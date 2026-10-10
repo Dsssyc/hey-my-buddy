@@ -18,6 +18,8 @@ from hey_my_buddy.errors import BoardError
 
 
 class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture):
+    reuse_repository_template = True
+
     def retained(self, summary, manifest, reason=None):
         aliases = self.aliases(self._stack[-1])
         for old in {manifest["checkoutId"], manifest["repositoryId"]}:
@@ -122,7 +124,27 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
         self.migrate(board)
         before = self.all_rows(board)
         before_files = self.fixed_files()
-        self.migrate(board)
+        statements = []
+        connect = sqlite3.connect
+
+        def traced(*args, **kwargs):
+            connection = connect(*args, **kwargs)
+            connection.set_trace_callback(statements.append)
+            return connection
+
+        with connect(self.directory / "board.sqlite3", isolation_level=None) as holder:
+            holder.execute("BEGIN IMMEDIATE")
+            with patch.object(migration.sqlite3, "connect", side_effect=traced):
+                try:
+                    summary, expected = self.migrate(board)
+                except sqlite3.OperationalError as error:
+                    self.fail("Empty identity plan requested the writer lock: " + str(error))
+            holder.execute("ROLLBACK")
+        self.assertFalse(any(sql.upper().startswith(("BEGIN IMMEDIATE", "UPDATE ", "INSERT ", "DELETE "))
+                             for sql in statements), statements)
+        self.assertEqual(summary["normalizedObjectives"], 0)
+        self.assertEqual(summary["normalizedReservations"], 0)
+        self.assertEqual(expected, self.snapshot(board))
         self.assertEqual(self.all_rows(board), before)
         self.assertEqual(self.fixed_files(), before_files)
 
@@ -301,7 +323,7 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
         board, run, manifest = self.legacy_run()
         self.rewrite_manifest(board, run, manifest, lambda value: value.update(checkoutRoot=str(self.repo)))
         summary, _expected = self.migrate(board)
-        self.retained(summary, manifest)
+        self.retained(summary, manifest, "checkout-root-changed")
 
     def test_missing_fixed_input_ref_is_retained_with_no_alias(self):
         board, _run, manifest = self.legacy_run()
@@ -682,3 +704,106 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
         with self.assertRaises(BoardError):
             self.migrate(board)
         self.assertEqual(self.all_rows(board), before)
+
+    def test_anchor_replaced_inside_write_transaction_after_binding_is_rejected(self):
+        board, _run, manifest = self.legacy_run(kind="existing")
+        before = self.snapshot(board)
+        rows, files = self.all_rows(board), self.fixed_files()
+        directory = self.repo / ".git"
+        retained = self.directory / "retained-transaction-anchor"
+        snapshot = migration._snapshot
+        observed = []
+
+        def replace_after_binding(connection):
+            result = snapshot(connection)
+            observed.append(connection.in_transaction)
+            # First call is the read preflight, second is already in the write
+            # transaction. Its unchanged DB binding has been gathered in full.
+            if len(observed) == 2:
+                directory.rename(retained)
+                shutil.copytree(retained, directory)
+                self.assertNotEqual(directory.stat().st_ino, retained.stat().st_ino)
+                self.assertEqual(self.git(self.repo, "rev-parse", manifest["snapshot"]["inputRef"]), manifest["inputCommit"])
+                self.assertEqual(self.git(self.repo, "rev-parse", manifest["snapshot"]["stagedRef"]), manifest["snapshot"]["stagedCommit"])
+            return result
+
+        with patch.object(migration, "_snapshot", side_effect=replace_after_binding):
+            with self.assertRaises(BoardError) as caught:
+                migrate_workspace_identity(self.directory, before)
+        self.assertEqual(caught.exception.code, "UPGRADE_MIGRATION_FAILED")
+        self.assertEqual(caught.exception.message, "Identity anchor changed after proof")
+        self.assertEqual(observed, [True, True])
+        self.assertEqual(self.all_rows(board), rows)
+        self.assertEqual(self.fixed_files(), files)
+        self.assertEqual(self.aliases(board), {})
+
+    def test_split_anchor_reads_cannot_bind_old_and_new_hashes_to_different_inodes(self):
+        board, _run, manifest = self.legacy_run(kind="existing")
+        directory = self.repo / ".git"
+        retained = self.directory / "retained-split-anchor"
+        copied = self.directory / "copied-split-anchor"
+        directory.rename(retained)
+        shutil.copytree(retained, directory)
+        self.assertNotEqual(directory.stat().st_ino, retained.stat().st_ino)
+        legacy_device = workspace_identity.legacy_device
+
+        def restore_before_device_proof(path, recorded):
+            directory.rename(copied)
+            retained.rename(directory)
+            return legacy_device(path, recorded)
+
+        with patch.object(workspace_identity, "legacy_device", side_effect=restore_before_device_proof):
+            with self.assertRaises(BoardError) as caught:
+                migration._anchor(directory, manifest["repositoryId"], manifest, "repositoryId")
+        self.assertEqual(caught.exception.code, "IDENTITY_UNPROVEN")
+        self.assertEqual(caught.exception.message, "legacy-inode-unproven")
+        self.assertEqual(self.git(self.repo, "rev-parse", manifest["snapshot"]["inputRef"]), manifest["inputCommit"])
+
+    def test_trigger_cannot_change_exempt_sqlite_sequence_rows(self):
+        self.collateral("UPDATE sqlite_sequence SET seq=seq+100 WHERE name='events'")
+
+    def test_schema_change_after_proof_rolls_back_the_entire_plan(self):
+        board, _run, _manifest = self.legacy_run(kind="existing")
+        before = self.all_rows(board)
+        connect = sqlite3.connect
+
+        class InjectedConnection(sqlite3.Connection):
+            def execute(inner, sql, parameters=()):
+                result = super().execute(sql, parameters)
+                if sql.startswith("UPDATE objectives SET"):
+                    super().execute("CREATE TABLE identity_unplanned_schema(value TEXT)")
+                return result
+
+        with patch.object(migration.sqlite3, "connect", side_effect=lambda *args, **kwargs: connect(
+                *args, **kwargs, factory=InjectedConnection)):
+            with self.assertRaises(BoardError) as caught:
+                self.migrate(board)
+        self.assertEqual(caught.exception.code, "UPGRADE_MIGRATION_FAILED")
+        self.assertEqual(caught.exception.message, "Identity migration changed data outside its exact plan")
+        self.assertEqual(self.all_rows(board), before)
+
+    def test_trigger_cannot_change_unrelated_meta_values(self):
+        self.collateral("UPDATE meta SET value='unplanned' WHERE key='created_at'")
+
+    def test_database_change_between_read_proof_and_write_lock_is_rejected(self):
+        board, _run, _manifest = self.legacy_run(kind="existing")
+        before = self.snapshot(board)
+        connect = sqlite3.connect
+        changed = []
+
+        class RacingConnection(sqlite3.Connection):
+            def execute(inner, sql, parameters=()):
+                if sql == "BEGIN IMMEDIATE":
+                    with connect(self.directory / "board.sqlite3") as other:
+                        other.execute("UPDATE tasks SET queue_reason='changed-after-proof'")
+                    changed.append(self.all_rows(board))
+                return super().execute(sql, parameters)
+
+        with patch.object(migration.sqlite3, "connect", side_effect=lambda *args, **kwargs: connect(
+                *args, **kwargs, factory=RacingConnection)):
+            with self.assertRaises(BoardError) as caught:
+                migrate_workspace_identity(self.directory, before)
+        self.assertEqual(caught.exception.code, "UPGRADE_MIGRATION_FAILED")
+        self.assertEqual(caught.exception.message, "Identity proof inputs changed before migration")
+        self.assertEqual(len(changed), 1)
+        self.assertEqual(self.all_rows(board), changed[0])

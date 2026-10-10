@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sqlite3
+import tempfile
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
@@ -25,6 +27,23 @@ class WorkspaceIdentityFixture(WorkflowTestCase):
     change does not rewrite the saved manifests or manufacture inode evidence.
     """
 
+    reuse_repository_template = False
+    _repository_template = None
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if not cls.reuse_repository_template:
+            return
+        # Only immutable initial Git objects/config are shared. Each method gets
+        # a new directory inode and board, and captures its own real manifests.
+        temporary = tempfile.TemporaryDirectory(prefix="buddy-identity-repository-")
+        cls.addClassCleanup(temporary.cleanup)
+        fixture = cls(methodName="runTest")
+        fixture.directory = Path(temporary.name)
+        cls._repository_template = None
+        cls._repository_template = fixture.repository("template")
+
     def setUp(self):
         super().setUp()
         self.workspace = workspace
@@ -40,6 +59,9 @@ class WorkspaceIdentityFixture(WorkflowTestCase):
 
     def repository(self, name):
         path = self.workdir(name).resolve()
+        if self._repository_template is not None:
+            shutil.copytree(self._repository_template, path, dirs_exist_ok=True)
+            return path
         self.git(path, "init", "-q")
         self.git(path, "config", "user.name", "Workspace Identity Test")
         self.git(path, "config", "user.email", "identity@example.invalid")
@@ -118,6 +140,8 @@ class WorkspaceIdentityFixture(WorkflowTestCase):
 
 
 class WorkspaceIdentityTests(WorkspaceIdentityFixture):
+    reuse_repository_template = True
+
     def test_changed_device_keeps_identity_and_changed_inode_changes_it(self):
         original_stat = Path.stat
         directory = self.repo / ".git"
@@ -181,3 +205,34 @@ class WorkspaceIdentityTests(WorkspaceIdentityFixture):
                 with self.assertRaises(BoardError) as caught:
                     workspace.verify(modified, require_unchanged=False)
         self.assertEqual(caught.exception.code, "WORKSPACE_MANIFEST_CHANGED")
+
+    def test_python_alias_loader_rejects_independently_drifted_anchor_hashes(self):
+        directory = self.repo / ".git"
+        inode, device = directory.stat().st_ino, directory.stat().st_dev + 2
+        old = hashlib.sha256(workspace_identity._json([str(directory), device, inode])).hexdigest()
+        new = workspace_identity.stable_identity(directory)
+        valid = {"version": 1, "newId": new, "source": "fixed-input-and-inode", "anchors": [{
+            "directory": str(directory), "inode": inode, "legacyDevice": device,
+            "manifestSha256": "a" * 64, "workspaceId": "ws-proof", "role": "repositoryId"}]}
+        # No SQL projection/report participates: this directly exercises Python
+        # loading from valid-shaped persisted meta and each SHA comparison.
+        with sqlite3.connect(":memory:") as connection:
+            connection.execute("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)")
+            key = workspace_identity.META_KEY_PREFIX + old
+            connection.execute("INSERT INTO meta VALUES(?,?)", (key, json.dumps(valid)))
+            self.assertEqual(workspace_identity.load_alias_map(connection), {old: new})
+            for field in ("legacyDevice", "newId", "directory", "oldKey"):
+                with self.subTest(field=field):
+                    entry = json.loads(json.dumps(valid))
+                    changed_key = key
+                    if field == "legacyDevice":
+                        entry["anchors"][0][field] += 1  # Only the old-anchor hash changes.
+                    elif field == "newId":
+                        entry[field] = "f" * 64  # Only the new-anchor hash changes.
+                    elif field == "directory":
+                        entry["anchors"][0][field] += "-drifted"
+                    else:
+                        changed_key = workspace_identity.META_KEY_PREFIX + "b" * 64
+                    connection.execute("UPDATE meta SET key=?,value=?", (changed_key, json.dumps(entry)))
+                    self.assertEqual(workspace_identity.load_alias_map(connection), {}, field)
+                    connection.execute("UPDATE meta SET key=?,value=?", (key, json.dumps(valid)))

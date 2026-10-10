@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from unittest import mock
 import json
+import hashlib
+import sqlite3
 
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.errors import BoardError
@@ -206,3 +208,41 @@ class BackupTests(BoardTestCase):
         self.assertEqual(manifest['skippedAttemptEntries'],
                          {'count': 1, 'paths': ['attempts/run/attempt/no-tool-not-a-hex-name']})
         self.assertEqual(secret.read_text(), 'target')
+
+    def test_snapshot_keeps_historical_json_sort_and_exemption_format(self):
+        with sqlite3.connect(self.directory / "fingerprint.sqlite3") as connection:
+            connection.execute("CREATE TABLE workers(id INTEGER PRIMARY KEY AUTOINCREMENT,value TEXT)")
+            connection.execute("CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT)")
+            connection.execute('CREATE TABLE "quoted table"(value,other)')
+            connection.executemany('INSERT INTO "quoted table" VALUES(?,?)', [
+                ("中文", b"\x00\xff"), ("é", 2), ("😀", None), ("z\n", 1.25),
+                ("a", "duplicate"), ("a", "duplicate"), (10, True), (2, False)])
+            connection.execute("INSERT INTO workers(value) VALUES('ignored')")
+            connection.executemany("INSERT INTO events(kind) VALUES(?)", [('before',), ('after',)])
+            connection.execute('CREATE TABLE generated(value INTEGER,derived INTEGER GENERATED ALWAYS AS(value+1))')
+            connection.execute('INSERT INTO generated(value) VALUES(10)')
+            connection.setlimit(sqlite3.SQLITE_LIMIT_FUNCTION_ARG, 127)
+            connection.execute('CREATE TABLE wide(' + ','.join('c' + str(index) for index in range(130)) + ')')
+            connection.execute('INSERT INTO wide VALUES(' + ','.join('?' for _ in range(130)) + ')', tuple(range(130)))
+            historical = {}
+            names = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+            for name in names:
+                if name == 'workers':
+                    continue
+                sql = 'SELECT * FROM "' + name.replace('"', '""') + '"'
+                if name == 'events':
+                    sql += ' WHERE seq<=1'
+                elif name == 'sqlite_sequence':
+                    sql += " WHERE name NOT IN ('events','workers')"
+                rows = sorted(json.dumps(list(row), ensure_ascii=False, separators=(',', ':'),
+                                         default=lambda value:value.hex()) for row in connection.execute(sql))
+                historical[name] = hashlib.sha256('\n'.join(rows).encode()).hexdigest()
+            try:
+                actual = backup.database_snapshot(connection, event_head=1)
+            except sqlite3.DatabaseError as error:
+                self.fail("Historical SELECT * fingerprint projection was refused: " + str(error))
+            self.assertEqual(actual, {'tables': {name:connection.execute('SELECT COUNT(*) FROM "' + name + '"').fetchone()[0]
+                                               for name in names}, 'fingerprints': historical, 'eventHead': 1})
+            connection.execute("UPDATE workers SET value='changed'")
+            self.assertEqual(backup.database_snapshot(connection, event_head=1), actual)
+            self.assertNotEqual(backup.database_snapshot(connection)['fingerprints']['events'], historical['events'])

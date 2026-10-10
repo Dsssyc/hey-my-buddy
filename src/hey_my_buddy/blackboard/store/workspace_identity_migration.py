@@ -67,13 +67,14 @@ def _manifests(connection):
 
 def _anchor(directory, recorded, manifest, role):
     path = Path(directory).resolve(strict=True)
-    current = identity.stable_identity(path)
+    inode = path.stat().st_ino
+    current = hashlib.sha256(identity._json([str(path), inode])).hexdigest()
     if recorded == current:
         return current, None
     device = identity.legacy_device(path, recorded)
-    if device is None:
+    if device is None or hashlib.sha256(identity._json([str(path), device, inode])).hexdigest() != recorded:
         raise BoardError("IDENTITY_UNPROVEN", "legacy-inode-unproven")
-    return current, {"directory": str(path), "inode": path.stat().st_ino, "legacyDevice": device,
+    return current, {"directory": str(path), "inode": inode, "legacyDevice": device,
                      "manifestSha256": manifest["manifestSha256"], "workspaceId": manifest["workspaceId"],
                      "role": role}
 
@@ -261,14 +262,47 @@ def _plan(connection, state):
     return mapping, additions, kept, registered
 
 
-def _rows(connection):
-    """Exact inventories, including workers/events that backup may exempt."""
-    return {row[0]: [tuple(item) for item in connection.execute('SELECT * FROM "' + row[0].replace('"', '""') + '"')]
-            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+def _snapshot(connection):
+    from . import backup
+
+    result = backup.database_snapshot(connection, exact=True)
+    result["sqliteSchema"] = [tuple(row) for row in connection.execute("SELECT * FROM sqlite_master ORDER BY type,name")]
+    return result
 
 
-def _inventory(rows):
-    return sorted(json.dumps(row, ensure_ascii=False, separators=(",", ":"), default=lambda value: value.hex()) for row in rows)
+def _write_plan(connection, mapping, additions, kept, registered):
+    """Keep only changed rows and new meta values, never an inventory copy."""
+    changes = {}
+    counts = {"objectives": 0, "reservations": 0}
+    for table, columns in (("objectives", ("project_id",)), ("workspace_reservations", ("checkout_id", "repository_id"))):
+        names = [row[1] for row in connection.execute(f"PRAGMA table_info({table})")]
+        updates = {}
+        for original in connection.execute(f"SELECT * FROM {table}"):
+            changed = list(original)
+            for column in columns:
+                index = names.index(column)
+                changed[index] = mapping.get(original[index], original[index])
+            if tuple(changed) != tuple(original):
+                updates[original[0]] = tuple(changed)
+        changes[table] = (updates, {})
+        counts["objectives" if table == "objectives" else "reservations"] = len(updates)
+    inserts = {identity.META_KEY_PREFIX + old: (identity.META_KEY_PREFIX + old, _json(value))
+               for old, value in sorted(additions.items())}
+    entries = {old: inserts[identity.META_KEY_PREFIX + old][1] if old in additions else connection.execute(
+        "SELECT value FROM meta WHERE key=?", (identity.META_KEY_PREFIX + old,)).fetchone()[0]
+        for old in sorted({**registered, **additions})}
+    report = {"version": 1, "mapped": sorted({**registered, **additions,
+              **{old: new for old, new in mapping.items() if old != new}}),
+              "kept": dict(sorted(kept.items())), "entries": entries}
+    encoded = _json(report)
+    previous = connection.execute("SELECT value FROM meta WHERE key=?", (identity.MIGRATION_META_KEY,)).fetchone()
+    updates = {}
+    if previous is None:
+        inserts[identity.MIGRATION_META_KEY] = (identity.MIGRATION_META_KEY, encoded)
+    elif previous[0] != encoded:
+        updates[identity.MIGRATION_META_KEY] = (identity.MIGRATION_META_KEY, encoded)
+    changes["meta"] = (updates, inserts)
+    return changes, counts, report
 
 
 def migrate_workspace_identity(state: Path, before: dict) -> tuple[dict, dict]:
@@ -278,64 +312,73 @@ def migrate_workspace_identity(state: Path, before: dict) -> tuple[dict, dict]:
     with closing(sqlite3.connect(state / "board.sqlite3", isolation_level=None, timeout=10)) as connection:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
-        # Git evidence is gathered before the SQLite write transaction. Upgrade
-        # owns the maintenance fences; the transaction rechecks every row before
-        # applying the precomputed plan, and current inode facts are checked again.
-        preflight_rows = _rows(connection)
-        mapping, additions, kept, registered = _plan(connection, state)
-        connection.execute("BEGIN IMMEDIATE")
+        # SQLite spills sorting to private temporary storage rather than growing
+        # a Python copy of every table. Upgrade owns the maintenance fences.
+        connection.execute("PRAGMA temp_store=FILE")
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("BEGIN")
         try:
             schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if schema is None or int(schema[0]) != SCHEMA_VERSION:
                 raise BoardError("UPGRADE_MIGRATION_FAILED", "Workspace identity migration requires schema 15")
-            baseline = backup.database_snapshot(connection)
+            baseline = _snapshot(connection)
             if any(before.get(key) != baseline[key] for key in ("tables", "fingerprints", "eventHead")):
                 raise BoardError("UPGRADE_MIGRATION_FAILED", "Identity migration no longer matches its verified backup")
-            rows_before = _rows(connection)
-            if any(_inventory(rows) != _inventory(rows_before.get(table, [])) for table, rows in preflight_rows.items()) or set(preflight_rows) != set(rows_before):
-                raise BoardError("UPGRADE_MIGRATION_FAILED", "Identity proof inputs changed before migration")
-            for entry in additions.values():
-                for anchor in entry["anchors"]:
-                    directory = Path(anchor["directory"])
-                    if str(directory.resolve(strict=True)) != anchor["directory"] or directory.stat().st_ino != anchor["inode"]:
-                        raise BoardError("UPGRADE_MIGRATION_FAILED", "Identity anchor changed after proof")
-            schema_before = [tuple(row) for row in connection.execute("SELECT * FROM sqlite_master ORDER BY type,name")]
-            counts = {"objectives": 0, "reservations": 0}
-            planned = {table: list(rows) for table, rows in rows_before.items()}
-            for table, columns in (("objectives", ("project_id",)), ("workspace_reservations", ("checkout_id", "repository_id"))):
-                names = [row[1] for row in connection.execute(f"PRAGMA table_info({table})")]
-                pk = names[0]
-                for offset, original in enumerate(rows_before[table]):
-                    changed = list(original)
-                    for column in columns:
-                        index = names.index(column)
-                        changed[index] = mapping.get(original[index], original[index])
-                    planned[table][offset] = tuple(changed)
-                    if tuple(changed) != original:
-                        counts["objectives" if table == "objectives" else "reservations"] += 1
-                        connection.execute(f"UPDATE {table} SET " + ",".join(column + "=?" for column in columns) + f" WHERE {pk}=?",
-                                           (*[changed[names.index(column)] for column in columns], original[0]))
-            meta = dict(rows_before["meta"])
-            for old, value in sorted(additions.items()):
-                key, encoded = identity.META_KEY_PREFIX + old, _json(value)
-                meta[key] = encoded
-                connection.execute("INSERT INTO meta(key,value) VALUES(?,?)", (key, encoded))
-            report = {"version": 1, "mapped": sorted({**registered, **additions, **{old: new for old, new in mapping.items() if old != new}}),
-                      "kept": dict(sorted(kept.items())),
-                      "entries": {old: meta[identity.META_KEY_PREFIX + old] for old in sorted({**registered, **additions})}}
-            encoded = _json(report)
-            if meta.get(identity.MIGRATION_META_KEY) != encoded:
-                meta[identity.MIGRATION_META_KEY] = encoded
-                connection.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                                   (identity.MIGRATION_META_KEY, encoded))
-            planned["meta"] = list(meta.items())
-            actual = _rows(connection)
-            changed = [table for table in planned if _inventory(planned[table]) != _inventory(actual.get(table, []))]
-            if changed or set(planned) != set(actual) or schema_before != [tuple(row) for row in connection.execute("SELECT * FROM sqlite_master ORDER BY type,name")]:
-                raise BoardError("UPGRADE_MIGRATION_FAILED", "Identity migration changed data outside its exact plan", tables=changed)
-            expected = {**before, **backup.database_snapshot(connection, event_head=before["eventHead"])}
+            mapping, additions, kept, registered = _plan(connection, state)
+            changes, counts, report = _write_plan(connection, mapping, additions, kept, registered)
+            writes = any(updates or inserts for updates, inserts in changes.values())
+            if writes:
+                # Unchanged tables retain this plan's fresh baseline digest.
+                # Changed tables are hashed in full with sparse row projections,
+                # so unrelated mutations inside those tables remain detectable.
+                projected = backup.database_snapshot(connection, changes=changes,
+                    table_names={table for table, (updates, inserts) in changes.items() if updates or inserts})
+                planned = {**baseline, "tables": {**baseline["tables"], **projected["tables"]},
+                           "fingerprints": {**baseline["fingerprints"], **projected["fingerprints"]}}
             connection.execute("COMMIT")
         except BaseException:
             connection.execute("ROLLBACK")
             raise
+        # An empty plan still proves current Git facts and its backup binding,
+        # but never takes the writer lock or copies the database into Python.
+        if not writes:
+            connection.execute("BEGIN")
+            try:
+                if _snapshot(connection) != baseline:
+                    raise BoardError("UPGRADE_MIGRATION_FAILED", "Identity proof inputs changed before migration")
+                connection.execute("COMMIT")
+            except BaseException:
+                connection.execute("ROLLBACK")
+                raise
+            expected = {**before, **{key: baseline[key] for key in ("tables", "fingerprints", "eventHead")}}
+        else:
+            connection.execute("PRAGMA query_only=OFF")
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                if _snapshot(connection) != baseline:
+                    raise BoardError("UPGRADE_MIGRATION_FAILED", "Identity proof inputs changed before migration")
+                for entry in additions.values():
+                    for anchor in entry["anchors"]:
+                        directory = Path(anchor["directory"])
+                        if str(directory.resolve(strict=True)) != anchor["directory"] or directory.stat().st_ino != anchor["inode"]:
+                            raise BoardError("UPGRADE_MIGRATION_FAILED", "Identity anchor changed after proof")
+                for table, columns in (("objectives", ("project_id",)), ("workspace_reservations", ("checkout_id", "repository_id"))):
+                    names = [row[1] for row in connection.execute(f"PRAGMA table_info({table})")]
+                    for key, row in changes[table][0].items():
+                        connection.execute(f"UPDATE {table} SET " + ",".join(column + "=?" for column in columns) + f" WHERE {names[0]}=?",
+                                           (*[row[names.index(column)] for column in columns], key))
+                for key, value in changes["meta"][1].values():
+                    connection.execute("INSERT INTO meta(key,value) VALUES(?,?)", (key, value))
+                for key, value in changes["meta"][0].values():
+                    connection.execute("UPDATE meta SET value=? WHERE key=?", (value, key))
+                actual = _snapshot(connection)
+                if actual != planned:
+                    changed = [table for table in planned["fingerprints"]
+                               if planned["fingerprints"][table] != actual["fingerprints"].get(table)]
+                    raise BoardError("UPGRADE_MIGRATION_FAILED", "Identity migration changed data outside its exact plan", tables=changed)
+                expected = {**before, **{key: actual[key] for key in ("tables", "fingerprints", "eventHead")}}
+                connection.execute("COMMIT")
+            except BaseException:
+                connection.execute("ROLLBACK")
+                raise
     return {**report, "normalizedObjectives": counts["objectives"], "normalizedReservations": counts["reservations"]}, expected

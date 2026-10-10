@@ -307,24 +307,82 @@ def _private_copy(source: Path, target: Path) -> None:
         os.fsync(dst.fileno())
 
 
-def database_snapshot(connection, *, event_head: int | None = None) -> dict:
-    tables = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+def database_snapshot(connection, *, event_head: int | None = None, exact: bool = False,
+                      changes: dict | None = None, table_names: set[str] | None = None) -> dict:
+    """Hash the historical sorted JSON format with SQLite's bounded sorter.
+
+    Python retains one row at a time. Optional sparse changes describe expected
+    rows, before any statements execute; exact adds the lifecycle rows normally
+    exempted by backup. Neither option changes ordinary backup metadata.
+    """
+    from heapq import merge
+
+    tables = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+              if table_names is None or row[0] in table_names]
+    counts = {name:connection.execute('SELECT COUNT(*) FROM "'+name.replace('"','""')+'"').fetchone()[0]
+              for name in tables}
     if event_head is None:
         event_head = connection.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
-    fingerprints = {}
-    for name in tables:
-        if name == 'workers':
-            continue
+
+    def fingerprint(name, *, exempt=False):
+        updates, inserts = (changes or {}).get(name, ({}, {}))
+        if not counts[name] and not inserts:
+            return hashlib.sha256(b'').hexdigest()
+
+        def encode(*row):
+            row = updates.get(row[0], row)
+            return json.dumps(list(row), ensure_ascii=False, separators=(',', ':'), default=lambda value:value.hex())
+
         quoted = '"' + name.replace('"','""') + '"'
-        sql, args = 'SELECT * FROM ' + quoted, ()
+        columns = [column[0] for column in connection.execute('SELECT * FROM ' + quoted + ' LIMIT 0').description]
+        arguments = ','.join('"' + column.replace('"', '""') + '"' for column in columns)
+        limit = connection.getlimit(sqlite3.SQLITE_LIMIT_FUNCTION_ARG)
+        wide = len(columns) > limit
+        if wide:
+            # SELECT * also supports generated columns and tables wider than a
+            # SQLite function call. Join bounded chunks in the same JSON format.
+            def encode_part(offset, key, *row):
+                if key in updates:
+                    row = updates[key][offset:offset + len(row)]
+                return json.dumps(list(row), ensure_ascii=False, separators=(',', ':'), default=lambda value:value.hex())[1:-1]
+
+            connection.create_function('buddy_snapshot_part', -1, encode_part)
+            quoted_columns = ['"' + column.replace('"', '""') + '"' for column in columns]
+            parts = ['buddy_snapshot_part(' + str(offset) + ',' + quoted_columns[0] + ','
+                     + ','.join(quoted_columns[offset:offset + limit - 2]) + ')'
+                     for offset in range(0, len(columns), limit - 2)]
+            arguments = "'[' || " + " || ',' || ".join(parts) + " || ']'"
+        else:
+            arguments = 'buddy_snapshot_row(' + arguments + ')'
+        sql, args = 'SELECT ' + arguments + ' AS encoded FROM ' + quoted, ()
         if name == 'events':
-            sql += ' WHERE seq<=?';args = (event_head,)
-        elif name == 'sqlite_sequence':
+            sql += ' WHERE seq<=?'; args = (event_head,)
+        elif name == 'sqlite_sequence' and not exempt:
             sql += " WHERE name NOT IN ('events','workers')"
-        rows = sorted(json.dumps(list(row), ensure_ascii=False, separators=(',', ':'), default=lambda value:value.hex()) for row in connection.execute(sql,args))
-        fingerprints[name] = hashlib.sha256('\n'.join(rows).encode()).hexdigest()
-    return {'tables':{name:connection.execute('SELECT COUNT(*) FROM "'+name.replace('"','""')+'"').fetchone()[0] for name in tables},
-            'fingerprints':fingerprints, 'eventHead':event_head}
+        sql += ' ORDER BY encoded COLLATE BINARY'
+        connection.create_function('buddy_snapshot_row', -1, encode)
+        try:
+            rows = (row[0] for row in connection.execute(sql, args))
+            added = sorted(encode(*row) for row in inserts.values())
+            result = hashlib.sha256()
+            separator = b''
+            for encoded in merge(rows, added):
+                result.update(separator)
+                result.update(encoded.encode())
+                separator = b'\n'
+            return result.hexdigest()
+        finally:
+            connection.create_function('buddy_snapshot_row', -1, None)
+            if wide:
+                connection.create_function('buddy_snapshot_part', -1, None)
+
+    fingerprints = {name:fingerprint(name) for name in tables if name != 'workers'}
+    result = {'tables':{name:counts[name] + len((changes or {}).get(name, ({}, {}))[1]) for name in tables},
+              'fingerprints':fingerprints, 'eventHead':event_head}
+    if exact:
+        result['exemptFingerprints'] = {name:fingerprint(name, exempt=True)
+                                      for name in ('workers', 'sqlite_sequence') if name in tables}
+    return result
 
 
 def verify(directory: Path) -> dict:
