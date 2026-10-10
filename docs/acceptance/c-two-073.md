@@ -155,3 +155,5 @@ Host编号核对工具首次用完整loader发现范围外黑板旧socket_path�
 - `buddy.runtime.test_live.WorkerLiveUnitTests.test_explicit_client_root_wins_over_environment`
 - `buddy.runtime.test_worker_live_wiring.WorkerEndpointClosureTests.test_controller_end_through_execute_reaps_only_the_owned_endpoint`
 - `buddy.runtime.test_worker_live_wiring.WorkerEndpointClosureTests.test_worker_exit_closes_its_own_c_two_endpoint`
+
+1-B整合53b0130a，integration int-7920ec42-6a5a-47a6-9c66-41bf67e4ab73已verified，原run accepted/completed；cleanup-plan/apply applied。Host保留两回合的顶层交付日志、原补丁和最终固定副本后，按结构化交付登记的两个确切根 <1B_FIRST_TASK_TMP>/<1B_REPAIR_TASK_TMP> 整体回收，未扫描前缀或公共命名空间。Host显示清理进度的小脚本因非清理响应中的cleanup为None而报AttributeError，显示失败未改变状态，随后从对应记录正确读回accepted/applied，未重复回收操作。
