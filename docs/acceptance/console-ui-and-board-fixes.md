@@ -437,3 +437,5 @@ Claude Code Host 通过后以 f1372949 合入，随后发现 U2 的结束未确�
 两个微任务无共同写入文件，均默认经路由提交，adapter/provider/model/effort 四字段及 configuration 均不写；原已验收 run 不能 continue，创建关联返修。产物缺陷打回当前返修 run 后在原 run continue，供应方不可重试限流按既有完整配置例外登记。Worker 只跑受影响测试，不跑全量、不构建产物；先建 ignored 任务目录、交付确切路径、不删除、不使用 stash、不操作分支或标签。Host 独立固定产物、实际测试与目标行为移除变异。
 
 PA07：私有合成看板的三个宏任务，适应窗口与放大两级，逐行测量非空 .sp-text 的实际文字范围并截图；PA08：真实后台加载列表已读取并有内容，隐藏期间无周期读取、切回立即读取，保留请求日志与截图。PA09：最终前端全量 npm --prefix apps/console test；PA10：重新构建发行产物并在最终源码的全新固定副本重构建，逐字节一致；PA11：tests/python/console、tests/python/install 与仓库卫生，使用私有状态及运行时根、清除继承 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT。本轮不跑 Python 完整检查。真实服务验证只用私有服务，日常服务故障则停下报告。
+
+PA-T aeb6fcd0-ce4c-4769-be7a-e0e3068366f4 与 PA-L 38fd3783-03bf-488f-9d84-92b870912c5d 的首次提交均省略四字段，经默认路由选 ZCode GLM-5.3-Flash/max；两份首次回合均被供应方不可重试限流 429/1310 拒绝，无产物、停机已确认。保留初次 get/result/await，于同一 run 使用 codex/openai/gpt-6.1-sol/high 完整配置 continue；续接前配置已启用、可用且 quotaExhausted=false。证据位于 tmp/console-ui-and-board-host/post-acceptance-ui-20261010/，本轮未变更共享偏好或日常运行时。
