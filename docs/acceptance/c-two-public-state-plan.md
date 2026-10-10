@@ -61,3 +61,13 @@ Host 只对自己这一批检查创建且 endpoint PID/serviceId 与台账相等
 3-B 唯一写入范围拟为 `src/hey_my_buddy/protocol/{transport,rpc_config}.py`、`src/hey_my_buddy/blackboard/service/daemon.py`、`tests/python/protocol/{test_public_state,test_rpc_config,test_transport_attach}.py`、`tests/python/blackboard/service/test_daemon.py` 及新 `docs/acceptance/c-two-path-state-repair.md`；开始时绑定已验收 3-A 的整合提交。没有额外客户端、角色、注册表、support、launcher 或其他公共文件写权，缺口交 Host 统一整合。新增 PATH-01 链接可达的私有状态 CLI health 真实成功且返回真实根；PATH-02 state/ipc 链接仍拒绝并报告自身路径；PATH-03 0755 冷启动/直接服务启动后为 0700、0500 只读 attach 不 chmod；PATH-04 CLI 保留结构拒绝代码/路径，与模拟系统权限拒绝分开；PATH-05 各删除真实路径解析、所有者修正、错误保留后目标断言失败，并保留既有内部缺根拒绝与旧编号。每项真实服务采用空 HOME、私有根、固定模型目录与 sentinel；范围内缺陷原 run continue。
 
 “已有 0755 状态可用”的旧记载仅在 rpc_config 能选域这一层成立，不是普通冷启动已可用；不抹掉历史证据，在 3-B 验收记录明确修正口径。3-A 当前针对公开状态参数的链接/路径断言随新用户决定逐项迁移到状态内部 guard，列编号与故障注入，不偷偷删除旧防护。整批最后核对编号和默认并行全检；之后只改记录跑卫生，然后停等整合 Host 明确结论。
+
+## 3-A 第二份固定候选的 Host 核对
+
+固定 `5b466de8c9bc61f4b81003ea485005cb62385585`、artifact `063b340b-897a-43f2-afa1-8c40d5fc5aba`、累积补丁 SHA-256 `74e4827cd7bfec3a877b8fe733be78d78df0461461d17e76197e9864495d4bd2` 仍只有四个范围内路径；两个生产文件与首份候选字节相等，旧 attach 文件未改。Host 对新文件全 26 项独立运行，通过、退出 0、27.411 秒（测试 26.704 秒）；默认 CLI、源码启动器、两个客户端、覆盖时机、既有 stop/restart、真实只读与两种真实冷启动均核对。旧 attach 全 28 项与 rpc_config 全 24 项的首份 Host green 因文件和生产配置未变继续适用，不因记录或夹具返修重跑。
+
+新文件证据有 27 个独立子场景，22 个实际自建进程回执均 wait 退出 0，所有场景 RPC shutdown 确认、没有非预期 cleanupFailures，原生 CLI sentinel 调用 0；readonly 的真实 ping 同服务身份、entry snapshot 与权限均保留。收尾故障的三个单元场景是明确的 substitutesOnly，不计入实际 Popen 台账。证据为 `public-state-host-r2-green.{json,log}`、`public-state-host-r2-process-proof.json`；首次 22 项三失败与旧实例两阶段停止证据原样保留。
+
+Host 从本份固定源码重建三份只取消最终目录传递的生产变异，各跑原真实 call_service、call_board、BoardClient(False) 目标：正常 RPC 已通过，取消后均恰好一项 failure、无 errors、退出 1，实际错误为 PRIVATE_STATE_REQUIRED；命令耗时 1.978 / 1.979 / 1.980 秒。另两份只去掉夹具 import 路径或 finally 恢复，分别命中新 import 目标的缺 support 证据与恢复目标的 320!=448 断言，0.644 / 0.301 秒；这两项是夹具防护，不作为生产缺根或真实 RPC 证据。五项没有以沙箱、任意传输或停止失败算红灯，原始计划、日志与结果为 `public-state-host-r2-target-proofs.json` 及对应 red 文件。
+
+实际 unittest loader 从 3,474→3,500，214 个模块，原 3,474 个集合相等、删除 0、新增 26，无重复/装载错误；原始编号及新增差集为 `public-state-{baseline,fixed}-ids.json` 与 `public-state-id-delta.json`。本批当前只整合 3-A，不提前宣称三处新增路径/权限回归已修复，不进行中间全检；3-A 微任务签收后顺序启动 3-B，最终完整检查仍在两份整合后的源码上执行。

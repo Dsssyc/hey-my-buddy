@@ -58,12 +58,13 @@ class BoardClient:
         if not self.autostart:
             # ``autostart=False`` means exactly that, for every resource: observe an
             # existing service read-only and never cold-start one as a side effect.
-            endpoint = transport._attach_read_only(transport.get_state_dir(self.state_dir))
+            directory = transport.get_state_dir(self.state_dir)
+            endpoint = transport._attach_read_only(directory)
             if endpoint is None:
                 raise transport.ServiceError(
                     "SERVICE_UNAVAILABLE", "No board service is running in this state directory"
                 )
-            return transport._request(endpoint, operation, params or {}, resource=resource, state_dir=self.state_dir)
+            return transport._request(endpoint, operation, params or {}, resource=resource, state_dir=directory)
         return transport.call_board(operation, params or {}, self.state_dir, resource=resource)
 
     # -- service ------------------------------------------------------------

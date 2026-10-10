@@ -251,8 +251,9 @@ def _request(endpoint: dict, operation: str, params: dict, resource: str = "cont
 
 def call_board(operation: str, params: dict | None = None, state_dir: str | Path | None = None, *, resource: str = "control", endpoint: dict | None = None) -> dict:
     """Call one named C-Two board operation through a healthy, trusted endpoint."""
-    endpoint = endpoint or ensure_service(state_dir, resource=resource)
-    return _request(endpoint, operation, params or {}, resource, state_dir=state_dir)
+    directory = get_state_dir(state_dir)
+    endpoint = endpoint or ensure_service(directory, resource=resource)
+    return _request(endpoint, operation, params or {}, resource, state_dir=directory)
 
 
 def _healthy(directory: Path) -> dict | None:
@@ -442,13 +443,14 @@ def call_service(method: str, params: dict | None = None, state_dir: str | Path 
         params.setdefault("action", method)
     # Validate locally before any daemon spawn so an invalid request never starts work.
     encode_message({"method": method, "params": params})
+    directory = get_state_dir(state_dir)
     if method in ("stop", "restart"):
-        endpoint = _attach_read_only(get_state_dir(state_dir))
+        endpoint = _attach_read_only(directory)
         if endpoint is None:
             return {"status": "stopped", "alreadyStopped": True, "stopped": True}
     else:
-        endpoint = ensure_service(state_dir, resource=resource)
-    reply = _request(endpoint, operation, params, resource=resource, state_dir=state_dir)
+        endpoint = ensure_service(directory, resource=resource)
+    reply = _request(endpoint, operation, params, resource=resource, state_dir=directory)
     if method in UNWRAP_TASK:
         task = reply.get("task")
         if not isinstance(task, dict):
