@@ -10,7 +10,8 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:browser": "npm run build && playwright test"
   },
   "dependencies": {
     "class-variance-authority": "0.7.1",
@@ -23,6 +24,7 @@
     "react-i18next": "17.0.16"
   },
   "devDependencies": {
+    "@playwright/test": "1.64.0",
     "@tailwindcss/vite": "4.3.3",
     "@testing-library/react": "16.3.3",
     "@testing-library/user-event": "14.6.7",
