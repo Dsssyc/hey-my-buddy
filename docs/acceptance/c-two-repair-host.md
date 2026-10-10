@@ -214,3 +214,11 @@ Host 在现有 localhost 响应夹具中只给测试自有 native wrapper 附加
 持有的 Worker 与私有服务均停止，C-Two shutdown.completed=true；服务、Worker、控制器三个实际地址 inspect 均 absent，私有 state/ipc 套接字残留集合为空，没有手工 unlink。证据为 `tmp/c073-host/codex-approved-smoke-{started,result,proof}.json`、`codex-approved-smoke.log` 及 `<CODEX_SMOKE_ROOT>` 中的 run-request、run-result、round、delivered-view、acknowledgment、stop-and-endpoints 与固定原生 evidence；不在记录里写出凭据或完整主目录。没有设置 CODEX_HOME/CLAUDE_CONFIG_DIR，没有读取登录凭据文件内容或操作日常服务/Worker。
 
 结合已定位的 ZCode 临时套接字长度条件，Host 将尚未运行的其余三个入口准备在开始时创建并登记确切路径的短私有系统任务根，脚本逐字节哈希不变；只重做 prepare，modelCalls=0、nativeStarts=0，旧准备材料保留、没有消耗旧批准门。三个真实回合仍各待用户批准，Codex 的这一次授权不延伸到其他 harness 或重跑。
+
+## 用户单次批准的 Claude Code 真实 Worker 冒烟
+
+用户另行回复“批准这一次 Claude 回合”后，Host 仅执行 Claude/anthropic/claude-haiku-4-5-20251001/default 的一次 Worker 回合，没有重跑。源提交 `624fe4bb4358dd0aa677b8ce145b0c62d861b185`，与完整检查候选的生产代码相同；原生版本 `2.1.284 (Claude Code)`，命令退出 0、27.764 秒。实际角色结果 ok/completed，私有 run `45a805b1-6d99-4e91-b539-8e2f71a60496` 的 artifact `bce91ab6-5e03-4cde-b69b-62c3a3d2e1a1` 已 accepted/completed，签收前真实交付为 delivered。
+
+工具事实 streamComplete=true、toolCalls=0、unsettledToolCalls=0、truncated=false，绑定实际 task/attempt/session；结构化交付沿用既有角色接缝。控制器 shutdownConfirmed=true、退出 0，原生 groupState=gone、nativeExitCode=0，角色两层停止确认。stream-json 用量事实 nativeRecords=1、inputTokens=17,694（含 cachedInputTokens=17,684）、outputTokens=409、reasoningOutputTokens=307。Worker 与私有服务停止、SDK shutdown.completed=true，三个实际端点均 absent，socketResiduals=[]。
+
+原始证据为 `tmp/c073-host/claude-approved-smoke-{started,result,proof}.json` 与 `claude-approved-smoke.log`，固定 run/result/交付/签收/端点材料保留在 `<CLAUDE_SMOKE_ROOT>`；没有设置 CLAUDE_CONFIG_DIR 或 CODEX_HOME，没有改登录或读凭据文件。真实冒烟累计为 Codex 1 次、Claude Code 1 次，DSH 与 ZCode 仍未运行，继续各自请求批准；这一记录更正没有代码变化，按既有规则只重跑仓库卫生检查。
