@@ -322,3 +322,5 @@ Host私有ffd5b2bb副本负向排查：模块求值前预置models.showUnavailab
 收尾仅补本记录；`cli.test_repository_hygiene` 私有环境5项退出0，`git diff --check`退出0。最终代码与assets保持ec9e1526，Python/full frontend/builder精确提交号与退出0见首表；Host工作树保持，不推送，不安装升级或重启日常服务/Worker、不触碰另一会话分支/检出。至此停止本批实施，等待Claude Code Host验收；验收之前不开始其他工作。
 
 R-B在委派前收窄补充范围：备份database_snapshot目前仍对单张表收集/排序序列化行；如有写入的峰值因此仍过高，允许在该现有指纹函数内复用SQLite/标准库实现有界处理及对应backup测试，必须保持当前fingerprint格式、BLOB/Unicode/排序、备份校验/事件头/排除workers默认语义不变。无schema/新持久表/新测试框架，不能用另一套指纹绕过原快照绑定；完整备份/触发器回归列为受影响检查。R-A及其他微任务不写该文件。
+
+本轮首交：R-A run91f46843-5004-4906-a440-11f6299d5697、R-B run778ae456-460b-46d9-99d5-b3d150b75711、R-D run93accf26-54b0-4357-962d-60dcf6fe8980，基于c6280fb0提交，三次均省略所有四字段/configuration、明确原已accepted关联run和原宏任务；健康读取contract0.27/status ok，仍以attach-only既有CLI访问共享日常服务，不触发冷启动。三次首次路由分别GLM-5.3 max、GLM-5.3 max、GLM-5.3-Flash max，均供应方stream不可重试429/1310，原停止证据self/descendants confirmed、无输出；原始get/result与packet固定host-review-repair-20261010/hr_*-round1-limited。各自fresh enabled/available/quota未耗尽后按用户限流例外在原run完整codex/openai/gpt-6.1-sol/high continue（hr-*-continue-rate-limit-1310-r1，revision4→5），范围/规则保持。原模型错误与Monitor compact摘要不当测试/产物验收，等待新固定交付。
