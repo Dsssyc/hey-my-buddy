@@ -22,6 +22,7 @@
   --danger: #a03b35;
   --danger-wash: #fcf0ee;
   --danger-line: #edcfcb;
+  --on-danger: #ffffff;
   --focus: #81ad90;
   --edit-surface: #fbfdf9;
   --edit-line: #a9c9b5;
@@ -74,6 +75,7 @@
   --danger: #f0a09a;
   --danger-wash: #3a2321;
   --danger-line: #5c3733;
+  --on-danger: #2b100d;
   --focus: #b6c5d6;
   --edit-surface: #1c1f22;
   --edit-line: #465059;

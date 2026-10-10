@@ -13,7 +13,6 @@ import { BuddyConfig } from "./BuddyConfig";
 import { Settings } from "./Settings";
 import { Badge, Icon } from "./ui";
 import { readVerificationText } from "./api";
-import "./styles.css";
 import buddyIcon from "../../../docs/assets/icon.svg?no-inline";
 
 const tabs = { tasks: "委派记录", buddy: "Buddy 配置", settings: "设置" } as const;
