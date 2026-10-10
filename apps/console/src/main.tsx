@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { applyStoredTheme } from "./theme";
+import "./i18n";
 import "./index.css";
 
 // Apply the stored display preference before the first paint; a failed storage

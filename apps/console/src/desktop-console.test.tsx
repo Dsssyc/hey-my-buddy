@@ -2,7 +2,8 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { readVerificationText, type ConsoleApi } from "./api";
+import type { ConsoleApi } from "./api";
+import { formatDateTime } from "./i18n/format";
 import type { Profile, Snapshot, Task, TaskQuery, WriterGrant } from "./types";
 import type { Workflow } from "./workflow-types";
 
@@ -87,10 +88,11 @@ describe("desktop console", () => {
     const { container } = render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "还没有工作目标" });
     expect(screen.queryByRole("button", { name: "刷新工作台" })).toBeNull();
-    const timestamp = container.querySelector(".snapshot-read-state")!;
-    expect(timestamp.textContent).toBe(`黑板快照 · ${readVerificationText(Date.parse("2026-01-02T03:04:05Z"))}`);
-    expect(timestamp.textContent).toContain("核对时间");
-    expect(timestamp.textContent).not.toContain("未记录");
+    // A read from an earlier day is written with its date; the top bar holds the only copy.
+    const read = within(screen.getByRole("banner")).getByText(formatDateTime(Date.parse("2026-01-02T03:04:05Z")));
+    expect(read.getAttribute("datetime")).toBe("2026-01-02T03:04:05.000Z");
+    expect(read.parentElement!.textContent).toBe(`核对时间 ${read.textContent}`);
+    expect(within(screen.getByRole("main")).queryByText(/黑板快照/)).toBeNull();
     expect(screen.queryByText("已连接")).toBeNull();
   });
 
@@ -100,7 +102,7 @@ describe("desktop console", () => {
     try {
       render(<App suppliedApi={f.api} />);
       await act(async () => { await vi.advanceTimersByTimeAsync(200); });
-      expect(screen.getByText("黑板快照 · 核对时间未记录")).toBeTruthy();
+      expect(within(screen.getByRole("banner")).getByText("核对时间未记录")).toBeTruthy();
       (f.api.snapshot as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("合成连接中断"));
       await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
       expect(screen.getByRole("button", { name: "重试连接" })).toBeTruthy();
@@ -121,13 +123,12 @@ describe("desktop console", () => {
     // The fixture's rows contain no awaiting-Host goal at all; the count only
     // comes from the slim snapshot's server-side field.
     f.snapshot.tasks.pendingCount = 5;
-    const { container } = render(<App suppliedApi={f.api} />);
+    render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "还没有工作目标" });
-    const badge = container.querySelector(".nav-count");
-    expect(badge?.textContent).toBe("5");
-    expect(badge?.getAttribute("title")).toBe("全部委派中等待 Host 决定的目标");
+    // The count and what it counts are both part of the tab's name.
+    expect(screen.getByRole("link", { name: /^任务\s*5\s*等待 Host 决定的微任务$/ })).toBeTruthy();
     f.snapshot.tasks.pendingCount = 0;
-    await waitFor(() => expect(container.querySelector(".nav-count")).toBeNull(), { timeout: 5000 });
+    await waitFor(() => expect(screen.getByRole("link", { name: "任务" })).toBeTruthy(), { timeout: 5000 });
   });
 
   it("uses the exact top navigation and presents the 22 native configurations as six read-only model families", async () => {
@@ -135,11 +136,11 @@ describe("desktop console", () => {
     const user = userEvent.setup();
     const { container } = render(<App suppliedApi={f.api} />);
     const navigation = await screen.findByRole("navigation", { name: "主要导航" });
-    expect(within(navigation).getAllByRole("link").map(link => link.textContent)).toEqual(["委派记录", "Buddy 配置", "设置"]);
+    expect(within(navigation).getAllByRole("link").map(link => link.textContent)).toEqual(["任务", "伙伴", "设置"]);
     expect(navigation.closest("header")).not.toBeNull();
     expect(container.querySelector(".sidebar")).toBeNull();
     expect(screen.getAllByRole("navigation")).toHaveLength(1);
-    await user.click(within(navigation).getByRole("link", { name: "Buddy 配置" }));
+    await user.click(within(navigation).getByRole("link", { name: "伙伴" }));
     expect(await screen.findByRole("heading", { name: "模型 6" })).toBeTruthy();
     const list = screen.getByRole("region", { name: "模型家族" });
     expect(list.querySelectorAll(".family-row")).toHaveLength(6);
@@ -172,7 +173,7 @@ describe("desktop console", () => {
     await user.type(screen.getByLabelText("家族备注"), "ZCode 家族备注");
     await user.click(screen.getByRole("link", { name: "设置" }));
     expect(screen.queryByRole("textbox", { name: "家族备注" })).toBeNull();
-    await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
+    await user.click(screen.getByRole("link", { name: /伙伴/ }));
     expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "ZCode 家族备注");
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "flash 家族备注");
@@ -225,8 +226,8 @@ describe("desktop console", () => {
       query: "目标", projectId: "source-project", hostId: "codex-source" }), expect.any(AbortSignal)));
     const scroll = screen.getByLabelText("委派条目");
     scroll.scrollTop = 280;
-    await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
-    await user.click(screen.getByRole("link", { name: "委派记录" }));
+    await user.click(screen.getByRole("link", { name: /伙伴/ }));
+    await user.click(screen.getByRole("link", { name: "任务" }));
     expect(screen.getByLabelText("搜索委派")).toHaveProperty("value", "目标");
     expect(screen.getByLabelText("项目筛选")).toHaveProperty("value", "source-project");
     expect(screen.getByLabelText("委派方筛选")).toHaveProperty("value", "codex-source");
@@ -302,8 +303,8 @@ describe("desktop console", () => {
     expect(screen.queryByRole("button", { name: "批准所列协助" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /目标 two/ }));
     expect((await screen.findAllByText(/协助 two/)).length).toBeGreaterThan(0);
-    await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
-    await user.click(screen.getByRole("link", { name: "委派记录" }));
+    await user.click(screen.getByRole("link", { name: /伙伴/ }));
+    await user.click(screen.getByRole("link", { name: "任务" }));
     expect((await screen.findAllByText(/协助 two/)).length).toBeGreaterThan(0);
     expect(f.command.mock.calls.every(([operation]) => operation === "workflow_get")).toBe(true);
   });

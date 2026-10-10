@@ -15,22 +15,6 @@ input, textarea, select { width: 100%; min-width: 0; border: 1px solid var(--lin
 textarea { resize: vertical; line-height: 1.65; min-height: 64px; max-height: 50vh; }
 input::placeholder, textarea::placeholder { color: var(--faint); }
 input[type="checkbox"] { width: 16px; height: 16px; padding: 0; accent-color: var(--accent); flex-shrink: 0; }
-.app-shell { height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.app-header { display: flex; align-items: center; gap: 32px; flex: 0 0 auto; min-height: 60px; padding: 0 24px; border-bottom: 1px solid var(--line); background: var(--surface); }
-.brand { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
-.brand strong { font-size: 15px; letter-spacing: -.03em; }
-.brand-icon { display: block; width: 30px; height: 30px; object-fit: contain; flex-shrink: 0; }
-.primary-tabs { display: flex; align-self: stretch; gap: 8px; }
-.primary-tabs a { display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 3px solid transparent; color: var(--muted); white-space: nowrap; font-size: 13px; }
-.primary-tabs a:hover { background: var(--subtle); }
-.primary-tabs a.active { color: var(--accent); border-color: var(--accent); font-weight: 600; }
-.nav-count { padding: 0 5px; background: var(--warning-wash); color: var(--warning); border-radius: 3px; font-size: 11px; }
-.header-status { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
-.connection { font-size: 12px; color: var(--muted); }
-.refresh-spinning { display: inline-flex; animation: refresh-spin .8s linear infinite; }
-@keyframes refresh-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .refresh-spinning { animation: none; } }
-.nav-unsaved { color: var(--warning); font-size: 16px; line-height: 1; }
 /* A real switch track: the effort tags' enable switches. */
 .switch-track { position: relative; display: inline-block; flex-shrink: 0; width: 30px; height: 16px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--subtle); transition: background .15s ease, border-color .15s ease; }
 .switch-thumb { position: absolute; top: 1px; left: 1px; width: 12px; height: 12px; border: 1px solid var(--line-strong); border-radius: 50%; background: var(--surface); transition: transform .15s ease; }
@@ -61,8 +45,6 @@ input[type="checkbox"] { width: 16px; height: 16px; padding: 0; accent-color: va
 .dialog-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 20px; background: var(--overlay); }
 .dialog { width: min(440px, 100%); display: grid; gap: 14px; padding: 20px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--ink); }
 .dialog p { color: var(--muted); font-size: 13px; }
-.main-content { flex: 1; min-height: 0; min-width: 0; padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
-.view-panel { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .workspace-grid { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(260px, var(--list-width, 330px)) 10px minmax(0, 1fr); }
 .panel { min-width: 0; min-height: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .list-panel, .detail-panel { display: flex; flex-direction: column; height: 100%; }
@@ -237,24 +219,9 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .mono { font-family: ui-monospace, monospace; font-size: 11px; }
 .padded { padding: 16px; }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-.skip-link { position: fixed; z-index: 20; top: -80px; left: 12px; padding: 12px; background: var(--accent); color: var(--on-accent); }
-.skip-link:focus { top: 12px; }
-.startup { min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; padding: 24px; text-align: center; }
 .mobile-back { display: none; }
 @media (min-width: 1180px) { .reading-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 900px) {
-  .app-header { gap: 12px; padding-inline: 16px; }
-  .brand strong { display: none; }
-  .primary-tabs a { padding-inline: 12px; }
-  .header-status { gap: 8px; }
-}
 @media (max-width: 760px) {
-  .app-header { display: grid; grid-template-columns: 1fr auto; gap: 0; padding: 10px 12px 0; }
-  .brand strong { display: none; }
-  .primary-tabs { grid-column: 1 / -1; grid-row: 2; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin-top: 6px; }
-  .primary-tabs a { justify-content: center; padding: 9px 4px; font-size: 12px; gap: 5px; }
-  .primary-tabs svg { width: 15px; height: 15px; }
-  .main-content { padding: 8px; }
   .workspace-grid { display: block; }
   .pane-divider { display: none; }
   .workspace-grid:not(.has-selection) > .detail-panel, .workspace-grid.has-selection > .list-panel { display: none; }
@@ -265,7 +232,6 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
   .detail-tabs { padding: 0 6px; gap: 0; }
   .detail-tabs button { flex: 1; padding: 9px 4px; }
   .reading-grid { grid-template-columns: 1fr; gap: 14px; }
-  .header-status { justify-content: flex-end; }
   .edit-cluster { flex-wrap: wrap; justify-content: flex-end; }
   .settings-panel { padding: 16px; }
   .acceptance-controls { padding-inline: 14px; }
@@ -283,7 +249,6 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .list-title-toolbar { flex-wrap: wrap; justify-content: flex-start; gap: 6px; }
 .list-title-toolbar h2 { flex: 1 1 auto; }
 .local-read-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
-.snapshot-read-state { flex-shrink: 0; }
 .history-view { flex: 1; min-height: 0; overflow: hidden; }
 .count-line { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; }
 .cnt { display: inline-flex; gap: 3px; white-space: nowrap; }

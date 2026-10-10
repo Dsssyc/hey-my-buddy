@@ -336,13 +336,13 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(f.operations).toEqual([]);
     expect(f.published).toHaveLength(0);
     // Navigation keeps working and no control reacquires authority.
-    await user.click(screen.getByRole("link", { name: "委派记录" }));
+    await user.click(screen.getByRole("link", { name: "任务" }));
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     expect(screen.getByRole("heading", { name: "选择一项委派" })).toBeTruthy();
     expect(f.operations).toEqual([]);
     // Refreshing again never regains rights without a new login.
     // The edit cluster only exists on the settings tabs (P1.2), so return there.
-    await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
+    await user.click(screen.getByRole("link", { name: /伙伴/ }));
     await screen.findByRole("heading", { name: "模型 2" });
     await readSnapshotOnForeground(f.api.snapshot);
     await waitFor(() => expect(screen.getByRole("button", { name: "保存" }).getAttribute("aria-disabled")).toBe("true"));
@@ -374,7 +374,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await user.click(discover);
     expect((await screen.findAllByText(/暂时不能发现模型/)).length).toBeGreaterThan(0);
     // Browsing and the read-only detail keep working.
-    await user.click(screen.getByRole("link", { name: "委派记录" }));
+    await user.click(screen.getByRole("link", { name: "任务" }));
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /只读普通任务/ }));
     await screen.findByRole("heading", { name: /只读普通任务/ });
@@ -623,7 +623,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     // Filters and searches stay usable without any write attempt.
     await user.type(screen.getByLabelText("搜索委派"), "可浏览");
     await waitFor(() => expect(f.tasks).toHaveBeenLastCalledWith(expect.objectContaining({ query: "可浏览" }), expect.any(AbortSignal)));
-    await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
+    await user.click(screen.getByRole("link", { name: /伙伴/ }));
     await user.click(await screen.findByRole("button", { name: "更新记录" }));
     expect(await screen.findByText("V12")).toBeTruthy();
     await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（1）" }));
@@ -652,7 +652,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.type(await screen.findByLabelText("家族备注"), "断线草稿");
 
-    await user.click(screen.getByRole("link", { name: /委派记录/ }));
+    await user.click(screen.getByRole("link", { name: /任务/ }));
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     const detail = await screen.findByRole("complementary", { name: "任务详情" });
     await user.click(await screen.findByRole("button", { name: /断线可取消任务/ }));
@@ -666,14 +666,14 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     // The authenticated poll now fails; the detail stays readable and empty of
     // write controls, and no mutation is dispatched from either session state.
     await readSnapshotOnForeground(f.api.snapshot);
-    expect(await screen.findByText(/连接中断 · 请检查本地服务/)).toBeTruthy();
+    expect(await screen.findByText("连接中断 ·")).toBeTruthy();
     expect(within(detail).queryByRole("group", { name: "用户决定" })).toBeNull();
     expect(within(detail).queryByRole("group", { name: "手工接续" })).toBeNull();
     // A failed poll is not a new-window takeover.
     expect(screen.queryByText(bannerNotice)).toBeNull();
     expect(f.operations.every(operation => ["evaluation_history", "selection_get", "selection_list", "model_profiles", "workflow_get"].includes(operation))).toBe(true);
     // The dirty model draft is preserved and its save stays disabled.
-    await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
+    await user.click(screen.getByRole("link", { name: /伙伴/ }));
     expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "原人工意见断线草稿");
     expect(screen.getByRole("button", { name: "保存" }).getAttribute("aria-disabled")).toBe("true");
   });

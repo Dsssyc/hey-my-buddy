@@ -200,10 +200,10 @@ describe("direct editing and the save bar", () => {
     await user.click(screen.getByRole("radio", { name: /优先/ }));
     expect(within(saveBar()!).getByText("3 项未保存")).toBeTruthy();
     // The records page shows neither the save bar nor any draft state.
-    await user.click(screen.getByRole("link", { name: "委派记录" }));
+    await user.click(screen.getByRole("link", { name: "任务" }));
     expect(saveBar()).toBeNull();
     // The navigation still says a draft is waiting on the Buddy page.
-    await user.click(screen.getByRole("link", { name: /^Buddy 配置\s*有未保存的修改$/ }));
+    await user.click(screen.getByRole("link", { name: /^伙伴\s*有未保存的修改$/ }));
     expect(within(saveBar()!).getByText("3 项未保存")).toBeTruthy();
   });
 
@@ -548,7 +548,7 @@ describe("direct editing and the save bar", () => {
     const user = userEvent.setup();
     await openBuddy(f.api, user);
     const nav = screen.getByRole("navigation", { name: "主要导航" });
-    expect(within(nav).getAllByRole("link").map(link => link.textContent)).toEqual(["委派记录", "Buddy 配置", "设置"]);
+    expect(within(nav).getAllByRole("link").map(link => link.textContent)).toEqual(["任务", "伙伴", "设置"]);
     expect(screen.queryByText("模型卡片")).toBeNull();
     expect(screen.queryByText("路由配置")).toBeNull();
     expect(screen.queryByText("编辑设置")).toBeNull();
@@ -556,7 +556,7 @@ describe("direct editing and the save bar", () => {
     // An open gate is normal, so no "评价表可读" badge is needed.
     expect(screen.queryByText("评价表可读")).toBeNull();
     expect(screen.queryByText("独占编辑中")).toBeNull();
-    for (const page of ["委派记录", "设置", "Buddy 配置"]) {
+    for (const page of ["任务", "设置", "伙伴"]) {
       await user.click(within(nav).getByRole("link", { name: page }));
       expect(screen.queryByText("编辑设置")).toBeNull();
     }
@@ -567,7 +567,7 @@ describe("direct editing and the save bar", () => {
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
-    expect(screen.getByRole("link", { name: "Buddy 配置" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("link", { name: "伙伴" }).getAttribute("aria-current")).toBe("page");
   });
 
   it("shows only an actionable gate state instead of a readable badge", async () => {

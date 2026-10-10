@@ -26,6 +26,7 @@
   --color-muted-foreground: var(--muted);
   --color-accent: var(--accent-wash);
   --color-accent-foreground: var(--accent-dark);
+  --color-accent-line: var(--accent-line);
   --color-destructive: var(--danger);
   --color-destructive-foreground: var(--on-danger);
   --color-border: var(--line);

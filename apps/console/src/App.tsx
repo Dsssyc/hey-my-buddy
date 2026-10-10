@@ -1,4 +1,8 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { createApi } from "./api";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
@@ -8,16 +12,14 @@ import type { Editor } from "./use-editor";
 import { useTheme } from "./theme";
 import { UNRESOLVED_SAVE_NOTE } from "./console-session";
 import { createAuthorityLatch } from "./console-session";
+import { formatClock, formatDateTime } from "./i18n/format";
 import { Objectives } from "./Objectives";
 import { BuddyConfig } from "./BuddyConfig";
 import { Settings } from "./Settings";
-import { Badge, Icon } from "./ui";
-import { readVerificationText } from "./api";
 import buddyIcon from "../../../docs/assets/icon.svg?no-inline";
 
-const tabs = { tasks: "委派记录", buddy: "Buddy 配置", settings: "设置" } as const;
+const tabs = { tasks: "nav.tasks", buddy: "nav.buddies", settings: "nav.settings" } as const;
 type Tab = keyof typeof tabs;
-const tabIcons = { tasks: "tasks", buddy: "models", settings: "settings" } as const;
 /**
  * URL hash per tab. The 设置 page cannot keep `settings`: that hash was the
  * retired 路由配置 page, and the user's decision is that the old bookmark opens
@@ -32,19 +34,22 @@ function currentTab(): Tab {
   return known ?? legacyTabs[key] ?? "tasks";
 }
 
+/** The clock time of a read made today, and the date with it once the read is older. */
+function readTime(ms: number): string {
+  return new Date(ms).toDateString() === new Date().toDateString() ? formatClock(ms) : formatDateTime(ms);
+}
+
 export function App({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
+  const { t } = useTranslation("shell");
   const [api] = useState(() => suppliedApi || createApi(window.location.pathname));
   const state = useConsole(api);
   return state.snapshot ? <Connected api={api} snapshot={state.snapshot} refresh={state.refresh} connectionError={state.error} /> :
-    <main className="startup"><img className="brand-icon" src={buddyIcon} alt="" width="30" height="30" />
-      <h1>{state.error ? "暂时无法连接黑板" : "正在连接本地黑板"}</h1>
-      <p role={state.error ? "alert" : "status"}>{state.error || "正在连接…"}</p>
-      {state.error && <button className="button primary" onClick={() => void state.refresh()}>重新连接</button>}
+    <main className="flex min-h-dvh flex-col items-center justify-center gap-5 p-6 text-center">
+      <img src={buddyIcon} alt="" width="32" height="32" className="size-8" />
+      <h1 className="text-lg font-semibold">{state.error ? t("startup.failed") : t("startup.connecting")}</h1>
+      <p className="text-muted-foreground" role={state.error ? "alert" : "status"}>{state.error || t("startup.waiting")}</p>
+      {state.error && <Button onClick={() => void state.refresh()}>{t("startup.reconnect")}</Button>}
     </main>;
-}
-
-function gateStateText(snapshot: Snapshot) {
-  return snapshot.gate.phase === "draining" ? "写入排队中" : "独占编辑中";
 }
 
 /**
@@ -74,6 +79,7 @@ function SaveBar({ editor, mutationsAvailable, describedBy }: {
 function Connected({ api, snapshot, refresh, connectionError }: {
   api: ConsoleApi; snapshot: Snapshot; refresh: () => Promise<Snapshot | null>; connectionError: string;
 }) {
+  const { t } = useTranslation("shell");
   const [tab, setTab] = useState<Tab>(currentTab);
   const [visited, setVisited] = useState(() => new Set<Tab>([currentTab()]));
   const theme = useTheme();
@@ -102,41 +108,59 @@ function Connected({ api, snapshot, refresh, connectionError }: {
     window.addEventListener("hashchange", changed);
     return () => window.removeEventListener("hashchange", changed);
   }, []);
-  // The server's board-wide count of delegation roots awaiting their Host —
+  // The server's board-wide count of micro tasks awaiting their Host —
   // computed over every run, never inferred from a page of recent rows.
   const pending = snapshot.tasks.pendingCount;
   const saveRefusal = editor.saveBlockedReason
     || (editor.waiting ? "正在等待其他保存完成；可先取消等待。" : "");
-  // P1.2: the internal table revision lives only in the connection tooltip.
-  const connectionTitle = connectionError
-    ? `连接中断：${connectionError} 请检查服务或刷新重试。`
-    : `评价表 V${snapshot.tableRevision}`;
   const conflictTitle = editor.conflict ? `V${editor.conflict.basedOn} → V${editor.conflict.latest}` : undefined;
   // Draft banners belong to the Buddy settings page; the records page shows none.
   const draftTab = tab === "buddy";
-  return <div className="app-shell">
-    <a className="skip-link" href="#main" onClick={event => {
-      event.preventDefault(); document.getElementById("main")?.focus();
-    }}>跳至主要内容</a>
-    <header className="app-header">
-      <a className="brand" href="#tasks" aria-label="Hey my buddy" onClick={() => select("tasks")}><img className="brand-icon" src={buddyIcon} alt="" width="30" height="30" /><strong>Hey my buddy</strong></a>
-      <nav className="primary-tabs" aria-label="主要导航">
-        {(Object.keys(tabs) as Tab[]).map(key => <a key={key} href={"#" + tabHashes[key]} onClick={() => select(key)}
-          aria-current={tab === key ? "page" : undefined} className={tab === key ? "active" : ""}>
-          <Icon name={tabIcons[key]} /><span>{tabs[key]}</span>
-          {key === "tasks" && pending > 0 && <span className="nav-count" title="全部委派中等待 Host 决定的目标">{pending}</span>}
-          {key === "buddy" && editor.dirty && <span className="nav-unsaved" title="有未保存的修改"><span aria-hidden="true">•</span><span className="sr-only">有未保存的修改</span></span>}
-        </a>)}
+  const verifiedAt = api.readVerifiedAt?.(snapshot) ?? null;
+  // What a mark on a tab means; the tab shows it on hover and on focus.
+  const tabHints: Partial<Record<Tab, string>> = {
+    tasks: pending > 0 ? t("nav.pendingHost") : undefined,
+    buddy: editor.dirty ? t("nav.unsaved") : undefined,
+  };
+  return <TooltipProvider delayDuration={300}><div className="flex h-dvh min-h-0 flex-col overflow-hidden">
+    <a className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground"
+      href="#main" onClick={event => { event.preventDefault(); document.getElementById("main")?.focus(); }}>{t("skipToContent")}</a>
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-card px-3 sm:gap-6 sm:px-4">
+      <a className="flex shrink-0 items-center gap-2 rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        href="#tasks" aria-label="Hey my buddy" onClick={() => select("tasks")}>
+        <img src={buddyIcon} alt="" width="24" height="24" className="size-6" />
+        <span className="text-sm font-semibold tracking-tight max-sm:hidden">Hey my buddy</span>
+      </a>
+      <nav className="flex h-full" aria-label={t("nav.label")}>
+        {(Object.keys(tabs) as Tab[]).map(key => {
+          const hint = tabHints[key];
+          const link = <a key={key} href={"#" + tabHashes[key]} onClick={() => select(key)} aria-current={tab === key ? "page" : undefined}
+            className="relative flex items-center gap-1.5 px-3 text-sm whitespace-nowrap text-muted-foreground outline-none hover:text-foreground focus-visible:bg-accent aria-[current=page]:font-medium aria-[current=page]:text-foreground aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-3 aria-[current=page]:after:bottom-0 aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-primary">
+            {t(tabs[key])}
+            {key === "tasks" && pending > 0 && <Badge tone="warning" className="tabular-nums">{pending}</Badge>}
+            {key === "buddy" && editor.dirty && <span className="size-1.5 rounded-full bg-warning" aria-hidden="true" />}
+            {hint && <span className="sr-only">{hint}</span>}
+          </a>;
+          return hint ? <Tooltip key={key}><TooltipTrigger asChild>{link}</TooltipTrigger><TooltipContent>{hint}</TooltipContent></Tooltip> : link;
+        })}
       </nav>
-      <div className="header-status">
-        {connectionError && <span className="connection" title={connectionTitle}>连接中断 · 请检查本地服务</span>}
-        {snapshot.gate.phase !== "open" && <Badge tone="amber">{gateStateText(snapshot)}</Badge>}
+      <div className="ml-auto flex min-w-0 items-center gap-3 text-xs text-muted-foreground">
+        {snapshot.gate.phase !== "open" && <Badge tone="warning">{snapshot.gate.phase === "draining" ? t("gate.draining") : t("gate.exclusive")}</Badge>}
+        {/* A narrow bar keeps the time and leaves the words to the alert below it. */}
+        <p className={connectionError ? "truncate text-destructive tabular-nums" : "truncate tabular-nums"}>
+          {connectionError && <span className="max-sm:hidden">{t("connection.lost")} · </span>}
+          {verifiedAt !== null
+            ? <><span className="max-sm:hidden">{t("snapshot.verified")} </span><time dateTime={new Date(verifiedAt).toISOString()}>{readTime(verifiedAt)}</time></>
+            : t("snapshot.unverified")}
+        </p>
       </div>
     </header>
-    <main id="main" className="main-content" tabIndex={-1}>
-      <h1 className="sr-only">{tabs[tab]}</h1>
-      {connectionError && <p className="banner error-banner" role="alert">{connectionError} <button type="button" className="button small-button" onClick={() => void refresh()}>重试连接</button></p>}
-      <p className="small muted snapshot-read-state">黑板快照 · {readVerificationText(api.readVerifiedAt?.(snapshot))}</p>
+    <main id="main" className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden p-2 outline-none sm:p-4" tabIndex={-1}>
+      <h1 className="sr-only">{t(tabs[tab])}</h1>
+      {connectionError && <p className="flex shrink-0 flex-wrap items-center gap-3 rounded-md border border-danger-line bg-danger-wash px-3 py-2 text-destructive" role="alert">
+        <span className="min-w-0 wrap-anywhere">{connectionError}</span>
+        <Button variant="outline" size="sm" onClick={() => void refresh()}>{t("connection.retry")}</Button>
+      </p>}
       {draftTab && editor.conflict && !editor.confirming && <div className="banner conflict-banner" role="alert">
         <span title={conflictTitle}>设置已更新；请核对草稿。</span>
         {editor.rebaseConflicts.length > 0 && <ul className="conflict-details">
@@ -161,7 +185,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       {/* Stable positions preserve page selections, drafts and scroll offsets.
           https://react.dev/learn/preserving-and-resetting-state */}
       {(Object.keys(tabs) as Tab[]).map(key => visited.has(key) && <section key={key} hidden={tab !== key}
-        className="view-panel" aria-label={tabs[key]}>
+        className="min-h-0 min-w-0 flex-1 overflow-hidden" aria-label={t(tabs[key])}>
         {key === "tasks" ? <Objectives snapshot={snapshot} api={api} refresh={refresh} active={tab === key}
           authority={authority} writesAvailable={writesAvailable} /> :
           key === "buddy" ? <BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
@@ -173,5 +197,5 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       {draftTab && editor.mode && <SaveBar editor={editor} mutationsAvailable={mutationsAvailable}
         describedBy={saveRefusal ? "editor-save-reason" : undefined} />}
     </main>
-  </div>;
+  </div></TooltipProvider>;
 }
