@@ -51,6 +51,8 @@ R-F run `7bd25223-0021-45e2-97da-888fda890c8a`，基于 `214692a9` 首次路由�
 
 R-D真实浏览器补证：固定 `9a8ae43b` 构建，私有真实ConsoleHTTP/SyntheticBoard预览，不读取日常看板、不调用模型。Chrome独占预览后台重载后578.436秒观察窗内恰一条首次快照GET/200、无周期快照，切回实际恢复GET/304与三秒cadence；原生自动化按键时间不能定位浏览器visibility事件，未把该延迟冒充服务端耗时，“立即一次”精确边界由六处独立移除和fake-clock断言守住。初次IAB始终visible及被Chrome阻止的工具标签不当后台证据，原材料保留。源码与合成已安装runtime均默认两项/详细信息关闭，在light/dark、1280/760×860实际DOM宽度下无水平溢出，Enter/Space分别展开/收起且版本读取总数仍2。合成已安装6.8.2/2026-09-30仅沿用VersionInfoTests READY配方，标记程序未执行；初写指针权限错误导致真实产品显示未记录，随后用既有write_active_runtime纠正，仅私有夹具，未安装/动凭据。证据 `host-review-repair-20261010/rd-visibility-single/{native-times-r2,version-browser-matrix,version-browser-keyboard,version-fixture-boundary}.json`，改后截图位于ignored `host-review-repair-20261010/screenshots/RD01-Chrome-*.jpg`、`RD02-Chrome-background-first-read-return.jpg`；发行产物的最终源码重建仍待整合后完成。
 
+R-E原始受影响144项中136通过、7failures/1error，旧输入与准备优化版本同类失败、材料固定 `review-hr-speed/host-review-round3/r-e-128211ca/`，不能算验收通过。Host在本分支 `d30513f4` 私有复现提交被拒回收用例1项/2.747秒 AssertionError、退出1，确认R-A把_orphan_workspace改为两参却漏了workflow._revoke_submission_allocation三参调用。按范围内缺陷回原run，R-A唯一写入范围登记追加 `blackboard/tasks/workflow.py` 的这个调用点，测试仍只storage文件；R-E六测试文件暂不继续，避免同文件写入。保留原异常、恢复收据与writer/allocation引用防护，不能削弱八个既有断言或用TypeError兼容掩盖。
+
 ## 初交结果（2026-10-10，随后被 Claude Code Host 打回）
 
 B1–B5、U1–U11 已完成本 Host 的固定产物核对、受影响检查、目标行为移除验证与整合。分支 `socu/console-ui-and-board-fixes` 的最终代码/前端测试提交为 `ec9e1526585d96e96dd8e5e6202476879004a339`，已合入 `socu/buddy-core@1a9decd95736a15a5ec4b4db6526e4cb48666326`（含已验收 DSH 原生续接）。以下完整检查均使用合入后的源码、私有状态/运行时与清除继承变量的环境；保留此前两次前端失败和合入前 Python 失败，不把单文件通过代替完整结果。分支不推送，Host 工作树保留供验收。
