@@ -255,3 +255,13 @@ Host 在本检出执行 `npm --prefix apps/console ci` 准备 AGENTS 要求的�
 本轮基线 `b2741294`：2-A run `ad73f506-d3f9-49f5-85fc-7b72fcbb643c` 首次决定 `dec-09af40e4-65c8-4585-ac03-c0cbf561cf9f` 选 ZCode/zai-api/GLM-5.3/max；2-B run `7bba6511-75fe-4aa3-b042-2fd5df372bc3` 首次决定 `dec-8e478dff-b249-458e-9116-dcac7f2d6264` 选 ZCode/zai-api/GLM-5.3-Flash/max。两者供应方均不可重试 429/1310 限流，两层停止确认；按已有授权各自在原 run 上用 Codex/openai/gpt-6.1-sol/high continue，该配置已完成本批同类实现与核对。原路由、原失败、原根与请求保留，没有改用户路由设置。
 
 Host 已执行开发依赖准备，退出 0、4.590 秒，`apps/console` 源码与锁未变；npm 输出已有 audit 警告，只保留原日志，不另做升级。原始材料 `tmp/c073-host/console-dev-ci.{json,log}`。Host 在新自建根亲自核对发布版 0.7.4：0755 状态父目录下，0700 与 0755 端点目录真实注册均成功，0770 端点目录在原生初始化/注册时被 `CoreError` 拒绝；仅 `set_local_endpoint` 配置成功不证明实际域初始化通过。所有探针根均属本任务，未使用默认公共域，材料 `sdk-directory-rule-native.{json,log}`。此次观察的机器负载约 31～37，最终完整检查等待重测试低峰，已确认的产品与隔离失败不归因于负载。
+
+用户授权补充微任务 2-E：仅修改 `tests/python/console/test_console.py` 中新增 R-05 测试及必要局部 helper、新增 `docs/acceptance/c-two-r05-guard.md`，基线 `27b91e0d`。旧 2-B 已签收，黑板实际拒绝原 run 的 continue；新任务是用户明确批准的例外，不取消旧 run 或改写旧产物。CLI/HTTP 错误也必须核对记录拒绝诱饵，原 HTTP 500 本身不再计为有效目标变异。2-E 与 2-C 的 support、2-D 的检查点夹具范围互不重叠，其余约束沿用本计划。
+
+| 微任务 / run | 首次路由决定 | 不可重试限流后的同 run 配置 |
+| --- | --- | --- |
+| 2-C / `9a357572-1b91-4e5a-81d2-095593f6fcd0` | `dec-adc545f2-4ae0-467c-87a4-eaba1b3f2222`；ZCode/zai-api/GLM-5.3-Flash/max | Codex/openai/gpt-6.1-sol/high |
+| 2-D / `a4e106fd-82f7-44ca-8312-9b3a11bd320d` | `dec-3c1f508b-71c1-469d-b2f6-91a83d1ead8a`；ZCode/zai-api/GLM-5.3-Flash/max | Codex/openai/gpt-6.1-sol/high |
+| 2-E / `22e5e432-44c3-439c-b885-2b3f7f23c470` | `dec-783275aa-5531-40d1-a1ba-2fc4240aeb19`；ZCode/zai-api/GLM-5.3-Flash/max | Codex/openai/gpt-6.1-sol/high |
+
+三项首次提交均省略全部四项配置。供应方均返回不可重试 429/1310，失败回合两层停止确认后，按用户已有许可在各自原 run 上 continue，使用已完成本批同类工作的完整配置；没有改变用户路由设置。原失败与请求材料分别保留在 `<实施检出>/tmp/c073-host/repair-rpc*`、`repair-checkpoint*`、`repair-r05*` 的精确材料清单中；此处星号只说明文件名前缀，未用于清理。

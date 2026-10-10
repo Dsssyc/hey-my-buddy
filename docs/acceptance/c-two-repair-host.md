@@ -69,3 +69,7 @@ Host 复读真实 catalog-loss 日志后发现，前述“额外一处命中拒�
 Host 在原 2-B run 发出不指定配置的 continue，黑板拒绝 `CONFLICT: An accepted goal cannot be continued`，没有创建新回合。用户明确授权例外新增一个经路由的窄微任务 2-E，唯一可写 `tests/python/console/test_console.py` 中的新增 R-05 测试与新 `docs/acceptance/c-two-r05-guard.md`；不碰旧 run、原固定记录与正在由 2-C 独占的 support。目的为在 CLI/HTTP/bootstrap 错误时也明确核对记录拒绝诱饵，正常路径仍验证真实服务与修改后 fixture 重读。旧签收、原失败与撤回全部保留，R-05 等新固定交付与实际目标变异通过后再登记。
 
 首批整合为 `57837f2f`，2-A 的 `int-9f3931f7-e1e3-49e8-9763-cd4d5a40311f`、2-B 的 `int-8b1f1f78-4f9f-400f-85ab-578282f80aca` 均 verified 后内部签收。原始产物日志与脚本已保存在 Host 根的 `retained-c2a-8p4Pqv` / `retained-b2b-iptu2A`，Host 按创建时记录的两个确切任务根整体回收，删除错误未屏蔽；清单在 `repair-ab-task-root-cleanup.json`。受管检出经黑板 cleanup-plan 核对，2-A 已自动 applied，2-B 后续按其 eligible 计划 apply，不手工删除受管检出。
+
+2-B 的受管检出回收已完成，计划 `cln-6d49a5d2-1194-4f99-9623-ac975c796f20` 返回 applied、removed=true。首次 apply 缺少 confirmPath 被拒绝，未发生回收；随后用计划给出的确切路径确认后成功，两个原始响应均保留。Host 只补充回收事实，没有修改 Worker 的固定记录、代码或测试，因此不重跑其聚焦测试。
+
+第二批 2-C/2-D 基线 `57837f2f`，例外新增的 2-E 基线 `27b91e0d`。三个路由决定、首次不可重试限流与同 run 完整配置继续均列在执行计划；不指定 buddy 的首次请求及失败停止证据完整保留。最终完整检查将使用新的独立日志和空私有 HOME，不覆盖初跑的 `final-check.log` 或结果。
