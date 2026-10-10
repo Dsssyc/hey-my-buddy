@@ -230,3 +230,11 @@ Host 在现有 localhost 响应夹具中只给测试自有 native wrapper 附加
 工具事实 streamComplete=true、toolCalls=0、unsettledToolCalls=0、truncated=false，绑定实际 task/attempt/session。控制器停止确认、退出 0，原生 groupState=gone、nativeExitCode=0，角色两层停止确认；Worker、私有服务与 SDK 也确认停止。三个实际端点均 absent，socketResiduals=[]，没有项目自行推算套接字路径并删除。私有会话用量 source=dsh/session-record、scope=attempt、completeness=complete、nativeRecords=2、inputTokens=22,737（含 cachedInputTokens=12,032）、outputTokens=150；这里只记录本回合原生报告，没有把多回合累计数当作本回合。
 
 证据为 `tmp/c073-host/dsh-approved-smoke-{started,result,proof}.json`、`dsh-approved-smoke.log` 与 `<DSH_SMOKE_ROOT>` 中的固定交付/签收/用量/停止/端点材料。使用产品既有私有 DSH_HOME 与启动配置，没有改用户交互使用的 DSH、登录或凭据。真实冒烟累计为 Codex、Claude Code、DSH 各一次，ZCode 仍未调用，须另行批准。
+
+## 提交整步验收的最终状态
+
+用户对最后一次 ZCode 付费冒烟明确回复“zcode没额度了，这个暂时不调用模型”。本批 ZCode 真实供应方回合为 0 次，因额度不足记为未验证；没有运行已准备入口、改变配置或自动重试。localhost 安装版测试与真实模型回合是不同验证边界，前者已在短根完整检查通过，不能替代后者。真实付费 Worker 冒烟总计 3 次：Codex、Claude Code、DSH 各一次且全通过，没有重跑。
+
+最终产品、测试与锁文件仍与全检提交 `e0ce3d2b` 相同；全检 3,474 项（跳过 1）、213/213 文件、690.917 秒、退出 0 的绑定及三次失败原始证据不变。后续只修改记录，仓库卫生检查重跑，不重复全检；控制台相对已合入 core 没有改动，不另跑前端测试。本分支不推送、不安装或升级日常运行时，到这里停止，等 Claude Code Host 整步验收。
+
+已签收微任务的受管检出通过各自 cleanup-plan/apply 回收，记录中的确切路径与保留固定产物可复核。Host 私有根、短根原生冒烟/检查证据，以及 2-D、2-F 原始失败对应任务根留给整步复核；没有因为后来 green 改写它们曾经的 unknown 停止证据，也没有按相同名称、前缀或日期推断并清扫别的会话对象。后续回收只按创建时台账与已登记的确切根进行。日常 state/ipc 的先前越界残留、公共默认端点命名空间仍未触碰。
