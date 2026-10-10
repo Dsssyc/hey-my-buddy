@@ -1,4 +1,4 @@
-# C-Two 0.7.3 执行计划与验收记录
+# C-Two 执行计划与验收记录（当前目标 0.7.4）
 
 起点是 `socu/buddy-core` 的 `0fffda8f`，实施分支为 `socu/c-two-073`，检出为 `~/.codex/worktrees/c-two-073/hey-my-buddy`。Host 沿用 `codex-adr025`，本批另建宏任务；不推送，不安装或升级日常运行时。已读 DSH 原生续接、ADR-025 第五步的 Host 验收记录、待办中的 C-Two 0.7.3 实测、ADR-025 第 13 条、ADR-007 和当前架构。
 
@@ -8,11 +8,11 @@
 
 Unix 端点目录选择为 `<state>/ipc`，复用项目已有的私有目录保护，在第一次本地注册或连接之前调用 `cc.set_local_endpoint(root=...)`。服务、Worker、控制器和 CLI 客户端用同一状态根推导同一目录；不用用户的 `C2_IPC_ROOT` 决定本项目的域。目录必须属于当前用户、为普通目录、无链接、权限 0700；已有不安全目录拒绝使用。Windows 不传根目录，保留 C-Two 的默认 Named Pipe 域。配置在进程中冻结，不能悄悄切换状态根；测试必须在自有进程中使用一致的私有域。
 
-关闭 buddy 缓冲池只设置 `pool_enabled=False`，删除池段大小与池段个数配置及其推导出的容量报告；保留与消息上限、重组及等待/控制并发有关的限制，并按实际 0.7.3 行为核对。关闭池仍可能临时使用共享内存，不能描述成关闭全部共享内存。公共接口与版本以发布的 [0.7.3 包](https://pypi.org/project/c-two/0.7.3/)、其公开接口说明和本批私有探针为依据；代码中的实测事实只写 Host 本次亲自复核过的事实。
+关闭 buddy 缓冲池只设置 `pool_enabled=False`，删除池段大小与池段个数配置及其推导出的容量报告；保留与消息上限、重组及等待/控制并发有关的限制，并按发布的 0.7.4 行为重新核对。关闭池仍可能临时使用共享内存，不能描述成关闭全部共享内存。公共接口与版本以发布的 [0.7.4 包](https://pypi.org/project/c-two/0.7.4/)、其公开接口说明和本批私有探针为依据；代码中的实测事实只写 Host 本次亲自复核过的事实。
 
 控制器注册后用 `cc.inspect_endpoint` 取得凭据，原样通过 `EndpointCredential.to_json()` 保存；Worker 用 `EndpointCredential.from_json()` 读取，仍验证尝试身份、控制器 PID 与实际停止证据。确认持有的进程组消失之后只调用一次 `cc.reap_endpoint`，记录 `reaped`、`already-absent`、`busy`、`stale-target`、`unverified` 等真实结果；后几种结果不重试删除。删除本项目的套接字路径推算、设备号/inode 登记和 unlink。就绪材料仍遵守现有整帧大小、普通文件与私有路径保护。
 
-实时调用改用 `cc.with_call_options(proxy, timeout=...)`，捕获 `c_two.error.CallDeadlineExceeded` 并沿用现有超时失败码。删除为每次调用新建线程及相关等待箱；保留本项目自己的请求时间窗、排队/消费检查与幂等绑定，因为调用期限只停止调用方等待，已经派发的对端调用仍会完成。连接建立和业务调用的期限范围分别在记录中说明，不把业务调用期限写成停止对端执行。
+每次实时连接使用 `cc.connect(..., timeout=剩余秒数)`，业务调用使用 `cc.with_call_options(proxy, timeout=剩余秒数)`，捕获 `c_two.error.CallDeadlineExceeded` 并沿用现有超时失败码。删除为每次调用新建线程及相关等待箱；保留本项目自己的请求时间窗、排队/消费检查与幂等绑定，因为调用期限只停止调用方等待，已经派发的对端调用仍会完成。连接与调用采用同一个整体时间窗的剩余预算，整个等待线程删除。两处 CallDeadlineExceeded 映射既有超时码；需要区分未发出与结果未知时只读 transport_phase 的 pre_dispatch / dispatch_uncertain，不解析错误文字。
 
 不做 owner-bound 生命周期、`spawn_owned_child`、两侧引用清理、Worker 权限档位和控制台改动；不改 ADR、CONTEXT、AGENTS、README、待办或参考文档。端点由公共目录迁入私有状态目录、rpcProfile 的池容量字段删除以及安装时传输版本必须一致，作为对外可见变化在本记录列出，交 Claude Code Host 维护文档。
 
@@ -24,9 +24,10 @@ Unix 端点目录选择为 `<state>/ipc`，复用项目已有的私有目录保�
 | --- | --- | --- | --- |
 | 0-A 用量边界防护 | 本计划提交；`tests/python/buddy/harnesses/dsh/test_session_records.py`、`docs/acceptance/c-two-073-0a.md` | 先补非会话头首行与冻结截断两处测试，调用真实冻结与本回合投影，断言未知，生产代码不变 | V-01、V-02；该测试文件 |
 | 1-A 配置与私有域 | 0-A 整合提交；`pyproject.toml`、`uv.lock`、`packaging/runtime-assets.json`、`protocol/rpc_config.py`、`protocol/transport.py`、`protocol/client.py`、`blackboard/service/daemon.py`、`buddy/runtime/worker.py`（后三者均在 `src/hey_my_buddy/` 下）、`src/hey_my_buddy/cli/checks.py`、`tests/python/support.py`、`tests/python/protocol/test_rpc_config.py`、`tests/python/protocol/test_ctwo_service.py`、`tests/python/protocol/test_transport_attach.py`、`tests/python/blackboard/tasks/test_workspace_api.py`、`tests/python/cli/test_checks_cleanup.py`、`tests/python/cli/test_checks_parallel.py`、`docs/acceptance/c-two-073-1a.md`；所需新公共模块先报 Host | 升依赖/锁；共享初始化接口关闭池、配置根；更新实际变动的资源清单，清单已覆盖则说明；测试夹具在第一次通信前接入私有域，不清扫公共目录 | V-03～V-06；RPC 配置、服务、检查运行器、打包受影响测试 |
-| 1-B 端点凭据 | 1-A 整合提交；`src/hey_my_buddy/buddy/harnesses/c_two_live.py`、`src/hey_my_buddy/buddy/roles/live.py`、`src/hey_my_buddy/buddy/runtime/live.py`、`tests/python/buddy/harnesses/test_c_two_live.py`、`tests/python/buddy/harnesses/fixtures/c_two_live_peer.py`、`tests/python/buddy/roles/test_role_live_seam.py`、`tests/python/buddy/runtime/test_live.py`、`tests/python/buddy/runtime/test_worker_invariants.py`、`tests/python/buddy/runtime/test_worker_live_wiring.py`、`tests/probes/dsh_native_resume_smoke.py`（仅旧端点接口适配）、`docs/acceptance/c-two-073-1b.md` | 把共享私有域初始化接到控制器/Worker 实时入口；就绪材料改存原生凭据；停止证据之后一次原生回收，删除旧路径/文件身份实现，迁移既有防护测试 | V-07、V-08；实时端点、角色和 Worker 防护 |
-| 1-C 调用期限 | 1-B 整合提交；`src/hey_my_buddy/buddy/harnesses/c_two_live.py`、`tests/python/buddy/harnesses/test_c_two_live.py`、`tests/python/buddy/harnesses/fixtures/c_two_live_peer.py`、`docs/acceptance/c-two-073-1c.md` | 使用原生调用期限，删除等待线程；保留过期请求不送达与原有失败码，覆盖已派发调用仍会结束 | V-09、V-10；实时通道与请求时间窗 |
-| 1-D 整链核对与冒烟准备 | 1-C 整合提交；新 `tests/python/protocol/test_ctwo_073_integration.py`、新 `tests/python/protocol/fixtures/ctwo_073_controller.py`、`docs/acceptance/c-two-073-1d.md`；4 份冒烟脚本放任务根中交付 | 一套真实私有服务、Worker 与模拟控制器，无模型；脚本预备每个 harness 最短一回合，禁止执行模型调用 | V-11～V-13；独立端到端文件 |
+| 1-A2 更新发布依赖 | 本次计划提交；`pyproject.toml`、`uv.lock`、`src/hey_my_buddy/protocol/rpc_config.py`、`tests/python/protocol/test_rpc_config.py`、新 `docs/acceptance/c-two-dependency-update.md` | 锁定0.7.4，修正当前绑定版本的说明与断言；重新取得V-03/V-04/V-06、1-A聚焦与三处变异，旧结果保留为历史 | 1-A相关聚焦文件、三处变异、发布版与私有安装 |
+| 1-B 端点凭据 | 1-A2 整合提交；`src/hey_my_buddy/buddy/harnesses/c_two_live.py`、`src/hey_my_buddy/buddy/roles/live.py`、`src/hey_my_buddy/buddy/runtime/live.py`、`tests/python/buddy/harnesses/test_c_two_live.py`、`tests/python/buddy/harnesses/fixtures/c_two_live_peer.py`、`tests/python/buddy/roles/test_role_live_seam.py`、`tests/python/buddy/runtime/test_live.py`、`tests/python/buddy/runtime/test_worker_invariants.py`、`tests/python/buddy/runtime/test_worker_live_wiring.py`、`tests/probes/dsh_native_resume_smoke.py`（仅旧端点接口适配）、`docs/acceptance/c-two-endpoints.md` | 把共享私有域初始化接到控制器/Worker 实时入口；就绪材料改存原生凭据；停止证据之后一次原生回收，删除旧路径/文件身份实现，迁移既有防护测试 | V-07、V-08；实时端点、角色和 Worker 防护 |
+| 1-C 调用期限 | 1-B 整合提交；`src/hey_my_buddy/buddy/harnesses/c_two_live.py`、`tests/python/buddy/harnesses/test_c_two_live.py`、`tests/python/buddy/harnesses/fixtures/c_two_live_peer.py`、`docs/acceptance/c-two-deadlines.md` | 使用原生调用期限，删除等待线程；保留过期请求不送达与原有失败码，覆盖已派发调用仍会结束 | V-09、V-10；实时通道与请求时间窗 |
+| 1-D 整链核对与冒烟准备 | 1-C 整合提交；新 `tests/python/protocol/test_ctwo_integration.py`、新 `tests/python/protocol/fixtures/ctwo_controller.py`、`docs/acceptance/c-two-integration.md`；4 份冒烟脚本放任务根中交付 | 一套真实私有服务、Worker 与模拟控制器，无模型；脚本预备每个 harness 最短一回合，禁止执行模型调用 | V-11～V-13；独立端到端文件 |
 
 表中目录路径均相对检出。前一项固定产物整合并受影响测试通过后冻结下一项基线；1-B 与 1-C 写同一文件，所以串行。Host 负责公共接口决定、冲突与整合，不由微任务越界改注册表、值或其他角色文件。发现需要扩大唯一可写范围先交付具体缺口，Host 评估；明显超出计划则停止说明。
 
@@ -42,7 +43,7 @@ Unix 端点目录选择为 `<state>/ipc`，复用项目已有的私有目录保�
 | V-06 | 锁文件 c-two 0.7.3、构建资源覆盖、私有安装产物从该锁取得依赖；不更新日常运行时 |
 | V-07 | 正常端点退出无残留；持有的控制器被杀后确认两层停止再 reap，回收对应端点；移除停止证据或凭据绑定时防护失败 |
 | V-08 | 活端点 busy、旧凭据 stale-target、无法核实均保留真实结果且只调用一次，不误删目标；原生凭据编解码使用库而非自造字段 |
-| V-09 | 原生调用期限按时抛出、映射旧超时码、同一连接随后可用；不新增每调用等待线程，去掉期限时测试失败 |
+| V-09 | 自建对端暂停时，首次连接与已连接各一例按连接期限抛出pre_dispatch；去掉连接期限目标测试失败，仅暂停自建进程。业务调用期限按时抛出、映射旧超时码、同一连接随后可用；不新增每调用等待线程，去掉期限时测试失败 |
 | V-10 | 已派发但超时的调用最终完成；排队请求过时不交给 owner/native loop，去掉本项目时间窗判断时测试失败 |
 | V-11 | 无模型整链：真实服务→持有 Worker→模拟控制器，端点均在同一私有状态域，正常关闭与强行杀掉后无自身端点残留 |
 | V-12 | 四个 harness 冒烟脚本就绪；用户另行批准后各最短一回合，记录次数、实际 CLI、交付/活动/两层停止与端点；失败重跑重新询问 |
@@ -89,3 +90,9 @@ Host从最终固定输出重新建立三份变异副本：去掉私有根setter�
 1-A 原补丁整合为 `7064e32b`；黑板整合 int-77bd89c5-540f-4487-8cc5-8ab991997484 已 verified，原run accepted。cleanup-plan/apply 成功回收登记的受管检出；Host保留交付日志后整体删除结构化summary报告的确切 <1A_TURN4_TASK_TMP>，只按报告路径回收，不按相同前缀推断别的目录。实施检出自己的 uv sync --frozen 已切到 c-two0.7.3；此环境及上述私有wheel环境都不是日常运行时。Host任务根的探针、固定副本、原始失败与检查证据仍保留以供后续核对。
 
 当前状态：0-A 与1-A已内部验收；1-B、1-C、1-D未开始。1-C因连接阶段期限前提未通过暂停，用户选择尚未返回。未做整批完整检查、四harness冒烟，也未准备或执行付费冒烟；恢复后继续剩余微任务、合入最新core，再在最终代码上按默认并行数跑一次完整检查，四个最短真实CLI回合须另行批准。日常服务/Worker、配置和登录未改。实施分支不推送，保留供恢复与Claude Code Host后续验收。
+
+## 2026-10-10 用户决定与恢复
+
+目标由0.7.3改为已发布0.7.4，分支与已提交记录文件名保留。1-A2作为小微任务先于1-B，更新依赖/锁并重新取得版本绑定证据。当前计划段落已更新；此前0.7.3实测、失败、验收与暂停记载均是历史，不改写成0.7.4通过。1-C恢复，所有实时连接带连接期限、业务调用带调用期限，整个等待线程删除；两种期限同码，通过transport_phase区分。连接空闲60秒后泄漏由Claude Code Host用私有验收探针核对，本批测试集不加长等待用例。
+
+日常0.6.0服务的FD接近上限。遇到Too many open files立即停止报告，不重启或替换日常服务/Worker，也不以私有服务替代委派。四个harness的真实回合及其重跑仍须用户逐次批准，旧批准不覆盖本批；其他原约束保持。
