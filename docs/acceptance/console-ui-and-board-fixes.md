@@ -619,3 +619,6 @@ edge-glyphs-wide-route 采用 R1 失败的 99px 路由及 1px 执行区间，最
 Host integration int-879fe6c8-9742-4692-a5c3-3b1153a086f2 绑定最终 artifact、2f3f9285 目标与十个 Worker 路径；Host 自己构建而变化的五个资产路径（旧/新 hash 文件和 index.html）由 hostPaths 单独登记，未伪归 Worker。acknowledge accepted 从 revision 13→14，attention 已结清；随后 cleanup-plan 因 revision 变化被拒，重读为 revision 15/planned/eligible。一次 apply 缺 confirmPath 被 INVALID_ARGUMENT 拒绝；补齐确切路径后再遇 REVISION_CONFLICT，重新 get 为 revision 16、plan cln-2d913b22-7eae-4bdc-b9af-94c08edea9ff/applied，确切 ~/.local/share/hey-my-buddy/state/workspaces/ws-3ddc7d0e0afa70631b5b31d31ffffe57/checkout 已不存在。未重复删除或断言清理施行主体；R1 的 ws-84c18f5531a91df950b53f46de8019ba/checkout 也已不存在。manifest/input/output 与所有 Host 复制证据仍保留。宽路由的 Enter 打开另补 final-wide-route-keyboard-loaded.txt / jpg，实际“路由依据”详情已读取完成；真实取值不混同模拟点击回调。
 
 本 Host 的微任务产物验收仅代表上述固定整合与验证，整批仍等 Claude Code Host 验收。分支 socu/console-ui-and-board-fixes 不推送；本 Host 工作树与 tmp/ 证据保留。末次只改记录，前端全量及所选 Python 门槛不重复；提交记录后补跑仓库卫生与读取文档的测试。
+
+
+记录提交 6e2e215c 上，私有包装命令 python -m unittest discover -s tests/python -p test_repository_hygiene.py 为 5 项、exit 0；对应 test_skill_workflow.py 为 12 项、exit 0，日志及元数据 records-hygiene.* / records-doc-readers.* 保存提交绑定。本段为一次记录补全，之后只重复这两份受影响的记录检查；代码、资产与完整门槛绑定不变，工作树无未提交改动后交 Claude Code Host 验收。
