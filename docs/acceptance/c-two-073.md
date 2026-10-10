@@ -212,3 +212,5 @@ Host 的公共接线聚焦按每文件独立解释器运行：worker_runtime4、
 无模型整链保留四个端点同根/权限、问询真实提交、正常already-absent、强杀reaped、外来peer保留、两层停止、板上shutdown事实、最终inspect全absent与自身目录无socket；SDK收尾completed。第一次失败遗留的自建服务只经其私有service_control协作停止，端点present→absent，没有信号发现的PID，没有清扫默认公共域。细节及原始证据见c-two-integration.md与本检出tmp/c073-host。四个真实harness回合仍未批准、未执行。
 
 1-D 编号集合由实际 unittest loader 核对：3268→3270，3268个既有编号集合相等，改名/删除均0，仅新增 protocol.test_ctwo_integration.CTwoIntegrationTests.test_holder_reaps_killed_controller_and_preserves_foreign_peer 与 protocol.test_ctwo_integration.CTwoIntegrationTests.test_normal_stop_and_same_connection_after_deadline；模块203，loader错误/重复0。原始清单与差集在tmp/c073-host/integration-final-ids.json、integration-id-delta.json；四处夹具及公共Worker接线不改变编号。仓库卫生5项exit0。
+
+1-D 首次 integration-record 返回 INTEGRATION_UNVERIFIED：Host 把补证追加进 Worker 范围内记录，目标 blob 不再等于固定交付。已把 Host 实际验证与整合证据保留在 c-two-integration-host.md，Worker 的 c-two-integration.md 从固定 9d873dfc 逐字节恢复，代码与测试不变；用新 commandId 重试登记，不把失败登记称为成功。
