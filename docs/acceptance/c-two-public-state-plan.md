@@ -268,3 +268,14 @@ Host 在最终 R3 归档上独立建立六个窄变异副本，正常目标六�
 Root 整合登记：范围操作顺序错误由 Root 承担，原 scopeVersion 1 封存失败及 adopt 保全不改写，正式版本 2/3 只用于后续回合。R1/R2 fixture 缺陷均原 run continue，readonly 重复流程由原 Worker 合并为一份，不由 Root 代改。Root 只改自己的固定归档/检查助手、数目口径与本计划，不触碰用户 stash、分支标签或保护文档。任务根 `/tmp/c073-c-H6SbNM` 在签收前仍保留，当前无绑定进程/持有锁的观察不能补造旧 daemon 数字 wait 回执。根外 `/tmp/state-calls-readonly-audit.txt` 写前归属与实际覆盖未知，原普通重定向命令留存，文件原样保留、不纳入回收。
 
 这次是微任务内部核对，尚未完整检查、整批 Host 验收或日常安装。已有 Codex/Claude Code/DSH 各一次授权真实冒烟沿用原提交证据；ZCode 无额度未验证，不重跑模型。三步整合后在最终提交上运行一次默认并行数完整检查；完整结果与精确回收随后追加本记录。
+
+
+## 3-C 整合首轮完整检查退回：剩余夹具调用方
+
+绑定整合提交 `dcc265b0e091b9bf68c3719f3de82d210e54040d`、core `12eb4fcdc2be8d6599c862fae3b9d3a20b40409d` 的完整检查已结束：命令 `uv run --frozen python -m hey_my_buddy.cli.checks`，默认 4 并行，exit 1、706.360 秒，216 文件中 209 通过、7 失败；通过文件共 3,420 项（跳过 1），不能写成 3,519 全通过。3,519 是实际 loader 编号集合。负载开始 21.02/17.52/17.43、结束 16.47/21.71/21.19，中途约 34；下面都有确定的调用方错误，不归因于负载。原日志、提交/根/进程绑定、汇总为 `tmp/c073-host/state-boundaries-final-check*`。3-C 固定源码的既有 201+106 聚焦结果保留其绑定，不覆盖全检失败；原 run 未签收，可直接 continue。
+
+失败文件为 blackboard.service.test_liveness、buddy.harnesses.dsh.test_dsh_role_wiring、buddy.harnesses.test_inquiry_owner、buddy.harnesses.zcode.test_zcode_checkpoint、buddy.harnesses.zcode.test_zcode_inquiry、buddy.harnesses.zcode.test_zcode_tool_refusals、protocol.test_ctwo_integration。liveness 模拟健康 endpoint 却缺其私有 ipc 目录；DSH、ZCode 两个 live helper 仍传 environment 字符串而不是必填 Path，造成已有归属断言失败，checkpoint/tool_refusals 复用 test_zcode 的同一 helper；inquiry owner 子进程把 JSON 字符串未经边界转换传给 endpoint；model-free 整链的 ct_controller fixture 漏传 OneSlowCallEndpoint 必填 state_dir，Worker 轮次提前结束，随后合作 stop 的原断言也失败。原始失败与次级清理错误全部保留。
+
+按用户明确的“范围不够就修订范围”许可，在 3-C 原 run 追加 tests/python/blackboard/service/test_liveness.py 与 tests/python/protocol/fixtures/ctwo_controller.py，两条新增路径使正式范围从 67 到 69；先在停下的边界 scope-amend v3→v4，确认成功后才原 run continue，不再用文本授权替代机械范围。R4 实际唯一修改限于这两份 fixture、既已许可的 test_dsh_role_wiring.py、test_inquiry_owner.py、test_zcode.py、test_zcode_inquiry.py 及交付记录。冻结产品代码；保留所有原断言/编号，不加兼容、不恢复内部解析、不放宽健康/截止时刻规则；Host 不代改。各修补必须经独立聚焦与对应目标故障注入，受限真实 bind 不重复，完整检查由 Host 在最终代码上重跑并保留本轮 exit 1。
+
+Host 汇总助手最初用逐行末尾锚定遗漏一行被并发 stderr 拼接的成功输出，断言拒绝；一次探查脚本有括号语法错误，均未跑测试或改变源码。已按实际逐文件前缀、最终 216/209/7 汇总核对，原日志不改写；检查器私有根是否自行移除以结构化 summary 里的实际存在性为准。
