@@ -218,3 +218,13 @@ Host 的公共接线聚焦按每文件独立解释器运行：worker_runtime4、
 1-D 已以 int-b93d8ac7-0349-4438-a810-1e3ae62c7689 verified 登记并 accepted/completed。首次 acknowledge 误用 status 参数，被0.27 CLI以INVALID_ARGUMENT拒绝，没有形成签收；改用既有verdict参数的新commandId后成功。黑板已自动回收受管检出，后续cleanup-plan回读state=applied/result.removed=true，不重复删除。保留两回合顶层交付日志、固定副本与六份冒烟材料后，Host只整体删除两个结构化交付报告的确切 <1D_FIRST_TASK_TMP>/<1D_FINAL_TASK_TMP>；无通配符，无其他会话对象。
 
 四个最短回合的入口与共享脚本已经固定SHA复制至Host自建 <HOST_TASK_TMP>/native-smoke-bundle，逐个静态prepare退出0；prepare未发现CLI、未启动模型。候选配置复用现有已验证选择：ZCode/zai-api/GLM-5.3-Flash/max，Codex/openai/gpt-6.1-sol/low，Claude/anthropic/claude-haiku-4-5-20251001/default，DSH/deepseek-official/deepseek-v4-flash/off。各回合独立私有根，execute必须绑定用户的逐次批准，当前0个真实回合、没有批准文件。脚本不覆写CODEX_HOME或CLAUDE_CONFIG_DIR；登录/额度若阻碍，只如实记录，重跑另请批准。
+
+## 完整初跑与范围核对
+
+最新 core 1a9decd 已在实施分支，最终候选 0dc618ed61412c97179c5b2a7c936f4c2669046d 的完整初跑命令是 uv run --frozen python -m hey_my_buddy.cli.checks，不带 --jobs。退出1、909.486秒；203份Python文件中177份通过，26份失败，通过文件的汇总2816 tests/skipped1，不能写成3270全通过。3270是此前独立loader清单的集合计数。完整日志、命令/私有根/提交绑定、逐文件错误与清单保留在tmp/c073-host/final-check.{log,result.json}、final-first-failure-inventory.json。前端源码没有改，也没有另跑前端测试。没有真实付费harness回合。
+
+Host自己的顺序修正引入了凭据清理失败后的第二次机会丢失，已修正：端点release单独复用原实现，在原来collect后的凭据清理之前调用；凭据清理第一次仍可抛入原execute异常分支，异常分支保留停止证据并再清理一次，finally只作端点收尾，不增加第三次凭据删除。每个新handle清除live_release_attempted，原生reap只调用一次；未知native停止仍不删除凭据。14个CrashWindows故障测试exit0/31.961秒，恢复旧清理顺序与去掉异常路径第二次机会的两个变异分别触发真实目标assert失败。新增整链2项仍exit0/10.929秒。该修正由Host负责，记录先前错误，不改写首次全检。
+
+另一个确认的范围外夹具遗漏已修正：blackboard/store/test_blackboard.py重启场景的wait_capacity直接_request补state_dir=self.directory，该实际重启用例exit0/15.171秒。全检中ZCode与Claude两个取消用例失败分别保留；空闲时独立重跑完整相关文件，ZCode25项exit0/30.499秒，Claude42项exit0/41.636秒，没有改取消测试或停止判定，也不把这些单文件成功改写成初跑成功。
+
+余下失败涉及原唯一写入范围之外的大批夹具和调用方。本计划要求“明显超出计划则停止说明”；本次先登记可审查的补充范围，暂停扩大实施：RPC私有state传递及Mock/stub接口适配；其余原生角色/工具/用量夹具的0700状态域初始化；同一测试进程同时使用多个不同state的并发场景隔离；安装版ZCode离线app-server关闭与Host原生回合停止的独立定位；console测试catalog显式环境与host-preview开发依赖前提。每一份修改仍需独立固定交付/聚焦/去掉目标行为红灯，默认经路由，公共文件由Host整合。未证明的controller失败不能统称为状态根或机器负载，不能弱化shutdown与工具/用量断言。

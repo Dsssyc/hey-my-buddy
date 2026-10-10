@@ -15,3 +15,7 @@ Four paid harness scripts remain prepared only. Each real execution and any reru
 The final actual loader inventory contains 3,270 unique tests in 203 modules, with zero loading errors. All prior 3,268 IDs remain identical as a set; only the two CTwoIntegrationTests cases are added. No test is renamed or deleted. Inventory and delta are retained in `<Host-checkout>/tmp/c073-host/integration-final-ids.json` and `integration-id-delta.json`. Repository hygiene passed all five cases.
 
 The first integration-record request returned INTEGRATION_UNVERIFIED because the Host had appended verification paragraphs to the scoped Worker record, so its target blob no longer matched the immutable delivery. Host evidence is retained in this separate file; the Worker record is restored byte-for-byte from sealed 9d873dfc. Source and test code are unchanged. The retry uses a fresh commandId.
+
+## Whole-check result and Host correction
+
+The complete candidate check at 0dc618ed exited 1 after 909.486 seconds: 26 of 203 Python modules failed. Its raw log is preserved. Host's credential-cleanup ordering repair initially lost the original exception-path second attempt. The revised code reaps before the original post-collect credential cleanup, preserves its exception propagation and second attempt, and uses endpoint-only final fallback. Fourteen crash-window cases, the real restart case and both private integration cases pass; two corresponding point mutants fail at their target assertions. The whole check has not yet passed and paid native rounds remain unapproved.
