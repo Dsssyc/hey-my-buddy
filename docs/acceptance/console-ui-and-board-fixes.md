@@ -557,3 +557,25 @@ PB-G 第一次交付在 Host attention 边界封存四路径产物：另一个�
 对外可见变化清单：短时间片的长度与结束标记准确反映记录时刻；文字左右留 8px 内部空白；窄片段省略文字但悬停与读屏事实完整；unknown 尾部的文字显示阈值改为固定像素可用宽度。既有列表首次后台读取、侧栏宽度与尾部重叠抑制保持。该分支不推送，完成本 Host 的固定产物验收与受管检出回收后，停下等 Claude Code Host 验收。
 
 本 Host 已登记 integration int-fdc74ff1-72f6-4511-9860-dbeb4ee1504b 并 acknowledge 精确最终 artifact，workflow revision 14→15、verdict accepted。随后 Host 的 cleanup-plan 遇到 REVISION_CONFLICT，重新 get 发现黑板已在 revision 17 记录 plan cln-87ac42b1-3e1d-43c1-b5ed-50d5924932ee 为 applied；逐路径确认 ~/.local/share/hey-my-buddy/state/workspaces/ws-74e99e6e459821830c74cc1d1548ddf8/checkout 已不存在。没有重复删除，未独立追查施行主体；清理只涉及该 run 的实际检出，manifest/input/output 记录及 Host 复制材料仍保留。末次记录更改后，读取文档的 cli.test_skill_workflow 12 项已通过，仓库卫生随后在相同私有环境完成，5 项、exit 0（records-hygiene.json）；不重跑前端全量或 Python 完整检查。
+
+
+### 验收前追加返修：开头标记与图形留白（PC-EDGE，2026-10-10）
+
+用户继续指出最大放大时图形拥挤，开头的验收标记嵌入标题栏。当前 Chrome 与私有预览都加载 index-BN-2tpII.js / index-HkfuQGek.css，确为上轮产物；未归咎旧缓存。最新私有预览中短执行文本为空，但失败圆标约 5.6px 被 sticky 标题栏遮住，路由叉号、结束圆标、选中装饰与后续等待标签仍挨近。此前 14 组“文字相交为零”只证明文字范围，未证明图形间的留白及左侧 sticky 遮挡；通过与失败记录均保留，不把上一轮结论扩张为完整绘制验收。
+
+core 仍为用户已确认停止变动的 12eb4fcd，已在本分支祖先中，不再重复合入。沿用 hostId codex-adr027 与原宏任务；上轮 PB-G 已 accepted 且检出回收，新增关联 run 17e1167b-9221-4e47-b8ae-1998b46181ad 的 PC-EDGE 返修微任务，首次四配置字段全省略，经路由。只改 apps/console 与产物，以及本 Host 的验收记录。
+
+实现复用已有 scaleTimeline / fitPixelsPerMinute 和末端留白机制，在现有时间轨道开头留 16px，不伪造时间或延长片段；默认刻度调用不变，工作目标时间轴显式使用前留白。统一坐标覆盖片段、验收/事件标记、空闲块、刻度、读数线与缩放锚点。普通标签左 16px / 右 8px；带结束圆标的标签右 16px，按实际剩余内容宽度决定是否显示文字，过窄只省略文字。保留片段父盒无 padding/border、真实时长与固定像素最小形状。沿用已有三个内部图层，把选择/悬停装饰放在符号和文字之下，使其不遮盖圆标或路由叉号；不新增元素、图层、设置或新的碰撞系统。
+
+一个 Worker 串行写入唯一范围：ObjectiveTimeline.tsx、styles.css、objective-timeline-scale.ts 及其 test.ts、timeline-layers.test.tsx、ui-box-model.test.tsx、objective-timeline.test.tsx、objective-timeline-016.test.tsx、timeline-idle-readout.test.tsx、routing-timeline.test.tsx（均在 apps/console/src）。其余代码、钩子、列表读取和后端不改；若另有受影响断言，先 attention。只跑受影响测试与类型检查，不跑全量、不构建；开始建独有 ignored tmp/ 任务目录，报告确切路径。Worker 不删除，不用 stash，不操作分支/标签，不安装、不重启或替换日常服务/Worker，不改凭据，不调用其他模型；记录与夹具位置用 ~ 或占位符。
+
+| 验证编号 | 验证内容 |
+| --- | --- |
+| PC-01 | fit/+2/max、开头零/短时长的 failed/cancelled/unknown/验收标记有完整前留白；移除前留白时测试失败，默认刻度、32px 空闲块与真实时长不变。 |
+| PC-02 | 普通和 terminal 标签保留与符号所需的间距，短等待只省略文字；扣掉内距或右侧圆标空间保护时测试失败。 |
+| PC-03 | selected、hover、键盘 focus、run-member 的装饰不盖住 end-mark/routing-cross/验收 glyph；不新增层，恢复旧图层关系时测试失败。 |
+| PC-04 | 固定产物 checksum 与 Git blob，Host 独立受影响测试与变异；缺陷退回原 run continue，配置字段省略。 |
+| PC-05 | 已提交最终资产的私有合成看板：三个宏任务 fit/+2/max，另显式覆盖开头验收、零时长终止、紧接等待和选中/悬停/focus；截图、glyph 与文字范围、elementsFromPoint 的左/中/右命中核对，不仅检查文字相交。 |
+| PC-06 | 最终源码前端全量、构建和全新构建字节核对；顺序运行 console/install、仓库卫生与读取文档的测试，不跑 Python 全量；只改记录后只补卫生与文档读取测试。 |
+
+证据放在 ~/.codex/worktrees/console-ui-and-board-fixes/hey-my-buddy/tmp/console-ui-and-board-host/timeline-edge-and-decorations-20261010/，原 tmp/ 全保留。对外可见变化是开头标记完整显示、文字按符号留白而在狭段省略、选择边框不压住符号；不新增界面负担。继续停在本批范围内，全部完成后等 Claude Code Host 验收。
