@@ -52,3 +52,4 @@ td.g{vertical-align:top;padding-top:16px}td.dim,tr.dim td{color:var(--ink3)}td s
 td.id{white-space:nowrap}td.id+td.id:before{content:"/";color:var(--line2);margin-right:14px}td.rep{color:var(--ink3)}td.id b{font-weight:500}td.end,th.end{border-right:1px solid var(--line)}
 th.grp{color:var(--ink);font-weight:500;font-size:13px;border-bottom:0;padding:14px 12px 0}td.id small{display:inline;margin:0 0 0 10px}
 .more{margin-left:16px;width:32px;height:32px;border:1px solid var(--line2);border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:var(--ink2);letter-spacing:1px;align-self:center}
+.cv{display:inline-block;width:16px;color:var(--ink3);font-size:9px;vertical-align:1px}td.n{color:var(--ink3);font-weight:400}tr.fold td{background:var(--sunk)}
