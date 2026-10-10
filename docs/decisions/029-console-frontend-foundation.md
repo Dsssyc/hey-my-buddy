@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受：用户于 2026-10-11 验收控制台返修时提出，实现方一直靠调整像素距离来微调时间轴等部件，很吃力，问有没有成熟的东西可以代替，并要求 Claude Code Host 主持完善前端。Host 读了源码、在浏览器里看了界面、比较了现成的时间轴组件之后给出建议，用户同日逐项同意：时间轴仍然自己画，但换画法并改用现成的库；整个控制台统一到 Tailwind 与 shadcn；界面用语的改名与中英文 i18n 并入这条线；i18n 用 react-i18next，语言跟随浏览器；几何的检查改在真实的浏览器里做；长等待的画法先出静态稿由用户挑；首次公开发版等新前端。尚未实现，执行计划见 [console-frontend.md](../design/console-frontend.md)。本文修改 [ADR-024](024-console-session-view.md) 第 6 条（Tailwind 与 shadcn 不再只限于会话视图），接手 [ADR-021](021-router-buddy-planes-and-routing-evidence.md) 展示线的 U6（界面用语）。[ADR-016](016-human-console-design.md) 定下的交互规则保持不变，除非本文或时间轴的新设计另有说明。
+已接受：用户于 2026-10-11 验收控制台返修时提出，实现方一直靠调整像素距离来微调时间轴等部件，很吃力，问有没有成熟的东西可以代替，并要求 Claude Code Host 主持完善前端。Host 读了源码、在浏览器里看了界面、比较了现成的时间轴组件之后给出建议，用户同日逐项同意：时间轴仍然自己画，但换画法并改用现成的库；整个控制台统一到 Tailwind 与 shadcn；界面用语的改名与中英文 i18n 并入这条线；i18n 用 react-i18next，语言跟随浏览器；几何的检查改在真实的浏览器里做；长等待的画法先出静态稿由用户挑；首次公开发版等新前端。实现在单独的分支上进行，尚未合入、尚未安装：打底一步已经完成，其余各步尚未开始；执行计划见 [console-frontend.md](../design/console-frontend.md)，每一步的核对见 [Host 的记录](../acceptance/console-frontend.md)。本文修改 [ADR-024](024-console-session-view.md) 第 6 条（Tailwind 与 shadcn 不再只限于会话视图），接手 [ADR-021](021-router-buddy-planes-and-routing-evidence.md) 展示线的 U6（界面用语）。[ADR-016](016-human-console-design.md) 定下的交互规则保持不变，除非本文或时间轴的新设计另有说明。
 
 ## 背景
 
@@ -36,7 +36,7 @@
 
 ## 影响
 
-- **依赖。** 新增 Tailwind 及其 Vite 插件、shadcn 生成的组件所依赖的包、d3-scale、d3-time、i18next 与 react-i18next，开发依赖里新增 Playwright。运行时依赖从两个变成十来个，构建产物会变大（现在脚本 547 KB、样式 72 KB）。每个包的许可与产物大小的前后对比在打底那一步核对并记录。
+- **依赖。** 新增 Tailwind 及其 Vite 插件、shadcn 生成的组件所依赖的包、d3-scale、d3-time、i18next 与 react-i18next，开发依赖里新增 Playwright。运行时依赖从两个变成十来个，构建产物会变大（现在脚本 547 KB、样式 72 KB）。每个包的许可与产物大小的前后对比在打底那一步核对并记录。打底之后的实际情况：直接依赖八个，但 Radix 的汇总包把它的全部基础组件带进了锁文件，运行时的包新增 82 个，进产物的只有实际引用的；脚本 682 KB、样式 113 KB。
 - **内容安全策略。** 现有策略允许内联样式，预计不需要放宽，打底时核对。
 - **测试。** 守几何的约 232 项随旧画法删除，新增浏览器里的断言。改名与文案抽取会改到大量断言文字的测试，测试固定用中文。
 - **文档。** `console.md` 与 `objectives.md` 的展示部分随每一步更新；`objectives.md` 里空闲折叠的数字已经过时。`AGENTS.md` 的验证一节加上浏览器检查的命令。
