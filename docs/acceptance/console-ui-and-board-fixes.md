@@ -479,3 +479,5 @@ PA12：最终已提交的脚本与 CSS 资源名在页面中核对，sidebar-aft
 对外可见的变化只有三项：重合的结束未确认尾部不再绘制这几个字，其余证据不变；激活列表后台首次加载有内容和核对时间，隐藏周期仍暂停；侧栏不需要滚动时不再预留空白槽。没有新增 UI 元素、提示、设置、服务事件或服务端端点。
 
 三个关联返修 run 已分别绑定固定产物与已验证的整合记录并 accepted；PA-T 与 PA-S 的 Host attention 由 Host 完成实际核对后直接验收，原缺少验证的事实留在 note。整合记录为 int-cf8351a7-09a6-4031-9e09-dc0c1f94ec0b、int-c8f2a36d-8fc1-4ef8-bc48-9c9e47c5720d、int-4abddd91-db4b-4dfc-b676-f03282b2594d。受管检出按登记的确切路径核对已回收：~/.local/share/hey-my-buddy/state/workspaces/ws-19d548ec9a82329b058f8a1f775e2f79/checkout、~/.local/share/hey-my-buddy/state/workspaces/ws-1694e6a2cea47fd9c95f2981da592ece/checkout、~/.local/share/hey-my-buddy/state/workspaces/ws-f481f7f81a452698bdc600c89a78dfe9/checkout。PA-T 的计划/应用由本 Host 执行；PA-L 遇一次 REVISION_CONFLICT，原结果保留，重读时 PA-L 和 PA-S 已是 applied，检出不存在，未重复删除。固定副本、Worker 材料副本、截图和日志均在 Host tmp/ 保留，Host 工作树不回收，等待 Claude Code Host 验收。
+
+记录提交 bd7aa8a5 后再次运行 cli.test_repository_hygiene：5 项、退出 0（1.094 秒），使用同一私有根与 Node 24 环境，日志 final-records-hygiene-node24.log。代码与产物仍停在 2bca5fe5，随后仅补这一条验证事实；再次运行卫生后交付，不重复前端全量或 Python 指定范围。
