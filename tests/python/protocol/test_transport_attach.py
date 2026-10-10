@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, call, patch
+from hey_my_buddy.errors import BoardError
 
 from hey_my_buddy.protocol.transport import (
     ServiceError,
@@ -153,22 +154,23 @@ class TrustBoundaryTests(AttachFixture):
             return child
 
         with MutationRecorder() as recorder:
+            recorder.chmod.side_effect = lambda directory, mode: os.chmod(directory, mode)
             recorder.popen.side_effect = spawn
             with patch("hey_my_buddy.protocol.transport._read_endpoint", side_effect=endpoint_read):
                 self.assertEqual(ensure_service(self.directory), ENDPOINT)
             spawned, created = recorder.popen.call_count, recorder.mkdir.call_count
         self.assertEqual(spawned, 1, "cold setup must still run when no endpoint can be trusted")
-        self.assertEqual(created, 0, "secure state and IPC directories already exist")
+        self.assertEqual(created, 1, "owner setup must ensure its existing state directory")
+        recorder.mkdir.assert_called_once_with(self.directory.resolve(), mode=0o700, parents=True, exist_ok=True)
+        recorder.chmod.assert_called_once_with(self.directory.resolve(), 0o700)
         self.assertGreaterEqual(len(calls), 3, "health must be re-checked after spawning")
         self.assertEqual(requests_before_spawn, [0], "no RPC may run against an untrusted endpoint")
 
     def test_group_or_world_accessible_directory_is_not_trusted(self):
         self.directory.chmod(0o755)
         self.assert_rejected_by_validation()
-        with self.assertRaises(ServiceError) as refused:
-            ensure_service(self.directory)
-        self.assertEqual(refused.exception.code, "LAUNCH_ACCESS_DENIED")
-        self.assertEqual(self.directory.stat().st_mode & 0o777, 0o755)
+        self.assert_falls_back_to_cold_start()
+        self.assertEqual(self.directory.stat().st_mode & 0o777, 0o700)
 
     def test_private_but_unreadable_directory_is_not_trusted(self):
         self.directory.chmod(0o000)
@@ -342,9 +344,11 @@ class ColdStartTests(unittest.TestCase):
         # A path that already exists as a file cannot become the state directory.
         blocked = Path(self.temp.name) / "state"
         blocked.write_text("not a directory")
-        with self.assertRaises(ServiceError) as refused:
+        with self.assertRaises(BoardError) as refused:
             ensure_service(blocked)
-        self.assertEqual(refused.exception.code, 'LAUNCH_ACCESS_DENIED')
+        self.assertEqual(refused.exception.code, 'PRIVATE_PATH_UNSAFE')
+        self.assertEqual(refused.exception.message, 'IPC path is not a directory')
+        self.assertEqual(refused.exception.details['path'], str(blocked.resolve()))
         self.spawn.assert_not_called()
         self.assertEqual(blocked.read_text(), "not a directory")
 
@@ -464,10 +468,14 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         # Register ownership before waiting for readiness: a failed startup must
         # still collect this exact child, without discovering or stopping a peer.
         peer = probe_fixture.ProbeServer.__new__(probe_fixture.ProbeServer)
+        self.peer_receipt = {"pid": None, "waitExit": None, "stopRequested": False}
 
         def stop():
             if hasattr(peer, "process"):
+                self.peer_receipt["pid"] = peer.pid
+                self.peer_receipt["stopRequested"] = True
                 peer.close()
+                self.peer_receipt["waitExit"] = peer.process.returncode
                 if hasattr(peer, "address"):
                     self.assertEqual(peer.process.returncode, 0, "the native probe must confirm shutdown")
             elif hasattr(peer, "log"):

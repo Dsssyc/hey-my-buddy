@@ -79,3 +79,25 @@ Host 从本份固定源码重建三份只取消最终目录传递的生产变异
 3-B run `9ab4e50b-03dd-49ed-92ca-95d84e22961b`，实际任务基线为仅再增加计划记录的 `b772198d45525f7d2cff12474be4a4103c2e8115`，生产和测试与 3-A 整合相同。首次省略四项配置，路由 `dec-7520b7df-b208-48ad-8d1d-d9a2c7fab67b` 选择 ZCode/zai-api/GLM-5.3/max；保持已授权的供应方不可重试限流同 run 恢复规则，不改变用户路由设置。九路径的独立工作树已经启动，其他公共文件无写权，最终完整检查尚未运行。
 
 该次 ZCode 实际返回 429/1310、nativeFailure.attribution.reason=rate_limited、retryable=false，原生退出 0、两层停止确认，未交付修复。根据原许可与本批同类交付，完整 configuration 与独立 reason 使同 run continue 到 Codex/openai/gpt-6.1-sol/high，revision 5；没有重试已限流 ZCode、修改全局模型或 Router 配置。原路由、失败与继续请求/响应留存为 `tmp/c073-host/path-state-{routing,failed-result,repair*}`，既有三次真实付费冒烟不重跑，ZCode 真实冒烟仍未验证。
+
+## 3-B 固定产物的 Host 补核与整合
+
+固定候选 `765d1c1faaff2aed423b3481c781d8967535c589`、artifact `8fcc5af5-190e-4bc2-aee1-fec313795446`、补丁 SHA-256 `8dc70f6124df2ecf2894e6df43fb319adf2e339431541022d32375ffb55223e3` 共八个路径，均在九路径范围内。Worker 明确记录 73 项沙箱可运行聚焦测试、真实 RPC 成功数 0、一次 console bind 被阻止及其自建进程 wait 退出；Host 不将受限验证当成功签收，固定副本完成以下补核。核心 `12eb4fcd` 未变化，第二次复核的整合分支只读使用，没有合入。
+
+| Host 聚焦文件 | 项数 | exit | 命令墙钟秒 |
+| --- | ---: | ---: | ---: |
+| `protocol.test_path_state` | 12 | 0 | 6.836 |
+| `protocol.test_public_state` | 26 | 0 | 28.293 |
+| `protocol.test_rpc_config` | 24 | 0 | 8.819 |
+| `protocol.test_transport_attach` | 28 | 0 | 1.381 |
+| `blackboard.service.test_daemon` | 13 | 0 | 5.618 |
+
+五个文件各自独立解释器、空 HOME、明确私有 state/runtime、固定 catalog 与原生 sentinel，共 103 项全部通过，日志为 `tmp/c073-host/path-state-host-{path,public,rpc,attach,daemon}.{json,log}`。真实 linked-cli 同时覆盖链接祖先和直接状态链接，两次 CLI health 及随后实际 RPC 的 serviceId、stateDir 与同一服务相符，实际传入路径为真实状态根，nativeRoot 为其 ipc。cold-755 在 preflight 返回瞬间为 0700，再真实启动；daemon-755 不走 preflight，直接启动后 0700。三个场景五个服务/CLI 直属 Popen 均 wait 退出 0、服务与 Worker 锁释放、RPC shutdown 完成、cleanupFailures 为空，native sentinel 没有调用。0500 只读核对用真实 C-Two tiny ping peer，不把 SQLite 访问混成传输结论；实际 RPC 到达、其余目录快照和权限 0500 不变，peer 请求停止并 wait 退出 0，RPC 收尾完成。实际 state/ipc 链接经 CLI 拒绝的 code/message/path 与 preflight 结构错误相等。
+
+Host 从固定源码独立重建 13 份目标变异并运行原目标测试：公开 realpath、两处所有者 chmod/mkdir、BoardError 保留、内部链接/..、结构 path、测试环境耦合，以及 3-A 的三种实际 RPC 目录传递。每份恰好一项 assertion failure、无 errors，命中相应路径、权限、错误对象或 PRIVATE_STATE_REQUIRED 断言，不以沙箱或任意导入/超时算 red；3-A 的三个目标这次仍经过真实私有 RPC。13 份命令墙钟为 0.315–0.705 秒。Host 本地结果分类器最初对五种消息预期过窄，汇总退出 1；逐个读取未改日志确认目标断言后补充准确消息标记，不重跑测试、不改源或掩盖首次汇总。初汇总 `path-state-host-target-proofs.json` 与复核 `path-state-host-target-proofs-reviewed.json` 均保留，各 red 日志不覆写。
+
+用户的原 path_probe 只读复制后在候选及冻结 core 各重放一次：两份均链接路径预检成功、解析到真实目录、0755 修正 0700、新 HOME 默认预检通过；命令各退出 0、0.143/0.144 秒。沿用此前相同外层短私有临时根约束和创建台账，不改探针，产品没有模型调用；该原探针是文件/本地预检对照，真实服务证据以上述新场景为准。台账 `path-preflight-green-owned-root.json` 保留原脚本哈希与两份输出，之前原候选 red 不改写。
+
+实际 loader 3,500→3,512，214→215 模块，旧 3,500 编号集合全保留、删除 0、新增 12、重复和装载错误 0；新编号和集合证明在 `path-state-fixed-ids.json`、`path-state-id-delta.json`。旧 PS-07 及 rpc_config 链接断言按用户决定迁移到状态边界内，公开根链接改由 PATH-01 正向保护；旧 transport 的 owner setup 断言按恢复的 mkdir/chmod 改为实测行为，只读 guard 未削弱。产品 preflight 不再读取 BUDDY_CHECKS_TMPDIR，标准 tempfile 使用 TMPDIR；这项测试设施耦合没有生产必要。0755 只表示 rpc_config 可选 IPC 域，服务所有者冷启动和启动会修正 0700；只读 attach 不创建或改权限。
+
+Host 没有修改微任务代码或测试，只整合固定补丁及在本计划登记独立补核和本地分类器说明。此结论仅为 3-B 内部微任务验收；整批仍等最终完整检查和 Claude Code Host。Worker 原记录的“待 Host 补核”保留原提交绑定，不回写成 Worker 做过真实成功验证。

@@ -130,9 +130,9 @@ class ServiceError(BoardError):
 
 
 def get_state_dir(state_dir: str | Path | None = None) -> Path:
-    return private_dirs._absolute(Path(
+    return Path(
         state_dir or os.environ.get("BUDDY_STATE_DIR") or home.default_state_dir()
-    ).expanduser())
+    ).expanduser().resolve()
 
 
 def encode_message(value: Any) -> str:
@@ -279,6 +279,9 @@ def _cold_start_preflight(directory: Path) -> None:
     socket_directory = None
     address = None
     try:
+        rpc_config._validate_path(directory)
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory.chmod(0o700)
         rpc_config.configure_local_endpoint(directory)
         if not _trusted_directory(directory):
             raise OSError('State directory is not owner-private')
@@ -301,7 +304,7 @@ def _cold_start_preflight(directory: Path) -> None:
         else:
             # State paths need not fit sockaddr_un; C-Two also uses short private
             # IPC names. Keep the probe independent of a deeply nested checkout.
-            socket_directory = Path(tempfile.mkdtemp(prefix='buddy-ipc-', dir=os.environ.get('BUDDY_CHECKS_TMPDIR', '/tmp')))
+            socket_directory = Path(tempfile.mkdtemp(prefix='buddy-ipc-'))
             address = str(socket_directory / 's')
             listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             connector = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -316,7 +319,7 @@ def _cold_start_preflight(directory: Path) -> None:
             finally:
                 connector.close()
                 listener.close()
-    except (OSError, BoardError) as error:
+    except OSError as error:
         raise ServiceError('LAUNCH_ACCESS_DENIED',
                            'Cold start needs state-directory writes and local IPC; allow this skill launcher outside the Host sandbox and retry') from error
     finally:

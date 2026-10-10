@@ -595,6 +595,9 @@ class Daemon:
         )
 
     def run(self) -> int:
+        rpc_config._validate_path(self.directory)
+        self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.directory.chmod(0o700)
         self.control["rpc_profile"] = rpc_config.configure_server(self.directory)
         self.acquire_exclusive()
         try:

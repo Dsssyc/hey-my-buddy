@@ -152,18 +152,25 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
         state.mkdir(mode=0o700, parents=True)
         restore_modes[state] = stat.S_IMODE(state.stat().st_mode)
         if name == "unsafe-path":
-            (state / "ipc").mkdir(mode=0o700)
-            link = state / "linked"
-            link.symlink_to(state / "ipc", target_is_directory=True)
+            # PS-07 now guards the private IPC tree. Public state roots are
+            # canonicalized by the user's second Host review decision.
+            target = state / "target"
+            target.mkdir(mode=0o700)
+            link = state / "ipc"
+            link.symlink_to(target, target_is_directory=True)
             endpoint = {"address": "ipc://unused", "token": "fixture"}
             with patch.object(transport.cc, "connect") as connect:
-                for selected in (link, state / "unused" / ".."):
+                for boundary in ("public", "private"):
                     try:
-                        transport.call_board("ping", state_dir=selected, endpoint=endpoint)
+                        if boundary == "public":
+                            transport.call_board("ping", state_dir=state, endpoint=endpoint)
+                        else:
+                            transport.rpc_config.configure_client(state / "unused" / "..", create=False)
                     except BoardError as error:
                         assert error.code == "PRIVATE_PATH_UNSAFE", error.payload()
+                        assert error.details.get("path"), error.payload()
                     else:
-                        raise AssertionError("public resolution hid an unsafe path")
+                        raise AssertionError("private IPC guard accepted an unsafe path")
                 connect.assert_not_called()
             return
 

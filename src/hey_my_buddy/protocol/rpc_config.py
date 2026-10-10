@@ -107,13 +107,26 @@ def resolve_state_dir(state_dir: str | Path | None = None) -> Path:
     selected = state_dir if state_dir is not None else os.environ.get("BUDDY_STATE_DIR")
     if not selected:
         raise BoardError("PRIVATE_STATE_REQUIRED", "Internal RPC requires an explicit state directory")
-    return private_dirs._absolute(Path(selected).expanduser())
+    path = private_dirs._absolute(Path(selected).expanduser())
+    if '..' in path.parts:
+        raise BoardError("PRIVATE_PATH_UNSAFE", "IPC path contains an unsafe component", path=str(path))
+    return path.resolve()
 
 
-def _validate_path(path: Path) -> bool:
+def _validate_path(path: Path, *, boundary: Path | None = None) -> bool:
     """Keep structural path guards; C-Two owns endpoint access checks."""
-    if '..' in path.parts or private_dirs.linked_component(path) is not None:
-        raise BoardError("PRIVATE_PATH_UNSAFE", "IPC path contains a linked or unsafe component")
+    if '..' in path.parts:
+        raise BoardError("PRIVATE_PATH_UNSAFE", "IPC path contains a linked or unsafe component", path=str(path))
+    # The chosen state root may have user-owned linked ancestors. Inspect only
+    # entries in the private tree, before following any of those entries.
+    first = boundary if boundary is not None else path
+    if private_dirs.linked(first):
+        raise BoardError("PRIVATE_PATH_UNSAFE", "IPC path contains a linked or unsafe component", path=str(first))
+    current = first
+    for part in path.relative_to(first).parts:
+        current /= part
+        if private_dirs.linked(current):
+            raise BoardError("PRIVATE_PATH_UNSAFE", "IPC path contains a linked or unsafe component", path=str(current))
     try:
         info = path.lstat()
     except FileNotFoundError:
@@ -134,22 +147,20 @@ def configure_local_endpoint(state_dir: str | Path | None = None, *, create: boo
         cc.set_local_endpoint()
         return None
     root = state / "ipc"
-    for ancestor in reversed(state.parents):
-        _validate_path(ancestor)
     for directory in (state, root):
-        if not _validate_path(directory):
+        if not _validate_path(directory, boundary=state):
             if not create:
                 raise BoardError("PRIVATE_PATH_UNSAFE", "Private IPC directory is missing", path=str(directory))
             try:
                 directory.mkdir(mode=0o700, parents=True)
             except FileExistsError:
                 pass
-        _validate_path(directory)
+        _validate_path(directory, boundary=state)
     # Core owns both the active-domain fence and endpoint access validation.
     try:
         cc.set_local_endpoint(root=str(root))
     except (ValueError, RuntimeError) as error:
-        raise BoardError("PRIVATE_PATH_UNSAFE", str(error)) from error
+        raise BoardError("PRIVATE_PATH_UNSAFE", str(error), path=str(root)) from error
     return root
 
 

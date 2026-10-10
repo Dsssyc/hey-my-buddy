@@ -345,9 +345,12 @@ class ProfileTests(unittest.TestCase):
         link = self.state / "link"
         link.symlink_to(ipc, target_is_directory=True)
         with self.assertRaises(BoardError):
-            rpc_config._validate_path(link / "child")
-        with self.assertRaises(BoardError):
-            rpc_config.configure_client(link / "child")
+            rpc_config._validate_path(link / "child", boundary=self.state)
+        # A chosen public root may pass through a link. Preserve the nested
+        # private-link assertion within its explicit state boundary instead.
+        with self.assertRaises(BoardError) as refused:
+            rpc_config._validate_path(link / "child" / "inner", boundary=self.state)
+        self.assertEqual(refused.exception.details["path"], str(link))
         linked_state = self.state / "linked-state"
         linked_state.mkdir()
         (linked_state / "ipc").symlink_to(ipc, target_is_directory=True)
