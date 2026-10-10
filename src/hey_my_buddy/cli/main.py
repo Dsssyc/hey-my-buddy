@@ -33,7 +33,7 @@ from ..install.entrypoints import ENTRY_MODULES
 from ..protocol import transport
 from ..errors import BoardError
 from ..install.launcher import service_environment
-from ..protocol.transport import METHOD_MAP, call_service, get_state_dir
+from ..protocol.transport import METHOD_MAP, _call_service, get_state_dir
 from ..buddy.runtime.worker import RETIRE_REQUEST_NAME
 
 METHODS = [
@@ -257,26 +257,24 @@ def _abandoned(abandoned, commands: list[str]) -> dict:
     }
 
 
-def _worker_command(action: str, params: dict) -> dict:
+def _worker_command(action: str, params: dict, state: Path) -> dict:
     if _agent_credential() is not None:
         raise BoardError("FORBIDDEN", "An attempt credential cannot manage service workers")
     if action == "worker-start":
         from ..install.upgrade import file_lock
-        state = get_state_dir(params.get("stateDir"))
         state.mkdir(mode=0o700, parents=True, exist_ok=True)
         with file_lock(state / "control-start.lock"):
             if (state / "upgrade.json").exists():
                 raise BoardError("UPGRADE_IN_PROGRESS", "Worker start is fenced during upgrade")
-            return _worker_command_unlocked(action, params)
-    return _worker_command_unlocked(action, params)
+            return _worker_command_unlocked(action, params, state)
+    return _worker_command_unlocked(action, params, state)
 
 
-def _worker_command_unlocked(action: str, params: dict) -> dict:
+def _worker_command_unlocked(action: str, params: dict, state_dir: Path) -> dict:
     """Start or cooperatively stop one independent worker supervisor."""
     worker_id = params.get("workerId") or "local"
     if not isinstance(worker_id, str) or not worker_id.strip():
         raise ValueError("workerId must be a nonempty string")
-    state_dir = get_state_dir(params.get("stateDir"))
     directory = state_dir / "workers" / worker_id
     if action == "worker-stop":
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -371,19 +369,19 @@ def _agent_credential() -> str | None:
     return scoped.strip()
 
 
-def _control_path(run_id: str, generation: int) -> Path:
+def _control_path(run_id: str, generation: int, state_dir: Path) -> Path:
     """The private control path for one run and owner generation, with its 0700 directory."""
     if not isinstance(run_id, str) or not _RUN_ID_PATTERN.match(run_id):
         raise BoardError("INVALID_ARGUMENT", "runId must be a plain identifier to locate its control file")
     if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
         raise BoardError("INVALID_ARGUMENT", "ownerGeneration must be a positive integer")
-    directory = transport.get_state_dir() / "controls"
+    directory = state_dir / "controls"
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory.chmod(0o700)
     return directory / f"{run_id}.g{generation}.json"
 
 
-def _save_control(run_id: str, control: dict) -> str:
+def _save_control(run_id: str, control: dict, state_dir: Path) -> str:
     """Atomically save one Host control capability to its own 0600 file."""
     control = control if isinstance(control, dict) else {}
     host_id = control.get("hostId")
@@ -395,7 +393,7 @@ def _save_control(run_id: str, control: dict) -> str:
         raise BoardError("INVALID_ARGUMENT", "control.ownerGeneration must be a positive integer")
     if not isinstance(token, str) or not token.strip():
         raise BoardError("INVALID_ARGUMENT", "control.controlToken must be a nonempty string")
-    path = _control_path(run_id, generation)
+    path = _control_path(run_id, generation, state_dir)
     payload = json.dumps(
         {
             "hostId": host_id.strip(),
@@ -510,7 +508,7 @@ def _apply_control(params: object, method: str) -> dict:
     return prepared
 
 
-def _submission_token(request_id: object, params: dict) -> str:
+def _submission_token(request_id: object, params: dict, state_dir: Path) -> str:
     """The private submission capability, created before the first submit RPC.
 
     It is persisted under the state directory keyed by requestId, so a retried
@@ -519,7 +517,7 @@ def _submission_token(request_id: object, params: dict) -> str:
     """
     if not isinstance(request_id, str) or not request_id:
         raise BoardError("INVALID_ARGUMENT", "submit requires requestId before a submission token")
-    directory = transport.get_state_dir() / "submissions"
+    directory = state_dir / "submissions"
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory.chmod(0o700)
     name = hashlib.sha256(request_id.encode("utf-8")).hexdigest()[:32]
@@ -562,7 +560,7 @@ def _read_submission_token(path: Path, request_id: str) -> str:
     return token
 
 
-def _scrub_and_save(result: dict) -> None:
+def _scrub_and_save(result: dict, state_dir: Path) -> None:
     """Save a returned Host control capability privately and replace its token with the file path."""
     control = result.get("control")
     if not isinstance(control, dict) or not isinstance(control.get("controlToken"), str) or not control["controlToken"]:
@@ -570,7 +568,7 @@ def _scrub_and_save(result: dict) -> None:
     run_id = result.get("runId")
     if not isinstance(run_id, str) or not run_id:
         raise BoardError("INVALID_ARGUMENT", "A control result must carry its runId before its token can be saved")
-    path = _save_control(run_id, control)
+    path = _save_control(run_id, control, state_dir)
     result["control"] = {
         "hostId": control.get("hostId"),
         "ownerGeneration": control.get("ownerGeneration"),
@@ -691,6 +689,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         params = _parse_parameters(_parameters_text(args))
+        state_dir = get_state_dir(params.get("stateDir") if args.method in LOCAL_METHODS else None)
         if (args.method == 'account-login' and 'apiKey' in params
                 and not (args.params == '-' or args.params_file == '-')):
             params.pop('apiKey', None)
@@ -722,7 +721,7 @@ def main(argv: list[str] | None = None) -> int:
             from ..install.skill_install import paths
             result = paths(params)
         elif args.method in LOCAL_METHODS:
-            result = _worker_command(args.method, params)
+            result = _worker_command(args.method, params, state_dir)
         elif args.method == "console":
             # Console keeps its one canonical JSON argument, but `browser` and `wait`
             # are CLI-local: console_cli validates and strips them, launches the
@@ -730,12 +729,12 @@ def main(argv: list[str] | None = None) -> int:
             # attempt-scoped credential is refused before any local action or RPC.
             from . import console_cli
 
-            result = console_cli.run(params, credential=_agent_credential())
+            result = console_cli.run(params, state_dir=state_dir, credential=_agent_credential())
         elif args.method == "await":
             from .blocking import WaitAbandoned, await_run, recovery_commands
 
             try:
-                result = await_run(params)
+                result = await_run(params, state_dir=state_dir)
             except WaitAbandoned as abandoned:
                 print(_dumps(_abandoned(abandoned, recovery_commands(abandoned.request_id, abandoned.run_id))))
                 return 1
@@ -749,10 +748,10 @@ def main(argv: list[str] | None = None) -> int:
             if args.method == "submit" and not prepared.get("submissionToken"):
                 # An agent-scoped caller must never mint Host authority.
                 if credential is None:
-                    prepared["submissionToken"] = _submission_token(prepared.get("requestId"), prepared)
-            result = call_service(args.method, prepared)
+                    prepared["submissionToken"] = _submission_token(prepared.get("requestId"), prepared, state_dir)
+            result = _call_service(args.method, prepared, state_dir)
             if isinstance(result, dict):
-                _scrub_and_save(result)
+                _scrub_and_save(result, state_dir)
         print(_dumps(_render_output(args.method, result, mode)))
         return 1 if isinstance(result, dict) and result.get("error") else 0
     except Exception as error:  # noqa: BLE001 - the CLI converts every failure into one envelope

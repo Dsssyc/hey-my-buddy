@@ -318,7 +318,7 @@ class LiveActivityForwardTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
         from hey_my_buddy.protocol.contracts import HarnessRunLive
         endpoint = CTwoLiveEndpoint(identity, LiveCapabilities(inquiry_delivery="unsupported"), HarnessRunLive,
-                                    instance_id="c" * 64, token="d" * 64)
+                                    instance_id="c" * 64, token="d" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         self.addCleanup(endpoint.close, reason="fixture-ended")
         self.endpoints = getattr(self, "endpoints", {})
         self.endpoints[str(directory)] = endpoint
@@ -357,7 +357,7 @@ class LiveActivityForwardTests(unittest.TestCase):
                                          "attempt_id": attempt_id, "generation": generation})
         if source_identity != endpoint.identity:
             endpoint = CTwoLiveEndpoint(source_identity, LiveCapabilities(inquiry_delivery="unsupported"), HarnessRunLive,
-                                        instance_id="c" * 64, token="d" * 64)
+                                        instance_id="c" * 64, token="d" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
             self.endpoints[str(directory)] = endpoint
             self.addCleanup(endpoint.close, reason="fixture-ended")
         self.assertTrue(endpoint.publish_activity({"phase": "streaming-model", "eventSeq": event_seq,

@@ -250,36 +250,6 @@ class ProfileTests(unittest.TestCase):
             endpoint.assert_called_once_with()
         self.assertFalse((self.state / "ipc").exists())
 
-    def test_missing_state_refuses_before_sdk_or_default_paths(self):
-        """R-01: internal configuration has no Host CLI default resolution."""
-        from hey_my_buddy.errors import BoardError
-        home = self.state / "empty-home"
-        home.mkdir()
-        environment = {key: value for key, value in os.environ.items()
-                       if not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
-        environment["HOME"] = str(home)
-        with mock.patch.dict(os.environ, environment, clear=True), \
-                mock.patch.object(rpc_config.cc, "set_local_endpoint") as endpoint:
-            for configure in (rpc_config.configure_local_endpoint, rpc_config.configure_server,
-                              rpc_config.configure_client):
-                with self.subTest(configure=configure.__name__):
-                    with self.assertRaises(BoardError) as raised:
-                        configure()
-                    self.assertEqual(raised.exception.code, "PRIVATE_STATE_REQUIRED")
-            with mock.patch.object(rpc_config, "os", SimpleNamespace(name="nt", environ=os.environ)):
-                with self.assertRaises(BoardError) as raised:
-                    rpc_config.configure_local_endpoint()
-                self.assertEqual(raised.exception.code, "PRIVATE_STATE_REQUIRED")
-            endpoint.assert_not_called()
-        self.assertEqual(list(home.iterdir()), [])
-        self.assertFalse((self.state / "ipc").exists())
-
-    def test_explicit_state_and_environment_are_the_only_sources(self):
-        environment_state = self.state / "environment"
-        with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(environment_state)}):
-            self.assertEqual(rpc_config.configure_local_endpoint(), environment_state / "ipc")
-            self.assertEqual(rpc_config.configure_local_endpoint(self.state), self.state / "ipc")
-
     def test_0755_state_creates_0700_ipc_without_parent_repair(self):
         """R-02 setup boundary; the transport test separately verifies I/O."""
         from hey_my_buddy.errors import BoardError

@@ -102,17 +102,6 @@ def report(role: str = "server") -> dict:
         return _reports.setdefault(role, _build_report(role))
 
 
-def resolve_state_dir(state_dir: str | Path | None = None) -> Path:
-    """Resolve only caller-supplied state; internal RPC never selects a default."""
-    selected = state_dir if state_dir is not None else os.environ.get("BUDDY_STATE_DIR")
-    if not selected:
-        raise BoardError("PRIVATE_STATE_REQUIRED", "Internal RPC requires an explicit state directory")
-    path = private_dirs._absolute(Path(selected).expanduser())
-    if '..' in path.parts:
-        raise BoardError("PRIVATE_PATH_UNSAFE", "IPC path contains an unsafe component", path=str(path))
-    return path.resolve()
-
-
 def _validate_path(path: Path, *, boundary: Path | None = None) -> bool:
     """Keep structural path guards; C-Two owns endpoint access checks."""
     if '..' in path.parts:
@@ -136,13 +125,13 @@ def _validate_path(path: Path, *, boundary: Path | None = None) -> bool:
     return True
 
 
-def configure_local_endpoint(state_dir: str | Path | None = None, *, create: bool = True) -> Path | None:
+def configure_local_endpoint(state_dir: Path, *, create: bool = True) -> Path | None:
     """Select explicit state/ipc; native C-Two validates access on first I/O.
 
     ``create=False`` never creates or chmods directories. Completed native shutdown
     allows a new selection. Windows retains its native Named Pipe domain.
     """
-    state = resolve_state_dir(state_dir)
+    state = state_dir
     if os.name == "nt":
         cc.set_local_endpoint()
         return None
@@ -164,7 +153,7 @@ def configure_local_endpoint(state_dir: str | Path | None = None, *, create: boo
     return root
 
 
-def _apply(role: str, state_dir: str | Path | None, *, create: bool) -> dict:
+def _apply(role: str, state_dir: Path, *, create: bool) -> dict:
     with _LOCK:
         configure_local_endpoint(state_dir, create=create)
         # The public scope is absent before the role's first I/O and after complete
@@ -184,12 +173,12 @@ def _apply(role: str, state_dir: str | Path | None, *, create: bool) -> dict:
         return _reports[role]
 
 
-def configure_server(state_dir: str | Path | None = None, *, create: bool = True) -> dict:
+def configure_server(state_dir: Path, *, create: bool = True) -> dict:
     """Apply the server profile and private domain before the first register."""
     return _apply("server", state_dir, create=create)
 
 
-def configure_client(state_dir: str | Path | None = None, *, create: bool = True) -> dict:
+def configure_client(state_dir: Path, *, create: bool = True) -> dict:
     """Apply the client profile and private domain before the first connect."""
     return _apply("client", state_dir, create=create)
 

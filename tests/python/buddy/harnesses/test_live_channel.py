@@ -73,7 +73,7 @@ class LiveSeamCase(unittest.TestCase):
     def setUp(self):
         self.endpoint = ctl.CTwoLiveEndpoint(identity(), lv.EXISTING_CAPABILITIES["zcode"],
                                             TEST_CRM, instance_id="a" * 64, token="b" * 64,
-                                            name="Ada")
+                                            name="Ada", state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         self.peer = EndpointConnection(self.endpoint)
         def connect(*args, timeout, **kwargs):
             self.assertGreaterEqual(timeout, 0)
@@ -85,7 +85,7 @@ class LiveSeamCase(unittest.TestCase):
         self.connection = self.enterContext(patch.object(ctl.cc, "connect", side_effect=connect))
         self.enterContext(patch.object(ctl.cc, "with_call_options", side_effect=with_call_options))
         self.channel = ctl.CTwoLiveChannel(identity(), TEST_CRM, name="Ada", address="ipc://fixture",
-                                           instance_id="a" * 64, token="b" * 64)
+                                           instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         self.addCleanup(self.endpoint.close, reason="fixture finished")
         self.directory = self.enterContext(tempfile.TemporaryDirectory(prefix="live-fixture-"))
         self.journal = Path(self.directory) / "inquiries.jsonl"
@@ -169,7 +169,7 @@ class LimitTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             lv.InquiryPayload(question_id="q-1", question="水" * 2001)  # 6003 UTF-8 bytes, 2001 characters
         channel = ctl.CTwoLiveChannel(identity(), TEST_CRM, name="Ada", address="ipc://fixture",
-                                       instance_id="a" * 64, token="b" * 64)
+                                       instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         for timeout in (99, 5001, 0, "1500"):
             with self.assertRaises(BoardError, msg=str(timeout)):
                 channel.request(inquiry_request(), timeout_ms=timeout)
@@ -254,7 +254,7 @@ class RequestBindingTests(LiveSeamCase):
 
     def test_unsupported_facilities_answer_unsupported(self):
         unsupported = ctl.CTwoLiveEndpoint(identity(), lv.EXISTING_CAPABILITIES["codex"],
-                                           TEST_CRM, instance_id="a" * 64, token="b" * 64)
+                                           TEST_CRM, instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         self.peer.endpoint = unsupported
         reply = self.channel.request(inquiry_request(), timeout_ms=1500)
         self.assertEqual((reply.status, reply.reason_code), ("unsupported", "inquiry-unsupported"))

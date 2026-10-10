@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from contextlib import contextmanager
 from dataclasses import replace
 import signal
@@ -11,7 +12,6 @@ import time
 from pathlib import Path
 
 from ...errors import BoardError
-from ...protocol import rpc_config
 from ...protocol.contracts import HarnessRunLive
 from ..harnesses.c_two_live import CTwoLiveEndpoint, write_ready_material
 from ..harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
@@ -27,7 +27,7 @@ from .turn_io import _private_bytes, guard_private_path, private_json
 
 
 @contextmanager
-def _controller_live(control, request, services):
+def _controller_live(control, request, services, state_dir: Path):
     material = control.get("live")
     if material is None:
         yield services
@@ -36,7 +36,7 @@ def _controller_live(control, request, services):
                     else LiveCapabilities(inquiry_delivery="unsupported"))
     endpoint = CTwoLiveEndpoint(request.identity, capabilities, HarnessRunLive,
                                instance_id=material["instanceId"], token=material["token"],
-                               state_dir=rpc_config.resolve_state_dir())
+                               state_dir=state_dir)
     try:
         descriptor = endpoint.start()
         write_ready_material(material["readyFile"], descriptor)
@@ -45,7 +45,7 @@ def _controller_live(control, request, services):
         endpoint.stop()
 
 
-def execute(control: dict, cancelled: threading.Event) -> tuple[str, int]:
+def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple[str, int]:
     if control["operation"] == "review" and not adapter(control["harness"]).read_only_structured:
         raise BoardError("INVALID_ARGUMENT", "The harness has no review carrier")
     module = run_seam(control["harness"])
@@ -80,7 +80,7 @@ def execute(control: dict, cancelled: threading.Event) -> tuple[str, int]:
     _private_bytes(request_path, encode_run_request(request).encode(), exclusive=True)
     request = decode_run_request(request_path.read_bytes())
     if input_error is None:
-        with _controller_live(control, request, services) as live_services:
+        with _controller_live(control, request, services, state_dir) as live_services:
             result = run_harness(module, request, observer=observer, services=live_services, cancelled=cancelled.is_set)
     else:
         result = RunResult(identity=request.identity, harness=request.harness,
@@ -111,13 +111,17 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--control", required=True)
     args = parser.parse_args()
+    selected = os.environ.get("BUDDY_STATE_DIR")
+    if not selected:
+        parser.error("BUDDY_STATE_DIR is required")
+    state_dir = Path(selected)
     cancelled = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT,
                 *((signal.SIGBREAK,) if hasattr(signal, "SIGBREAK") else ())):
         signal.signal(sig, lambda _sig, _frame: cancelled.set())
     try:
         control = decode_strict_json(guard_private_path(Path(args.control)).read_bytes())
-        frame, code = execute(control, cancelled)
+        frame, code = execute(control, cancelled, state_dir)
     except Exception:
         # No native receipt can be inferred from a controller failure. The
         # normal result reader refuses this diagnostic as a RunResult.

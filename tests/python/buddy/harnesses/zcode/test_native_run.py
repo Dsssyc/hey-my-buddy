@@ -76,10 +76,10 @@ def fixture_live_channel(case, identity, *, credentials, journal_path, activity_
     from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
     from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
     endpoint = CTwoLiveEndpoint(identity, EXISTING_CAPABILITIES[harness], TEST_CRM,
-                               instance_id="c"*64, token="d"*64)
+                               instance_id="c"*64, token="d"*64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
     address = f"fixture-address-{uuid.uuid4().hex}"
     channel = CTwoLiveChannel(identity, TEST_CRM, name="Test Producer", address=address,
-                             instance_id="c"*64, token="d"*64)
+                             instance_id="c"*64, token="d"*64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
     # DSH creates its owner when the native turn starts; its endpoint must not
     # acquire a competing fixture consumer before that owner exists.
     bridge = None
@@ -554,7 +554,7 @@ class WorkerSeamTests(MockNativeCase):
         os.environ.update(self.environment)
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "task-tool"
         request, services = self.worker_request(self.turn_input())
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM)
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         services = dataclasses.replace(services, live=endpoint)
         seen = []
         original = endpoint.publish_activity
@@ -597,7 +597,7 @@ class WorkerSeamTests(MockNativeCase):
         os.environ.update(self.environment)
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "task-tool"
         request, services = self.worker_request(self.turn_input())
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM)
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         services = dataclasses.replace(services, live=endpoint)
         with mock.patch.object(endpoint, "publish_activity", return_value=False) as publish:
             result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
@@ -639,7 +639,7 @@ class WorkerSeamTests(MockNativeCase):
         from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM)
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         services = dataclasses.replace(services, live=endpoint)
         with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
             result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
@@ -879,7 +879,7 @@ class ProducerContractTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
         from hey_my_buddy.protocol.activity import ActivityPublisher
         request = self.fast_request("fixture")
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM)
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         now = [0.0]
         callback = mock.Mock(wraps=endpoint.publish_activity)
         publisher = ActivityPublisher(callback, clock=lambda: now[0])

@@ -112,7 +112,7 @@ class BridgeHarness:
         self.attention_path = self.directory / "attention.json"
         self.live = (CTwoLiveEndpoint(RUN_IDENTITY, LiveCapabilities(
             inquiry_delivery="cooperative-checkpoint"), TEST_CRM,
-            instance_id=LIVE_INSTANCE, token=LIVE_TOKEN) if live else None)
+            instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, state_dir=Path(os.environ["BUDDY_STATE_DIR"])) if live else None)
         self.bridge = make_inquiry_bridge(identity=IDENTITY,
                                          journal_path=self.credentials["resultsPath"],
                                          attention_path=str(self.attention_path), live=self.live)
@@ -1178,18 +1178,18 @@ class TransportWindowBoundaryTests(unittest.TestCase):
             with self.subTest(timeout_ms=accepted):
                 frame = LiveWireRequest(identity=RUN_IDENTITY, request_id="request-window", kind="inquiry",
                                         payload=InquiryPayload(question_id="question-window", question="window?"),
-                                        instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, timeout_ms=accepted)
+                                        instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, timeout_ms=accepted, deadline_monotonic=time.monotonic() + accepted/1000.0)
                 self.assertEqual(frame.timeout_ms, accepted)
         for refused in (99, 5001, True, 1500.0):
             with self.subTest(timeout_ms=refused):
                 with self.assertRaises(BoardError):
                     LiveWireRequest(identity=RUN_IDENTITY, request_id="request-window", kind="inquiry",
                                     payload=InquiryPayload(question_id="question-window", question="window?"),
-                                    instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, timeout_ms=refused)
+                                    instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, timeout_ms=refused, deadline_monotonic=time.monotonic() + refused/1000.0)
 
     def test_the_channel_entry_keeps_the_same_edges_and_refuses_bools(self):
         channel = CTwoLiveChannel(RUN_IDENTITY, TEST_CRM, name="window-probe", address="ipc://window-probe",
-                                  instance_id=LIVE_INSTANCE, token=LIVE_TOKEN)
+                                  instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         channel.close(reason="fixture-no-endpoint")
         for accepted in (100, 5000):
             with self.subTest(timeout_ms=accepted):

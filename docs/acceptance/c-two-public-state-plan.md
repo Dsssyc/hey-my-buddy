@@ -220,3 +220,51 @@ R2 在 scopeVersion 1 下封存失败，conflict `wsc-b68ab678-4458-4225-90a6-8e
 随后 scope-amend（expectedScopeVersion=1）在确认停止和无待执行 continuation 时记录 scopeVersion 2 的 66 路径；R2 又暴露一个必填 await_run 调用方 `tests/python/blackboard/tasks/test_workflow_stop_surface.py`，四个旧断言只需传自有根，Host 在下一次 continue 之前用 scope-amend（expectedScopeVersion=2）正式追加此路径，当前 scopeVersion 3、67 路径、revision 15。这种当前授权只用于之后的回合，不追溯当前已失败的 R2。Host 封存助手也校验实际黑板 scope，恢复被截断路径列表只使用固定 base/output Git diff 和补丁哈希；不把本地 input 文本替代机械授权。
 
 R2 如实补充：根外审计输出用普通重定向 `>`，没有独占创建或写入前存在检查；是否截断既有内容、写前归属均未知。`/tmp/state-calls-readonly-audit.txt` 原样保留，不按名称/内容/日期推断归属，不纳入 Host 自有根回收。沙箱第二次受限 bind、旧数字 wait 缺口和 R2 service_environment 两处误触 preflight bind 的失败亦保留，不能写成“未绑定”或“全部停止”。当前根只读观察不能补造过去回执。本轮源码尚未整合，最终完整检查未开始。
+
+
+## 3-C 最终固定交付的 Host 独立核对
+
+R3 固定输出 `dbffa3ab29828250f4d387141bb8b386b5ab6c03`，artifact `69cc7551-cb7d-4e99-a69f-0440c48bbb6b`，累积补丁 SHA-256 `c01aa715f8876a15bed436604ac1e00e6416a6d527af3653a79bebfd743132bf`，相对基线 5f7e3b2a 共 56 路径，均在实际 scopeVersion 3 的 67 路径内。Host 逐项读取生产接缝与六个 R2→R3 差异，核对单一 get_state_dir、公开入口一次解析、内部必填 Path、进程入口一次父目录检查，以及必填 deadline 与两跳原截止时刻；固定源码归档与补丁绑定为 `tmp/c073-host/state-boundaries-fixed.json`。3-A/3-B 成果和历史反例保留，本轮没有代改 Worker 代码或测试。
+
+Host 在空 HOME、明确私有状态与运行时根、清除继承的 BUDDY_/ANTHROPIC_/C2_ 和虚拟环境后运行下面 15 个受影响选择，实际 201 项全部退出 0。原始命令、用时及日志为 `tmp/c073-host/state-boundaries-host-final-<label>.json/.log`；不是 Worker 自报或语法检查。
+
+| label | 项数 | exit | seconds |
+| --- | ---: | ---: | ---: |
+| `public` | 26 | 0 | 30.092 |
+| `path` | 12 | 0 | 8.072 |
+| `attach` | 28 | 0 | 1.471 |
+| `boundaries` | 9 | 0 | 1.287 |
+| `console-canonical` | 36 | 0 | 1.053 |
+| `stop` | 8 | 0 | 2.558 |
+| `service-env` | 12 | 0 | 0.673 |
+| `workspace` | 4 | 0 | 20.227 |
+| `worker-runtime` | 4 | 0 | 57.817 |
+| `cli-views` | 11 | 0 | 18.055 |
+| `blocking` | 26 | 0 | 1.659 |
+| `catalog` | 10 | 0 | 1.698 |
+| `account-ops` | 8 | 0 | 1.781 |
+| `workflow-worker` | 5 | 0 | 22.022 |
+| `eval` | 2 | 0 | 0.910 |
+
+首次 console 全 36 项在 Host 助手传入 `/tmp` 别名而非真实私有目录时 3 项失败、exit 1、0.550 秒；公开解析得到 `/private/tmp`，造成目标 Path 不相等。Host 只修自己忽略目录助手 repair_check.py 的任务根 resolve，未改产品或测试；同一固定源码单独重跑 console-canonical 的 36 项退出 0、1.053 秒。第一次日志与结果保留。Host 一次 commentary 把聚焦总数错加为 211，按原始 15 份日志复算为 201，已更正；不改变做过哪些验证的结论。
+
+真实 C-Two 全 71 项退出 0、16.045 秒与 Worker live 全 35 项退出 0、7.195 秒是在 adopt 的 f86215878e74 固定源码上执行。R3 的后端、角色绑定、rpc_config、两份测试及对端 fixture 共八个文件 byte/SHA-256 完全相同，复用 106 项已有真实 IPC 结果；逐文件绑定为 `state-boundaries-host-final-review.json`，原日志为 `state-boundaries-host-ctwo-r2`、`state-boundaries-host-live-r2`。覆盖新连接及已有连接的 pre_dispatch 期限、dispatch_uncertain 后对端仍完成且同连接可用、连接消耗预算后晚请求不送 owner、正常停机与只杀自建控制器后的凭据回收及端点 absent。没有真实模型调用，没有公共端点清扫。
+
+Host 在最终 R3 归档上独立建立六个窄变异副本，正常目标六项退出 0；变异六项均恰好一个目标 assertion failure、没有 unittest errors、导入失败或沙箱拒绝。逐份原/变异 hash、完整目标 ID、命令、退出码与用时为 `tmp/c073-host/state-boundaries-host-final-target-proofs.json`。缺 deadline 变异同时恢复 nullable 字段及服务端容忍，业务窗口到期返回 request-window-expired 与要求 frame-invalid 的断言不符，1.5 秒来自业务窗口，不是外层 watchdog。
+
+| 变异 | green exit / seconds | red exit / seconds | 目标 ID |
+| --- | --- | --- | --- |
+| `public-resolution` | 0 / 0.674 | 1 / 0.581 | `protocol.test_public_state.PublicStateTests.test_ps08_call_service_directory_parameter` |
+| `missing-deadline` | 0 / 0.240 | 1 / 1.724 | `buddy.harnesses.test_c_two_live.WireFrameTests.test_missing_deadline_is_refused_before_queue_or_native_delivery` |
+| `worker-cutoff` | 0 / 0.223 | 1 / 0.248 | `buddy.runtime.test_live.WorkerLiveUnitTests.test_worker_forwarding_preserves_original_deadline_and_refuses_missing_or_expired` |
+| `invalid-health` | 0 / 0.162 | 1 / 0.187 | `protocol.test_transport_attach.TrustBoundaryTests.test_invalid_health_reply_fails_without_cold_start` |
+| `peer-import` | 0 / 0.238 | 1 / 0.256 | `buddy.harnesses.test_c_two_live.ReadyMaterialTests.test_private_peer_reaches_start_with_explicit_state` |
+| `controller-root` | 0 / 0.258 | 1 / 0.238 | `buddy.runtime.test_live.WorkerLiveUnitTests.test_private_controller_reaches_start_with_parent_state` |
+
+实际全仓 loader 为 3,519 个唯一 ID、216 模块、重复 0、loaderErrors 0；与 3-B 的 3,512/215 比较：未变集合 3,504 严格相等、减少 8、增加 15。八个减少编号及对应规则、十五新增/改名编号逐项见交付 c-two-state-boundaries.md；Host 集合复算为 `state-boundaries-final-ids.json` 与 `state-boundaries-host-id-delta.json`。没有靠重复 import 维持数量。
+
+可选状态入口最终仅 CLI、BoardClient、call_service、call_board、ensure_service、request_stop；唯一解析 helper 为 transport.get_state_dir。AST 的可选参数函数为 BoardClient.__init__、四个 transport 公开操作及 get_state_dir，CLI 通过既有命令参数与环境接受可选根；cli.checks.create_private_root(directory=None) 选择的是检查器临时目录，既不是服务状态入口也不是第二个状态解析函数。内部 await_run、console_cli.run、catalog.discover 以及本批列举的请求/configure/live 函数都必填 Path，没有环境/客户端回退。完整审计 `state-boundaries-optional-functions.json`。公开依赖路径的行为、链接/0755 owner 修正、0500 只读与结构错误 code/message/path 都由最终 public/path/attach 真实私有回归确认；公开 envelope、schema 和契约版本未改。
+
+Root 整合登记：范围操作顺序错误由 Root 承担，原 scopeVersion 1 封存失败及 adopt 保全不改写，正式版本 2/3 只用于后续回合。R1/R2 fixture 缺陷均原 run continue，readonly 重复流程由原 Worker 合并为一份，不由 Root 代改。Root 只改自己的固定归档/检查助手、数目口径与本计划，不触碰用户 stash、分支标签或保护文档。任务根 `/tmp/c073-c-H6SbNM` 在签收前仍保留，当前无绑定进程/持有锁的观察不能补造旧 daemon 数字 wait 回执。根外 `/tmp/state-calls-readonly-audit.txt` 写前归属与实际覆盖未知，原普通重定向命令留存，文件原样保留、不纳入回收。
+
+这次是微任务内部核对，尚未完整检查、整批 Host 验收或日常安装。已有 Codex/Claude Code/DSH 各一次授权真实冒烟沿用原提交证据；ZCode 无额度未验证，不重跑模型。三步整合后在最终提交上运行一次默认并行数完整检查；完整结果与精确回收随后追加本记录。

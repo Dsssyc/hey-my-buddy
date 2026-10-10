@@ -86,7 +86,7 @@ class ServiceEnvironmentBuilderTests(unittest.TestCase):
         from hey_my_buddy.errors import BoardError
         with mock.patch.dict(os.environ, {"BUDDY_AGENT_CREDENTIAL": "scoped-worker"}, clear=True):
             with self.assertRaises(BoardError) as caught:
-                cli._worker_command("worker-start", {})
+                cli._worker_command("worker-start", {}, Path(tempfile.gettempdir()) / "state")
         self.assertEqual(caught.exception.code, "FORBIDDEN")
 
     def test_the_builder_is_an_allowlist_not_the_host_session(self):
@@ -250,7 +250,7 @@ class ExplicitWorkerEnvironmentTests(unittest.TestCase):
                     mock.patch.object(cli.runtime, "launch_target", return_value=target), \
                     mock.patch.object(cli.subprocess, "Popen") as spawn:
                 spawn.return_value.pid = 123
-                result = cli._worker_command("worker-start", {"workerId": "extra", "stateDir": str(state)})
+                result = cli._worker_command("worker-start", {"workerId": "extra", "stateDir": str(state)}, state.resolve())
             environment = spawn.call_args.kwargs["env"]
             self.assertEqual(result["supervisorPid"], 123)
             self.assertEqual(forbidden_environment(environment), set())

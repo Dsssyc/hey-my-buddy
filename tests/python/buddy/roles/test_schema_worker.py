@@ -1,6 +1,8 @@
 """The schema Worker uses one role policy and real native fixture deliveries."""
 from __future__ import annotations
 
+import os
+from pathlib import Path
 import hashlib
 import json
 import threading
@@ -37,7 +39,7 @@ class SchemaWorkerTests(NativeRunCase):
         # frames without editing that microtask's native files.
         with mock.patch.dict(RUN_SEAMS, {"claude": native_run}), \
                 mock.patch.object(native_run, "prepare_run_services", return_value=None, create=True):
-            frame, code = run_controller.execute(control, threading.Event())
+            frame, code = run_controller.execute(control, threading.Event(), state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         result = decode_run_result(frame)
         request = decode_run_request((root / "request.json").read_bytes())
         verdict = json.loads((root / "verdict.json").read_bytes())
@@ -108,7 +110,7 @@ class SchemaWorkerTests(NativeRunCase):
                 error.discovery_shutdown_confirmed = stopped
                 with mock.patch.dict(RUN_SEAMS, {"claude": native_run}), \
                         mock.patch.object(native_run, "run_discovery", side_effect=error):
-                    frame, code = run_controller.execute(control, threading.Event())
+                    frame, code = run_controller.execute(control, threading.Event(), state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
                 payload = json.loads(frame)
                 self.assertEqual(code, 1)
                 self.assertEqual(payload["error"], "tokenSource none")

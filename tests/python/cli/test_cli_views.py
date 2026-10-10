@@ -14,7 +14,6 @@ import json
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 import os
 import unittest
-from functools import partial
 from pathlib import Path
 from unittest import mock
 
@@ -44,22 +43,19 @@ class CliViewTests(RealWorkspaceTestCase):
         self.board_instance = self.board()
         self.register(self.board_instance)
         self.rpc_params: list[tuple[str, dict]] = []
-        self.enterContext(mock.patch.object(cli, "call_service",
-                          partial(transport.call_service, state_dir=self.directory)))
-        self.enterContext(mock.patch.object(blocking, "await_run",
-                          partial(blocking.await_run, state_dir=str(self.directory))))
+        self.enterContext(mock.patch.object(cli, "_call_service", transport._call_service))
 
-        def request(_endpoint, operation, params, resource="control", *, state_dir=None):
+        def request(_endpoint, operation, params, resource="control", *, state_dir: Path):
             self.assert_rpc_state_dir(state_dir)
             self.rpc_params.append((operation, dict(params)))
             return self.board_instance.call(operation, params)
 
         endpoint = {"address": "ipc://cli-views-test", "token": "test-token"}
-        def ensure_service(state_dir=None, resource="control"):
+        def ensure_service(state_dir: Path, resource="control"):
             self.assert_rpc_state_dir(state_dir)
             return endpoint
 
-        self.enterContext(mock.patch.object(transport, "ensure_service", ensure_service))
+        self.enterContext(mock.patch.object(transport, "_ensure_service", ensure_service))
         self.enterContext(mock.patch.object(transport, "_request", request))
         self.enterContext(mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory)}))
         for name in ("BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE"):

@@ -10,7 +10,9 @@ observing or closing a console. Only the first ``open`` may attach to (or start)
 """
 from __future__ import annotations
 
+from functools import partial
 import re
+from pathlib import Path
 import sys
 import time
 import webbrowser
@@ -124,16 +126,16 @@ def _launch_browser(url: str, enabled: bool, opener: Callable[..., Any]) -> bool
         return False
 
 
-def _non_autostart_client():
+def _non_autostart_client(state_dir: Path):
     """One observation-only board client: observing must never cold-start a daemon."""
     from ..protocol.client import BoardClient
 
-    return BoardClient(autostart=False)
+    return BoardClient(state_dir, call=partial(transport._call_board_read_only, directory=state_dir), autostart=False)
 
 
-def _observe_client(factory: Callable[[], Any] | None):
+def _observe_client(factory: Callable[[], Any] | None, state_dir: Path):
     """Build the read-only client used by every non-opening console action."""
-    return (factory or _non_autostart_client)()
+    return factory() if factory is not None else _non_autostart_client(state_dir)
 
 
 def _validated_open_reply(reply: Any) -> dict:
@@ -226,6 +228,7 @@ def _close_after_interrupt(console_id: str, *, client) -> dict:
 def run(
     params: Any,
     *,
+    state_dir: Path,
     credential: str | None = None,
     call_service: Callable[[str, dict], dict] | None = None,
     client_factory: Callable[[], Any] | None = None,
@@ -248,12 +251,12 @@ def run(
         )
     request = parse_request(params)
     if request.action != "open":
-        reply = _observe_client(client_factory).call("console", request.rpc_params)
+        reply = _observe_client(client_factory, state_dir).call("console", request.rpc_params)
         if not isinstance(reply, dict):
             raise BoardError("INVALID_RESPONSE", "The console did not return a lifecycle object")
         return dict(reply)
-    call = call_service if call_service is not None else transport.call_service
-    reply = call("console", request.rpc_params)
+    reply = (transport._call_service("console", request.rpc_params, state_dir)
+             if call_service is None else call_service("console", request.rpc_params))
     result = _validated_open_reply(reply)
     opener = browser_open if browser_open is not None else webbrowser.open
     opened = _launch_browser(result["url"], request.browser, opener)
@@ -262,7 +265,7 @@ def run(
         return result
     if not opened:
         print(f"{FALLBACK_NOTICE}{result['url']}", file=stderr if stderr is not None else sys.stderr)
-    client = _observe_client(client_factory)
+    client = _observe_client(client_factory, state_dir)
     try:
         result["wait"] = wait_for_console(
             result["consoleId"], client=client, sleep=sleep if sleep is not None else time.sleep

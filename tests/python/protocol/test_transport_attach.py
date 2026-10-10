@@ -280,9 +280,15 @@ class TrustBoundaryTests(AttachFixture):
         self.request.return_value = {"status": "ready"}
         self.assert_falls_back_to_cold_start()
 
-    def test_unresolvable_health_reply_is_not_attached(self):
+    def test_invalid_health_reply_fails_without_cold_start(self):
         self.request.side_effect = ServiceError("INVALID_RESPONSE", "malformed")
-        self.assertIsNone(_attach_read_only(self.directory))
+        with MutationRecorder() as recorder, patch("hey_my_buddy.protocol.transport.subprocess.Popen") as spawn:
+            for attach in (_attach_read_only, ensure_service):
+                with self.assertRaises(ServiceError) as raised:
+                    attach(self.directory)
+                self.assertEqual(raised.exception.code, "INVALID_RESPONSE")
+            spawn.assert_not_called()
+        recorder.assert_no_mutation()
 
     def test_malformed_endpoint_contents_are_never_trusted(self):
         for contents in ("not json", json.dumps([1, 2]), json.dumps({"address": "tcp://elsewhere", "token": "x"}), json.dumps({"address": "ipc://x", "token": ""})):
@@ -367,6 +373,7 @@ class ColdStartTests(unittest.TestCase):
         shared.chmod(0o777 | stat.S_ISVTX)
         directory = shared / "state"
         directory.mkdir(mode=0o700)
+        (directory / "ipc").mkdir(mode=0o700)
         endpoint_file = directory / "control.json"
         endpoint_file.write_text(json.dumps(ENDPOINT))
         endpoint_file.chmod(0o600)

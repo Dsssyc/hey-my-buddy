@@ -91,7 +91,7 @@ class JournalOwner:
             "activity": [{"at": "2026-10-07T00:00:00.000Z", "kind": "tool_call", "toolName": "bash"}],
         }
         capabilities = LiveCapabilities(inquiry_delivery="cooperative-checkpoint")
-        self.endpoint = CTwoLiveEndpoint(identity, capabilities, WorkerRuntimeLive, token=self.token)
+        self.endpoint = CTwoLiveEndpoint(identity, capabilities, WorkerRuntimeLive, token=self.token, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         self.lock = threading.RLock()
         self.stopping = threading.Event()
         self.errors = []
@@ -235,7 +235,7 @@ def attach_owner(case, board, client, task, adapter):
     case.assertIsInstance(getattr(board.store, "live_registry", None), LiveRegistry)
     board.store.live_registry = LiveRegistry(board.store, lambda frame: CTwoLiveChannel(
         frame.identity, WorkerRuntimeLive, name=frame.name, address=frame.address,
-        instance_id=frame.instance_id, token=frame.live_token))
+        instance_id=frame.instance_id, token=frame.live_token, state_dir=Path(os.environ["BUDDY_STATE_DIR"])))
     attachment = {"workerId": worker_id, "workerInstance": worker_instance,
                   "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": nonce,
                   "identity": identity.to_payload(), "instanceId": owner.endpoint.instance_id,

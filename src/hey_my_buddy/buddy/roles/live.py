@@ -9,7 +9,6 @@ import c_two as cc
 
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
-from ...protocol import rpc_config
 from ...protocol.contracts import HarnessRunLive
 from ..harnesses.c_two_live import (
     CTwoLiveChannel, ConfirmedProcessGone, CleanupOutcome,
@@ -79,7 +78,7 @@ def _ready_descriptor(handle) -> LiveEndpointDescriptor | None:
     return descriptor
 
 
-def handle_live_binding(handle, *, state_dir: str | Path | None = None):
+def handle_live_binding(handle, *, state_dir: Path):
     """Retry readiness against the held identity; never adopt a PID or file's identity."""
     control = getattr(handle, "role_run_control", None)
     expected = getattr(handle, "role_run_identity", None)
@@ -89,7 +88,6 @@ def handle_live_binding(handle, *, state_dir: str | Path | None = None):
     binding = live_binding(control.get("harness"))
     if binding is None:
         return LIVE_UNEXTRACTED, None
-    state_dir = rpc_config.resolve_state_dir(state_dir)
     descriptor = _ready_descriptor(handle)
     if descriptor is None:
         return LIVE_UNAVAILABLE, None

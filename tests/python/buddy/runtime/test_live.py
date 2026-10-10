@@ -4,6 +4,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import json
+import importlib.util
+import io
 import os
 from pathlib import Path
 import subprocess
@@ -54,7 +56,8 @@ def frame(attachment, model=ctl.LiveWireRequest, **changes):
     values = dict(identity=attachment.identity, instance_id=attachment.instance_id,
                   token=attachment.live_token)
     if model is ctl.LiveWireRequest:
-        values.update(request_id="request-1", kind="inquiry", payload=request().payload, timeout_ms=1000)
+        values.update(request_id="request-1", kind="inquiry", payload=request().payload, timeout_ms=1000,
+                      deadline_monotonic=time.monotonic() + 1.0)
     elif model is ctl.LiveWireObserve:
         values.update(limit=10)
     values.update(changes)
@@ -126,14 +129,15 @@ class RecordingChannel(ctl.CTwoLiveChannel):
 
     def __init__(self, run=None):
         super().__init__(run or identity(), HarnessRunLive, name="Ada", address="ipc://controller-only",
-                         instance_id="b" * 64, token="c" * 64)
+                         instance_id="b" * 64, token="c" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         self.calls = []
         self.closes = []
         self.check = lambda: None
         self.request_hook = lambda: LiveReply(status="queued", observed=True, state="queued")
 
-    def request(self, value, *, timeout_ms):
+    def _request(self, value, *, timeout_ms, deadline_monotonic):
         self.check()
+        self.deadline = deadline_monotonic
         self.calls.append(("request", value, timeout_ms))
         return self.request_hook()
 
@@ -174,12 +178,36 @@ class WorkerLiveUnitTests(unittest.TestCase):
             self.resolutions.append(handle)
             return "bound", self.channel
 
-        self.runtime = live.WorkerLiveRuntime(self.board, "worker-1", "process-1", resolve)
+        self.runtime = live.WorkerLiveRuntime(self.board, "worker-1", "process-1", resolve, state_dir=self.board.state_dir)
         self.addCleanup(self.runtime.stop)
 
     def bound(self):
         self.assertTrue(self.runtime.bind(claim(), self.handle, "nonce-1"))
         return self.board.attachments[-1]
+
+    def test_private_controller_reaches_start_with_parent_state(self):
+        path = Path(__file__).parent / "fixtures" / "live_runtime_peer.py"
+        spec = importlib.util.spec_from_file_location("live_runtime_peer", path)
+        peer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(peer)
+        command = {"op": "start", "identity": identity().to_payload()}
+
+        def before_bind(endpoint):
+            self.assertEqual(endpoint._state_dir, Path(self.temp.name))
+            raise BoardError("FIXTURE_START_REACHED", "before native registration")
+
+        with patch.object(sys, "stdin", io.StringIO(canonical_json(command) + "\n")), \
+                patch.object(ctl.CTwoLiveEndpoint, "start", autospec=True, side_effect=before_bind) as start, \
+                patch.object(ctl.CTwoLiveEndpoint, "stop") as stop:
+            failure = None
+            try:
+                peer.controller()
+            except Exception as error:
+                failure = error
+        self.assertIsInstance(failure, BoardError, "private controller must reach start with the parent state Path")
+        self.assertEqual(failure.code, "FIXTURE_START_REACHED")
+        start.assert_called_once()
+        stop.assert_called_once()
 
     def unlocked(self):
         acquired = self.runtime._lock.acquire(blocking=False)
@@ -202,24 +230,6 @@ class WorkerLiveUnitTests(unittest.TestCase):
         self.runtime.stop()
         self.assertEqual([e[0] for e in self.events[-2:]], ["unregister", "shutdown"])
         self.assertFalse(self.runtime.bind(claim(), self.handle, "nonce-1"))
-
-    def test_explicit_client_root_wins_over_environment(self):
-        with patch.dict(os.environ, {"BUDDY_STATE_DIR": "<FOREIGN_STATE>"}):
-            runtime = live.WorkerLiveRuntime(self.board, "worker-other", "process-other",
-                                            lambda handle: ("bound", self.channel))
-        self.assertEqual(self.events[-2:], [("server-profile", self.board.state_dir),
-                                          ("client-profile", self.board.state_dir)])
-        runtime.stop()
-
-    def test_missing_owner_root_refuses_before_sdk_even_with_an_ambient_domain(self):
-        with patch.dict(os.environ, {}, clear=True), patch.object(
-            live.cc, "local_endpoint_context", return_value=SimpleNamespace(root="<AMBIENT_STATE>/ipc"),
-        ) as ambient:
-            with self.assertRaises(BoardError) as raised:
-                live.WorkerLiveRuntime(SimpleNamespace(), "worker-missing", "process-missing",
-                                       lambda handle: ("bound", self.channel))
-            self.assertEqual(raised.exception.code, "PRIVATE_STATE_REQUIRED")
-            ambient.assert_not_called()
 
     def test_worker_supplied_root_wins_over_an_injected_client_root(self):
         owner = Path(self.temp.name).resolve()
@@ -291,6 +301,19 @@ class WorkerLiveUnitTests(unittest.TestCase):
         point = snapshot(self.runtime.observe(frame(attachment, ctl.LiveWireObserve,
                                                    inquiry_id="question-1", limit=None)))
         self.assertFalse(point.observed)
+
+    def test_worker_forwarding_preserves_original_deadline_and_refuses_missing_or_expired(self):
+        attachment = self.bound()
+        deadline = time.monotonic() + 1.0
+        self.assertEqual(reply(self.runtime.request(frame(attachment, deadline_monotonic=deadline))).status, "queued")
+        self.assertEqual(self.channel.deadline, deadline)
+        self.channel.calls.clear()
+        payload = json.loads(frame(attachment))
+        del payload["deadlineMonotonic"]
+        self.assertEqual(reply(self.runtime.request(canonical_json(payload))).reason_code, "frame-invalid")
+        self.assertEqual(reply(self.runtime.request(frame(attachment, deadline_monotonic=0.0))).reason_code,
+                         "request-window-expired")
+        self.assertEqual(self.channel.calls, [], "missing/expired request reached controller")
 
     def test_b2_06_all_six_identity_components_tokens_instances_refuse_before_peer(self):
         attachment = self.bound()
@@ -890,7 +913,7 @@ class WorkerLiveRealPeerTests(unittest.TestCase):
                 altered = identity(**{field: value})
                 channel = ctl.CTwoLiveChannel(
                     altered, WorkerRuntimeLive, name=attachment.name, address=attachment.address,
-                    instance_id=attachment.instance_id, token=attachment.live_token)
+                    instance_id=attachment.instance_id, token=attachment.live_token, state_dir=self.state)
                 self.assertEqual(channel.request(request(altered), timeout_ms=1000).status, "unavailable")
             for changes in ({"token": "d" * 64}, {"instance_id": "e" * 64}):
                 channel = process.channel(attachment, **changes)

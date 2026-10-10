@@ -218,7 +218,7 @@ def _read_endpoint(directory: Path) -> dict | None:
             os.close(fd)
 
 
-def _request(endpoint: dict, operation: str, params: dict, resource: str = "control", *, state_dir: str | Path | None = None) -> dict:
+def _request(endpoint: dict, operation: str, params: dict, resource: str = "control", *, state_dir: Path) -> dict:
     # The token travels with the operation's own parameters and is verified by the
     # resource before any schema validation happens.
     payload = {"token": endpoint["token"], **params}
@@ -252,19 +252,35 @@ def _request(endpoint: dict, operation: str, params: dict, resource: str = "cont
 def call_board(operation: str, params: dict | None = None, state_dir: str | Path | None = None, *, resource: str = "control", endpoint: dict | None = None) -> dict:
     """Call one named C-Two board operation through a healthy, trusted endpoint."""
     directory = get_state_dir(state_dir)
-    endpoint = endpoint or ensure_service(directory, resource=resource)
+    return _call_board(operation, params, directory, resource=resource, endpoint=endpoint)
+
+
+def _call_board(operation: str, params: dict | None, directory: Path, *, resource: str = "control", endpoint: dict | None = None) -> dict:
+    endpoint = endpoint or _ensure_service(directory, resource=resource)
     return _request(endpoint, operation, params or {}, resource, state_dir=directory)
+
+
+def _call_board_read_only(operation: str, params: dict | None, directory: Path, *, resource: str = "control") -> dict:
+    """Call through an existing service using the already selected state root."""
+    endpoint = _attach_read_only(directory)
+    if endpoint is None:
+        raise ServiceError("SERVICE_UNAVAILABLE", "No board service is running in this state directory")
+    return _request(endpoint, operation, params or {}, resource=resource, state_dir=directory)
 
 
 def _healthy(directory: Path) -> dict | None:
     """Return a trusted endpoint only when its service answers, without any write."""
     endpoint = _read_endpoint(directory)
     if endpoint:
+        if (os.name != "nt" and not (directory / "ipc").exists()
+                and not private_dirs.linked(directory / "ipc")):
+            return None
         try:
             _request(endpoint, "ping", {}, state_dir=directory)
             return endpoint
-        except BoardError:
-            pass
+        except ServiceError as error:
+            if error.code != "SERVICE_UNAVAILABLE":
+                raise
     return None
 
 
@@ -362,7 +378,10 @@ def _retire_stale_endpoint(directory: Path) -> None:
 
 def ensure_service(state_dir: str | Path | None = None, *, resource: str = "control") -> dict:
     """Attach to a healthy daemon or cold-start one, preserving read-only attach."""
-    directory = get_state_dir(state_dir)
+    return _ensure_service(get_state_dir(state_dir), resource=resource)
+
+
+def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
     endpoint = _attach_read_only(directory)
     if endpoint:
         return endpoint
@@ -436,6 +455,11 @@ def ensure_service(state_dir: str | Path | None = None, *, resource: str = "cont
 
 def call_service(method: str, params: dict | None = None, state_dir: str | Path | None = None) -> dict:
     """CLI-facing call: maps one method name onto one named C-Two operation."""
+    directory = get_state_dir(state_dir)
+    return _call_service(method, params, directory)
+
+
+def _call_service(method: str, params: dict | None, directory: Path) -> dict:
     if not isinstance(method, str) or method not in METHOD_MAP:
         raise ServiceError("INVALID_ARGUMENT", f"Unknown method {method!r}")
     if params is not None and not isinstance(params, dict):
@@ -446,13 +470,12 @@ def call_service(method: str, params: dict | None = None, state_dir: str | Path 
         params.setdefault("action", method)
     # Validate locally before any daemon spawn so an invalid request never starts work.
     encode_message({"method": method, "params": params})
-    directory = get_state_dir(state_dir)
     if method in ("stop", "restart"):
         endpoint = _attach_read_only(directory)
         if endpoint is None:
             return {"status": "stopped", "alreadyStopped": True, "stopped": True}
     else:
-        endpoint = ensure_service(directory, resource=resource)
+        endpoint = _ensure_service(directory, resource=resource)
     reply = _request(endpoint, operation, params, resource=resource, state_dir=directory)
     if method in UNWRAP_TASK:
         task = reply.get("task")
@@ -468,4 +491,5 @@ def call_service(method: str, params: dict | None = None, state_dir: str | Path 
 
 def request_stop(state_dir: str | Path | None = None, *, action: str = "stop", drain_seconds: int = 10) -> dict:
     """Ask the daemon to stop or restart through its own endpoint (never a signal)."""
-    return call_service(action, {"drainSeconds": drain_seconds}, state_dir)
+    directory = get_state_dir(state_dir)
+    return _call_service(action, {"drainSeconds": drain_seconds}, directory)

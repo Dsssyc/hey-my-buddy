@@ -124,6 +124,7 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
     request = transport._request
 
     def record_request(endpoint, operation, params, *args, **kwargs):
+        assert kwargs.get("state_dir") == state, "public default request must carry the selected real state Path"
         evidence["requests"].append({"operation": operation, "state": str(kwargs.get("state_dir")),
                                      "pid": endpoint.get("pid"), "serviceId": endpoint.get("serviceId")})
         return request(endpoint, operation, params, *args, **kwargs)
@@ -176,8 +177,8 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
 
         if name.startswith("boundary-"):
             # Supplemental parameter regression only: native connection is
-            # substituted, but the real _request/configure_client missing-root
-            # guard runs. This is never evidence of a successful real RPC.
+            # substituted; the real _request/configure_client receive the selected
+            # root. This is never evidence of a successful real RPC.
             (state / "ipc").mkdir(mode=0o700)
             endpoint = {"address": "ipc://public-state-parameter-fixture", "token": "fixture"}
             proxy = MagicMock()
@@ -405,9 +406,9 @@ class PublicStateTests(unittest.TestCase):
     def test_ps07_internal_request_still_requires_private_root(self):
         environment = {key: value for key, value in os.environ.items() if key != "BUDDY_STATE_DIR"}
         with patch.dict(os.environ, environment, clear=True), patch.object(transport.cc, "connect") as connect:
-            with self.assertRaises(BoardError) as refused:
+            with self.assertRaises(TypeError) as refused:
                 transport._request({"token": "fixture", "address": "ipc://unused"}, "ping", {})
-            self.assertEqual(refused.exception.code, "PRIVATE_STATE_REQUIRED")
+            self.assertIn("state_dir", str(refused.exception))
             connect.assert_not_called()
 
     def test_ps04_injected_call_does_not_resolve_state(self):

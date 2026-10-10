@@ -52,7 +52,7 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
 
     def cli_call(self, board: InProcessBoard, method: str, params: dict) -> tuple[int, dict]:
         endpoint = {"address": "ipc://private-api-test", "token": "test-token"}
-        with patch.object(transport, "ensure_service", return_value=endpoint), patch.object(
+        with patch.object(transport, "_ensure_service", return_value=endpoint), patch.object(
             transport, "_request", side_effect=lambda _endpoint, operation, values, resource="control", **kwargs: board.call(operation, values)
         ), contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()):
             code = cli.main([method, json.dumps(params)])
@@ -143,7 +143,7 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
         board = self.board()
         self.register(board)
         submitted, _claimed, manifest, checkout, _seal, view, artifact = self.run_worktree(board)
-        control_file = cli._save_control(submitted["runId"], submitted["control"])
+        control_file = cli._save_control(submitted["runId"], submitted["control"], self.directory)
         target = self.target_with_artifact(artifact)
         code, accepted = self.cli_call(board, "accept", {
             "runId": view["runId"], "artifactId": artifact["artifactId"],

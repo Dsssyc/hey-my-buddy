@@ -181,7 +181,7 @@ class Worker:
     def __init__(
         self,
         worker_id: str,
-        state_dir: str | Path,
+        state_dir: Path,
         *,
         client: BoardClient | None = None,
         lease_seconds: int = 120,
@@ -198,7 +198,7 @@ class Worker:
         # One identity per worker *process*: a new process cannot prove it owns a
         # child that a previous process spawned, so it must never resume that work.
         self.instance_id = f"{worker_id}-{uuid.uuid4()}"
-        self.state_dir = Path(state_dir)
+        self.state_dir = state_dir
         self.client = client or BoardClient(self.state_dir, autostart=False)
         from .live import WorkerLiveRuntime
         from ..roles.live import handle_live_binding

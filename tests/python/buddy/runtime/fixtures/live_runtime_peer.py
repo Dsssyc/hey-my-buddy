@@ -65,7 +65,8 @@ def controller():
                 token = secrets.token_hex(32)
                 endpoint_type = SlowEndpoint if command.get("slow") else ctl.CTwoLiveEndpoint
                 endpoint = endpoint_type(identity, LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
-                                         HarnessRunLive, token=token, name="Ada")
+                                         HarnessRunLive, token=token, name="Ada",
+                                         state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
                 descriptor = endpoint.start()
                 journal = Path(command["journal"])
                 if not command.get("paused"):
@@ -163,13 +164,13 @@ def worker():
                     return "bound", channels[handle]
 
                 with patch("hey_my_buddy.buddy.runtime.live.random_person_name", return_value="Ada"):
-                    runtime = WorkerLiveRuntime(client, command["workerId"], command["workerInstance"], resolve)
+                    runtime = WorkerLiveRuntime(client, command["workerId"], command["workerInstance"], resolve, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
                 descriptor = runtime.start()
                 emit({"ok": True, "descriptor": descriptor.to_payload()})
             elif op == "spawn":
                 handle = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "controller"],
                                           stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                          stderr=subprocess.DEVNULL, text=True)
+                                          stderr=sys.stderr, text=True)
                 handles[command["label"]] = handle
                 handle.role_run_identity = RunIdentity.from_payload(command["identity"])
                 result = exchange(handle, {"op": "start", "identity": command["identity"],
@@ -178,7 +179,7 @@ def worker():
                 descriptor = ctl.LiveEndpointDescriptor.from_payload(result["descriptor"])
                 channels[handle] = ctl.CTwoLiveChannel(
                     handle.role_run_identity, HarnessRunLive, name=descriptor.name,
-                    address=descriptor.address, instance_id=descriptor.instance_id, token=result["token"])
+                    address=descriptor.address, instance_id=descriptor.instance_id, token=result["token"], state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
                 descriptors[command["label"]] = descriptor
                 emit({"ok": True, "descriptor": descriptor.to_payload()})
             elif op in ("bind", "refresh"):

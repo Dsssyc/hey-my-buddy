@@ -62,7 +62,7 @@ REVIEW_SCHEMA = answer_schema(["legal"])
 
 def activity_endpoint(identity):
     return CTwoLiveEndpoint(identity, EXISTING_CAPABILITIES["codex"], HarnessRunLive,
-                            instance_id="a" * 64, token="b" * 64)
+                            instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
 
 
 def observed_activity(endpoint, identity):

@@ -55,17 +55,10 @@ class BoardClient:
     def call(self, operation: str, params: dict | None = None, *, resource: str = "control") -> dict:
         if self._call is not None:
             return self._call(operation, params or {})
+        directory = transport.get_state_dir(self.state_dir)
         if not self.autostart:
-            # ``autostart=False`` means exactly that, for every resource: observe an
-            # existing service read-only and never cold-start one as a side effect.
-            directory = transport.get_state_dir(self.state_dir)
-            endpoint = transport._attach_read_only(directory)
-            if endpoint is None:
-                raise transport.ServiceError(
-                    "SERVICE_UNAVAILABLE", "No board service is running in this state directory"
-                )
-            return transport._request(endpoint, operation, params or {}, resource=resource, state_dir=directory)
-        return transport.call_board(operation, params or {}, self.state_dir, resource=resource)
+            return transport._call_board_read_only(operation, params, directory, resource=resource)
+        return transport._call_board(operation, params or {}, directory, resource=resource)
 
     # -- service ------------------------------------------------------------
     def ping(self) -> dict:

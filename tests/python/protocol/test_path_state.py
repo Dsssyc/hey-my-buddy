@@ -140,13 +140,8 @@ class PathStateTests(unittest.TestCase):
         with patch.dict(os.environ, {'BUDDY_STATE_DIR': str(alias)}):
             self.assertEqual(transport.get_state_dir(), self.state)
             self.assertEqual(transport.get_state_dir(self.work / 'explicit'), self.work / 'explicit')
-            self.assertEqual(rpc_config.resolve_state_dir(), self.state)
         with patch.dict(os.environ, {}, clear=True), patch.object(transport.home, 'default_state_dir', return_value=alias):
             self.assertEqual(transport.get_state_dir(), self.state)
-            for resolve in (rpc_config.resolve_state_dir,):
-                with self.assertRaises(BoardError) as caught:
-                    resolve()
-                self.assertEqual(caught.exception.code, 'PRIVATE_STATE_REQUIRED')
 
     def test_path02_private_ipc_and_inner_links_and_dotdot_have_paths(self):
         self.state.mkdir(mode=0o700)

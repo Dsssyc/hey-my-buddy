@@ -381,9 +381,9 @@ class WorkerActivityForwarding(BoardTestCase):
                                generation=attempt["generation"], invocation_id="activity-invocation",
                                turn_id="activity-turn", input_sha256="f" * 64)
         endpoint = ctl.CTwoLiveEndpoint(identity, LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
-                                       contract, instance_id="a" * 64, token="b" * 64)
+                                       contract, instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         channel = ctl.CTwoLiveChannel(identity, contract, name="Activity Fixture",
-                                     address="ipc://activity-fixture", instance_id="a" * 64, token="b" * 64)
+                                     address="ipc://activity-fixture", instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         self.addCleanup(lambda: endpoint.close(reason="fixture-finished"))
         self.addCleanup(lambda: channel.close(reason="fixture-finished"))
         def connect(*args, timeout, **kwargs):

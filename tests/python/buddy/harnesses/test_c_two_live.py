@@ -20,6 +20,7 @@ file. No harness, model or credential is involved.
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import select
@@ -101,7 +102,7 @@ def wire_request(request: lv.LiveRequest, *, token: str, instance_id: str,
                  timeout_ms: int = 1500) -> str:
     frame = ctl.LiveWireRequest(identity=request.identity, request_id=request.request_id,
                                 kind=request.kind, payload=request.payload,
-                                instance_id=instance_id, token=token, timeout_ms=timeout_ms)
+                                instance_id=instance_id, token=token, timeout_ms=timeout_ms, deadline_monotonic=ctl.time.monotonic() + timeout_ms/1000.0)
     return canonical_json(frame.to_payload())
 
 
@@ -180,7 +181,7 @@ class WireFrameTests(unittest.TestCase):
         frame = ctl.LiveWireRequest(identity=identity(), request_id="request-1", kind="inquiry",
                                     payload=lv.InquiryPayload(question_id="question-1",
                                                               question="hello?"),
-                                    instance_id="a" * 64, token="b" * 64, timeout_ms=1500)
+                                    instance_id="a" * 64, token="b" * 64, timeout_ms=1500, deadline_monotonic=ctl.time.monotonic() + 1500/1000.0)
         payload = frame.to_payload()
         self.assertEqual(set(payload), {"identity", "requestId", "kind", "payload",
                                         "instanceId", "token", "timeoutMs", "deadlineMonotonic"})
@@ -191,10 +192,22 @@ class WireFrameTests(unittest.TestCase):
         values = dict(identity=identity(), request_id="r", kind="inquiry",
                       payload=lv.InquiryPayload(question_id="q", question="hello"),
                       instance_id="a" * 64, token="b" * 64, timeout_ms=100)
-        for cutoff in (-1.0, float("nan"), float("inf"), True, "10.0"):
+        for cutoff in (None, -1.0, float("nan"), float("inf"), True, "10.0"):
             with self.subTest(cutoff=cutoff), self.assertRaises(BoardError):
                 ctl.LiveWireRequest(**values, deadline_monotonic=cutoff)
         self.assertEqual(ctl.LiveWireRequest(**values, deadline_monotonic=0.0).deadline_monotonic, 0.0)
+
+    def test_missing_deadline_is_refused_before_queue_or_native_delivery(self):
+        target = endpoint(token="b" * 64, instance_id="a" * 64)
+        payload = json.loads(wire_request(inquiry_request(), token="b" * 64,
+                                          instance_id=target.instance_id))
+        del payload["deadlineMonotonic"]
+        refused = decode_reply(target.request(canonical_json(payload)))
+        self.assertEqual(refused.reason_code, "frame-invalid",
+                         "missing deadline must be refused by the server")
+        self.assertIsNone(target.consume_request(0.0), "missing deadline reached the owner")
+        self.assertEqual(target._pending, {}, "missing deadline was queued")
+        self.assertEqual(target._requests, {}, "missing deadline was admitted")
 
     def test_the_observe_and_capabilities_frames_carry_only_envelope_and_selection(self):
         run = identity()
@@ -220,38 +233,7 @@ class WireFrameTests(unittest.TestCase):
             with self.assertRaises(BoardError):
                 ctl.LiveWireRequest(identity=run, request_id="r", kind="inquiry",
                                     payload=lv.InquiryPayload(question_id="q", question="x"),
-                                    instance_id="a" * 64, token="b" * 64, timeout_ms=value)
-
-
-class ExplicitStateTests(unittest.TestCase):
-    def test_internal_endpoint_and_channel_refuse_missing_state_before_sdk(self):
-        """R-01: construction cannot silently select the Host CLI default."""
-        with tempfile.TemporaryDirectory() as directory:
-            home = Path(directory) / "home"
-            home.mkdir()
-            environment = {key: value for key, value in os.environ.items()
-                           if key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
-                           and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
-            environment["HOME"] = str(home)
-            with mock.patch.dict(os.environ, environment, clear=True), \
-                    mock.patch.object(ctl.cc, "register") as register, \
-                    mock.patch.object(ctl.cc, "connect") as connect, \
-                    mock.patch.object(rpc_config.cc, "set_local_endpoint") as selected:
-                constructors = (
-                    lambda: ctl.CTwoLiveEndpoint(identity(), lv.LiveCapabilities(
-                        inquiry_delivery="unsupported"), TEST_CRM),
-                    lambda: ctl.CTwoLiveChannel(identity(), TEST_CRM, name="RootRequired",
-                        address="ipc://explicit-root-only", instance_id="a" * 64, token="b" * 64),
-                )
-                for constructor in constructors:
-                    with self.subTest(constructor=constructor):
-                        with self.assertRaises(BoardError) as raised:
-                            constructor()
-                        self.assertEqual(raised.exception.code, "PRIVATE_STATE_REQUIRED")
-                register.assert_not_called()
-                connect.assert_not_called()
-                selected.assert_not_called()
-            self.assertEqual(list(home.iterdir()), [])
+                                    instance_id="a" * 64, token="b" * 64, timeout_ms=value, deadline_monotonic=ctl.time.monotonic() + value/1000.0)
 
 
 class EndpointAdmissionTests(unittest.TestCase):
@@ -668,7 +650,7 @@ class EndpointAdmissionTests(unittest.TestCase):
                                     "identity": identity().to_payload(), "requestId": "r",
                                     "kind": "inquiry",
                                     "payload": {"questionId": "q", "question": "x" * 70000},
-                                    "timeoutMs": 1500})
+                                    "timeoutMs": 1500, "deadlineMonotonic": time.monotonic() + 1.5})
         self.assertGreater(len(oversized.encode()), lv.MAX_LIVE_FRAME_BYTES)
         reply = decode_reply(self.endpoint.request(oversized))
         self.assertEqual((reply.status, reply.reason_code), ("unavailable", "frame-too-large"))
@@ -995,7 +977,7 @@ class EndpointLifecycleTests(unittest.TestCase):
         real_cc = ctl.cc
         ctl.cc = fake
         try:
-            target = endpoint(name="Ava", state_dir=self.temp.name)
+            target = endpoint(name="Ava", state_dir=Path(self.temp.name))
             described = target.start()
             self.assertEqual(fake.roles_at_register, ("client", "server"))
             contract, implementation, name, concurrency = fake.registered[0]
@@ -1006,7 +988,7 @@ class EndpointLifecycleTests(unittest.TestCase):
             self.assertEqual((described.address, described.name, described.host_pid),
                              (fake.address, "Ava", os.getpid()))
             self.assertEqual(described.endpoint_credential, "opaque-native-credential")
-            started = endpoint(name="Bo", state_dir=self.temp.name)
+            started = endpoint(name="Bo", state_dir=Path(self.temp.name))
             started.start()
             with self.assertRaises(BoardError):
                 started.start()
@@ -1025,7 +1007,7 @@ class EndpointLifecycleTests(unittest.TestCase):
     def test_native_credential_json_is_preserved_without_reencoding(self):
         fake = FakeC2()
         with mock.patch.object(ctl, "cc", fake):
-            described = endpoint(name="Dana", state_dir=self.temp.name).start()
+            described = endpoint(name="Dana", state_dir=Path(self.temp.name)).start()
         self.assertEqual(described.endpoint_credential, "opaque-native-credential")
 
 
@@ -1033,7 +1015,7 @@ class CleanupPrimitiveTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
-        rpc_config.configure_client(self.temp.name)
+        rpc_config.configure_client(Path(self.temp.name))
         self.addCleanup(cc.shutdown)
         self.descriptor = ctl.LiveEndpointDescriptor(
             address="ipc://fixture", name="Edith", instance_id="a" * 64,
@@ -1107,6 +1089,27 @@ class CleanupPrimitiveTests(unittest.TestCase):
 
 
 class ReadyMaterialTests(unittest.TestCase):
+    def test_private_peer_reaches_start_with_explicit_state(self):
+        spec = importlib.util.spec_from_file_location(PEER_MODULE_NAME, FIXTURE_PATH)
+        peer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(peer)
+        state = Path(os.environ["BUDDY_STATE_DIR"])
+        command = {"op": "start", "identity": identity().to_payload(), "stateDir": str(state)}
+        output = io.StringIO()
+
+        def before_bind(endpoint):
+            self.assertEqual(endpoint._state_dir, state)
+            raise BoardError("FIXTURE_START_REACHED", "before native registration")
+
+        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(command) + "\n")), \
+                mock.patch.object(sys, "stdout", output), \
+                mock.patch.object(ctl.CTwoLiveEndpoint, "start", autospec=True, side_effect=before_bind) as start, \
+                mock.patch.object(cc, "register") as register:
+            self.assertEqual(peer.serve(), 0)
+        start.assert_called_once()
+        register.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue())["error"], "BoardError: before native registration")
+
     def test_ready_material_is_one_fresh_private_file_without_the_token(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "live-ready.json"
@@ -1176,7 +1179,7 @@ class ChannelUnitTests(unittest.TestCase):
         self.run = identity()
         self.channel = ctl.CTwoLiveChannel(self.run, TEST_CRM, name="Hana",
                                            address="ipc://cc" + "5" * 38,
-                                           instance_id="a" * 64, token="b" * 64)
+                                           instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         self._restore = ctl.cc
 
     def tearDown(self):
@@ -1224,7 +1227,7 @@ class ChannelUnitTests(unittest.TestCase):
             self.channel.request(inquiry_request(), timeout_ms=99)
         foreign = ctl.CTwoLiveChannel(identity(attempt_id="other"), TEST_CRM, name="Hana",
                                       address="ipc://cc" + "5" * 38, instance_id="a" * 64,
-                                      token="b" * 64)
+                                      token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         self.assertEqual(foreign.request(inquiry_request(), timeout_ms=1500).reason_code,
                          "identity-mismatch")
 
@@ -1518,11 +1521,11 @@ def run_deadline_client() -> int:
     """Private test CLI: the parent owns both this Popen and the peer Popen."""
     case = unittest.TestCase()
     config = json.loads(sys.stdin.readline())
-    rpc_config.configure_client(config["stateDir"])
+    rpc_config.configure_client(Path(config["stateDir"]))
     descriptor = ctl.LiveEndpointDescriptor.from_payload(config["descriptor"])
     channel = ctl.CTwoLiveChannel(identity(), TEST_CRM, name=descriptor.name,
                                 address=descriptor.address, instance_id=descriptor.instance_id,
-                                token=config["token"], state_dir=config["stateDir"])
+                                token=config["token"], state_dir=Path(config["stateDir"]))
     phases = []
     connection_elapsed = []
     native_connect = cc.connect

@@ -74,15 +74,15 @@ class PrivateCliTestCase(BoardTestCase):
         """Substitute only the C-Two socket; the whole service path stays real."""
         self.bind_cli_state()
         endpoint = {"address": "ipc://in-process-test", "token": "test-token"}
-        def ensure_service(state_dir=None, resource="control"):
+        def ensure_service(state_dir, resource="control"):
             self.assert_rpc_state_dir(state_dir)
             return endpoint
 
         self.enterContext(
-            mock.patch.object(transport, "ensure_service", ensure_service)
+            mock.patch.object(transport, "_ensure_service", ensure_service)
         )
 
-        def request(_endpoint, operation, params, resource="control", *, state_dir=None):
+        def request(_endpoint, operation, params, resource="control", *, state_dir):
             self.assert_rpc_state_dir(state_dir)
             if capture is not None:
                 capture.append(json.loads(json.dumps(params)))
@@ -94,15 +94,15 @@ class PrivateCliTestCase(BoardTestCase):
         """Capture the RPC parameters and answer with a canned admitted task."""
         self.bind_cli_state()
         endpoint = {"address": "ipc://in-process-test", "token": "test-token"}
-        def ensure_service(state_dir=None, resource="control"):
+        def ensure_service(state_dir, resource="control"):
             self.assert_rpc_state_dir(state_dir)
             return endpoint
 
         self.enterContext(
-            mock.patch.object(transport, "ensure_service", ensure_service)
+            mock.patch.object(transport, "_ensure_service", ensure_service)
         )
 
-        def request(_endpoint, operation, params, resource="control", *, state_dir=None):
+        def request(_endpoint, operation, params, resource="control", *, state_dir):
             self.assert_rpc_state_dir(state_dir)
             capture.append(json.loads(json.dumps(params)))
             return {"task": {"runId": "run-capture-1", "requestId": "host-cli", "state": "queued"}}
@@ -110,8 +110,7 @@ class PrivateCliTestCase(BoardTestCase):
         self.enterContext(mock.patch.object(transport, "_request", request))
 
     def bind_cli_state(self) -> None:
-        self.enterContext(mock.patch.object(cli, "call_service",
-                          partial(transport.call_service, state_dir=self.directory)))
+        self.enterContext(mock.patch.object(cli, "_call_service", transport._call_service))
 
     def write_params(self, payload: dict, name: str = "params.json") -> Path:
         path = self.directory / name
@@ -231,7 +230,7 @@ class ParameterDocumentTests(PrivateCliTestCase):
         def forbidden(*_args, **_kwargs):
             raise AssertionError("the service must not be called for a usage error")
 
-        self.enterContext(mock.patch.object(transport, "ensure_service", forbidden))
+        self.enterContext(mock.patch.object(transport, "_ensure_service", forbidden))
         self.enterContext(mock.patch.object(transport, "_request", forbidden))
         path = self.write_params({"runId": "run-1"})
         with self.assertRaises(SystemExit) as caught:
@@ -295,7 +294,7 @@ class HelpTests(unittest.TestCase):
         output = io.StringIO()
         with contextlib.redirect_stdout(output), mock.patch.object(
             transport, "call_service", side_effect=AssertionError("help must not call the service")
-        ), mock.patch.object(transport, "ensure_service", side_effect=AssertionError("help must not start the service")):
+        ), mock.patch.object(transport, "_ensure_service", side_effect=AssertionError("help must not start the service")):
             code = cli.main(["help", *arguments])
         self.assertEqual(code, 0)
         return output.getvalue()
@@ -519,7 +518,7 @@ class HelpExtractionRegressionTests(unittest.TestCase):
                 with contextlib.redirect_stdout(output), mock.patch.object(
                     transport, "call_service", side_effect=AssertionError("unknown methods are never dispatched")
                 ), mock.patch.object(
-                    transport, "ensure_service", side_effect=AssertionError("unknown methods never start a service")
+                    transport, "_ensure_service", side_effect=AssertionError("unknown methods never start a service")
                 ), self.assertRaises(SystemExit) as caught:
                     cli.main([name, "{}"])
                 self.assertEqual(caught.exception.code, 2)

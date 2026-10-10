@@ -208,7 +208,7 @@ class LiveWireRequest(LiveRequest):
     instance_id: Hex64
     token: Hex64
     timeout_ms: TransportWindowMs
-    deadline_monotonic: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    deadline_monotonic: float = Field(ge=0, allow_inf_nan=False)
 
 
 class LiveWireObserve(InternalModel):
@@ -409,7 +409,7 @@ class CTwoLiveEndpoint:
 
     def __init__(self, identity: RunIdentity, capabilities: LiveCapabilities, contract: type, *,
                  name: str | None = None, instance_id: str | None = None,
-                 token: str | None = None, state_dir: str | Path | None = None):
+                 token: str | None = None, state_dir: Path):
         if not isinstance(identity, RunIdentity):
             raise fail("identity must be a RunIdentity")
         if not isinstance(capabilities, LiveCapabilities):
@@ -419,7 +419,7 @@ class CTwoLiveEndpoint:
         for operation in ("capabilities", "request", "observe"):
             if not callable(getattr(contract, operation, None)):
                 raise fail(f"the live contract must declare a {operation} operation")
-        self._state_dir = rpc_config.resolve_state_dir(state_dir)
+        self._state_dir = state_dir
         self._identity = identity
         self._capabilities = capabilities
         self._contract = contract
@@ -711,9 +711,7 @@ class CTwoLiveEndpoint:
         frame, refusal = self._authenticate_frame(request_json, LiveWireRequest)
         if refusal is not None or frame is None:
             return self._refusal_reply(refusal or "frame-invalid")
-        deadline = started + frame.timeout_ms / 1000.0
-        if frame.deadline_monotonic is not None:
-            deadline = min(deadline, frame.deadline_monotonic)
+        deadline = min(started + frame.timeout_ms / 1000.0, frame.deadline_monotonic)
         question_id = frame.payload.question_id
         digest = _request_digest(frame)
         with self._lock:
@@ -1004,7 +1002,7 @@ class CTwoLiveChannel:
     """
 
     def __init__(self, identity: RunIdentity, contract: type, *, name: str, address: str,
-                 instance_id: str, token: str, state_dir: str | Path | None = None):
+                 instance_id: str, token: str, state_dir: Path):
         if not isinstance(identity, RunIdentity):
             raise fail("identity must be a RunIdentity")
         if not isinstance(contract, type):
@@ -1012,7 +1010,7 @@ class CTwoLiveChannel:
         for operation in ("capabilities", "request", "observe"):
             if not callable(getattr(contract, operation, None)):
                 raise fail(f"the live contract must declare a {operation} operation")
-        self._state_dir = rpc_config.resolve_state_dir(state_dir)
+        self._state_dir = state_dir
         self._identity = identity
         self._contract = contract
         self._name = check_text(name, "name", maximum=128)
@@ -1051,6 +1049,11 @@ class CTwoLiveChannel:
     def request(self, request: LiveRequest, *, timeout_ms: int) -> LiveReply:
         """Deliver one live request within its transport window."""
         _timeout_ms(timeout_ms, "timeoutMs")
+        return self._request(request, timeout_ms=timeout_ms,
+                             deadline_monotonic=time.monotonic() + timeout_ms / 1000.0)
+
+    def _request(self, request: LiveRequest, *, timeout_ms: int, deadline_monotonic: float) -> LiveReply:
+        """Forward an authenticated Worker hop without renewing its original window."""
         if self._closed_reason is not None:
             return LiveReply(status="unavailable", reason_code="channel-closed")
         if request.identity != self._identity:
@@ -1058,7 +1061,8 @@ class CTwoLiveChannel:
         frame = LiveWireRequest(identity=request.identity, request_id=request.request_id,
                                 kind=request.kind, payload=request.payload,
                                 instance_id=self._instance_id, token=self._token,
-                                timeout_ms=timeout_ms)
+                                timeout_ms=timeout_ms,
+                                deadline_monotonic=deadline_monotonic)
         try:
             raw = self._call("request", frame, timeout_ms)
         except CallDeadlineExceeded:
@@ -1104,9 +1108,8 @@ class CTwoLiveChannel:
         consumed most of the window. A zero budget reaches the SDK so its
         pre-dispatch expiry keeps the same failure facts as any other deadline.
         """
-        deadline = time.monotonic() + timeout_ms / 1000.0
-        if isinstance(frame, LiveWireRequest):
-            frame = frame.model_copy(update={"deadline_monotonic": deadline})
+        deadline = (frame.deadline_monotonic if isinstance(frame, LiveWireRequest)
+                    else time.monotonic() + timeout_ms / 1000.0)
         text = canonical_json(frame.to_payload())
         rpc_config.configure_client(self._state_dir)
         with cc.connect(self._contract, name=self._name, address=self._address,
