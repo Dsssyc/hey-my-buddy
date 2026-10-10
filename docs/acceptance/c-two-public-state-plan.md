@@ -73,3 +73,7 @@ Host 从本份固定源码重建三份只取消最终目录传递的生产变异
 实际 unittest loader 从 3,474→3,500，214 个模块，原 3,474 个集合相等、删除 0、新增 26，无重复/装载错误；原始编号及新增差集为 `public-state-{baseline,fixed}-ids.json` 与 `public-state-id-delta.json`。本批当前只整合 3-A，不提前宣称三处新增路径/权限回归已修复，不进行中间全检；3-A 微任务签收后顺序启动 3-B，最终完整检查仍在两份整合后的源码上执行。
 
 3-A 整合提交 `99cd2b0652a1156777472bb307bc6e70f6a16c2e`，黑板整合 `int-02a53b8c-c3a4-4146-b79d-92f2a2f6d26d` verified，原 run accepted/completed（revision 14）。这是内部微任务验收，整合 Host 的整批退回结论不变。3-B 起点绑定这个整合提交；为了把新增路径场景与已固定的公开目录回归分开核对，唯一写入范围在前述八路径之外增加新 `tests/python/protocol/test_path_state.py`，其余不变，共九路径。优先复用 3-A 与现有服务 fixture、MutationRecorder、固定 catalog 和子环境，不另造 RPC 或发现路径。旧编号中确需按新用户决定迁移的逐项说明，没有改变记录而掩盖验证结论。
+
+3-A 清理计划 `cln-05e8a2be-1dd8-4a12-867c-f8a423ba006f` 原样 confirmPath apply，removed=true。两个 Worker 创建并报告的任务根 `/private/tmp/ps3a-34r52t5y`、`/private/tmp/ps3b-21te13_d` 分别留存 4,617 / 2,776 份源码、日志与台账文件后按这两个确切根整体回收；uv/cache/重复公开依赖材料未再留一份。已登记的自有 0500 故障目录按原权限残留台账恢复后回收，没有按名称或日期推断别的对象，不屏蔽删除错误。留存哈希与实际回收结果为 `public-state-retained-evidence.json`，没有手工删除受管检出。
+
+3-B run `9ab4e50b-03dd-49ed-92ca-95d84e22961b`，实际任务基线为仅再增加计划记录的 `b772198d45525f7d2cff12474be4a4103c2e8115`，生产和测试与 3-A 整合相同。首次省略四项配置，路由 `dec-7520b7df-b208-48ad-8d1d-d9a2c7fab67b` 选择 ZCode/zai-api/GLM-5.3/max；保持已授权的供应方不可重试限流同 run 恢复规则，不改变用户路由设置。九路径的独立工作树已经启动，其他公共文件无写权，最终完整检查尚未运行。
