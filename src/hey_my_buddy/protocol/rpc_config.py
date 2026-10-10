@@ -1,4 +1,4 @@
-"""Private C-Two 0.7.3 endpoint and IPC profile.
+"""Private C-Two 0.7.4 endpoint and IPC profile.
 
 Apply before the first local register/connect. Unix roles use <state>/ipc,
 independent of inherited C2_IPC_ROOT; Windows retains the native Named Pipe domain.

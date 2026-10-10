@@ -1,4 +1,4 @@
-"""Private published C-Two 0.7.3 RPC, non-pool accounting and control capacity.
+"""Private published C-Two 0.7.4 RPC, non-pool accounting and control capacity.
 
 Every native process configures an explicit test-owned state/ipc directory before
 local I/O. Memory statistics are C-Two accounting, never RSS.
@@ -336,7 +336,7 @@ class IsolatedTransportTests(unittest.TestCase):
         for size in (4096, MAX_MESSAGE_BYTES):
             legal = server.call("echo", f"bytes:{size}")
             self.assertTrue(legal["ok"], legal)
-            self.assertEqual(legal["version"], "0.7.3")
+            self.assertEqual(legal["version"], "0.7.4")
             self.assertEqual(legal["bytes"], size)
             self.assertEqual(legal["sha256"], hashlib.sha256(b"x" * size).hexdigest())
         skeleton = encode_message({"token": "t", "pad": ""})

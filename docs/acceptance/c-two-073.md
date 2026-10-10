@@ -106,3 +106,7 @@ Host公开表面比较0.7.3与0.7.4：__all__、异常类名字、ClientIPCOverr
 1-A2 第二回合停在依赖准备的Host assistance边界：原沙箱DNS与缺依赖失败保留，未声称升级完成。Host在固定输出5a8459d6的独立副本从公开PyPI执行uv lock --upgrade-package c-two，退出0，只更新c-two0.7.3→0.7.4；用导出的哈希锁下载当前平台依赖及构建依赖，两次退出0，共16个wheel和参考锁，命令与SHA256在原任务根host-materials/provenance.json。材料交原run continue自行核对写入，Host未代改实施分支uv.lock；本回合不指定配置四字段。真实无模型0.7.4探针证据继续保留，尚未复核最终固定产物或开展1-B/1-C。
 
 Host在1-C开工前复核到protocol.test_inquiry_transport直接调用旧等待机制，包含桩SDK阻塞的用例，因此把该受影响文件加入1-C唯一可写范围。只适配SDK边界与保留原关联/失败覆盖，原生期限由私有真实对端核对；不是新通道或新增产品行为，其他归属不变。
+
+1-A2最终固定输出dd0304dc（artifact5471e7a0-5227-48b6-9fe5-5430b3b08510，补丁SHA46279948a25a031377ef88e55073ac707c1ddf1d88d5d5c6cb5d5a9e4c0a728b）严格5路径，已核对12包锁仅c-two与项目metadata变动；442份运行源码、测试、资源及新锁与Host受检副本逐字节相同。Host在0.7.4重新取得82项RPC/服务/transport/workspace/checks聚焦exit0（测试57.170秒，命令60.163秒）、44项打包/runtime exit0（37.288秒）、三处目标变异均assert失败exit1。检查清理用例故意保留的未确认证据按预期，未当作生产残留。V-03/V-04/V-06在0.7.4重取：outgoing SHM used0/peak8392704、实际根与权限/隔离/长路径/Windows mock、wheel/sdist及require-hashes私有安装读回0.7.4、wheel内置锁与metadata一致；16个wheel素材只在任务根。Worker另有105项正常通过和沙箱socket/ps缺口，Host上述原生补核覆盖缺口，原失败保留。完整检查、真实harness回合未执行。
+
+Host核对工具的两处失败已纠正：第三变异首次误定位support.py，0处匹配时停住未执行，随后在test_rpc_config.py正确夹具定位后目标assert失败；固定输出列表首次误取较旧输出，锁比较失败即停，随后按createdAt选最新输出并核对SHA/442文件，不使用旧产物做验收。只是Host验证工具问题，未代改Worker代码。原始日志与比较数据保留tmp/c073-host。
