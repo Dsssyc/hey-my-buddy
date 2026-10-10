@@ -161,9 +161,7 @@ def inquiry_paths(context: ExecutionContext) -> dict:
     """The durable checkpoint journal of one attempt; live credentials stay in memory."""
     private_root = ensure_private_dir(context_root(context, getattr(context, "private_adapter", None)))
     ensure_private_dir(context.directory)
-    paths = {"resultsPath": str(context.directory / "inquiry.results.jsonl")}
-    private_json(private_root / "inquiry.json", paths)
-    return {"directory": private_root, **paths}
+    return {"directory": private_root, "resultsPath": str(context.directory / "inquiry.results.jsonl")}
 
 
 def verify_workspace(context: ExecutionContext) -> None:

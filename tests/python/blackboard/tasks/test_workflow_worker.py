@@ -146,7 +146,7 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
             self.assertTrue(turn["sessionId"].startswith("fake-session-"))
 
             # Git isolation and native session storage are separate facts: this
-            # run's rollout lands under the attempt-private DSH_HOME sessions
+            # run's rollout lands under the task's shared private sessions
             # root, the owning credentials store keeps resolving by path, and
             # the installed app lists none of it. The session identity comes
             # only from the imported, validated turn record — sessionIdSource
@@ -156,13 +156,13 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
             # supplies its activity facts after the short live endpoint ends.
             _, receipt = self.cli("result", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
             native = (receipt.get("result") or {}).get("nativeSession") or {}
-            self.assertEqual(native.get("storageScope"), "attempt-private-sessions")
-            self.assertEqual(native.get("storageOwner"), "buddy-attempt")
+            self.assertEqual(native.get("storageScope"), "task-shared-sessions")
+            self.assertEqual(native.get("storageOwner"), "buddy-goal")
             self.assertEqual(native.get("nativeAppVisibility"), "not-listed-in-native-app")
             self.assertEqual(native.get("credentialsStore"), "harness-user-store")
-            self.assertFalse(native.get("bindingPresent"))
+            self.assertTrue(native.get("bindingPresent"))
             self.assertTrue(native.get("captured"))
-            self.assertFalse(native.get("resumable"))
+            self.assertTrue(native.get("resumable"))
             self.assertEqual(native.get("sessionId"), turn["sessionId"])
             self.assertEqual(native.get("sessionIdSource"), "validated-turn")
             self.assertFalse(native.get("sessionIdConflict"))

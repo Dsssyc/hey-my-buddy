@@ -21,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+import typing
 import unittest
 from pathlib import Path
 
@@ -44,9 +45,11 @@ from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     verify_receipt,
     verify_tool_refusal,
 )
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.buddy.harnesses import c_two_live, live as live_module
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
-from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
-from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
+from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, CTwoLiveEndpoint, LiveWireRequest
+from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveCapabilities, LiveRequest
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 
 IDENTITY = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "turnId": "turn-1"}
@@ -1129,8 +1132,9 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         tree = json.loads((context_root(context, "zcode") / "finish-bridge.json").read_text())
         self.assertIn("attentionPath", tree)
-        credentials = json.loads((context_root(context, "zcode") / "inquiry.json").read_text())
-        self.assertEqual(tree["inquiryJournalPath"], credentials["resultsPath"])
+        control = json.loads((context_root(context, "zcode") / "role-run-control.json").read_text())
+        self.assertEqual(tree["inquiryJournalPath"], control["inquiry"]["resultsPath"])
+        self.assertEqual(control["inquiry"]["resultsPath"], str(context.directory / "inquiry.results.jsonl"))
         self.assertEqual(tree["identity"], {"taskId": "goal-1", "attemptId": context.attempt_id,
                                             "generation": 1, "turnId": "turn-1"})
         self.assertIn(COOPERATIVE_INQUIRY_NOTE, outcome.result["inquiry"]["limitation"])
@@ -1142,6 +1146,61 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         self.assertIn("mcp__buddy_x__buddy_checkpoint", prompt)
         self.assertIn("mcp__buddy_x__buddy_answer_inquiry", prompt)
         self.assertIn("never on a timer", prompt)
+
+
+class TransportWindowBoundaryTests(unittest.TestCase):
+    """The 100–5000 ms transport window is defined once, in the live seam.
+
+    ``c_two_live`` must keep referencing ``live.py``'s constants rather than
+    restating the bounds: the frame admission field is built from them, the
+    client-side whole-call check enforces exactly them, and every boundary
+    value keeps its behavior — 100 and 5000 are accepted, one step outside,
+    a float spelling and a bool are refused.
+    """
+
+    def inquiry_request(self):
+        return LiveRequest(identity=RUN_IDENTITY, request_id="request-window", kind="inquiry",
+                           payload=InquiryPayload(question_id="question-window", question="window?"))
+
+    def test_the_window_constants_live_once_in_the_live_seam(self):
+        self.assertEqual((live_module.MIN_TRANSPORT_TIMEOUT_MS, live_module.MAX_TRANSPORT_TIMEOUT_MS),
+                         (100, 5000))
+        bounds = {name: getattr(constraint, name)
+                  for constraint in typing.get_args(c_two_live.TransportWindowMs)[-1].metadata
+                  for name in ("ge", "le") if hasattr(constraint, name)}
+        self.assertEqual((bounds["ge"], bounds["le"]),
+                         (live_module.MIN_TRANSPORT_TIMEOUT_MS, live_module.MAX_TRANSPORT_TIMEOUT_MS))
+
+    def test_the_wire_frame_admits_exactly_the_window_edges(self):
+        for accepted in (100, 5000):
+            with self.subTest(timeout_ms=accepted):
+                frame = LiveWireRequest(identity=RUN_IDENTITY, request_id="request-window", kind="inquiry",
+                                        payload=InquiryPayload(question_id="question-window", question="window?"),
+                                        instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, timeout_ms=accepted)
+                self.assertEqual(frame.timeout_ms, accepted)
+        for refused in (99, 5001, True, 1500.0):
+            with self.subTest(timeout_ms=refused):
+                with self.assertRaises(BoardError):
+                    LiveWireRequest(identity=RUN_IDENTITY, request_id="request-window", kind="inquiry",
+                                    payload=InquiryPayload(question_id="question-window", question="window?"),
+                                    instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, timeout_ms=refused)
+
+    def test_the_channel_entry_keeps_the_same_edges_and_refuses_bools(self):
+        channel = CTwoLiveChannel(RUN_IDENTITY, TEST_CRM, name="window-probe", address="ipc://window-probe",
+                                  instance_id=LIVE_INSTANCE, token=LIVE_TOKEN)
+        channel.close(reason="fixture-no-endpoint")
+        for accepted in (100, 5000):
+            with self.subTest(timeout_ms=accepted):
+                reply = channel.request(self.inquiry_request(), timeout_ms=accepted)
+                self.assertEqual(reply.reason_code, "channel-closed")
+                snapshot = channel.observe(timeout_ms=accepted, limit=1)
+                self.assertEqual(snapshot.unavailable, "channel-closed")
+        for refused in (99, 5001, True, 1500.0):
+            with self.subTest(timeout_ms=refused):
+                with self.assertRaises(BoardError):
+                    channel.request(self.inquiry_request(), timeout_ms=refused)
+                with self.assertRaises(BoardError):
+                    channel.observe(timeout_ms=refused, limit=1)
 
 
 class NativeCatalogEmptyTests(ZcodeFixtureCase):

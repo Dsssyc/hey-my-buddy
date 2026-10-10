@@ -16,7 +16,7 @@ from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.roles.controller import worker_executor
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.private_dirs import context_root
+from hey_my_buddy.private_dirs import context_root, native_root
 from buddy.harnesses.dsh.test_dsh_role_wiring import DshRoleCase
 
 FIXTURES = Path(__file__).parent
@@ -169,7 +169,7 @@ class DshUsageContractTests(DshRoleCase):
                 "original = fake_agent.FakeAgent.write_session_record\n"
                 "def record(self, session_id, prompt):\n"
                 "    original(self, session_id, prompt)\n"
-                "    path = Path(os.environ['DSH_HOME']) / 'sessions' / (session_id + '.v3.jsonl.zstd')\n"
+                "    path = self.sessions_dir() / (session_id + '.v3.jsonl.zstd')\n"
                 "    raw = zstandard.ZstdDecompressor().decompress(path.read_bytes()).decode()\n"
                 "    events = [json.loads(line) for line in raw.splitlines()]\n"
                 "    for event in events:\n"
@@ -197,12 +197,14 @@ class DshUsageContractTests(DshRoleCase):
         self.assertTrue(outcome.shutdown_confirmed)
         return context, handle, outcome
 
-    def test_the_run_reads_only_its_attempt_private_session_record(self):
+    def test_the_run_reads_only_its_task_private_session_record(self):
         context, handle, _outcome = self.execute_record()
         entries = [json.loads(line) for line in self.log.read_text().splitlines()]
         written = next(e for e in entries if e.get("event") == "session-record-written")
         record = Path(written["path"])
-        self.assertTrue(record.is_relative_to(context_root(context, "dsh")))
+        self.assertFalse(record.is_relative_to(context_root(context, "dsh")))
+        self.assertTrue(record.is_relative_to(native_root(
+            Path(context.environment["BUDDY_STATE_DIR"]), "dsh", context.task_id)))
         self.assertTrue(record.is_relative_to(Path(handle.role_run_control["nativeRoot"])))
         self.assertTrue(record.name.endswith(".v3.jsonl.zstd"))
 

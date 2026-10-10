@@ -117,12 +117,12 @@ class ZcodeFixtureCase(unittest.TestCase):
         return channel, reply
 
     def inquiry_results_path(self, context):
-        """The attempt-private journal path from the integrated inquiry entry."""
+        """The attempt-private journal path from the role's real control record."""
         from hey_my_buddy.private_dirs import context_root
 
-        paths = json.loads((context_root(context, "zcode") / "inquiry.json").read_text())
-        self.assertEqual(set(paths), {"resultsPath"}, paths)
-        return Path(paths["resultsPath"])
+        control = json.loads((context_root(context, "zcode") / "role-run-control.json").read_text())
+        self.assertEqual(control["inquiry"], {"resultsPath": str(context.directory / "inquiry.results.jsonl")})
+        return Path(control["inquiry"]["resultsPath"])
 
     def inquiry_records(self, context, inquiry_id):
         """The durable journal's ordered records of one inquiry of this attempt."""
@@ -196,21 +196,20 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(native["nativeAppVisibility"], "not-listed-in-native-app")
         self.assertTrue(native["bindingPresent"])
         self.assertTrue(native["resumable"])
-        # The integrated inquiry entry: the attempt-private paths file and the
-        # role control carry only the durable journal path — the retired socket
-        # credentials (token, socket, errorPath) no longer exist on disk. Live
-        # access is the holder's own control.live material plus the ready
-        # descriptor its controller published; the narrow token stays in the
-        # holder-held material and never reaches the descriptor or the report.
+        # The integrated inquiry entry: the role's control record is the only
+        # carrier of the durable journal path — the retired socket credentials
+        # (token, socket, errorPath) and the retired per-turn inquiry.json no
+        # longer exist on disk. Live access is the holder's own control.live
+        # material plus the ready descriptor its controller published; the
+        # narrow token stays in the holder-held material and never reaches the
+        # descriptor or the report.
         from hey_my_buddy.private_dirs import context_root
-        inquiry_file = context_root(context, "zcode") / "inquiry.json"
-        paths = json.loads(inquiry_file.read_text())
-        self.assertEqual(set(paths), {"resultsPath"}, paths)
-        self.assertEqual(paths["resultsPath"], str(context.directory / "inquiry.results.jsonl"))
-        self.assertEqual(oct(inquiry_file.stat().st_mode & 0o777), "0o600")
-        control = json.loads((context_root(context, "zcode") / "role-run-control.json").read_text())
-        self.assertEqual(control["inquiry"], {"resultsPath": paths["resultsPath"]})
+        private_root = context_root(context, "zcode")
+        control = json.loads((private_root / "role-run-control.json").read_text())
+        self.assertEqual(control["inquiry"], {"resultsPath": str(context.directory / "inquiry.results.jsonl")})
         self.assertEqual(control, handle.role_run_control)
+        self.assertFalse((private_root / "inquiry.json").exists(),
+                         "the retired per-turn inquiry.json must not be written")
         material = control["live"]
         self.assertEqual(set(material), {"instanceId", "token", "readyFile"}, material)
         self.assertEqual(len(material["instanceId"]), 64)

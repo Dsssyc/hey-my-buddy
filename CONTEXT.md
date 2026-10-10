@@ -102,6 +102,10 @@ A micro task explicitly authorized by the Host to help another micro task.
 **执行回合 / turn**:
 One Worker buddy execution ending in a result, assistance request or attention boundary.
 
+**权限档位 / permission level**:
+How far a Worker buddy may go in one turn, chosen by the Host when it delegates and changeable between turns: 只读 / read-only (read and search; no file may be modified), 写检出 / checkout-write (edit and run commands; files may be modified only inside the micro task's checkout) or 放开 / full access (no limit on where files are modified). A level says where files may be modified and nothing about the network.
+_Avoid_: 权限清单, sandbox mode (a level is not a list of grants, and a sandbox mode is only how one harness carries a level out)
+
 **换手 / handoff**:
 A micro task passing to a different buddy between turns: the buddy that executed its earlier turns stops, and another executes the next. The micro task, its Host and the micro tasks under it stay the same.
 _Avoid_: 接管, takeover (those name a Host taking over the ownership of a micro task)
