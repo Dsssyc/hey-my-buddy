@@ -22,7 +22,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import shutil
+import select
 import signal
 import stat
 import subprocess
@@ -34,8 +34,10 @@ import unittest
 from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
+from contextlib import ExitStack
 
 import c_two as cc
+from c_two.error import CallDeadlineExceeded
 
 from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 from hey_my_buddy.buddy.harnesses import live as lv
@@ -171,18 +173,27 @@ class FakeC2:
 
 
 class WireFrameTests(unittest.TestCase):
-    def test_the_request_frame_is_the_request_plus_exactly_three_private_fields(self):
+    def test_the_request_frame_carries_the_private_deadline_and_envelope(self):
         self.assertEqual(set(ctl.LiveWireRequest.model_fields) - set(lv.LiveRequest.model_fields),
-                         {"instance_id", "token", "timeout_ms"})
+                         {"instance_id", "token", "timeout_ms", "deadline_monotonic"})
         frame = ctl.LiveWireRequest(identity=identity(), request_id="request-1", kind="inquiry",
                                     payload=lv.InquiryPayload(question_id="question-1",
                                                               question="hello?"),
                                     instance_id="a" * 64, token="b" * 64, timeout_ms=1500)
         payload = frame.to_payload()
         self.assertEqual(set(payload), {"identity", "requestId", "kind", "payload",
-                                        "instanceId", "token", "timeoutMs"})
+                                        "instanceId", "token", "timeoutMs", "deadlineMonotonic"})
         self.assertEqual(ctl.LiveWireRequest.from_payload(
             decode_strict_json(canonical_json(payload))), frame)
+
+    def test_private_deadline_is_finite_and_keeps_the_public_window_bound(self):
+        values = dict(identity=identity(), request_id="r", kind="inquiry",
+                      payload=lv.InquiryPayload(question_id="q", question="hello"),
+                      instance_id="a" * 64, token="b" * 64, timeout_ms=100)
+        for cutoff in (-1.0, float("nan"), float("inf"), True, "10.0"):
+            with self.subTest(cutoff=cutoff), self.assertRaises(BoardError):
+                ctl.LiveWireRequest(**values, deadline_monotonic=cutoff)
+        self.assertEqual(ctl.LiveWireRequest(**values, deadline_monotonic=0.0).deadline_monotonic, 0.0)
 
     def test_the_observe_and_capabilities_frames_carry_only_envelope_and_selection(self):
         run = identity()
@@ -307,6 +318,17 @@ class EndpointAdmissionTests(unittest.TestCase):
         # The identical retry goes through the whole hand-off again.
         retried = self.deliver(inquiry_request())
         self.assertEqual(retried.status, "queued")
+
+    def test_consume_checks_deadline_even_before_rpc_waiter_marks_expiry(self):
+        request = inquiry_request()
+        slot = ctl._PendingRequest(request.payload.question_id, ctl._request_digest(request),
+                                   time.monotonic() - 1.0)
+        self.endpoint._pending[request.request_id] = slot
+        self.endpoint._queue.put_nowait((request, slot))
+        self.assertFalse(slot.expired)
+        self.assertIsNone(self.endpoint.consume_request(0.0))
+        self.assertTrue(slot.expired)
+        self.assertEqual(self.endpoint._pending, {})
 
     def test_close_wakes_waiting_requests_without_delivery(self):
         box: list[str] = []
@@ -1078,16 +1100,14 @@ class ReadyMaterialTests(unittest.TestCase):
 
 
 class StubPeer:
-    """One scripted C-Two connection the channel tests call into.
+    """Scripted SDK boundary facts, without timing or a waiting worker.
 
-    ``delay`` makes every operation stall like a peer that never answers, so
-    the channel's own bounded-call mechanism — not a fake clock — faces a
-    genuinely blocked transport.
+    Deadline replies are actual CallDeadlineExceeded instances. Native timing
+    and dispatch semantics are tested with private subprocess peers below.
     """
 
-    def __init__(self, replies, delay: float = 0.0):
+    def __init__(self, replies):
         self.replies = list(replies)
-        self.delay = delay
         self.calls: list[tuple[str, str]] = []
 
     def __enter__(self):
@@ -1109,8 +1129,6 @@ class StubPeer:
         return self._answer()
 
     def _answer(self):
-        if self.delay:
-            time.sleep(self.delay)
         reply = self.replies.pop(0)
         if isinstance(reply, Exception):
             raise reply
@@ -1132,16 +1150,27 @@ class ChannelUnitTests(unittest.TestCase):
     def tearDown(self):
         ctl.cc = self._restore
 
-    def connect(self, *replies, delay: float = 0.0) -> StubPeer:
-        stub = StubPeer(replies, delay=delay)
-        channel = self.channel
+    def connect(self, *replies, connection_error=None) -> StubPeer:
+        stub = StubPeer(replies)
+        self.connection_timeouts = []
+        self.call_timeouts = []
 
-        def connect(contract, *, name, address):
+        def connect(contract, *, name, address, timeout):
             self.assertIs(contract, TEST_CRM)
             self.assertEqual((name, address), ("Hana", "ipc://cc" + "5" * 38))
+            self.assertGreaterEqual(timeout, 0.0)
+            self.connection_timeouts.append(timeout)
+            if connection_error is not None:
+                raise connection_error
             return stub
 
-        ctl.cc = SimpleNamespace(connect=connect)
+        def with_call_options(peer, *, timeout):
+            self.assertIs(peer, stub)
+            self.assertGreaterEqual(timeout, 0.0)
+            self.call_timeouts.append(timeout)
+            return peer
+
+        ctl.cc = SimpleNamespace(connect=connect, with_call_options=with_call_options)
         return stub
 
     def test_request_maps_success_refusals_and_bad_replies(self):
@@ -1167,49 +1196,53 @@ class ChannelUnitTests(unittest.TestCase):
         self.assertEqual(foreign.request(inquiry_request(), timeout_ms=1500).reason_code,
                          "identity-mismatch")
 
-    def test_the_whole_connect_and_call_is_bounded_by_the_window(self):
-        # A stalling peer against a short window: the bounded mechanism
-        # returns within the window — not after the blocked call finally
-        # answers — and reports the expiry, never a stopped peer.
-        self.connect(*(["x"] * 4), delay=0.4)
-        started = time.monotonic()
-        reply = self.channel.request(inquiry_request(), timeout_ms=150)
-        elapsed = time.monotonic() - started
-        self.assertEqual((reply.status, reply.reason_code),
-                         ("unavailable", "transport-window-expired"))
-        self.assertLess(elapsed, 1.2)
-        self.assertGreaterEqual(elapsed, 0.14)
-        snapshot = self.channel.observe(limit=5, timeout_ms=150)
-        self.assertEqual((snapshot.observed, snapshot.reason),
-                         (False, "transport-window-expired"))
-        with self.assertRaises(BoardError):
-            self.channel.capabilities()
+    def test_native_connection_and_call_deadlines_keep_the_existing_taxonomy(self):
+        for phase in ("pre_dispatch", "dispatch_uncertain"):
+            for boundary in ("connect", "call"):
+                with self.subTest(phase=phase, boundary=boundary):
+                    expired = CallDeadlineExceeded("scripted SDK deadline",
+                                                  details={"transport_phase": phase})
+                    self.connect(*([expired] * 3),
+                                 connection_error=expired if boundary == "connect" else None)
+                    reply = self.channel.request(inquiry_request(), timeout_ms=150)
+                    self.assertEqual((reply.status, reply.reason_code),
+                                     ("unavailable", "transport-window-expired"))
+                    snapshot = self.channel.observe(limit=5, timeout_ms=150)
+                    self.assertEqual((snapshot.observed, snapshot.reason),
+                                     (False, "transport-window-expired"))
+                    with self.assertRaises(BoardError) as caught:
+                        self.channel.capabilities()
+                    self.assertEqual(caught.exception.code, "LIVE_UNAVAILABLE")
+                    self.assertEqual(caught.exception.details["reason"], "transport-window-expired")
+                    self.assertEqual(len(self.connection_timeouts), 3)
+                    self.assertEqual(len(self.call_timeouts), 0 if boundary == "connect" else 3)
 
-    def test_bounded_call_slots_report_busy_and_drain_back(self):
-        baseline = threading.active_count()
-        self.connect(*(["x"] * 16), delay=1.0)
-        outcomes = []
-        for _ in range(ctl.MAX_INFLIGHT_LIVE_CALLS):
-            outcomes.append(self.channel.request(inquiry_request(), timeout_ms=100).reason_code)
-        self.assertEqual(outcomes, ["transport-window-expired"] * ctl.MAX_INFLIGHT_LIVE_CALLS)
-        # Every bounded slot is held by a stuck attempt: the next call spends
-        # its whole window waiting for one and reports busyness instead of
-        # growing another worker.
-        started = time.monotonic()
-        busy = self.channel.request(inquiry_request(), timeout_ms=100)
-        elapsed = time.monotonic() - started
-        self.assertEqual((busy.status, busy.reason_code), ("unavailable", "transport-busy"))
-        self.assertLess(elapsed, 1.0)
-        self.assertLessEqual(threading.active_count(),
-                             baseline + ctl.MAX_INFLIGHT_LIVE_CALLS)
-        # Once the stuck attempts drain, the slots serve calls again.
-        time.sleep(1.2)
-        reply = self.channel.request(inquiry_request(), timeout_ms=100)
-        self.assertEqual(reply.reason_code, "transport-window-expired")
-        deadline = time.monotonic() + 5
-        while threading.active_count() > baseline and time.monotonic() < deadline:
-            time.sleep(0.05)
-        self.assertEqual(threading.active_count(), baseline)
+    def test_repeated_deadlines_need_no_call_workers_or_busy_slots(self):
+        expired = CallDeadlineExceeded("scripted call expiry",
+                                      details={"transport_phase": "dispatch_uncertain"})
+        queued = canonical_json(QUEUED_REPLY)
+        self.connect(*([expired] * 5), queued)
+        with mock.patch.object(ctl.threading, "Thread", side_effect=AssertionError("waiting worker")):
+            for _ in range(5):
+                self.assertEqual(self.channel.request(inquiry_request(), timeout_ms=100).reason_code,
+                                 "transport-window-expired")
+            self.assertEqual(self.channel.request(inquiry_request(), timeout_ms=100).status, "queued")
+        self.assertEqual(len(self.connection_timeouts), 6)
+        self.assertEqual(len(self.call_timeouts), 6)
+        self.assertFalse(hasattr(self.channel, "_call_permits"))
+
+    def test_budgets_refresh_and_clamp_at_both_native_boundaries(self):
+        queued = canonical_json(QUEUED_REPLY)
+        for clock, expected_connect, expected_call in (
+                ([10.0, 10.04, 10.10], 0.06, 0.0),
+                ([10.0, 10.20, 10.30], 0.0, 0.0)):
+            with self.subTest(clock=clock):
+                self.connect(queued)
+                with mock.patch.object(ctl.time, "monotonic", side_effect=clock):
+                    self.assertEqual(self.channel.request(inquiry_request(), timeout_ms=100).status,
+                                     "queued")
+                self.assertAlmostEqual(self.connection_timeouts[0], expected_connect)
+                self.assertAlmostEqual(self.call_timeouts[0], expected_call)
 
     def test_observe_and_capabilities_map_the_same_taxonomy(self):
         empty = canonical_json(lv.LiveSnapshot(observed=True).to_payload())
@@ -1270,6 +1303,7 @@ class LivePeer:
         (self.directory / "home").mkdir(mode=0o700)
         (self.directory / "tmp").mkdir(mode=0o700)
         command = [sys.executable, "-c", PEER_LAUNCHER, str(FIXTURE_PATH), PEER_MODULE_NAME]
+        self.environment = environment
         self.process = subprocess.Popen(
             command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=environment, text=True, cwd=str(self.directory), start_new_session=True)
@@ -1314,6 +1348,9 @@ class LivePeer:
         assert self.process.stdin and self.process.stdout
         self.process.stdin.write(canonical_json(payload) + "\n")
         self.process.stdin.flush()
+        ready, _, _ = select.select([self.process.stdout], [], [], timeout)
+        if not ready:
+            raise AssertionError("owned peer command exceeded its watchdog")
         line = self.process.stdout.readline()
         if not line:
             raise AssertionError(f"the peer closed its output before answering: "
@@ -1371,11 +1408,13 @@ class LivePeerCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.class_root = Path(tempfile.mkdtemp(prefix="c-two-live-"))
+        cls.class_root = Path(tempfile.mkdtemp(prefix="c2-",
+            dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp")))
 
     @classmethod
     def tearDownClass(cls):
-        shutil.rmtree(cls.class_root, ignore_errors=True)
+        # Keep raw evidence under the caller's private task root.
+        pass
 
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="peer-", dir=self.class_root))
@@ -1441,6 +1480,249 @@ class LivePeerCase(unittest.TestCase):
                 return
             time.sleep(0.02)
         raise AssertionError(f"the peer never held {count} pending requests")
+
+
+def run_deadline_client() -> int:
+    """Private test CLI: the parent owns both this Popen and the peer Popen."""
+    case = unittest.TestCase()
+    config = json.loads(sys.stdin.readline())
+    rpc_config.configure_client(config["stateDir"])
+    descriptor = ctl.LiveEndpointDescriptor.from_payload(config["descriptor"])
+    channel = ctl.CTwoLiveChannel(identity(), TEST_CRM, name=descriptor.name,
+                                address=descriptor.address, instance_id=descriptor.instance_id,
+                                token=config["token"], state_dir=config["stateDir"])
+    phases = []
+    connection_elapsed = []
+    native_connect = cc.connect
+
+    def recording_connect(*args, **kwargs):
+        started = time.monotonic()
+        try:
+            return native_connect(*args, **kwargs)
+        except CallDeadlineExceeded as error:
+            phases.append(error.transport_phase)
+            raise
+        finally:
+            connection_elapsed.append(time.monotonic() - started)
+
+    def reply(value):
+        print(canonical_json(value), flush=True)
+
+    try:
+        with ExitStack() as stack:
+            if config["mode"] == "warm":
+                deadline = time.monotonic() + 1.5
+                held = stack.enter_context(cc.connect(
+                    TEST_CRM, name=descriptor.name, address=descriptor.address,
+                    timeout=max(0.0, deadline - time.monotonic())))
+                raw = cc.with_call_options(held, timeout=max(0.0, deadline - time.monotonic()))
+                query = ctl.LiveWireQuery(instance_id=descriptor.instance_id,
+                                         token=config["token"], identity=identity())
+                case.assertEqual(json.loads(raw.capabilities(canonical_json(query.to_payload()))),
+                                 {"inquiryDelivery": "cooperative-checkpoint"})
+            reply({"stage": "ready"})
+            case.assertEqual(sys.stdin.readline().strip(), "go")
+            with mock.patch.object(cc, "connect", side_effect=recording_connect):
+                started = time.monotonic()
+                if config["mode"] == "budget":
+                    answer = channel.request(inquiry_request(), timeout_ms=500)
+                    case.assertIn(answer.reason_code, ("request-window-expired", "transport-window-expired"))
+                    elapsed = time.monotonic() - started
+                    case.assertGreaterEqual(elapsed, 0.48)
+                    case.assertLess(elapsed, 1.2)
+                    case.assertGreaterEqual(connection_elapsed[0], 0.25)
+                    reply({"stage": "budget-expired", "elapsed": elapsed,
+                           "connectionElapsed": connection_elapsed[0], "reason": answer.reason_code})
+                else:
+                    answer = channel.observe(limit=1, timeout_ms=150)
+                    elapsed = time.monotonic() - started
+                    case.assertEqual((answer.observed, answer.reason),
+                                     (False, "transport-window-expired"))
+                    case.assertEqual(phases, ["pre_dispatch"])
+                    case.assertGreaterEqual(elapsed, 0.14)
+                    case.assertLess(elapsed, 1.0)
+                    reply({"stage": "expired", "phase": phases[0], "elapsed": elapsed})
+                    case.assertEqual(sys.stdin.readline().strip(), "resume")
+                    case.assertEqual(channel.capabilities().inquiry_delivery,
+                                     "cooperative-checkpoint")
+                    reply({"stage": "recovered"})
+        return 0
+    finally:
+        cc.shutdown()
+
+
+@unittest.skipIf(os.name == "nt", "owned POSIX process-group pause probes")
+class NativeDeadlineTests(LivePeerCase):
+    """V-09/V-10: real private peers, with only owned child watchdogs."""
+
+    def start_client(self, peer, mode):
+        process = subprocess.Popen(
+            [sys.executable, "-c", PEER_LAUNCHER, str(FIXTURE_PATH), PEER_MODULE_NAME,
+             "deadline-client"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, env=peer.environment,
+            cwd=peer.directory, start_new_session=True)
+        process.stdin.write(canonical_json({"mode": mode, "stateDir": str(self.root / "state"),
+                                           "descriptor": peer.descriptor.to_payload(),
+                                           "token": peer.token}) + "\n")
+        process.stdin.flush()
+        self.addCleanup(self.finish_client, process)
+        try:
+            self.assertEqual(self.client_line(process, 3.0)["stage"], "ready")
+        except BaseException:
+            self.finish_client(process)
+            raise
+        return process
+
+    def client_line(self, process, timeout):
+        ready, _, _ = select.select([process.stdout], [], [], timeout)
+        self.assertTrue(ready, "native connection/call deadline exceeded owned-client watchdog")
+        line = process.stdout.readline()
+        if not line:
+            code = process.wait(timeout=2)
+            self.fail(f"deadline client failed its assertions (exit {code}): {process.stderr.read()}")
+        return json.loads(line)
+
+    def client_command(self, process, text):
+        process.stdin.write(text + "\n")
+        process.stdin.flush()
+
+    def finish_client(self, process):
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=3)
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            self.fail("owned deadline client process group is not confirmed stopped")
+        for stream in (process.stdin, process.stdout, process.stderr):
+            stream.close()
+
+    def finish_pair(self, peer, client, paused):
+        # Failure of one cleanup must not skip the other owned process layer.
+        try:
+            if paused:
+                os.killpg(peer.process.pid, signal.SIGCONT)
+        finally:
+            try:
+                if client is not None:
+                    self.finish_client(client)
+            finally:
+                self.assertIsNone(peer.stop()["addressAfter"])
+                peer.assert_group_gone()
+
+    def connect_expiry(self, mode):
+        peer = self.spawn()
+        client = None
+        paused = False
+        try:
+            client = self.start_client(peer, mode)
+            os.killpg(peer.process.pid, signal.SIGSTOP)
+            paused = True
+            self.client_command(client, "go")
+            fact = self.client_line(client, 2.0)
+            self.assertEqual((fact["stage"], fact["phase"]), ("expired", "pre_dispatch"))
+            os.killpg(peer.process.pid, signal.SIGCONT)
+            paused = False
+            self.client_command(client, "resume")
+            self.assertEqual(self.client_line(client, 2.0)["stage"], "recovered")
+            self.assertEqual(client.wait(timeout=3), 0)
+            self.record(f"connect-{mode}", fact)
+        finally:
+            self.finish_pair(peer, client, paused)
+
+    def test_first_connection_expires_pre_dispatch_and_recovers(self):
+        self.connect_expiry("fresh")
+
+    def test_already_connected_peer_expires_pre_dispatch_and_recovers(self):
+        self.connect_expiry("warm")
+
+    def test_zero_connection_and_call_budgets_are_native_pre_dispatch(self):
+        peer = self.spawn()
+        try:
+            with self.assertRaises(CallDeadlineExceeded) as caught:
+                cc.connect(TEST_CRM, name=peer.name, address=peer.address, timeout=0.0)
+            self.assertEqual(caught.exception.transport_phase, "pre_dispatch")
+            deadline = time.monotonic() + 1.5
+            with cc.connect(TEST_CRM, name=peer.name, address=peer.address,
+                            timeout=max(0.0, deadline - time.monotonic())) as connected:
+                with self.assertRaises(CallDeadlineExceeded) as caught:
+                    cc.with_call_options(connected, timeout=0.0).capabilities("unused")
+                self.assertEqual(caught.exception.transport_phase, "pre_dispatch")
+                query = ctl.LiveWireQuery(instance_id=peer.instance_id, token=peer.token,
+                                         identity=self.identity)
+                self.assertEqual(json.loads(cc.with_call_options(
+                    connected, timeout=max(0.0, deadline - time.monotonic())).capabilities(
+                        canonical_json(query.to_payload())))["inquiryDelivery"], "cooperative-checkpoint")
+        finally:
+            self.assertIsNone(peer.stop()["addressAfter"])
+            peer.assert_group_gone()
+
+    def test_dispatched_call_expires_but_same_connection_and_remote_call_survive(self):
+        peer = self.spawn(stall=2.0)
+        try:
+            deadline = time.monotonic() + 1.5
+            with cc.connect(TEST_CRM, name=peer.name, address=peer.address,
+                            timeout=max(0.0, deadline - time.monotonic())) as connected:
+                text = wire_request(inquiry_request(request_id="slow-1"),
+                                    token=peer.token, instance_id=peer.instance_id)
+                started = time.monotonic()
+                with self.assertRaises(CallDeadlineExceeded) as caught:
+                    deadline = time.monotonic() + 0.1
+                    cc.with_call_options(connected, timeout=max(0.0, deadline - time.monotonic())).request(text)
+                elapsed = time.monotonic() - started
+                self.assertEqual(caught.exception.transport_phase, "dispatch_uncertain")
+                self.assertGreaterEqual(elapsed, 0.09)
+                self.assertLess(elapsed, 0.8)
+                deadline = time.monotonic() + 0.1
+                self.assertEqual(json.loads(cc.with_call_options(
+                    connected, timeout=max(0.0, deadline - time.monotonic())).observe('{"probe":"immediate"}')), {"observed": True})
+                time.sleep(2.2)
+                self.assertIn("slow-1", peer.command({"op": "completedCalls"})["requestIds"])
+                self.record("dispatch-uncertain", {"phase": caught.exception.transport_phase,
+                                                  "elapsed": elapsed, "sameConnectionUsable": True,
+                                                  "remoteCompleted": True})
+        finally:
+            self.assertIsNone(peer.stop()["addressAfter"])
+            peer.assert_group_gone()
+
+    def test_delayed_owner_never_consumes_an_expired_queue_entry(self):
+        peer = self.spawn()
+        try:
+            answer = self.channel(peer).request(inquiry_request(), timeout_ms=150)
+            self.assertIn(answer.reason_code, ("request-window-expired", "transport-window-expired"))
+            time.sleep(0.1)
+            self.assertIsNone(peer.command({"op": "consume", "timeout": 0.1})["request"],
+                              "an expired unconsumed request reached the native owner")
+            self.assertEqual(peer.command({"op": "pendingCount"})["count"], 0)
+            self.record("delayed-owner", {"consumed": False, "reason": answer.reason_code})
+        finally:
+            self.assertIsNone(peer.stop()["addressAfter"])
+            peer.assert_group_gone()
+
+    def test_connection_time_does_not_renew_the_owner_queue_window(self):
+        peer = self.spawn()
+        client = None
+        paused = False
+        try:
+            client = self.start_client(peer, "budget")
+            os.killpg(peer.process.pid, signal.SIGSTOP)
+            paused = True
+            self.client_command(client, "go")
+            time.sleep(0.3)
+            os.killpg(peer.process.pid, signal.SIGCONT)
+            paused = False
+            fact = self.client_line(client, 2.0)
+            self.assertEqual(fact["stage"], "budget-expired")
+            time.sleep(0.1)
+            self.assertIsNone(peer.command({"op": "consume", "timeout": 0.1})["request"],
+                              "connection time granted a second owner queue window")
+            self.assertEqual(client.wait(timeout=3), 0)
+            self.assertEqual(peer.command({"op": "pendingCount"})["count"], 0)
+            self.record("connection-owner-budget", fact)
+        finally:
+            self.finish_pair(peer, client, paused)
 
 
 class SubprocessLifecycleTests(LivePeerCase):
@@ -1549,13 +1831,18 @@ class SubprocessLifecycleTests(LivePeerCase):
         peer = self.spawn()
         rpc_config.configure_client(self.root / "state")
         oversized = "x" * (lv.MAX_LIVE_FRAME_BYTES + 1)
-        with cc.connect(TEST_CRM, name=peer.name, address=peer.address) as raw:
+        deadline = time.monotonic() + 1.5
+        with cc.connect(TEST_CRM, name=peer.name, address=peer.address,
+                        timeout=max(0.0, deadline - time.monotonic())) as connected:
+            raw = cc.with_call_options(connected, timeout=max(0.0, deadline - time.monotonic()))
             for raw_text, expected in (("not json", "frame-invalid"), ("{}", "frame-invalid"),
                                        ('{"instanceId":1}', "frame-invalid"),
                                        (oversized, "frame-too-large")):
+                raw = cc.with_call_options(connected, timeout=max(0.0, deadline - time.monotonic()))
                 reply = decode_reply(raw.request(raw_text))
                 self.assertEqual((reply.status, reply.reason_code),
                                  ("unavailable", expected), raw_text[:16])
+                raw = cc.with_call_options(connected, timeout=max(0.0, deadline - time.monotonic()))
                 snapshot = decode_snapshot(raw.observe(raw_text))
                 self.assertEqual((snapshot.observed, snapshot.unavailable),
                                  (False, expected), raw_text[:16])
@@ -1677,36 +1964,38 @@ class SubprocessLifecycleTests(LivePeerCase):
         self.assertEqual(peer.command({"op": "pendingCount"})["count"], 0)
         peer.stop()
 
-    def test_a_stalling_endpoint_returns_within_the_window_and_stays_bounded(self):
+    def test_a_stalling_endpoint_returns_within_the_native_window(self):
         peer = self.spawn(stall=2.0)
-        channel = self.channel(peer)
-        for index in range(3):
-            started = time.monotonic()
-            reply = channel.request(inquiry_request(request_id=f"r-{index}",
-                                                    question_id=f"q-{index}"),
-                                    timeout_ms=300)
-            elapsed = time.monotonic() - started
-            self.assertEqual((reply.status, reply.reason_code),
-                             ("unavailable", "transport-window-expired"))
-            self.assertLess(elapsed, 1.5)
-            self.assertGreaterEqual(elapsed, 0.28)
-        snapshot = channel.observe(limit=5, timeout_ms=300)
-        self.assertEqual((snapshot.observed, snapshot.reason),
-                         (False, "transport-window-expired"))
-        with self.assertRaises(BoardError):
-            channel.capabilities()
-        # Scheduling tolerance for the drain: the stalling calls finish, the
-        # bounded slots release, and the clean stop is not blocked by them.
-        time.sleep(2.2)
-        stop_reply = peer.stop()
-        self.record("stalling-endpoint", {
-            "stallSeconds": 2.0,
-            "windowMs": 300,
-            "bounded": {"requests": 3, "observe": 1, "capabilities": 1},
-            "stop": {"exitCode": peer.process.returncode,
-                     "addressAfter": stop_reply["addressAfter"]},
-        })
-        self.assertIsNone(stop_reply["addressAfter"])
+        try:
+            channel = self.channel(peer)
+            for index in range(3):
+                started = time.monotonic()
+                reply = channel.request(inquiry_request(request_id=f"r-{index}",
+                                                        question_id=f"q-{index}"),
+                                        timeout_ms=300)
+                elapsed = time.monotonic() - started
+                self.assertEqual((reply.status, reply.reason_code),
+                                 ("unavailable", "transport-window-expired"))
+                self.assertLess(elapsed, 1.5)
+                self.assertGreaterEqual(elapsed, 0.28)
+            snapshot = channel.observe(limit=5, timeout_ms=300)
+            self.assertEqual((snapshot.observed, snapshot.reason),
+                             (False, "transport-window-expired"))
+            with self.assertRaises(BoardError):
+                channel.capabilities()
+            # Scheduling tolerance for remote completion after client expiry;
+            # the SDK deadline is not cancellation or shutdown evidence.
+            time.sleep(2.2)
+        finally:
+            stop_reply = peer.stop()
+            self.record("stalling-endpoint", {
+                "stallSeconds": 2.0,
+                "windowMs": 300,
+                "bounded": {"requests": 3, "observe": 1, "capabilities": 1},
+                "stop": {"exitCode": peer.process.returncode,
+                         "addressAfter": stop_reply["addressAfter"]},
+            })
+            self.assertIsNone(stop_reply["addressAfter"])
 
 
 if __name__ == "__main__":

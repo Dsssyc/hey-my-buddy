@@ -8,6 +8,7 @@ The native InquiryBridge lifecycle remains a separate C1 boundary.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 import os
 import subprocess
@@ -27,6 +28,7 @@ from hey_my_buddy.blackboard.tasks.inquiry import (
 )
 
 from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
+from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, CTwoLiveEndpoint
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import read_inquiry_journal
 from hey_my_buddy.buddy.harnesses.live import (
@@ -37,16 +39,13 @@ from hey_my_buddy.protocol.contracts import WorkerRuntimeLive
 from hey_my_buddy.protocol.run_identity import RunIdentity
 
 
-class OwnerChannel(CTwoLiveChannel):
-    """Replace only connect/call; all three named RPCs still encode shared Wire."""
+class OwnerConnection:
+    """Fictional SDK peer dispatching the three named RPCs to the real owner."""
 
-    def __init__(self, attachment, owner):
-        super().__init__(attachment.identity, WorkerRuntimeLive,
-                         name=attachment.name, address=attachment.address,
-                         instance_id=attachment.instance_id, token=attachment.live_token)
+    def __init__(self, owner):
         self.owner = owner
 
-    def _connect_and_call(self, operation, text):
+    def _call(self, operation, text):
         self.owner.requests.append({"operation": operation, **json.loads(text)})
         if self.owner.disconnected:
             raise ConnectionError("the fixture Worker endpoint is unavailable")
@@ -58,6 +57,15 @@ class OwnerChannel(CTwoLiveChannel):
         if operation == "request":
             return self.owner.endpoint.request(text)
         return self.owner.endpoint.observe(text)
+
+    def capabilities(self, text):
+        return self._call("capabilities", text)
+
+    def request(self, text):
+        return self._call("request", text)
+
+    def observe(self, text):
+        return self._call("observe", text)
 
 
 class JournalOwner:
@@ -213,9 +221,21 @@ def attach_owner(case, board, client, task, adapter):
     directory.mkdir(parents=True, exist_ok=True)
     owner = JournalOwner(directory, identity)
     case.addCleanup(owner.close)
+    peer = OwnerConnection(owner)
+    def connect(*args, timeout, **kwargs):
+        case.assertGreaterEqual(timeout, 0)
+        return nullcontext(peer)
+    def with_call_options(connection, *, timeout):
+        case.assertIs(connection, peer)
+        case.assertGreaterEqual(timeout, 0)
+        return connection
+    case.enterContext(mock.patch.object(ctl.cc, "connect", side_effect=connect))
+    case.enterContext(mock.patch.object(ctl.cc, "with_call_options", side_effect=with_call_options))
     # Require BoardService's production initialization before injecting a factory.
     case.assertIsInstance(getattr(board.store, "live_registry", None), LiveRegistry)
-    board.store.live_registry = LiveRegistry(board.store, lambda frame: OwnerChannel(frame, owner))
+    board.store.live_registry = LiveRegistry(board.store, lambda frame: CTwoLiveChannel(
+        frame.identity, WorkerRuntimeLive, name=frame.name, address=frame.address,
+        instance_id=frame.instance_id, token=frame.live_token))
     attachment = {"workerId": worker_id, "workerInstance": worker_instance,
                   "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": nonce,
                   "identity": identity.to_payload(), "instanceId": owner.endpoint.instance_id,

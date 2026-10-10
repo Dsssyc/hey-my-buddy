@@ -19,7 +19,8 @@ and an endpoint that cannot be reached is an unavailable fact — never a
 stopped process. Every cross-process frame is one strict pydantic model of the
 existing live format plus the two private envelope fields this backend really
 reads (``instanceId`` and ``token``) and, on the request frame, the transport
-window the server enforces at admission. The narrow token never travels in a
+window and original local monotonic cutoff the server enforces at admission.
+The narrow token never travels in a
 reply, a snapshot, a diagnostic or a log line.
 
 Inside the endpoint the RPC threads only validate and enqueue: requests enter
@@ -41,11 +42,11 @@ endpoint encodes — pages and point queries alike — is measured against the
 unavailability instead of a trimmed or undecodable fact. Durable journals and
 results stay with the production code that owns them.
 
-On the client side the whole connect and call runs under the caller's
-transport window through one bounded standard-library mechanism
-(:meth:`CTwoLiveChannel._call`): a daemon worker carries the attempt and the
-caller waits only until the deadline; repeated timeouts hold at most a fixed
-number of permits and never block ``close`` or process exit.
+On the client side C-Two's native connection and call deadlines enforce one
+caller transport window. Expiry ends the client's wait, without cancelling a
+dispatched owner operation or implying that the endpoint stopped. The private
+request frame carries that same local monotonic deadline so connecting and
+queueing cannot give an unconsumed request a second full window.
 """
 from __future__ import annotations
 
@@ -60,6 +61,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, Mapping, Optional
 
 import c_two as cc
+from c_two.error import CallDeadlineExceeded
 
 from ...errors import BoardError
 from ...json_codec import canonical_json, decode_bounded_frame, decode_strict_json
@@ -103,13 +105,6 @@ from pydantic import Field
 #: fact for a stalled owner loop rather than a second inquiry limit.
 MAX_PENDING_LIVE_REQUESTS = MAX_INQUIRIES_PER_RUN
 
-#: The per-channel bound on concurrent whole connect+call attempts. The live
-#: seam's callers are one holder loop plus its occasional parallel polls, so
-#: four in-flight attempts cover that with headroom while capping what a peer
-#: that never answers can hold: each attempt outliving its window keeps at
-#: most one of these permits until the transport itself unblocks.
-MAX_INFLIGHT_LIVE_CALLS = 4
-
 
 class _PendingRequest:
     """One admitted request between its enqueue and the owner's settlement.
@@ -121,28 +116,16 @@ class _PendingRequest:
     ever inferred from the buffer insertion itself.
     """
 
-    __slots__ = ("question_id", "digest", "done", "reply", "expired")
+    __slots__ = ("question_id", "digest", "deadline", "done", "reply", "expired")
 
-    def __init__(self, question_id: str, digest: str):
+    def __init__(self, question_id: str, digest: str, deadline: float):
         self.question_id = question_id
         self.digest = digest
+        self.deadline = deadline
         self.done = threading.Event()
         self.reply: LiveReply | None = None
         self.expired = False
 
-
-class _LiveCallExpired(Exception):
-    """One bounded transport attempt that did not finish within its window.
-
-    ``reason_code`` distinguishes the two honest expiries: the attempt itself
-    outlived the window (``transport-window-expired``) and every bounded call
-    slot was still occupied when the window ran out (``transport-busy``).
-    Neither is ever a statement about the peer process.
-    """
-
-    def __init__(self, reason_code: str):
-        super().__init__(reason_code)
-        self.reason_code = reason_code
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -216,14 +199,16 @@ def _timeout_ms(value: Any, label: str) -> int:
 class LiveWireRequest(LiveRequest):
     """One live request frame on the C-Two wire: the request plus the envelope.
 
-    ``instanceId`` and ``token`` are the only private envelope fields, and
-    ``timeoutMs`` is the transport window the server enforces at admission;
-    every other member is the existing :class:`LiveRequest` unchanged.
+    ``timeoutMs`` keeps the validated transport window. ``deadlineMonotonic``
+    carries its original cutoff across this same-machine IPC boundary: unlike
+    starting another window on arrival, it includes connection and dispatch
+    time. It is private to this backend, never a public board-schema field.
     """
 
     instance_id: Hex64
     token: Hex64
     timeout_ms: TransportWindowMs
+    deadline_monotonic: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
 
 
 class LiveWireObserve(InternalModel):
@@ -534,6 +519,8 @@ class CTwoLiveEndpoint:
             except queue.Empty:
                 return None
             with self._lock:
+                if time.monotonic() >= slot.deadline:
+                    slot.expired = True
                 if slot.expired or slot.reply is not None \
                         or self._pending.get(request.request_id) is not slot:
                     self._forget_slot(slot)
@@ -720,6 +707,9 @@ class CTwoLiveEndpoint:
         frame, refusal = self._authenticate_frame(request_json, LiveWireRequest)
         if refusal is not None or frame is None:
             return self._refusal_reply(refusal or "frame-invalid")
+        deadline = started + frame.timeout_ms / 1000.0
+        if frame.deadline_monotonic is not None:
+            deadline = min(deadline, frame.deadline_monotonic)
         question_id = frame.payload.question_id
         digest = _request_digest(frame)
         with self._lock:
@@ -782,9 +772,9 @@ class CTwoLiveEndpoint:
                         return self._refusal_reply("inquiry-limit")
                     if len(self._requests) + len(self._pending) >= MAX_INQUIRIES_PER_RUN:
                         return self._refusal_reply("request-limit")
-                    if (time.monotonic() - started) * 1000.0 >= frame.timeout_ms:
+                    if time.monotonic() >= deadline:
                         return self._refusal_reply("request-window-expired")
-                    slot = _PendingRequest(question_id, digest)
+                    slot = _PendingRequest(question_id, digest, deadline)
                     try:
                         # The queue carries the plain request without the
                         # envelope beside its slot: the owner loop never holds
@@ -795,8 +785,7 @@ class CTwoLiveEndpoint:
                     except queue.Full:
                         return self._refusal_reply("queue-full")
                     self._pending[frame.request_id] = slot
-        if not slot.done.wait(timeout=max(0.0, started + frame.timeout_ms / 1000.0
-                                          - time.monotonic())):
+        if not slot.done.wait(timeout=max(0.0, deadline - time.monotonic())):
             with self._lock:
                 if slot.reply is None:
                     # The window passed without the owner's answer: the caller
@@ -1002,8 +991,8 @@ class CTwoLiveChannel:
     Each call opens one fresh C-Two connection to the endpoint's address — the
     measured production shape — with the display name only selecting the
     resource at that address. The whole connect and call runs under the
-    caller's transport window through :meth:`_call`'s bounded standard-library
-    mechanism, so a peer that never answers returns within the window instead
+    caller's transport window through C-Two's native deadlines, so a peer
+    that never answers returns within the window instead
     of hanging the holder. A dead, unreachable or stalling endpoint is always
     an unavailable fact; nothing here ever reports a process as stopped.
     Closing the channel is local: it changes no result ownership, stops
@@ -1028,7 +1017,6 @@ class CTwoLiveChannel:
         self._instance_id = _secret(instance_id, "instanceId")
         self._token = _secret(token, "token")
         self._closed_reason: str | None = None
-        self._call_permits = threading.BoundedSemaphore(MAX_INFLIGHT_LIVE_CALLS)
 
     @property
     def identity(self) -> RunIdentity:
@@ -1042,12 +1030,12 @@ class CTwoLiveChannel:
         frame = LiveWireQuery(instance_id=self._instance_id, token=self._token,
                               identity=self._identity)
         try:
-            raw = self._call("capabilities", canonical_json(frame.to_payload()),
+            raw = self._call("capabilities", frame,
                              DEFAULT_TRANSPORT_TIMEOUT_MS)
-        except _LiveCallExpired as expired:
+        except CallDeadlineExceeded:
             raise BoardError("LIVE_UNAVAILABLE",
                              "the live capabilities call did not finish within its transport window",
-                             reason=expired.reason_code) from None
+                             reason="transport-window-expired") from None
         except Exception as error:
             raise BoardError("LIVE_UNAVAILABLE",
                              "the live endpoint did not answer the capabilities call") from error
@@ -1069,9 +1057,9 @@ class CTwoLiveChannel:
                                 instance_id=self._instance_id, token=self._token,
                                 timeout_ms=timeout_ms)
         try:
-            raw = self._call("request", canonical_json(frame.to_payload()), timeout_ms)
-        except _LiveCallExpired as expired:
-            return LiveReply(status="unavailable", reason_code=expired.reason_code)
+            raw = self._call("request", frame, timeout_ms)
+        except CallDeadlineExceeded:
+            return LiveReply(status="unavailable", reason_code="transport-window-expired")
         except Exception:
             return LiveReply(status="unavailable", reason_code="transport-unreachable")
         try:
@@ -1089,9 +1077,9 @@ class CTwoLiveChannel:
         frame = LiveWireObserve(instance_id=self._instance_id, token=self._token,
                                 identity=self._identity, **arguments)
         try:
-            raw = self._call("observe", canonical_json(frame.to_payload()), timeout_ms)
-        except _LiveCallExpired as expired:
-            return LiveSnapshot(observed=False, reason=expired.reason_code)
+            raw = self._call("observe", frame, timeout_ms)
+        except CallDeadlineExceeded:
+            return LiveSnapshot(observed=False, reason="transport-window-expired")
         except Exception:
             return LiveSnapshot(observed=False, reason="transport-unreachable")
         try:
@@ -1105,57 +1093,27 @@ class CTwoLiveChannel:
         if self._closed_reason is None:
             self._closed_reason = reason
 
-    def _call(self, operation: str, text: str, timeout_ms: int) -> str:
-        """One whole connect and named call, bounded by the transport window.
+    def _call(self, operation: str, frame: InternalModel, timeout_ms: int) -> str:
+        """One native bounded connection and call under the same deadline.
 
-        C-Two 0.6.0's public client surface exposes no per-call timeout — the
-        probed ``connect`` and the call proxies take no timeout argument and
-        ``set_transport_policy`` only tunes chunking thresholds — so the bound
-        comes from the standard library instead of the SDK: the connection and
-        the named call run on one daemon worker, and the caller waits for that
-        worker only until the window's deadline. The boundary is explicit: an
-        attempt that outlives its window is an expired fact while its worker
-        keeps at most one of the channel's bounded call permits until the
-        transport itself unblocks, so repeated timeouts accumulate at most
-        ``MAX_INFLIGHT_LIVE_CALLS`` daemon threads, and neither ``close`` nor
-        process exit ever waits on a stuck peer.
+        Only C-Two owns transport waiting. The owner's business queue still
+        enforces this original same-machine cutoff, even when connection time
+        consumed most of the window. A zero budget reaches the SDK so its
+        pre-dispatch expiry keeps the same failure facts as any other deadline.
         """
         deadline = time.monotonic() + timeout_ms / 1000.0
-
-        def remaining() -> float:
-            return max(0.0, deadline - time.monotonic())
-
-        if not self._call_permits.acquire(timeout=remaining()):
-            raise _LiveCallExpired("transport-busy")
-        done = threading.Event()
-        outcome: list[tuple[str, BaseException | None]] = []
-
-        def run() -> None:
-            try:
-                outcome.append((self._connect_and_call(operation, text), None))
-            except BaseException as error:  # handed to the caller through the box
-                outcome.append(("", error))
-            finally:
-                self._call_permits.release()
-                done.set()
-
-        threading.Thread(target=run, name="buddy-live-call", daemon=True).start()
-        if not done.wait(timeout=remaining()):
-            raise _LiveCallExpired("transport-window-expired")
-        value, error = outcome[0]
-        if error is not None:
-            raise error
-        return value
-
-    def _connect_and_call(self, operation: str, text: str) -> str:
-        """One fresh connection and one named call; the profile is applied first."""
+        if isinstance(frame, LiveWireRequest):
+            frame = frame.model_copy(update={"deadline_monotonic": deadline})
+        text = canonical_json(frame.to_payload())
         rpc_config.configure_client(self._state_dir)
-        with cc.connect(self._contract, name=self._name, address=self._address) as peer:
+        with cc.connect(self._contract, name=self._name, address=self._address,
+                        timeout=max(0.0, deadline - time.monotonic())) as peer:
+            bounded = cc.with_call_options(peer, timeout=max(0.0, deadline - time.monotonic()))
             if operation == "capabilities":
-                return peer.capabilities(text)
+                return bounded.capabilities(text)
             if operation == "request":
-                return peer.request(text)
-            return peer.observe(text)
+                return bounded.request(text)
+            return bounded.observe(text)
 
 
 def _decode_reply(raw: Any, label: str) -> Any:
@@ -1167,6 +1125,6 @@ def _decode_reply(raw: Any, label: str) -> Any:
 __all__ = [
     "CTwoLiveChannel", "CTwoLiveEndpoint", "CleanupOutcome",
     "ConfirmedProcessGone", "LiveEndpointDescriptor", "LiveWireObserve",
-    "LiveWireQuery", "LiveWireRequest", "MAX_INFLIGHT_LIVE_CALLS", "MAX_PENDING_LIVE_REQUESTS",
+    "LiveWireQuery", "LiveWireRequest", "MAX_PENDING_LIVE_REQUESTS",
     "authenticate_live_frame", "decode_live_wire_frame", "cleanup_owned_endpoint", "random_person_name", "write_ready_material",
 ]

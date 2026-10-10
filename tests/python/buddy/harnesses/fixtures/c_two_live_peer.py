@@ -48,6 +48,8 @@ class StallingLive:
 
     def __init__(self, seconds: float):
         self._seconds = seconds
+        self.completed_requests: list[str] = []
+        self._lock = threading.Lock()
 
     def capabilities(self, request_json: str) -> str:
         time.sleep(self._seconds)
@@ -55,10 +57,13 @@ class StallingLive:
 
     def request(self, request_json: str) -> str:
         time.sleep(self._seconds)
+        with self._lock:
+            self.completed_requests.append(json.loads(request_json)["requestId"])
         return json.dumps({"status": "queued", "observed": True, "state": "queued"})
 
     def observe(self, request_json: str) -> str:
-        time.sleep(self._seconds)
+        if json.loads(request_json).get("probe") != "immediate":
+            time.sleep(self._seconds)
         return json.dumps({"observed": True})
 
 
@@ -82,6 +87,7 @@ def serve() -> int:
     os.environ["C2_ENV_FILE"] = ""
     endpoint: ctl.CTwoLiveEndpoint | None = None
     stalled_name: str | None = None
+    stalled: StallingLive | None = None
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -100,7 +106,8 @@ def serve() -> int:
                 rpc_config.configure_server()
                 rpc_config.configure_client()
                 stalled_name = command.get("name") or ctl.random_person_name()
-                cc.register(TEST_CRM, StallingLive(float(command["stallSeconds"])),
+                stalled = StallingLive(float(command["stallSeconds"]))
+                cc.register(TEST_CRM, stalled,
                             name=stalled_name,
                             concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
                 inspected = cc.inspect_endpoint(cc.server_address())
@@ -157,6 +164,9 @@ def serve() -> int:
 
                 threading.Thread(target=owner, name="peer-owner", daemon=True).start()
                 _reply({"ok": True})
+            elif op == "completedCalls":
+                with stalled._lock:
+                    _reply({"ok": True, "requestIds": list(stalled.completed_requests)})
             elif op == "pendingCount":
                 _reply({"ok": True, "count": len(endpoint._pending)})
             elif op == "settle":
@@ -194,6 +204,9 @@ def serve() -> int:
 
 
 def main() -> int:
+    if sys.argv[-1] == "deadline-client":
+        from buddy.harnesses.test_c_two_live import run_deadline_client
+        return run_deadline_client()
     return serve()
 
 

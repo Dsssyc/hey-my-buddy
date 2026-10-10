@@ -313,7 +313,7 @@ class WorkerActivityForwarding(BoardTestCase):
 
     The owned child is an explicit command fixture, not an installed harness.
     Only the role binding is supplied: its channel uses the actual C-Two client,
-    strict wire DTOs and endpoint handler. The SDK connection alone is replaced
+    strict wire DTOs and endpoint handler. Both SDK boundaries are replaced
     by an in-process endpoint; this provides no cross-process/native receipt.
     """
 
@@ -386,7 +386,15 @@ class WorkerActivityForwarding(BoardTestCase):
                                      address="ipc://activity-fixture", instance_id="a" * 64, token="b" * 64)
         self.addCleanup(lambda: endpoint.close(reason="fixture-finished"))
         self.addCleanup(lambda: channel.close(reason="fixture-finished"))
-        self.enterContext(mock.patch.object(ctl.cc, "connect", side_effect=lambda *a, **kw: nullcontext(endpoint)))
+        def connect(*args, timeout, **kwargs):
+            self.assertGreaterEqual(timeout, 0)
+            return nullcontext(endpoint)
+        def with_call_options(peer, *, timeout):
+            self.assertIs(peer, endpoint)
+            self.assertGreaterEqual(timeout, 0)
+            return peer
+        self.enterContext(mock.patch.object(ctl.cc, "connect", side_effect=connect))
+        self.enterContext(mock.patch.object(ctl.cc, "with_call_options", side_effect=with_call_options))
         self.enterContext(mock.patch.object(role_live, "handle_live_binding",
                                            return_value=(role_live.LIVE_BOUND, channel)))
         return endpoint, channel

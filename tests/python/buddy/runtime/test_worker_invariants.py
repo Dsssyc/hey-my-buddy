@@ -9,6 +9,7 @@ daemon, no harness and no model.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -333,12 +334,16 @@ class LiveActivityForwardTests(unittest.TestCase):
         self.enterContext(mock.patch.object(cc.EndpointCredential, "from_json", return_value=types.SimpleNamespace(
             address="fixture-address", context=cc.local_endpoint_context())))
         # Readiness/held-request validation, wire admission and forwarding all
-        # run. Only the SDK connection is local; no native PID is proven here.
-        def local_call(_channel, operation, text):
-            return getattr(self.endpoints[str(directory)], operation)(text)
-        patcher = mock.patch.object(CTwoLiveChannel, "_connect_and_call", local_call)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        # run. Both SDK boundaries are local; no native PID is proven here.
+        def connect(*args, timeout, **kwargs):
+            self.assertGreaterEqual(timeout, 0)
+            return nullcontext(self.endpoints[str(directory)])
+        def with_call_options(peer, *, timeout):
+            self.assertIs(peer, self.endpoints[str(directory)])
+            self.assertGreaterEqual(timeout, 0)
+            return peer
+        self.enterContext(mock.patch.object(cc, "connect", side_effect=connect))
+        self.enterContext(mock.patch.object(cc, "with_call_options", side_effect=with_call_options))
         return worker_module._Renewal(worker, claim, handle, implementation=object()), directory
 
     def publish_activity(self, directory: Path, *, task_id="task-live", attempt_id="attempt-live",

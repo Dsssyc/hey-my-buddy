@@ -9,6 +9,7 @@ the result comes from the same native stream the legacy controller observed.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 import dataclasses
 import hashlib
 import json
@@ -16,6 +17,7 @@ import os
 import tempfile
 import threading
 import time
+import types
 import unittest
 import uuid
 import weakref
@@ -44,6 +46,7 @@ from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observ
 from hey_my_buddy.buddy.roles.structured_call import no_tool_prompt
 from hey_my_buddy.buddy.roles.turn_io import input_hash, validate_outcome
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
 from buddy.harnesses.zcode.test_zcode_tool_evidence import FakeAppServerTests, SCHEMA
@@ -67,14 +70,15 @@ def fixture_ask(bridge, frame):
 
 
 def fixture_live_channel(case, identity, *, credentials, journal_path, activity_path, harness="zcode"):
-    """Use the actual owner and shared endpoint; only SDK connection is local."""
+    """Use the actual owner and shared endpoint; both SDK boundaries are local."""
     from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
     from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, CTwoLiveEndpoint
     from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
     from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
     endpoint = CTwoLiveEndpoint(identity, EXISTING_CAPABILITIES[harness], TEST_CRM,
                                instance_id="c"*64, token="d"*64)
-    channel = CTwoLiveChannel(identity, TEST_CRM, name="Test Producer", address="fixture-address",
+    address = f"fixture-address-{uuid.uuid4().hex}"
+    channel = CTwoLiveChannel(identity, TEST_CRM, name="Test Producer", address=address,
                              instance_id="c"*64, token="d"*64)
     # DSH creates its owner when the native turn starts; its endpoint must not
     # acquire a competing fixture consumer before that owner exists.
@@ -103,12 +107,27 @@ def fixture_live_channel(case, identity, *, credentials, journal_path, activity_
         if bridge is not None:
             bridge._publish()
         return getattr(endpoint, operation)(request_json)
-    patcher = mock.patch.object(channel, "_connect_and_call", side_effect=call)
-    patcher.start()
+    peer = types.SimpleNamespace(
+        capabilities=lambda text: call("capabilities", text),
+        request=lambda text: call("request", text),
+        observe=lambda text: call("observe", text))
+    if not hasattr(case, "_fixture_live_peers"):
+        # Several channels coexist in the journal-correlation cases. One SDK
+        # boundary routes their distinct fixture addresses to their held peers.
+        case._fixture_live_peers = {}
+        def connect(*args, address, timeout, **kwargs):
+            case.assertGreaterEqual(timeout, 0)
+            return nullcontext(case._fixture_live_peers[address])
+        def with_call_options(connection, *, timeout):
+            case.assertTrue(any(connection is held for held in case._fixture_live_peers.values()))
+            case.assertGreaterEqual(timeout, 0)
+            return connection
+        case.enterContext(mock.patch.object(ctl.cc, "connect", side_effect=connect))
+        case.enterContext(mock.patch.object(ctl.cc, "with_call_options", side_effect=with_call_options))
+    case._fixture_live_peers[address] = peer
     def close():
         if bridge is not None:
             bridge.close()
-        patcher.stop()
         endpoint.close(reason="fixture-finished")
     case.addCleanup(close)
     channel.fixture_endpoint = endpoint
@@ -1339,7 +1358,7 @@ class ProducerContractTests(NativeRunCase):
         gone = bind_live_channel(identity, credentials={"socketPath": str(temp / "absent.sock"),
                                                         "token": credentials["token"]},
                                  journal_path=None, activity_path=temp / "activity.json")
-        with mock.patch.object(gone, "_connect_and_call", side_effect=ConnectionError("fixture peer lost")):
+        with mock.patch.object(ctl.cc, "connect", side_effect=ConnectionError("fixture peer lost")):
             unreachable = gone.request(request, timeout_ms=1000)
         self.assertEqual((unreachable.status, unreachable.reason_code, unreachable.error_code),
                          ("unavailable", "transport-unreachable", None))
