@@ -184,3 +184,29 @@ Host 没有修改微任务代码或测试，只整合固定补丁及在本计划
 3-C 新 run `df9f35ac-5df8-43b9-89e3-58e0b5ef3bb8` 绑定计划提交 `5f7e3b2a`，首次四项配置全部省略，路由决定 `dec-50783657-382b-46b8-8977-c900b7b3753e`，初响应 revision 1、awaiting-model-selection。有且只有一个仅监控的 await，不以工具等待超时当作交付。3-B 的 Worker 精确任务根 `/tmp/c073-b-cIzzzx` 已留存 20,894 份源码、变异、日志和台账后按该一个根整体回收，removed=true；留存哈希与回收账为 `tmp/c073-host/path-state-retained-evidence.json`。没有手动删除受管检出、其他会话或日常对象。
 
 3-C 路由实际选择 ZCode/zai-api/GLM-5.3-Flash/max，决定 `dec-50783657-382b-46b8-8977-c900b7b3753e`。供应方实际 429/1310 rate_limited、retryable=false，两层停止确认，原生 exit 0、没有固定交付。按既有许可在同 run 用完整 configuration 和独立 reason continue 到 Codex/openai/gpt-6.1-sol/high（完成过本批 3-A/3-B 与 C-Two 同类工作），revision 5、awaiting-worker。原失败、get 和继续请求/响应留存 `tmp/c073-host/state-boundaries*`；不修改用户路由偏好、不重试无额度 ZCode，不把委派模型调用写成既有三次付费冒烟的重跑。
+
+## 3-C 首份固定交付与范围修订
+
+首份候选 `65bd6f1f8d859c7fb0690a4ecefff989d22d7011`、artifact `9acc5797-953d-48ef-a051-f7decae923e5`、补丁 SHA-256 `b04e10f9e6a768cee8718e2d9a5f7602c22a83c99ec46483457f147d1b4604d1` 共 42 个路径、全部在初始 53 路径内。RPC 路径列表的投影显示 changedPathsTruncated，Host 首次封存助手拒绝后从绑定 base/output 的不可变 Git diff 取完整 42 路径、确认原投影是其子集、固定补丁 SHA-256 相等，再建立独立归档，不把截断列表当完整。Worker 记录 567 项可运行聚焦、四处目标变异，以及八删除/十二新增的 loader 对照；真实 RPC 沙箱失败与残留观察未知如实交付，尚未签收。额外只读生产接缝审查未发现已知范围缺口之外的新阻塞，不作为真实测试通过。
+
+Host 在固定副本补核 path_state 全 12 项退出 0、6.801 秒，public_state 全 26 项退出 0、27.858 秒，真实 3-A/3-B 场景通过；C-Two 全文件 70 项退出 1、5.837 秒、18 failures，Worker live 全文件 34 项退出 1、4.416 秒、6 errors。原始 `state-boundaries-host-{path,public,ctwo,live}-r1.{json,log}` 保留：前一缺陷是 c_two_live_peer 使用 Path 却未导入，后一缺陷是 live_runtime_peer 的 controller 建 CTwoLiveEndpoint 未传必填 state_dir，stderr 被现有 DEVNULL 隐去，只见私有 peer pipe 关闭。两处都是原范围 fixture 缺陷，退回原 run，Host 不代改。语法通过不足以证明这些 fixture 实际可用。
+
+按用户明确的范围修订许可，把六个已查到的测试调用方纳入；blocking.await_run 和 console_cli.run 属于 CLI 内部 helper，必须消费 main 已解析 Path，不再有默认或调用公开解析的重复选择。catalog.discover 位于黑板内部、生产由 service/store 明确传目录，不是新公开状态入口，也改必填 Path，删除其目录环境 fallback，保留账户/模型语义，直接调用的离线测试显式提供自有根。没有对外新增入口或改变 CLI schema，console 仅 Python 状态传递，无前端变化。
+
+附加唯一写入路径如下，原 53 路径全部保留，总 66 路径；Host 仍独占计划和整合记录。继续 API 没有 executionWorkspace 变更字段，原提交意图保持原样，按该 API 的 input 原 run 记录这份明确范围修订；不可把旧投影说成已经改写，最终固定产物按本次明确有效范围独立核验。原始 scope、修订理由、基线和新 scope 为 `tmp/c073-host/state-boundaries-scope-amendment.json`，Task/Host 验收以该继续输入为依据。
+
+- `tests/python/blackboard/service/test_service_environment.py`
+- `tests/python/buddy/runtime/test_worker_runtime.py`
+- `tests/python/blackboard/tasks/test_workspace_api.py`
+- `tests/python/blackboard/tasks/test_workflow_worker.py`
+- `tests/python/cli/test_cli_views.py`
+- `tests/python/blackboard/catalog/test_account_operations.py`
+- `src/hey_my_buddy/cli/blocking.py`
+- `src/hey_my_buddy/cli/console_cli.py`
+- `src/hey_my_buddy/blackboard/catalog/catalog.py`
+- `tests/python/cli/test_blocking.py`
+- `tests/python/console/test_console_cli.py`
+- `tests/python/blackboard/catalog/test_catalog.py`
+- `tests/python/blackboard/evaluation/test_evaluation.py`
+
+Worker 如实披露第二次误触真实 bind、数字 wait 记录缺口和任务根外 `/tmp/state-calls-readonly-audit.txt` 的写入。Host 只读观测已登记的 `/tmp/c073-c-H6SbNM`：没有与该根绑定的当前活进程、观测问题或持有 daemon/supervisor 锁；这个当下观察不能补造过去缺失的 wait/两层停止回执。根外文件先保留，要求 Worker 用自身原始命令记录说明新建或覆盖的证据，不能按名称/日期推断归属或删除；首次披露与违规口径保留。原 run continue 还须正确接线新增调用方并保留全部旧失败、只跑受影响测试、无真实沙箱重试和无付费模型调用，真实环境补核由 Host 对最终固定候选完成。
