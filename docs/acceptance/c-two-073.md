@@ -112,3 +112,5 @@ Host在1-C开工前复核到protocol.test_inquiry_transport直接调用旧等待
 Host核对工具的两处失败已纠正：第三变异首次误定位support.py，0处匹配时停住未执行，随后在test_rpc_config.py正确夹具定位后目标assert失败；固定输出列表首次误取较旧输出，锁比较失败即停，随后按createdAt选最新输出并核对SHA/442文件，不使用旧产物做验收。只是Host验证工具问题，未代改Worker代码。原始日志与比较数据保留tmp/c073-host。
 
 1-A2补丁整合fdff0c2a，integration int-81363d55-478d-4dff-ae38-41607dcda753 已 verified，原run accepted/completed；cleanup-plan/apply 已 applied。Host在保留最新原补丁、两回合顶层验证日志和固定副本后整体删除结构化交付登记的两个确切任务根 <1A2_FIRST_TASK_TMP>/<1A2_SECOND_TASK_TMP>，没有按前缀查找或删除其他对象；公共依赖材料另拷到Host自建根供后续微任务使用，增补editables的公开下载退出0、哈希已登记。实施检出uv sync --frozen退出0，现为0.7.4，只更新实施环境；记录补充后仓库卫生5项退出0。
+
+1-B从9a9a66c3路由提交，run6f1205d5-c82d-45ea-87d3-241c627d0cc2，四项配置全部省略。决定dec-4a97c9c4-1d3c-4446-9f67-74628c5f84de选ZCode/zai-api/GLM-5.3-Flash/max，供应方不可重试429/1310失败，两层停止确认；按用户许可在原run continue改用已完成同类1-A2的Codex/openai/gpt-6.1-sol/high，未改变全局配置。Host首份continue错误地把四字段写在顶层，INVALID_ARGUMENT拒绝且无状态改动，随后按现有CLI契约改用configuration对象成功；原错误保留，未另开run。微任务仍在实施，未验收。
