@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
+import { contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
 
 const languages = [
   { locale: "zh-CN", tabs: ["任务", "伙伴", "设置"], pending: "等待 Host 决定的微任务" },
@@ -37,3 +37,25 @@ for (const { locale, tabs, pending } of languages) for (const width of [1440, 39
     });
   });
 }
+
+// The bar keeps the logo's ink in both themes, so everything on it has to be readable on that ink.
+for (const theme of ["light", "dark"]) test(`the top bar is dark and readable in the ${theme} theme`, async ({ page }) => {
+  await open(page, "#tasks");
+  await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+  const bar = page.getByRole("banner").first();
+  expect(await bar.evaluate(node => getComputedStyle(node).backgroundColor)).toBe(theme === "light" ? "rgb(31, 42, 36)" : "rgb(12, 15, 14)");
+  const texts = bar.locator("nav a, nav a > span:not(.sr-only), time");
+  expect(await texts.count()).toBeGreaterThanOrEqual(5);
+  for (const text of await texts.all()) {
+    expect(await contrastOf(text), await text.textContent() ?? "").toBeGreaterThanOrEqual(4.5);
+  }
+});
+
+test.describe("the time in the top bar", () => {
+  test.use({ locale: "zh-CN" });
+  test("says what it is the time of", async ({ page }) => {
+    await open(page, "#tasks");
+    await page.getByRole("banner").first().locator("time").hover();
+    await expect(page.getByRole("tooltip")).toHaveText("核对时间");
+  });
+});

@@ -61,3 +61,27 @@ export async function expectNoSidewaysScroll(page: Page): Promise<void> {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow, "the page scrolls sideways").toBeLessThanOrEqual(0);
 }
+
+/** The contrast between an element's text colour and the first opaque background behind it. */
+export async function contrastOf(target: Locator): Promise<number> {
+  return target.evaluate(node => {
+    const parse = (value: string) => {
+      const parts = value.match(/[\d.]+/g)!.map(Number);
+      return { rgb: parts.slice(0, 3), alpha: parts.length > 3 ? parts[3] : 1 };
+    };
+    const luminance = (rgb: number[]) => {
+      const [r, g, b] = rgb.map(channel => {
+        const share = channel / 255;
+        return share <= 0.03928 ? share / 12.92 : ((share + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    let behind = [255, 255, 255];
+    for (let element: Element | null = node; element; element = element.parentElement) {
+      const background = parse(getComputedStyle(element).backgroundColor);
+      if (background.alpha === 1) { behind = background.rgb; break; }
+    }
+    const [lighter, darker] = [luminance(parse(getComputedStyle(node).color).rgb), luminance(behind)].sort((a, b) => b - a);
+    return (lighter + 0.05) / (darker + 0.05);
+  });
+}

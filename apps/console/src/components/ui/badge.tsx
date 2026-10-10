@@ -2,17 +2,17 @@ import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "cn"
 
-// The tones name what a state means, not a colour: the console's states are
-// ordinary, good, needing attention and failed.
+// The tones name what a state means, in the design's own words: ordinary,
+// live, waiting for a hand, failed.
 const badgeVariants = cva(
-  "inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-sm border px-1.5 py-px text-xs leading-4 font-medium whitespace-nowrap [&>svg]:pointer-events-none [&>svg]:size-3",
+  "inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-sm border px-1.5 text-xs leading-[18px] whitespace-nowrap [&>svg]:pointer-events-none [&>svg]:size-3",
   {
     variants: {
       tone: {
-        neutral: "border-border bg-muted text-muted-foreground",
-        accent: "border-accent-line bg-accent text-primary",
-        warning: "border-warning-line bg-warning-wash text-warning",
-        danger: "border-danger-line bg-danger-wash text-destructive",
+        neutral: "border-line2 text-ink2",
+        live: "border-live text-live",
+        hand: "border-hand text-hand",
+        fail: "border-fail text-fail",
       },
     },
     defaultVariants: {

@@ -190,17 +190,24 @@ describe("light and dark themes", () => {
     expect(dark).toHaveProperty("checked", false);
   });
 
-  it("defines every semantic token for both themes and keeps styles token-only", () => {
-    const tokens = readFileSync(resolve(process.cwd(), "src/tokens.css"), "utf8");
-    const light = tokens.slice(tokens.indexOf(":root {"), tokens.indexOf(":root[data-theme="));
-    const dark = tokens.slice(tokens.indexOf(":root[data-theme="));
-    const names = (block: string) => [...block.matchAll(/--[a-z-]+(?=:)/g)]
-      .map(match => match[0])
-      .filter(name => name !== "--radius");
-    expect(names(light).length).toBeGreaterThan(20);
-    for (const name of names(light)) expect(names(dark)).toContain(name);
-    expect(light).toContain("color-scheme: light");
-    expect(dark).toContain("color-scheme: dark");
+  it("defines every token for both themes and keeps the old stylesheet token-only", () => {
+    const pairs = (block: string) => new Map([...block.matchAll(/(--[a-z0-9-]+):\s*([^;]+);/g)].map(match => [match[1], match[2]]));
+    const themes = (file: string) => {
+      const text = readFileSync(resolve(process.cwd(), file), "utf8");
+      const split = text.indexOf(":root[data-theme=");
+      return { light: text.slice(text.indexOf(":root {"), split), dark: text.slice(split) };
+    };
+    const palette = themes("src/tokens.css");
+    expect(pairs(palette.light).size).toBeGreaterThan(20);
+    for (const name of pairs(palette.light).keys()) expect(pairs(palette.dark).has(name), name).toBe(true);
+    expect(palette.light).toContain("color-scheme: light");
+    expect(palette.dark).toContain("color-scheme: dark");
+    // The old names are aliases of the palette; only the colours that have no
+    // place in it carry values of their own, and those exist for both themes.
+    const legacy = themes("src/legacy-tokens.css");
+    const own = [...pairs(legacy.light)].filter(([, value]) => !value.startsWith("var(") && !/^\d+px$/.test(value));
+    expect(own.length).toBeGreaterThan(0);
+    for (const [name] of own) expect(pairs(legacy.dark).has(name), name).toBe(true);
     const styles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
     expect(styles.match(/#[0-9a-fA-F]{3,8}\b/g)).toBeNull();
     expect(styles.match(/\b(rgb|hsl)a?\(/g)).toBeNull();

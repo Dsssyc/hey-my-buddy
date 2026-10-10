@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { createApi } from "./api";
@@ -30,6 +29,17 @@ function currentTab(): Tab {
 /** The clock time of a read made today, and the date with it once the read is older. */
 function readTime(ms: number): string {
   return new Date(ms).toDateString() === new Date().toDateString() ? formatClock(ms) : formatDateTime(ms);
+}
+
+/** The logo on the top bar, in the bar's own colours: the bar is dark in both themes. */
+function BrandMark() {
+  return <svg viewBox="3 3 58 58" className="size-[22px] shrink-0" aria-hidden="true">
+    <polygon className="fill-bar-live" points="12,13 22,13 22,61 12,54" />
+    <polygon className="fill-bar-live" points="22,32 30,28 30,38 22,42" />
+    <polygon className="fill-bar-ink" points="42,3 52,10 52,51 42,51" />
+    <polygon className="fill-bar-ink" points="34,26 42,22 42,32 34,36" />
+    <polygon className="fill-bar-hand" points="30,28 34,26 34,36 30,38" />
+  </svg>;
 }
 
 export function App({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
@@ -118,39 +128,41 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   return <TooltipProvider delayDuration={300}><div className="flex h-dvh min-h-0 flex-col overflow-hidden">
     <a className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground"
       href="#main" onClick={event => { event.preventDefault(); document.getElementById("main")?.focus(); }}>{t("skipToContent")}</a>
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-card px-3 sm:gap-6 sm:px-4">
-      <a className="flex shrink-0 items-center gap-2 rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+    <header className="flex h-11 shrink-0 items-center gap-2 bg-bar px-3 text-bar-ink sm:gap-7 sm:px-4">
+      <a className="flex shrink-0 items-center gap-2 rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-bar-live/60"
         href="#tasks" aria-label="Hey my buddy" onClick={() => select("tasks")}>
-        <img src={buddyIcon} alt="" width="24" height="24" className="size-6" />
-        <span className="text-sm font-semibold tracking-tight max-sm:hidden">Hey my buddy</span>
+        <BrandMark />
+        <span className="font-semibold tracking-tight max-sm:hidden">Hey my buddy</span>
       </a>
       <nav className="flex h-full" aria-label={t("nav.label")}>
         {tabs.map(key => {
           const hint = tabHints[key];
           const link = <a key={key} href={"#" + key} onClick={() => select(key)} aria-current={tab === key ? "page" : undefined}
-            className="relative flex items-center gap-1.5 px-3 text-sm whitespace-nowrap text-muted-foreground outline-none hover:text-foreground focus-visible:bg-accent aria-[current=page]:font-medium aria-[current=page]:text-foreground aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-3 aria-[current=page]:after:bottom-0 aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-primary">
+            className="relative flex items-center gap-[7px] px-3.5 whitespace-nowrap text-bar-ink2 outline-none hover:text-bar-ink focus-visible:bg-bar-ink/10 aria-[current=page]:font-medium aria-[current=page]:text-bar-ink aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-3.5 aria-[current=page]:after:bottom-0 aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-bar-live">
             {t(`nav.${key}`)}
-            {key === "tasks" && pending > 0 && <Badge tone="warning" className="tabular-nums">{pending}</Badge>}
-            {key === "buddies" && editor.dirty && <span className="size-1.5 rounded-full bg-warning" aria-hidden="true" />}
+            {key === "tasks" && pending > 0 && <span className="min-w-[18px] rounded-sm bg-bar-hand px-[5px] text-center text-xs leading-[18px] font-semibold text-bar tabular-nums">{pending}</span>}
+            {key === "buddies" && editor.dirty && <span className="size-1.5 rounded-full bg-bar-hand" aria-hidden="true" />}
             {hint && <span className="sr-only">{hint}</span>}
           </a>;
           return hint ? <Tooltip key={key}><TooltipTrigger asChild>{link}</TooltipTrigger><TooltipContent>{hint}</TooltipContent></Tooltip> : link;
         })}
       </nav>
-      <div className="ml-auto flex min-w-0 items-center gap-3 text-xs text-muted-foreground">
-        {snapshot.gate.phase !== "open" && <Badge tone="warning">{snapshot.gate.phase === "draining" ? t("gate.draining") : t("gate.exclusive")}</Badge>}
-        {/* A narrow bar keeps the time and leaves the words to the alert below it. */}
-        <p className={connectionError ? "truncate text-destructive tabular-nums" : "truncate tabular-nums"}>
+      <div className="ml-auto flex min-w-0 items-center gap-3 text-xs text-bar-ink2">
+        {snapshot.gate.phase !== "open" && <span className="shrink-0 rounded-sm border border-bar-hand px-1.5 leading-[18px] text-bar-hand">{snapshot.gate.phase === "draining" ? t("gate.draining") : t("gate.exclusive")}</span>}
+        {/* The bar shows the time alone; what it is the time of is said on hover and to a screen reader. */}
+        <p className={connectionError ? "truncate text-bar-fail" : "truncate"}>
           {connectionError && <span className="max-sm:hidden">{t("connection.lost")} · </span>}
           {verifiedAt !== null
-            ? <><span className="max-sm:hidden">{t("snapshot.verified")} </span><time dateTime={new Date(verifiedAt).toISOString()}>{readTime(verifiedAt)}</time></>
+            ? <Tooltip><TooltipTrigger asChild><span><span className="sr-only">{t("snapshot.verified")} </span>
+              <time className="font-mono tabular-nums" dateTime={new Date(verifiedAt).toISOString()}>{readTime(verifiedAt)}</time></span></TooltipTrigger>
+              <TooltipContent>{t("snapshot.verified")}</TooltipContent></Tooltip>
             : t("snapshot.unverified")}
         </p>
       </div>
     </header>
     <main id="main" className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden p-2 outline-none sm:p-4" tabIndex={-1}>
       <h1 className="sr-only">{t(`nav.${tab}`)}</h1>
-      {connectionError && <p className="flex shrink-0 flex-wrap items-center gap-3 rounded-md border border-danger-line bg-danger-wash px-3 py-2 text-destructive" role="alert">
+      {connectionError && <p className="flex shrink-0 flex-wrap items-center gap-3 rounded-md border border-fail bg-fail-wash px-3 py-2 text-fail" role="alert">
         <span className="min-w-0 wrap-anywhere">{connectionError}</span>
         <Button variant="outline" size="sm" onClick={() => void refresh()}>{t("connection.retry")}</Button>
       </p>}
