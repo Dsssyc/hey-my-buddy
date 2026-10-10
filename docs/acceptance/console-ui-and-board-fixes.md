@@ -237,3 +237,7 @@ Python完整第一次结束：acaa51802a5c85988c5d930cebbf5d7ce25e4fba，uv run 
 关联前端测试返修整合3d5684dc、integration int-92e1659b-9b6d-4e40-b9c9-938b560f1fb9 verified4，run091248a0 accepted（28项/tsc与支持撤销核对已由Host完成）。B1关联返修cc908ad0在完整Codex continue后未启动模型回合：日常黑板准备检出报WORKSPACE_GIT_ERROR、[Errno 24] Too many open files，revision6/state awaiting-host，attention prep-8040bbd8-a7f8-4d01-86b8-b4a7e8155475，无输出产物。get固定review-bg-final-identity/preparation-blocked/get.json；Host冻结助手找不到output因而StopIteration，未产生虚假固定产物。
 
 按用户明确规定“日常的服务或Worker出了故障、委派无法继续时，停下来把现象告诉用户，由用户决定怎么处理”，在上述已确认共享服务准备故障处停止；未重启/停止/替换日常服务/Worker，也未更改文件句柄限制、运行时或登录凭据。当前分支3d5684dc、不推送、Host工作树保留；B1稳定失败修正尚未取得产物，两套完整检查第一次均退出1，前端4份夹具修正的局部28项通过但最终整轮尚未重跑。不得将本批标作完成或已提交Claude验收；待用户处理共享服务后再继续原B1 run及最终顺序完整检查、最终记录与卫生测试。
+
+2026-10-10恢复：用户报告11:26（Asia/Singapore）授权restart日常服务，未取消工作、Worker保留，描述符220→23；用户说明当前日常C-Two仍0.6.0，空闲60秒连接池未关闭连接会重新累积，重现时Host仍必须停止报告，不自行维护。Host只用既有attach-only CLI读取原B1 run，然后continue bg-final-identity-continue-after-user-service-recovery-r1（revision6→7），configuration与四字段全省略、原Codex high及6路径范围沿用，不新建B1任务、不更改日常环境。
+
+收尾计划按新授权调整：B1关联返修固定产物/独立检查/目标移除失败后整合，合入最新socu/buddy-core（读取时81a4cfb9，包含DSH原生续接）；共同源码仅workflow.py的不同区域，保留两边行为并跑受影响检查。合入后从最终源码重新核对控制台产物、更新测试编号，在同一最终代码提交顺序运行默认并行的Python完整检查与npm前端全量，保存此前失败日志；若再有疑似负载失败，等空闲后单文件复跑再判断。socu/c-two-073与工作树不操作，日常运行时/服务/Worker不安装升级或重启。两套最终退出0和最后卫生测试仍待执行，未宣称完成。
