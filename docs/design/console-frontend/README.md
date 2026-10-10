@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | `tasks.html` | 任务页：宏任务的列表、一个宏任务及其时间轴、选中的微任务 | 方向已由用户认可 |
 | `buddies.html` | 伙伴页的目录，模型一项：一行一个模型，第四列的每个档位是一个伙伴；右边是档位与模型的设置 | 待确认 |
-| `buddies-harness.html` | 伙伴页的目录，Harness 一项：一行一个 Harness；右边是它的检测、账户与额度 | 待确认 |
+| `buddies-harness.html` | 伙伴页的目录，Harness 一项：一行一个 Harness；右边是它的位置、账户与额度 | 待确认 |
 | `roles.html` | 伙伴页的角色：Router 的列表、设置与记录 | 待确认 |
 | `settings.html` | 设置页 | 待确认 |
 
