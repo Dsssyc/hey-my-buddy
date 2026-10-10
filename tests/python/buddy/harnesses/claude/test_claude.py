@@ -55,6 +55,7 @@ class ClaudeFixtureCase(unittest.TestCase):
                                                 dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        (self.root / "state").mkdir(mode=0o700)
         self.cwd = self.root / "checkout"
         self.cwd.mkdir()
         FIXTURE.chmod(0o755)

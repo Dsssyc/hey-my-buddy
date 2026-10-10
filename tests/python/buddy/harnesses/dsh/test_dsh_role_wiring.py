@@ -51,6 +51,10 @@ class DshRoleCase(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="buddy-dsh-role-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        from hey_my_buddy.protocol.rpc_config import configure_client
+        import c_two as cc
+        configure_client(self.root / "state")
+        self.addCleanup(cc.shutdown)
         self.cwd = self.root / "checkout"
         self.cwd.mkdir(mode=0o700)
         self.log = self.root / "logs" / "fake-agent.log"

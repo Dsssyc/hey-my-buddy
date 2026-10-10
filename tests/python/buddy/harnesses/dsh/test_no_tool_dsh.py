@@ -46,6 +46,7 @@ class DshNoToolTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="buddy-no-tool-dsh-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        (self.root / "state").mkdir(mode=0o700)
         self.cwd = self.root / "empty"
         self.cwd.mkdir(mode=0o700)
         self.log = self.root / "logs" / "fake-agent.log"

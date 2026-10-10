@@ -198,3 +198,17 @@ Host七份独立最终源码变异取得目标assert失败exit1：移除connect�
 1-C补丁整合6d072f37，integration int-ee84b6fb-d68d-4191-953c-cde71213aa18 verified，原run accepted/completed；cleanup-plan/apply applied。Host保留范围缺口、实施回合的顶层脚本/manifest/所有runs原始日志、最终原补丁与固定副本后，按结构化交付唯一根 <1C_TASK_TMP> 整体回收，未按前缀扫描或清扫默认公共域。未运行60秒连接空闲泄漏探针，该项留给Claude Code Host验收。
 
 1-D基线dcc11031，run8a6200bc-324e-4d64-b232-b4794eb1d198首次省略四字段，经决定dec-d9c89127-f9b9-4750-a119-bb10ae0805a0选ZCode/zai-api/GLM-5.3-Flash/max；供应方不可重试429/1310，两层停止确认后用户许可原run continue改用完成本批同类工作的Codex/openai/gpt-6.1-sol/high。范围仍三个新测试/fixture/记录，模型冒烟只准备，不执行。所有原清理/私有根/共享refs/日常服务约束保持，源分支不推送。
+
+## 1-D 整合核对与公共接线修正
+
+1-D 首份固定 d2e6f202 未验收：真实两用例检查 exit 1、7.532 秒、2 failures/2 errors。范围内的异常收尾与无限管道等待退回原 run continue，省略四项配置；最终固定 9d873dfc8fc091fe7c53f9e3dfaf0656b0899e3f、artifact bc691eec-d61f-4dcb-947d-df6ab09ab6d8、SHA 0c3b114ff35ddbc45e271802d71c7265834d018c824830b6d61b2c172c97857a，三个路径已独立核对。Host 最终私有合成源码的两个真实无模型整链用例 exit 0，测试 11.156 秒、命令 11.923 秒；三处原定变异及五处整合防护变异都由目标断言抓住。首次失败、沙箱 EPERM 和所有原始日志保留，未改写为通过。
+
+公共整合由 Host 修改 buddy/runtime/worker.py：原先 _execute_selected 与异常路径在 release_live_binding 前删除 role-run-request.json，令回收退成 endpoint-binding-unverified。私有诊断只禁用这次提前删除，强杀用例 1/1 通过；正式修正复用既有 release/reap 与凭据清理实现，把顺序合到 _release_attempt_resources，先核验回收材料，再按原来的 confirmed_stopped 门槛清理凭据。原生启动前失败的内部重试在丢弃旧 handle 前执行同一收尾。未知停止继续保留凭据，不推断已停止；无 schema 或公开 CLI 改动。恢复旧顺序的变异由新整链用例抓住。
+
+范围外夹具适配也由 Host 处理：Codex、Claude 与 DSH 快速调用的角色夹具提前 mkdir(state,0700)，DSH Worker 角色夹具用已有 rpc_config.configure_client 建私有域，SDK shutdown 在自己的收尾里执行。这修正了直接驱动角色时中间 state 被 parents mkdir 建成0755、以及父进程没选择控制器私有域的问题。Codex41、Claude42、DSH快速6项分别 exit0；DSH角色初次12项中问询1项失败，接上父进程私有域后12项 exit0；另一个新增 import 漏项导致12 errors的原始结果保留，修正后通过。去掉各处适配的四个变异都触发实际目标断言。未修改角色判定、权限策略或另一个运行通道。
+
+Host 的公共接线聚焦按每文件独立解释器运行：worker_runtime4、run7、run_execution10项 exit0，worker_sessions3项在Codex夹具补齐私有state后exit0。先前误把四文件合在一个解释器导致的1 failure/1 error保留：域冻结只在合跑出现，单文件中未再出现；session失败独立复现并由夹具修正。误列不存在的test_worker模块的18项运行 exit1，其中17个实际用例通过，不算整组通过。完整检查仍等所有产物整合、合入最新core之后只跑一次，默认并行数。
+
+无模型整链保留四个端点同根/权限、问询真实提交、正常already-absent、强杀reaped、外来peer保留、两层停止、板上shutdown事实、最终inspect全absent与自身目录无socket；SDK收尾completed。第一次失败遗留的自建服务只经其私有service_control协作停止，端点present→absent，没有信号发现的PID，没有清扫默认公共域。细节及原始证据见c-two-integration.md与本检出tmp/c073-host。四个真实harness回合仍未批准、未执行。
+
+1-D 编号集合由实际 unittest loader 核对：3268→3270，3268个既有编号集合相等，改名/删除均0，仅新增 protocol.test_ctwo_integration.CTwoIntegrationTests.test_holder_reaps_killed_controller_and_preserves_foreign_peer 与 protocol.test_ctwo_integration.CTwoIntegrationTests.test_normal_stop_and_same_connection_after_deadline；模块203，loader错误/重复0。原始清单与差集在tmp/c073-host/integration-final-ids.json、integration-id-delta.json；四处夹具及公共Worker接线不改变编号。仓库卫生5项exit0。

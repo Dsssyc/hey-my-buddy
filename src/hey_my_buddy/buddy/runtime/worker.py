@@ -558,11 +558,7 @@ class Worker:
             elif not shutdown_confirmed and not holder.get("start_invoked"):
                 # Validation failed before start() could spawn anything.
                 shutdown_confirmed = True
-            if shutdown_confirmed:
-                try:
-                    self._cleanup_attempt_credentials(claim, spec, task, attempt)
-                except Exception as cleanup_error:
-                    self.log(f"private credential cleanup needs attention ({cleanup_error!r})")
+            holder["confirmed_stopped"] = shutdown_confirmed
             self.log(
                 f"execution failed after the attempt started: {error!r} "
                 f"(shutdownConfirmed={shutdown_confirmed})"
@@ -589,16 +585,25 @@ class Worker:
                 self.live.unbind(claim)
             except Exception as error:
                 self.log(f"live detach unavailable: {type(error).__name__}")
-            handle = holder.get("handle")
-            if handle is not None:
-                try:
-                    from ..roles.live import release_live_binding
-                    cleanup = release_live_binding(handle)
-                    if cleanup is not None:
-                        self.log(f"owned controller endpoint cleanup: {cleanup.outcome}; {cleanup.reason}")
-                except Exception as error:
-                    self.log(f"owned endpoint cleanup not confirmed: {type(error).__name__}")
+            self._release_attempt_resources(claim, spec, task, attempt, holder)
 
+    def _release_attempt_resources(self, claim: dict, spec: dict, task: dict,
+                                   attempt: dict, holder: dict) -> None:
+        # Revalidate and reap before deleting the request used for that binding.
+        handle = holder.get("handle")
+        if handle is not None:
+            try:
+                from ..roles.live import release_live_binding
+                cleanup = release_live_binding(handle)
+                if cleanup is not None:
+                    self.log(f"owned controller endpoint cleanup: {cleanup.outcome}; {cleanup.reason}")
+            except Exception as error:
+                self.log(f"owned endpoint cleanup not confirmed: {type(error).__name__}")
+        if holder.get("confirmed_stopped") is True:
+            try:
+                self._cleanup_attempt_credentials(claim, spec, task, attempt)
+            except Exception as error:
+                self.log(f"private credential cleanup needs attention ({error!r})")
 
     def _execute_guarded(
         self, claim: dict, task: dict, spec: dict, attempt: dict, directory: Path, holder: dict
@@ -800,12 +805,11 @@ class Worker:
         retention_failure = getattr(handle, "evidence_retention_failure", None)
         if isinstance(retention_failure, dict) and isinstance(outcome.result, dict):
             outcome.result = {**outcome.result, "evidenceRetention": retention_failure}
-        if outcome.shutdown_confirmed:
-            self._cleanup_attempt_credentials(claim, spec, task, attempt)
         if (holder.get('harnessHistory') and not timed_out
                 and not handle.cancel_requested and outcome.shutdown_confirmed and outcome.status == 'failed'
                 and isinstance(outcome.result, dict) and outcome.result.get('modelStarted') is False
                 and outcome.result.get('code') in {'adapter-unavailable', 'invalid-native-result', 'invalid-protocol', 'transport-error', 'native-rpc-error', 'protocol-error', 'native-exit', 'connection-closed'}):
+            self._release_attempt_resources(claim, spec, task, attempt, holder)
             fsync_json(directory / 'harness-prestart-failure.json', {'code': outcome.result['code'], 'shutdownConfirmed': True})
             holder['started'] = False
             holder['confirmed_stopped'] = True
