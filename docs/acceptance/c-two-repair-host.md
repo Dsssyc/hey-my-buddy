@@ -109,3 +109,9 @@ Host 同时复现其范围外提示：原单项 `test_one_send_delivers_and_answ
 用固定 2-D 源码与这项 Host 公共改动合成独立副本，原单项通过，0.951 / 1.278 秒；从该副本只去掉显式传根，保留根归属断言，目标即退出 1、failure=1、errors=0，0.547 / 0.835 秒，明确报 `the role channel must use the fixture's private state root`。它没有依靠超时或导入错误识别目标。材料为 `host-checkpoint-existing-state-seam`、`host-checkpoint-shared-seam-green`、`host-checkpoint-shared-seam-red` 的原始日志与 JSON；2-D 最终全十项及三处变异仍待其返修固定输出。
 
 共享夹具的工具拒绝文件 `buddy.harnesses.zcode.test_zcode_tool_refusals` 八项独立通过，5.093 / 5.424 秒，原工具拒绝与停止断言保留。该聚焦验证不替代最终完整检查，日志为 `host-zcode-shared-refusals.{json,log}`。
+
+2-D 返修固定为 `6b3f674fe57d2afbe019c1004413e43f9a60e2cc`，artifact `019047b0-1709-4d1f-90e4-17b0490e485f`，累积补丁 SHA-256 `193da66f3b01a56ca6a2983ace9c08b0491d4e2428ccfe599feceded743708d0`；仍仅原三路径。父与子根都在建立 TemporaryDirectory 时使用 canonical 父目录，再规范自身路径，没有放宽路径或身份断言。Host 将该固定输出与已提交的公共夹具接线合成独立副本，十项全部通过，退出 0，12.296 / 12.754 秒。四个实际进程持有者分别报告完整回合、controllerStopped=true、nativeStopped=true、rpcShutdownConfirmed=true、wait 退出 0，证据 `host-checkpoint-final-green.{json,log}` 与 `host-checkpoint-green-stop-proof.json`；此前失败回合的 unknown 不因此改写。
+
+Host 从这份合成源码另建三份变异，保留现有防护断言：强制持有者使用共享 SDK 状态域，命中子夹具实际 IPC 根的归属断言；late 场景复用一个持有者，命中 ownerPid 不同的断言；own 管道发送 peer 的问询编号，命中 peer-question 记录必须为空的断言。三份各一項 failure、errors=0、退出 1，测试 / 命令耗时分别为 4.305 / 4.601、4.325 / 4.554、1.868 / 2.088 秒。没有把权限、路径别名或导入错误当红灯。没有采用旧助手中恢复整段旧测试并额外插入断言的第一种变异作证明：额外断言不能替代当前测试的防护证据。实际三份计划、改动与原始结果为 `host-checkpoint-mutants-{plan,results}.json` 及对应日志。
+
+四个付费冒烟入口在修复后的源码上再次作静态导入，均退出 0、modelCalls=0、nativeStarts=0，`paid-started.json` 不存在。首次静态入口因 Host 未先建精确 round 根而退出 1，随后补建自己记下的四个根，原前提错误保留在 `native-smoke-static-root-precondition.json`，成功结果在 `native-smoke-static-after-repair.json`；没有运行或重跑付费模型。
