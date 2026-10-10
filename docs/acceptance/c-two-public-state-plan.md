@@ -41,3 +41,11 @@ Host 核对固定补丁与风险接缝、实际聚焦测试、目标故障注入
 ## 路由与同 run 恢复登记
 
 3-A run `ef9677e7-df3e-4f57-b03b-4c7add95b85f`，微任务基线 `9e45e890e0c249250621a12d165001c9c76d7e8e`。首次四项配置全部省略，路由决定 `dec-7705e392-3073-4d96-9576-986a5c4eca38` 选 ZCode/zai-api/GLM-5.3/max；实际 nativeFailure.attribution 为 provider rate_limited、statusCode=429、providerErrorCode=1310、retryable=false，两层停止确认，没有固定修复交付。按本批既有许可，用完整 configuration 与独立 reason 在原 run continue 到 Codex/openai/gpt-6.1-sol/high（曾完成本批 C-Two 实施与夹具返修），revision 5 已排队，范围与规则不变。没有修改用户路由设置或为 ZCode 重试相同限流回合；既有三个付费冒烟和用户暂不调用 ZCode 的决定不改写，微任务使用模型另按本 run 记录。请求、原始失败、路由与恢复响应保存在 `tmp/c073-host/public-state-repair*`。
+
+## 首份固定产物退回与 Host 自建实例收尾
+
+固定候选 `cb33c21792bee0c589dfeaaeefd50595951ac713`、artifact `1148145a-93ed-4e5b-950c-b7d1c6c93886`、补丁 SHA-256 `739ab46e7a541e276ac6b705fe2160f5d06d1d2b2fc2d298856ccc6d7a2326ec` 只有四个范围内路径。生产三个边界改动简洁，内部缺根拒绝不变；Worker assistance 仅声称 50 项沙箱可运行验证，没有真实 RPC green。Host 在固定源码独立跑新 public_state 全 22 项，退出 1、62.348 秒、3 failures；旧 attach 全 28 项退出 0、1.997 秒，rpc_config 全 24 项退出 0、9.253 秒。新文件的默认 CLI、启动器、客户端、覆盖和已有服务 stop/restart 已走真实私有 RPC，但整份测试尚未通过，不签收。
+
+三个失败为新夹具范围内缺陷：cold-service/cold-board 的生产启动环境只传 src，替换为测试助手后没有补 tests/python，报 `ModuleNotFoundError: No module named 'support'`；readonly 把正在运行服务的 SQLite 状态树改成 0500，health 失败后未在 finally 恢复，收尾 stop 也失败并留下自己创建的 daemon。已按原 run continue（不指定配置，revision 9）打回，要求在测试内补齐私有启动环境、用实际 RPC 加现成变更观察器验证只读接入，并在任何失败下恢复夹具权限后 stop/wait，不能修改公共 launcher/support 或弱化断言。原始日志为 `public-state-host-{green,attach,rpc-config}.{json,log}`，首次完整新文件失败保留。
+
+Host 只对自己这一批检查创建且 endpoint PID/serviceId 与台账相等的实例操作：PID 32358、serviceId `01bc5a84-ecdb-42a4-9626-9f00b5c5069d`。将该实例 state 的 0500 恢复 0700，使用既有显式-root stop helper 合作停止；helper 返回 0、服务锁释放，首次随即 PID 仍在，原观察与工具断言失败保留。稍后单独确认该 PID 消失、控制端点已移除；没有发送信号，没有采用其他会话的进程，没有宣称由 Host 对非直属 Popen 完成 wait。该操作是失败夹具的运行收尾，不是代改微任务代码。两个阶段证据为 `public-state-first-residual-stop.json` 与 `public-state-first-residual-stop-confirmed.json`，不把后一个结果覆写到前一个。
