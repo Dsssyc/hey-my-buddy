@@ -247,3 +247,9 @@ B1关联返修2026-10-10固定3798e5bb9e5cc10f9050648a406a490e07d8db48、artifac
 Host已独立执行隔离B2控制组：关闭B1回退时原受管用例退出0；再移除B2借用保护时该项以BoardError not raised失败、退出1。非受管用例单独移除B1未证明持有者防护时同样失败；真实不同inode目录的现有用例移除物理身份核对时也失败。三组目标失败均1 assertion failure、0 error，正常源码未改；材料review-bg-final-identity/after-service-recovery/host-counterfactuals-r2。首个Host变异runner把材料目录定位少一层，导入失败未执行测试，保留host-counterfactuals并排除，纠正后独立重跑；第一次受影响测试的PYTHONPATH重复拼接，虽固定测试目录已正确，仍中止且排除，重新以固定checkout/src明确源绑定执行，不将中止当验证。Worker私有报告首句绝对主目录位置由Host一句话替为~，仅位置、不改验证结论，登记host-record-correction.json；原冻结产物/patch不变。
 
 Host固定3798e5bb两模块受影响检查39项（迁移35、身份4）退出0、103.118秒，正常teardown；命令明确PYTHONPATH为固定checkout/src，日志host-affected-fixed-source.log。三个目标反事实均以目标断言失败，并保留独立B2控制组通过；原固定历史、原物理目录与没有第二持有者均有严格断言。准备将唯一测试差异整合到Host分支，最终完整检查仍待最新core合入。
+
+B1关联返修整合5d9fac44、integration int-40776bd6-1f80-4322-be25-45e78edf0b9f verified1，原run accepted；accepted sweep回收cln-516f130f-c6c5-4176-8f2a-205e248a063e applied、`~/.local/share/hey-my-buddy/state/workspaces/ws-41ae4e6001c48f6e44171a3e140018f0/checkout`确已不存在。Host计划请求遇revision冲突，随后apply与sweep并发返回WORKSPACE_GIT_ERROR；fresh get证明同一计划已applied且精确目录不存在，未把错误回复当回收成功证据，也未据此声称共享服务故障或重启。前端测试返修run091248a0同样applied/absent，至此11个本批microtasks均accepted、其检出均已回收；固定Git产物、收据、任务材料、Host副本保留。
+
+收尾合入最新core：3a8a8ef16470551aa130aa9a4a4766c80686c86d第二父1a9decd95736a15a5ec4b4db6526e4cb48666326，无冲突；导入已验收DSH原生续接及其拥有的文档，Host本批相对该core没有修改禁止文件。唯一重叠生产文件workflow.py自动合并不同区域，随后验证DSH选择/Worker与本批身份/拒绝撤销路径。标准npm --prefix apps/console run build在3a8a8ef1退出0、1.441秒，四个最终资产哈希与acaa5180已提交资产及f8e2a493私有浏览器预览逐字节相同，无新增构建差异；final/assets-source-proof-merged.json保留绑定。全部U01–U11已有真实私有浏览器截图/状态证据，matrix与最终源码/资产指纹已绑定browser-qa-checklist.json，不重复未改变的界面操作。
+
+测试编号最终盘点（只枚举，非执行）：原613faa40为195文件/3163项；合入core为202文件/3230项（上游新增75、删除8）；本批最终212文件/3400项，对最新core新增170、删除0。准确编号差集final/final-python-test-number-delta.json，不把上游测试增删算入本批。前端最终仍需完整命令确认项目数。完整Python与前端保持顺序、只在合入后的最终代码执行；前次失败日志均保留，最终执行结果待后段。
