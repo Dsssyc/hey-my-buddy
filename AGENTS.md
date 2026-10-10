@@ -12,6 +12,8 @@ Read [ADR-023](docs/decisions/023-harness-integration-principles.md) before addi
 
 The shared `buddy` skill is the only distribution ([ADR-015](docs/decisions/015-shared-agent-skill-distribution.md)). The source carries no compatibility facades for retired plugin paths, CLI aliases, legacy Node records, fingerprints or socket guards, or historical schema conversions.
 
+While the version is 0.x the source keeps neither defensive redundancy nor compatibility. Validation happens once at a boundary: outside input, another process, content from a model or the web, and anything that deletes or overwrites. Inside the boundary code trusts its invariants and fails loudly, without fallbacks, repeated checks or swallowed exceptions. A defect is fixed at its cause, amending the task's scope when the cause lies outside it, never patched at the call site. Replaced code, tests and documents are deleted in the same change.
+
 ## Layout
 
 - `src/hey_my_buddy/`: the package, divided by the two sides of the system ([ADR-025](docs/decisions/025-harness-run-module.md) decision 12). Code that takes a database connection belongs to the blackboard side; code that starts or drives a harness process belongs to the buddy side.
