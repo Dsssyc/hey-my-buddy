@@ -49,7 +49,11 @@ table{border-collapse:collapse;width:100%}th{font-size:12px;font-weight:400;colo
 td.g{vertical-align:top;padding-top:16px}td.dim,tr.dim td{color:var(--ink3)}td small{display:block;font-size:12px;color:var(--ink3);margin-top:3px}tr.sel td{background:var(--live-wash)}
 .tb{display:flex;align-items:center;gap:22px;padding:12px 24px;border-bottom:1px solid var(--line);font-size:13px;color:var(--ink2);background:var(--surface)}.tb .search{margin:0;width:260px}
 .ck{display:inline-flex;align-items:center;gap:8px}.ck i{width:14px;height:14px;border:1px solid var(--line2);border-radius:2px;display:inline-block}.ck.on i{background:var(--ink);border-color:var(--ink);box-shadow:inset 0 0 0 2px var(--surface)}
-td.id{white-space:nowrap}td.id+td.id:before{content:"/";color:var(--line2);margin-right:14px}td.rep{color:var(--ink3)}td.id b{font-weight:500}td.end,th.end{border-right:1px solid var(--line)}
+td.id{white-space:nowrap}td.id.end{white-space:normal}.ch{margin-top:2px;margin-bottom:2px}td.id+td.id:before{content:"/";color:var(--line2);margin-right:14px}td.rep{color:var(--ink3)}td.id b{font-weight:500}td.end,th.end{border-right:1px solid var(--line)}
 th.grp{color:var(--ink);font-weight:500;font-size:13px;border-bottom:0;padding:14px 12px 0}td.id small{display:inline;margin:0 0 0 10px}
 .more{margin-left:16px;width:32px;height:32px;border:1px solid var(--line2);border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:var(--ink2);letter-spacing:1px;align-self:center}
 .cv{display:inline-block;width:16px;color:var(--ink3);font-size:9px;vertical-align:1px}td.n{color:var(--ink3);font-weight:400}tr.fold td{background:var(--sunk)}
+.ch{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;margin-right:6px;border:1px solid var(--line);border-radius:2px;font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12px;color:var(--ink3)}
+.ch i{width:6px;height:6px;border-radius:50%;border:1px solid var(--ink3)}.ch.on{border-color:var(--past);color:var(--ink)}.ch.on i{background:var(--live);border-color:var(--live)}.ch em{font-style:normal;font-family:-apple-system,"PingFang SC",sans-serif;color:var(--ink2);font-size:11px}
+.er{display:grid;grid-template-columns:34px 64px 1fr auto;gap:10px;align-items:center;padding:7px 20px;font-size:13px}.er span.num{color:var(--ink2);font-size:12px}
+.sel2{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 8px;border:1px solid var(--line2);border-radius:4px;font-size:12px;color:var(--ink)}.sel2:after{content:"▾";color:var(--ink3);font-size:10px}
