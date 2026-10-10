@@ -33,6 +33,12 @@ R-D 真浏览器：用户协助打开 Chrome 私有页后，Host 以新的唯一
 
 R-E 顺序起点已具备：R-B 的身份夹具接口 `74059ff2` 已由 Host 核对、整合为 `778fa48f`，该接口只对 identity/migration 类 opt in、其他派生类仍原初态。R-E 以此固定输入启动，只写其六个测试文件；R-B 同 run 的准备成本补充与这六个文件互斥。若 R-B 后续改变共享夹具接口，Host 先核对差异，并在原 R-E run 继续受影响修正，最终整合后再做交叉验证。R-B provisional integration-record 初次遇 revision race，重读 11 后标准重试返回 verified `int-cb19f582-57b7-49d1-9ce9-52482ba3c65f`；未重启进程。
 
+R-B 原 run 成本补充已 completed，最新 artifact `af8d5d01-698b-4daa-9c5c-ca8de500d5bb`，源码仍 `74059ff2`、累计补丁逐字节不变，旧 57 项与十组变异按哈希绑定，不重复无变化检查。Worker 正常新一轮 46 项退出 0（117.416 秒），并保留原 39 项 106.834→120.568 秒；旧/新准备 AB/BA 各 39 次均正常收尾，Git 195→10，均值 6.149→0.920 秒。Host 在同一固定实现只切换既有模板 opt-in、关闭正文的独立 AB/BA：195/10/10/195 Git，5.265/0.804/0.759/5.344 秒，全部标准收尾；这 156 次只是 fixture 生命周期实验，正确性测试数为 0。真实 profile 的迁移/身份正文分别约 89.7%/93.9% 时间在 subprocess.run；不能用跨 case 的捕获清单、ref、inode、快照或缓存真实 inspect 消去被测替换/漂移。剩余代价和全部 .prof 在 ignored review-hr-identity/host-review-round3/，最终默认完整逐文件时长仍另列。
+
+R-C 固定 `736ae853` 只改 summary 测试，Host 五文件实际 60 项及正常私有收尾退出 0（24.205 秒）；两处 C 防护、clock 复原移除均直接 AssertionError。Python fixture 字段深拷贝移除的单独新隔离方法仍通过，期望读了同一被污染种子；Host 保留 survivor 的退出 0，按原 run continue（hr-cache-continue-seed-isolation-test-r1）只加强独立 seed oracle，不更改正确生产/夹具实现，尚未整合验收。
+
+R-E run `9830549b-f0af-4519-9b3b-9fa33dad6e23`，首次路由四字段全部省略、基线 `4e2c0e22`。GLM-5.3-Flash/max 供应方非可重试 429/1310，无固定产物、shutdown self/descendants confirmed；当次读取的 Codex high enabled/available/quotaExhausted=false，按既有例外原 run 完整配置 codex/openai/gpt-6.1-sol/high continue（hr-speed-continue-rate-limit-1310-r1），原失败在 ignored host-review-repair-20261010/hr-speed-round1-limited/。当前只六个测试文件，暂无验收结论。
+
 ## 初交结果（2026-10-10，随后被 Claude Code Host 打回）
 
 B1–B5、U1–U11 已完成本 Host 的固定产物核对、受影响检查、目标行为移除验证与整合。分支 `socu/console-ui-and-board-fixes` 的最终代码/前端测试提交为 `ec9e1526585d96e96dd8e5e6202476879004a339`，已合入 `socu/buddy-core@1a9decd95736a15a5ec4b4db6526e4cb48666326`（含已验收 DSH 原生续接）。以下完整检查均使用合入后的源码、私有状态/运行时与清除继承变量的环境；保留此前两次前端失败和合入前 Python 失败，不把单文件通过代替完整结果。分支不推送，Host 工作树保留供验收。
