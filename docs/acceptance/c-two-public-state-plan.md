@@ -77,3 +77,5 @@ Host 从本份固定源码重建三份只取消最终目录传递的生产变异
 3-A 清理计划 `cln-05e8a2be-1dd8-4a12-867c-f8a423ba006f` 原样 confirmPath apply，removed=true。两个 Worker 创建并报告的任务根 `/private/tmp/ps3a-34r52t5y`、`/private/tmp/ps3b-21te13_d` 分别留存 4,617 / 2,776 份源码、日志与台账文件后按这两个确切根整体回收；uv/cache/重复公开依赖材料未再留一份。已登记的自有 0500 故障目录按原权限残留台账恢复后回收，没有按名称或日期推断别的对象，不屏蔽删除错误。留存哈希与实际回收结果为 `public-state-retained-evidence.json`，没有手工删除受管检出。
 
 3-B run `9ab4e50b-03dd-49ed-92ca-95d84e22961b`，实际任务基线为仅再增加计划记录的 `b772198d45525f7d2cff12474be4a4103c2e8115`，生产和测试与 3-A 整合相同。首次省略四项配置，路由 `dec-7520b7df-b208-48ad-8d1d-d9a2c7fab67b` 选择 ZCode/zai-api/GLM-5.3/max；保持已授权的供应方不可重试限流同 run 恢复规则，不改变用户路由设置。九路径的独立工作树已经启动，其他公共文件无写权，最终完整检查尚未运行。
+
+该次 ZCode 实际返回 429/1310、nativeFailure.attribution.reason=rate_limited、retryable=false，原生退出 0、两层停止确认，未交付修复。根据原许可与本批同类交付，完整 configuration 与独立 reason 使同 run continue 到 Codex/openai/gpt-6.1-sol/high，revision 5；没有重试已限流 ZCode、修改全局模型或 Router 配置。原路由、失败与继续请求/响应留存为 `tmp/c073-host/path-state-{routing,failed-result,repair*}`，既有三次真实付费冒烟不重跑，ZCode 真实冒烟仍未验证。
