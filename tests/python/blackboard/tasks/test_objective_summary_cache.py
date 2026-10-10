@@ -3,10 +3,14 @@ from __future__ import annotations
 
 import json
 import hashlib
+import copy
+import shutil
+import sqlite3
 import threading
 import unittest
+from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from support import private_state_dir
 from blackboard.tasks.test_console_objective_fixture import fixture_module, SOURCE
@@ -14,12 +18,44 @@ from hey_my_buddy.blackboard.tasks import objectives, objective_summary_cache as
 
 
 class ObjectiveSummaryCacheTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Generate the admitted relationships once, then restore a private DB
+        # and fresh Python fixture for every case. Keep fixed artifact bindings
+        # to the seed's immutable evidence instead of rewriting signed JSON.
+        cls.seed_root = cls.enterClassContext(private_state_dir("objective-summary-seed-"))
+        with fixture_module.SyntheticBoard(
+            cls.seed_root / "state", cls.seed_root / "runtime", SOURCE,
+            recipe=fixture_module.Recipe.smoke(), seed=613,
+        ) as seed:
+            cls.snapshot = sqlite3.connect(":memory:")
+            cls.addClassCleanup(cls.snapshot.close)
+            with seed.board.store.db.read() as connection:
+                connection.backup(cls.snapshot)
+            cls.fixture_values = copy.deepcopy({name: getattr(seed, name) for name in (
+                "macros", "roots", "helpers", "completed_attempts", "plain", "controls", "operations",
+            )})
+            cls.clock_value = seed.clock.value
+            cls.workspace_values = copy.deepcopy(vars(seed.workspace))
+
+    def restore_seed(self, fixture):
+        with closing(sqlite3.connect(fixture.board.store.db.path)) as connection:
+            self.snapshot.backup(connection)
+        shutil.copytree(self.seed_root / "state", fixture.state, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("board.sqlite3", "board.sqlite3-wal", "board.sqlite3-shm"))
+        for name, value in copy.deepcopy(self.fixture_values).items():
+            setattr(fixture, name, value)
+        fixture.clock.value = self.clock_value
+        vars(fixture.workspace).update(copy.deepcopy(self.workspace_values))
+        fixture.workspace.root = fixture.state
+
     def setUp(self):
         self.root = self.enterContext(private_state_dir("objective-summary-cache-"))
-        self.fixture = self.enterContext(fixture_module.SyntheticBoard(
-            self.root / "state", self.root / "runtime", SOURCE,
-            recipe=fixture_module.Recipe.smoke(), seed=613,
-        ))
+        with patch.object(fixture_module.SyntheticBoard, "generate", autospec=True, side_effect=self.restore_seed):
+            self.fixture = self.enterContext(fixture_module.SyntheticBoard(
+                self.root / "state", self.root / "runtime", SOURCE,
+                recipe=fixture_module.Recipe.smoke(), seed=613,
+            ))
         self.store = self.fixture.board.store
 
     def read(self, **params):
@@ -125,6 +161,75 @@ class ObjectiveSummaryCacheTests(unittest.TestCase):
             self.sql("UPDATE workflow_turns SET disposition='attention' WHERE run_id=?",(root,))
             self.read()
             self.assert_recomputed(counter,[group])
+
+    def test_attempt_execution_fact_alone_recomputes_only_its_macro(self):
+        """C2: the attempt marker must work even with frozen review_ready."""
+        group = self.fixture.macros[1]
+        root = self.root_for(group)
+        with self.store.db.read() as connection:
+            selected = connection.execute(
+                "SELECT selected_attempt_id FROM tasks WHERE task_id=?", (root,),
+            ).fetchone()[0]
+        # Both finished/unconfirmed and uncertain/unconfirmed are unresolved
+        # stops. Prime before caching so review_ready cannot be the invalidator.
+        self.sql("UPDATE attempts SET shutdown_confirmed=0 WHERE attempt_id=?", (selected,))
+        original_dependencies = memo.dependencies
+        captures = []
+
+        def capture(connection, members):
+            markers, reusable = original_dependencies(connection, members)
+            membership = {identifier: [tuple(row[column] for column in (*memo.MEMBER_COLUMNS, "matching"))
+                                       for row in rows] for identifier, rows in members.items()}
+            captures.append((membership, copy.deepcopy(markers), reusable.copy()))
+            return markers, reusable
+
+        def facts():
+            with self.store.db.read() as connection:
+                tables = [row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+                other = {table: [tuple(row) for row in connection.execute(f'SELECT * FROM "{table}" ORDER BY rowid')]
+                         for table in tables if table != "attempts"}
+                attempts = [dict(row) for row in connection.execute("SELECT * FROM attempts ORDER BY rowid")]
+                return other, attempts
+
+        with patch.object(memo, "dependencies", side_effect=capture), \
+                patch.object(objectives, "_summary", wraps=objectives._summary) as counter:
+            initial = self.read()
+            self.assert_recomputed(counter, self.fixture.macros)
+            self.assertEqual(self.read(), initial)
+            self.assert_recomputed(counter, [])
+            before_other, before_attempts = facts()
+            self.sql("UPDATE attempts SET execution_state='uncertain' WHERE attempt_id=?", (selected,))
+            after_other, after_attempts = facts()
+            self.assertEqual(after_other, before_other)  # Includes task/run revisions and all JSON/events.
+            expected_attempts = copy.deepcopy(before_attempts)
+            target = next(row for row in expected_attempts if row["attempt_id"] == selected)
+            self.assertEqual(target["execution_state"], "finished")
+            self.assertEqual(target["shutdown_confirmed"], 0)
+            target["execution_state"] = "uncertain"
+            self.assertEqual(after_attempts, expected_attempts)
+
+            changed = self.read()
+            self.assertEqual(changed, initial)
+            before_members, before_markers, before_reusable = captures[1]
+            after_members, after_markers, after_reusable = captures[2]
+            self.assertEqual(after_members, before_members)  # Includes review_ready and matching.
+            self.assertEqual(after_reusable, before_reusable)
+            without_attempts = lambda markers: {identifier: [row for row in rows if row[0] != "attempt"]
+                                                for identifier, rows in markers.items()}
+            self.assertEqual(without_attempts(after_markers), without_attempts(before_markers))
+            self.assert_recomputed(counter, [group])  # C2 behavior assertion; unrelated macros reuse.
+            expected_markers = copy.deepcopy(before_markers)
+            for index, row in enumerate(expected_markers[group]):
+                if row[0] == "attempt" and row[2] == selected:
+                    self.assertEqual(row[4], "finished")
+                    expected_markers[group][index] = (*row[:4], "uncertain", *row[5:])
+                    break
+            else:
+                self.fail("Selected attempt must have its own dependency marker")
+            self.assertEqual(after_markers, expected_markers)
+            self.assertEqual(self.read(), initial)
+            self.assert_recomputed(counter, [])
 
     def test_project_alias_and_raw_source_event_correction_affect_query_membership(self):
         group=self.fixture.macros[1]
@@ -473,6 +578,11 @@ class ObjectiveSummaryCacheTests(unittest.TestCase):
         initial=self.rows()
         initial[self.fixture.macros[0]]["counts"]["roots"]=-500
         self.assertGreater(self.rows()[self.fixture.macros[0]]["counts"]["roots"],0)
+        hit = self.rows()[self.fixture.macros[0]]
+        expected = copy.deepcopy(hit)
+        hit["counts"]["roots"] = -500
+        hit["currentHostIds"].append("fictional-poisoned-host")
+        self.assertEqual(self.rows()[self.fixture.macros[0]], expected)
         with patch.object(objectives,"_summary",wraps=objectives._summary) as counter:
             self.read(query="macro-000")
             self.assert_recomputed(counter,[self.fixture.macros[0]])
@@ -505,6 +615,50 @@ class ObjectiveSummaryCacheTests(unittest.TestCase):
         self.assertEqual(len(cache.entries),0)
         self.assertEqual(cache.bytes,0)
 
+    def test_restored_cases_isolate_database_clock_cache_and_python_fixture(self):
+        """E: restoring a case must discard every mutable fixture layer."""
+        expected_fixture_values = copy.deepcopy(self.fixture_values)
+        expected_clock_value = self.clock_value
+        expected_workspace_values = copy.deepcopy(self.workspace_values)
+        expected_database = list(self.snapshot.iterdump())
+        initial = self.read()
+        self.sql("INSERT INTO meta(key,value) VALUES('fictional-case-only','changed')")
+        self.fixture.clock.advance(600)
+        self.fixture.macros.append("fictional-case-only")
+        self.fixture.controls[next(iter(self.fixture.controls))]["hostId"] = "fictional-case-only"
+        self.fixture.workspace.dirty = True
+        self.fixture.workspace.manifests.clear()
+        self.fixture.initial_facts["counts"]["tasks"] = -500
+        self.fixture.board.console.read_cache.calls["fictional-case-only"] = {"projections": 1}
+        memo.for_store(self.store).clock = lambda: -500
+        self.assertEqual(self.fixture_values, expected_fixture_values,
+                         "E1: mutating a case must not contaminate the class seed")
+        self.assertEqual(self.clock_value, expected_clock_value)
+        self.assertEqual(self.workspace_values, expected_workspace_values)
+        self.assertEqual(list(self.snapshot.iterdump()), expected_database)
+
+        with patch.object(fixture_module.SyntheticBoard, "generate", autospec=True, side_effect=self.restore_seed):
+            with fixture_module.SyntheticBoard(
+                self.root / "restored-state", self.root / "restored-runtime", SOURCE,
+                recipe=fixture_module.Recipe.smoke(), seed=613,
+            ) as restored:
+                self.assertNotEqual(restored.board.store.db.path, self.store.db.path)
+                with restored.board.store.db.read() as connection:
+                    self.assertEqual(list(connection.iterdump()), expected_database)
+                for name, value in expected_fixture_values.items():
+                    self.assertEqual(getattr(restored, name), value)
+                self.assertEqual(restored.clock.value, expected_clock_value)
+                self.assertIsNot(restored.clock, self.fixture.clock)
+                expected_workspace = copy.deepcopy(expected_workspace_values)
+                expected_workspace["root"] = restored.state
+                self.assertEqual(vars(restored.workspace), expected_workspace)
+                self.assertGreater(restored.initial_facts["counts"]["tasks"], 0)
+                self.assertEqual(memo.for_store(restored.board.store).entries, {})
+                self.assertEqual(restored.board.console.read_cache.calls, {})
+                self.assertEqual(restored.board.console.read_cache._entries, {})
+                self.assertEqual(restored.launch_guard.call_count, 0)
+                self.assertEqual(objectives.objective_list(restored.board.store, {}), initial)
+
     def test_marker_never_copies_large_result_or_outcome_documents(self):
         root=self.root_for(self.fixture.macros[1])
         self.sql("UPDATE workflow_runs SET objective_id=NULL WHERE run_id=?",(root,))
@@ -522,6 +676,23 @@ class ObjectiveSummaryCacheTests(unittest.TestCase):
         with patch.object(objectives,"_summary",wraps=objectives._summary) as counter:
             self.assertEqual(self.rows()["run:"+root]["summary"],"fictional-visible")
             self.assert_recomputed(counter,["run:"+root])
+
+
+class SummaryCacheReturnTests(unittest.TestCase):
+    def test_cache_hits_own_nested_list_and_dict_values(self):
+        """C1: mutate the actual hit return, beyond the cold-write copy."""
+        cache = memo.SummaryCache()
+        expected = {"counts": {"roots": 3}, "hosts": [{"id": "fictional-host"}]}
+        # A compute spy proves both later calls really take the hit path.
+        compute = Mock(return_value=copy.deepcopy(expected))
+        self.assertEqual(cache.get("group", ("fixed",), compute), expected)
+        hit = cache.get("group", ("fixed",), compute)
+        hit["counts"]["roots"] = -500
+        hit["hosts"][0]["id"] = "fictional-poisoned-host"
+        hit["hosts"].append({"id": "fictional-added-host"})
+        self.assertEqual(cache.get("group", ("fixed",), compute), expected,
+                         "C1: mutating a cache-hit return must not poison the next hit")
+        compute.assert_called_once_with()
 
 
 if __name__ == "__main__":

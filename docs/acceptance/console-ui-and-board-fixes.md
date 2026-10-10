@@ -39,6 +39,10 @@ R-C 固定 `736ae853` 只改 summary 测试，Host 五文件实际 60 项及正�
 
 R-E run `9830549b-f0af-4519-9b3b-9fa33dad6e23`，首次路由四字段全部省略、基线 `4e2c0e22`。GLM-5.3-Flash/max 供应方非可重试 429/1310，无固定产物、shutdown self/descendants confirmed；当次读取的 Codex high enabled/available/quotaExhausted=false，按既有例外原 run 完整配置 codex/openai/gpt-6.1-sol/high continue（hr-speed-continue-rate-limit-1310-r1），原失败在 ignored host-review-repair-20261010/hr-speed-round1-limited/。当前只六个测试文件，暂无验收结论。
 
+R-C 最终固定 artifact `782ac9eb-832c-42d0-a7f2-4db450424a5f`、源码 `464c1a53`，只改 summary 测试。新增 3 编号：真实 cache-hit 嵌套 list/dict 副本、只变 attempt.execution_state、独立恢复各 case 的 SQLite/clock/cache/Python fixture；原 26 编号/语句保留并扩展实际 API 的命中隔离。C2 精确证明 task/run revision、membership/review_ready、其他表/JSON/event及所有非attempt marker完全没变，结果值可相同但仅对应宏重算。种子恢复用既有 SyntheticBoard/SQLite backup/深拷贝，一类生成一次、每项独立 state/store/clock/cache，不重签固定 JSON。Host 首份 60 项真实 HTTP/正常收尾退出 0，最新仅隔离方法新增独立 oracle，Host 最终三目标正常通过、四种单目标移除（hit、attempt、clock、fixture deepcopy）全部 AssertionError/无 error/退出 1；保留此前 deepcopy survivor 的退出 0和原 run退回事实。Worker 的 ps 收尾受限退出 1如实保留，不能当正常收尾；最终全量仍由 Host 在整合后的代码测。
+
+R-A 新发现的原始 token 回归已留探针证据：当 requestId 等于另一经 load_alias_map 接受的别名 oldId，b093 的 reference matcher 返回 events-reference，1a5 新版返回空集合。仅规范化查索引会丢弃原始精确引用，违反保守性；Host 在原 run continue（hr-storage-continue-preserve-raw-reference-token-r1）修 matcher 和回归，当前旧整合仍不验收。R-E 沙箱导入/收尾阻塞已有原始日志：无目标执行，不计测试失败；Host 提供本任务现成私有开发解释器及真实单项 profile，case正常 1 项/6.184 秒、213 次 workspace._git、正常最终私有收尾 exit 0（源码 ddcbdcc8 与 R-E输入生产/测试相同），原 run continue（hr-speed-continue-private-interpreter-and-host-profile-r1）继续六文件，不扩大沙箱权限、安装或替换日常进程。
+
 ## 初交结果（2026-10-10，随后被 Claude Code Host 打回）
 
 B1–B5、U1–U11 已完成本 Host 的固定产物核对、受影响检查、目标行为移除验证与整合。分支 `socu/console-ui-and-board-fixes` 的最终代码/前端测试提交为 `ec9e1526585d96e96dd8e5e6202476879004a339`，已合入 `socu/buddy-core@1a9decd95736a15a5ec4b4db6526e4cb48666326`（含已验收 DSH 原生续接）。以下完整检查均使用合入后的源码、私有状态/运行时与清除继承变量的环境；保留此前两次前端失败和合入前 Python 失败，不把单文件通过代替完整结果。分支不推送，Host 工作树保留供验收。
