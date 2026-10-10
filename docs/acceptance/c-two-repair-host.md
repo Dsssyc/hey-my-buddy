@@ -112,6 +112,37 @@ Host 同时复现其范围外提示：原单项 `test_one_send_delivers_and_answ
 
 2-D 返修固定为 `6b3f674fe57d2afbe019c1004413e43f9a60e2cc`，artifact `019047b0-1709-4d1f-90e4-17b0490e485f`，累积补丁 SHA-256 `193da66f3b01a56ca6a2983ace9c08b0491d4e2428ccfe599feceded743708d0`；仍仅原三路径。父与子根都在建立 TemporaryDirectory 时使用 canonical 父目录，再规范自身路径，没有放宽路径或身份断言。Host 将该固定输出与已提交的公共夹具接线合成独立副本，十项全部通过，退出 0，12.296 / 12.754 秒。四个实际进程持有者分别报告完整回合、controllerStopped=true、nativeStopped=true、rpcShutdownConfirmed=true、wait 退出 0，证据 `host-checkpoint-final-green.{json,log}` 与 `host-checkpoint-green-stop-proof.json`；此前失败回合的 unknown 不因此改写。
 
-Host 从这份合成源码另建三份变异，保留现有防护断言：强制持有者使用共享 SDK 状态域，命中子夹具实际 IPC 根的归属断言；late 场景复用一个持有者，命中 ownerPid 不同的断言；own 管道发送 peer 的问询编号，命中 peer-question 记录必须为空的断言。三份各一項 failure、errors=0、退出 1，测试 / 命令耗时分别为 4.305 / 4.601、4.325 / 4.554、1.868 / 2.088 秒。没有把权限、路径别名或导入错误当红灯。没有采用旧助手中恢复整段旧测试并额外插入断言的第一种变异作证明：额外断言不能替代当前测试的防护证据。实际三份计划、改动与原始结果为 `host-checkpoint-mutants-{plan,results}.json` 及对应日志。
+Host 从这份合成源码另建三份变异，保留现有防护断言：强制持有者使用共享 SDK 状态域，命中子夹具实际 IPC 根的归属断言；late 场景复用一个持有者，命中 ownerPid 不同的断言；own 管道发送 peer 的问询编号，命中 peer-question 记录必须为空的断言。三份各一项 failure、errors=0、退出 1，测试 / 命令耗时分别为 4.305 / 4.601、4.325 / 4.554、1.868 / 2.088 秒。没有把权限、路径别名或导入错误当红灯。没有采用旧助手中恢复整段旧测试并额外插入断言的第一种变异作证明：额外断言不能替代当前测试的防护证据。实际三份计划、改动与原始结果为 `host-checkpoint-mutants-{plan,results}.json` 及对应日志。
 
 四个付费冒烟入口在修复后的源码上再次作静态导入，均退出 0、modelCalls=0、nativeStarts=0，`paid-started.json` 不存在。首次静态入口因 Host 未先建精确 round 根而退出 1，随后补建自己记下的四个根，原前提错误保留在 `native-smoke-static-root-precondition.json`，成功结果在 `native-smoke-static-after-repair.json`；没有运行或重跑付费模型。
+
+## 最终 core 合并与编号核对
+
+最新 `socu/buddy-core@1f7e8b60577cc0b8883aa5dca9e9a1bc392f6ad0` 已无冲突合入，合并提交 `fe9c5a8e10d5f0874a0eb1fa92dc003057bee7d9`；祖先关系实测通过。本线相对该 core 的 `apps/console` 差集为空，保留已验收的前端与资源，不重复前端测试。2-D 在 `c0a10e22` 整合，`int-9ccf425c-0fbb-4b67-a5a5-3b7b72980aec` verified 后 accepted/completed。
+
+Host 分别对该 core 的归档副本与合并后的源码执行 loader，执行测试和模型的次数均为 0。core 为 212 个模块、3,421 个编号，合并后为 213 个模块、3,473 个编号；无加载错误或重复。3,401 个未变化编号集合相等，变更/删除 20 个、新增 72 个，净增 52 个。20 个旧编号按前面各微任务的原生期限、原生回收及关闭缓冲池迁移对照核对；RPC 夹具、R-05 返修和检查点两项均没有减少原编号。最新 core 自己增加的编号纳入基线，不归成本线新增。完整原始清单为 `repair-current-core-ids.json`、`repair-final-merged-ids.json`、`repair-final-core-id-delta.json`。
+
+下面只列本线退出的编号；它们的原防护由所列迁移内容接替，新增原始编号及各次防护变异保留在前述证据。
+
+| 退出编号 | 接替的验证 |
+| --- | --- |
+| `buddy.harnesses.test_c_two_live.ChannelUnitTests.test_bounded_call_slots_report_busy_and_drain_back` | 重复原生 deadline 无等待线程/permit；旧线程资源机制删除 |
+| `buddy.harnesses.test_c_two_live.ChannelUnitTests.test_the_whole_connect_and_call_is_bounded_by_the_window` | 原生 connect 与 call 期限、fresh/warm 暂停及恢复；未确认停止继续为未知 |
+| `buddy.harnesses.test_c_two_live.CleanupPrimitiveTests.test_a_replaced_file_refuses_and_a_missing_file_is_already_absent` | 原生回收的停止、地址、域与凭据绑定核对，失败不重试删除 |
+| `buddy.harnesses.test_c_two_live.EndpointLifecycleTests.test_the_socket_identity_is_captured_from_the_registered_address` | inspect_endpoint 凭据绑定与 reap_endpoint；忙、目标替换、未知与外来域的真实/单点核对 |
+| `buddy.harnesses.test_c_two_live.SubprocessLifecycleTests.test_a_replaced_socket_file_is_refused_by_the_cleanup` | inspect_endpoint 凭据绑定与 reap_endpoint；忙、目标替换、未知与外来域的真实/单点核对 |
+| `buddy.harnesses.test_c_two_live.SubprocessLifecycleTests.test_a_stalling_endpoint_returns_within_the_window_and_stays_bounded` | 原生 connect 与 call 期限、fresh/warm 暂停及恢复；未确认停止继续为未知 |
+| `buddy.harnesses.test_c_two_live.WireFrameTests.test_the_request_frame_is_the_request_plus_exactly_three_private_fields` | 同一公开请求加私有截止帧，整帧与时间窗防护 |
+| `buddy.roles.test_role_live_seam.HandleBindingTests.test_ready_cleanup_cannot_name_an_unrelated_socket` | inspect_endpoint 凭据绑定与 reap_endpoint；忙、目标替换、未知与外来域的真实/单点核对 |
+| `buddy.roles.test_role_live_seam.HandleBindingTests.test_unknown_controller_group_never_deletes_endpoint` | inspect_endpoint 凭据绑定与 reap_endpoint；忙、目标替换、未知与外来域的真实/单点核对 |
+| `buddy.runtime.test_live.WorkerLiveRealPeerTests.test_b2_17_real_same_name_different_addresses_and_normal_socket_disappearance` | inspect_endpoint 凭据绑定与 reap_endpoint；忙、目标替换、未知与外来域的真实/单点核对 |
+| `buddy.runtime.test_worker_live_wiring.WorkerEndpointClosureTests.test_controller_end_through_execute_clears_only_the_captured_socket` | inspect_endpoint 凭据绑定与 reap_endpoint；忙、目标替换、未知与外来域的真实/单点核对 |
+| `buddy.runtime.test_worker_live_wiring.WorkerEndpointClosureTests.test_worker_exit_closes_its_own_c_two_socket` | inspect_endpoint 凭据绑定与 reap_endpoint；忙、目标替换、未知与外来域的真实/单点核对 |
+| `protocol.test_inquiry_transport.TransportTests.test_stalled_sdk_calls_expire_without_reporting_a_stopped_owner` | 原生 connect 与 call 期限、fresh/warm 暂停及恢复；未确认停止继续为未知 |
+| `protocol.test_rpc_config.IsolatedTransportTests.test_a_client_with_other_overrides_can_still_reach_the_profile_server` | 0.7.4 私有端点域、pool_enabled=false、非池分段上限、原生内存与往返、Windows 默认分支 |
+| `protocol.test_rpc_config.IsolatedTransportTests.test_chunked_fallback_uses_the_production_reassembly_bounds` | 0.7.4 私有端点域、pool_enabled=false、非池分段上限、原生内存与往返、Windows 默认分支 |
+| `protocol.test_rpc_config.IsolatedTransportTests.test_concurrent_large_transfers_fit_two_segments` | 0.7.4 私有端点域、pool_enabled=false、非池分段上限、原生内存与往返、Windows 默认分支 |
+| `protocol.test_rpc_config.IsolatedTransportTests.test_configured_capacity_mapping_and_rss_are_separate_measurements` | 0.7.4 私有端点域、pool_enabled=false、非池分段上限、原生内存与往返、Windows 默认分支 |
+| `protocol.test_rpc_config.IsolatedTransportTests.test_pool_enabled_false_still_maps_shared_memory` | 0.7.4 私有端点域、pool_enabled=false、非池分段上限、原生内存与往返、Windows 默认分支 |
+| `protocol.test_rpc_config.ProfileTests.test_configure_applies_once_and_writes_no_environment` | 0.7.4 私有端点域、pool_enabled=false、非池分段上限、原生内存与往返、Windows 默认分支 |
+| `protocol.test_rpc_config.ProfileTests.test_profile_is_bounded_and_offers_no_fake_off_switch` | 0.7.4 私有端点域、pool_enabled=false、非池分段上限、原生内存与往返、Windows 默认分支 |
