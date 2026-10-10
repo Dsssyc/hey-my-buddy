@@ -106,6 +106,19 @@ Python相对b093：3400→3421、新增21、删除0，模块212不变；分别st
 
 未验证到：日常数据库未读/复制/写入，全部容量/代价是私有合成配方；没有在真实运行Native owners的日常盘上做孤立规划/应用或恢复归因，process_inventory明示是私有fixture seam。未进行任何真实模型调用（除授权委派）；未安装本批源码到日常运行时。真实浏览器的原生切换命令时间不能代表visibility事件时间，“立即一次”的严格边界由fake-clock与目标移除守住，真实隐藏窗与恢复GET/304已记录。SHA碰撞防御不能构造真实碰撞，理由明列；新依赖C-Two 0.7.4在本次检查前尚未合入，未伪称验证新依赖。所有图片仍ignored，四主题/窗口图与后台读数路径保留。本Host分支不推送，等待Claude Code Host验收；微任务的Host验收/精确检出回收将在门禁之后登记，不表示Claude验收已通过。
 
+返修微任务收尾：R-A/R-B/R-C/R-D/R-E/R-F六个当前finalArtifact均按已核对的integrationId完成Host acknowledge/accepted；Python3421/前端854完整退出0、私有实测与目标移除后才验收，不把原worker ps未知当正常收尾。固定材料已复制到Host ignored目录。accepted sweep并行使R-C/R-D计划遭REVISION_CONFLICT，重读后按实际applied/精确目录不存在确认，未把冲突回复算成功；R-A首计划过期PLAN_EXPIRED，按fresh revision重建计划后以原精确confirmPath应用，新plan applied/目录与symlink均不存在。各plan/路径如下，Root Host工作树与本批分支保留供Claude验收。
+
+| 微任务 | 回收plan | 精确检出路径（已不存在） |
+| --- | --- | --- |
+| `hr_storage` | `cln-018b3512-c2e3-493a-9157-2d98e56eae22` | `~/.local/share/hey-my-buddy/state/workspaces/ws-2e11a862a3bde6978e912d536a683a6a/checkout` |
+| `hr_identity` | `cln-aff39f8f-0708-4e6e-9728-9103f7dce687` | `~/.local/share/hey-my-buddy/state/workspaces/ws-54fcee8c7f1d1b3709b83726c982e89e/checkout` |
+| `hr_cache` | `cln-55066a4a-44cb-4981-8ed5-32a6aeb44a8d` | `~/.local/share/hey-my-buddy/state/workspaces/ws-897e246ec48b82f3adea8915bf607882/checkout` |
+| `hr_ui` | `cln-285162da-74b6-4b20-a8b0-55954a4f5097` | `~/.local/share/hey-my-buddy/state/workspaces/ws-aede07cf842a272e9a31771e4a3b4552/checkout` |
+| `hr_speed` | `cln-83098e7c-faeb-4486-8f1b-11cf46cc0bab` | `~/.local/share/hey-my-buddy/state/workspaces/ws-89e0e8cdd88aa0c350c34144bea5a71b/checkout` |
+| `hr_scale` | `cln-647320c1-e1a5-499b-8cc3-f21e4d2b1844` | `~/.local/share/hey-my-buddy/state/workspaces/ws-5b7ff39781b0895f2d212dcc57defc25/checkout` |
+
+回收原始get/plan/apply/冲突与过期材料、最终精确路径证明在 `host-review-repair-20261010/final-exact-reclaim-proof.json` 及可提交测量JSON内；没有手工删除、stash、分支/标签操作、触动其他会话检出或日常服务/Worker。日常孤立项没有手工清理。完整代码门禁提交仍是9f5df505，后续仅两个验收记录，Git对源码/全部测试/4发行文件的字节绑定在最终本地证明；记录变动后仅5项仓库卫生测试，不重复完整检查。图片/私有容量数据/全部失败日志只留ignored。
+
 ## 初交结果（2026-10-10，随后被 Claude Code Host 打回）
 
 B1–B5、U1–U11 已完成本 Host 的固定产物核对、受影响检查、目标行为移除验证与整合。分支 `socu/console-ui-and-board-fixes` 的最终代码/前端测试提交为 `ec9e1526585d96e96dd8e5e6202476879004a339`，已合入 `socu/buddy-core@1a9decd95736a15a5ec4b4db6526e4cb48666326`（含已验收 DSH 原生续接）。以下完整检查均使用合入后的源码、私有状态/运行时与清除继承变量的环境；保留此前两次前端失败和合入前 Python 失败，不把单文件通过代替完整结果。分支不推送，Host 工作树保留供验收。

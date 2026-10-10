@@ -818,5 +818,73 @@
     "before": 1165.2,
     "final": 1055.1,
     "fileCount": 14
-  }
+  },
+  "microtaskAcceptanceAndReclaim": [
+    {
+      "alias": "hr_storage",
+      "runId": "91f46843-5004-4906-a440-11f6299d5697",
+      "artifactId": "4555c523-e4d0-480a-9fb7-71b7e99ed033",
+      "revision": 24,
+      "planId": "cln-018b3512-c2e3-493a-9157-2d98e56eae22",
+      "state": "applied",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-2e11a862a3bde6978e912d536a683a6a/checkout",
+      "exactPathAbsent": true,
+      "retainedArtifactsAndReceipts": true
+    },
+    {
+      "alias": "hr_identity",
+      "runId": "778ae456-460b-46d9-99d5-b3d150b75711",
+      "artifactId": "af8d5d01-698b-4daa-9c5c-ca8de500d5bb",
+      "revision": 17,
+      "planId": "cln-aff39f8f-0708-4e6e-9728-9103f7dce687",
+      "state": "applied",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-54fcee8c7f1d1b3709b83726c982e89e/checkout",
+      "exactPathAbsent": true,
+      "retainedArtifactsAndReceipts": true
+    },
+    {
+      "alias": "hr_cache",
+      "runId": "24db8ed8-6fed-4f06-853f-6712378cad76",
+      "artifactId": "782ac9eb-832c-42d0-a7f2-4db450424a5f",
+      "revision": 20,
+      "planId": "cln-55066a4a-44cb-4981-8ed5-32a6aeb44a8d",
+      "state": "applied",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-897e246ec48b82f3adea8915bf607882/checkout",
+      "exactPathAbsent": true,
+      "retainedArtifactsAndReceipts": true
+    },
+    {
+      "alias": "hr_ui",
+      "runId": "93accf26-54b0-4357-962d-60dcf6fe8980",
+      "artifactId": "2e1aed35-2556-47df-a5d6-e370c6fefd11",
+      "revision": 16,
+      "planId": "cln-285162da-74b6-4b20-a8b0-55954a4f5097",
+      "state": "applied",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-aede07cf842a272e9a31771e4a3b4552/checkout",
+      "exactPathAbsent": true,
+      "retainedArtifactsAndReceipts": true
+    },
+    {
+      "alias": "hr_speed",
+      "runId": "9830549b-f0af-4519-9b3b-9fa33dad6e23",
+      "artifactId": "752b5fc1-58bf-4e33-a192-ef09d2e46c34",
+      "revision": 26,
+      "planId": "cln-83098e7c-faeb-4486-8f1b-11cf46cc0bab",
+      "state": "applied",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-89e0e8cdd88aa0c350c34144bea5a71b/checkout",
+      "exactPathAbsent": true,
+      "retainedArtifactsAndReceipts": true
+    },
+    {
+      "alias": "hr_scale",
+      "runId": "7bd25223-0021-45e2-97da-888fda890c8a",
+      "artifactId": "8a8a8469-5977-473d-9583-2a391f318330",
+      "revision": 12,
+      "planId": "cln-647320c1-e1a5-499b-8cc3-f21e4d2b1844",
+      "state": "applied",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-5b7ff39781b0895f2d212dcc57defc25/checkout",
+      "exactPathAbsent": true,
+      "retainedArtifactsAndReceipts": true
+    }
+  ]
 }
