@@ -337,3 +337,21 @@ Host 在已登记 Worker 根 `/tmp/c073-c-H6SbNM` 做只读进程/持锁观测�
 
 
 最终记录更新后的仓库卫生与文档读取/链接补核实际20项通过：cli.test_repository_hygiene + cli.test_skill_workflow 17项/exit0/0.808秒；README/operations读取与打包skill内部链接3项/exit0/0.471秒。卫生扫描用真实HOME识别本机标识，其余状态/运行时/TMP仍显式私有，清除继承运行身份，没有原生程序发现或模型调用。原始命令和日志为 `tmp/c073-host/state-boundaries-final-doc-tests` 与 `state-boundaries-final-shipped-doc-tests`。补记本段后仅再跑仓库卫生；不重跑已通过的完整检查。整批验收仍待Claude Code Host，当前无后续任务启动。
+
+
+## 第三次独立复核退回：四处范围内整洁性返修
+
+用户转达整合分支 c-two-074-host-review.md 的“第三次独立复核”：候选9522e73e的行为、22个编号迁移与合并后的完整检查均已由Claude Code Host独立通过；仅退回本批自己新增代码的四处整洁性缺口。评审只读复制，不合入整合分支，不修其升级L15与预检问题、跨侧下划线命名、其他环境解析或参考文档。本次仅focused测试，完整检查由Host合入后跑；旧3519/216/645.517秒与历史失败保持原绑定。
+
+原3-C run df9f35ac上轮已签收并回收检出，实际continue返回CONFLICT“An accepted goal cannot be continued”；没有改黑板数据或恢复清理中的检出。用户明确批准例外新增同宏任务的窄返修微任务，经路由首次省略四配置，hostId codex-adr025、宏任务obj-e2bf6c47-a17b-42ba-9b75-a32581e43716沿用。范围仅下表对应生产三文件、四测试文件及本既有最终记录；rpc_config与Daemon.run的根链接防护代码只读、保留，不顺手改其他产品接缝。
+
+| 编号 | 做法与验收 |
+| --- | --- |
+| T3-01 | cleanup_owned_endpoint的context改为必填LocalEndpointContext，删除ambient-domain回退；全部缺省测试调用显式传持有者的context，审计静态点位与subTest口径；缺context自然TypeError，原跨域/身份/停止及回收结果测试保留。撤回必填及回退删除时对应目标测试失败。 |
+| T3-02 | supervisor.main的--state-dir必填，删BUDDY_STATE_DIR来源及二选一规则；CLI与Daemon两启动方已传参、process_inventory靠参数识别，三方只读不改。即使环境给有效根，没有参数也失败且不启动Supervisor；显式参数优先/独一来源由原入口与私有子进程证明。恢复旧env fallback时目标失败。 |
+| T3-03 | transport._request注释描述每次configure_client检查路径并设置私有域，删“首次之后no-op”错误说明；不改该函数行为，不为措辞造测试。 |
+| T3-04 | 保留rpc_config._validate_path中linked(first)边界拒绝，分别实际调用configure_local_endpoint与Daemon.run处理自建状态根链接，PRIVATE_PATH_UNSAFE及路径/链接诊断正确，目标目录权限不变。只删除该分支做故障注入，目标新测试必须失败，不用其他规则、任意启动错误或全段guard替换凑红灯。 |
+
+唯一可写：src/hey_my_buddy/buddy/harnesses/c_two_live.py、src/hey_my_buddy/buddy/runtime/supervisor.py、src/hey_my_buddy/protocol/transport.py；tests/python/buddy/harnesses/test_c_two_live.py、tests/python/protocol/test_state_boundaries.py、tests/python/protocol/test_rpc_config.py、tests/python/blackboard/service/test_daemon.py；docs/acceptance/c-two-public-state-plan.md。本轮记录追加到本文件，不新建验收文件，不改其他历史事实。旧ID全量3519基线仅collect；新增/消失/改名逐条列，未变集合相等。Worker与Host仅跑这四项受影响测试及必要旧启动方/清点相关选择，文件分别私有解释器；Host独立固定补丁、实际focused、点变异，范围缺陷回当前窄run continue。
+
+Worker开始时建短任务专用系统临时根并记录确切路径，TMPDIR/BUDDY_CHECKS_TMPDIR、私有HOME/state/runtime、uv环境/cache/比较副本与日志全在根，Worker不删除任何文件目录，框架自己正常收尾例外；共享stash/分支/标签不使用或改动，改动留工作区由黑板封存。只跑受影响测试，不跑完整检查/前端/模型/账号发现；受限真实绑定不反复，由Host固定环境补核。清除继承BUDDY_/ANTHROPIC_/C2_及虚拟环境身份，使用现成fixture和公开锁定依赖；不安装升级重启停止替换日常服务Worker，不碰日常配置凭据或公共命名空间，Too many open files立即停下报告。测试服务行为只在自有私有服务上验证，权限链接目标均为自建，未知停止不说成已停止。路径写~或占位符、清理只由Host验收后按确切根；根外既有审计文件仍不动。修完提交已有最终记录后停等Claude Code Host验收，不开始后续。
