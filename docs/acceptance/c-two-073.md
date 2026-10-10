@@ -157,3 +157,5 @@ Host编号核对工具首次用完整loader发现范围外黑板旧socket_path�
 - `buddy.runtime.test_worker_live_wiring.WorkerEndpointClosureTests.test_worker_exit_closes_its_own_c_two_endpoint`
 
 1-B整合53b0130a，integration int-7920ec42-6a5a-47a6-9c66-41bf67e4ab73已verified，原run accepted/completed；cleanup-plan/apply applied。Host保留两回合的顶层交付日志、原补丁和最终固定副本后，按结构化交付登记的两个确切根 <1B_FIRST_TASK_TMP>/<1B_REPAIR_TASK_TMP> 整体回收，未扫描前缀或公共命名空间。Host显示清理进度的小脚本因非清理响应中的cleanup为None而报AttributeError，显示失败未改变状态，随后从对应记录正确读回accepted/applied，未重复回收操作。
+
+1-C固定基线ebf8dfb6，run3fa17c8b-0820-481b-8151-c3f476030cc9首次提交省略四字段；决定dec-df9f6bd8-e8a8-4a39-9415-1f9e2e85c1e6选ZCode/zai-api/GLM-5.3-Flash/max，供应方不可重试429/1310失败，两层停止确认。用户许可原run continue采用已完成本批同类1-A2与1-B的Codex/openai/gpt-6.1-sol/high，未动全局配置。1-C仍实施，范围5文件（含受影响protocol.test_inquiry_transport），无完整检查、付费harness冒烟或日常服务/Worker变动。
