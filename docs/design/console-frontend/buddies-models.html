@@ -1,0 +1,31 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>buddies-models.html</title><link rel="stylesheet" href="base.css">
+<svg width="0" height="0" style="position:absolute"><defs>
+<symbol id="run" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.5" fill="var(--live)"/></symbol>
+<symbol id="hand" viewBox="0 0 12 12"><path d="M6 .8 11.2 6 6 11.2.8 6Z" fill="var(--hand-mark)"/></symbol>
+<symbol id="ok" viewBox="0 0 12 12"><path d="M2 6.4 4.8 9 10 3.2" fill="none" stroke="var(--past)" stroke-width="1.8"/></symbol>
+<symbol id="bad" viewBox="0 0 12 12"><path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" fill="none" stroke="var(--fail)" stroke-width="1.8"/></symbol>
+<symbol id="wait" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="none" stroke="var(--ink3)" stroke-width="1.5"/></symbol>
+</defs></svg>
+<div class="bar"><div class="brand"><svg width="22" height="22" viewBox="3 3 58 58"><polygon fill="#7CC79F" points="12,13 22,13 22,61 12,54"/><polygon fill="#7CC79F" points="22,32 30,28 30,38 22,42"/><polygon fill="#F1EFE8" points="42,3 52,10 52,51 42,51"/><polygon fill="#F1EFE8" points="34,26 42,22 42,32 34,36"/><polygon fill="#F0997B" points="30,28 34,26 34,36 30,38"/></svg>Hey my buddy</div>
+<div class="tabs"><div class="tab">任务<span class="cnt num">3</span></div><div class="tab on">伙伴</div><div class="tab">设置</div></div><div class="clock mono num">17:12:05</div></div>
+<div class="ph"><h1>伙伴</h1><div class="seg"><span class="on">模型<b class="num">9</b></span><span class="">Router</span><span class="">Harness<b class="num">4</b></span></div><div class="sum"><span><svg class="m"><use href="#run"/></svg>Router 可用</span><span><svg class="m"><use href="#run"/></svg>Harness 4/4</span><span class="hand"><svg class="m"><use href="#hand"/></svg>DSH 额度接近上限</span></div></div>
+<div class="body" style="grid-template-columns:400px 1fr"><div class="list"><div class="lhead"><div class="search">搜索模型、Harness 或提供方</div>
+<div class="seg"><span class="on">全部<b class="num">9</b></span><span>已启用<b class="num">5</b></span><span>不可用<b class="num">1</b></span></div></div>
+<div class="grp"><span>DSH · deepseek-official</span><span>并发</span></div>
+<div class="row sel" style="grid-template-columns:1fr auto"><span class="t">deepseek-flash <span class="tag r" style="margin-left:6px">Router</span></span><span class="w num">0 / 2</span><span class="s" style="grid-column:1"><span class="eff on"><i></i>off</span><span class="eff on"><i></i>max</span></span></div><div class="row" style="grid-template-columns:1fr auto"><span class="t">deepseek-v4-pro</span><span class="w num">0 / 1</span><span class="s" style="grid-column:1"><span class="eff"><i></i>high</span><span class="eff"><i></i>max</span></span></div>
+<div class="grp"><span>Codex · openai</span><span>并发</span></div>
+<div class="row" style="grid-template-columns:1fr auto"><span class="t">gpt-6.1-sol</span><span class="w num">1 / 2</span><span class="s" style="grid-column:1"><span class="eff"><i></i>medium</span><span class="eff on"><i></i>high</span><span class="eff on"><i></i>max</span></span></div><div class="row" style="grid-template-columns:1fr auto"><span class="t">gpt-6-luna</span><span class="w num">0 / 2</span><span class="s" style="grid-column:1"><span class="eff on"><i></i>high</span><span class="eff"><i></i>max</span></span></div>
+<div class="grp"><span>Claude Code · anthropic</span><span>并发</span></div>
+<div class="row" style="grid-template-columns:1fr auto"><span class="t">claude-sonnet-5-5</span><span class="w num">1 / 1</span><span class="s" style="grid-column:1"><span class="eff"><i></i>medium</span><span class="eff on"><i></i>high</span></span></div>
+</div>
+<div class="main" style="background:var(--surface)"><div class="mh" style="border-bottom:1px solid var(--line)"><div><h1>deepseek-flash</h1><div class="meta"><span>DSH</span><span>deepseek-official</span><span>按量计费</span></div></div>
+<div class="stats" style="align-self:center;font-size:13px;color:var(--ink2);gap:8px;align-items:center"><svg class="m"><use href="#run"/></svg>可用</div></div>
+<div class="sec"><label>档位</label><div style="display:grid;grid-template-columns:auto 64px 1fr;gap:12px 14px;align-items:center;width:fit-content">
+<span class="sw on"></span><span class="mono" style="color:var(--ink)">off</span><span style="color:var(--ink3);font-size:12px">最近 30 天执行 41 次</span>
+<span class="sw on"></span><span class="mono" style="color:var(--ink)">max</span><span><span class="tag r">Router</span> <span style="color:var(--ink3);font-size:12px;margin-left:8px">最近 30 天执行 12 次</span></span></div></div>
+<div class="sec"><label>偏好</label><div><div class="pick"><span>不设</span><span class="on">优先</span><span>固定</span><span>排除</span></div><br>
+<div class="in" style="width:420px;margin-top:10px;color:var(--ink2)">便宜又快，机械的改动先交给它</div></div></div>
+<div class="sec"><label>并发</label><div style="display:flex;align-items:center;gap:12px"><div class="in num" style="width:72px">2</div><span style="font-size:12px;color:var(--ink3)">现在占用 0</span></div></div>
+<div class="sec"><label>评价</label><div style="font-size:13px;color:var(--ink2);line-height:1.7"><span class="mono" style="color:var(--ink)">off</span>　改造 18 次，验收 16 次；排错 6 次，验收 3 次<br><span class="mono" style="color:var(--ink)">max</span>　还没有评价</div></div>
+<div style="margin-top:auto;border-top:1px solid var(--line);padding:12px 24px;display:flex;align-items:center;gap:10px"><span class="hand" style="display:flex;align-items:center;gap:7px;font-size:13px;margin-right:auto"><svg class="m"><use href="#hand"/></svg>2 项改动还没有保存</span><span class="btn">放弃</span><span class="btn p">保存</span></div>
+</div></div></html>

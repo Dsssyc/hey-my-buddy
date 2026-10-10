@@ -1,0 +1,13 @@
+# 控制台的静态稿
+
+[执行计划](../console-frontend.md)的设计依据：每个页面一份静态稿，用浏览器直接打开 HTML 文件即可。数据是编的，稿不联网，也不是实现。在 `<html>` 上加 `data-theme="dark"` 看深色。
+
+| 文件 | 内容 | 状态 |
+| --- | --- | --- |
+| `tasks.html` | 任务页：宏任务的列表、一个宏任务及其时间轴、选中的微任务 | 方向已由用户认可 |
+| `buddies-models.html` | 伙伴页的模型分区 | 待确认 |
+| `buddies-router.html` | 伙伴页的 Router 分区 | 待确认 |
+| `buddies-harness.html` | 伙伴页的 Harness 分区 | 待确认 |
+| `settings.html` | 设置页 | 待确认 |
+
+颜色、记号与版式的规则写在 `base.css` 里，含义见执行计划的"设计"一节。页面实现并验收之后，对应的稿删除。
