@@ -59,6 +59,7 @@ class Fixture:
                                                 dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name).resolve()
+        self.enterContext(mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory / "state")}))
         from hey_my_buddy.protocol import rpc_config
         rpc_config.configure_client(self.directory / "state")
         self.addCleanup(cc.shutdown)
@@ -84,6 +85,16 @@ class Fixture:
 
 
 class LiveBindingRegistryTests(Fixture, unittest.TestCase):
+    def test_a_ready_handle_cannot_borrow_the_ambient_sdk_state_when_its_owner_is_missing(self):
+        handle = self.handle()
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(cc, "connect") as connect, \
+                mock.patch.object(cc, "local_endpoint_context") as context:
+            with self.assertRaises(BoardError) as raised:
+                role_live.handle_live_binding(handle)
+            self.assertEqual(raised.exception.code, "PRIVATE_STATE_REQUIRED")
+            connect.assert_not_called()
+            context.assert_not_called()
+
     def test_only_registered_modules_carry_a_live_binding(self):
         for name in HARNESS_NAMES:
             self.assertIs(live_binding(name), CTwoLiveChannel)

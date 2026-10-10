@@ -10,10 +10,12 @@ import http.client
 import json
 import os
 import socket
+import sys
 import unittest
+from pathlib import Path
 from urllib.parse import urlsplit
 
-from support import BoardTestCase
+from support import BoardTestCase, PYTHON_ROOT
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
 
@@ -678,6 +680,71 @@ class ConsoleAssetTests(ConsoleTestCase):
 
 
 class ConsoleDaemonTests(ConsoleTestCase):
+    def test_r05_private_daemon_reads_owned_catalog_without_native_discovery(self):
+        """A missing catalog must trip a recording, model-free native decoy."""
+        guard = self.directory / "discovery-guard"
+        guard.mkdir(mode=0o700)
+        trace = self.directory / "native-cli-calls.jsonl"
+        decoy = guard / "reject-native.py"
+        decoy.write_text(
+            f"#!{sys.executable}\n"
+            "import json, sys\n"
+            f"with open({str(trace)!r}, 'a') as stream:\n"
+            "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+            "raise SystemExit(86)\n"
+        )
+        decoy.chmod(0o700)
+        # Discovery ignores HOME when resolving system account homes. Intercept
+        # its entry before it can inspect any installed CLI or account metadata.
+        # The decoy still executes and records the adapter that tried discovery.
+        (guard / "sitecustomize.py").write_text(
+            "import subprocess, sys\n"
+            "from hey_my_buddy.buddy.harnesses import discovery\n"
+            "def reject(adapter, **kwargs):\n"
+            f"    subprocess.run([sys.executable, {str(decoy)!r}, adapter], check=False)\n"
+            "    raise RuntimeError('R-05: native discovery reached the rejecting CLI')\n"
+            "discovery.candidate_snapshot = reject\n"
+        )
+        environment = {
+            "PYTHONPATH": os.pathsep.join((str(guard), str(PYTHON_ROOT), os.environ.get("PYTHONPATH", ""))),
+            **{f"BUDDY_{name}_CLI": str(decoy) for name in ("CLAUDE", "CODEX", "DSH", "ZCODE")},
+        }
+        payload = json.loads(self._catalog_fixture_path.read_text())
+        model = payload["providers"][0]["models"][0]
+        model["id"] = "r05-first-private-model"
+        fixture = self.catalog_fixture(payload)
+        with self.daemon(env=environment):
+            code, health = self.cli("health", env=environment)
+            self.assertEqual(code, 0, health)
+            self.assertEqual(Path(health["stateDir"]), self.directory)
+            code, capabilities = self.cli("capabilities", "{}", env=environment)
+            self.assertEqual(code, 0, capabilities)
+            self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
+            code, opened = self.cli("console", json.dumps({"action": "open", "browser": False}), env=environment)
+            self.assertEqual(code, 0, opened)
+            browser = Browser(opened["url"])
+            csrf = browser.bootstrap()["csrfToken"]
+            status, _headers, body = browser.command(
+                "model_catalog_refresh", {"requestId": "r05-http-catalog"}, csrf=csrf,
+            )
+            self.assertEqual(status, 200, body)
+            self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
+            refreshed = json.loads(body)["result"]["catalog"]
+            self.assertEqual(refreshed["source"], f"file:{fixture}")
+            self.assertEqual(refreshed["providers"][0]["models"][0]["id"], model["id"])
+            # Re-read changed file contents through the real CLI and transport;
+            # a cached constant or a different fixture cannot satisfy this check.
+            model["id"] = "r05-second-private-model"
+            fixture.write_text(json.dumps(payload))
+            code, refreshed = self.cli("model-catalog-refresh", json.dumps({"requestId": "r05-cli-catalog"}), env=environment)
+            self.assertEqual(code, 0, refreshed)
+            self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
+            self.assertEqual(refreshed["catalog"]["source"], f"file:{fixture}")
+            self.assertEqual(refreshed["catalog"]["providers"][0]["models"][0]["id"], model["id"])
+            self.assertIn(model["id"], {profile["model"] for profile in browser.bootstrap()["profiles"]})
+        self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
+        self.assertEqual(list((self.directory / "home").iterdir()), [])
+
     def test_cli_console_opens_and_closes_the_real_daemon_surface(self):
         with self.daemon():
             code, opened = self.cli("console", json.dumps({"action": "open", "browser": False}))

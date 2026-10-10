@@ -203,7 +203,8 @@ class Worker:
         from .live import WorkerLiveRuntime
         from ..roles.live import handle_live_binding
         self.live = WorkerLiveRuntime(self.client, worker_id=self.worker_id,
-                                      worker_instance=self.instance_id, resolve_channel=handle_live_binding)
+                                      worker_instance=self.instance_id, state_dir=self.state_dir,
+                                      resolve_channel=lambda handle: handle_live_binding(handle, state_dir=self.state_dir))
         self.lease_seconds = lease_seconds
         self.adapters = adapters
         self.extra_capabilities = tuple(extra_capabilities)
@@ -1080,7 +1081,7 @@ class _Renewal(threading.Thread):
             return "unextracted", None
         from ..roles import live as role_live
 
-        state, channel = role_live.handle_live_binding(self.handle)
+        state, channel = role_live.handle_live_binding(self.handle, state_dir=self.worker.state_dir)
         if state == role_live.LIVE_BOUND:
             try:
                 self.worker.live.bind(self.claim, self.handle, self.nonce)

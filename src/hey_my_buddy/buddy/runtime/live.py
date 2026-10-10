@@ -57,21 +57,17 @@ class WorkerLiveRuntime:
     """
 
     def __init__(self, client, worker_id: str, worker_instance: str,
-                 resolve_channel: Callable[[object], tuple[str, LiveChannel | None]]):
+                 resolve_channel: Callable[[object], tuple[str, LiveChannel | None]], *,
+                 state_dir: str | Path | None = None):
         self._worker_id = check_text(worker_id, "workerId", maximum=128)
         self._worker_instance = check_text(worker_instance, "workerInstance", maximum=128)
         if not callable(resolve_channel):
             raise fail("resolve_channel must be callable")
-        # BoardClient supplies the explicit state. For an injected client, the
-        # Worker has already selected its domain before constructing this runtime.
-        # Use that native selection, never a fresh environment-based selection.
-        selected = getattr(client, "state_dir", None)
-        if selected is None and os.name != "nt":
-            root = cc.local_endpoint_context().root
-            if root is None or Path(root).name != "ipc":
-                raise fail("Worker live runtime requires the owning private state directory")
-            selected = Path(root).parent
-        self._state_dir = selected
+        # The Worker supplies its own state even when its board client is injected.
+        # Direct users may supply a BoardClient or an explicit private environment;
+        # the SDK's ambient/default domain is never a source of ownership.
+        selected = state_dir if state_dir is not None else getattr(client, "state_dir", None)
+        self._state_dir = rpc_config.resolve_state_dir(selected)
         self._client = client
         self._resolve_channel = resolve_channel
         self._instance_id = secrets.token_hex(32)
@@ -96,8 +92,11 @@ class WorkerLiveRuntime:
             if self._descriptor is None:
                 registered = False
                 try:
-                    cc.register(WorkerRuntimeLive, self, name=self._name,
-                                concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+                    try:
+                        cc.register(WorkerRuntimeLive, self, name=self._name,
+                                    concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+                    except (ValueError, RuntimeError) as error:
+                        raise BoardError("PRIVATE_PATH_UNSAFE", str(error)) from error
                     registered = True
                     address = cc.server_address()
                     self._descriptor = LiveEndpointDescriptor(

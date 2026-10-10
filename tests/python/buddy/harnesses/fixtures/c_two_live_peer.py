@@ -103,8 +103,8 @@ def serve() -> int:
                 # A stalling endpoint: the same contract registered with an
                 # implementation that sleeps, so the client's bounded call
                 # faces a real peer that never answers within the window.
-                rpc_config.configure_server()
-                rpc_config.configure_client()
+                rpc_config.configure_server(command["stateDir"])
+                rpc_config.configure_client(command["stateDir"])
                 stalled_name = command.get("name") or ctl.random_person_name()
                 stalled = StallingLive(float(command["stallSeconds"]))
                 cc.register(TEST_CRM, stalled,
@@ -125,7 +125,8 @@ def serve() -> int:
                     identity, LiveCapabilities(inquiry_delivery=command.get("delivery",
                                                                             "cooperative-checkpoint")),
                     TEST_CRM, name=command.get("name"),
-                    instance_id=secrets.token_hex(32), token=secrets.token_hex(32))
+                    instance_id=secrets.token_hex(32), token=secrets.token_hex(32),
+                    state_dir=command["stateDir"])
                 descriptor = endpoint.start()
                 ctl.write_ready_material(command["readyPath"], descriptor)
                 # The constructing side is the one trust position that holds the

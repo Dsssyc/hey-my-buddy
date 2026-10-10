@@ -200,8 +200,30 @@ def offline_facts_source(directory: Path) -> str:
 
 
 def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
-    environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
+    from hey_my_buddy.buddy.harnesses.claude.config import THIRD_PARTY_OVERRIDE_VARIABLES
+
+    removed = _INHERITED_CHILD_KEYS | set(THIRD_PARTY_OVERRIDE_VARIABLES)
+    environment = {key: value for key, value in os.environ.items() if key not in removed and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
+    # HOME and SDK locations belong to this fixture, never to the interpreter's
+    # inherited account. Do not create native configuration files in this home.
+    private_home = directory / "home"
+    private_home.mkdir(mode=0o700, exist_ok=True)
     environment.update(
+        HOME=str(private_home),
+        USERPROFILE=str(private_home),
+        CODEX_HOME=str(private_home / ".codex"),
+        CLAUDE_CONFIG_DIR=str(private_home / ".claude"),
+        ZCODE_DATA_BASE_DIR=str(private_home / ".zcode"),
+        ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(private_home / ".zcode/builtin-provider.json"),
+        ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(private_home / ".zcode/personal-provider.json"),
+        DSH_HOME=str(private_home / ".dsh"),
+        XDG_CONFIG_HOME=str(private_home / ".config"),
+        XDG_DATA_HOME=str(private_home / ".local/share"),
+        XDG_CACHE_HOME=str(private_home / ".cache"),
+        XDG_STATE_HOME=str(private_home / ".local/state"),
+        XDG_RUNTIME_DIR=str(directory / "runtime-root"),
+        APPDATA=str(private_home / "AppData/Roaming"),
+        LOCALAPPDATA=str(private_home / "AppData/Local"),
         BUDDY_STATE_DIR=str(directory),
         BUDDY_RUNTIME_ROOT=str(directory / "runtime-root"),
         PYTHONPATH=str(PYTHON_ROOT) + (os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else ""),
@@ -221,6 +243,12 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
     environment["BUDDY_STATE_DIR"] = str(directory)
     if not Path(environment["BUDDY_RUNTIME_ROOT"]).resolve().is_relative_to(directory.resolve()):
         raise ValueError("Test runtime root must be inside its private state directory")
+    for key in ("HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "ZCODE_DATA_BASE_DIR",
+                "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", "DSH_HOME",
+                "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
+                "XDG_RUNTIME_DIR", "APPDATA", "LOCALAPPDATA", "BUDDY_MODEL_CATALOG_FILE"):
+        if key in environment and not Path(environment[key]).resolve().is_relative_to(directory.resolve()):
+            raise ValueError(f"Test {key} must be inside its private state directory")
     return environment
 
 
@@ -397,6 +425,7 @@ class BoardTestCase(unittest.TestCase):
     def catalog_fixture(self, payload: dict | None = None) -> Path:
         """Point discovery at a private fixture instead of the installed harness."""
         path = write_catalog_fixture(self.directory, payload)
+        self._catalog_fixture_path = path
         previous = os.environ.get("BUDDY_MODEL_CATALOG_FILE")
         os.environ["BUDDY_MODEL_CATALOG_FILE"] = str(path)
 
@@ -409,6 +438,14 @@ class BoardTestCase(unittest.TestCase):
         self.addCleanup(restore)
         return path
 
+    def child_environment(self, overrides: dict | None = None) -> dict:
+        """Pass this owner's catalog explicitly after inherited pins are cleared."""
+        explicit = {}
+        if getattr(self, "_catalog_fixture_path", None) is not None:
+            explicit["BUDDY_MODEL_CATALOG_FILE"] = str(self._catalog_fixture_path)
+        explicit.update(overrides or {})
+        return _child_environment(self.directory, explicit)
+
     # -- real daemon helpers -------------------------------------------------
     @contextmanager
     def daemon(self, *, env: dict | None = None):
@@ -417,7 +454,7 @@ class BoardTestCase(unittest.TestCase):
 
         from hey_my_buddy.protocol.rpc_config import configure_client
         configure_client(self.directory)
-        environment = _child_environment(self.directory, env)
+        environment = self.child_environment(env)
         log = open(self.directory / "test-daemon.log", "ab")
         command = [sys.executable, '-m', 'hey_my_buddy.blackboard.service.daemon']
         if environment.get('BUDDY_MODEL_CATALOG_FILE'):
@@ -487,7 +524,7 @@ class BoardTestCase(unittest.TestCase):
 
     def cli(self, *arguments: str, env: dict | None = None, timeout: int = 90) -> tuple[int, dict]:
         """Run the real CLI in a child process; returns (exit code, parsed stdout)."""
-        environment = _child_environment(self.directory, env)
+        environment = self.child_environment(env)
         completed = subprocess.run(
             [sys.executable, "-m", "hey_my_buddy.cli.main", *arguments],
             env=environment,

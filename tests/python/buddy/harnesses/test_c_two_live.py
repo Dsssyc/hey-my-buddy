@@ -112,6 +112,7 @@ def wire_observe(run: RunIdentity, *, token: str, instance_id: str, **arguments)
 
 def endpoint(run: RunIdentity | None = None, *, delivery: str = "cooperative-checkpoint",
              **kwargs) -> ctl.CTwoLiveEndpoint:
+    kwargs.setdefault("state_dir", Path(tempfile.gettempdir()) / "live-unit-state")
     return ctl.CTwoLiveEndpoint(run or identity(), lv.LiveCapabilities(inquiry_delivery=delivery),
                                 TEST_CRM, **kwargs)
 
@@ -220,6 +221,37 @@ class WireFrameTests(unittest.TestCase):
                 ctl.LiveWireRequest(identity=run, request_id="r", kind="inquiry",
                                     payload=lv.InquiryPayload(question_id="q", question="x"),
                                     instance_id="a" * 64, token="b" * 64, timeout_ms=value)
+
+
+class ExplicitStateTests(unittest.TestCase):
+    def test_internal_endpoint_and_channel_refuse_missing_state_before_sdk(self):
+        """R-01: construction cannot silently select the Host CLI default."""
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / "home"
+            home.mkdir()
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
+                           and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
+            environment["HOME"] = str(home)
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(ctl.cc, "register") as register, \
+                    mock.patch.object(ctl.cc, "connect") as connect, \
+                    mock.patch.object(rpc_config.cc, "set_local_endpoint") as selected:
+                constructors = (
+                    lambda: ctl.CTwoLiveEndpoint(identity(), lv.LiveCapabilities(
+                        inquiry_delivery="unsupported"), TEST_CRM),
+                    lambda: ctl.CTwoLiveChannel(identity(), TEST_CRM, name="RootRequired",
+                        address="ipc://explicit-root-only", instance_id="a" * 64, token="b" * 64),
+                )
+                for constructor in constructors:
+                    with self.subTest(constructor=constructor):
+                        with self.assertRaises(BoardError) as raised:
+                            constructor()
+                        self.assertEqual(raised.exception.code, "PRIVATE_STATE_REQUIRED")
+                register.assert_not_called()
+                connect.assert_not_called()
+                selected.assert_not_called()
+            self.assertEqual(list(home.iterdir()), [])
 
 
 class EndpointAdmissionTests(unittest.TestCase):
@@ -963,7 +995,7 @@ class EndpointLifecycleTests(unittest.TestCase):
         real_cc = ctl.cc
         ctl.cc = fake
         try:
-            target = endpoint(name="Ava")
+            target = endpoint(name="Ava", state_dir=self.temp.name)
             described = target.start()
             self.assertEqual(fake.roles_at_register, ("client", "server"))
             contract, implementation, name, concurrency = fake.registered[0]
@@ -974,7 +1006,7 @@ class EndpointLifecycleTests(unittest.TestCase):
             self.assertEqual((described.address, described.name, described.host_pid),
                              (fake.address, "Ava", os.getpid()))
             self.assertEqual(described.endpoint_credential, "opaque-native-credential")
-            started = endpoint(name="Bo")
+            started = endpoint(name="Bo", state_dir=self.temp.name)
             started.start()
             with self.assertRaises(BoardError):
                 started.start()
@@ -993,7 +1025,7 @@ class EndpointLifecycleTests(unittest.TestCase):
     def test_native_credential_json_is_preserved_without_reencoding(self):
         fake = FakeC2()
         with mock.patch.object(ctl, "cc", fake):
-            described = endpoint(name="Dana").start()
+            described = endpoint(name="Dana", state_dir=self.temp.name).start()
         self.assertEqual(described.endpoint_credential, "opaque-native-credential")
 
 
@@ -1312,7 +1344,7 @@ class LivePeer:
         self.token_path = self.directory / "live-token"
         start = {"op": "start", "identity": run.to_payload(), "delivery": delivery,
                  "name": name, "readyPath": str(self.ready_path),
-                 "tokenPath": str(self.token_path)}
+                 "tokenPath": str(self.token_path), "stateDir": str(root / "state")}
         if stall is not None:
             start["stallSeconds"] = stall
         reply = self.command(start)

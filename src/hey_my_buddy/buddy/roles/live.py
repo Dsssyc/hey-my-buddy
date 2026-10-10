@@ -9,6 +9,7 @@ import c_two as cc
 
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
+from ...protocol import rpc_config
 from ...protocol.contracts import HarnessRunLive
 from ..harnesses.c_two_live import (
     CTwoLiveChannel, ConfirmedProcessGone, CleanupOutcome,
@@ -78,7 +79,7 @@ def _ready_descriptor(handle) -> LiveEndpointDescriptor | None:
     return descriptor
 
 
-def handle_live_binding(handle):
+def handle_live_binding(handle, *, state_dir: str | Path | None = None):
     """Retry readiness against the held identity; never adopt a PID or file's identity."""
     control = getattr(handle, "role_run_control", None)
     expected = getattr(handle, "role_run_identity", None)
@@ -88,6 +89,7 @@ def handle_live_binding(handle):
     binding = live_binding(control.get("harness"))
     if binding is None:
         return LIVE_UNEXTRACTED, None
+    state_dir = rpc_config.resolve_state_dir(state_dir)
     descriptor = _ready_descriptor(handle)
     if descriptor is None:
         return LIVE_UNAVAILABLE, None
@@ -98,7 +100,7 @@ def handle_live_binding(handle):
     if cached is None:
         cached = binding(expected, HarnessRunLive, name=descriptor.name, address=descriptor.address,
                          instance_id=descriptor.instance_id, token=control["live"]["token"],
-                         state_dir=Path(cc.local_endpoint_context().root).parent if os.name != "nt" else None)
+                         state_dir=state_dir)
         handle.role_live_channel = cached
         handle.role_live_descriptor = descriptor
     return LIVE_BOUND, cached

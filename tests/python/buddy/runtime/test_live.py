@@ -93,7 +93,7 @@ class FakeC2:
 
 class FakeBoard:
     def __init__(self):
-        self.state_dir = Path(os.environ["BUDDY_STATE_DIR"])
+        self.state_dir = Path(os.environ["BUDDY_STATE_DIR"]).resolve()
         self.attachments = []
         self.hook = lambda attachment: None
         self.detach_hook = lambda withdrawal: None
@@ -209,6 +209,23 @@ class WorkerLiveUnitTests(unittest.TestCase):
                                             lambda handle: ("bound", self.channel))
         self.assertEqual(self.events[-2:], [("server-profile", self.board.state_dir),
                                           ("client-profile", self.board.state_dir)])
+        runtime.stop()
+
+    def test_missing_owner_root_refuses_before_sdk_even_with_an_ambient_domain(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            live.cc, "local_endpoint_context", return_value=SimpleNamespace(root="<AMBIENT_STATE>/ipc"),
+        ) as ambient:
+            with self.assertRaises(BoardError) as raised:
+                live.WorkerLiveRuntime(SimpleNamespace(), "worker-missing", "process-missing",
+                                       lambda handle: ("bound", self.channel))
+            self.assertEqual(raised.exception.code, "PRIVATE_STATE_REQUIRED")
+            ambient.assert_not_called()
+
+    def test_worker_supplied_root_wins_over_an_injected_client_root(self):
+        owner = Path(self.temp.name).resolve()
+        runtime = live.WorkerLiveRuntime(SimpleNamespace(state_dir="<FOREIGN_STATE>"),
+            "worker-owned", "process-owned", lambda handle: ("bound", self.channel), state_dir=owner)
+        self.assertEqual(self.events[-2:], [("server-profile", Path(owner)), ("client-profile", Path(owner))])
         runtime.stop()
 
     def test_b2_02_actual_actor_identity_and_independent_worker_token(self):

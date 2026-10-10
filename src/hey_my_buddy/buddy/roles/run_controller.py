@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from ...errors import BoardError
+from ...protocol import rpc_config
 from ...protocol.contracts import HarnessRunLive
 from ..harnesses.c_two_live import CTwoLiveEndpoint, write_ready_material
 from ..harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
@@ -34,7 +35,8 @@ def _controller_live(control, request, services):
     capabilities = (EXISTING_CAPABILITIES[request.harness] if getattr(services, "inquiry", None)
                     else LiveCapabilities(inquiry_delivery="unsupported"))
     endpoint = CTwoLiveEndpoint(request.identity, capabilities, HarnessRunLive,
-                               instance_id=material["instanceId"], token=material["token"])
+                               instance_id=material["instanceId"], token=material["token"],
+                               state_dir=rpc_config.resolve_state_dir())
     try:
         descriptor = endpoint.start()
         write_ready_material(material["readyFile"], descriptor)

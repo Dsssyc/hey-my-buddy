@@ -409,7 +409,7 @@ class CTwoLiveEndpoint:
 
     def __init__(self, identity: RunIdentity, capabilities: LiveCapabilities, contract: type, *,
                  name: str | None = None, instance_id: str | None = None,
-                 token: str | None = None):
+                 token: str | None = None, state_dir: str | Path | None = None):
         if not isinstance(identity, RunIdentity):
             raise fail("identity must be a RunIdentity")
         if not isinstance(capabilities, LiveCapabilities):
@@ -419,6 +419,7 @@ class CTwoLiveEndpoint:
         for operation in ("capabilities", "request", "observe"):
             if not callable(getattr(contract, operation, None)):
                 raise fail(f"the live contract must declare a {operation} operation")
+        self._state_dir = rpc_config.resolve_state_dir(state_dir)
         self._identity = identity
         self._capabilities = capabilities
         self._contract = contract
@@ -479,10 +480,13 @@ class CTwoLiveEndpoint:
         """
         if self._descriptor is not None:
             raise fail("the live endpoint was already started")
-        rpc_config.configure_server()
-        rpc_config.configure_client()
-        cc.register(self._contract, self, name=self._name,
-                    concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+        rpc_config.configure_server(self._state_dir)
+        rpc_config.configure_client(self._state_dir)
+        try:
+            cc.register(self._contract, self, name=self._name,
+                        concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+        except (ValueError, RuntimeError) as error:
+            raise BoardError("PRIVATE_PATH_UNSAFE", str(error)) from error
         address = cc.server_address()
         if not isinstance(address, str) or not address:
             raise fail("the registered live endpoint reported no server address")
@@ -1008,8 +1012,7 @@ class CTwoLiveChannel:
         for operation in ("capabilities", "request", "observe"):
             if not callable(getattr(contract, operation, None)):
                 raise fail(f"the live contract must declare a {operation} operation")
-        from ...protocol.transport import get_state_dir
-        self._state_dir = get_state_dir(state_dir)
+        self._state_dir = rpc_config.resolve_state_dir(state_dir)
         self._identity = identity
         self._contract = contract
         self._name = check_text(name, "name", maximum=128)

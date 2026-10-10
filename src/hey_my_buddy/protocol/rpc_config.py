@@ -12,7 +12,7 @@ from pathlib import Path
 import stat
 import threading
 
-from .. import home, private_dirs
+from .. import private_dirs
 from ..errors import BoardError
 
 import c_two as cc
@@ -102,51 +102,54 @@ def report(role: str = "server") -> dict:
         return _reports.setdefault(role, _build_report(role))
 
 
-def _validate_path(path: Path, *, private: bool = False, ipc: bool = False) -> bool:
-    """Reject unsafe existing entries; never repair their permissions."""
+def resolve_state_dir(state_dir: str | Path | None = None) -> Path:
+    """Resolve only caller-supplied state; internal RPC never selects a default."""
+    selected = state_dir if state_dir is not None else os.environ.get("BUDDY_STATE_DIR")
+    if not selected:
+        raise BoardError("PRIVATE_STATE_REQUIRED", "Internal RPC requires an explicit state directory")
+    return private_dirs._absolute(Path(selected).expanduser())
+
+
+def _validate_path(path: Path) -> bool:
+    """Keep structural path guards; C-Two owns endpoint access checks."""
     if '..' in path.parts or private_dirs.linked_component(path) is not None:
         raise BoardError("PRIVATE_PATH_UNSAFE", "IPC path contains a linked or unsafe component")
     try:
         info = path.lstat()
     except FileNotFoundError:
         return False
-    if (not stat.S_ISDIR(info.st_mode)
-            or info.st_uid not in (os.geteuid(), 0)
-            or (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX)
-            or (private and (info.st_uid != os.geteuid() or info.st_mode & 0o077))
-            or (ipc and stat.S_IMODE(info.st_mode) != 0o700)):
-        raise BoardError("PRIVATE_PATH_UNSAFE", "IPC path is not an owner-private directory", path=str(path))
+    if not stat.S_ISDIR(info.st_mode):
+        raise BoardError("PRIVATE_PATH_UNSAFE", "IPC path is not a directory", path=str(path))
     return True
 
 
 def configure_local_endpoint(state_dir: str | Path | None = None, *, create: bool = True) -> Path | None:
-    """Select the private domain before local I/O; native C-Two fences active roots.
+    """Select explicit state/ipc; native C-Two validates access on first I/O.
 
-    ``create=False`` requires both state and IPC directories to exist securely and
-    never creates or chmods them. Completed native shutdown allows a new selection.
+    ``create=False`` never creates or chmods directories. Completed native shutdown
+    allows a new selection. Windows retains its native Named Pipe domain.
     """
+    state = resolve_state_dir(state_dir)
     if os.name == "nt":
         cc.set_local_endpoint()
         return None
-    state = private_dirs._absolute(Path(state_dir or os.environ.get("BUDDY_STATE_DIR") or home.default_state_dir()).expanduser())
     root = state / "ipc"
     for ancestor in reversed(state.parents):
         _validate_path(ancestor)
     for directory in (state, root):
-        exists = _validate_path(directory, private=True, ipc=directory == root)
-        if not exists:
+        if not _validate_path(directory):
             if not create:
                 raise BoardError("PRIVATE_PATH_UNSAFE", "Private IPC directory is missing", path=str(directory))
-            # linked_component supplies the shared ancestor guard. An entry that
-            # races creation must pass the same strict check; never chmod it.
             try:
                 directory.mkdir(mode=0o700, parents=True)
             except FileExistsError:
                 pass
-        _validate_path(directory, private=True, ipc=directory == root)
-    # Do not cache the root in Python: Core owns the active-domain fence and the
-    # fresh session after a fully completed shutdown.
-    cc.set_local_endpoint(root=str(root))
+        _validate_path(directory)
+    # Core owns both the active-domain fence and endpoint access validation.
+    try:
+        cc.set_local_endpoint(root=str(root))
+    except (ValueError, RuntimeError) as error:
+        raise BoardError("PRIVATE_PATH_UNSAFE", str(error)) from error
     return root
 
 

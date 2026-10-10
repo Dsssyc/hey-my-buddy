@@ -18,6 +18,7 @@ import unittest
 from unittest import mock
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 from support import stop_private_service, stop_private_workers, _child_environment, shutdown_private_rpc
 
@@ -35,6 +36,7 @@ MIB = 1024 * 1024
 PROBE_SERVER = '''
 import json, os, sys, time
 from pathlib import Path
+from types import SimpleNamespace
 import c_two as cc
 from c_two import crm
 
@@ -78,6 +80,7 @@ class ProbeContract:
     def sleep_ms(self, payload: str) -> str: ...
 
 from pathlib import Path
+from types import SimpleNamespace
 from hey_my_buddy.protocol import rpc_config
 state = Path(os.environ["BUDDY_STATE_DIR"])
 mode = os.environ.get("PROBE_CLIENT_MODE", "profile")
@@ -242,39 +245,118 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(dict(os.environ), before)
 
     def test_windows_never_passes_root_override(self):
-        with mock.patch.object(rpc_config.os, "name", "nt"), mock.patch.object(rpc_config.cc, "set_local_endpoint") as endpoint:
+        with mock.patch.object(rpc_config, "os", SimpleNamespace(name="nt", environ=os.environ)), mock.patch.object(rpc_config.cc, "set_local_endpoint") as endpoint:
             rpc_config.configure_local_endpoint(self.state)
             endpoint.assert_called_once_with()
         self.assertFalse((self.state / "ipc").exists())
 
-    def test_bad_state_or_ipc_is_refused_without_repair(self):
+    def test_missing_state_refuses_before_sdk_or_default_paths(self):
+        """R-01: internal configuration has no Host CLI default resolution."""
         from hey_my_buddy.errors import BoardError
+        home = self.state / "empty-home"
+        home.mkdir()
+        environment = {key: value for key, value in os.environ.items()
+                       if not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
+        environment["HOME"] = str(home)
+        with mock.patch.dict(os.environ, environment, clear=True), \
+                mock.patch.object(rpc_config.cc, "set_local_endpoint") as endpoint:
+            for configure in (rpc_config.configure_local_endpoint, rpc_config.configure_server,
+                              rpc_config.configure_client):
+                with self.subTest(configure=configure.__name__):
+                    with self.assertRaises(BoardError) as raised:
+                        configure()
+                    self.assertEqual(raised.exception.code, "PRIVATE_STATE_REQUIRED")
+            with mock.patch.object(rpc_config, "os", SimpleNamespace(name="nt", environ=os.environ)):
+                with self.assertRaises(BoardError) as raised:
+                    rpc_config.configure_local_endpoint()
+                self.assertEqual(raised.exception.code, "PRIVATE_STATE_REQUIRED")
+            endpoint.assert_not_called()
+        self.assertEqual(list(home.iterdir()), [])
+        self.assertFalse((self.state / "ipc").exists())
+
+    def test_explicit_state_and_environment_are_the_only_sources(self):
+        environment_state = self.state / "environment"
+        with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(environment_state)}):
+            self.assertEqual(rpc_config.configure_local_endpoint(), environment_state / "ipc")
+            self.assertEqual(rpc_config.configure_local_endpoint(self.state), self.state / "ipc")
+
+    def test_0755_state_creates_0700_ipc_without_parent_repair(self):
+        """R-02 setup boundary; the transport test separately verifies I/O."""
+        from hey_my_buddy.errors import BoardError
+        self.state.chmod(0o755)
+        error = None
+        try:
+            root = rpc_config.configure_local_endpoint(self.state)
+        except BoardError as caught:
+            error = caught
+        self.assertIsNone(error, "0755 state must be accepted without chmod")
+        self.assertEqual(root, self.state / "ipc")
+        self.assertEqual(self.state.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(root.stat().st_mode & 0o777, 0o700)
+        # Existing non-writable-by-group/others modes are left for native access
+        # checks; create=False must never turn setup into a permission repair.
+        root.chmod(0o755)
+        self.assertEqual(rpc_config.configure_local_endpoint(self.state, create=False), root)
+        self.assertEqual(root.stat().st_mode & 0o777, 0o755)
+
+    def test_bad_state_or_ipc_is_refused_without_repair(self):
+        """R-03: structural guards and real SDK access refusal at registration."""
+        from hey_my_buddy.errors import BoardError
+        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
+        from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
+        from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
+        from hey_my_buddy.protocol.contracts import HarnessRunLive
+        import c_two as cc
+        run = RunIdentity(task_id="rpc-test", attempt_id="rpc-attempt", generation=1,
+                          invocation_id="rpc-invocation", input_sha256="a" * 64)
         ipc = self.state / "ipc"
         ipc.mkdir(mode=0o700)
-        for path in (self.state, ipc):
-            path.chmod(0o750)
-            with self.assertRaises(BoardError):
-                rpc_config.configure_client(self.state)
-            self.assertEqual(path.stat().st_mode & 0o777, 0o750)
-            path.chmod(0o700)
-        # Owner-private state may be read-only, but IPC's native container must
-        # retain exactly 0700. Do not silently repair an owner-only 0500 IPC root.
-        ipc.chmod(0o500)
-        with self.assertRaises(BoardError):
-            rpc_config.configure_client(self.state, create=False)
-        self.assertEqual(ipc.stat().st_mode & 0o777, 0o500)
+        self.state.chmod(0o755)
+        for mode, reason in ((0o775, "group and other users must not have write permission"),
+                             (0o777, "group and other users must not have write permission"),
+                             (0o500, "effective user lacks read/write/traverse access")):
+            with self.subTest(mode=oct(mode)):
+                ipc.chmod(mode)
+                target = CTwoLiveEndpoint(run, LiveCapabilities(inquiry_delivery="unsupported"),
+                                         HarnessRunLive, state_dir=self.state)
+                # Selection alone succeeds; only real native I/O checks access.
+                rpc_config.configure_local_endpoint(self.state, create=False)
+                error = None
+                try:
+                    target.start()
+                except Exception as caught:
+                    error = caught
+                self.assertIsInstance(error, BoardError)
+                self.assertEqual(error.code, "PRIVATE_PATH_UNSAFE")
+                self.assertIsInstance(error.__cause__, RuntimeError)
+                self.assertIn(reason, str(error.__cause__))
+                self.assertEqual(ipc.stat().st_mode & 0o777, mode)
+                self.assertTrue(cc.shutdown()["completed"])
         ipc.chmod(0o700)
         file_state = self.state / "file-state"
         file_state.write_text("ordinary file")
         with self.assertRaises(BoardError):
             rpc_config.configure_client(file_state)
+        file_ipc = self.state / "file-ipc"
+        file_ipc.mkdir()
+        (file_ipc / "ipc").write_text("ordinary file")
+        with self.assertRaises(BoardError):
+            rpc_config.configure_client(file_ipc)
         link = self.state / "link"
         link.symlink_to(ipc, target_is_directory=True)
         with self.assertRaises(BoardError):
+            rpc_config._validate_path(link / "child")
+        with self.assertRaises(BoardError):
             rpc_config.configure_client(link / "child")
-        with mock.patch.object(rpc_config.os, "geteuid", return_value=os.geteuid() + 1):
-            with self.assertRaises(BoardError):
-                rpc_config.configure_client(self.state)
+        linked_state = self.state / "linked-state"
+        linked_state.mkdir()
+        (linked_state / "ipc").symlink_to(ipc, target_is_directory=True)
+        with self.assertRaises(BoardError):
+            rpc_config.configure_client(linked_state)
+        with self.assertRaises(BoardError):
+            rpc_config._validate_path(self.state / "unused" / "..")
+        with self.assertRaises(BoardError):
+            rpc_config.configure_client(self.state / "unused" / "..")
 
     def test_read_only_setup_does_not_create_or_chmod_missing_directories(self):
         from hey_my_buddy.errors import BoardError
@@ -330,6 +412,18 @@ class IsolatedTransportTests(unittest.TestCase):
         server = ProbeServer(self.work, **kwargs)
         self.probes.append(server)
         return server
+
+    def test_0755_state_creates_0700_ipc_and_round_trips(self):
+        """R-02: a real published server/client uses an ordinary state parent."""
+        self.work.chmod(0o755)
+        self.assertFalse((self.work / "ipc").exists())
+        server = self.probe()
+        self.assertEqual(self.work.stat().st_mode & 0o777, 0o755)
+        self.assertEqual((self.work / "ipc").stat().st_mode & 0o777, 0o700)
+        self.assertEqual(Path(json.loads(server.endpoint_path.read_text())["root"]), self.work / "ipc")
+        reply = server.call("echo", "0755-parent")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["sha256"], hashlib.sha256(b"0755-parent").hexdigest())
 
     def test_maximum_legal_payload_round_trips_and_over_limit_fails_explicitly(self):
         server = self.probe()
