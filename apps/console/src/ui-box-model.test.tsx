@@ -4,7 +4,8 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ObjectiveTimeline } from "./ObjectiveTimeline";
 import type { ObjectiveTimelineProps } from "./ObjectiveTimeline";
-import { objectiveSummary, objectiveTimelineFixture } from "./objective-fixtures";
+import { ObjectiveList } from "./ObjectiveList";
+import { listFixture, objectiveSummary, objectiveTimelineFixture } from "./objective-fixtures";
 import { Status } from "./ui";
 import type { ObjectiveTimeline as ObjectiveTimelineData, TimelineRow, TimelineSpan } from "./objective-types";
 
@@ -120,6 +121,35 @@ describe("U5: duration geometry and borders share one boundary", () => {
 });
 
 describe("U5: audited controls retain the shared global box model and normal sizes", () => {
+  it("lets the rendered list use its full width without reserving an idle scrollbar gutter", () => {
+    const rows = listFixture();
+    const { getByLabelText } = render(<ObjectiveList
+      rows={rows} total={rows.length} loading={false} error="" nextCursor={null} reorder={null}
+      filter="all" query="" projectId="" hostId="" choices={{ projects: [], hosts: [] }}
+      selected={null} rail={false}
+      onFilterChange={vi.fn()} onQueryChange={vi.fn()} onProjectChange={vi.fn()} onHostChange={vi.fn()}
+      onSelect={vi.fn()} onRetry={vi.fn()} onMore={vi.fn()} onApplyReorder={vi.fn()}
+    />);
+    const scroll = getByLabelText("工作目标条目");
+    const css = getComputedStyle(scroll);
+    expect(css.getPropertyValue("scrollbar-gutter")).toBe("auto");
+    expect(css.overflowY).toBe("auto");
+    expect(css.overflowX).toBe("hidden");
+    expect(["0", "0px"]).toContain(css.minHeight);
+    expect(css.getPropertyValue("overscroll-behavior")).toBe("contain");
+    expect(css.getPropertyValue("scrollbar-width")).not.toBe("none");
+    expect(css.getPropertyValue("touch-action")).not.toBe("none");
+    expect(scroll.tabIndex).toBe(0);
+    scroll.focus();
+    expect(document.activeElement).toBe(scroll);
+    const entries = scroll.querySelectorAll(".group-heading, .task-row");
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) {
+      expect(getComputedStyle(entry).width).toBe("100%");
+      expect(getComputedStyle(entry).boxSizing).toBe("border-box");
+    }
+  });
+
   it("uses the existing global border-box reset for badges, segments, filters, titles and floating layers", () => {
     const { container } = render(<>
       <Status status="waiting-host" />
