@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -13,6 +14,17 @@ from hey_my_buddy.blackboard.tasks import workspace
 
 
 class WorkspaceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        temporary = tempfile.TemporaryDirectory(prefix="buddy-workspace-repository-")
+        cls.addClassCleanup(temporary.cleanup)
+        fixture = cls(methodName="runTest")
+        fixture.repo = Path(temporary.name) / "repo"
+        fixture.repo.mkdir()
+        fixture._seed_repository()
+        cls._repository_template = fixture.repo
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="buddy-workspace-")
         self.addCleanup(self.temp.cleanup)
@@ -20,6 +32,13 @@ class WorkspaceTests(unittest.TestCase):
         self.repo = self.root / "repo"
         self.repo.mkdir()
         self.state = self.root / "state"
+        # copytree creates distinct ordinary files and Git administration; no
+        # hardlinks, captured identity, worktree allocation or board is shared.
+        shutil.copytree(self._repository_template, self.repo, dirs_exist_ok=True)
+        self.git("update-index", "--refresh")
+        self.base = self.git("rev-parse", "HEAD").decode().strip()
+
+    def _seed_repository(self):
         self.git("init", "-q")
         self.git("config", "user.name", "Workspace Test")
         self.git("config", "user.email", "workspace@example.invalid")

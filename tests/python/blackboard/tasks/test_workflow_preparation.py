@@ -3,6 +3,8 @@ import itertools
 import json
 import os
 import subprocess
+import shutil
+import tempfile
 import uuid
 from pathlib import Path
 from unittest.mock import patch
@@ -17,6 +19,20 @@ from hey_my_buddy.errors import BoardError
 
 
 class PreparationTests(WorkflowTestCase):
+    _repository_template = None
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Share only initial Git objects/config. Mutable files, index, refs,
+        # worktree registration and identity facts belong to each copied site.
+        temporary = tempfile.TemporaryDirectory(prefix="buddy-preparation-repository-")
+        cls.addClassCleanup(temporary.cleanup)
+        fixture = cls(methodName="runTest")
+        fixture.directory = Path(temporary.name)
+        cls._repository_template = None
+        cls._repository_template = fixture.repository("template")
+
     def setUp(self):
         super().setUp()
         self.workspace = workspace
@@ -31,6 +47,11 @@ class PreparationTests(WorkflowTestCase):
 
     def repository(self, name):
         path = self.workdir(name).resolve()
+        if self._repository_template is not None:
+            shutil.copytree(self._repository_template, path, dirs_exist_ok=True)
+            # Rebind the copied index's stat cache to these new file inodes.
+            self.git(path, "update-index", "--refresh")
+            return path
         self.git(path, "init", "-q")
         self.git(path, "config", "user.name", "Preparation Test")
         self.git(path, "config", "user.email", "preparation@example.invalid")

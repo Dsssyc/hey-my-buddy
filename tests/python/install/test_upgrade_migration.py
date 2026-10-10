@@ -3,6 +3,8 @@ import gzip
 import json
 import os
 import sqlite3
+import shutil
+import tempfile
 from contextlib import closing, ExitStack
 from pathlib import Path
 from unittest import mock
@@ -19,10 +21,26 @@ FIXTURE = Path(__file__).resolve().parents[1] / "blackboard/store/fixtures/schem
 
 
 class UpgradeMigrationTests(BoardTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        temporary = tempfile.TemporaryDirectory(prefix="buddy-upgrade-schema-")
+        cls.addClassCleanup(temporary.cleanup)
+        fixture = cls(methodName="runTest")
+        fixture.state = Path(temporary.name) / "state"
+        fixture.state.mkdir(mode=0o700)
+        fixture._seed_schema_14()
+        cls._database_template = fixture.state / "board.sqlite3"
+
     def setUp(self) -> None:
         super().setUp()
         self.state = self.directory / "state"
         self.state.mkdir(mode=0o700)
+        # The seed connection is closed before publication. Each case owns a
+        # distinct database inode, connections, journals, locks and backup files.
+        shutil.copyfile(self._database_template, self.state / "board.sqlite3")
+
+    def _seed_schema_14(self) -> None:
         with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
             connection.executescript(FIXTURE.read_text())
             connection.executemany("INSERT INTO meta(key, value) VALUES(?, ?)",

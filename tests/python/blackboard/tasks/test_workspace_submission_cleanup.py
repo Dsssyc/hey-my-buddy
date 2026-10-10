@@ -1,5 +1,6 @@
 """Submission failure revokes only the invocation's new private Git allocation."""
 import json
+import tempfile
 from pathlib import Path
 import sqlite3
 import threading
@@ -14,6 +15,20 @@ from hey_my_buddy.errors import BoardError
 class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
     git = preparation_tests.PreparationTests.git
     repository = preparation_tests.PreparationTests.repository
+
+    _repository_template = None
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Share only initial Git objects/config. Mutable files, index, refs,
+        # worktree registration and identity facts belong to each copied site.
+        temporary = tempfile.TemporaryDirectory(prefix="buddy-submission-repository-")
+        cls.addClassCleanup(temporary.cleanup)
+        fixture = cls(methodName="runTest")
+        fixture.directory = Path(temporary.name)
+        cls._repository_template = None
+        cls._repository_template = fixture.repository("template")
 
     def setUp(self):
         super().setUp()

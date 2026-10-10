@@ -53,6 +53,8 @@ R-D真实浏览器补证：固定 `9a8ae43b` 构建，私有真实ConsoleHTTP/Sy
 
 R-E原始受影响144项中136通过、7failures/1error，旧输入与准备优化版本同类失败、材料固定 `review-hr-speed/host-review-round3/r-e-128211ca/`，不能算验收通过。Host在本分支 `d30513f4` 私有复现提交被拒回收用例1项/2.747秒 AssertionError、退出1，确认R-A把_orphan_workspace改为两参却漏了workflow._revoke_submission_allocation三参调用。按范围内缺陷回原run，R-A唯一写入范围登记追加 `blackboard/tasks/workflow.py` 的这个调用点，测试仍只storage文件；R-E六测试文件暂不继续，避免同文件写入。保留原异常、恢复收据与writer/allocation引用防护，不能削弱八个既有断言或用TypeError兼容掩盖。
 
+R-E固定 `5eed7d3b`、artifact `4e44b6c8-e0da-4482-907d-0951452258c8`，只五个授权测试文件，git_errors无diff；Host逐个AST证明144个原方法与全部原断言语句未改。独立六类Git/Board隔离探针和SQLite并行writer/独立inode/模板不变探针正常收尾退出0；原生命周期1项正常5.384秒，移除真实删除后原物理assertFalse失败1项/5.025秒、无error；原workspace2项正常7.775秒，去掉复制后index refresh时原index字节不变断言失败1/2项、7.856秒、无error。四轮只准备/真实cleanup的ABBA（不执行正文、不计测试通过）49/30/20/25类Git进程分别245→54、150→55、100→25、150→56，全部复测同数；相应准备秒数7.433/6.515→1.829/1.829、4.256/3.741→1.607/1.641、3.070/2.512→0.896/0.823、4.187/3.836→1.702/1.541。5个upgrade schema准备改类级一次、每例真实独立SQLite副本，其余备份/迁移/回滚原方法不变；13个git_errors已快不加共享。原Worker六文件before/final 366.525→643.977秒、144中8个调用契约失败与ps未知收尾仍保留，不把不同负载的wall差当加速。暂时整合供A修复后的交叉检查/最终全套；R-A三参调用缺陷未解决前不验收R-E。材料 `review-hr-speed/host-review-round3/` 包含原始失败、Host probe/单项/变异/ABBA与hash。
+
 ## 初交结果（2026-10-10，随后被 Claude Code Host 打回）
 
 B1–B5、U1–U11 已完成本 Host 的固定产物核对、受影响检查、目标行为移除验证与整合。分支 `socu/console-ui-and-board-fixes` 的最终代码/前端测试提交为 `ec9e1526585d96e96dd8e5e6202476879004a339`，已合入 `socu/buddy-core@1a9decd95736a15a5ec4b4db6526e4cb48666326`（含已验收 DSH 原生续接）。以下完整检查均使用合入后的源码、私有状态/运行时与清除继承变量的环境；保留此前两次前端失败和合入前 Python 失败，不把单文件通过代替完整结果。分支不推送，Host 工作树保留供验收。

@@ -14,13 +14,14 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from support import FakeClock
+from support import BoardTestCase, FakeClock
 from protocol.fixtures import native_turn
-from blackboard.tasks.test_workflow_real import CONFIGURATION, GIT_ENV, RealWorkspaceTestCase
+from blackboard.tasks.test_workflow_real import CONFIGURATION, GIT_ENV, RealWorkspaceTestCase, private_environment
 import blackboard.tasks.test_workspace_identity as identity_fixtures
 
 from hey_my_buddy import private_dirs
@@ -49,8 +50,31 @@ class LifecycleTestCase(RealWorkspaceTestCase):
     historical = identity_fixtures.WorkspaceIdentityFixture.historical
     fixed_files = identity_fixtures.WorkspaceIdentityFixture.fixed_files
 
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        temporary = tempfile.TemporaryDirectory(prefix="buddy-lifecycle-repository-")
+        cls.addClassCleanup(temporary.cleanup)
+        fixture = RealWorkspaceTestCase(methodName="runTest")
+        try:
+            # Build the same initial repository through the existing fixture,
+            # then finish all its ordinary private cleanups before any method.
+            fixture.setUp()
+            cls._repository_template = Path(temporary.name) / "repo"
+            shutil.copytree(fixture.repo, cls._repository_template)
+        finally:
+            if not fixture.doCleanups():
+                raise AssertionError("Initial repository fixture cleanup failed")
+
     def setUp(self) -> None:
-        super().setUp()
+        # Keep the base fixture's private board/environment/catalog lifecycle;
+        # only its invariant initial Git construction moves to setUpClass.
+        BoardTestCase.setUp(self)
+        private_environment(self)
+        self.catalog_fixture()
+        self.repo = self.directory / "repo"
+        shutil.copytree(self._repository_template, self.repo)
+        self.git("update-index", "--refresh")
         self.controls: dict[str, dict] = {}
         self.worker = "w-life"
         self._previous_workspace = workflow_module._workspace_module
