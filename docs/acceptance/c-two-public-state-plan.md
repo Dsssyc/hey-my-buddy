@@ -282,3 +282,40 @@ Host 汇总助手最初用逐行末尾锚定遗漏一行被并发 stderr 拼接�
 
 
 机械范围修订已成功：scopeVersion 4、69 路径、revision 21，新增仅 liveness 与 ct_controller 两份测试 fixture。随后在同 run continue，commandId `c2-state-boundaries-v4-final-fixtures-continue-20261011-v1`、revision 22，四项配置全部省略；本回合实际可写六份夹具和交付记录，产品源码冻结。只有一个仅监控 await，原输出 dbffa3ab、整合 dcc265b0 和 `int-99cf5fe7-a471-44dd-b7d4-1a66f54bec5a` 的 verified 登记保留；完整检查 exit 1 后没有 acknowledge accepted，可在原 run 返修。检查器自建根已由其正常 teardown 移除，外层 Host 根与全部原始日志保留。
+
+
+## 3-C R4 最终夹具交付的独立补核
+
+固定输出 `70e949439f5ec962407fbe00c92c2efe20284c9d` / artifact `989e8292-6be5-4a54-88d4-788e668df0fd` / 累积补丁 SHA-256 `7f678e7e563d09a5ece2f3c6c0338fe2314d8ba0f26ec0144dc4df14f45a9949`，累计 61 路径，全部在实际 scopeVersion 4 的 69 路径内。R3→R4 恰好为六个许可 fixture 与交付记录七路径；全部 src Python byte/hash 与 dbffa3ab 一致，未改任何产品源码，也没有额外改测试或保护文档。Host 逐行核对实际 Path 接线、健康模拟的 ipc 前提、JSON 子进程边界、控制器 main 的一次 parent-state 检查，以及删除 make_endpoint 的默认参数并接上五个使用方。
+
+Host 用最终固定副本、空 HOME 和各自明确私有根补核七个原失败文件，共 99 项全部通过；额外核对共享 test_zcode 全文件。下面是第一次两进程聚焦批次的实际结果，不能把第八行的失败算进通过。
+
+| 文件 | 项数 | exit | seconds |
+| --- | ---: | ---: | ---: |
+| `blackboard.service.test_liveness` | 5 | 0 | 0.893 |
+| `buddy.harnesses.dsh.test_dsh_role_wiring` | 12 | 0 | 6.409 |
+| `buddy.harnesses.test_inquiry_owner` | 15 | 0 | 1.969 |
+| `buddy.harnesses.zcode.test_zcode_checkpoint` | 10 | 0 | 13.712 |
+| `buddy.harnesses.zcode.test_zcode_inquiry` | 47 | 0 | 7.016 |
+| `buddy.harnesses.zcode.test_zcode_tool_refusals` | 8 | 0 | 5.544 |
+| `protocol.test_ctwo_integration` | 2 | 0 | 11.273 |
+| `buddy.harnesses.zcode.test_zcode` | 25 | 1 | 29.639 |
+
+额外 test_zcode 的取消目标 test_cancel_and_unconfirmed_stop_are_distinct 第一次得到 failed 而非 cancelled，控制器没有完整结果、SIGTERM/-15、shutdownConfirmed=false；原 25 项/exit 1/29.639s 和完整原报告保留。自有并行批次全部结束后，独立解释器在同一固定源码单独重跑整个文件 25 项/exit 0/31.935s，tests自报31.613s。未改代码、断言、等待时间或首次结果，不据此断言初次一定是负载。日志分别为 `state-boundaries-host-r4-buddy-harnesses-zcode-test_zcode` 与 `state-boundaries-r4-zcode-alone`。七份原失败文件和这次单文件最终通过共 124 项，各自固定源码绑定保留。
+
+Host 独立从最终归档新建六个窄变异副本，分别去掉健康 ipc mkdir、DSH/ZCode/活动 Path、owner JSON 转 Path 与控制器 endpoint 状态参数；原集成目标各 green 退出 0，变异各退出 1且有指定目标 assertion，非导入/权限/外层超时错误。controller-state 的原 primary 断言与合作 stop=False 的次级清理 error 均保留，未吞掉来制造单一红灯；owner-json 的真实 peer TypeError 经原 started.ok 断言呈现。准确原/变异 hash、源码节点、目标及结果为 `state-boundaries-host-r4-target-proofs.json`。
+
+| 变异 | green exit / seconds | red exit / seconds | 原集成目标 |
+| --- | --- | --- | --- |
+| `healthy-ipc` | 0 / 0.321 | 1 / 0.315 | `blackboard.service.test_liveness.LivenessTests.test_each_client_attach_uses_light_ping` |
+| `dsh-path` | 0 / 0.878 | 1 / 0.799 | `buddy.harnesses.dsh.test_dsh_role_wiring.WorkerRegisteredRunTests.test_an_answered_host_question_flows_through_the_governed_turn` |
+| `zcode-path` | 0 / 0.897 | 1 / 0.792 | `buddy.harnesses.zcode.test_zcode_checkpoint.ZcodeCheckpointFlowTests.test_one_send_delivers_and_answers_a_question_and_finishes_completed` |
+| `activity-path` | 0 / 2.877 | 1 / 0.897 | `buddy.harnesses.zcode.test_zcode_inquiry.LiveActivityTests.test_running_same_phase_native_events_refresh_the_published_observation` |
+| `owner-json-path` | 0 / 0.621 | 1 / 5.477 | `buddy.harnesses.test_inquiry_owner.InquiryOwnerPeerTests.test_real_ctwo_owner_queue_requires_verified_cooperative_native_delivery_and_answer` |
+| `controller-state` | 0 / 5.708 | 1 / 7.303 | `protocol.test_ctwo_integration.CTwoIntegrationTests.test_normal_stop_and_same_connection_after_deadline` |
+
+Host-only 观察助手只记录原持有 Popen 的实际 wait/poll-reap 和原 cc.shutdown 返回，不添加信号、停止 RPC、修改结果或延长时间窗。七文件、首次第八文件及所有点变异的 observed held leaders 都获得退出码、unconfirmedPids=[]，观测到的 SDK shutdown 全 completed=true；深层的 controller/native 两层事实来自原 ct_integration fixture 的实际 native EOF/回执、Worker 停止与 endpoint inspect/reap 断言。未用“进程退出”替代未知原生停止。真实服务→Worker→模拟控制器整链两项通过，包括正常关闭、只杀自建 controller 后确认并凭据回收、外来 peer 保留、同连接期限后可用；协调文件与端点文件分开。原始 stdout/stderr、精确子进程回执、未知字段在同名 JSON/log 与 `state-boundaries-host-r4-focused.json`，没有调用模型或默认公共域。
+
+Host 独立 loader 再核：3,519 唯一 ID、216 模块、重复 0、loaderErrors 0，R3→R4 集合严格相等、增删 0；原 3-B→3-C 的 8 删除/15 新增及逐条规则对应保留。结果为 `state-boundaries-r4-ids.json`；原七失败文件99项加先前通过3420项恰好3519，不把编号清单当新整批检查通过。
+
+Root 整合只应用 dbffa3ab→70e94943 的七路径差异，再追加本计划；不重放已经整合的 R3 累积补丁，不代改 Worker 代码或测试。原 scope1 失败、正式 v2/v3/v4 与同 run continue、全检 dcc265b0 exit1、首次取消失败及当前未知历史回执均保留。最终完整检查仍待在本次整合提交上运行，原 run 尚未签收，以便范围缺陷继续打回；回收与最后全检结果另附。

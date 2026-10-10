@@ -1016,7 +1016,7 @@ class LiveActivityTests(ZcodeFixtureCase):
         from hey_my_buddy.buddy.roles.live import handle_live_binding
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            _, channel = handle_live_binding(handle, state_dir=self.environment["BUDDY_STATE_DIR"])
+            _, channel = handle_live_binding(handle, state_dir=Path(self.environment["BUDDY_STATE_DIR"]))
             if channel is not None:
                 self.assertEqual(channel._state_dir, Path(self.environment["BUDDY_STATE_DIR"]).resolve(),
                                  "the role channel must use the fixture's private state root")

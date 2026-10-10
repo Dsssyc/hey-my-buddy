@@ -256,7 +256,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         channel = None
         while time_module.monotonic() < deadline:
             if holder:
-                _, channel = handle_live_binding(holder[0], state_dir=self.environment["BUDDY_STATE_DIR"])
+                _, channel = handle_live_binding(holder[0], state_dir=Path(self.environment["BUDDY_STATE_DIR"]))
             if channel is not None:
                 break
             time_module.sleep(0.05)

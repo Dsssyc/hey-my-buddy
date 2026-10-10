@@ -25,6 +25,7 @@ class LivenessTests(BoardTestCase):
 
     def test_each_client_attach_uses_light_ping(self):
         board = self.board()
+        (board.directory / "ipc").mkdir(mode=0o700)
         operations = []
 
         def request(endpoint, operation, params, resource="control", *, state_dir=None):
@@ -43,7 +44,10 @@ class LivenessTests(BoardTestCase):
                 patch("hey_my_buddy.protocol.transport._request", side_effect=request), \
                 patch.object(board.store, "integrity", wraps=board.store.integrity) as integrity:
             for _ in range(3):
-                client.call("worker_list")
+                try:
+                    client.call("worker_list")
+                except BoardError as error:
+                    self.fail(f"healthy fixture must reach light ping and worker_list: {error.code}: {error}")
         self.assertEqual(integrity.call_count, 0, "routine reads must never run database integrity checks")
         self.assertEqual(operations, ["ping", "worker_list"] * 3)
 

@@ -1,6 +1,6 @@
 # 3-C 状态边界整理：范围内交付与待 Host 补核
 
-本记录保留首份未签收候选 `65bd6f1f8d859c7fb0690a4ecefff989d22d7011` / artifact `9acc5797-953d-48ef-a051-f7decae923e5` 的证据，并登记同 run R2 返修、机械范围失败的保全及正式 scope v3 下的 R3 收尾；原补丁 SHA-256 `b04e10f9e6a768cee8718e2d9a5f7602c22a83c99ec46483457f147d1b4604d1`。本记录绑定基线 `5f7e3b2add11936421d70f76951dc1a71aaeddc3`，3-A/3-B 已整合、3-B 生产 `8183fd05`，core 保持 `12eb4fcd`。当前范围内代码与受影响离线聚焦已交付，正式 scope v3 的最后一个 await 调用方已接通；停等 Host 固定产物补核与签收，尚无最终真实 C-Two/Worker 补核结果；本记录不是整批验收，不启动队列后续，不提交或移动 refs。
+本记录保留首份未签收候选 `65bd6f1f8d859c7fb0690a4ecefff989d22d7011` / artifact `9acc5797-953d-48ef-a051-f7decae923e5` 的证据，并登记同 run R2 返修、机械范围失败的保全及正式 scope v3 下的 R3 收尾；原补丁 SHA-256 `b04e10f9e6a768cee8718e2d9a5f7602c22a83c99ec46483457f147d1b4604d1`。本记录绑定基线 `5f7e3b2add11936421d70f76951dc1a71aaeddc3`，3-A/3-B 已整合、3-B 生产 `8183fd05`，core 保持 `12eb4fcd`。R3 已由 Host 独立补核并 exact-patch 整合，但整合后的完整检查发现七个剩余 fixture 文件失败，任务未签收。当前为正式 scope v4 下 R4 的测试调用方返修交付，产品冻结；受影响离线结果与待 Host 真实补核边界见末节；本记录不是整批验收，不启动队列后续，不提交或移动 refs。
 
 路由沿用 Host 给出的同 run 恢复：`dec-50783657-382b-46b8-8977-c900b7b3753e` 原 ZCode/zai-api/GLM-5.3-Flash/max，实际 provider 429/1310、rate_limited、retryable=false，Host 输入登记旧回合两层停止、无产物；恢复配置 Codex/openai/gpt-6.1-sol/high，configuration revision 2。本回合未重试 ZCode、未改偏好、未创建 Buddy goal/task/worker；仅有内部 Codex 只读调用审计，未把它称作独立验收。
 
@@ -30,9 +30,9 @@ LiveWireRequest.deadline_monotonic 是无默认的必填有限非负 float；唯
 
 _healthy 仅将 SERVICE_UNAVAILABLE 当作没应答，其余异常原样传播。读不到可信 endpoint 就返回 None；可信 endpoint 的 POSIX ipc 缺失用直接条件，Windows Named Pipe 不要求 ipc 目录，dangling ipc link 仍到现有结构拒绝边界。preflight 仅 OSError 写入/IPC拒绝映射 LAUNCH_ACCESS_DENIED，3-B code/message/path 保真与不读 BUDDY_CHECKS_TMPDIR 保留。
 
-## 最新 changedPaths（56，正式 scope v3 的 67 路径内）
+## 最新 changedPaths（61，正式 scope v4 的 69 路径内）
 
-首份 42 路径候选与 R2 的 55 路径候选保留。R2 相对首份有 20 路径变化、含 13 个新增许可路径，但当时机械 scope 仍为 v1，封存失败；Host 核对失败现场后 adopt 保全，之后才正式记录 v2/v3，本轮使用实际 v3/67。原 submission intent 53 不变，没有自行修改 manifest/SQL。R3 相对 adopt 的 f862 固定候选实际变化 6 路径（5 个 Python 文件与本记录），累计 56 路径。完整列表为 `<TASK_ROOT>/changed-paths-r3.json`，差集为 `turn-delta-r3.json`。
+首份 42 路径候选与 R2 的 55 路径候选保留。R2 相对首份有 20 路径变化、含 13 个新增许可路径，但当时机械 scope 仍为 v1，封存失败；Host 核对失败现场后 adopt 保全，之后才正式记录 v2/v3，本轮使用实际 v3/67。原 submission intent 53 不变，没有自行修改 manifest/SQL。R3 相对 adopt 的 f862 固定候选实际变化 6 路径（5 个 Python 文件与本记录），累计 56 路径；R4 对固定 dbffa3ab 只改本轮指定的六个测试/fixture 来源及记录，共 7 路径，累计 61 路径。最新完整列表为 `<TASK_ROOT>/changed-paths-r4.json`，本轮差集为 `turn-delta-r4.json`；原 R3 列表仍保留。
 
 - `docs/acceptance/c-two-state-boundaries.md`
 - `src/hey_my_buddy/blackboard/catalog/catalog.py`
@@ -56,6 +56,7 @@ _healthy 仅将 SERVICE_UNAVAILABLE 当作没应答，其余异常原样传播�
 - `tests/python/blackboard/catalog/test_catalog.py`
 - `tests/python/blackboard/evaluation/test_evaluation.py`
 - `tests/python/blackboard/routing/test_stage2_review_scope.py`
+- `tests/python/blackboard/service/test_liveness.py`
 - `tests/python/blackboard/service/test_service_environment.py`
 - `tests/python/blackboard/tasks/test_inquiry.py`
 - `tests/python/blackboard/tasks/test_workflow_stop_surface.py`
@@ -63,11 +64,14 @@ _healthy 仅将 SERVICE_UNAVAILABLE 当作没应答，其余异常原样传播�
 - `tests/python/blackboard/tasks/test_workspace_api.py`
 - `tests/python/buddy/harnesses/claude/test_native_run.py`
 - `tests/python/buddy/harnesses/codex/test_native_run.py`
+- `tests/python/buddy/harnesses/dsh/test_dsh_role_wiring.py`
 - `tests/python/buddy/harnesses/dsh/test_native_run.py`
 - `tests/python/buddy/harnesses/fixtures/c_two_live_peer.py`
 - `tests/python/buddy/harnesses/test_c_two_live.py`
+- `tests/python/buddy/harnesses/test_inquiry_owner.py`
 - `tests/python/buddy/harnesses/test_live_channel.py`
 - `tests/python/buddy/harnesses/zcode/test_native_run.py`
+- `tests/python/buddy/harnesses/zcode/test_zcode.py`
 - `tests/python/buddy/harnesses/zcode/test_zcode_inquiry.py`
 - `tests/python/buddy/roles/test_registered_review.py`
 - `tests/python/buddy/roles/test_registered_run_wiring.py`
@@ -82,6 +86,7 @@ _healthy 仅将 SERVICE_UNAVAILABLE 当作没应答，其余异常原样传播�
 - `tests/python/cli/test_cli_views.py`
 - `tests/python/cli/test_host_cli.py`
 - `tests/python/console/test_console_cli.py`
+- `tests/python/protocol/fixtures/ctwo_controller.py`
 - `tests/python/protocol/test_activity.py`
 - `tests/python/protocol/test_inquiry_transport.py`
 - `tests/python/protocol/test_path_state.py`
@@ -319,3 +324,66 @@ R2 的 54 个改动 Python 文件中 50 个 hash 未变；四个改变是 consol
 Host 输入只说明已开始在 f862 固定副本做 C-Two 71 和 runtimeLive 35 的真实 SDK 补核，尚未提供结果，本记录不声称它们通过。它们的生产/fixture/test 文件与最新源完全未变，Host 可按 hash 复用其结果；若有新缺陷，原 run 在正式 scope 内继续，不由 Host 代写代码。最新只读公共流程的真实默认 BoardClient/晚选环境/0500、原受限 service_environment 两个 preflight 及 workspace_api 的真实目标仍需 Host 核定。host-replay-r3.py 核对 55 个源码 hash 后只执行这些补核选择，每个 driver 与 suite 都保留直接 wait；此助手由 Worker 静态交付，未运行。其选测不重复正在由 Host 核定的未变 C-Two/runtimeLive 文件。R1 path_state 12/public_state 26 实际通过与 C-Two 70/runtimeLive 34 失败、首份本地/沙箱失败、R2 两处误 bind 全部保持原历史。
 
 沿用结构化报告的同一精确任务根，未新建 root、未新装依赖、未派新 helper/Worker、未手工删除任何材料、未用 stash/refs/commit。没有已知未 wait 的本轮 suite 句柄；旧 accidental daemon 缺数字 wait/两层证据仍未知，Host 的当前 0 观察不能追补历史。根外 `<OUTSIDE_AUDIT_FILE>` 首次普通 > 可能截断旧文件，实际覆盖与写前归属未知，原样保留且本轮没有再访问/修改/删除，不纳入 owned 清理。scope 外空行误写/恢复披露保留。当前停止在用户约定的 Host 审查条件，范围内无已知待接线使用方或新增共享缺口；真实边界与最终签收仍待 Host，不是整批验收。
+
+## 同 run R4：全检退回后的六个 fixture 来源返修
+
+本轮先读 `git show 8229200e:docs/acceptance/c-two-public-state-plan.md` 的“3-C 整合首轮完整检查退回”，并消费 Host 正式 scope-amend v3→v4、revision 21 的 69 路径权限；本轮进一步限定只写下列七个精确路径。原任务基线 5f7e3b2a、core 12eb4fcd 不变；输入 R3 固定候选 `dbffa3ab29828250f4d387141bb8b386b5ab6c03` / artifact `69cc7551-cb7d-4e99-a69f-0440c48bbb6b`，累积补丁 SHA-256 `c01aa715f8876a15bed436604ac1e00e6416a6d527af3653a79bebfd743132bf`，Host 已 exact-patch 整合为 `dcc265b0e091b9bf68c3719f3de82d210e54040d`，8229200e 只追加失败记录。产品及 R3 其他文件全部冻结，本 Worker 未 checkout/stash/commit/改 refs，黑板负责封存。
+
+Host 最新输入确认独立 201 项聚焦、未变的 106 项真实 IPC、六项目标独立 green/red 与 3519 个唯一 ID/216 模块；这些是 Host 对固定 R3 源码的证据，不是本 Worker 新执行，也不是整批签收。原 console 助手 /tmp 别名导致三项失败、Host 修自己助手后 canonical 36 项通过，以及 Host 211→201 的计数纠正均按最新计划保留，未据此改产品。R3 当时的“未收到补核结果”是当时状态，不能回写历史成提前通过。
+
+整合提交 dcc265b0 的默认 4 并行完整检查实际 exit 1、706.360s，216 文件 209 通过/7 失败，通过文件 3420 项（skipped 1），3519 是 loader 集合，不能称为全部通过。负载 21→中途34→16；以下均为确定的夹具调用方缺陷，不归因负载。原 Host `state-boundaries-final-check*` 结果保留：liveness、dsh_role_wiring、inquiry_owner、zcode_checkpoint、zcode_inquiry、zcode_tool_refusals、ctwo_integration 七个文件失败。ctwo_integration 两项原 first failure 为 own Worker round ended before its controller attached，合作 stop=False 的两次次级清理错误亦保留。R1/R2 全部源码/本地/沙箱失败、机械 scope1 失败/adopt、误 bind、scope 外空行误写恢复及缺 wait 历史均未抹去。Host 的全检汇总助手锚定遗漏拼接行、探查脚本语法错误也不是测试重跑或源码缺陷。
+
+### 本轮实际修改与根因
+
+- `tests/python/blackboard/service/test_liveness.py`：mock 健康 endpoint 却缺其 state/ipc 前提，真实 _healthy 缺目录分支自然返回 None。以 BoardTestCase 自有 board.directory 建 0700 ipc；保留三轮 ping/worker_list 顺序、integrity=0、缺根/外根拒绝及原 ID。健康 fixture 遇 BoardError 转为描述该失败的 self.fail，便于撤销前提时产生目标 assertion；没有 mock _healthy/attach、没有吞成成功或改产品。
+- `tests/python/buddy/harnesses/dsh/test_dsh_role_wiring.py`：现有 inquiry ready 调用把 environment 字符串传到内部 channel，原 Path 归属断言失败；调用方用 Path 包装既选私有根，原断言不改。
+- `tests/python/buddy/harnesses/zcode/test_zcode.py`：共享 live_channel 用 Path 传值，checkpoint/tool_refusals 继续复用这一个来源，不改失败的子套件文件或产品内部解析；原 root/identity/stop 断言不变。
+- `tests/python/buddy/harnesses/zcode/test_zcode_inquiry.py`：activity_channel 同样消费 Path，保留活动与归属断言，不触碰 native 活动语义。
+- `tests/python/buddy/harnesses/test_inquiry_owner.py`：peer start 在 JSON 边界将必有 command[stateDir] 转 Path，缺字段由原协议返回错误，未使用环境或默认根。make_endpoint 改必填 Path，四个本地 unit 使用方显式传各自 self.directory/state；原 cooperative/native/tampered/child 证据断言不变。
+- `tests/python/protocol/fixtures/ctwo_controller.py`：main 的 controller 分支一次读取父进程给的 BUDDY_STATE_DIR，缺失 parser.error/exit 2，构成 Path 后传 controller/control→OneSlowCallEndpoint；原缺必填 endpoint 参数的 TypeError 被根因修复。原 Worker/controller/native Popen、合作停止、RPC endpoint/reap、foreign peer、deadline 与同连接证明不改；没有补成功、吞清理错误或延长等待。
+- `docs/acceptance/c-two-state-boundaries.md`：追加实际失败、修改、验证与待补核边界，修最新路径投影；历史段保留其回合语境。
+
+本轮全部七路径与机械 v4 相交完整，六个 Python 来源对应的 10 个相关 call 已逐项 AST 接线；共享方法、checkpoint/refusal 继承及 peer/helper 使用方共 33 条源码审计位置留于 caller-audit-r4.json。handle_live_binding 三处传 Path，make_endpoint 五处有显式参数，controller(main) 和 OneSlowCallEndpoint 各一处显式根；没有新增已知使用方缺口。产品源码逐文件与 R3 byte/hash 完全一致，其余 R3 文件亦一致。
+
+### 本轮离线聚焦：18 个仓库测试与 7 个临时 guard
+
+沿用原任务根/私有环境与 run.py：`python3 <TASK_ROOT>/run.py <CHECKOUT> <label> <参数>`。每个来源独立解释器；清除继承 BUDDY_/ANTHROPIC_/C2_/VIRTUAL_ENV/UV_PROJECT_ENVIRONMENT，私有 HOME/state/runtime/tmp、离线固定 catalog、无真实原生 CLI/账号发现/模型。下表最新 25 个目标全部通过；临时 guard 在 root/offline-r4.py，不加入产品 loader，也不宣称对应全文件或真实 RPC 通过。
+
+| label | 完整参数 | 项数 | exit | seconds | suite pid / waitExit |
+| --- | --- | ---: | ---: | ---: | --- |
+| `r4-liveness-fixed` | `-m unittest -v blackboard.service.test_liveness` | 5 | 0 | 1.008 | 75168 / 0 |
+| `r4-owner-unit` | `-m unittest -v buddy.harnesses.test_inquiry_owner.InquiryOwnerTests buddy.harnesses.test_inquiry_owner.InquiryJournalProjectionTests` | 13 | 0 | 1.336 | 74839 / 0 |
+| `r4-dsh-call` | `<TASK_ROOT>/offline-r4.py -v FixtureBoundaries.test_dsh_selected_root_at_exact_existing_call` | 1 | 0 | 0.586 | 74668 / 0 |
+| `r4-zcode-call` | `<TASK_ROOT>/offline-r4.py -v FixtureBoundaries.test_zcode_common_live_helper_selected_root` | 1 | 0 | 0.581 | 74669 / 0 |
+| `r4-zcode-activity` | `<TASK_ROOT>/offline-r4.py -v FixtureBoundaries.test_zcode_activity_helper_selected_root` | 1 | 0 | 0.629 | 74671 / 0 |
+| `r4-owner-json` | `<TASK_ROOT>/offline-r4.py -v FixtureBoundaries.test_owner_json_start_passes_explicit_path_to_real_endpoint FixtureBoundaries.test_owner_missing_root_is_protocol_error_before_endpoint_start` | 2 | 0 | 0.605 | 74672 / 0 |
+| `r4-controller` | `<TASK_ROOT>/offline-r4.py -v FixtureBoundaries.test_controller_main_passes_parent_root_to_real_endpoint_before_native_launch FixtureBoundaries.test_controller_missing_parent_root_fails_at_entry_without_default` | 2 | 0 | 0.726 | 74670 / 0 |
+
+r4-liveness 早期 5 项/exit 0/1.099s、suite pid74538/waitExit0 也保留；增加健康失败的 assertion 描述后才执行上表最终 r4-liveness-fixed，其余未变测试没重跑。DSH guard 执行原测试的唯一 handle_live_binding AST call，连真实角色绑定与 channel 构造；ZCode/活动 guard 直接运行实际共享方法。仅替换 ready descriptor，并设置 cc.connect/register tripwire，不执行 SDK I/O。owner guard 运行真实 peer_main JSON start、真实 endpoint 构造，在 start 处验证 Path 后截住，bridge/session 输出是 unit substitutes，缺字段保持协议拒绝；controller guard 从真实 main 进入真实 endpoint 构造，在 Popen 前截住，缺父状态在入口 exit2。它们不是 mock 的真实 RPC 成功，原全文件与 native 行为留给 Host。Owner 13 个 unit 使用原 admission/journal/fsync/投影/收尾逻辑，不注册 endpoint。
+
+loader 仅 collect：`python3 <TASK_ROOT>/run.py <CHECKOUT> r4-loader <TASK_ROOT>/loader.py <TASK_ROOT>/final-ids-r4.json`，3519/唯一3519、exit0、1.512s，suite pid74838/waitExit0；216 模块。R3→R4 ID 集合严格相等，增删0；原3512→当前仍删8/增15/未变3504，逐项规则与 ID 表沿用本记录，未保数字留旧规则/空壳或动态重复导入。临时 helper 的七个 unit 名称不计入这3519。完整集合及差集 id-delta-r4.json 保留。
+
+### 六个固定副本的迁移故障注入
+
+最终 fixed-source-r4 与六个独立 variant-r4-* 都留任务根，受管 checkout 不用于变异。mutation-plan-r4.json / mutation-bindings-r4.json 逐项绑定原/变异文件 SHA、源码 AST 节点 SHA/行号、准确目标、green/red driver/suite pid与 waitExit；offline-r4.py SHA `2bc7da31847a7ef8d428e0cf8d5353bffee729ed4d70ddbc1e086559d17ed70d`。每项目标 green/red 各独立解释器、各一项：green exit0，red exit1且恰好一项 AssertionError/failure，0 unittest errors；没有 import、权限、真实 bind/原生子进程或任意 timeout 红灯。
+
+| 变异 | 离线完整目标 | green exit/seconds | red exit/seconds | 目标原因 |
+| --- | --- | --- | --- | --- |
+| `healthy-ipc` 撤销 fixture mkdir | `blackboard.service.test_liveness.LivenessTests.test_each_client_attach_uses_light_ping` | 0/0.843 | 1/0.661 | healthy fixture must reach light ping and worker_list: SERVICE_UNAVAILABLE；缺真实 IPC 前提，原健康调用不达。 |
+| `dsh-path` 撤销调用 Path | `FixtureBoundaries.test_dsh_selected_root_at_exact_existing_call` | 0/0.454 | 1/0.452 | 原调用得到 str channel 根，与预期 Path 不相等。 |
+| `zcode-path` 撤销共享 Path | `FixtureBoundaries.test_zcode_common_live_helper_selected_root` | 0/0.441 | 1/0.485 | 实际 live_channel 中原 private root 断言 str != Path。 |
+| `activity-path` 撤销活动 Path | `FixtureBoundaries.test_zcode_activity_helper_selected_root` | 0/0.478 | 1/0.486 | 实际 activity_channel 中原 private root 断言 str != Path。 |
+| `owner-json-path` 撤销 JSON转换 | `FixtureBoundaries.test_owner_json_start_passes_explicit_path_to_real_endpoint` | 0/0.442 | 1/0.466 | 实际 endpoint._state_dir 仍是 str，JSON start 不能到达具备 Path 的 start；协议 ok=False 触发目标 assertion。 |
+| `controller-state` 撤销 endpoint参数 | `FixtureBoundaries.test_controller_main_passes_parent_root_to_real_endpoint_before_native_launch` | 0/0.559 | 1/0.599 | 真构造抛缺 state_dir TypeError，guard 转为“controller must reach native launch with explicit parent Path” assertion。 |
+
+上述有意红灯保留完整日志，不抹去底层原因或冒充原 native 全链完成。前一项是原仓库测试，后五项为源码绑定的临时迁移 guard；Host 仍需在允许 IPC 的环境跑原集成目标。原公开解析、missing deadline、Worker原deadline、health错误保真、两处 R2 fixture 的六份独立 Host R3红绿证据仍保留，其节点/目标不在本轮改动中；不为记录或未变产品重复运行。
+
+### 固定绑定、Host 补核与残留
+
+当前累计 changedPaths61、Python60；本轮相对 dbffa3ab 只改指定七路径（六 Python与记录），product/other-R3 hash无变化。完整 changed-paths-r4.json / turn-delta-r4.json / ast-source-binding-r4.json 绑定实际源，fixed-source-r4 共944文件，manifest排除本记录避免自引用。fixed-manifest-r4.json SHA `fa0631e15ab187bdcb0ef53b8af408804e6b5aa9a7f8e17dfb15f837542a9759`，Python全集 SHA `c1f3a6039092de961b877a46d31acb9de2a18e7010f869334d36a96e559b2085`；最新报告hash、helper hash、diff检查与每个suite receipt在 final-record-binding-r4.json。记录完成后只核绑定/diff，不重跑测试。Host 201+106与全检exit1各自源码边界保留。
+
+Host-only helper `python3 <TASK_ROOT>/host-replay-r4.py <TASK_ROOT>/fixed-source-r4 [full|proofs|both]` 先核60个源码 hash；full为原七失败文件各独立解释器共99个原 ID（5/12/15/10/47/8/2），proofs为六个原集成目标在正常/变异源上点核。准确 Host目标在 mutation-plan-r4.json，已静态确认存在。host-target-r4.py 只记录既有 held Popen 的实际 wait/poll-reap和既有 cc.shutdown 结果，不改变停止、deadline、断言、返回值或发额外清理调用；每层 driver/suite wait、各直属子句柄与未知停止字段另存。controller 变异的原 primary 与 cleanup 次级错误都保留，Host 不能把它们吞掉以凑一个红灯。两个助手仅静态交付，Worker 没运行，不能当作全文件99项通过或原目标native变异有效。
+
+本轮七条最终 focus、loader及十二条proof suite均有直属 waitExit，十二个proof driver也有实际wait，proof编排工具session53794最终exit0。没有真实bind/register/原生harness子进程、付费模型、账户发现、日常服务Worker操作或新进程观察；unit线程用既有框架收尾。没有已知未wait的本轮suite句柄；旧daemon缺数字wait/两层证据仍未知，不能由后来根观察补造。根外审计文件写前归属与实际覆盖未知，原样保留且本轮未访问/删除/重建；scope外空行误写/恢复、R1/R2误bind与范围顺序错误照旧披露。
+
+沿用结构化报告的精确任务根，TMPDIR/BUDDY_CHECKS_TMPDIR、已验证依赖/cache、副本/变异/一次性材料都在根，未新建根或手工删除材料，未改 refs/stash/commit/保护文档；既有18项hash与锁的私有依赖环境沿用，无新安装升级。范围内代码与离线目标交付后停等 Host原七文件、六点变异的真实补核及本微任务验收；最后完整检查只能由Host安排，本Worker未运行，也不宣称整批验收。

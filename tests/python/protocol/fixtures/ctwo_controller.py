@@ -134,7 +134,7 @@ class OneSlowCallEndpoint(CTwoLiveEndpoint):
         return super().observe(request_json)
 
 
-def controller(control_path):
+def controller(control_path: Path, state_dir: Path):
     from hey_my_buddy.buddy.harnesses.registry import run_seam
 
     control = json.loads(control_path.read_text())
@@ -145,7 +145,8 @@ def controller(control_path):
     write_fact(control["requestFile"], json.loads(encode_run_request(request)))
     endpoint = OneSlowCallEndpoint(request.identity,
         LiveCapabilities(inquiry_delivery="cooperative-checkpoint"), HarnessRunLive,
-        token=control["live"]["token"], instance_id=control["live"]["instanceId"])
+        token=control["live"]["token"], instance_id=control["live"]["instanceId"],
+        state_dir=state_dir)
     process = subprocess.Popen([sys.executable, str(SELF), "native", "--root", str(root)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     owned = ProcessHandle(process, own_group=False, log_paths={})
@@ -326,7 +327,10 @@ def main():
     parser.add_argument("--control", type=Path)
     args = parser.parse_args()
     if args.mode == "controller":
-        controller(args.control)
+        state_dir = os.environ.get("BUDDY_STATE_DIR")
+        if not state_dir:
+            parser.error("BUDDY_STATE_DIR is required for the controller process")
+        controller(args.control, Path(state_dir))
     else:
         globals()[args.mode](args.root)
 

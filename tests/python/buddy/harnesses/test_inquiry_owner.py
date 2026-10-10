@@ -55,7 +55,7 @@ def new_material_directory() -> Path:
     return Path(tempfile.mkdtemp(prefix="inquiry-owner-", dir=TASK_MATERIAL_ROOT))
 
 
-def make_endpoint(state_dir=TASK_MATERIAL_ROOT / "owner-unit-state") -> ctl.CTwoLiveEndpoint:
+def make_endpoint(state_dir: Path) -> ctl.CTwoLiveEndpoint:
     return ctl.CTwoLiveEndpoint(RUN, lv.LiveCapabilities(
         inquiry_delivery="cooperative-checkpoint"), TEST_CRM,
         instance_id=TEST_INSTANCE, token=TEST_TOKEN,
@@ -98,7 +98,7 @@ def records(path: Path) -> list[dict]:
 class InquiryOwnerTests(unittest.TestCase):
     def setUp(self):
         self.directory = new_material_directory()
-        self.endpoint = make_endpoint()
+        self.endpoint = make_endpoint(self.directory / "state")
         self.bridge = make_bridge(self.directory, self.endpoint)
         self.addCleanup(self.bridge.close)
 
@@ -319,7 +319,7 @@ class InquiryJournalProjectionTests(unittest.TestCase):
             fact = ib.read_inquiry_journal(RUN, self.path)
         self.assertEqual(lock.call_count, 1)
         self.assertTrue(lock.call_args.kwargs["shared"])
-        bridge = make_bridge(self.directory, make_endpoint())
+        bridge = make_bridge(self.directory, make_endpoint(self.directory / "state"))
         self.addCleanup(bridge.close)
         # Bind the preexisting file without copying or altering its records.
         bridge.journal_path = self.path
@@ -333,7 +333,7 @@ class InquiryJournalProjectionTests(unittest.TestCase):
 
     def test_strict_projection_failure_keeps_owner_alive_and_observation_unavailable(self):
         self.write_records([self.record("q-invalid", "answered", answer={"text": "x" * 4001})])
-        endpoint = make_endpoint()
+        endpoint = make_endpoint(self.directory / "state")
         bridge = make_bridge(self.directory, endpoint)
         bridge.journal_path = self.path
         self.addCleanup(bridge.close)
@@ -352,7 +352,7 @@ class InquiryJournalProjectionTests(unittest.TestCase):
         self.path.touch()
         with self.path.open("r+b") as stream:
             stream.truncate(MAX_JOURNAL_BYTES + 1)
-        endpoint = make_endpoint()
+        endpoint = make_endpoint(self.directory / "state")
         bridge = make_bridge(self.directory, endpoint)
         bridge.journal_path = self.path
         self.addCleanup(bridge.close)
@@ -388,7 +388,7 @@ def peer_main() -> int:
             op = command["op"]
             if op == "start":
                 directory = Path(command["directory"])
-                endpoint = make_endpoint(command["stateDir"])
+                endpoint = make_endpoint(Path(command["stateDir"]))
                 descriptor = endpoint.start()
                 bridge = make_bridge(directory, endpoint)
                 bridge.start()
