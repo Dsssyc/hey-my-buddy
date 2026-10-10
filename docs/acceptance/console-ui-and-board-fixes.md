@@ -481,3 +481,24 @@ PA12：最终已提交的脚本与 CSS 资源名在页面中核对，sidebar-aft
 三个关联返修 run 已分别绑定固定产物与已验证的整合记录并 accepted；PA-T 与 PA-S 的 Host attention 由 Host 完成实际核对后直接验收，原缺少验证的事实留在 note。整合记录为 int-cf8351a7-09a6-4031-9e09-dc0c1f94ec0b、int-c8f2a36d-8fc1-4ef8-bc48-9c9e47c5720d、int-4abddd91-db4b-4dfc-b676-f03282b2594d。受管检出按登记的确切路径核对已回收：~/.local/share/hey-my-buddy/state/workspaces/ws-19d548ec9a82329b058f8a1f775e2f79/checkout、~/.local/share/hey-my-buddy/state/workspaces/ws-1694e6a2cea47fd9c95f2981da592ece/checkout、~/.local/share/hey-my-buddy/state/workspaces/ws-f481f7f81a452698bdc600c89a78dfe9/checkout。PA-T 的计划/应用由本 Host 执行；PA-L 遇一次 REVISION_CONFLICT，原结果保留，重读时 PA-L 和 PA-S 已是 applied，检出不存在，未重复删除。固定副本、Worker 材料副本、截图和日志均在 Host tmp/ 保留，Host 工作树不回收，等待 Claude Code Host 验收。
 
 记录提交 bd7aa8a5 后再次运行 cli.test_repository_hygiene：5 项、退出 0（1.094 秒），使用同一私有根与 Node 24 环境，日志 final-records-hygiene-node24.log。代码与产物仍停在 2bca5fe5，随后仅补这一条验证事实；再次运行卫生后交付，不重复前端全量或 Python 指定范围。
+
+
+### 验收前追加返修：时间片真实宽度与标签间距（2026-10-10）
+
+用户尚未交 Claude Code Host 验收，继续指出合成委派 0 的失败执行与后续等待片段挤在一起，以及文字紧贴边框。修前真实浏览器在最大时间轴刻度测得：不足几秒的执行被 0.3% 的整幅画布最小宽度拉成约 45 像素；结束标记随人工宽度偏移，普通标签的左右 padding 均为 0。上次文字之间的范围核对没有验证结束标记位置与标签内距，原有通过记录保留，并补足这两项事实。
+
+开始前已合入最新 socu/buddy-core @ 40d82d93，合并提交 b88b01c4；这一段 core 只有文档变化。继续使用原宏任务与 hostId codex-adr027，新增关联 PA-T、PA-S 与 UI-FRAME 的返修微任务 PB-G，不继续已验收并回收的 run。PB-G 唯一写入范围为 apps/console/src/ObjectiveTimeline.tsx、styles.css、timeline-layers.test.tsx 与 ui-box-model.test.tsx；首次四个配置字段全部省略，经黑板路由。Worker 只跑受影响测试，不删文件或目录，不用 stash，不创建或切换分支及标签；材料在开始时创建的 ignored tmp/ 任务目录里，报告确切路径，记录位置用 ~ 或占位符。
+
+修法复用现有时间刻度、跨度事实与 CSS 盒模型：时间片按真实区间给出宽度，仅用固定像素最小点击形状；结束标记跟随真实记录时刻，不能跟随人工最小宽度漂移。标签统一留内部水平空白，剩余宽度足够才显示文字；不改变时间坐标，不增加界面元素、层或设置，保留失败、取消、结束未确认的标记、悬停与读屏事实，保留已修复的尾部重叠抑制与侧栏宽度行为。
+
+| 验证编号 | 验证内容与复用机制 |
+| --- | --- |
+| PB-01 | 实际渲染的短执行与无长度片段不会随画布长度被 0.3% 拉长；复用 scaleTimeline 与固定 CSS 最小形状。 |
+| PB-02 | 失败、取消和结束未确认标记位于真实记录时间，含零时长、短片段与放大；移除定位保护测试必须失败。 |
+| PB-03 | 标签左右有统一内距，短片段扣除内距后才显示文字；保留片段父盒无 padding/border 的几何约束；移除内距或可用宽度判断测试必须失败。 |
+| PB-04 | 固定封存产物、校验 patch 与 Git blob，Host 独立跑受影响前端测试及失败注入；范围缺陷回原 run continue。 |
+| PB-05 | 私有合成看板三个宏任务，在适应窗口、放大两级与最大刻度核对文字之间、文字与标记以及边框内距；保存修前后截图与 DOM 几何，不提交图片。 |
+| PB-06 | 最终源码前端全量、发行构建、全新构建四个产物逐字节一致；顺序运行 tests/python/console、tests/python/install 与仓库卫生测试，不跑 Python 完整检查。 |
+| PB-07 | 记录本次用户指出的缺陷、源提交、测试编号变化、实际验证与未验证部分；记录更改后重跑仓库卫生；验收后按确切路径回收 Worker 检出，保留 Host tmp/。 |
+
+本次原始证据目录为 ~/.codex/worktrees/console-ui-and-board-fixes/hey-my-buddy/tmp/console-ui-and-board-host/timeline-geometry-spacing-20261010/。对外可见变化为短时间片与结束标记准确对应时间，标签留出内部空白并在过窄时省略文字；最终事实在交付节记录。
