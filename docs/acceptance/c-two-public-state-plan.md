@@ -279,3 +279,6 @@ Root 整合登记：范围操作顺序错误由 Root 承担，原 scopeVersion 1
 按用户明确的“范围不够就修订范围”许可，在 3-C 原 run 追加 tests/python/blackboard/service/test_liveness.py 与 tests/python/protocol/fixtures/ctwo_controller.py，两条新增路径使正式范围从 67 到 69；先在停下的边界 scope-amend v3→v4，确认成功后才原 run continue，不再用文本授权替代机械范围。R4 实际唯一修改限于这两份 fixture、既已许可的 test_dsh_role_wiring.py、test_inquiry_owner.py、test_zcode.py、test_zcode_inquiry.py 及交付记录。冻结产品代码；保留所有原断言/编号，不加兼容、不恢复内部解析、不放宽健康/截止时刻规则；Host 不代改。各修补必须经独立聚焦与对应目标故障注入，受限真实 bind 不重复，完整检查由 Host 在最终代码上重跑并保留本轮 exit 1。
 
 Host 汇总助手最初用逐行末尾锚定遗漏一行被并发 stderr 拼接的成功输出，断言拒绝；一次探查脚本有括号语法错误，均未跑测试或改变源码。已按实际逐文件前缀、最终 216/209/7 汇总核对，原日志不改写；检查器私有根是否自行移除以结构化 summary 里的实际存在性为准。
+
+
+机械范围修订已成功：scopeVersion 4、69 路径、revision 21，新增仅 liveness 与 ct_controller 两份测试 fixture。随后在同 run continue，commandId `c2-state-boundaries-v4-final-fixtures-continue-20261011-v1`、revision 22，四项配置全部省略；本回合实际可写六份夹具和交付记录，产品源码冻结。只有一个仅监控 await，原输出 dbffa3ab、整合 dcc265b0 和 `int-99cf5fe7-a471-44dd-b7d4-1a66f54bec5a` 的 verified 登记保留；完整检查 exit 1 后没有 acknowledge accepted，可在原 run 返修。检查器自建根已由其正常 teardown 移除，外层 Host 根与全部原始日志保留。
