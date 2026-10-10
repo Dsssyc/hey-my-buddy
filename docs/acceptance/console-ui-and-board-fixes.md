@@ -504,3 +504,56 @@ PA12：最终已提交的脚本与 CSS 资源名在页面中核对，sidebar-aft
 本次原始证据目录为 ~/.codex/worktrees/console-ui-and-board-fixes/hey-my-buddy/tmp/console-ui-and-board-host/timeline-geometry-spacing-20261010/。对外可见变化为短时间片与结束标记准确对应时间，标签留出内部空白并在过窄时省略文字；最终事实在交付节记录。
 
 PB-G 第一次交付在 Host attention 边界封存四路径产物：另一个受影响的 routing-timeline.test.tsx 仍断言 1ms 路由宽度为 0.3%，Worker 因写入范围未包含它而保留未改，报告五文件有一项失败。Host 将该单个测试文件加入同一 run 的 scope-amend（scopeVersion 1→2），在原 run 上继续且不指定四字段；其他写入范围与约束不变。此为本次几何修正必需的旧错误断言更正，不恢复错误实现。
+
+
+### PB-G 最终产物与验证
+
+返修 run 为 17e1167b-9221-4e47-b8ae-1998b46181ad。首次提交 adapter/provider/model/effort 全省略，路由选到 ZCode / zai-api / GLM-5.3-Flash / max；供应方返回不可重试 429/1310，无产物且根与后代停止已确认。按用户已授权的例外，在同一 run 用 codex/openai/gpt-6.1-sol/high 完整配置 continue；其后范围内更正的 continue 不包含 configuration 或四字段。没有另起模型调用，没有更改日常配置。限流原 get/result/await 已另存 r1-quota-*.json，不会被后续查询覆盖。
+
+第一份封存产物为 eb3c8534-848c-4d27-a676-5add9b417d80 @ 10d302a8，四路径；Host 固定 cumulative patch、SHA-256 与源 blob，独立五文件测试为 136/137、exit 1，唯一失败为未获写权限的 routing-timeline.test.tsx:97 旧 0.3% 断言。追加该一个测试的 scope-amend 后，在原 run continue；第二轮起初误假设该 fixture 无折叠空闲区间，Worker 的 initial-fold-assumption.log 如实保留，随后复用 createTimelineLayout/scaleTimeline 改正测试。最终产物为 6555d60c-e531-4e2b-bc6a-4d1ddaffdab7 @ 6402bef9，五路径；先前四路径逐字节保留。Host 在固定最终产物独立跑相同五文件：137/137、exit 0，6.068 秒。await 的顶层 runner revision 与 workflow revision 不同，监控摘要曾返回前轮失败/attention 信息；Host 使用 get 的当前 workflow 边界与完整 await 文件作判断，R2 最终为 delivered、workflow revision 13，没有按过期摘要继续或验收。
+
+用户确认 core 在 12eb4fcd 停止变动。从上次 1f7e8b60 到该提交只有文档变化，已合入；最终 core 合并为 505f1b1a，生产五路径整合为 51ebacaf，发行构建为 681ca05d1cfdbbe8b3d1267fd17d819c0ebe65bf。Host 将最终五路径与固定产物及 681ca05d 的 Git blob 逐字节核对，integrated-source-proof.json 记录散列。没有将 core 文档合并误报为本 Host 手工修改文档，DSH/C-Two 并行分支与检出未操作。
+
+实现以真实刻度的起止差值给出时间片宽度，零时长为零，CSS 的普通 4px / 失败 routing 14px 最小识别形状保留；移除 0.3% 画布最小宽度。failed、cancelled 的结束标记与 unknown 的 solid/问号均使用真实记录时刻的像素偏移。普通、solid、tail 标签统一左右 8px 内距及 border-box，父时间片仍无 padding/border；扣除内距后的可用宽度决定文字档位。unknown 尾部另保留原 10px 标记间隔，五个 10px 汉字需要 50px 内容宽度，因此尾部需至少 76px，取代 4% 画布阈值。过窄片段省略文字，title/aria 保留；尾部与后续片段重叠时继续省略“结束未确认”，问号、虚线与完整事实保留。没有新增界面元素、层或设置。
+
+| 测试编号变化 | 数量与依据 |
+| --- | --- |
+| 前端全量 | 906 → 931，新增 25、删除 0、旧名称更正 13；66 个文件不变，frontend-inventory-before/after/change.json 留存完整编号。 |
+| 旧名称更正 | U5 短条几何与标签内距各 1；unknown tail 阈值 below/at/above 共 3；Host 扣内距的短标签 5；execution 扣内距的短标签 3。原非缺陷断言保留。 |
+| 新增几何测试 | 测试文件的 U6.1 组 3 项：fit/+2/max 下 execution/queue/routing/Host 的零时长、1ms、3s；这只是测试分组名，与设置版本信息的工作编号 U6 无关。 |
+| 新增端点测试 | 测试文件 U6.2 组 13 项：failed/cancelled/unknown 与刻度、零/短时长、solid/tail、观察端点。 |
+| 新增标签测试 | 测试文件 U6.3 组 8 项阈值与标记间隔，U6.4 组 1 项真实 CSS cascade 的统一内距。 |
+| 路由旧断言 | 原一毫秒失败路由测试名称及编号不变；复用现有刻度验证起止与真实宽度，保留记录时间、cross、14px 最小形状等断言。 |
+| Python 编号 | 没有修改 Python 源码与测试，新增/删除均为 0；本轮选择 console、install、仓库卫生和读取 skill/reference 文档的模块。 |
+
+| Host 独立移除目标行为 | 失败项数 / exit |
+| --- | --- |
+| 恢复百分比最小宽度 | 17 / 1 |
+| failed/cancelled 跟随最小形状端点 | 6 / 1 |
+| unknown solid 恢复百分比最小宽度 | 7 / 1 |
+| unknown 标记跟随最小形状端点 | 7 / 1 |
+| 去掉标签内距 | 2 / 1 |
+| 去掉普通标签可用宽度扣除 | 9 / 1 |
+| 去掉 solid 标签可用宽度扣除 | 1 / 1 |
+| 去掉 tail 标签可用宽度扣除 | 2 / 1 |
+
+以上 8 处在独立副本中以 Node 24.21.0 运行两文件 75 项，每处均为断言失败，非语法或加载失败；Host 没有在固定产物中留变异。Worker 的 14 处变异及原日志也保留，Host 没有把它们冒充自己的独立检查。R1/R2 的生产源码及前两文件字节一致，最终整合五路径与 R2 一致，因此这些红测绑定到最终实现；固定 R2 的 Host 绿测随后再次确认 137 项全部通过。
+
+| 最终代码 681ca05d 上的命令 | 项数与结果 |
+| --- | --- |
+| npm --prefix apps/console test（加 default/json reporter，仅为留证） | 66 文件、931 项、失败 0、exit 0，24.403 秒。 |
+| npm --prefix apps/console run build | tsc --noEmit 与 Vite 均 exit 0；整合构建 1.058 秒。 |
+| 从 git archive 681ca05d 的 apps/console 与 docs/assets 在全新目录构建 | 起初发行输出不存在，构建 exit 0、0.888 秒；四个文件与已提交 Git blob 逐字节一致，fresh-build-byte-equality.json 留存散列。 |
+| 私有 runner 选择 tests/python/console、tests/python/install、cli.test_repository_hygiene、cli.test_skill_workflow | 27 文件、328 项、skip 0、默认 4 并行、exit 0，121.007 秒；无 teardown 失败。 |
+
+最终前端全量、构建与所选 Python 检查顺序运行；没有 Python 完整检查。使用已存在的 Node 24.21.0、console 依赖和私有状态/运行时，清除继承 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT。高负载期间仅如实等待，未停止并行会话或日常进程；这组最终检查没有负载疑似失败。日常服务、Worker、运行时安装与凭据未操作。
+
+真实浏览器使用本轮私有合成看板与 681ca05d 的已提交资产，地址为 http://127.0.0.1:58586/；ready.json 绑定提交且 subprocessAttempts 为 0，不是日常看板。浅色的三个宏任务分别在 fit、+2、max 共 9 组核对，再补浅/深色及列表收起后的宽轨道，合计 14 组 DOM 几何与截图；每组文字之间、文字与 end-mark 的相交数为 0，标签左右 padding 为 8px，最小文字左内距为 8px。修前最大刻度有 19 组文字相交、2 组文字/标记相交；修后同类短执行显示约 4px，而不是约 45px。几何报告包括纵向屏外的行，截图证明当前可见的行；标记、title/aria 与缩放边界另由渲染测试守住。最终浏览器 error 日志为空。此前 PA-L 的隐藏首次列表读取与侧栏无空闲 gutter 代码未改，前端全量及既有变异记录继续保留，没有重新声称做过后台首读的人工核对。
+
+截图与日志均在 ignored 的 ~/.codex/worktrees/console-ui-and-board-fixes/hey-my-buddy/tmp/console-ui-and-board-host/timeline-geometry-spacing-20261010/，不提交图片；修前对照为 before-max-selected.jpg 与 before-max-wide.jpg，最终为 final-macro1-light-max-delivery.jpg、final-macro1-dark-max-expanded-track.jpg 及 final-macro[1-3]-light-[fit/plus2/max].jpg，完整测量见 final-browser-matrix.json 与逐组 geometry.json。Worker 材料已复制到同一 Host 根的 review-pb-geometry/r1 与 r2（两轮 pb-geometry-* 目录），以免检出回收丢证据。Host tmp/ 不清理。
+
+未验证部分与工具限制：这次实际浏览器 viewport 为 1058×595，主题和列表收起造成的轨道宽度都已测量；工具 viewport.set(1440×900) 没有改变实际值，之后 reset，不把文件名里的 wide 当成 1440×900 窗口证据。没有重做原生 125% 缩放或其它浏览器矩阵，也没有在日常看板安装或跑本批资产。测量脚本最初调用不开放的全局 parseFloat 失败，动态字符串生成也被工具拒绝；随后改为直接声明 Number.parseFloat 的只读测量脚本，只有成功后的 14 组计入证据。这些没有改动产品源码或页面行为。
+
+对外可见变化清单：短时间片的长度与结束标记准确反映记录时刻；文字左右留 8px 内部空白；窄片段省略文字但悬停与读屏事实完整；unknown 尾部的文字显示阈值改为固定像素可用宽度。既有列表首次后台读取、侧栏宽度与尾部重叠抑制保持。该分支不推送，完成本 Host 的固定产物验收与受管检出回收后，停下等 Claude Code Host 验收。
+
+本 Host 已登记 integration int-fdc74ff1-72f6-4511-9860-dbeb4ee1504b 并 acknowledge 精确最终 artifact，workflow revision 14→15、verdict accepted。随后 Host 的 cleanup-plan 遇到 REVISION_CONFLICT，重新 get 发现黑板已在 revision 17 记录 plan cln-87ac42b1-3e1d-43c1-b5ed-50d5924932ee 为 applied；逐路径确认 ~/.local/share/hey-my-buddy/state/workspaces/ws-74e99e6e459821830c74cc1d1548ddf8/checkout 已不存在。没有重复删除，未独立追查施行主体；清理只涉及该 run 的实际检出，manifest/input/output 记录及 Host 复制材料仍保留。末次记录更改后，读取文档的 cli.test_skill_workflow 12 项已通过，仓库卫生随后在相同私有环境完成，5 项、exit 0（records-hygiene.json）；不重跑前端全量或 Python 完整检查。
