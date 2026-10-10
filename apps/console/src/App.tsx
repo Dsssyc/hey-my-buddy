@@ -18,20 +18,13 @@ import { BuddyConfig } from "./BuddyConfig";
 import { Settings } from "./Settings";
 import buddyIcon from "../../../docs/assets/icon.svg?no-inline";
 
-const tabs = { tasks: "nav.tasks", buddy: "nav.buddies", settings: "nav.settings" } as const;
-type Tab = keyof typeof tabs;
-/**
- * URL hash per tab. The 设置 page cannot keep `settings`: that hash was the
- * retired 路由配置 page, and the user's decision is that the old bookmark opens
- * Buddy 配置, where the routing settings now live.
- */
-const tabHashes: Record<Tab, string> = { tasks: "tasks", buddy: "buddy", settings: "system" };
-/** Old bookmarks of the retired "模型卡片" (`models`) and "路由配置" (`settings`) pages land on their successor. */
-const legacyTabs: Record<string, Tab> = { models: "buddy", settings: "buddy" };
+/** The pages. Each is addressed by its own name as the URL hash and named by `nav.<page>` in the text. */
+const tabs = ["tasks", "buddies", "settings"] as const;
+type Tab = (typeof tabs)[number];
+/** The page the URL hash names; any other hash opens the tasks. */
 function currentTab(): Tab {
   const key = window.location.hash.slice(1).split("/")[0];
-  const known = (Object.keys(tabs) as Tab[]).find(tab => tabHashes[tab] === key);
-  return known ?? legacyTabs[key] ?? "tasks";
+  return tabs.find(tab => tab === key) ?? "tasks";
 }
 
 /** The clock time of a read made today, and the date with it once the read is older. */
@@ -115,12 +108,12 @@ function Connected({ api, snapshot, refresh, connectionError }: {
     || (editor.waiting ? "正在等待其他保存完成；可先取消等待。" : "");
   const conflictTitle = editor.conflict ? `V${editor.conflict.basedOn} → V${editor.conflict.latest}` : undefined;
   // Draft banners belong to the Buddy settings page; the records page shows none.
-  const draftTab = tab === "buddy";
+  const draftTab = tab === "buddies";
   const verifiedAt = api.readVerifiedAt?.(snapshot) ?? null;
   // What a mark on a tab means; the tab shows it on hover and on focus.
   const tabHints: Partial<Record<Tab, string>> = {
     tasks: pending > 0 ? t("nav.pendingHost") : undefined,
-    buddy: editor.dirty ? t("nav.unsaved") : undefined,
+    buddies: editor.dirty ? t("nav.unsaved") : undefined,
   };
   return <TooltipProvider delayDuration={300}><div className="flex h-dvh min-h-0 flex-col overflow-hidden">
     <a className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground"
@@ -132,13 +125,13 @@ function Connected({ api, snapshot, refresh, connectionError }: {
         <span className="text-sm font-semibold tracking-tight max-sm:hidden">Hey my buddy</span>
       </a>
       <nav className="flex h-full" aria-label={t("nav.label")}>
-        {(Object.keys(tabs) as Tab[]).map(key => {
+        {tabs.map(key => {
           const hint = tabHints[key];
-          const link = <a key={key} href={"#" + tabHashes[key]} onClick={() => select(key)} aria-current={tab === key ? "page" : undefined}
+          const link = <a key={key} href={"#" + key} onClick={() => select(key)} aria-current={tab === key ? "page" : undefined}
             className="relative flex items-center gap-1.5 px-3 text-sm whitespace-nowrap text-muted-foreground outline-none hover:text-foreground focus-visible:bg-accent aria-[current=page]:font-medium aria-[current=page]:text-foreground aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-3 aria-[current=page]:after:bottom-0 aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-primary">
-            {t(tabs[key])}
+            {t(`nav.${key}`)}
             {key === "tasks" && pending > 0 && <Badge tone="warning" className="tabular-nums">{pending}</Badge>}
-            {key === "buddy" && editor.dirty && <span className="size-1.5 rounded-full bg-warning" aria-hidden="true" />}
+            {key === "buddies" && editor.dirty && <span className="size-1.5 rounded-full bg-warning" aria-hidden="true" />}
             {hint && <span className="sr-only">{hint}</span>}
           </a>;
           return hint ? <Tooltip key={key}><TooltipTrigger asChild>{link}</TooltipTrigger><TooltipContent>{hint}</TooltipContent></Tooltip> : link;
@@ -156,7 +149,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       </div>
     </header>
     <main id="main" className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden p-2 outline-none sm:p-4" tabIndex={-1}>
-      <h1 className="sr-only">{t(tabs[tab])}</h1>
+      <h1 className="sr-only">{t(`nav.${tab}`)}</h1>
       {connectionError && <p className="flex shrink-0 flex-wrap items-center gap-3 rounded-md border border-danger-line bg-danger-wash px-3 py-2 text-destructive" role="alert">
         <span className="min-w-0 wrap-anywhere">{connectionError}</span>
         <Button variant="outline" size="sm" onClick={() => void refresh()}>{t("connection.retry")}</Button>
@@ -184,11 +177,11 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       {saveRefusal && <p id="editor-save-reason" className="sr-only">{saveRefusal}</p>}
       {/* Stable positions preserve page selections, drafts and scroll offsets.
           https://react.dev/learn/preserving-and-resetting-state */}
-      {(Object.keys(tabs) as Tab[]).map(key => visited.has(key) && <section key={key} hidden={tab !== key}
-        className="min-h-0 min-w-0 flex-1 overflow-hidden" aria-label={t(tabs[key])}>
+      {tabs.map(key => visited.has(key) && <section key={key} hidden={tab !== key}
+        className="min-h-0 min-w-0 flex-1 overflow-hidden" aria-label={t(`nav.${key}`)}>
         {key === "tasks" ? <Objectives snapshot={snapshot} api={api} refresh={refresh} active={tab === key}
           authority={authority} writesAvailable={writesAvailable} /> :
-          key === "buddy" ? <BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
+          key === "buddies" ? <BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
             <Settings api={api} csrfToken={snapshot.csrfToken} connectionError={connectionError}
               access={snapshot.consoleAccess} refresh={refresh} writesAvailable={writesAvailable}
               active={tab === "settings"}

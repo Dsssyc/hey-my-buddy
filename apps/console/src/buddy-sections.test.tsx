@@ -7,9 +7,9 @@ import type { Profile, Snapshot } from "./types";
 
 /**
  * Buddy 配置分区导航（docs/design/backlog.md 控制台第 1 条）：默认进入模型
- * 分区；#buddy/models、#buddy/router、#buddy/harness 三个分区互相切换；全局
+ * 分区；#buddies/models、#buddies/router、#buddies/harness 三个分区互相切换；全局
  * 状态条在三个分区始终可见，提醒链接直接跳到能处理它的分区和条目；深链、
- * hashchange、浏览器返回与旧书签 #models、#settings 落到同一状态；跳转穿透
+ * hashchange 与浏览器返回落到同一状态；跳转穿透
  * 搜索与筛选；窄屏是同一导航的顶部横排，切换可用且不丢状态。CSS 几何由
  * Host 的真实浏览器验收，这里只测组件行为。
  */
@@ -136,7 +136,7 @@ describe("current Router health", () => {
       abstentionCount: 0, cancelledCount: 0, staleCount: 0,
       lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],
     } });
-    renderBuddy("#buddy", f);
+    renderBuddy("#buddies", f);
     await screen.findByRole("heading", { name: "模型 3" });
     expect(within(statusStrip()).getByRole("link", { name: "Router 需处理，去处理" })).toBeTruthy();
     expect(statusStrip().textContent).not.toContain("Router：可用");
@@ -158,7 +158,7 @@ describe("section navigation", () => {
   it("enters the model section by default and switches through the section nav", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    renderBuddy("#buddy", f);
+    renderBuddy("#buddies", f);
     await screen.findByRole("heading", { name: "模型 3" });
     expect(currentSection()).toEqual(["模型"]);
     expect(screen.getByRole("region", { name: "模型分区" })).toBeTruthy();
@@ -166,7 +166,7 @@ describe("section navigation", () => {
     expect(screen.queryByRole("region", { name: "Harness 分区" })).toBeNull();
 
     await user.click(sectionLink("Router"));
-    expect(window.location.hash).toBe("#buddy/router");
+    expect(window.location.hash).toBe("#buddies/router");
     await waitFor(() => expect(screen.getByRole("region", { name: "Router 分区" })).toBeTruthy());
     expect(screen.queryByRole("region", { name: "模型分区" })).toBeNull();
     expect(currentSection()).toEqual(["Router"]);
@@ -175,7 +175,7 @@ describe("section navigation", () => {
     expect(screen.getByRole("radiogroup", { name: "审阅预算" })).toBeTruthy();
 
     await user.click(sectionLink("Harness"));
-    expect(window.location.hash).toBe("#buddy/harness");
+    expect(window.location.hash).toBe("#buddies/harness");
     await waitFor(() => expect(screen.getByRole("region", { name: "Harness 状态" })).toBeTruthy());
     expect(screen.queryByRole("region", { name: "Router 分区" })).toBeNull();
     expect(currentSection()).toEqual(["Harness"]);
@@ -189,7 +189,7 @@ describe("section navigation", () => {
   it("keeps the selected family, the search filter and the draft across section switches", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    renderBuddy("#buddy", f);
+    renderBuddy("#buddies", f);
     await screen.findByRole("heading", { name: "模型 3" });
     await user.type(screen.getByLabelText("搜索模型"), "gpt");
     await screen.findByRole("heading", { name: "模型 1" });
@@ -214,7 +214,7 @@ describe("section navigation", () => {
   it("keeps the global status strip visible in all three sections", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    renderBuddy("#buddy", f);
+    renderBuddy("#buddies", f);
     await screen.findByRole("heading", { name: "模型 3" });
     const alerts = () => [
       "Router 需处理，去处理", "Harness 可用 3/4", "额度提醒：DSH",
@@ -234,10 +234,10 @@ describe("status reminders jump to the entry that can handle them", () => {
   it("jumps an ineligible Router reminder to its model effort", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    renderBuddy("#buddy", f);
+    renderBuddy("#buddies", f);
     await screen.findByRole("heading", { name: "模型 3" });
     await user.click(within(statusStrip()).getByRole("link", { name: "Router 需处理，去处理" }));
-    expect(window.location.hash).toBe(`#buddy/models/${encodeURIComponent(solMediumId)}`);
+    expect(window.location.hash).toBe(`#buddies/models/${encodeURIComponent(solMediumId)}`);
     await screen.findByRole("heading", { name: "GPT-6 Sol" });
     await waitFor(() => expect(document.activeElement).toBe(document.getElementById(`effort-tag-${solMediumId}`)));
     expect(screen.queryByLabelText("审阅验证配置")).toBeNull();
@@ -247,10 +247,10 @@ describe("status reminders jump to the entry that can handle them", () => {
   it("jumps the quota reminder to the opened and focused DSH row", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    renderBuddy("#buddy", f);
+    renderBuddy("#buddies", f);
     await screen.findByRole("heading", { name: "模型 3" });
     await user.click(within(statusStrip()).getByRole("link", { name: "额度提醒：DSH" }));
-    expect(window.location.hash).toBe("#buddy/harness/dsh");
+    expect(window.location.hash).toBe("#buddies/harness/dsh");
     await waitFor(() => expect(screen.getByRole("region", { name: "Harness 状态" })).toBeTruthy());
     const dshRow = document.getElementById("harness-dsh")!;
     expect(screen.getByRole("button", { name: "DSH 收起详情" })).toBeTruthy();
@@ -261,9 +261,9 @@ describe("status reminders jump to the entry that can handle them", () => {
 });
 
 describe("deep links", () => {
-  it("opens the Codex harness row focused from #buddy/harness/codex", async () => {
+  it("opens the Codex harness row focused from #buddies/harness/codex", async () => {
     const f = fixture();
-    renderBuddy("#buddy/harness/codex", f);
+    renderBuddy("#buddies/harness/codex", f);
     await screen.findByRole("region", { name: "Harness 状态" });
     expect(screen.queryByRole("region", { name: "模型分区" })).toBeNull();
     const codexRow = document.getElementById("harness-codex")!;
@@ -273,9 +273,9 @@ describe("deep links", () => {
     expect(currentSection()).toEqual(["Harness"]);
   });
 
-  it("opens and focuses the encoded profile from #buddy/models/<profileId>", async () => {
+  it("opens and focuses the encoded profile from #buddies/models/<profileId>", async () => {
     const f = fixture();
-    renderBuddy(`#buddy/models/${encodeURIComponent(mediumId)}`, f);
+    renderBuddy(`#buddies/models/${encodeURIComponent(mediumId)}`, f);
     await screen.findByRole("heading", { name: "模型 3" });
     expect(screen.getByRole("region", { name: "模型分区" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Harness 分区" })).toBeNull();
@@ -286,9 +286,9 @@ describe("deep links", () => {
     expect(currentSection()).toEqual(["模型"]);
   });
 
-  it("focuses the named Router line from a #buddy/router target", async () => {
+  it("focuses the named Router line from a #buddies/router target", async () => {
     const f = fixture();
-    renderBuddy("#buddy/router/current", f);
+    renderBuddy("#buddies/router/current", f);
     await screen.findByRole("region", { name: "路由状态" });
     expect(screen.getByRole("region", { name: "Router 分区" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "模型分区" })).toBeNull();
@@ -299,9 +299,9 @@ describe("deep links", () => {
 
   it("follows hashchange and the browser back action between sections", async () => {
     const f = fixture();
-    renderBuddy("#buddy", f);
+    renderBuddy("#buddies", f);
     await screen.findByRole("heading", { name: "模型 3" });
-    await act(async () => { window.location.hash = "#buddy/harness"; });
+    await act(async () => { window.location.hash = "#buddies/harness"; });
     await waitFor(() => expect(screen.getByRole("region", { name: "Harness 状态" })).toBeTruthy());
     expect(currentSection()).toEqual(["Harness"]);
     await act(async () => { window.history.back(); });
@@ -310,23 +310,14 @@ describe("deep links", () => {
     expect(currentSection()).toEqual(["模型"]);
   });
 
-  it.each(["#models", "#settings"])("lands the legacy %s bookmark in the model section", async hash => {
-    const f = fixture();
-    renderBuddy(hash, f);
-    await screen.findByRole("heading", { name: "模型 3" });
-    expect(screen.getByRole("region", { name: "模型分区" })).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "Router 分区" })).toBeNull();
-    expect(currentSection()).toEqual(["模型"]);
-  });
-
   it("jumps from the Router section to the router's family and focuses its effort", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    renderBuddy("#buddy/router", f);
+    renderBuddy("#buddies/router", f);
     await screen.findByRole("region", { name: "路由状态" });
     const reviewLine = document.getElementById("router-current")!;
     await user.click(within(reviewLine).getByRole("button", { name: "查看所在家族" }));
-    expect(window.location.hash).toBe(`#buddy/models/${encodeURIComponent(solMediumId)}`);
+    expect(window.location.hash).toBe(`#buddies/models/${encodeURIComponent(solMediumId)}`);
     await waitFor(() => expect(screen.getByRole("region", { name: "模型分区" })).toBeTruthy());
     expect(await screen.findByRole("heading", { name: "GPT-6 Sol" })).toBeTruthy();
     const tag = document.getElementById(`effort-tag-${solMediumId}`)!;
@@ -338,7 +329,7 @@ describe("deep links", () => {
     // jump must clear whatever hid that family.
     const f = fixture(highId);
     const user = userEvent.setup();
-    renderBuddy("#buddy", f);
+    renderBuddy("#buddies", f);
     await screen.findByRole("heading", { name: "模型 3" });
     await user.type(screen.getByLabelText("搜索模型"), "gpt");
     await screen.findByRole("heading", { name: "模型 1" });
@@ -346,7 +337,7 @@ describe("deep links", () => {
     await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
 
     await user.click(within(statusStrip()).getByRole("link", { name: "Router 需处理，去处理" }));
-    expect(window.location.hash).toBe(`#buddy/models/${encodeURIComponent(highId)}`);
+    expect(window.location.hash).toBe(`#buddies/models/${encodeURIComponent(highId)}`);
     await waitFor(() => expect(screen.getByLabelText("搜索模型")).toHaveProperty("value", ""));
     expect((screen.getByRole("checkbox", { name: "只看已启用" }) as HTMLInputElement).checked).toBe(false);
     await screen.findByRole("heading", { name: "模型 3" });
@@ -358,7 +349,7 @@ describe("deep links", () => {
 
   it("turns on the unavailable filter when a deep link names an offline effort", async () => {
     const f = fixture();
-    renderBuddy(`#buddy/models/${encodeURIComponent(glmId)}`, f);
+    renderBuddy(`#buddies/models/${encodeURIComponent(glmId)}`, f);
     await screen.findByRole("heading", { name: "模型 3" });
     const box = screen.getByRole("checkbox", { name: "显示不可用配置（1）" }) as HTMLInputElement;
     await waitFor(() => expect(box.checked).toBe(true));
@@ -375,7 +366,7 @@ describe("a narrow viewport", () => {
     const f = fixture();
     const user = userEvent.setup();
     Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
-    renderBuddy("#buddy", f);
+    renderBuddy("#buddies", f);
     await screen.findByRole("heading", { name: "模型 3" });
     await user.click(screen.getByRole("button", { name: /^Claude Sonnet 5/ }));
     await user.type(await screen.findByLabelText("家族备注"), "窄屏草稿");

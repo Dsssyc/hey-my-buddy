@@ -205,7 +205,7 @@ describe("decision profile selector", () => {
       tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
       objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
     } as unknown as ConsoleApi;
-    window.location.hash = "#buddy";
+    window.location.hash = "#buddies";
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
     // The Router is a role on an effort tag now: no "路由模型配置" selector exists.
@@ -245,7 +245,7 @@ describe("model list display", () => {
       tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
       objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
     } as unknown as ConsoleApi;
-    window.location.hash = "#buddy";
+    window.location.hash = "#buddies";
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
     expect(

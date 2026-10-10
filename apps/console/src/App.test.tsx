@@ -197,7 +197,7 @@ describe("console interactions", () => {
     expect(api.command).not.toHaveBeenCalled();
   });
 
-  it("opens Buddy 配置 from the retired #settings and #models bookmarks and keeps 设置 at #system", async () => {
+  it("addresses each page by its own name and opens the tasks for any other hash", async () => {
     const state = initial();
     const api = {
       runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
@@ -208,26 +208,24 @@ describe("console interactions", () => {
       objectives: vi.fn(async () => emptyObjectives()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
-    // The old 路由配置 bookmark opens Buddy 配置, where its settings moved.
-    window.location.hash = "#settings";
+    window.location.hash = "#buddies";
     const first = render(<App suppliedApi={api} />);
     await screen.findByRole("heading", { name: "模型 1" });
     expect(screen.getByRole("heading", { name: "伙伴" })).toBeTruthy();
     first.unmount();
-    // The old 模型卡片 bookmark keeps landing on the same successor.
+    // A retired bookmark is a hash like any other the console does not know.
     window.location.hash = "#models";
     const second = render(<App suppliedApi={api} />);
-    await screen.findByRole("heading", { name: "模型 1" });
+    expect((await screen.findByRole("link", { name: "任务" })).getAttribute("aria-current")).toBe("page");
     second.unmount();
-    // The system settings page keeps a hash of its own, addressable on reload.
-    window.location.hash = "#system";
+    window.location.hash = "#settings";
     render(<App suppliedApi={api} />);
     await screen.findByRole("heading", { name: "显示" });
     await user.click(screen.getByRole("link", { name: "伙伴" }));
     await screen.findByRole("heading", { name: "模型 1" });
     await user.click(screen.getByRole("link", { name: "设置" }));
     await screen.findByRole("heading", { name: "显示" });
-    expect(window.location.hash).toBe("#system");
+    expect(window.location.hash).toBe("#settings");
     expect(api.command).not.toHaveBeenCalled();
   });
 
@@ -249,7 +247,7 @@ describe("console interactions", () => {
       objectives: vi.fn(async () => emptyObjectives()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={api} />);
     await screen.findByRole("heading", { name: "模型 1" });
     await user.click(screen.getByRole("button", { name: /Flash 决策/ }));

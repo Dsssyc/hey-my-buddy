@@ -152,7 +152,7 @@ function fixture(options: FixtureOptions = {}) {
 }
 
 async function openBuddy(f: ReturnType<typeof fixture>) {
-  window.location.hash = "#buddy/harness";
+  window.location.hash = "#buddies/harness";
   render(<App suppliedApi={f.api} />);
   await screen.findByRole("region", { name: "Harness 状态" });
 }
@@ -229,7 +229,7 @@ describe("the harness status strip", () => {
 
   it("shows nothing rather than invented health when the snapshot carries no harness rows", async () => {
     const f = fixture({ harnesses: [] });
-    window.location.hash = "#buddy";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     // The offline ZCode family stays hidden; the page is loaded with one family.
     await screen.findByRole("heading", { name: "模型 1" });

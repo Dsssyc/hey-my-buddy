@@ -75,7 +75,7 @@ function fixture(state: Snapshot & { harnesses: HarnessHealth[] }, command: Cons
 
 async function openDetail(api: ConsoleApi) {
   const user = userEvent.setup();
-  window.location.hash = "#buddy/harness";
+  window.location.hash = "#buddies/harness";
   render(<App suppliedApi={api} />);
   await screen.findByRole("region", { name: "Harness 状态" });
   const dsh = screen.getByText(/^找到：路径 \/usr\/local\/bin\/dsh/).closest("li")!;

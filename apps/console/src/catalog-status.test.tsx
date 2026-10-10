@@ -129,7 +129,7 @@ describe("catalog pending display (ADR-027 §6)", () => {
   it("marks the pending family with its recorded start time and leaves normal and unavailable rows unmarked", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     // The pending family stays in the default view: it is available, so no
     // 显示不可用配置 is needed to see it.
@@ -151,7 +151,7 @@ describe("catalog pending display (ADR-027 §6)", () => {
 
   it("aggregates one pending mark per family at the earliest recorded first-absence time", async () => {
     const f = fixture();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 3" });
     // Both efforts are pending, but the family row carries exactly one mark
@@ -165,7 +165,7 @@ describe("catalog pending display (ADR-027 §6)", () => {
   it("keeps a pending effort usable and routable, and shows the time in its detail view", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 3" });
     await user.click(screen.getByRole("button", { name: /^deepseek-flash，已启用 1\/2，Router，待确认/ }));
@@ -200,7 +200,7 @@ describe("catalog pending display (ADR-027 §6)", () => {
 
   it("shows a pending family without a recorded time as plain 待确认, never an invented date", async () => {
     const f = fixture();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 3" });
     const ghostRow = screen.getByRole("button", { name: "ghost-model，已启用 0/1，待确认" });
@@ -212,7 +212,7 @@ describe("catalog pending display (ADR-027 §6)", () => {
   it("keeps the board's catalog-available state when harness health marks the profile unusable", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 3" });
     await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（3）" }));

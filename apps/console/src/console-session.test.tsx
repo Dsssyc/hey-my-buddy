@@ -301,7 +301,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   it("keeps a dirty draft local, stops publish and renew, and stays readable without any takeover copy", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
     // No single-writer badge or banner exists anywhere (0.16 multi-window).
@@ -353,7 +353,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     const record = goal("readonly-task", "只读普通任务", { workflow: undefined });
     const f = fixture({ records: [record] });
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
     expect(screen.queryByText(bannerNotice)).toBeNull();
@@ -387,7 +387,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   it("keeps an unconfirmed publication after the login lapses and never replays it", async () => {
     const f = fixture({ script: { publish: "network" } });
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
@@ -420,7 +420,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   it("keeps an ambiguous publish unknown when its retry is refused before the next poll", async () => {
     const f = fixture({ script: { publish: ["network", "expired"] } });
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
@@ -451,7 +451,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   it("treats a first publish that is definitely refused as a resolved rejection", async () => {
     const f = fixture({ script: { publish: "expired" } });
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
@@ -470,7 +470,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   it("preserves the draft when an in-flight save is refused with the 401 login-expired code", async () => {
     const f = fixture({ script: { begin: "expired" } });
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
@@ -487,7 +487,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   it("stops renewing a queued intent refused with the 401 login-expired code and releases nothing", async () => {
     const f = fixture({ script: { begin: "queued", renew: "expired" } });
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
@@ -506,7 +506,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   it("stops a queued wait on a polled invalid snapshot without sending another renew", async () => {
     const f = fixture({ script: { begin: "queued", renew: "expired" }, queuedForever: true });
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
@@ -646,7 +646,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     const workflows = new Map<string, Workflow>([["gated-governed", workflow(awaiting)]]);
     const f = fixture({ records: [plain, awaiting], workflows, failAfter: 1, failWith: failure });
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
@@ -681,7 +681,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   it("keeps the connection-loss gate: a failed poll disables saving and retains the draft", async () => {
     const f = fixture({ failAfter: 1 });
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
     // Let restored-history reads become reachable before checking the default fixture's gate.

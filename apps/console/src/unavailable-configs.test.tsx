@@ -151,7 +151,7 @@ describe("unavailable configurations", () => {
   it("hides them by default and reveals them with the 显示不可用配置（N） filter", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 1" });
     // The snapshot keeps retired identities as a count, and the unchecked filter
@@ -179,7 +179,7 @@ describe("unavailable configurations", () => {
   it("counts a listed offline decision selector once and pages the rest in by itself", async () => {
     const f = fixture({ staleDecision: true, pageSize: 2 });
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     // The listed decision selector is unavailable too, so its family is hidden
     // by default; the count is the table-wide 2, never 3.
@@ -201,7 +201,7 @@ describe("unavailable configurations", () => {
   it("reads the remaining unavailable pages through the server cursor on its own", async () => {
     const f = fixture({ pageSize: 2 });
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 1" });
     await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（2）" }));
@@ -218,7 +218,7 @@ describe("unavailable configurations", () => {
   it("combines 只看已启用 with 显示不可用配置", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 1" });
     // 只看已启用 alone still hides the family: none of its available rows exist.
@@ -240,7 +240,7 @@ describe("unavailable configurations", () => {
   it("allows disabling a retired configuration but never re-enabling it", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await openRetired(f, user);
     // "max" is currently enabled, so the user may turn it off.
@@ -259,7 +259,7 @@ describe("unavailable configurations", () => {
   it("publishes a disable and a family note as patches without program fields", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await openRetired(f, user);
     await user.click(screen.getByRole("switch", { name: "启用 max" }));
@@ -285,7 +285,7 @@ describe("unavailable configurations", () => {
   it("allows a reason-only edit of a retired pin while a new pin on an unavailable effort stays blocked", async () => {
     const f = fixture({ stalePin: true });
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await openRetired(f, user);
     await screen.findByText(/固定选择指向.*请启用或改回/);
@@ -314,7 +314,7 @@ describe("unavailable configurations", () => {
   it("keeps a retained disable unresolved until the fresh history is re-read", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await openRetired(f, user);
     await user.click(screen.getByRole("switch", { name: "启用 max" }));
@@ -345,7 +345,7 @@ describe("unavailable configurations", () => {
   it("does not resurrect a preference the user removed when a page is re-read", async () => {
     const f = fixture({ stalePin: true });
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await openRetired(f, user);
     await user.click(screen.getByRole("button", { name: "max 档位菜单" }));
@@ -367,7 +367,7 @@ describe("unavailable configurations", () => {
   it("sends the search text to the unavailable-configuration request", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 1" });
     await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（2）" }));
@@ -386,7 +386,7 @@ describe("stale settings and unrelated saves", () => {
   it("shows a stale decision setting as attention and still saves a family note elsewhere", async () => {
     const f = fixture({ staleDecision: true });
     const user = userEvent.setup();
-    window.location.hash = "#buddy";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     // The unavailable decision family stays hidden behind the filter.
     await screen.findByRole("heading", { name: "模型 1" });
@@ -410,7 +410,7 @@ describe("stale settings and unrelated saves", () => {
   it("keeps a stale pin visible without requiring a repair before saving", async () => {
     const f = fixture({ stalePin: true });
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await openRetired(f, user);
     await screen.findByText(/固定选择指向.*请启用或改回/);
@@ -430,7 +430,7 @@ describe("browser model view preferences", () => {
   it("restores both filters across unmount/remount and a reload with one bounded history read", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     let view = render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 1" });
     await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
@@ -456,7 +456,7 @@ describe("browser model view preferences", () => {
     const state = f.snapshot();
     state.unavailableProfileCount = 0;
     f.command.mockImplementation(async () => ({ profiles: state.profiles, cards: [], preferences: [], sampleCounts: {}, modelConcurrency: [], tableRevision: state.tableRevision, nextCursor: null }));
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     const view = render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 1" });
     await waitFor(() => expect(f.command).toHaveBeenCalledTimes(1));
@@ -472,7 +472,7 @@ describe("browser model view preferences", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
     const f = fixture();
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 1" });
     expect(screen.getByRole("checkbox", { name: "只看已启用" })).toHaveProperty("checked", false);
@@ -488,7 +488,7 @@ describe("deep links preserve manually saved filters", () => {
   const unavailableKey = "hey-my-buddy.console.view.models.showUnavailable";
   function jump(profileId: string) {
     act(() => {
-      window.location.hash = `#buddy/models/${encodeURIComponent(profileId)}`;
+      window.location.hash = `#buddies/models/${encodeURIComponent(profileId)}`;
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
   }
@@ -497,7 +497,7 @@ describe("deep links preserve manually saved filters", () => {
     const f = fixture();
     for (const profile of f.snapshot().profiles) profile.enabled = false;
     const user = userEvent.setup();
-    window.location.hash = "#buddy/models";
+    window.location.hash = "#buddies/models";
     let view = render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 1" });
     await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
@@ -513,7 +513,7 @@ describe("deep links preserve manually saved filters", () => {
     expect(localStorage.getItem(enabledKey)).toBe("true");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
     view.unmount();
-    window.location.hash = "#buddy/models";
+    window.location.hash = "#buddies/models";
     view = render(<App suppliedApi={f.api} />);
     await waitFor(() => expect(screen.queryByRole("checkbox", { name: "只看已启用" })).toHaveProperty("checked", true));
     expect(screen.getByRole("checkbox", { name: /^显示不可用配置/ })).toHaveProperty("checked", false);
@@ -524,7 +524,7 @@ describe("deep links preserve manually saved filters", () => {
   it("reveals an unavailable Router target without overwriting the manually unchecked filter", async () => {
     const f = fixture({ staleDecision: true });
     const user = userEvent.setup();
-    window.location.hash = "#buddy/models";
+    window.location.hash = "#buddies/models";
     let view = render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 1" });
     await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
@@ -542,7 +542,7 @@ describe("deep links preserve manually saved filters", () => {
     expect(localStorage.getItem(enabledKey)).toBe("false");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
     view.unmount();
-    window.location.hash = "#buddy/models";
+    window.location.hash = "#buddies/models";
     view = render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 1" });
     expect(screen.getByRole("checkbox", { name: "只看已启用" })).toHaveProperty("checked", false);

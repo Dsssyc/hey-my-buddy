@@ -205,7 +205,7 @@ function fixture(options: Options = {}) {
 }
 
 async function openBuddy(api: ConsoleApi, user: ReturnType<typeof userEvent.setup>) {
-  window.location.hash = "#buddy";
+  window.location.hash = "#buddies";
   render(<App suppliedApi={api} />);
   // The unavailable ZCode family is hidden by default, so two families show.
   await screen.findByRole("heading", { name: "模型 2" });

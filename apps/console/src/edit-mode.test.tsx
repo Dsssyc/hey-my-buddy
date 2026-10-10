@@ -125,7 +125,7 @@ function fixture(script: Script = {}, options: { queuedForever?: boolean; discov
 }
 
 async function openBuddy(api: ConsoleApi, user: ReturnType<typeof userEvent.setup>) {
-  window.location.hash = "#buddy";
+  window.location.hash = "#buddies";
   render(<App suppliedApi={api} />);
   await screen.findByRole("heading", { name: "模型 2" });
   await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
@@ -367,7 +367,7 @@ describe("direct editing and the save bar", () => {
   it("refreshes program directory facts on discovery without uploading a draft", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    window.location.hash = "#buddy";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
     await user.click(screen.getByRole("button", { name: "发现模型" }));
@@ -560,14 +560,6 @@ describe("direct editing and the save bar", () => {
       await user.click(within(nav).getByRole("link", { name: page }));
       expect(screen.queryByText("编辑设置")).toBeNull();
     }
-  });
-
-  it("lands an old 模型卡片 bookmark on Buddy 配置", async () => {
-    const f = fixture();
-    window.location.hash = "#models";
-    render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 2" });
-    expect(screen.getByRole("link", { name: "伙伴" }).getAttribute("aria-current")).toBe("page");
   });
 
   it("shows only an actionable gate state instead of a readable badge", async () => {

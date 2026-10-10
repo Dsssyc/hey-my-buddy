@@ -160,7 +160,7 @@ describe("desktop console", () => {
 
   it("keeps one note draft per family across models, models detail and main pages without a lease", async () => {
     const f = fixture();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
     await user.click(await screen.findByRole("button", { name: /^deepseek-flash/ }));
@@ -195,7 +195,7 @@ describe("desktop console", () => {
     const f = fixture();
     f.snapshot.cards = f.snapshot.cards.map(card => ({ ...card, origin: "unattributed" }));
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await user.click(await screen.findByRole("button", { name: /^deepseek-flash/ }));
     const detail = screen.getByRole("complementary", { name: "模型家族详情" });

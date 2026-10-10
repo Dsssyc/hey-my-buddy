@@ -101,7 +101,7 @@ function fixture(options: { discoveryLimit?: number } = {}) {
 }
 
 async function openFlashCard(f: ReturnType<typeof fixture>, user: ReturnType<typeof userEvent.setup>) {
-  window.location.hash = "#models";
+  window.location.hash = "#buddies";
   render(<App suppliedApi={f.api} />);
   await screen.findByRole("heading", { name: "模型 1" });
   await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
@@ -207,7 +207,7 @@ describe("model family concurrency", () => {
   it("edits the concurrency limit of an unavailable family", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     // The retired family is hidden until 显示不可用配置 is checked.
     await screen.findByRole("heading", { name: "模型 1" });

@@ -3,14 +3,13 @@ export type BuddySection = keyof typeof BUDDY_SECTIONS;
 export type BuddyLocation = { section: BuddySection; target?: string };
 
 export function buddyHash({ section, target }: BuddyLocation): string {
-  return `#buddy/${section}${target ? `/${encodeURIComponent(target)}` : ""}`;
+  return `#buddies/${section}${target ? `/${encodeURIComponent(target)}` : ""}`;
 }
 
-/** Old bookmarks still enter the default model section. Unrelated pages keep their own state. */
+/** The section and target a hash names on the buddies page, whose bare address opens the model section. Other pages give null. */
 export function buddyLocation(hash: string): BuddyLocation | null {
-  if (["#buddy", "#models", "#settings"].includes(hash)) return { section: "models" };
   const [page, section, target] = hash.slice(1).split("/");
-  if (page !== "buddy") return null;
+  if (page !== "buddies") return null;
   if (!Object.hasOwn(BUDDY_SECTIONS, section)) return { section: "models" };
   try { return { section: section as BuddySection, target: target ? decodeURIComponent(target) : undefined }; }
   catch { return { section: section as BuddySection }; }
