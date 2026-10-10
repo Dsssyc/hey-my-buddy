@@ -212,3 +212,11 @@ Host 在固定副本补核 path_state 全 12 项退出 0、6.801 秒，public_st
 Worker 如实披露第二次误触真实 bind、数字 wait 记录缺口和任务根外 `/tmp/state-calls-readonly-audit.txt` 的写入。Host 只读观测已登记的 `/tmp/c073-c-H6SbNM`：没有与该根绑定的当前活进程、观测问题或持有 daemon/supervisor 锁；这个当下观察不能补造过去缺失的 wait/两层停止回执。根外文件先保留，要求 Worker 用自身原始命令记录说明新建或覆盖的证据，不能按名称/日期推断归属或删除；首次披露与违规口径保留。原 run continue 还须正确接线新增调用方并保留全部旧失败、只跑受影响测试、无真实沙箱重试和无付费模型调用，真实环境补核由 Host 对最终固定候选完成。
 
 补核接口后发现 scope-amend 必须在所有相关回合已确认停止、没有冻结旧 scope 的待执行 continuation 时执行；不能追溯授权活动回合。Host 发现顺序错误时 R2 已 running、scopeVersion 仍 1、self stop 未确认，未调用一个必然被拒绝的修改，也不取消并重建 run或手动改manifest/数据库。等待该回合停下后先核对合法固定交付/机械scope失败现场，有新增路径时按已有workspace-resolve保全与核验，再scope-amend为下一回合记录66路径并在原run continue；当前回合的旧scope与错误顺序保留，任何失败不能改写为通过。
+
+## 3-C 机械范围失败的固定保全与正式修订
+
+R2 在 scopeVersion 1 下封存失败，conflict `wsc-b68ab678-4458-4225-90a6-8e923b18340d`，observedFingerprint `eeb0a6cff67f83d36af2c765736942c3f246a79247cf29765f81a2bed56c6cff`，两层停止均确认。13 个 blockingPaths 与 f22d8450 明确许可的 13 个新增路径集合完全相等，实际文件哈希与失败现场各 observed.sha256 相等。Host 用正式 workspace-resolve/adopt 保全可审查产物 `217e3f07-7f4f-4d65-8f80-82b67adb3573` / `f86215878e746cbb3b5e9c50d0d9374a961467dc`，累积补丁 SHA-256 `fa2e641dbbba4ef176d839934bdd89c0ac7f41bcd6ea6d99bc1cef04e7acea70`，55 路径，没有手动修改 manifest/数据库/工作区。adopt 不是代码签收，原 state=failed 和 scopeVersion 1 的历史不改写。
+
+随后 scope-amend（expectedScopeVersion=1）在确认停止和无待执行 continuation 时记录 scopeVersion 2 的 66 路径；R2 又暴露一个必填 await_run 调用方 `tests/python/blackboard/tasks/test_workflow_stop_surface.py`，四个旧断言只需传自有根，Host 在下一次 continue 之前用 scope-amend（expectedScopeVersion=2）正式追加此路径，当前 scopeVersion 3、67 路径、revision 15。这种当前授权只用于之后的回合，不追溯当前已失败的 R2。Host 封存助手也校验实际黑板 scope，恢复被截断路径列表只使用固定 base/output Git diff 和补丁哈希；不把本地 input 文本替代机械授权。
+
+R2 如实补充：根外审计输出用普通重定向 `>`，没有独占创建或写入前存在检查；是否截断既有内容、写前归属均未知。`/tmp/state-calls-readonly-audit.txt` 原样保留，不按名称/内容/日期推断归属，不纳入 Host 自有根回收。沙箱第二次受限 bind、旧数字 wait 缺口和 R2 service_environment 两处误触 preflight bind 的失败亦保留，不能写成“未绑定”或“全部停止”。当前根只读观察不能补造过去回执。本轮源码尚未整合，最终完整检查未开始。
