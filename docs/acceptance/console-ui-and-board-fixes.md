@@ -1,6 +1,25 @@
 # 控制台界面与黑板可靠性：执行计划与验收记录
 
-## 最终交付（2026-10-10，等待 Claude Code Host 验收）
+## Claude Code Host 打回与返修计划（2026-10-10）
+
+初交 `b093dd73` 未通过，以下返修按用户本次完整要求为准；此前成功、失败、初交数字与各轮固定材料都保留。已通过的范围、Python 3230→3400（新增170无删除）、前端844项及4产物字节一致、八项私有预览和8处前端变异不重做；后端40处中的33处已守住，7处缺口随本轮逐项核对。用户把产品简洁作为取舍原则，界面只减默认展示，不增加设置、开关或提示。原Host `codex-adr027`、原宏任务 `obj-1ba05143-a5d7-496b-9b03-5d16681b2b33`、分支与Host工作树沿用，不推送。原已accepted微任务不能continue，按既有授权创建关联返修；每份本轮产物的代码/测试/行为缺陷回本轮原run继续，默认仍省略全部四字段/configuration。
+
+| 微任务 / 唯一写入范围 | 做法与现成机制 | 验证编号 |
+| --- | --- | --- |
+| R-A：A1–A3、E的孤立项文件。`src/hey_my_buddy/blackboard/tasks/storage.py`；`tests/python/blackboard/tasks/test_storage_orphans.py` | 先识别仍有实际checkout且黑板未知的分配，记录目录/已认识分配不冒充孤立候选；不存在待证明项时不扫描23表。同一规划逐条流式解析一次并复用结果，应用在既有allocation锁/SQLite写围栏重核对，只用现成SQL、JSON、标量投影与批量读取，不加schema/持久索引/框架；保留所有残留引用、损坏JSON、各状态、alias、物理替换/竞态防护。目录名与原request推导的id必须一致。优化此文件的重复准备，编号/断言不减。 | RA01缺checkout/已知分配跳过；RA02正常回收后不再出现；RA03无候选不扫描、同记录不重复解析；RA04全部引用仍阻止规划/应用；RA05目录与request绑定移除即失败；RA06应用围栏结构边界及实测；RE-A前后用时 |
+| R-B：B1–B2、E的身份文件。`src/hey_my_buddy/blackboard/store/workspace_identity_migration.py`；`src/hey_my_buddy/blackboard/tasks/workspace_identity.py`；`tests/python/install/test_workspace_identity_migration.py`；`tests/python/blackboard/tasks/test_workspace_identity.py` | 空计划直接返回，不开写事务或整库拷贝；有写入只保存允许变更的必要事实，并优先复用备份database_snapshot指纹/现有SQLite快照校验，保持schema/sqlite_sequence/workers及所有计划外数据均不能被触发器改变，保留回滚与before绑定。别名锚点哈希由Python读取直接拒绝格式合法的漂移；写入前物理锚点重核对；checkout-root-changed/identity-collision逐项给出可达测试或精确不可达原因，不盲删防护。只用现成unittest准备/上下文与既有夹具提速。 | RB01空计划不BEGIN/不拷贝；RB02实际迁移精确计划/触发器/回滚/快照；RB03Python别名锚点拒绝；RB04证明后替换目录；RB05两个保留原因的可达性/断言；RE-B前后用时 |
+| R-D：D1–D2。`apps/console/src/RuntimeVersion.tsx`；`apps/console/src/runtime-version.test.tsx`；`apps/console/src/use-console.ts`；`apps/console/src/use-console.test.tsx`；必要的`apps/console/src/App.test.tsx` | 复用现有details/summary：软件版本、安装时间常显；契约/schema/提交收在默认折叠详细信息；源码模式一行说明，已安装份同样两项；未知仍未记录，服务端/读取数不变。首个snapshot读取不受可见性阻止，隐藏只暂停周期，前台立即读；复用Page Visibility、AbortController与现有sequence防迟响应。只减法，不增加文案提示/开关/设置，不写assets。 | RD01默认两事实、详情折叠、source/installed/unknown；RD02版本读取数不增加；RD03隐藏加载首读、后续暂停、前台立即读；RD04卸载/StrictMode/迟响应原防护；RD05移除目标行为失败；RD06真实私有浏览器 |
+| R-C：C1–C2及E的其余新增快速模块。`tests/python/blackboard/tasks/test_objective_summary_cache.py`；`tests/python/blackboard/tasks/test_console_objective_fixture.py`；`tests/python/console/test_console_objective_cache.py`；`tests/python/console/test_console_gate_deadlines.py`；`tests/python/console/test_console_version_info.py` | cache第二次命中后修改返回值，第三次必须仍为原值；只改attempt原子事实且task/run修订不变，只有对应宏重算；隔离移除hit副本/attempt标记各失败。先剖析实际用时，复用现成unittest类准备/Recipe/SQLite/上下文，保留各用例的独立状态/全部编号/断言，不新增测试基础设施；已快的模块只记录原因。生产cache只读。 | RC01命中副本；RC02独立attempt标记；RC03两目标移除；RE-C各文件前后用时 |
+| R-E：E的其余受影响Git文件，待R-B整合后顺序开始。`tests/python/blackboard/tasks/test_workspace_lifecycle.py`；`tests/python/blackboard/tasks/test_workspace_submission_cleanup.py`；`tests/python/blackboard/tasks/test_workflow_preparation.py`；`tests/python/blackboard/tasks/test_workspace_git_errors.py`；`tests/python/blackboard/tasks/test_workspace.py`；`tests/python/install/test_upgrade_migration.py` | 先用现成cProfile/测试runner识别仓库/Board准备与收尾瓶颈，复用现成unittest setUpClass/tearDownClass或类内既有夹具；隔离每例可变事实，保证真实Git/SQLite/锁/停止/历史bytes与物理目录断言。不得为提速省掉实际操作、缩超时、删编号、降低断言、模拟通过或加入全局测试框架；无法减少的固有代价实测说明。 | RE01编号/全部原断言；RE02源操作与隔离不变；RE03逐文件前后及慢步骤；RE04最终默认并行全套 |
+| R-F：A2/B1全规模量测；前序A/B/C/E整合后再委派，只写ignored专用任务目录，生产/测试文件只读 | 沿用已验收SyntheticBoard/Recipe重新生成，不复制日常看板；保留60宏/360受管/40普通/4000证据/100大结果基础，额外合成约34万条历史事实接近日常数据量，固定种子/配方/表分布和文件大小。复用sqlite3、time、resource与独立子进程测每项峰值RSS；分别固定原b093和最终源码，量规划、应用及写围栏区间、首次实际迁移、无事可做迁移。不得只拿小库数字作结论，不assert耗时；记录线性扫描无法与看板大小无关的原因。 | RF01配方/规模/私有源证明；RF02规划耗时/RSS；RF03应用总耗时/围栏耗时/RSS；RF04首次迁移/空迁移耗时/RSS；RF05无候选对照与原版可比性 |
+
+R-A、R-B、R-D首先并行，范围互斥；R-C在空位开始；R-E等待R-B整合（生命周期读取身份夹具），同文件只一个写入者；R-F只在最终后端整合后开始。每个微任务先建ignored材料目录、只受影响测试、不完整检查/构建、Worker不删除任何东西，不stash或分支/标签操作、不commit。清继承BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT后设私有state/runtime/source；报告与夹具位置~或占位符。生产变化、测试编号增减、断言保留、正常/目标移除结果与材料哈希由Host独立核对，不用Worker摘要作验收。Host在验收后按精确checkout路径回收，原材料提前固定。
+
+原版用时基线来自本Host真实完整日志ffd5b2bb/default4（全套842.853秒），逐文件原数保存host-review-repair-20261010/before-test-file-times.json；用户验收时的177/98.5/90.9/425.6秒另作外部测量来源，机器负载差异不抹平。最终用同一默认runner的日志逐文件对照，不能把Worker材料保留型runner的省收尾时长冒充完整检查提速。只在全部整合且合入届时最新socu/buddy-core后，重新构建并提交assets、独立全新构建字节核对，先Python默认完整检查、后前端全量，顺序各跑一次；疑似负载失败保留并在空闲后单文件复跑再判断。若core已合入C-Two0.7.4，最终检查使用其新依赖，只同步本任务私有开发环境，不安装升级日常运行时。最终记录/卫生再核对后停下等Claude Code Host，期间不开始其他工作、不操作socu/c-two-073或其工作树。
+
+用户报告日常仍C-Two0.6.0、2026-10-10 11:26授权restart后的状态沿用；服务/Worker故障阻断委派就停止报告，不能自行重启/替换/安装、改限额或凭据。保留原schema15私有迁移授权，但本轮不对日常数据库写迁移或复制其数据。范围内界面取舍以用户简洁要求为准。
+
+## 初交结果（2026-10-10，随后被 Claude Code Host 打回）
 
 B1–B5、U1–U11 已完成本 Host 的固定产物核对、受影响检查、目标行为移除验证与整合。分支 `socu/console-ui-and-board-fixes` 的最终代码/前端测试提交为 `ec9e1526585d96e96dd8e5e6202476879004a339`，已合入 `socu/buddy-core@1a9decd95736a15a5ec4b4db6526e4cb48666326`（含已验收 DSH 原生续接）。以下完整检查均使用合入后的源码、私有状态/运行时与清除继承变量的环境；保留此前两次前端失败和合入前 Python 失败，不把单文件通过代替完整结果。分支不推送，Host 工作树保留供验收。
 
