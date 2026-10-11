@@ -6,6 +6,7 @@ comparison; startup never repairs an existing schema.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 
@@ -117,6 +118,139 @@ CREATE TABLE workflow_host_conclusions_16 (
 _CONCLUSION_INDEX = "CREATE INDEX workflow_host_conclusions_run_idx ON workflow_host_conclusions(run_id, run_revision)"
 
 
+# Frozen table replacements and named copy columns for both schema-15 column orders.
+_REBUILT_TABLES = (
+    ("attempts", """CREATE TABLE attempts_16 (
+    attempt_id          TEXT PRIMARY KEY,
+    task_id             TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    generation          INTEGER NOT NULL,
+    worker_id           TEXT,
+    worker_identity     TEXT,
+    worker_instance     TEXT,
+    capability_version  INTEGER NOT NULL DEFAULT 1,
+    nonce_verifier      TEXT NOT NULL,
+    claim_request_id    TEXT NOT NULL,
+    lease_expires_at    TEXT,
+    lease_seconds       INTEGER NOT NULL DEFAULT 120,
+    execution_state     TEXT NOT NULL
+        CHECK (execution_state IN ('starting','executing','finalizing','uncertain','finished')),
+    ownership           TEXT NOT NULL DEFAULT 'owned' CHECK (ownership IN ('owned','uncertain')),
+    runtime_identity    TEXT,
+    adapter             TEXT NOT NULL,
+    model_adapter       TEXT,
+    model_provider      TEXT,
+    model_model         TEXT,
+    log_paths           TEXT NOT NULL DEFAULT '{}',
+    result_json         TEXT,
+    result_command_id   TEXT,
+    error               TEXT,
+    shutdown_confirmed  INTEGER NOT NULL DEFAULT 0,
+    cancel_requested_at TEXT,
+    exit_code           INTEGER,
+    signal              TEXT,
+    started_at          TEXT,
+    finished_at         TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    revision            INTEGER NOT NULL DEFAULT 1,
+    token_usage_json    TEXT,
+    UNIQUE(task_id, generation)
+)""",
+     ('attempt_id, task_id, generation, worker_id, worker_identity, worker_instance, capability_version, '
+      'nonce_verifier, claim_request_id, lease_expires_at, lease_seconds, execution_state, ownership, '
+      'runtime_identity, adapter, model_adapter, model_provider, model_model, log_paths, result_json, '
+      'result_command_id, error, shutdown_confirmed, cancel_requested_at, exit_code, signal, started_at, '
+      'finished_at, created_at, updated_at, revision, token_usage_json'),
+     (
+         """CREATE INDEX attempts_task_idx ON attempts(task_id, generation)""",
+         """CREATE UNIQUE INDEX attempts_effective_unique ON attempts(task_id)
+    WHERE execution_state IN ('starting','executing','finalizing','uncertain')""",
+         """CREATE INDEX attempts_active_idx ON attempts(execution_state)""",
+         """CREATE INDEX attempts_model_family_idx
+    ON attempts(model_adapter, model_provider, model_model) WHERE model_model IS NOT NULL""",
+     )),
+    ("workflow_runs", """CREATE TABLE workflow_runs_16 (
+    run_id                  TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    objective_id            TEXT REFERENCES objectives(objective_id) ON DELETE RESTRICT,
+    title                   TEXT,
+    activity_seq            INTEGER NOT NULL DEFAULT 0,
+    activity_at             TEXT,
+    host_id                 TEXT NOT NULL,
+    owner_generation        INTEGER NOT NULL DEFAULT 1,
+    control_verifier        TEXT NOT NULL,
+    goal_json               TEXT NOT NULL,
+    goal_fingerprint        TEXT NOT NULL,
+    request_fingerprint     TEXT NOT NULL,
+    execution_configuration_json TEXT,
+    execution_configuration_revision INTEGER NOT NULL DEFAULT 0,
+    validated_configuration_revision INTEGER,
+    current_routing_id      TEXT,
+    submission_verifier     TEXT,
+    execution_workspace_json TEXT NOT NULL,
+    workspace_manifest_json TEXT,
+    workspace_id            TEXT,
+    workspace_manifest_sha256 TEXT,
+    state                   TEXT NOT NULL
+        CHECK (state IN ('executing','awaiting-host','waiting-helpers','delivered','accepted','cancelled','failed')),
+    active_request_id       TEXT,
+    current_turn_id         TEXT,
+    current_attempt_id      TEXT,
+    continuation_count      INTEGER NOT NULL DEFAULT 0,
+    final_artifact_id       TEXT,
+    final_attempt_id        TEXT,
+    revision                INTEGER NOT NULL DEFAULT 1,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL,
+    configuration_locked    INTEGER NOT NULL DEFAULT 0 CHECK (configuration_locked IN (0,1))
+)""",
+     ('run_id, objective_id, title, activity_seq, activity_at, host_id, owner_generation, control_verifier, '
+      'goal_json, goal_fingerprint, request_fingerprint, execution_configuration_json, '
+      'execution_configuration_revision, validated_configuration_revision, current_routing_id, '
+      'submission_verifier, execution_workspace_json, workspace_manifest_json, workspace_id, '
+      'workspace_manifest_sha256, state, active_request_id, current_turn_id, current_attempt_id, '
+      'continuation_count, final_artifact_id, final_attempt_id, revision, created_at, updated_at, '
+      'configuration_locked'),
+     (
+         """CREATE INDEX workflow_runs_state_idx ON workflow_runs(state, updated_at)""",
+         """CREATE INDEX workflow_runs_objective_idx ON workflow_runs(objective_id, activity_seq DESC, run_id DESC)""",
+         """CREATE INDEX workflow_runs_activity_idx ON workflow_runs(activity_seq)""",
+     )),
+    ("evaluation_cards", """CREATE TABLE evaluation_cards_16 (
+    profile_id        TEXT PRIMARY KEY REFERENCES evaluation_profiles(profile_id) ON DELETE RESTRICT,
+    revision          INTEGER NOT NULL,
+    summary           TEXT NOT NULL DEFAULT '',
+    origin            TEXT NOT NULL DEFAULT 'unattributed' CHECK(origin IN ('maintenance','unattributed')),
+    strengths_json    TEXT NOT NULL DEFAULT '[]',
+    limitations_json  TEXT NOT NULL DEFAULT '[]',
+    risks_json        TEXT NOT NULL DEFAULT '[]',
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    sample_count      INTEGER NOT NULL DEFAULT 0,
+    updated_at        TEXT NOT NULL
+)""",
+     ('profile_id, revision, summary, origin, strengths_json, limitations_json, risks_json, '
+      'evidence_ids_json, sample_count, updated_at'),
+     (
+     )),
+)
+
+
+def _rebuilt_fingerprints(connection: sqlite3.Connection) -> dict[str, str]:
+    """Compare every retained value by column name, independent of physical order.
+
+    SQLite sorts the rows; Python hashes one row at a time. Ordinary backup
+    snapshots retain their historical positional fingerprint contract.
+    """
+    result = {}
+    for table, _ddl, names, _indexes in _REBUILT_TABLES:
+        columns = ", ".join(sorted(names.split(", ")))
+        digest = hashlib.sha256()
+        for row in connection.execute(f"SELECT {columns} FROM {table} ORDER BY {columns}"):
+            digest.update(json.dumps(tuple(row), ensure_ascii=False, separators=(",", ":")).encode())
+            digest.update(b"\n")
+        result[table] = digest.hexdigest()
+    return result
+
+
 def schema_version(connection: sqlite3.Connection) -> int:
     row = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     return int(row[0]) if row else 0
@@ -153,12 +287,20 @@ def _router_values(values: dict[str, str]) -> dict[str, str]:
 
 def migrate_15_to_16(connection: sqlite3.Connection) -> dict:
     """Convert SQL, Router settings and catalog trust atomically, retaining history."""
-    from .backup import database_snapshot
-
     if schema_version(connection) != PREVIOUS_SCHEMA_VERSION:
         raise BoardError("UPGRADE_MIGRATION_FAILED", "Migration expects schema 15", tables=["meta"])
-    connection.execute("PRAGMA foreign_keys=ON")
-    connection.execute("BEGIN IMMEDIATE")
+    foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+    connection.execute("PRAGMA foreign_keys=OFF")
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        return _migrate_15_to_16_transaction(connection)
+    finally:
+        connection.execute(f"PRAGMA foreign_keys={foreign_keys}")
+
+
+def _migrate_15_to_16_transaction(connection: sqlite3.Connection) -> dict:
+    from .backup import database_snapshot
+
     tables = ["meta"]
     try:
         original_meta = dict(connection.execute("SELECT key,value FROM meta"))
@@ -172,8 +314,17 @@ def migrate_15_to_16(connection: sqlite3.Connection) -> dict:
         planned_catalog = [(row[0], row[1], row[2], "unknown", "ACCOUNT_STATUS_UNKNOWN", row[5])
                            for row in current]
         retained_tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        retained_tables -= {"meta", "catalog_current"}
+        retained_tables -= {"meta", "catalog_current"} | {table for table, *_rest in _REBUILT_TABLES}
         retained = database_snapshot(connection, exact=True, table_names=retained_tables)
+        rebuilt = _rebuilt_fingerprints(connection)
+        for table, ddl, columns, indexes in _REBUILT_TABLES:
+            tables = [table]
+            connection.execute(ddl)
+            connection.execute(f"INSERT INTO {table}_16 ({columns}) SELECT {columns} FROM {table}")
+            connection.execute(f"DROP TABLE {table}")
+            connection.execute(f"ALTER TABLE {table}_16 RENAME TO {table}")
+            for statement in indexes:
+                connection.execute(statement)
         for statement in _NEW_DDL:
             # The table/index named by this fixed statement is the failure context.
             words = statement.split()
@@ -203,6 +354,8 @@ def migrate_15_to_16(connection: sqlite3.Connection) -> dict:
         changed = [name for name in retained['fingerprints']
                    if retained['fingerprints'][name] != actual['fingerprints'].get(name)
                    or retained['tables'][name] != actual['tables'].get(name)]
+        actual_rebuilt = _rebuilt_fingerprints(connection)
+        changed += [name for name in rebuilt if rebuilt[name] != actual_rebuilt[name]]
         changed += [name for name in retained.get('exemptFingerprints', {})
                     if retained['exemptFingerprints'][name] != actual['exemptFingerprints'].get(name)]
         if dict(connection.execute("SELECT key,value FROM meta")) != planned_meta:

@@ -76,7 +76,7 @@ class Schema15UpgradeTests(BoardTestCase):
         self.assertEqual(summary['fromSchema'], 15)
         self.assertEqual(summary['toSchema'], 16)
         created_tables = [sql for sql in statements if sql.lstrip().startswith('CREATE TABLE')]
-        self.assertEqual(len(created_tables), len(migrations.NEW_TABLES) + 1)
+        self.assertEqual(len(created_tables), len(migrations.NEW_TABLES) + 4)
         self.assertFalse(any('CREATE TABLE IF NOT EXISTS tasks' in sql for sql in statements))
         for table in migrations.NEW_TABLES:
             self.assertEqual(self.connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0], 0, table)
