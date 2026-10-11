@@ -201,7 +201,7 @@ class DiscoveryStopTimingTests(unittest.TestCase):
 
     def test_short_lived_background_child_preserves_success(self):
         with tempfile.TemporaryDirectory() as directory, self.capture_probe() as processes:
-            result = discovery._probe(
+            result = discovery.probe(
                 ["/bin/sh", "-c", "sleep 0.2 >/dev/null 2>&1 & echo 1.2.3"],
                 {"PATH": "/usr/bin:/bin", "HOME": directory}, deadline=time.monotonic() + 2)
             self.assertEqual(result, (None, b"1.2.3\n"))
@@ -264,7 +264,7 @@ class DiscoveryStopTimingTests(unittest.TestCase):
     def test_unreaped_real_group_exhausts_stop_budget_without_confirmation(self):
         with self.controlled_group('hold') as (root, command, processes):
             started = time.monotonic()
-            result = discovery._probe(command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)},
+            result = discovery.probe(command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)},
                                       deadline=time.monotonic() + 2)
             self.assertEqual(result, ('shutdown-unverified', b''))
             self.assertLess(time.monotonic() - started, 1.5)
@@ -299,11 +299,11 @@ class DiscoveryStopTimingTests(unittest.TestCase):
                  patch.object(selector, 'select', side_effect=drain_then_reap), \
                  patch.object(discovery, '_terminate_group', side_effect=stop):
                 if read_error is None:
-                    result = discovery._probe(command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)},
+                    result = discovery.probe(command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)},
                                               deadline=time.monotonic() + 0.15)
                 else:
                     with self.assertRaises(type(read_error)) as caught:
-                        discovery._probe(command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)},
+                        discovery.probe(command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)},
                                          deadline=time.monotonic() + 2)
                     result = caught.exception
             self.assertTrue(self.group_gone(processes[0].pid))

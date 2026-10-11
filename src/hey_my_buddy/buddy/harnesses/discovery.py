@@ -450,7 +450,7 @@ def _probe_windows(process: subprocess.Popen, stop_at: float) -> tuple[str | Non
         ("probe-failed" if process.returncode else None), b"".join(chunks), True)
 
 
-def _probe(command: list[str], environment: dict, *, deadline: float | None = None,
+def probe(command: list[str], environment: dict, *, deadline: float | None = None,
            cwd: str | None = None) -> tuple[str | None, bytes]:
     """Run one noninteractive probe with bounded time, output and child lifetime."""
     start = time.monotonic()
@@ -559,7 +559,7 @@ def _node_for(path: Path, environment: dict, deadline: float) -> tuple[str | Non
                 continue
             child_env = native_environment(environment, command=command)
             shutdown = False
-            code, output = _probe([*command, "--version"], child_env, deadline=deadline)
+            code, output = probe([*command, "--version"], child_env, deadline=deadline)
             shutdown = code != "shutdown-unverified"
             if not shutdown:
                 return None, code
@@ -626,7 +626,7 @@ def _candidate_handshake(adapter: str, candidate: dict, environment: dict, deadl
         child_env = native_environment(environment, command=command, adapter=adapter)
         shutdown = False
         code, output = (_probe_dsh_version(command, child_env, deadline) if adapter == "dsh" else
-                        _probe([*command, "--version"], child_env, deadline=deadline))
+                        probe([*command, "--version"], child_env, deadline=deadline))
         shutdown = code != "shutdown-unverified"
         if code is not None:
             result["reasonCode"] = code
@@ -635,7 +635,7 @@ def _candidate_handshake(adapter: str, candidate: dict, environment: dict, deadl
         result["version"] = match.group(0) if match else "unknown"
         if adapter == "codex":
             shutdown = False
-            code, output = _probe([*command, "login", "status"], child_env, deadline=deadline)
+            code, output = probe([*command, "login", "status"], child_env, deadline=deadline)
             shutdown = code != "shutdown-unverified"
             if not shutdown:
                 result["reasonCode"] = code
@@ -652,7 +652,7 @@ def _candidate_handshake(adapter: str, candidate: dict, environment: dict, deadl
                 return result
         elif adapter == "claude":
             shutdown = False
-            code, output = _probe([*command, "auth", "status", "--json"], child_env, deadline=deadline)
+            code, output = probe([*command, "auth", "status", "--json"], child_env, deadline=deadline)
             shutdown = code != "shutdown-unverified"
             if not shutdown:
                 result["reasonCode"] = code

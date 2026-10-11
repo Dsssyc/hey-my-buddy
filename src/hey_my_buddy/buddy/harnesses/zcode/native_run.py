@@ -637,7 +637,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     Failures inside ``owned_popen`` carry creation/cleanup evidence before
     registration, including a suspended child whose stop remains unknown.
     """
-    from ..discovery import native_environment, _probe
+    from ..discovery import native_environment, probe
     root = ensure_private_dir(native_root)
     incoming = dict(os.environ)
     command = cli_command(incoming)
@@ -657,7 +657,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
                         "ZCODE_LOG_DIR": str(private / "native-logs"), "ZCODE_LOG_CONSOLE": "0",
                         "ZCODE_MODEL_TELEMETRY_ENABLED": "0"})
     try:
-        version_code, version_output = _probe([*command, "--version"], environment, cwd=cwd,
+        version_code, version_output = probe([*command, "--version"], environment, cwd=cwd,
                                               deadline=min(deadline, time.monotonic() + 5))
     except Exception as error:
         if owned is not None:

@@ -80,7 +80,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]), patch.object(
-                discovery, "_probe", wraps=discovery._probe
+                discovery, "probe", wraps=discovery.probe
             ) as probe:
                 result = discovery.discover("zcode", manual_path=str(launcher), environment={"PATH": ""})
             self.assertEqual(result["status"], "ready")
@@ -416,7 +416,7 @@ if __name__ == "__main__":
 class ProbeStopEvidenceTests(unittest.TestCase):
     def test_snapshot_failure_proves_no_probe_created(self):
         with patch.object(discovery, 'candidate_snapshot', side_effect=ValueError('fixture snapshot failed')), \
-             patch.object(discovery, '_probe') as probe:
+             patch.object(discovery, 'probe') as probe:
             with self.assertRaises(ValueError) as caught:
                 discovery.discover('codex', environment={'PATH': ''})
         probe.assert_not_called()
@@ -425,7 +425,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
     def test_candidate_preparation_failure_proves_no_probe_created(self):
         candidate = {'path': '/fixture/codex', 'source': 'manual', 'fingerprint': {}, 'exists': True}
         with patch.object(discovery, '_script_uses_node', side_effect=ValueError('fixture input failed')), \
-             patch.object(discovery, '_probe') as probe:
+             patch.object(discovery, 'probe') as probe:
             with self.assertRaises(ValueError) as caught:
                 discovery._candidate_handshake('codex', candidate, {}, time.monotonic() + 1)
         probe.assert_not_called()
@@ -435,7 +435,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
         candidate = {'path': '/fixture/codex', 'source': 'manual', 'fingerprint': {}, 'exists': True}
         with patch.object(discovery, '_script_uses_node', return_value=False), \
              patch.object(discovery, '_launch_command', return_value=['/fixture/codex']), \
-             patch.object(discovery, '_probe', side_effect=ValueError('fixture unknown process state')):
+             patch.object(discovery, 'probe', side_effect=ValueError('fixture unknown process state')):
             with self.assertRaises(ValueError) as caught:
                 discovery._candidate_handshake('codex', candidate, {}, time.monotonic() + 1)
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
@@ -444,7 +444,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
         candidate = {'path': '/fixture/codex', 'source': 'manual', 'fingerprint': {}, 'exists': True}
         with patch.object(discovery, '_script_uses_node', return_value=False), \
              patch.object(discovery, '_launch_command', return_value=['/fixture/codex']), \
-             patch.object(discovery, '_probe', return_value=(None, b'codex 1.0')), \
+             patch.object(discovery, 'probe', return_value=(None, b'codex 1.0')), \
              patch.object(discovery, '_VERSION') as version:
             version.search.side_effect = ValueError('fixture version parsing failed')
             with self.assertRaises(ValueError) as caught:
@@ -469,7 +469,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
             with self.subTest(adapter=adapter), \
                  patch.object(discovery, '_script_uses_node', return_value=False), \
                  patch.object(discovery, '_launch_command', return_value=['/fixture/cli']), \
-                 patch.object(discovery, '_probe', side_effect=[(None, b'fixture 1.0'), ('shutdown-unverified', output)]):
+                 patch.object(discovery, 'probe', side_effect=[(None, b'fixture 1.0'), ('shutdown-unverified', output)]):
                 result = discovery._candidate_handshake(adapter, candidate, {}, time.monotonic() + 1)
             self.assertEqual(result['reasonCode'], 'shutdown-unverified')
 
@@ -477,7 +477,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
         with patch.object(discovery, '_variants', return_value=[Path('/fixture/node')]), \
              patch.object(discovery, 'file_fingerprint', return_value={}), \
              patch.object(discovery, '_launch_command', return_value=['/fixture/node']), \
-             patch.object(discovery, '_probe', return_value=('shutdown-unverified', b'')), \
+             patch.object(discovery, 'probe', return_value=('shutdown-unverified', b'')), \
              patch.object(discovery, '_discover') as scan:
             node, reason = discovery._node_for(Path('/fixture/cli'), {}, time.monotonic() + 1)
         self.assertIsNone(node)
@@ -488,7 +488,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
         with patch.object(discovery, '_variants', return_value=[Path('/fixture/node')]), \
              patch.object(discovery, 'file_fingerprint', return_value={}), \
              patch.object(discovery, '_launch_command', return_value=['/fixture/node']), \
-             patch.object(discovery, '_probe', return_value=('probe-failed', b'')), \
+             patch.object(discovery, 'probe', return_value=('probe-failed', b'')), \
              patch.object(discovery, '_discover', return_value={'available': False, 'status': 'unhealthy',
                                                               'reasonCode': 'shutdown-unverified'}):
             node, reason = discovery._node_for(Path('/fixture/cli'), {}, time.monotonic() + 1)
@@ -522,7 +522,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
                              patch.object(discovery, '_app_paths', return_value=[]):
                             discovery.discover('zcode', manual_path=str(cli), environment={'PATH': ''})
                     else:
-                        discovery._probe([str(cli)], dict(os.environ), deadline=time.monotonic() + 1)
+                        discovery.probe([str(cli)], dict(os.environ), deadline=time.monotonic() + 1)
             return caught.exception
 
     @unittest.skipIf(os.name == 'nt', 'POSIX private probe')
@@ -542,7 +542,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
                 self.assertTrue(terminate(process))
                 return False
             with patch.object(discovery, '_terminate_group', side_effect=unobserved):
-                code, output = discovery._probe([str(cli)], dict(os.environ), deadline=time.monotonic() + 1)
+                code, output = discovery.probe([str(cli)], dict(os.environ), deadline=time.monotonic() + 1)
         self.assertEqual((code, output), ('shutdown-unverified', b''))
 
     def test_node_probe_exception_keeps_actual_stop(self):
@@ -553,7 +553,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
                 with patch.object(discovery, '_variants', return_value=[Path('/fixture/node')]), \
                      patch.object(discovery, 'file_fingerprint', return_value={}), \
                      patch.object(discovery, '_launch_command', return_value=['/fixture/node']), \
-                     patch.object(discovery, '_probe', side_effect=error):
+                     patch.object(discovery, 'probe', side_effect=error):
                     with self.assertRaises(ValueError) as caught:
                         discovery._node_for(Path('/fixture/cli'), {}, time.monotonic() + 1)
                 self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), stopped)
@@ -600,7 +600,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
         with patch.object(discovery, '_variants', return_value=[Path('/fixture/node')]), \
              patch.object(discovery, 'file_fingerprint', return_value={}), \
              patch.object(discovery, '_launch_command', return_value=['/fixture/node']), \
-             patch.object(discovery, '_probe', side_effect=ValueError('fixture unknown stop')):
+             patch.object(discovery, 'probe', side_effect=ValueError('fixture unknown stop')):
             with self.assertRaises(ValueError) as caught:
                 discovery._node_for(Path('/fixture/cli'), {}, time.monotonic() + 1)
         self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)
@@ -610,7 +610,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
              patch.object(discovery, 'file_fingerprint', return_value={}), \
              patch.object(discovery, '_launch_command', return_value=['/fixture/node']), \
              patch.object(discovery, 'native_environment', side_effect=ValueError('fixture environment failed')), \
-             patch.object(discovery, '_probe') as probe:
+             patch.object(discovery, 'probe') as probe:
             with self.assertRaises(ValueError) as caught:
                 discovery._node_for(Path('/fixture/cli'), {}, time.monotonic() + 1)
         probe.assert_not_called()

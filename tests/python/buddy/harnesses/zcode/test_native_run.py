@@ -1741,7 +1741,7 @@ class DiscoveryStopTests(NativeRunCase):
         self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)
 
     def test_version_probe_unconfirmed_stop_is_not_never_created(self):
-        with mock.patch('hey_my_buddy.buddy.harnesses.discovery._probe', return_value=('shutdown-unverified', b'')), \
+        with mock.patch('hey_my_buddy.buddy.harnesses.discovery.probe', return_value=('shutdown-unverified', b'')), \
              mock.patch.object(native_run, 'owned_popen', wraps=native_run.owned_popen) as spawn:
             with self.assertRaises(native_run.NativeError) as caught:
                 self.discover()
@@ -1753,7 +1753,7 @@ class DiscoveryStopTests(NativeRunCase):
             with self.subTest(stopped=stopped):
                 error = ValueError('fixture version probe failed')
                 error.discovery_shutdown_confirmed = stopped
-                with mock.patch('hey_my_buddy.buddy.harnesses.discovery._probe', side_effect=error), \
+                with mock.patch('hey_my_buddy.buddy.harnesses.discovery.probe', side_effect=error), \
                      mock.patch.object(native_run, 'owned_popen') as spawn:
                     with self.assertRaises(ValueError) as caught:
                         self.discover()
