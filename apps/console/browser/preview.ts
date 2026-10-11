@@ -56,6 +56,20 @@ export async function expectTextUncut(items: Locator): Promise<void> {
   expect(cut, "text cut off").toEqual([]);
 }
 
+/**
+ * Resolves when every transition and animation that has an end has ended, so that
+ * boxes and colours are read at rest and never in the middle of a motion. A frame
+ * is let pass first: what a click has just started only exists from the next one.
+ */
+export async function settle(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await Promise.all(document.getAnimations()
+      .filter(animation => animation.effect?.getComputedTiming().endTime !== Infinity)
+      .map(animation => animation.finished.catch(() => undefined)));
+  });
+}
+
 /** The page itself never scrolls sideways. */
 export async function expectNoSidewaysScroll(page: Page): Promise<void> {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -85,3 +99,6 @@ export async function contrastOf(target: Locator): Promise<number> {
     return (lighter + 0.05) / (darker + 0.05);
   });
 }
+
+/** What the catalogue's toolbar is made of, as items that take room: the sections, the search, the filters, the count and the two actions. */
+export const TOOLBAR_ITEMS = ":scope > nav, [data-slot=catalogue-controls] > input, [data-slot=catalogue-filters], [data-slot=catalogue-controls] [role=status], [data-slot=catalogue-actions] > button";

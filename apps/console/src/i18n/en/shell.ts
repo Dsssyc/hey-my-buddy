@@ -33,6 +33,12 @@ export default {
     discard: "Discard",
     cancelWait: "Stop waiting",
     waitingRefusal: "Waiting for another save to finish; you can stop waiting first.",
+    unresolvedNote: "The result of the save is unknown and it may have taken effect; check before retrying.",
+    unavailable: {
+      connection: "The connection is lost; retry the connection. The draft is kept.",
+      login: "The login has expired; run buddy console to log in again. The draft is kept.",
+      gate: "This session cannot write, so saving is unavailable.",
+    },
     conflict: "The settings have changed; check the draft.",
     reload: "Load the latest version",
     discardChanges: "Discard changes",

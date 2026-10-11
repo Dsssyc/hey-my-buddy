@@ -33,6 +33,12 @@ export default {
     discard: "放弃",
     cancelWait: "取消等待",
     waitingRefusal: "正在等待其他保存完成；可先取消等待。",
+    unresolvedNote: "保存结果未知，可能已生效；请核对后重试。",
+    unavailable: {
+      connection: "连接中断；请重试连接，草稿已保留。",
+      login: "登录已失效；请运行 buddy console 重新登录，草稿已保留。",
+      gate: "无写入资格；保存不可用。",
+    },
     conflict: "设置已更新；请核对草稿。",
     reload: "重新加载最新版本",
     discardChanges: "放弃修改",

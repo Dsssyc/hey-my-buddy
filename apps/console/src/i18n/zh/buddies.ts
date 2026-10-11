@@ -28,12 +28,14 @@ export default {
     exclude: "不参与路由",
   },
   unsaved: "未保存",
+  loginExpired: "登录已失效，操作未提交；请重新登录。",
   models: {
     search: "搜索 buddy",
     enabledOnly: "只看已启用",
     showUnavailable: "显示不可用",
     enabled: "启用",
     discover: "发现模型",
+    discoverBusy: "发现进行中",
     columns: {
       buddy: "Buddy",
       effort: "推理强度",

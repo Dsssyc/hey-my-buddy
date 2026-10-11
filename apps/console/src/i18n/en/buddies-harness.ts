@@ -7,6 +7,7 @@ export default {
 
   check: "Check",
   checkAll: "Check all",
+  checkAllBusy: "Checking",
   retry: "Retry",
   refused: "The connection is lost or this session cannot write",
   unrecorded: "Not recorded",
@@ -44,10 +45,6 @@ export default {
     "not-found": "Not found",
     "login-required": "Login required",
     unhealthy: "Check failed",
-  },
-  empty: {
-    title: "No harnesses recorded",
-    hint: "Use “Check all” to find the harnesses on this machine.",
   },
   done: {
     checked: "Checked {{name}}: {{status}}",
@@ -168,6 +165,11 @@ export default {
     atLimit: "At limit",
     nearLimit: "Near limit",
     reported: "Limit reported",
+    note: {
+      recent: "Latest quota observation, not live",
+      stale: "The quota observation is stale",
+      reported: "The native record reports a quota limit; the reset state may be unknown.",
+    },
     exhaustedList: "Exhausted quota records",
     balanceZero: "Balance zero",
     exhausted: "Exhausted",

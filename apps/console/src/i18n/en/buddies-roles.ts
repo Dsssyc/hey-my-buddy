@@ -41,6 +41,12 @@ export default {
     none: "No buddy to add",
     noMatch: "No buddy matches",
   },
+  refusal: {
+    fast: "Its harness does not support routing calls without tools yet",
+    review: "Its harness does not meet the local read-only routing eligibility yet",
+    unavailable: "This reasoning effort is unavailable now",
+    disabled: "This reasoning effort is not enabled; switch it on first",
+  },
   mode: {
     name: "Default mode",
     nameHint: "With a single candidate the program chooses it directly, without a Router",

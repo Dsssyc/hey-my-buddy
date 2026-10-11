@@ -27,12 +27,14 @@ export default {
     exclude: "Left out of routing",
   },
   unsaved: "Unsaved",
+  loginExpired: "The login has expired and nothing was submitted; log in again.",
   models: {
     search: "Search buddies",
     enabledOnly: "Enabled only",
     showUnavailable: "Show unavailable",
     enabled: "Enabled",
     discover: "Discover models",
+    discoverBusy: "Discovering",
     columns: {
       buddy: "Buddy",
       effort: "Reasoning effort",

@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { makeDraft, routerListEqual } from "../draft";
+import zh from "../i18n/zh/buddies";
+import { routerRefusal } from "../policy";
 import type { Draft, RouterHealthEntry, RoutingMode } from "../types";
 import {
   FLASH, FLASH_ID, GLM_ID, HIGH, HIGH_ID, MEDIUM, MEDIUM_ID, PENDING_ID, SOL_ID, health, profiles, snapshot,
 } from "./roles.testing";
 import {
-  addRouter, buddyQuad, currentRouterId, healthSummary, moveRouter, recordCounts, removeRouter, routerCandidates, routerLines, routerNote,
+  addRouter, buddyQuad, currentRouterId, healthSummary, moveRouter, recordCounts, removeRouter, routerCandidates, routerLines, routerNote, routerRefusalOf,
 } from "./roles";
 
 function entry(profileId: string, extra: Partial<RouterHealthEntry> = {}): RouterHealthEntry {
@@ -117,11 +119,16 @@ describe("the buddies that can be added", () => {
       .toEqual([MEDIUM_ID, FLASH_ID, PENDING_ID]);
   });
 
-  it("gives the reason `routerRefusal` gives for each that cannot", () => {
+  it("gives the reason code for each that cannot, and the page's words for a code are the words `routerRefusal` gives", () => {
     const by = Object.fromEntries(routerCandidates(profiles(), [], "review", "").map(({ profile, refusal }) => [profile.profileId, refusal]));
-    expect(by[SOL_ID]).toBe("所属 Harness 尚不具备本地只读路由资格");
-    expect(by[HIGH_ID]).toBe("该推理强度未启用：先打开它的开关");
-    expect(by[GLM_ID]).toBe("该推理强度当前不可用");
+    expect(by[SOL_ID]).toBe("review");
+    expect(by[HIGH_ID]).toBe("disabled");
+    expect(by[GLM_ID]).toBe("unavailable");
+    // The policy layer still words its own refusals; the page words them from the code and must not drift from it.
+    for (const mode of ["fast", "review"] as const) for (const profile of profiles()) {
+      const code = routerRefusalOf(profile, mode);
+      expect(code ? zh.roles.refusal[code] : null, `${profile.profileId} in ${mode}`).toBe(routerRefusal(profile, mode));
+    }
     expect(by[MEDIUM_ID]).toBeNull();
     expect(by[PENDING_ID]).toBeNull();
   });
@@ -186,11 +193,11 @@ describe("the note under the list", () => {
     expect(routerNote(source([]), health({ currentRouterProfileId: null, available: false }))).toEqual({ kind: "unavailable", code: null });
   });
 
-  it("names the first buddy and why the default mode refuses it, in the words `routerRefusal` gives", () => {
+  it("names the first buddy and why the default mode refuses it, by the reason code", () => {
     expect(routerNote(source([SOL_ID, MEDIUM_ID]), health({ currentRouterProfileId: MEDIUM_ID })))
-      .toEqual({ kind: "head", profileId: SOL_ID, refusal: "所属 Harness 尚不具备本地只读路由资格" });
+      .toEqual({ kind: "head", profileId: SOL_ID, refusal: "review" });
     expect(routerNote(source([SOL_ID, MEDIUM_ID], "fast"), health({ currentRouterProfileId: MEDIUM_ID })))
-      .toEqual({ kind: "head", profileId: SOL_ID, refusal: "所属 Harness 尚不支持无工具路由调用" });
+      .toEqual({ kind: "head", profileId: SOL_ID, refusal: "fast" });
   });
 
   it("has no reason for a first buddy that is gone from the catalogue", () => {

@@ -41,6 +41,13 @@ export default {
     none: "没有可添加的 buddy",
     noMatch: "没有匹配的 buddy",
   },
+  /** Why a buddy cannot be the Router in the default mode. */
+  refusal: {
+    fast: "所属 Harness 尚不支持无工具路由调用",
+    review: "所属 Harness 尚不具备本地只读路由资格",
+    unavailable: "该推理强度当前不可用",
+    disabled: "该推理强度未启用：先打开它的开关",
+  },
   mode: {
     name: "默认模式",
     nameHint: "只有一个候选时，由程序直接选定，不经过 Router",

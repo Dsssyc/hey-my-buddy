@@ -4,14 +4,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import type { ConsoleApi, HarnessHealth } from "../api";
 import type { Profile, Snapshot } from "../types";
-import { level, listed, modelButton, note, pane, queryModel, search, selectModel } from "./page.testing";
+import { effortCell, level, listed, modelButton, note, pane, queryModel, search, selectModel } from "./page.testing";
+import { familyKey } from "../console-data";
 
 /**
  * The Buddy page's own navigation: two sections, 目录 and 角色, and inside the
- * catalogue its two tables, 模型 and Harness. Every view has an address; deep
- * links, hashchange and the browser's back action land in the same state, and a
- * deep link cuts through search and filters. A mark on a section or a table says
- * where something waits for the user. Geometry is checked in a real browser.
+ * catalogue one directory in which a harness, a model or a buddy can be
+ * selected. Every selection has an address; deep links, hashchange and the
+ * browser's back action land in the same state, and a deep link cuts through
+ * search and filters. A mark on a section says where something waits for the
+ * user. Geometry is checked in a real browser.
  */
 
 const sonnet = { adapter: "claude", provider: "anthropic", model: "claude-sonnet-5" };
@@ -235,6 +237,23 @@ describe("deep links", () => {
     await waitFor(() => pane(SONNET));
     expect(modelButton(SONNET).getAttribute("aria-expanded")).toBe("true");
     await waitFor(() => expect(document.activeElement).toBe(level("medium")));
+  });
+
+  it("opens a whole model from #buddies/catalog/model/<key> on its first enabled effort, and a click on a row writes that address", async () => {
+    const user = userEvent.setup();
+    const f = fixture();
+    const address = (index: number) => `#buddies/catalog/model/${encodeURIComponent(familyKey(profiles()[index]))}`;
+    renderBuddy(address(0), f);
+    await listed(3, 4);
+    await waitFor(() => pane(SONNET));
+    expect(modelButton(SONNET).getAttribute("aria-expanded")).toBe("true");
+    expect(effortCell("medium").getAttribute("aria-pressed")).toBe("true");
+    await waitFor(() => expect(document.activeElement).toBe(level("medium")));
+    // Closing it returns to the bare address; opening another model writes that model's own.
+    await user.click(modelButton(SONNET));
+    expect(window.location.hash).toBe("#buddies/catalog");
+    await user.click(modelButton(SOL));
+    expect(window.location.hash).toBe(address(2));
   });
 
   it("focuses the named Router line from #buddies/roles/current", async () => {

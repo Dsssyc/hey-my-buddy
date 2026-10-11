@@ -6,6 +6,7 @@ export default {
 
   check: "检测",
   checkAll: "全部检测",
+  checkAllBusy: "检测进行中",
   retry: "重试",
   refused: "连接中断或缺少写入资格",
   unrecorded: "未记录",
@@ -46,10 +47,6 @@ export default {
     "not-found": "未找到",
     "login-required": "需要登录",
     unhealthy: "未通过",
-  },
-  empty: {
-    title: "没有 Harness 记录",
-    hint: "点“全部检测”，查找本机的 Harness。",
   },
   done: {
     checked: "已检测 {{name}}：{{status}}",
@@ -172,6 +169,12 @@ export default {
     atLimit: "已到上限",
     nearLimit: "接近上限",
     reported: "已报告限额",
+    /** What an observation is: the latest reading and not a live one. */
+    note: {
+      recent: "最近额度观测 · 非实时",
+      stale: "额度观测已过期",
+      reported: "原生记录报告额度限制，当前重置状态可能未知。",
+    },
     exhaustedList: "额度耗尽记录",
     balanceZero: "余额为零",
     exhausted: "额度耗尽",

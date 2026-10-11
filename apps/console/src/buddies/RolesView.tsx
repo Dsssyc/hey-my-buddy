@@ -32,7 +32,7 @@ function noteText(note: RouterNote | null, profiles: Profile[], t: TFunction<"bu
     case "head": {
       const profile = profiles.find(candidate => candidate.profileId === note.profileId);
       return t("roles.list.attention.head", {
-        name: profile ? buddyQuad(profile) : note.profileId, reason: note.refusal ?? t("roles.list.attention.gone"),
+        name: profile ? buddyQuad(profile) : note.profileId, reason: note.refusal ? t(`roles.refusal.${note.refusal}`) : t("roles.list.attention.gone"),
       });
     }
     case "unavailable": return note.code ? t("roles.list.attention.unavailableCode", { code: note.code }) : t("roles.list.attention.unavailable");

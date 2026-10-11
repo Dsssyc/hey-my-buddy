@@ -25,11 +25,11 @@ function Choices({ profiles, list, mode, onAdd }: {
         : <ul>{candidates.map(({ profile, refusal }) => <li key={profile.profileId} className="border-b last:border-b-0">
           {/* A buddy that cannot serve stays in the list, with the reason; choosing it does nothing. */}
           <button type="button" aria-disabled={!!refusal || undefined}
-            className={cn("flex w-full flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-2 text-left outline-none focus-visible:bg-sunk",
+            className={cn("flex w-full flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-2 text-left outline-none transition-colors duration-150 focus-visible:bg-sunk motion-reduce:transition-none",
               refusal ? "cursor-not-allowed" : "hover:bg-sunk")}
             onClick={() => { if (!refusal) onAdd(profile.profileId); }}>
             <span className={cn("font-mono text-xs", refusal && "text-ink3")}>{buddyQuad(profile)}</span>
-            {refusal && <span className="text-xs text-ink3">{refusal}</span>}
+            {refusal && <span className="text-xs text-ink3">{t(`roles.refusal.${refusal}`)}</span>}
           </button>
         </li>)}</ul>}
     </ScrollArea>

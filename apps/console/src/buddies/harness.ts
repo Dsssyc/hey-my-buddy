@@ -198,7 +198,7 @@ export function harnessDetailsView(row: HarnessHealth, t: T): HarnessDetailsView
     quota: quota && {
       observed: harnessTime(quota.observedAt),
       stale: quota.stale,
-      note: quota.note,
+      note: [t(quota.stale ? "harness.quota.note.stale" : "harness.quota.note.recent"), quota.limitReported ? t("harness.quota.note.reported") : ""].filter(Boolean).join(" "),
       source: quota.provider ? `${quota.source} · ${quota.provider}` : quota.source,
       limitReported: quota.limitReported,
       windows: quota.windows.map(window => ({

@@ -15,7 +15,6 @@ import { useConsole } from "./use-console";
 import { useEditor } from "./use-editor";
 import type { Editor } from "./use-editor";
 import { useTheme } from "./theme";
-import { UNRESOLVED_SAVE_NOTE } from "./console-session";
 import { createAuthorityLatch } from "./console-session";
 import { formatClock, formatDateTime } from "./i18n/format";
 import { Objectives } from "./Objectives";
@@ -63,9 +62,9 @@ export function App({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
 
 /**
  * The save bar exists only while the page holds a draft: changes that are not
- * saved, or a save whose result is not settled. It offers 放弃 and 保存, and
- * 取消等待 while another save is ahead. A button that cannot act now still takes
- * the click, so that the editor can say why.
+ * saved, or a save whose result is not settled. It offers to discard and to
+ * save, and to stop waiting while another save is ahead. A button that cannot
+ * act now still takes the click, so that the editor can say why.
  */
 function SaveBar({ editor, mutationsAvailable, describedBy }: {
   editor: Editor; mutationsAvailable: boolean; describedBy?: string;
@@ -110,11 +109,11 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   const writesAvailable = !connectionError && sessionWritable;
   const mutationsAvailable = writesAvailable && snapshot.capabilities.evaluationWriteGate !== false;
   const unavailableReason = connectionError
-    ? "连接中断；请重试连接，草稿已保留。"
+    ? t("draft.unavailable.connection")
     : !sessionWritable
-      ? "登录已失效；请运行 buddy console 重新登录，草稿已保留。"
+      ? t("draft.unavailable.login")
       : snapshot.capabilities.evaluationWriteGate === false
-        ? "无写入资格；保存不可用。"
+        ? t("draft.unavailable.gate")
         : "";
   const editor = useEditor(api, snapshot, refresh, mutationsAvailable, unavailableReason, authority);
   function select(key: Tab) {
@@ -155,7 +154,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
         {tabs.map(key => {
           const hint = tabHints[key];
           const link = <a key={key} href={"#" + key} onClick={() => select(key)} aria-current={tab === key ? "page" : undefined}
-            className="relative flex items-center gap-[7px] px-3.5 whitespace-nowrap text-bar-ink2 outline-none hover:text-bar-ink focus-visible:bg-bar-ink/10 aria-[current=page]:font-medium aria-[current=page]:text-bar-ink aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-3.5 aria-[current=page]:after:bottom-0 aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-bar-live">
+            className="relative flex items-center gap-[7px] px-3.5 whitespace-nowrap text-bar-ink2 outline-none transition-colors duration-150 hover:text-bar-ink focus-visible:bg-bar-ink/10 motion-reduce:transition-none aria-[current=page]:font-medium aria-[current=page]:text-bar-ink aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-3.5 aria-[current=page]:after:bottom-0 aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-bar-live">
             {t(`nav.${key}`)}
             {key === "tasks" && pending > 0 && <span className="min-w-[18px] rounded-sm bg-bar-hand px-[5px] text-center text-xs leading-[18px] font-semibold text-bar tabular-nums">{pending}</span>}
             {key === "buddies" && hint && <span className="size-1.5 rounded-full bg-bar-hand" aria-hidden="true" />}
@@ -196,7 +195,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
             onClick={() => void editor.discard()}>{t("draft.discardChanges")}</Button>
         </Notice>}
         {draftTab && editor.confirming && editor.uncertain && <Notice tone="hand" role="status">
-          <span>{UNRESOLVED_SAVE_NOTE}</span>
+          <span>{t("draft.unresolvedNote")}</span>
           <Button variant="outline" size="sm" aria-disabled={editor.busy || undefined}
             onClick={() => void editor.save()}>{t("draft.retry")}</Button>
           <Button variant="outline" size="sm" aria-disabled={editor.busy || undefined}

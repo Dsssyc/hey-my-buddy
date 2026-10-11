@@ -1,6 +1,7 @@
 import i18n from "i18next";
 import { describe, expect, it } from "vitest";
 import type { HarnessAccount } from "../harness-account";
+import { quotaView } from "../host-workflow";
 import type { HarnessHealth, HarnessQuota, QuotaRoutingRecord } from "../types";
 import {
   absolutePath, harnessDetailsView, harnessPath, harnessSummary, harnessTime, recoveryText, retryProviders, statusText,
@@ -196,6 +197,11 @@ describe("harness details", () => {
     const view = harnessDetailsView(row({ quota: quota({ stale: true, windows: [{ name: "5h", usedPercent: 99, resetsAt: null }] }) }), t).quota!;
     expect(view).toMatchObject({ stale: true, note: "额度观测已过期" });
     expect(view.windows[0]).toMatchObject({ hot: false, flag: null });
+  });
+
+  it("words the note of an observation from the page's own text, as the layer below words it", () => {
+    for (const recorded of [quota(), quota({ stale: true }), quota({ reachedType: "usage_limit_reached" })])
+      expect(harnessDetailsView(row({ quota: recorded }), t).quota!.note).toBe(quotaView(recorded)!.note);
   });
 });
 

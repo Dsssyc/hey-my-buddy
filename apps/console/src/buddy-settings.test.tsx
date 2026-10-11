@@ -289,7 +289,8 @@ describe("the harness directory", () => {
     // recorded reason is its explanation, on hover and for a screen reader.
     const zcode = foldHandle("ZCode");
     expect(zcode.getAttribute("aria-expanded")).toBe("false");
-    const state = within(zcode.closest("[data-slot=harness-section]")!).getByText("未找到");
+    const state = within(zcode.closest("[data-slot=harness-section]")!).getByRole("button", { name: "ZCode 账户" });
+    expect(within(state).getByText("未找到")).toBeTruthy();
     expect(state.getAttribute("aria-description")).toContain("本机未检测到 zcode CLI");
     await user.hover(state);
     expect((await screen.findByRole("tooltip")).textContent).toContain("本机未检测到 zcode CLI");
@@ -299,7 +300,7 @@ describe("the harness directory", () => {
     expect(within(modelRow(GLM)).queryByText("不可用")).toBeNull();
     // Its side column says once that it cannot work, and why.
     await user.click(modelButton(GLM));
-    expect(within(pane(GLM)).getByText("不可用").getAttribute("aria-description")).toContain("本机未检测到 zcode CLI");
+    expect(within(pane(GLM)).getByText("不可用").getAttribute("aria-description")).toBe("ZCode 未找到 · 本机未检测到 zcode CLI");
   });
 
   it("shows only enabled reasoning efforts in rows and opens a single drawer without naming roles", async () => {

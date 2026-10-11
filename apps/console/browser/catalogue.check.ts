@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
+import { TOOLBAR_ITEMS, contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
 
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 const CODEX = "codex / openai / gpt-5-codex";
@@ -23,7 +23,7 @@ for (const { locale, catalog, unsaved, settings, account, manage, check, checked
         await expect(page.locator("[data-slot=model-drawer]")).toHaveCount(0);
         await expectWholeAndApart(page.locator("[data-slot=harness-section]").first().locator(".."), page.locator("[data-slot=harness-section]"));
         const toolbar = page.locator("[data-slot=catalogue-toolbar]");
-        await expectWholeAndApart(directory, toolbar.locator(":scope > nav, [data-slot=catalogue-controls] > input, [data-slot=catalogue-controls] > [data-slot=catalogue-filters], [data-slot=catalogue-controls] > [role=status], [data-slot=catalogue-controls] > button"));
+        await expectWholeAndApart(directory, toolbar.locator(TOOLBAR_ITEMS));
         const search = toolbar.getByRole("searchbox");
         expect(await search.evaluate(node => getComputedStyle(node).fontSize)).toBe("14px");
         const navBox = (await toolbar.getByRole("navigation").boundingBox())!;
@@ -36,7 +36,7 @@ for (const { locale, catalog, unsaved, settings, account, manage, check, checked
           expect(searchBox.width).toBe(width - 24);
           const filtersBox = (await toolbar.locator("[data-slot=catalogue-filters]").boundingBox())!;
           expect(filtersBox.y).toBeGreaterThanOrEqual(searchBox.y + searchBox.height);
-          for (const button of await toolbar.locator("[data-slot=catalogue-controls] > button").all()) {
+          for (const button of await toolbar.locator("[data-slot=catalogue-actions] > button").all()) {
             const box = (await button.boundingBox())!;
             expect(box.y).toBeGreaterThanOrEqual(searchBox.y + searchBox.height);
             expect(box.height).toBe(28);
@@ -62,7 +62,8 @@ for (const { locale, catalog, unsaved, settings, account, manage, check, checked
         }
         for (const summary of await page.locator("[data-slot=harness-section]").getByRole("button", { name: new RegExp(` ${account}$`) }).all()) {
           await expectTextUncut(summary);
-          expect(await summary.evaluate(node => getComputedStyle(node).whiteSpace)).toBe("nowrap");
+          // The row is the button; its quota summary is a part of it and stays on one line.
+          expect(await summary.locator("[data-slot=quota-summary]").evaluate(node => getComputedStyle(node).whiteSpace)).toBe("nowrap");
           expect(await contrastOf(summary)).toBeGreaterThanOrEqual(4.5);
         }
         const zcode = page.getByRole("button", { name: `ZCode ${account}`, exact: true });

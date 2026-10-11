@@ -25,7 +25,7 @@ function SegmentedItem({
     <RadioGroupPrimitive.Item
       data-slot="segmented-item"
       className={cn(
-        "border-l border-line2 px-3 py-[5px] whitespace-nowrap text-ink2 outline-none first:border-l-0 hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset disabled:cursor-not-allowed disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-checked:bg-foreground aria-checked:text-card",
+        "border-l border-line2 px-3 py-[5px] whitespace-nowrap text-ink2 outline-none transition-colors duration-150 first:border-l-0 hover:text-foreground motion-reduce:transition-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset disabled:cursor-not-allowed disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-checked:bg-foreground aria-checked:text-card",
         className
       )}
       {...props}

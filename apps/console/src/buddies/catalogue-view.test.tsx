@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
@@ -306,6 +306,23 @@ describe("what the view says about its own reads", () => {
     expect(await screen.findByText("只显示前 600 个不可用的 buddy；更早的请用搜索查找。")).toBeTruthy();
     // The cut is a hard stop: one bounded read, no further page.
     expect(f.command.mock.calls.filter(([operation]) => operation === "model_profiles")).toHaveLength(1);
+  });
+
+  it("says why the discovery button is closed while a discovery is under way, on the same button", async () => {
+    let finish!: () => void;
+    const f = fixture(snapshot(), { model_catalog_refresh: () => new Promise<void>(resolve => { finish = resolve; }) });
+    const user = userEvent.setup();
+    open(f);
+    await listed(1, 4);
+    const discover = screen.getByRole("button", { name: "发现模型" });
+    expect(discover.getAttribute("aria-description")).toBeNull();
+    await user.click(discover);
+    await waitFor(() => expect(discover.getAttribute("aria-disabled")).toBe("true"));
+    expect(screen.getByRole("button", { name: "发现模型" })).toBe(discover);
+    expect(discover.getAttribute("aria-description")).toBe("发现进行中");
+    await act(async () => { finish(); });
+    await waitFor(() => expect(discover.hasAttribute("aria-disabled")).toBe(false));
+    expect(discover.getAttribute("aria-description")).toBeNull();
   });
 
   it("reports a failed discovery as a failure and leaves the catalogue and the button usable", async () => {

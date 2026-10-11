@@ -1,15 +1,15 @@
-import { cn } from "cn";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import type { ConsoleApi } from "../api";
 import { errorText } from "../api";
+import { harnessName } from "../buddy-display";
 import { familyKey, modelFamilies } from "../console-data";
-import { LOGIN_EXPIRED_ACTION_REFUSAL } from "../console-session";
 import { historyView } from "../draft";
 import type { Snapshot } from "../types";
 import type { Editor } from "../use-editor";
@@ -18,15 +18,14 @@ import { useViewPreference } from "../view-preferences";
 import type { BuddyAttention } from "./attention";
 import { BuddyHeader } from "./BuddyHeader";
 import { HarnessDetails } from "./HarnessDetails";
-import { HarnessLogo } from "./HarnessLogo";
-import { harnessSummary, harnessTime, recoveryText } from "./harness";
-import { useHarnessActions } from "./use-harness-actions";
+import { HarnessHeader } from "./HarnessHeader";
 import { ModelDrawer, buddyRowId } from "./ModelDrawer";
 import { ModelLine } from "./ModelLine";
-import { harnessName } from "../buddy-display";
-import { harnessBlocks, harnessStateText, listedModels, reasonTexts } from "./models";
+import { harnessBlocks, harnessStateText, listedModels } from "./models";
+import type { ModelRow } from "./models";
 import { buddyHash } from "./navigation";
 import type { BuddyLocation } from "./navigation";
+import { useHarnessActions } from "./use-harness-actions";
 
 /**
  * One directory, grouped by harness, with independent account expansions and one model drawer.
@@ -39,7 +38,8 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
 }) {
   const { t } = useTranslation("buddies");
   const [selected, setSelected] = useState<string | null>(null);
-  const [selectedBuddy, setSelectedBuddy] = useState<string | null>(null);
+  /** The buddy chosen on each model's strip; a model keeps its choice while its drawer closes. */
+  const [chosen, setChosen] = useState<Record<string, string>>({});
   const [accounts, setAccounts] = useState<Record<string, boolean>>({});
   const actions = useHarnessActions({ snapshot, api, refresh, mutationsAvailable, sessionWritable: editor.sessionWritable });
   const [query, setQuery] = useState("");
@@ -61,7 +61,6 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   const listedKeys = new Set(listed.map(family => family.key));
   const blocks = harnessBlocks({ listed: modelFamilies(data.profiles), data, recorded, harnesses: actions.rows, folded, fresh })
     .map(block => ({ ...block, modelCount: block.models.length, models: block.models.filter(row => listedKeys.has(row.key)) }));
-  const current = blocks.filter(block => !block.folded).flatMap(block => block.models).find(row => row.key === selected) ?? null;
   const healthBlocks = actions.rows.filter(health => !data.profiles.some(profile => profile.adapter === health.adapter))
     .map(health => ({ adapter: health.adapter, name: harnessName(health.adapter), state: health.status === "ready" ? null : health.status,
       reasons: [], folded: folded[health.adapter] ?? true, models: [], modelCount: 0, providers: Object.keys(health.billingByProvider ?? {}), enabled: 0, total: 0 }));
@@ -105,7 +104,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
       const family = modelFamilies(data.profiles).find(row => row.key === familyKey(target))!;
       const first = family.profiles.find(profile => profile.enabled) ?? family.profiles[0];
       const profileId = location.targetKind === "model" ? first.profileId : target.profileId;
-      setSelected(familyKey(target)); setSelectedBuddy(profileId);
+      setSelected(familyKey(target)); setChosen(previous => ({ ...previous, [familyKey(target)]: profileId }));
       setQuery(""); setEnabledOnlyForView(false);
       if (!target.available) setShowUnavailableForView(true);
       setFolded(previous => ({ ...previous, [target.adapter]: false }));
@@ -119,19 +118,21 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
     target?.focus(); target?.scrollIntoView?.({ block: "nearest" });
   }, [focusRequest, active]);
 
-  function selectModel(row: typeof current) {
-    if (!row) return;
+  function selectModel(row: ModelRow) {
     const opening = selected !== row.key;
     setSelected(opening ? row.key : null);
-    if (opening) setFolded(previous => ({ ...previous, [row.family.adapter]: false }));
-    const first = row.chips.find(chip => chip.profile.enabled) ?? row.chips[0];
-    setSelectedBuddy(opening ? first.profile.profileId : null);
+    if (opening) {
+      // Opening a model pins its harness open: switching its last buddy off must not fold it away.
+      setFolded(previous => ({ ...previous, [row.family.adapter]: false }));
+      const first = row.chips.find(chip => chip.profile.enabled) ?? row.chips[0];
+      setChosen(previous => ({ ...previous, [row.key]: first.profile.profileId }));
+    }
     const next: BuddyLocation = opening ? { view: "models", targetKind: "model", target: row.key } : { view: "models" };
     handledLocation.current = buddyHash(next);
     onNavigate(next);
   }
-  function selectBuddy(profileId: string) {
-    setSelectedBuddy(profileId);
+  function selectBuddy(model: string, profileId: string) {
+    setChosen(previous => ({ ...previous, [model]: profileId }));
     const next: BuddyLocation = { view: "models", targetKind: "buddy", target: profileId };
     handledLocation.current = buddyHash(next);
     onNavigate(next);
@@ -144,7 +145,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
     onNavigate(next);
   }
 
-  const refusal = !editor.sessionWritable ? LOGIN_EXPIRED_ACTION_REFUSAL : !mutationsAvailable ? t("models.refused") : "";
+  const refusal = !editor.sessionWritable ? t("loginExpired") : !mutationsAvailable ? t("models.refused") : "";
   async function discover() {
     if (busy) return;
     // A refusal is said only while the action would still be refused.
@@ -172,32 +173,37 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
     className="flex min-h-0 flex-1 flex-col bg-sunk">
       <div data-slot="catalogue-toolbar" className="grid min-h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-2 border-b bg-card px-3 py-2 text-ink2 sm:grid-cols-[auto_minmax(0,1fr)] sm:gap-x-6 sm:px-6">
         <BuddyHeader location={location} attention={attention} onNavigate={onNavigate} />
+        {/* From 640px the controls wrap in two steps: the search takes a line of its own, and the rest is one group whose two buttons never part. */}
         <div data-slot="catalogue-controls" className="contents sm:ml-auto sm:flex sm:min-w-0 sm:flex-wrap sm:items-center sm:justify-end sm:gap-x-5 sm:gap-y-2">
           <Input type="search" className="col-span-3 row-start-2 h-8 w-full max-w-full bg-card text-sm text-foreground shadow-none sm:w-[200px]" aria-label={t("models.search")} placeholder={t("models.search")}
             value={query} onChange={event => setQuery(event.target.value)} />
-          <div data-slot="catalogue-filters" className="col-start-1 row-start-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 text-xs sm:gap-x-5 sm:text-sm">
-            <label className="flex items-center gap-2 whitespace-nowrap">
-              <Checkbox checked={enabledOnly} onCheckedChange={checked => setEnabledOnly(checked === true)} />{t("models.enabledOnly")}
-            </label>
-            {unavailableCount > 0 && <label className="flex items-center gap-2 whitespace-nowrap">
-              <Checkbox checked={showUnavailable} aria-label={`${t("models.showUnavailable")} ${unavailableCount}`}
-                onCheckedChange={checked => setShowUnavailable(checked === true)} />
-              {t("models.showUnavailable")}<span className="text-ink3 tabular-nums">{unavailableCount}</span>
-            </label>}
+          <div data-slot="catalogue-group" className="contents sm:flex sm:min-w-0 sm:flex-wrap sm:items-center sm:justify-end sm:gap-x-5 sm:gap-y-2">
+            <div data-slot="catalogue-filters" className="col-start-1 row-start-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 text-xs sm:gap-x-5 sm:text-sm">
+              <label className="flex items-center gap-2 whitespace-nowrap">
+                <Checkbox checked={enabledOnly} onCheckedChange={checked => setEnabledOnly(checked === true)} />{t("models.enabledOnly")}
+              </label>
+              {unavailableCount > 0 && <label className="flex items-center gap-2 whitespace-nowrap">
+                <Checkbox checked={showUnavailable} aria-label={`${t("models.showUnavailable")} ${unavailableCount}`}
+                  onCheckedChange={checked => setShowUnavailable(checked === true)} />
+                {t("models.showUnavailable")}<span className="text-ink3 tabular-nums">{unavailableCount}</span>
+              </label>}
+            </div>
+            <span className="col-span-2 col-start-2 row-start-1 justify-self-end whitespace-nowrap text-xs tabular-nums sm:text-sm" role="status">{t("models.enabled")} {buddies.filter(chip => chip.profile.enabled).length} / {buddies.length}</span>
+            <div data-slot="catalogue-actions" className="contents sm:flex sm:items-center sm:gap-2">
+              <Hint text={actions.refusal || (actions.busy ? t("harness.checkAllBusy") : undefined)}>
+                <Button variant="outline" className="col-start-2 row-start-3 h-7 px-2 text-xs sm:h-8 sm:px-3 sm:text-sm" aria-disabled={actions.busy || !!actions.refusal || undefined} onClick={() => void actions.run({ kind: "check" })}>{t("harness.checkAll")}</Button>
+              </Hint>
+              <Hint text={refusal || (busy ? t("models.discoverBusy") : undefined)}>
+                <Button variant="outline" className="col-start-3 row-start-3 h-7 px-2 text-xs sm:h-8 sm:px-3 sm:text-sm" aria-disabled={busy || !!refusal || undefined} onClick={() => void discover()}>{t("models.discover")}</Button>
+              </Hint>
+            </div>
           </div>
-          <span className="col-span-2 col-start-2 row-start-1 justify-self-end whitespace-nowrap text-xs tabular-nums sm:text-sm" role="status">{t("models.enabled")} {buddies.filter(chip => chip.profile.enabled).length} / {buddies.length}</span>
-          <Hint text={actions.refusal || undefined}>
-            <Button variant="outline" className="col-start-2 row-start-3 h-7 px-2 text-xs sm:h-8 sm:px-3 sm:text-sm" aria-disabled={actions.busy || !!actions.refusal || undefined} onClick={() => void actions.run({ kind: "check" })}>{t("harness.checkAll")}</Button>
-          </Hint>
-          <Hint text={refusal || undefined}>
-            <Button variant="outline" className="col-start-3 row-start-3 h-7 px-2 text-xs sm:h-8 sm:px-3 sm:text-sm" aria-disabled={busy || !!refusal || undefined} onClick={() => void discover()}>{t("models.discover")}</Button>
-          </Hint>
         </div>
       </div>
       {(reading || readFailure || (showUnavailable && history.limitReached) || guard || error || note) && <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1 border-b px-3 py-2 text-xs sm:px-6">
         {reading && <p className="text-ink3" role="status">{t("models.reading")}</p>}
         {readFailure && <p className="flex items-center gap-2.5 text-fail" role="alert">{readFailure}
-          <Button variant="outline" size="xs" onClick={history.reload}>{t("models.retry")}</Button></p>}
+          <Button variant="outline" size="sm" onClick={history.reload}>{t("models.retry")}</Button></p>}
         {showUnavailable && history.limitReached && <p className="text-ink3">{t("models.limit", { n: MAX_HISTORY_PROFILES })}</p>}
         {guard && <p className="text-ink2" role="status">{guard}</p>}
         {error && <p className="text-fail" role="alert">{error}</p>}
@@ -206,63 +212,40 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
       {(actions.guard || actions.error || actions.note) && <div data-slot="harness-feedback" className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b bg-card px-3 py-2 text-xs sm:px-6">
         {actions.guard && <p role="status">{actions.guard}</p>}
         {actions.error && <p className="flex flex-wrap items-center gap-2 text-fail" role="alert">{actions.error}
-          {actions.retry && <Button variant="outline" size="xs" onClick={() => void actions.run(actions.retry!)}>{t("harness.retry")}</Button>}</p>}
+          {actions.retry && <Button variant="outline" size="sm" onClick={() => void actions.run(actions.retry!)}>{t("harness.retry")}</Button>}</p>}
         {actions.note && <p role="status">{actions.note}</p>}
       </div>}
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-3 p-3 sm:p-6">
           {sections.map(block => {
             const health = actions.rows.find(row => row.adapter === block.adapter);
-            const summary = health && harnessSummary(health, t);
-            const metered = health && Object.values(health.billingByProvider ?? {}).some(fact => fact.kind === "metered");
-            const blocked = health?.quotaRouting?.find(record => record.blocked);
-            const state = health && health.status !== "ready" ? health.status : block.state;
-            const retryTime = blocked && harnessTime(blocked.resetsAt ?? blocked.retry?.eligibleAt);
-            return <section key={block.adapter} aria-label={block.name} data-slot="harness-section" className="border bg-card">
-              <div data-slot="harness-header" className="flex min-h-12 flex-wrap items-center gap-x-2 gap-y-2 px-3 py-2 sm:px-4">
-                <button type="button" className="shrink-0 rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-expanded={!block.folded}
-                  aria-label={t(block.folded ? "models.unfold" : "models.fold", { name: block.name })}
-                  onClick={() => setFolded(previous => ({ ...previous, [block.adapter]: !block.folded }))}>
-                  <span aria-hidden="true" className="inline-flex size-4 items-center justify-center text-xs leading-none text-ink2">{block.folded ? "▶" : "▼"}</span>
-                </button>
-                <HarnessLogo adapter={block.adapter} />
-                <b className="text-base font-semibold">{block.name}</b>
-                <span className="text-xs text-ink2">{block.providers.join(" / ")}</span>
-                {state && !blocked && <Hint text={[health?.remedy, ...reasonTexts(block.reasons, t, true)].filter(Boolean).join(" · ") || undefined}>
-                  <span tabIndex={0} className="text-xs text-ink3">{harnessStateText(state, t)}</span>
-                </Hint>}
-                {blocked && <Hint text={recoveryText(blocked, t)}><span tabIndex={0} className="text-xs text-hand">{t(blocked.code === "HARNESS_BALANCE_ZERO" ? "harness.quota.balanceZero" : "harness.quota.exhausted")}{retryTime && ` · ${t(blocked.resetsAt ? "harness.quota.reset" : "harness.quota.retryTime", { time: retryTime })}`}</span></Hint>}
-                <div className="ml-auto flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
-                  {block.folded && <span className="text-xs text-ink3 tabular-nums">{t("models.modelCount", { n: block.modelCount })} · {t("models.enabled")} {block.enabled} / {block.total}</span>}
-                  {health && <Hint text={health.quota ? t("harness.quota.observation", { time: harnessTime(health.quota.observedAt) ?? t("harness.unrecorded"), source: health.quota.source }) : undefined}>
-                    <button id={`account-summary-${block.adapter}`} type="button" data-slot="account-summary" aria-label={t("harness.summaryLabel", { name: block.name })} aria-expanded={!!accounts[block.adapter]}
-                      className="inline-flex max-w-full items-center gap-2 whitespace-nowrap rounded-sm text-xs tabular-nums outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                      onClick={() => toggleAccount(block.adapter)}>
-                      <span data-slot="summary-value" className={cn("whitespace-nowrap", (metered ? !summary?.stale && health.quota?.balanceZero : summary?.hot) && "text-hand")}>
-                        {metered ? health.quota?.balanceZero ? t("harness.quota.balanceZero") : `${t("harness.balance")} ${t("harness.quota.unknown")}`
-                          : summary ? summary.text : "—"}
-                      </span>
-                      {!metered && summary?.resets && <span className="whitespace-nowrap text-ink3">{t("harness.quota.reset", { time: summary.resets })}</span>}
-                      {summary?.stale && <span className="whitespace-nowrap text-ink3">{t("harness.quota.stale")}</span>}
-                      <span aria-hidden="true" className="text-xs leading-none text-ink2">{accounts[block.adapter] ? "▲" : "▼"}</span>
-                    </button>
-                  </Hint>}
-                  {!block.folded && <span className="hidden w-16 text-right text-xs text-ink3 sm:inline">{t("models.columns.concurrency")}</span>}
-                </div>
-              </div>
-              {health && accounts[block.adapter] && active && <HarnessDetails row={health} name={block.name} api={api} csrfToken={snapshot.csrfToken}
-                canWrite={!actions.refusal} refusal={actions.refusal} busy={actions.busy}
-                onCheck={() => void actions.run({ kind: "check", adapter: block.adapter })}
-                onSavePath={path => void actions.run({ kind: "set", adapter: block.adapter, path })}
-                onRetry={provider => void actions.run({ kind: "retry", adapter: block.adapter, provider })}
-                onRefreshed={actions.reloadSnapshot} />}
-              {!block.folded && block.models.map(row => <div key={row.key}>
-                <ModelLine row={row} harnessState={state} recorded={recorded} data={data} expanded={current?.key === row.key} onSelect={() => selectModel(row)} />
-                {current?.key === row.key && active && <ModelDrawer row={row} data={data} recorded={recorded} editor={editor}
-                  harnessState={state ? `${block.name} ${harnessStateText(state, t)}` : undefined}
-                  selectedProfileId={selectedBuddy!} onSelectProfile={selectBuddy} />}
-              </div>)}
-            </section>;
+            return <Collapsible asChild key={block.adapter} open={!block.folded}
+              onOpenChange={open => setFolded(previous => ({ ...previous, [block.adapter]: !open }))}>
+              <section aria-label={block.name} data-slot="harness-section" className="border bg-card">
+                <HarnessHeader block={block} health={health} state={block.state} accountOpen={!!accounts[block.adapter]}
+                  onToggleAccount={() => toggleAccount(block.adapter)} />
+                <Collapsible open={!!health && !!accounts[block.adapter]}>
+                  <CollapsibleContent>
+                    {health && active && <HarnessDetails row={health} name={block.name} api={api} csrfToken={snapshot.csrfToken}
+                      canWrite={!actions.refusal} refusal={actions.refusal} busy={actions.busy}
+                      onCheck={() => void actions.run({ kind: "check", adapter: block.adapter })}
+                      onSavePath={path => void actions.run({ kind: "set", adapter: block.adapter, path })}
+                      onRetry={provider => void actions.run({ kind: "retry", adapter: block.adapter, provider })}
+                      onRefreshed={actions.reloadSnapshot} />}
+                  </CollapsibleContent>
+                </Collapsible>
+                <CollapsibleContent>
+                  {block.models.map(row => <Collapsible key={row.key} open={selected === row.key}>
+                    <ModelLine row={row} harnessState={block.state} recorded={recorded} data={data} expanded={selected === row.key} onSelect={() => selectModel(row)} />
+                    <CollapsibleContent>
+                      {active && <ModelDrawer row={row} data={data} recorded={recorded} editor={editor}
+                        harnessState={block.state ? `${block.name} ${harnessStateText(block.state, t)}` : undefined}
+                        selectedProfileId={chosen[row.key]!} onSelectProfile={profileId => selectBuddy(row.key, profileId)} />}
+                    </CollapsibleContent>
+                  </Collapsible>)}
+                </CollapsibleContent>
+              </section>
+            </Collapsible>;
           })}
           {!listed.length && <div className="px-6 py-12 text-center">
             <p className="font-medium">{t(data.profiles.length ? "models.empty.filtered" : "models.empty.none")}</p>

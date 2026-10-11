@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { ApiError, errorText, snapshotHarnesses } from "../api";
 import type { ConsoleApi } from "../api";
 import { harnessName } from "../buddy-display";
-import { LOGIN_EXPIRED_ACTION_REFUSAL } from "../console-session";
 import type { HarnessHealth, Snapshot } from "../types";
 import { harnessPath, statusText } from "./harness";
 import { openQuotaRetry } from "./harness-retry";
@@ -30,7 +29,7 @@ export function useHarnessActions({ snapshot, api, refresh, mutationsAvailable, 
   const [refused, setRefused] = useState(false);
 
   const rows = recorded.map(row => replies[row.adapter] ?? row);
-  const refusal = !sessionWritable ? LOGIN_EXPIRED_ACTION_REFUSAL : !mutationsAvailable ? t("harness.refused") : "";
+  const refusal = !sessionWritable ? t("loginExpired") : !mutationsAvailable ? t("harness.refused") : "";
   const expectedRevision = (adapter: string) => rows.find(row => row.adapter === adapter)?.revision ?? 0;
   /** The reload is the point of the action: the snapshot stays the recorded truth. */
   async function reloadSnapshot() {

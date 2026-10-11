@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
+import { TOOLBAR_ITEMS, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
 
 const languages = [
   { locale: "zh-CN", sections: ["目录", "角色"] },
@@ -18,7 +18,7 @@ for (const { locale, sections } of languages) for (const width of [1280, 390]) {
       for (const [index, name] of sections.entries()) await expect(links.nth(index)).toContainText(name);
       await expectWholeAndApart(navigation, links);
       await expectTextUncut(links);
-      await expectWholeAndApart(page.getByRole("main"), page.locator("[data-slot=catalogue-toolbar]").locator(":scope > nav, [data-slot=catalogue-controls] > input, [data-slot=catalogue-controls] > [data-slot=catalogue-filters], [data-slot=catalogue-controls] > [role=status], [data-slot=catalogue-controls] > button"));
+      await expectWholeAndApart(page.getByRole("main"), page.locator("[data-slot=catalogue-toolbar]").locator(TOOLBAR_ITEMS));
       await expectNoSidewaysScroll(page);
       const [bar, toolbar] = [await page.getByRole("banner").first().boundingBox(), await page.locator("[data-slot=catalogue-toolbar]").boundingBox()];
       expect(toolbar!.x).toBe(0);

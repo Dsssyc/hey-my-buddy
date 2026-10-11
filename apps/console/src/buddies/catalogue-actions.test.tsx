@@ -12,13 +12,13 @@ import {
 } from "./harness.testing";
 
 /**
- * ADR-017 §15 on the Buddy page's harness table: each harness shows its state,
- * version, account and quota in a row, and its path, source, last check, or its
- * attempted locations and remedy, in the side column. Checking is an explicit
- * click that goes through the existing `capabilities` operation with
- * `refresh: true` and never calls a model; saving a path goes through
- * `harness_set` with the recorded revision, so a concurrent change is a
- * reported conflict rather than an overwrite.
+ * ADR-017 §15 on the Buddy page's harness sections: each harness shows its state
+ * and quota summary in its head, and in what the head opens its path, version,
+ * source, last check, or its attempted locations and remedy, its account and its
+ * quota. Checking is an explicit click that goes through the existing
+ * `capabilities` operation with `refresh: true` and never calls a model; saving
+ * a path goes through `harness_set` with the recorded revision, so a concurrent
+ * change is a reported conflict rather than an overwrite.
  */
 
 const clock = (iso: string) => {
@@ -236,15 +236,20 @@ describe("checking", () => {
     let finish!: (value: unknown) => void;
     const f = fixture({ replies: { capabilities: () => new Promise(resolve => { finish = resolve; }) } });
     await openHarness(f);
-    await user.click(screen.getByRole("button", { name: "全部检测" }));
+    const checkAll = screen.getByRole("button", { name: "全部检测" });
+    await user.click(checkAll);
     await waitFor(() => expect(f.command).toHaveBeenCalledTimes(1));
     for (const button of [screen.getByRole("button", { name: "全部检测" }), within(paneBlock("位置")).getByRole("button", { name: "检测" })]) {
       expect(button.getAttribute("aria-disabled")).toBe("true");
       await user.click(button);
     }
     expect(f.command).toHaveBeenCalledTimes(1);
+    // The toolbar button says why, and is still the button that was clicked.
+    expect(screen.getByRole("button", { name: "全部检测" })).toBe(checkAll);
+    expect(checkAll.getAttribute("aria-description")).toBe("检测进行中");
     await act(async () => { finish({ harnesses: harnesses() }); });
     await waitFor(() => expect(screen.getByRole("button", { name: "全部检测" }).getAttribute("aria-disabled")).toBeNull());
+    expect(checkAll.getAttribute("aria-description")).toBeNull();
   });
 });
 
@@ -397,7 +402,32 @@ describe("entering the view", () => {
     expect(screen.queryByText(/未保存/)).toBeNull();
   });
 
+  it("draws an account and a model's drawer only while the view is in front, and brings them back with it", async () => {
+    const user = userEvent.setup();
+    const f = fixture({ harnesses: [harness({ adapter: "claude", status: "ready" })] });
+    const state = snapshot([harness({ adapter: "claude", status: "ready" })]);
+    function View({ active }: { active: boolean }) {
+      const editor = useEditor(f.api, state, async () => null, true, "");
+      return <TooltipProvider><CatalogView snapshot={state} editor={editor} api={f.api} refresh={async () => null} active={active}
+        mutationsAvailable location={{ view: "models" }} attention={{ roles: null, quota: [] }} onNavigate={() => {}} hidden={!active} /></TooltipProvider>;
+    }
+    const { rerender } = render(<View active />);
+    await user.click(screen.getByRole("button", { name: "Claude Code 账户" }));
+    await user.click(screen.getByRole("button", { name: "claude / anthropic / claude-sonnet-5" }));
+    expect(document.querySelector("[data-slot=harness-details]")).toBeTruthy();
+    expect(document.querySelector("[data-slot=model-drawer]")).toBeTruthy();
+    rerender(<View active={false} />);
+    expect(document.querySelector("[data-slot=harness-details]")).toBeNull();
+    expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
+    rerender(<View active />);
+    expect(document.querySelector("[data-slot=harness-details]")).toBeTruthy();
+    expect(document.querySelector("[data-slot=model-drawer]")).toBeTruthy();
+  });
 
+  it("writes that a harness was never checked as not recorded, in its location block", async () => {
+    await openHarness(fixture({ harnesses: [harness({ adapter: "claude", status: "unknown" })] }));
+    expect(fieldValue(paneBlock("位置"), "检测").textContent).toBe("未记录");
+  });
 });
 
 describe("the account block", () => {
