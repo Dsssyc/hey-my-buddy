@@ -10,6 +10,7 @@ from support import BoardTestCase, InProcessBoard
 from blackboard.store.test_migrations import rows, schema_shape, DELIVERED
 from blackboard.store.upgrade_fixture import load_fixture
 from blackboard.tasks import test_workspace_identity as identity_fixtures
+from hey_my_buddy.blackboard.catalog import accounts
 from hey_my_buddy.blackboard.store import backup, migrations
 from hey_my_buddy.blackboard.store.db import Database, canonical_json
 from hey_my_buddy.blackboard.store.store import BoardStore
@@ -22,7 +23,7 @@ class UpgradeMigrationTests(BoardTestCase):
     def setUp(self):
         super().setUp()
         self.state = self.directory / 'state'
-        load_fixture(self.state)
+        self.fixture = load_fixture(self.state)
 
     def backed_up(self):
         current = Path(backup.create(BoardStore(self.state))["path"])
@@ -32,6 +33,90 @@ class UpgradeMigrationTests(BoardTestCase):
     def all_rows(self):
         with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
             return rows(connection)
+
+    def account_operation(self):
+        operation_id = self.fixture['accountOperation']['operationId']
+        with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
+            return connection.execute('SELECT value FROM meta WHERE key=?', (operation_id,)).fetchone()[0]
+
+    def test_r8_uncertain_base_operation_survives_backup_migration_identity_and_verification(self):
+        original = self.account_operation()
+        operation = json.loads(original)
+        self.assertEqual(operation['status'], 'uncertain')
+        current, before = self.backed_up()
+        self.assertEqual(before, upgrade.idle_snapshot(self.state))
+        self.assertEqual(self.account_operation(), original)
+        migration, expected = upgrade.migrate_board(self.state, before)
+        self.assertEqual(migration['toSchema'], 16)
+        self.assertEqual(self.account_operation(), original)
+        identity, expected = migrate_workspace_identity(self.state, expected)
+        self.assertTrue(identity['mapped'])
+        self.assertEqual(identity['kept'], {})
+        self.assertEqual(self.account_operation(), original)
+        target = self.directory / 'private-runtime'
+        health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': 16}
+        # Only runtime inspection is synthetic; backup, both conversions and the
+        # post-start retained-value verification use their production paths.
+        with mock.patch.object(upgrade, 'command', return_value={'leaks': []}):
+            verified = upgrade.verify_started(self.state, target, health, expected)
+        self.assertTrue(verified['retainedDataFingerprints'])
+        self.assertEqual(self.account_operation(), original)
+        with mock.patch.object(upgrade, 'command', return_value={'leaks': []}):
+            with closing(sqlite3.connect(self.state / 'board.sqlite3', isolation_level=None)) as connection:
+                connection.execute('UPDATE meta SET value=? WHERE key=?',
+                    (canonical_json({**operation, 'purpose': 'corrupted'}), self.fixture['accountOperation']['operationId']))
+            with self.assertRaises(BoardError) as corrupt:
+                upgrade.verify_started(self.state, target, health, expected)
+        self.assertEqual(corrupt.exception.details['tables'], ['meta'])
+        # The verified schema-15 backup retains the exact old JSON as well.
+        upgrade.restore(self.state, current)
+        self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], 15)
+        self.assertEqual(self.account_operation(), original)
+
+    def test_r8_upgraded_uncertain_operation_refuses_credentials_before_native_action(self):
+        original = self.account_operation()
+        _current, before = self.backed_up()
+        _migration, expected = upgrade.migrate_board(self.state, before)
+        migrate_workspace_identity(self.state, expected)
+        operation = json.loads(original)
+        owner = accounts.Accounts(BoardStore(self.state))
+        with self.assertRaises(BoardError) as caught:
+            with owner.credential_change(operation['adapter'], operation['source'],
+                    expected_credential_revision=operation['credentialRevision'], expected_selection_revision=0):
+                self.fail('Credential admission must fail before any native action')
+        self.assertEqual(caught.exception.code, 'ACCOUNT_IN_USE')
+        self.assertEqual(self.account_operation(), original)
+        with owner.board.db.read() as connection:
+            self.assertEqual(accounts.selection(connection, operation['adapter'])['credentialRevision'],
+                             operation['credentialRevision'])
+            self.assertIsNone(connection.execute("SELECT key FROM meta WHERE key LIKE 'account-mutation:%'").fetchone())
+
+    def test_r8_active_base_operation_is_not_idle_and_is_not_rewritten(self):
+        operation_id = self.fixture['accountOperation']['operationId']
+        with closing(sqlite3.connect(self.state / 'board.sqlite3', isolation_level=None)) as connection:
+            connection.execute("UPDATE meta SET value=json_set(value,'$.status','active') WHERE key=?", (operation_id,))
+        original = self.all_rows()
+        with self.assertRaises(BoardError) as caught:
+            upgrade.idle_snapshot(self.state)
+        self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
+        self.assertEqual(self.all_rows(), original)
+
+    def test_r8_active_base_mutation_is_not_idle_and_is_not_rewritten(self):
+        self.assert_base_mutation_not_idle('active')
+
+    def test_r8_uncertain_base_mutation_is_not_idle_and_is_not_rewritten(self):
+        self.assert_base_mutation_not_idle('uncertain')
+
+    def assert_base_mutation_not_idle(self, status):
+        with closing(sqlite3.connect(self.state / 'board.sqlite3', isolation_level=None)) as connection:
+            connection.execute('INSERT INTO meta(key,value) VALUES(?,?)',
+                ('account-mutation:' + canonical_json(['codex', 'native']),
+                 canonical_json({'operationId': 'fixture-mutation', 'status': status, 'credentialRevision': 0})))
+        original = self.all_rows()
+        with self.assertRaises(BoardError) as caught:
+            upgrade.idle_snapshot(self.state)
+        self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
+        self.assertEqual(self.all_rows(), original)
 
     def test_backup_records_15_and_trials_the_same_migration_without_touching_the_source(self):
         old = self.all_rows()

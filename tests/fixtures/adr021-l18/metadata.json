@@ -1,4 +1,16 @@
 {
+  "accountOperation": {
+    "account": {
+      "adapter": "codex",
+      "credentialRevision": 0,
+      "revision": 0,
+      "source": "native"
+    },
+    "operationId": "account-operation:00000000000000000000000000000021",
+    "purpose": "fixture-shutdown-unconfirmed",
+    "shutdownConfirmed": false,
+    "source": "buddy.accounts.native_operation"
+  },
   "boundary": "Old BoardService named operations in process; synthetic native discovery and worker result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, legacy device/inode identities and dependent hashes before upgrade; this preparation is not migration or new native execution. Real host_seal is tested separately; service workflow_conclude after upgrade remains Host verification.",
   "catalogSha256": "97adfc1ebcf05769ba1447a8fdde2bbed248847b1bb3e36b1e07af5bdfa44336",
   "dependencyMode": "prepared-read-only-interpreter",
@@ -10,8 +22,8 @@
   },
   "fixedTimestamp": "2026-01-01T00:00:00.000Z",
   "format": 2,
-  "generationCommand": "python packaging/generate-upgrade-fixture.py --python <prepared-python> --work-dir tmp/adr021-l18/run --output-dir tests/fixtures/adr021-l18",
-  "generatorSha256": "e3d325e68fa3211df845b39f8a6462da82eb78bff41e2c1f78824296438c044c",
+  "generationCommand": "python packaging/generate-upgrade-fixture.py --python <prepared-python> --work-dir tmp/adr021-l18-rework/r8-fixture-01 --output-dir tests/fixtures/adr021-l18",
+  "generatorSha256": "7c99b1f79a7ff97882646c2fe97e5cb40f35d2659cb47cc51861f59ede54f76d",
   "inputCommit": "df9318f38b732681e1004cf190e71bb4bc25fe17",
   "loadedSourceModules": [
     "src/buddy/account_integrations.py",
@@ -75,8 +87,8 @@
     "src/buddy/workflow.py",
     "src/buddy/workspace.py"
   ],
-  "operationsSha256": "4b9c4e11535ff9a8ec72256a9f1ed05a908c347fcb3312ee713f7c4d481d4747",
-  "resourcesSha256": "96218aea97644911e63b81b87bbc08d7065482e62ef52aa1880671d4e74a0ef2",
+  "operationsSha256": "baea5c9ad062a7808a34d1a94c0ca6bb72ccffb7327f553b7667e4daa018f8e8",
+  "resourcesSha256": "233b3006b1ec78a0bd51c3a6adcd451436791ba4bbe4d12e410a0a346d82453e",
   "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 15; baseline only after return",
   "routerSlots": {
     "fast": "codex:openai:fixture-alpha:high",
@@ -199,7 +211,7 @@
   },
   "sourceTree": "2a22fa49324f1315676fbb05d79df014edb5071b",
   "sourceVersion": "0.27.0",
-  "sqlSha256": "59d2e866c5ec8b0805605dcb66c9d70d6eca56d5fe426d78deb02521d6ff01f3",
+  "sqlSha256": "bfacb3460f46bad402558bf9efc55abfc4e85259e9ac5f60822c72c9a1ac92a8",
   "stableIds": {
     "accepted": "00000000-0000-0000-0000-00000000000f",
     "cancelled": "00000000-0000-0000-0000-00000000001e",

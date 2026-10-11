@@ -65,6 +65,7 @@ def generate(args):
         raise ValueError("work-dir must be a new directory inside this checkout's ignored tmp/")
     work.mkdir(parents=True, exist_ok=False)
     (work / "scratch").mkdir()
+    (work / "home").mkdir(mode=0o700)
     source = work / "base"
     source.mkdir()
     archive = work / "base.tar"
@@ -73,6 +74,7 @@ def generate(args):
     with tarfile.open(archive) as stream:
         stream.extractall(source, filter="data")
     env = private_environment(work)
+    env["HOME"] = str(work / "home")
     if args.python is None:
         run(["uv", "sync", "--frozen", "--no-install-project", "--link-mode", "copy",
              *(["--offline"] if args.offline else []), "--project", str(source)], cwd=root, env=env)
@@ -110,7 +112,7 @@ def populate(args):
     from buddy.adapters.codex import CodexAdapter
     from buddy.service import BoardService, dispatch_local
     from buddy.store import BoardStore
-    from buddy import workspace
+    from buddy import accounts, workspace
 
     assert Path(db_module.__file__).resolve() == source / "src/buddy/db.py"
     assert db_module.SCHEMA_VERSION == 15
@@ -230,6 +232,18 @@ def populate(args):
                 call("workflow_acknowledge", {"runId": run_id, "commandId": "review-" + label,
                     "expectedRevision": view["revision"], "artifactId": view["finalArtifactId"],
                     "verdict": label, "note": "fixture " + label, "evidence": ["fixture:model-free"], **control})
+        # Add the reservation only after the sample workflows: their stable IDs
+        # keep the same UUID sequence. The base owns the active→uncertain write;
+        # no native process is started and no shutdown evidence is fabricated.
+        with store.db.read() as connection:
+            account = accounts.selection(connection, "codex")
+        purpose = "fixture-shutdown-unconfirmed"
+        with accounts.native_operation(store.db, account, purpose) as stop:
+            assert stop["shutdownConfirmed"] is False
+        account_operation = {"source": "buddy.accounts.native_operation", "account": account,
+                             "purpose": purpose, **stop}
+        operations.append({"operation": "accounts.native_operation", "params": {"account": account, "purpose": purpose},
+                           "response": dict(stop)})
         hashing.close()
         # All rows were created by base public operations. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
@@ -257,13 +271,15 @@ def populate(args):
             "workspaceInputCommit": WORKSPACE_INPUT,
             "generationCommand": "python packaging/generate-upgrade-fixture.py " +
                 ("--python <prepared-python>" if args.python else "--offline") +
-                " --work-dir tmp/adr021-l18/run --output-dir tests/fixtures/adr021-l18",
+                " --work-dir " + str(work.relative_to(Path(__file__).resolve().parents[1])) +
+                " --output-dir tests/fixtures/adr021-l18",
             "dependencyMode": "prepared-read-only-interpreter" if args.python else "base-frozen-uv-environment",
             "dependencyVersions": {name: importlib.metadata.version(name) for name in ("c-two", "fastdb4py", "numpy", "portalocker")},
             "sourceFiles": {str(p.relative_to(source)): digest(p.read_bytes()) for p in
                             [*sorted((source / "src/buddy").rglob("*.py")), source / "pyproject.toml",
                              source / "uv.lock", source / "src/buddy/review-certificates.json"]},
-            "stableIds": ids, "routerSlots": {"fast": PROFILES[0], "review": PROFILES[1]}, "fixedTimestamp": AT,
+            "stableIds": ids, "accountOperation": account_operation,
+            "routerSlots": {"fast": PROFILES[0], "review": PROFILES[1]}, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
             "boundary": "Old BoardService named operations in process; synthetic native discovery and worker result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, legacy device/inode identities and dependent hashes before upgrade; this preparation is not migration or new native execution. Real host_seal is tested separately; service workflow_conclude after upgrade remains Host verification.",
             "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 15; baseline only after return",
@@ -361,6 +377,14 @@ def verify(output, restored):
         assert keys["router_configuration_version"] == "1"
         assert keys["router_fast_profile_id"] == PROFILES[0] and keys["router_review_profile_id"] == PROFILES[1]
         assert keys["capability_secret"] == "ab" * 32
+        provenance = metadata["accountOperation"]
+        assert provenance["source"] == "buddy.accounts.native_operation"
+        assert provenance["shutdownConfirmed"] is False
+        account = provenance["account"]
+        assert json.loads(keys[provenance["operationId"]]) == {
+            "adapter": account["adapter"], "source": account["source"],
+            "credentialRevision": account["credentialRevision"],
+            "purpose": provenance["purpose"], "status": "uncertain"}
         for table in ("evaluation_cards", "family_annotations", "evaluation_catalog", "catalog_current"):
             assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] >= 1
         reviews = {json.loads(row[0])["verdict"] for row in connection.execute(

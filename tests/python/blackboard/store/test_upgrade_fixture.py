@@ -181,6 +181,31 @@ class UpgradeFixtureTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             migration._proof(fixture["state"], manifest, [manifest])
 
+    def test_r8_base_native_operation_provenance_and_raw_uncertainty_are_restored(self):
+        fixture, connection = self.restored()
+        provenance = fixture['accountOperation']
+        self.assertEqual(provenance['source'], 'buddy.accounts.native_operation')
+        self.assertIs(provenance['shutdownConfirmed'], False)
+        self.assertEqual(set(fixture['stableIds']), {'delivered', 'accepted', 'rejected', 'cancelled'})
+        self.assertNotIn(provenance['operationId'], fixture['stableIds'].values())
+        raw = sqlite3.connect(':memory:')
+        self.addCleanup(raw.close)
+        raw.executescript((FIXTURE / 'board.sql').read_text())
+        query = "SELECT key,value FROM meta WHERE key LIKE 'account-operation:%'"
+        original = raw.execute(query).fetchall()
+        restored = [tuple(row) for row in connection.execute(query)]
+        self.assertEqual(restored, original)
+        self.assertEqual(len(restored), 1)
+        account = provenance['account']
+        self.assertEqual(json.loads(restored[0][1]), {
+            'adapter': account['adapter'], 'source': account['source'],
+            'credentialRevision': account['credentialRevision'],
+            'purpose': provenance['purpose'], 'status': 'uncertain'})
+        recorded = fixture['operations'][-1]
+        self.assertEqual(recorded['operation'], 'accounts.native_operation')
+        self.assertEqual(recorded['response'], {
+            'operationId': provenance['operationId'], 'shutdownConfirmed': False})
+
 
 if __name__ == "__main__":
     unittest.main()

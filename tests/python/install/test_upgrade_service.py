@@ -18,7 +18,10 @@ from hey_my_buddy.protocol.transport import _read_endpoint, _request
 
 class UpgradeServiceTests(BoardTestCase):
     def test_real_private_service_reads_the_fixed_upgrade_and_uses_public_host_conclusions(self):
-        load_fixture(self.directory)
+        fixture = load_fixture(self.directory)
+        operation_id = fixture['accountOperation']['operationId']
+        with closing(sqlite3.connect(self.directory / 'board.sqlite3')) as db:
+            original_operation = db.execute('SELECT value FROM meta WHERE key=?', (operation_id,)).fetchone()[0]
         current = Path(backup.create(BoardStore(self.directory))['path'])
         verified = backup.verify(current)
         before = {**verified['databaseSnapshot'], 'schema':verified['schema']}
@@ -45,6 +48,9 @@ class UpgradeServiceTests(BoardTestCase):
         try:
             with self.daemon(env={'BUDDY_MAX_CONCURRENT':'1'}):
                 self.assertEqual(call('health', {})['schemaVersion'], 16)
+                with database.read() as db:
+                    self.assertEqual(db.execute('SELECT value FROM meta WHERE key=?', (operation_id,)).fetchone()[0],
+                                     original_operation)
                 snapshot = call('console_snapshot', {})
                 self.assertEqual(snapshot['configuration']['routerProfileIds'], migration['routerProfileIds'])
                 models = call('model_profiles', {})['profiles']
@@ -85,6 +91,9 @@ class UpgradeServiceTests(BoardTestCase):
                 self.assertEqual(sealed['kind'], 'host-output')
                 self.assertEqual(sealed['snapshotSha256'], artifact[0])
                 self.assertEqual(worker_file.read_bytes(), worker_bytes)
+                with database.read() as db:
+                    self.assertEqual(db.execute('SELECT value FROM meta WHERE key=?', (operation_id,)).fetchone()[0],
+                                     original_operation)
         finally:
             # The focused runner retains this raw child log after normal harness
             # teardown removes the private test state.
