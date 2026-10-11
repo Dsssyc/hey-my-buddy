@@ -355,3 +355,68 @@ Host 在已登记 Worker 根 `/tmp/c073-c-H6SbNM` 做只读进程/持锁观测�
 唯一可写：src/hey_my_buddy/buddy/harnesses/c_two_live.py、src/hey_my_buddy/buddy/runtime/supervisor.py、src/hey_my_buddy/protocol/transport.py；tests/python/buddy/harnesses/test_c_two_live.py、tests/python/protocol/test_state_boundaries.py、tests/python/protocol/test_rpc_config.py、tests/python/blackboard/service/test_daemon.py；docs/acceptance/c-two-public-state-plan.md。本轮记录追加到本文件，不新建验收文件，不改其他历史事实。旧ID全量3519基线仅collect；新增/消失/改名逐条列，未变集合相等。Worker与Host仅跑这四项受影响测试及必要旧启动方/清点相关选择，文件分别私有解释器；Host独立固定补丁、实际focused、点变异，范围缺陷回当前窄run continue。
 
 Worker开始时建短任务专用系统临时根并记录确切路径，TMPDIR/BUDDY_CHECKS_TMPDIR、私有HOME/state/runtime、uv环境/cache/比较副本与日志全在根，Worker不删除任何文件目录，框架自己正常收尾例外；共享stash/分支/标签不使用或改动，改动留工作区由黑板封存。只跑受影响测试，不跑完整检查/前端/模型/账号发现；受限真实绑定不反复，由Host固定环境补核。清除继承BUDDY_/ANTHROPIC_/C2_及虚拟环境身份，使用现成fixture和公开锁定依赖；不安装升级重启停止替换日常服务Worker，不碰日常配置凭据或公共命名空间，Too many open files立即停下报告。测试服务行为只在自有私有服务上验证，权限链接目标均为自建，未知停止不说成已停止。路径写~或占位符、清理只由Host验收后按确切根；根外既有审计文件仍不动。修完提交已有最终记录后停等Claude Code Host验收，不开始后续。
+
+
+## T3 本轮范围内返修交付与受限验证（待 Host 复核）
+
+本轮绑定输入 `46ebbccaf4102d1bb5f859e65c1acf112bc73bc2`、窄 run `76cdc2b1-0eb0-4487-a6a0-481b45525f38`、attempt `ba89b98c-0e35-430f-ba40-5bdd60fb7fe5`。continuation 输入登记的历史为：原 3-C 已 accepted 且检出回收，实际 continue 被 CONFLICT 拒绝；用户批准同宏任务经路由的新窄微任务，没有取消原 run、改黑板数据或自建新 goal。路由 `dec-5767702b-7e42-4311-9814-6d9db80b44fb` 首次省略四字段，选择 ZCode/zai-api/GLM-5.3-Flash/max；实际 provider `rate_limited` HTTP429/code1310、not-retryable，两层停止确认、无 artifact。用户随后批准同 run 的完整配置恢复为 Codex/openai/gpt-6.1-sol/high，理由是该配置已完成同类工作；这些是输入提供的历史，本轮没有重试 ZCode、调用路由模型或自行分派任务，先前未实施代码不登记为已交付。
+
+本轮唯一临时根由 mktemp 创建为 `/tmp/t3-6RShzm`（macOS 真实路径 `/private/tmp/t3-6RShzm`），完整保留供 Host 按此确切根验收后整体回收。HOME/USERPROFILE、TMPDIR/BUDDY_CHECKS_TMPDIR、state/runtime、uv 环境/cache/解释器安装目录、baseline/fixed/三个 mutant 副本、catalog、助手和原始日志都在该根。子进程清除继承 BUDDY_/ANTHROPIC_/C2_ 与 VIRTUAL_ENV/UV_PROJECT_ENVIRONMENT 后显式设置私有值；空私有 HOME、固定 support.FIXTURE_CATALOG、不可用 native CLI sentinel，无模型或账号发现、凭据内容读取、登录登出或用户配置修改。仅使用获准 delegate-materials，核对 provenance 中全部18份文件的 SHA-256/size，当前 uv.lock 与材料 byte 相等（`5ae675829eb4c9aca5e2c933b86799abd3ab9a979e80f8d00c074adf5e27cdf8`）；`uv venv --python /opt/homebrew/bin/python3.13 <TASK_ROOT>/env` 与 `uv pip install --no-index --find-links <AUTHORIZED_MATERIALS>/wheelhouse --require-hashes -r <AUTHORIZED_MATERIALS>/locked-dependencies.txt` 均退出0，未改锁或依赖。源码对照来自只读 git archive，复制前拒绝 symlink/hardlink，不复制用户链接数据。
+
+实际修改只有原八路径：三份生产文件、四份测试和本记录追加。cleanup_owned_endpoint 的 keyword context 必填 cc.LocalEndpointContext，删除 nullable/default/ambient SDK 回退，credential/domain/identity/stop/unverified/busy/stale/reap 一次且不重试的旧断言全部保留；supervisor.main 的 --state-dir 为 argparse.required，仅读参数一次转 Path，删除 BUDDY_STATE_DIR 来源及二选一分支，其他参数原样保留；transport._request 只替换两行注释，完整 Python AST 与基线相等。rpc_config 和 daemon 产品文件没有修改。风险边界是内部省略 context 或仅靠环境启动 supervisor 现在直接拒绝，生产已有显式参数接线不变；这是本轮指定收紧，没有兼容默认。
+
+全 src/tests 的 AST 加 rg 调用审计：基线11个静态 cleanup 调用，唯一生产 roles/live.py:131 已传 cc.local_endpoint_context()，另4个测试点已有 context（test_c_two_live:1079/1787/1942、test_worker_live_wiring:335），均只读保留。缺省的6点都在 test_c_two_live:1042/1048/1053/1058/1068/1085，全部改传该 fixture 在自己的 private domain 取得的 self.context；1042 的3个 evidence subTest、1068 的7个 status subTest使这6点实际覆盖14次调用，不把它凑成评审文字的8处。最终12点里唯一故意省略的是新增缺参 guard，其余11点都显式传 context；无默认 helper 或 context=None 兼容。完整点位为 `<TASK_ROOT>/call-audit.json`。
+
+只读启动方/清点审计：cli/main.py 的 _worker_command Popen argv 已含 --state-dir（316行），daemon.SupervisorHandle.start 已含 --state-dir（149行），storage.process_inventory 从命令参数识别所属 state（84行）；三文件与基线 byte/hash 相等。唯一生产 cleanup caller、rpc_config 和 test_worker_live_wiring 同样逐文件相等，完整 hash 在 `<TASK_ROOT>/readonly-audit.json`。已有两启动方的 service_environment 选择及真实 process_inventory 旧选择共3项通过；其环境 mock 结果不是 native 服务通过证据。
+
+两份根链接 guard 分别自建0755 target、state-alias 与 sibling marker，直接真实 configure_local_endpoint(alias)/真实 Daemon(alias).run()，不 resolve alias，不 mock guard、Daemon 或源码；断言 PRIVATE_PATH_UNSAFE、details.path 为 alias、message 为根链接专属 `IPC path contains a linked or unsafe component`，目标0755、目录集合、marker、alias 不变，无 ipc/endpoint/workers 创建。Daemon 的拒绝发生于其 mkdir/chmod/configure_server/服务启动之前。仅删除 linked(first) 两行分支后，后续 lstat 仍报 `IPC path is not a directory`，两个新目标各恰好在 message 相等断言失败；未把任意异常或剩余分支当成目标规则。原公开解析用户链接、0755 owner修正、0500只读及 ipc 内链接规则及断言未改；部分 native 旧目标在本轮沙箱下待 Host 补核。新 POSIX 链接 guard 按平台跳过 Windows，旧模拟 Windows 选择通过不等于原生 Windows 验证。
+
+聚焦运行复用 unittest.TestLoader/TextTestRunner 与现有 fixtures/support，未重建启动通道。任务根助手只负责清理继承环境、离线依赖、固定副本、选定 ID 调度、原 Popen poll-reap/cc.shutdown 返回观察及证据汇总；checks.main 会运行全套并回收根，故本轮不用它。新 supervisor guard 调用真实 main，仅 mock Supervisor 构造/serve 以免启动三层服务，并在显式参数选择中暂存信号注册；不替换 argparse/路径选择。没有为注释写测试。以下用时为外层 held Popen wait 的 wall seconds（suiteSeconds另存），命令统一为 `uv run --frozen --no-sync python <TASK_ROOT>/test_runner.py <label> run <目标ID或class列表>`；每份完整 argv、源码副本、项数、exit、秒和数字 wait 在 `<TASK_ROOT>/logs/<label>-command.json`、`<label>-observations.json` 与 `.log`，不将退出0的 driver 包装器当测试退出码。
+
+| label | 项数 | exit | wall seconds |
+| --- | ---: | ---: | ---: |
+| `live-offline` | 54 | 0 | 1.863 |
+| `boundaries` | 11 | 0 | 3.542 |
+| `rpc-guard` | 1 | 0 | 1.339 |
+| `daemon-guard` | 1 | 0 | 1.438 |
+| `rpc-offline` | 13 | 0 | 1.314 |
+| `daemon-offline` | 11 | 0 | 2.710 |
+| `caller-inventory` | 3 | 0 | 0.982 |
+| `native-probe` | 1 | 1 | 1.394 |
+
+live-offline 为 WireFrame/EndpointAdmission/EndpointObservation/EndpointLifecycle/CleanupPrimitive/ReadyMaterial/ChannelUnit/RichReplay 八类；boundaries 是完整11项；rpc-offline 是6项不做 native I/O 的 Profile 旧选择及7项 DaemonFixture；daemon-offline 是4项原 Ceiling 及7项不启动真实 supervisor/服务的 Pool 选择，两个新链接目标单独列行。四个受影响文件共120个 ID，本轮其中91项通过；另3项只读启动方/清点选择通过，合计94个不同通过 ID。后续两个独立 green 单目标各重复一次通过，不加进94。首次 native-probe 的1项失败保留，其余28个受影响 ID 未运行（逐项 `<TASK_ROOT>/pending-ids.json`）。没有完整检查、前端测试或整批新验收。
+
+固定候选三个生产文件的原→改后 SHA-256：
+
+| 文件 | 原 hash | 改后 hash |
+| --- | --- | --- |
+| `src/hey_my_buddy/buddy/harnesses/c_two_live.py` | `0a55b78b9fb27f3fcc1792fcba5d6da51d4d3b25cdc9eeee638405db45003e4f` | `9675f239f28cbc33d13b14914f987ae0181c358d33d373c0b6ecb0e8211496d0` |
+| `src/hey_my_buddy/buddy/runtime/supervisor.py` | `a08cce537e9401c38f889c4e6876a6470a61d274556a309c2532f6760c931db8` | `f8cef2fd5044e9162b346672531622ba387e76e84cfcd1fafe1193dbcf16a5cd` |
+| `src/hey_my_buddy/protocol/transport.py` | `c58a039afced49aae494c38a0796e1619de23250f8d6c6f72aaf66ea8a66bc44` | `067834d4512073c5d1c28fbd8cceba6330fd57d7f6eda82d59329eede5567221` |
+
+四个迁移防护目标按同一 fixed 源 green 后再运行窄 mutant red，每次1项；四 red 均 exit1、failures=1、errors=0，没有导入错误、权限错误或外层超时伪装。context mutant 仅恢复原 cleanup 函数的 nullable/default 与 ambient fallback；supervisor mutant 仅恢复原 main 的可选参数和 env fallback；first-link mutant 仅删除 rpc_config._validate_path 内 linked(first) 分支，其他字节不变。context/supervisor mutant 文件 hash 分别等于上表原 hash；first-link 原 `2f9e4aff590ea9b68b11587461ae45762fcc3263adf198803a85447aed113b70` → mutant `2d1d9cfc1467be55841f337173c8699de1ff57f98c6163a8bb6c94eede2d89ad`。三个 `<TASK_ROOT>/*-mutation.json` 和原始命令/日志绑定哈希与实际目标，不修改受管源码做变异。
+
+| 目标完整 ID | green label / exit / wall秒 | red label / exit / wall秒 | 实际 red 断言 |
+| --- | --- | --- | --- |
+| `buddy.harnesses.test_c_two_live.CleanupPrimitiveTests.test_missing_context_is_type_error_before_ambient_sdk_or_reap` | `context-green` / 0 / 0.947 | `context-red` / 1 / 1.083 | TypeError not raised |
+| `protocol.test_state_boundaries.StateBoundaryTests.test_supervisor_requires_argument_even_with_valid_environment_state` | `supervisor-green` / 0 / 0.929 | `supervisor-red` / 1 / 1.052 | SystemExit not raised |
+| `protocol.test_rpc_config.ProfileTests.test_linked_state_root_is_refused_with_root_link_diagnostic_before_changes` | `rpc-guard` / 0 / 1.339 | `rpc-link-red` / 1 / 1.053 | 根链接 message 相等断言，实际 IPC path is not a directory |
+| `blackboard.service.test_daemon.DaemonCeilingTests.test_run_refuses_linked_state_root_before_chmod_or_service_start` | `daemon-guard` / 0 / 1.438 | `daemon-link-red` / 1 / 1.182 | 根链接 message 相等断言，实际 IPC path is not a directory |
+
+仅 collect 的全仓基线3519/216与最终3524/216：唯一 ID 均无重复、loaderErrors=[]，未变3519集合严格相等，删除0、改名0；没有为了守数量更名或删除旧测试。五项新增逐条如下，临时助手没有加入仓库 ID：
+
+- `blackboard.service.test_daemon.DaemonCeilingTests.test_run_refuses_linked_state_root_before_chmod_or_service_start`：Daemon真实run根链接边界及chmod前无副作用。
+- `buddy.harnesses.test_c_two_live.CleanupPrimitiveTests.test_missing_context_is_type_error_before_ambient_sdk_or_reap`：必填context自然TypeError及无ambient读取/codec/reap。
+- `protocol.test_rpc_config.ProfileTests.test_linked_state_root_is_refused_with_root_link_diagnostic_before_changes`：真实configure_local_endpoint根链接诊断及无副作用。
+- `protocol.test_state_boundaries.StateBoundaryTests.test_supervisor_requires_argument_even_with_valid_environment_state`：有效私有环境也不能代替supervisor必填参数。
+- `protocol.test_state_boundaries.StateBoundaryTests.test_supervisor_uses_explicit_argument_as_the_only_state_root`：supervisor显式参数是唯一state来源且其他选项保持。
+
+完整集合/差为 `<TASK_ROOT>/logs/baseline-ids.json`、`logs/final-ids.json`、`id-delta.json`；collect 命令同上但 mode=collect，仅 loader 不执行测试。原3519/645.517秒历史完整检查保持原绑定，不能作为本轮通过证明。
+
+失败与停止边界：首次且唯一真实 native-probe 在 cc.register 启动私有 peer 时得到 `BoardError: server error: config error: server failed to start: IO error: Operation not permitted (os error 1)`，1项/exit1/1.394秒；没有重试 bind，没有用 stub 冒称 native green。原持有 peer PID1079最终 poll-reap=0、外层 runner PID1065 wait=1；fixture 的失败路径关闭其 stdin 并按原 reap 等待，但本轮没有 peer 的正常 stop/child SDK shutdown/进程组消失回执，这三者标为 unknown，不由 leader退出补造。boundary 三子进程PID939/941/961均communicate后returncode2；daemon离线选择的五个合作停止子进程PID1450..1454和一个pass子进程PID1455均原wait/最终poll-reap=0。所有测试外层 held Popen 的数字 wait、父进程 SDK shutdown 返回均在日志；已观察 SDK 回执全部completed=true，held leaders unconfirmedPids=[]，只代表实际持有及被观察的句柄。
+
+一次复用现有 checks.observed_processes/held_locks 的只读根观测 exit1/1.014秒：`ps process enumeration failed; residue status is unknown`，daemon/supervisor heldLocks均空。没有为失败另试 ps、清扫公共端点、调用 stop 或删除根；不能写成根无残留进程。Host仍需对该精确根独立观察。附带只读定位曾把fixture路径误写为protocol/fixtures/ctwo_live_peer.py，rg报告不存在；随后按实际 test_c_two_live.FIXTURE_PATH 只读找到 buddy/harnesses/fixtures/c_two_live_peer.py，无代码影响。汇总助手初版按逐行 `... ok` 解析被输出换行触发 IndexError（非测试失败）；改用冻结ID集合与完整argv选择相交并对照testsRun计数，复算成功，不重写测试日志或初次失败结果。
+
+Worker没有删除任何文件目录；现有 TemporaryDirectory/BoardTestCase 的正常框架收尾照旧，未额外屏蔽收尾错误。原始root保留；未访问旧根外审计文件或其他会话材料，除明确允许的材料目录只读核对，没有根外写入、用户数据访问、日常服务/Worker操作或Too many open files。未使用stash、创建/切换/移动/删除refs或自行commit；工作区改动留黑板封存。七份代码/测试在fixed验证后byte/hash仍一致，本记录只追加，所有旧事实前缀保持原样。
+
+交付停在本轮授权复核边界：需要Host封存固定八路径diff后在允许真实IPC的私有环境补核受影响四文件（含失败目标与28个未运行ID）、独立点变异及精确根残留观察，再决定验收/回收；完整检查由Host合入后运行。范围内代码/测试缺陷回本窄run continue，微小措辞由Host修改登记。本轮不称整批已验收，不开始下一批。

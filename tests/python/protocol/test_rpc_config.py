@@ -331,6 +331,28 @@ class ProfileTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             rpc_config.configure_client(self.state / "unused" / "..")
 
+    @unittest.skipIf(os.name == "nt", "POSIX state-root symlink boundary")
+    def test_linked_state_root_is_refused_with_root_link_diagnostic_before_changes(self):
+        from hey_my_buddy.errors import BoardError
+        target = self.state / "target"
+        target.mkdir(mode=0o755)
+        target.chmod(0o755)
+        alias = self.state / "state-alias"
+        alias.symlink_to(target, target_is_directory=True)
+        marker = self.state / "untouched"
+        marker.write_text("private sibling")
+        before = sorted(self.state.rglob("*"))
+        with self.assertRaises(BoardError) as refused:
+            rpc_config.configure_local_endpoint(alias)
+        self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(sorted(self.state.rglob("*")), before)
+        self.assertEqual(marker.read_text(), "private sibling")
+        self.assertTrue(alias.is_symlink())
+        self.assertFalse((target / "ipc").exists())
+        self.assertEqual(refused.exception.code, "PRIVATE_PATH_UNSAFE")
+        self.assertEqual(refused.exception.details["path"], str(alias))
+        self.assertEqual(refused.exception.message, "IPC path contains a linked or unsafe component")
+
     def test_read_only_setup_does_not_create_or_chmod_missing_directories(self):
         from hey_my_buddy.errors import BoardError
         missing = self.state / "missing"

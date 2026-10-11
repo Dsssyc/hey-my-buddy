@@ -1032,6 +1032,14 @@ class CleanupPrimitiveTests(unittest.TestCase):
         values.update(overrides)
         return ctl.ConfirmedProcessGone(**values)
 
+    def test_missing_context_is_type_error_before_ambient_sdk_or_reap(self):
+        with mock.patch.object(cc, "local_endpoint_context") as ambient:
+            with self.assertRaisesRegex(TypeError, "required keyword-only argument: 'context'"):
+                ctl.cleanup_owned_endpoint(self.descriptor, self.gone())
+        ambient.assert_not_called()
+        self.codec.assert_not_called()
+        self.reap.assert_not_called()
+
     def test_unconfirmed_or_foreign_evidence_refuses(self):
         for evidence, reason in [
             (self.gone(exit_code=None), "vanishing-not-confirmed"),
@@ -1039,23 +1047,23 @@ class CleanupPrimitiveTests(unittest.TestCase):
             (self.gone(pid=9999), "process-identity-mismatch"),
         ]:
             with self.subTest(reason=reason):
-                outcome = ctl.cleanup_owned_endpoint(self.descriptor, evidence)
+                outcome = ctl.cleanup_owned_endpoint(self.descriptor, evidence, context=self.context)
                 self.assertEqual((outcome.outcome, outcome.reason), ("unverified", reason))
                 self.reap.assert_not_called()
 
     def test_an_unknown_identity_refuses_without_touching_anything(self):
         unknown = self.descriptor.model_copy(update={"endpoint_credential": None})
-        self.assertEqual(ctl.cleanup_owned_endpoint(unknown, self.gone()).outcome, "unverified")
+        self.assertEqual(ctl.cleanup_owned_endpoint(unknown, self.gone(), context=self.context).outcome, "unverified")
         self.reap.assert_not_called()
 
     def test_address_and_foreign_domain_refuse_before_reap(self):
         self.credential.address = "ipc://another"
-        self.assertEqual(ctl.cleanup_owned_endpoint(self.descriptor, self.gone()).reason,
+        self.assertEqual(ctl.cleanup_owned_endpoint(self.descriptor, self.gone(), context=self.context).reason,
                          "endpoint-address-mismatch")
         self.credential.address = self.descriptor.address
         self.credential.context = SimpleNamespace(platform=self.context.platform,
             namespace_id="another-private-state", root="<OTHER_PRIVATE_ROOT>")
-        self.assertEqual(ctl.cleanup_owned_endpoint(self.descriptor, self.gone()).reason,
+        self.assertEqual(ctl.cleanup_owned_endpoint(self.descriptor, self.gone(), context=self.context).reason,
                          "endpoint-domain-mismatch")
         self.reap.assert_not_called()
 
@@ -1065,7 +1073,7 @@ class CleanupPrimitiveTests(unittest.TestCase):
             with self.subTest(status=status):
                 self.reap.reset_mock()
                 self.reap.return_value = {"status": status, "reason": "native-fact"}
-                outcome = ctl.cleanup_owned_endpoint(self.descriptor, self.gone())
+                outcome = ctl.cleanup_owned_endpoint(self.descriptor, self.gone(), context=self.context)
                 self.assertEqual((outcome.outcome, outcome.reason), (status, "native-fact"))
                 self.codec.assert_called_with("opaque-native-credential")
                 self.reap.assert_called_once_with(self.descriptor.address, self.credential,
@@ -1083,7 +1091,7 @@ class CleanupPrimitiveTests(unittest.TestCase):
     def test_windows_no_credential_is_not_applicable(self):
         with mock.patch.object(ctl.os, "name", "nt"):
             result = ctl.cleanup_owned_endpoint(self.descriptor.model_copy(
-                update={"endpoint_credential": None}), self.gone())
+                update={"endpoint_credential": None}), self.gone(), context=self.context)
         self.assertEqual(result.outcome, "not-applicable")
         self.reap.assert_not_called()
 

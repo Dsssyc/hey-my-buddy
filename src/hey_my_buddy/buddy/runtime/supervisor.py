@@ -131,7 +131,7 @@ class Supervisor:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Buddy independent worker supervisor")
     parser.add_argument("--worker-id", default=os.environ.get("BUDDY_WORKER_ID", "local"))
-    parser.add_argument("--state-dir", default=None)
+    parser.add_argument("--state-dir", required=True)
     parser.add_argument("--lease-seconds", type=int, default=120)
     parser.add_argument("--max-restarts", type=int, default=None)
     parser.add_argument(
@@ -140,10 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Comma-separated extra capabilities this worker advertises, on top of the built-in adapters",
     )
     arguments = parser.parse_args(argv)
-    selected = arguments.state_dir or os.environ.get("BUDDY_STATE_DIR")
-    if not selected:
-        parser.error("--state-dir or BUDDY_STATE_DIR is required")
-    state_dir = Path(selected)
+    state_dir = Path(arguments.state_dir)
     capabilities = tuple(item.strip() for item in arguments.capabilities.split(",") if item.strip())
     supervisor = Supervisor(
         arguments.worker_id, state_dir, lease_seconds=arguments.lease_seconds, capabilities=capabilities

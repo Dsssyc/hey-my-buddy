@@ -71,6 +71,33 @@ class DaemonCeilingTests(BoardTestCase):
         self.assertEqual(daemon.pool.total_limit, 4)
         self.assertEqual(len(daemon.pool.worker_ids), 4)
 
+    @unittest.skipIf(os.name == "nt", "POSIX state-root symlink boundary")
+    def test_run_refuses_linked_state_root_before_chmod_or_service_start(self):
+        from hey_my_buddy.blackboard.service.daemon import Daemon
+        from hey_my_buddy.errors import BoardError
+        target = self.directory / "target"
+        target.mkdir(mode=0o755)
+        target.chmod(0o755)
+        alias = self.directory / "state-alias"
+        alias.symlink_to(target, target_is_directory=True)
+        marker = self.directory / "untouched"
+        marker.write_text("private sibling")
+        before = sorted(self.directory.rglob("*"))
+        with clean_buddy_env():
+            daemon = Daemon(alias)
+            with self.assertRaises(BoardError) as refused:
+                daemon.run()
+        self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(sorted(self.directory.rglob("*")), before)
+        self.assertEqual(marker.read_text(), "private sibling")
+        self.assertTrue(alias.is_symlink())
+        self.assertFalse(daemon.endpoint_path.exists())
+        self.assertFalse((target / "ipc").exists())
+        self.assertFalse((target / "workers").exists())
+        self.assertEqual(refused.exception.code, "PRIVATE_PATH_UNSAFE")
+        self.assertEqual(refused.exception.details["path"], str(alias))
+        self.assertEqual(refused.exception.message, "IPC path contains a linked or unsafe component")
+
 
 class DaemonPoolLifecycleTests(BoardTestCase):
     def private_daemon(self, name):

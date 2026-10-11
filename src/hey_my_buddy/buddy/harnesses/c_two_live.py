@@ -354,7 +354,7 @@ def write_ready_material(path: str | Path, descriptor: LiveEndpointDescriptor) -
 
 def cleanup_owned_endpoint(descriptor: LiveEndpointDescriptor,
                            evidence: ConfirmedProcessGone, *,
-                           context: cc.LocalEndpointContext | None = None) -> CleanupOutcome:
+                           context: cc.LocalEndpointContext) -> CleanupOutcome:
     """Reap once through C-Two only after the held leader and group are gone.
 
     The supplied context is the holder's configured private domain, never a
@@ -374,15 +374,14 @@ def cleanup_owned_endpoint(descriptor: LiveEndpointDescriptor,
                               reason="endpoint-credential-unavailable")
     try:
         credential = cc.EndpointCredential.from_json(descriptor.endpoint_credential)
-        trusted = context if context is not None else cc.local_endpoint_context()
     except (ValueError, TypeError):
         return CleanupOutcome(outcome="unverified", reason="endpoint-credential-invalid")
     if credential.address != descriptor.address:
         return CleanupOutcome(outcome="unverified", reason="endpoint-address-mismatch")
     if (credential.context.platform, credential.context.namespace_id, credential.context.root) != \
-            (trusted.platform, trusted.namespace_id, trusted.root):
+            (context.platform, context.namespace_id, context.root):
         return CleanupOutcome(outcome="unverified", reason="endpoint-domain-mismatch")
-    result = cc.reap_endpoint(descriptor.address, credential, context=trusted)
+    result = cc.reap_endpoint(descriptor.address, credential, context=context)
     return CleanupOutcome(outcome=result["status"], reason=result.get("reason"))
 
 

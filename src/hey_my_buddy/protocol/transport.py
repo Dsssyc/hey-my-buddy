@@ -227,8 +227,8 @@ def _request(endpoint: dict, operation: str, params: dict, resource: str = "cont
     request = encode_message(payload)
     contract = BuddyControl if resource == "control" else BuddyWait
     name = CONTROL_NAME if resource == "control" else WAIT_NAME
-    # One process may not connect before the private profile is in place; this is the
-    # single client chokepoint, and the call is a no-op after the first time.
+    # Every call validates the supplied paths and selects the private endpoint domain.
+    # This client chokepoint also applies the profile before the first connection.
     rpc_config.configure_client(state_dir, create=False)
     try:
         with cc.connect(contract, name=name, address=endpoint["address"]) as service:
