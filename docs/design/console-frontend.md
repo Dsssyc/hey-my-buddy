@@ -178,7 +178,7 @@ B0 的第一部分于 2026-10-11 完成（[记录](../acceptance/console-fronten
 模型一项做完之后留给后面几步的事：
 
 - **评价分区要接过来的断言。** 发布者没有记录的历史卡片不能称为自动评价；没有证据的档位照实写没有记录；评价只读，没有提交观察的入口。
-- **B5 收口时的清理。** `console-data.ts` 的 `preferredVariant` 与 `profile-display.ts` 的 `profileTitleOr` 在这一步之前就没有调用方，连同测试删除；数据层与编辑器里的中文报错（`api.ts`、`policy.ts`、`use-editor.ts`、`console-session.ts`）还没有进文案，Buddy 页因此还有几句只有中文的话；黑板记下的不可用原因是英文的句子与代码，界面按字面认出其中四种，别的照原样显示。 B3 与 B4 验收时又记下几处：`quotaView().note`、`routerRefusal` 与额度窗口的名字（`5h`、`weekly`）只有中文或没有进文案；`policy.ts` 的 `routerAttention` 里有一句过时的话；键盘聚焦在对话框里第一个带说明的控件上时，说明可能盖住标题的一部分。
+- **B5 收口时的清理。** `console-data.ts` 的 `preferredVariant` 与 `profile-display.ts` 的 `profileTitleOr` 在这一步之前就没有调用方，连同测试删除；数据层与编辑器里的中文报错（`api.ts`、`policy.ts`、`use-editor.ts`、`console-session.ts`）还没有进文案，Buddy 页因此还有几句只有中文的话；黑板记下的不可用原因是英文的句子与代码，界面按字面认出其中四种，别的照原样显示。 B3 与 B4 验收时又记下几处：`quotaView().note`、`routerRefusal` 与额度窗口的名字（`5h`、`weekly`）只有中文或没有进文案；`policy.ts` 的 `routerAttention` 里有一句过时的话；键盘聚焦在对话框里第一个带说明的控件上时，说明可能盖住标题的一部分。 2026-10-11 把这两个视图与静态稿上下并排时又看到三处，验收时漏了：Harness 表在 1280 宽时，额度一列的"过期"被挤成两行（验收只看了 1440、1100 与 390）；角色的记录里，失败原因与最近错误显示的是代码（`routing-bounds-rejected`），静态稿是文字；最近的失败里微任务显示的是编号，静态稿是标题，而黑板给出的路由健康数据里没有标题。
 
 ### 长等待的画法（已定）
 
