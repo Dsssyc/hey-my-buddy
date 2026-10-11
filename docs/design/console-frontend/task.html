@@ -46,11 +46,10 @@
 <div class="n"><svg><use href="#i-think"/></svg><i>推理</i><em class="num">4 秒</em></div>
 <div class="n"><svg><use href="#i-read"/></svg><i>读取</i><span class="mono">apps/console/src/Settings.tsx</span></div>
 <div class="n t">四张卡片的结构相同，可以统一成分节。先改设置页本身，再处理版本一节的说明。</div>
-<div class="n"><svg><use href="#i-edit"/></svg><i>修改</i><span class="mono">apps/console/src/Settings.tsx</span><em class="num">+48　−61</em></div>
-<div class="n"><svg><use href="#i-edit"/></svg><i>修改</i><span class="mono">apps/console/src/RuntimeVersion.tsx</span><em class="num">+12　−9</em></div>
+<div class="n"><svg><use href="#i-edit"/></svg><i>修改</i><span class="mono">apps/console/src/Settings.tsx</span><em class="num"><span class="add">+48</span>　<span class="del">−61</span></em></div>
+<div class="diff"><span>   return &lt;div className="settings-page"&gt;</span><span class="d"><b>−</b>    &lt;section className="panel settings-panel"&gt;</span><span class="d"><b>−</b>      &lt;div className="panel-heading"&gt;&lt;h2&gt;显示&lt;/h2&gt;&lt;/div&gt;</span><span class="a"><b>+</b>    &lt;Section label={t("theme")}&gt;</span><span class="a"><b>+</b>      &lt;ThemePick value={theme} onChange={onTheme} /&gt;</span></div>
+<div class="n"><svg><use href="#i-edit"/></svg><i>修改</i><span class="mono">apps/console/src/RuntimeVersion.tsx</span><em class="num"><span class="add">+12</span>　<span class="del">−9</span></em></div>
 <div class="n"><svg><use href="#i-run"/></svg><i>运行</i><span class="mono">npm --prefix apps/console test -- settings</span><em class="num">38 秒</em></div>
-<div class="term"> Test Files  5 passed (5)
-      Tests  40 passed (40)</div>
 <div class="n end"><div><b>结果</b>设置页已换到新组件，四张卡片改为分节；版本一节在合成预览里读不到数据，已注明。<ul class="rm"><li>存储一节的确认对话框仍是旧样式</li></ul></div></div>
 </div>
 <div class="bh"><span class="role plain">产物</span><span class="mono">3f9a2c1</span><span class="r mono">d286db0 → 3f9a2c1</span><span class="l2 num">9 个文件</span><span></span></div>
