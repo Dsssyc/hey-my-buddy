@@ -20,7 +20,7 @@
 
 有没有第六处，由第一个微任务的清点回答；清点出的每一处都在这一批里换算，范围随之修订，不留到以后。
 
-2026-10-11，实现 Host 根据微任务 1 的双提交清点和源码复核修订范围。SQL 形式只有上述四项变化；基点实际有 49 张业务表，当前源码有 50 张，另有 SQLite 自身的 `sqlite_sequence`。第六处是模型目录的当前可信状态：基点的 `catalog_current.status=complete` 不含 ADR-027 的账户可信读取证据，升级将当前投影置为 `unknown` 并说明 `ACCOUNT_STATUS_UNKNOWN`，保留 observation/discovery 指针、原始目录载荷、账户绑定、模型、effort、available/enabled 值及历史证据。相应 adapter 的账户可信状态为 `unknown`；不制造 `catalog-read-at`、`catalog-scan-after` 或消失确认窗口，基点没有 pending 存量。只有后续真实可信读取才产生这些事实。删除只服务于中间开发版本的 pending 时间字符串读时兼容；当前 pending 结构只保留 `{since, efforts}`。
+2026-10-11，实现 Host 根据微任务 1 的双提交清点和源码复核修订范围。SQL 形式只有上述四项变化；基点实际有 49 张业务表，当前源码有 50 张，另有 SQLite 自身的 `sqlite_sequence`。第六处是模型目录的当前可信状态：基点的 `catalog_current.status=complete` 不含 ADR-027 的账户可信读取证据，升级将当前投影置为 `unknown` 并说明 `ACCOUNT_STATUS_UNKNOWN`，保留 observation/discovery 指针、原始目录载荷、账户绑定、模型、effort、available/enabled 值及历史证据。账户可信状态的 `unknown` 以缺少 `catalog-account-status:<adapter>` 键表达，迁移不写值为 `unknown` 的键；不制造 `catalog-read-at`、`catalog-scan-after` 或消失确认窗口，基点没有 pending 存量。只有后续真实可信读取才产生这些事实。删除只服务于中间开发版本的 pending 时间字符串读时兼容；当前 pending 结构只保留 `{since, efforts}`。
 
 新增的 Router 请求、分派、claim 与结果收据属于新执行事实，基点没有可换算的同类事实。旧终态 decision 请求、冻结输入、输出、摘要与事件原样保留，不补造 Router 执行。两个提交均将 `needs-host` 列为 decision 终态；基点创建 `queued` decision 时在同一事务创建内部 task，运行中的 decision 有未结束的 attempt，升级现有 idle 边界拒绝这些活动任务及未确认停机的 attempt。第二微任务用聚焦测试证明这一边界，并验证旧终态记录保留；不新增旧请求的运行时解释分支。历史工作区 manifest、原生回合与 quota/usage JSON 保留原有版本和哈希，后续新执行写当前格式。
 
@@ -65,3 +65,29 @@
 - 在空 HOME 里走一遍：安装 0.27.0，启动服务，用候选的包覆盖安装。这一次应当成功，并且升级之后的服务在新的 C-Two 上照常工作。
 - 在日常看板的副本上只读演练。复制日常数据需要用户为那一次授权；副本放在私有目录里，演练之后删除。
 - 改写 `operations.md` 里升级的部分与 `architecture.md` 里 schema 的说明。
+
+
+## 整合复核后的返修范围（2026-10-11）
+
+候选 `8d5a5888` 被整合 Host 打回，未合入。依据是整合分支 `socu/integration-0.26` 的固定提交 `ea21c202` 中 `docs/acceptance/adr021-l18-host-review.md`。该次复核已完成夹具、空 HOME 的 0.27.0 覆盖安装及经当次授权的日常看板副本换算；这些是原候选的验证事实，返修后的复验仍由整合 Host 负责。实现 Host 本轮只使用合成夹具与私有状态，不再读取日常数据。
+
+范围增加三张表的形式统一：`attempts`、`workflow_runs`、`evaluation_cards` 在同一条 15→16 路径中无条件重建为当前定义，不判断它们来自新建 0.27.0 还是更早版本的升级。升级形成的旧顺序为 attempts 的 model_adapter/model_provider/model_model 在 revision 后、token_usage_json 最后；workflow_runs 的 objective_id/title/activity_seq/activity_at 在 updated_at 后、configuration_locked 最后；evaluation_cards 的 origin 最后。相应 attempts_model_family_idx、workflow_runs_activity_idx、workflow_runs_objective_idx、workflow_runs_state_idx 也须与新建库一致。
+
+重建使用独立冻结的目标 DDL 与显式列名复制；被重建表的保留值按列名比较，不使用 SELECT * 的位置关系。遵循 [SQLite 官方重建流程](https://www.sqlite.org/lang_altertable.html#otheralter)：在事务开始之前处理外键开关，创建临时新表、复制、删除旧表、将新表改回原名并重建相关索引，提交前执行 foreign_key_check，结束后恢复外键约束。必须保留其他表对它们的引用、事务回滚与错误表名上下文。测试在私有夹具上构造上述追加列顺序，先证明它与新建基点不同，再证明迁移后完整形式与新建当前库逐项一致、所有原值按列名不变。
+
+目录当前投影仍按既定范围置 unknown/ACCOUNT_STATUS_UNKNOWN；账户可信状态遵守产品现有的缺键表示，不写 catalog-account-status:<adapter>=unknown。迁移仅删除本次被取代的实现，不扩展为清理其他 meta 存量。失败回复只在 error.details.reason 保留根因，journal.failure 保留持久化原因；删除回复顶层的重复 failure。DDL 的执行语句与所属表名显式成对保存，不从 SQL 文本解析表名。
+
+六项各建一个新窄微任务，全部归入原宏任务“ADR-021 L18 补升级”（obj-5ff4636b-a6cf-42e7-993e-89f055b47a4d），经路由且不指定 buddy；不续接此前已验收的任务。R1 与 R2 的写入范围独立，可同时执行并分别验收；其余按 R3 → R6 → R4 → R5 的依赖顺序执行，后一项使用已验收并整合的输入。每项自身发现的缺陷只打回该新任务，Host 不代修。
+
+| 新微任务 | 范围 | 验收 |
+| --- | --- | --- |
+| R1 旧目录时间测试 | 改写或删除 blackboard/tasks/test_catalog_trust.py 中两个已退休回退测试；不恢复产品回退 | 该模块聚焦验证；新增/消失编号与删除理由 |
+| R2 三表形式统一 | migrations.py 及所需保留值核对；三表、关联索引的无条件重建和追加顺序夹具测试 | 两种来源排列的完整形式与新建库一致；按列名保值；真实引用、回滚、外键状态；仅受影响的迁移/备份测试 |
+| R3 账户未知缺键 | 删除迁移写入 unknown 键及 planned_meta 的对应项；调整受影响断言 | 升级后缺键、读取仍未知、原目录历史保留；聚焦迁移测试 |
+| R6 错误与 DDL 上下文 | 去掉回复根因重复；DDL 与表名成对给出；相关断言 | 错误回复、journal、SQLite 失败表名一致；受影响测试 |
+| R4 存活变异 | 版本 1 单独条件；meta 计划值、豁免行指纹、外键检查；非 BoardError tables；dispatch 顺序；claim 组合唯一；outcome event_seq 唯一和外键 | 每个保留判断有对应存活变异转红及基线转绿；不可触发的新表为空检查删除，或给出真实可触发的测试；只运行相关模块/单项 |
+| R5 证据归位 | 将 tests/python/install 下四个 adr021-l18 JSON/Markdown 和夹具目录的 storage-inventory.json、verification.json 移至 docs/acceptance，更新引用 | 测试不依赖这六个记录文件；目标内容、引用及确切退休清单核对；不运行无关测试 |
+
+Worker 不删除任何文件或目录；改写已授权文件中的被取代内容，整文件退休或移动则复制目标并保留源文件，交回确切路径、原因与 SHA-256，由 Host 在整合时机械删除。每项只报告精简交付摘要，原始日志与探针留在自己的忽略 tmp；不再在测试目录添加交付记录。每项验收前，Host 保留需要的临时证据，避免验收后的自动工作区回收丢失日志。
+
+本轮不运行完整检查、完整变异组、安装演练或日常看板副本演练；整合 Host 复验时执行。新增与消失编号以 `8d5a5888` 为本轮基线，另保留从原始 `df9318f3` 的累计差集。最终更新本分支的 docs/acceptance/adr021-l18.md，区分原候选、打回原因与本轮证据，并停下等复验。日常看板的 48 条 uncertain account-operation 及其他历史结构化 meta 的归属问题不在本批处理。
