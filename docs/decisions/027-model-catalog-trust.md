@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受：用户于 2026-10-07 在另一个项目里遇到 Host 明确指定的 buddy 被黑板拒绝，要求必须解决。Claude Code Host 查明原因并提出六条规则，用户同日同意。由 Codex 实现，Claude Code Host 于 2026-10-07 验收并合入集成分支（[验收记录](../acceptance/adr027-host-review.md)）；它不依赖 [ADR-025](025-harness-run-module.md) 的第五步。用户同意随下一个版本一起安装，不为日常的 0.27.0 单独出修复版。尚未安装：日常的 0.27.0 不具备这些行为，安装需另行授权。
+已接受：用户于 2026-10-07 在另一个项目里遇到 Host 明确指定的 buddy 被黑板拒绝，要求必须解决。Claude Code Host 查明原因并提出六条规则，用户同日同意。由 Codex 实现，Claude Code Host 于 2026-10-07 验收并合入集成分支（[验收记录](../acceptance/adr027-host-review.md)）；它不依赖 [ADR-025](025-harness-run-module.md) 的第五步。用户同意随下一个版本一起安装，不为日常的 0.27.0 单独出修复版。已于 2026-10-11 随 0.29.0 安装。
 
 ## 背景
 
