@@ -44,7 +44,7 @@ The CLI uses short names that map one-to-one onto those operations: `submit` →
 
 The local `worker-start` and `worker-stop` CLI commands start a supervisor or write its cooperative stop request directly. They do not use this RPC path.
 
-hey-my-buddy transports bounded JSON strings through C-Two 0.6.0's named Python operations. This is a same-user Python API only; no cross-language portability is claimed and no FastDB DTO is used. A non-Python client must define an explicit transport contract. Node-side bridges do not connect to C-Two directly: the Python service is their client over private files and sockets. This dependency update validates hey-my-buddy behavior without reviewing C-Two internals.
+hey-my-buddy transports bounded JSON strings through C-Two 0.7.4's named Python operations. On Unix every local endpoint lives in the state directory's own `ipc` directory, so a process reaches a service only through the state directory it was given; Windows keeps C-Two's named-pipe domain. A runtime on C-Two 0.6.0 and one on 0.7.4 cannot reach each other, which is why an upgrade stops the old service with the old runtime's own modules. This is a same-user Python API only; no cross-language portability is claimed and no FastDB DTO is used. A non-Python client must define an explicit transport contract. Node-side bridges do not connect to C-Two directly: the Python service is their client over private files and sockets. This dependency update validates hey-my-buddy behavior without reviewing C-Two internals.
 
 ## Data model
 
