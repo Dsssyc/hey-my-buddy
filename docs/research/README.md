@@ -29,6 +29,7 @@
 | 2026-10-11 | [订阅额度用完之后：付费用量、供应方的拒绝与恢复](2026-10-11-plan-quota-and-paid-usage.md) | ADR-021 第 22 条 |
 | 2026-10-11 | [供应方的拒绝怎样分类、歇多久；智谱的套餐、资源包与余额各管哪一段](2026-10-11-refusal-kinds-and-zhipu-funding.md) | ADR-021 第 22 条与 L9；续查上一份，读了源码并做了实测 |
 | 2026-10-11 | [别的项目怎样在三个系统上找到 harness](2026-10-11-harness-discovery-across-systems.md) | ADR-017 第 9 至 15 条；harness 这一层管哪些事的讨论 |
+| 2026-10-11 | [黑板加的角色说明压不压得过用户自己的指令；Worker 的会话能不能不留在 harness 的历史里](2026-10-11-role-text-against-user-instructions.md) | harness 这一层管哪些事的决定，尚未起草 |
 | 2026-10-11 | [harness 的标志从哪里来，受什么约束](2026-10-11-harness-marks.md) | 控制台 Buddy 页的设计，尚未实现 |
 | 2026-10-11 | [harness 的标志，通行的做法与最后的决定](2026-10-11-harness-marks-in-practice.md) | 同上；改掉了上一份里的两处取舍 |
 | 2026-10-11 | [Codex 做 Host 时怎样等子代理，能不能结束回合等唤醒](2026-10-11-codex-host-waiting.md) | `docs/reference/host-codex.md` |
