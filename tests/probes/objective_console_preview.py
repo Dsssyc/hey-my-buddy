@@ -15,7 +15,9 @@ Safety boundary:
 * All mutation POSTs are refused. ``POST /api/command`` serves the same five
   read-only operations the real console allows (``workflow_get``,
   ``selection_get``, ``selection_list``, ``model_profiles``,
-  ``evaluation_history``) with fixed-shape fixture payloads. Operations the
+  ``evaluation_history``) with fixed-shape fixture payloads, and answers a
+  check of the harnesses (``capabilities``) with the same synthetic rows
+  without probing anything. Operations the
   0.15.1 browser allowlist removed (decide/continue/acknowledge/takeover/
   per-run cancel/retry and friends) answer ``METHOD_NOT_FOUND`` exactly like
   the real console; the still-allowed writes (settings operations and
@@ -186,7 +188,7 @@ MARKER_SUMMARY = {"dispatch": "synthetic dispatch · preview fixture",
 ALLOWED_OPERATIONS = (
     "evaluation_history", "selection_get", "selection_list", "model_profiles", "workflow_get",
     "evaluation_write_begin", "evaluation_write_renew", "user_policy_publish", "evaluation_write_abort",
-    "model_catalog_refresh", "objective_stop",
+    "model_catalog_refresh", "objective_stop", "capabilities",
 )
 #: Operations the 0.15.1 read-only repair removed from the browser surface.
 REMOVED_OPERATIONS = (
@@ -1307,8 +1309,25 @@ def sample_counts() -> dict:
     return {view["profileId"]: SAMPLE_COUNTS.get(view["profileId"], 0) for view in profile_views()}
 
 
+def harness_account(adapter: str, source: str, status: str, *, account_type: str | None = None,
+                    reason: str | None = None, guidance: str | None = None, worker_account: bool = True,
+                    oauth: bool = False, api_key: bool = False) -> dict:
+    """One account record in the shape the console parses; a separate account can be logged out and removed."""
+    separate = source == "worker"
+    return {"adapter": adapter, "source": source, "status": status, "revision": 1,
+            "credentialRevision": 1 if separate else 0, "accountType": account_type, "checkedAt": instant(9, 55),
+            "reasonCode": reason, "guidance": guidance,
+            "capabilities": {"workerAccount": worker_account, "oauth": oauth, "apiKey": api_key,
+                             "logout": separate, "remove": separate}}
+
+
 def harness_rows() -> list[dict]:
-    """The four ADR-018 console harness rows, in adapter order, with quota.
+    """The four ADR-018 console harness rows, in adapter order, with account and quota.
+
+    The accounts cover a separate account with a key, a shared login on a
+    harness that has no separate account, a shared login with a known account
+    type, and a login that is missing. One provider carries the exhaustion
+    record of the run that failed on quota, with its retry window open.
 
     Retained quota observations are display-only: an absent observation is
     ``null``, a stale one keeps its old ``observedAt``, and an unknown window is
@@ -1317,6 +1336,9 @@ def harness_rows() -> list[dict]:
     return [
         {"adapter": "dsh", "status": "ready", "available": True, "revision": 3, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/dsh/dsh", "version": "synthetic-preview-1.0",
+         "account": harness_account("dsh", "worker", "ready", account_type="apiKey", api_key=True),
+         "billingByProvider": {"deepseek-official": {"kind": "metered", "source": "synthetic-preview",
+                                                     "observedAt": OBSERVED_AT}},
          "source": "synthetic-preview", "checkedAt": instant(9, 55),
          "quota": {"observedAt": instant(9, 50), "source": "dsh-native",
                    "provider": "deepseek-official", "stale": False,
@@ -1324,6 +1346,11 @@ def harness_rows() -> list[dict]:
                                {"name": "weekly", "usedPercent": 41, "resetsAt": instant(77, 0)}]}},
         {"adapter": "zcode", "status": "ready", "available": True, "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/zcode/zcode", "version": "synthetic-preview-0.4",
+         "account": harness_account("zcode", "native", "ready", worker_account=False),
+         "quotaRouting": [{"provider": "zai", "limitId": None, "code": "HARNESS_QUOTA_EXHAUSTED",
+                           "source": "zcode-native", "observedAt": instant(6, 26), "resetsAt": None, "blocked": True,
+                           "retry": {"eligibleAt": instant(7, 26), "open": True, "pendingManual": False,
+                                     "manualAt": None, "consumedAt": None, "consumedBy": None}}],
          "source": "synthetic-preview", "checkedAt": instant(9, 55),
          "quota": {"observedAt": instant(2, 30), "source": "zcode-native", "provider": "zai",
                    "stale": True,
@@ -1331,12 +1358,15 @@ def harness_rows() -> list[dict]:
                                {"name": "weekly", "usedPercent": 12, "resetsAt": instant(77, 0)}]}},
         {"adapter": "codex", "status": "ready", "available": True, "revision": 1, "manualPath": None,
          'executable': '/synthetic-preview/codex', 'version': '0.159.0',
+         "account": harness_account("codex", "native", "ready", account_type="chatgpt", oauth=True),
          'billingByProvider': {'openai': {'kind': 'subscription', 'source': 'synthetic-preview', 'observedAt': OBSERVED_AT}},
          'systemSandbox': True,
          'readOnlyStructured': {'eligible': True, 'reasonCode': None, 'reason': None, 'systemSandbox': True, 'sameAttemptContinuation': True},
          "source": "synthetic-preview", "checkedAt": instant(9, 55), "quota": None},
         {"adapter": "claude", "status": "login-required", "available": False, "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/claude/claude", "version": "synthetic-preview-2.1",
+         "account": harness_account("claude", "native", "logged-out", reason="ACCOUNT_LOGIN_REQUIRED",
+                                    guidance="完成当前来源的登录后重新检测。", oauth=True),
          "source": "synthetic-preview", "checkedAt": instant(9, 55), "reasonCode": "HARNESS_LOGIN_REQUIRED",
          "quota": {"observedAt": instant(9, 40), "source": "claude-native", "provider": "anthropic",
                    "stale": False,
@@ -1379,8 +1409,28 @@ def runtime_version_report() -> dict:
     return {"running": {"mode": "runtime", **facts}, "installed": dict(facts)}
 
 
+def router_records(profiles: list[dict]) -> list[dict]:
+    """The Router list with one record each: one serving, one waiting to be tried again, one that cannot serve."""
+    def record(profile_id: str, index: int, **facts) -> dict:
+        profile = next(item for item in profiles if item["profileId"] == profile_id)
+        return {"profileId": profile_id, "index": index,
+                "identity": {key: profile[key] for key in ("adapter", "provider", "model", "effort")},
+                "eligible": True, "code": None, "inSkipWindow": False, "skipUntil": None, "retryAt": None,
+                "retryInProgress": False, "answeredCount": 0, "noAnswerCount": 0, "consecutiveNoAnswers": 0,
+                "lastAnsweredAt": None, "lastNoAnswerAt": None, "lastError": None, **facts}
+    return [
+        record(profiles[0]["profileId"], 0, answeredCount=3, noAnswerCount=1, lastAnsweredAt=instant(6, 5),
+               lastNoAnswerAt=instant(4, 12), lastError={"code": "routing-bounds-rejected", "at": instant(4, 12), "phase": "answer"}),
+        record("codex:openai:gpt-5-mini:high", 1, inSkipWindow=True, skipUntil=instant(8, 46), retryAt=instant(8, 46),
+               answeredCount=1, noAnswerCount=2, consecutiveNoAnswers=2, lastAnsweredAt=instant(3, 2),
+               lastNoAnswerAt=instant(8, 36), lastError={"code": "router-no-answer", "at": instant(8, 36), "phase": "start"}),
+        record("claude:anthropic:claude-opus-5-5:high", 2, eligible=False, code="harness-unavailable"),
+    ]
+
+
 def console_snapshot(scenario: str, assets_ready: bool) -> dict:
     profiles = profile_views()
+    routers = router_records(profiles)
     writable = scenario != "readonly"
     return {
         "csrfToken": SYNTHETIC_CSRF,
@@ -1389,7 +1439,8 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
                            "reason": None if writable else "superseded"},
         "tableRevision": 7,
         "gate": {"phase": "open", "readers": 0, "waitingWriters": 0, "writer": None},
-        "configuration": {"revision": 1, "routerProfileIds": [profiles[0]["profileId"]], "routerRetryIntervalSeconds": 600,
+        "configuration": {"revision": 1, "routerProfileIds": [entry["profileId"] for entry in routers],
+                          "routerRetryIntervalSeconds": 600,
                           "defaultRoutingMode": "fast", "routingBudget": "standard",
                           "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300,
                                                   "toolCalls": 24, "bytesRead": 524288}},
@@ -1403,6 +1454,8 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
                           "consecutiveFailures": 0, "abstentionCount": 1, "cancelledCount": 1, "staleCount": 0,
                           "budgetExhaustedCount": 0, "boundsRejectedCount": 1, "inputChangedCount": 0,
                           "lastSuccessAt": instant(6, 5), "lastSuccessDecisionId": ROUTING_A1["decisionId"],
+                          "available": True, "reasonCode": None, "currentRouterProfileId": routers[0]["profileId"],
+                          "routers": routers,
                           "recentFailures": [{"decisionId": ROUTING_A2["decisionId"], "runId": "preview-run-a2",
                                               "at": instant(8, 36), "code": "routing-bounds-rejected"}]},
         "pendingEvidence": 0, "sampleCounts": sample_counts(),
@@ -1515,7 +1568,13 @@ def command_result(scenario: str, operation: str, params: Any) -> dict:
             raise PreviewError("INVALID_ARGUMENT", "commandId is required")
         if len(str(params.get("reason") or "")) > 500:
             raise PreviewError("INVALID_ARGUMENT", "reason is too long")
-    if operation not in READ_OPERATIONS:
+    # A check of the harnesses changes nothing here: it answers the same synthetic rows, and nothing is probed.
+    checking = operation == "capabilities" and scenario != "readonly"
+    if checking:
+        unknown = sorted(set(params) - {"refresh", "adapter"})
+        if unknown:
+            raise PreviewError("INVALID_ARGUMENT", f"Unknown parameter: {unknown[0]}")
+    if operation not in READ_OPERATIONS and not checking:
         # Includes objective_stop: allowed by the 0.15.1 contract for the current
         # writer, but this preview never mutates, so it answers the same refusal
         # the board would give a session without write authority.
@@ -1529,6 +1588,11 @@ def command_result(scenario: str, operation: str, params: Any) -> dict:
         decisions = [decision_view(item) for item in FIXTURES["runs"].values()
                      if item["kind"] == "decision"]
         result = {"decisions": decisions, "nextCursor": None, "total": len(decisions)}
+    elif operation == "capabilities":
+        rows = [row for row in harness_rows() if params.get("adapter") in (None, row["adapter"])]
+        if not rows:
+            raise PreviewError("INVALID_ARGUMENT", "adapter names no harness of the preview")
+        result = {"harnesses": rows}
     elif operation == "model_profiles":
         profiles = profile_views()
         result = {"profiles": profiles, "cards": [], **policy_views(),
