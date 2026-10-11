@@ -10,6 +10,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import c_two as cc
+
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
 from hey_my_buddy.buddy.roles.controller import worker_executor
@@ -31,10 +33,13 @@ class ZcodeFixtureCase(unittest.TestCase):
         self.personal.write_text(json.dumps({"config": {"providerConfigRules": {"providerRules": [
             {"providerId": "fixture-api", "config": {"access": {"type": "api-key", "apiKey": "fixture-secret-never-public"}}}]}}}))
         FIXTURE.chmod(0o755)
-        self.environment = {k: v for k, v in os.environ.items() if not k.startswith("BUDDY_") and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
+        self.environment = {k: v for k, v in os.environ.items() if not k.startswith(("BUDDY_", "ANTHROPIC_", "C2_")) and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_ZCODE_CLI=str(FIXTURE.resolve()), BUDDY_STATE_DIR=str(self.root / "state"),
                                 BUDDY_RUNTIME_ROOT=str(self.root / "runtime"), BUDDY_DEV_SOURCE="1",
                                 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(self.builtin), ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(self.personal))
+        from hey_my_buddy.protocol.rpc_config import configure_client
+        configure_client(self.root / "state")
+        self.addCleanup(cc.shutdown)
         self.adapter = worker_executor("zcode")
         self.description = adapter("zcode")
 
@@ -69,8 +74,8 @@ class ZcodeFixtureCase(unittest.TestCase):
         def release():
             release_live_binding(handle)
             descriptor = getattr(handle, "role_live_descriptor", None)
-            if descriptor is not None and descriptor.socket is not None:
-                self.assertFalse(Path(descriptor.socket.path).exists(),
+            if descriptor is not None:
+                self.assertEqual(cc.inspect_endpoint(descriptor.address)["status"], "absent",
                                  "the owned endpoint was left behind")
         # LIFO: stop the actual held group before cleaning its captured endpoint.
         self.addCleanup(release)
@@ -82,8 +87,11 @@ class ZcodeFixtureCase(unittest.TestCase):
 
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
-            state, channel = handle_live_binding(handle)
+            state, channel = handle_live_binding(
+                handle, state_dir=Path(self.environment["BUDDY_STATE_DIR"]))
             if channel is not None:
+                self.assertEqual(channel._state_dir, Path(self.environment["BUDDY_STATE_DIR"]).resolve(),
+                                 "the role channel must use the fixture's private state root")
                 return channel
             time.sleep(0.05)
         self.fail("the held controller endpoint never became ready")
@@ -218,7 +226,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(ready.parent, context_root(context, "zcode"))
         self.assertEqual(oct(ready.stat().st_mode & 0o777), "0o600")
         descriptor = json.loads(ready.read_text())
-        self.assertEqual(set(descriptor), {"address", "name", "instanceId", "hostPid", "socket"}, descriptor)
+        self.assertEqual(set(descriptor), {"address", "name", "instanceId", "hostPid", "endpointCredential"}, descriptor)
         self.assertEqual(descriptor["instanceId"], material["instanceId"])
         self.assertEqual(descriptor["hostPid"], handle.pid)
         self.assertNotIn(material["token"], json.dumps(descriptor))

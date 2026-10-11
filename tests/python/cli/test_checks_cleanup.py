@@ -54,10 +54,16 @@ class ChecksEnvironmentTests(unittest.TestCase):
             "VIRTUAL_ENV": "/wrong-venv",
             "UV_PROJECT_ENVIRONMENT": "/wrong-uv",
             "BUDDY_CONSOLE_PORT": "8642",
+            "BUDDY_UNLISTED_TEST_PIN": "inherited",
+            "ANTHROPIC_UNLISTED_TEST_PIN": "inherited",
+            "C2_IPC_ROOT": "/public-native-domain",
+            "C2_UNLISTED_TEST_PIN": "inherited",
         }
         with patch.dict(os.environ, inherited):
             environment = checks.test_environment(Path("/repo"))
         for key in checks.SANITIZED_VARIABLES:
+            self.assertNotIn(key, environment)
+        for key in ("BUDDY_UNLISTED_TEST_PIN", "ANTHROPIC_UNLISTED_TEST_PIN", "C2_IPC_ROOT", "C2_UNLISTED_TEST_PIN"):
             self.assertNotIn(key, environment)
         self.assertEqual(environment["BUDDY_DEV_SOURCE"], "1")
         self.assertEqual(environment["BUDDY_CONSOLE_PORT"], "0")
@@ -85,6 +91,15 @@ class ChecksEnvironmentTests(unittest.TestCase):
             self.assertEqual(Path(completed.stdout.strip()).parent, tmp)
         finally:
             shutil.rmtree(root, ignore_errors=True)
+
+    def test_daemon_stop_uses_explicit_state_and_ends_its_rpc_session(self):
+        endpoint = {"address": "ipc://private-checks-mock", "token": "fixture"}
+        state = Path("/private-test-state")
+        with patch("hey_my_buddy.protocol.transport._read_endpoint", return_value=endpoint), patch("hey_my_buddy.protocol.transport._request") as request, patch("c_two.shutdown", return_value={"completed": True}) as shutdown:
+            checks._request_daemon_stop(state)
+        self.assertEqual(request.call_args.kwargs["state_dir"], state)
+        shutdown.assert_called_once_with()
+
 
 
 class ResidueObservationTests(unittest.TestCase):

@@ -5,12 +5,13 @@ process and answers a one-line JSON command protocol on stdin, so the tests
 drive a real registered endpoint, a real owner loop and the real clean
 lifecycle. Imported (by file path) instead, it exposes ``TEST_CRM`` — the
 minimal three-operation contract the peer registers and the in-process tests
-connect with. No harness, model or credential is ever touched.
+connect with. No harness, model or account credential is ever touched.
 """
 from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import secrets
 import sys
 import threading
@@ -48,6 +49,8 @@ class StallingLive:
 
     def __init__(self, seconds: float):
         self._seconds = seconds
+        self.completed_requests: list[str] = []
+        self._lock = threading.Lock()
 
     def capabilities(self, request_json: str) -> str:
         time.sleep(self._seconds)
@@ -55,10 +58,13 @@ class StallingLive:
 
     def request(self, request_json: str) -> str:
         time.sleep(self._seconds)
+        with self._lock:
+            self.completed_requests.append(json.loads(request_json)["requestId"])
         return json.dumps({"status": "queued", "observed": True, "state": "queued"})
 
     def observe(self, request_json: str) -> str:
-        time.sleep(self._seconds)
+        if json.loads(request_json).get("probe") != "immediate":
+            time.sleep(self._seconds)
         return json.dumps({"observed": True})
 
 
@@ -82,6 +88,7 @@ def serve() -> int:
     os.environ["C2_ENV_FILE"] = ""
     endpoint: ctl.CTwoLiveEndpoint | None = None
     stalled_name: str | None = None
+    stalled: StallingLive | None = None
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -97,15 +104,19 @@ def serve() -> int:
                 # A stalling endpoint: the same contract registered with an
                 # implementation that sleeps, so the client's bounded call
                 # faces a real peer that never answers within the window.
-                rpc_config.configure_server()
-                rpc_config.configure_client()
+                rpc_config.configure_server(Path(command["stateDir"]))
+                rpc_config.configure_client(Path(command["stateDir"]))
                 stalled_name = command.get("name") or ctl.random_person_name()
-                cc.register(TEST_CRM, StallingLive(float(command["stallSeconds"])),
+                stalled = StallingLive(float(command["stallSeconds"]))
+                cc.register(TEST_CRM, stalled,
                             name=stalled_name,
                             concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+                inspected = cc.inspect_endpoint(cc.server_address())
+                credential = inspected["credential"]
                 descriptor = ctl.LiveEndpointDescriptor(
                     address=cc.server_address(), name=stalled_name,
-                    instance_id=secrets.token_hex(32), host_pid=os.getpid())
+                    instance_id=secrets.token_hex(32), host_pid=os.getpid(),
+                    endpoint_credential=credential.to_json() if credential is not None else None)
                 _write_token(command["tokenPath"], secrets.token_hex(32))
                 _reply({"ok": True, "descriptor": descriptor.to_payload(),
                         "configuredRoles": list(rpc_config.configured_roles())})
@@ -115,7 +126,8 @@ def serve() -> int:
                     identity, LiveCapabilities(inquiry_delivery=command.get("delivery",
                                                                             "cooperative-checkpoint")),
                     TEST_CRM, name=command.get("name"),
-                    instance_id=secrets.token_hex(32), token=secrets.token_hex(32))
+                    instance_id=secrets.token_hex(32), token=secrets.token_hex(32),
+                    state_dir=Path(command["stateDir"]))
                 descriptor = endpoint.start()
                 ctl.write_ready_material(command["readyPath"], descriptor)
                 # The constructing side is the one trust position that holds the
@@ -154,6 +166,9 @@ def serve() -> int:
 
                 threading.Thread(target=owner, name="peer-owner", daemon=True).start()
                 _reply({"ok": True})
+            elif op == "completedCalls":
+                with stalled._lock:
+                    _reply({"ok": True, "requestIds": list(stalled.completed_requests)})
             elif op == "pendingCount":
                 _reply({"ok": True, "count": len(endpoint._pending)})
             elif op == "settle":
@@ -191,13 +206,9 @@ def serve() -> int:
 
 
 def main() -> int:
-    extra = sys.argv[3:]
-    if extra and extra[0] == "rebind":
-        # A replacement-scenario peer: rebind the dead endpoint's exact
-        # server_id so C-Two itself replaces the socket file at that address.
-        rpc_config.configure_server()
-        cc.set_server(server_id=extra[1])
-        rpc_config.configure_client()
+    if sys.argv[-1] == "deadline-client":
+        from buddy.harnesses.test_c_two_live import run_deadline_client
+        return run_deadline_client()
     return serve()
 
 

@@ -374,13 +374,13 @@ class SubmissionPreparationRaceTests(GovernedWorkerTestCase):
         from hey_my_buddy.errors import BoardError
 
         with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory)}):
-            tokens = self._race(lambda: cli._submission_token("req-race", {}))
+            tokens = self._race(lambda: cli._submission_token("req-race", {}, self.directory))
             self.assertEqual(len(set(tokens)), 1, tokens)
             path = next((self.directory / "submissions").glob("*.json"))
             original = path.read_text()
             path.write_text("not-json")
             with self.assertRaises(BoardError) as raised:
-                cli._submission_token("req-race", {})
+                cli._submission_token("req-race", {}, self.directory)
             self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
             self.assertEqual(path.read_text(), "not-json", "a malformed record is never overwritten")
             path.write_text(original)

@@ -22,7 +22,7 @@ from pathlib import Path
 from unittest import mock
 
 from buddy.harnesses.test_c_two_live import (
-    SANITIZED_VARIABLES, TEST_CRM, decode_reply, decode_snapshot, wire_observe,
+    TEST_CRM, decode_reply, decode_snapshot, wire_observe,
     wire_request,
 )
 from hey_my_buddy import locking
@@ -55,10 +55,11 @@ def new_material_directory() -> Path:
     return Path(tempfile.mkdtemp(prefix="inquiry-owner-", dir=TASK_MATERIAL_ROOT))
 
 
-def make_endpoint() -> ctl.CTwoLiveEndpoint:
+def make_endpoint(state_dir: Path) -> ctl.CTwoLiveEndpoint:
     return ctl.CTwoLiveEndpoint(RUN, lv.LiveCapabilities(
         inquiry_delivery="cooperative-checkpoint"), TEST_CRM,
-        instance_id=TEST_INSTANCE, token=TEST_TOKEN)
+        instance_id=TEST_INSTANCE, token=TEST_TOKEN,
+        state_dir=state_dir)
 
 
 def make_bridge(directory: Path, endpoint=None, *, identity=None) -> ib.InquiryBridge:
@@ -97,7 +98,7 @@ def records(path: Path) -> list[dict]:
 class InquiryOwnerTests(unittest.TestCase):
     def setUp(self):
         self.directory = new_material_directory()
-        self.endpoint = make_endpoint()
+        self.endpoint = make_endpoint(self.directory / "state")
         self.bridge = make_bridge(self.directory, self.endpoint)
         self.addCleanup(self.bridge.close)
 
@@ -318,7 +319,7 @@ class InquiryJournalProjectionTests(unittest.TestCase):
             fact = ib.read_inquiry_journal(RUN, self.path)
         self.assertEqual(lock.call_count, 1)
         self.assertTrue(lock.call_args.kwargs["shared"])
-        bridge = make_bridge(self.directory, make_endpoint())
+        bridge = make_bridge(self.directory, make_endpoint(self.directory / "state"))
         self.addCleanup(bridge.close)
         # Bind the preexisting file without copying or altering its records.
         bridge.journal_path = self.path
@@ -332,7 +333,7 @@ class InquiryJournalProjectionTests(unittest.TestCase):
 
     def test_strict_projection_failure_keeps_owner_alive_and_observation_unavailable(self):
         self.write_records([self.record("q-invalid", "answered", answer={"text": "x" * 4001})])
-        endpoint = make_endpoint()
+        endpoint = make_endpoint(self.directory / "state")
         bridge = make_bridge(self.directory, endpoint)
         bridge.journal_path = self.path
         self.addCleanup(bridge.close)
@@ -351,7 +352,7 @@ class InquiryJournalProjectionTests(unittest.TestCase):
         self.path.touch()
         with self.path.open("r+b") as stream:
             stream.truncate(MAX_JOURNAL_BYTES + 1)
-        endpoint = make_endpoint()
+        endpoint = make_endpoint(self.directory / "state")
         bridge = make_bridge(self.directory, endpoint)
         bridge.journal_path = self.path
         self.addCleanup(bridge.close)
@@ -367,7 +368,7 @@ def peer_main() -> int:
     """Real C-Two controller peer; stdin commands model native fixture events."""
     os.environ["C2_RELAY_ANCHOR_ADDRESS"] = ""
     os.environ["C2_ENV_FILE"] = ""
-    endpoint = make_endpoint()
+    endpoint = None
     bridge = None
     evidence = None
     ordinal = 0
@@ -387,6 +388,7 @@ def peer_main() -> int:
             op = command["op"]
             if op == "start":
                 directory = Path(command["directory"])
+                endpoint = make_endpoint(Path(command["stateDir"]))
                 descriptor = endpoint.start()
                 bridge = make_bridge(directory, endpoint)
                 bridge.start()
@@ -403,7 +405,9 @@ def peer_main() -> int:
                     validate_outcome=turn_io.validate_outcome,
                     mounted_tools=("buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn"))
                 event("turn.started", {"inputId": RUN.invocation_id})
-                result = {"descriptor": descriptor.to_payload()}
+                import c_two as cc
+                result = {"descriptor": descriptor.to_payload(),
+                          "endpointRoot": cc.local_endpoint_context().root}
             elif op in ("checkpoint", "answer", "tamperedCheckpoint", "childCheckpoint"):
                 tool = "buddy_answer_inquiry" if op == "answer" else "buddy_checkpoint"
                 arguments = ({"inquiryId": command["questionId"], "answer": command["answer"]}
@@ -451,8 +455,17 @@ class InquiryOwnerPeerTests(unittest.TestCase):
     def setUp(self):
         self.directory = new_material_directory()
         environment = {key: value for key, value in os.environ.items()
-                       if key not in SANITIZED_VARIABLES}
-        environment.update(C2_ENV_FILE="", C2_RELAY_ANCHOR_ADDRESS="")
+                       if key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
+                       and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
+        self.state = self.directory / "state"
+        self.home = self.directory / "home"
+        self.home.mkdir(mode=0o700)
+        self.native_tmp = self.directory / "tmp"
+        self.native_tmp.mkdir(mode=0o700)
+        environment.update(HOME=str(self.home), TMPDIR=str(self.native_tmp),
+                           BUDDY_CHECKS_TMPDIR=str(self.native_tmp),
+                           BUDDY_RUNTIME_ROOT=str(self.directory / "runtime"),
+                           C2_ENV_FILE="", C2_RELAY_ANCHOR_ADDRESS="")
         self.stderr_path = self.directory / "peer.stderr"
         self.stderr = self.stderr_path.open("x")
         self.addCleanup(self.stderr.close)
@@ -460,12 +473,22 @@ class InquiryOwnerPeerTests(unittest.TestCase):
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr,
             env=environment, text=True)
         self.addCleanup(self.stop_peer)
-        started = self.command("start", directory=str(self.directory))
+        started = self.command("start", directory=str(self.directory), stateDir=str(self.state))
         self.assertTrue(started["ok"], started)
+        self.assertEqual(Path(started["endpointRoot"]), self.state.resolve() / "ipc")
+        self.assertFalse((self.home / ".local" / "share" / "hey-my-buddy").exists())
+        self.assertEqual(list(self.native_tmp.iterdir()), [], "the default C-Two domain was created")
+        self.assertEqual(list(self.home.iterdir()), [], "the private empty HOME was used as a default")
         self.descriptor = ctl.LiveEndpointDescriptor.from_payload(started["descriptor"])
         self.channel = ctl.CTwoLiveChannel(RUN, TEST_CRM, name=self.descriptor.name,
             address=self.descriptor.address, instance_id=self.descriptor.instance_id,
-            token=TEST_TOKEN)
+            token=TEST_TOKEN, state_dir=self.state)
+        from hey_my_buddy.protocol import rpc_config
+        import c_two as cc
+        rpc_config.configure_client(self.state)
+        self.assertEqual(Path(cc.local_endpoint_context().root), self.state.resolve() / "ipc")
+        from support import shutdown_private_rpc
+        self.addCleanup(shutdown_private_rpc)
         self.addCleanup(lambda: self.channel.close(reason="test-ended"))
 
     def command(self, op, **fields):
@@ -516,6 +539,8 @@ class InquiryOwnerPeerTests(unittest.TestCase):
                          ["queued", "delivered", "answered"])
         self.assertEqual(self.channel.request(request(), timeout_ms=3000).status, "answered")
         self.assertEqual(self.observe().inquiries[0].seq, answer.seq)
+        self.assertEqual(list(self.home.iterdir()), [])
+        self.assertEqual(list(self.native_tmp.iterdir()), [])
 
     def test_tampered_receipt_and_child_native_evidence_cannot_upgrade_rpc_queue_receipt(self):
         self.assertEqual(self.channel.request(request(), timeout_ms=4000).status, "queued")

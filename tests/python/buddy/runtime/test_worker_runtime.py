@@ -31,7 +31,7 @@ class WorkerLaunchEnvironmentTests(unittest.TestCase):
                          "CLAUDECODE": "1", "CLAUDE_CODE_OAUTH_TOKEN": "session-token"}
             with patch.dict(os.environ, inherited, clear=True), patch.object(runtime, "launch_target", return_value=target) as select, patch.object(cli.subprocess, "Popen") as spawn:
                 spawn.return_value.pid = 123
-                result = cli._worker_command("worker-start", {"workerId": "extra", "stateDir": directory})
+                result = cli._worker_command("worker-start", {"workerId": "extra", "stateDir": directory}, Path(directory).resolve())
             select.assert_called_once_with(log_path=Path(directory).resolve() / "runtime-install.log")
             args, options = spawn.call_args
             self.assertEqual(args[0][0], target["python"])
@@ -53,7 +53,7 @@ class WorkerLaunchEnvironmentTests(unittest.TestCase):
                          "VIRTUAL_ENV": "/dev/venv", "UV_PROJECT_ENVIRONMENT": "/dev/venv"}
             with patch.dict(os.environ, inherited, clear=True), patch.object(cli.subprocess, "Popen") as spawn:
                 spawn.return_value.pid = 123
-                cli._worker_command("worker-start", {"workerId": "dev-extra", "stateDir": directory})
+                cli._worker_command("worker-start", {"workerId": "dev-extra", "stateDir": directory}, Path(directory).resolve())
             args, options = spawn.call_args
             self.assertEqual(args[0][0], sys.executable)
             # The checkout's own source path is set explicitly; a Host session's
@@ -70,7 +70,7 @@ class WorkerLaunchEnvironmentTests(unittest.TestCase):
     def test_worker_stop_does_not_select_runtime_or_spawn(self):
         with tempfile.TemporaryDirectory(prefix="buddy-worker-stop-") as directory:
             with patch.object(runtime, "launch_target") as select, patch.object(cli.subprocess, "Popen") as spawn:
-                result = cli._worker_command("worker-stop", {"workerId": "extra", "stateDir": directory})
+                result = cli._worker_command("worker-stop", {"workerId": "extra", "stateDir": directory}, Path(directory).resolve())
             select.assert_not_called()
             spawn.assert_not_called()
             self.assertTrue(result["stopRequested"])

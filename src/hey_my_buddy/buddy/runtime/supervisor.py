@@ -17,7 +17,6 @@ import time
 from pathlib import Path
 
 from ...protocol.client import BoardClient
-from ...protocol.transport import get_state_dir
 from .worker import RETIRE_REQUEST_NAME, Worker, fsync_json, supervisor_start_stop_path
 
 RESTART_BACKOFF_SECONDS = 2.0
@@ -132,7 +131,7 @@ class Supervisor:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Buddy independent worker supervisor")
     parser.add_argument("--worker-id", default=os.environ.get("BUDDY_WORKER_ID", "local"))
-    parser.add_argument("--state-dir", default=None)
+    parser.add_argument("--state-dir", required=True)
     parser.add_argument("--lease-seconds", type=int, default=120)
     parser.add_argument("--max-restarts", type=int, default=None)
     parser.add_argument(
@@ -141,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Comma-separated extra capabilities this worker advertises, on top of the built-in adapters",
     )
     arguments = parser.parse_args(argv)
-    state_dir = get_state_dir(arguments.state_dir)
+    state_dir = Path(arguments.state_dir)
     capabilities = tuple(item.strip() for item in arguments.capabilities.split(",") if item.strip())
     supervisor = Supervisor(
         arguments.worker_id, state_dir, lease_seconds=arguments.lease_seconds, capabilities=capabilities

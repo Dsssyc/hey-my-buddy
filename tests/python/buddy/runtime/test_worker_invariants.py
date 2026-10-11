@@ -9,6 +9,7 @@ daemon, no harness and no model.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -260,6 +261,7 @@ class LiveActivityForwardTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.state = self.root / "state"
+        self.state.mkdir(mode=0o700)
         self.work = self.root / "work"
         self.work.mkdir()
 
@@ -316,25 +318,32 @@ class LiveActivityForwardTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
         from hey_my_buddy.protocol.contracts import HarnessRunLive
         endpoint = CTwoLiveEndpoint(identity, LiveCapabilities(inquiry_delivery="unsupported"), HarnessRunLive,
-                                    instance_id="c" * 64, token="d" * 64)
+                                    instance_id="c" * 64, token="d" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         self.addCleanup(endpoint.close, reason="fixture-ended")
         self.endpoints = getattr(self, "endpoints", {})
         self.endpoints[str(directory)] = endpoint
         ready_file = directory / "live-ready.json"
         ready_file.write_text(json.dumps(LiveEndpointDescriptor(
-            address="fixture-address", name="Fixture Activity", instance_id="c" * 64, host_pid=42).to_payload()))
+            address="fixture-address", name="Fixture Activity", instance_id="c" * 64, host_pid=42, endpoint_credential="opaque-native-credential").to_payload()))
         control = {"operation": "worker", "harness": harness, "requestFile": str(request_file),
                    "directory": str(directory),
                    "live": {"readyFile": str(ready_file), "instanceId": "c" * 64, "token": "d" * 64}}
         handle = types.SimpleNamespace(role_run_control=control, role_run_identity=identity,
                                        pid=42, cancel_requested=False)
+        import c_two as cc
+        self.enterContext(mock.patch.object(cc.EndpointCredential, "from_json", return_value=types.SimpleNamespace(
+            address="fixture-address", context=cc.local_endpoint_context())))
         # Readiness/held-request validation, wire admission and forwarding all
-        # run. Only the SDK connection is local; no native PID is proven here.
-        def local_call(_channel, operation, text):
-            return getattr(self.endpoints[str(directory)], operation)(text)
-        patcher = mock.patch.object(CTwoLiveChannel, "_connect_and_call", local_call)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        # run. Both SDK boundaries are local; no native PID is proven here.
+        def connect(*args, timeout, **kwargs):
+            self.assertGreaterEqual(timeout, 0)
+            return nullcontext(self.endpoints[str(directory)])
+        def with_call_options(peer, *, timeout):
+            self.assertIs(peer, self.endpoints[str(directory)])
+            self.assertGreaterEqual(timeout, 0)
+            return peer
+        self.enterContext(mock.patch.object(cc, "connect", side_effect=connect))
+        self.enterContext(mock.patch.object(cc, "with_call_options", side_effect=with_call_options))
         return worker_module._Renewal(worker, claim, handle, implementation=object()), directory
 
     def publish_activity(self, directory: Path, *, task_id="task-live", attempt_id="attempt-live",
@@ -348,7 +357,7 @@ class LiveActivityForwardTests(unittest.TestCase):
                                          "attempt_id": attempt_id, "generation": generation})
         if source_identity != endpoint.identity:
             endpoint = CTwoLiveEndpoint(source_identity, LiveCapabilities(inquiry_delivery="unsupported"), HarnessRunLive,
-                                        instance_id="c" * 64, token="d" * 64)
+                                        instance_id="c" * 64, token="d" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
             self.endpoints[str(directory)] = endpoint
             self.addCleanup(endpoint.close, reason="fixture-ended")
         self.assertTrue(endpoint.publish_activity({"phase": "streaming-model", "eventSeq": event_seq,

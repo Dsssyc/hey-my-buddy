@@ -946,7 +946,8 @@ class TestLifecycle(BoardTestCase):
                 if endpoint is None:
                     return False
                 try:
-                    return _request(endpoint, "wait_capacity", {}, resource="wait").get("admitted", 0) >= 1
+                    return _request(endpoint, "wait_capacity", {}, resource="wait",
+                                    state_dir=self.directory).get("admitted", 0) >= 1
                 except ServiceError:
                     return False
 

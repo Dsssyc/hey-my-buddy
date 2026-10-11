@@ -173,11 +173,11 @@ class AccountOperationTests(WorkflowTestCase):
         from hey_my_buddy.cli import main as cli
         secret = 'fixture-cli-private-key'
         params = {'adapter': 'codex', 'mode': 'api-key', 'expectedRevision': 1}
-        with patch.object(cli, 'call_service', return_value={'account': {}}) as rpc, patch('sys.stdin', io.StringIO(secret)), contextlib.redirect_stdout(io.StringIO()):
+        with patch.object(cli, '_call_service', return_value={'account': {}}) as rpc, patch('sys.stdin', io.StringIO(secret)), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(cli.main(['account-login', json.dumps(params)]), 0)
             self.assertEqual(rpc.call_args.args[1]['apiKey'], secret)
         output = io.StringIO()
-        with patch.object(cli, 'call_service') as rpc, contextlib.redirect_stdout(output):
+        with patch.object(cli, '_call_service') as rpc, contextlib.redirect_stdout(output):
             self.assertEqual(cli.main(['account-login', json.dumps({**params, 'apiKey': secret})]), 1)
             rpc.assert_not_called()
         self.assertNotIn(secret, output.getvalue())

@@ -108,9 +108,7 @@ def _account_environment(name: str, context: ExecutionContext, *, purpose: str) 
         return context.environment
     if not isinstance(account, dict) or account.get('adapter') != name:
         raise BoardError('INVALID_ARGUMENT', 'Structured calls require the matching frozen account')
-    state = context.environment.get('BUDDY_STATE_DIR')
-    if not state:
-        raise BoardError('INVALID_ARGUMENT', 'Account selection requires the private state directory')
+    state = context.environment['BUDDY_STATE_DIR']
     from ...blackboard.catalog.accounts import execution_environment
     return execution_environment(Path(state), account, context.environment, purpose=purpose)
 

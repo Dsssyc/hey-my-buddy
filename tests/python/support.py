@@ -91,6 +91,13 @@ class FakeClock:
         return self.value
 
 
+def shutdown_private_rpc() -> None:
+    """End this fixture's communication before another private state is selected."""
+    import c_two as cc
+    if not cc.shutdown().get("completed"):
+        raise AssertionError("Private test RPC shutdown is unconfirmed; preserve its state")
+
+
 def stop_private_workers(directory: Path, timeout: float = 35.0) -> None:
     """Keep this test's state until its detached supervisors release ownership.
 
@@ -160,7 +167,7 @@ def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
             if endpoint is not None:
                 try:
                     reply = _request(endpoint, "service_control", {"action": "stop", "drainSeconds": 20,
-                                                                    "reason": "private test cleanup"})
+                                                                    "reason": "private test cleanup"}, state_dir=directory)
                 except ServiceError:
                     # The endpoint may have disappeared during a restart. Recheck
                     # the lifetime locks and attach to its replacement if needed.
@@ -193,8 +200,30 @@ def offline_facts_source(directory: Path) -> str:
 
 
 def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
-    environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS}
+    from hey_my_buddy.buddy.harnesses.claude.config import THIRD_PARTY_OVERRIDE_VARIABLES
+
+    removed = _INHERITED_CHILD_KEYS | set(THIRD_PARTY_OVERRIDE_VARIABLES)
+    environment = {key: value for key, value in os.environ.items() if key not in removed and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
+    # HOME and SDK locations belong to this fixture, never to the interpreter's
+    # inherited account. Do not create native configuration files in this home.
+    private_home = directory / "home"
+    private_home.mkdir(mode=0o700, exist_ok=True)
     environment.update(
+        HOME=str(private_home),
+        USERPROFILE=str(private_home),
+        CODEX_HOME=str(private_home / ".codex"),
+        CLAUDE_CONFIG_DIR=str(private_home / ".claude"),
+        ZCODE_DATA_BASE_DIR=str(private_home / ".zcode"),
+        ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(private_home / ".zcode/builtin-provider.json"),
+        ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(private_home / ".zcode/personal-provider.json"),
+        DSH_HOME=str(private_home / ".dsh"),
+        XDG_CONFIG_HOME=str(private_home / ".config"),
+        XDG_DATA_HOME=str(private_home / ".local/share"),
+        XDG_CACHE_HOME=str(private_home / ".cache"),
+        XDG_STATE_HOME=str(private_home / ".local/state"),
+        XDG_RUNTIME_DIR=str(directory / "runtime-root"),
+        APPDATA=str(private_home / "AppData/Roaming"),
+        LOCALAPPDATA=str(private_home / "AppData/Local"),
         BUDDY_STATE_DIR=str(directory),
         BUDDY_RUNTIME_ROOT=str(directory / "runtime-root"),
         PYTHONPATH=str(PYTHON_ROOT) + (os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else ""),
@@ -202,6 +231,8 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
         # A test child never shares the console backend's fixed default port; the
         # operating system assigns a private one. Tests may override this explicitly.
         BUDDY_CONSOLE_PORT="0",
+        BUDDY_CLAUDE_CLI=str(PYTHON_ROOT.parent / "tests/python/fixtures/claude-not-installed"),
+        BUDDY_CODEX_CLI=str(PYTHON_ROOT.parent / "tests/python/fixtures/codex-not-installed"),
         # Model-facts refreshes stay offline: the pinned source is a private fixture
         # path, and a missing one is a retained snapshot, never a network request.
         BUDDY_MODEL_FACTS_FILE=str(directory / "model-facts-fixture.json"),
@@ -212,6 +243,12 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
     environment["BUDDY_STATE_DIR"] = str(directory)
     if not Path(environment["BUDDY_RUNTIME_ROOT"]).resolve().is_relative_to(directory.resolve()):
         raise ValueError("Test runtime root must be inside its private state directory")
+    for key in ("HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "ZCODE_DATA_BASE_DIR",
+                "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", "DSH_HOME",
+                "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
+                "XDG_RUNTIME_DIR", "APPDATA", "LOCALAPPDATA", "BUDDY_MODEL_CATALOG_FILE"):
+        if key in environment and not Path(environment[key]).resolve().is_relative_to(directory.resolve()):
+            raise ValueError(f"Test {key} must be inside its private state directory")
     return environment
 
 
@@ -237,6 +274,7 @@ def private_state_dir(prefix: str = "buddy-test-"):
         restore_facts_source()
         stop_private_service(directory)
         stop_private_workers(directory)
+        shutdown_private_rpc()
         shutil.rmtree(directory)
 
 
@@ -362,12 +400,28 @@ class BoardTestCase(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     handle.kill()
                     handle.wait(timeout=5)
+        shutdown_private_rpc()
         shutil.rmtree(self.directory)
 
     def board(self, **options) -> InProcessBoard:
         board = InProcessBoard(self.directory, **options)
         self._stack.append(board)
         return board
+
+    def assert_rpc_state_dir(self, state_dir) -> None:
+        """RPC substitutes accept only this test's explicitly supplied state root."""
+        self.assertIsInstance(state_dir, (str, Path), "RPC requires an explicit private state_dir")
+        self.assertEqual(Path(state_dir).resolve(), self.directory.resolve(),
+                         "RPC state_dir must belong to the current test")
+
+    @contextmanager
+    def rpc_connection(self, contract, *, name: str, address: str):
+        """A direct native connection in this fixture's private state domain."""
+        import c_two as cc
+        from hey_my_buddy.protocol.rpc_config import configure_client
+        configure_client(self.directory)
+        with cc.connect(contract, name=name, address=address) as proxy:
+            yield proxy
 
     def workdir(self, name: str = "work") -> Path:
         path = self.directory / name
@@ -377,6 +431,7 @@ class BoardTestCase(unittest.TestCase):
     def catalog_fixture(self, payload: dict | None = None) -> Path:
         """Point discovery at a private fixture instead of the installed harness."""
         path = write_catalog_fixture(self.directory, payload)
+        self._catalog_fixture_path = path
         previous = os.environ.get("BUDDY_MODEL_CATALOG_FILE")
         os.environ["BUDDY_MODEL_CATALOG_FILE"] = str(path)
 
@@ -389,13 +444,23 @@ class BoardTestCase(unittest.TestCase):
         self.addCleanup(restore)
         return path
 
+    def child_environment(self, overrides: dict | None = None) -> dict:
+        """Pass this owner's catalog explicitly after inherited pins are cleared."""
+        explicit = {}
+        if getattr(self, "_catalog_fixture_path", None) is not None:
+            explicit["BUDDY_MODEL_CATALOG_FILE"] = str(self._catalog_fixture_path)
+        explicit.update(overrides or {})
+        return _child_environment(self.directory, explicit)
+
     # -- real daemon helpers -------------------------------------------------
     @contextmanager
     def daemon(self, *, env: dict | None = None):
         """Start the real daemon in a child process and wait for health."""
         from hey_my_buddy.protocol.transport import _request, _read_endpoint, ServiceError
 
-        environment = _child_environment(self.directory, env)
+        from hey_my_buddy.protocol.rpc_config import configure_client
+        configure_client(self.directory)
+        environment = self.child_environment(env)
         log = open(self.directory / "test-daemon.log", "ab")
         command = [sys.executable, '-m', 'hey_my_buddy.blackboard.service.daemon']
         if environment.get('BUDDY_MODEL_CATALOG_FILE'):
@@ -416,7 +481,7 @@ class BoardTestCase(unittest.TestCase):
                 endpoint = _read_endpoint(self.directory)
                 if endpoint:
                     try:
-                        health = _request(endpoint, "health", {})
+                        health = _request(endpoint, "health", {}, state_dir=self.directory)
                         break
                     except ServiceError:
                         pass
@@ -465,7 +530,7 @@ class BoardTestCase(unittest.TestCase):
 
     def cli(self, *arguments: str, env: dict | None = None, timeout: int = 90) -> tuple[int, dict]:
         """Run the real CLI in a child process; returns (exit code, parsed stdout)."""
-        environment = _child_environment(self.directory, env)
+        environment = self.child_environment(env)
         completed = subprocess.run(
             [sys.executable, "-m", "hey_my_buddy.cli.main", *arguments],
             env=environment,

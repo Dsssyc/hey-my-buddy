@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
-from hey_my_buddy.buddy.harnesses.c_two_live import C_TWO_IPC_DIRECTORY
+import c_two as cc
 from hey_my_buddy.buddy.harnesses.registry import run_seam
 from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result
 from hey_my_buddy.buddy.roles import controller as role_seam
@@ -165,8 +165,9 @@ def run_round(board, executor, run_id: str, question: str, number: int, root: Pa
     worker = Worker(f"native-smoke-{number}", board.directory, client=board.client(),
                     adapters=("dsh",), retry_seconds=1)
     descriptor = worker.live.start()
-    socket = Path(C_TWO_IPC_DIRECTORY) / (descriptor.address.removeprefix("ipc://") + ".sock")
-    require(socket.is_socket(), "Worker endpoint was not created")
+    context = cc.local_endpoint_context(root=str(board.directory / "ipc"))
+    require(cc.inspect_endpoint(descriptor.address, context=context)["status"] == "present",
+            "Worker endpoint was not created")
 
     def run():
         try:
@@ -178,16 +179,17 @@ def run_round(board, executor, run_id: str, question: str, number: int, root: Pa
     thread.start()
     inquiry_id = f"memory-question-{number}"
     deadline = time.monotonic() + 240
-    controller_sockets: dict[str, bool] = {}
+    controller_endpoints: dict[str, bool] = {}
     question_posted = False
     try:
         while thread.is_alive():
             require(time.monotonic() < deadline, "probe deadline expired")
             for handle in executor.handles[number - 1:]:
                 ready = getattr(handle, "role_live_descriptor", None)
-                if ready is not None and ready.socket is not None:
-                    path = ready.socket.path
-                    controller_sockets[path] = controller_sockets.get(path, False) or Path(path).is_socket()
+                if ready is not None and ready.endpoint_credential is not None:
+                    address = ready.address
+                    controller_endpoints[address] = controller_endpoints.get(address, False) or (
+                        cc.inspect_endpoint(address, context=context)["status"] == "present")
             # Posting while the task is still queued permanently marks this
             # inquiry unavailable. Observe without posting until the actual
             # holder is attached and reports its native session ready.
@@ -207,14 +209,16 @@ def run_round(board, executor, run_id: str, question: str, number: int, root: Pa
         worker.live.stop()
         write_new(root / f"worker-{number}.json",
                   {"errors": errors, "address": descriptor.address,
-                   "socketExistedBefore": True, "socketExistsAfter": socket.exists(),
-                   "controllerSockets": [{"path": path, "existedBefore": existed,
-                                          "existsAfter": Path(path).exists()}
-                                         for path, existed in controller_sockets.items()]})
+                   "endpointStatusBefore": "present",
+                   "endpointStatusAfter": cc.inspect_endpoint(descriptor.address, context=context)["status"],
+                   "controllerEndpoints": [{"address": address, "existedBefore": existed,
+                       "statusAfter": cc.inspect_endpoint(address, context=context)["status"]}
+                       for address, existed in controller_endpoints.items()]})
     require(not errors, "the Worker raised an error")
-    require(not socket.exists(), "Worker endpoint file survived stop")
-    require(controller_sockets and all(controller_sockets.values()), "the live controller socket was not observed")
-    require(all(not Path(path).exists() for path in controller_sockets), "controller endpoint file survived stop")
+    require(cc.inspect_endpoint(descriptor.address, context=context)["status"] == "absent", "Worker endpoint file survived stop")
+    require(controller_endpoints and all(controller_endpoints.values()), "the live controller socket was not observed")
+    require(all(cc.inspect_endpoint(address, context=context)["status"] == "absent"
+                for address in controller_endpoints), "controller endpoint file survived stop")
     require(len(executor.completed) == number, "the role did not collect a complete result")
     entry = executor.completed[-1]
     report = entry["report"]

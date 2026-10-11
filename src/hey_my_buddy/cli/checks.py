@@ -72,7 +72,7 @@ def test_environment(root: Path) -> dict:
     # A Claude Code Host session exports ANTHROPIC_BASE_URL. Claude fixtures model the
     # first-party account explicitly, so an inherited gateway must not decide them.
     removed = {*SANITIZED_VARIABLES, *THIRD_PARTY_OVERRIDE_VARIABLES}
-    values = {key: value for key, value in os.environ.items() if key not in removed}
+    values = {key: value for key, value in os.environ.items() if key not in removed and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
     source = str(root / "src")
     tests = str(root / "tests" / "python")
     inherited = values.get("PYTHONPATH")
@@ -596,15 +596,22 @@ def _request_daemon_stop(state_dir: Path) -> None:
     """Ask one observed daemon to stop through its own authenticated endpoint."""
     from ..protocol.transport import ServiceError, _read_endpoint, _request
 
+    import c_two as cc
+
     endpoint = _read_endpoint(state_dir)
     if endpoint is None:
         return
     try:
         _request(endpoint, "service_control", {"action": "stop", "drainSeconds": 10,
-                                               "reason": "hey_my_buddy.cli.checks private teardown"})
+                                               "reason": "hey_my_buddy.cli.checks private teardown"}, state_dir=state_dir)
     except ServiceError:
         # The endpoint may already be disappearing; the lifetime locks decide.
         pass
+    finally:
+        # This runner owns only this short stop RPC. End it before the next
+        # observed state root is selected, without touching another native domain.
+        if not cc.shutdown().get("completed"):
+            raise RuntimeError("Private teardown RPC shutdown is unconfirmed")
 
 
 def request_cooperative_stop(root: Path, timeout: float = 30.0) -> list[str]:
@@ -758,7 +765,8 @@ def main(argv: list[str] | None = None) -> None:
     # macOS's per-user temporary path leaves too little room for nested native
     # AF_UNIX sockets (sun_path is only 104 bytes). Keep the suite's one owned
     # root short; all child TMPDIRs still stay inside it and share its teardown.
-    private_root = create_private_root(directory=Path("/tmp") if sys.platform == "darwin" else None)
+    temporary = os.environ.get("BUDDY_CHECKS_TMPDIR")
+    private_root = create_private_root(directory=Path(temporary) if temporary else (Path("/tmp") if sys.platform == "darwin" else None))
     print(f"hey_my_buddy.cli.checks: private test root {private_root}", file=sys.stderr)
     failure: str | None = None
     evidence: dict | None = None

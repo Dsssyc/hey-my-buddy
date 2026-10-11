@@ -557,9 +557,7 @@ class WorkerRunExecutor:
             raise BoardError("INVALID_ARGUMENT", "Coding requires an explicit turn resume mode", adapter=self.name)
         if context.turn_input.get("resumeMode") == "native-session" and not self.description.native_resume:
             raise BoardError("INVALID_ARGUMENT", "This harness does not support native-session resume", adapter=self.name)
-        state = context.environment.get("BUDDY_STATE_DIR")
-        if not state:
-            raise BoardError("INVALID_ARGUMENT", "Coding requires the owning private state directory", adapter=self.name)
+        state = context.environment["BUDDY_STATE_DIR"]
         if context.turn_output_file().exists():
             raise BoardError("CONFLICT", "The attempt already has a turn result; it cannot execute twice", adapter=self.name)
         turn_io.prepare_turn(context)

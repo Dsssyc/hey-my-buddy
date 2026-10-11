@@ -730,7 +730,7 @@ class RoleSurfaceTests(NativeRunCase):
         self.fixture_case("clean")
         request = self.request()
         endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["claude"], HarnessRunLive,
-                                   instance_id="a" * 64, token="b" * 64)
+                                   instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
             result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                          services=native_run.RunServices(live=endpoint), cancelled=lambda: False)

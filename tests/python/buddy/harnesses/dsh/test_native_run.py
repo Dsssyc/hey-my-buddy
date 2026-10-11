@@ -887,7 +887,7 @@ class WorkerSeamTests(NativeRunCase):
         from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM)
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         services = dataclasses.replace(bound.services, live=endpoint)
         with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
             result = run(request, observer=worker_observer, services=services,
@@ -909,7 +909,7 @@ class WorkerSeamTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
         from hey_my_buddy.protocol.activity import is_newer
         request, bound, mount = self.worker_request()
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM)
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         seen = []
         original = endpoint.publish_activity
 
@@ -952,7 +952,7 @@ class WorkerSeamTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
         request, bound, mount = self.worker_request()
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM)
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         services = dataclasses.replace(bound.services, live=endpoint)
         self.governed_agent_args(mount)
         with mock.patch.object(endpoint, "publish_activity", return_value=False) as publish:

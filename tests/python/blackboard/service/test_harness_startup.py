@@ -25,10 +25,12 @@ class HarnessStartupTests(BoardTestCase):
 
     def setUp(self):
         super().setUp()
-        self.client = Mock()
+        self.client = Mock(state_dir=self.directory / 'state')
         self.record = {'adapter': 'codex', 'status': 'ready', 'available': True, 'revision': 1, 'command': ['/native/codex']}
         self.client.call.return_value = {'harness': self.record}
         self.worker = Worker('fixture', self.directory / 'state', client=self.client)
+        self.assertEqual(self.client.state_dir, self.worker.state_dir,
+                         'Injected client must carry the private Worker state path')
         self.worker.spool.write_startup({'nonce': 'fixture-owned-nonce'})
         self.attempt = {'attemptId': 'attempt-1', 'generation': 1}
         self.claim = {'attempt': self.attempt}

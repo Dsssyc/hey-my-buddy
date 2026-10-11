@@ -54,7 +54,9 @@ class FakeRpc:
         self.calls: list[tuple[str, dict]] = []
         self.reply = dict(OPEN_REPLY if reply is None else reply)
 
-    def __call__(self, method: str, params: dict) -> dict:
+    def __call__(self, method: str, params: dict, state_dir: Path | None = None) -> dict:
+        if state_dir is not None:
+            assert state_dir == Path(os.environ["BUDDY_STATE_DIR"])
         self.calls.append((method, dict(params)))
         return dict(self.reply)
 
@@ -135,7 +137,7 @@ class LocalOptionTests(ConsoleCliTestCase):
     def test_default_fixed_loopback_url_opens_without_a_ticket(self):
         url = "http://127.0.0.1:8123/"
         opener = mock.Mock(return_value=True)
-        result = console_cli.run({}, call_service=FakeRpc(open_reply(url=url, expiresAt=None)), browser_open=opener)
+        result = console_cli.run({}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), call_service=FakeRpc(open_reply(url=url, expiresAt=None)), browser_open=opener)
         self.assertEqual(result["url"], url)
         opener.assert_called_once_with(url, new=2)
         for invalid in (url + "other", url + "?x=1", url + "#x", url.replace("127.0.0.1", "localhost")):
@@ -232,7 +234,7 @@ class LocalOptionTests(ConsoleCliTestCase):
         )
         for params in params_cases:
             with self.subTest(params=params):
-                with mock.patch.object(transport, "call_service", rpc), mock.patch.object(
+                with mock.patch.object(transport, "_call_service", rpc), mock.patch.object(
                     console_cli.webbrowser, "open", browser
                 ), mock.patch("hey_my_buddy.protocol.client.BoardClient", client):
                     code, result, _stderr = self.run_cli("console", json.dumps(params))
@@ -250,7 +252,7 @@ class CredentialTests(ConsoleCliTestCase):
         rpc = FakeRpc()
         browser = mock.Mock(side_effect=AssertionError("no browser may be launched"))
         with mock.patch.dict(os.environ, {"BUDDY_AGENT_CREDENTIAL": "scoped-token"}):
-            with mock.patch.object(transport, "call_service", rpc), mock.patch.object(
+            with mock.patch.object(transport, "_call_service", rpc), mock.patch.object(
                 console_cli.webbrowser, "open", browser
             ):
                 code, result, stderr = self.run_cli("console", '{"action":"open","wait":true}')
@@ -270,7 +272,7 @@ class CredentialTests(ConsoleCliTestCase):
             os.chmod(path, 0o600)
             rpc = FakeRpc()
             with mock.patch.dict(os.environ, {"BUDDY_AGENT_CREDENTIAL_FILE": str(path)}):
-                with mock.patch.object(transport, "call_service", rpc):
+                with mock.patch.object(transport, "_call_service", rpc):
                     code, result, _stderr = self.run_cli("console", '{"action":"status"}')
         self.assertEqual(code, 1)
         self.assertEqual(result["error"]["code"], "FORBIDDEN")
@@ -285,7 +287,7 @@ class CredentialTests(ConsoleCliTestCase):
         for environment in environments:
             with self.subTest(environment=sorted(environment)):
                 with mock.patch.dict(os.environ, environment):
-                    with mock.patch.object(transport, "call_service", rpc):
+                    with mock.patch.object(transport, "_call_service", rpc):
                         code, result, _stderr = self.run_cli("console", '{"action":"status"}')
                 self.assertEqual(code, 1)
                 self.assertEqual(result["error"]["code"], "UNAUTHORIZED")
@@ -300,7 +302,7 @@ class OpenTests(ConsoleCliTestCase):
         else:
             browser = mock.Mock(return_value=browser_result)
         stderr = io.StringIO()
-        result = console_cli.run(params, call_service=rpc, browser_open=browser, stderr=stderr)
+        result = console_cli.run(params, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), call_service=rpc, browser_open=browser, stderr=stderr)
         return rpc, browser, stderr, result
 
     def test_open_launches_the_default_browser_once_and_keeps_the_lifecycle_reply(self):
@@ -336,7 +338,7 @@ class OpenTests(ConsoleCliTestCase):
     def test_the_default_browser_opener_is_python_webbrowser_with_new_2(self):
         rpc = FakeRpc()
         with mock.patch.object(console_cli.webbrowser, "open", return_value=True) as browser:
-            result = console_cli.run({"action": "open"}, call_service=rpc)
+            result = console_cli.run({"action": "open"}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), call_service=rpc)
         self.assertEqual(browser.call_args_list, [mock.call(ENTRY_URL, new=2)])
         self.assertTrue(result["browserOpened"])
         self.assertEqual(rpc.calls, [("console", {"action": "open"})])
@@ -371,7 +373,7 @@ class OpenTests(ConsoleCliTestCase):
                 with self.subTest(case=name, browser=choice.get("browser", True)):
                     browser = mock.Mock(side_effect=AssertionError("no browser may be launched"))
                     with self.assertRaises(BoardError) as refused:
-                        console_cli.run(choice, call_service=FakeRpc(open_reply(url=url)), browser_open=browser)
+                        console_cli.run(choice, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), call_service=FakeRpc(open_reply(url=url)), browser_open=browser)
                     self.assertEqual(refused.exception.code, "INVALID_RESPONSE")
                     self.assertEqual(browser.call_args_list, [])
 
@@ -396,7 +398,7 @@ class OpenTests(ConsoleCliTestCase):
                 with self.subTest(case=name, browser=choice.get("browser", True)):
                     browser = mock.Mock(side_effect=AssertionError("no browser may be launched"))
                     with self.assertRaises(BoardError) as refused:
-                        console_cli.run(choice, call_service=FakeRpc(reply), browser_open=browser)
+                        console_cli.run(choice, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), call_service=FakeRpc(reply), browser_open=browser)
                     self.assertEqual(refused.exception.code, "INVALID_RESPONSE")
                     self.assertEqual(browser.call_args_list, [])
 
@@ -404,7 +406,7 @@ class OpenTests(ConsoleCliTestCase):
         rpc = FakeRpc()
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with mock.patch.object(transport, "call_service", rpc), contextlib.redirect_stdout(
+        with mock.patch.object(transport, "_call_service", rpc), contextlib.redirect_stdout(
             stdout
         ), contextlib.redirect_stderr(stderr):
             code = cli.main(["console", '{"action":"open","browser":false}'])
@@ -423,7 +425,7 @@ class OpenTests(ConsoleCliTestCase):
         factory = mock.Mock(side_effect=AssertionError("no client may be built"))
         with self.assertRaises(BoardError) as refused:
             console_cli.run(
-                {"action": "open", "wait": True},
+                {"action": "open", "wait": True}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]),
                 call_service=rpc,
                 browser_open=browser,
                 sleep=sleep,
@@ -443,10 +445,10 @@ class ObserveAndCloseTests(ConsoleCliTestCase):
         factory = mock.Mock(return_value=client)
         cold = mock.Mock(side_effect=AssertionError("status must not use the cold-starting call surface"))
         browser = mock.Mock(side_effect=AssertionError("status never launches a browser"))
-        with mock.patch.object(transport, "call_service", cold), mock.patch.object(
+        with mock.patch.object(transport, "_call_service", cold), mock.patch.object(
             console_cli.webbrowser, "open", browser
         ):
-            result = console_cli.run({"action": "status"}, client_factory=factory)
+            result = console_cli.run({"action": "status"}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), client_factory=factory)
         self.assertEqual(cold.call_args_list, [])
         self.assertEqual(browser.call_args_list, [])
         self.assertEqual(factory.call_count, 1)
@@ -457,9 +459,9 @@ class ObserveAndCloseTests(ConsoleCliTestCase):
         client = FakeClient(close_reply={"closed": False, "reason": "replaced"})
         factory = mock.Mock(return_value=client)
         cold = mock.Mock(side_effect=AssertionError("close must not use the cold-starting call surface"))
-        with mock.patch.object(transport, "call_service", cold):
+        with mock.patch.object(transport, "_call_service", cold):
             result = console_cli.run(
-                {"action": "close", "expectedConsoleId": REPLACEMENT_ID}, client_factory=factory
+                {"action": "close", "expectedConsoleId": REPLACEMENT_ID}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), client_factory=factory
             )
         self.assertEqual(cold.call_args_list, [])
         self.assertEqual(client.calls, [("console", {"action": "close", "expectedConsoleId": REPLACEMENT_ID})])
@@ -471,7 +473,7 @@ class ObserveAndCloseTests(ConsoleCliTestCase):
                 with tempfile.TemporaryDirectory() as directory:
                     cold = mock.Mock(side_effect=AssertionError("a missing service must never be cold-started"))
                     with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": directory}), mock.patch.object(
-                        transport, "call_service", cold
+                        transport, "_call_service", cold
                     ):
                         code, result, _stderr = self.run_cli("console", json.dumps(params))
                     self.assertEqual(cold.call_args_list, [])
@@ -488,7 +490,7 @@ class ObserveAndCloseTests(ConsoleCliTestCase):
         )
         with mock.patch("hey_my_buddy.protocol.client.BoardClient", return_value=client) as built:
             code, result, _stderr = self.run_cli("console", '{"action":"status"}')
-        self.assertEqual(built.call_args_list, [mock.call(autostart=False)])
+        self.assertEqual(built.call_args_list, [mock.call(Path(os.environ["BUDDY_STATE_DIR"]), call=mock.ANY, autostart=False)])
         self.assertEqual(code, 1)
         self.assertEqual(result["error"]["code"], "SERVICE_UNAVAILABLE")
         self.assertNotIn("running", result)
@@ -512,7 +514,7 @@ class WaitTests(ConsoleCliTestCase):
         sleep = FakeSleep(interrupt_after=interrupt_after)
         stderr = io.StringIO()
         result = console_cli.run(
-            {"action": "open", "wait": True},
+            {"action": "open", "wait": True}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]),
             call_service=rpc,
             client_factory=factory,
             browser_open=mock.Mock(return_value=browser_result),
@@ -625,7 +627,7 @@ class WaitTests(ConsoleCliTestCase):
         self.assertNotEqual(result["wait"]["status"], "closed")
 
     def test_unavailable_daemon_uses_the_non_autostart_board_client(self):
-        client = console_cli._non_autostart_client()
+        client = console_cli._non_autostart_client(Path(os.environ["BUDDY_STATE_DIR"]))
         self.assertIsInstance(client, BoardClient)
         self.assertIs(client.autostart, False)
 
@@ -633,7 +635,7 @@ class WaitTests(ConsoleCliTestCase):
         with tempfile.TemporaryDirectory() as directory:
             with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": directory}):
                 result = console_cli.run(
-                    {"action": "open", "browser": False, "wait": True},
+                    {"action": "open", "browser": False, "wait": True}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]),
                     call_service=FakeRpc(),
                     sleep=FakeSleep(),
                     stderr=io.StringIO(),
@@ -684,7 +686,7 @@ class WaitTests(ConsoleCliTestCase):
 
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with mock.patch.object(transport, "call_service", rpc), mock.patch(
+        with mock.patch.object(transport, "_call_service", rpc), mock.patch(
             "hey_my_buddy.protocol.client.BoardClient", side_effect=build
         ), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = cli.main(["console", '{"wait":true,"browser":false}'])
@@ -692,7 +694,8 @@ class WaitTests(ConsoleCliTestCase):
         result = json.loads(stdout.getvalue())
         self.assertEqual(result["wait"], {"status": "closed"})
         self.assertIs(result["browserOpened"], False)
-        self.assertEqual(constructed["kwargs"], {"autostart": False})
+        self.assertEqual(constructed["args"], (Path(os.environ["BUDDY_STATE_DIR"]),))
+        self.assertEqual(constructed["kwargs"], {"call": mock.ANY, "autostart": False})
         self.assertEqual(rpc.calls, [("console", {"action": "open"})])
         self.assertEqual(client.calls, [("console", {"action": "status"})])
         self.assertEqual(stderr.getvalue(), f"{console_cli.FALLBACK_NOTICE}{ENTRY_URL}\n")

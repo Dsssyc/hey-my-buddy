@@ -6,6 +6,8 @@ never start, resume, retry or cancel a run - not on timeout, not on disconnect a
 not while reconnecting after a transient service failure.
 """
 import json
+import os
+from pathlib import Path
 import shlex
 import threading
 import unittest
@@ -109,7 +111,7 @@ class WaitWindowTests(unittest.TestCase):
     def test_wait_seconds_defaults_to_24h_and_is_bounded_by_it(self):
         clock = VirtualClock()
         service = FakeService(clock, listed=True, complete_after_waits=1)
-        envelope = await_run({"requestId": "fixture"}, service=service, clock=clock)
+        envelope = await_run({"requestId": "fixture"}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["waitSeconds"], MAX_WAIT_SECONDS)
         self.assertEqual(envelope["maxWaitSeconds"], MAX_WAIT_SECONDS)
         self.assertFalse(hasattr(blocking, "default_wait_seconds"))
@@ -137,7 +139,7 @@ class WaitWindowTests(unittest.TestCase):
         for params, code in cases:
             with self.subTest(params=params):
                 with self.assertRaises(ServiceError) as failure:
-                    await_run(params, service=forbidden)
+                    await_run(params, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=forbidden)
                 self.assertEqual(failure.exception.code, code)
 
     def test_the_run_blocking_convenience_is_gone(self):
@@ -201,7 +203,7 @@ class AwaitTests(unittest.TestCase):
     def test_await_resolves_an_existing_run_by_request_id_and_never_starts(self):
         clock = VirtualClock()
         service = FakeService(clock, listed=True, complete_after_waits=1)
-        envelope = await_run({"requestId": "fixture"}, service=service, clock=clock)
+        envelope = await_run({"requestId": "fixture"}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "completed")
         self.assertEqual(envelope["runId"], "run-fixture")
         self.assertEqual(envelope["result"]["finalText"], "fixture result")
@@ -210,18 +212,18 @@ class AwaitTests(unittest.TestCase):
     def test_await_accepts_a_run_id_and_checks_a_mismatched_request(self):
         clock = VirtualClock()
         service = FakeService(clock, complete_after_waits=1)
-        envelope = await_run({"runId": "run-fixture", "requestId": "fixture"}, service=service, clock=clock)
+        envelope = await_run({"runId": "run-fixture", "requestId": "fixture"}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "completed")
         self.assertEqual(service.calls[0], "status")
         with self.assertRaises(ServiceError) as failure:
-            await_run({"runId": "run-fixture", "requestId": "other"}, service=service, clock=clock)
+            await_run({"runId": "run-fixture", "requestId": "other"}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(failure.exception.code, "CONFLICT")
 
     def test_await_never_starts_missing_work_and_names_current_commands(self):
         clock = VirtualClock()
         service = FakeService(clock)
         with self.assertRaises(ServiceError) as failure:
-            await_run({"requestId": "missing"}, service=service, clock=clock)
+            await_run({"requestId": "missing"}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(failure.exception.code, "NOT_FOUND")
         message = str(failure.exception)
         self.assertIn("buddy submit", message)
@@ -232,7 +234,7 @@ class AwaitTests(unittest.TestCase):
     def test_await_timeout_is_a_wait_limit_and_never_cancels(self):
         clock = VirtualClock()
         service = FakeService(clock, listed=True)
-        envelope = await_run({"requestId": "fixture", "waitSeconds": 1}, service=service, clock=clock)
+        envelope = await_run({"requestId": "fixture", "waitSeconds": 1}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "wait-timeout")
         self.assertEqual(envelope["status"], "running")
         self.assertTrue(envelope["timedOut"])
@@ -253,7 +255,7 @@ class AwaitTests(unittest.TestCase):
         stop = threading.Event()
         service = FakeService(clock, listed=True, stop_event=stop)
         with self.assertRaises(WaitAbandoned) as failure:
-            await_run({"requestId": "fixture"}, service=service, clock=clock, stop=stop)
+            await_run({"requestId": "fixture"}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock, stop=stop)
         self.assertEqual(failure.exception.run_id, "run-fixture")
         self.assertEqual(failure.exception.request_id, "fixture")
         # list + one event wait; the durable run is never cancelled by losing the wait.
@@ -266,7 +268,7 @@ class ReconnectTests(unittest.TestCase):
     def test_transient_wait_failure_reattaches_by_run_id_read_only(self):
         clock = VirtualClock()
         service = FakeService(clock, complete_after_waits=1, fail_waits=1)
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, service=service, clock=clock)
+        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "completed")
         self.assertEqual(envelope["reconnects"], 1)
         self.assertEqual(envelope["runId"], "run-fixture")
@@ -282,7 +284,7 @@ class ReconnectTests(unittest.TestCase):
             clock, listed=True, fail_waits=1, complete_after_waits=99,
             status_queue=[{"runId": "run-someone-else", "requestId": "other", "status": "running", "revision": 1}],
         )
-        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, service=service, clock=clock)
+        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "unavailable")
         self.assertEqual(envelope["error"]["code"], "RECOVERY_MISMATCH")
         self.assertEqual(envelope["reconnects"], 1)
@@ -290,7 +292,7 @@ class ReconnectTests(unittest.TestCase):
     def test_failed_reattach_reports_unavailable_with_recovery(self):
         clock = VirtualClock()
         service = FakeService(clock, listed=True, fail_waits=1, fail_status=1)
-        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, service=service, clock=clock)
+        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "unavailable")
         self.assertEqual(envelope["error"]["code"], "SERVICE_UNAVAILABLE")
         self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
@@ -300,7 +302,7 @@ class ReconnectTests(unittest.TestCase):
     def test_exhausted_reconnects_return_unavailable_bounded(self):
         clock = VirtualClock()
         service = FakeService(clock, fail_waits=99)
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, service=service, clock=clock)
+        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "unavailable")
         self.assertEqual(envelope["error"]["code"], "SERVICE_UNAVAILABLE")
         self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
@@ -314,7 +316,7 @@ class ReconnectTests(unittest.TestCase):
     def test_terminal_without_persisted_result_is_reported(self):
         clock = VirtualClock()
         service = FakeService(clock, complete_after_waits=None, fail_waits=0, terminal_without_result=True)
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, service=service, clock=clock)
+        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "reconciliation-needed")
         self.assertFalse(envelope["resultAvailable"])
         self.assertIsNone(envelope["result"])
@@ -331,7 +333,7 @@ class ResultTruthTests(unittest.TestCase):
     def test_completed_without_persisted_result_cannot_claim_success(self):
         clock = VirtualClock()
         service = FakeService(clock, listed=True, terminal_without_result="completed")
-        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, service=service, clock=clock)
+        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         # Execution status and identity are preserved...
         self.assertEqual(envelope["status"], "completed")
         self.assertEqual(envelope["runId"], "run-fixture")
@@ -352,7 +354,7 @@ class ResultTruthTests(unittest.TestCase):
     def test_result_read_service_error_cannot_claim_success(self):
         clock = VirtualClock()
         service = FakeService(clock, listed=True, complete_after_waits=1, fail_result=1)
-        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, service=service, clock=clock)
+        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["status"], "completed")
         self.assertFalse(envelope["ok"])
         self.assertEqual(envelope["outcome"], "completed-no-result")
@@ -377,7 +379,7 @@ class ResultTruthTests(unittest.TestCase):
             with self.subTest(response=name):
                 clock = VirtualClock()
                 service = FakeService(clock, listed=True, complete_after_waits=1, result_response=response)
-                envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, service=service, clock=clock)
+                envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
                 # The failure is attributed to this run even when the response was unusable.
                 self.assertEqual(envelope["runId"], "run-fixture")
                 self.assertEqual(envelope["requestId"], "fixture")
@@ -393,7 +395,7 @@ class ResultTruthTests(unittest.TestCase):
     def test_successful_result_control_keeps_completed_semantics(self):
         clock = VirtualClock()
         service = FakeService(clock, listed=True, complete_after_waits=1)
-        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, service=service, clock=clock)
+        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertTrue(envelope["ok"])
         self.assertEqual(envelope["outcome"], "completed")
         self.assertEqual(envelope["status"], "completed")
@@ -406,7 +408,7 @@ class ResultTruthTests(unittest.TestCase):
     def test_failed_terminal_without_result_stays_honest(self):
         clock = VirtualClock()
         service = FakeService(clock, listed=True, terminal_without_result="failed")
-        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, service=service, clock=clock)
+        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["status"], "failed")
         self.assertEqual(envelope["outcome"], "failed")
         self.assertFalse(envelope["ok"])
@@ -426,7 +428,7 @@ class GovernedBoundaryTests(unittest.TestCase):
                       "requestSummary": "Configure a selector", "requestRouting": True,
                       "requestTargetRunId": "authorized-child"},
         )
-        envelope = await_run({"runId": "run-fixture"}, service=service, clock=clock)
+        envelope = await_run({"runId": "run-fixture"}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "waiting-host")
         self.assertFalse(envelope["goalComplete"])
         self.assertIsNone(envelope["turn"])
@@ -476,7 +478,7 @@ class GovernedBoundaryTests(unittest.TestCase):
 
     def test_await_returns_the_structured_boundary_immediately(self):
         service, clock = self._boundary_service()
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, service=service, clock=clock)
+        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "waiting-host")
         self.assertFalse(envelope["ok"])
         self.assertFalse(envelope["goalComplete"])
@@ -487,7 +489,7 @@ class GovernedBoundaryTests(unittest.TestCase):
 
     def test_next_commands_use_current_names_and_a_named_control_file(self):
         service, clock = self._boundary_service()
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, service=service, clock=clock)
+        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         commands = envelope["nextCommands"]
         self.assertEqual([shlex.split(command)[1] for command in commands], ["decide", "decide", "continue"])
         for command in commands:
@@ -510,7 +512,7 @@ class GovernedBoundaryTests(unittest.TestCase):
             "workflowState": "waiting-helpers",
             "awaitingHost": False,
         }
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, service=service, clock=clock)
+        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         # The stale turn result of the previous attempt never becomes a fake success;
         # the wait follows the same durable task until it really completes.
         self.assertEqual(envelope["outcome"], "completed")
@@ -555,7 +557,7 @@ class CompactGovernedEnvelopeTests(unittest.TestCase):
             },
             "resultMeta": {"status": "ok", "shutdownConfirmed": True},
         }
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, service=service, clock=clock)
+        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "completed")
         self.assertTrue(envelope["ok"])
         self.assertTrue(envelope["resultCompact"])
@@ -570,7 +572,7 @@ class CompactGovernedEnvelopeTests(unittest.TestCase):
     def test_execution_envelope_delivers_the_full_result(self):
         clock = VirtualClock()
         service = FakeService(clock, complete_after_waits=1)
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, service=service, clock=clock)
+        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "completed")
         self.assertNotIn("resultCompact", envelope)
         self.assertEqual(envelope["result"]["finalText"], "fixture result")

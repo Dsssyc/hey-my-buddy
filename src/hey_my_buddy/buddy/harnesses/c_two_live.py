@@ -19,7 +19,8 @@ and an endpoint that cannot be reached is an unavailable fact — never a
 stopped process. Every cross-process frame is one strict pydantic model of the
 existing live format plus the two private envelope fields this backend really
 reads (``instanceId`` and ``token``) and, on the request frame, the transport
-window the server enforces at admission. The narrow token never travels in a
+window and original local monotonic cutoff the server enforces at admission.
+The narrow token never travels in a
 reply, a snapshot, a diagnostic or a log line.
 
 Inside the endpoint the RPC threads only validate and enqueue: requests enter
@@ -41,12 +42,11 @@ endpoint encodes — pages and point queries alike — is measured against the
 unavailability instead of a trimmed or undecodable fact. Durable journals and
 results stay with the production code that owns them.
 
-On the client side the whole connect and call runs under the caller's
-transport window through one bounded standard-library mechanism
-(:meth:`CTwoLiveChannel._call`): C-Two 0.6.0 exposes no per-call timeout on
-its public client surface, so a daemon worker carries the attempt and the
-caller waits only until the deadline; repeated timeouts hold at most a fixed
-number of permits and never block ``close`` or process exit.
+On the client side C-Two's native connection and call deadlines enforce one
+caller transport window. Expiry ends the client's wait, without cancelling a
+dispatched owner operation or implying that the endpoint stopped. The private
+request frame carries that same local monotonic deadline so connecting and
+queueing cannot give an unconsumed request a second full window.
 """
 from __future__ import annotations
 
@@ -55,13 +55,13 @@ import os
 import queue
 import re
 import secrets
-import stat
 import threading
 import time
 from pathlib import Path
 from typing import Annotated, Any, Literal, Mapping, Optional
 
 import c_two as cc
+from c_two.error import CallDeadlineExceeded
 
 from ...errors import BoardError
 from ...json_codec import canonical_json, decode_bounded_frame, decode_strict_json
@@ -100,24 +100,10 @@ from .live import (
 from .run_contract import RunIdentity
 from pydantic import Field
 
-#: The machine-wide C-Two IPC directory observed by the accepted F-C1 probe on
-#: macOS (``/tmp/c_two_ipc/<server_id>.sock``, independent of ``TMPDIR``). The
-#: cross-platform layout itself belongs to C-Two; where the derived path does
-#: not exist the endpoint simply captures no socket identity and every later
-#: cleanup refuses instead of guessing.
-C_TWO_IPC_DIRECTORY = "/tmp/c_two_ipc"
-
 #: The bounded admission buffer between the RPC threads and the owner loop. It
 #: never exceeds the per-run inquiry budget, so a full queue is the defensive
 #: fact for a stalled owner loop rather than a second inquiry limit.
 MAX_PENDING_LIVE_REQUESTS = MAX_INQUIRIES_PER_RUN
-
-#: The per-channel bound on concurrent whole connect+call attempts. The live
-#: seam's callers are one holder loop plus its occasional parallel polls, so
-#: four in-flight attempts cover that with headroom while capping what a peer
-#: that never answers can hold: each attempt outliving its window keeps at
-#: most one of these permits until the transport itself unblocks.
-MAX_INFLIGHT_LIVE_CALLS = 4
 
 
 class _PendingRequest:
@@ -130,28 +116,16 @@ class _PendingRequest:
     ever inferred from the buffer insertion itself.
     """
 
-    __slots__ = ("question_id", "digest", "done", "reply", "expired")
+    __slots__ = ("question_id", "digest", "deadline", "done", "reply", "expired")
 
-    def __init__(self, question_id: str, digest: str):
+    def __init__(self, question_id: str, digest: str, deadline: float):
         self.question_id = question_id
         self.digest = digest
+        self.deadline = deadline
         self.done = threading.Event()
         self.reply: LiveReply | None = None
         self.expired = False
 
-
-class _LiveCallExpired(Exception):
-    """One bounded transport attempt that did not finish within its window.
-
-    ``reason_code`` distinguishes the two honest expiries: the attempt itself
-    outlived the window (``transport-window-expired``) and every bounded call
-    slot was still occupied when the window ran out (``transport-busy``).
-    Neither is ever a statement about the peer process.
-    """
-
-    def __init__(self, reason_code: str):
-        super().__init__(reason_code)
-        self.reason_code = reason_code
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -225,14 +199,16 @@ def _timeout_ms(value: Any, label: str) -> int:
 class LiveWireRequest(LiveRequest):
     """One live request frame on the C-Two wire: the request plus the envelope.
 
-    ``instanceId`` and ``token`` are the only private envelope fields, and
-    ``timeoutMs`` is the transport window the server enforces at admission;
-    every other member is the existing :class:`LiveRequest` unchanged.
+    ``timeoutMs`` keeps the validated transport window. ``deadlineMonotonic``
+    carries its original cutoff across this same-machine IPC boundary: unlike
+    starting another window on arrival, it includes connection and dispatch
+    time. It is private to this backend, never a public board-schema field.
     """
 
     instance_id: Hex64
     token: Hex64
     timeout_ms: TransportWindowMs
+    deadline_monotonic: float = Field(ge=0, allow_inf_nan=False)
 
 
 class LiveWireObserve(InternalModel):
@@ -255,36 +231,19 @@ class LiveWireQuery(InternalModel):
     identity: RunIdentity
 
 
-class EndpointSocketFact(InternalModel):
-    """This endpoint's socket file: the exact path and the file identity.
-
-    The identity is the ``(st_dev, st_ino)`` pair captured right after this
-    endpoint's own registration; a replaced file at the same path never shows
-    the same pair, so a later cleanup can tell its own dead endpoint's file
-    from whatever now occupies the path.
-    """
-
-    address: Text(256)
-    path: Text(1024)
-    device: NonNegativeInt
-    inode: NonNegativeInt
-
-
 class LiveEndpointDescriptor(InternalModel):
-    """The publishable facts of one started endpoint; the token is not among them.
+    """Bounded private readiness facts; the credential is native opaque JSON.
 
-    ``address`` is the value read back through ``cc.server_address()`` and the
-    only routing key; ``name`` is the display-only person name; ``hostPid`` is
-    the process that registered the endpoint and binds the holder's cleanup
-    evidence to it; ``socket`` is present only when this endpoint's own file
-    identity was actually captured.
+    The holder consumes ``endpointCredential`` through C-Two's codec. Address,
+    instance and the held process PID remain independent binding checks.
+    Windows has no reap credential and uses the native default pipe domain.
     """
 
     address: Text(256)
     name: Text(128)
     instance_id: Hex64
     host_pid: NonNegativeInt
-    socket: Optional[EndpointSocketFact] = None
+    endpoint_credential: OptionalText(8192) = None
 
 
 class ConfirmedProcessGone(InternalModel):
@@ -301,11 +260,12 @@ class ConfirmedProcessGone(InternalModel):
     group_gone: bool
 
 
-CleanupOutcomeValue = Literal["deleted", "already-absent", "refused"]
+CleanupOutcomeValue = Literal["reaped", "already-absent", "busy", "stale-target",
+                              "unverified", "io-error", "not-applicable"]
 
 
 class CleanupOutcome(InternalModel):
-    """What one cleanup attempt did with exactly this endpoint's file."""
+    """The public native reap fact, or a holder binding refusal."""
 
     outcome: CleanupOutcomeValue
     reason: OptionalText(256) = None
@@ -383,6 +343,8 @@ def write_ready_material(path: str | Path, descriptor: LiveEndpointDescriptor) -
     if not isinstance(descriptor, LiveEndpointDescriptor):
         raise fail("descriptor must be a LiveEndpointDescriptor value")
     text = canonical_json(descriptor.to_payload())
+    if len(text.encode()) > 16384:
+        raise fail("live readiness material exceeds its frame bound")
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     try:
         os.write(fd, text.encode())
@@ -390,43 +352,37 @@ def write_ready_material(path: str | Path, descriptor: LiveEndpointDescriptor) -
         os.close(fd)
 
 
-def cleanup_abandoned_socket(descriptor: LiveEndpointDescriptor,
-                             evidence: ConfirmedProcessGone) -> CleanupOutcome:
-    """Delete exactly this endpoint's socket file after a confirmed vanishing.
+def cleanup_owned_endpoint(descriptor: LiveEndpointDescriptor,
+                           evidence: ConfirmedProcessGone, *,
+                           context: cc.LocalEndpointContext) -> CleanupOutcome:
+    """Reap once through C-Two only after the held leader and group are gone.
 
-    The rule is conservative at every step: the evidence must name this
-    endpoint's own host process, carry its reaped exit code and observe the
-    group gone; the file at the captured path must still carry the captured
-    ``(device, inode)`` identity. Anything unknown, replaced or unconfirmed
-    refuses, and no other file is ever touched — old residue in the shared
-    IPC directory is never scanned.
+    The supplied context is the holder's configured private domain, never a
+    domain derived from the untrusted readiness credential. No file paths or
+    native identity fields are constructed here; C-Two owns the codec and reap.
     """
     if not isinstance(descriptor, LiveEndpointDescriptor):
         raise fail("descriptor must be a LiveEndpointDescriptor value")
     if not isinstance(evidence, ConfirmedProcessGone):
         raise fail("evidence must be a ConfirmedProcessGone value")
     if evidence.exit_code is None or evidence.group_gone is not True:
-        return CleanupOutcome(outcome="refused", reason="vanishing-not-confirmed")
+        return CleanupOutcome(outcome="unverified", reason="vanishing-not-confirmed")
     if evidence.pid != descriptor.host_pid:
-        return CleanupOutcome(outcome="refused", reason="process-identity-mismatch")
-    socket_fact = descriptor.socket
-    if socket_fact is None:
-        return CleanupOutcome(outcome="refused", reason="socket-identity-unknown")
+        return CleanupOutcome(outcome="unverified", reason="process-identity-mismatch")
+    if descriptor.endpoint_credential is None:
+        return CleanupOutcome(outcome="not-applicable" if os.name == "nt" else "unverified",
+                              reason="endpoint-credential-unavailable")
     try:
-        info = os.lstat(socket_fact.path)
-    except FileNotFoundError:
-        return CleanupOutcome(outcome="already-absent", reason=None)
-    except OSError as error:
-        return CleanupOutcome(outcome="refused", reason=f"socket-stat-failed:{error.errno}")
-    if (info.st_dev, info.st_ino) != (socket_fact.device, socket_fact.inode):
-        return CleanupOutcome(outcome="refused", reason="socket-file-replaced")
-    try:
-        os.unlink(socket_fact.path)
-    except FileNotFoundError:
-        return CleanupOutcome(outcome="already-absent", reason=None)
-    except OSError as error:
-        return CleanupOutcome(outcome="refused", reason=f"socket-unlink-failed:{error.errno}")
-    return CleanupOutcome(outcome="deleted", reason=None)
+        credential = cc.EndpointCredential.from_json(descriptor.endpoint_credential)
+    except (ValueError, TypeError):
+        return CleanupOutcome(outcome="unverified", reason="endpoint-credential-invalid")
+    if credential.address != descriptor.address:
+        return CleanupOutcome(outcome="unverified", reason="endpoint-address-mismatch")
+    if (credential.context.platform, credential.context.namespace_id, credential.context.root) != \
+            (context.platform, context.namespace_id, context.root):
+        return CleanupOutcome(outcome="unverified", reason="endpoint-domain-mismatch")
+    result = cc.reap_endpoint(descriptor.address, credential, context=context)
+    return CleanupOutcome(outcome=result["status"], reason=result.get("reason"))
 
 
 class CTwoLiveEndpoint:
@@ -452,7 +408,7 @@ class CTwoLiveEndpoint:
 
     def __init__(self, identity: RunIdentity, capabilities: LiveCapabilities, contract: type, *,
                  name: str | None = None, instance_id: str | None = None,
-                 token: str | None = None):
+                 token: str | None = None, state_dir: Path):
         if not isinstance(identity, RunIdentity):
             raise fail("identity must be a RunIdentity")
         if not isinstance(capabilities, LiveCapabilities):
@@ -462,6 +418,7 @@ class CTwoLiveEndpoint:
         for operation in ("capabilities", "request", "observe"):
             if not callable(getattr(contract, operation, None)):
                 raise fail(f"the live contract must declare a {operation} operation")
+        self._state_dir = state_dir
         self._identity = identity
         self._capabilities = capabilities
         self._contract = contract
@@ -522,17 +479,25 @@ class CTwoLiveEndpoint:
         """
         if self._descriptor is not None:
             raise fail("the live endpoint was already started")
-        rpc_config.configure_server()
-        rpc_config.configure_client()
-        cc.register(self._contract, self, name=self._name,
-                    concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+        rpc_config.configure_server(self._state_dir)
+        rpc_config.configure_client(self._state_dir)
+        try:
+            cc.register(self._contract, self, name=self._name,
+                        concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+        except (ValueError, RuntimeError) as error:
+            raise BoardError("PRIVATE_PATH_UNSAFE", str(error)) from error
         address = cc.server_address()
         if not isinstance(address, str) or not address:
             raise fail("the registered live endpoint reported no server address")
+        inspected = cc.inspect_endpoint(address)
+        credential = inspected["credential"]
+        if inspected["status"] != "present" and inspected["status"] != "not-applicable":
+            raise BoardError("LIVE_UNAVAILABLE", "Registered endpoint credential is unavailable",
+                             reason=inspected["status"])
         self._descriptor = LiveEndpointDescriptor(
             address=check_text(address, "address", maximum=256),
             name=self._name, instance_id=self._instance_id, host_pid=os.getpid(),
-            socket=self._capture_socket_fact(address))
+            endpoint_credential=credential.to_json() if credential is not None else None)
         return self._descriptor
 
     def consume_request(self, timeout_s: float) -> LiveRequest | None:
@@ -557,6 +522,8 @@ class CTwoLiveEndpoint:
             except queue.Empty:
                 return None
             with self._lock:
+                if time.monotonic() >= slot.deadline:
+                    slot.expired = True
                 if slot.expired or slot.reply is not None \
                         or self._pending.get(request.request_id) is not slot:
                     self._forget_slot(slot)
@@ -743,6 +710,7 @@ class CTwoLiveEndpoint:
         frame, refusal = self._authenticate_frame(request_json, LiveWireRequest)
         if refusal is not None or frame is None:
             return self._refusal_reply(refusal or "frame-invalid")
+        deadline = min(started + frame.timeout_ms / 1000.0, frame.deadline_monotonic)
         question_id = frame.payload.question_id
         digest = _request_digest(frame)
         with self._lock:
@@ -805,9 +773,9 @@ class CTwoLiveEndpoint:
                         return self._refusal_reply("inquiry-limit")
                     if len(self._requests) + len(self._pending) >= MAX_INQUIRIES_PER_RUN:
                         return self._refusal_reply("request-limit")
-                    if (time.monotonic() - started) * 1000.0 >= frame.timeout_ms:
+                    if time.monotonic() >= deadline:
                         return self._refusal_reply("request-window-expired")
-                    slot = _PendingRequest(question_id, digest)
+                    slot = _PendingRequest(question_id, digest, deadline)
                     try:
                         # The queue carries the plain request without the
                         # envelope beside its slot: the owner loop never holds
@@ -818,8 +786,7 @@ class CTwoLiveEndpoint:
                     except queue.Full:
                         return self._refusal_reply("queue-full")
                     self._pending[frame.request_id] = slot
-        if not slot.done.wait(timeout=max(0.0, started + frame.timeout_ms / 1000.0
-                                          - time.monotonic())):
+        if not slot.done.wait(timeout=max(0.0, deadline - time.monotonic())):
             with self._lock:
                 if slot.reply is None:
                     # The window passed without the owner's answer: the caller
@@ -966,27 +933,6 @@ class CTwoLiveEndpoint:
         self._entries = tuple(sorted(merged, key=lambda entry: entry.seq))
         return self._entries
 
-    def _capture_socket_fact(self, address: str) -> EndpointSocketFact | None:
-        """Capture this endpoint's own socket file identity, or nothing.
-
-        The path is derived from the address through the layout the accepted
-        F-C1 probe observed; when the derived path is absent or not a socket
-        file the endpoint records no identity and every later cleanup refuses
-        rather than touching a file it cannot name.
-        """
-        if os.name != "posix" or not address.startswith("ipc://"):
-            return None
-        server_id = address[len("ipc://"):]
-        path = Path(C_TWO_IPC_DIRECTORY) / f"{server_id}.sock"
-        try:
-            info = os.stat(path)
-        except OSError:
-            return None
-        if not stat.S_ISSOCK(info.st_mode):
-            return None
-        return EndpointSocketFact(address=address, path=str(path),
-                                  device=info.st_dev, inode=info.st_ino)
-
     def _refusal_reply(self, reason_code: str) -> str:
         return canonical_json(
             LiveReply(status="unavailable", reason_code=reason_code).to_payload())
@@ -1046,8 +992,8 @@ class CTwoLiveChannel:
     Each call opens one fresh C-Two connection to the endpoint's address — the
     measured production shape — with the display name only selecting the
     resource at that address. The whole connect and call runs under the
-    caller's transport window through :meth:`_call`'s bounded standard-library
-    mechanism, so a peer that never answers returns within the window instead
+    caller's transport window through C-Two's native deadlines, so a peer
+    that never answers returns within the window instead
     of hanging the holder. A dead, unreachable or stalling endpoint is always
     an unavailable fact; nothing here ever reports a process as stopped.
     Closing the channel is local: it changes no result ownership, stops
@@ -1055,7 +1001,7 @@ class CTwoLiveChannel:
     """
 
     def __init__(self, identity: RunIdentity, contract: type, *, name: str, address: str,
-                 instance_id: str, token: str):
+                 instance_id: str, token: str, state_dir: Path):
         if not isinstance(identity, RunIdentity):
             raise fail("identity must be a RunIdentity")
         if not isinstance(contract, type):
@@ -1063,6 +1009,7 @@ class CTwoLiveChannel:
         for operation in ("capabilities", "request", "observe"):
             if not callable(getattr(contract, operation, None)):
                 raise fail(f"the live contract must declare a {operation} operation")
+        self._state_dir = state_dir
         self._identity = identity
         self._contract = contract
         self._name = check_text(name, "name", maximum=128)
@@ -1070,7 +1017,6 @@ class CTwoLiveChannel:
         self._instance_id = _secret(instance_id, "instanceId")
         self._token = _secret(token, "token")
         self._closed_reason: str | None = None
-        self._call_permits = threading.BoundedSemaphore(MAX_INFLIGHT_LIVE_CALLS)
 
     @property
     def identity(self) -> RunIdentity:
@@ -1084,12 +1030,12 @@ class CTwoLiveChannel:
         frame = LiveWireQuery(instance_id=self._instance_id, token=self._token,
                               identity=self._identity)
         try:
-            raw = self._call("capabilities", canonical_json(frame.to_payload()),
+            raw = self._call("capabilities", frame,
                              DEFAULT_TRANSPORT_TIMEOUT_MS)
-        except _LiveCallExpired as expired:
+        except CallDeadlineExceeded:
             raise BoardError("LIVE_UNAVAILABLE",
                              "the live capabilities call did not finish within its transport window",
-                             reason=expired.reason_code) from None
+                             reason="transport-window-expired") from None
         except Exception as error:
             raise BoardError("LIVE_UNAVAILABLE",
                              "the live endpoint did not answer the capabilities call") from error
@@ -1102,6 +1048,11 @@ class CTwoLiveChannel:
     def request(self, request: LiveRequest, *, timeout_ms: int) -> LiveReply:
         """Deliver one live request within its transport window."""
         _timeout_ms(timeout_ms, "timeoutMs")
+        return self._request(request, timeout_ms=timeout_ms,
+                             deadline_monotonic=time.monotonic() + timeout_ms / 1000.0)
+
+    def _request(self, request: LiveRequest, *, timeout_ms: int, deadline_monotonic: float) -> LiveReply:
+        """Forward an authenticated Worker hop without renewing its original window."""
         if self._closed_reason is not None:
             return LiveReply(status="unavailable", reason_code="channel-closed")
         if request.identity != self._identity:
@@ -1109,11 +1060,12 @@ class CTwoLiveChannel:
         frame = LiveWireRequest(identity=request.identity, request_id=request.request_id,
                                 kind=request.kind, payload=request.payload,
                                 instance_id=self._instance_id, token=self._token,
-                                timeout_ms=timeout_ms)
+                                timeout_ms=timeout_ms,
+                                deadline_monotonic=deadline_monotonic)
         try:
-            raw = self._call("request", canonical_json(frame.to_payload()), timeout_ms)
-        except _LiveCallExpired as expired:
-            return LiveReply(status="unavailable", reason_code=expired.reason_code)
+            raw = self._call("request", frame, timeout_ms)
+        except CallDeadlineExceeded:
+            return LiveReply(status="unavailable", reason_code="transport-window-expired")
         except Exception:
             return LiveReply(status="unavailable", reason_code="transport-unreachable")
         try:
@@ -1131,9 +1083,9 @@ class CTwoLiveChannel:
         frame = LiveWireObserve(instance_id=self._instance_id, token=self._token,
                                 identity=self._identity, **arguments)
         try:
-            raw = self._call("observe", canonical_json(frame.to_payload()), timeout_ms)
-        except _LiveCallExpired as expired:
-            return LiveSnapshot(observed=False, reason=expired.reason_code)
+            raw = self._call("observe", frame, timeout_ms)
+        except CallDeadlineExceeded:
+            return LiveSnapshot(observed=False, reason="transport-window-expired")
         except Exception:
             return LiveSnapshot(observed=False, reason="transport-unreachable")
         try:
@@ -1147,57 +1099,26 @@ class CTwoLiveChannel:
         if self._closed_reason is None:
             self._closed_reason = reason
 
-    def _call(self, operation: str, text: str, timeout_ms: int) -> str:
-        """One whole connect and named call, bounded by the transport window.
+    def _call(self, operation: str, frame: InternalModel, timeout_ms: int) -> str:
+        """One native bounded connection and call under the same deadline.
 
-        C-Two 0.6.0's public client surface exposes no per-call timeout — the
-        probed ``connect`` and the call proxies take no timeout argument and
-        ``set_transport_policy`` only tunes chunking thresholds — so the bound
-        comes from the standard library instead of the SDK: the connection and
-        the named call run on one daemon worker, and the caller waits for that
-        worker only until the window's deadline. The boundary is explicit: an
-        attempt that outlives its window is an expired fact while its worker
-        keeps at most one of the channel's bounded call permits until the
-        transport itself unblocks, so repeated timeouts accumulate at most
-        ``MAX_INFLIGHT_LIVE_CALLS`` daemon threads, and neither ``close`` nor
-        process exit ever waits on a stuck peer.
+        Only C-Two owns transport waiting. The owner's business queue still
+        enforces this original same-machine cutoff, even when connection time
+        consumed most of the window. A zero budget reaches the SDK so its
+        pre-dispatch expiry keeps the same failure facts as any other deadline.
         """
-        deadline = time.monotonic() + timeout_ms / 1000.0
-
-        def remaining() -> float:
-            return max(0.0, deadline - time.monotonic())
-
-        if not self._call_permits.acquire(timeout=remaining()):
-            raise _LiveCallExpired("transport-busy")
-        done = threading.Event()
-        outcome: list[tuple[str, BaseException | None]] = []
-
-        def run() -> None:
-            try:
-                outcome.append((self._connect_and_call(operation, text), None))
-            except BaseException as error:  # handed to the caller through the box
-                outcome.append(("", error))
-            finally:
-                self._call_permits.release()
-                done.set()
-
-        threading.Thread(target=run, name="buddy-live-call", daemon=True).start()
-        if not done.wait(timeout=remaining()):
-            raise _LiveCallExpired("transport-window-expired")
-        value, error = outcome[0]
-        if error is not None:
-            raise error
-        return value
-
-    def _connect_and_call(self, operation: str, text: str) -> str:
-        """One fresh connection and one named call; the profile is applied first."""
-        rpc_config.configure_client()
-        with cc.connect(self._contract, name=self._name, address=self._address) as peer:
+        deadline = (frame.deadline_monotonic if isinstance(frame, LiveWireRequest)
+                    else time.monotonic() + timeout_ms / 1000.0)
+        text = canonical_json(frame.to_payload())
+        rpc_config.configure_client(self._state_dir)
+        with cc.connect(self._contract, name=self._name, address=self._address,
+                        timeout=max(0.0, deadline - time.monotonic())) as peer:
+            bounded = cc.with_call_options(peer, timeout=max(0.0, deadline - time.monotonic()))
             if operation == "capabilities":
-                return peer.capabilities(text)
+                return bounded.capabilities(text)
             if operation == "request":
-                return peer.request(text)
-            return peer.observe(text)
+                return bounded.request(text)
+            return bounded.observe(text)
 
 
 def _decode_reply(raw: Any, label: str) -> Any:
@@ -1207,8 +1128,8 @@ def _decode_reply(raw: Any, label: str) -> Any:
 
 
 __all__ = [
-    "C_TWO_IPC_DIRECTORY", "CTwoLiveChannel", "CTwoLiveEndpoint", "CleanupOutcome",
-    "ConfirmedProcessGone", "EndpointSocketFact", "LiveEndpointDescriptor", "LiveWireObserve",
-    "LiveWireQuery", "LiveWireRequest", "MAX_INFLIGHT_LIVE_CALLS", "MAX_PENDING_LIVE_REQUESTS",
-    "authenticate_live_frame", "decode_live_wire_frame", "cleanup_abandoned_socket", "random_person_name", "write_ready_material",
+    "CTwoLiveChannel", "CTwoLiveEndpoint", "CleanupOutcome",
+    "ConfirmedProcessGone", "LiveEndpointDescriptor", "LiveWireObserve",
+    "LiveWireQuery", "LiveWireRequest", "MAX_PENDING_LIVE_REQUESTS",
+    "authenticate_live_frame", "decode_live_wire_frame", "cleanup_owned_endpoint", "random_person_name", "write_ready_material",
 ]

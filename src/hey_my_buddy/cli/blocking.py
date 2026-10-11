@@ -26,12 +26,13 @@ deadline, never to this wait. Reaching the window returns an honest
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import shlex
 import threading
 import time
 from typing import Any, Callable
 
-from ..protocol.transport import ServiceError, call_service
+from ..protocol.transport import ServiceError, _call_service
 
 # The wait window may never exceed the existing 24 h CLI wait maximum.
 MAX_WAIT_SECONDS = 86400
@@ -189,7 +190,7 @@ def _envelope(
     }
 
 
-def _find_run(request_id: str, service: Callable[..., dict], state_dir) -> dict | None:
+def _find_run(request_id: str, service: Callable[..., dict], state_dir: Path) -> dict | None:
     offset = 0
     while True:
         page = service("list", {"limit": 100, "offset": offset}, state_dir)
@@ -338,7 +339,7 @@ def _host_boundary(
     waited_seconds: float,
     wait_seconds: int,
     service: Callable[..., dict],
-    state_dir,
+    state_dir: Path,
     reconnects: int,
 ) -> dict:
     """Return one governed Host decision boundary as a structured checkpoint.
@@ -466,7 +467,7 @@ def _wait_until_terminal(
     started: float,
     clock: Callable[[], float],
     service: Callable[..., dict],
-    state_dir,
+    state_dir: Path,
     stop: threading.Event | None,
 ) -> dict:
     """Follow one existing durable run with bounded event waits.
@@ -673,10 +674,10 @@ def _wait_until_terminal(
 
 def await_run(
     params: dict,
-    state_dir: str | None = None,
+    state_dir: Path,
     stop: threading.Event | None = None,
     clock: Callable[[], float] = time.monotonic,
-    service: Callable[..., dict] = call_service,
+    service: Callable[..., dict] = _call_service,
 ) -> dict:
     """Wait for an already existing durable run without starting or replaying anything.
 

@@ -51,6 +51,10 @@ class DshRoleCase(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="buddy-dsh-role-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        from hey_my_buddy.protocol.rpc_config import configure_client
+        import c_two as cc
+        configure_client(self.root / "state")
+        self.addCleanup(cc.shutdown)
         self.cwd = self.root / "checkout"
         self.cwd.mkdir(mode=0o700)
         self.log = self.root / "logs" / "fake-agent.log"
@@ -252,11 +256,13 @@ class WorkerRegisteredRunTests(DshRoleCase):
         channel = None
         while time_module.monotonic() < deadline:
             if holder:
-                _, channel = handle_live_binding(holder[0])
+                _, channel = handle_live_binding(holder[0], state_dir=Path(self.environment["BUDDY_STATE_DIR"]))
             if channel is not None:
                 break
             time_module.sleep(0.05)
         self.assertIsNotNone(channel, "the held controller endpoint never became ready")
+        self.assertEqual(channel._state_dir, (self.root / "state").resolve(),
+                         "the Host inquiry channel must use the fixture's private state root")
         live_request = LiveRequest(identity=request.identity, request_id="live-1", kind="inquiry",
                                    payload=InquiryPayload(question_id="inq-1",
                                                           question="bounded wiring question"))

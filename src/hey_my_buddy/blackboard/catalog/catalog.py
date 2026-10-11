@@ -547,7 +547,7 @@ def discovery_available() -> bool:
     return any(item.model_discovery and item.discovery_available()[0] for item in adapters().values())
 
 
-def discover(*, directory=None, database=None) -> dict:
+def discover(*, directory: Path, database=None) -> dict:
     override = _override()
     if override is not None:
         return override
@@ -562,10 +562,7 @@ def discover(*, directory=None, database=None) -> dict:
             environment = dict(os.environ)
             if selected_health and selected_health.get('account'):
                 from .accounts import execution_environment
-                state = directory or environment.get('BUDDY_STATE_DIR')
-                if not state and selected_health['account']['source'] == 'worker':
-                    raise BoardError('ACCOUNT_CAPABILITY_UNVERIFIED', 'Account model discovery requires the private state root')
-                environment = execution_environment(state, selected_health['account'], environment, purpose='catalog')
+                environment = execution_environment(directory, selected_health['account'], environment, purpose='catalog')
             with bound([selected_health], environment=environment) if selected_health else nullcontext():
                 usable, reason = instance.discovery_available()
                 if not usable:

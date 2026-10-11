@@ -25,18 +25,29 @@ class LivenessTests(BoardTestCase):
 
     def test_each_client_attach_uses_light_ping(self):
         board = self.board()
+        (board.directory / "ipc").mkdir(mode=0o700)
         operations = []
 
-        def request(endpoint, operation, params, resource="control"):
+        def request(endpoint, operation, params, resource="control", *, state_dir=None):
+            self.assert_rpc_state_dir(state_dir)
             operations.append(operation)
             return call_operation(board.service, operation, params)
 
         client = BoardClient(board.directory, autostart=False)
+        # Exercise the substitute's ownership boundary before it handles real
+        # client calls; accepting a missing or foreign root is never harmless.
+        with self.assertRaisesRegex(AssertionError, "explicit private state_dir"):
+            request({}, "ping", {})
+        with self.assertRaisesRegex(AssertionError, "current test"):
+            request({}, "ping", {}, state_dir=self.directory / "foreign-state")
         with patch("hey_my_buddy.protocol.transport._read_endpoint", return_value={"address": "private-fixture"}), \
                 patch("hey_my_buddy.protocol.transport._request", side_effect=request), \
                 patch.object(board.store, "integrity", wraps=board.store.integrity) as integrity:
             for _ in range(3):
-                client.call("worker_list")
+                try:
+                    client.call("worker_list")
+                except BoardError as error:
+                    self.fail(f"healthy fixture must reach light ping and worker_list: {error.code}: {error}")
         self.assertEqual(integrity.call_count, 0, "routine reads must never run database integrity checks")
         self.assertEqual(operations, ["ping", "worker_list"] * 3)
 

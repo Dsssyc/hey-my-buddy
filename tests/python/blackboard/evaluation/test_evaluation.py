@@ -1317,7 +1317,7 @@ class InstalledHarnessDiscoveryTests(BoardTestCase):
         if not catalog.discovery_available():
             self.skipTest("the discovery helper and Node.js are not available in this build")
         try:
-            payload = catalog.discover()
+            payload = catalog.discover(directory=self.directory)
         except BoardError as error:
             self.assertEqual(error.code, "CATALOG_UNAVAILABLE")
             self.skipTest(f"no installed harness catalog could be read: {error.message}")

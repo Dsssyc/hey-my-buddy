@@ -13,6 +13,7 @@ import json
 import os
 import stat
 import unittest
+from functools import partial
 from pathlib import Path
 from unittest import mock
 
@@ -223,13 +224,22 @@ class PrivateStateTestCase(BoardTestCase):
 
     def use_board_transport(self, board) -> None:
         """Substitute only the C-Two socket; the whole service path stays real."""
+        self.enterContext(mock.patch.object(cli, "_call_service", transport._call_service))
         endpoint = {"address": "ipc://in-process-test", "token": "test-token"}
+        def ensure_service(state_dir, resource="control"):
+            self.assert_rpc_state_dir(state_dir)
+            return endpoint
+
+        def request(_endpoint, operation, params, resource="control", *, state_dir):
+            self.assert_rpc_state_dir(state_dir)
+            return board.call(operation, params)
+
         self.enterContext(
-            mock.patch.object(transport, "ensure_service", lambda state_dir=None, resource="control": endpoint)
+            mock.patch.object(transport, "_ensure_service", ensure_service)
         )
         self.enterContext(
             mock.patch.object(
-                transport, "_request", lambda _endpoint, operation, params, resource="control": board.call(operation, params)
+                transport, "_request", request
             )
         )
 
@@ -255,19 +265,19 @@ class ModelProfilesCliTests(PrivateStateTestCase):
 class ControlFileTests(PrivateStateTestCase):
     def test_saved_control_is_private_and_generation_scoped(self):
         triple = {"hostId": "host-1", "ownerGeneration": 2, "controlToken": "token-2"}
-        path = cli._save_control("run-1", triple)
+        path = cli._save_control("run-1", triple, state_dir=self.directory)
         self.assertEqual(Path(path).name, "run-1.g2.json")
         self.assertEqual(stat.S_IMODE(Path(path).stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(Path(path).parent.stat().st_mode), 0o700)
         self.assertEqual(cli._read_control(path), triple)
         # A different generation never overwrites another generation's capability.
-        other = cli._save_control("run-1", {"hostId": "host-2", "ownerGeneration": 3, "controlToken": "token-3"})
+        other = cli._save_control("run-1", {"hostId": "host-2", "ownerGeneration": 3, "controlToken": "token-3"}, state_dir=self.directory)
         self.assertNotEqual(other, path)
         self.assertEqual(cli._read_control(path), triple)
 
     def test_read_control_refuses_loose_modes_links_and_unknown_fields(self):
         triple = {"hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"}
-        path = Path(cli._save_control("run-1", triple))
+        path = Path(cli._save_control("run-1", triple, state_dir=self.directory))
         path.chmod(0o644)
         with self.assertRaises(BoardError) as loose:
             cli._read_control(str(path))
@@ -291,8 +301,8 @@ class ControlFileTests(PrivateStateTestCase):
         self.assertEqual(missing.exception.code, "INVALID_ARGUMENT")
 
     def test_apply_control_injects_only_the_named_file_and_never_a_latest_generation(self):
-        first = cli._save_control("run-1", {"hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"})
-        second = cli._save_control("run-1", {"hostId": "host-2", "ownerGeneration": 2, "controlToken": "token-2"})
+        first = cli._save_control("run-1", {"hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"}, state_dir=self.directory)
+        second = cli._save_control("run-1", {"hostId": "host-2", "ownerGeneration": 2, "controlToken": "token-2"}, state_dir=self.directory)
 
         # Passing no controlFile injects nothing at all, even though files exist.
         self.assertEqual(cli._apply_control({"runId": "run-1"}, "decide"), {"runId": "run-1"})
@@ -312,7 +322,7 @@ class ControlFileTests(PrivateStateTestCase):
         )
 
     def test_agent_credential_cannot_use_a_host_control_file(self):
-        path = cli._save_control("run-1", {"hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"})
+        path = cli._save_control("run-1", {"hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"}, state_dir=self.directory)
         with mock.patch.dict(os.environ, {"BUDDY_AGENT_CREDENTIAL": "scoped-token"}):
             with self.assertRaises(BoardError) as refused:
                 cli._apply_control({"runId": "run-1", "controlFile": path}, "decide")
@@ -329,7 +339,7 @@ class ControlFileTests(PrivateStateTestCase):
             "runId": "run-1",
             "control": {"hostId": "host-1", "ownerGeneration": 1, "controlToken": "super-secret"},
         }
-        cli._scrub_and_save(result)
+        cli._scrub_and_save(result, state_dir=self.directory)
         encoded = json.dumps(result)
         self.assertNotIn("super-secret", encoded)
         self.assertNotIn("controlToken", encoded)
@@ -338,21 +348,21 @@ class ControlFileTests(PrivateStateTestCase):
         self.assertEqual(stat.S_IMODE(Path(path).stat().st_mode), 0o600)
 
         untouched = {"runId": "run-2", "status": "queued"}
-        cli._scrub_and_save(untouched)
+        cli._scrub_and_save(untouched, state_dir=self.directory)
         self.assertEqual(untouched, {"runId": "run-2", "status": "queued"})
 
     def test_submission_capability_is_private_and_stable_per_request(self):
-        token = cli._submission_token("req-1", {})
-        self.assertEqual(cli._submission_token("req-1", {}), token)
-        self.assertEqual(cli._submission_token("req-1", {"cwd": "/elsewhere"}), token)
-        self.assertNotEqual(cli._submission_token("req-2", {}), token)
+        token = cli._submission_token("req-1", {}, state_dir=self.directory)
+        self.assertEqual(cli._submission_token("req-1", {}, state_dir=self.directory), token)
+        self.assertEqual(cli._submission_token("req-1", {"cwd": "/elsewhere"}, state_dir=self.directory), token)
+        self.assertNotEqual(cli._submission_token("req-2", {}, state_dir=self.directory), token)
         files = list((self.directory / "submissions").glob("*.json"))
         self.assertEqual(len(files), 2)
         for path in files:
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE((self.directory / "submissions").stat().st_mode), 0o700)
         with self.assertRaises(BoardError) as missing:
-            cli._submission_token("", {})
+            cli._submission_token("", {}, state_dir=self.directory)
         self.assertEqual(missing.exception.code, "INVALID_ARGUMENT")
 
 
