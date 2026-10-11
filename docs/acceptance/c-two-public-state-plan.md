@@ -359,7 +359,7 @@ Worker开始时建短任务专用系统临时根并记录确切路径，TMPDIR/B
 
 ## T3 本轮范围内返修交付与受限验证（待 Host 复核）
 
-本轮绑定输入 `46ebbccaf4102d1bb5f859e65c1acf112bc73bc2`、窄 run `76cdc2b1-0eb0-4487-a6a0-481b45525f38`、attempt `ba89b98c-0e35-430f-ba40-5bdd60fb7fe5`。continuation 输入登记的历史为：原 3-C 已 accepted 且检出回收，实际 continue 被 CONFLICT 拒绝；用户批准同宏任务经路由的新窄微任务，没有取消原 run、改黑板数据或自建新 goal。路由 `dec-5767702b-7e42-4311-9814-6d9db80b44fb` 首次省略四字段，选择 ZCode/zai-api/GLM-5.3-Flash/max；实际 provider `rate_limited` HTTP429/code1310、not-retryable，两层停止确认、无 artifact。用户随后批准同 run 的完整配置恢复为 Codex/openai/gpt-6.1-sol/high，理由是该配置已完成同类工作；这些是输入提供的历史，本轮没有重试 ZCode、调用路由模型或自行分派任务，先前未实施代码不登记为已交付。
+本轮绑定输入 `46ebbccaf4102d1bb5f859e65c1acf112bc73bc2`、窄 run `76cdc2b1-0eb0-4487-a6a0-481b45525f38`、attempt `ba89b98c-0e35-430f-ba40-5bdd60fb7fe5`。continuation 输入登记的历史为：原 3-C 已 accepted 且检出回收，实际 continue 被 CONFLICT 拒绝；用户批准同宏任务经路由的新窄微任务，没有取消原 run、改黑板数据或自建新 goal。路由 `dec-5767702b-7e42-4311-9814-6d9db80b44fb` 首次省略四字段，选择 ZCode/zai-api/GLM-5.3-Flash/max；实际 provider `rate_limited` HTTP429/code1310、not-retryable，两层停止确认、无 artifact。按用户既有的不可重试限流恢复授权，在同 run 用完整配置继续为 Codex/openai/gpt-6.1-sol/high，理由是该配置已完成同类工作；这些是输入提供的历史，本轮没有重试 ZCode、调用路由模型或自行分派任务，先前未实施代码不登记为已交付。
 
 本轮唯一临时根由 mktemp 创建为 `/tmp/t3-6RShzm`（macOS 真实路径 `/private/tmp/t3-6RShzm`），完整保留供 Host 按此确切根验收后整体回收。HOME/USERPROFILE、TMPDIR/BUDDY_CHECKS_TMPDIR、state/runtime、uv 环境/cache/解释器安装目录、baseline/fixed/三个 mutant 副本、catalog、助手和原始日志都在该根。子进程清除继承 BUDDY_/ANTHROPIC_/C2_ 与 VIRTUAL_ENV/UV_PROJECT_ENVIRONMENT 后显式设置私有值；空私有 HOME、固定 support.FIXTURE_CATALOG、不可用 native CLI sentinel，无模型或账号发现、凭据内容读取、登录登出或用户配置修改。仅使用获准 delegate-materials，核对 provenance 中全部18份文件的 SHA-256/size，当前 uv.lock 与材料 byte 相等（`5ae675829eb4c9aca5e2c933b86799abd3ab9a979e80f8d00c074adf5e27cdf8`）；`uv venv --python /opt/homebrew/bin/python3.13 <TASK_ROOT>/env` 与 `uv pip install --no-index --find-links <AUTHORIZED_MATERIALS>/wheelhouse --require-hashes -r <AUTHORIZED_MATERIALS>/locked-dependencies.txt` 均退出0，未改锁或依赖。源码对照来自只读 git archive，复制前拒绝 symlink/hardlink，不复制用户链接数据。
 
@@ -420,3 +420,48 @@ live-offline 为 WireFrame/EndpointAdmission/EndpointObservation/EndpointLifecyc
 Worker没有删除任何文件目录；现有 TemporaryDirectory/BoardTestCase 的正常框架收尾照旧，未额外屏蔽收尾错误。原始root保留；未访问旧根外审计文件或其他会话材料，除明确允许的材料目录只读核对，没有根外写入、用户数据访问、日常服务/Worker操作或Too many open files。未使用stash、创建/切换/移动/删除refs或自行commit；工作区改动留黑板封存。七份代码/测试在fixed验证后byte/hash仍一致，本记录只追加，所有旧事实前缀保持原样。
 
 交付停在本轮授权复核边界：需要Host封存固定八路径diff后在允许真实IPC的私有环境补核受影响四文件（含失败目标与28个未运行ID）、独立点变异及精确根残留观察，再决定验收/回收；完整检查由Host合入后运行。范围内代码/测试缺陷回本窄run continue，微小措辞由Host修改登记。本轮不称整批已验收，不开始下一批。
+
+
+## T3 Host 独立复核、整合与本轮停止关口
+
+Host 独立封存输出 `88e74748074b66a01947113a9c975c8d2c5e216e`、artifact `b4c3042a-c333-45a1-b305-e2d3fe603581`，累积补丁 SHA-256 `11365b8c7b73f3b3a6e9d469331da95066be867d0e1f54f3e76723a9868316cc`；八路径均与固定授权相等，三份生产改动只有cleanup必填context及去回退、supervisor必填参数及去env分支、transport两行注释。rpc_config/Daemon.run根链接guard及chmod、两启动方CLI/Daemon、storage清点与roles/live唯一生产cleanup调用方byte均未变；transport新旧AST相等，行为未变。全部原历史记录前缀在Worker交付里保留，本次不合入整合分支、不改保护文档或后续列出的事项。
+
+实际静态审计在本基线识别六个缺省cleanup调用表达式，均位于test_c_two_live，包含不同subTest重复调用；全部迁移显式context。最终只有新contract拒绝测试刻意省略context以验证自然TypeError，不把这一次负向调用算遗漏。生产唯一调用方一直显式传context，仍如此。supervisor的参数来自argparse必填--state-dir，没有BUDDY_STATE_DIR状态fallback；其他选项保持，两个原启动方和进程清点已经靠该参数运行，本轮不动它们。
+
+Host 在最终固定源码上各自独立私有解释器、空HOME/私有state/runtime/TMP、清除继承运行身份，用已锁C-Two0.7.4运行四受影响整文件120项，加旧启动与清点选择5项，共125项全部退出0。没有完整检查、前端测试、付费模型或真实账户发现；服务/IPC行为只发生在自建私有目录与持有子进程。下列实际命令、父Popen wait/poll-reap、SDK shutdown及原始stderr在 `tmp/c073-host/third-review-host-focused.json` 和同名分文件JSON/log。所有本次观测held leaders均获得退出码、unconfirmedPids=[]，观测的SDK shutdown均completed=true；原受限probe的正常stop/子SDK/group旧回执仍unknown，不由新观察补造。
+
+| 选择 | 项数 | exit | wall秒 |
+| --- | ---: | ---: | ---: |
+| `buddy.harnesses.test_c_two_live` | 72 | 0 | 15.161 |
+| `protocol.test_state_boundaries` | 11 | 0 | 1.282 |
+| `protocol.test_rpc_config` | 23 | 0 | 8.061 |
+| `blackboard.service.test_daemon` | 14 | 0 | 5.016 |
+| `buddy.runtime.test_worker_runtime` | 4 | 0 | 18.473 |
+| `blackboard.tasks.test_storage.ProcessInventoryServiceTests` | 1 | 0 | 0.271 |
+
+Host 另从最终归档独立新建三个窄变异副本，四个目标分别正常源green0、mutant1，各恰好一项assertion failure、errors0；没有用导入、权限或外层timeout代替目标失败。context只恢复旧cleanup函数的可选值/ambient fallback，TypeError not raised；supervisor只恢复旧main的可选参数/envfallback，SystemExit not raised；根链接只删除linked(first)的两行分支，两个新真实Daemon/configure目标都命中诊断断言，linked/unsafe变成not-a-directory。后者仍被lstat目录类型检查拒绝、目标权限仍不变，不把它说成删除该分支后一定会chmod或启动。明确的根链接拒绝诊断是这两个新增目标守住的边界事实；原first-link guard留在生产。原/变异hash、精确AST范围、准确目标/命令/退出码为 `third-review-host-target-proofs.json`。
+
+| 变异 / 目标 | green exit / 秒 | red exit / 秒 |
+| --- | --- | --- |
+| `cleanup_owned_endpoint` / `buddy.harnesses.test_c_two_live.CleanupPrimitiveTests.test_missing_context_is_type_error_before_ambient_sdk_or_reap` | 0 / 0.216 | 1 / 0.226 |
+| `main` / `protocol.test_state_boundaries.StateBoundaryTests.test_supervisor_requires_argument_even_with_valid_environment_state` | 0 / 0.244 | 1 / 0.261 |
+| `_validate_path` / `protocol.test_rpc_config.ProfileTests.test_linked_state_root_is_refused_with_root_link_diagnostic_before_changes` | 0 / 0.259 | 1 / 0.262 |
+| `_validate_path` / `blackboard.service.test_daemon.DaemonCeilingTests.test_run_refuses_linked_state_root_before_chmod_or_service_start` | 0 / 0.362 | 1 / 0.344 |
+
+Host实际loader只collect，不执行全套：3,519→3,524个唯一ID、216模块，旧3,519集合全部相等、删除0、改名0、重复0、loaderErrors0。新增五项如下；原完整检查3,519/216/645.517秒保持原提交256023c5绑定，不作为这次源码的全检。新源码的完整检查按用户要求由Claude Code Host合入后跑。
+
+- `blackboard.service.test_daemon.DaemonCeilingTests.test_run_refuses_linked_state_root_before_chmod_or_service_start`
+- `buddy.harnesses.test_c_two_live.CleanupPrimitiveTests.test_missing_context_is_type_error_before_ambient_sdk_or_reap`
+- `protocol.test_rpc_config.ProfileTests.test_linked_state_root_is_refused_with_root_link_diagnostic_before_changes`
+- `protocol.test_state_boundaries.StateBoundaryTests.test_supervisor_requires_argument_even_with_valid_environment_state`
+- `protocol.test_state_boundaries.StateBoundaryTests.test_supervisor_uses_explicit_argument_as_the_only_state_root`
+
+固定产物只应用原八路径，代码/Worker记录提交 `7adc6327`，整合 `int-68583a0b-36c9-4147-a7f0-916ee8bcb316` verified且八文件完全匹配；Host独立focused/变异/编号通过后才acknowledge accepted，revision10。本次仅微任务内部签收，尚待Claude Code Host复验/合入；不开始后续批次、不推送、不安装升级日常运行时或重启服务。
+
+Root的唯一直接措辞修正：本轮开头“用户随后批准同run完整配置恢复”更正为“按用户既有的不可重试限流恢复授权”，授权时间来自本会话既有规则，本轮没有另一次逐次授权提问。四字段仍只在实际429/1310不可重试且停止确认后写入同run continue；旧ZCode、新Codex与路由dec-5767702b均保留。这是自己掌握事实的一句话表述校正，按用户相称性规则直接改并在本整合登记/ack note列明，不改变代码、测试或验证结论，不为此返修或重跑。
+
+清理边界：首次计划因签收后的revision变化被REVISION_CONFLICT拒绝；Root提前读取未生成计划文件得到FileNotFoundError，未发删除操作，这两个工具失败均保留。新计划 `cln-81572004-5e2b-41d2-a5ba-5681fec91c43` 创建成功；apply返回INTERNAL_ERROR“workspace.cleanup_apply failed inside the service”。Root立即停止后续服务写操作，不重启、不修补、不反复试。仅一次本run只读get确认cleanup.state=applied、result.removed=true，精确受管路径不存在；因此检出已经回收，原API失败不能改写成成功响应。完整服务结果与只读核对是 `third-review-tidy.cleanup-failure-readonly.result.json`、`third-review-cleanup-failure-summary.json` 和先前plan/apply原始文件。
+
+Worker精确根 `/tmp/t3-6RShzm`（真实路径 `/private/tmp/t3-6RShzm`）当前仍保留，未删除；独立只读观测processes/problems/notes均空、daemon/supervisor持锁均空，记录 `third-review-worker-residue.json`。这不补造旧probe回执。本轮发生服务回收API报错后，临时材料留给Host复核，未按通配符/日期/同名推断归属，未碰旧根外审计文件或其他会话数据。后续回收只可按这个已记录确切根，待Host安排；服务内部错误不纳入四项返修，不另开范围。
+
+本记录追加后仅跑仓库卫生测试，代码focused证据不因文字变化重跑；完成记录提交后按用户要求停下等验收。
