@@ -48,7 +48,7 @@ hey-my-buddy transports bounded JSON strings through C-Two 0.7.4's named Python 
 
 ## Data model
 
-One schema-versioned SQLite database (`board.sqlite3`, schema version 15) owns every authoritative fact in 49 tables plus the read-only `effective_preferences` view; Since 0.27.0 the source has changed five stored forms without an upgrade step: the `model_facts` table and two Router indexes on `events` are created at startup, the review event index and the `workflow_host_conclusions` constraint differ on an existing board, and Router settings are read only in their list form. The source therefore cannot yet upgrade a board written by 0.27.0; ADR-021 L18 writes the explicit upgrade to schema 16 that closes this.
+One schema-versioned SQLite database (`board.sqlite3`, schema version 16) owns every authoritative fact in 55 tables plus the read-only `effective_preferences` view; Startup accepts schema 16 only; a schema-15 board written by the upgrade base is converted by the explicit upgrade during an idle install, described in [operations](operations.md), and ends in the form of a new board.
 
 | Group | Tables |
 | --- | --- |
