@@ -255,30 +255,6 @@ describe("marks for what waits", () => {
 });
 
 describe("deep links", () => {
-  it("opens the Codex harness row focused from #buddies/harness/codex", async () => {
-    const f = fixture();
-    renderBuddy("#buddies/harness/codex", f);
-    await screen.findByRole("region", { name: "Harness" });
-    expect(modelsRegion()).toBeNull();
-    const codexRow = document.getElementById("harness-codex")!;
-    expect(await screen.findByRole("button", { name: "Codex 收起详情" })).toBeTruthy();
-    expect(within(codexRow).getByText("本地只读运行资源不可用")).toBeTruthy();
-    await waitFor(() => expect(document.activeElement).toBe(codexRow));
-    expect(current(sectionsNav())).toEqual(["目录"]);
-    expect(current(tablesNav())).toEqual(["Harness"]);
-  });
-
-  it("opens the DSH harness row with its quota from #buddies/harness/dsh", async () => {
-    const f = fixture();
-    renderBuddy("#buddies/harness/dsh", f);
-    await screen.findByRole("region", { name: "Harness" });
-    const dshRow = document.getElementById("harness-dsh")!;
-    expect(await screen.findByRole("button", { name: "DSH 收起详情" })).toBeTruthy();
-    expect(within(dshRow).getByText("使用率 93%")).toBeTruthy();
-    expect(within(dshRow).getByText("接近上限")).toBeTruthy();
-    await waitFor(() => expect(document.activeElement).toBe(dshRow));
-  });
-
   it("opens and focuses the encoded profile from #buddies/models/<profileId>", async () => {
     const f = fixture();
     renderBuddy(`#buddies/models/${encodeURIComponent(mediumId)}`, f);

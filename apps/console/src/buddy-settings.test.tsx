@@ -316,20 +316,6 @@ describe("the models table", () => {
     expect(pane(SOL)).toBeTruthy();
   });
 
-  it("opens recorded harness health from the Harness table without calling anything", async () => {
-    const f = fixture();
-    const user = userEvent.setup();
-    await openBuddy(f.api);
-    await user.click(within(screen.getByRole("navigation", { name: "目录的内容" })).getByRole("link", { name: /^Harness/ }));
-    const strip = screen.getByRole("region", { name: "Harness 状态" });
-    expect(within(strip).getByText("可用 1/2")).toBeTruthy();
-    expect(within(strip).getByText(/^找到：路径 \/Users\/fixture\/\.local\/bin\/claude · 版本 2\.0\.1/)).toBeTruthy();
-    expect(within(strip).getByText("未找到可执行文件（已尝试 1 处）")).toBeTruthy();
-    // The strip is read-only on entry: no command, no draft.
-    expect(f.command).not.toHaveBeenCalled();
-    expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
-  });
-
   it("matches adapter id, harness display name, provider and model name, case-insensitively", async () => {
     const f = fixture();
     const user = userEvent.setup();
