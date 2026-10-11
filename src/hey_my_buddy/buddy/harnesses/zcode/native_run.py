@@ -633,8 +633,9 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     other native failure, so the owned group is never left unwatched. The
     moment ``owned_popen`` succeeds this helper is the only holder: it records
     the handle on ``owned`` and, if anything fails before the connection
-    exists, it stops what it started itself and reports those stop facts —
-    no child is ever left alive by a lost handle.
+    exists, it stops what it started itself and reports those stop facts.
+    Failures inside ``owned_popen`` carry creation/cleanup evidence before
+    registration, including a suspended child whose stop remains unknown.
     """
     from ..discovery import native_environment, _probe
     root = ensure_private_dir(native_root)
@@ -672,30 +673,41 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     # timeout must not suppress the capability/catalog handshake below.
     version = version_output.decode(errors="replace").strip()[:80] if version_code is None else None
     fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    process = None
     try:
-        process = owned_popen([*command, "app-server", "--cwd", cwd], env=environment,
-                              cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=fd,
-                              start_new_session=True, close_fds=True)
-    except OSError:
-        raise NativeError("adapter-unavailable", "The selected ZCode executable could not start") from None
-    finally:
-        os.close(fd)
-    handle = ProcessHandle(process, own_group=True, log_paths={})
-    if owned is not None:
-        owned[:] = [handle]
-    try:
+        try:
+            try:
+                process = owned_popen([*command, "app-server", "--cwd", cwd], env=environment,
+                                      cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=fd,
+                                      start_new_session=True, close_fds=True)
+            except BaseException as error:
+                evidence = error.owned_popen_evidence
+                if owned is not None:
+                    owned[:] = [{"created": evidence.created, "shutdown": evidence.shutdown_confirmed,
+                                 "exit_code": evidence.exit_code}]
+                if isinstance(error, OSError):
+                    raise NativeError("adapter-unavailable", "The selected ZCode executable could not start") from None
+                raise
+            # Take the actual process/group handle before releasing the stderr
+            # descriptor: descriptor cleanup can fail after successful creation.
+            handle = ProcessHandle(process, own_group=True, log_paths={})
+            if owned is not None:
+                owned[:] = [handle]
+        finally:
+            os.close(fd)
         connection = NativeConnection(process, deadline, cancel, no_tools=no_tools)
     except BaseException:
-        # The connection setup failed after the child existed: this helper is
-        # still the only holder, so it stops the group itself and leaves the
-        # observed stop facts for the result before re-raising.
-        try:
-            shutdown, _signalled = halt_owned_group(process, handle, time.monotonic() + 5.0)
-            if owned is not None:
-                owned[:] = [{"created": True, "shutdown": shutdown,
-                             "exit_code": process.returncode}]
-        finally:
-            process.stdout.close()
+        # Every failure after creation, including fd close and connection setup,
+        # follows the same owned-group stop. A failed stop observation leaves the
+        # actual handle registered, never the initial no-child receipt.
+        if process is not None:
+            try:
+                shutdown, _signalled = halt_owned_group(process, handle, time.monotonic() + 5.0)
+                if owned is not None:
+                    owned[:] = [{"created": True, "shutdown": shutdown,
+                                 "exit_code": process.returncode}]
+            finally:
+                process.stdout.close()
         raise
     return _Spawn(process=process, handle=handle, connection=connection, access=access, version=version)
 
@@ -1580,7 +1592,9 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
     available-model snapshot and stops the owned process conservatively. The
     return value is the catalog receipt shape consumed by the current callers.
     """
-    owned: list = []
+    # Explicit initial creation fact, replaced by probe/spawn evidence or the
+    # actual handle. An empty registration list is never proof of no child.
+    owned: list = [{"created": False, "shutdown": True, "exit_code": None}]
     shutdown = True  # No native app-server has been created yet.
     try:
         deadline = execution_deadline(timeout_seconds)
@@ -1597,9 +1611,9 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
                                       deadline=deadline, cancel=cancel, stderr_path=stderr_path,
                                       no_tools=True, owned=owned)
         except Exception:
-            # The spawn helper registers every created child and records its
-            # actual stop if connection construction fails before returning.
-            shutdown = not owned or (isinstance(owned[0], dict) and owned[0]["shutdown"] is True)
+            # Creation-boundary receipts include failures before registration;
+            # a retained handle without a cleanup receipt remains unknown.
+            shutdown = isinstance(owned[0], dict) and owned[0]["shutdown"] is True
             raise
         shutdown = False
         try:
