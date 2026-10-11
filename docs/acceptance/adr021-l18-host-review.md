@@ -1,5 +1,7 @@
 # ADR-021 L18 整合 Host 复核
 
+本文记两轮复核，都在 2026-10-11：第一轮打回；返修之后的第二轮再次打回，记在文末。以下到“没有验证的”为止是第一轮。
+
 2026-10-11，Claude Code Host。候选是分支 `socu/adr021-l18` 的 `8d5a5888`，在核心 `df9318f3` 之上有 5 个提交；实现方 Host 的记录是候选分支上的 `docs/acceptance/adr021-l18.md`，执行计划是 [adr021-l18-upgrade.md](../design/adr021-l18-upgrade.md)。
 
 ## 结论
@@ -33,3 +35,34 @@
 ## 没有验证的
 
 Windows；真实账户与付费的模型回合；升级之后目录从 `unknown` 恢复为可信读取的过程（需要真实的账户读取）。日常看板副本上的读取是进程内的，没有经过 C-Two 与守护进程；经过它们的路径由空 HOME 的演练覆盖，但那个看板是空的。返修之后复验时重做合并、编号、完整检查、上述变异与两种演练。
+
+## 第二轮：返修之后的复验
+
+候选是 `socu/adr021-l18` 的 `8de5ee9f`，返修是 `8d5a5888..8de5ee9f` 这 11 个提交；与整合分支 `3f24993e` 临时合并为 `7a2e474a`，没有冲突。实现方 Host 的记录仍是候选分支上的 `docs/acceptance/adr021-l18.md`。
+
+### 结论
+
+再次打回，没有合入。第一轮的六条缺陷，以及之后补给实现方的两条（目录与健康读取按真实的停止证据了结账户操作；升级只拒绝进行中的账户操作，把 `uncertain` 的原样带过，服务启动时把上一个服务留下的进行中记录改为 `uncertain`），代码里都改了，完整检查通过，夹具与空 HOME 里的升级都通过。打回的原因是返修新写的停止证据有三处会给出与事实不符的结论，以及保值判断仍然没有被测试守住。日常看板副本上的演练这一轮还没有做，等用户为这一次授权。
+
+### 核对了什么
+
+- **差异。** 返修的产品代码全部读过：`blackboard/store/migrations.py`、`store.py`、`blackboard/catalog/catalog.py`、`blackboard/service/service.py`、`harness_health.py`、`buddy/harnesses/discovery.py`、`buddy/harnesses/zcode/native_run.py`、`buddy/roles/run_execution.py`、`install/upgrade.py`、`packaging/generate-upgrade-fixture.py`。
+- **测试编号。** 整合分支 3,548 → 合并之后 3,656，新增 131，消失 23，与实现方的累计清单逐项相同。
+- **完整检查。** 在合并之后的树上：3,656 项（跳过 1），222 个文件全部通过，12 分 18 秒。整合分支上当天的两处运行时修复也在这次检查里。
+- **夹具的来源。** 重新生成的夹具多了一条由基点自己的代码写出的 `uncertain` 账户操作；metadata 里 108 个基点源文件的摘要仍与 `e4fbc916` 的 Git 对象逐个相符。
+- **像用户那样升级。** 空 HOME：安装 0.27.0，启动它的服务，用候选的包覆盖安装。`upgraded: true`，schema 15 → 16，备份已校验，保留数据的指纹一致；升级之后服务与 8 个 Worker 正常，停止之后没有残留进程。这个演练的 PATH 上没有任何 harness。
+- **真实的 harness 命令。** 在候选的探测函数上直接跑本机的真实命令，只数结果，不看输出：Codex、Claude Code、ZCode、node 的 `--version` 各 15 次，Codex 与 Claude Code 的登录状态查询各 8 次，全部正常，与基点相同。所以下面的缺陷 1 今天不会在这台机器上发作。
+- **变异。** 75 个变异加 1 个对照：第一轮的 47 个重新对位（其中“升级不写账户状态键”改为反向的“升级又写了这个键”，被删除的“新表必须为空”去掉），加上针对返修的 28 个，覆盖三张表的重建、外键开关、空闲检查、启动时的收口、三处账户操作的了结、探测各层的停止证据、ZCode 的三处。72 个被测试抓到，没有超时；3 个存活，见缺陷 4。第一轮存活而这一轮被抓到的有 9 个。脚本与结果在整合工作树被忽略的 `tmp/l18-acceptance/`（`mutate_l18r.py`、`mut2-results.json`）。
+- **独立审查。** 差异里有七百多行落在进程行为上，按约定在验收开始时并行请了一次独立审查（codex / openai / gpt-6-astra / max，只读，约 12 分钟，输入约 346 万 token，其中 327 万命中缓存，输出 1.4 万），双方互不看对方的结论。它给出四条线索：第一条与 Host 已经复现的缺陷 1 相同；第二、第四条 Host 各自复现；第三条 Host 读代码确认，没有在 Windows 上运行。看板上的记录：微任务 `fc194f39-3eec-46e5-8540-0003acdd6d30`，结论为接受，无需整合，检出已回收。
+
+### 打回的缺陷
+
+1. **停止进程组只做一遍就下结论。** `discovery._terminate_group` 向进程组发一遍 SIGTERM 和 SIGKILL，随即用 `killpg(pid, 0)` 检查一次。两个后果。其一，刚被它自己杀掉的进程组会被报成没有停：命令 `/bin/sh -c 'sleep 0.2 >/dev/null 2>&1 & echo 1.2.3'`（主进程正常退出时留下一个不占用输出管道的子进程）经 `discovery._probe` 探测，候选 40 次里 40 次返回 `shutdown-unverified`，基点返回成功；单独量过，进程组在信号发出之后中位 0.7 毫秒消失，检查抢在了前面，而三次 `process.wait` 等的都是早已退出的主进程，并没有等待。其二，信号发出的那一刻刚被分叉出来的子进程会漏掉：让子进程忽略 SIGTERM 并在主进程退出时才分叉 `sleep`，30 次里有 15 次留下一个仍在运行的 `sleep`，再发一遍就能停住。应当在限定的时间内反复“发信号、再检查”，直到进程组不存在或时间用完。连带的两处：`_probe_dsh_version` 对同一个进程有两份停止证据，上面那条命令在候选上 20 次里 20 次返回 `shutdown-unverified`，而它自己的句柄随后每次都确认已停并删掉了私有目录，返回的是先得到、会误报的那一份；`_probe_posix` 的超时分支在排空管道之后不再更新先前的结论。后果：`--version` 或登录状态查询一旦带出一个短命的子进程，harness 会一直显示不健康，每次探测留下一条无法了结的 `uncertain` 账户操作；ZCode 的每次启动都先走这条探测，回合会以 `native-shutdown-failed` 失败。
+2. **Codex 的目录读取在没有启动任何原生进程时，仍然报告“未确认停止”。** 用私有的状态目录、PATH 上没有任何 harness 命令去调 `run_execution.discover_models`：Claude Code 与 ZCode 的失败带着“已确认停止”，Codex 的失败带着“未确认”，控制器的回复是 `processState.shutdownConfirmed: false`，于是目录读取会留下一条 `uncertain` 的账户操作。成因是 `codex/native_run.run_discovery` 里命令选择、版本探测与启动 app-server 这三步的失败都发生在它收集停止证据的那一段之前。角色层有同一类的两处（读代码）：`run_execution.discover_models` 的 `mkdtemp` 在 `try` 之外；`finally` 里的 `rmtree` 失败会用一个不带证据的新异常盖掉原来的结果。`docs/reference/operations.md` 新写的“任何子进程创建之前的失败都明确记录这一事实”因此与代码不符。日常看板上 36 条 Codex 的 `uncertain` 记录成因不明，服务耗尽文件描述符时的启动失败正属于这一类。
+3. **ZCode 把“没有登记”当成“没有进程”。** `zcode/native_run.run_discovery` 用 `owned` 列表为空推断已停。`_spawn_app_server` 在 `owned_popen` 返回之后才登记；Windows 上 `owned_popen` 在已经创建子进程、建立归属失败、清理又无法确认时，会抛出 `suspended child shutdown is unconfirmed after ownership failure`，这个异常不是 `OSError`，直接穿出，此时列表为空，对外发布的就是“已确认停止”。这违反“不知道不等于已停”。读代码确认，没有在 Windows 上运行；POSIX 上 `owned_popen` 只在没有子进程时才抛出，没有找到能触发的路径。
+4. **保值判断没有被测试守住。** 存活的变异有三个。删除重建表的指纹比较（`changed += [name for name in rebuilt …]`）之后没有测试失败：`test_upgrade_column_order` 与 `test_migrations` 里那两条用触发器制造改动的测试，在迁移 `DROP` 旧表之后的 `RENAME` 重新解析触发器时就以 `no such table` 失败，没有走到指纹比较，而断言只看失败的表名与回滚。从 `attempts` 的复制列清单里去掉 `token_usage_json` 之后也没有测试失败：指纹与复制用的是同一份清单，夹具里这一列全是空值；夹具的 `attempts` 里 `token_usage_json`、`error`、`cancel_requested_at`、`signal`、`worker_instance` 都没有值，`workflow_runs` 里 `title`、`current_routing_id` 没有值、`configuration_locked` 全是默认值，而当年追加的列正在其中，所以旧列序的测试也分辨不出这些列被丢掉或放错。现在的清单是对的：三张表的复制清单与冻结的定义、与新建看板的列逐个相同（32、31、10 列）。第三个是第一轮就存活、Host 当时漏报的：`catalog.py` 里待确认模型的读取在账户不一致时返回空，去掉这个判断没有测试失败；它要么有测试，要么是多余的重复检查，应当删除。
+5. **一处小的。** `zcode/native_run.py` 跨模块引用了 `discovery` 的私有函数 `_probe`；把它公开，或放到两边都该用的位置。
+
+### 没有验证的
+
+日常看板副本上的升级演练这一轮没有做；脚本已经改为按状态清点账户操作记录、并独立比对三张重建表的每一个值。Windows；真实账户与付费的模型回合。一个已知的边界：0.27.0 的服务不会在启动时收口，所以 0.27.0 的看板上若留有上一个服务实例遗留的进行中记录，升级会一直拒绝，用户没有办法了结；第一轮的副本里 48 条记录全是 `uncertain`，没有这种记录，这一轮演练时再数一次。返修之后复验时重做合并、编号、完整检查、上面的实验与变异，并做这一次的副本演练。
