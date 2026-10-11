@@ -55,6 +55,7 @@ class DiscoveryReceiptTests(unittest.TestCase):
                             "error": "Codex requires an existing ChatGPT account-plan login"},
                            exit_code=1)
         self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
         self.assertEqual(caught.exception.details.get("adapter"), "codex")
         self.assertEqual(caught.exception.message,
                          "Codex requires an existing ChatGPT account-plan login")
@@ -64,6 +65,38 @@ class DiscoveryReceiptTests(unittest.TestCase):
             self._discover({"status": "ok", "catalog": _catalog("codex", "confirmed")},
                            stopped=False)
         self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+
+    def test_a_failed_control_write_proves_no_controller_created(self):
+        with mock.patch.object(run_execution, "private_json", side_effect=OSError("fixture write failed")), \
+             mock.patch.object(run_execution, "launch_controller") as launch:
+            with self.assertRaises(OSError) as caught:
+                run_execution.discover_models("codex")
+        launch.assert_not_called()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_an_unknown_collection_failure_never_implies_stop(self):
+        handle = SimpleNamespace(wait=lambda timeout: 0)
+        with mock.patch.object(run_execution, "launch_controller", return_value=handle), \
+             mock.patch.object(run_execution, "collect_controller", side_effect=ValueError("fixture read failed")):
+            with self.assertRaises(ValueError) as caught:
+                run_execution.discover_models("codex")
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+
+    def test_an_unregistered_discovery_proves_no_controller_created(self):
+        with mock.patch("hey_my_buddy.buddy.harnesses.registry.run_seam", return_value=None):
+            with self.assertRaises(BoardError) as caught:
+                run_execution.discover_models("fixture")
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_environment_failure_proves_no_controller_created(self):
+        with mock.patch('hey_my_buddy.buddy.harnesses.runtime_selection.controller_environment',
+                        side_effect=ValueError('fixture environment failed')), \
+             mock.patch.object(run_execution, 'launch_controller') as launch:
+            with self.assertRaises(ValueError) as caught:
+                run_execution.discover_models('codex')
+        launch.assert_not_called()
+        self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), True)
 
 
 class CodexModelCheckProjectionTests(unittest.TestCase):

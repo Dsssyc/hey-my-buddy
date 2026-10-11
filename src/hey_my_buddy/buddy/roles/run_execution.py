@@ -704,18 +704,22 @@ def discover_models(name: str) -> dict:
 
     module = run_seam(name)
     if module is None or not callable(getattr(module, "run_discovery", None)):
-        raise BoardError("CATALOG_UNAVAILABLE", "The harness has no registered discovery operation", adapter=name)
+        error = BoardError("CATALOG_UNAVAILABLE", "The harness has no registered discovery operation", adapter=name)
+        error.discovery_shutdown_confirmed = True  # No controller was created.
+        raise error
     directory = Path(tempfile.mkdtemp(prefix="buddy-" + name + "-catalog-"))
-    stopped = False
+    stopped = True  # No controller exists during control-file preparation.
     try:
         control = directory / _CONTROL
         private_json(control, {"operation": "discover", "harness": name,
                                "privateRoot": str(directory), "nativeRoot": str(directory / "native"),
                                "cwd": str(directory), "timeoutSeconds": 25})
+        environment = controller_environment(directory)
+        stopped = False  # Ownership passes to the launch boundary.
         handle = launch_controller(
             prepare=lambda: (
                 [sys.executable, "-m", "hey_my_buddy.buddy.roles.run_controller", "--control", str(control)],
-                None, controller_environment(directory)),
+                None, environment),
             log_paths={"stdout": str(directory / "stdout"), "stderr": str(directory / "stderr")})
         if handle.wait(30) is None:
             handle.terminate(grace_seconds=8)
@@ -727,6 +731,9 @@ def discover_models(name: str) -> dict:
                 message = "Native model discovery did not settle successfully"
             raise BoardError("ADAPTER_UNAVAILABLE", message, adapter=name)
         return collection.payload["catalog"]
+    except Exception as error:
+        error.discovery_shutdown_confirmed = stopped
+        raise
     finally:
         if stopped:
             shutil.rmtree(directory)

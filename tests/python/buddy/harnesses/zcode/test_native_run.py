@@ -1374,3 +1374,147 @@ class ProducerContractTests(NativeRunCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DiscoveryStopTests(NativeRunCase):
+    """The existing private app-server fixture, with real stop collection."""
+    def discover(self):
+        os.environ['BUDDY_ZCODE_TEST_CASE'] = 'discovery'
+        return native_run.run_discovery(cwd=str(self.cwd), invocation_root=self.base / 'discover',
+                                       native_root=self.base / 'native-discover', timeout_seconds=3,
+                                       cancelled=lambda: False)
+
+    def broken_snapshot(self):
+        self.fake.write_text(self.fake.read_text().replace("'sessionId':f's-{session}','sessionKind'",
+                                                         "'wrongSessionId':f's-{session}','sessionKind'"))
+
+    def test_original_non_native_read_error_keeps_confirmed_stop(self):
+        self.broken_snapshot()
+        with self.assertRaises(KeyError) as caught:
+            self.discover()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+        self.assertEqual(caught.exception.args, ('sessionId',))
+
+    def test_native_read_error_keeps_confirmed_stop(self):
+        call = native_run.NativeConnection.call
+        def rejected(connection, method, params):
+            if method == 'session/create':
+                raise native_run.NativeError('invalid-protocol', 'fixture protocol failure')
+            return call(connection, method, params)
+        with mock.patch.object(native_run.NativeConnection, 'call', rejected):
+            with self.assertRaises(native_run.NativeError) as caught:
+                self.discover()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+        self.assertEqual(caught.exception.code, 'invalid-protocol')
+
+    def test_read_error_keeps_unconfirmed_stop(self):
+        self.broken_snapshot()
+        stop = native_run._stop_native
+        def unobserved(spawn, deadline):
+            stop(spawn, deadline)  # Actually reap the private fixture.
+            return False, True
+        with mock.patch.object(native_run, '_stop_native', side_effect=unobserved):
+            with self.assertRaises(KeyError) as caught:
+                self.discover()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+
+    def test_abnormal_exit_keeps_actual_confirmed_stop(self):
+        self.fake.write_text(self.fake.read_text().replace(
+            "send({'id':call['id'],'result':result})",
+            "send({'id':call['id'],'result':result})\n    if method == 'session/close': sys.exit(7)"))
+        with self.assertRaises(native_run.NativeError) as caught:
+            self.discover()
+        self.assertEqual(caught.exception.code, 'native-shutdown-failed')
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_successful_read_with_unconfirmed_stop_is_refused(self):
+        stop = native_run._stop_native
+        def unobserved(spawn, deadline):
+            stop(spawn, deadline)
+            return False, True
+        with mock.patch.object(native_run, '_stop_native', side_effect=unobserved):
+            with self.assertRaises(native_run.NativeError) as caught:
+                self.discover()
+        self.assertEqual(caught.exception.code, 'native-shutdown-failed')
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+
+    def test_preparation_failure_proves_no_child_created(self):
+        with mock.patch.object(native_run, 'private_json', side_effect=OSError('fixture write refused')), \
+             mock.patch.object(native_run, '_spawn_app_server') as spawn:
+            with self.assertRaises(OSError) as caught:
+                self.discover()
+        spawn.assert_not_called()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_spawn_rejection_proves_no_child_created(self):
+        with mock.patch.object(native_run, 'owned_popen', side_effect=OSError('fixture spawn refused')):
+            with self.assertRaises(native_run.NativeError) as caught:
+                self.discover()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_connection_construction_failure_keeps_actual_stop(self):
+        with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')):
+            with self.assertRaises(ValueError) as caught:
+                self.discover()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_connection_construction_failure_keeps_unconfirmed_stop(self):
+        halt = native_run.halt_owned_group
+        def unobserved(process, handle, deadline):
+            halt(process, handle, deadline)
+            return False, True
+        with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')), \
+             mock.patch.object(native_run, 'halt_owned_group', side_effect=unobserved):
+            with self.assertRaises(ValueError) as caught:
+                self.discover()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+
+    def test_actual_failed_discovery_crosses_controller_and_role(self):
+        from hey_my_buddy.buddy.roles import run_execution
+        self.broken_snapshot()
+        os.environ['BUDDY_ZCODE_TEST_CASE'] = 'discovery'
+        with self.assertRaises(BoardError) as caught:
+            run_execution.discover_models('zcode')
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+        self.assertEqual(caught.exception.code, 'ADAPTER_UNAVAILABLE')
+
+    def test_unknown_stop_failure_never_uses_pre_spawn_evidence(self):
+        stop = native_run._stop_native
+        def stopped_without_receipt(spawn, deadline):
+            stop(spawn, deadline)
+            raise ValueError('fixture stop observation failed')
+        with mock.patch.object(native_run, '_stop_native', side_effect=stopped_without_receipt):
+            with self.assertRaises(ValueError) as caught:
+                self.discover()
+        self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)
+
+    def test_unknown_connection_stop_keeps_owned_child_uncertain(self):
+        halt = native_run.halt_owned_group
+        def stopped_without_receipt(process, handle, deadline):
+            halt(process, handle, deadline)
+            raise ValueError('fixture stop observation failed')
+        with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')), \
+             mock.patch.object(native_run, 'halt_owned_group', side_effect=stopped_without_receipt):
+            with self.assertRaises(ValueError) as caught:
+                self.discover()
+        self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)
+
+    def test_version_probe_unconfirmed_stop_is_not_never_created(self):
+        with mock.patch('hey_my_buddy.buddy.harnesses.discovery._probe', return_value=('shutdown-unverified', b'')), \
+             mock.patch.object(native_run, 'owned_popen', wraps=native_run.owned_popen) as spawn:
+            with self.assertRaises(native_run.NativeError) as caught:
+                self.discover()
+        spawn.assert_not_called()
+        self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)
+
+    def test_version_probe_exception_keeps_actual_stop(self):
+        for stopped in (True, False):
+            with self.subTest(stopped=stopped):
+                error = ValueError('fixture version probe failed')
+                error.discovery_shutdown_confirmed = stopped
+                with mock.patch('hey_my_buddy.buddy.harnesses.discovery._probe', side_effect=error), \
+                     mock.patch.object(native_run, 'owned_popen') as spawn:
+                    with self.assertRaises(ValueError) as caught:
+                        self.discover()
+                spawn.assert_not_called()
+                self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), stopped)

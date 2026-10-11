@@ -319,7 +319,13 @@ def _terminate_group(process: subprocess.Popen) -> bool:
             pass
     try:
         process.wait(timeout=0.5)
-        return True
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        return False
     except subprocess.TimeoutExpired:
         return False
 
@@ -372,7 +378,21 @@ def _probe_posix(process: subprocess.Popen, stop_at: float, deadline: float | No
             process.wait(timeout=max(0.01, stop_at - time.monotonic()))
         except subprocess.TimeoutExpired:
             return ("timeout" if _terminate_group(process) else "shutdown-unverified"), b""
+        if not _terminate_group(process):
+            return "shutdown-unverified", b""
         return ("probe-failed" if process.returncode else None), b"".join(chunks)
+    except Exception as error:
+        contained = _terminate_group(process)
+        drain_until = time.monotonic() + 0.5
+        while not eof and time.monotonic() < drain_until:
+            try:
+                if not selector.select(max(0, drain_until - time.monotonic())):
+                    break
+                eof = not os.read(process.stdout.fileno(), 4096)
+            except OSError:
+                break
+        error.discovery_shutdown_confirmed = contained and eof
+        raise
     finally:
         selector.close()
         process.stdout.close()
@@ -428,14 +448,15 @@ def _probe_windows(process: subprocess.Popen, stop_at: float) -> tuple[str | Non
         ("probe-failed" if process.returncode else None), b"".join(chunks))
 
 
-def _probe(command: list[str], environment: dict, *, deadline: float | None = None) -> tuple[str | None, bytes]:
+def _probe(command: list[str], environment: dict, *, deadline: float | None = None,
+           cwd: str | None = None) -> tuple[str | None, bytes]:
     """Run one noninteractive probe with bounded time, output and child lifetime."""
     start = time.monotonic()
     if deadline is not None and start >= deadline:
         return "scan-timeout", b""
     try:
         process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT, env=environment,
+                                   stderr=subprocess.STDOUT, env=environment, cwd=cwd,
                                    start_new_session=os.name != "nt",
                                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
     except (OSError, ValueError):
@@ -460,6 +481,7 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -
     process = handle = None
     stopped = True  # No child exists until launch returns or transfers ownership.
     code, output = "launch-failed", b""
+    failure = None
     try:
         try:
             process, handle = launch([*command, "--version"], private_root=root,
@@ -473,6 +495,9 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -
             stop_at = min(start + _TIMEOUT, deadline)
             code, output = (_probe_windows(process, stop_at) if os.name == "nt" else
                             _probe_posix(process, stop_at, deadline))
+    except Exception as error:
+        failure = error
+        raise
     finally:
         if handle is not None:
             stopped = handle.shutdown_confirmed(settle_seconds=0.2)
@@ -482,6 +507,8 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -
             for stream in (process.stdin, process.stdout, process.stderr):
                 if stream is not None:
                     stream.close()
+        if failure is not None:
+            failure.discovery_shutdown_confirmed = stopped
         if stopped:
             shutil.rmtree(root)
         else:
@@ -512,29 +539,44 @@ def _script_uses_node(path: Path) -> bool:
 
 
 def _node_for(path: Path, environment: dict, deadline: float) -> tuple[str | None, str | None]:
-    # Use the launcher directory before resolving npm's symlink into node_modules.
-    adjacent = _variants(path.parent, "node")
-    seen = set()
-    failures = []
-    for option in adjacent:
-        if str(option) in seen or file_fingerprint(option) is None:
-            continue
-        seen.add(str(option))
-        command = _launch_command(option, environment)
-        if command is None:
-            failures.append("interpreter-missing")
-            continue
-        code, output = _probe([*command, "--version"],
-                              native_environment(environment, command=command), deadline=deadline)
-        if code is None:
-            match = _VERSION.search(output.decode("utf-8", "replace")[:256])
-            return str(option), match.group(0) if match else "unknown"
-        failures.append(code)
-    found = _discover("node", environment=environment, deadline=deadline)
-    if found["available"]:
-        return found["executable"], found["version"]
-    missing = "node-missing" if found["status"] == "missing" else found["reasonCode"]
-    return None, failures[0] if failures else missing or "node-missing"
+    shutdown = True  # No child has been created in this scan stage.
+    try:
+        # Use the launcher directory before resolving npm's symlink into node_modules.
+        adjacent = _variants(path.parent, "node")
+        seen = set()
+        failures = []
+        for option in adjacent:
+            if str(option) in seen or file_fingerprint(option) is None:
+                continue
+            seen.add(str(option))
+            command = _launch_command(option, environment)
+            if command is None:
+                failures.append("interpreter-missing")
+                continue
+            child_env = native_environment(environment, command=command)
+            shutdown = False
+            code, output = _probe([*command, "--version"], child_env, deadline=deadline)
+            shutdown = code != "shutdown-unverified"
+            if not shutdown:
+                return None, code
+            if code is None:
+                match = _VERSION.search(output.decode("utf-8", "replace")[:256])
+                return str(option), match.group(0) if match else "unknown"
+            failures.append(code)
+        shutdown = False
+        found = _discover("node", environment=environment, deadline=deadline)
+        shutdown = found["reasonCode"] != "shutdown-unverified"
+        if found["available"]:
+            return found["executable"], found["version"]
+        if not shutdown:
+            return None, found["reasonCode"]
+        missing = "node-missing" if found["status"] == "missing" else found["reasonCode"]
+        return None, failures[0] if failures else missing or "node-missing"
+    except Exception as error:
+        if hasattr(error, "discovery_shutdown_confirmed"):
+            shutdown = error.discovery_shutdown_confirmed
+        error.discovery_shutdown_confirmed = shutdown
+        raise
 
 
 def _launch_command(path: Path, environment: dict) -> list[str] | None:
@@ -555,67 +597,88 @@ def _launch_command(path: Path, environment: dict) -> list[str] | None:
 
 
 def _candidate_handshake(adapter: str, candidate: dict, environment: dict, deadline: float) -> dict:
-    path = Path(candidate["path"])
-    result = {"path": str(path), "source": candidate["source"], "fingerprint": candidate["fingerprint"],
-              "status": "unhealthy", "reasonCode": None, "version": None, "command": []}
-    if not candidate["exists"]:
-        result["status"] = "missing"
-        result["reasonCode"] = "not-found"
-        return result
-    if adapter != "node" and _script_uses_node(path):
-        node, problem = _node_for(path, environment, deadline)
-        if node is None:
-            result["reasonCode"] = problem
+    shutdown = True  # No child has been created in this scan stage.
+    try:
+        path = Path(candidate["path"])
+        result = {"path": str(path), "source": candidate["source"], "fingerprint": candidate["fingerprint"],
+                  "status": "unhealthy", "reasonCode": None, "version": None, "command": []}
+        if not candidate["exists"]:
+            result["status"] = "missing"
+            result["reasonCode"] = "not-found"
             return result
-        command = [node, str(path)]
-    else:
-        command = _launch_command(path, environment)
-        if command is None:
-            result["reasonCode"] = "interpreter-missing"
-            return result
-    child_env = native_environment(environment, command=command, adapter=adapter)
-    code, output = (_probe_dsh_version(command, child_env, deadline) if adapter == "dsh" else
-                    _probe([*command, "--version"], child_env, deadline=deadline))
-    if code is not None:
-        result["reasonCode"] = code
-        return result
-    match = _VERSION.search(output.decode("utf-8", "replace")[:256])
-    result["version"] = match.group(0) if match else "unknown"
-    if adapter == "codex":
-        code, output = _probe([*command, "login", "status"], child_env, deadline=deadline)
-        status = output.decode("utf-8", "replace").lower()
-        if "not logged in" in status or "logged out" in status:
-            result.update(status="login-required", reasonCode="login-required")
-            return result
+        if adapter != "node" and _script_uses_node(path):
+            shutdown = False
+            node, problem = _node_for(path, environment, deadline)
+            shutdown = problem != "shutdown-unverified"
+            if node is None:
+                result["reasonCode"] = problem
+                return result
+            command = [node, str(path)]
+        else:
+            command = _launch_command(path, environment)
+            if command is None:
+                result["reasonCode"] = "interpreter-missing"
+                return result
+        child_env = native_environment(environment, command=command, adapter=adapter)
+        shutdown = False
+        code, output = (_probe_dsh_version(command, child_env, deadline) if adapter == "dsh" else
+                        _probe([*command, "--version"], child_env, deadline=deadline))
+        shutdown = code != "shutdown-unverified"
         if code is not None:
             result["reasonCode"] = code
             return result
-        if "logged in" not in status:
-            result["reasonCode"] = "auth-unverified"
-            return result
-    elif adapter == "claude":
-        code, output = _probe([*command, "auth", "status", "--json"], child_env, deadline=deadline)
-        try:
-            account = json.loads(output)
-        except (ValueError, UnicodeError):
-            result["reasonCode"] = code or "auth-unverified"
-            return result
-        if not isinstance(account, dict) or account.get("loggedIn") is not True:
-            result.update(status="login-required", reasonCode="login-required")
-            return result
-        if code is not None:
-            result["reasonCode"] = code
-            return result
-        if account.get("apiProvider") not in ("anthropic", "firstParty"):
-            result["reasonCode"] = "auth-unverified"
-            return result
-        from ...protocol.billing import claude_status
-        from datetime import datetime, timezone
-        observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        result["billingByProvider"] = {"anthropic": claude_status(account, observed_at)}
-    result.update(status="ready", command=command,
-                  reasonCode="version-unknown" if match is None else None)
-    return result
+        match = _VERSION.search(output.decode("utf-8", "replace")[:256])
+        result["version"] = match.group(0) if match else "unknown"
+        if adapter == "codex":
+            shutdown = False
+            code, output = _probe([*command, "login", "status"], child_env, deadline=deadline)
+            shutdown = code != "shutdown-unverified"
+            if not shutdown:
+                result["reasonCode"] = code
+                return result
+            status = output.decode("utf-8", "replace").lower()
+            if "not logged in" in status or "logged out" in status:
+                result.update(status="login-required", reasonCode="login-required")
+                return result
+            if code is not None:
+                result["reasonCode"] = code
+                return result
+            if "logged in" not in status:
+                result["reasonCode"] = "auth-unverified"
+                return result
+        elif adapter == "claude":
+            shutdown = False
+            code, output = _probe([*command, "auth", "status", "--json"], child_env, deadline=deadline)
+            shutdown = code != "shutdown-unverified"
+            if not shutdown:
+                result["reasonCode"] = code
+                return result
+            try:
+                account = json.loads(output)
+            except (ValueError, UnicodeError):
+                result["reasonCode"] = code or "auth-unverified"
+                return result
+            if not isinstance(account, dict) or account.get("loggedIn") is not True:
+                result.update(status="login-required", reasonCode="login-required")
+                return result
+            if code is not None:
+                result["reasonCode"] = code
+                return result
+            if account.get("apiProvider") not in ("anthropic", "firstParty"):
+                result["reasonCode"] = "auth-unverified"
+                return result
+            from ...protocol.billing import claude_status
+            from datetime import datetime, timezone
+            observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            result["billingByProvider"] = {"anthropic": claude_status(account, observed_at)}
+        result.update(status="ready", command=command,
+                      reasonCode="version-unknown" if match is None else None)
+        return result
+    except Exception as error:
+        if hasattr(error, "discovery_shutdown_confirmed"):
+            shutdown = error.discovery_shutdown_confirmed
+        error.discovery_shutdown_confirmed = shutdown
+        raise
 
 
 _REMEDIES = {
@@ -643,53 +706,62 @@ def discover(adapter: str, *, manual_path: str | None = None, environment: dict 
 
 def _discover(adapter: str, *, manual_path: str | None = None,
               environment: dict | None = None, deadline: float) -> dict:
-    snapshot = candidate_snapshot(adapter, manual_path=manual_path, environment=environment)
-    environment = os.environ if environment is None else environment
-    candidates = sorted((item for item in snapshot["candidates"] if item["exists"]),
-                        key=lambda item: _priority(item["source"]))
-    attempts = []
-    ready_tier = None
-    incomplete = False
-    incomplete_reason = None
-    for item in candidates:
-        tier = _priority(item["source"])
-        if ready_tier is not None and tier > ready_tier:
-            break
-        if time.monotonic() >= deadline:
-            incomplete = True
-            incomplete_reason = "scan-timeout"
-            break
-        attempt = _candidate_handshake(adapter, item, environment, deadline)
-        attempts.append(attempt)
-        if attempt["status"] == "ready":
-            ready_tier = tier
-        if attempt["reasonCode"] in ("scan-timeout", "shutdown-unverified"):
-            incomplete = True
-            incomplete_reason = attempt["reasonCode"]
-            break
-    ready = [item for item in attempts if item["status"] == "ready"]
-    selected = min(ready, key=lambda item: (_priority(item["source"]),
-                                            tuple(-part for part in _version_key(item["version"])))) if ready else None
-    if incomplete:
-        selected = None
-        status, reason = "unhealthy", incomplete_reason
-    elif selected is None:
-        failure = next((item for item in attempts if item["status"] == "login-required"), None)
-        failure = failure or (attempts[0] if attempts else None)
-        status = failure["status"] if failure else "missing"
-        reason = failure["reasonCode"] if failure else "not-found"
-    else:
-        status, reason = "ready", selected["reasonCode"]
-    diagnostics = [{"path": item["path"], "source": item["source"], "status": item["status"],
-                    "reasonCode": item["reasonCode"]} for item in attempts[:_MAX_DIAGNOSTICS]]
-    if not attempts:
-        diagnostics = [{"path": item["path"], "source": item["source"], "status": "missing",
-                        "reasonCode": "not-found"} for item in snapshot["candidates"][:_MAX_DIAGNOSTICS]]
-    return {"adapter": adapter, "status": status, "available": selected is not None,
-            "command": selected["command"] if selected else [],
-            "executable": selected["path"] if selected else None,
-            "version": selected["version"] if selected else None,
-            "source": selected["source"] if selected else None,
-            "fingerprint": selected["fingerprint"] if selected else None,
-            "scanFingerprint": _scan_hash(snapshot), "candidates": diagnostics,
-            "reasonCode": reason, "remedy": _REMEDIES.get(reason) if reason else None}
+    shutdown = True  # No child has been created in this scan stage.
+    try:
+        snapshot = candidate_snapshot(adapter, manual_path=manual_path, environment=environment)
+        environment = os.environ if environment is None else environment
+        candidates = sorted((item for item in snapshot["candidates"] if item["exists"]),
+                            key=lambda item: _priority(item["source"]))
+        attempts = []
+        ready_tier = None
+        incomplete = False
+        incomplete_reason = None
+        for item in candidates:
+            tier = _priority(item["source"])
+            if ready_tier is not None and tier > ready_tier:
+                break
+            if time.monotonic() >= deadline:
+                incomplete = True
+                incomplete_reason = "scan-timeout"
+                break
+            shutdown = False
+            attempt = _candidate_handshake(adapter, item, environment, deadline)
+            shutdown = attempt["reasonCode"] != "shutdown-unverified"
+            attempts.append(attempt)
+            if attempt["status"] == "ready":
+                ready_tier = tier
+            if attempt["reasonCode"] in ("scan-timeout", "shutdown-unverified"):
+                incomplete = True
+                incomplete_reason = attempt["reasonCode"]
+                break
+        ready = [item for item in attempts if item["status"] == "ready"]
+        selected = min(ready, key=lambda item: (_priority(item["source"]),
+                                                tuple(-part for part in _version_key(item["version"])))) if ready else None
+        if incomplete:
+            selected = None
+            status, reason = "unhealthy", incomplete_reason
+        elif selected is None:
+            failure = next((item for item in attempts if item["status"] == "login-required"), None)
+            failure = failure or (attempts[0] if attempts else None)
+            status = failure["status"] if failure else "missing"
+            reason = failure["reasonCode"] if failure else "not-found"
+        else:
+            status, reason = "ready", selected["reasonCode"]
+        diagnostics = [{"path": item["path"], "source": item["source"], "status": item["status"],
+                        "reasonCode": item["reasonCode"]} for item in attempts[:_MAX_DIAGNOSTICS]]
+        if not attempts:
+            diagnostics = [{"path": item["path"], "source": item["source"], "status": "missing",
+                            "reasonCode": "not-found"} for item in snapshot["candidates"][:_MAX_DIAGNOSTICS]]
+        return {"adapter": adapter, "status": status, "available": selected is not None,
+                "command": selected["command"] if selected else [],
+                "executable": selected["path"] if selected else None,
+                "version": selected["version"] if selected else None,
+                "source": selected["source"] if selected else None,
+                "fingerprint": selected["fingerprint"] if selected else None,
+                "scanFingerprint": _scan_hash(snapshot), "candidates": diagnostics,
+                "reasonCode": reason, "remedy": _REMEDIES.get(reason) if reason else None}
+    except Exception as error:
+        if hasattr(error, "discovery_shutdown_confirmed"):
+            shutdown = error.discovery_shutdown_confirmed
+        error.discovery_shutdown_confirmed = shutdown
+        raise

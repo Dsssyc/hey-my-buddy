@@ -512,9 +512,16 @@ def discover(*, directory: Path, database=None) -> dict:
                     continue
                 from .accounts import native_operation
                 with native_operation(database, selected_health['account'], 'catalog') if database and selected_health and selected_health.get('account') else nullcontext() as stop:
-                    payload = canonical_payload(instance.discover_models())
-                    if stop is not None:
-                        stop['shutdownConfirmed'] = True
+                    try:
+                        payload = instance.discover_models()
+                    except Exception as error:
+                        if stop is not None:
+                            stop['shutdownConfirmed'] = getattr(error, 'discovery_shutdown_confirmed', False) is True
+                        raise
+                    else:
+                        if stop is not None:
+                            stop['shutdownConfirmed'] = True
+            payload = canonical_payload(payload)
             if any(entry["adapter"] != name for entry in payload["providers"]):
                 raise BoardError("CATALOG_INVALID", "A harness advertised another adapter identity")
         except BoardError as error:
