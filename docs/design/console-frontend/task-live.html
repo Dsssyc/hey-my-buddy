@@ -6,9 +6,14 @@
 <symbol id="ok" viewBox="0 0 12 12"><path d="M2 6.4 4.8 9 10 3.2" fill="none" stroke="var(--past)" stroke-width="1.8"/></symbol>
 <symbol id="bad" viewBox="0 0 12 12"><path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" fill="none" stroke="var(--fail)" stroke-width="1.8"/></symbol>
 <symbol id="wait" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="none" stroke="var(--ink3)" stroke-width="1.5"/></symbol>
+<symbol id="i-read" viewBox="0 0 12 12"><path d="M3 1.5h4L9.5 4v6.5H3zM7 1.5V4h2.5" fill="none" stroke="currentColor" stroke-width="1.2"/></symbol>
+<symbol id="i-find" viewBox="0 0 12 12"><circle cx="5.2" cy="5.2" r="3.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M7.6 7.6 10.6 10.6" stroke="currentColor" stroke-width="1.2"/></symbol>
+<symbol id="i-edit" viewBox="0 0 12 12"><path d="M2 10l.5-2.4L8.3 1.8l1.9 1.9L4.4 9.5z" fill="none" stroke="currentColor" stroke-width="1.2"/></symbol>
+<symbol id="i-run" viewBox="0 0 12 12"><path d="M2 3l3 3-3 3M6.5 9.5H10" fill="none" stroke="currentColor" stroke-width="1.3"/></symbol>
+<symbol id="i-think" viewBox="0 0 12 12"><circle cx="2.6" cy="6" r="1" fill="currentColor"/><circle cx="6" cy="6" r="1" fill="currentColor"/><circle cx="9.4" cy="6" r="1" fill="currentColor"/></symbol>
 </defs></svg>
 <div class="bar"><div class="brand"><svg width="22" height="22" viewBox="3 3 58 58"><polygon fill="#7CC79F" points="12,13 22,13 22,61 12,54"/><polygon fill="#7CC79F" points="22,32 30,28 30,38 22,42"/><polygon fill="#F1EFE8" points="42,3 52,10 52,51 42,51"/><polygon fill="#F1EFE8" points="34,26 42,22 42,32 34,36"/><polygon fill="#F0997B" points="30,28 34,26 34,36 30,38"/></svg>Hey my buddy</div>
-<div class="tabs"><div class="tab on">任务<span class="cnt num">3</span></div><div class="tab">伙伴</div><div class="tab">设置</div></div><div class="clock mono num">17:12:05</div></div>
+<div class="tabs"><div class="tab on">任务<span class="cnt num">3</span></div><div class="tab">Buddy</div><div class="tab">设置</div></div><div class="clock mono num">17:12:05</div></div>
 <div class="body"><div class="list"><div class="lhead"><div class="h">宏任务</div><div class="search">搜索标题、项目、Host 或编号</div>
 <div class="seg"><span class="on">全部<b class="num">12</b></span><span>进行中<b class="num">2</b></span><span class="y">等待 Host<b class="num">1</b></span><span class="y">等待验收<b class="num">2</b></span></div></div>
 <div class="grp"><span>hey-my-buddy</span><span class="num">3</span></div>
@@ -31,19 +36,19 @@
 <div class="stp sel last"><i class="on"></i><b>回合 1</b><span class="d num">6 分</span><small class="mono">gpt-6.1-sol / high</small><em class="live">进行中</em></div>
 </div><div class="pane turn">
 <div class="pt"><h3>回合 1</h3><span class="live s12">进行中</span><span class="tm"><span class="mono num">17:06:20 –</span><b class="num">6 分 02 秒</b></span></div>
-<div class="strip"><i>Worker</i><span class="mono">codex / openai / gpt-6.1-sol / high</span><i>计数</i><span class="num">模型回合 7　工具调用 23</span></div>
-<div class="flow">
-<div class="ev"><span class="cv">▾</span><i>路由</i><b>Router 选择</b><b>快速</b><em class="num">14 秒</em></div>
-<div class="sub"><div class="g"><i>Router</i><span class="w mono">codex / openai / gpt-6-luna / high</span><i>用量</i><span class="w num">输入 2.1k　输出 0.2k</span><i>候选</i><span class="w"><span class="ch on"><i></i>gpt-6.1-sol / high<em>优先</em></span><span class="ch"><i></i>gpt-6.1-sol / max</span><span class="ch"><i></i>deepseek-flash / max</span><span class="ch"><i></i>gpt-6-luna / high</span></span></div>
-<p class="p" style="margin-top:10px;color:var(--ink2)">改动集中在比例尺与刻度，需要先读懂现有的布局代码；近期同类的微任务里这个 buddy 一次通过。</p></div>
-<span class="lb" style="margin-top:10px">输入</span><p class="in2">把时间轴的比例尺改成纯函数：输入是片段与等待的区间，输出是时间与像素的互换和刻度……</p>
-<div class="ev"><span class="cv">▸</span><i>推理</i><em class="num">11 秒</em></div>
-<div class="ev"><span class="cv">▸</span><i>读取</i><span class="mono">apps/console/src/objective-timeline-scale.ts</span></div>
-<div class="ev"><span class="cv">▸</span><i>搜索</i><span class="mono">timeScale(</span><em class="num">14 处</em></div>
-<p class="msg">现有的换算把时间先变成百分比再变成像素，断口的位置算了两遍。先写新的比例尺和它的测试。</p>
-<div class="ev"><span class="cv">▸</span><i>修改</i><span class="mono">apps/console/src/timeline/scale.ts</span><em class="num">+164</em></div>
-<div class="ev"><span class="cv">▸</span><i>运行</i><span class="mono">npm --prefix apps/console test -- scale</span><em class="num live"><svg viewBox="0 0 12 12"><use href="#run"/></svg>41 秒</em></div>
+<div class="bh"><span class="role">Router</span><span class="mono">codex / openai / gpt-6-luna / high</span><span class="r num">快速　14 秒</span><span class="l2 num">输入 2.1k　输出 0.2k</span><span></span></div>
+<p class="bb">改动集中在比例尺与刻度，需要先读懂现有的布局代码；近期同类的微任务里这个 buddy 一次通过。</p>
+<div class="bh"><span class="role">Worker</span><span class="mono">codex / openai / gpt-6.1-sol / high</span><span></span><span class="l2 num">模型回合 7　工具调用 23</span><span class="r2">会话 <span class="mono">01a3b0d8…47aa</span></span></div>
+<div class="thr">
+<div class="n inp"><p>把时间轴的比例尺改成纯函数：输入是片段与等待的区间，输出是时间与像素的互换和刻度……</p></div>
+<div class="n"><svg><use href="#i-think"/></svg><i>推理</i><em class="num">11 秒</em></div>
+<div class="n"><svg><use href="#i-read"/></svg><i>读取</i><span class="mono">apps/console/src/objective-timeline-scale.ts</span></div>
+<div class="n"><svg><use href="#i-find"/></svg><i>搜索</i><span class="mono">timeScale(</span><em class="num">14 处</em></div>
+<div class="n t">现有的换算把时间先变成百分比再变成像素，断口的位置算了两遍。先写新的比例尺和它的测试。</div>
+<div class="n"><svg><use href="#i-edit"/></svg><i>修改</i><span class="mono">apps/console/src/timeline/scale.ts</span><em class="num">+164</em></div>
+<div class="n"><svg style="border-color:var(--live);color:var(--live)"><use href="#i-run"/></svg><i>运行</i><span class="mono">npm --prefix apps/console test -- scale</span><em class="num live">41 秒</em></div>
 </div>
+<div class="fill"></div>
 <div class="lf"><svg class="m"><use href="#run"/></svg><span class="live">工具执行中</span><em class="num">上报 3 秒前</em></div>
 </div></div>
 </div></div></html>
