@@ -115,7 +115,7 @@ R8 使 upgrade.idle_snapshot 只因 active 的 account-operation 或任意 accou
 
 三表保值核对必须独立于复制列清单；复制漏列不能同时让核对漏列。测试的私有还原库对 attempts 的 token_usage_json/error/cancel_requested_at/signal/worker_instance，以及 workflow_runs 的 title/current_routing_id/configuration_locked 布置有区分的非默认值，并按真实表列名保留全部值。被替换的两个触发器测试不能在 DROP/RENAME 重新解析时提前失败，必须证明真实走到指纹比较并因保值损坏拒绝，再做移除比较、遗漏复制列的独立变异。测试布置明确为私有合成输入，不手改已封存夹具；若需修改固定夹具，必须由固定基点及生成器真实重生成、同步 provenance 与摘要。catalog 待确认模型的账户隔离判断须以不同账户和非空 pending stock 证明必要，或确认是重复边界后删除；不恢复旧形式。
 
-新增五个窄微任务 R9—R13，仍归原宏任务“ADR-021 L18 补升级”，经路由且不指定 buddy；R1—R8 已 accepted，不续接。R9、R11、R12 的写入路径独立，可并行；R10、R13 使用 R9、R11 已验收并整合的输入，避免同一探测与 ZCode 文件的并行改动。各项自身的缺陷只打回原新微任务；若 accepted 后发现范围内缺陷，另开同宏任务窄返修。
+新增五个窄微任务 R9—R13，仍归原宏任务“ADR-021 L18 补升级”，经路由且不指定 buddy；R1—R8 已 accepted，不续接。R9、R11、R12 的写入路径独立，可并行；R13 使用 R9、R11 已验收并整合的输入，R10 在 R13 公共探测入口验收后进行，避免新增私有跨模块调用或第二套停止判断。Codex 的版本探测本身也会创建子进程，其失败只按实际停止证据表达，不能因 app-server 尚未创建而报告没有子进程。各项自身的缺陷只打回原新微任务；若 accepted 后发现范围内缺陷，另开同宏任务窄返修。
 
 | 新微任务 | 对应第二轮意见与写入范围 | 验收 |
 | --- | --- | --- |
