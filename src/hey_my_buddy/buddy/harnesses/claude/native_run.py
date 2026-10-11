@@ -978,7 +978,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         state.status = "error"
         state.reason = "quota-rejected"
         state.error_text = QUOTA_REJECTED_ERROR
-        state.quota_failure = {"nativeCode": error.rate_limit_type,
+        state.quota_failure = {"code": "quota-exceeded", "nativeCode": error.rate_limit_type,
                                "source": "claude/stream-json-rate-limit-event",
                                "observedAt": utc_now(), "resetsAt": error.resets_at}
         request_interrupt()

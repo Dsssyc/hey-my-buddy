@@ -39,9 +39,7 @@ NATIVE_METADATA_TIMEOUT_SECONDS = 2.0
 USAGE_DELTA_COUNTERS = ("inputTokens", "outputTokens", "totalTokens", "reasoningTokens",
                         "cacheReadTokens", "cacheWriteTokens")
 
-#: Native structured fields a ``turn.failed`` attribution may carry a quota cause
-#: on, most specific first. Only a code that classifies as a quota/rate failure is
-#: used; provider prose is never read.
+#: Native structured fields carrying a quota cause, most specific first.
 QUOTA_FAILURE_CODE_FIELDS = ("code", "errorType")
 QUOTA_FAILURE_ATTRIBUTION_FIELDS = ("providerErrorCode", "reason")
 
@@ -311,21 +309,25 @@ def decode_native_failure(payload: object) -> dict | None:
     return failure
 
 
-def quota_native_code(failure: dict) -> str | None:
-    """The first native structured code of a ``turn.failed`` that means quota.
+def quota_failure(failure: dict) -> dict | None:
+    """Classify native rate-limit attribution before code-only quota errors.
 
-    The whitelisted attribution is scanned most-specific first; only a value the
-    canonical classifier recognises as a quota or rate-limit failure is returned,
-    so an unrelated failure (a context-window or transport error) never becomes a
-    quota reason and no provider prose is ever read.
+    Only an explicit non-retryable rate limit means exhaustion. The provider's
+    code keeps its identity; summaries and provider prose never decide quota.
     """
     from ....protocol.usage import classify_quota_code
     attribution = failure.get("attribution") if isinstance(failure.get("attribution"), dict) else {}
+    if attribution.get("reason") == "rate_limited":
+        native_code = attribution.get("providerErrorCode") or failure.get("code") or "rate_limited"
+        return {"code": "quota-exceeded" if attribution.get("retryable") is False else "rate-limited",
+                "nativeCode": native_code}
     candidates = [failure.get(key) for key in QUOTA_FAILURE_CODE_FIELDS]
     candidates.extend(attribution.get(key) for key in QUOTA_FAILURE_ATTRIBUTION_FIELDS)
     for candidate in candidates:
-        if isinstance(candidate, str) and candidate and classify_quota_code(candidate) != "unknown":
-            return candidate
+        if isinstance(candidate, str) and candidate:
+            classification = classify_quota_code(candidate)
+            if classification != "unknown":
+                return {"code": classification, "nativeCode": candidate}
     return None
 
 

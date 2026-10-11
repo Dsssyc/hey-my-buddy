@@ -65,13 +65,54 @@ class QuotaVisibilityTests(BoardTestCase):
         board = self.board()
         attempt = {"attempt_id": "fixture", "adapter": "codex", "model_adapter": "codex", "model_provider": "openai"}
         with board.store.db.write() as db:
-            persist(db, attempt, {"quotaFailure": {"nativeCode": "usageLimitExceeded", "source": "codex/turn-error",
+            persist(db, attempt, {"quotaFailure": {"code": "quota-exceeded", "nativeCode": "usageLimitExceeded", "source": "codex/turn-error",
                                                   "observedAt": "2026-09-29T10:00:00Z"}})
             observed = read_health(db, "codex")["quota"]
             self.assertEqual(observed["windows"], [])
             warning = warnings(db, {"adapter": "codex", "provider": "openai"}, now="2026-09-29T10:01:00Z")
             self.assertEqual(warning[0]["code"], "HARNESS_QUOTA_EXHAUSTED")
             self.assertEqual(warnings(db, {"adapter": "codex", "provider": "openai"}, now="2026-09-29T12:01:00Z")[0]['code'], 'HARNESS_QUOTA_EXHAUSTED')
+
+    def test_claude_normalized_rejection_without_quota_persists_and_keeps_its_native_limit_type(self):
+        from unittest.mock import patch
+        from hey_my_buddy.buddy.harnesses.claude import native_run
+        from hey_my_buddy.buddy.harnesses.claude.protocol import QuotaRejected
+        from hey_my_buddy.buddy.harnesses.run_contract import (
+            FEEDBACK_CONTINUE, PrivateStatePaths, RunBudget, RunConfiguration, RunIdentity, RunRequest,
+        )
+        from hey_my_buddy.blackboard.evaluation.native_observations import failure_view, persist
+        from hey_my_buddy.protocol.usage import classify_quota_code
+        board = self.board()
+        observed_at = "2026-09-29T10:00:00Z"
+        request = RunRequest(identity=RunIdentity(task_id="task", attempt_id="attempt", generation=1,
+                                                 invocation_id="invocation"),
+                             harness="claude", configuration=RunConfiguration(provider="fixture-api",
+                                                                               model="fixture-model", effort="low"),
+                             cwd=str(self.directory), input_text="fixture", tool_scope="none",
+                             output_schema={"type": "object"}, budget=RunBudget(timeout_seconds=5),
+                             private_state=PrivateStatePaths(invocation_root=str(self.directory / "run"),
+                                                             native_root=str(self.directory / "native")))
+        with patch.object(native_run, "_prepare", side_effect=QuotaRejected("five_hour", None)), \
+             patch.object(native_run, "utc_now", return_value=observed_at):
+            run = native_run.run(request, observer=lambda _: FEEDBACK_CONTINUE,
+                                 services=None, cancelled=lambda: False)
+        # Test the normalized failure package; the existing native Worker
+        # receipt still carries its separate rateLimitType/resetsAt fields.
+        result = {"code": run.end.reason_code, "quotaFailure": run.native_failure.value}
+        self.assertNotIn("quota", result)
+        self.assertEqual(classify_quota_code("five_hour"), "unknown")
+        with board.store.db.write() as db:
+            persist(db, {"attempt_id": "attempt", "adapter": "claude", "model_adapter": "claude",
+                         "model_provider": "fixture-api"}, result)
+            observed = read_health(db, "claude")["quota"]
+            self.assertEqual(observed["reachedType"], "five_hour")
+            self.assertIs(observed["ordinaryUsageAllowed"], False)
+            self.assertEqual(observed["windows"], [])
+            self.assertNotIn("resetsAt", observed)
+            self.assertEqual(warnings(db, {"adapter": "claude", "provider": "fixture-api"},
+                                      now=observed_at)[0]["code"], "HARNESS_QUOTA_EXHAUSTED")
+        self.assertEqual(failure_view(result, adapter="claude"), run.native_failure.value)
+        self.assertEqual(failure_view(result, adapter="claude")["nativeCode"], "five_hour")
 
 
 class NativeReceiptTests(WorkflowTestCase):

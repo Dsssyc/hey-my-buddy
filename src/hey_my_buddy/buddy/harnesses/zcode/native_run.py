@@ -93,7 +93,7 @@ from .protocol import (
     NativeError,
     RootTurnEvidence,
     ZcodeAttemptUsage,
-    quota_native_code,
+    quota_failure,
 )
 from .tool_evidence import ZcodeToolFacts
 
@@ -1038,12 +1038,9 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
         failure = getattr(error, "failure", None)
         if isinstance(failure, dict):
             state.native_failure = failure
-            # A structured native failure code that means quota exhaustion is
-            # published as the explicit quota reason; provider prose is never read
-            # and no retry or probe is attempted.
-            native_code = quota_native_code(failure)
-            if native_code is not None:
-                state.quota_failure = {"nativeCode": native_code, "source": "zcode/session-turn-failed",
+            classified = quota_failure(failure)
+            if classified is not None:
+                state.quota_failure = {**classified, "source": "zcode/session-turn-failed",
                                        "observedAt": utc_now()}
         # A failed turn still retains its native observations: the bounded read is
         # optional, so it can never turn this failure into another one.

@@ -70,7 +70,8 @@ def persist(connection, attempt, result):
     failure = normalize_quota_failure(result.get("quotaFailure"))
     if quota is None and failure is not None and failure["code"] == "quota-exceeded":
         quota = normalize_quota({"source": failure["source"], "observedAt": failure.get("observedAt"),
-                                 "reachedType": failure["nativeCode"], 'resetsAt': failure.get('resetsAt'), "windows": []})
+                                 "reachedType": failure["nativeCode"], "ordinaryUsageAllowed": False,
+                                 'resetsAt': failure.get('resetsAt'), "windows": []})
     account = attempt_account(connection, attempt)
     if quota is None or account is None:
         return
@@ -132,7 +133,7 @@ def failure_view(result, *, adapter=None):
         return None
     from ...protocol.usage import normalize_quota_failure
     failure = normalize_quota_failure(result.get("quotaFailure"))
-    if failure is not None and failure["code"] != "unknown":
+    if failure is not None:
         return failure
     if result.get("code") == "quota-rejected":
         return {"code": "quota-exceeded", "nativeCode": "quota-rejected", "source": (adapter or "harness") + "/native-quota"}

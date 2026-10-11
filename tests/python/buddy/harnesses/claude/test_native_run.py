@@ -492,6 +492,7 @@ class SettlementGuardTests(NativeRunCase):
         self.assertIn("ADAPTER_UNAVAILABLE", result.end.message)
         failure = result.native_failure.value
         self.assertEqual(failure["nativeCode"], "five_hour")
+        self.assertEqual(failure["code"], "quota-exceeded")
         self.assertEqual(failure["source"], "claude/stream-json-rate-limit-event")
         self.assertIsNone(result.value)
         self.assertTrue(result.stop_evidence.interrupt.requested)

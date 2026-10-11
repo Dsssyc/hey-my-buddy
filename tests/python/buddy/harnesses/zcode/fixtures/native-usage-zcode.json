@@ -172,7 +172,7 @@
                               "modelId": "fixture-model", "providerKind": "anthropic", "transport": "sse",
                               "statusCode": 429, "providerErrorCode": "1308", "retryable": false}},
     "turnPhase": "stream",
-    "expectedCode": "model_rate_limited",
-    "expectedClass": "rate-limited"
+    "expectedCode": "1308",
+    "expectedClass": "quota-exceeded"
   }
 }

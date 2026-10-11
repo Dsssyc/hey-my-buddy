@@ -24,7 +24,7 @@ from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     NativeError,
     ZcodeAttemptUsage,
     optional_native_call,
-    quota_native_code,
+    quota_failure,
 )
 
 FIXTURES = Path(__file__).resolve().parents[2] / "buddy" / "harnesses"
@@ -440,12 +440,13 @@ class ZcodeNativeRecordTests(unittest.TestCase):
 
     def test_quota_attribution_uses_only_structured_native_codes(self):
         failure = ZCODE_NATIVE["quotaFailureTurn"]
-        self.assertEqual(quota_native_code(failure["error"]), failure["expectedCode"])
-        self.assertEqual(usage.classify_quota_code(failure["expectedCode"]), failure["expectedClass"])
+        self.assertEqual(quota_failure(failure["error"]),
+                         {"nativeCode": failure["expectedCode"], "code": failure["expectedClass"]})
+        self.assertEqual(usage.classify_quota_code(failure["expectedCode"]), "unknown")
         unrelated = {"errorType": "AiSdkModelAdapterError", "code": "model_context_exceeded",
                      "attribution": {"reason": "context_window", "providerErrorCode": "1308"}}
-        self.assertIsNone(quota_native_code(unrelated))
-        self.assertIsNone(quota_native_code({}))
+        self.assertIsNone(quota_failure(unrelated))
+        self.assertIsNone(quota_failure({}))
 
 
 class ZcodeAdapterObservationTests(unittest.TestCase):

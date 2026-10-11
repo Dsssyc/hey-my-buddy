@@ -386,12 +386,15 @@ def classify_quota_code(native_code: str) -> str:
 def normalize_quota_failure(value: Any) -> dict | None:
     """One native quota/rate-limit failure, keeping its structured native code.
 
-    The canonical ``code`` is a bounded classification; ``nativeCode`` is the
-    harness's own machine code and is never translated away.
+    The harness supplies the bounded ``code`` classification; ``nativeCode``
+    is its own machine code and is never translated or classified here.
     """
     if not isinstance(value, dict):
         return None
     if "version" in value and (type(value["version"]) is not int or value["version"] != 1):
+        return None
+    code = value.get("code")
+    if code not in ("quota-exceeded", "rate-limited"):
         return None
     native_code = identifier(value.get("nativeCode"))
     if native_code is None:
@@ -399,7 +402,7 @@ def normalize_quota_failure(value: Any) -> dict | None:
     observed_at = _timestamp(value.get("observedAt"))
     failure = {
         "version": QUOTA_FAILURE_VERSION,
-        "code": classify_quota_code(native_code),
+        "code": code,
         "nativeCode": native_code,
         "source": identifier(value.get("source")) or "unknown",
     }

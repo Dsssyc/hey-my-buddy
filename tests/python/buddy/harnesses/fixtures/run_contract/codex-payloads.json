@@ -41,7 +41,7 @@
       "modelStarted": true,
       "sessionId": "thread-fixture-0001",
       "nativeIdentity": {"sessionId": "thread-fixture-0001", "turnId": "turn-fixture-0002"},
-      "quotaFailure": {"nativeCode": "usageLimitExceeded", "source": "codex/app-server-turn-error",
+      "quotaFailure": {"code": "quota-exceeded", "nativeCode": "usageLimitExceeded", "source": "codex/app-server-turn-error",
                        "observedAt": "2026-01-01T00:05:00Z"},
       "processState": {"shutdownConfirmed": true, "nativeExitCode": 0}
     },

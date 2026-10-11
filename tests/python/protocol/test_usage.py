@@ -227,18 +227,32 @@ class QuotaFailureTests(unittest.TestCase):
                                  ("workspace_owner_usage_limit_reached", "quota-exceeded"),
                                  ("RATE_LIMIT", "rate-limited"), ("rateLimitExceeded", "rate-limited")):
             with self.subTest(native=native):
-                failure = usage.normalize_quota_failure({"nativeCode": native, "source": "fixture",
+                self.assertEqual(usage.classify_quota_code(native), expected)
+                failure = usage.normalize_quota_failure({"code": expected, "nativeCode": native, "source": "fixture",
                                                          "observedAt": 1791046876})
                 self.assertEqual(failure["code"], expected)
                 self.assertEqual(failure["nativeCode"], native)
                 self.assertEqual(failure["observedAt"], "2026-10-03T17:01:16Z")
 
-    def test_an_unrelated_native_error_is_not_a_quota_failure(self):
-        failure = usage.normalize_quota_failure({"nativeCode": "contextWindowExceeded", "source": "fixture"})
-        self.assertEqual(failure["code"], "unknown")
+    def test_classification_is_supplied_by_the_harness_not_the_native_code(self):
+        for native, code in (("1310", "quota-exceeded"), ("1310", "rate-limited"),
+                             ("RATE_LIMIT", "quota-exceeded"), ("QUOTA", "rate-limited")):
+            with self.subTest(native=native, code=code):
+                failure = usage.normalize_quota_failure({"code": code, "nativeCode": native})
+                self.assertEqual(failure["code"], code)
+                self.assertEqual(failure["nativeCode"], native)
+                self.assertEqual(usage.normalize_quota_failure(failure), failure)
+        self.assertEqual(usage.classify_quota_code("1310"), "unknown")
+        self.assertEqual(usage.classify_quota_code("rate_limited"), "unknown")
+
+    def test_missing_or_invalid_classification_is_refused(self):
+        for code in (None, "unknown", "QUOTA", "quota exceeded", False, 0, [], {}):
+            with self.subTest(code=code):
+                self.assertIsNone(usage.normalize_quota_failure({"code": code, "nativeCode": "QUOTA"}))
+        self.assertIsNone(usage.normalize_quota_failure({"nativeCode": "QUOTA"}))
 
     def test_a_failure_without_a_native_code_returns_none(self):
-        for value in (None, {}, {"code": "quota-exceeded"}, {"nativeCode": ""}, {"nativeCode": 5}):
+        for value in (None, {}, {"code": "quota-exceeded"}, {"code": "quota-exceeded", "nativeCode": ""}, {"code": "quota-exceeded", "nativeCode": 5}):
             with self.subTest(value=value):
                 self.assertIsNone(usage.normalize_quota_failure(value))
 
@@ -247,8 +261,8 @@ class QuotaFailureTests(unittest.TestCase):
         # free-text source is replaced with "unknown". Neither is ever copied.
         for bad in ("Bearer sk-ant-api03-SECRET-FRAGMENT", "usage limit exceeded!", "quota\nexceeded"):
             with self.subTest(bad=bad):
-                self.assertIsNone(usage.normalize_quota_failure({"nativeCode": bad, "source": "fixture"}))
-        failure = usage.normalize_quota_failure({"nativeCode": "usage_limit_reached",
+                self.assertIsNone(usage.normalize_quota_failure({"code": "quota-exceeded", "nativeCode": bad, "source": "fixture"}))
+        failure = usage.normalize_quota_failure({"code": "quota-exceeded", "nativeCode": "usage_limit_reached",
                                                  "source": "Bearer sk-ant-api03-SECRET-FRAGMENT"})
         self.assertEqual(failure["nativeCode"], "usage_limit_reached")
         self.assertEqual(failure["source"], "unknown")

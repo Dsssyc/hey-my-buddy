@@ -1176,8 +1176,9 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
     failure_code = turn_failure_code(native_turn)
     if failure_code is not None:
         from ....protocol.usage import classify_quota_code
-        if classify_quota_code(failure_code) != "unknown":
-            state.quota_failure = {"nativeCode": failure_code, "source": "codex/app-server-turn-error",
+        classification = classify_quota_code(failure_code)
+        if classification != "unknown":
+            state.quota_failure = {"code": classification, "nativeCode": failure_code, "source": "codex/app-server-turn-error",
                                    "observedAt": utc_now()}
     if native_turn.get("status") != "completed" or not evidence.started:
         raise CodexProtocolError("native-turn-failed", "Codex turn did not complete successfully")

@@ -125,10 +125,9 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
 
 
 def _worker_facts(result) -> dict:
-    from ..harnesses.registry import worker_format, worker_receipt_options
+    from ..harnesses.registry import worker_format
 
     format = worker_format(result.harness)
-    receipt_options = worker_receipt_options(result.harness)
     payload = _base_result(result)
     if format is not None:
         payload.update(format.receipt_fields(result))
@@ -146,11 +145,7 @@ def _worker_facts(result) -> dict:
     if result.native_error is not None:
         payload["nativeFailure"] = result.native_error.value
     if result.native_failure is not None and not (format and format.native_quota_failure):
-        failure = result.native_failure.value
-        # Registration preserves which native codes the published quota
-        # field omits; the full native fact remains in the retained run result.
-        payload["quotaFailure"] = (None if failure.get("code") in receipt_options.ignored_quota_codes
-                                   else failure)
+        payload["quotaFailure"] = result.native_failure.value
     if result.activity is not None:
         activity = result.activity.value
         payload["activity"] = {"phase": activity.get("phase"),

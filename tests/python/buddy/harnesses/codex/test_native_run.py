@@ -552,6 +552,7 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(result.end.reason_code, "native-turn-failed")
         self.assertIsNotNone(result.native_failure.value)
         self.assertEqual(result.native_failure.value["nativeCode"], "usageLimitExceeded")
+        self.assertEqual(result.native_failure.value["code"], "quota-exceeded")
         remove_coding_auth(self.base / "worker-native")
 
     def test_denied_native_requests_are_facts_on_a_completed_worker_turn(self):
