@@ -134,7 +134,7 @@ Jev 在当前拟用接入中是外部 API。启用此路线意味着普通候选
 
 [TypeSafe 的 skill suggestion cookbook](https://docs.typesafe.ai/cookbooks/skill_suggestion) 是直接相关的实例：读取有限目录作选择，并保留不采用任何候选的路径。其示例对较大技能目录使用先排名、再核对短名单的两阶段调用。Buddy 首版拟验证更小的完整配置表和一次调用，不能将示例的效果或时延视为本机保证。
 
-[Agent-as-a-Router](https://github.com/LanceZPF/agent-as-a-router) 的执行后反馈、[models.dev](https://github.com/anomalyco/models.dev/blob/dev/sync.md) 的目录增量同步，以及 [LangMem](https://github.com/langchain-ai/langmem/blob/main/docs/docs/guides/delayed_processing.md) 的延迟合并处理，仍可作为资料维护的参考。不引入它们的完整运行框架，现有黑板与普通 Worker 足以承载相应职责。
+Agent-as-a-Router 的执行后反馈、[models.dev](https://github.com/anomalyco/models.dev/blob/dev/sync.md) 的目录增量同步，以及 LangMem 的延迟合并处理，仍可作为资料维护的参考。不引入它们的完整运行框架，现有黑板与普通 Worker 足以承载相应职责。
 
 ## 9. 实施路线与验收
 

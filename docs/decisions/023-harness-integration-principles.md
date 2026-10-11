@@ -20,8 +20,8 @@
 | 项目 | 做法 |
 | --- | --- |
 | [Vibe Kanban](https://vibekanban.com/docs/configuration-customisation/agent-configurations) | 每个代理只用自己的原生参数：Claude Code 是计划模式与跳过权限，Codex 是三档沙盒与审批策略，Gemini 是免确认开关。没有跨代理通用的只读模式 |
-| [Omnigent](https://github.com/omnigent-ai/omnigent) | 策略分服务器、代理、会话三级。统一强制靠在代理进程外套 bwrap 或 seatbelt，再加出口代理。维护一张能力矩阵，并用测试台核对矩阵与实际行为。自述 Windows 上只约束进程树，不隔离文件系统与网络 |
-| [Rivet sandbox-agent](https://github.com/rivet-dev/sandbox-agent) | 统一的是 HTTP 接口与事件格式；隔离交给外层沙盒，自己不做限制 |
+| Omnigent | 策略分服务器、代理、会话三级。统一强制靠在代理进程外套 bwrap 或 seatbelt，再加出口代理。维护一张能力矩阵，并用测试台核对矩阵与实际行为。自述 Windows 上只约束进程树，不隔离文件系统与网络 |
+| Rivet sandbox-agent | 统一的是 HTTP 接口与事件格式；隔离交给外层沙盒，自己不做限制 |
 | [Agent Client Protocol](https://agentclientprotocol.com/protocol/v1/tool-calls) | 为工具调用规定统一的类别：read、edit、delete、move、search、execute、think、fetch、switch_mode、other。类别由代理上报，用于展示与权限提示，协议不强制 |
 | [Anthropic sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime) | 可以包裹任意进程的系统沙盒：写入与网络默认拒绝，按白名单放行。支持 macOS 与 Linux，Windows 为 alpha |
 
@@ -62,7 +62,7 @@
     Codex 的套接字、端口、共享内存、临时目录，与 Claude Code 的套接字、端口、共享内存，是 2026-10-09 在本机用同一个探针实测的，探针不调用模型；其余各格依据文档，DSH 一列没有实测。受管检出是源仓库的一个 worktree，它的 Git 元数据在检出之外，所以在 Codex 上 `git add` 被拒绝，这一项也是实测的；另外两家没有核对。
 - **越界时的表现基本一致。** 已接入的四家在无人值守时都能拒绝并把请求交给控制器，通道各不相同。Kimi Code 经 ACP 发出权限请求；OpenCode 的文档没有说明。
 
-这次补查的聚合项目没有改变 2026-10-02 的结论：Rivet sandbox-agent 的模式仍是各家原生的名字；ZCode 自己能驱动五种 CLI，统一的也是模式；把一份策略翻译成各家设置文件的项目（agent-perms、agentperms、praetor）只到工具级规则，都很早期。与 harness 无关的系统级包装除 sandbox-runtime 外还有带 Python 绑定的 [nono](https://github.com/always-further/nono)。Omnigent 用一组探针核对能力矩阵与实际行为是否一致，这一点被"接入新 harness 时"一节采用。
+这次补查的聚合项目没有改变 2026-10-02 的结论：Rivet sandbox-agent 的模式仍是各家原生的名字；ZCode 自己能驱动五种 CLI，统一的也是模式；把一份策略翻译成各家设置文件的项目（agent-perms、agentperms、praetor）只到工具级规则，都很早期。与 harness 无关的系统级包装除 sandbox-runtime 外还有带 Python 绑定的 nono。Omnigent 用一组探针核对能力矩阵与实际行为是否一致，这一点被"接入新 harness 时"一节采用。
 
 ## 决定
 
