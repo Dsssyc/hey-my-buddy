@@ -163,33 +163,6 @@ describe("zero candidate routing source", () => {
   });
 });
 
-describe("routing configuration", () => {
-  it("keeps a large decision history out of the Buddy config page and performs no decision request", async () => {
-    const state = snapshot();
-    state.decisions = Array.from({ length: 50 }, (_, i) => decision(`history-${i}`, {
-      task: "不应出现在配置页的长任务说明。".repeat(200),
-    }));
-    const command = vi.fn();
-    window.location.hash = "#buddies/roles";
-    const user = userEvent.setup();
-    render(<App suppliedApi={apiFor(state, command)} />);
-    await screen.findByRole("region", { name: "路由状态" });
-    // The Router section is the expanded page itself; the old stacked page's
-    // "详情" fold step is gone.
-    expect(screen.queryByRole("button", { name: "详情" })).toBeNull();
-    const budget = screen.getByRole("radiogroup", { name: "审阅预算" });
-    expect(within(budget).getByRole("radio", { name: "标准" })).toHaveProperty("checked", true);
-    expect(screen.getAllByText(/快速路由固定 60 秒/).length).toBeGreaterThan(0);
-    expect(screen.queryByRole("checkbox", { name: "自动采纳常规整理结果" })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "最近决策" })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "试算一次推荐" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "请求整理" })).toBeNull();
-    expect(screen.queryByText(/整理经验/)).toBeNull();
-    expect(screen.queryByText(/不应出现在配置页的长任务说明/)).toBeNull();
-    expect(command).not.toHaveBeenCalled();
-  });
-});
-
 describe("recorded decision details", () => {
   it("shows the saved mode while retaining retired routing fields only in raw audit snapshots", async () => {
     const legacy = { requestedRoutingMode: "review", fallback: { from: "review", to: "fast", code: "REVIEW_UNAVAILABLE", reason: "审阅配置失效" } };

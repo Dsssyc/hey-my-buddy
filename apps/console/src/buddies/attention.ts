@@ -1,7 +1,7 @@
 import { snapshotHarnesses } from "../api";
 import { quotaView } from "../host-workflow";
 import { isDecisionCandidate, isFastRouterCandidate } from "../policy";
-import { healthSummary } from "../RoutingStatusBar";
+import { healthSummary } from "./roles";
 import type { ConsoleView, Snapshot } from "../types";
 
 /** What on the Buddy page waits for the user: the Router role, and the harnesses whose quota nears its limit. */

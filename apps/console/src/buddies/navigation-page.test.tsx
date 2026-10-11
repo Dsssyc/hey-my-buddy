@@ -274,8 +274,9 @@ describe("deep links", () => {
     await screen.findByRole("region", { name: "角色" });
     expect(screen.getByRole("region", { name: "角色" })).toBeTruthy();
     expect(modelsRegion()).toBeNull();
-    const line = document.getElementById("router-current")!;
-    expect(line.textContent).toContain("Router");
+    // The snapshot carries no health facts, so the head of the list is the one serving.
+    const line = screen.getByRole("listitem", { name: `${SOL} / medium` });
+    expect(within(line).getByText("当前")).toBeTruthy();
     await waitFor(() => expect(document.activeElement).toBe(line));
   });
 
@@ -305,8 +306,8 @@ describe("deep links", () => {
     const user = userEvent.setup();
     renderBuddy("#buddies/roles", f);
     await screen.findByRole("region", { name: "角色" });
-    const reviewLine = document.getElementById("router-current")!;
-    await user.click(within(reviewLine).getByRole("button", { name: "查看所在家族" }));
+    const reviewLine = screen.getByRole("listitem", { name: `${SOL} / medium` });
+    await user.click(within(reviewLine).getByRole("link", { name: `${SOL} / medium` }));
     expect(window.location.hash).toBe(`#buddies/models/${encodeURIComponent(solMediumId)}`);
     await waitFor(() => expect(modelsRegion()).toBeTruthy());
     await waitFor(() => pane(SOL));
