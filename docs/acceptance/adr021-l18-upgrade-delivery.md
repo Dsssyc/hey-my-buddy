@@ -1,5 +1,7 @@
 # ADR-021 L18 升级交付
 
+本文件及相邻 JSON 是原固定交付的历史记录；其中命令、提交、changedPaths/sourceHashes 和旧摘要保持原始历史地址与含义，不代表本轮执行或验收。
+
 本轮基于 `cccf3714bd2631ea7b09a1f9343379dfc3492361`，原样接入 Host 已验收的 fixture 提交 `513e97da90477bc9e8dd12bda5efaa89b5db8924`（artifact `bb884da8-44f8-4b2f-80d7-c4f16be9558d`，integration `int-f287794d-a091-4cd5-8f7a-ad5ec7872efd`）。9 文件逐项与共享 Git 对象字节及 SHA-256 一致，未复制 generator/inventory 文档或重生成夹具。产品源码与本轮输入一致。
 
 唯一还原入口为 `blackboard.store.upgrade_fixture.load_fixture`：先完成私有路径、基点旧身份与摘要绑定，仍保持 schema 15；之后才取保留基线和备份。旧 SQL-only loader 已移除。进程内公开测试调用真实 `migrate_workspace_identity`，验证升级前后历史保留，再读取 Router、unknown 目录和待结论 delivered，写真实 Host 结论并原请求重放。结论及事件各一条，独立 Host 封存文件与结论产物摘要绑定，原 Worker 产物保持不变。相同快照按既有身份复用原 output 行。

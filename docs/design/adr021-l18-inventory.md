@@ -2,7 +2,7 @@
 
 本记录只交付微任务 1，未实现升级、未改产品代码、未安装、未读取日常看板、未运行模型或完整检查；Worker 的验证事实不是 Host 的验收结论。冻结基点 B 为 `e4fbc91696f354991252ea2abddc73d45f286aa5`（0.27.0），冻结输入 C 为 `df9318f38b732681e1004cf190e71bb4bc25fe17`（0.29.0）。依据是 [执行计划](adr021-l18-upgrade.md)、[失败演练](../acceptance/c-two-074-host-review.md#从已安装的版本升级)、AGENTS.md、CONTEXT.md、[architecture](../reference/architecture.md) 与 ADR-007；以这两个固定提交的源码取证，不以运行中的安装推断。
 
-下文 `B:path:line`、`C:path:line` 指相应固定提交的文件位置，可以用 `git show <完整提交>:<path>` 读取。SQL 附表中 `B:D` 是 B 的 `src/buddy/db.py`，`C:D` 是 C 的 `src/hey_my_buddy/blackboard/store/db.py`。新增对象在 B 不存在时，给出其所在旧分区或旧写入点，明确标记“无”，不伪造旧定义。机器可读的完整定义、列类型/默认值/非空/主键/隐藏标记、外键删除动作、显式与自动索引的列/表达式/排序/部分条件和视图在 [storage-inventory.json](../../tests/fixtures/adr021-l18/storage-inventory.json)；所有对象都保留两个提交的来源。
+本记录引用的 storage inventory 与 verification 是原固定交付的历史材料，现归档于 `docs/acceptance/`；其中固定提交路径、旧命令和摘要仍按历史来源解释，不作为当前夹具输入。下文 `B:path:line`、`C:path:line` 指相应固定提交的文件位置，可以用 `git show <完整提交>:<path>` 读取。SQL 附表中 `B:D` 是 B 的 `src/buddy/db.py`，`C:D` 是 C 的 `src/hey_my_buddy/blackboard/store/db.py`。新增对象在 B 不存在时，给出其所在旧分区或旧写入点，明确标记“无”，不伪造旧定义。机器可读的完整定义、列类型/默认值/非空/主键/隐藏标记、外键删除动作、显式与自动索引的列/表达式/排序/部分条件和视图在 [storage-inventory.json](../acceptance/adr021-l18-storage-inventory.json)；所有对象都保留两个提交的来源。
 
 ## SQL 形式：计划中的四项完整，另有文档计数差异
 
@@ -98,7 +98,7 @@ helper 与常量：schema_version:58 被三个换算函数和迁移测试调用�
 
 ## 固定夹具、生成路径与验证边界
 
-固定 artifact 为 [board.sql](../../tests/fixtures/adr021-l18/board.sql)、[metadata.json](../../tests/fixtures/adr021-l18/metadata.json)、[operations.json](../../tests/fixtures/adr021-l18/operations.json)、[catalog.json](../../tests/fixtures/adr021-l18/catalog.json)、[workspace-resources.json](../../tests/fixtures/adr021-l18/workspace-resources.json)、[storage-inventory.json](../../tests/fixtures/adr021-l18/storage-inventory.json) 和 [生成脚本](../../packaging/generate-upgrade-fixture.py)。metadata format=2 记录基点/输入提交、基点 tree、锁文件和源文件摘要、实际导入的旧模块、生成脚本与固定文本摘要、稳定样本标识、依赖模式/实际版本、固定假值与边界。operations 逐次保留旧公开操作的输入/响应，明示模拟 Worker 结果；原始清点的 verification 与窄返修自查分别存于 [verification.json](../../tests/fixtures/adr021-l18/verification.json)，均不是 Host 验收。
+固定 artifact 为 [board.sql](../../tests/fixtures/adr021-l18/board.sql)、[metadata.json](../../tests/fixtures/adr021-l18/metadata.json)、[operations.json](../../tests/fixtures/adr021-l18/operations.json)、[catalog.json](../../tests/fixtures/adr021-l18/catalog.json)、[workspace-resources.json](../../tests/fixtures/adr021-l18/workspace-resources.json)、[storage-inventory.json](../acceptance/adr021-l18-storage-inventory.json) 和 [生成脚本](../../packaging/generate-upgrade-fixture.py)。metadata format=2 记录基点/输入提交、基点 tree、锁文件和源文件摘要、实际导入的旧模块、生成脚本与固定文本摘要、稳定样本标识、依赖模式/实际版本、固定假值与边界。operations 逐次保留旧公开操作的输入/响应，明示模拟 Worker 结果；原始清点的 verification 与窄返修自查分别存于 [verification.json](../acceptance/adr021-l18-fixture-verification.json)，均不是 Host 验收。
 
 脚本以 `git archive B` 导出未修改源码，默认用 `uv sync --frozen --no-install-project --link-mode copy` 准备基点环境；`--python <prepared-python>` 可复用已经准备好的只读依赖解释器，本轮实际走这一路径。PYTHONPATH 先放本检出的 src 和 tests/python，并显式装载归档的 `buddy` 包，避免同名测试包遮蔽；未用当前 `hey_my_buddy` 建库。旧 `Database.initialize` 建 schema 15，旧 BoardService 的命名公开操作经过验证、事务、事件和幂等规则写入：harness_set/model_catalog_refresh、evaluation_write_begin/user_policy_publish/assessment_publish、workflow_submit、worker_register/worker_claim/worker_result、workflow_integration_record/workflow_acknowledge、workflow_cancel。没有手写 INSERT 伪造样本或当前 schema。外部 native discovery 和 Worker result 用固定测试输入代替；没有原生线程/模型实际运行，结果 provenance 不能作为新 harness 能力的验收证据。两个 Router 分别指向不同模拟模型，两槽均经旧公开设置校验写入，default=review，可验证换算后的顺序为 beta、alpha。
 

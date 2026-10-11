@@ -200,7 +200,7 @@
     }
   ],
   "testChanges": {
-    "manifest": "tests/python/install/adr021-l18-test-changes.json",
+    "manifest": "docs/acceptance/adr021-l18-test-changes.json",
     "currentCountsRelativeToOriginalInput": {
       "added": 47,
       "removedFromReplacedContents": 12,
@@ -215,7 +215,7 @@
     "boundary": "撤换的负向编号由本微任务创建，不增加相对原基点的移除计数；依赖 5 编号与 Worker 新定义 1 编号单列。Host 退休后收集最终编号。"
   },
   "retirements": {
-    "manifest": "tests/python/install/adr021-l18-retirements.json",
+    "manifest": "docs/acceptance/adr021-l18-retirements.json",
     "manifestSha256": "4f3f55e1d1e9da0000a4e5cd959482de318dc7985f75cc06047f3564b074027f",
     "files": 10,
     "status": "清单及 10 个逐文件 SHA-256 均与输入产物一致；Worker 保留全部文件，由 Codex 实现 Host 机械删除。",
