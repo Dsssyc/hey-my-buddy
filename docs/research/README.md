@@ -27,6 +27,7 @@
 | 2026-10-02 | [聚合多个 harness 的平台怎样在各家之间保持一致](2026-10-02-consistency-across-harnesses.md) | ADR-023 |
 | 2026-10-09 | [各 harness 的原生权限](2026-10-09-native-harness-permissions.md) | ADR-023 的权限档位 |
 | 2026-10-11 | [订阅额度用完之后：付费用量、供应方的拒绝与恢复](2026-10-11-plan-quota-and-paid-usage.md) | ADR-021 第 22 条 |
+| 2026-10-11 | [供应方的拒绝怎样分类、歇多久；智谱的套餐、资源包与余额各管哪一段](2026-10-11-refusal-kinds-and-zhipu-funding.md) | ADR-021 第 22 条与 L9；续查上一份，读了源码并做了实测 |
 | 2026-10-11 | [harness 的标志从哪里来，受什么约束](2026-10-11-harness-marks.md) | 控制台 Buddy 页的设计，尚未实现 |
 | 2026-10-11 | [harness 的标志，通行的做法与最后的决定](2026-10-11-harness-marks-in-practice.md) | 同上；改掉了上一份里的两处取舍 |
 | 2026-10-11 | [Codex 做 Host 时怎样等子代理，能不能结束回合等唤醒](2026-10-11-codex-host-waiting.md) | `docs/reference/host-codex.md` |
