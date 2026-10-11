@@ -342,7 +342,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(f.operations).toEqual([]);
     // Refreshing again never regains rights without a new login.
     // The edit cluster only exists on the settings tabs (P1.2), so return there.
-    await user.click(screen.getByRole("link", { name: /伙伴/ }));
+    await user.click(screen.getByRole("link", { name: /Buddy/ }));
     await screen.findByRole("heading", { name: "模型 2" });
     await readSnapshotOnForeground(f.api.snapshot);
     await waitFor(() => expect(screen.getByRole("button", { name: "保存" }).getAttribute("aria-disabled")).toBe("true"));
@@ -623,7 +623,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     // Filters and searches stay usable without any write attempt.
     await user.type(screen.getByLabelText("搜索委派"), "可浏览");
     await waitFor(() => expect(f.tasks).toHaveBeenLastCalledWith(expect.objectContaining({ query: "可浏览" }), expect.any(AbortSignal)));
-    await user.click(screen.getByRole("link", { name: /伙伴/ }));
+    await user.click(screen.getByRole("link", { name: /Buddy/ }));
     await user.click(await screen.findByRole("button", { name: "更新记录" }));
     expect(await screen.findByText("V12")).toBeTruthy();
     await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（1）" }));
@@ -673,7 +673,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(screen.queryByText(bannerNotice)).toBeNull();
     expect(f.operations.every(operation => ["evaluation_history", "selection_get", "selection_list", "model_profiles", "workflow_get"].includes(operation))).toBe(true);
     // The dirty model draft is preserved and its save stays disabled.
-    await user.click(screen.getByRole("link", { name: /伙伴/ }));
+    await user.click(screen.getByRole("link", { name: /Buddy/ }));
     expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "原人工意见断线草稿");
     expect(screen.getByRole("button", { name: "保存" }).getAttribute("aria-disabled")).toBe("true");
   });

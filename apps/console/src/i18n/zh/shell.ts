@@ -4,7 +4,7 @@ export default {
   nav: {
     label: "主要导航",
     tasks: "任务",
-    buddies: "伙伴",
+    buddies: "Buddy",
     settings: "设置",
     pendingHost: "等待 Host 决定的微任务",
     unsaved: "有未保存的修改",

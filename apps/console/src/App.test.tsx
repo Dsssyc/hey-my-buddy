@@ -174,7 +174,7 @@ describe("console interactions", () => {
     render(<App suppliedApi={api} />);
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await screen.findByRole("heading", { name: "选择一项委派" });
-    await user.click(screen.getByRole("link", { name: "伙伴" }));
+    await user.click(screen.getByRole("link", { name: "Buddy" }));
     await screen.findByRole("heading", { name: "模型 1" });
     // There is no global edit switch: controls are directly editable, and no
     // save bar appears until the user actually changes something.
@@ -187,7 +187,7 @@ describe("console interactions", () => {
     // The save bar belongs to Buddy 配置 alone; the draft is kept without any
     // leave confirmation and no save happens by navigating away.
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
-    await user.click(screen.getByRole("link", { name: /伙伴/ }));
+    await user.click(screen.getByRole("link", { name: /Buddy/ }));
     expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "本地草稿");
     expect(screen.getByRole("region", { name: "未保存的修改" })).toBeTruthy();
     // The automatic assessment is program-owned and stays read-only.
@@ -211,7 +211,7 @@ describe("console interactions", () => {
     window.location.hash = "#buddies";
     const first = render(<App suppliedApi={api} />);
     await screen.findByRole("heading", { name: "模型 1" });
-    expect(screen.getByRole("heading", { name: "伙伴" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Buddy" })).toBeTruthy();
     first.unmount();
     // A retired bookmark is a hash like any other the console does not know.
     window.location.hash = "#models";
@@ -221,7 +221,7 @@ describe("console interactions", () => {
     window.location.hash = "#settings";
     render(<App suppliedApi={api} />);
     await screen.findByRole("heading", { name: "显示" });
-    await user.click(screen.getByRole("link", { name: "伙伴" }));
+    await user.click(screen.getByRole("link", { name: "Buddy" }));
     await screen.findByRole("heading", { name: "模型 1" });
     await user.click(screen.getByRole("link", { name: "设置" }));
     await screen.findByRole("heading", { name: "显示" });

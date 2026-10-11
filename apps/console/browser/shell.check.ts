@@ -2,7 +2,7 @@ import { expect } from "@playwright/test";
 import { contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
 
 const languages = [
-  { locale: "zh-CN", tabs: ["任务", "伙伴", "设置"], pending: "等待 Host 决定的微任务" },
+  { locale: "zh-CN", tabs: ["任务", "Buddy", "设置"], pending: "等待 Host 决定的微任务" },
   { locale: "en-US", tabs: ["Tasks", "Buddies", "Settings"], pending: "Micro tasks waiting for their Host's decision" },
 ];
 

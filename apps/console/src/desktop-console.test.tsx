@@ -136,11 +136,11 @@ describe("desktop console", () => {
     const user = userEvent.setup();
     const { container } = render(<App suppliedApi={f.api} />);
     const navigation = await screen.findByRole("navigation", { name: "主要导航" });
-    expect(within(navigation).getAllByRole("link").map(link => link.textContent)).toEqual(["任务", "伙伴", "设置"]);
+    expect(within(navigation).getAllByRole("link").map(link => link.textContent)).toEqual(["任务", "Buddy", "设置"]);
     expect(navigation.closest("header")).not.toBeNull();
     expect(container.querySelector(".sidebar")).toBeNull();
     expect(screen.getAllByRole("navigation")).toHaveLength(1);
-    await user.click(within(navigation).getByRole("link", { name: "伙伴" }));
+    await user.click(within(navigation).getByRole("link", { name: "Buddy" }));
     expect(await screen.findByRole("heading", { name: "模型 6" })).toBeTruthy();
     const list = screen.getByRole("region", { name: "模型家族" });
     expect(list.querySelectorAll(".family-row")).toHaveLength(6);
@@ -173,7 +173,7 @@ describe("desktop console", () => {
     await user.type(screen.getByLabelText("家族备注"), "ZCode 家族备注");
     await user.click(screen.getByRole("link", { name: "设置" }));
     expect(screen.queryByRole("textbox", { name: "家族备注" })).toBeNull();
-    await user.click(screen.getByRole("link", { name: /伙伴/ }));
+    await user.click(screen.getByRole("link", { name: /Buddy/ }));
     expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "ZCode 家族备注");
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "flash 家族备注");
@@ -226,7 +226,7 @@ describe("desktop console", () => {
       query: "目标", projectId: "source-project", hostId: "codex-source" }), expect.any(AbortSignal)));
     const scroll = screen.getByLabelText("委派条目");
     scroll.scrollTop = 280;
-    await user.click(screen.getByRole("link", { name: /伙伴/ }));
+    await user.click(screen.getByRole("link", { name: /Buddy/ }));
     await user.click(screen.getByRole("link", { name: "任务" }));
     expect(screen.getByLabelText("搜索委派")).toHaveProperty("value", "目标");
     expect(screen.getByLabelText("项目筛选")).toHaveProperty("value", "source-project");
@@ -303,7 +303,7 @@ describe("desktop console", () => {
     expect(screen.queryByRole("button", { name: "批准所列协助" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /目标 two/ }));
     expect((await screen.findAllByText(/协助 two/)).length).toBeGreaterThan(0);
-    await user.click(screen.getByRole("link", { name: /伙伴/ }));
+    await user.click(screen.getByRole("link", { name: /Buddy/ }));
     await user.click(screen.getByRole("link", { name: "任务" }));
     expect((await screen.findAllByText(/协助 two/)).length).toBeGreaterThan(0);
     expect(f.command.mock.calls.every(([operation]) => operation === "workflow_get")).toBe(true);

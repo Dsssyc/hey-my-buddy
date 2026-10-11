@@ -487,7 +487,7 @@ describe("the Router menu", () => {
     // A programmatic navigation has no outside pointer press to dismiss the portal.
     fireEvent.click(screen.getByRole("link", { name: "设置" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "GPT-6 Sol · medium 档位设置" })).toBeNull());
-    fireEvent.click(screen.getByRole("link", { name: /伙伴/ }));
+    fireEvent.click(screen.getByRole("link", { name: /Buddy/ }));
     expect(screen.queryByRole("dialog", { name: "GPT-6 Sol · medium 档位设置" })).toBeNull();
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
   });
