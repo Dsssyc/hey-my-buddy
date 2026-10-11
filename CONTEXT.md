@@ -75,6 +75,10 @@ A native agent product in which a buddy runs, such as DSH, ZCode, Codex or Claud
 **adapter**:
 The connector through which one harness takes part in the blackboard in one role.
 
+**推理强度 / reasoning effort**:
+The fourth part of a buddy's identity: how much reasoning the harness asks of the model. Each harness names and grades its efforts in its own way, so two harnesses' values are not comparable even when they share a name.
+_Avoid_: 档位, 思考档位 (档位 names a permission level), effort level, thinking level
+
 **模型目录 / model catalog**:
 The blackboard's record of the models and reasoning efforts a harness reported it can provide, and so of which buddies exist in that harness. It is a reading taken at one moment, not a fact about the harness: a buddy whose model is missing from a later reading is pending, still usable, until a further reading confirms the absence.
 _Avoid_: model list (for the blackboard's record; the model list is what the harness itself returns)
