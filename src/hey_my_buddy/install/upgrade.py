@@ -549,7 +549,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                         clear_journal(marker)
                         error = failure.payload() if isinstance(failure, BoardError) and failure.code in ('UPGRADE_NOT_IDLE', 'BACKUP_PREFLIGHT_FAILED') else {'code':'UPGRADE_NOT_SWITCHED','message':'Upgrade could not detach; the previous service remains available'}
                         error.setdefault('details', {})['reason'] = reason
-                        return {'upgraded':False, 'error':error, 'failure':reason}
+                        return {'upgraded':False, 'error':error}
                 endpoint_now = json.loads((state / 'control.json').read_text()) if (state / 'control.json').exists() else None
                 if detached and endpoint_now and endpoint_now.get('runtimeIdentity') == 'runtime:' + active.name:
                     detach(state, active)
@@ -569,7 +569,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 error = failure.payload() if backed_up is None and isinstance(failure, BoardError) and failure.code in ('UPGRADE_NOT_IDLE', 'BACKUP_PREFLIGHT_FAILED') else {'code':'UPGRADE_ROLLED_BACK','message':'Upgrade failed; the previous runtime and backup were restored'}
                 error.setdefault('details', {})['reason'] = reason
                 return {'upgraded':False, 'error':error,
-                        'backup':backed_up, 'rollback':evidence, 'failure':journal['failure'],
+                        'backup':backed_up, 'rollback':evidence,
                         'privateMigration':_private_summary(journal, rolled_back=True)}
             except Exception as recovery:
                 journal.update(phase='recovery-required', failure=reason, recoveryFailure=_failure_reason(recovery))

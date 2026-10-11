@@ -178,6 +178,31 @@ class Schema15UpgradeTests(BoardTestCase):
         self.assertIn("'router.claimed'", definitions['events_router_claimed_idx'])
 
     def test_sql_failure_rolls_back_every_form_value_and_marker(self):
+        # Collisions exercise the real table/index statements. Index failure
+        # context must name its owning table, even when the collision is elsewhere.
+        collisions = (
+            ('model_facts', 'CREATE TABLE model_facts(value TEXT)'),
+            ('events', 'CREATE INDEX events_router_outcome_idx ON tasks(task_id)'),
+            ('attempts', 'CREATE INDEX attempts_router_binding_unique ON tasks(task_id)'),
+            ('router_outcomes', 'CREATE INDEX router_outcomes_profile_idx ON tasks(task_id)'),
+            ('catalog_pending', 'CREATE TABLE catalog_pending(value TEXT)'),
+        )
+        for table, statement in collisions:
+            with self.subTest(table=table):
+                state = self.directory / ('collision-' + table)
+                load_fixture(state)
+                with closing(sqlite3.connect(state / 'board.sqlite3', isolation_level=None)) as connection:
+                    connection.execute(statement)
+                    old_rows, old_shape = rows(connection), schema_shape(connection)
+                    with self.assertRaises(BoardError) as caught:
+                        migrations.migrate_15_to_16(connection)
+                    self.assertEqual(caught.exception.code, 'UPGRADE_MIGRATION_FAILED')
+                    self.assertEqual(caught.exception.details['tables'], [table])
+                    self.assertIn('already exists', caught.exception.message)
+                    self.assertEqual(rows(connection), old_rows)
+                    self.assertEqual(schema_shape(connection), old_shape)
+                    self.assertFalse(connection.in_transaction)
+
         old_rows, old_shape = rows(self.connection), schema_shape(self.connection)
         with mock.patch.object(migrations, '_CONCLUSION_INDEX', 'CREATE INDEX broken ON no_such_table(value)'):
             with self.assertRaises(BoardError) as caught:

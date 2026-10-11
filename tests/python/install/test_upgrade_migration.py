@@ -241,14 +241,34 @@ class UpgradeMigrationTests(BoardTestCase):
 
     def test_failed_upgrade_response_and_journal_share_the_structured_cause_and_tables(self):
         old = self.all_rows()
-        failure = BoardError('UPGRADE_VERIFY_FAILED', 'declared private failure', tables=['model_facts'])
-        result = self.failed_upgrade([failure, {'retainedDataFingerprints':True}])
+        with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
+            old_shape = schema_shape(connection)
+        original = upgrade.migrate_board
+
+        def failed_migration(*args):
+            # Let backup trials succeed, then fail SQLite in the actual board
+            # migration with context independent of the injected SQL text.
+            with mock.patch.object(migrations, '_NEW_DDL', migrations._NEW_DDL + (
+                    ('router_outcomes', 'CREATE INDEX broken ON no_such_table(value)'),)):
+                return original(*args)
+
+        with mock.patch.object(upgrade, 'migrate_board', side_effect=failed_migration):
+            result = self.failed_upgrade([{'retainedDataFingerprints':True}])
         journal = json.loads((self.state / 'upgrade-last.json').read_text())
         self.assertFalse(result['upgraded'])
-        self.assertEqual(result['error']['details']['reason'], failure.payload())
+        self.assertNotIn('failure', result)
+        self.assertEqual(result['error']['code'], 'UPGRADE_ROLLED_BACK')
+        self.assertEqual(result['error']['details']['reason'], {
+            'code':'UPGRADE_MIGRATION_FAILED', 'message':'no such table: main.no_such_table',
+            'details':{'tables':['router_outcomes']},
+        })
         self.assertEqual(journal['failure'], result['error']['details']['reason'])
-        self.assertEqual(journal['failure']['details']['tables'], ['model_facts'])
+        self.assertEqual(journal['phase'], 'rolled-back')
+        self.assertIsNotNone(result['backup'])
+        self.assertFalse((self.state / 'upgrade.json').exists())
         self.assertEqual(self.all_rows(), old)
+        with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
+            self.assertEqual(schema_shape(connection), old_shape)
 
     def test_router_source_form_failure_reaches_upgrade_error_and_journal_without_changing_settings(self):
         for version in ('2', '3', None):
@@ -282,7 +302,7 @@ class UpgradeMigrationTests(BoardTestCase):
                     }},
                 })
                 self.assertEqual(journal['failure'], reason)
-                self.assertEqual(result['failure'], reason)
+                self.assertNotIn('failure', result)
                 self.assertEqual(journal['phase'], 'rolled-back')
                 self.assertIsNone(result['backup'])
                 with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
@@ -298,6 +318,9 @@ class UpgradeMigrationTests(BoardTestCase):
         active = json.loads((self.state / 'upgrade.json').read_text())
         last = json.loads((self.state / 'upgrade-last.json').read_text())
         self.assertEqual(active, last)
+        self.assertEqual(last['phase'], 'recovery-required')
+        self.assertEqual(caught.exception.details['reason'], failure.payload())
+        self.assertEqual(caught.exception.details['recoveryReason'], recovery.payload())
         self.assertEqual(last['failure'], caught.exception.details['reason'])
         self.assertEqual(last['recoveryFailure'], caught.exception.details['recoveryReason'])
         self.assertEqual(last['failure']['details']['tables'], ['catalog_current'])

@@ -21,7 +21,7 @@ ROUTER_META_KEYS = _SOURCE_ROUTER_META_KEYS | {"router_profile_ids", "router_ret
 
 # Frozen migration DDL, deliberately not derived from db.SCHEMA at execution time.
 _NEW_DDL = (
-    """CREATE TABLE model_facts (
+    ("model_facts", """CREATE TABLE model_facts (
     adapter          TEXT NOT NULL,
     provider         TEXT NOT NULL,
     model            TEXT NOT NULL,
@@ -33,19 +33,19 @@ _NEW_DDL = (
     fetched_at       TEXT NOT NULL,
     reason           TEXT,
     PRIMARY KEY (adapter, provider, model)
-)""",
-    """CREATE INDEX events_router_outcome_idx
+)"""),
+    ("events", """CREATE INDEX events_router_outcome_idx
     ON events(json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END, '$.profileId'), seq)
-    WHERE kind IN ('router.answered','router.no_answer')""",
-    """CREATE INDEX events_router_claimed_idx
+    WHERE kind IN ('router.answered','router.no_answer')"""),
+    ("events", """CREATE INDEX events_router_claimed_idx
     ON events(json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END, '$.profileId'), seq)
-    WHERE kind='router.claimed'""",
-    """CREATE TABLE router_requests (
+    WHERE kind='router.claimed'"""),
+    ("router_requests", """CREATE TABLE router_requests (
     decision_id      TEXT NOT NULL PRIMARY KEY REFERENCES decision_requests(decision_id) ON DELETE RESTRICT,
     snapshot_json    TEXT NOT NULL,
     frozen_at        TEXT NOT NULL
-)""",
-    """CREATE TABLE router_dispatches (
+)"""),
+    ("router_dispatches", """CREATE TABLE router_dispatches (
     task_id      TEXT NOT NULL PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
     decision_id  TEXT NOT NULL REFERENCES router_requests(decision_id) ON DELETE RESTRICT,
     router_index INTEGER NOT NULL CHECK (router_index >= 0),
@@ -58,17 +58,17 @@ _NEW_DDL = (
     input_sha256 TEXT NOT NULL,
     created_at   TEXT NOT NULL,
     UNIQUE (decision_id, router_index)
-)""",
-    """CREATE UNIQUE INDEX attempts_router_binding_unique ON attempts(attempt_id, task_id, generation)""",
-    """CREATE TABLE router_claims (
+)"""),
+    ("attempts", """CREATE UNIQUE INDEX attempts_router_binding_unique ON attempts(attempt_id, task_id, generation)"""),
+    ("router_claims", """CREATE TABLE router_claims (
     attempt_id TEXT NOT NULL PRIMARY KEY,
     task_id    TEXT NOT NULL REFERENCES router_dispatches(task_id) ON DELETE RESTRICT,
     generation INTEGER NOT NULL CHECK (generation >= 1),
     FOREIGN KEY (attempt_id, task_id, generation) REFERENCES attempts(attempt_id, task_id, generation) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
     UNIQUE (task_id, generation)
-)""",
-    """CREATE UNIQUE INDEX attempts_router_outcome_binding_unique ON attempts(attempt_id, task_id)""",
-    """CREATE TABLE router_outcomes (
+)"""),
+    ("attempts", """CREATE UNIQUE INDEX attempts_router_outcome_binding_unique ON attempts(attempt_id, task_id)"""),
+    ("router_outcomes", """CREATE TABLE router_outcomes (
     receipt_id   TEXT NOT NULL PRIMARY KEY,
     plane        TEXT NOT NULL CHECK (plane IN ('work','maintenance','portrait')),
     request_id   TEXT NOT NULL,
@@ -83,18 +83,18 @@ _NEW_DDL = (
     recorded_at  TEXT NOT NULL,
     CHECK (attempt_id IS NULL OR task_id IS NOT NULL),
     FOREIGN KEY (attempt_id, task_id) REFERENCES attempts(attempt_id, task_id) ON DELETE RESTRICT
-)""",
-    """CREATE INDEX router_outcomes_profile_idx ON router_outcomes(profile_id, event_seq)""",
-    """CREATE INDEX router_outcomes_task_idx ON router_outcomes(task_id, event_seq)""",
-    """CREATE INDEX router_outcomes_attempt_idx ON router_outcomes(attempt_id)""",
-    """CREATE TABLE catalog_pending (
+)"""),
+    ("router_outcomes", """CREATE INDEX router_outcomes_profile_idx ON router_outcomes(profile_id, event_seq)"""),
+    ("router_outcomes", """CREATE INDEX router_outcomes_task_idx ON router_outcomes(task_id, event_seq)"""),
+    ("router_outcomes", """CREATE INDEX router_outcomes_attempt_idx ON router_outcomes(attempt_id)"""),
+    ("catalog_pending", """CREATE TABLE catalog_pending (
     adapter      TEXT NOT NULL REFERENCES catalog_current(adapter) ON DELETE RESTRICT,
     provider     TEXT NOT NULL,
     model        TEXT NOT NULL,
     since        TEXT NOT NULL,
     efforts_json TEXT NOT NULL,
     PRIMARY KEY (adapter, provider, model)
-)""",
+)"""),
 )
 _REVIEW_INDEX = """CREATE INDEX events_review_seq_idx
     ON events(seq) WHERE kind IN ('task.accepted','task.rejected','workflow.acknowledged','workflow.review_rejected')"""
@@ -324,11 +324,8 @@ def _migrate_15_to_16_transaction(connection: sqlite3.Connection) -> dict:
             connection.execute(f"ALTER TABLE {table}_16 RENAME TO {table}")
             for statement in indexes:
                 connection.execute(statement)
-        for statement in _NEW_DDL:
-            # The table/index named by this fixed statement is the failure context.
-            words = statement.split()
-            tables = ["attempts" if words[2] == "INDEX" else "events" if "ON events(" in statement
-                      else words[2] if words[1] == "TABLE" else statement.split(" ON ")[1].split("(")[0]]
+        for table, statement in _NEW_DDL:
+            tables = [table]
             connection.execute(statement)
         tables = ["events"]
         connection.execute("DROP INDEX events_review_seq_idx")
