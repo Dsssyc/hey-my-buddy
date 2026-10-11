@@ -28,14 +28,15 @@ import sys
 import tempfile
 import time
 import unittest
+
+import c_two as cc
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome, ProcessHandle
 from hey_my_buddy.buddy.harnesses.c_two_live import (
-    C_TWO_IPC_DIRECTORY,
     ConfirmedProcessGone,
     LiveEndpointDescriptor,
-    cleanup_abandoned_socket,
+    cleanup_owned_endpoint,
 )
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.buddy.runtime import worker as worker_module
@@ -243,7 +244,7 @@ class EndingControllerExecutor:
 
 class WorkerEndpointClosureTests(unittest.TestCase):
     """V-C3/V-C4: exit closes the Worker's own endpoint; a reaped owned
-    controller's captured socket is cleared and nobody else's file is touched."""
+    controller's owned endpoint is reaped and foreign endpoints survive."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="buddy-worker-endpoint-",
@@ -266,7 +267,10 @@ class WorkerEndpointClosureTests(unittest.TestCase):
         never left behind for a failing assertion to lose.
         """
         environment = {key: value for key, value in os.environ.items()
-                       if key not in invariants.SANITIZED_VARIABLES}
+                       if key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
+                       and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
+        environment.update(BUDDY_STATE_DIR=str(self.state),
+                           BUDDY_RUNTIME_ROOT=str(self.materials / "runtime"), TMPDIR=str(self.materials))
         environment.update(C2_RELAY_ANCHOR_ADDRESS="", C2_ENV_FILE="", PYTHONDONTWRITEBYTECODE="1")
         stderr = (self.materials / f"{label}-stderr.log").open("x")
         process = subprocess.Popen([sys.executable, str(PEER), "controller"],
@@ -316,8 +320,8 @@ class WorkerEndpointClosureTests(unittest.TestCase):
     def reclaim_owned_endpoint(self, peer) -> dict:
         """End this test's peer and clear exactly its captured endpoint file.
 
-        The socket identity is the one this peer's own descriptor captured at
-        creation, and the file is touched only through the production cleanup
+        The native credential is the one this peer's own descriptor captured at
+        creation, and the endpoint is reaped only through the production cleanup
         primitive — never by scanning the shared directory — and only after the
         group this fixture created is observed gone.
         """
@@ -326,14 +330,18 @@ class WorkerEndpointClosureTests(unittest.TestCase):
             owned.terminate(grace_seconds=1.0)
         exit_code = owned.process.poll()
         group_gone = owned.shutdown_confirmed()
-        cleanup = cleanup_abandoned_socket(
-            peer["descriptor"], ConfirmedProcessGone(pid=owned.pid, exit_code=exit_code,
-                                                     group_gone=group_gone))
+        cleanup = getattr(peer.get("releaseHandle"), "role_endpoint_cleanup", None)
+        if cleanup is None:
+            cleanup = cleanup_owned_endpoint(
+                peer["descriptor"], ConfirmedProcessGone(pid=owned.pid, exit_code=exit_code,
+                                                         group_gone=group_gone),
+                context=cc.local_endpoint_context(root=str(self.state / "ipc")))
         self.close_peer_pipes(peer["process"], peer["stderr"])
         record = {"peer": peer["label"], "pid": owned.pid, "pgid": owned.pgid,
                   "exitCode": exit_code, "groupGone": group_gone,
-                  "socketPath": peer["descriptor"].socket.path,
-                  "socketExistsAfter": Path(peer["descriptor"].socket.path).exists(),
+                  "address": peer["descriptor"].address,
+                  "endpointStatusAfter": cc.inspect_endpoint(peer["descriptor"].address,
+                      root=str(self.state / "ipc"))["status"],
                   "outcome": cleanup.outcome, "reason": cleanup.reason}
         self.record_disposition(record)
         return record
@@ -354,29 +362,30 @@ class WorkerEndpointClosureTests(unittest.TestCase):
             self.close_peer_pipes(process, peer["stderr"])
             record = {"peer": peer["label"], "pid": process.pid, "pgid": peer["owned"].pgid,
                       "returnCode": process.poll(),
-                      "socketPath": peer["descriptor"].socket.path,
-                      "socketExistsAfter": Path(peer["descriptor"].socket.path).exists()}
+                      "address": peer["descriptor"].address,
+                      "endpointStatusAfter": cc.inspect_endpoint(peer["descriptor"].address,
+                          root=str(self.state / "ipc"))["status"]}
             self.record_disposition(record)
             return record
         # A peer that would not stop cleanly is ended and its captured endpoint
         # cleared exactly like the owned one; this test leaves nothing behind.
         return self.reclaim_owned_endpoint(peer)
 
-    @unittest.skipUnless(os.name == "posix", "the recorded C-Two socket layout is POSIX")
-    def test_worker_exit_closes_its_own_c_two_socket(self):
+    @unittest.skipUnless(os.name == "posix", "native local endpoint maintenance is POSIX")
+    def test_worker_exit_closes_its_own_c_two_endpoint(self):
         worker = Worker("w-exit", self.state, client=LoopRecordingClient(), log=invariants.silent)
         descriptor = worker.live.start()
-        socket = Path(C_TWO_IPC_DIRECTORY) / (descriptor.address.removeprefix("ipc://") + ".sock")
+
         self.addCleanup(worker.live.stop)
-        self.assertTrue(socket.is_socket(), "a started Worker runtime owns a live C-Two socket")
+        self.assertEqual(cc.inspect_endpoint(descriptor.address)["status"], "present")
         worker.run(max_iterations=1)
         self.assertEqual(worker.client.registrations, ["w-exit"])
         self.assertEqual(len(worker.client.claims), 1, "the loop really ran one claim round")
-        self.assertFalse(socket.exists(),
-                         "the Worker main loop's exit path closes its own C-Two endpoint")
+        self.assertEqual(cc.inspect_endpoint(descriptor.address)["status"], "absent",
+                         "the Worker main loop closes its own C-Two endpoint")
 
-    @unittest.skipUnless(os.name == "posix", "the recorded C-Two socket layout is POSIX")
-    def test_controller_end_through_execute_clears_only_the_captured_socket(self):
+    @unittest.skipUnless(os.name == "posix", "native local endpoint maintenance is POSIX")
+    def test_controller_end_through_execute_reaps_only_the_owned_endpoint(self):
         from hey_my_buddy.buddy.harnesses.run_contract import (
             FrozenJson, PrivateStatePaths, RunBudget, RunConfiguration, RunIdentity, RunRequest,
             encode_run_request,
@@ -412,10 +421,8 @@ class WorkerEndpointClosureTests(unittest.TestCase):
         owned, foreign = self.controller_pair(identity)
         recycling = []
         try:
-            owned_socket = Path(owned["descriptor"].socket.path)
-            foreign_socket = Path(foreign["descriptor"].socket.path)
-            self.assertTrue(owned_socket.is_socket())
-            self.assertTrue(foreign_socket.is_socket())
+            self.assertEqual(cc.inspect_endpoint(owned["descriptor"].address)["status"], "present")
+            self.assertEqual(cc.inspect_endpoint(foreign["descriptor"].address)["status"], "present")
             ready_file = directory / "live-ready.json"
             ready_file.write_text(json.dumps(owned["descriptor"].to_payload()))
             control = {"operation": "worker", "harness": "zcode", "requestFile": str(request_file),
@@ -424,24 +431,27 @@ class WorkerEndpointClosureTests(unittest.TestCase):
                                 "instanceId": owned["descriptor"].instance_id,
                                 "token": owned["token"]}}
             handle = EndingControllerHandle(control, identity, owned["owned"], client)
+            owned["releaseHandle"] = handle
             claim = {"attempt": {"attemptId": attempt_id, "taskId": task_id, "generation": 1},
                      "task": {"taskId": task_id,
                               "spec": {"adapter": "command", "cwd": str(self.work),
                                        "task": "controller end wiring", "timeoutSeconds": 30}}}
             self.addCleanup(worker.live.stop)
             with mock.patch.object(worker_module.role_seam, "worker_executor",
-                                   return_value=EndingControllerExecutor(handle)):
+                                   return_value=EndingControllerExecutor(handle)), \
+                    mock.patch.object(cc, "reap_endpoint", wraps=cc.reap_endpoint) as reap:
                 receipt = worker.execute(claim)
+            reap.assert_called_once()
             self.assertEqual(receipt["report"]["status"], "ok")
             self.assertEqual(len(client.live_attachments), 1,
                              "the renewal thread's real tick registered the controller binding")
             self.assertEqual(client.live_attachments[0].attempt_id, attempt_id)
             self.assertEqual(len(client.live_detachments), 1,
                              "the execute end path released the binding with the board")
-            self.assertFalse(owned_socket.exists(),
-                             "the reaped owned controller's captured socket file was cleared")
-            self.assertTrue(foreign_socket.is_socket(),
-                            "another holder's socket file in the shared IPC directory survives")
+            self.assertEqual(cc.inspect_endpoint(owned["descriptor"].address)["status"], "absent",
+                             "the reaped owned controller's owned endpoint was reaped")
+            self.assertEqual(cc.inspect_endpoint(foreign["descriptor"].address)["status"], "present",
+                            "another holder's endpoint in the private IPC domain survives")
         finally:
             # After the assertions, in every outcome: recycle exactly the two
             # endpoints this test created. The owned file is cleared through the
@@ -449,13 +459,13 @@ class WorkerEndpointClosureTests(unittest.TestCase):
             # peer ends through its own clean C-Two stop. Nothing is scanned.
             recycling.append(self.reclaim_owned_endpoint(owned))
             recycling.append(self.stop_foreign_peer(foreign))
-        self.assertIn(recycling[0]["outcome"], ("already-absent", "deleted"))
+        self.assertIn(recycling[0]["outcome"], ("already-absent", "reaped"))
         self.assertIs(recycling[0]["groupGone"], True)
         self.assertIsNotNone(recycling[0]["exitCode"])
-        self.assertFalse(recycling[0]["socketExistsAfter"],
+        self.assertEqual(recycling[0]["endpointStatusAfter"], "absent",
                          "the fixture leaves no endpoint file of its own behind")
         self.assertIsNotNone(recycling[1]["returnCode"])
-        self.assertFalse(recycling[1]["socketExistsAfter"],
+        self.assertEqual(recycling[1]["endpointStatusAfter"], "absent",
                          "the foreign peer's own stop removed its endpoint file")
 
 

@@ -291,7 +291,7 @@ class BoardService(_BaseResource):
         def worker_channel(attachment):
             return CTwoLiveChannel(attachment.identity, WorkerRuntimeLive, name=attachment.name,
                                    address=attachment.address, instance_id=attachment.instance_id,
-                                   token=attachment.live_token)
+                                   token=attachment.live_token, state_dir=store.directory)
         store.live_registry = LiveRegistry(store, channel_factory=worker_channel)
         self.started_at = utc_now()
 

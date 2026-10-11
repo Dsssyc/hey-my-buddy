@@ -181,7 +181,7 @@ class Worker:
     def __init__(
         self,
         worker_id: str,
-        state_dir: str | Path,
+        state_dir: Path,
         *,
         client: BoardClient | None = None,
         lease_seconds: int = 120,
@@ -192,18 +192,19 @@ class Worker:
         log: Callable[[str], None] | None = None,
     ):
         from ...protocol.rpc_config import configure_server, configure_client
-        configure_server()
-        configure_client()
+        configure_server(state_dir)
+        configure_client(state_dir)
         self.worker_id = worker_id
         # One identity per worker *process*: a new process cannot prove it owns a
         # child that a previous process spawned, so it must never resume that work.
         self.instance_id = f"{worker_id}-{uuid.uuid4()}"
-        self.state_dir = Path(state_dir)
+        self.state_dir = state_dir
         self.client = client or BoardClient(self.state_dir, autostart=False)
         from .live import WorkerLiveRuntime
         from ..roles.live import handle_live_binding
         self.live = WorkerLiveRuntime(self.client, worker_id=self.worker_id,
-                                      worker_instance=self.instance_id, resolve_channel=handle_live_binding)
+                                      worker_instance=self.instance_id, state_dir=self.state_dir,
+                                      resolve_channel=lambda handle: handle_live_binding(handle, state_dir=self.state_dir))
         self.lease_seconds = lease_seconds
         self.adapters = adapters
         self.extra_capabilities = tuple(extra_capabilities)
@@ -559,6 +560,7 @@ class Worker:
                 # Validation failed before start() could spawn anything.
                 shutdown_confirmed = True
             if shutdown_confirmed:
+                self._release_controller_endpoint(holder)
                 try:
                     self._cleanup_attempt_credentials(claim, spec, task, attempt)
                 except Exception as cleanup_error:
@@ -589,16 +591,20 @@ class Worker:
                 self.live.unbind(claim)
             except Exception as error:
                 self.log(f"live detach unavailable: {type(error).__name__}")
-            handle = holder.get("handle")
-            if handle is not None:
-                try:
-                    from ..roles.live import release_live_binding
-                    cleanup = release_live_binding(handle)
-                    if cleanup is not None:
-                        self.log(f"owned controller endpoint cleanup: {cleanup.outcome}; {cleanup.reason}")
-                except Exception as error:
-                    self.log(f"owned endpoint cleanup not confirmed: {type(error).__name__}")
+            self._release_controller_endpoint(holder)
 
+    def _release_controller_endpoint(self, holder: dict) -> None:
+        # Revalidate and reap before deleting the request used for that binding.
+        handle = holder.get("handle")
+        if handle is not None and not holder.get("live_release_attempted"):
+            holder["live_release_attempted"] = True
+            try:
+                from ..roles.live import release_live_binding
+                cleanup = release_live_binding(handle)
+                if cleanup is not None:
+                    self.log(f"owned controller endpoint cleanup: {cleanup.outcome}; {cleanup.reason}")
+            except Exception as error:
+                self.log(f"owned endpoint cleanup not confirmed: {type(error).__name__}")
 
     def _execute_guarded(
         self, claim: dict, task: dict, spec: dict, attempt: dict, directory: Path, holder: dict
@@ -738,6 +744,7 @@ class Worker:
         # A previous pre-model retry may have proved its own child stopped. That
         # proof cannot cover this start(): it might spawn before raising a handle.
         holder.pop("confirmed_stopped", None)
+        holder.pop("live_release_attempted", None)
         holder.pop("handle", None)
         holder["start_invoked"] = True
         handle = role_seam.worker_start(implementation, context)
@@ -801,6 +808,7 @@ class Worker:
         if isinstance(retention_failure, dict) and isinstance(outcome.result, dict):
             outcome.result = {**outcome.result, "evidenceRetention": retention_failure}
         if outcome.shutdown_confirmed:
+            self._release_controller_endpoint(holder)
             self._cleanup_attempt_credentials(claim, spec, task, attempt)
         if (holder.get('harnessHistory') and not timed_out
                 and not handle.cancel_requested and outcome.shutdown_confirmed and outcome.status == 'failed'
@@ -1073,7 +1081,7 @@ class _Renewal(threading.Thread):
             return "unextracted", None
         from ..roles import live as role_live
 
-        state, channel = role_live.handle_live_binding(self.handle)
+        state, channel = role_live.handle_live_binding(self.handle, state_dir=self.worker.state_dir)
         if state == role_live.LIVE_BOUND:
             try:
                 self.worker.live.bind(self.claim, self.handle, self.nonce)

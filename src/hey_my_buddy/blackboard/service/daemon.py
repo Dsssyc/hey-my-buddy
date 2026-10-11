@@ -32,7 +32,7 @@ from ..store.db import SCHEMA_VERSION, utc_now
 from ...errors import BoardError
 from .service import BoardService, WaitAdmission, WaitService
 from ..store.store import BoardStore
-from ...protocol.transport import ServiceError, get_state_dir
+from ...protocol.transport import ServiceError
 from ...buddy.runtime.worker import RETIRE_REQUEST_NAME, ReceiptSpool
 
 DRAIN_SECONDS_DEFAULT = 10
@@ -595,8 +595,10 @@ class Daemon:
         )
 
     def run(self) -> int:
+        rpc_config._validate_path(self.directory)
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(self.directory, 0o700)
+        self.directory.chmod(0o700)
+        self.control["rpc_profile"] = rpc_config.configure_server(self.directory)
         self.acquire_exclusive()
         try:
             self.store.initialize()
@@ -609,7 +611,6 @@ class Daemon:
             # Buddy's private C-Two profile goes in before the first register: the
             # pool, reassembly and execution capacity are set through C-Two's public
             # overrides, never through inherited environment variables.
-            self.control["rpc_profile"] = rpc_config.configure_server()
             cc.register(
                 BuddyControl,
                 service,
@@ -837,7 +838,11 @@ def _env_int(name: str, default: int) -> int:
 
 
 def main() -> int:
-    directory = get_state_dir()
+    selected = os.environ.get("BUDDY_STATE_DIR")
+    if not selected:
+        sys.stderr.write("buddy daemon: BUDDY_STATE_DIR is required\n")
+        return 2
+    directory = Path(selected)
     daemon = Daemon(directory)
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_args: daemon.on_stop({"drainSeconds": DRAIN_SECONDS_DEFAULT, "reason": "signal"}))

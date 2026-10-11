@@ -4,8 +4,11 @@ Only registration delivery uses the peer's recording BoardClient. The service
 operation, actor/turn checks, channel factory and two live C-Two hops are real.
 The controller commits a fsynced fake native journal, without a model.
 """
+import os
+from unittest import mock
+
 from blackboard.store.test_store import StoreConcurrencyTestCase
-from buddy.runtime.test_live import peer, request, claim, socket_path
+from buddy.runtime.test_live import peer, request, claim, endpoint_status
 from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.buddy.harnesses.c_two_live import LiveEndpointDescriptor
@@ -25,7 +28,7 @@ class ServiceHolderIntegrationTests(StoreConcurrencyTestCase):
         identity = RunIdentity(task_id=run_id, attempt_id=attempt["attemptId"],
             generation=attempt["generation"], invocation_id="held-controller-invocation",
             turn_id=turn["turnId"], input_sha256=turn["inputSha256"])
-        with peer() as holding:
+        with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(board.directory)}), peer() as holding:
             descriptor = LiveEndpointDescriptor.from_payload(holding.call(op="spawn", label="one",
                 identity=identity.to_payload(), journal=str(holding.root / "one-journal.jsonl"))["descriptor"])
             holding.controllers.append(descriptor)
@@ -34,7 +37,8 @@ class ServiceHolderIntegrationTests(StoreConcurrencyTestCase):
             self.assertTrue(board.call("worker_live_attach", attachment.to_payload())["attached"])
             view = board.store.task_get({"runId": run_id})["task"]
             registry = board.store.live_registry
-            channel = registry.channel_for(view)
+            with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(board.directory / "foreign-state")}):
+                channel = registry.channel_for(view)
             self.assertEqual(channel.identity, identity)
             self.assertEqual(channel.request(request(identity), timeout_ms=2000).status, "queued")
             self.assertTrue((holding.root / "one-journal.jsonl").read_text())
@@ -60,5 +64,5 @@ class ServiceHolderIntegrationTests(StoreConcurrencyTestCase):
             self.assertTrue(board.call("worker_live_detach", detached.to_payload())["detached"])
             self.assertIsNone(fresh.channel_for(board.store.task_get({"runId": run_id})["task"]))
             descriptors = [holding.descriptor, *holding.controllers]
-            self.assertTrue(all(socket_path(d).is_socket() for d in descriptors))
-        self.assertTrue(all(not socket_path(d).exists() for d in descriptors))
+            self.assertTrue(all(endpoint_status(d) == "present" for d in descriptors))
+        self.assertTrue(all(endpoint_status(d) == "absent" for d in descriptors))

@@ -29,42 +29,65 @@ from hey_my_buddy.private_dirs import context_root
 
 
 class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
+    def setUp(self):
+        if self._testMethodName in {
+            'test_private_fixture_states_keep_concurrent_inquiry_bridges_separate',
+            'test_concurrent_private_attempts_keep_late_questions_bound',
+        }:
+            # The parent only drives pipes. Each holder configures its one
+            # process-level C-Two domain in the private child fixture.
+            return
+        super().setUp()
+
     def test_private_fixture_states_keep_concurrent_inquiry_bridges_separate(self):
-        peer = ZcodeFixtureCase()
-        peer.setUp()
-        self.addCleanup(peer.doCleanups)
-        own = self.context('inquiry-live', timeout=40)
-        other = peer.context('inquiry-live', timeout=40)
-        own_handle = self.adapter.start(own)
-        self.own_handle(own_handle)
-        peer_handle = peer.adapter.start(other)
-        peer.own_handle(peer_handle)
-        own_channel = self.ready_channel(own_handle)
-        peer_channel = peer.ready_channel(peer_handle)
-        self.assertNotEqual(own.attempt_id, other.attempt_id)
+        from buddy.harnesses.zcode.fixtures.checkpoint_domain import CheckpointDomain
+
+        own = CheckpointDomain(self, 'inquiry-live')
+        peer = CheckpointDomain(self, 'inquiry-live')
+        # Both admitted turns must still be live before any inquiry/release.
+        for domain in (own, peer):
+            self.assertTrue(domain.command({'op': 'live'})['live'])
+        self.assertNotEqual(own.live['ownerPid'], peer.live['ownerPid'])
+        for key in ('state', 'runtime', 'home', 'ipcRoot'):
+            self.assertNotEqual(own.live[key], peer.live[key], key)
+        self.assertNotEqual(own.live['attemptId'], peer.live['attemptId'])
         # Each controller owns one endpoint: the holder-held live materials and
         # the published ready descriptors never cross the two private runs.
-        own_material, peer_material = own_handle.role_run_control['live'], peer_handle.role_run_control['live']
+        own_material, peer_material = own.live, peer.live
         self.assertNotEqual(own_material['instanceId'], peer_material['instanceId'])
         self.assertNotEqual(own_material['token'], peer_material['token'])
-        self.assertNotEqual(json.loads(Path(own_material['readyFile']).read_text())['address'],
-                            json.loads(Path(peer_material['readyFile']).read_text())['address'])
-        self.ask(own_handle, 'own-question', 'Answer this private fixture.', own_channel)
-        self.ask(peer_handle, 'peer-question', 'Answer the other private fixture.', peer_channel)
-        self.release(own)
-        self.release(other)
-        for adapter, context, handle in ((self.adapter, own, own_handle), (peer.adapter, other, peer_handle)):
-            self.assertIsNotNone(handle.wait(40))
-            result = adapter.collect(handle, context)
-            self.assertEqual(result.status, 'ok', result.to_report())
-            self.assertTrue(result.shutdown_confirmed)
-        self.assertNotIn('peer-question', json.dumps(self.inquiry_records(own, 'own-question')))
-        self.assertEqual(self.inquiry_records(own, 'peer-question'), [])
-        self.assertEqual(self.inquiry_records(other, 'own-question'), [])
-        self.assertEqual([record['state'] for record in self.inquiry_records(own, 'own-question')],
+        self.assertNotEqual(own_material['address'], peer_material['address'])
+        own_receipt = own.command({'op': 'ask', 'id': 'own-question', 'question': 'Answer this private fixture.'})
+        peer_receipt = peer.command({'op': 'ask', 'id': 'peer-question', 'question': 'Answer the other private fixture.'})
+        for domain in (own, peer):
+            domain.command({'op': 'release'})
+        results = [domain.command({'op': 'collect', 'ids': ['own-question', 'peer-question']})
+                   for domain in (own, peer)]
+        for result in results:
+            self.assertEqual(result['status'], 'ok', result['report'])
+            self.assertTrue(result['shutdown'])
+            self.assertTrue(result['controllerStopped'])
+            self.assertTrue(result['nativeStopped'])
+            self.assertEqual(result['result']['turn']['outcome']['disposition'], 'completed')
+            self.assertEqual(result['methods'].split().count('session/send'), 1)
+        own_records, peer_records = results[0]['records'], results[1]['records']
+        self.assertNotIn('peer-question', json.dumps(own_records['own-question']))
+        self.assertEqual(own_records['peer-question'], [])
+        self.assertEqual(peer_records['own-question'], [])
+        self.assertEqual([record['state'] for record in own_records['own-question']],
                          ['queued', 'delivered', 'answered'])
-        self.assertEqual(self.inquiry_records(own, 'own-question')[0]['attemptId'], own.attempt_id)
-        self.assertEqual(self.inquiry_records(other, 'peer-question')[0]['attemptId'], other.attempt_id)
+        self.assertEqual(own_records['own-question'][0]['attemptId'], own.live['attemptId'])
+        self.assertEqual(peer_records['peer-question'][0]['attemptId'], peer.live['attemptId'])
+        for domain, result, inquiry_id, receipt in (
+            (own, results[0], 'own-question', own_receipt),
+            (peer, results[1], 'peer-question', peer_receipt),
+        ):
+            records = result['records'][inquiry_id]
+            self.assertEqual([record['state'] for record in records], ['queued', 'delivered', 'answered'])
+            self.assertEqual(records[0]['questionSha256'], receipt['correlation']['questionSha256'])
+            self.assertEqual(records[2]['answer']['text'], f'fixture answer for {inquiry_id}')
+            self.assertTrue(all(record['attemptId'] == domain.live['attemptId'] for record in records))
+            self.assertEqual([json.loads(line) for line in result['journal'].splitlines()], records)
 
     def test_one_send_delivers_and_answers_a_question_and_finishes_completed(self):
         context = self.context("inquiry-live", timeout=40)
@@ -201,31 +224,37 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         self.assertNotIn("child answer must not count", json.dumps(records))
 
     def test_concurrent_private_attempts_keep_late_questions_bound(self):
-        other = ZcodeFixtureCase()
-        other.setUp()
-        self.addCleanup(other.doCleanups)
-        attempts = []
-        for fixture in (self, other):
-            context = fixture.context("inquiry-late", timeout=40)
-            handle = fixture.adapter.start(context)
-            fixture.own_handle(handle)
-            attempts.append((fixture, context, handle, fixture.ready_channel(handle)))
+        from buddy.harnesses.zcode.fixtures.checkpoint_domain import CheckpointDomain
+
+        attempts = [CheckpointDomain(self, 'inquiry-late') for _ in range(2)]
         # Both endpoints are alive before either finishes. A question must reach
         # its own authenticated channel and journal even with another suite live.
-        for fixture, context, handle, channel in attempts:
-            self.release(context)
-            self.assertIsNotNone(self.wait_file(context, "finish-accepted"))
-            _, asked = self.ask(handle, "q-late", "Too late?", channel)
-            (context_root(context, "zcode") / "native-logs" / "late-asked").touch()
-            self.assertIsNotNone(handle.wait(40), "controller did not exit")
-            outcome = fixture.adapter.collect(handle, context)
-            self.assertEqual(outcome.status, "ok", outcome.to_report())
-            self.assertTrue(outcome.shutdown_confirmed)
-            records = fixture.inquiry_records(context, "q-late")
+        for domain in attempts:
+            self.assertTrue(domain.command({'op': 'live'})['live'])
+        for key in ('ownerPid', 'attemptId', 'instanceId', 'token', 'address', 'ipcRoot', 'state', 'runtime', 'home'):
+            self.assertNotEqual(attempts[0].live[key], attempts[1].live[key], key)
+        for domain in attempts:
+            domain.command({'op': 'release'})
+        for domain in attempts:
+            domain.command({'op': 'finish-accepted'})
+        receipts = [domain.command({'op': 'ask', 'id': 'q-late', 'question': 'Too late?'})
+                    for domain in attempts]
+        for domain in attempts:
+            domain.command({'op': 'late-asked'})
+        for domain, asked in zip(attempts, receipts):
+            outcome = domain.command({'op': 'collect', 'ids': ['q-late']})
+            self.assertEqual(outcome['status'], 'ok', outcome['report'])
+            self.assertTrue(outcome['shutdown'])
+            self.assertTrue(outcome['controllerStopped'])
+            self.assertTrue(outcome['nativeStopped'])
+            self.assertEqual(outcome['result']['turn']['outcome']['disposition'], 'completed')
+            records = outcome['records']['q-late']
             self.assertEqual([record["state"] for record in records], ["queued", "unavailable"])
-            self.assertEqual(records[0]["questionSha256"], asked.native_correlation.value["questionSha256"])
-            self.assertEqual(records[0]["attemptId"], context.attempt_id)
-            self.assertEqual(self.native_log(context, "methods.jsonl").split().count("session/send"), 1)
+            self.assertEqual(records[0]['questionSha256'], asked['correlation']['questionSha256'])
+            self.assertEqual(records[0]['attemptId'], domain.live['attemptId'])
+            self.assertEqual(outcome['methods'].split().count('session/send'), 1)
+            self.assertTrue(all(record['attemptId'] == domain.live['attemptId'] for record in records))
+            self.assertEqual([json.loads(line) for line in outcome['journal'].splitlines()], records)
 
     def test_a_forged_answer_receipt_fails_the_whole_turn(self):
         context = self.context("inquiry-forged", timeout=40)

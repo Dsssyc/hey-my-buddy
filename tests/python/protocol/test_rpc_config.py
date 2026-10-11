@@ -1,21 +1,7 @@
-"""Buddy's private C-Two profile: application order, measured capacity, no starvation.
+"""Private published C-Two 0.7.4 RPC, non-pool accounting and control capacity.
 
-Every process in this file is test-owned: private state and runtime roots, inherited
-``BUDDY_*`` runtime/worker/credential variables removed, and no daily board. The
-numbers asserted here were measured against the installed ``c-two==0.5.1``:
-
-- a maximum legal 8 MiB message (``MAX_MESSAGE_BYTES``) plus its pickle envelope fits
-  one 16 MiB pool segment with about 2x headroom;
-- a request above the configured ``max_payload_size`` fails explicitly and quickly
-  while the service keeps answering;
-- six concurrent 7 MiB transfers complete with only two pool segments;
-- a server started with ``pool_enabled=False`` still maps a shared-memory segment,
-  which is why the profile offers no fake "off" mode;
-- the configured execution capacity (64) keeps ordinary control traffic responsive
-  while the C-Two default of 10 delayed it by seconds behind admitted waits.
-
-Configured capacity, mapped shared memory and resident RSS are reported as three
-separate measurements; none of them is derived from another.
+Every native process configures an explicit test-owned state/ipc directory before
+local I/O. Memory statistics are C-Two accounting, never RSS.
 """
 from __future__ import annotations
 
@@ -23,8 +9,6 @@ import fcntl
 import hashlib
 import json
 import os
-import pickle
-import re
 import shutil
 import subprocess
 import sys
@@ -34,8 +18,9 @@ import unittest
 from unittest import mock
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
-from support import stop_private_workers
+from support import stop_private_service, stop_private_workers, _child_environment, shutdown_private_rpc
 
 from hey_my_buddy.protocol import rpc_config
 from hey_my_buddy.blackboard.service.service import WAIT_CAPACITY_DEFAULT
@@ -45,29 +30,13 @@ ROOT = Path(__file__).resolve().parents[3]
 PYTHON = ROOT / "src"
 TESTS = ROOT / "tests" / "python"
 
-#: Inherited variables that would point a test subprocess at a production runtime,
-#: another Worker's state or a credential instead of its private roots.
-INHERITED_RUNTIME_VARIABLES = (
-    "BUDDY_STATE_DIR",
-    "BUDDY_RUNTIME_ROOT",
-    "BUDDY_RUNTIME",
-    "BUDDY_RUNTIME_IDENTITY",
-    "BUDDY_WORKER_STATE",
-    "BUDDY_WORKER_ID",
-    "BUDDY_AGENT_CREDENTIAL",
-    "BUDDY_AGENT_CREDENTIAL_FILE",
-    "VIRTUAL_ENV",
-    "UV_PROJECT_ENVIRONMENT",
-)
-
 MIB = 1024 * 1024
 
-#: One isolated real C-Two server. ``profile`` mode exercises the frozen Buddy
-#: interface; ``raw`` mode exists only to measure upstream behavior such as
-#: ``pool_enabled=False``.
+#: Native subprocess fixtures; raw mode varies only explicit IPC overrides.
 PROBE_SERVER = '''
 import json, os, sys, time
 from pathlib import Path
+from types import SimpleNamespace
 import c_two as cc
 from c_two import crm
 
@@ -83,18 +52,21 @@ class ProbeImpl:
         time.sleep(int(payload) / 1000.0)
         return json.dumps({"slept": int(payload)})
 
+from hey_my_buddy.protocol import rpc_config
+state = Path(os.environ["BUDDY_STATE_DIR"])
 if os.environ.get("PROBE_SERVER_MODE") == "raw":
+    rpc_config.configure_local_endpoint(state)
     cc.set_server(ipc_overrides=json.loads(os.environ["PROBE_SERVER_OVERRIDES"]))
 else:
     from hey_my_buddy.protocol import rpc_config
-    rpc_config.configure_server()
+    rpc_config.configure_server(state)
 cc.register(ProbeContract, ProbeImpl(), name="buddy-probe",
             concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
-Path(sys.argv[1]).write_text(json.dumps({"address": cc.server_address(), "pid": os.getpid()}))
+Path(sys.argv[1]).write_text(json.dumps({"address": cc.server_address(), "pid": os.getpid(), "root": cc.local_endpoint_context().root}))
 stop = sys.argv[2]
 while not os.path.exists(stop):
     time.sleep(0.05)
-cc.shutdown()
+assert cc.shutdown()["completed"]
 '''
 
 PROBE_CLIENT = '''
@@ -107,12 +79,17 @@ class ProbeContract:
     def echo(self, payload: str) -> str: ...
     def sleep_ms(self, payload: str) -> str: ...
 
+from pathlib import Path
+from types import SimpleNamespace
+from hey_my_buddy.protocol import rpc_config
+state = Path(os.environ["BUDDY_STATE_DIR"])
 mode = os.environ.get("PROBE_CLIENT_MODE", "profile")
 if mode == "raw":
+    rpc_config.configure_local_endpoint(state)
     cc.set_client(ipc_overrides=json.loads(os.environ["PROBE_CLIENT_OVERRIDES"]))
 elif mode == "profile":
     from hey_my_buddy.protocol import rpc_config
-    rpc_config.configure_client()
+    rpc_config.configure_client(state)
 
 address, operation, argument = sys.argv[1], sys.argv[2], sys.argv[3]
 payload = "x" * int(argument.split(":", 1)[1]) if argument.startswith("bytes:") else argument
@@ -122,6 +99,8 @@ try:
         result = getattr(probe, operation)(payload)
     reply = {
         "ok": True,
+        "version": cc.__version__,
+        "memory": cc.memory_stats(),
         "seconds": round(time.monotonic() - started, 3),
         "bytes": len(result.encode("utf-8")),
         "sha256": hashlib.sha256(result.encode("utf-8")).hexdigest(),
@@ -130,67 +109,15 @@ except Exception as exc:
     reply = {"ok": False, "seconds": round(time.monotonic() - started, 3),
              "error": f"{type(exc).__name__}: {exc}"[:400]}
 print(json.dumps(reply), flush=True)
+assert cc.shutdown()["completed"]
 '''
 
 
 def private_environment(root: Path, **overrides) -> dict:
-    """A child environment for this checkout with no inherited runtime or credential."""
-    values = {key: value for key, value in os.environ.items() if key not in INHERITED_RUNTIME_VARIABLES}
-    inherited = values.get("PYTHONPATH")
-    values["PYTHONPATH"] = os.pathsep.join([str(PYTHON), str(TESTS)] + ([inherited] if inherited else []))
-    values["BUDDY_DEV_SOURCE"] = "1"
-    values["BUDDY_RUNTIME_ROOT"] = str(root / "runtime-root")
-    # Never contend for the console's fixed default port with a running daily service.
-    values["BUDDY_CONSOLE_PORT"] = "0"
-    values.update(overrides)
-    return values
-
-
-def resident_bytes(pid: int) -> int | None:
-    """Resident set size of one live process, in bytes."""
-    completed = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True)
-    text = completed.stdout.strip()
-    return int(text) * 1024 if text else None
-
-
-def shm_mapping_regions(pid: int) -> list[int] | None:
-    """Sizes of one live process's shared-memory mappings; None when unmeasurable.
-
-    macOS reports anonymous shared-memory mappings through ``vmmap``; Linux exposes the
-    POSIX segment names in ``/proc/<pid>/maps``. These are *mappings*, never the
-    configured pool size and never RSS: a pool segment is mapped once per open pool and
-    the total says nothing about resident memory.
-    """
-    if sys.platform == "darwin":
-        try:
-            text = subprocess.run(["vmmap", str(pid)], capture_output=True, text=True, timeout=180).stdout
-        except (OSError, subprocess.SubprocessError):
-            return None
-        regions = []
-        for line in text.splitlines():
-            if "shared memory" not in line or "SM=SHM" not in line:
-                continue
-            match = re.search(r"\[\s*([0-9.]+)([KMG])\s", line)
-            if match:
-                regions.append(int(float(match.group(1)) * {"K": 1024, "M": MIB, "G": 1024 * MIB}[match.group(2)]))
-        return regions or None
-    maps = Path(f"/proc/{pid}/maps")
-    if not maps.exists():
-        return None
-    regions = []
-    for line in maps.read_text().splitlines():
-        if "/dev/shm/" not in line:
-            continue
-        match = re.match(r"([0-9a-f]+)-([0-9a-f]+)", line)
-        if match:
-            regions.append(int(match.group(2), 16) - int(match.group(1), 16))
-    return regions or None
-
-
-def shm_mapping_bytes(pid: int) -> int | None:
-    """Total mapped shared memory of one live process, in bytes."""
-    regions = shm_mapping_regions(pid)
-    return sum(regions) if regions else None
+    """Remove inherited credentials, runtime pins and native C-Two settings."""
+    fallback = root / "native-fallback"
+    fallback.mkdir(mode=0o700, exist_ok=True)
+    return _child_environment(root, {"C2_IPC_ROOT": str(fallback), **overrides})
 
 
 class ProbeServer:
@@ -283,209 +210,412 @@ class ProbeServer:
 
 
 class ProfileTests(unittest.TestCase):
-    """The frozen interface itself: bounded values, one application, no environment."""
+    """Public setup API, safe directories and the native domain fence."""
 
-    def test_profile_is_bounded_and_offers_no_fake_off_switch(self):
-        server = rpc_config.report("server")
-        client = rpc_config.report("client")
-        self.assertEqual(server["profile"], rpc_config.PROFILE_ID)
+    def setUp(self):
+        import c_two as cc
+        self.temp = tempfile.TemporaryDirectory(prefix="rpc-config-")
+        self.addCleanup(self.temp.cleanup)
+        self.addCleanup(shutdown_private_rpc)
+        self.state = Path(self.temp.name).resolve()
+
+    def test_profile_disables_pool_and_preserves_non_pool_limits(self):
+        server, client = rpc_config.report("server"), rpc_config.report("client")
         self.assertEqual(set(server["overrides"]), set(rpc_config.WHITELISTED_KEYS["server"]))
-        # The client carries exactly the shared pool settings and nothing server-only.
         self.assertEqual(set(client["overrides"]), set(rpc_config.WHITELISTED_KEYS["client"]))
-        for key in rpc_config.WHITELISTED_KEYS["client"]:
-            self.assertEqual(client["overrides"][key], server["overrides"][key], key)
-        self.assertIs(server["overrides"]["pool_enabled"], True)
+        self.assertIs(server["overrides"]["pool_enabled"], False)
         self.assertFalse(server["sharedMemoryDisabled"])
-        self.assertNotIn("false", json.dumps(server["overrides"]).lower(), "no override may disable the pool")
-        # A maximum legal message plus its pickle envelope fits one pool segment, and the
-        # two-segment capacity covers two such transfers without serializing.
-        dto = pickle.dumps("x" * MAX_MESSAGE_BYTES, protocol=4)
-        self.assertLess(len(dto), server["capacity"]["poolSegmentBytes"])
-        self.assertGreaterEqual(server["capacity"]["poolCapacityBytes"], 2 * len(dto) - 1)
-        # The pool and reassembly ceilings are explicit and far below the C-Two defaults.
-        self.assertEqual(server["capacity"]["poolCapacityBytes"], 32 * MIB)
+        for values in (server, client):
+            self.assertFalse(any("pool" in key.lower() for key in values["capacity"]))
+            self.assertNotIn("pool_segment_size", values["overrides"])
+            self.assertNotIn("max_pool_segments", values["overrides"])
         self.assertEqual(server["capacity"]["reassemblyCapacityBytes"], 32 * MIB)
         self.assertGreaterEqual(server["capacity"]["maxReassemblyBytes"], MAX_MESSAGE_BYTES)
-        # The callback capacity must cover the waits plus ordinary control traffic; the
-        # C-Two default of 10 is below Buddy's default wait admission.
         self.assertGreater(server["overrides"]["max_execution_workers"], WAIT_CAPACITY_DEFAULT)
         self.assertLessEqual(server["overrides"]["max_execution_workers"], 64)
 
-    def test_configure_applies_once_and_writes_no_environment(self):
+    def test_configure_is_idempotent_and_writes_no_environment(self):
+        import c_two as cc
         before = dict(os.environ)
-        first = rpc_config.configure_server()
-        second = rpc_config.configure_server()
-        client = rpc_config.configure_client()
-        self.assertEqual(first, second)
-        self.assertEqual(client["role"], "client")
-        self.assertEqual(set(rpc_config.configured_roles()), {"client", "server"})
-        created = {key for key in os.environ if key not in before}
-        self.assertEqual(created, set(), "the private C-Two profile must not be exported to child processes")
+        first = rpc_config.configure_server(self.state)
+        self.assertEqual(rpc_config.configure_server(self.state), first)
+        self.assertEqual(rpc_config.configure_client(self.state)["role"], "client")
+        self.assertEqual(Path(cc.local_endpoint_context().root), self.state / "ipc")
+        self.assertEqual((self.state / "ipc").stat().st_mode & 0o777, 0o700)
+        self.assertEqual(dict(os.environ), before)
+
+    def test_windows_never_passes_root_override(self):
+        with mock.patch.object(rpc_config, "os", SimpleNamespace(name="nt", environ=os.environ)), mock.patch.object(rpc_config.cc, "set_local_endpoint") as endpoint:
+            rpc_config.configure_local_endpoint(self.state)
+            endpoint.assert_called_once_with()
+        self.assertFalse((self.state / "ipc").exists())
+
+    def test_0755_state_creates_0700_ipc_without_parent_repair(self):
+        """R-02 setup boundary; the transport test separately verifies I/O."""
+        from hey_my_buddy.errors import BoardError
+        self.state.chmod(0o755)
+        error = None
+        try:
+            root = rpc_config.configure_local_endpoint(self.state)
+        except BoardError as caught:
+            error = caught
+        self.assertIsNone(error, "0755 state must be accepted without chmod")
+        self.assertEqual(root, self.state / "ipc")
+        self.assertEqual(self.state.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(root.stat().st_mode & 0o777, 0o700)
+        # Existing non-writable-by-group/others modes are left for native access
+        # checks; create=False must never turn setup into a permission repair.
+        root.chmod(0o755)
+        self.assertEqual(rpc_config.configure_local_endpoint(self.state, create=False), root)
+        self.assertEqual(root.stat().st_mode & 0o777, 0o755)
+
+    def test_bad_state_or_ipc_is_refused_without_repair(self):
+        """R-03: structural guards and real SDK access refusal at registration."""
+        from hey_my_buddy.errors import BoardError
+        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
+        from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
+        from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
+        from hey_my_buddy.protocol.contracts import HarnessRunLive
+        import c_two as cc
+        run = RunIdentity(task_id="rpc-test", attempt_id="rpc-attempt", generation=1,
+                          invocation_id="rpc-invocation", input_sha256="a" * 64)
+        ipc = self.state / "ipc"
+        ipc.mkdir(mode=0o700)
+        self.state.chmod(0o755)
+        for mode, reason in ((0o775, "group and other users must not have write permission"),
+                             (0o777, "group and other users must not have write permission"),
+                             (0o500, "effective user lacks read/write/traverse access")):
+            with self.subTest(mode=oct(mode)):
+                ipc.chmod(mode)
+                target = CTwoLiveEndpoint(run, LiveCapabilities(inquiry_delivery="unsupported"),
+                                         HarnessRunLive, state_dir=self.state)
+                # Selection alone succeeds; only real native I/O checks access.
+                rpc_config.configure_local_endpoint(self.state, create=False)
+                error = None
+                try:
+                    target.start()
+                except Exception as caught:
+                    error = caught
+                self.assertIsInstance(error, BoardError)
+                self.assertEqual(error.code, "PRIVATE_PATH_UNSAFE")
+                self.assertIsInstance(error.__cause__, RuntimeError)
+                self.assertIn(reason, str(error.__cause__))
+                self.assertEqual(ipc.stat().st_mode & 0o777, mode)
+                self.assertTrue(cc.shutdown()["completed"])
+        ipc.chmod(0o700)
+        file_state = self.state / "file-state"
+        file_state.write_text("ordinary file")
+        with self.assertRaises(BoardError):
+            rpc_config.configure_client(file_state)
+        file_ipc = self.state / "file-ipc"
+        file_ipc.mkdir()
+        (file_ipc / "ipc").write_text("ordinary file")
+        with self.assertRaises(BoardError):
+            rpc_config.configure_client(file_ipc)
+        link = self.state / "link"
+        link.symlink_to(ipc, target_is_directory=True)
+        with self.assertRaises(BoardError):
+            rpc_config._validate_path(link / "child", boundary=self.state)
+        # A chosen public root may pass through a link. Preserve the nested
+        # private-link assertion within its explicit state boundary instead.
+        with self.assertRaises(BoardError) as refused:
+            rpc_config._validate_path(link / "child" / "inner", boundary=self.state)
+        self.assertEqual(refused.exception.details["path"], str(link))
+        linked_state = self.state / "linked-state"
+        linked_state.mkdir()
+        (linked_state / "ipc").symlink_to(ipc, target_is_directory=True)
+        with self.assertRaises(BoardError):
+            rpc_config.configure_client(linked_state)
+        with self.assertRaises(BoardError):
+            rpc_config._validate_path(self.state / "unused" / "..")
+        with self.assertRaises(BoardError):
+            rpc_config.configure_client(self.state / "unused" / "..")
+
+    @unittest.skipIf(os.name == "nt", "POSIX state-root symlink boundary")
+    def test_linked_state_root_is_refused_with_root_link_diagnostic_before_changes(self):
+        from hey_my_buddy.errors import BoardError
+        target = self.state / "target"
+        target.mkdir(mode=0o755)
+        target.chmod(0o755)
+        alias = self.state / "state-alias"
+        alias.symlink_to(target, target_is_directory=True)
+        marker = self.state / "untouched"
+        marker.write_text("private sibling")
+        before = sorted(self.state.rglob("*"))
+        with self.assertRaises(BoardError) as refused:
+            rpc_config.configure_local_endpoint(alias)
+        self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(sorted(self.state.rglob("*")), before)
+        self.assertEqual(marker.read_text(), "private sibling")
+        self.assertTrue(alias.is_symlink())
+        self.assertFalse((target / "ipc").exists())
+        self.assertEqual(refused.exception.code, "PRIVATE_PATH_UNSAFE")
+        self.assertEqual(refused.exception.details["path"], str(alias))
+        self.assertEqual(refused.exception.message, "IPC path contains a linked or unsafe component")
+
+    def test_read_only_setup_does_not_create_or_chmod_missing_directories(self):
+        from hey_my_buddy.errors import BoardError
+        missing = self.state / "missing"
+        with self.assertRaises(BoardError):
+            rpc_config.configure_client(missing, create=False)
+        self.assertFalse(missing.exists())
+        with self.assertRaises(BoardError):
+            rpc_config.configure_client(self.state, create=False)
+        self.assertFalse((self.state / "ipc").exists())
+
+    def test_active_root_is_fenced_and_complete_shutdown_allows_new_root(self):
+        import c_two as cc
+        from hey_my_buddy.protocol.contracts import BuddyControl, CONTROL_NAME
+        rpc_config.configure_client(self.state)
+        # Even a failed native connection freezes the active domain. This address
+        # is absent inside this test's private root, never a public endpoint.
+        with self.assertRaises(Exception):
+            cc.connect(BuddyControl, name=CONTROL_NAME, address="ipc://rpc-config-absent")
+        other = self.state / "other"
+        with self.assertRaisesRegex(Exception, "configuration is frozen"):
+            rpc_config.configure_client(other)
+        self.assertEqual(Path(cc.local_endpoint_context().root), self.state / "ipc")
+        self.assertTrue(cc.shutdown()["completed"])
+        rpc_config.configure_client(other)
+        self.assertEqual(Path(cc.local_endpoint_context().root), other / "ipc")
 
     def test_wait_admission_cannot_consume_every_native_callback(self):
         from hey_my_buddy.blackboard.service.daemon import Daemon
         from hey_my_buddy.errors import BoardError
-        with tempfile.TemporaryDirectory(prefix="buddy-wait-bound-") as root:
-            with mock.patch.dict(os.environ, {"BUDDY_WAIT_CAPACITY": "64"}):
-                with self.assertRaises(BoardError) as raised:
-                    Daemon(Path(root))
-                self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-            with mock.patch.dict(os.environ, {"BUDDY_WAIT_CAPACITY": "48"}):
-                daemon = Daemon(Path(root))
-                self.assertEqual(daemon.wait_admission.capacity, 48)
+        with mock.patch.dict(os.environ, {"BUDDY_WAIT_CAPACITY": "64"}):
+            with self.assertRaises(BoardError) as raised:
+                Daemon(self.state)
+            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+        with mock.patch.dict(os.environ, {"BUDDY_WAIT_CAPACITY": "48"}):
+            self.assertEqual(Daemon(self.state).wait_admission.capacity, 48)
 
 
 class IsolatedTransportTests(unittest.TestCase):
-    """The frozen profile under a real server and real clients, in separate processes."""
+    """V-03/V-04/V-05: released RPC and public memory_stats, in private processes."""
 
     def setUp(self):
-        self.work = Path(tempfile.mkdtemp(prefix="buddy-rpc-probe-"))
-        os.chmod(self.work, 0o700)
+        self.work = Path(tempfile.mkdtemp(prefix="rpc-probe-")).resolve()
         self.addCleanup(shutil.rmtree, self.work, ignore_errors=True)
-        self.probes: list[ProbeServer] = []
+        self.probes = []
         self.addCleanup(self._close_probes)
 
     def _close_probes(self):
         for probe in reversed(self.probes):
-            try:
-                probe.close()
-            except Exception:  # noqa: BLE001 - cleanup must not mask the test result
-                pass
+            probe.close()
 
-    def probe(self, **kwargs) -> ProbeServer:
+    def probe(self, **kwargs):
         server = ProbeServer(self.work, **kwargs)
         self.probes.append(server)
         return server
 
+    def test_0755_state_creates_0700_ipc_and_round_trips(self):
+        """R-02: a real published server/client uses an ordinary state parent."""
+        self.work.chmod(0o755)
+        self.assertFalse((self.work / "ipc").exists())
+        server = self.probe()
+        self.assertEqual(self.work.stat().st_mode & 0o777, 0o755)
+        self.assertEqual((self.work / "ipc").stat().st_mode & 0o777, 0o700)
+        self.assertEqual(Path(json.loads(server.endpoint_path.read_text())["root"]), self.work / "ipc")
+        reply = server.call("echo", "0755-parent")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["sha256"], hashlib.sha256(b"0755-parent").hexdigest())
+
     def test_maximum_legal_payload_round_trips_and_over_limit_fails_explicitly(self):
         server = self.probe()
-        legal = server.call("echo", f"bytes:{MAX_MESSAGE_BYTES}")
-        self.assertTrue(legal["ok"], legal)
-        self.assertEqual(legal["bytes"], MAX_MESSAGE_BYTES)
-        self.assertEqual(legal["sha256"], hashlib.sha256(b"x" * MAX_MESSAGE_BYTES).hexdigest())
-        # A request JSON of exactly 8 MiB is the legal maximum; one byte more is refused.
+        for size in (4096, MAX_MESSAGE_BYTES):
+            legal = server.call("echo", f"bytes:{size}")
+            self.assertTrue(legal["ok"], legal)
+            self.assertEqual(legal["version"], "0.7.4")
+            self.assertEqual(legal["bytes"], size)
+            self.assertEqual(legal["sha256"], hashlib.sha256(b"x" * size).hexdigest())
         skeleton = encode_message({"token": "t", "pad": ""})
-        request = encode_message({"token": "t", "pad": "x" * (MAX_MESSAGE_BYTES - len(skeleton.encode("utf-8")))})
-        self.assertEqual(len(request.encode("utf-8")), MAX_MESSAGE_BYTES)
+        pad = "x" * (MAX_MESSAGE_BYTES - len(skeleton.encode()))
+        self.assertEqual(len(encode_message({"token": "t", "pad": pad}).encode()), MAX_MESSAGE_BYTES)
         with self.assertRaises(ServiceError) as rejected:
-            encode_message({"token": "t", "pad": "x" * (MAX_MESSAGE_BYTES - len(skeleton.encode("utf-8")) + 1)})
+            encode_message({"token": "t", "pad": pad + "x"})
         self.assertEqual(rejected.exception.code, "MESSAGE_TOO_LARGE")
-        # Above the configured server ceiling the failure is explicit and fast, and the
-        # service keeps answering ordinary control calls afterwards.
         over = server.call("echo", f"bytes:{40 * MIB}")
-        self.assertFalse(over["ok"])
+        self.assertFalse(over["ok"], over)
         self.assertIn("max_payload_size", over["error"])
         self.assertIn(str(rpc_config.SERVER_OVERRIDES["max_payload_size"]), over["error"])
         self.assertLess(over["seconds"], 10)
-        after = server.call("echo", "still-here")
-        self.assertTrue(after["ok"], after)
-        self.assertEqual(after["bytes"], len("still-here"))
+        self.assertTrue(server.call("echo", "still-here")["ok"])
 
-    def test_concurrent_large_transfers_fit_two_segments(self):
+    def test_concurrent_large_transfers_complete_without_pool(self):
         server = self.probe()
-        payload = f"bytes:{7 * MIB}"
-        clients = [server.spawn("echo", payload) for _ in range(6)]
+        clients = [server.spawn("echo", f"bytes:{7 * MIB}") for _ in range(6)]
         results = []
         for client in clients:
             out, err = client.communicate(timeout=180)
-            line = out.strip().splitlines()
-            results.append(json.loads(line[-1]) if line else {"ok": False, "error": (out + err)[-300:]})
-        self.assertTrue(all(result["ok"] for result in results), results)
-        self.assertTrue(all(result["bytes"] == 7 * MIB for result in results), results)
-        self.assertTrue(all(result["sha256"] == hashlib.sha256(b"x" * (7 * MIB)).hexdigest() for result in results))
-
-    def test_configured_capacity_mapping_and_rss_are_separate_measurements(self):
-        """Three distinct numbers: a configured ceiling, a mapping and a resident size.
-
-        One segment is mapped per open pool, so the mapping total is not the configured
-        capacity; the resident bytes are smaller again. The profile is proven at the
-        segment level: no region may reach the 256 MiB C-Two default.
-        """
-        server = self.probe()
-        report = rpc_config.report("server")
-        configured = report["capacity"]["poolCapacityBytes"]
-        segment = report["capacity"]["poolSegmentBytes"]
-        baseline_rss = resident_bytes(server.pid)
-        self.assertIsNotNone(baseline_rss)
-        transferred = server.call("echo", f"bytes:{8 * MIB}")
-        self.assertTrue(transferred["ok"], transferred)
-        regions = shm_mapping_regions(server.pid)
-        resident = resident_bytes(server.pid)
-        evidence = {
-            "configuredPoolCapacityBytes": configured,
-            "configuredSegmentBytes": segment,
-            "mappedSharedMemoryRegions": regions,
-            "mappedSharedMemoryBytes": sum(regions) if regions else None,
-            "residentBytesAfter8MiB": resident,
-            "residentBytesBaseline": baseline_rss,
-            "defaultPoolSegmentBytes": 256 * MIB,
-        }
-        print("rpc_config memory evidence: " + json.dumps(evidence))
-        if regions is not None:
-            self.assertGreaterEqual(len(regions), 1)
-            self.assertLessEqual(max(regions), segment, "no mapping may reach the C-Two default segment")
-            self.assertGreaterEqual(max(regions), segment, "the configured segment is actually mapped")
-        self.assertIsNotNone(resident)
-        self.assertLess(resident, configured + 256 * MIB)
-        # 16x smaller segments and a 32x smaller pool ceiling than the C-Two defaults.
-        self.assertEqual(evidence["defaultPoolSegmentBytes"] // segment, 16)
-        self.assertEqual((4 * 256 * MIB) // configured, 32)
-
-    def test_pool_enabled_false_still_maps_shared_memory(self):
-        """The measured reason the profile never claims a disabled pool."""
-        server = self.probe(mode="raw", overrides={"pool_enabled": False}, name="nopool")
-        mapped = shm_mapping_bytes(server.pid)
-        if mapped is None:
-            self.skipTest("this platform cannot report shared-memory mappings for a live process")
-        print("pool_enabled=False mapping evidence: " + json.dumps({"mappedSharedMemoryBytes": mapped}))
-        self.assertGreaterEqual(mapped, 64 * MIB, "0.5.1 still maps a pool segment with pool_enabled=False")
-        probe = server.call("echo", "still-works")
-        self.assertTrue(probe["ok"], probe)
-
-    def test_a_client_with_other_overrides_can_still_reach_the_profile_server(self):
-        """A rolling upgrade may pair clients and servers with different pools."""
-        server = self.probe()
-        reply = server.call("echo", f"bytes:{7 * MIB}", client_mode="raw", overrides={})
-        self.assertTrue(reply["ok"], reply)
-        self.assertEqual(reply["bytes"], 7 * MIB)
-
-    def test_chunked_fallback_uses_the_production_reassembly_bounds(self):
-        """Reassembly is exercised separately from the pool by forcing a chunk boundary.
-
-        A maximum legal 8 MiB message never chunks under the production profile (0.9 x
-        16 MiB). This probe keeps the production reassembly values (16 MiB x 2 with a
-        16 MiB payload ceiling) and moves only the pool segment and chunk ratio so that a
-        multi-megabyte payload takes the chunked path; every chunk must reassemble
-        without truncation or corruption.
-        """
-        shared = {
-            **rpc_config.POOL_OVERRIDES,
-            "pool_segment_size": 2 * MIB,
-            "max_pool_segments": 2,
-            "chunk_threshold_ratio": 0.5,
-        }
-        server_only = {
-            **shared,
-            "max_execution_workers": 64,
-            "max_pending_requests": 256,
-            "max_payload_size": 32 * MIB,
-            "max_frame_size": 16 * MIB,
-        }
-        server = self.probe(mode="raw", overrides=server_only, name="chunked")
-        ceiling = (
-            server_only["pool_segment_size"] * server_only["max_pool_segments"]
-            + server_only["reassembly_segment_size"] * server_only["reassembly_max_segments"]
-        )
-        for size in (4 * MIB, 7 * MIB):
-            reply = server.call("echo", f"bytes:{size}", client_mode="raw", overrides=shared)
+            self.assertEqual(client.returncode, 0, err)
+            results.append(json.loads(out.strip().splitlines()[-1]))
+        for reply in results:
             self.assertTrue(reply["ok"], reply)
-            self.assertEqual(reply["bytes"], size)
-            self.assertEqual(reply["sha256"], hashlib.sha256(b"x" * size).hexdigest())
-        regions = shm_mapping_regions(server.pid)
-        print("chunked reassembly evidence: " + json.dumps({"mappedSharedMemoryRegions": regions, "ceilingBytes": ceiling}))
-        if regions is not None:
-            self.assertGreaterEqual(max(regions), server_only["pool_segment_size"])
-            self.assertLessEqual(max(regions), server_only["reassembly_segment_size"])
+            self.assertEqual(reply["bytes"], 7 * MIB)
+            self.assertEqual(reply["sha256"], hashlib.sha256(b"x" * (7 * MIB)).hexdigest())
+
+    def test_disabled_pool_releases_outgoing_shm_after_real_rpc(self):
+        server = self.probe()
+        reply = server.call("echo", f"bytes:{8 * MIB}")
+        self.assertTrue(reply["ok"], reply)
+        cell = reply["memory"]["runtime_outgoing"]["cells"]["shm"]
+        print("V-03 outgoing SHM accounting: " + json.dumps(cell))
+        self.assertEqual(cell["used_bytes"], 0, "disabled buddy pool must release temporary outgoing SHM")
+        self.assertEqual(cell["peak_bytes"], 8392704)
+
+    def test_private_root_overrides_inherited_namespace(self):
+        # A mutation remains private: the deliberately conflicting native fallback
+        # is also a test-owned 0700 directory, never the default public namespace.
+        server = self.probe()
+        endpoint = json.loads(server.endpoint_path.read_text())
+        self.assertEqual(Path(endpoint["root"]), self.work / "ipc")
+        reply = server.call("echo", "private-root")
+        self.assertTrue(reply["ok"], reply)
+
+    def test_different_private_root_cannot_connect(self):
+        server = self.probe()
+        other = self.work / "other"
+        other.mkdir(mode=0o700)
+        script = other / "client.py"
+        script.write_text(PROBE_CLIENT)
+        completed = subprocess.run([sys.executable, str(script), server.address, "echo", "unreachable"],
+                                   env=private_environment(other), capture_output=True, text=True, timeout=30)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertFalse(json.loads(completed.stdout.strip().splitlines()[-1])["ok"])
+        self.assertTrue(server.call("echo", "still-here")["ok"])
+
+
+class DaemonFixtureTests(unittest.TestCase):
+    """Exercise the real fixture wiring without starting native IPC or workers."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="rpc-daemon-fixture-")
+        self.addCleanup(self.temp.cleanup)
+        self.fixture = RealDaemonControlTests()
+        self.fixture.work = Path(self.temp.name)
+        self.fixture.state = self.fixture.work / "state"
+        self.fixture.state.mkdir(mode=0o700)
+        self.fixture.children = []
+        self.fixture.probe_claims = {}
+
+    def test_daemon_environment_health_and_cleanup_select_the_same_state(self):
+        fixture = self.fixture
+        endpoint = {"address": "ipc://fixture-only"}
+        with mock.patch(__name__ + ".subprocess.Popen") as spawn, \
+                mock.patch(__name__ + "._read_endpoint", return_value=endpoint) as read, \
+                mock.patch(__name__ + "._request", return_value={"managedWorkerIds": []}) as request:
+            self.assertEqual(fixture._start_daemon(), endpoint)
+        environment = spawn.call_args.kwargs["env"]
+        self.assertEqual(Path(environment["BUDDY_STATE_DIR"]), fixture.state)
+        self.assertEqual(Path(environment["BUDDY_RUNTIME_ROOT"]), fixture.state / "runtime-root")
+        self.assertEqual(Path(environment["C2_IPC_ROOT"]), fixture.state / "native-fallback")
+        self.assertEqual(read.call_args_list, [mock.call(fixture.state), mock.call(fixture.state)])
+        request.assert_called_once_with(endpoint, "health", {}, state_dir=fixture.state)
+        # No real child exists, but exercise cleanup with the actual environment
+        # passed to Popen rather than assuming an override reached the subprocess.
+        with mock.patch(__name__ + ".stop_private_service") as service, \
+                mock.patch(__name__ + ".stop_private_workers") as workers, \
+                mock.patch(__name__ + ".shutdown_private_rpc"), \
+                mock.patch(__name__ + ".shutil.rmtree"):
+            fixture._cleanup()
+        selected_state = Path(environment["BUDDY_STATE_DIR"])
+        service.assert_called_once_with(selected_state)
+        workers.assert_called_once_with(selected_state)
+
+    def test_environment_helper_keeps_its_state_and_runtime_boundary(self):
+        state = self.fixture.state
+        outside = self.fixture.work / "outside"
+        environment = private_environment(state, BUDDY_STATE_DIR=str(outside))
+        self.assertEqual(Path(environment["BUDDY_STATE_DIR"]), state)
+        with self.assertRaisesRegex(ValueError, "inside its private state"):
+            private_environment(state, BUDDY_RUNTIME_ROOT=str(outside))
+
+    def test_cleanup_confirms_only_its_service_workers_and_child_before_removal(self):
+        fixture = self.fixture
+        child = mock.Mock()
+        fixture.children = [child]
+        with mock.patch(__name__ + ".stop_private_service") as service, \
+                mock.patch(__name__ + ".stop_private_workers") as workers, \
+                mock.patch(__name__ + ".shutdown_private_rpc") as shutdown, \
+                mock.patch(__name__ + ".shutil.rmtree") as remove:
+            order = mock.Mock()
+            for name, operation in (("service", service), ("workers", workers),
+                                    ("child", child), ("shutdown", shutdown), ("remove", remove)):
+                order.attach_mock(operation, name)
+            fixture._cleanup()
+        self.assertEqual(order.mock_calls, [mock.call.service(fixture.state), mock.call.workers(fixture.state),
+                                           mock.call.child.wait(timeout=15), mock.call.shutdown(),
+                                           mock.call.remove(fixture.work)])
+        child.terminate.assert_not_called()
+        child.kill.assert_not_called()
+
+    def test_unconfirmed_cleanup_preserves_the_fixture(self):
+        fixture = self.fixture
+        for stage in ("service", "workers", "child", "shutdown"):
+            with self.subTest(stage=stage), \
+                    mock.patch(__name__ + ".stop_private_service") as service, \
+                    mock.patch(__name__ + ".stop_private_workers") as workers, \
+                    mock.patch(__name__ + ".shutdown_private_rpc") as shutdown, \
+                    mock.patch(__name__ + ".shutil.rmtree") as remove:
+                child = mock.Mock()
+                fixture.children = [child]
+                operation = {"service": service, "workers": workers, "child": child.wait, "shutdown": shutdown}[stage]
+                failure = subprocess.TimeoutExpired("fixture-daemon", 15) if stage == "child" else AssertionError(stage)
+                operation.side_effect = failure
+                with self.assertRaises(type(failure)):
+                    fixture._cleanup()
+                remove.assert_not_called()
+                child.terminate.assert_not_called()
+                child.kill.assert_not_called()
+                self.assertTrue(fixture.work.is_dir())
+
+    def test_cleanup_does_not_hide_directory_removal_errors(self):
+        with mock.patch(__name__ + ".stop_private_service"), \
+                mock.patch(__name__ + ".stop_private_workers"), \
+                mock.patch(__name__ + ".shutdown_private_rpc"), \
+                mock.patch(__name__ + ".shutil.rmtree", side_effect=OSError("fixture removal failed")) as remove:
+            with self.assertRaisesRegex(OSError, "fixture removal failed"):
+                self.fixture._cleanup()
+            remove.assert_called_once_with(self.fixture.work)
+
+    def test_cleanup_releases_only_its_synthetic_claims_before_service_stop(self):
+        fixture = self.fixture
+        fixture.endpoint = {"address": "ipc://fixture-only"}
+        claim = {"attemptId": "fixture-attempt", "generation": 7}
+        with mock.patch(__name__ + ".call_board", return_value={"claim": {"attempt": claim}}):
+            fixture._claim("fixture-worker", "fixture-claim", "fixture-nonce", "fixture-run")
+        with mock.patch(__name__ + ".call_board", return_value={"committed": True}) as result, \
+                mock.patch(__name__ + ".stop_private_service") as service, \
+                mock.patch(__name__ + ".stop_private_workers"), \
+                mock.patch(__name__ + ".shutdown_private_rpc"), \
+                mock.patch(__name__ + ".shutil.rmtree"):
+            order = mock.Mock()
+            order.attach_mock(result, "result")
+            order.attach_mock(service, "service")
+            fixture._cleanup()
+        self.assertEqual([call[0] for call in order.mock_calls], ["result", "service"])
+        operation, params = result.call_args.args
+        self.assertEqual(operation, "worker_result")
+        self.assertEqual({key: params[key] for key in ("workerId", "attemptId", "generation", "nonce")},
+                         {"workerId": "fixture-worker", "attemptId": "fixture-attempt", "generation": 7,
+                          "nonce": "fixture-nonce"})
+        self.assertIs(params["shutdownConfirmed"], True)
+        self.assertEqual(result.call_args.kwargs, {"endpoint": fixture.endpoint, "state_dir": fixture.state})
+        self.assertEqual(fixture.probe_claims, {})
+
+    def test_uncommitted_probe_receipt_preserves_claim_and_state(self):
+        fixture = self.fixture
+        fixture.endpoint = {"address": "ipc://fixture-only"}
+        fixture.probe_claims = {"fixture-attempt": {"attemptId": "fixture-attempt", "generation": 7,
+                                                  "workerId": "fixture-worker", "nonce": "fixture-nonce"}}
+        with mock.patch(__name__ + ".call_board", return_value={"committed": False}), \
+                mock.patch(__name__ + ".stop_private_service") as service, \
+                mock.patch(__name__ + ".shutil.rmtree") as remove:
+            with self.assertRaisesRegex(AssertionError, "probe receipt"):
+                fixture._cleanup()
+            service.assert_not_called()
+            remove.assert_not_called()
+        self.assertIn("fixture-attempt", fixture.probe_claims)
 
 
 class RealDaemonControlTests(unittest.TestCase):
@@ -501,26 +631,34 @@ class RealDaemonControlTests(unittest.TestCase):
         self.state = self.work / "state"
         self.state.mkdir(mode=0o700)
         self.children: list[subprocess.Popen] = []
+        self.probe_claims: dict[str, dict] = {}
         self.addCleanup(self._cleanup)
         self.endpoint = self._start_daemon()
-        self._assert_daemon_uses_the_lightweight_pool()
+        self.assertIs(call_board("health", {}, endpoint=self.endpoint, state_dir=self.state)["rpcProfile"]["overrides"]["pool_enabled"], False)
 
     def _cleanup(self):
-        for child in self.children:
-            if child.poll() is None:
-                child.terminate()
-                try:
-                    child.wait(timeout=15)
-                except subprocess.TimeoutExpired:  # pragma: no cover - test watchdog
-                    child.kill()
-                    child.wait(timeout=5)
+        # These external probes never spawn a harness/child. End their own claims
+        # after the wait threads have joined, so cooperative service stop can drain.
+        for attempt_id, claim in list(self.probe_claims.items()):
+            reply = call_board(
+                "worker_result",
+                {**claim, "commandId": f"rpc-cleanup-{attempt_id}", "status": "ok",
+                 "result": {"note": "synthetic control probe finished; no harness child was started"},
+                 "shutdownConfirmed": True, "exitCode": 0},
+                endpoint=self.endpoint, state_dir=self.state,
+            )
+            self.assertTrue(reply["committed"], f"probe receipt was not committed: {reply}")
+            del self.probe_claims[attempt_id]
+        stop_private_service(self.state)
         stop_private_workers(self.state)
-        shutil.rmtree(self.work, ignore_errors=True)
+        for child in self.children:
+            child.wait(timeout=15)
+        shutdown_private_rpc()
+        shutil.rmtree(self.work)
 
     def _start_daemon(self) -> dict:
         environment = private_environment(
-            self.work,
-            BUDDY_STATE_DIR=str(self.state),
+            self.state,
             BUDDY_WAIT_CAPACITY=str(self.WAIT_CAPACITY),
             # Two total slots so the waited and the renewable attempt coexist.
             BUDDY_MAX_CONCURRENT="2",
@@ -542,7 +680,7 @@ class RealDaemonControlTests(unittest.TestCase):
             endpoint = _read_endpoint(self.state)
             if endpoint:
                 try:
-                    health = _request(endpoint, "health", {})
+                    health = _request(endpoint, "health", {}, state_dir=self.state)
                     break
                 except ServiceError:
                     pass
@@ -575,26 +713,6 @@ class RealDaemonControlTests(unittest.TestCase):
                 raise AssertionError(f"managed supervisor did not start: {worker_id}")
         return _read_endpoint(self.state)
 
-    def _assert_daemon_uses_the_lightweight_pool(self) -> None:
-        """The real daemon process must map the bounded pool, not the 256 MiB default."""
-        report = rpc_config.report("server")
-        segment = report["capacity"]["poolSegmentBytes"]
-        ceiling = report["capacity"]["poolCapacityBytes"]
-        regions = None
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            regions = shm_mapping_regions(self.children[0].pid)
-            if regions:
-                break
-            time.sleep(0.1)
-        if not regions:
-            self.skipTest("this platform cannot report shared-memory mappings for a live process")
-        self.assertEqual(max(regions), segment, "the daemon must map the configured segment, not the C-Two default")
-        print(
-            "daemon pool evidence: "
-            + json.dumps({"mappedSharedMemoryRegions": regions, "poolCeilingBytes": ceiling, "rssBytes": resident_bytes(self.children[0].pid)})
-        )
-
     def _submit_external(self, request_id: str) -> str:
         # One private cwd per task: two live attempts must not share a workspace
         # reservation, or the second claim is refused with cwd-overlap before any
@@ -604,7 +722,7 @@ class RealDaemonControlTests(unittest.TestCase):
         reply = call_board(
             "task_submit",
             {"requestId": request_id, "task": "hold for control traffic", "cwd": str(cwd), "adapter": "external"},
-            endpoint=self.endpoint,
+            endpoint=self.endpoint, state_dir=self.state,
         )
         return reply["task"]["runId"]
 
@@ -612,14 +730,17 @@ class RealDaemonControlTests(unittest.TestCase):
         claim = call_board(
             "worker_claim",
             {"workerId": worker_id, "claimRequestId": claim_request_id, "nonce": nonce, "runId": run_id},
-            endpoint=self.endpoint,
+            endpoint=self.endpoint, state_dir=self.state,
         )
         granted = (claim.get("claim") or {}).get("attempt")
         self.assertTrue(granted, f"the probe worker must claim its attempt: {claim.get('reason')}")
+        self.probe_claims[granted["attemptId"]] = {
+            "workerId": worker_id, "attemptId": granted["attemptId"], "generation": granted["generation"], "nonce": nonce,
+        }
         return granted
 
     def _admission(self) -> dict:
-        return call_board("wait_capacity", {}, endpoint=self.endpoint, resource="wait")
+        return call_board("wait_capacity", {}, endpoint=self.endpoint, state_dir=self.state, resource="wait")
 
     def _await_admitted(self, expected: int) -> None:
         deadline = time.monotonic() + 10
@@ -635,7 +756,7 @@ class RealDaemonControlTests(unittest.TestCase):
         return call_board(
             "task_wait",
             {"runId": run_id, "timeoutMs": self.WAIT_MILLISECONDS},
-            endpoint=self.endpoint,
+            endpoint=self.endpoint, state_dir=self.state,
             resource="wait",
         )
 
@@ -647,7 +768,7 @@ class RealDaemonControlTests(unittest.TestCase):
             call_board(
                 "worker_register",
                 {"workerId": worker_id, "adapter": "external", "capabilities": ["external"], "pid": os.getpid()},
-                endpoint=self.endpoint,
+                endpoint=self.endpoint, state_dir=self.state,
             )
         first_nonce, second_nonce = "n" * 32, "m" * 32
         waited_claim = self._claim("rpc-probe", "rpc-claim-1", first_nonce, waited)
@@ -662,7 +783,7 @@ class RealDaemonControlTests(unittest.TestCase):
 
             def control(name: str, operation: str, params: dict, resource: str = "control") -> dict:
                 begin = time.monotonic()
-                reply = call_board(operation, params, endpoint=self.endpoint, resource=resource)
+                reply = call_board(operation, params, endpoint=self.endpoint, state_dir=self.state, resource=resource)
                 measured[name] = round(time.monotonic() - begin, 3)
                 return reply
 
@@ -698,6 +819,7 @@ class RealDaemonControlTests(unittest.TestCase):
                 },
             )
             self.assertTrue(result["committed"])
+            del self.probe_claims[renewable_claim["attemptId"]]
             # Every control operation above committed while all wait slots stayed busy:
             # no admitted wait was ended, converted into an error or left behind.
             self.assertEqual(self._admission()["admitted"], self.WAIT_CAPACITY)
@@ -714,7 +836,7 @@ class RealDaemonControlTests(unittest.TestCase):
         self.assertGreaterEqual(
             elapsed, self.WAIT_MILLISECONDS / 1000, "the waits must have been genuinely in flight for their whole window"
         )
-        final = call_board("task_get", {"runId": renewable}, endpoint=self.endpoint)
+        final = call_board("task_get", {"runId": renewable}, endpoint=self.endpoint, state_dir=self.state)
         self.assertEqual(final["task"]["status"], "completed")
         self.assertTrue(final["task"]["resultAvailable"])
 

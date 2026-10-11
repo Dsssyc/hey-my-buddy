@@ -9,7 +9,9 @@ from __future__ import annotations
 import os
 import secrets
 import threading
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 import c_two as cc
@@ -56,11 +58,13 @@ class WorkerLiveRuntime:
     """
 
     def __init__(self, client, worker_id: str, worker_instance: str,
-                 resolve_channel: Callable[[object], tuple[str, LiveChannel | None]]):
+                 resolve_channel: Callable[[object], tuple[str, LiveChannel | None]], *,
+                 state_dir: Path):
         self._worker_id = check_text(worker_id, "workerId", maximum=128)
         self._worker_instance = check_text(worker_instance, "workerInstance", maximum=128)
         if not callable(resolve_channel):
             raise fail("resolve_channel must be callable")
+        self._state_dir = state_dir
         self._client = client
         self._resolve_channel = resolve_channel
         self._instance_id = secrets.token_hex(32)
@@ -74,8 +78,8 @@ class WorkerLiveRuntime:
         self._retiring: dict[tuple[str, str, int], _Binding] = {}
         self._resolving: dict[tuple[str, str, int], object] = {}
         self._stopped = False
-        rpc_config.configure_server()
-        rpc_config.configure_client()
+        rpc_config.configure_server(self._state_dir)
+        rpc_config.configure_client(self._state_dir)
 
     def start(self) -> LiveEndpointDescriptor:
         """Register this one Worker resource and read back its actual address."""
@@ -85,8 +89,11 @@ class WorkerLiveRuntime:
             if self._descriptor is None:
                 registered = False
                 try:
-                    cc.register(WorkerRuntimeLive, self, name=self._name,
-                                concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+                    try:
+                        cc.register(WorkerRuntimeLive, self, name=self._name,
+                                    concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+                    except (ValueError, RuntimeError) as error:
+                        raise BoardError("PRIVATE_PATH_UNSAFE", str(error)) from error
                     registered = True
                     address = cc.server_address()
                     self._descriptor = LiveEndpointDescriptor(
@@ -311,11 +318,14 @@ class WorkerLiveRuntime:
         binding, frame, refusal = self._select(request_json, LiveWireRequest)
         if refusal is not None:
             reply = LiveReply(status="unavailable", reason_code=refusal)
+        elif time.monotonic() >= frame.deadline_monotonic:
+            reply = LiveReply(status="unavailable", reason_code="request-window-expired")
         else:
             request = LiveRequest(identity=frame.identity, request_id=frame.request_id,
                                   kind=frame.kind, payload=frame.payload)
             try:
-                reply = binding.channel.request(request, timeout_ms=frame.timeout_ms)
+                reply = binding.channel._request(request, timeout_ms=frame.timeout_ms,
+                                                 deadline_monotonic=frame.deadline_monotonic)
             except Exception:
                 reply = LiveReply(status="unavailable", reason_code="source-unavailable")
         return canonical_json(reply.to_payload())

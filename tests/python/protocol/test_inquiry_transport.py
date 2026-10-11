@@ -1,6 +1,6 @@
 """Named live RPC transport through the actual bounded C-Two channel.
 
-Only ``cc.connect`` is replaced: one connection points at the actual endpoint
+Both ``cc.connect`` and ``cc.with_call_options`` are replaced: one connection points at the actual endpoint
 handlers; malformed replies and SDK failures use the existing ``StubPeer``.
 No socket framing or vendor correlation protocol is reproduced here. The
 endpoint owner in the correlation test supplies a simulated settlement, not a
@@ -9,10 +9,12 @@ correlation belongs to the mature C-Two contract (ADR-023 decisions 7/8).
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
 import threading
-import time
 import unittest
 from contextlib import nullcontext
+from c_two.error import CallDeadlineExceeded
 from unittest.mock import patch
 
 from hey_my_buddy.buddy.harnesses import c_two_live as ctl
@@ -32,15 +34,18 @@ class TransportTests(unittest.TestCase):
         self.run = identity()
         self.endpoint = ctl.CTwoLiveEndpoint(
             self.run, lv.LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
-            TEST_CRM, instance_id="a" * 64, token="b" * 64)
+            TEST_CRM, instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         self.channel = ctl.CTwoLiveChannel(
             self.run, TEST_CRM, name="Hana", address="ipc://cc" + "5" * 38,
-            instance_id="a" * 64, token="b" * 64)
+            instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         self.addCleanup(self.endpoint.close, reason="test-finished")
 
     def connect(self, peer):
-        """Replace SDK network connection only; named dispatch remains real."""
+        """Replace both SDK boundaries; named dispatch remains real."""
         patcher = patch.object(ctl.cc, "connect", return_value=nullcontext(peer))
+        options = patch.object(ctl.cc, "with_call_options", side_effect=lambda peer, *, timeout: peer)
+        self.call_options = options.start()
+        self.addCleanup(options.stop)
         connection = patcher.start()
         self.addCleanup(patcher.stop)
         return connection
@@ -78,7 +83,12 @@ class TransportTests(unittest.TestCase):
         self.assertTrue(all(entry.status == "queued" for entry in snapshot.inquiries))
         for call in connection.call_args_list:
             self.assertEqual(call.args, (TEST_CRM,))
-            self.assertEqual(call.kwargs, {"name": "Hana", "address": "ipc://cc" + "5" * 38})
+            self.assertEqual({k: v for k, v in call.kwargs.items() if k != "timeout"},
+                             {"name": "Hana", "address": "ipc://cc" + "5" * 38})
+            self.assertGreaterEqual(call.kwargs["timeout"], 0.0)
+        self.assertEqual(self.call_options.call_count, connection.call_count)
+        for call in self.call_options.call_args_list:
+            self.assertGreaterEqual(call.kwargs["timeout"], 0.0)
         self.assertIsNone(self.endpoint.consume_request(0.0))
 
     def test_sdk_connection_failure_is_unavailable_for_every_named_rpc(self):
@@ -160,21 +170,19 @@ class TransportTests(unittest.TestCase):
                     self.channel.observe(limit=10, timeout_ms=value)
         connection.assert_not_called()
 
-    def test_stalled_sdk_calls_expire_without_reporting_a_stopped_owner(self):
-        peer = StubPeer(["unused"] * 2, delay=0.35)
-        self.connect(peer)
-        started = time.monotonic()
-        reply = self.channel.request(inquiry_request(), timeout_ms=100)
-        self.assertEqual((reply.status, reply.reason_code),
-                         ("unavailable", "transport-window-expired"))
-        self.assertGreaterEqual(time.monotonic() - started, 0.09)
-        self.assertLess(time.monotonic() - started, 0.8)
-        snapshot = self.channel.observe(limit=10, timeout_ms=100)
-        self.assertEqual((snapshot.observed, snapshot.reason),
-                         (False, "transport-window-expired"))
-        # Drain the finite StubPeer stall before fixture cleanup. No subprocess
-        # was started, and this result is never used as shutdown evidence.
-        time.sleep(0.4)
+    def test_sdk_deadline_facts_expire_without_reporting_a_stopped_owner(self):
+        for phase in ("pre_dispatch", "dispatch_uncertain"):
+            with self.subTest(phase=phase):
+                expired = CallDeadlineExceeded("scripted SDK deadline",
+                                              details={"transport_phase": phase})
+                self.connect(StubPeer([expired] * 2))
+                reply = self.channel.request(inquiry_request(), timeout_ms=100)
+                self.assertEqual((reply.status, reply.reason_code),
+                                 ("unavailable", "transport-window-expired"))
+                snapshot = self.channel.observe(limit=10, timeout_ms=100)
+                self.assertEqual((snapshot.observed, snapshot.reason),
+                                 (False, "transport-window-expired"))
+        # Actual elapsed time and remote completion use V-09's private peers.
 
 
 if __name__ == "__main__":

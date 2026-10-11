@@ -28,7 +28,7 @@ class CatalogTests(unittest.TestCase):
 
         with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={"missing": MissingHarness()}), \
              patch.object(catalog, "_override", return_value=None):
-            result = catalog.discover()
+            result = catalog.discover(directory=Path(os.environ["BUDDY_STATE_DIR"]))
         self.assertEqual(result["discoveries"], [{"adapter": "missing", "status": "unknown", "accountStatus": "unknown",
                                                   "reason": "fixture executable missing"}])
 
@@ -49,7 +49,7 @@ class CatalogTests(unittest.TestCase):
             self.assertFalse(instance.available()[0])
             self.assertFalse(instance.available()[0])
             self.assertEqual(probe.call_count, 1)
-            refreshed = catalog.discover()
+            refreshed = catalog.discover(directory=Path(os.environ["BUDDY_STATE_DIR"]))
             self.assertEqual(refreshed["discoveries"], [{"adapter": "claude", "status": "complete",
                                                          "accountStatus": "not-applicable", "reason": None}])
             self.assertEqual(probe.call_count, 2, "Explicit discovery must bypass the old auth failure")

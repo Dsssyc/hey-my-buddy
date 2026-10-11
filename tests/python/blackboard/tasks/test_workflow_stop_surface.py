@@ -1,4 +1,6 @@
 """Public receipt/wait boundaries preserve whole-goal stop evidence."""
+import os
+from pathlib import Path
 import unittest
 
 from hey_my_buddy.cli.blocking import await_run
@@ -65,20 +67,24 @@ class ReceiptStopTests(WorkflowTestCase):
 
 
 class GoalStopWaitTests(unittest.TestCase):
+    def setUp(self):
+        self.state = Path(os.environ["BUDDY_STATE_DIR"])
+
     def test_cancelled_goal_never_becomes_success_from_a_late_completed_execution(self):
         run = {"runId": "parent", "status": "completed", "workflowState": "cancelled", "revision": 9,
                "resultAvailable": True, "shutdownConfirmed": True,
                "workflowShutdown": {"selfConfirmed": True, "descendantsConfirmed": True,
                                     "unconfirmedRunIds": [], "unconfirmedCount": 0, "truncated": False}}
 
-        def service(method, params, _directory=None):
+        def service(method, params, directory):
+            self.assertIs(directory, self.state)
             if method == "status":
                 return dict(run)
             if method == "result":
                 return {**run, "result": {"status": "ok", "turn": {"outcome": {"disposition": "completed", "summary": "done"}}}}
             raise AssertionError(f"unexpected operation {method}")
 
-        result = await_run({"runId": "parent", "waitSeconds": 1}, service=service, clock=VirtualClock())
+        result = await_run({"runId": "parent", "waitSeconds": 1}, state_dir=self.state, service=service, clock=VirtualClock())
         self.assertEqual(result["outcome"], "cancelled")
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["workflowState"], "cancelled")
@@ -91,7 +97,8 @@ class GoalStopWaitTests(unittest.TestCase):
                "resultAvailable": True, "shutdownConfirmed": True, "workflowShutdown": pending}
         calls = []
 
-        def service(method, params, _directory=None):
+        def service(method, params, directory):
+            self.assertIs(directory, self.state)
             calls.append((method, params))
             if method == "status":
                 return dict(run)
@@ -107,7 +114,7 @@ class GoalStopWaitTests(unittest.TestCase):
                 return {**run, "result": {"status": "cancelled"}}
             raise AssertionError(f"unexpected operation {method}")
 
-        result = await_run({"runId": "parent", "waitSeconds": 1}, service=service, clock=clock)
+        result = await_run({"runId": "parent", "waitSeconds": 1}, state_dir=self.state, service=service, clock=clock)
         self.assertEqual(result["outcome"], "cancelled")
         self.assertTrue(result["shutdownConfirmed"])
         self.assertTrue(result["shutdown"]["descendantsConfirmed"])
@@ -120,7 +127,8 @@ class GoalStopWaitTests(unittest.TestCase):
         run = {"runId": "parent", "status": "cancelled", "workflowState": "cancelled", "revision": 9,
                "resultAvailable": True, "shutdownConfirmed": True, "workflowShutdown": pending}
 
-        def service(method, params, _directory=None):
+        def service(method, params, directory):
+            self.assertIs(directory, self.state)
             if method == "status":
                 return dict(run)
             if method == "events":
@@ -130,7 +138,7 @@ class GoalStopWaitTests(unittest.TestCase):
                 return {"head": 42, "events": [], "timedOut": True}
             raise AssertionError(f"unexpected operation {method}")
 
-        result = await_run({"runId": "parent", "waitSeconds": 1}, service=service, clock=clock)
+        result = await_run({"runId": "parent", "waitSeconds": 1}, state_dir=self.state, service=service, clock=clock)
         self.assertEqual(result["outcome"], "wait-timeout")
         self.assertFalse(result["shutdownConfirmed"])
         self.assertEqual(result["shutdown"]["unconfirmedRunIds"], ["child"])
@@ -141,7 +149,8 @@ class GoalStopWaitTests(unittest.TestCase):
                "resultAvailable": False, "shutdownConfirmed": False}
         calls = []
 
-        def service(method, params, _directory=None):
+        def service(method, params, directory):
+            self.assertIs(directory, self.state)
             calls.append(method)
             if method == "status":
                 return dict(run)
@@ -150,7 +159,7 @@ class GoalStopWaitTests(unittest.TestCase):
                 return dict(run)
             raise AssertionError(f"await must stay read-only, but called {method!r}")
 
-        result = await_run({"runId": "parent", "waitSeconds": 1}, service=service, clock=clock)
+        result = await_run({"runId": "parent", "waitSeconds": 1}, state_dir=self.state, service=service, clock=clock)
         self.assertEqual(result["outcome"], "wait-timeout")
         self.assertFalse(result["ok"])
         self.assertTrue(result["timedOut"])

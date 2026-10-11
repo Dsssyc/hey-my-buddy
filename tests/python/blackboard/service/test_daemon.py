@@ -15,7 +15,7 @@ import threading
 import unittest
 import uuid
 from contextlib import contextmanager
-from unittest.mock import patch
+from unittest.mock import DEFAULT, patch
 
 from support import BoardTestCase, PYTHON_ROOT
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
@@ -70,6 +70,33 @@ class DaemonCeilingTests(BoardTestCase):
         self.assertFalse(hasattr(daemon.store, "decision_concurrent"))
         self.assertEqual(daemon.pool.total_limit, 4)
         self.assertEqual(len(daemon.pool.worker_ids), 4)
+
+    @unittest.skipIf(os.name == "nt", "POSIX state-root symlink boundary")
+    def test_run_refuses_linked_state_root_before_chmod_or_service_start(self):
+        from hey_my_buddy.blackboard.service.daemon import Daemon
+        from hey_my_buddy.errors import BoardError
+        target = self.directory / "target"
+        target.mkdir(mode=0o755)
+        target.chmod(0o755)
+        alias = self.directory / "state-alias"
+        alias.symlink_to(target, target_is_directory=True)
+        marker = self.directory / "untouched"
+        marker.write_text("private sibling")
+        before = sorted(self.directory.rglob("*"))
+        with clean_buddy_env():
+            daemon = Daemon(alias)
+            with self.assertRaises(BoardError) as refused:
+                daemon.run()
+        self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(sorted(self.directory.rglob("*")), before)
+        self.assertEqual(marker.read_text(), "private sibling")
+        self.assertTrue(alias.is_symlink())
+        self.assertFalse(daemon.endpoint_path.exists())
+        self.assertFalse((target / "ipc").exists())
+        self.assertFalse((target / "workers").exists())
+        self.assertEqual(refused.exception.code, "PRIVATE_PATH_UNSAFE")
+        self.assertEqual(refused.exception.details["path"], str(alias))
+        self.assertEqual(refused.exception.message, "IPC path contains a linked or unsafe component")
 
 
 class DaemonPoolLifecycleTests(BoardTestCase):
@@ -286,7 +313,14 @@ class DaemonHealthTests(BoardTestCase):
             with self.daemon(env={"BUDDY_MAX_CONCURRENT": "2", "BUDDY_WORKER_ID": "local"}) as process:
                 self.assertNotEqual(process.poll(), 0)
                 endpoint = _read_endpoint(self.directory)
-                health = _request(endpoint, "health", {})
+                def check_state(*args, **kwargs):
+                    self.assert_rpc_state_dir(kwargs.get("state_dir"))
+                    return DEFAULT
+
+                # The spy checks ownership and still executes the native request.
+                with patch("hey_my_buddy.protocol.transport._request", wraps=_request,
+                           side_effect=check_state) as request:
+                    health = request(endpoint, "health", {}, state_dir=self.directory)
                 self.assertEqual(health["schemaVersion"], SCHEMA_VERSION)
                 self.assertEqual(health["maxConcurrent"], 2)
                 self.assertEqual(set(health["capacity"]), {"totalLimit", "totalActive", "models"})

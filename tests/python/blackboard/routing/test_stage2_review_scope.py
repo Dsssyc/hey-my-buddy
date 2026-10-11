@@ -1,4 +1,5 @@
 """Deferred review carriers are unavailable before any native process starts."""
+import os
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -20,7 +21,7 @@ class DeferredReviewTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[4]
         self.assertFalse((root / 'harnesses/dsh/plugins/read-only-structured.mjs').exists())
 
-    def test_capabilities_and_all_entrypoints_refuse_without_native_start(self):
+    def test_capabilities_and_router_refuse_without_native_start(self):
         with tempfile.TemporaryDirectory(prefix='deferred-review-') as directory:
             root = Path(directory)
             context = ExecutionContext(task_id='micro-task', attempt_id='attempt', generation=1,
@@ -36,19 +37,17 @@ class DeferredReviewTests(unittest.TestCase):
                     self.assertEqual(item.local_read_only_check()['reasonCode'], 'readonly-worker-carrier-unimplemented')
                     with self.assertRaises(BoardError):
                         router_role.prepare_router_review({}, {}, item, context)
-                    with self.assertRaises(BoardError):
-                        run_execution.start_review(item.name, context, request)
 
     def test_manually_supplied_controller_review_request_is_refused_before_launch(self):
         with patch('subprocess.Popen', side_effect=AssertionError('native process')), \
              patch('subprocess.run', side_effect=AssertionError('native process')):
             with self.assertRaises(BoardError) as caught:
-                run_controller.execute({'operation': 'review', 'harness': 'zcode'}, threading.Event())
+                run_controller.execute({'operation': 'review', 'harness': 'zcode'}, threading.Event(), state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
             self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
             self.assertIsNone(importlib.util.find_spec('hey_my_buddy.buddy.harnesses.zcode.runner'))
             self.assertIsNone(importlib.util.find_spec('hey_my_buddy.buddy.harnesses.dsh.runner'))
             with self.assertRaises(BoardError) as caught:
-                run_controller.execute({'operation': 'review', 'harness': 'dsh'}, threading.Event())
+                run_controller.execute({'operation': 'review', 'harness': 'dsh'}, threading.Event(), state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
             self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
 
 

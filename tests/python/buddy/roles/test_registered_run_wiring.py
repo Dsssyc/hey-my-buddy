@@ -198,7 +198,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
                 mock.patch.object(module, "prepare_services", side_effect=AssertionError("session service")):
             raw, code = run_controller.execute({"operation": "discover", "harness": "zcode",
                 "cwd": str(root), "privateRoot": str(root), "nativeRoot": str(root / "native"),
-                "timeoutSeconds": 3}, threading.Event())
+                "timeoutSeconds": 3}, threading.Event(), state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         result = json.loads(raw)
         self.assertEqual(code, 0)
         self.assertFalse(result["modelStarted"])

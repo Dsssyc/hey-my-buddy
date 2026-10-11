@@ -20,7 +20,7 @@ from unittest import mock
 import blackboard.tasks.test_workspace_lifecycle as lifecycle_tests
 from blackboard.tasks.test_workflow_real import CONFIGURATION, RealWorkspaceTestCase
 
-from hey_my_buddy.cli import main as cli, cli_views
+from hey_my_buddy.cli import main as cli, cli_views, blocking
 from hey_my_buddy.protocol import transport
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace as workspace_module
 
@@ -43,13 +43,19 @@ class CliViewTests(RealWorkspaceTestCase):
         self.board_instance = self.board()
         self.register(self.board_instance)
         self.rpc_params: list[tuple[str, dict]] = []
+        self.enterContext(mock.patch.object(cli, "_call_service", transport._call_service))
 
-        def request(_endpoint, operation, params, resource="control"):
+        def request(_endpoint, operation, params, resource="control", *, state_dir: Path):
+            self.assert_rpc_state_dir(state_dir)
             self.rpc_params.append((operation, dict(params)))
             return self.board_instance.call(operation, params)
 
         endpoint = {"address": "ipc://cli-views-test", "token": "test-token"}
-        self.enterContext(mock.patch.object(transport, "ensure_service", lambda state_dir=None, resource="control": endpoint))
+        def ensure_service(state_dir: Path, resource="control"):
+            self.assert_rpc_state_dir(state_dir)
+            return endpoint
+
+        self.enterContext(mock.patch.object(transport, "_ensure_service", ensure_service))
         self.enterContext(mock.patch.object(transport, "_request", request))
         self.enterContext(mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory)}))
         for name in ("BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE"):

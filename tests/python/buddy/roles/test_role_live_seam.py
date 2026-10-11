@@ -12,11 +12,13 @@ import json
 import os
 import tempfile
 import unittest
+
+import c_two as cc
 from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
-from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, LiveEndpointDescriptor, EndpointSocketFact
+from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, LiveEndpointDescriptor
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, live_binding, run_seam
 from hey_my_buddy.buddy.harnesses.run_contract import (
     FrozenJson,
@@ -57,13 +59,21 @@ class Fixture:
                                                 dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name).resolve()
+        self.enterContext(mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory / "state")}))
+        from hey_my_buddy.protocol import rpc_config
+        rpc_config.configure_client(self.directory / "state")
+        self.addCleanup(cc.shutdown)
+        self.context = cc.local_endpoint_context()
+        self.credential = SimpleNamespace(address="ipc://fixture", context=self.context)
+        self.enterContext(mock.patch.object(cc.EndpointCredential, "from_json",
+                                           return_value=self.credential))
         self.request_file = self.directory / "role-run-request.json"
         self.ready_file = self.directory / "live-ready.json"
 
     def handle(self, *, held=None, control=None):
         self.request_file.write_text(encode_run_request(request()))
         descriptor = LiveEndpointDescriptor(address="ipc://fixture", name="Alex", instance_id="b"*64,
-                                            host_pid=123, socket=None)
+                                            host_pid=123, endpoint_credential="opaque-native-credential")
         self.ready_file.write_text(json.dumps(descriptor.to_payload()))
         return SimpleNamespace(pid=123, role_run_control=control if control is not None else {
             "operation": "worker", "harness": "zcode", "requestFile": str(self.request_file),
@@ -71,10 +81,11 @@ class Fixture:
             role_run_identity=held if held is not None else identity())
 
     def unavailable(self, handle):
-        self.assertEqual(role_live.handle_live_binding(handle), (role_live.LIVE_UNAVAILABLE, None))
+        self.assertEqual(role_live.handle_live_binding(handle, state_dir=self.directory / "state"), (role_live.LIVE_UNAVAILABLE, None))
 
 
 class LiveBindingRegistryTests(Fixture, unittest.TestCase):
+
     def test_only_registered_modules_carry_a_live_binding(self):
         for name in HARNESS_NAMES:
             self.assertIs(live_binding(name), CTwoLiveChannel)
@@ -82,7 +93,7 @@ class LiveBindingRegistryTests(Fixture, unittest.TestCase):
             self.assertIsNone(live_binding(name))
 
     def test_a_channel_binds_the_requests_own_complete_identity(self):
-        state, channel = role_live.handle_live_binding(self.handle())
+        state, channel = role_live.handle_live_binding(self.handle(), state_dir=self.directory / "state")
         self.assertEqual(state, role_live.LIVE_BOUND)
         self.assertIsInstance(channel, CTwoLiveChannel)
         self.assertEqual(channel.identity, identity())
@@ -92,15 +103,15 @@ class LiveBindingRegistryTests(Fixture, unittest.TestCase):
         handle.role_run_control["harness"] = "codex"
         self.unavailable(handle)
         with mock.patch.dict(RUN_SEAMS, {"codex": None}):
-            self.assertEqual(role_live.handle_live_binding(handle), (role_live.LIVE_UNEXTRACTED, None))
+            self.assertEqual(role_live.handle_live_binding(handle, state_dir=self.directory / "state"), (role_live.LIVE_UNEXTRACTED, None))
 
 
 class StoredRequestTests(Fixture, unittest.TestCase):
     def test_a_whole_stored_relationship_verifies_its_complete_identity(self):
         handle = self.handle()
-        _, channel = role_live.handle_live_binding(handle)
+        _, channel = role_live.handle_live_binding(handle, state_dir=self.directory / "state")
         self.assertEqual(channel.identity, handle.role_run_identity)
-        self.assertIs(role_live.handle_live_binding(handle)[1], channel)
+        self.assertIs(role_live.handle_live_binding(handle, state_dir=self.directory / "state")[1], channel)
 
     def test_any_identity_gap_refuses_the_whole_request(self):
         handle = self.handle()
@@ -130,19 +141,19 @@ class StoredRequestTests(Fixture, unittest.TestCase):
 class HandleBindingTests(Fixture, unittest.TestCase):
     def test_the_owned_request_binds_the_channel(self):
         handle = self.handle()
-        state, channel = role_live.handle_live_binding(handle)
+        state, channel = role_live.handle_live_binding(handle, state_dir=self.directory / "state")
         self.assertEqual(state, role_live.LIVE_BOUND)
         self.assertEqual(channel.identity, identity())
         self.assertNotIn("a"*64, self.ready_file.read_text())
         self.assertNotIn("a"*64, encode_run_request(request()))
 
     def test_the_binding_states_are_the_three_the_consumer_acts_on(self):
-        self.assertEqual(role_live.handle_live_binding(SimpleNamespace()), (role_live.LIVE_UNEXTRACTED, None))
+        self.assertEqual(role_live.handle_live_binding(SimpleNamespace(), state_dir=self.directory / "state"), (role_live.LIVE_UNEXTRACTED, None))
         handle = self.handle()
         handle.role_run_control.pop("live")
         self.unavailable(handle)
         handle = self.handle()
-        self.assertEqual(role_live.handle_live_binding(handle)[0], role_live.LIVE_BOUND)
+        self.assertEqual(role_live.handle_live_binding(handle, state_dir=self.directory / "state")[0], role_live.LIVE_BOUND)
 
     def test_a_missing_unreadable_or_foreign_request_never_binds(self):
         handle = self.handle()
@@ -166,22 +177,80 @@ class HandleBindingTests(Fixture, unittest.TestCase):
         self.request_file.write_text(encode_run_request(request(harness="codex")))
         self.unavailable(handle)
 
-    def test_ready_cleanup_cannot_name_an_unrelated_socket(self):
+    def stopped(self):
         handle = self.handle()
-        descriptor = LiveEndpointDescriptor(address="ipc://fixture", name="Alex", instance_id="b"*64,
-            host_pid=123, socket=EndpointSocketFact(address="ipc://fixture", path="/tmp/somebody.sock", device=1, inode=2))
-        self.ready_file.write_text(json.dumps(descriptor.to_payload()))
-        self.unavailable(handle)
-
-    def test_unknown_controller_group_never_deletes_endpoint(self):
-        handle = self.handle()
-        handle.process = mock.Mock()
+        handle.process = mock.Mock(pid=123)
         handle.process.poll.return_value = -9
-        handle.shutdown_confirmed = mock.Mock(return_value=False)
-        with mock.patch.object(role_live, "cleanup_abandoned_socket") as cleanup:
-            role_live.release_live_binding(handle)
-        self.assertFalse(cleanup.call_args.args[1].group_gone)
-        self.assertEqual(cleanup.call_args.args[1].exit_code, -9)
+        handle.shutdown_confirmed = mock.Mock(return_value=True)
+        return handle
+
+    def test_credential_address_and_domain_mismatch_never_reap(self):
+        handle = self.stopped()
+        with mock.patch.object(cc, "reap_endpoint", return_value={"status": "reaped", "reason": None}) as reap:
+            self.credential.address = "ipc://foreign"
+            self.unavailable(handle)
+            self.assertEqual(role_live.release_live_binding(handle).outcome, "unverified")
+            self.credential.address = "ipc://fixture"
+            self.credential.context = SimpleNamespace(platform=self.context.platform,
+                namespace_id="foreign-state", root="<OTHER_PRIVATE_ROOT>")
+            self.unavailable(handle)
+            self.assertEqual(role_live.release_live_binding(handle).outcome, "unverified")
+            reap.assert_not_called()
+
+    def test_unknown_controller_group_never_reaps_endpoint(self):
+        handle = self.stopped()
+        handle.shutdown_confirmed.return_value = False
+        with mock.patch.object(cc, "reap_endpoint", return_value={"status": "reaped", "reason": None}) as reap:
+            result = role_live.release_live_binding(handle)
+        self.assertEqual((result.outcome, result.reason), ("unverified", "vanishing-not-confirmed"))
+        reap.assert_not_called()
+
+    def test_unreaped_or_wrong_popen_pid_never_reaps_endpoint(self):
+        with mock.patch.object(cc, "reap_endpoint", return_value={"status": "reaped", "reason": None}) as reap:
+            handle = self.stopped()
+            handle.process.poll.return_value = None
+            self.assertEqual(role_live.release_live_binding(handle).outcome, "unverified")
+            handle = self.stopped()
+            handle.process.pid = 124
+            self.assertEqual(role_live.release_live_binding(handle).outcome, "unverified")
+            reap.assert_not_called()
+
+    def test_release_revalidates_every_identity_instance_pid_and_cached_address(self):
+        with mock.patch.object(cc, "reap_endpoint", return_value={"status": "reaped", "reason": None}) as reap:
+            for field, value in {"task_id": "other", "attempt_id": "other", "generation": 2,
+                                 "turn_id": "other", "invocation_id": "other", "input_sha256": "f"*64}.items():
+                with self.subTest(component=field):
+                    handle = self.stopped()
+                    role_live.handle_live_binding(handle, state_dir=self.directory / "state")
+                    handle.role_run_identity = identity().model_copy(update={field: value})
+                    self.assertEqual(role_live.release_live_binding(handle).outcome, "unverified")
+            handle = self.stopped()
+            handle.role_run_control["live"]["instanceId"] = "c"*64
+            self.assertEqual(role_live.release_live_binding(handle).outcome, "unverified")
+            handle = self.stopped()
+            handle.pid = 124
+            self.assertEqual(role_live.release_live_binding(handle).outcome, "unverified")
+            handle = self.stopped()
+            role_live.handle_live_binding(handle, state_dir=self.directory / "state")
+            handle.role_live_descriptor = handle.role_live_descriptor.model_copy(update={"address": "ipc://other"})
+            self.assertEqual(role_live.release_live_binding(handle).outcome, "unverified")
+            reap.assert_not_called()
+
+    def test_exceptional_reap_is_not_retried(self):
+        handle = self.stopped()
+        with mock.patch.object(cc, "reap_endpoint", side_effect=OSError("native IO failure")) as reap:
+            with self.assertRaises(OSError):
+                role_live.release_live_binding(handle)
+            self.assertEqual(role_live.release_live_binding(handle).outcome, "unverified")
+            reap.assert_called_once()
+
+    def test_a_native_refusal_is_reported_and_never_retried(self):
+        handle = self.stopped()
+        with mock.patch.object(cc, "reap_endpoint", return_value={"status": "busy", "reason": "alive"}) as reap:
+            first = role_live.release_live_binding(handle)
+            self.assertEqual((first.outcome, first.reason), ("busy", "alive"))
+            self.assertIs(role_live.release_live_binding(handle), first)
+            reap.assert_called_once()
 
 
 class ReadyFileBarrierTests(Fixture, unittest.TestCase):

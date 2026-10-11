@@ -127,10 +127,7 @@ def account_root(state: Path, adapter: str) -> Path:
 
 def context_root(context, adapter: str | None = None) -> Path:
     """Resolve an execution's private root from its explicit service state root."""
-    environment = getattr(context, 'environment', None)
-    state = environment.get('BUDDY_STATE_DIR') if isinstance(environment, dict) else None
-    if not state or not Path(state).is_absolute():
-        raise BoardError('PRIVATE_STATE_REQUIRED', 'BUDDY_STATE_DIR must explicitly name the private state root')
+    state = context.environment['BUDDY_STATE_DIR']
     selected = adapter or context.spec.get('adapter')
     return attempt_root(Path(state), selected, context.task_id, context.attempt_id)
 
