@@ -306,31 +306,34 @@ def native_environment(environment: dict, *, command: tuple[str, ...] | list[str
 
 def _terminate_group(process: subprocess.Popen) -> bool:
     """Stop and reap a POSIX probe group, including children holding its pipe."""
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    started = time.monotonic()
+    stop_at = started + 1.0
+    while True:
+        now = time.monotonic()
+        sig = signal.SIGTERM if now - started < 0.25 else signal.SIGKILL
         try:
             os.killpg(process.pid, sig)
-        except ProcessLookupError:
-            pass
         except OSError:
-            return False
-        try:
-            process.wait(timeout=0.25)
-        except subprocess.TimeoutExpired:
+            # A signal failure is not stop evidence. Observe the group below;
+            # a group with only unreaped members may reject signals until reaped.
             pass
-    try:
-        process.wait(timeout=0.5)
+        process.poll()
         try:
             os.killpg(process.pid, 0)
         except ProcessLookupError:
-            return True
+            return process.returncode is not None
         except OSError:
+            # Unavailable observation stays unknown throughout the bounded wait.
+            pass
+        remaining = stop_at - time.monotonic()
+        if remaining <= 0:
             return False
-        return False
-    except subprocess.TimeoutExpired:
-        return False
+        time.sleep(min(0.01, remaining))
 
 
-def _probe_posix(process: subprocess.Popen, stop_at: float, deadline: float | None) -> tuple[str | None, bytes]:
+def _probe_posix(process: subprocess.Popen, stop_at: float,
+                 deadline: float | None) -> tuple[str | None, bytes, bool]:
+    """Keep the read outcome separate from the final group/pipe stop evidence."""
     assert process.stdout is not None
     chunks: list[bytes] = []
     count = 0
@@ -360,7 +363,7 @@ def _probe_posix(process: subprocess.Popen, stop_at: float, deadline: float | No
                 break
             chunks.append(chunk)
         if reason is not None:
-            contained = _terminate_group(process)
+            _terminate_group(process)
             # A detached descendant still holding the pipe means containment is
             # unproven. Never report the original timeout as a clean shutdown.
             drain_until = time.monotonic() + 0.5
@@ -371,18 +374,16 @@ def _probe_posix(process: subprocess.Popen, stop_at: float, deadline: float | No
                     eof = not os.read(process.stdout.fileno(), 4096)
                 except OSError:
                     break
-            if not eof or not contained:
-                return "shutdown-unverified", b""
-            return reason, b""
+            contained = _terminate_group(process)
+            return reason, b"", contained and eof
         try:
             process.wait(timeout=max(0.01, stop_at - time.monotonic()))
         except subprocess.TimeoutExpired:
-            return ("timeout" if _terminate_group(process) else "shutdown-unverified"), b""
-        if not _terminate_group(process):
-            return "shutdown-unverified", b""
-        return ("probe-failed" if process.returncode else None), b"".join(chunks)
-    except Exception as error:
+            return "timeout", b"", _terminate_group(process)
         contained = _terminate_group(process)
+        return ("probe-failed" if process.returncode else None), b"".join(chunks), contained
+    except Exception as error:
+        _terminate_group(process)
         drain_until = time.monotonic() + 0.5
         while not eof and time.monotonic() < drain_until:
             try:
@@ -391,6 +392,7 @@ def _probe_posix(process: subprocess.Popen, stop_at: float, deadline: float | No
                 eof = not os.read(process.stdout.fileno(), 4096)
             except OSError:
                 break
+        contained = _terminate_group(process)
         error.discovery_shutdown_confirmed = contained and eof
         raise
     finally:
@@ -398,7 +400,7 @@ def _probe_posix(process: subprocess.Popen, stop_at: float, deadline: float | No
         process.stdout.close()
 
 
-def _probe_windows(process: subprocess.Popen, stop_at: float) -> tuple[str | None, bytes]:
+def _probe_windows(process: subprocess.Popen, stop_at: float) -> tuple[str | None, bytes, bool]:
     """Poll a Windows pipe without a reader thread; forced tree stop is unverified."""
     import ctypes
     from ctypes import wintypes
@@ -444,8 +446,8 @@ def _probe_windows(process: subprocess.Popen, stop_at: float) -> tuple[str | Non
             process.kill()
     process.wait()
     process.stdout.close()
-    return ("shutdown-unverified", b"") if forced else (
-        ("probe-failed" if process.returncode else None), b"".join(chunks))
+    return (reason, b"", False) if forced else (
+        ("probe-failed" if process.returncode else None), b"".join(chunks), True)
 
 
 def _probe(command: list[str], environment: dict, *, deadline: float | None = None,
@@ -462,7 +464,9 @@ def _probe(command: list[str], environment: dict, *, deadline: float | None = No
     except (OSError, ValueError):
         return "launch-failed", b""
     stop_at = min(start + _TIMEOUT, deadline) if deadline is not None else start + _TIMEOUT
-    return _probe_windows(process, stop_at) if os.name == "nt" else _probe_posix(process, stop_at, deadline)
+    code, output, stopped = (_probe_windows(process, stop_at) if os.name == "nt" else
+                             _probe_posix(process, stop_at, deadline))
+    return (code, output) if stopped else ("shutdown-unverified", b"")
 
 
 def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -> tuple[str | None, bytes]:
@@ -493,8 +497,8 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -
         else:
             process.stdin.close()
             stop_at = min(start + _TIMEOUT, deadline)
-            code, output = (_probe_windows(process, stop_at) if os.name == "nt" else
-                            _probe_posix(process, stop_at, deadline))
+            code, output, _ = (_probe_windows(process, stop_at) if os.name == "nt" else
+                               _probe_posix(process, stop_at, deadline))
     except Exception as error:
         failure = error
         raise

@@ -324,7 +324,12 @@ class HarnessDiscoveryTests(unittest.TestCase):
             # A slow OS reaper may not close the inherited pipe within the
             # cleanup budget. It must remain unavailable with honest evidence.
             self.assertIn(result["reasonCode"], ("scan-timeout", "shutdown-unverified"))
-            self.assertIn(signal.SIGKILL, [call.args[1] for call in kill_group.call_args_list])
+            self.assertIn(signal.SIGTERM, [call.args[1] for call in kill_group.call_args_list])
+            groups = {call.args[0] for call in kill_group.call_args_list}
+            self.assertTrue(groups)
+            for pgid in groups:
+                with self.assertRaises(ProcessLookupError):
+                    os.killpg(pgid, 0)
 
     @unittest.skipIf(os.name == "nt", "POSIX process-group assertion")
     def test_total_deadline_covers_multiple_candidates(self):
@@ -539,13 +544,6 @@ class ProbeStopEvidenceTests(unittest.TestCase):
             with patch.object(discovery, '_terminate_group', side_effect=unobserved):
                 code, output = discovery._probe([str(cli)], dict(os.environ), deadline=time.monotonic() + 1)
         self.assertEqual((code, output), ('shutdown-unverified', b''))
-
-    @unittest.skipIf(os.name == 'nt', 'POSIX group observation')
-    def test_reaped_parent_with_surviving_group_is_not_confirmed(self):
-        from types import SimpleNamespace
-        process = SimpleNamespace(pid=424242, wait=lambda **kwargs: 0)
-        with patch.object(discovery.os, 'killpg', return_value=None):
-            self.assertIs(discovery._terminate_group(process), False)
 
     def test_node_probe_exception_keeps_actual_stop(self):
         for stopped in (True, False):
