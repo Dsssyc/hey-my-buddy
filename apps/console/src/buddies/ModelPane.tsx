@@ -125,7 +125,7 @@ export function ModelPane({ row, harnessState, data, recorded, editor, onBack, c
   return <aside aria-labelledby={`${id}-title`} className={className}>
     <div className="px-5 pt-[18px] pb-3.5">
       <Button variant="outline" size="sm" className="mb-3 xl:hidden" onClick={onBack}><span aria-hidden="true">‹</span>{t("pane.back")}</Button>
-      <h2 id={`${id}-title`} className="font-mono text-xs break-all" aria-label={modelIdentity(family)}>
+      <h2 id={`${id}-title`} className="font-mono text-xs wrap-anywhere" aria-label={modelIdentity(family)}>
         <span className="text-ink3">{family.adapter} / {family.provider} /</span><br />
         <span className="text-sm">{member.model}</span>
       </h2>

@@ -87,16 +87,42 @@ describe("the harness table", () => {
     await waitFor(() => harnessPane("ZCode"));
   });
 
-  it("lets the side column take the table's place in a narrow window, and gives the table back", async () => {
+  it("lets the side column take the place of the toolbar and the table in a narrow window, and gives them back", async () => {
     const user = userEvent.setup();
     await openHarness(fixture());
-    const table = () => harnessTable().closest("div.min-h-0")!.parentElement!;
-    const column = () => table().parentElement!.querySelector<HTMLElement>("[data-slot=scroll-area]:has(aside)")!;
-    expect(column().className).toContain("max-xl:hidden");
+    const narrowHidden = (element: Element) => element.className.includes("max-xl:hidden");
+    const table = () => harnessTable().closest("[data-slot=scroll-area]")!;
+    const toolbar = () => document.querySelector("[data-slot=harness-toolbar]")!;
+    const column = () => harnessPane().closest("[data-slot=scroll-area]")!;
+    expect([toolbar(), table(), column()].map(narrowHidden)).toEqual([false, false, true]);
     await user.click(harnessButton("Codex"));
-    expect(column().className).not.toContain("max-xl:hidden");
+    expect([toolbar(), table(), column()].map(narrowHidden)).toEqual([true, true, false]);
     await user.click(within(harnessPane("Codex")).getByRole("button", { name: "Harness" }));
-    expect(column().className).toContain("max-xl:hidden");
+    expect([toolbar(), table(), column()].map(narrowHidden)).toEqual([false, false, true]);
+  });
+
+  it("keeps what an action said outside the parts a narrow window hides", async () => {
+    const user = userEvent.setup();
+    await openHarness(fixture());
+    await selectHarness(user, "Codex");
+    await user.click(within(paneBlock("位置")).getByRole("button", { name: "检测" }));
+    const line = (await screen.findByText("已检测 Codex：已找到")).closest("[data-slot=harness-feedback]")!;
+    const view = screen.getByRole("region", { name: "Harness" });
+    // The line is a row of the view itself, beside the toolbar and the table, and no narrow-window rule hides it.
+    expect(line.parentElement).toBe(view);
+    expect(line.className).not.toContain("hidden");
+    expect(document.querySelector("[data-slot=harness-toolbar]")!.className).toContain("max-xl:hidden");
+  });
+
+  it("draws the side column only while the view is in front", () => {
+    const f = fixture();
+    const view = (active: boolean) => <TooltipProvider><HarnessView snapshot={snapshot()} api={f.api} refresh={async () => null} active={active}
+      mutationsAvailable sessionWritable location={{ view: "harness" }} attention={{ roles: null, quota: [] }} onNavigate={() => {}} hidden={!active} /></TooltipProvider>;
+    const { rerender } = render(view(true));
+    expect(screen.getByRole("complementary")).toBeTruthy();
+    rerender(view(false));
+    expect(screen.queryByRole("complementary", { hidden: true })).toBeNull();
+    expect(screen.getByRole("table", { name: "Harness", hidden: true })).toBeTruthy();
   });
 });
 

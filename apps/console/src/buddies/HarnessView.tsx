@@ -115,36 +115,38 @@ export function HarnessView({ snapshot, api, refresh, active, mutationsAvailable
 
   const guard = refused ? refusal : "";
   const checked = lastChecked(rows);
+  // In a window too narrow for both, an opened row's side column takes the place of the toolbar and the table.
+  const replaced = opened && !!current && "max-xl:hidden";
+  // Three rows: the toolbar, what the last action said, and the table. The line in the middle stays when the
+  // side column replaces the other two, so an action started there still says how it ended.
   return <section hidden={hidden} aria-label={t("catalog.harness")} aria-busy={busy}
-    className={cn("grid min-h-0 flex-1 grid-cols-1 bg-card", current && "xl:grid-cols-[minmax(0,1fr)_352px]")}>
-    <div className={cn("flex min-h-0 min-w-0 flex-col", opened && current && "max-xl:hidden")}>
-      <div data-slot="harness-toolbar" className="flex shrink-0 flex-wrap items-center gap-x-[22px] gap-y-2 border-b px-3 py-3 text-ink2 sm:px-6">
-        <CatalogPick location={location} attention={attention} onNavigate={onNavigate} />
-        <div className="ml-auto flex items-center gap-[22px]">
-          <span className="whitespace-nowrap"><span className="mr-1.5 text-ink3">{t("harness.lastChecked")}</span><span className="tabular-nums">{checked ?? "—"}</span></span>
-          <Hint text={refusal || undefined}>
-            <Button variant="outline" aria-disabled={busy || !!refusal || undefined} onClick={() => void run({ kind: "check" })}>{t("harness.checkAll")}</Button>
-          </Hint>
-        </div>
+    className={cn("grid min-h-0 flex-1 grid-cols-1 grid-rows-[auto_auto_minmax(0,1fr)] bg-card", current && "xl:grid-cols-[minmax(0,1fr)_352px]")}>
+    <div data-slot="harness-toolbar" className={cn("col-start-1 row-start-1 flex min-w-0 flex-wrap items-center gap-x-[22px] gap-y-2 border-b px-3 py-3 text-ink2 sm:px-6", replaced)}>
+      <CatalogPick location={location} attention={attention} onNavigate={onNavigate} />
+      <div className="ml-auto flex items-center gap-[22px]">
+        <span className="whitespace-nowrap"><span className="mr-1.5 text-ink3">{t("harness.lastChecked")}</span><span className="tabular-nums">{checked ?? "—"}</span></span>
+        <Hint text={refusal || undefined}>
+          <Button variant="outline" aria-disabled={busy || !!refusal || undefined} onClick={() => void run({ kind: "check" })}>{t("harness.checkAll")}</Button>
+        </Hint>
       </div>
-      {(guard || error || note) && <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1 border-b px-3 py-2 text-xs sm:px-6">
-        {guard && <p className="text-ink2" role="status">{guard}</p>}
-        {error && <p className="flex items-center gap-2.5 text-fail" role="alert">{error}
-          {retry && <Button variant="outline" size="xs" onClick={() => void run(retry)}>{t("harness.retry")}</Button>}</p>}
-        {note && <p className="text-ink2" role="status">{note}</p>}
-      </div>}
-      <ScrollArea className="min-h-0 flex-1">
-        {rows.length > 0 && <HarnessTable rows={rows.map(row => harnessTableRow(row, t))} current={current?.adapter ?? null}
-          onSelect={adapter => { setSelected(adapter); setOpened(true); }} />}
-        {!rows.length && <div className="px-6 py-16 text-center">
-          <p className="font-medium">{t("harness.empty.title")}</p>
-          <p className="mt-1.5 text-xs text-ink2">{t("harness.empty.hint")}</p>
-        </div>}
-        <ScrollBar orientation="horizontal" />
-      </ScrollArea>
     </div>
+    {(guard || error || note) && <div data-slot="harness-feedback" className="col-start-1 row-start-2 flex min-w-0 flex-wrap items-center gap-x-5 gap-y-1 border-b px-3 py-2 text-xs sm:px-6">
+      {guard && <p className="text-ink2" role="status">{guard}</p>}
+      {error && <p className="flex items-center gap-2.5 text-fail" role="alert">{error}
+        {retry && <Button variant="outline" size="xs" onClick={() => void run(retry)}>{t("harness.retry")}</Button>}</p>}
+      {note && <p className="text-ink2" role="status">{note}</p>}
+    </div>}
+    <ScrollArea className={cn("col-start-1 row-start-3 min-h-0 min-w-0", replaced)}>
+      {rows.length > 0 && <HarnessTable rows={rows.map(row => harnessTableRow(row, t))} current={current?.adapter ?? null}
+        onSelect={adapter => { setSelected(adapter); setOpened(true); }} />}
+      {!rows.length && <div className="px-6 py-16 text-center">
+        <p className="font-medium">{t("harness.empty.title")}</p>
+        <p className="mt-1.5 text-xs text-ink2">{t("harness.empty.hint")}</p>
+      </div>}
+      <ScrollBar orientation="horizontal" />
+    </ScrollArea>
     {/* The side column is drawn only while this view is in front, so that a list it opened cannot stay over another page. */}
-    {current && active && <ScrollArea className={cn("min-h-0 xl:border-l", !opened && "max-xl:hidden")}>
+    {current && active && <ScrollArea className={cn("col-start-1 row-start-3 min-h-0 xl:col-start-2 xl:row-span-3 xl:row-start-1 xl:border-l", !opened && "max-xl:hidden")}>
       <HarnessPane key={current.adapter} row={current} name={harnessName(current.adapter)} api={api} csrfToken={snapshot.csrfToken}
         canWrite={!refusal} refusal={refusal} busy={busy}
         onCheck={() => void run({ kind: "check", adapter: current.adapter })}

@@ -2,6 +2,7 @@ import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { harnessName } from "../buddy-display";
+import { formatList } from "../i18n/format";
 import type { BuddyAttention } from "./attention";
 import { buddyHash } from "./navigation";
 import type { BuddyLocation, BuddyView } from "./navigation";
@@ -13,7 +14,7 @@ const tableClass = "flex items-center gap-1.5 border-l border-line2 px-3 py-[5px
 export function attentionHints(attention: BuddyAttention, t: TFunction<"buddies">): { roles?: string; harness?: string } {
   return {
     roles: attention.roles ? t(`attention.${attention.roles}`) : undefined,
-    harness: attention.quota.length ? t("attention.quota", { names: attention.quota.map(harnessName).join("、") }) : undefined,
+    harness: attention.quota.length ? t("attention.quota", { names: formatList(attention.quota.map(harnessName)) }) : undefined,
   };
 }
 

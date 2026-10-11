@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { Button } from "@/components/ui/button";
 import { StateMark } from "@/components/ui/state-mark";
-import { formatDateTime } from "../i18n/format";
+import { formatShortDateTime } from "../i18n/format";
 import type { Profile, RoutingMode } from "../types";
 import { RouterAddDialog } from "./RouterAddDialog";
 import { buddyHash } from "./navigation";
@@ -19,27 +19,30 @@ export function routerLineId(profileId: string): string {
 }
 
 /** A small control of a line: it stays on screen when it cannot be used, and says why where it can. */
-function LineButton({ label, disabled, reason, onClick, children }: {
-  label: string; disabled: boolean; reason?: string; onClick: () => void; children: ReactNode;
+function LineButton({ label, disabled, reason, className, onClick, children }: {
+  label: string; disabled: boolean; reason?: string; className?: string; onClick: () => void; children: ReactNode;
 }) {
   return <Hint text={reason}>
-    <Button variant="ghost" size="icon-sm" className="text-ink2" aria-label={label} aria-disabled={disabled || undefined}
+    <Button variant="ghost" size="icon-sm" className={cn("text-ink2", className)} aria-label={label} aria-disabled={disabled || undefined}
       onClick={() => { if (!disabled) onClick(); }}>{children}</Button>
   </Hint>;
 }
 
-/** The mark and the word of a buddy's standing; the recorded code of an unavailable one is the word's hint. */
+/**
+ * The mark and the word of a buddy's standing; the recorded code of an unavailable one is the word's hint.
+ * In a window too narrow for one row it stands under the name, which then has the row's width to itself.
+ */
 function Standing({ status }: { status: RouterStatus }) {
   const { t } = useTranslation("buddies");
   const hint = status.kind === "unavailable" ? status.code ?? undefined : undefined;
-  return <span className="flex items-center gap-1.5 whitespace-nowrap">
+  return <span className="flex items-center gap-1.5 whitespace-nowrap max-sm:col-start-3 max-sm:row-start-2">
     <StateMark kind={status.kind === "current" ? "live" : "idle"} />
     <Hint text={hint}>
       <span tabIndex={hint ? 0 : undefined} className={cn("rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", status.kind === "current" ? "text-live" : "text-ink2")}>
         {t(`roles.list.status.${status.kind}`)}
       </span>
     </Hint>
-    {status.kind === "retry" && status.at && <time className="text-ink3 tabular-nums" dateTime={status.at}>{formatDateTime(Date.parse(status.at))}</time>}
+    {status.kind === "retry" && status.at && <time className="text-ink3 tabular-nums" dateTime={status.at}>{formatShortDateTime(Date.parse(status.at))}</time>}
   </span>;
 }
 
@@ -77,11 +80,12 @@ export function RouterList({ lines, profiles, mode, locked, note, onShow, onAdd,
           </span>
           <span className="text-right text-ink3 tabular-nums">{index + 1}</span>
           {profile
-            ? <a href={buddyHash({ view: "models", target: profileId })} className="min-w-0 rounded-sm font-mono text-xs break-all outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            ? <a href={buddyHash({ view: "models", target: profileId })} className="min-w-0 rounded-sm font-mono text-xs wrap-anywhere outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
               onClick={event => { event.preventDefault(); onShow(profileId); }}>{name}</a>
-            : <span className="min-w-0 font-mono text-xs break-all">{name}</span>}
+            : <span className="min-w-0 font-mono text-xs wrap-anywhere">{name}</span>}
           {status ? <Standing status={status} /> : <span />}
-          <LineButton label={t("roles.list.remove", { name })} disabled={!!locked} reason={locked} onClick={() => onRemove(profileId)}><XIcon /></LineButton>
+          <LineButton label={t("roles.list.remove", { name })} disabled={!!locked} reason={locked} className="max-sm:col-start-5 max-sm:row-start-1"
+            onClick={() => onRemove(profileId)}><XIcon /></LineButton>
         </li>;
       })}
     </ol>}

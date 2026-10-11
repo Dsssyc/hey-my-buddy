@@ -3,8 +3,11 @@ export default {
   heading: "Router",
   upgrade: {
     title: "Router 设置需要升级",
+    titleWith: "Router 设置需要升级：{{message}}",
     locked: "Router 设置需要升级后才能修改",
   },
+  /** Why a control cannot be used, then what it says of itself. */
+  lockedAnd: "{{locked}}。{{own}}",
   list: {
     name: "列表",
     label: "Router 列表",

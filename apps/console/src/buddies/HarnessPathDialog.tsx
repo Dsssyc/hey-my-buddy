@@ -34,7 +34,7 @@ export function HarnessPathDialog({ adapter, name, manualPath, disabled, reason,
     onSave(path);
   }
   return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
-    <DialogContent showCloseButton={false} aria-describedby={undefined} className="sm:max-w-md">
+    <DialogContent aria-describedby={undefined} className="sm:max-w-md">
       <DialogHeader><DialogTitle>{t("harness.path.title", { name })}</DialogTitle></DialogHeader>
       <form className="flex flex-col gap-4" onSubmit={event => { event.preventDefault(); submit(); }}>
         <div className="flex flex-col gap-1.5">

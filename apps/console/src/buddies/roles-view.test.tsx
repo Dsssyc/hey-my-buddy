@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { App } from "../App";
 import { makeDraft } from "../draft";
-import { formatDateTime } from "../i18n/format";
+import { formatShortDateTime } from "../i18n/format";
 import type { Snapshot } from "../types";
 import type { Editor } from "../use-editor";
 import { RolesView } from "./RolesView";
@@ -70,7 +70,7 @@ describe("the Router list", () => {
     expect(standing(SOL)).toBe("idle");
     const waiting = within(line(HIGH));
     expect(waiting.getByText("等待重试")).toBeTruthy();
-    expect(line(HIGH).querySelector("time")!.textContent).toBe(formatDateTime(Date.parse("2026-09-27T08:00:00.000Z")));
+    expect(line(HIGH).querySelector("time")!.textContent).toBe(formatShortDateTime(Date.parse("2026-09-27T08:00:00.000Z")));
     expect(standing(HIGH)).toBe("idle");
     expect(screen.getByRole("heading", { name: "Router", level: 2 })).toBeTruthy();
   });
@@ -687,7 +687,7 @@ describe("the records of routing", () => {
   const records = () => within(section("记录"));
   /** One fact of the window: its name and its number, as they read. */
   const fact = (name: string) => records().getByText(name).closest("dl")!.textContent;
-  const time = (iso: string) => formatDateTime(Date.parse(iso));
+  const time = (iso: string) => formatShortDateTime(Date.parse(iso));
 
   it("says that nothing is recorded when the snapshot carries no health facts, and writes no failures", async () => {
     const f = fixture(snapshot({ routers: [MEDIUM_ID] }));

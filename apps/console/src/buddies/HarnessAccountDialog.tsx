@@ -113,7 +113,7 @@ export function HarnessAccountDialog({ account, name, api, csrfToken, canWrite, 
   const loginWord = login && (login.state === "pending" && login.kind && login.kind !== "oauth"
     ? t("harness.dialog.loginState.running") : t(`harness.dialog.loginState.${login.state}`));
   return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
-    <DialogContent showCloseButton={false} aria-describedby={undefined} aria-busy={busy} className="sm:max-w-md">
+    <DialogContent aria-describedby={undefined} aria-busy={busy} className="sm:max-w-md">
       <DialogHeader><DialogTitle>{t("harness.dialog.title", { name })}</DialogTitle></DialogHeader>
       <div className="flex flex-col gap-4">
         <Segmented aria-label={t("harness.dialog.source")} value={account.source}

@@ -2,6 +2,7 @@ import type { TFunction } from "i18next";
 import { parseReadOnlyStructured } from "../api";
 import { harnessName } from "../buddy-display";
 import { parseHarnessAccount } from "../harness-account";
+import { formatShortDateTime } from "../i18n/format";
 import type { HarnessAccount } from "../harness-account";
 import { quotaView } from "../host-workflow";
 import type { QuotaWindowView } from "../host-workflow";
@@ -10,13 +11,10 @@ import type { HarnessCandidate, HarnessHealth, QuotaRoutingRecord } from "../typ
 
 type T = TFunction<"buddies">;
 
-/** A moment as `MM-DD HH:mm` in the local zone; null when it is not recorded or not a time. */
+/** A recorded moment in the short form; null when it is not recorded or not a time. */
 export function harnessTime(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  const pad = (part: number) => String(part).padStart(2, "0");
-  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const ms = Date.parse(value ?? "");
+  return Number.isNaN(ms) ? null : formatShortDateTime(ms);
 }
 
 /** The latest time any harness was checked; null while none was. */

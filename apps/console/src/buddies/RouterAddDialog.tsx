@@ -48,7 +48,7 @@ export function RouterAddDialog({ open, onOpenChange, profiles, list, mode, onAd
 }) {
   const { t } = useTranslation("buddies");
   return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent showCloseButton={false} aria-describedby={undefined} className="gap-3 rounded-none p-5 sm:max-w-[560px]">
+    <DialogContent aria-describedby={undefined} className="gap-3 sm:max-w-[560px]">
       <DialogTitle>{t("roles.add.title")}</DialogTitle>
       <Choices profiles={profiles} list={list} mode={mode} onAdd={profileId => { onAdd(profileId); onOpenChange(false); }} />
       <DialogFooter>

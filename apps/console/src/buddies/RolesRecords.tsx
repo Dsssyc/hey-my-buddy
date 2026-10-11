@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { Hint } from "@/components/hint";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { StateMark } from "@/components/ui/state-mark";
-import { formatDateTime } from "../i18n/format";
+import { formatShortDateTime } from "../i18n/format";
 import type { RoutingHealth } from "../types";
 import { buddyQuad, recordCounts } from "./roles";
 
@@ -23,7 +23,7 @@ function Fact({ name, hint, children }: { name: string; hint?: string; children:
 /** A recorded moment; a moment that was not recorded is a dash, never a zero. */
 function Moment({ at }: { at: string | null | undefined }) {
   const { t } = useTranslation("buddies");
-  return at ? <time dateTime={at} className="tabular-nums">{formatDateTime(Date.parse(at))}</time> : <>{t("roles.records.routers.none")}</>;
+  return at ? <time dateTime={at} className="tabular-nums">{formatShortDateTime(Date.parse(at))}</time> : <>{t("roles.records.routers.none")}</>;
 }
 
 /**
@@ -49,7 +49,7 @@ export function RolesRecords({ health }: { health: RoutingHealth | undefined }) 
           <Fact name={t("roles.records.lastSuccess")}>{health.lastSuccessAt ? <Moment at={health.lastSuccessAt} /> : t("roles.records.never")}</Fact>
         </>}
     </div>
-    {!!health.routers?.length && <ScrollArea className="max-w-[760px]">
+    {!!health.routers?.length && <ScrollArea className="max-w-[1100px]">
       <table className="w-full border-collapse">
         <caption className="pb-1.5 text-left text-xs text-ink3">{t("roles.records.routers.label")}</caption>
         <thead><tr>

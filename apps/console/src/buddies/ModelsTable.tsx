@@ -39,7 +39,7 @@ function HarnessHandle({ block, onFold }: { block: HarnessBlock; onFold: (adapte
   </button>;
   return <>
     {button}
-    {block.state && <Hint text={reasonTexts(block.reasons, t, true).join("；") || undefined}>
+    {block.state && <Hint text={reasonTexts(block.reasons, t, true).join(" · ") || undefined}>
       <span className="ml-2.5 text-xs text-ink3">{harnessStateText(block.state, t)}</span>
     </Hint>}
   </>;
@@ -66,7 +66,7 @@ function Row({ block, index, selected, onSelect, onFold }: {
         {model.family.profiles[0].model}
       </button>
       {/* A harness that cannot work says so once, on its own row. */}
-      {!model.available && !block.state && <Hint text={reasonTexts(model.reasons, t).join("；") || undefined}>
+      {!model.available && !block.state && <Hint text={reasonTexts(model.reasons, t).join(" · ") || undefined}>
         <span className="ml-2.5 text-xs">{t("models.unavailable")}</span>
       </Hint>}
       {model.pending && <Hint text={model.pendingSince ? t("models.pendingSince", { time: formatDateTime(Date.parse(model.pendingSince)) }) : undefined}>

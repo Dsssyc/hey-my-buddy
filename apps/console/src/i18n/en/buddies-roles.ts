@@ -4,8 +4,10 @@ export default {
   heading: "Router",
   upgrade: {
     title: "Router settings need an upgrade",
+    titleWith: "Router settings need an upgrade: {{message}}",
     locked: "Router settings can be changed once they are upgraded",
   },
+  lockedAnd: "{{locked}}. {{own}}",
   list: {
     name: "List",
     label: "Router list",
@@ -73,7 +75,7 @@ export default {
     unavailable: "Unavailable",
     failed: "Failed",
     failedHint: "Abstentions, cancellations and stale results do not count as failures",
-    consecutiveFailures: "In a row",
+    consecutiveFailures: "Failed in a row",
     abstention: "Abstained",
     cancelled: "Cancelled",
     stale: "Stale",

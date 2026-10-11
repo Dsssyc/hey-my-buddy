@@ -69,7 +69,7 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
   };
   const mark = (is: boolean) => is ? t("unsaved") : undefined;
   /** What a control says when it cannot be used, with its own words after. */
-  const explain = (own?: string) => locked ? (own ? `${locked}。${own}` : locked) : own;
+  const explain = (own?: string) => locked ? (own ? t("roles.lockedAnd", { locked, own }) : locked) : own;
   const limits = recorded?.routingBudgetLimits;
   const interval = configuration?.routerRetryIntervalSeconds;
   const intervalInvalid = !!configuration && retryIntervalSeconds(interval) === null;
@@ -91,7 +91,7 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
     <ScrollArea className="min-h-0 flex-1">
       <h2 className="px-6 pt-5 pb-2 text-base font-semibold">{t("roles.heading")}</h2>
       {!configuration && <p className="mx-6 mb-3 border-l-2 border-fail pl-3 text-xs text-fail" role="alert">
-        {t("roles.upgrade.title")}{snapshot.configurationError?.message && `：${snapshot.configurationError.message}`}</p>}
+        {snapshot.configurationError?.message ? t("roles.upgrade.titleWith", { message: snapshot.configurationError.message }) : t("roles.upgrade.title")}</p>}
 
       <Section name={t("roles.list.name")} unsaved={mark(unsaved.list)} id={LIST_ID} tabIndex={-1}>
         <RouterList lines={lines} profiles={data.profiles} mode={configuration?.defaultRoutingMode} locked={locked}
