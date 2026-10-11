@@ -3,6 +3,7 @@ import errno
 import json
 import os
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -11,7 +12,7 @@ from hey_my_buddy.blackboard.service.service import BoardService
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.buddy.harnesses.runtime_selection import bound
 from hey_my_buddy.buddy.harnesses.codex import native_run
-from hey_my_buddy.buddy.harnesses import controller
+from hey_my_buddy.buddy.harnesses import controller, discovery, version
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from hey_my_buddy.buddy.runtime.windows_process import owned_popen
 from hey_my_buddy.buddy.roles import run_execution
@@ -229,27 +230,67 @@ class CatalogNativeStopTests(NativeStopMatrix, BoardTestCase):
                                         cancelled=lambda: False)
 
     def private_version_command(self):
+        fixture = Path(__file__).resolve().parents[2] / 'buddy/harnesses/codex/fixtures/mock_codex.py'
         script = self.directory / 'diagnostic.py'
-        script.write_text("import sys\nprint('fixture diagnostic refused')\nsys.exit(7)\n")
+        script.write_text("import os, sys\nif '--version' in sys.argv:\n"
+                          "    print('fixture diagnostic refused')\n    sys.exit(7)\n"
+                          "os.execv(sys.executable, [sys.executable, " + repr(str(fixture)) +
+                          ", *sys.argv[1:]])\n")
         self.record.update(status='ready', command=[sys.executable, str(script)])
 
-    def test_codex_version_failure_with_actual_stop_removes_real_operation(self):
+    def test_codex_version_failure_with_actual_stop_continues_catalog_and_removes_real_operation(self):
         self.private_version_command()
+        receipts = []
+
+        def probe_version(*args, **kwargs):
+            result = version.probe_version(*args, **kwargs)
+            self.assertIsNone(result)
+            receipts.append(dict(kwargs['owned'][0]))
+            return result
+
+        def read():
+            payload = self.native_discovery()
+            self.assertEqual(payload['harnessVersion'], 'unknown')
+            return payload
+
         with patch.dict(os.environ, {'HOME': str(self.directory), 'CODEX_HOME': str(self.directory / '.codex'),
-                                     'BUDDY_CODEX_CLI': ''}):
-            with self.assertRaises(native_run.CodexProtocolError) as caught:
-                self.invoke(self.native_discovery)
-        self.assertEqual(caught.exception.code, 'native-version-probe-failed')
+                                     'BUDDY_CODEX_CLI': ''}), \
+             patch.object(native_run, 'probe_version', side_effect=probe_version):
+            result = self.invoke(read)
+        self.assertEqual(receipts, [{'created': True, 'shutdown': True, 'exit_code': 7}])
+        self.assertEqual(result['source'], 'codex-native-app-server')
+        self.assertEqual(result['harnessVersion'], 'codex:unknown')
+        self.assertEqual(result['discoveries'], [{'adapter': 'codex', 'status': 'complete',
+                                                  'accountStatus': 'confirmed', 'reason': None}])
+        self.assertEqual(result['providers'][0]['adapter'], 'codex')
+        self.assertEqual(result['providers'][0]['provider'], 'openai')
+        self.assertEqual([model['id'] for model in result['providers'][0]['models']], ['fixture-model'])
         self.assertEqual(self.operations(), [])
-        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
 
     def test_codex_version_unknown_stop_retains_real_uncertain_operation(self):
         self.private_version_command()
+        reader = discovery._probe_posix
+
+        def observed(process, stop_at, deadline):
+            reason, output, stopped = reader(process, stop_at, deadline)
+            self.assertTrue(stopped, 'the private version process must actually be reaped')
+            self.assertEqual(reason, 'probe-failed')
+            self.assertEqual(process.returncode, 7)
+            return reason, output, False
+
         with patch.dict(os.environ, {'HOME': str(self.directory), 'CODEX_HOME': str(self.directory / '.codex'),
                                      'BUDDY_CODEX_CLI': ''}), \
-             patch('hey_my_buddy.buddy.harnesses.discovery.probe', return_value=('shutdown-unverified', b'')):
-            with self.assertRaises(native_run.CodexProtocolError) as caught:
+             patch.object(discovery, '_probe_posix', side_effect=observed) as observation, \
+             patch.object(native_run, 'probe_version', wraps=version.probe_version) as shared, \
+             patch.object(native_run, 'owned_popen', wraps=native_run.owned_popen) as main:
+            with self.assertRaises(version.VersionShutdownError) as caught:
                 self.invoke(self.native_discovery)
+        observation.assert_called_once()
+        shared.assert_called_once()
+        main.assert_not_called()
+        self.assertEqual(shared.call_args.kwargs['owned'],
+                         [{'created': True, 'shutdown': False, 'exit_code': 7}])
+        self.assertEqual(caught.exception.code, 'native-shutdown-failed')
         self.assertEqual([record['status'] for record in self.operations()], ['uncertain'])
         self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
 
