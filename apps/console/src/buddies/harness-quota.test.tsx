@@ -5,7 +5,7 @@ import { ApiError } from "../api";
 import type { HarnessHealth, QuotaRoutingRecord } from "../types";
 import { LOGIN_EXPIRED_ACTION_REFUSAL } from "../console-session";
 import { CHECKED_AT, fixture, harness, openHarness } from "./harness.fixtures";
-import { fieldValue, harnessCells, harnessPane, paneBlock, selectHarness, toolbarAlert } from "./harness.testing";
+import { fieldValue, harnessButton, harnessPane, harnessSection, paneBlock, selectHarness, toolbarAlert } from "./harness.testing";
 
 /**
  * ADR-018 §23 on the harness table: the latest recorded quota observation names
@@ -48,14 +48,13 @@ function observed(): HarnessHealth[] {
 describe("quota observations", () => {
   it("warns about the near-limit window in the table and names source, window and reset time in the side column", async () => {
     await openHarness(fixture({ harnesses: observed() }));
-    const cell = harnessCells("DSH")[4];
-    expect(cell.textContent).toBe(`93%重置 ${clock("2026-09-29T13:00:00.000Z")}`);
+    const cell = harnessButton("DSH");
+    expect(cell.textContent).toContain(`93%重置 ${clock("2026-09-29T13:00:00.000Z")}`);
     // The nearest window is drawn hot: its bar and its percentage.
     expect(within(cell).getByText("93%").className).toContain("text-hand");
-    expect(cell.querySelector("[aria-hidden=true] > div")!.className).toContain("bg-hand-mark");
-    expect((cell.querySelector("[aria-hidden=true] > div") as HTMLElement).style.width).toBe("93%");
+
     // The Harness table carries the mark without a row being opened, and names the harness.
-    expect(within(screen.getByRole("navigation", { name: "目录的内容" })).getByRole("link", { name: /^Harness\s*额度接近上限：DSH$/ })).toBeTruthy();
+    expect(within(harnessButton("DSH")).getByText("93%").className).toContain("text-hand");
 
     const quota = paneBlock("额度");
     const windows = ["5h", "weekly"].map(name => fieldValue(quota, name));
@@ -71,6 +70,28 @@ describe("quota observations", () => {
     expect(within(quota).queryByText("过期")).toBeNull();
   });
 
+  it.each([false, true])("uses balance facts for a metered account with balanceZero=%s", async balanceZero => {
+    const rows = [harness({ adapter: "dsh", status: "ready", billingByProvider: {
+      "deepseek-official": { kind: "metered", source: "native", observedAt: CHECKED_AT },
+    }, quota: { source: "dsh-native", observedAt: CHECKED_AT, balanceZero, windows: [] } })];
+    await openHarness(fixture({ harnesses: rows }));
+    expect(harnessButton("DSH").textContent).toContain("余额");
+    expect(harnessButton("DSH").textContent).toContain(balanceZero ? "余额为零" : "未知");
+    expect(harnessButton("DSH").textContent).not.toMatch(/\d+%|¥|\$/);
+  });
+
+  it("keeps a stale metered balance factual without near-limit colour", async () => {
+    const rows = [harness({ adapter: "dsh", status: "ready", billingByProvider: {
+      "deepseek-official": { kind: "metered", source: "native", observedAt: CHECKED_AT },
+    }, quota: { source: "dsh-native", observedAt: CHECKED_AT, stale: true, balanceZero: true, windows: [] } })];
+    await openHarness(fixture({ harnesses: rows }));
+    const summary = harnessButton("DSH");
+    const value = within(summary).getByText("余额为零");
+    expect(value.className).not.toContain("text-hand");
+    expect(within(summary).getByText("过期")).toBeTruthy();
+    expect(summary.textContent).not.toContain("余额 余额");
+  });
+
   it("says a window at its limit and a limit the native record reports", async () => {
     const rows = [harness({ adapter: "dsh", status: "ready", quota: { observedAt: "2026-09-29T09:00:00.000Z", source: "dsh-native", reachedType: "usage_limit_reached",
       windows: [{ name: "5h", usedPercent: 100, resetsAt: null }, { name: "weekly", usedPercent: 12, resetsAt: null }] } })];
@@ -81,17 +102,18 @@ describe("quota observations", () => {
     expect(within(quota).getByText("已报告限额").className).toContain("text-hand");
     expect(within(quota).getByText("观测").getAttribute("aria-description")).toContain("原生记录报告额度限制");
     // The table shows the window nearest the limit, hot.
-    expect(within(harnessCells("DSH")[4]).getByText("100%").className).toContain("text-hand");
+    expect(within(harnessButton("DSH")).getByText("100%").className).toContain("text-hand");
   });
 
   it("never shows a stale unknown observation as 0% or as available", async () => {
     const user = userEvent.setup();
     await openHarness(fixture({ harnesses: observed() }));
-    const cell = harnessCells("ZCode")[4];
-    expect(cell.textContent).toBe("未知过期");
-    expect(cell.querySelector("[aria-hidden=true]")).toBeNull();
+    const cell = harnessButton("ZCode");
+    expect(cell.textContent).toContain("未知过期");
+    expect(within(cell).queryByText("接近上限")).toBeNull();
     expect(cell.textContent).not.toMatch(/0%/);
     expect(within(cell).getByText("未知").className).not.toContain("text-hand");
+    await user.click(harnessButton("DSH"));
     await selectHarness(user, "ZCode");
     const quota = paneBlock("额度");
     expect(fieldValue(quota, "5h").textContent).toBe("未知重置 未记录");
@@ -100,22 +122,23 @@ describe("quota observations", () => {
     expect(within(quota).getByText("观测").getAttribute("aria-description")).toBe("额度观测已过期");
     expect(quota.textContent).not.toMatch(/0%|接近上限|已到上限/);
     // The stale observation raises no reminder of its own: the only one is DSH's.
-    expect(within(screen.getByRole("navigation", { name: "目录的内容" })).getByRole("link", { name: /^Harness\s*额度接近上限：DSH$/ })).toBeTruthy();
+    expect(within(harnessButton("DSH")).getByText("93%").className).toContain("text-hand");
   });
 
   it("does not draw a stale reading as near its limit", async () => {
     const rows = [harness({ adapter: "dsh", status: "ready", quota: { observedAt: "2026-09-20T09:00:00.000Z", source: "dsh-native", stale: true,
       windows: [{ name: "5h", usedPercent: 97, resetsAt: null }] } })];
     await openHarness(fixture({ harnesses: rows }));
-    expect(harnessCells("DSH")[4].textContent).toBe("97%过期");
-    expect(within(harnessCells("DSH")[4]).getByText("97%").className).not.toContain("text-hand");
-    expect(within(screen.getByRole("navigation", { name: "目录的内容" })).getByRole("link", { name: /^Harness$/ })).toBeTruthy();
+    expect(harnessButton("DSH").textContent).toContain("97%过期");
+    expect(within(harnessButton("DSH")).getByText("97%").className).not.toContain("text-hand");
+    expect(within(harnessButton("DSH")).getByText("97%").className).not.toContain("text-hand");
   });
 
   it("reports a harness with no recorded observation as not recorded, never as 0", async () => {
     const user = userEvent.setup();
     await openHarness(fixture({ harnesses: observed() }));
-    expect(harnessCells("Codex")[4].textContent).toBe("—");
+    expect(harnessButton("Codex").textContent).toContain("—");
+    await user.click(harnessButton("DSH"));
     await selectHarness(user, "Codex");
     expect(paneBlock("额度").textContent).toBe("额度未记录");
     expect(paneBlock("额度").textContent).not.toMatch(/0%/);
@@ -143,6 +166,7 @@ describe("an exhausted quota", () => {
     expect(first.textContent).toBe(`deepseek-official余额为零观测 ${clock("2026-09-29T09:00:00.000Z")} · dsh-native${clock(ELIGIBLE_AT)} 后可重试`);
     expect(within(first).getByText("余额为零").className).toContain("text-hand");
     expect(second.textContent).toContain("other · tokens额度耗尽");
+    expect(harnessSection("DSH").querySelector("[data-slot=harness-header]")!.textContent).toContain(clock(ELIGIBLE_AT));
   });
 
   it("explains the one-shot retry window from the recorded facts only, and states what opening it proves", async () => {
@@ -261,7 +285,7 @@ describe("an exhausted quota", () => {
     expect(open().getAttribute("aria-description")).toContain(LOGIN_EXPIRED_ACTION_REFUSAL);
     expect(open().getAttribute("aria-description")).toContain("不代表额度已恢复");
     await user.click(open());
-    expect((await screen.findByRole("status", { name: "" })).textContent).toBe(LOGIN_EXPIRED_ACTION_REFUSAL);
+    expect(await screen.findByText(LOGIN_EXPIRED_ACTION_REFUSAL)).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
   });
 

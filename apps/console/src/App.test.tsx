@@ -195,7 +195,8 @@ describe("console interactions", () => {
     expect(screen.getByRole("region", { name: "未保存的修改" })).toBeTruthy();
     // The automatic assessment is program-owned: the page offers no field for it.
     expect(screen.queryByLabelText("当前评价")).toBeNull();
-    expect(within(pane()).getAllByRole("textbox")).toHaveLength(1);
+    expect(within(pane()).getAllByRole("textbox")).toHaveLength(2);
+    expect(within(pane()).getByRole("textbox", { name: "off 的偏好理由" })).toHaveProperty("readOnly", true);
     await user.click(screen.getByRole("button", { name: "放弃" }));
     expect(api.command).not.toHaveBeenCalled();
   });
@@ -257,8 +258,8 @@ describe("console interactions", () => {
     expect(screen.queryByLabelText("作为卡片依据")).toBeNull();
     expect(screen.queryByRole("button", { name: "记录待整理观察" })).toBeNull();
     expect(screen.queryByRole("button", { name: "评价维护" })).toBeNull();
-    // The side column's only buttons are the way back to the table and its own controls.
-    expect(within(pane()).getAllByRole("button").map(button => button.textContent)).toEqual(["‹模型"]);
+    // The drawer's only button selects its one native reasoning effort; it sends no request.
+    expect(within(pane()).getAllByRole("button").map(button => button.getAttribute("aria-label"))).toEqual(["off"]);
     expect(command).not.toHaveBeenCalled();
   });
 

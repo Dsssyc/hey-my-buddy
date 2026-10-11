@@ -7,10 +7,9 @@ import type { BuddyAttention } from "./attention";
 import { buddyHash } from "./navigation";
 import type { BuddyLocation, BuddyView } from "./navigation";
 
-const sectionClass = "relative flex items-center gap-1.5 pb-3 whitespace-nowrap text-ink2 outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-[current=page]:font-medium aria-[current=page]:text-foreground aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-0 aria-[current=page]:after:-bottom-px aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-foreground";
-const tableClass = "flex items-center gap-1.5 border-l border-line2 px-3 py-[5px] whitespace-nowrap text-ink2 outline-none first:border-l-0 hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-[current=page]:bg-foreground aria-[current=page]:text-card";
+const sectionClass = "relative flex items-center gap-1.5 self-stretch whitespace-nowrap text-ink2 outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-[current=page]:font-medium aria-[current=page]:text-foreground aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-0 aria-[current=page]:after:-bottom-px aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-foreground";
 
-/** What each mark on the Buddy page says, in words: on the roles section and on the harness table. */
+/** What each mark on the Buddy page says, in words: on the roles and directory sections. */
 export function attentionHints(attention: BuddyAttention, t: TFunction<"buddies">): { roles?: string; harness?: string } {
   return {
     roles: attention.roles ? t(`attention.${attention.roles}`) : undefined,
@@ -38,21 +37,9 @@ export function BuddyHeader({ location, attention, onNavigate }: {
   const { t } = useTranslation("buddies");
   const hints = attentionHints(attention, t);
   const inCatalog = location.view !== "roles";
-  return <nav aria-label={t("sections.label")} className="flex shrink-0 gap-[22px] border-b bg-card px-3 pt-3.5 sm:px-6">
+  return <nav aria-label={t("sections.label")} className="flex shrink-0 self-stretch items-center gap-[22px] bg-card">
     <ViewLink view={inCatalog ? location.view : "models"} label={t("sections.catalog")} current={inCatalog} className={sectionClass}
-      hint={inCatalog ? undefined : hints.harness} onNavigate={onNavigate} />
+      hint={hints.harness} onNavigate={onNavigate} />
     <ViewLink view="roles" label={t("sections.roles")} current={!inCatalog} className={sectionClass} hint={hints.roles} onNavigate={onNavigate} />
-  </nav>;
-}
-
-/** The choice between the catalogue's two tables; it sits first in the toolbar of each. */
-export function CatalogPick({ location, attention, onNavigate }: {
-  location: BuddyLocation; attention: BuddyAttention; onNavigate: (next: BuddyLocation) => void;
-}) {
-  const { t } = useTranslation("buddies");
-  return <nav aria-label={t("catalog.label")} className="flex shrink-0 overflow-hidden rounded-md border border-line2">
-    <ViewLink view="models" label={t("catalog.models")} current={location.view === "models"} className={tableClass} onNavigate={onNavigate} />
-    <ViewLink view="harness" label={t("catalog.harness")} current={location.view === "harness"} className={tableClass}
-      hint={attentionHints(attention, t).harness} onNavigate={onNavigate} />
   </nav>;
 }

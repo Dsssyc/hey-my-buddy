@@ -5,7 +5,7 @@ import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import type { Card, FamilyAnnotation, Preference, Profile, ProfilePage, Snapshot, WriterGrant } from "./types";
 import {
-  chip, choosePreference, conflictNotice, level, levelPreference, levelSwitch, listed, modelButton, note, pane, queryModel, search, selectModel,
+  chip, choosePreference, conflictNotice, effortCell, level, levelPreference, levelSwitch, listed, modelButton, modelRow, note, pane, queryModel, search, selectModel,
 } from "./buddies/page.testing";
 
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
@@ -175,14 +175,14 @@ describe("unavailable buddies", () => {
       { includeUnavailable: true, limit: 100 }, "csrf");
     // The retired model joins its harness's rows. Its harness works, so the
     // row says itself that it cannot, with the recorded reason as explanation.
-    const state = within(modelButton(RETIRED).closest("td")!).getByText("不可用");
+    const state = within(modelRow(RETIRED)).getByText("不可用");
     expect(state.getAttribute("aria-description")).toBe("provider paused");
-    expect(chip(RETIRED, "max").textContent).toBe("max已启用 不可用");
-    expect(chip(RETIRED, "low").textContent).toBe("low未启用 不可用");
-    expect(within(modelButton(FLASH).closest("td")!).queryByText("不可用")).toBeNull();
+    expect(chip(RETIRED, "max").textContent).toBe("max");
+    expect(within(modelRow(RETIRED)).queryByText("low")).toBeNull();
+    expect(within(modelRow(FLASH)).queryByText("不可用")).toBeNull();
     await user.click(modelButton(RETIRED));
     // The side column says it once for the model, keeps the note and the samples.
-    expect(within(pane(RETIRED)).getByText("provider paused")).toBeTruthy();
+    expect(within(pane(RETIRED)).getByText("不可用").getAttribute("aria-description")).toBe("provider paused");
     expect(within(pane()).getAllByText("不可用")).toHaveLength(1);
     expect(note()).toHaveProperty("value", "用户保留的历史意见");
     expect(within(level("max")).getByText("9")).toBeTruthy();
@@ -206,6 +206,7 @@ describe("unavailable buddies", () => {
       { includeUnavailable: true, limit: 100, after: expect.any(String) }, "csrf");
     await user.click(modelButton(RETIRED));
     expect(levelSwitch("max")).toBeTruthy();
+    await user.click(effortCell("low"));
     expect(levelSwitch("low")).toBeTruthy();
   });
 
@@ -240,7 +241,7 @@ describe("unavailable buddies", () => {
     // buddy (max) and appears; the filters combine.
     await user.click(showUnavailable());
     await listed(2, 4);
-    expect(within(modelButton(RETIRED).closest("td")!).getByText("不可用")).toBeTruthy();
+    expect(within(modelRow(RETIRED)).getByText("不可用")).toBeTruthy();
     // Turning the unavailable filter off hides the model again.
     await user.click(showUnavailable());
     await listed(1, 2);
@@ -259,12 +260,14 @@ describe("unavailable buddies", () => {
     expect(levelSwitch("max").getAttribute("aria-checked")).toBe("false");
     expect(screen.getByText(/1 项未保存/)).toBeTruthy();
     // "low" is off and unavailable: it cannot be switched on at all, and says why.
+    await user.click(effortCell("low"));
     expect(levelSwitch("low").getAttribute("aria-disabled")).toBe("true");
     expect(levelSwitch("low").getAttribute("aria-description")).toBe("已不可用，不能启用");
     await user.click(levelSwitch("low"));
     expect(levelSwitch("low").getAttribute("aria-checked")).toBe("false");
     expect(screen.getByText(/1 项未保存/)).toBeTruthy();
     // Once "max" is off it is in the same position: off for good until it is discarded.
+    await user.click(effortCell("max"));
     expect(levelSwitch("max").getAttribute("aria-disabled")).toBe("true");
     expect(f.operations).not.toContain("user_policy_publish");
   });
@@ -303,17 +306,18 @@ describe("unavailable buddies", () => {
     await openRetired(user);
     await screen.findByText(/固定选择指向.*请启用或改回/);
     // The existing pin stays a reachable value on its own level; only its reason changes.
-    expect(levelPreference("max").textContent).toBe("固定");
+    expect(within(levelPreference("max")).getByRole("radio", { name: "固定" }).getAttribute("aria-checked")).toBe("true");
     const reason = within(level("max")).getByRole("textbox", { name: "max 的偏好理由" });
     expect(reason).toHaveProperty("value", "以前固定");
     await user.clear(reason);
     await user.type(reason, "仍然适用");
     // "low" has no pin, is unavailable and off: a new pin there is not offered.
-    await user.click(levelPreference("low"));
-    const pin = await screen.findByRole("option", { name: /^固定/ });
+    await user.click(effortCell("low"));
+    const pin = within(levelPreference("low")).getByRole("radio", { name: /^固定/ });
     expect(pin.getAttribute("aria-disabled")).toBe("true");
-    expect(pin.textContent).toBe("固定需先启用");
-    await user.keyboard("{Escape}");
+    expect(pin.getAttribute("aria-description")).toBe("这个 buddy 不可用或未启用，不能固定");
+    await user.click(pin);
+    expect(pin.getAttribute("aria-checked")).toBe("false");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本");
     expect(f.published[0].preferenceChanges).toEqual([
@@ -423,7 +427,7 @@ describe("stale settings and unrelated saves", () => {
     render(<App suppliedApi={f.api} />);
     await openRetired(user);
     await screen.findByText(/固定选择指向.*请启用或改回/);
-    expect(chip(RETIRED, "max").textContent).toBe("max已启用 不可用固定");
+    expect(chip(RETIRED, "max").textContent).toBe("max固定");
     await selectModel(user, FLASH, "DSH");
     await user.type(note(), "，补充说明");
     await user.click(screen.getByRole("button", { name: "保存" }));
@@ -497,7 +501,7 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
   const unavailableKey = "hey-my-buddy.console.view.models.showUnavailable";
   function jump(profileId: string) {
     act(() => {
-      window.location.hash = `#buddies/models/${encodeURIComponent(profileId)}`;
+      window.location.hash = `#buddies/catalog/buddy/${encodeURIComponent(profileId)}`;
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
   }
@@ -506,7 +510,7 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
     const f = fixture();
     for (const profile of f.snapshot().profiles) profile.enabled = false;
     const user = userEvent.setup();
-    window.location.hash = "#buddies/models";
+    window.location.hash = "#buddies/catalog";
     let view = render(<App suppliedApi={f.api} />);
     await listed(0, 2);
     await user.click(enabledOnly());
@@ -524,7 +528,7 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
     expect(localStorage.getItem(enabledKey)).toBe("true");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
     view.unmount();
-    window.location.hash = "#buddies/models";
+    window.location.hash = "#buddies/catalog";
     view = render(<App suppliedApi={f.api} />);
     await waitFor(() => expect(checked(screen.queryByRole("checkbox", { name: "只看已启用" }))).toBe("true"));
     expect(checked(showUnavailable())).toBe("false");
@@ -535,7 +539,7 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
   it("reveals an unavailable Router target without overwriting the manually unchecked filter", async () => {
     const f = fixture({ staleDecision: true });
     const user = userEvent.setup();
-    window.location.hash = "#buddies/models";
+    window.location.hash = "#buddies/catalog";
     let view = render(<App suppliedApi={f.api} />);
     await listed(1, 2);
     await user.click(enabledOnly());
@@ -552,7 +556,7 @@ describe("an address that names a buddy keeps the filters set by hand", () => {
     expect(localStorage.getItem(enabledKey)).toBe("false");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
     view.unmount();
-    window.location.hash = "#buddies/models";
+    window.location.hash = "#buddies/catalog";
     view = render(<App suppliedApi={f.api} />);
     await listed(1, 2);
     expect(checked(enabledOnly())).toBe("false");

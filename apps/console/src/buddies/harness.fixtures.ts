@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import { vi } from "vitest";
 import { App } from "../App";
@@ -144,8 +144,17 @@ export function fixture(options: FixtureOptions = {}) {
 }
 
 /** Opens the page at an address and waits for the harness view. */
-export async function openHarness(f: ReturnType<typeof fixture>, hash = "#buddies/harness") {
+export async function openHarness(f: ReturnType<typeof fixture>, hash = "#buddies", expand = true) {
   window.location.hash = hash;
   render(createElement(App, { suppliedApi: f.api }));
-  await screen.findByRole("region", { name: "Harness" });
+  await screen.findByRole("region", { name: "目录" });
+  if (expand && !hash.startsWith("#buddies/catalog/")) {
+    const first = f.state().harnesses[0];
+    if (first) {
+      const name = { dsh: "DSH", codex: "Codex", claude: "Claude Code", zcode: "ZCode" }[first.adapter] ?? first.adapter;
+      const summary = await screen.findByRole("button", { name: `${name} 账户` });
+      if (summary.getAttribute("aria-expanded") !== "true") fireEvent.click(summary);
+      await waitFor(() => screen.getByRole("group", { name: `${name} 设置` }));
+    }
+  }
 }

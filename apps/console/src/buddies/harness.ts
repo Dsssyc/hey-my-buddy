@@ -1,6 +1,5 @@
 import type { TFunction } from "i18next";
 import { parseReadOnlyStructured } from "../api";
-import { harnessName } from "../buddy-display";
 import { parseHarnessAccount } from "../harness-account";
 import { formatShortDateTime } from "../i18n/format";
 import type { HarnessAccount } from "../harness-account";
@@ -15,12 +14,6 @@ type T = TFunction<"buddies">;
 export function harnessTime(value: string | null | undefined): string | null {
   const ms = Date.parse(value ?? "");
   return Number.isNaN(ms) ? null : formatShortDateTime(ms);
-}
-
-/** The latest time any harness was checked; null while none was. */
-export function lastChecked(rows: HarnessHealth[]): string | null {
-  const times = rows.map(row => Date.parse(row.checkedAt ?? "")).filter(Number.isFinite);
-  return times.length ? harnessTime(new Date(Math.max(...times)).toISOString()) : null;
 }
 
 /** A manual path is absolute; Windows drive paths count as absolute too. */
@@ -62,7 +55,7 @@ function remedyText(row: HarnessHealth, t: T): string | null {
   return row.remedy?.trim() || (known ? t(`harness.remedy.${known}`) : null);
 }
 
-/** The quota cell of the table: the window nearest its limit. */
+/** The quota summary of a harness section: the window nearest its limit. */
 export type QuotaCell = {
   /** The share used, 0–100; null while it is unknown, which never reads as 0. */
   used: number | null;
@@ -73,21 +66,11 @@ export type QuotaCell = {
   resets: string | null;
 };
 
-export type HarnessTableRow = {
-  adapter: string;
-  name: string;
-  statusText: string;
-  found: boolean;
-  version: string | null;
-  account: { source: string; state: string | null } | null;
-  quota: QuotaCell | null;
-};
-
 function accountStatusText(status: HarnessAccount["status"], t: T): string {
   return t(`harness.account.status.${status}`);
 }
 
-function quotaCell(row: HarnessHealth, t: T): QuotaCell | null {
+export function harnessSummary(row: HarnessHealth, t: T): QuotaCell | null {
   const view = quotaView(row.quota);
   if (!view) return null;
   // The window nearest its limit; while none has a known use the first stands, as unknown.
@@ -101,22 +84,6 @@ function quotaCell(row: HarnessHealth, t: T): QuotaCell | null {
     hot: !!nearest?.nearLimit || view.limitReported,
     stale: view.stale || nearest?.stale === true,
     resets: harnessTime(nearest?.resetsAt),
-  };
-}
-
-export function harnessTableRow(row: HarnessHealth, t: T): HarnessTableRow {
-  const account = parseHarnessAccount(row.account, row.adapter);
-  return {
-    adapter: row.adapter,
-    name: harnessName(row.adapter),
-    statusText: statusText(row.status, t),
-    found: row.status === "ready",
-    version: row.version?.trim() || null,
-    account: account && {
-      source: t(`harness.account.source.${account.source}`),
-      state: account.status === "ready" ? null : accountStatusText(account.status, t),
-    },
-    quota: quotaCell(row, t),
   };
 }
 
@@ -139,7 +106,7 @@ export type ExhaustedRow = {
   recovery: string;
 };
 
-export type HarnessPaneView = {
+export type HarnessDetailsView = {
   location: {
     path: string | null;
     source: string;
@@ -191,7 +158,7 @@ export function retryProviders(records: QuotaRoutingRecord[]): string[] {
 const PLANS = ["subscription", "metered"] as const;
 const ACCOUNT_TYPES = ["chatgpt", "apiKey", "subscription", "metered"] as const;
 
-export function harnessPaneView(row: HarnessHealth, t: T): HarnessPaneView {
+export function harnessDetailsView(row: HarnessHealth, t: T): HarnessDetailsView {
   const eligibility = parseReadOnlyStructured(row.readOnlyStructured);
   const reviewNote = [t("harness.review.note"),
     eligibility ? t(eligibility.systemSandbox ? "harness.review.sandbox" : "harness.review.noSandbox") : ""].filter(Boolean).join(" ");

@@ -5,7 +5,7 @@ import { App } from "../App";
 import { ApiError, type ConsoleApi } from "../api";
 import type { HarnessHealth, Profile, Snapshot, WriterGrant } from "../types";
 import {
-  defaultPreference, foldHandle, levelPreference, levelSwitch, listed, modelButton, modelRow, modelsTable, note, pane, search, selectModel,
+  defaultPreference, effortCell, foldHandle, levelPreference, levelSwitch, listed, modelButton, modelRow, catalogue, note, pane, search, selectModel,
 } from "./page.testing";
 
 /**
@@ -82,17 +82,15 @@ afterEach(() => {
   window.location.hash = "";
 });
 
-describe("an empty table", () => {
-  it("says that there are no models yet and how to find some, and opens no side column", async () => {
+describe("an empty catalogue", () => {
+  it("says that there are no models yet and how to find some, and opens no drawer", async () => {
     const f = fixture(snapshot({ profiles: [], modelConcurrency: [] }));
     open(f);
     await listed(0, 0);
     expect(screen.getByText("还没有模型")).toBeTruthy();
     expect(screen.getByText("点“发现模型”，查找本机的 Harness 能用的模型。")).toBeTruthy();
-    expect(screen.queryByRole("complementary")).toBeNull();
-    // The table keeps its header, so the page does not change shape.
-    expect(within(modelsTable()).getAllByRole("columnheader").map(cell => cell.textContent))
-      .toEqual(["Buddy", "Harness", "提供方", "模型", "推理强度", "并发"]);
+    expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
+    expect(catalogue()).toBeTruthy();
   });
 
   it("says that nothing matches when a search or a filter leaves no row", async () => {
@@ -105,34 +103,71 @@ describe("an empty table", () => {
     expect(screen.getByText("没有匹配的模型")).toBeTruthy();
     expect(screen.getByText("换一个搜索词，或者去掉筛选。")).toBeTruthy();
     expect(screen.queryByText("还没有模型")).toBeNull();
-    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
   });
 });
 
-describe("the row the side column follows", () => {
-  it("opens the first row on screen, and returns to the chosen one when it is on screen again", async () => {
+describe("the harness sections", () => {
+  it("keeps an unavailable harness, its state and account when filters hide every model", async () => {
+    const state = snapshot();
+    state.profiles = state.profiles.map(entry => entry.adapter === "claude"
+      ? { ...entry, available: false, unavailableReason: "HARNESS_UNHEALTHY" } : entry);
+    state.harnesses[0] = { ...state.harnesses[0], status: "login-required", available: false };
+    const f = fixture(state, { model_profiles: () => page(state.profiles.filter(entry => !entry.available), state) });
+    const user = userEvent.setup();
+    open(f);
+    await listed(0, 2);
+    const section = within(catalogue()).getByRole("region", { name: "Claude Code" });
+    const header = within(section.querySelector<HTMLElement>("[data-slot=harness-header]")!);
+    expect(document.querySelector("[data-slot=harness-section]:last-of-type")).toBe(section);
+    expect(header.getByText("未登录")).toBeTruthy();
+    expect(within(section).getByText("anthropic")).toBeTruthy();
+    expect(foldHandle("Claude Code").getAttribute("aria-expanded")).toBe("false");
+    expect(section.textContent).toContain("1 个模型");
+    expect(section.textContent).toContain("启用 1 / 2");
+    expect(section.querySelector("[data-slot=model-row]")).toBeNull();
+    await user.click(within(section).getByRole("button", { name: "Claude Code 账户" }));
+    expect(within(section).getByRole("group", { name: "Claude Code 设置" })).toBeTruthy();
+    await user.type(search(), "no-such-model");
+    await listed(0, 0);
+    expect(within(catalogue()).getByRole("region", { name: "Claude Code" })).toBe(section);
+    expect(within(section).getByRole("group", { name: "Claude Code 设置" })).toBeTruthy();
+    await user.clear(search());
+    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
+    await listed(0, 0);
+    expect(header.getByText("未登录")).toBeTruthy();
+    expect(f.command).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("checkbox", { name: /^显示不可用/ }));
+    await listed(1, 2);
+    expect(foldHandle("Claude Code").getAttribute("aria-expanded")).toBe("false");
+    await user.click(foldHandle("Claude Code"));
+    expect(modelButton(SONNET)).toBeTruthy();
+    expect(f.command.mock.calls.every(([operation]) => operation === "model_profiles")).toBe(true);
+  });
+});
+
+describe("the selected model", () => {
+  it("opens no model until chosen and restores that drawer after filtering or folding", async () => {
     const f = fixture();
     const user = userEvent.setup();
     open(f);
     await listed(1, 4);
-    // Nothing chosen yet: the first row that is drawn is the one being edited.
-    expect(pane(SONNET)).toBeTruthy();
-    expect(modelButton(SONNET).getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
     await selectModel(user, SOL, "Codex");
-    // A search that hides the chosen row moves the side column to a row that is there.
     await user.type(search(), "claude");
-    await waitFor(() => pane(SONNET));
+    expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
     await user.clear(search());
     await waitFor(() => pane(SOL));
-    expect(modelButton(SOL).getAttribute("aria-pressed")).toBe("true");
-    // Folding its harness away does the same.
+    expect(modelButton(SOL).getAttribute("aria-expanded")).toBe("true");
     await user.click(foldHandle("Codex"));
-    await waitFor(() => pane(SONNET));
+    expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
     await user.click(foldHandle("Codex"));
     await waitFor(() => pane(SOL));
+    await user.click(modelButton(SOL));
+    expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
   });
 
-  it("writes an unknown occupancy as unknown in the table and in the side column, never as 0", async () => {
+  it("writes an unknown occupancy as unknown in the model row and drawer, never as 0", async () => {
     const f = fixture();
     const user = userEvent.setup();
     open(f);
@@ -152,6 +187,7 @@ describe("a model's default preference", () => {
     open(f);
     await listed(1, 4);
     await selectModel(user, SOL, "Codex");
+    await user.click(effortCell("medium"));
     expect(defaultPreference("不设").getAttribute("aria-checked")).toBe("true");
     // Each choice explains itself to a pointer, to the keyboard and to a screen reader.
     expect(defaultPreference("优先").getAttribute("aria-description")).toBe("路由时先考虑");
@@ -176,13 +212,14 @@ describe("a model's default preference", () => {
     open(f);
     await listed(1, 4);
     await selectModel(user, SOL, "Codex");
+    await user.click(effortCell("medium"));
     expect(within(pane()).queryByRole("textbox", { name: "默认偏好的理由" })).toBeNull();
     await user.click(defaultPreference("优先"));
     await user.type(within(pane()).getByRole("textbox", { name: "默认偏好的理由" }), "机械改动");
     // The default shows on every buddy that follows it, and the field is marked until saved.
-    expect(within(modelRow(SOL)).getAllByText("优先")).toHaveLength(2);
-    expect(within(pane()).getAllByRole("img", { name: "未保存" })).toHaveLength(1);
-    expect(levelPreference("medium").textContent).toBe("跟随模型");
+    expect(defaultPreference("优先").getAttribute("aria-checked")).toBe("true");
+    expect(within(pane()).getAllByRole("img", { name: "未保存" }).length).toBeGreaterThan(0);
+    expect(within(levelPreference("medium")).getByRole("radio", { name: "跟随模型" }).getAttribute("aria-checked")).toBe("true");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本");
     expect(f.published[0].familyPreferenceChanges).toEqual([{ ...sol, mode: "prefer", reason: "机械改动" }]);
@@ -199,14 +236,15 @@ describe("a session that cannot write", () => {
     const user = userEvent.setup();
     open(f);
     await listed(1, 4);
+    await selectModel(user, SONNET, "Claude Code");
     const lock = levelSwitch("medium");
     expect(lock.getAttribute("aria-checked")).toBe("true");
     expect(lock.getAttribute("aria-disabled")).toBe("true");
     expect(lock.getAttribute("aria-description")).toBe("登录已失效，重新登录后可以修改");
     await user.click(lock);
     expect(levelSwitch("medium").getAttribute("aria-checked")).toBe("true");
-    expect(levelPreference("medium")).toHaveProperty("disabled", true);
-    expect(within(pane()).getByRole("spinbutton", { name: "并发上限" })).toHaveProperty("disabled", true);
+    expect(within(levelPreference("medium")).getAllByRole("radio").every(radio => radio.getAttribute("aria-disabled") === "true")).toBe(true);
+    expect(within(pane()).getByRole("spinbutton", { name: "并发上限" })).toHaveProperty("readOnly", true);
     // The note stays readable and copyable, never editable.
     expect(note()).toHaveProperty("readOnly", true);
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
@@ -270,7 +308,7 @@ describe("what the view says about its own reads", () => {
     expect(f.command.mock.calls.filter(([operation]) => operation === "model_profiles")).toHaveLength(1);
   });
 
-  it("reports a failed discovery as a failure and leaves the table and the button usable", async () => {
+  it("reports a failed discovery as a failure and leaves the catalogue and the button usable", async () => {
     let attempt = 0;
     const f = fixture(snapshot(), { model_catalog_refresh: () => {
       attempt += 1;
@@ -287,5 +325,85 @@ describe("what the view says about its own reads", () => {
     expect(discover.hasAttribute("aria-disabled")).toBe(false);
     await user.click(discover);
     await waitFor(() => expect(attempt).toBe(2));
+  });
+});
+
+describe("the inline model drawer", () => {
+  it("chooses the first enabled effort, and selecting another never toggles it", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    open(f);
+    await listed(1, 4);
+    await selectModel(user, SONNET, "Claude Code");
+    expect(effortCell("medium").getAttribute("aria-pressed")).toBe("true");
+    await user.click(effortCell("high"));
+    expect(effortCell("high").getAttribute("aria-pressed")).toBe("true");
+    expect(levelSwitch("high").getAttribute("aria-checked")).toBe("false");
+    expect(within(pane()).queryByRole("group", { name: "medium" })).toBeNull();
+    expect(within(pane()).getByText("claude / anthropic / claude-sonnet-5 /", { exact: false })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
+    expect(f.command).not.toHaveBeenCalled();
+  });
+
+  it("chooses the first effort when none is enabled and opens only one model", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    open(f);
+    await listed(1, 4);
+    await selectModel(user, SOL, "Codex");
+    expect(effortCell("low").getAttribute("aria-pressed")).toBe("true");
+    await selectModel(user, SONNET, "Claude Code");
+    expect(document.querySelectorAll("[data-slot=model-drawer]")).toHaveLength(1);
+    expect(modelButton(SOL).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("marks edited settings and the effort cell outside field labels and carries marks to a closed row", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    open(f);
+    await listed(1, 4);
+    await selectModel(user, SONNET, "Claude Code");
+    await user.click(levelSwitch("medium"));
+    expect(within(effortCell("medium")).getByRole("img", { name: "未保存" })).toBeTruthy();
+    expect(within(pane()).getAllByRole("img", { name: "未保存" }).every(mark => mark.closest("label") === null)).toBe(true);
+    await user.click(modelButton(SONNET));
+    expect(within(modelRow(SONNET)).getByRole("img", { name: "未保存" })).toBeTruthy();
+  });
+});
+
+describe("inherited preference changes", () => {
+  it("marks changed effective preferences on the effort strip and closed model row", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    open(f);
+    await listed(1, 4);
+    await selectModel(user, SONNET, "Claude Code");
+    await user.click(defaultPreference("优先"));
+    expect(effortCell("medium").textContent).toContain("优先");
+    expect(within(effortCell("medium")).getByRole("img", { name: "未保存" })).toBeTruthy();
+    await user.click(modelButton(SONNET));
+    expect(within(modelRow(SONNET)).getByRole("img", { name: "未保存" })).toBeTruthy();
+    expect(within(modelRow(SONNET)).getByText("优先")).toBeTruthy();
+  });
+});
+
+describe("keyboard catalogue handles", () => {
+  it("opens and closes the row and selects an effort through the keyboard", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    open(f);
+    await listed(1, 4);
+    modelButton(SONNET).focus();
+    await user.keyboard("{Enter}");
+    expect(modelButton(SONNET).getAttribute("aria-expanded")).toBe("true");
+    effortCell("high").focus();
+    await user.keyboard(" ");
+    expect(effortCell("high").getAttribute("aria-pressed")).toBe("true");
+    expect(levelSwitch("high").getAttribute("aria-checked")).toBe("false");
+    modelButton(SONNET).focus();
+    await user.keyboard(" ");
+    expect(modelButton(SONNET).getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
+    expect(f.command).not.toHaveBeenCalled();
   });
 });

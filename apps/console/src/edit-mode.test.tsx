@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiError, type ConsoleApi } from "./api";
 import type { FamilyAnnotation, Profile, Snapshot, WriterGrant } from "./types";
-import { chip, conflictNotice, level, levelSwitch, listed, modelRow, pane, selectModel } from "./buddies/page.testing";
+import { chip, conflictNotice, defaultPreference, effortCell, level, levelSwitch, listed, modelRow, pane, selectModel } from "./buddies/page.testing";
 
 /** One family with an enabled and a disabled effort, plus a second enabled family. */
 function catalog(): Profile[] {
@@ -199,8 +199,9 @@ describe("direct editing and the save bar", () => {
     const user = userEvent.setup();
     await openBuddy(f.api, user);
     await user.type(note(), "，补充");
+    await user.click(effortCell("high"));
     await user.click(levelSwitch("high"));
-    await user.click(within(pane()).getByRole("radio", { name: "优先" }));
+    await user.click(defaultPreference("优先"));
     expect(within(saveBar()!).getByText("3 项未保存")).toBeTruthy();
     // The records page shows neither the save bar nor any draft state.
     await user.click(screen.getByRole("link", { name: "任务" }));
@@ -380,7 +381,9 @@ describe("direct editing and the save bar", () => {
     await listed(2, 4);
     const added = modelRow("dsh / deepseek-official / deepseek-v5");
     expect(within(added).getByText("新")).toBeTruthy();
-    expect(chip("dsh / deepseek-official / deepseek-v5", "medium").textContent).toBe("medium未启用");
+    expect(within(added).queryByText("medium")).toBeNull();
+    await selectModel(user, "dsh / deepseek-official / deepseek-v5", "DSH");
+    expect(levelSwitch("medium").getAttribute("aria-checked")).toBe("false");
     expect(saveBar()).toBeNull();
   });
 
@@ -456,14 +459,16 @@ describe("direct editing and the save bar", () => {
     const user = userEvent.setup();
     await openBuddy(f.api, user);
     expect(within(level("off")).getByText("5")).toBeTruthy();
+    await user.click(effortCell("high"));
     expect(within(level("high")).getByText("2")).toBeTruthy();
+    await user.click(effortCell("off"));
     // The column says what the number counts, in its name and in the explanation of that name.
     expect(within(pane()).getByText("计入评价").getAttribute("aria-description"))
       .toBe("Host 验收或打回过、并且记为证据的执行次数；取消的、没有结论的与环境故障不算");
     // The side column holds settings only: the two reason-less levels offer a switch and a preference, nothing else.
     expect(within(level("off")).getAllByRole("switch")).toHaveLength(1);
-    expect(within(level("off")).getAllByRole("combobox")).toHaveLength(1);
-    expect(within(level("off")).queryByRole("textbox")).toBeNull();
+    expect(within(level("off")).getAllByRole("radiogroup")).toHaveLength(1);
+    expect(within(level("off")).getByRole("textbox")).toHaveProperty("readOnly", true);
     expect(within(level("off")).queryByRole("button")).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });
@@ -473,19 +478,19 @@ describe("direct editing and the save bar", () => {
     const user = userEvent.setup();
     await openBuddy(f.api, user);
     expect(levelSwitch("off").getAttribute("aria-checked")).toBe("true");
-    expect(levelSwitch("high").getAttribute("aria-checked")).toBe("false");
-    expect(chip(FLASH, "off").textContent).toBe("off已启用");
+    expect(effortCell("high").getAttribute("aria-pressed")).toBe("false");
+    expect(chip(FLASH, "off").textContent).toBe("off");
     await user.click(levelSwitch("off"));
     expect(levelSwitch("off").getAttribute("aria-checked")).toBe("false");
     expect(within(level("off")).getByRole("img", { name: "未保存" })).toBeTruthy();
     expect(within(saveBar()!).getByText("1 项未保存")).toBeTruthy();
     // The table's row follows the draft immediately, with the same mark.
-    expect(chip(FLASH, "off").textContent).toBe("off未启用");
-    expect(within(chip(FLASH, "off")).getByRole("img", { name: "未保存" })).toBeTruthy();
+    expect(within(modelRow(FLASH)).queryByText("off")).toBeNull();
+    expect(within(effortCell("off")).getByRole("img", { name: "未保存" })).toBeTruthy();
     await user.click(save());
     await screen.findByText(PUBLISHED);
     expect(within(level("off")).queryByRole("img", { name: "未保存" })).toBeNull();
-    expect(within(chip(FLASH, "off")).queryByRole("img", { name: "未保存" })).toBeNull();
+    expect(within(effortCell("off")).queryByRole("img", { name: "未保存" })).toBeNull();
     // A disable publishes one enablement patch and nothing program-owned.
     expect(f.published.at(-1)!.profileSettings).toEqual([{ profileId: flashOff, enabled: false }]);
     expect(f.published.at(-1)).not.toHaveProperty("profiles");

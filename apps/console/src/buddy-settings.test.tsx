@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import {
-  chip, choosePreference, defaultPreference, foldHandle, level, levelPreference, listed, modelButton, modelsTable, pane,
+  catalogue, chip, choosePreference, defaultPreference, effortCell, foldHandle, level, levelPreference, listed, modelButton, modelRow, pane,
   queryFoldHandle, queryModel, search, selectModel,
 } from "./buddies/page.testing";
 import type { ConsoleApi, HarnessHealth } from "./api";
@@ -228,7 +228,7 @@ afterEach(() => {
   document.documentElement.dataset.theme = "";
 });
 
-describe("the models table", () => {
+describe("the harness directory", () => {
   it("filters to models with an enabled buddy and restores the full list", async () => {
     const f = fixture();
     const user = userEvent.setup();
@@ -237,16 +237,18 @@ describe("the models table", () => {
     expect(modelButton(SONNET)).toBeTruthy();
     expect(foldHandle("Codex").getAttribute("aria-expanded")).toBe("false");
     expect(queryModel(SOL)).toBeNull();
-    // The harness with nothing available is hidden until the user asks for it,
-    // and the filter says how many buddies that hides.
-    expect(queryFoldHandle("ZCode")).toBeNull();
+    // The unavailable filter hides models, while the recorded harness stays in view.
+    expect(queryFoldHandle("ZCode")).toBeTruthy();
+    expect(queryModel(GLM)).toBeNull();
     expect(showUnavailable()).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
     await user.click(enabledOnly());
     // GPT-6 Sol has no enabled buddy; the whole ZCode harness stays unusable.
     await listed(1, 2);
-    expect(queryFoldHandle("Codex")).toBeNull();
-    expect(queryFoldHandle("ZCode")).toBeNull();
+    expect(queryFoldHandle("Codex")).toBeTruthy();
+    expect(queryFoldHandle("ZCode")).toBeTruthy();
+    expect(queryModel(SOL)).toBeNull();
+    expect(queryModel(GLM)).toBeNull();
     expect(modelButton(SONNET)).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
     await user.click(enabledOnly());
@@ -259,7 +261,8 @@ describe("the models table", () => {
     expect(foldHandle("ZCode").getAttribute("aria-expanded")).toBe("false");
     await user.click(enabledOnly());
     await listed(1, 2);
-    expect(queryFoldHandle("ZCode")).toBeNull();
+    expect(queryFoldHandle("ZCode")).toBeTruthy();
+    expect(queryModel(GLM)).toBeNull();
     await user.click(enabledOnly());
     await listed(1, 5);
   });
@@ -273,47 +276,48 @@ describe("the models table", () => {
     expect(foldHandle("Claude Code").getAttribute("aria-expanded")).toBe("true");
     const codex = foldHandle("Codex");
     expect(codex.getAttribute("aria-expanded")).toBe("false");
-    expect(codex.closest("tr")!.textContent).toContain("1 个模型");
-    expect(codex.closest("tr")!.textContent).toContain("启用 0 / 2");
+    expect(codex.closest("[data-slot=harness-section]")!.textContent).toContain("1 个模型");
+    expect(codex.closest("[data-slot=harness-section]")!.textContent).toContain("启用 0 / 2");
     expect(queryModel(SOL)).toBeNull();
     await user.click(codex);
     expect(modelButton(SOL)).toBeTruthy();
     // Folding a harness that has an enabled buddy keeps that count in sight.
     await user.click(foldHandle("Claude Code"));
-    expect(foldHandle("Claude Code").closest("tr")!.textContent).toContain("启用 1 / 2");
+    expect(foldHandle("Claude Code").closest("[data-slot=harness-section]")!.textContent).toContain("启用 1 / 2");
     expect(queryModel(SONNET)).toBeNull();
     // The harness that cannot work is written with its recorded state; the
     // recorded reason is its explanation, on hover and for a screen reader.
     const zcode = foldHandle("ZCode");
     expect(zcode.getAttribute("aria-expanded")).toBe("false");
-    const state = within(zcode.closest("td")!).getByText("未找到");
-    expect(state.getAttribute("aria-description")).toBe("本机未检测到 zcode CLI");
+    const state = within(zcode.closest("[data-slot=harness-section]")!).getByText("未找到");
+    expect(state.getAttribute("aria-description")).toContain("本机未检测到 zcode CLI");
     await user.hover(state);
-    expect((await screen.findByRole("tooltip")).textContent).toBe("本机未检测到 zcode CLI");
+    expect((await screen.findByRole("tooltip")).textContent).toContain("本机未检测到 zcode CLI");
     // A folded harness hides its models; unfolded, the model says nothing the harness already said.
     expect(queryModel(GLM)).toBeNull();
     await user.click(zcode);
-    expect(within(modelButton(GLM).closest("td")!).queryByText("不可用")).toBeNull();
+    expect(within(modelRow(GLM)).queryByText("不可用")).toBeNull();
     // Its side column says once that it cannot work, and why.
     await user.click(modelButton(GLM));
-    expect(within(pane(GLM)).getByText("ZCode 未找到 · 本机未检测到 zcode CLI")).toBeTruthy();
+    expect(within(pane(GLM)).getByText("不可用").getAttribute("aria-description")).toContain("本机未检测到 zcode CLI");
   });
 
-  it("draws each buddy as a chip that says whether it is on, and names no role in the catalogue", async () => {
+  it("shows only enabled reasoning efforts in rows and opens a single drawer without naming roles", async () => {
     const f = fixture();
     const user = userEvent.setup();
     await openBuddy(f.api);
-    expect(chip(SONNET, "medium").textContent).toBe("medium已启用");
-    expect(chip(SONNET, "high").textContent).toBe("high未启用");
+    expect(pane()).toBeNull();
+    expect(chip(SONNET, "medium").textContent).toBe("medium");
+    expect(within(modelRow(SONNET)).queryByText("high")).toBeNull();
     await user.click(foldHandle("Codex"));
-    expect(chip(SOL, "low").textContent).toBe("low未启用");
-    // Who holds the Router role is said in the roles section only.
-    expect(within(modelsTable()).queryByText("Router")).toBeNull();
-    // Selecting a row opens its settings beside the table and marks the row.
+    expect(within(modelRow(SOL)).queryByText("low")).toBeNull();
+    expect(within(catalogue()).queryByText("Router")).toBeNull();
     await user.click(modelButton(SOL));
-    expect(modelButton(SOL).getAttribute("aria-pressed")).toBe("true");
-    expect(modelButton(SONNET).getAttribute("aria-pressed")).toBe("false");
+    expect(modelButton(SOL).getAttribute("aria-expanded")).toBe("true");
+    expect(modelButton(SONNET).getAttribute("aria-expanded")).toBe("false");
     expect(pane(SOL)).toBeTruthy();
+    expect(effortCell("low").getAttribute("aria-pressed")).toBe("true");
+    expect(effortCell("medium").getAttribute("aria-pressed")).toBe("false");
   });
 
   it("matches adapter id, harness display name, provider and model name, case-insensitively", async () => {
@@ -324,7 +328,8 @@ describe("the models table", () => {
     await user.type(search(), "claude code");
     await listed(1, 2);
     expect(modelButton(SONNET)).toBeTruthy();
-    expect(queryFoldHandle("Codex")).toBeNull();
+    expect(queryFoldHandle("Codex")).toBeTruthy();
+    expect(queryModel(SOL)).toBeNull();
     // While the unavailable filter is off, searching stays a local filter.
     expect(f.command).not.toHaveBeenCalled();
     // Provider, uppercase: case does not matter. The offline ZCode model is
@@ -335,7 +340,8 @@ describe("the models table", () => {
     await user.type(search(), "ZHIPU");
     await listed(0, 1);
     expect(foldHandle("ZCode")).toBeTruthy();
-    expect(queryFoldHandle("Claude Code")).toBeNull();
+    expect(queryFoldHandle("Claude Code")).toBeTruthy();
+    expect(queryModel(SONNET)).toBeNull();
     // The model's display label, lowercase, still finds the row that shows its id.
     await user.clear(search());
     await user.type(search(), "gpt-6 sol");
@@ -359,21 +365,21 @@ describe("a level's own preference", () => {
     await openBuddy(f.api);
     await selectModel(user, SONNET, "Claude Code");
     // The default is written on every chip that follows it, in words.
-    expect(chip(SONNET, "medium").textContent).toBe("medium已启用优先");
-    expect(chip(SONNET, "high").textContent).toBe("high未启用优先");
+    expect(chip(SONNET, "medium").textContent).toBe("medium优先");
+    expect(within(modelRow(SONNET)).queryByText("high")).toBeNull();
     // The side column holds the default with its reason; the level follows the model.
     expect(defaultPreference("优先").getAttribute("aria-checked")).toBe("true");
     expect(within(pane()).getByRole("textbox", { name: "默认偏好的理由" })).toHaveProperty("value", defaultReason);
-    expect(levelPreference("medium").textContent).toBe("跟随模型");
-    expect(within(level("medium")).queryByRole("textbox")).toBeNull();
+    expect(within(levelPreference("medium")).getByRole("radio", { name: "跟随模型" }).getAttribute("aria-checked")).toBe("true");
+    expect(within(level("medium")).getByRole("textbox")).toHaveProperty("readOnly", true);
 
     await choosePreference(user, "medium", "不设");
 
-    expect(levelPreference("medium").textContent).toBe("不设");
-    expect(chip(SONNET, "medium").textContent).toBe("medium已启用");
-    expect(within(chip(SONNET, "medium")).getByRole("img", { name: "未保存" })).toBeTruthy();
+    expect(within(levelPreference("medium")).getByRole("radio", { name: "不设" }).getAttribute("aria-checked")).toBe("true");
+    expect(chip(SONNET, "medium").textContent).toBe("medium");
+    expect(within(effortCell("medium")).getByRole("img", { name: "未保存" })).toBeTruthy();
     expect(within(level("medium")).getByRole("img", { name: "未保存" })).toBeTruthy();
-    expect(chip(SONNET, "high").textContent).toBe("high未启用优先");
+    expect(within(modelRow(SONNET)).queryByText("high")).toBeNull();
     expect(within(screen.getByRole("region", { name: "未保存的修改" })).getByText("1 项未保存")).toBeTruthy();
     await user.click(saveButton());
     await screen.findByText("已发布新版本");
@@ -391,23 +397,24 @@ describe("a level's own preference", () => {
     await openBuddy(f.api);
     await selectModel(user, SONNET, "Claude Code");
     // The level shows its own preference with its reason; the other still follows the model.
-    expect(chip(SONNET, "medium").textContent).toBe("medium已启用排除");
-    expect(chip(SONNET, "high").textContent).toBe("high未启用优先");
-    expect(levelPreference("medium").textContent).toBe("排除");
+    expect(chip(SONNET, "medium").textContent).toBe("medium排除");
+    expect(within(modelRow(SONNET)).queryByText("high")).toBeNull();
+    expect(within(levelPreference("medium")).getByRole("radio", { name: "排除" }).getAttribute("aria-checked")).toBe("true");
     expect(within(level("medium")).getByRole("textbox", { name: "medium 的偏好理由" })).toHaveProperty("value", "成本过高");
-    expect(levelPreference("high").textContent).toBe("跟随模型");
+    await user.click(effortCell("high"));
+    expect(within(levelPreference("high")).getByRole("radio", { name: "跟随模型" }).getAttribute("aria-checked")).toBe("true");
 
     await choosePreference(user, "medium", "跟随模型");
 
     expect(chip(SONNET, "medium").textContent).toContain("优先");
-    expect(within(level("medium")).queryByRole("textbox")).toBeNull();
+    expect(within(level("medium")).getByRole("textbox")).toHaveProperty("readOnly", true);
     await user.click(saveButton());
     await screen.findByText("已发布新版本");
     expect(f.published.at(-1)!.preferenceChanges).toEqual([{ profileId: mediumId, mode: null, reason: "" }]);
     expect(f.published.at(-1)).not.toHaveProperty("annotationChanges");
   });
 
-  it("writes every preference as a word on the chip, never as a colour", async () => {
+  it("writes enabled preferences as words and gives them the same styling", async () => {
     const f = fixture({ preferenceOverrides: [
       { profileId: highId, mode: "prefer", reason: "" },
       { profileId: solMediumId, mode: "pin", reason: "" },
@@ -415,28 +422,35 @@ describe("a level's own preference", () => {
     ] });
     const user = userEvent.setup();
     await openBuddy(f.api);
-    await user.click(foldHandle("Codex"));
+    await selectModel(user, SONNET, "Claude Code");
+    await user.click(effortCell("high"));
+    await user.click(within(level("high")).getByRole("switch"));
+    await selectModel(user, SOL, "Codex");
+    await user.click(effortCell("medium"));
+    await user.click(within(level("medium")).getByRole("switch"));
+    await user.click(effortCell("low"));
+    await user.click(within(level("low")).getByRole("switch"));
     const chips = [chip(SONNET, "high"), chip(SOL, "medium"), chip(SOL, "low")];
-    expect(chips.map(item => item.textContent)).toEqual(["high未启用优先", "medium未启用固定", "low未启用排除"]);
-    // The three buddies are equally off, so their chips are drawn alike: only the word differs.
+    expect(chips.map(item => item.textContent)).toEqual(["high优先", "medium固定", "low排除"]);
     expect(new Set(chips.map(item => item.className)).size).toBe(1);
     expect(new Set(chips.map(item => item.lastElementChild!.className)).size).toBe(1);
   });
 
-  it("closes a level's open list when the page leaves the front, without reopening it on return", async () => {
+  it("has no detached preference list to survive leaving and returning to the page", async () => {
     const f = fixture();
     const user = userEvent.setup();
     await openBuddy(f.api);
     await selectModel(user, SOL, "Codex");
-    await user.click(levelPreference("medium"));
-    expect(await screen.findByRole("listbox")).toBeTruthy();
-    // Going back in the browser's history has no outside pointer press to dismiss the list.
+    await user.click(effortCell("medium"));
+    expect(levelPreference("medium")).toBeTruthy();
+    expect(screen.queryByRole("listbox")).toBeNull();
     window.location.hash = "#settings";
-    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
-    window.location.hash = "#buddies/models";
-    await waitFor(() => expect(levelPreference("medium").getAttribute("aria-expanded")).toBe("false"));
+    await waitFor(() => expect(screen.queryByRole("radiogroup", { name: "medium 的偏好" })).toBeNull());
+    window.location.hash = "#buddies/catalog";
+    await waitFor(() => expect(screen.queryByRole("region", { name: SOL })).toBeNull());
     expect(screen.queryByRole("listbox")).toBeNull();
   });
+
 });
 
 describe("the settings page", () => {

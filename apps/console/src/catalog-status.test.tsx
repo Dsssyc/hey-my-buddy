@@ -5,7 +5,7 @@ import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import { formatDateTime } from "./i18n/format";
-import { levelPreference, levelSwitch, listed, modelButton, pane, selectModel } from "./buddies/page.testing";
+import { effortCell, levelPreference, levelSwitch, listed, modelButton, modelRow, pane, selectModel } from "./buddies/page.testing";
 import type { Profile, ProfilePage, Snapshot, WriterGrant } from "./types";
 
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
@@ -21,8 +21,8 @@ const lateMissing = "2026-10-07T03:00:00Z";
 const early = formatDateTime(Date.parse(earlyMissing));
 const late = formatDateTime(Date.parse(lateMissing));
 const model = (name: string) => `dsh / deepseek-official / ${name}`;
-/** The cell that holds a model's name and whatever is said about its state. */
-const nameCell = (name: string) => modelButton(model(name)).closest("td")!;
+/** The inline row that holds a model's name and whatever is said about its state. */
+const nameCell = (name: string) => modelRow(model(name));
 
 /**
  * One DSH catalog covering the ADR-027 §6 states: a pending family whose
@@ -164,7 +164,7 @@ describe("a model the catalogue no longer confirms (ADR-027 §6)", () => {
     expect(document.body.textContent).not.toContain(late);
   });
 
-  it("keeps a pending buddy usable, and writes the state with its time in the side column", async () => {
+  it("keeps a pending buddy usable, and writes the state with its time in the drawer", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
@@ -177,13 +177,14 @@ describe("a model the catalogue no longer confirms (ADR-027 §6)", () => {
     expect(within(pane()).queryByText("不可用")).toBeNull();
     expect(within(pane()).queryByText("可用")).toBeNull();
     // A pending buddy still toggles like any available one.
+    await user.click(effortCell("high"));
     expect(levelSwitch("high").hasAttribute("aria-disabled")).toBe(false);
     await user.click(levelSwitch("high"));
     expect(levelSwitch("high").getAttribute("aria-checked")).toBe("true");
     expect(screen.getByText(/1 项未保存/)).toBeTruthy();
     // And it can be pinned: pending records nothing against a buddy that is on.
-    await user.click(levelPreference("off"));
-    expect((await screen.findByRole("option", { name: "固定" })).hasAttribute("aria-disabled")).toBe(false);
+    await user.click(effortCell("off"));
+    expect(within(levelPreference("off")).getByRole("radio", { name: "固定" }).hasAttribute("aria-disabled")).toBe(false);
   });
 
   it("shows a pending model without a recorded time as plain 待确认, never an invented date", async () => {
@@ -215,7 +216,7 @@ describe("a model the catalogue no longer confirms (ADR-027 §6)", () => {
     expect(within(nameCell("plain-model")).queryByText("待确认")).toBeNull();
     await user.click(modelButton(model("plain-model")));
     expect(within(pane(model("plain-model"))).getByText("不可用")).toBeTruthy();
-    expect(within(pane()).getByText("Harness 不可用")).toBeTruthy();
+    expect(within(pane()).getByText("不可用").getAttribute("aria-description")).toBe("Harness 不可用");
     expect(within(pane()).queryByText("可用")).toBeNull();
   });
 });

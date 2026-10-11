@@ -5,7 +5,7 @@ import type { ModelFamilyGroup } from "../console-data";
 import { effortText } from "../profile-display";
 import type { ConsoleView, HarnessHealth, PreferenceMode, Profile, Snapshot } from "../types";
 
-/** One buddy in the models table: a level of reasoning effort of one model. */
+/** One buddy on the reasoning-effort scale of one model. */
 export type BuddyChip = {
   profile: Profile;
   effort: string;
@@ -15,7 +15,7 @@ export type BuddyChip = {
   unsaved: boolean;
 };
 
-/** One row of the models table: a model as one harness offers it through one provider. */
+/** One model row within a harness section. */
 export type ModelRow = {
   key: string;
   family: ModelFamilyGroup;
@@ -94,7 +94,8 @@ export function harnessBlocks({ listed, data, recorded, harnesses, folded, fresh
             profile,
             effort: effortText(profile.effort),
             preference: data.preferences.find(entry => entry.profileId === profile.profileId)?.mode ?? null,
-            unsaved: (!!published && published.enabled !== profile.enabled)
+            unsaved: data.preferences.find(entry => entry.profileId === profile.profileId)?.mode !== recorded.preferences.find(entry => entry.profileId === profile.profileId)?.mode
+              || (!!published && published.enabled !== profile.enabled)
               || own(data)?.mode !== own(recorded)?.mode || (own(data)?.reason ?? "") !== (own(recorded)?.reason ?? ""),
           };
         }),

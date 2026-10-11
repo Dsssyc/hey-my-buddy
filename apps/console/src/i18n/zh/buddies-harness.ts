@@ -1,19 +1,14 @@
-/** The harness table of the catalogue and its side column. */
+/** Recorded harness settings within the directory. */
 export default {
-  table: "Harness",
-  lastChecked: "上次检测",
+  detailsLabel: "{{name}} 设置",
+  summaryLabel: "{{name}} 账户",
+  balance: "余额",
+
   check: "检测",
   checkAll: "全部检测",
   retry: "重试",
   refused: "连接中断或缺少写入资格",
   unrecorded: "未记录",
-  columns: {
-    harness: "Harness",
-    status: "状态",
-    version: "版本",
-    account: "账户",
-    quota: "额度",
-  },
   status: {
     ready: "已找到",
     missing: "未找到",
@@ -63,7 +58,7 @@ export default {
     restored: "已恢复自动检测；{{name}} {{status}}",
   },
   pane: {
-    back: "Harness",
+    version: "版本",
     location: "位置",
     path: "路径",
     source: "来源",
@@ -171,6 +166,7 @@ export default {
     stale: "过期",
     source: "来源",
     reset: "重置 {{time}}",
+    retryTime: "重试 {{time}}",
     resetUnrecorded: "重置 未记录",
     unknown: "未知",
     atLimit: "已到上限",

@@ -6,7 +6,7 @@ import { RoutingPanel } from "./RoutingPanel";
 import type { ConsoleApi } from "./api";
 import type { Profile, Snapshot } from "./types";
 import type { Workflow } from "./workflow-types";
-import { chip, listed, modelButton, modelsTable, pane } from "./buddies/page.testing";
+import { catalogue, chip, listed, modelButton, pane } from "./buddies/page.testing";
 import {
   effortText,
   profileName,
@@ -142,8 +142,8 @@ describe("profile display", () => {
   });
 });
 
-describe("the models table's names", () => {
-  it("names a row by its identity and writes the native level on its chip", async () => {
+describe("the catalogue's names", () => {
+  it("names a row by its identity and writes the native reasoning effort on its enabled entry", async () => {
     const api = {
       snapshot: vi.fn(async () => catalogSnapshot()),
       command: vi.fn(),
@@ -156,14 +156,14 @@ describe("the models table's names", () => {
     render(<App suppliedApi={api} />);
     await listed(2, 2);
     // A row shows the model's own id, the fourth part of the identity is the chip.
-    expect(modelButton("dsh / deepseek-official / deepseek-flash").textContent).toBe("deepseek-flash");
-    expect(modelButton("dsh / deepseek-official / deepseek-v4-pro").textContent).toBe("deepseek-v4-pro");
+    expect(modelButton("dsh / deepseek-official / deepseek-flash").textContent).toContain("deepseek-flash");
+    expect(modelButton("dsh / deepseek-official / deepseek-v4-pro").textContent).toContain("deepseek-v4-pro");
     // `off` keeps its native name on the chip, exactly like `max`; the catalogue's
     // display label with the level in it is never repeated in the table.
-    expect(chip("dsh / deepseek-official / deepseek-flash", "off").textContent).toBe("off已启用");
-    expect(chip("dsh / deepseek-official / deepseek-v4-pro", "max").textContent).toBe("max已启用");
+    expect(chip("dsh / deepseek-official / deepseek-flash", "off").textContent).toBe("off");
+    expect(chip("dsh / deepseek-official / deepseek-v4-pro", "max").textContent).toBe("max");
     expect(screen.queryByText("非思考")).toBeNull();
-    expect(within(modelsTable()).queryByText(/DeepSeek-V41-Flash/)).toBeNull();
+    expect(within(catalogue()).queryByText(/DeepSeek-V41-Flash/)).toBeNull();
     await user.click(modelButton("dsh / deepseek-official / deepseek-v4-pro"));
     expect(within(pane("dsh / deepseek-official / deepseek-v4-pro")).getByRole("group", { name: "max" })).toBeTruthy();
   });

@@ -74,7 +74,7 @@ describe("local review eligibility", () => {
     await openHarness(fixture({ harnesses: [codex({ readOnlyStructured: { ...eligibility, eligible: false,
       reasonCode: "readonly-resource-missing", reason: "The native read-only controller is missing" } })] }));
     expect(word().textContent).toBe("不可用");
-    expect(within(review()).getByRole("status").textContent).toBe("The native read-only controller is missing");
+    expect(word().getAttribute("aria-description")).toContain("The native read-only controller is missing");
     expect(word().getAttribute("aria-description")).toContain(note);
     expectNoVerificationControls();
   });

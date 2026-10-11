@@ -6,7 +6,7 @@ import type { ConsoleApi } from "./api";
 import { formatDateTime } from "./i18n/format";
 import type { Profile, Snapshot, Task, TaskQuery, WriterGrant } from "./types";
 import type { Workflow } from "./workflow-types";
-import { level, levelSwitch, listed, modelButton, modelsTable, note, pane, selectModel } from "./buddies/page.testing";
+import { catalogue, effortCell, level, levelSwitch, listed, modelButton, note, pane, selectModel } from "./buddies/page.testing";
 
 const dsh = (model: string) => `dsh / deepseek-official / ${model}`;
 const GLM = "zcode / bigmodel-api / GLM-5.3";
@@ -147,13 +147,16 @@ describe("desktop console", () => {
     expect(screen.getAllByRole("navigation")).toHaveLength(1);
     await user.click(within(navigation).getByRole("link", { name: /^Buddy/ }));
     await listed(4, 22);
-    expect(within(modelsTable()).getAllByRole("button").filter(button => button.hasAttribute("aria-pressed"))).toHaveLength(6);
+    expect(within(catalogue()).getAllByRole("button").filter(button => button.closest("[data-slot=model-row]") && button.hasAttribute("aria-expanded"))).toHaveLength(6);
+    expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
     await selectModel(user, dsh("deepseek-flash"), "DSH");
     const detail = pane(dsh("deepseek-flash"));
-    // Each level is a buddy with its own switch; the recorded samples are read-only numbers.
+    // Each effort selects its buddy; only that buddy has an editable panel.
     expect(levelSwitch("off")).toBeTruthy();
-    expect(levelSwitch("low")).toBeTruthy();
     expect(within(level("off")).getByText("4")).toBeTruthy();
+    await user.click(effortCell("low"));
+    expect(levelSwitch("low")).toBeTruthy();
+    expect(within(detail).queryByRole("switch", { name: "启用 off" })).toBeNull();
     // The automatic assessment is program-owned: there is no field for it or for an observation.
     expect(within(detail).queryByRole("textbox", { name: "当前评价" })).toBeNull();
     expect(within(detail).queryByRole("textbox", { name: "补充观察" })).toBeNull();

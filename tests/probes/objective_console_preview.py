@@ -1341,9 +1341,8 @@ def harness_rows() -> list[dict]:
                                                      "observedAt": OBSERVED_AT}},
          "source": "synthetic-preview", "checkedAt": instant(9, 55),
          "quota": {"observedAt": instant(9, 50), "source": "dsh-native",
-                   "provider": "deepseek-official", "stale": False,
-                   "windows": [{"name": "5h", "usedPercent": 93, "resetsAt": instant(14, 30)},
-                               {"name": "weekly", "usedPercent": 41, "resetsAt": instant(77, 0)}]}},
+                   "provider": "deepseek-official", "stale": False, "balanceZero": True,
+                   "windows": []}},
         {"adapter": "zcode", "status": "ready", "available": True, "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/zcode/zcode", "version": "synthetic-preview-0.4",
          "account": harness_account("zcode", "native", "ready", worker_account=False),
@@ -2159,7 +2158,7 @@ def validate_fixtures() -> list[str]:
                                                                                         "codex", "claude"]:
         problems.append("harnesses must list dsh, zcode, codex and claude in that order")
         harnesses = []
-    near_limit = stale_unknown = False
+    stale_unknown = False
     for row in harnesses:
         if (row.get("available") is True) != (row.get("status") == "ready"):
             problems.append(f"harness {row.get('adapter')}: available must mirror status")
@@ -2174,6 +2173,9 @@ def validate_fixtures() -> list[str]:
                 or not isinstance(quota.get("source"), str) or not isinstance(quota.get("windows"), list):
             problems.append(f"harness {row.get('adapter')}: malformed quota observation")
             continue
+        if row["adapter"] == "dsh" and (row["billingByProvider"]["deepseek-official"]["kind"] != "metered"
+                                         or quota.get("balanceZero") is not True or quota["windows"]):
+            problems.append("DSH must be metered with a zero balance and no quota windows")
         if quota.get("stale") is True and any(window.get("usedPercent") is None
                                               for window in quota["windows"]):
             stale_unknown = True
@@ -2183,10 +2185,6 @@ def validate_fixtures() -> list[str]:
                 continue
             if type(used) is not int or not 0 <= used <= 100:
                 problems.append(f"harness {row.get('adapter')}: window usage must be 0..100 or null")
-            elif used >= 90:
-                near_limit = True
-    if not near_limit:
-        problems.append("one harness quota window must sit at or over the near-limit threshold")
     if not stale_unknown:
         problems.append("one harness quota observation must be stale with an unknown window")
     if not any(row.get("quota") is None for row in harnesses):

@@ -144,7 +144,7 @@ describe("a model's concurrency", () => {
     expect(screen.queryByRole("switch", { name: "编辑设置" })).toBeNull();
     expect(concurrencyInput()).toHaveProperty("value", "2");
     expect(within(pane()).getByText("占用 1")).toBeTruthy();
-    // The table writes the same two numbers in its own column.
+    // The model row writes the same two numbers at its trailing edge.
     expect(within(modelRow(FLASH)).getByLabelText("占用 1，上限 2").textContent).toBe("1 / 2");
     expect(f.command).not.toHaveBeenCalled();
   });
@@ -174,14 +174,14 @@ describe("a model's concurrency", () => {
     expect(within(pane()).queryByRole("img", { name: "未保存" })).toBeNull();
   });
 
-  it("edits one setting shared by all the model's levels", async () => {
+  it("edits one setting shared by all the model's reasoning efforts", async () => {
     const f = fixture();
     const user = userEvent.setup();
     await openFlashCard(f, user);
     await user.clear(concurrencyInput());
     await user.type(concurrencyInput(), "6");
     await unsaved();
-    // The draft limit is one field of the model, not tied to a level; the table follows it.
+    // The draft limit belongs to the model; its collapsed row follows it.
     expect(within(pane()).getAllByRole("spinbutton")).toHaveLength(1);
     expect(concurrencyInput()).toHaveProperty("value", "6");
     expect(within(pane()).getByText("占用 1")).toBeTruthy();
@@ -224,6 +224,7 @@ describe("a model's concurrency", () => {
     const input = concurrencyInput();
     expect(input).toHaveProperty("value", "3");
     expect(input.disabled).toBe(false);
+    expect(input.hasAttribute("aria-disabled")).toBe(false);
     await user.clear(input);
     await user.type(input, "4");
     await unsaved();

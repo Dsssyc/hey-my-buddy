@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { HarnessAccount } from "../harness-account";
 import type { HarnessHealth, HarnessQuota, QuotaRoutingRecord } from "../types";
 import {
-  absolutePath, harnessPaneView, harnessPath, harnessTableRow, harnessTime, lastChecked, recoveryText, retryProviders, statusText,
+  absolutePath, harnessDetailsView, harnessPath, harnessSummary, harnessTime, recoveryText, retryProviders, statusText,
 } from "./harness";
 
 /**
@@ -38,13 +38,6 @@ describe("times and words", () => {
     expect(harnessTime("not a time")).toBeNull();
   });
 
-  it("takes the latest check among the harnesses", () => {
-    expect(lastChecked([row({ checkedAt: "2026-09-28T09:30:00.000Z" }), row({ checkedAt: "2026-09-29T08:00:00.000Z" }), row({ checkedAt: null })]))
-      .toBe(clock("2026-09-29T08:00:00.000Z"));
-    expect(lastChecked([row(), row({ checkedAt: "garbage" })])).toBeNull();
-    expect(lastChecked([])).toBeNull();
-  });
-
   it("takes a path to be absolute when it starts at the root or at a drive", () => {
     for (const path of ["/usr/bin/codex", "C:\\tools\\codex.exe", "d:/tools/codex.exe"]) expect(absolutePath(path)).toBe(true);
     for (const path of ["codex", "./codex", "bin/codex", "C:codex", ""]) expect(absolutePath(path)).toBe(false);
@@ -63,30 +56,27 @@ describe("times and words", () => {
   });
 });
 
-describe("a row of the table", () => {
-  it("is marked found only for a harness that was found, and writes the version or nothing", () => {
-    expect(harnessTableRow(row({ version: " 0.4.2 " }), t)).toMatchObject({ name: "DSH", found: true, statusText: "已找到", version: "0.4.2" });
-    expect(harnessTableRow(row({ status: "login-required", available: false }), t)).toMatchObject({ found: false, statusText: "未登录", version: null });
-    expect(harnessTableRow(row({ adapter: "mystery", status: "paused" as never, available: false }), t))
-      .toMatchObject({ name: "mystery", statusText: "paused", found: false });
-  });
-
-  it("writes the account's source, and its state only when it is not configured", () => {
-    expect(harnessTableRow(row(), t).account).toBeNull();
-    expect(harnessTableRow(row({ account }), t).account).toEqual({ source: "共用登录", state: null });
-    expect(harnessTableRow(row({ account: { ...account, source: "worker", status: "logged-out" } }), t).account).toEqual({ source: "独立账户", state: "未登录" });
-    expect(harnessTableRow(row({ account: { ...account, status: "unsupported" } }), t).account?.state).toBe("未验证");
-    expect(harnessTableRow(row({ account: { ...account, status: "unknown" } }), t).account?.state).toBe("未知");
+describe("a harness summary", () => {
+  it("writes each recorded harness state and reads its account source and state in details", () => {
+    expect(statusText("ready", t)).toBe("已找到");
+    expect(statusText("login-required", t)).toBe("未登录");
+    expect(statusText("paused", t)).toBe("paused");
+    expect(harnessDetailsView(row(), t).account).toBeNull();
+    expect(harnessDetailsView(row({ account }), t).account).toMatchObject({ source: "共用登录", state: "已配置" });
+    expect(harnessDetailsView(row({ account: { ...account, source: "worker", status: "logged-out" } }), t).account)
+      .toMatchObject({ source: "独立账户", state: "未登录" });
+    expect(harnessDetailsView(row({ account: { ...account, status: "unsupported" } }), t).account?.state).toBe("未验证");
+    expect(harnessDetailsView(row({ account: { ...account, status: "unknown" } }), t).account?.state).toBe("未知");
   });
 
   it("shows no quota for a harness without an observation", () => {
-    expect(harnessTableRow(row({ quota: null }), t).quota).toBeNull();
-    expect(harnessTableRow(row(), t).quota).toBeNull();
+    expect(harnessSummary(row({ quota: null }), t)).toBeNull();
+    expect(harnessSummary(row(), t)).toBeNull();
   });
 
   it("shows the window nearest its limit, hot from the near-limit threshold", () => {
     const cell = (windows: HarnessQuota["windows"], extra: Partial<HarnessQuota> = {}) =>
-      harnessTableRow(row({ quota: quota({ windows, ...extra }) }), t).quota;
+      harnessSummary(row({ quota: quota({ windows, ...extra }) }), t);
     expect(cell([{ name: "5h", usedPercent: 41, resetsAt: null }, { name: "weekly", usedPercent: 93, resetsAt: "2026-09-29T13:00:00.000Z" }]))
       .toEqual({ used: 93, text: "93%", hot: true, stale: false, resets: clock("2026-09-29T13:00:00.000Z") });
     expect(cell([{ name: "5h", usedPercent: 89, resetsAt: null }])).toMatchObject({ used: 89, hot: false, resets: null });
@@ -95,31 +85,31 @@ describe("a row of the table", () => {
   });
 
   it("writes an unknown use as unknown, with no share that could read as 0", () => {
-    const cell = harnessTableRow(row({ quota: quota({ windows: [{ name: "5h", usedPercent: null, resetsAt: null }] }) }), t).quota;
+    const cell = harnessSummary(row({ quota: quota({ windows: [{ name: "5h", usedPercent: null, resetsAt: null }] }) }), t);
     expect(cell).toEqual({ used: null, text: "未知", hot: false, stale: false, resets: null });
     // An observation with no window says the same.
-    expect(harnessTableRow(row({ quota: quota() }), t).quota).toMatchObject({ used: null, text: "未知" });
+    expect(harnessSummary(row({ quota: quota() }), t)).toMatchObject({ used: null, text: "未知" });
     // A window with a known use outranks one without, whichever comes first.
-    expect(harnessTableRow(row({ quota: quota({ windows: [{ name: "a", usedPercent: null, resetsAt: null }, { name: "b", usedPercent: 12, resetsAt: null }] }) }), t).quota)
+    expect(harnessSummary(row({ quota: quota({ windows: [{ name: "a", usedPercent: null, resetsAt: null }, { name: "b", usedPercent: 12, resetsAt: null }] }) }), t))
       .toMatchObject({ used: 12, text: "12%" });
   });
 
   it("marks a stale observation and never lets it raise the near-limit colour", () => {
-    expect(harnessTableRow(row({ quota: quota({ stale: true, windows: [{ name: "5h", usedPercent: 97, resetsAt: null }] }) }), t).quota)
+    expect(harnessSummary(row({ quota: quota({ stale: true, windows: [{ name: "5h", usedPercent: 97, resetsAt: null }] }) }), t))
       .toMatchObject({ used: 97, hot: false, stale: true });
-    expect(harnessTableRow(row({ quota: quota({ windows: [{ name: "5h", usedPercent: 97, resetsAt: null, stale: true }] }) }), t).quota)
+    expect(harnessSummary(row({ quota: quota({ windows: [{ name: "5h", usedPercent: 97, resetsAt: null, stale: true }] }) }), t))
       .toMatchObject({ hot: false, stale: true });
   });
 
   it("makes the row hot when the native record reports a limit, even below the threshold", () => {
-    expect(harnessTableRow(row({ quota: quota({ reachedType: "usage_limit_reached", windows: [{ name: "5h", usedPercent: 10, resetsAt: null }] }) }), t).quota)
+    expect(harnessSummary(row({ quota: quota({ reachedType: "usage_limit_reached", windows: [{ name: "5h", usedPercent: 10, resetsAt: null }] }) }), t))
       .toMatchObject({ hot: true });
   });
 });
 
-describe("the side column", () => {
+describe("harness details", () => {
   it("says where a harness is, how it was found and whether local review is possible", () => {
-    const view = harnessPaneView(row({ executable: "/usr/local/bin/dsh", source: "PATH", checkedAt: "2026-09-28T09:30:00.000Z",
+    const view = harnessDetailsView(row({ executable: "/usr/local/bin/dsh", source: "PATH", checkedAt: "2026-09-28T09:30:00.000Z",
       readOnlyStructured: { eligible: true, systemSandbox: true, reason: null, reasonCode: null, sameAttemptContinuation: true } }), t);
     expect(view.location).toMatchObject({ path: "/usr/local/bin/dsh", source: "PATH", checked: clock("2026-09-28T09:30:00.000Z"), exception: null });
     expect(view.location.review).toEqual({ text: "可用", reason: null,
@@ -127,24 +117,24 @@ describe("the side column", () => {
   });
 
   it("calls a manually chosen path manual and keeps what is not recorded unrecorded", () => {
-    const view = harnessPaneView(row({ manualPath: "/manual/dsh", source: "手动路径" }), t);
+    const view = harnessDetailsView(row({ manualPath: "/manual/dsh", source: "手动路径" }), t);
     expect(view.location).toMatchObject({ path: "/manual/dsh", source: "手动", checked: null });
-    expect(harnessPaneView(row(), t).location).toMatchObject({ path: null, source: "未记录" });
+    expect(harnessDetailsView(row(), t).location).toMatchObject({ path: null, source: "未记录" });
   });
 
   it("words review as eligible, not eligible with its reason, or unknown, and keeps the sandbox boundary", () => {
     const eligibility = { eligible: false, systemSandbox: false, reasonCode: "readonly-resource-missing", reason: "The native read-only controller is missing", sameAttemptContinuation: true };
-    const view = harnessPaneView(row({ readOnlyStructured: eligibility }), t);
+    const view = harnessDetailsView(row({ readOnlyStructured: eligibility }), t);
     expect(view.location.review).toMatchObject({ text: "不可用", reason: "The native read-only controller is missing" });
     expect(view.location.review.note).toContain("本地资格检查不调用模型，不代表原生调用已验证。");
     expect(view.location.review.note).toContain("无系统沙盒，不能保证阻止副本外读取或外传；黑板的事后判定只覆盖上报的工具事件。");
     // Without a recorded eligibility nothing is said about the sandbox, and nothing reads as available.
-    const unknown = harnessPaneView(row(), t).location.review;
+    const unknown = harnessDetailsView(row(), t).location.review;
     expect(unknown).toEqual({ text: "未知", reason: null, note: "本地资格检查不调用模型，不代表原生调用已验证。" });
   });
 
   it("adds the reason, the remedy and the places tried only for a harness that is not found", () => {
-    const view = harnessPaneView(row({ status: "missing", available: false, reasonCode: "HARNESS_NOT_FOUND", remedy: "安装 ZCode CLI。",
+    const view = harnessDetailsView(row({ status: "missing", available: false, reasonCode: "HARNESS_NOT_FOUND", remedy: "安装 ZCode CLI。",
       candidates: [
         { path: "/a/zcode", source: "应用包", status: "missing", reasonCode: "not_found" },
         { path: "/b/zcode", source: "Homebrew", status: "failed", reasonCode: "handshake_failed" },
@@ -159,7 +149,7 @@ describe("the side column", () => {
 
   it("offers a remedy of its own when none was recorded, and leaves an unknown reason as recorded", () => {
     const exception = (status: HarnessHealth["status"], extra: Partial<HarnessHealth> = {}) =>
-      harnessPaneView(row({ status, available: false, ...extra }), t).location.exception;
+      harnessDetailsView(row({ status, available: false, ...extra }), t).location.exception;
     expect(exception("unknown")?.remedy).toBe("点“检测”查看状态。");
     expect(exception("missing")?.remedy).toBe("安装 CLI，或指定路径。");
     expect(exception("login-required")?.remedy).toBe("在 Harness 中登录后检测。");
@@ -169,23 +159,23 @@ describe("the side column", () => {
   });
 
   it("writes the account's source, status, type and check, the billing of each provider and the guidance", () => {
-    expect(harnessPaneView(row(), t).account).toBeNull();
-    const view = harnessPaneView(row({ account: { ...account, source: "worker", status: "ready", accountType: "chatgpt", checkedAt: "2026-09-29T09:00:00.000Z" },
+    expect(harnessDetailsView(row(), t).account).toBeNull();
+    const view = harnessDetailsView(row({ account: { ...account, source: "worker", status: "ready", accountType: "chatgpt", checkedAt: "2026-09-29T09:00:00.000Z" },
       billingByProvider: { openai: { kind: "subscription", source: "native", observedAt: "x" }, deepseek: { kind: "metered", source: "native", observedAt: "x" },
         other: { kind: "unknown", source: "native", observedAt: "x" } } }), t).account!;
     expect(view).toMatchObject({ source: "独立账户", state: `已配置 · ChatGPT · ${clock("2026-09-29T09:00:00.000Z")}`,
       billing: [{ provider: "openai", plan: "订阅" }, { provider: "deepseek", plan: "按量" }, { provider: "other", plan: "未知" }], guidance: null });
-    expect(harnessPaneView(row({ account: { ...account, accountType: "mystery" } }), t).account?.state).toBe("已配置 · 未知");
-    expect(harnessPaneView(row({ account }), t).account?.billing).toEqual([]);
+    expect(harnessDetailsView(row({ account: { ...account, accountType: "mystery" } }), t).account?.state).toBe("已配置 · 未知");
+    expect(harnessDetailsView(row({ account }), t).account?.billing).toEqual([]);
     const guided = (reasonCode: string | null, guidance: string | null) =>
-      harnessPaneView(row({ account: { ...account, status: "logged-out", reasonCode, guidance } }), t).account!.guidance;
+      harnessDetailsView(row({ account: { ...account, status: "logged-out", reasonCode, guidance } }), t).account!.guidance;
     expect(guided("ACCOUNT_LOGIN_REQUIRED", "recorded")).toBe("完成当前来源的登录后检测。");
     expect(guided("ACCOUNT_NEW", "recorded as is")).toBe("recorded as is");
     expect(guided("ACCOUNT_LOGIN_REQUIRED", null)).toBeNull();
   });
 
   it("lists each window with its use, its reset and whether it is at or near its limit", () => {
-    const view = harnessPaneView(row({ quota: quota({ provider: "deepseek-official", windows: [
+    const view = harnessDetailsView(row({ quota: quota({ provider: "deepseek-official", windows: [
       { name: "5h", usedPercent: 100, resetsAt: "2026-09-29T13:00:00.000Z" },
       { name: "weekly", usedPercent: 93.5, resetsAt: null },
       { name: "monthly", usedPercent: 41, resetsAt: null },
@@ -203,7 +193,7 @@ describe("the side column", () => {
   });
 
   it("says a stale observation is stale and has no window flagged near its limit", () => {
-    const view = harnessPaneView(row({ quota: quota({ stale: true, windows: [{ name: "5h", usedPercent: 99, resetsAt: null }] }) }), t).quota!;
+    const view = harnessDetailsView(row({ quota: quota({ stale: true, windows: [{ name: "5h", usedPercent: 99, resetsAt: null }] }) }), t).quota!;
     expect(view).toMatchObject({ stale: true, note: "额度观测已过期" });
     expect(view.windows[0]).toMatchObject({ hot: false, flag: null });
   });
@@ -230,7 +220,7 @@ describe("an exhausted quota", () => {
   });
 
   it("lists the blocked records with their word, their observation and their recovery, and leaves the others out", () => {
-    const view = harnessPaneView(row({ quotaRouting: [
+    const view = harnessDetailsView(row({ quotaRouting: [
       record(),
       record({ provider: "other", limitId: "tokens", code: "HARNESS_QUOTA_EXHAUSTED" }),
       record({ provider: "settled", blocked: false }),

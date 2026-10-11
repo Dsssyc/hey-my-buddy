@@ -87,7 +87,7 @@ afterEach(() => { cleanup(); window.location.hash = ""; });
 describe("sole candidate routing basis", () => {
   const routingBasis = { candidateCount: 1, excludedCount: 1, excludedProfiles: [
     { ...worker, profileId: "dsh:deepseek-official:deepseek-flash:off", effort: "off",
-      reason: "提交时排除低档位", source: "override" },
+      reason: "提交时排除低推理强度", source: "override" },
   ] };
   it("shows frozen bounds, exclusions and program policy without inventing a Router call", async () => {
     const audit = { ...decision("sole"), input: null, runId: null,
@@ -102,7 +102,7 @@ describe("sole candidate routing basis", () => {
     expect(await screen.findByText(/本次由程序直接选定/)).toBeTruthy();
     expect(screen.getByText(/硬约束：dsh/)).toBeTruthy();
     expect(screen.getByText("所需能力：execution:dsh")).toBeTruthy();
-    expect(screen.getByText(/用户排除 1 个：.*deepseek-flash.*off.*提交时排除低档位/)).toBeTruthy();
+    expect(screen.getByText(/用户排除 1 个：.*deepseek-flash.*off.*提交时排除低推理强度/)).toBeTruthy();
     expect(screen.queryByText("当前已改为排除")).toBeNull();
     expect(screen.getByText(/固定选择：当时固定此配置/)).toBeTruthy();
     expect(screen.queryByText(/快速路由固定 60 秒/)).toBeNull();
@@ -119,7 +119,7 @@ describe("sole candidate routing basis", () => {
     expect(screen.getByText("程序直选（唯一合法候选，未调用 Router）")).toBeTruthy();
     expect(screen.getByText(/提交时硬约束：dsh/)).toBeTruthy();
     expect(screen.getByText("所需能力：execution:dsh")).toBeTruthy();
-    expect(screen.getByText(/用户排除 1 个：.*提交时排除低档位/)).toBeTruthy();
+    expect(screen.getByText(/用户排除 1 个：.*提交时排除低推理强度/)).toBeTruthy();
     expect(command).not.toHaveBeenCalled();
   });
 });

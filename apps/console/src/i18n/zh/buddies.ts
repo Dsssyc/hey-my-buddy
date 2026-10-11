@@ -8,11 +8,6 @@ export default {
     catalog: "目录",
     roles: "角色",
   },
-  catalog: {
-    label: "目录的内容",
-    models: "模型",
-    harness: "Harness",
-  },
   attention: {
     upgrade: "Router 设置需要升级",
     unset: "未指定 Router",
@@ -34,7 +29,6 @@ export default {
   },
   unsaved: "未保存",
   models: {
-    table: "模型",
     search: "搜索 buddy",
     enabledOnly: "只看已启用",
     showUnavailable: "显示不可用",
@@ -42,16 +36,12 @@ export default {
     discover: "发现模型",
     columns: {
       buddy: "Buddy",
-      harness: "Harness",
-      provider: "提供方",
-      model: "模型",
       effort: "推理强度",
       concurrency: "并发",
     },
     fold: "收起 {{name}}",
     unfold: "展开 {{name}}",
     modelCount: "{{n}} 个模型",
-    providerCount: "{{n}} 个提供方",
     harnessState: {
       missing: "未找到",
       "login-required": "未登录",
@@ -60,8 +50,6 @@ export default {
       unavailable: "不可用",
     },
     unavailable: "不可用",
-    enabledState: "已启用",
-    disabledState: "未启用",
     pending: "待确认",
     pendingSince: "待确认，自 {{time}}",
     fresh: "新",
@@ -86,8 +74,8 @@ export default {
     },
   },
   pane: {
-    back: "模型",
-    efforts: "档位",
+    preference: "偏好",
+    reasonFollow: "跟随模型时使用模型的偏好理由",
     counted: "计入评价",
     countedHint: "Host 验收或打回过、并且记为证据的执行次数；取消的、没有结论的与环境故障不算",
     enable: "启用 {{effort}}",
@@ -112,7 +100,7 @@ export default {
       saving: "正在保存或等待核对，暂时不能修改",
       retired: "已不可用，不能启用",
       pinModel: "这个模型没有可用并且已启用的 buddy，不能固定",
-      pinShort: "需先启用",
+      pinBuddy: "这个 buddy 不可用或未启用，不能固定",
     },
   },
   /** The two other views keep their texts in files of their own. */

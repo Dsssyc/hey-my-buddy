@@ -1,20 +1,15 @@
 import type zh from "../zh/buddies-harness";
 
 export default {
-  table: "Harnesses",
-  lastChecked: "Last checked",
+  detailsLabel: "{{name}} settings",
+  summaryLabel: "{{name}} account",
+  balance: "Balance",
+
   check: "Check",
   checkAll: "Check all",
   retry: "Retry",
   refused: "The connection is lost or this session cannot write",
   unrecorded: "Not recorded",
-  columns: {
-    harness: "Harness",
-    status: "Status",
-    version: "Version",
-    account: "Account",
-    quota: "Quota",
-  },
   status: {
     ready: "Found",
     missing: "Not found",
@@ -61,7 +56,7 @@ export default {
     restored: "Automatic detection restored; {{name}}: {{status}}",
   },
   pane: {
-    back: "Harnesses",
+    version: "Version",
     location: "Location",
     path: "Path",
     source: "Source",
@@ -167,6 +162,7 @@ export default {
     stale: "Stale",
     source: "Source",
     reset: "Resets {{time}}",
+    retryTime: "Retry {{time}}",
     resetUnrecorded: "Reset not recorded",
     unknown: "Unknown",
     atLimit: "At limit",

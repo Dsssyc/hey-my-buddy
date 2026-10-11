@@ -2,27 +2,24 @@ import { describe, expect, it } from "vitest";
 import { buddyHash, buddyLocation } from "./navigation";
 
 describe("addresses of the Buddy page", () => {
-  it("writes a view and an encoded target", () => {
-    expect(buddyHash({ view: "models" })).toBe("#buddies/models");
-    expect(buddyHash({ view: "harness", target: "codex" })).toBe("#buddies/harness/codex");
-    expect(buddyHash({ view: "models", target: "codex:openai:gpt-6-sol:high" })).toBe("#buddies/models/codex%3Aopenai%3Agpt-6-sol%3Ahigh");
+  it("writes one directory with encoded harness, model and buddy selections", () => {
+    expect(buddyHash({ view: "models" })).toBe("#buddies/catalog");
+    expect(buddyHash({ view: "models", targetKind: "harness", target: "codex" })).toBe("#buddies/catalog/harness/codex");
+    expect(buddyHash({ view: "models", targetKind: "model", target: "codex/openai/gpt" })).toBe("#buddies/catalog/model/codex%2Fopenai%2Fgpt");
+    expect(buddyHash({ view: "models", target: "codex:openai:gpt:high" })).toBe("#buddies/catalog/buddy/codex%3Aopenai%3Agpt%3Ahigh");
   });
-
-  it("reads back what it wrote", () => {
-    for (const location of [{ view: "roles" as const, target: "health" }, { view: "models" as const, target: "a/b c:d" }]) {
+  it("reads directory and roles selections", () => {
+    for (const location of [{ view: "roles" as const, target: "current" },
+      ...(["harness", "model", "buddy"] as const).map(targetKind => ({ view: "models" as const, targetKind, target: "a/b c:d" }))]) {
       expect(buddyLocation(buddyHash(location))).toEqual(location);
     }
-    expect(buddyLocation("#buddies/harness")).toEqual({ view: "harness", target: undefined });
-  });
-
-  it("opens the models for the bare address and for a view the page does not have", () => {
     expect(buddyLocation("#buddies")).toEqual({ view: "models" });
-    expect(buddyLocation("#buddies/router/current")).toEqual({ view: "models" });
+    expect(buddyLocation("#buddies/catalog")).toEqual({ view: "models" });
   });
-
-  it("gives nothing for another page and keeps the view when a target cannot be decoded", () => {
-    expect(buddyLocation("#tasks")).toBeNull();
-    expect(buddyLocation("")).toBeNull();
-    expect(buddyLocation("#buddies/models/%E0%A4%A")).toEqual({ view: "models" });
+  it("rejects the removed table addresses and unknown routes without redirects", () => {
+    for (const hash of ["#buddies/models", "#buddies/models/id", "#buddies/harness", "#buddies/harness/codex", "#buddies/router/current"]) expect(buddyLocation(hash)).toBeNull();
+  });
+  it("rejects malformed selections and other pages", () => {
+    for (const hash of ["#tasks", "", "#buddies/catalog/buddy/%E0%A4%A", "#buddies/catalog/buddy", "#buddies/catalog/unknown/id", "#buddies/catalog/model/id/extra"]) expect(buddyLocation(hash)).toBeNull();
   });
 });

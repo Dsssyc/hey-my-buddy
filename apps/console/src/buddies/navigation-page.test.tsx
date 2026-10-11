@@ -28,7 +28,7 @@ const CHECKED_AT = "2026-09-29T09:30:00.000Z";
 const SONNET = "claude / anthropic / claude-sonnet-5";
 const SOL = "codex / openai / gpt-6-sol";
 const GLM = "zcode / zhipu / glm-5";
-const modelsRegion = () => screen.queryByRole("region", { name: "模型" });
+const modelsRegion = () => screen.queryByRole("region", { name: "目录" });
 
 function profile(entry: Partial<Profile> & Pick<Profile, "profileId" | "label" | "adapter" | "provider" | "model" | "effort">): Profile {
   return {
@@ -129,9 +129,7 @@ function renderBuddy(hash: string, f: ReturnType<typeof fixture>) {
 }
 
 const sectionsNav = () => screen.getByRole("navigation", { name: "Buddy 的分区" });
-const tablesNav = () => screen.getByRole("navigation", { name: "目录的内容" });
 const sectionLink = (name: string | RegExp) => within(sectionsNav()).getByRole("link", { name });
-const tableLink = (name: string | RegExp) => within(tablesNav()).getByRole("link", { name });
 /** The labels of the links marked as the current one, without the words a mark adds for a screen reader. */
 const current = (nav: HTMLElement) => within(nav).getAllByRole("link")
   .filter(link => link.getAttribute("aria-current") === "page").map(link => link.firstChild?.textContent);
@@ -145,46 +143,26 @@ afterEach(() => {
 });
 
 describe("the Buddy page's sections and tables", () => {
-  it("opens the models table by default and moves between sections and tables", async () => {
-    const f = fixture();
-    const user = userEvent.setup();
-    renderBuddy("#buddies", f);
-    await listed(3, 4);
+  it("opens one directory by default and moves between directory and roles", async () => {
+    const f = fixture(); const user = userEvent.setup();
+    renderBuddy("#buddies", f); await listed(3, 4);
     expect(current(sectionsNav())).toEqual(["目录"]);
-    expect(current(tablesNav())).toEqual(["模型"]);
     expect(modelsRegion()).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "角色" })).toBeNull();
-    expect(screen.queryByRole("region", { name: "Harness" })).toBeNull();
-
+    expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
+    expect(document.querySelector("[data-slot=harness-details]")).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "目录的内容" })).toBeNull();
     await user.click(sectionLink(/^角色/));
     expect(window.location.hash).toBe("#buddies/roles");
-    await waitFor(() => expect(screen.getByRole("region", { name: "角色" })).toBeTruthy());
-    expect(modelsRegion()).toBeNull();
-    expect(current(sectionsNav())).toEqual(["角色"]);
-    // The two tables belong to the catalogue; the roles section does not offer them.
-    expect(screen.queryByRole("navigation", { name: "目录的内容" })).toBeNull();
-    expect(screen.getByRole("region", { name: "角色" })).toBeTruthy();
+    await screen.findByRole("region", { name: "角色" });
+    expect(modelsRegion()).toBeNull(); expect(current(sectionsNav())).toEqual(["角色"]);
     expect(screen.getByRole("radiogroup", { name: "审阅预算" })).toBeTruthy();
-
     await user.click(sectionLink(/^目录/));
-    expect(window.location.hash).toBe("#buddies/models");
+    expect(window.location.hash).toBe("#buddies/catalog");
     await waitFor(() => expect(modelsRegion()).toBeTruthy());
     expect(current(sectionsNav())).toEqual(["目录"]);
-
-    await user.click(tableLink(/^Harness/));
-    expect(window.location.hash).toBe("#buddies/harness");
-    await waitFor(() => expect(screen.getByRole("region", { name: "Harness" })).toBeTruthy());
-    expect(modelsRegion()).toBeNull();
-    expect(current(sectionsNav())).toEqual(["目录"]);
-    expect(current(tablesNav())).toEqual(["Harness"]);
-
-    await user.click(tableLink("模型"));
-    await waitFor(() => expect(modelsRegion()).toBeTruthy());
-    expect(screen.queryByRole("region", { name: "Harness" })).toBeNull();
-    expect(current(tablesNav())).toEqual(["模型"]);
   });
 
-  it("keeps the selected model, the search and the draft across sections and tables", async () => {
+  it("keeps the selected model, the search and the draft across sections", async () => {
     const f = fixture();
     const user = userEvent.setup();
     renderBuddy("#buddies", f);
@@ -198,10 +176,6 @@ describe("the Buddy page's sections and tables", () => {
     await user.click(sectionLink(/^角色/));
     await waitFor(() => expect(screen.getByRole("region", { name: "角色" })).toBeTruthy());
     await user.click(sectionLink(/^目录/));
-    await user.click(tableLink(/^Harness/));
-    await waitFor(() => expect(screen.getByRole("region", { name: "Harness" })).toBeTruthy());
-
-    await user.click(tableLink("模型"));
     expect(search()).toHaveProperty("value", "gpt");
     await listed(1, 1);
     expect(pane(SOL)).toBeTruthy();
@@ -211,22 +185,18 @@ describe("the Buddy page's sections and tables", () => {
 });
 
 describe("marks for what waits", () => {
-  it("marks the roles section and the harness table from every view, and the Buddy tab of the top bar", async () => {
+  it("marks the roles and directory sections, and the Buddy tab of the top bar", async () => {
     // The fixture's Router cannot review, and DSH's quota is at 93%.
     const f = fixture();
     const user = userEvent.setup();
     renderBuddy("#buddies", f);
     await listed(3, 4);
     expect(sectionLink(/^角色\s*Router 不可用$/)).toBeTruthy();
-    expect(tableLink(/^Harness\s*额度接近上限：DSH$/)).toBeTruthy();
+    expect(sectionLink(/^目录\s*额度接近上限：DSH$/)).toBeTruthy();
     // Inside the catalogue the mark sits on the table, so the section itself carries none.
-    expect(sectionLink("目录")).toBeTruthy();
+    expect(sectionLink(/^目录/)).toBeTruthy();
     const topBar = screen.getByRole("navigation", { name: "主要导航" });
     expect(within(topBar).getByRole("link", { name: /^Buddy\s*Router 不可用$/ })).toBeTruthy();
-
-    await user.click(tableLink(/^Harness/));
-    expect(sectionLink(/^角色\s*Router 不可用$/)).toBeTruthy();
-    expect(tableLink(/^Harness\s*额度接近上限：DSH$/)).toBeTruthy();
 
     // Outside the catalogue the table is not on screen, and the section carries its mark.
     await user.click(sectionLink(/^角色/));
@@ -255,17 +225,16 @@ describe("marks for what waits", () => {
 });
 
 describe("deep links", () => {
-  it("opens and focuses the encoded profile from #buddies/models/<profileId>", async () => {
+  it("opens and focuses the encoded profile from #buddies/catalog/buddy/<profileId>", async () => {
     const f = fixture();
-    renderBuddy(`#buddies/models/${encodeURIComponent(mediumId)}`, f);
+    renderBuddy(`#buddies/catalog/buddy/${encodeURIComponent(mediumId)}`, f);
     await listed(3, 4);
     expect(modelsRegion()).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Harness" })).toBeNull();
     // The model's row is selected, so the buddy is on screen in the side column and focused.
     await waitFor(() => pane(SONNET));
-    expect(modelButton(SONNET).getAttribute("aria-pressed")).toBe("true");
+    expect(modelButton(SONNET).getAttribute("aria-expanded")).toBe("true");
     await waitFor(() => expect(document.activeElement).toBe(level("medium")));
-    expect(current(tablesNav())).toEqual(["模型"]);
   });
 
   it("focuses the named Router line from #buddies/roles/current", async () => {
@@ -280,25 +249,22 @@ describe("deep links", () => {
     await waitFor(() => expect(document.activeElement).toBe(line));
   });
 
-  it("opens the models table for an address that names no view of the page", async () => {
+  it("shows the directory for the bare Buddy page without rewriting an unknown hash", async () => {
     const f = fixture();
     renderBuddy("#buddies/router", f);
     await listed(3, 4);
     expect(current(sectionsNav())).toEqual(["目录"]);
-    expect(current(tablesNav())).toEqual(["模型"]);
   });
 
   it("follows hashchange and the browser back action between views", async () => {
     const f = fixture();
     renderBuddy("#buddies", f);
     await listed(3, 4);
-    await act(async () => { window.location.hash = "#buddies/harness"; });
-    await waitFor(() => expect(screen.getByRole("region", { name: "Harness" })).toBeTruthy());
-    expect(current(tablesNav())).toEqual(["Harness"]);
+    await act(async () => { window.location.hash = "#buddies/roles"; });
+    await waitFor(() => expect(screen.getByRole("region", { name: "角色" })).toBeTruthy());
     await act(async () => { window.history.back(); });
     await waitFor(() => expect(modelsRegion()).toBeTruthy());
     expect(screen.queryByRole("region", { name: "Harness" })).toBeNull();
-    expect(current(tablesNav())).toEqual(["模型"]);
   });
 
   it("goes from the roles section to the Router's model and focuses that buddy", async () => {
@@ -308,7 +274,7 @@ describe("deep links", () => {
     await screen.findByRole("region", { name: "角色" });
     const reviewLine = screen.getByRole("listitem", { name: `${SOL} / medium` });
     await user.click(within(reviewLine).getByRole("link", { name: `${SOL} / medium` }));
-    expect(window.location.hash).toBe(`#buddies/models/${encodeURIComponent(solMediumId)}`);
+    expect(window.location.hash).toBe(`#buddies/catalog/buddy/${encodeURIComponent(solMediumId)}`);
     await waitFor(() => expect(modelsRegion()).toBeTruthy());
     await waitFor(() => pane(SOL));
     await waitFor(() => expect(document.activeElement).toBe(level("medium")));
@@ -324,7 +290,7 @@ describe("deep links", () => {
     expect(queryModel(SONNET)).toBeNull();
     await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
 
-    await act(async () => { window.location.hash = `#buddies/models/${encodeURIComponent(highId)}`; });
+    await act(async () => { window.location.hash = `#buddies/catalog/buddy/${encodeURIComponent(highId)}`; });
     await waitFor(() => expect(search()).toHaveProperty("value", ""));
     expect(screen.getByRole("checkbox", { name: "只看已启用" }).getAttribute("aria-checked")).toBe("false");
     await listed(3, 4);
@@ -336,12 +302,12 @@ describe("deep links", () => {
 
   it("turns on the unavailable filter and unfolds the harness when an address names an offline buddy", async () => {
     const f = fixture();
-    renderBuddy(`#buddies/models/${encodeURIComponent(glmId)}`, f);
+    renderBuddy(`#buddies/catalog/buddy/${encodeURIComponent(glmId)}`, f);
     const box = await screen.findByRole("checkbox", { name: "显示不可用 1" });
     await waitFor(() => expect(box.getAttribute("aria-checked")).toBe("true"));
     await listed(3, 5);
     // A harness that cannot work starts folded; the address opens it.
-    expect(modelButton(GLM).getAttribute("aria-pressed")).toBe("true");
+    expect(modelButton(GLM).getAttribute("aria-expanded")).toBe("true");
     await waitFor(() => expect(document.activeElement).toBe(level("default")));
     expect(f.command).not.toHaveBeenCalled();
   });
@@ -357,15 +323,15 @@ describe("a narrow viewport", () => {
     await selectModel(user, SONNET, "Claude Code");
     await user.type(note(), "窄屏草稿");
     expect(within(sectionsNav()).getAllByRole("link").map(link => link.firstChild?.textContent)).toEqual(["目录", "角色"]);
-    expect(within(tablesNav()).getAllByRole("link").map(link => link.firstChild?.textContent)).toEqual(["模型", "Harness"]);
-    await user.click(tableLink(/^Harness/));
-    await waitFor(() => expect(screen.getByRole("region", { name: "Harness" })).toBeTruthy());
-    await user.click(tableLink("模型"));
+    await user.click(sectionLink(/^角色/));
+    await screen.findByRole("region", { name: "角色" });
+    await user.click(sectionLink(/^目录/));
     await waitFor(() => expect(modelsRegion()).toBeTruthy());
     expect(pane(SONNET)).toBeTruthy();
     expect(note()).toHaveProperty("value", "窄屏草稿");
     // Once a row is opened, the side column offers the way back to the table.
-    expect(within(pane()).getByRole("button", { name: "模型" })).toBeTruthy();
+    expect(modelButton(SONNET).getAttribute("aria-expanded")).toBe("true");
+    expect(within(pane()).queryByRole("button", { name: "模型" })).toBeNull();
     expect(screen.getByText("1 项未保存")).toBeTruthy();
   });
 });

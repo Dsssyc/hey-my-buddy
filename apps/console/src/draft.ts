@@ -545,7 +545,7 @@ export type RebaseOutcome = {
 const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
   enabled: "启用状态",
   familyPreference: "家族偏好",
-  preference: "档位偏好",
+  preference: "推理强度偏好",
   familyAnnotation: "家族备注",
   configuration: "Router 列表",
   defaultRoutingMode: "默认路由模式",

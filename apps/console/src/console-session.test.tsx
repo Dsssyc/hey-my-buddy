@@ -407,6 +407,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     const retained = note() as HTMLTextAreaElement;
     expect(retained.value).toBe("原人工意见结果不明");
     expect(retained.disabled).toBe(false);
+    expect(retained.readOnly).toBe(true);
+    expect(retained.getAttribute("aria-disabled")).toBe("true");
     // A local retry is blocked and nothing new is dispatched.
     const operations = [...f.operations];
     await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);

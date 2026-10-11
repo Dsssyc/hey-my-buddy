@@ -110,10 +110,10 @@ describe("the Router list", () => {
     const user = userEvent.setup();
     await openRoles(f);
     const link = within(line(MEDIUM)).getByRole("link", { name: MEDIUM });
-    expect(link.getAttribute("href")).toBe(`#buddies/models/${encodeURIComponent(MEDIUM_ID)}`);
+    expect(link.getAttribute("href")).toBe(`#buddies/catalog/buddy/${encodeURIComponent(MEDIUM_ID)}`);
     await user.click(link);
-    expect(window.location.hash).toBe(`#buddies/models/${encodeURIComponent(MEDIUM_ID)}`);
-    await waitFor(() => expect(modelButton("claude / anthropic / claude-sonnet-5").getAttribute("aria-pressed")).toBe("true"));
+    expect(window.location.hash).toBe(`#buddies/catalog/buddy/${encodeURIComponent(MEDIUM_ID)}`);
+    await waitFor(() => expect(modelButton("claude / anthropic / claude-sonnet-5").getAttribute("aria-expanded")).toBe("true"));
   });
 
   it("says that there is no Router yet and how to add one, and draws no list", async () => {
@@ -247,10 +247,10 @@ describe("adding to the list", () => {
     const rows = choices();
     expect(rows.map(row => row.textContent)).toEqual([
       PENDING,
-      `${HIGH}该档位未启用：先打开它的开关`,
+      `${HIGH}该推理强度未启用：先打开它的开关`,
       `${FLASH}所属 Harness 尚不具备本地只读路由资格`,
       `${SOL}所属 Harness 尚不具备本地只读路由资格`,
-      `${GLM}该档位当前不可用`,
+      `${GLM}该推理强度当前不可用`,
     ]);
     expect(rows.map(row => row.getAttribute("aria-disabled"))).toEqual([null, "true", "true", "true", "true"]);
     expect(within(addDialog()).queryByText(MEDIUM)).toBeNull();
@@ -291,7 +291,7 @@ describe("adding to the list", () => {
     const user = userEvent.setup();
     await openRoles(f);
     await user.click(addButton());
-    expect(within(choice(HIGH)).getByText("该档位未启用：先打开它的开关")).toBeTruthy();
+    expect(within(choice(HIGH)).getByText("该推理强度未启用：先打开它的开关")).toBeTruthy();
     await user.click(choice(HIGH));
     expect(queryAddDialog()).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "取消" }));
@@ -304,7 +304,7 @@ describe("adding to the list", () => {
     const user = userEvent.setup();
     await openRoles(f);
     await user.click(addButton());
-    expect(within(choice(GLM)).getByText("该档位当前不可用")).toBeTruthy();
+    expect(within(choice(GLM)).getByText("该推理强度当前不可用")).toBeTruthy();
     await user.click(choice(GLM));
     expect(queryAddDialog()).toBeTruthy();
     expect(queryDraftBar()).toBeNull();
@@ -320,7 +320,7 @@ describe("adding to the list", () => {
     expect(choices().map(row => row.textContent)).toEqual([`${FLASH}所属 Harness 尚不具备本地只读路由资格`]);
     await user.clear(search);
     await user.type(search, "high");
-    expect(choices().map(row => row.textContent)).toEqual([`${HIGH}该档位未启用：先打开它的开关`]);
+    expect(choices().map(row => row.textContent)).toEqual([`${HIGH}该推理强度未启用：先打开它的开关`]);
     await user.clear(search);
     await user.type(search, "no-such-buddy");
     expect(within(addDialog()).getByText("没有匹配的 buddy")).toBeTruthy();
@@ -512,9 +512,9 @@ describe("what leaves the roles view out of use", () => {
   it("keeps the preferences of the catalogue editable and publishes them without the Router settings", async () => {
     const f = fixture(snapshot({ configuration: null }));
     const user = userEvent.setup();
-    window.location.hash = "#buddies/models";
+    window.location.hash = "#buddies/catalog";
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("table", { name: "模型" });
+    await screen.findByRole("region", { name: "目录" });
     await selectModel(user, "claude / anthropic / claude-sonnet-5", "Claude Code");
     await user.click(defaultPreference("优先"));
     await user.click(saveButton());

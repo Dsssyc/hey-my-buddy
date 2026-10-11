@@ -1,0 +1,78 @@
+import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { ApiError, errorText, snapshotHarnesses } from "../api";
+import type { ConsoleApi } from "../api";
+import { harnessName } from "../buddy-display";
+import { LOGIN_EXPIRED_ACTION_REFUSAL } from "../console-session";
+import type { HarnessHealth, Snapshot } from "../types";
+import { harnessPath, statusText } from "./harness";
+import { openQuotaRetry } from "./harness-retry";
+
+/** One explicit action; kept so that a failed attempt can be retried as it was. */
+type Action =
+  | { kind: "check"; adapter?: string }
+  | { kind: "set"; adapter: string; path: string | null }
+  | { kind: "retry"; adapter: string; provider: string };
+
+/** Explicit directory operations, preserving revision fencing and recorded replies. */
+export function useHarnessActions({ snapshot, api, refresh, mutationsAvailable, sessionWritable }: {
+  snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>;
+  mutationsAvailable: boolean; sessionWritable: boolean;
+}) {
+  const { t } = useTranslation("buddies");
+  const recorded = useMemo(() => snapshotHarnesses(snapshot), [snapshot]);
+  /** Rows returned by this view's own actions, shown until a snapshot reload lands. */
+  const [replies, setReplies] = useState<Record<string, HarnessHealth>>({});
+  /** Whether an action is under way; only one is at a time. */
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(""), [note, setNote] = useState("");
+  const [retry, setRetry] = useState<Action | null>(null);
+  const [refused, setRefused] = useState(false);
+
+  const rows = recorded.map(row => replies[row.adapter] ?? row);
+  const refusal = !sessionWritable ? LOGIN_EXPIRED_ACTION_REFUSAL : !mutationsAvailable ? t("harness.refused") : "";
+  const expectedRevision = (adapter: string) => rows.find(row => row.adapter === adapter)?.revision ?? 0;
+  /** The reload is the point of the action: the snapshot stays the recorded truth. */
+  async function reloadSnapshot() {
+    const next = await refresh();
+    if (next) setReplies({});
+    return next;
+  }
+  async function run(action: Action) {
+    if (busy) return;
+    // A refusal is said only while the action would still be refused.
+    if (refusal) { setRefused(true); return; }
+    setBusy(true); setError(""); setNote(""); setRetry(null); setRefused(false);
+    try {
+      if (action.kind === "check") {
+        const checked = await api.harnessRefresh(snapshot.csrfToken, action.adapter);
+        setReplies(previous => ({ ...previous, ...Object.fromEntries(checked.map(row => [row.adapter, row])) }));
+        setNote(action.adapter
+          ? t("harness.done.checked", { name: harnessName(action.adapter), status: statusText(checked.find(row => row.adapter === action.adapter)?.status ?? "unknown", t) })
+          : t("harness.done.checkedAll", { ready: checked.filter(row => row.status === "ready").length, n: checked.length }));
+      } else if (action.kind === "set") {
+        const updated = await api.harnessSet(action.adapter, action.path, expectedRevision(action.adapter), snapshot.csrfToken);
+        setReplies(previous => ({ ...previous, [updated.adapter]: updated }));
+        const status = { name: harnessName(updated.adapter), status: statusText(updated.status, t) };
+        setNote(action.path ? t("harness.done.saved", { path: harnessPath(updated) ?? action.path, ...status }) : t("harness.done.restored", status));
+      } else {
+        const outcome = await openQuotaRetry(api, snapshot.csrfToken, action.adapter, action.provider, t);
+        setNote(t(`harness.quota.done.${outcome}`, { provider: action.provider }));
+      }
+      await reloadSnapshot();
+    } catch (failure) {
+      setError(errorText(failure));
+      setRetry(action);
+      // A revision conflict means the recorded facts changed: reread them so a
+      // retry fences against the new revision instead of replaying a stale one.
+      if (failure instanceof ApiError && ["REVISION_CONFLICT", "CONFLICT", "STALE_GENERATION"].includes(failure.code)) {
+        await reloadSnapshot();
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return { rows, busy, error, note, retry, guard: refused ? refusal : "", refusal, run, reloadSnapshot };
+
+}

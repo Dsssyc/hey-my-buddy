@@ -120,8 +120,8 @@ describe("the buddies that can be added", () => {
   it("gives the reason `routerRefusal` gives for each that cannot", () => {
     const by = Object.fromEntries(routerCandidates(profiles(), [], "review", "").map(({ profile, refusal }) => [profile.profileId, refusal]));
     expect(by[SOL_ID]).toBe("所属 Harness 尚不具备本地只读路由资格");
-    expect(by[HIGH_ID]).toBe("该档位未启用：先打开它的开关");
-    expect(by[GLM_ID]).toBe("该档位当前不可用");
+    expect(by[HIGH_ID]).toBe("该推理强度未启用：先打开它的开关");
+    expect(by[GLM_ID]).toBe("该推理强度当前不可用");
     expect(by[MEDIUM_ID]).toBeNull();
     expect(by[PENDING_ID]).toBeNull();
   });

@@ -261,10 +261,15 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     expect("decisionProfileId" in snapshotFacts.configuration).toBe(false);
     expect("routerProfileId" in snapshotFacts.configuration).toBe(false);
 
+    // DSH is metered: a zero balance is recorded without invented percentage windows.
+    const normalSnapshot = await apiFor(manifest.files.find(entry => entry.scenario === "normal" && entry.kind === "console-snapshot")!).snapshot();
+    expect(snapshotHarnesses(normalSnapshot).find(row => row.adapter === "dsh")).toMatchObject({
+      billingByProvider: { "deepseek-official": { kind: "metered" } },
+      quota: { balanceZero: true, windows: [] },
+    });
     // Recorded quota: normal, stale and unknown observations stay distinct.
     const quotaFacts = snapshotFacts.harnesses as { adapter: string; quota: ReturnType<typeof quotaView> }[];
-    const near = quotaFacts.find(row => row.quota?.alert)!;
-    expect(near.quota!.windows.some(window => window.nearLimit)).toBe(true);
+    expect(quotaFacts.some(row => row.quota?.alert)).toBe(false);
     expect(quotaFacts.some(row => row.quota === null)).toBe(true);
     expect(quotaFacts.some(row => row.quota?.stale && row.quota.windows.some(window => window.usedPercent === null))).toBe(true);
 
