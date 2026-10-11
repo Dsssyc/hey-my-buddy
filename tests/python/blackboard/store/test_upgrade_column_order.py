@@ -5,7 +5,9 @@ import sqlite3
 from unittest import mock
 
 from support import BoardTestCase
-from blackboard.store.test_migrations import rows, schema_shape
+from blackboard.store.test_migrations import (
+    RebuildDamageConnection, assert_rebuild_damage_rejected, rows, schema_shape, seed_private_rebuild_values,
+)
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import backup, migrations
 from hey_my_buddy.blackboard.store.db import Database
@@ -77,12 +79,15 @@ class UpgradeColumnOrderTests(BoardTestCase):
         with self.fresh.read() as connection:
             self.fresh_shape = schema_shape(connection)
 
-    def prepare(self, name):
+    def prepare(self, name, *, factory=sqlite3.Connection):
         state = self.directory / name
         load_fixture(state)
-        connection = sqlite3.connect(state / 'board.sqlite3', isolation_level=None)
+        connection = sqlite3.connect(state / 'board.sqlite3', isolation_level=None, factory=factory)
         self.addCleanup(connection.close)
+        seed_private_rebuild_values(connection)
         before = {table: named_rows(connection, table) for table in APPENDED_COLUMNS}
+        self.assertEqual({table: len(value[0]) for table, value in before.items()},
+                         {'attempts': 32, 'workflow_runs': 31, 'evaluation_cards': 10})
         references = foreign_keys(connection)
         append_old_columns(connection)
         self.assertEqual(references, foreign_keys(connection))
@@ -103,6 +108,9 @@ class UpgradeColumnOrderTests(BoardTestCase):
         self.assertEqual(runs[runs.index('updated_at') + 1:], list(APPENDED_COLUMNS['workflow_runs']))
         self.assertTrue(connection.execute('SELECT COUNT(*) FROM workflow_turns WHERE attempt_id IS NOT NULL').fetchone()[0])
         self.assertTrue(connection.execute('SELECT COUNT(*) FROM workflow_artifacts WHERE run_id IS NOT NULL').fetchone()[0])
+        self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_runs r JOIN workflow_routes w '
+                                            'ON r.current_routing_id=w.decision_id AND r.run_id=w.run_id').fetchone()[0],
+                         len(before['workflow_runs'][1]))
         return state, connection
 
     def assert_preserved(self, connection, before):
@@ -127,7 +135,10 @@ class UpgradeColumnOrderTests(BoardTestCase):
                 connection.execute(f'PRAGMA foreign_keys={setting}')
                 statements = []
                 connection.set_trace_callback(statements.append)
-                migrations.migrate_15_to_16(connection)
+                try:
+                    migrations.migrate_15_to_16(connection)
+                except BoardError as error:
+                    self.fail(f'Valid private input must migrate with every value preserved: {error.payload()}')
                 self.assertEqual(schema_shape(connection), self.fresh_shape)
                 self.assert_preserved(connection, before)
                 current_references = foreign_keys(connection)
@@ -190,13 +201,11 @@ class UpgradeColumnOrderTests(BoardTestCase):
         self.assertEqual(connection.execute('PRAGMA foreign_keys').fetchone()[0], 1)
         self.assertFalse(connection.in_transaction)
 
-    def test_retained_value_change_in_rebuilt_table_is_rejected_by_column_name(self):
-        _state, connection = self.prepare('retained-value')
-        connection.execute("CREATE TRIGGER corrupt_attempt AFTER UPDATE ON catalog_current BEGIN"
-                           " UPDATE attempts SET token_usage_json='corrupted'; END")
-        before, shape = rows(connection), schema_shape(connection)
-        with self.assertRaises(BoardError) as caught:
-            migrations.migrate_15_to_16(connection)
-        self.assertEqual(caught.exception.details['tables'], ['attempts'])
-        self.assertEqual(rows(connection), before)
-        self.assertEqual(schema_shape(connection), shape)
+    def test_appended_table_value_damage_reaches_fingerprint_comparison_and_rolls_back(self):
+        for table in APPENDED_COLUMNS:
+            with self.subTest(table=table):
+                _state, connection = self.prepare(f'retained-value-{table}', factory=RebuildDamageConnection)
+                connection.execute('PRAGMA foreign_keys=ON')
+                assert_rebuild_damage_rejected(self, connection, table)
+                self.assertEqual(connection.execute('PRAGMA foreign_keys').fetchone()[0], 1)
+                self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])

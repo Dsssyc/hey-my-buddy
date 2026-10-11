@@ -55,6 +55,83 @@ def rows(connection) -> dict:
             for name in names}
 
 
+def seed_private_rebuild_values(connection):
+    """Private synthetic input after restore; never edit the sealed fixture.
+
+    Give nullable/default columns distinct values and real routing references.
+    Existing task/attempt/turn/artifact bindings remain intact.
+    """
+    for index, (attempt_id,) in enumerate(connection.execute(
+            'SELECT attempt_id FROM attempts ORDER BY attempt_id').fetchall(), 1):
+        connection.execute('UPDATE attempts SET token_usage_json=?,error=?,cancel_requested_at=?,signal=?, '
+                           'worker_instance=? WHERE attempt_id=?',
+                           (json.dumps({'inputTokens': index * 17, 'outputTokens': index * 7}),
+                            f'private synthetic error {index}', f'2026-01-02T00:00:{index:02d}.000Z',
+                            f'SIG{index}', f'private-worker-instance-{index}', attempt_id))
+    for index, (run_id, owner_generation) in enumerate(connection.execute(
+            'SELECT run_id,owner_generation FROM workflow_runs ORDER BY run_id').fetchall(), 1):
+        decision_id = f'private-synthetic-route-{index}'
+        stamp = f'2026-01-02T00:01:{index:02d}.000Z'
+        connection.execute('INSERT INTO evaluation_decisions(decision_id,status,task,table_revision,created_at)'
+                           ' VALUES(?,?,?,?,?)', (decision_id, 'resolved', f'private synthetic {index}', 0, stamp))
+        connection.execute('INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,'
+                           'created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
+                           (decision_id, f'private-request-{index}', 'select', f'private-input-{index}',
+                            run_id, stamp, stamp))
+        connection.execute('INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at,'
+                           'updated_at) VALUES(?,?,?,?,?,?)',
+                           (decision_id, run_id, owner_generation, 'resolved', stamp, stamp))
+        connection.execute('UPDATE workflow_runs SET title=?,current_routing_id=?,configuration_locked=1 '
+                           'WHERE run_id=?', (f'private synthetic title {index}', decision_id, run_id))
+
+
+class RebuildDamageConnection(sqlite3.Connection):
+    """Inject an actual row update after SQLite successfully renames a rebuild.
+
+    No trigger references a dropped table, and all snapshots/comparisons run
+    unchanged against this real connection.
+    """
+    damage_table = None
+    damage_sql = None
+
+    def execute(self, sql, parameters=()):
+        result = super().execute(sql, parameters)
+        if sql == f'ALTER TABLE {self.damage_table}_16 RENAME TO {self.damage_table}':
+            super().execute(self.damage_sql)
+        return result
+
+
+def assert_rebuild_damage_rejected(test, connection, table):
+    updates = {
+        'attempts': "UPDATE attempts SET token_usage_json='private corrupted usage'",
+        'workflow_runs': "UPDATE workflow_runs SET title='private corrupted title'",
+        'evaluation_cards': "UPDATE evaluation_cards SET summary='private corrupted summary'",
+    }
+    connection.damage_table, connection.damage_sql = table, updates[table]
+    old_rows, old_shape = rows(connection), schema_shape(connection)
+    test.assertTrue(old_rows[table])
+    statements = []
+    connection.set_trace_callback(statements.append)
+    with test.assertRaises(BoardError) as caught:
+        migrations.migrate_15_to_16(connection)
+    test.assertEqual(caught.exception.message, 'Migration changed values outside its exact plan')
+    test.assertEqual(caught.exception.details['tables'], [table])
+    # Both full, named SELECTs executed, with actual corruption between them:
+    # this proves arrival at the retained-value comparison, not a DDL failure.
+    columns = sorted(row[1] for row in connection.execute(f'PRAGMA table_info({table})'))
+    names = ', '.join(f'"{name}"' for name in columns)
+    reads = [index for index, sql in enumerate(statements)
+             if sql == f'SELECT {names} FROM {table} ORDER BY {names}']
+    test.assertEqual(len(reads), 2)
+    test.assertLess(reads[0], statements.index(updates[table]))
+    test.assertLess(statements.index(updates[table]), reads[1])
+    test.assertLess(reads[1], statements.index('ROLLBACK'))
+    test.assertNotIn('COMMIT', statements)
+    test.assertEqual(rows(connection), old_rows)
+    test.assertEqual(schema_shape(connection), old_shape)
+    test.assertFalse(connection.in_transaction)
+
+
 class Schema15UpgradeTests(BoardTestCase):
     def setUp(self):
         super().setUp()
@@ -94,6 +171,7 @@ class Schema15UpgradeTests(BoardTestCase):
         self.assertNotIn('unplanned', [row[1] for row in self.connection.execute('PRAGMA table_info(model_facts)')])
 
     def test_rows_raw_json_and_historical_hashes_are_preserved_except_the_exact_plan(self):
+        seed_private_rebuild_values(self.connection)
         self.connection.execute("INSERT INTO workflow_host_conclusions(conclusion_id,run_id,run_revision,"
                                 "owner_generation,execution_status,note,actor,command_id,created_at)"
                                 " VALUES('old-conclusion',?,1,1,'cancelled','old note','fixture','old-command','then')",
@@ -211,15 +289,11 @@ class Schema15UpgradeTests(BoardTestCase):
         self.assertEqual(rows(self.connection), old_rows)
         self.assertEqual(schema_shape(self.connection), old_shape)
 
-    def test_a_trigger_cannot_change_an_unrelated_retained_table(self):
-        self.connection.execute("CREATE TRIGGER retained_value_changed AFTER UPDATE ON catalog_current BEGIN"
-                                " UPDATE evaluation_cards SET summary='not authorized by this upgrade'; END")
-        old_rows, old_shape = rows(self.connection), schema_shape(self.connection)
-        with self.assertRaises(BoardError) as caught:
-            migrations.migrate_15_to_16(self.connection)
-        self.assertEqual(caught.exception.details['tables'], ['evaluation_cards'])
-        self.assertEqual(rows(self.connection), old_rows)
-        self.assertEqual(schema_shape(self.connection), old_shape)
+    def test_rebuilt_table_value_damage_reaches_fingerprint_comparison_and_rolls_back(self):
+        for table in ('attempts', 'workflow_runs', 'evaluation_cards'):
+            with self.subTest(table=table), closing(sqlite3.connect(
+                    self.state / 'board.sqlite3', isolation_level=None, factory=RebuildDamageConnection)) as connection:
+                assert_rebuild_damage_rejected(self, connection, table)
 
     def test_trigger_cannot_change_retained_values_inside_an_allowed_table(self):
         self.connection.execute("CREATE TRIGGER corrupt_catalog AFTER UPDATE ON catalog_current BEGIN"

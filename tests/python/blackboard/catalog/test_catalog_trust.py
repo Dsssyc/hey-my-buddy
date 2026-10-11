@@ -289,6 +289,28 @@ class CatalogTrustTests(BoardTestCase):
         self.assertEqual(row['status'], 'unknown')
         self.assertEqual(row['reason'], 'ACCOUNT_BINDING_CHANGED')
 
+    def test_pending_efforts_keep_same_account_and_hide_retained_different_credentials(self):
+        from hey_my_buddy.blackboard.catalog import accounts
+        from hey_my_buddy.blackboard.store.db import canonical_json
+
+        self.record(reading(efforts=('high', 'max')))
+        self.record(reading(models=()))
+        with self.board.store.db.write() as db:
+            stock = [tuple(row) for row in db.execute('SELECT * FROM catalog_pending')]
+            self.assertTrue(stock)
+            self.assertTrue(catalog.catalog_account_matches(db, 'dsh'))
+            self.assertEqual(catalog.pending_model_efforts(db, 'dsh', 'fixture', 'alpha'), ['high', 'max'])
+            # Retain the old stock while changing the selected credential
+            # identity. Calling invalidate would erase the evidence we test.
+            credential_key = 'account-credential:' + canonical_json(['dsh', 'native'])
+            accounts._write(db, credential_key, 1)
+            self.assertFalse(catalog.catalog_account_matches(db, 'dsh'))
+            self.assertIsNone(catalog.pending_model_efforts(db, 'dsh', 'fixture', 'alpha'))
+            self.assertEqual(catalog.pending_families(db), {})
+            self.assertEqual([tuple(row) for row in db.execute('SELECT * FROM catalog_pending')], stock)
+            accounts._write(db, credential_key, 0)
+            self.assertEqual(catalog.pending_model_efforts(db, 'dsh', 'fixture', 'alpha'), ['high', 'max'])
+
     def test_empty_confirmed_catalog_for_one_harness_leaves_others_alone(self):
         self.record(reading())
         self.record(reading(adapter='zcode', models=('beta',)))

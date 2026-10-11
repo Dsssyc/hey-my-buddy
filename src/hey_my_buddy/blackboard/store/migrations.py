@@ -241,8 +241,11 @@ def _rebuilt_fingerprints(connection: sqlite3.Connection) -> dict[str, str]:
     snapshots retain their historical positional fingerprint contract.
     """
     result = {}
-    for table, _ddl, names, _indexes in _REBUILT_TABLES:
-        columns = ", ".join(sorted(names.split(", ")))
+    for table, *_rest in _REBUILT_TABLES:
+        # Read the actual table independently of the copy list: omitting a
+        # copied column must still change its retained-value fingerprint.
+        names = sorted(row[1] for row in connection.execute(f"PRAGMA table_info({table})"))
+        columns = ", ".join(f'"{name}"' for name in names)
         digest = hashlib.sha256()
         for row in connection.execute(f"SELECT {columns} FROM {table} ORDER BY {columns}"):
             digest.update(json.dumps(tuple(row), ensure_ascii=False, separators=(",", ":")).encode())
