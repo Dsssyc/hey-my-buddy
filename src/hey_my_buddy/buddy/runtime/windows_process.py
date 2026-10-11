@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+from dataclasses import dataclass
 import os
 import subprocess
 
@@ -176,15 +177,32 @@ class OwnedJob:
                 pass
 
 
+@dataclass(frozen=True)
+class ProcessCreationEvidence:
+    created: bool
+    shutdown_confirmed: bool
+    exit_code: int | None
+
+
 def owned_popen(*args, windows_api=None, **kwargs):
-    """Create a process with tree ownership before any user code can run."""
-    if os.name != "nt" and windows_api is None:
-        return subprocess.Popen(*args, **kwargs)
-    api = windows_api if windows_api is not None else WindowsAPI()
-    job = OwnedJob(api, api.create_job())
+    """Create a process with tree ownership before any user code can run.
+
+    Every failure carries ``owned_popen_evidence`` (ProcessCreationEvidence).
+    ``created`` records whether Popen returned an actual process handle;
+    ``shutdown_confirmed`` records no child or observed cleanup, independently
+    of whether the caller has registered ownership. Confirmed failures retain
+    the original exception; unknown cleanup raises RuntimeError with the same
+    evidence and the original failure as its cause. Consumers use the evidence,
+    never exception text or type, to judge shutdown.
+    """
     process = None
+    job = None
     assigned = False
     try:
+        if os.name != "nt" and windows_api is None:
+            return subprocess.Popen(*args, **kwargs)
+        api = windows_api if windows_api is not None else WindowsAPI()
+        job = OwnedJob(api, api.create_job())
         kwargs = {**kwargs, "creationflags": kwargs.get("creationflags", 0) |
                   CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP, "start_new_session": False}
         process = subprocess.Popen(*args, **kwargs)
@@ -206,10 +224,18 @@ def owned_popen(*args, windows_api=None, **kwargs):
                     stopped = job.active() == 0
             except (OSError, subprocess.TimeoutExpired):
                 stopped = False
-        try:
-            job.close()
-        except OSError:
-            stopped = False
+        if job is not None:
+            try:
+                job.close()
+            except OSError:
+                if process is not None:
+                    stopped = False
+        evidence = ProcessCreationEvidence(
+            created=process is not None, shutdown_confirmed=stopped,
+            exit_code=process.returncode if process is not None else None)
         if not stopped:
-            raise RuntimeError("suspended child shutdown is unconfirmed after ownership failure") from error
+            failure = RuntimeError("suspended child shutdown is unconfirmed after ownership failure")
+            failure.owned_popen_evidence = evidence
+            raise failure from error
+        error.owned_popen_evidence = evidence
         raise

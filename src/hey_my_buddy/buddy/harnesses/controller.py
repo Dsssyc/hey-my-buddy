@@ -13,9 +13,10 @@ import stat
 import subprocess
 import time
 from pathlib import Path
+from typing import Callable
 
 from .base import ProcessHandle, open_logs
-from ..runtime.windows_process import owned_popen
+from ..runtime.windows_process import ProcessCreationEvidence, owned_popen
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
 from ..roles.turn_io import guard_private_path
@@ -33,28 +34,54 @@ def launch_controller(*, prepare, log_paths: dict, timeout_seconds: int | None =
                       grace_seconds: float = 0) -> ProcessHandle:
     """Open logs, prepare and spawn one owned child, closing both log FDs.
 
-    Preparation runs inside the spawn try block and returns command, cwd and
-    environment. A failed preparation leaves the logs as evidence and closes
-    their descriptors. Positive budgets stamp a deadline plus the supplied
-    grace; zero uses the caller's unbounded deadline; discovery supplies None
-    and terminates its handle after its own bounded wait.
+    Every failure carries the creating boundary's ``owned_popen_evidence``.
+    That receipt describes this controller only, not a separately owned native
+    child. Consumers combine it with the controller's native stop receipt.
+    Log opening and preparation precede child creation. A successful spawn
+    transfers ownership to its handle before log descriptors are closed, so
+    later failures terminate and observe that owned group. An ownership
+    failure consumes owned_popen's receipt even when no handle was returned.
+    Positive budgets stamp a deadline plus the supplied grace; zero uses the
+    caller's unbounded deadline; discovery supplies None and waits itself.
     """
-    stdout, stderr = open_logs(log_paths)
+    evidence = ProcessCreationEvidence(created=False, shutdown_confirmed=True, exit_code=None)
+    handle = None
     try:
-        command, cwd, environment = prepare()
-        process = owned_popen(command, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
-                              stdout=stdout, stderr=stderr, start_new_session=True, close_fds=True)
-    finally:
-        os.close(stdout)
-        os.close(stderr)
-    handle = ProcessHandle(process, own_group=True, log_paths=log_paths)
-    if timeout_seconds is None:
+        stdout, stderr = open_logs(log_paths)
+        try:
+            command, cwd, environment = prepare()
+            try:
+                process = owned_popen(command, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
+                                      stdout=stdout, stderr=stderr, start_new_session=True, close_fds=True)
+            except BaseException as error:
+                evidence = error.owned_popen_evidence
+                raise
+            evidence = ProcessCreationEvidence(created=True, shutdown_confirmed=False,
+                                               exit_code=process.returncode)
+            handle = ProcessHandle(process, own_group=True, log_paths=log_paths)
+        finally:
+            try:
+                os.close(stdout)
+            finally:
+                os.close(stderr)
+        if timeout_seconds == 0:
+            handle.deadline = unbounded_deadline
+        elif timeout_seconds is not None:
+            handle.deadline = time.monotonic() + timeout_seconds + grace_seconds
         return handle
-    if timeout_seconds == 0:
-        handle.deadline = unbounded_deadline
-    else:
-        handle.deadline = time.monotonic() + timeout_seconds + grace_seconds
-    return handle
+    except BaseException as error:
+        if handle is not None:
+            try:
+                handle.terminate(grace_seconds=0)
+                stopped = handle.shutdown_confirmed()
+            except BaseException as cleanup_error:
+                cleanup_error.owned_popen_evidence = ProcessCreationEvidence(
+                    created=True, shutdown_confirmed=False, exit_code=process.returncode)
+                raise
+            evidence = ProcessCreationEvidence(created=True, shutdown_confirmed=stopped,
+                                               exit_code=process.returncode)
+        error.owned_popen_evidence = evidence
+        raise
 
 
 def read_strict_result(path: Path) -> dict | None:
@@ -96,17 +123,21 @@ def read_plain_evidence(path: Path) -> object:
     return json.loads(raw)
 
 
-def stop_confirmed(payload: object, handle: ProcessHandle) -> bool:
-    """The Worker and discovery two-layer stop, exactly their baseline rule.
+def stop_confirmed(payload: dict | None, observe_outer: Callable[[], bool]) -> bool:
+    """Combine the native receipt with one actual outer stop observation.
 
     The whole conjunction is boolean: the controller's own receipt must carry
     ``processState.shutdownConfirmed`` exactly ``True`` and the owned outer
-    group must then be observed gone. Without a receipt the outer observation
-    is not even started, and any unobservable layer leaves the attempt not
-    stopped: unknown stays alive.
+    group must then be observed gone. The observation is a held handle's
+    method or the creating boundary's recorded fact, never a fabricated
+    handle. Missing or malformed native receipts never start the observation;
+    any unconfirmed layer leaves the whole native read unconfirmed.
     """
-    return bool(payload and payload.get("processState", {}).get("shutdownConfirmed") is True
-                and handle.shutdown_confirmed())
+    if payload is None:
+        return False
+    native = payload.get("processState")
+    return bool(isinstance(native, dict) and native.get("shutdownConfirmed") is True
+                and observe_outer())
 
 
 def router_stop_confirmed(payload: object, handle: ProcessHandle) -> bool:

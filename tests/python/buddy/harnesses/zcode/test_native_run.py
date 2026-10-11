@@ -12,8 +12,10 @@ from __future__ import annotations
 from contextlib import nullcontext
 import dataclasses
 import hashlib
+import io
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import time
@@ -50,6 +52,8 @@ from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
 from buddy.harnesses.zcode.test_zcode_tool_evidence import FakeAppServerTests, SCHEMA
+from buddy.runtime.test_windows_process import FakeAPI, FakeProcess
+from hey_my_buddy.buddy.runtime import windows_process
 
 
 _FIXTURE_BRIDGES = weakref.WeakValueDictionary()
@@ -1374,3 +1378,364 @@ class ProducerContractTests(NativeRunCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DiscoveryStopTests(NativeRunCase):
+    """The existing private app-server fixture, with real stop collection."""
+    def discover(self):
+        os.environ['BUDDY_ZCODE_TEST_CASE'] = 'discovery'
+        return native_run.run_discovery(cwd=str(self.cwd), invocation_root=self.base / 'discover',
+                                       native_root=self.base / 'native-discover', timeout_seconds=3,
+                                       cancelled=lambda: False)
+
+    def broken_snapshot(self):
+        self.fake.write_text(self.fake.read_text().replace("'sessionId':f's-{session}','sessionKind'",
+                                                         "'wrongSessionId':f's-{session}','sessionKind'"))
+
+    def discover_with_windows_boundary(self, api, *, process=None):
+        """Real owned_popen; only the Win32 API and Popen creation are synthetic."""
+        real_popen = subprocess.Popen
+
+        def popen(argv, **kwargs):
+            if "app-server" not in argv:
+                return real_popen(argv, **kwargs)  # The private version fixture.
+            self.assertEqual(kwargs["creationflags"] & windows_process.CREATE_SUSPENDED,
+                             windows_process.CREATE_SUSPENDED)
+            self.assertFalse(kwargs["start_new_session"])
+            if process is None:
+                raise OSError("fixture process creation refused")
+            return process
+
+        def owned_popen(*args, **kwargs):
+            return windows_process.owned_popen(*args, windows_api=api, **kwargs)
+
+        with mock.patch.object(native_run, "owned_popen", owned_popen), \
+             mock.patch.object(windows_process.subprocess, "Popen", side_effect=popen), \
+             mock.patch.object(native_run, "NativeConnection") as connection:
+            try:
+                return self.discover()
+            finally:
+                connection.assert_not_called()
+
+    def discover_with_fd_close_failure(self, error, *, windows_api=None, process=None):
+        """Fail only the app-server stderr close after real owned_popen runs.
+
+        Windows uses injected API/Popen handles; POSIX starts the real private
+        fixture. Test teardown retains its own actual handle to reap mutants.
+        """
+        real_popen, real_close = subprocess.Popen, os.close
+        app_fd = None
+        close_failed = False
+        self.fd_close_child = None
+
+        def popen(argv, **kwargs):
+            nonlocal app_fd
+            if "app-server" not in argv:
+                return real_popen(argv, **kwargs)
+            app_fd = kwargs["stderr"]
+            if windows_api is None:
+                return real_popen(argv, **kwargs)
+            self.assertEqual(kwargs["creationflags"] & windows_process.CREATE_SUSPENDED,
+                             windows_process.CREATE_SUSPENDED)
+            self.assertFalse(kwargs["start_new_session"])
+            if process is None:
+                raise OSError("fixture process creation refused")
+            return process
+
+        def owned_popen(*args, **kwargs):
+            child = windows_process.owned_popen(*args, windows_api=windows_api, **kwargs)
+            self.fd_close_child = child
+            owner = native_run.ProcessHandle(child, own_group=True, log_paths={})
+
+            def reap():
+                try:
+                    native_run.halt_owned_group(child, owner, time.monotonic() + 5)
+                finally:
+                    child.stdout.close()
+            self.addCleanup(reap)
+            return child
+
+        def close(fd):
+            nonlocal close_failed
+            real_close(fd)  # The private descriptor must not leak in a failing test.
+            if fd == app_fd and not close_failed:
+                close_failed = True
+                raise error
+
+        with mock.patch.object(native_run, "owned_popen", owned_popen), \
+             mock.patch.object(windows_process.subprocess, "Popen", side_effect=popen), \
+             mock.patch.object(native_run.os, "close", side_effect=close), \
+             mock.patch.object(native_run, "NativeConnection") as connection:
+            try:
+                return self.discover()
+            finally:
+                self.assertTrue(close_failed)
+                connection.assert_not_called()
+
+    def fd_close_windows_process(self):
+        process = FakeProcess()
+        process.stdin, process.stdout = io.BytesIO(), io.BytesIO()
+        return process
+
+    def test_fd_close_failure_after_windows_creation_keeps_actual_stop(self):
+        process = self.fd_close_windows_process()
+        api = FakeAPI(process)
+        error = OSError("fixture stderr close failed")
+        with self.assertRaises(Exception) as caught:
+            self.discover_with_fd_close_failure(error, windows_api=api, process=process)
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+        self.assertIs(caught.exception, error)
+        self.assertIs(self.fd_close_child, process)
+        self.assertEqual(api.events[:3], ["create", ("assign", 77, 42), ("resume", 42)])
+        self.assertIn(("terminate", 77), api.events)
+        self.assertEqual(api.events[-1], ("close", 77))
+        self.assertTrue(process._buddy_job.empty_confirmed)
+        self.assertTrue(process.stdin.closed)
+        self.assertTrue(process.stdout.closed)
+
+    def test_fd_close_failure_after_windows_creation_keeps_unknown_stop(self):
+        process = self.fd_close_windows_process()
+        api = FakeAPI(process)
+        api.fail_at = "active"
+        error = OSError("fixture stderr close failed")
+        with self.assertRaises(Exception) as caught:
+            self.discover_with_fd_close_failure(error, windows_api=api, process=process)
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+        self.assertIs(caught.exception, error)
+        self.assertIs(self.fd_close_child, process)
+        self.assertIn(("terminate", 77), api.events)
+        self.assertIsNotNone(process._buddy_job.handle)
+        self.assertFalse(process._buddy_job.empty_confirmed)
+        self.assertTrue(process.stdout.closed)
+        api.fail_at = None  # Private synthetic teardown can now observe the Job.
+
+    def test_fd_close_failure_before_windows_creation_keeps_no_child_stop(self):
+        api = FakeAPI(FakeProcess())
+        error = OSError("fixture stderr close failed")
+        with self.assertRaises(Exception) as caught:
+            self.discover_with_fd_close_failure(error, windows_api=api)
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+        self.assertIs(caught.exception, error)
+        self.assertIsNone(self.fd_close_child)
+        self.assertEqual(api.events, ["create", ("close", 77)])
+        self.assertEqual(caught.exception.__context__.code, "adapter-unavailable")
+
+    def test_fd_close_failure_after_windows_ownership_failure_keeps_unknown_stop(self):
+        process = self.fd_close_windows_process()
+        api = FakeAPI(process)
+        api.fail_at = "assign"
+        error = OSError("fixture stderr close failed")
+        with mock.patch.object(process, "kill", side_effect=OSError("fixture kill refused")):
+            with self.assertRaises(Exception) as caught:
+                self.discover_with_fd_close_failure(error, windows_api=api, process=process)
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+        self.assertIs(caught.exception, error)
+        self.assertIsNone(self.fd_close_child)
+        self.assertTrue(caught.exception.__context__.owned_popen_evidence.created)
+        self.assertFalse(caught.exception.__context__.owned_popen_evidence.shutdown_confirmed)
+
+    def test_fd_close_failure_with_stop_error_keeps_owned_handle_unknown(self):
+        process = self.fd_close_windows_process()
+        api = FakeAPI(process)
+        close_error = OSError("fixture stderr close failed")
+        stop_error = OSError("fixture wait observation failed")
+        with mock.patch.object(process, "wait", side_effect=stop_error):
+            with self.assertRaises(Exception) as caught:
+                self.discover_with_fd_close_failure(close_error, windows_api=api, process=process)
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+        self.assertIs(caught.exception, stop_error)
+        self.assertIs(caught.exception.__context__, close_error)
+        self.assertIs(self.fd_close_child, process)
+        self.assertIsNotNone(process._buddy_job.handle)
+        self.assertTrue(process.stdout.closed)
+
+    @unittest.skipIf(os.name == "nt", "POSIX private-process regression")
+    def test_fd_close_failure_after_posix_creation_keeps_actual_stop(self):
+        error = OSError("fixture stderr close failed")
+        with self.assertRaises(Exception) as caught:
+            self.discover_with_fd_close_failure(error)
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+        self.assertIs(caught.exception, error)
+        self.assertIsNotNone(self.fd_close_child)
+        self.assertIsNotNone(self.fd_close_child.poll())
+        self.assertTrue(self.fd_close_child.stdout.closed)
+
+    @unittest.skipIf(os.name == "nt", "POSIX private-process regression")
+    def test_fd_close_failure_after_posix_creation_keeps_unknown_stop(self):
+        error = OSError("fixture stderr close failed")
+        real_killpg = os.killpg
+
+        def killpg(pgid, sig):
+            if self.fd_close_child is not None and pgid == self.fd_close_child.pid and sig == 0:
+                raise PermissionError("fixture group observation refused")
+            return real_killpg(pgid, sig)
+
+        with mock.patch.object(os, "killpg", side_effect=killpg):
+            with self.assertRaises(Exception) as caught:
+                self.discover_with_fd_close_failure(error)
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+        self.assertIs(caught.exception, error)
+        self.assertIsNotNone(self.fd_close_child)
+        self.assertIsNotNone(self.fd_close_child.poll())
+        self.assertTrue(self.fd_close_child.stdout.closed)
+
+    def test_original_non_native_read_error_keeps_confirmed_stop(self):
+        self.broken_snapshot()
+        with self.assertRaises(KeyError) as caught:
+            self.discover()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+        self.assertEqual(caught.exception.args, ('sessionId',))
+
+    def test_native_read_error_keeps_confirmed_stop(self):
+        call = native_run.NativeConnection.call
+        def rejected(connection, method, params):
+            if method == 'session/create':
+                raise native_run.NativeError('invalid-protocol', 'fixture protocol failure')
+            return call(connection, method, params)
+        with mock.patch.object(native_run.NativeConnection, 'call', rejected):
+            with self.assertRaises(native_run.NativeError) as caught:
+                self.discover()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+        self.assertEqual(caught.exception.code, 'invalid-protocol')
+
+    def test_read_error_keeps_unconfirmed_stop(self):
+        self.broken_snapshot()
+        stop = native_run._stop_native
+        def unobserved(spawn, deadline):
+            stop(spawn, deadline)  # Actually reap the private fixture.
+            return False, True
+        with mock.patch.object(native_run, '_stop_native', side_effect=unobserved):
+            with self.assertRaises(KeyError) as caught:
+                self.discover()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+
+    def test_abnormal_exit_keeps_actual_confirmed_stop(self):
+        self.fake.write_text(self.fake.read_text().replace(
+            "send({'id':call['id'],'result':result})",
+            "send({'id':call['id'],'result':result})\n    if method == 'session/close': sys.exit(7)"))
+        with self.assertRaises(native_run.NativeError) as caught:
+            self.discover()
+        self.assertEqual(caught.exception.code, 'native-shutdown-failed')
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_successful_read_with_unconfirmed_stop_is_refused(self):
+        stop = native_run._stop_native
+        def unobserved(spawn, deadline):
+            stop(spawn, deadline)
+            return False, True
+        with mock.patch.object(native_run, '_stop_native', side_effect=unobserved):
+            with self.assertRaises(native_run.NativeError) as caught:
+                self.discover()
+        self.assertEqual(caught.exception.code, 'native-shutdown-failed')
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+
+    def test_preparation_failure_proves_no_child_created(self):
+        with mock.patch.object(native_run, 'private_json', side_effect=OSError('fixture write refused')), \
+             mock.patch.object(native_run, '_spawn_app_server') as spawn:
+            with self.assertRaises(OSError) as caught:
+                self.discover()
+        spawn.assert_not_called()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_spawn_rejection_proves_no_child_created(self):
+        api = FakeAPI(FakeProcess())
+        with self.assertRaises(native_run.NativeError) as caught:
+            self.discover_with_windows_boundary(api)
+        self.assertEqual(api.events, ["create", ("close", 77)])
+        self.assertEqual(caught.exception.code, "adapter-unavailable")
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_windows_job_creation_failure_proves_no_child_created(self):
+        api = FakeAPI(FakeProcess())
+        with mock.patch.object(api, "create_job", side_effect=OSError("fixture job creation refused")):
+            with self.assertRaises(native_run.NativeError) as caught:
+                self.discover_with_windows_boundary(api)
+        self.assertEqual(api.events, [])
+        self.assertEqual(caught.exception.code, "adapter-unavailable")
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_windows_ownership_failure_keeps_observed_cleanup(self):
+        for failure in ("assign", "resume"):
+            with self.subTest(failure=failure):
+                process = FakeProcess()
+                api = FakeAPI(process)
+                api.fail_at = failure
+                with self.assertRaises(native_run.NativeError) as caught:
+                    self.discover_with_windows_boundary(api, process=process)
+                self.assertEqual(process.returncode, 1)
+                self.assertEqual(api.events[-1], ("close", 77))
+                if failure == "assign":
+                    self.assertEqual(process.kills, 1)
+                    self.assertNotIn(("resume", 42), api.events)
+                else:
+                    self.assertIn(("terminate", 77), api.events)
+                    self.assertIn(("active", 77), api.events)
+                self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_windows_ownership_failure_before_registration_keeps_unknown_stop(self):
+        cases = (("assign", "kill"), ("assign", "wait"), ("assign", "close"),
+                 ("resume", "terminate"), ("resume", "wait"), ("resume", "active"),
+                 ("resume", "nonempty"), ("resume", "close"))
+        for failure, cleanup in cases:
+            with self.subTest(failure=failure, cleanup=cleanup):
+                process = FakeProcess()
+                api = FakeAPI(process)
+                api.fail_at = failure
+                target = process if cleanup in ("kill", "wait") else api
+                method = "active" if cleanup == "nonempty" else cleanup
+                options = {"return_value": 1} if cleanup == "nonempty" else {
+                    "side_effect": subprocess.TimeoutExpired("fake", 2) if cleanup == "wait" else OSError("fixture cleanup refused")}
+                with mock.patch.object(target, method, **options):
+                    with self.assertRaises(Exception) as caught:
+                        self.discover_with_windows_boundary(api, process=process)
+                self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+                self.assertTrue(caught.exception.owned_popen_evidence.created)
+                self.assertFalse(caught.exception.owned_popen_evidence.shutdown_confirmed)
+                self.assertIn(("assign", 77, 42), api.events)
+
+    def test_connection_construction_failure_keeps_actual_stop(self):
+        with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')):
+            with self.assertRaises(ValueError) as caught:
+                self.discover()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_connection_construction_failure_keeps_unconfirmed_stop(self):
+        halt = native_run.halt_owned_group
+        def unobserved(process, handle, deadline):
+            halt(process, handle, deadline)
+            return False, True
+        with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')), \
+             mock.patch.object(native_run, 'halt_owned_group', side_effect=unobserved):
+            with self.assertRaises(ValueError) as caught:
+                self.discover()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+
+    def test_actual_failed_discovery_crosses_controller_and_role(self):
+        from hey_my_buddy.buddy.roles import run_execution
+        self.broken_snapshot()
+        os.environ['BUDDY_ZCODE_TEST_CASE'] = 'discovery'
+        with self.assertRaises(BoardError) as caught:
+            run_execution.discover_models('zcode')
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+        self.assertEqual(caught.exception.code, 'ADAPTER_UNAVAILABLE')
+
+    def test_unknown_stop_failure_never_uses_pre_spawn_evidence(self):
+        stop = native_run._stop_native
+        def stopped_without_receipt(spawn, deadline):
+            stop(spawn, deadline)
+            raise ValueError('fixture stop observation failed')
+        with mock.patch.object(native_run, '_stop_native', side_effect=stopped_without_receipt):
+            with self.assertRaises(ValueError) as caught:
+                self.discover()
+        self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)
+
+    def test_unknown_connection_stop_keeps_owned_child_uncertain(self):
+        halt = native_run.halt_owned_group
+        def stopped_without_receipt(process, handle, deadline):
+            halt(process, handle, deadline)
+            raise ValueError('fixture stop observation failed')
+        with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')), \
+             mock.patch.object(native_run, 'halt_owned_group', side_effect=stopped_without_receipt):
+            with self.assertRaises(ValueError) as caught:
+                self.discover()
+        self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)

@@ -25,7 +25,7 @@ class ConsoleObjectiveFixtureTests(unittest.TestCase):
             with fixture_module.SyntheticBoard(root / "state", root / "runtime", SOURCE,
                                                 recipe=fixture_module.Recipe.smoke(), seed=613) as fixture:
                 facts = fixture.initial_facts
-                self.assertEqual(facts["schemaVersion"], 15)
+                self.assertEqual(facts["schemaVersion"], 16)
                 self.assertEqual(facts["governedRuns"], 12)
                 self.assertEqual(facts["counts"]["objectives"], 3)
                 self.assertEqual(facts["plainRecords"], 2)

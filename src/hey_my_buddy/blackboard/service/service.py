@@ -557,8 +557,13 @@ class BoardService(_BaseResource):
             environment = execution_environment(self.store.directory, record['account'], self.harnesses.environment(), purpose='catalog')
             with bound([record], environment=environment):
                 with native_operation(self.store.db, record['account'], 'catalog') as stop:
-                    payload = adapter(name).discover_models()
-                    stop['shutdownConfirmed'] = True
+                    try:
+                        payload = adapter(name).discover_models()
+                    except Exception as error:
+                        stop['shutdownConfirmed'] = getattr(error, 'discovery_shutdown_confirmed', False) is True
+                        raise
+                    else:
+                        stop['shutdownConfirmed'] = True
             # The harness's own observation carries this session's account-status
             # fact; the service never hardcodes a confirmed reading over it.
             native_fact = next((item for item in payload.get('discoveries', [])

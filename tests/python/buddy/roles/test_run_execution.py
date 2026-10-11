@@ -55,6 +55,7 @@ class DiscoveryReceiptTests(unittest.TestCase):
                             "error": "Codex requires an existing ChatGPT account-plan login"},
                            exit_code=1)
         self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
         self.assertEqual(caught.exception.details.get("adapter"), "codex")
         self.assertEqual(caught.exception.message,
                          "Codex requires an existing ChatGPT account-plan login")
@@ -64,6 +65,93 @@ class DiscoveryReceiptTests(unittest.TestCase):
             self._discover({"status": "ok", "catalog": _catalog("codex", "confirmed")},
                            stopped=False)
         self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+
+    def test_a_failed_control_write_proves_no_controller_created(self):
+        with mock.patch.object(run_execution, "private_json", side_effect=OSError("fixture write failed")), \
+             mock.patch.object(run_execution, "launch_controller") as launch:
+            with self.assertRaises(OSError) as caught:
+                run_execution.discover_models("codex")
+        launch.assert_not_called()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_an_unknown_collection_failure_never_implies_stop(self):
+        handle = SimpleNamespace(wait=lambda timeout: 0)
+        with mock.patch.object(run_execution, "launch_controller", return_value=handle), \
+             mock.patch.object(run_execution, "collect_controller", side_effect=ValueError("fixture read failed")):
+            with self.assertRaises(ValueError) as caught:
+                run_execution.discover_models("codex")
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+
+    def test_an_unregistered_discovery_proves_no_controller_created(self):
+        with mock.patch("hey_my_buddy.buddy.harnesses.registry.run_seam", return_value=None):
+            with self.assertRaises(BoardError) as caught:
+                run_execution.discover_models("fixture")
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_environment_failure_proves_no_controller_created(self):
+        with mock.patch('hey_my_buddy.buddy.harnesses.runtime_selection.controller_environment',
+                        side_effect=ValueError('fixture environment failed')), \
+             mock.patch.object(run_execution, 'launch_controller') as launch:
+            with self.assertRaises(ValueError) as caught:
+                run_execution.discover_models('codex')
+        launch.assert_not_called()
+        self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), True)
+
+    def test_directory_creation_failure_proves_no_controller_created(self):
+        error = OSError('fixture catalog directory refused')
+        with mock.patch.object(run_execution.tempfile, 'mkdtemp', side_effect=error), \
+             mock.patch.object(run_execution, 'launch_controller') as launch, \
+             mock.patch.object(run_execution.shutil, 'rmtree') as remove:
+            with self.assertRaises(OSError) as caught:
+                run_execution.discover_models('codex')
+        self.assertIs(caught.exception, error)
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+        launch.assert_not_called()
+        remove.assert_not_called()
+
+    def test_cleanup_failure_after_success_keeps_confirmed_stop(self):
+        remove_directory = run_execution.shutil.rmtree
+        error = OSError('fixture catalog cleanup refused')
+
+        def remove_then_fail(directory):
+            remove_directory(directory)
+            raise error
+
+        with mock.patch.object(run_execution.shutil, 'rmtree', side_effect=remove_then_fail):
+            with self.assertRaises(OSError) as caught:
+                self._discover({'status': 'ok', 'catalog': _catalog('codex', 'confirmed')})
+        self.assertIs(caught.exception, error)
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+
+    def test_cleanup_failure_after_refusal_keeps_confirmed_stop_and_reason(self):
+        remove_directory = run_execution.shutil.rmtree
+        error = OSError('fixture catalog cleanup refused')
+
+        def remove_then_fail(directory):
+            remove_directory(directory)
+            raise error
+
+        with mock.patch.object(run_execution.shutil, 'rmtree', side_effect=remove_then_fail):
+            with self.assertRaises(OSError) as caught:
+                self._discover({'status': 'error', 'error': 'fixture native refusal'}, exit_code=1)
+        self.assertIs(caught.exception, error)
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+        self.assertIsInstance(caught.exception.__context__, BoardError)
+        self.assertEqual(caught.exception.__context__.message, 'fixture native refusal')
+
+    def test_unknown_stop_retains_directory_without_cleanup(self):
+        with tempfile.TemporaryDirectory(dir=os.environ.get('BUDDY_CHECKS_TMPDIR', '/tmp')) as temporary:
+            directory = Path(temporary) / 'catalog'
+            directory.mkdir()
+            with mock.patch.object(run_execution.tempfile, 'mkdtemp', return_value=str(directory)), \
+                 mock.patch.object(run_execution.shutil, 'rmtree', wraps=run_execution.shutil.rmtree) as remove:
+                with self.assertRaises(BoardError) as caught:
+                    self._discover({'status': 'error', 'error': 'fixture unknown stop'},
+                                   exit_code=1, stopped=False)
+            remove.assert_not_called()
+            self.assertTrue(directory.is_dir())
+            self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
 
 
 class CodexModelCheckProjectionTests(unittest.TestCase):

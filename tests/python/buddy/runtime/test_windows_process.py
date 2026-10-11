@@ -15,6 +15,7 @@ from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError, Conn
 from hey_my_buddy.buddy.runtime.windows_process import (
     CREATE_NEW_PROCESS_GROUP,
     CREATE_SUSPENDED,
+    ProcessCreationEvidence,
     owned_popen,
 )
 
@@ -103,8 +104,9 @@ class WindowsProcessTests(unittest.TestCase):
         api = FakeAPI(process)
         api.fail_at = "assign"
         with mock.patch("hey_my_buddy.buddy.runtime.windows_process.subprocess.Popen", return_value=process):
-            with self.assertRaises(OSError):
+            with self.assertRaises(OSError) as caught:
                 owned_popen(["child"], windows_api=api)
+        self.assertEqual(caught.exception.owned_popen_evidence, ProcessCreationEvidence(True, True, 1))
         self.assertEqual(process.kills, 1)
         self.assertNotIn(("resume", 42), api.events)
         self.assertEqual(api.events[-1], ("close", 77))
@@ -113,20 +115,94 @@ class WindowsProcessTests(unittest.TestCase):
         with mock.patch("hey_my_buddy.buddy.runtime.windows_process.WindowsAPI", side_effect=OSError("unavailable")), \
              mock.patch("hey_my_buddy.buddy.runtime.windows_process.subprocess.Popen") as popen, \
              mock.patch("hey_my_buddy.buddy.runtime.windows_process.os.name", "nt"):
-            with self.assertRaises(OSError):
+            with self.assertRaises(OSError) as caught:
                 owned_popen(["child"])
         popen.assert_not_called()
+        self.assertEqual(caught.exception.owned_popen_evidence, ProcessCreationEvidence(False, True, None))
+
+    def test_job_creation_failure_proves_no_child_created(self):
+        api = FakeAPI(FakeProcess())
+        error = OSError("fixture job creation refused")
+        with mock.patch.object(api, "create_job", side_effect=error), \
+             mock.patch("hey_my_buddy.buddy.runtime.windows_process.subprocess.Popen") as popen:
+            with self.assertRaises(OSError) as caught:
+                owned_popen(["child"], windows_api=api)
+        popen.assert_not_called()
+        self.assertIs(caught.exception, error)
+        self.assertEqual(error.owned_popen_evidence, ProcessCreationEvidence(False, True, None))
+
+    def test_popen_failure_proves_no_child_even_if_empty_job_close_fails(self):
+        for close_fails in (False, True):
+            with self.subTest(close_fails=close_fails):
+                api = FakeAPI(FakeProcess())
+                error = OSError("fixture process creation refused")
+                with mock.patch("hey_my_buddy.buddy.runtime.windows_process.subprocess.Popen", side_effect=error), \
+                     mock.patch.object(api, "close", side_effect=OSError("fixture close refused") if close_fails else None):
+                    with self.assertRaises(OSError) as caught:
+                        owned_popen(["child"], windows_api=api)
+                self.assertIs(caught.exception, error)
+                self.assertEqual(error.owned_popen_evidence, ProcessCreationEvidence(False, True, None))
+                self.assertEqual(api.events, ["create"])
+
+    def test_posix_popen_failure_carries_no_child_evidence(self):
+        if os.name == "nt":
+            self.skipTest("POSIX only")
+        error = OSError("fixture process creation refused")
+        with mock.patch("hey_my_buddy.buddy.runtime.windows_process.subprocess.Popen", side_effect=error):
+            with self.assertRaises(OSError) as caught:
+                owned_popen(["child"])
+        self.assertIs(caught.exception, error)
+        self.assertEqual(error.owned_popen_evidence, ProcessCreationEvidence(False, True, None))
 
     def test_resume_failure_terminates_assigned_job(self):
         process = FakeProcess()
         api = FakeAPI(process)
         api.fail_at = "resume"
         with mock.patch("hey_my_buddy.buddy.runtime.windows_process.subprocess.Popen", return_value=process):
-            with self.assertRaises(OSError):
+            with self.assertRaises(OSError) as caught:
                 owned_popen(["child"], windows_api=api)
+        self.assertEqual(caught.exception.owned_popen_evidence, ProcessCreationEvidence(True, True, 1))
         self.assertLess(api.events.index(("assign", 77, 42)), api.events.index(("resume", 42)))
         self.assertIn(("terminate", 77), api.events)
         self.assertEqual(api.events[-1], ("close", 77))
+
+    def test_assignment_failure_with_unknown_cleanup_carries_created_evidence(self):
+        for failure in ("kill", "wait", "close"):
+            with self.subTest(failure=failure):
+                process = FakeProcess()
+                api = FakeAPI(process)
+                api.fail_at = "assign"
+                target = api if failure == "close" else process
+                error = subprocess.TimeoutExpired("fake", 2) if failure == "wait" else OSError("fixture cleanup refused")
+                with mock.patch("hey_my_buddy.buddy.runtime.windows_process.subprocess.Popen", return_value=process), \
+                     mock.patch.object(target, failure, side_effect=error):
+                    with self.assertRaises(RuntimeError) as caught:
+                        owned_popen(["child"], windows_api=api)
+                evidence = caught.exception.owned_popen_evidence
+                self.assertEqual(evidence, ProcessCreationEvidence(True, False, process.returncode))
+                self.assertEqual(caught.exception.__cause__.args, ("assign failed",))
+                self.assertIn(("assign", 77, 42), api.events)
+                self.assertNotIn(("resume", 42), api.events)
+
+    def test_resume_failure_with_unknown_cleanup_carries_created_evidence(self):
+        for failure in ("terminate", "wait", "active", "nonempty", "close"):
+            with self.subTest(failure=failure):
+                process = FakeProcess()
+                api = FakeAPI(process)
+                api.fail_at = "resume"
+                target = process if failure == "wait" else api
+                method = "active" if failure == "nonempty" else failure
+                options = {"return_value": 1} if failure == "nonempty" else {
+                    "side_effect": subprocess.TimeoutExpired("fake", 2) if failure == "wait" else OSError("fixture cleanup refused")}
+                with mock.patch("hey_my_buddy.buddy.runtime.windows_process.subprocess.Popen", return_value=process), \
+                     mock.patch.object(target, method, **options):
+                    with self.assertRaises(RuntimeError) as caught:
+                        owned_popen(["child"], windows_api=api)
+                self.assertEqual(caught.exception.owned_popen_evidence,
+                                 ProcessCreationEvidence(True, False, process.returncode))
+                self.assertEqual(caught.exception.__cause__.args, ("resume failed",))
+                self.assertIn(("assign", 77, 42), api.events)
+                self.assertIn(("resume", 42), api.events)
 
     def test_live_descendant_and_failed_observation_do_not_confirm_shutdown(self):
         process = FakeProcess()

@@ -15,6 +15,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -33,6 +35,8 @@ from hey_my_buddy.buddy.harnesses.codex.home import remove_coding_auth
 from hey_my_buddy.buddy.harnesses.codex.native_run import RunServices, run, run_discovery
 from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
 from hey_my_buddy.buddy.harnesses.registry import worker_format
+from hey_my_buddy.buddy.harnesses.runtime_selection import bound
+from hey_my_buddy.buddy.runtime import windows_process
 from hey_my_buddy.buddy.harnesses.run_contract import (
     FEEDBACK_CONTINUE,
     FEEDBACK_STOP,
@@ -50,6 +54,7 @@ from hey_my_buddy.buddy.roles.run_observers import CORRECTION_SUFFIX, FastCorrec
 from hey_my_buddy.buddy.roles.structured_call import correction_code
 from hey_my_buddy.buddy.roles.turn_io import input_hash
 from hey_my_buddy.errors import BoardError
+from buddy.runtime.test_windows_process import FakeAPI, FakeProcess
 
 FIXTURE = Path(__file__).parent / "fixtures/mock_codex.py"
 FAST_FIXTURE = Path(__file__).parent / "fixtures/no_tool_codex.py"
@@ -292,7 +297,7 @@ class FastSeamTests(SeamCase):
                 self.assertIsNone(result.model_started)
                 self.assertIsNone(result.effective_policy.tools)
 
-    def test_an_unrunnable_executable_reports_spawn_never_happened(self):
+    def test_an_unrunnable_executable_fails_native_creation_without_a_child(self):
         garbage = self.base / "not-a-cli"
         garbage.write_bytes(b"\x00\x01not an executable")
         garbage.chmod(0o755)
@@ -304,6 +309,7 @@ class FastSeamTests(SeamCase):
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "adapter-unavailable")
+        self.assertIn("could not start", result.end.message)
         self.assertIsNone(result.model_started)
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "gone")
@@ -881,6 +887,197 @@ class WorkerSeamTests(CodexSeamCase):
         remove_coding_auth(self.base / "worker-native")
 
 
+class DiscoveryBoundaryTests(unittest.TestCase):
+    """Private commands and the actual public probe/owned-creation boundaries."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='buddy-codex-discovery-boundary-',
+                                                dir=os.environ.get('BUDDY_CHECKS_TMPDIR', '/tmp'))
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
+        self.command = self.base / 'native.py'
+        self.command.write_text("import sys, time\nif '--version' in sys.argv:\n    print('fixture-version')\nelse:\n    time.sleep(60)\n")
+        self.home = self.base / 'home'
+        self.home.mkdir()
+        environment = {**os.environ, 'HOME': str(self.home), 'CODEX_HOME': str(self.home / '.codex')}
+        environment.pop('BUDDY_CODEX_CLI', None)
+        environment.pop('BUDDY_HARNESS_RECORD_FILE', None)
+        self.environment = environment
+        context = mock.patch.dict(os.environ, environment, clear=True)
+        context.start()
+        self.addCleanup(context.stop)
+        self.record = {'adapter': 'codex', 'status': 'ready', 'command': [sys.executable, str(self.command)]}
+
+    def discover(self):
+        with bound([self.record], environment=self.environment):
+            return run_discovery(cwd=str(self.base), invocation_root=self.base / 'invocation',
+                                 native_root=self.base / 'native', timeout_seconds=2, cancelled=lambda: False)
+
+    def keep_child_for_teardown(self, before=None):
+        create = native_run.owned_popen
+
+        def owned(*args, **kwargs):
+            if before is not None:
+                before(kwargs)
+            child = create(*args, **kwargs)
+            handle = ProcessHandle(child, own_group=True, log_paths={})
+
+            def reap():
+                native_run._halt_owned_group(child, handle, time.monotonic() + 5)
+                child.stdout.close()
+            self.addCleanup(reap)
+            return child
+        return mock.patch.object(native_run, 'owned_popen', side_effect=owned)
+
+    def test_missing_command_proves_no_native_child(self):
+        self.record.update(status='unavailable', command=[], reasonCode='HARNESS_UNAVAILABLE', remedy='fixture no harness')
+        with mock.patch('hey_my_buddy.buddy.harnesses.discovery.probe') as probe, \
+             mock.patch.object(native_run, 'owned_popen') as create:
+            with self.assertRaises(BoardError) as caught:
+                self.discover()
+        self.assertEqual(caught.exception.code, 'ADAPTER_UNAVAILABLE')
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+        probe.assert_not_called()
+        create.assert_not_called()
+
+    def test_private_directory_failure_proves_no_native_child(self):
+        ensure = native_run.ensure_private_dir
+        for failed in ('invocation', 'native'):
+            with self.subTest(directory=failed):
+                error = OSError('fixture private directory refused')
+
+                def prepare(path):
+                    if path.name == failed:
+                        raise error
+                    return ensure(path)
+
+                with mock.patch.object(native_run, 'ensure_private_dir', side_effect=prepare), \
+                     mock.patch('hey_my_buddy.buddy.harnesses.discovery.probe') as probe, \
+                     mock.patch.object(native_run, 'owned_popen') as create:
+                    with self.assertRaises(OSError) as caught:
+                        self.discover()
+                self.assertIs(caught.exception, error)
+                self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+                probe.assert_not_called()
+                create.assert_not_called()
+
+    def test_native_environment_failure_proves_no_native_child(self):
+        error = ValueError('fixture native environment refused')
+        with mock.patch.object(native_run, 'native_environment', side_effect=error), \
+             mock.patch('hey_my_buddy.buddy.harnesses.discovery.probe') as probe, \
+             mock.patch.object(native_run, 'owned_popen') as create:
+            with self.assertRaises(ValueError) as caught:
+                self.discover()
+        self.assertIs(caught.exception, error)
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+        probe.assert_not_called()
+        create.assert_not_called()
+
+    def test_app_server_creation_failure_consumes_no_child_receipt(self):
+        popen = subprocess.Popen
+
+        def refuse_app(argv, **kwargs):
+            if 'app-server' in argv:
+                raise OSError('fixture native creation refused')
+            return popen(argv, **kwargs)
+
+        with mock.patch.object(windows_process.subprocess, 'Popen', side_effect=refuse_app), \
+             mock.patch.object(native_run, 'Connection') as connection:
+            with self.assertRaises(CodexProtocolError) as caught:
+                self.discover()
+        connection.assert_not_called()
+        self.assertEqual(caught.exception.code, 'adapter-unavailable')
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+
+    def windows_ownership_failure(self, *, stopped):
+        process = FakeProcess()
+        api = FakeAPI(process)
+        api.fail_at = 'assign'
+        popen = subprocess.Popen
+
+        def create(argv, **kwargs):
+            if 'app-server' not in argv:
+                return popen(argv, **kwargs)
+            self.assertTrue(kwargs['creationflags'] & windows_process.CREATE_SUSPENDED)
+            return process
+
+        def owned(*args, **kwargs):
+            return windows_process.owned_popen(*args, windows_api=api, **kwargs)
+
+        with mock.patch.object(native_run, 'owned_popen', side_effect=owned), \
+             mock.patch.object(windows_process.subprocess, 'Popen', side_effect=create), \
+             mock.patch.object(native_run, 'Connection') as connection:
+            if stopped:
+                with self.assertRaises(CodexProtocolError) as caught:
+                    self.discover()
+                self.assertEqual(process.kills, 1)
+                self.assertEqual(caught.exception.code, 'adapter-unavailable')
+            else:
+                with mock.patch.object(process, 'kill', side_effect=OSError('fixture native kill refused')):
+                    with self.assertRaises(RuntimeError) as caught:
+                        self.discover()
+                self.assertEqual(caught.exception.owned_popen_evidence,
+                                 windows_process.ProcessCreationEvidence(True, False, None))
+            connection.assert_not_called()
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, stopped)
+
+    def test_windows_creation_before_registration_keeps_unknown_stop(self):
+        self.windows_ownership_failure(stopped=False)
+
+    def test_windows_creation_before_registration_keeps_confirmed_cleanup(self):
+        self.windows_ownership_failure(stopped=True)
+
+    def test_connection_failure_keeps_owned_cleanup_fact(self):
+        error = ValueError('fixture connection refused')
+        with self.keep_child_for_teardown(), \
+             mock.patch.object(native_run, 'Connection', side_effect=error):
+            with self.assertRaises(ValueError) as caught:
+                self.discover()
+        self.assertIs(caught.exception, error)
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+
+    def test_connection_failure_with_unknown_halt_keeps_unknown_stop(self):
+        halt = native_run._halt_owned_group
+
+        def halt_without_evidence(process, handle, deadline):
+            halt(process, handle, deadline)
+            raise ValueError('fixture stop observation failed')
+
+        with self.keep_child_for_teardown(), \
+             mock.patch.object(native_run, 'Connection', side_effect=ValueError('fixture connection refused')), \
+             mock.patch.object(native_run, '_halt_owned_group', side_effect=halt_without_evidence):
+            with self.assertRaises(ValueError) as caught:
+                self.discover()
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
+
+    def test_stderr_close_failure_after_creation_keeps_owned_cleanup(self):
+        close = os.close
+        app_fd = None
+        failed = False
+
+        def remember_fd(kwargs):
+            nonlocal app_fd
+            app_fd = kwargs['stderr']
+
+        error = OSError('fixture stderr close refused')
+
+        def close_then_fail(fd):
+            nonlocal failed
+            close(fd)
+            if fd == app_fd and not failed:
+                failed = True
+                raise error
+
+        with self.keep_child_for_teardown(before=remember_fd), \
+             mock.patch.object(native_run.os, 'close', side_effect=close_then_fail), \
+             mock.patch.object(native_run, 'Connection') as connection:
+            with self.assertRaises(OSError) as caught:
+                self.discover()
+        connection.assert_not_called()
+        self.assertIs(caught.exception, error)
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+
+
 class DiscoverySeamTests(SeamCase):
     def setUp(self):
         super().setUp()
@@ -923,6 +1120,18 @@ class DiscoverySeamTests(SeamCase):
                 self.discover("unknown")
         self.assertEqual(unknown.exception.code, "invalid-catalog")
         self.assertIs(unknown.exception.discovery_shutdown_confirmed, False)
+
+    def test_discovery_stop_observation_failure_keeps_unknown_stop(self):
+        halt = native_run._halt_owned_group
+
+        def halt_without_evidence(process, handle, deadline):
+            halt(process, handle, deadline)
+            raise ValueError('fixture stop observation failed')
+
+        with mock.patch.object(native_run, '_halt_owned_group', side_effect=halt_without_evidence):
+            with self.assertRaises(ValueError) as caught:
+                self.discover('unknown-stop')
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
 
 
 class CatalogTrustTests(CodexSeamCase):

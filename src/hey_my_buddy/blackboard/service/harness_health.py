@@ -228,8 +228,15 @@ class HarnessHealth:
             try:
                 from ..catalog.accounts import native_operation
                 with native_operation(self.board.db, old['account'], 'health') as stop:
-                    record = _discover(name, old['manualPath'], environment)
-                    stop['shutdownConfirmed'] = record.get('reasonCode') != 'shutdown-unverified'
+                    try:
+                        record = _discover(name, old['manualPath'], environment)
+                    except Exception as error:
+                        stop['shutdownConfirmed'] = getattr(error, 'discovery_shutdown_confirmed', False) is True
+                        raise
+                    else:
+                        # The bounded probe returns shutdown-unverified whenever
+                        # its owned process could not be confirmed stopped.
+                        stop['shutdownConfirmed'] = record.get('reasonCode') != 'shutdown-unverified'
             except Exception:
                 record = {'adapter': name, 'status': 'unhealthy', 'reasonCode': 'HARNESS_HANDSHAKE_FAILED',
                           'remedy': 'Repair the native CLI installation and run buddy adapters with refresh:true'}

@@ -616,3 +616,61 @@ class StaleRereadServiceCallbackTests(BoardTestCase):
         self.assertFalse(again['available'], 'The failed native re-read speaks through the record')
         self.assertEqual(again['reasonCode'], 'CATALOG_UNAVAILABLE')
         self.assertEqual(health.get('dsh')['revision'], again['revision'])
+
+
+class HealthNativeStopTests(BoardTestCase):
+    def setUp(self):
+        super().setUp()
+        from hey_my_buddy.blackboard.store.store import BoardStore
+        self.board = BoardStore(self.directory / 'native-stop-health')
+        self.board.initialize()
+        self.health = HarnessHealth(self.board)
+        self.addCleanup(self.health.close)
+        self.enterContext(patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={}))
+
+    def operations(self):
+        import json
+        with self.board.db.read() as db:
+            return [json.loads(row[0]) for row in db.execute("SELECT value FROM meta WHERE key LIKE 'account-operation:%'")]
+
+    def invoke(self, value):
+        def read(*args):
+            self.assertEqual([r['status'] for r in self.operations()], ['active'])
+            if isinstance(value, Exception):
+                raise value
+            return value
+        with patch('hey_my_buddy.blackboard.service.harness_health._discover', side_effect=read):
+            return self.health.refresh('codex', force=True)
+
+    def fail_read(self, stopped):
+        error = ValueError('fixture probe failed')
+        if stopped is not None:
+            error.discovery_shutdown_confirmed = stopped
+        self.invoke(error)
+
+    def test_read_failure_with_confirmed_stop_removes_operation(self):
+        self.fail_read(True)
+        self.assertEqual(self.operations(), [])
+
+    def test_read_failure_with_unconfirmed_stop_retains_uncertain(self):
+        self.fail_read(False)
+        self.assertEqual([r['status'] for r in self.operations()], ['uncertain'])
+
+    def test_read_failure_without_stop_evidence_retains_uncertain(self):
+        self.fail_read(None)
+        self.assertEqual([r['status'] for r in self.operations()], ['uncertain'])
+
+    def test_shutdown_unverified_return_retains_uncertain(self):
+        self.invoke({'adapter': 'codex', 'status': 'unhealthy', 'reasonCode': 'shutdown-unverified'})
+        self.assertEqual([r['status'] for r in self.operations()], ['uncertain'])
+
+    def test_failed_probe_with_confirmed_stop_removes_operation(self):
+        self.invoke({'adapter': 'codex', 'status': 'unhealthy', 'reasonCode': 'timeout'})
+        self.assertEqual(self.operations(), [])
+
+    def test_invalid_return_after_confirmed_stop_removes_operation(self):
+        from hey_my_buddy.errors import BoardError
+        with self.assertRaises(BoardError) as caught:
+            self.invoke({'adapter': 'codex', 'status': 'illegal'})
+        self.assertEqual(caught.exception.code, 'HARNESS_INVALID_RESULT')
+        self.assertEqual(self.operations(), [])

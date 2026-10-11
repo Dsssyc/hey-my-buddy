@@ -58,7 +58,6 @@ CATALOG_REMEDY = "Run buddy adapters with refresh:true"
 #: enabled gate keeps its own separate reason.
 CATALOG_UNAVAILABLE_REASON = "catalog-unavailable"
 
-_PENDING_PREFIX = "catalog-pending:"
 _READ_AT_PREFIX = "catalog-read-at:"
 _ACCOUNT_STATUS_PREFIX = "catalog-account-status:"
 _SCAN_AFTER_PREFIX = "catalog-scan-after:"
@@ -213,99 +212,40 @@ def catalog_account_matches(db, adapter: str, *, account: dict | None = None) ->
 def _pending_map(db, adapter: str) -> dict:
     if not catalog_account_matches(db, adapter):
         return {}
-    row = db.execute("SELECT value FROM meta WHERE key=?", (_PENDING_PREFIX + adapter,)).fetchone()
-    if row is None:
-        return {}
-    try:
-        saved = json.loads(row[0])
-    except ValueError:
-        return {}
-    return saved if isinstance(saved, dict) else {}
-
-
-def _pending_entry(value: Any) -> dict:
-    """One pending entry: the first absence plus the last legal efforts.
-
-    The legal efforts are the ones the last trusted reading still declared when
-    the model first went absent; a later health reason is never native metadata
-    (ADR-027 rule 2). A legacy plain timestamp keeps its time, without efforts.
-    """
-    if isinstance(value, dict):
-        efforts = value.get("efforts")
-        return {"since": value.get("since") if isinstance(value.get("since"), str) else None,
-                "efforts": sorted({item for item in efforts if isinstance(item, str)}) if isinstance(efforts, list) else None}
-    if isinstance(value, str):
-        return {"since": value, "efforts": None}
-    return {"since": None, "efforts": None}
+    return {_family_key(row["provider"], row["model"]):
+            {"since": row["since"], "efforts": json.loads(row["efforts_json"])}
+            for row in db.execute("SELECT provider,model,since,efforts_json FROM catalog_pending WHERE adapter=?",
+                                  (adapter,))}
 
 
 def _write_pending_map(db, adapter: str, pending: dict) -> None:
     from ...json_codec import canonical_json
 
-    db.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-               (_PENDING_PREFIX + adapter, canonical_json(pending)))
+    db.execute("DELETE FROM catalog_pending WHERE adapter=?", (adapter,))
+    db.executemany("INSERT INTO catalog_pending(adapter,provider,model,since,efforts_json) VALUES(?,?,?,?,?)",
+                   [(adapter, *key.split("\x1f"), value["since"], canonical_json(value["efforts"]))
+                    for key, value in pending.items()])
 
 
 def pending_families(db) -> dict[tuple[str, str, str], str]:
-    """Model families awaiting disappearance confirmation, with their first absence.
-
-    ADR-027 rule 2 keys the pending state by adapter/provider/model identity, so
-    an effort-only change is never a model disappearance.
-    """
-    families: dict[tuple[str, str, str], str] = {}
-    for row in db.execute("SELECT key FROM meta WHERE key LIKE ?", (_PENDING_PREFIX + "%",)):
-        adapter = row["key"][len(_PENDING_PREFIX):]
-        for name, value in _pending_map(db, adapter).items():
-            provider, _, model = name.partition("\x1f")
-            since = _pending_entry(value)["since"]
-            if since:
-                families[(adapter, provider, model)] = since
-    return families
+    """Pending model families and their first absence, scoped to the current account."""
+    return {(row["adapter"], row["provider"], row["model"]): row["since"]
+            for row in db.execute("SELECT adapter,provider,model,since FROM catalog_pending")
+            if catalog_account_matches(db, row["adapter"])}
 
 
 def pending_model_efforts(db, adapter: str, provider: str, model: str) -> list[str] | None:
-    """Legal efforts retained for a pending model family, or None when not pending.
-
-    The recorded last legal efforts of the window lead; the retained profiles
-    are only a defensive fallback, so explicit validation keeps working through
-    health noise without adopting a health reason as native metadata.
-    """
+    """The legal efforts frozen at first absence, or None when not pending."""
     value = _pending_map(db, adapter).get(_family_key(provider, model))
-    if value is None:
-        return None
-    efforts = _pending_entry(value)["efforts"]
-    if efforts is not None:
-        return list(efforts)
-    rows = db.execute(
-        "SELECT effort FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=?"
-        " AND available=1 ORDER BY effort",
-        (adapter, provider, model)).fetchall()
-    return [row["effort"] for row in rows] or None
+    return value["efforts"] if value is not None else None
 
 
 def catalog_read_at(db, adapter: str) -> str | None:
-    """When this harness catalog was last confirmed (trusted) reading, if ever.
-
-    ADR-027 legacy boards recorded trusted catalogs before the confirmed-read
-    keys existed. Their read time comes from the existing catalog record: the
-    row's own time while the adopted reading is current, otherwise the time of
-    the discovery it still retains. An unknown reading never masquerades as a
-    successful one (it keeps the retained discovery and its time), a switched
-    account binding never inherits the old account's time, and a board without
-    an adopted discovery stays without a read time (cold start).
-    """
+    """When an actual trusted catalog reading was applied; legacy times prove nothing."""
     if not catalog_account_matches(db, adapter):
         return None
     row = db.execute("SELECT value FROM meta WHERE key=?", (_READ_AT_PREFIX + adapter,)).fetchone()
-    if row is not None:
-        return row[0]
-    current = db.execute(
-        "SELECT c.status, c.updated_at, c.discovery_id, d.discovered_at FROM catalog_current c"
-        " LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.adapter=?",
-        (adapter,)).fetchone()
-    if current is None or current["discovery_id"] is None or current["discovered_at"] is None:
-        return None
-    return current["updated_at"] if current["status"] == "complete" else current["discovered_at"]
+    return row[0] if row is not None else None
 
 
 def identities_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, str, str]]:
@@ -572,9 +512,16 @@ def discover(*, directory: Path, database=None) -> dict:
                     continue
                 from .accounts import native_operation
                 with native_operation(database, selected_health['account'], 'catalog') if database and selected_health and selected_health.get('account') else nullcontext() as stop:
-                    payload = canonical_payload(instance.discover_models())
-                    if stop is not None:
-                        stop['shutdownConfirmed'] = True
+                    try:
+                        payload = instance.discover_models()
+                    except Exception as error:
+                        if stop is not None:
+                            stop['shutdownConfirmed'] = getattr(error, 'discovery_shutdown_confirmed', False) is True
+                        raise
+                    else:
+                        if stop is not None:
+                            stop['shutdownConfirmed'] = True
+            payload = canonical_payload(payload)
             if any(entry["adapter"] != name for entry in payload["providers"]):
                 raise BoardError("CATALOG_INVALID", "A harness advertised another adapter identity")
         except BoardError as error:

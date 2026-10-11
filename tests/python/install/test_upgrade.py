@@ -145,7 +145,12 @@ class UpgradeTests(BoardTestCase):
              mock.patch('hey_my_buddy.blackboard.tasks.storage.prune_old_runtimes', return_value={'complete':True}):
             result = upgrade.upgrade({})
         self.assertFalse(result['upgraded'], result)
-        self.assertEqual(result['failure'], 'INJECTED')
+        self.assertNotIn('failure', result)
+        reason = result['error']['details']['reason']
+        self.assertEqual(reason, {'code':'INJECTED', 'message':'target failed', 'details':{'tables':[]}})
+        journal = json.loads((state / 'upgrade-last.json').read_text())
+        self.assertEqual(journal['phase'], 'rolled-back')
+        self.assertEqual(journal['failure'], reason)
         self.assertEqual((old / 'session.jsonl').read_text(), 'retained session')
         self.assertFalse((private_dirs.attempt_root(state, 'dsh', task_id, 'attempt') / 'sessions').exists())
         self.assertEqual(relocation_started, [True])
@@ -240,6 +245,13 @@ class UpgradeTests(BoardTestCase):
             result = upgrade.upgrade({})
         self.assertEqual(result['error']['code'], 'UPGRADE_NOT_IDLE')
         self.assertEqual(result['error']['details']['active'][0]['runId'], 'raced')
+        self.assertNotIn('failure', result)
+        reason = result['error']['details']['reason']
+        self.assertEqual(reason, {'code':'UPGRADE_NOT_IDLE', 'message':'raced task',
+                                 'details':{'active':[{'runId':'raced', 'state':'queued'}], 'tables':[]}})
+        journal = json.loads((state / 'upgrade-last.json').read_text())
+        self.assertEqual(journal['phase'], 'not-switched')
+        self.assertEqual(journal['failure'], reason)
         detach.assert_not_called()
         create.assert_not_called()
         self.assertFalse((state / 'upgrade.json').exists())

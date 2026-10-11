@@ -80,7 +80,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]), patch.object(
-                discovery, "_probe", wraps=discovery._probe
+                discovery, "probe", wraps=discovery.probe
             ) as probe:
                 result = discovery.discover("zcode", manual_path=str(launcher), environment={"PATH": ""})
             self.assertEqual(result["status"], "ready")
@@ -324,7 +324,12 @@ class HarnessDiscoveryTests(unittest.TestCase):
             # A slow OS reaper may not close the inherited pipe within the
             # cleanup budget. It must remain unavailable with honest evidence.
             self.assertIn(result["reasonCode"], ("scan-timeout", "shutdown-unverified"))
-            self.assertIn(signal.SIGKILL, [call.args[1] for call in kill_group.call_args_list])
+            self.assertIn(signal.SIGTERM, [call.args[1] for call in kill_group.call_args_list])
+            groups = {call.args[0] for call in kill_group.call_args_list}
+            self.assertTrue(groups)
+            for pgid in groups:
+                with self.assertRaises(ProcessLookupError):
+                    os.killpg(pgid, 0)
 
     @unittest.skipIf(os.name == "nt", "POSIX process-group assertion")
     def test_total_deadline_covers_multiple_candidates(self):
@@ -406,3 +411,215 @@ class HarnessDiscoveryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProbeStopEvidenceTests(unittest.TestCase):
+    def test_snapshot_failure_proves_no_probe_created(self):
+        with patch.object(discovery, 'candidate_snapshot', side_effect=ValueError('fixture snapshot failed')), \
+             patch.object(discovery, 'probe') as probe:
+            with self.assertRaises(ValueError) as caught:
+                discovery.discover('codex', environment={'PATH': ''})
+        probe.assert_not_called()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_candidate_preparation_failure_proves_no_probe_created(self):
+        candidate = {'path': '/fixture/codex', 'source': 'manual', 'fingerprint': {}, 'exists': True}
+        with patch.object(discovery, '_script_uses_node', side_effect=ValueError('fixture input failed')), \
+             patch.object(discovery, 'probe') as probe:
+            with self.assertRaises(ValueError) as caught:
+                discovery._candidate_handshake('codex', candidate, {}, time.monotonic() + 1)
+        probe.assert_not_called()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_unknown_probe_exception_never_implies_stop(self):
+        candidate = {'path': '/fixture/codex', 'source': 'manual', 'fingerprint': {}, 'exists': True}
+        with patch.object(discovery, '_script_uses_node', return_value=False), \
+             patch.object(discovery, '_launch_command', return_value=['/fixture/codex']), \
+             patch.object(discovery, 'probe', side_effect=ValueError('fixture unknown process state')):
+            with self.assertRaises(ValueError) as caught:
+                discovery._candidate_handshake('codex', candidate, {}, time.monotonic() + 1)
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+
+    def test_post_probe_error_keeps_confirmed_stop(self):
+        candidate = {'path': '/fixture/codex', 'source': 'manual', 'fingerprint': {}, 'exists': True}
+        with patch.object(discovery, '_script_uses_node', return_value=False), \
+             patch.object(discovery, '_launch_command', return_value=['/fixture/codex']), \
+             patch.object(discovery, 'probe', return_value=(None, b'codex 1.0')), \
+             patch.object(discovery, '_VERSION') as version:
+            version.search.side_effect = ValueError('fixture version parsing failed')
+            with self.assertRaises(ValueError) as caught:
+                discovery._candidate_handshake('codex', candidate, {}, time.monotonic() + 1)
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_scan_keeps_probe_exception_stop_evidence(self):
+        candidate = {'path': '/fixture/codex', 'source': 'manual', 'fingerprint': {}, 'exists': True}
+        for stopped in (True, False):
+            with self.subTest(stopped=stopped):
+                error = ValueError('fixture probe failed')
+                error.discovery_shutdown_confirmed = stopped
+                with patch.object(discovery, 'candidate_snapshot', return_value={'candidates': [candidate]}), \
+                     patch.object(discovery, '_candidate_handshake', side_effect=error):
+                    with self.assertRaises(ValueError) as caught:
+                        discovery.discover('codex', environment={'PATH': ''})
+                self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), stopped)
+
+    def test_login_text_cannot_hide_unverified_shutdown(self):
+        candidate = {'path': '/fixture/cli', 'source': 'manual', 'fingerprint': {}, 'exists': True}
+        for adapter, output in (('codex', b'Not logged in'), ('claude', b'{"loggedIn":false}')):
+            with self.subTest(adapter=adapter), \
+                 patch.object(discovery, '_script_uses_node', return_value=False), \
+                 patch.object(discovery, '_launch_command', return_value=['/fixture/cli']), \
+                 patch.object(discovery, 'probe', side_effect=[(None, b'fixture 1.0'), ('shutdown-unverified', output)]):
+                result = discovery._candidate_handshake(adapter, candidate, {}, time.monotonic() + 1)
+            self.assertEqual(result['reasonCode'], 'shutdown-unverified')
+
+    def test_adjacent_node_unverified_stop_cannot_fall_through(self):
+        with patch.object(discovery, '_variants', return_value=[Path('/fixture/node')]), \
+             patch.object(discovery, 'file_fingerprint', return_value={}), \
+             patch.object(discovery, '_launch_command', return_value=['/fixture/node']), \
+             patch.object(discovery, 'probe', return_value=('shutdown-unverified', b'')), \
+             patch.object(discovery, '_discover') as scan:
+            node, reason = discovery._node_for(Path('/fixture/cli'), {}, time.monotonic() + 1)
+        self.assertIsNone(node)
+        self.assertEqual(reason, 'shutdown-unverified')
+        scan.assert_not_called()
+
+    def test_node_scan_unverified_stop_overrides_previous_failure(self):
+        with patch.object(discovery, '_variants', return_value=[Path('/fixture/node')]), \
+             patch.object(discovery, 'file_fingerprint', return_value={}), \
+             patch.object(discovery, '_launch_command', return_value=['/fixture/node']), \
+             patch.object(discovery, 'probe', return_value=('probe-failed', b'')), \
+             patch.object(discovery, '_discover', return_value={'available': False, 'status': 'unhealthy',
+                                                              'reasonCode': 'shutdown-unverified'}):
+            node, reason = discovery._node_for(Path('/fixture/cli'), {}, time.monotonic() + 1)
+        self.assertIsNone(node)
+        self.assertEqual(reason, 'shutdown-unverified')
+
+    def probe_exception(self, stopped, *, eof=True, scan=False):
+        with tempfile.TemporaryDirectory() as directory:
+            cli = HarnessDiscoveryTests().executable(Path(directory) / 'cli', 'import time\ntime.sleep(20)\n')
+            selector = discovery.selectors.DefaultSelector()
+            select = selector.select
+            first = True
+            def failed_once(timeout):
+                nonlocal first
+                if first:
+                    first = False
+                    raise ValueError('fixture reader failed')
+                return select(timeout) if eof else []
+            terminate = discovery._terminate_group
+            def actual_stop(process):
+                result = terminate(process)
+                self.assertTrue(result)
+                return stopped
+            with patch.object(discovery.selectors, 'DefaultSelector', return_value=selector), \
+                 patch.object(selector, 'select', side_effect=failed_once), \
+                 patch.object(discovery, '_terminate_group', side_effect=actual_stop):
+                with self.assertRaises(ValueError) as caught:
+                    if scan:
+                        with patch.object(discovery, '_home', return_value=Path(directory)), \
+                             patch.object(discovery, '_common_dirs', return_value=[]), \
+                             patch.object(discovery, '_app_paths', return_value=[]):
+                            discovery.discover('zcode', manual_path=str(cli), environment={'PATH': ''})
+                    else:
+                        discovery.probe([str(cli)], dict(os.environ), deadline=time.monotonic() + 1)
+            return caught.exception
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX private probe')
+    def test_actual_probe_exception_keeps_confirmed_stop(self):
+        self.assertIs(getattr(self.probe_exception(True), "discovery_shutdown_confirmed", None), True)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX private probe')
+    def test_actual_probe_exception_keeps_unconfirmed_stop(self):
+        self.assertIs(getattr(self.probe_exception(False), "discovery_shutdown_confirmed", None), False)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX private probe')
+    def test_normal_exit_without_group_stop_evidence_is_unverified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cli = HarnessDiscoveryTests().executable(Path(directory) / 'cli', 'print("fixture 1.0")\n')
+            terminate = discovery._terminate_group
+            def unobserved(process):
+                self.assertTrue(terminate(process))
+                return False
+            with patch.object(discovery, '_terminate_group', side_effect=unobserved):
+                code, output = discovery.probe([str(cli)], dict(os.environ), deadline=time.monotonic() + 1)
+        self.assertEqual((code, output), ('shutdown-unverified', b''))
+
+    def test_node_probe_exception_keeps_actual_stop(self):
+        for stopped in (True, False):
+            with self.subTest(stopped=stopped):
+                error = ValueError('fixture node probe failed')
+                error.discovery_shutdown_confirmed = stopped
+                with patch.object(discovery, '_variants', return_value=[Path('/fixture/node')]), \
+                     patch.object(discovery, 'file_fingerprint', return_value={}), \
+                     patch.object(discovery, '_launch_command', return_value=['/fixture/node']), \
+                     patch.object(discovery, 'probe', side_effect=error):
+                    with self.assertRaises(ValueError) as caught:
+                        discovery._node_for(Path('/fixture/cli'), {}, time.monotonic() + 1)
+                self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), stopped)
+
+    def test_dsh_probe_exception_keeps_actual_stop(self):
+        from hey_my_buddy.buddy.harnesses.base import ProcessHandle
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            cli = HarnessDiscoveryTests().executable(root / 'dsh', 'print("dsh 1.0")\n')
+            for stopped in (True, False):
+                with self.subTest(stopped=stopped):
+                    private = root / ('probe-' + str(stopped))
+                    private.mkdir()
+                    observe = ProcessHandle.shutdown_confirmed
+                    def actual_stop(handle, **kwargs):
+                        actual = observe(handle, **kwargs)
+                        return actual and stopped
+                    with patch.object(discovery.tempfile, 'mkdtemp', return_value=str(private)), \
+                         patch.object(discovery, '_probe_posix', side_effect=ValueError('fixture reader failed')), \
+                         patch.object(ProcessHandle, 'shutdown_confirmed', actual_stop):
+                        with self.assertRaises(ValueError) as caught:
+                            discovery._probe_dsh_version([str(cli)], {'PATH': ''}, time.monotonic() + 1)
+                    self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), stopped)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX private probe')
+    def test_probe_exception_without_eof_keeps_unconfirmed_stop(self):
+        self.assertIs(getattr(self.probe_exception(True, eof=False), 'discovery_shutdown_confirmed', None), False)
+
+    def test_node_early_failure_proves_no_probe_created(self):
+        with patch.object(discovery, '_variants', side_effect=ValueError('fixture node input failed')):
+            with self.assertRaises(ValueError) as caught:
+                discovery._node_for(Path('/fixture/cli'), {}, time.monotonic() + 1)
+        self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), True)
+
+    def test_scan_unknown_candidate_failure_keeps_unconfirmed_stop(self):
+        candidate = {'path': '/fixture/codex', 'source': 'manual', 'fingerprint': {}, 'exists': True}
+        with patch.object(discovery, 'candidate_snapshot', return_value={'candidates': [candidate]}), \
+             patch.object(discovery, '_candidate_handshake', side_effect=ValueError('fixture unknown stop')):
+            with self.assertRaises(ValueError) as caught:
+                discovery.discover('codex', environment={'PATH': ''})
+        self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)
+
+    def test_node_unknown_probe_failure_keeps_unconfirmed_stop(self):
+        with patch.object(discovery, '_variants', return_value=[Path('/fixture/node')]), \
+             patch.object(discovery, 'file_fingerprint', return_value={}), \
+             patch.object(discovery, '_launch_command', return_value=['/fixture/node']), \
+             patch.object(discovery, 'probe', side_effect=ValueError('fixture unknown stop')):
+            with self.assertRaises(ValueError) as caught:
+                discovery._node_for(Path('/fixture/cli'), {}, time.monotonic() + 1)
+        self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)
+
+    def test_node_environment_failure_proves_no_probe_created(self):
+        with patch.object(discovery, '_variants', return_value=[Path('/fixture/node')]), \
+             patch.object(discovery, 'file_fingerprint', return_value={}), \
+             patch.object(discovery, '_launch_command', return_value=['/fixture/node']), \
+             patch.object(discovery, 'native_environment', side_effect=ValueError('fixture environment failed')), \
+             patch.object(discovery, 'probe') as probe:
+            with self.assertRaises(ValueError) as caught:
+                discovery._node_for(Path('/fixture/cli'), {}, time.monotonic() + 1)
+        probe.assert_not_called()
+        self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), True)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX private scan')
+    def test_actual_scan_probe_exception_keeps_confirmed_stop(self):
+        self.assertIs(getattr(self.probe_exception(True, scan=True), 'discovery_shutdown_confirmed', None), True)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX private scan')
+    def test_actual_scan_probe_exception_keeps_unconfirmed_stop(self):
+        self.assertIs(getattr(self.probe_exception(False, scan=True), 'discovery_shutdown_confirmed', None), False)

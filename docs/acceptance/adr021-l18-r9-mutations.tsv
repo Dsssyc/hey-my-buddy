@@ -1,0 +1,64 @@
+kind	id	test_ids	baseline_unittest_exit	changed_unittest_exit	wrapper_exit	result	evidence	notes
+binding	final-source					固定源码/测试/夹具/runner 摘要	tmp/adr021-l18-round2/r9/mutations/*/binding.json	source SHA-256=315de06cbcc50e54786cdee9d69f6979103f42c45172ef5f039a904287b81cee；每项各自保留完整 baseline/src、mutated/src、测试和精确替换
+verification	r9-old-shell	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_short_lived_background_child_preserves_success	1		1	旧代码实际功能断言失败	tmp/adr021-l18-round2/r9-old-shell.log	精确 /bin/sh 后台 sleep 命令返回 shutdown-unverified，预期 None/1.2.3；退出后实际进程组消失
+verification	r9-old-final-fixtures	buddy.harnesses.test_discovery_stop_timing	1		1	10 项：9 个目标断言失败、1 项通过、0 个 ERROR	tmp/adr021-l18-round2/r9/old-red/tmp/adr021-l18-round2/old-final-fixtures.log	原实现配最终测试的私有源码重放；初版夹具的清理/时序错误不计为目标检出
+verification	r9-final-focused	buddy.harnesses.test_discovery_stop_timing;buddy.harnesses.test_harness_discovery	0		1	48 项通过（原模块 39、新模块当时 9）	tmp/adr021-l18-round2/r9-final-focused.log	随后只改新模块排空 helper，原模块和产品源码未变
+verification	r9-final-drain	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_timeout_refreshes_group_fact_after_actual_pipe_eof;buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_reader_exception_refreshes_group_fact_after_actual_pipe_eof	0		1	最终排空 helper 的 2 项通过	tmp/adr021-l18-round2/r9-final-drain.log	最终编号共 49；没有重跑未受后续改动影响的选择；每项变异另有最终测试绿色基线
+mutation	one-round	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_group_disappearance_is_observed_after_delayed_reap	0	1	1/1	目标 AssertionError 检出；无环境/导入/清理 ERROR	tmp/adr021-l18-round2/r9/mutations/one-round/result.json	删掉后续轮次；延迟回收的真实组没有被确认为已停
+mutation	signals-once	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_term_fork_joining_after_first_kill_is_stopped_by_later_signal	0	1	1/1	目标 AssertionError 检出；无环境/导入/清理 ERROR	tmp/adr021-l18-round2/r9/mutations/signals-once/result.json	每种信号只发一次；TERM 分叉且忽略 TERM 的晚加入成员存活，功能断言拒绝
+mutation	budget-overrun	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_unreaped_real_group_exhausts_stop_budget_without_confirmation	0	1	1/1	目标 AssertionError 检出；无环境/导入/清理 ERROR	tmp/adr021-l18-round2/r9/mutations/budget-overrun/result.json	停止预算 1 秒变 2 秒；实际未回收组违反耗时上限
+mutation	expiry-assumes-stop	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_unreaped_real_group_exhausts_stop_budget_without_confirmation	0	1	1/1	目标 AssertionError 检出；无环境/导入/清理 ERROR	tmp/adr021-l18-round2/r9/mutations/expiry-assumes-stop/result.json	预算耗尽谎报已停；真实未回收组的探测错误发布成功
+mutation	stale-timeout-fact	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_timeout_refreshes_group_fact_after_actual_pipe_eof	0	1	1/1	目标 AssertionError 检出；无环境/导入/清理 ERROR	tmp/adr021-l18-round2/r9/mutations/stale-timeout-fact/result.json	排空后不再观察组；实际 EOF/停止后仍误报 shutdown-unverified
+mutation	stale-exception-fact	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_reader_exception_refreshes_group_fact_after_actual_pipe_eof	0	1	1/1	目标 AssertionError 检出；无环境/导入/清理 ERROR	tmp/adr021-l18-round2/r9/mutations/stale-exception-fact/result.json	异常排空后不再观察；原读取异常的真实最终停止标记错误
+mutation	dsh-preliminary-stop	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_dsh_final_owned_stop_preserves_success_output	0	1	1/1	目标 AssertionError 检出；无环境/导入/清理 ERROR	tmp/adr021-l18-round2/r9/mutations/dsh-preliminary-stop/result.json	采用早期停止结论；最终 owned handle 已停仍误报且丢失输出
+mutation	dsh-discards-read-error	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_dsh_final_owned_stop_preserves_pipe_error	0	1	1/1	目标 AssertionError 检出；无环境/导入/清理 ERROR	tmp/adr021-l18-round2/r9/mutations/dsh-discards-read-error/result.json	最终已停就清空读取错误；pipe-failed 被误改为成功
+mutation	dsh-discards-output	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_dsh_final_owned_stop_preserves_success_output	0	1	1/1	目标 AssertionError 检出；无环境/导入/清理 ERROR	tmp/adr021-l18-round2/r9/mutations/dsh-discards-output/result.json	最终已停却丢弃成功读取的版本输出
+mutation	dsh-ignores-final-stop	buddy.harnesses.test_harness_discovery.HarnessDiscoveryTests.test_dsh_version_probe_retains_its_directory_when_stop_is_unknown	0	1	1/1	目标 AssertionError 检出；无环境/导入/清理 ERROR	tmp/adr021-l18-round2/r9/mutations/dsh-ignores-final-stop/result.json	忽略最终 owned handle 的未知事实；已有私有真实进程断言拒绝
+repeat	stable-repeat-1	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_short_lived_background_child_preserves_success;buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_term_fork_joining_after_first_kill_is_stopped_by_later_signal	0		1	精确后台子进程及 TERM 晚加入子进程 2 项通过	tmp/adr021-l18-round2/r9/repeat-1/tmp/adr021-l18-round2/stable-repeat.log	真实信号/进程组；登记子进程由 guardian waitpid 回收，PID 和组均实查消失
+repeat	stable-repeat-2	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_short_lived_background_child_preserves_success;buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_term_fork_joining_after_first_kill_is_stopped_by_later_signal	0		1	精确后台子进程及 TERM 晚加入子进程 2 项通过	tmp/adr021-l18-round2/r9/repeat-2/tmp/adr021-l18-round2/stable-repeat.log	真实信号/进程组；登记子进程由 guardian waitpid 回收，PID 和组均实查消失
+test-id-summary	8de5ee9f					40→49；新增 10；消失 1	tmp/adr021-l18-round2/r9/test-id-deltas.json	只比较本项两个探测模块；df9318f3 为本模块累计差，不是宏任务全仓清单
+test-id-added	8de5ee9f	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_dsh_final_owned_stop_preserves_nonzero_exit_output				编号差		真实时序回归替代 mock-only 进程组判断
+test-id-added	8de5ee9f	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_dsh_final_owned_stop_preserves_pipe_error				编号差		真实时序回归替代 mock-only 进程组判断
+test-id-added	8de5ee9f	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_dsh_final_owned_stop_preserves_success_output				编号差		真实时序回归替代 mock-only 进程组判断
+test-id-added	8de5ee9f	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_dsh_final_owned_stop_preserves_timeout				编号差		真实时序回归替代 mock-only 进程组判断
+test-id-added	8de5ee9f	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_group_disappearance_is_observed_after_delayed_reap				编号差		真实时序回归替代 mock-only 进程组判断
+test-id-added	8de5ee9f	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_reader_exception_refreshes_group_fact_after_actual_pipe_eof				编号差		真实时序回归替代 mock-only 进程组判断
+test-id-added	8de5ee9f	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_short_lived_background_child_preserves_success				编号差		真实时序回归替代 mock-only 进程组判断
+test-id-added	8de5ee9f	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_term_fork_joining_after_first_kill_is_stopped_by_later_signal				编号差		真实时序回归替代 mock-only 进程组判断
+test-id-added	8de5ee9f	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_timeout_refreshes_group_fact_after_actual_pipe_eof				编号差		真实时序回归替代 mock-only 进程组判断
+test-id-added	8de5ee9f	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_unreaped_real_group_exhausts_stop_budget_without_confirmation				编号差		真实时序回归替代 mock-only 进程组判断
+test-id-removed	8de5ee9f	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_reaped_parent_with_surviving_group_is_not_confirmed				编号差		真实时序回归替代 mock-only 进程组判断
+test-id-summary	df9318f3					19→49；新增 30；消失 0	tmp/adr021-l18-round2/r9/test-id-deltas.json	只比较本项两个探测模块；df9318f3 为本模块累计差，不是宏任务全仓清单
+test-id-added	df9318f3	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_dsh_final_owned_stop_preserves_nonzero_exit_output				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_dsh_final_owned_stop_preserves_pipe_error				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_dsh_final_owned_stop_preserves_success_output				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_dsh_final_owned_stop_preserves_timeout				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_group_disappearance_is_observed_after_delayed_reap				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_reader_exception_refreshes_group_fact_after_actual_pipe_eof				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_short_lived_background_child_preserves_success				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_term_fork_joining_after_first_kill_is_stopped_by_later_signal				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_timeout_refreshes_group_fact_after_actual_pipe_eof				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_discovery_stop_timing.DiscoveryStopTimingTests.test_unreaped_real_group_exhausts_stop_budget_without_confirmation				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_actual_probe_exception_keeps_confirmed_stop				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_actual_probe_exception_keeps_unconfirmed_stop				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_actual_scan_probe_exception_keeps_confirmed_stop				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_actual_scan_probe_exception_keeps_unconfirmed_stop				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_adjacent_node_unverified_stop_cannot_fall_through				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_candidate_preparation_failure_proves_no_probe_created				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_dsh_probe_exception_keeps_actual_stop				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_login_text_cannot_hide_unverified_shutdown				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_node_early_failure_proves_no_probe_created				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_node_environment_failure_proves_no_probe_created				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_node_probe_exception_keeps_actual_stop				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_node_scan_unverified_stop_overrides_previous_failure				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_node_unknown_probe_failure_keeps_unconfirmed_stop				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_normal_exit_without_group_stop_evidence_is_unverified				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_post_probe_error_keeps_confirmed_stop				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_probe_exception_without_eof_keeps_unconfirmed_stop				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_scan_keeps_probe_exception_stop_evidence				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_scan_unknown_candidate_failure_keeps_unconfirmed_stop				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_snapshot_failure_proves_no_probe_created				编号差		本模块累计差
+test-id-added	df9318f3	buddy.harnesses.test_harness_discovery.ProbeStopEvidenceTests.test_unknown_probe_exception_never_implies_stop				编号差		本模块累计差
+boundary	real-process-fixtures					实际 POSIX；不是 Windows 或真实 harness/账户验证	tests/python/buddy/harnesses/test_discovery_stop_timing.py	注册 guardian/member/newborn；TERM fork 通过临时独立组和文件 join gate 确定性模拟首轮 KILL 后的成员；没有 mock killpg 返回值或把缺 PID 当停止
+boundary	global-residue-observation		0		1	未验证，待 Host	tmp/adr021-l18-round2/r9-final-focused.json	沙盒 ps 枚举拒绝导致所有绿色包装器退出 1；unittest 和已登记合成进程的清理分别有实际证据；全局残留须 Host 在固定 Git 产物补观察/复跑
+boundary	outside-excerpts					误写外部临时源码摘录，待 Host 机械清理	tmp/adr021-l18-round2/r9/external-excerpts.json	两份非运行源码副本；具体路径及 SHA-256 只留忽略 tmp 与回合请求；Worker 没有删除文件

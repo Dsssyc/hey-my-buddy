@@ -42,6 +42,7 @@ from ....errors import BoardError
 from ....json_codec import canonical_json, decode_strict_json
 from ....private_dirs import ensure_private_dir
 from ...roles.turn_io import private_json
+from ..version import VersionShutdownError, probe_version
 from ..base import BoundSessionServices, ProcessHandle
 from ...runtime.windows_process import owned_popen
 from ....protocol.internal_models import OptionalFrozenJsonAt
@@ -633,8 +634,9 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     other native failure, so the owned group is never left unwatched. The
     moment ``owned_popen`` succeeds this helper is the only holder: it records
     the handle on ``owned`` and, if anything fails before the connection
-    exists, it stops what it started itself and reports those stop facts —
-    no child is ever left alive by a lost handle.
+    exists, it stops what it started itself and reports those stop facts.
+    Failures inside ``owned_popen`` carry creation/cleanup evidence before
+    registration, including a suspended child whose stop remains unknown.
     """
     from ..discovery import native_environment
     root = ensure_private_dir(native_root)
@@ -655,35 +657,43 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     environment.update({"ZCODE_STORAGE_DIR": str(root / "storage"), "ZCODE_SESSION_DB_PATH": str(root / "sessions.sqlite"),
                         "ZCODE_LOG_DIR": str(private / "native-logs"), "ZCODE_LOG_CONSOLE": "0",
                         "ZCODE_MODEL_TELEMETRY_ENABLED": "0"})
-    try:
-        version_result = subprocess.run([*command, "--version"], env=environment, cwd=cwd, capture_output=True, timeout=5)
-        version = version_result.stdout.decode(errors="replace").strip()[:80] if version_result.returncode == 0 else None
-    except subprocess.TimeoutExpired:
-        # Version text is optional metadata. A slow --version probe must not
-        # suppress the actual native capability/catalog handshake below.
-        version = None
+    version = probe_version(command, environment, cwd=cwd, deadline=deadline, owned=owned)
     fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    process = None
     try:
-        process = owned_popen([*command, "app-server", "--cwd", cwd], env=environment,
-                              cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=fd,
-                              start_new_session=True, close_fds=True)
-    except OSError:
-        raise NativeError("adapter-unavailable", "The selected ZCode executable could not start") from None
-    finally:
-        os.close(fd)
-    handle = ProcessHandle(process, own_group=True, log_paths={})
-    if owned is not None:
-        owned[:] = [handle]
-    try:
+        try:
+            try:
+                process = owned_popen([*command, "app-server", "--cwd", cwd], env=environment,
+                                      cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=fd,
+                                      start_new_session=True, close_fds=True)
+            except BaseException as error:
+                evidence = error.owned_popen_evidence
+                if owned is not None:
+                    owned[:] = [{"created": evidence.created, "shutdown": evidence.shutdown_confirmed,
+                                 "exit_code": evidence.exit_code}]
+                if isinstance(error, OSError):
+                    raise NativeError("adapter-unavailable", "The selected ZCode executable could not start") from None
+                raise
+            # Take the actual process/group handle before releasing the stderr
+            # descriptor: descriptor cleanup can fail after successful creation.
+            handle = ProcessHandle(process, own_group=True, log_paths={})
+            if owned is not None:
+                owned[:] = [handle]
+        finally:
+            os.close(fd)
         connection = NativeConnection(process, deadline, cancel, no_tools=no_tools)
     except BaseException:
-        # The connection setup failed after the child existed: this helper is
-        # still the only holder, so it stops the group itself and leaves the
-        # observed stop facts for the result before re-raising.
-        shutdown, _signalled = halt_owned_group(process, handle, time.monotonic() + 5.0)
-        if owned is not None:
-            owned[:] = [{"created": True, "shutdown": shutdown,
-                         "exit_code": process.returncode}]
+        # Every failure after creation, including fd close and connection setup,
+        # follows the same owned-group stop. A failed stop observation leaves the
+        # actual handle registered, never the initial no-child receipt.
+        if process is not None:
+            try:
+                shutdown, _signalled = halt_owned_group(process, handle, time.monotonic() + 5.0)
+                if owned is not None:
+                    owned[:] = [{"created": True, "shutdown": shutdown,
+                                 "exit_code": process.returncode}]
+            finally:
+                process.stdout.close()
         raise
     return _Spawn(process=process, handle=handle, connection=connection, access=access, version=version)
 
@@ -1025,7 +1035,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
         state.reason = "observer-interrupt"
         state.observer_stopped = True
         outcome.record = None
-    except NativeError as error:
+    except (NativeError, VersionShutdownError) as error:
         state.status = "cancelled" if error.code == "cancelled" else "error"
         state.reason = error.code
         state.error_text = str(error)
@@ -1565,46 +1575,52 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
     available-model snapshot and stops the owned process conservatively. The
     return value is the catalog receipt shape consumed by the current callers.
     """
-    deadline = execution_deadline(timeout_seconds)
-    cancel = CancelFlag(cancelled)
-    invocation_root = ensure_private_dir(Path(invocation_root))
-    native_root = ensure_private_dir(Path(native_root))
-    # Discovery's empty workspace retains the native project-input switches
-    # formerly prepared by the outer descriptor. This is native configuration,
-    # not a role prompt or a synthetic run request.
-    ensure_private_dir(Path(cwd) / ".zcode")
-    private_json(Path(cwd) / ".zcode/config.json", {
-        "plugins": {"enabled": False},
-        "features": {"mcp": False, "memory": False, "skill": False, "subagent": False}})
-    stderr_path = invocation_root / _NATIVE_STDERR_FILE
-    spawn = _spawn_app_server(cwd=cwd, invocation_root=invocation_root, native_root=native_root,
-                              deadline=deadline, cancel=cancel, stderr_path=stderr_path, no_tools=True)
-    catalog_value = None
-    error: NativeError | None = None
+    # Explicit initial creation fact, replaced by probe/spawn evidence or the
+    # actual handle. An empty registration list is never proof of no child.
+    owned: list = [{"created": False, "shutdown": True, "exit_code": None}]
+    shutdown = True  # No native app-server has been created yet.
     try:
-        spawn.connection.call("runtime/capabilities", {})
-        workspace = {"workspacePath": cwd, "workspaceKey": cwd}
-        snapshot = spawn.connection.call("session/create", {"workspace": workspace,
-                                                            "titleGenerationEnabled": False,
-                                                            "toolAllowlist": []})
-        session_id = snapshot["session"]["sessionId"]
-        version = spawn.version if spawn.version is not None else "unknown"
-        catalog_value = catalog(snapshot, spawn.access, version)
-        spawn.connection.call("session/close", {"sessionId": session_id})
-    except NativeError as caught:
-        error = caught
-    finally:
-        shutdown, _interrupted = _stop_native(spawn, deadline)
+        deadline = execution_deadline(timeout_seconds)
+        cancel = CancelFlag(cancelled)
+        invocation_root = ensure_private_dir(Path(invocation_root))
+        native_root = ensure_private_dir(Path(native_root))
+        ensure_private_dir(Path(cwd) / ".zcode")
+        private_json(Path(cwd) / ".zcode/config.json", {
+            "plugins": {"enabled": False},
+            "features": {"mcp": False, "memory": False, "skill": False, "subagent": False}})
+        stderr_path = invocation_root / _NATIVE_STDERR_FILE
         try:
-            spawn.process.stdout.close()
-        except OSError:
-            pass
-    if error is not None:
-        raise error
-    if not shutdown or spawn.process.returncode != 0:
-        raise NativeError("native-shutdown-failed",
-                          "the native app server did not exit normally with confirmed group shutdown")
-    return catalog_value
+            spawn = _spawn_app_server(cwd=cwd, invocation_root=invocation_root, native_root=native_root,
+                                      deadline=deadline, cancel=cancel, stderr_path=stderr_path,
+                                      no_tools=True, owned=owned)
+        except Exception:
+            # Creation-boundary receipts include failures before registration;
+            # a retained handle without a cleanup receipt remains unknown.
+            shutdown = isinstance(owned[0], dict) and owned[0]["shutdown"] is True
+            raise
+        shutdown = False
+        try:
+            spawn.connection.call("runtime/capabilities", {})
+            workspace = {"workspacePath": cwd, "workspaceKey": cwd}
+            snapshot = spawn.connection.call("session/create", {"workspace": workspace,
+                                                                "titleGenerationEnabled": False,
+                                                                "toolAllowlist": []})
+            session_id = snapshot["session"]["sessionId"]
+            version = spawn.version if spawn.version is not None else "unknown"
+            catalog_value = catalog(snapshot, spawn.access, version)
+            spawn.connection.call("session/close", {"sessionId": session_id})
+        finally:
+            try:
+                shutdown, _interrupted = _stop_native(spawn, deadline)
+            finally:
+                spawn.process.stdout.close()
+        if not shutdown or spawn.process.returncode != 0:
+            raise NativeError("native-shutdown-failed",
+                              "the native app server did not exit normally with confirmed group shutdown")
+        return catalog_value
+    except Exception as error:
+        error.discovery_shutdown_confirmed = shutdown
+        raise
 
 
 __all__ = [

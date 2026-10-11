@@ -420,7 +420,7 @@ class OutcomeFactTests(CurrentRouterTestCase):
                 raise AssertionError("rollback")
         self.assertEqual(self.event_count(), 0)
         with self.board_.store.db.read() as db:
-            receipts = int(db.execute("SELECT COUNT(*) FROM meta WHERE key LIKE 'router-outcome:%'").fetchone()[0])
+            receipts = int(db.execute("SELECT COUNT(*) FROM router_outcomes").fetchone()[0])
         self.assertEqual(receipts, 0)
         # After the rollback the same outcome records cleanly.
         self.record(A, request="route-1", now=T0)
@@ -438,6 +438,10 @@ class OutcomeFactTests(CurrentRouterTestCase):
 
     def test_task_and_attempt_bind_onto_the_event(self):
         self.add_task("task-1", state="queued")
+        with self.board_.store.db.write() as db:
+            db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,"
+                       "execution_state,adapter,created_at,updated_at)"
+                       " VALUES('att-1','task-1',1,'nonce','claim','executing','decision',?,?)", (T0, T0))
         result = self.record(A, request="route-1", task="task-1", attempt="att-1", now=T0)
         with self.board_.store.db.read() as db:
             row = db.execute("SELECT task_id,attempt_id,payload_json FROM events WHERE seq=?",
@@ -502,8 +506,8 @@ class HistoryProjectionTests(CurrentRouterTestCase):
                                 code="timeout", output={"code": "timeout"}, attempt_state="finished", at=T0)
         self.record(A, request="route-1", task="task-dec-1", attempt="att-dec-1", phase="runtime", now=T0)
         self.assertEqual(self.state(A)["noAnswerCount"], 1)
-        # A fact carrying only the attempt id also suppresses the old record.
-        self.record(A, request="route-2-fact", attempt="att-dec-1", phase="runtime", now=T0)
+        # Another request fact with the same bound attempt also suppresses the old record.
+        self.record(A, request="route-2-fact", task="task-dec-1", attempt="att-dec-1", phase="runtime", now=T0)
         self.assertEqual(self.state(A)["noAnswerCount"], 2)
 
     def test_unattributed_and_program_records_stay_unknown(self):

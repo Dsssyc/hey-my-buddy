@@ -19,9 +19,9 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 #: The one earlier schema that ``upgrade`` migrates in place (see ``migrations``).
-PREVIOUS_SCHEMA_VERSION = 14
+PREVIOUS_SCHEMA_VERSION = 15
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CAPABILITY_VERSION = 1
@@ -1104,8 +1104,68 @@ CREATE TABLE IF NOT EXISTS workflow_host_conclusions (
 );
 """
 HOST_CONCLUSION_INDEX = "CREATE INDEX IF NOT EXISTS workflow_host_conclusions_run_idx ON workflow_host_conclusions(run_id, run_revision)"
+ROUTER_SCHEMA = """
+CREATE TABLE IF NOT EXISTS router_requests (
+    decision_id      TEXT NOT NULL PRIMARY KEY REFERENCES decision_requests(decision_id) ON DELETE RESTRICT,
+    snapshot_json    TEXT NOT NULL,
+    frozen_at        TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS router_dispatches (
+    task_id      TEXT NOT NULL PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    decision_id  TEXT NOT NULL REFERENCES router_requests(decision_id) ON DELETE RESTRICT,
+    router_index INTEGER NOT NULL CHECK (router_index >= 0),
+    profile_id   TEXT NOT NULL,
+    adapter      TEXT NOT NULL,
+    provider     TEXT NOT NULL,
+    model        TEXT NOT NULL,
+    effort       TEXT NOT NULL,
+    document_json TEXT NOT NULL,
+    input_sha256 TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    UNIQUE (decision_id, router_index)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS attempts_router_binding_unique ON attempts(attempt_id, task_id, generation);
+CREATE TABLE IF NOT EXISTS router_claims (
+    attempt_id TEXT NOT NULL PRIMARY KEY,
+    task_id    TEXT NOT NULL REFERENCES router_dispatches(task_id) ON DELETE RESTRICT,
+    generation INTEGER NOT NULL CHECK (generation >= 1),
+    FOREIGN KEY (attempt_id, task_id, generation) REFERENCES attempts(attempt_id, task_id, generation) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+    UNIQUE (task_id, generation)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS attempts_router_outcome_binding_unique ON attempts(attempt_id, task_id);
+CREATE TABLE IF NOT EXISTS router_outcomes (
+    receipt_id   TEXT NOT NULL PRIMARY KEY,
+    plane        TEXT NOT NULL CHECK (plane IN ('work','maintenance','portrait')),
+    request_id   TEXT NOT NULL,
+    router_index INTEGER NOT NULL CHECK (router_index >= 0),
+    profile_id   TEXT NOT NULL,
+    phase        TEXT NOT NULL,
+    task_id      TEXT REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    attempt_id   TEXT,
+    outcome      TEXT NOT NULL CHECK (outcome IN ('answered','no_answer')),
+    code         TEXT,
+    event_seq    INTEGER NOT NULL UNIQUE REFERENCES events(seq) ON DELETE RESTRICT,
+    recorded_at  TEXT NOT NULL,
+    CHECK (attempt_id IS NULL OR task_id IS NOT NULL),
+    FOREIGN KEY (attempt_id, task_id) REFERENCES attempts(attempt_id, task_id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS router_outcomes_profile_idx ON router_outcomes(profile_id, event_seq);
+CREATE INDEX IF NOT EXISTS router_outcomes_task_idx ON router_outcomes(task_id, event_seq);
+CREATE INDEX IF NOT EXISTS router_outcomes_attempt_idx ON router_outcomes(attempt_id);
+"""
+CATALOG_PENDING_SCHEMA = """
+CREATE TABLE IF NOT EXISTS catalog_pending (
+    adapter      TEXT NOT NULL REFERENCES catalog_current(adapter) ON DELETE RESTRICT,
+    provider     TEXT NOT NULL,
+    model        TEXT NOT NULL,
+    since        TEXT NOT NULL,
+    efforts_json TEXT NOT NULL,
+    PRIMARY KEY (adapter, provider, model)
+);
+"""
 SCHEMA = "\n".join((CORE_SCHEMA, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
-                    HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";"))
+                    HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA,
+                    CATALOG_PENDING_SCHEMA))
 
 
 def utc_now() -> str:
@@ -1180,10 +1240,8 @@ class Database:
     # -- lifecycle -----------------------------------------------------------
     def _require_current_schema(self) -> None:
         """Refuse unsupported files before opening a writable/WAL connection."""
-        guidance = (
-            f"This Buddy build accepts only schema {SCHEMA_VERSION}; use a clean state directory "
-            "and retain the existing directory as an archive"
-        )
+        guidance = (f"This build accepts only schema {SCHEMA_VERSION}; schema {PREVIOUS_SCHEMA_VERSION} "
+                    "requires an explicit idle upgrade. Retain other unsupported state as an archive")
         try:
             connection = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
             try:
@@ -1207,7 +1265,8 @@ class Database:
             self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
             os.chmod(self.directory, 0o700)
             with self.connect() as connection:
-                connection.executescript(SCHEMA)
+                if fresh:
+                    connection.executescript(SCHEMA)
                 version = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
                 if version is None:
                     connection.execute("BEGIN IMMEDIATE")

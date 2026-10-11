@@ -2986,7 +2986,7 @@ class BoardStore:
 
     # -- recovery ------------------------------------------------------------
     def reconcile_startup(self) -> dict:
-        """Make every pre-restart in-flight attempt honestly uncertain.
+        """Make pre-restart in-flight attempts and account operations uncertain.
 
         A restarted service never infers "stopped" from an expired lease or a
         missing PID: it marks possible external work uncertain and keeps its
@@ -2995,6 +2995,10 @@ class BoardStore:
         """
         summary = {"uncertain": 0, "retained": 0}
         with self.db.write() as connection:
+            account_operations = connection.execute(
+                "UPDATE meta SET value=json_set(value,'$.status','uncertain')"
+                " WHERE key LIKE 'account-operation:%' AND json_extract(value,'$.status')='active'"
+            ).rowcount
             now = self.now()
             rows = connection.execute(
                 "SELECT * FROM attempts WHERE execution_state IN ('starting','executing','finalizing')"
@@ -3046,7 +3050,7 @@ class BoardStore:
                     "UPDATE workers SET state='lost', revision=revision+1 WHERE worker_id=?", (worker["worker_id"],)
                 )
             head = self._head_of(connection)
-        if summary["uncertain"] or head:
+        if account_operations or summary["uncertain"] or head:
             self._notify(head)
         return summary
 

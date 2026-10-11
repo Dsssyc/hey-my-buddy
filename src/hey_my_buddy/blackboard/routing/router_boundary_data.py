@@ -172,9 +172,7 @@ def router_trials(connection, row, *, now):
         # request binding. Usually a Router dispatch has exactly one attempt.
         bound = []
         for attempt in attempts:
-            binding_row = connection.execute("SELECT value FROM meta WHERE key=?",
-                                             (router_sequence.ATTEMPT_KEY_PREFIX + attempt["attempt_id"],)).fetchone()
-            binding = _json(binding_row[0], {}) if binding_row else {}
+            binding = router_sequence.claim(connection, attempt["attempt_id"]) or {}
             if (binding.get("decisionId") == row["decision_id"] and binding.get("taskId") == task_id
                     and binding.get("attemptId") == attempt["attempt_id"]
                     and binding.get("generation") == attempt["generation"]

@@ -415,7 +415,8 @@ class ClaimTests(RouterDispatchTestCase):
         self.assertEqual(self.meta("attempt-routing-accounts:" + attempt["attemptId"]),
                          {"dsh": {"source": "native", "credentialRevision": 0}})
         self.assertEqual(self.meta("attempt-tool-policy:" + attempt["attemptId"]), {"systemSandbox": False})
-        binding = self.meta("attempt-router:" + attempt["attemptId"])
+        with self.board_.store.db.read() as db:
+            binding = router_sequence.claim(db, attempt["attemptId"])
         self.assertEqual(binding, {"taskId": result["runId"], "attemptId": attempt["attemptId"],
                                    "generation": attempt["generation"], "decisionId": result["decisionId"],
                                    "routerIndex": 0, "profileId": A})
