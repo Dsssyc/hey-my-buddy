@@ -1,10 +1,17 @@
 {
-  "boundary": "Old BoardService named operations in process; synthetic native discovery and worker result input; no daemon/IPC/model/account read. Paths redacted after dump, historical hashes unchanged; fixture supports board reads/conclusions, not filesystem resume/integration.",
+  "boundary": "Old BoardService named operations in process; synthetic native discovery and worker result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, legacy device/inode identities and dependent hashes before upgrade; this preparation is not migration or new native execution. Real host_seal is tested separately; service workflow_conclude after upgrade remains Host verification.",
   "catalogSha256": "97adfc1ebcf05769ba1447a8fdde2bbed248847b1bb3e36b1e07af5bdfa44336",
+  "dependencyMode": "prepared-read-only-interpreter",
+  "dependencyVersions": {
+    "c-two": "0.7.4",
+    "fastdb4py": "0.2.1",
+    "numpy": "2.5.3",
+    "portalocker": "3.2.0"
+  },
   "fixedTimestamp": "2026-01-01T00:00:00.000Z",
-  "format": 1,
-  "generationCommand": "uv run --no-project python packaging/generate-upgrade-fixture.py --offline --work-dir tmp/adr021-l18/run --output-dir tests/fixtures/adr021-l18",
-  "generatorSha256": "8fad21338c421a3860401323af39ed3f7106846ee8755966aa4be558c64b9871",
+  "format": 2,
+  "generationCommand": "python packaging/generate-upgrade-fixture.py --python <prepared-python> --work-dir tmp/adr021-l18/run --output-dir tests/fixtures/adr021-l18",
+  "generatorSha256": "e3d325e68fa3211df845b39f8a6462da82eb78bff41e2c1f78824296438c044c",
   "inputCommit": "df9318f38b732681e1004cf190e71bb4bc25fe17",
   "loadedSourceModules": [
     "src/buddy/account_integrations.py",
@@ -68,7 +75,9 @@
     "src/buddy/workflow.py",
     "src/buddy/workspace.py"
   ],
-  "operationsSha256": "8f267509810336d9b75de8fd96b6f4ce77983d7ce02e5b639412e8307c920f36",
+  "operationsSha256": "4b9c4e11535ff9a8ec72256a9f1ed05a908c347fcb3312ee713f7c4d481d4747",
+  "resourcesSha256": "96218aea97644911e63b81b87bbc08d7065482e62ef52aa1880671d4e74a0ef2",
+  "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 15; baseline only after return",
   "routerSlots": {
     "fast": "codex:openai:fixture-alpha:high",
     "review": "codex:openai:fixture-beta:high"
@@ -190,7 +199,7 @@
   },
   "sourceTree": "2a22fa49324f1315676fbb05d79df014edb5071b",
   "sourceVersion": "0.27.0",
-  "sqlSha256": "564f058712ec8f8be223133a88505437ad9814f09f89e1fffe01fb0b2a5c9719",
+  "sqlSha256": "59d2e866c5ec8b0805605dcb66c9d70d6eca56d5fe426d78deb02521d6ff01f3",
   "stableIds": {
     "accepted": "00000000-0000-0000-0000-00000000000f",
     "cancelled": "00000000-0000-0000-0000-00000000001e",

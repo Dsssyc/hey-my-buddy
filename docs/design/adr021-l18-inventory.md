@@ -68,7 +68,7 @@
 | --- | --- | --- | --- |
 | `workflow_turns.input_json.version` / `outcome_json` 与 `attempts.result_json` 中的 turn.version | `src/buddy/workflow.py:76,4833,5611` | `src/hey_my_buddy/blackboard/tasks/workflow.py:82,5778,6605`；`buddy/roles/turn_io.py:239` | 输入/结果 version 均为 1。旧冻结输入、结构化结果、native provenance 原样保留；后续新回合由新代码重新生成输入，不将历史证据伪装成新 harness 执行。 |
 | version=1 输入 context 新增 sharedStash，以及结果内 version=1 的共享引用比较 | `src/buddy/workflow.py:5313`；`workspace.py:839`（无该证据） | `src/hey_my_buddy/blackboard/tasks/workflow.py:5896,6867,6890`；`tasks/workspace.py:1351,1401,1441` | 新证据仅属于实际被新代码观察的回合。旧行缺少字段代表没有当时的观察，保留缺失，不能在升级时检查仓库后回填历史。 |
-| `workflow_runs.execution_workspace_json`、`workflow_artifacts.manifest_json`、turn 输入/结果中的 manifest 与 output.version=1 / exclusionPolicy.version=1 | `src/buddy/workspace.py:27,73,524,636,839` | `src/hey_my_buddy/blackboard/tasks/workspace.py:29,137,816,1007,1248`；`tasks/workspace_identity.py:31` | 容器仍 version=1，但身份摘要从 `[path,device,inode]` 变为 `[path,inode]`；旧 immutable manifest/摘要/输出不能重写。已存在的独立 identity migration 仅改 objectives.project_id、workspace_reservations 身份投影及新增证明 meta，留原始证据并为不证明的旧身份记录 kept 原因；无真实 inode 的脱敏夹具不能证明身份迁移。 |
+| `workflow_runs.execution_workspace_json`、`workflow_artifacts.manifest_json`、turn 输入/结果中的 manifest 与 output.version=1 / exclusionPolicy.version=1 | `src/buddy/workspace.py:27,73,524,636,839` | `src/hey_my_buddy/blackboard/tasks/workspace.py:29,137,816,1007,1248`；`tasks/workspace_identity.py:31` | 容器仍 version=1，但身份摘要从 `[path,device,inode]` 变为 `[path,inode]`；迁移不能重写旧 immutable manifest/摘要/输出。已存在的独立 identity migration 仅改 objectives.project_id、workspace_reservations 身份投影及新增证明 meta，留原始证据并为不证明的旧身份记录 kept 原因。窄返修的夹具先在私有目录物化资源，按基点身份算法绑定真实 device/inode，再取升级保留基线；这一步是夹具准备，见下节。 |
 | Router 提示文本版本（不是 JSON 版本字段）、decision_requests.input_json / requested_json / output_json、events.payload_json 中 routing facts | `src/buddy/router.py:10,219`；`decision.py:621,745` | `src/hey_my_buddy/blackboard/routing/router.py:11,353`；`src/hey_my_buddy/blackboard/routing/decision.py:622,951`；`router_sequence.py:49,97` | PROMPT_VERSION **10→11**，冻结输入 JSON 没有 promptVersion 字段；由双槽及 fallback 改为列表/索引/重试窗/独立分派。历史冻结请求、input_sha256、answer/evidence/decision.* 不重新编码或归因。新请求用 11。旧非终态请求被升级 idle 边界排除，旧终态历史保留，见前节证据。 |
 | `evaluation_catalog.payload_json.discoveries[*]` 与 catalog 当前投影 | `src/buddy/catalog.py:49,109`；`catalog_store.py:90` | `src/hey_my_buddy/blackboard/catalog/catalog.py:423,481`；`catalog_store.py:109` | 旧无 accountStatus，新有 accountStatus；catalog payload 无显式格式版本。旧 observation/discovery_id 的哈希与 payload 不能改写；在显式升级中给当前可信状态建立诚实的 unknown 边界。后续读取模型目录仍应读出旧 providers/models/efforts，不能把它们删除当换算。 |
 | `attempts.token_usage_json.version=1`、`harness_health.quota_json.version=1`、result.quotaFailure.version=1 / lastAssistantMessage.version=1 | `src/buddy/usage.py:42,204,325,402,433`；`native_observations.py:60` | `src/hey_my_buddy/protocol/usage.py:39,196,317,394,425`；`blackboard/evaluation/native_observations.py:60` | 编码与 version 均不变，normalize 只迁移模块；历史观察、未知 NULL、时间与代际保留。不把移除 activity/native-usage sidecar 的传输路径误当 SQLite JSON 换算。 |
@@ -98,25 +98,47 @@ helper 与常量：schema_version:58 被三个换算函数和迁移测试调用�
 
 ## 固定夹具、生成路径与验证边界
 
-固定 artifact 为 [board.sql](../../tests/fixtures/adr021-l18/board.sql)、[metadata.json](../../tests/fixtures/adr021-l18/metadata.json)、[operations.json](../../tests/fixtures/adr021-l18/operations.json)、[catalog.json](../../tests/fixtures/adr021-l18/catalog.json)、[storage-inventory.json](../../tests/fixtures/adr021-l18/storage-inventory.json) 和 [生成脚本](../../packaging/generate-upgrade-fixture.py)。metadata 记录完整基点/输入提交、基点 tree、锁文件和源文件摘要、实际导入的旧模块、生成脚本与 SQL/目录/操作记录摘要、稳定样本标识、固定假值与边界。operations 逐次保留公开操作的输入/响应，明示模拟 Worker 结果。
+固定 artifact 为 [board.sql](../../tests/fixtures/adr021-l18/board.sql)、[metadata.json](../../tests/fixtures/adr021-l18/metadata.json)、[operations.json](../../tests/fixtures/adr021-l18/operations.json)、[catalog.json](../../tests/fixtures/adr021-l18/catalog.json)、[workspace-resources.json](../../tests/fixtures/adr021-l18/workspace-resources.json)、[storage-inventory.json](../../tests/fixtures/adr021-l18/storage-inventory.json) 和 [生成脚本](../../packaging/generate-upgrade-fixture.py)。metadata format=2 记录基点/输入提交、基点 tree、锁文件和源文件摘要、实际导入的旧模块、生成脚本与固定文本摘要、稳定样本标识、依赖模式/实际版本、固定假值与边界。operations 逐次保留旧公开操作的输入/响应，明示模拟 Worker 结果；原始清点的 verification 与窄返修自查分别存于 [verification.json](../../tests/fixtures/adr021-l18/verification.json)，均不是 Host 验收。
 
-脚本以 `git archive B` 导出未修改源码，`uv sync --frozen --no-install-project --link-mode copy` 准备基点环境，导入 `buddy` 而不是 `hey_my_buddy`。旧 `Database.initialize` 建 schema 15，旧 BoardService 的命名公开操作经过验证、事务、事件和幂等规则写入：harness_set/model_catalog_refresh、evaluation_write_begin/user_policy_publish/assessment_publish、workflow_submit、worker_register/worker_claim/worker_result、workflow_integration_record/workflow_acknowledge、workflow_cancel。没有手写 INSERT 伪造样本或当前 schema。只有外部 native discovery 边界用固定事实代替；没有原生线程/模型实际运行，结果 provenance 是测试输入，不能作为新 harness 能力的验收证据。两个 Router 分别指向不同模拟模型，两槽均经旧公开设置校验写入，default=review，可验证换算后的顺序为 beta、alpha。
+脚本以 `git archive B` 导出未修改源码，默认用 `uv sync --frozen --no-install-project --link-mode copy` 准备基点环境；`--python <prepared-python>` 可复用已经准备好的只读依赖解释器，本轮实际走这一路径。PYTHONPATH 先放本检出的 src 和 tests/python，并显式装载归档的 `buddy` 包，避免同名测试包遮蔽；未用当前 `hey_my_buddy` 建库。旧 `Database.initialize` 建 schema 15，旧 BoardService 的命名公开操作经过验证、事务、事件和幂等规则写入：harness_set/model_catalog_refresh、evaluation_write_begin/user_policy_publish/assessment_publish、workflow_submit、worker_register/worker_claim/worker_result、workflow_integration_record/workflow_acknowledge、workflow_cancel。没有手写 INSERT 伪造样本或当前 schema。外部 native discovery 和 Worker result 用固定测试输入代替；没有原生线程/模型实际运行，结果 provenance 不能作为新 harness 能力的验收证据。两个 Router 分别指向不同模拟模型，两槽均经旧公开设置校验写入，default=review，可验证换算后的顺序为 beta、alpha。
 
 工作区使用仓库中已有的五文件提交 `122ec20edcdeb97cc655ae3993c402c2c9c966a3`，仅用于微任务输入快照，**建库的源码仍全部是 B**。它被导入本轮私有仓库，四个 detached worktree 在同一私有 repository 下，保证同宏任务且独立 checkout；没有创建或移动分支/标签，没有 git commit，也没有修改授权检出的 .git。旧公开 workspace.prepare/seal 产生 refs/buddy 固定快照，不产生新 commit（输入与输出 tree 相等）。脚本保留临时 Git 索引目录，过程数据未清理。
 
 微任务稳定 ID：delivered `00000000-0000-0000-0000-000000000007`，accepted `00000000-0000-0000-0000-00000000000f`，rejected `00000000-0000-0000-0000-000000000017`，cancelled `00000000-0000-0000-0000-00000000001e`。前三个各有 stopped 的模拟 attempt 与完整封存输出；delivered 没有 Host conclusion，accepted 的集成记录为显式 not-required，rejected 的 Host 边界为 awaiting-host。旧 governed API 的验收/打回事件均叫 `workflow.acknowledged`，payload.verdict 分别 accepted/rejected；它没有冒称基点会生成当前新增的 workflow.review_rejected。还有评价、卡片修订、家族备注、模型目录观察/当前指针/可用 profile 和宏任务绑定。
 
-导出通过旧数据库 iterdump，再把本轮工作根替换为 `<fixture-root>`；秘密从首次建库就是固定 ab×32，服务/提交令牌也是固定 fixture 假值。脱敏之后仍原样保留原始 manifest/hash/fingerprint 作为历史字段，没有用当前源码重算旧证据。因路径/设备/inode 的散列由原始旧公开操作产生，样本 ID 稳定不等于跨机器 SQL 字节完全复现。它是看板读取与待结论样本，不是可续跑工作区：文件系统 verify、真实 workspace identity 证明/集成/恢复需另外的私有仓库演练，不能拿占位符证明活目录身份。
+第一版只在旧数据库 iterdump 之后把工作根替换为 `<fixture-root>`，保留原 manifest/hash/fingerprint。Host 的 delivered 结论探针以 `WORKSPACE_MANIFEST_CHANGED` 拒绝；这说明第一版只能载入、读取，原先“待结论样本”的能力描述不足。窄返修重新用同一基点源码及公开操作生成看板，并导出文件系统证据；固定 SQL 仍是模板，不能直接作为活工作区使用，必须经下述还原入口完成绑定。
 
-生成命令（从授权检出运行，`tmp/adr021-l18/run` 必须不存在，离线运行需先有基点锁定依赖的私有 uv 缓存；缓存未准备时可在允许网络的环境去掉两处 --offline，环境清除前缀还由脚本对子进程统一执行）：
+新增资源只包含封存所需的 10 个固定 Git 对象（原始字节以 hex 文本保存）、22 条 refs/buddy 引用、17 个 input/manifest/pending/output/patch sidecar、5 项旧身份的目录锚点和 26 项相关 SHA-256 预像。生成器在旧公开操作期间观察真实 SHA-256 输入并返回未改变的真实摘要，再导出有路径/身份依赖的图；没有让 hash、身份或封存校验返回假成功。对象与引用固定在既有输入 commit/tree，检查不从生成仓库 fetch、不使用 alternates、不运行基点生成器，也不依赖生成机器遗留的 inode 或 Git 对象。
 
-```sh
-env -u BUDDY_STATE_DIR -u BUDDY_RUNTIME_ROOT -u BUDDY_RUNTIME -u BUDDY_RUNTIME_IDENTITY -u BUDDY_WORKER_STATE -u BUDDY_WORKER_ID -u BUDDY_AGENT_CREDENTIAL -u BUDDY_AGENT_CREDENTIAL_FILE -u VIRTUAL_ENV -u UV_PROJECT_ENVIRONMENT UV_CACHE_DIR="$PWD/tmp/adr021-l18/uv-cache" uv run --offline --no-project python packaging/generate-upgrade-fixture.py --offline --work-dir tmp/adr021-l18/run --output-dir tests/fixtures/adr021-l18
+假值从旧操作首次写入时就固定：capability_secret=ab×32，service/submission/nonce/console 令牌为 fixture 值，UUID 为固定递增测试 ID，时间固定为 `2026-01-01T00:00:00.000Z`；目录/健康事实、session/native turn/final item/provenance 为模拟输入，promptSha256=a×64。还原只绑定真实私有路径、基点 `[path,device,inode]` 旧身份和由它们牵动的 manifestSha256、snapshotSha256、turn inputSha256、spec/goal/request fingerprint、命令 request_hash 及其 sidecar、事件、冻结输入、结果与收据中的引用。Git 对象 ID、task/attempt/turn/artifact ID、schema、时间、模拟 outcome/provenance、prompt 摘要和不依赖路径的证据不变；没有产生新的 native 执行事实。
+
+### 交给第二微任务的还原接口
+
+唯一入口为 [upgrade_fixture.py](../../tests/python/blackboard/store/upgrade_fixture.py) 的 `load_fixture(state: Path) -> dict`，state 必须是不存在或空的私有目录。它校验固定文本摘要，物化 repository、四个 detached checkout 和 state/workspaces sidecar，载入基点 SQL，再绑定路径、旧身份及摘要图；不会调用当前建库器、写结论或写身份换算别名/报告。`<fixture-root>/state` 绑定到 state，其余 `<fixture-root>` 绑定到 `state/fixture-root`，因此执行 checkout 不会被误认成受管理的 state/workspaces allocation。
+
+返回值保留 metadata 的全部键（包括 `stableIds`、`sourceCommit`、`schemaVersion`），另有 `state` 与 `fixtureRoot` 两个 Path、`operations`（完成相同绑定的旧模拟操作记录）和 `bindings`（模板旧身份/摘要到还原值的字典）。metadata 中文件摘要描述固定文本，不是还原 SQLite 文件的摘要。升级前后逐值比较和 backup snapshot 必须以函数返回后的旧看板为基线；schema 此时仍为 15。后续真实升级仍先做 15→16，再走既有身份换算，不能把这里的准备 UPDATE 算作迁移或抹去其变动。
+
+```python
+from blackboard.store.upgrade_fixture import load_fixture
+
+fixture = load_fixture(private_state)
+delivered_run_id = fixture["stableIds"]["delivered"]
+# 现在才获取升级保留基线，并进入现有 install/upgrade 路径。
 ```
 
-本轮实际最终生成目录为 `tmp/adr021-l18/run6/`；退出 0：49 张业务表、37 条事件、4 个预期状态、schema 15、源 SQL 定义完全一致、integrity=ok、foreign_key_check=[]。首次联网获取依赖被 DNS 限制拒绝；随后只复制基点锁定的五个 uv 包到私有缓存，离线同步成功（c-two 0.6.0、fastdb4py 0.2.1、numpy 2.5.3、portalocker 3.2.0、pyyaml 6.0.3），未安装产品。中间调试分别发现公开 console 身份必须为 24 hex、完整源码工作区捕获太大（主动中止）、同 checkout 不同冻结 manifest 不能共享 read reservation，以及旧 governed 事件名应核验 verdict；均据基点代码修正生成脚本，没有绕开产品验证。
+[聚焦回归](../../tests/python/blackboard/store/test_upgrade_fixture.py) 读取固定夹具，在普通私有根和含空格、中文、引号及字面 `<fixture-root>` 的另一私有根还原；真实 `_proof` / `_plan` 重建旧身份的固定 input/staged 引用及 inode 锚点，并验证冻结输入、output snapshot、patch、Git 对象和 sidecar。只有该证据给出的 alias 在测试调用期间生效，板中不插入身份别名；真实 `workspace.host_seal` 对 delivered 的原 selected attempt 新建独立 `-host` 输出并可重放，保留原 Worker 输出。负向用例证明原始模板、无证明的旧身份、漂移的 manifest、patch 或 Git 引用被拒绝，没有 Mock 封存/身份/hash。这里没有执行 schema 迁移，身份换算的 schema 后置调用和私有服务 `workflow_conclude` 留给第二微任务及 Host。
 
-新增测试编号：无；消失测试编号：无。夹具检查是生成脚本的独立 `--verify`，不注册测试或运行现有测试套件。独立复核命令及源码证据结果在同目录 [verification.json](../../tests/fixtures/adr021-l18/verification.json)；未验证 15→16、真实 install/upgrade、私有 daemon/IPC、Host conclusion 写入、真实账户/模型、原生会话续跑、Windows 或日常看板。这些没有伪称已通过，仍属于后续微任务与 Host 验收。
+手工生成命令（从授权检出运行，work-dir 必须不存在；预备解释器路径由执行方传入，脚本清除所有 BUDDY_/provider/harness/GIT_ 绑定。只有升级基点变化或夹具准备修复时运行，不属于检查套件）：
+
+```sh
+"$FIXTURE_PYTHON" packaging/generate-upgrade-fixture.py --python "$FIXTURE_PYTHON" --work-dir tmp/adr021-l18/run --output-dir tests/fixtures/adr021-l18
+```
+
+原始清点生成于原授权检出的 `tmp/adr021-l18/run6/`，其离线依赖及过程事实保留在 verification 的 historicalInventoryVerification 中，不作为返修新证据。窄返修最终生成于本授权检出的 `tmp/adr021-l18-portable/generated-final/`，退出 0：49 张业务表、37 条事件、4 个预期状态、schema 15、integrity=ok、foreign_key_check=[]；108 个归档源码/资源摘要与 B 的 git show 相同，实际导入的 60 个 buddy 模块全部在归档 B 中。使用 Host 提供的只读预备依赖：c-two 0.7.4、fastdb4py 0.2.1、numpy 2.5.3、portalocker 3.2.0；这不是基点锁环境的重建，未运行 IPC，实际版本另记于 metadata。第一次生成因同名测试 buddy 包遮蔽失败，修正生成器的明确基点包装载后完成；所有目录和日志均保留。
+
+窄返修新增测试编号为 `UpgradeFixtureTests.test_l18_f01_restores_manifests_seals_and_frozen_hash_bindings`、`test_l18_f02_delivered_sample_gets_real_independent_host_seal`、`test_l18_f03_private_roots_rebind_legacy_identity_without_changing_native_history`、`test_l18_f04_raw_template_and_unproved_or_drifted_identity_are_refused`、`test_l18_f05_drifted_patch_and_fixed_git_ref_cannot_prove_a_seal`；消失编号无，仓库文件删除无。聚焦命令为清除继承环境、前置本检出 src/tests/python 并指定私有 state/runtime/TMPDIR 后的 `python -m unittest blackboard.store.test_upgrade_fixture -v`，最终 5 项通过（20.586 秒，退出 0）。首轮 3 项通过、1 项因负向测试查询错列而失败；补充字面路径标记后，原 Worker patch 校验暴露连续替换会重新展开新目录名，修正为一次替换后真实校验与 Host 封存均通过。`git diff --check` 退出 0。原始模板复现、生成、源码摘要复核和测试原始输出均留在本检出的 `tmp/adr021-l18-portable/`，确切目录清单在其中 retained-directories.txt，没有清理过程证据。
+
+未验证 15→16、install/upgrade、完整身份迁移事务、私有 daemon/IPC 及公开 `workflow_conclude` 写结论、真实账户/模型、原生会话续跑、Windows、日常看板或全套检查。Host 接入 `load_fixture` 后仍须在完整升级后的私有服务上对 delivered 样本写结论，并记录固定产物的独立验收；不能用这里的真实 host_seal 成功代替该验收。
 
 ## 交给 Host 的计划修订点
 
