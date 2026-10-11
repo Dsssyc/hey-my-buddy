@@ -1,12 +1,22 @@
 """Discovery failure evidence crosses the existing controller receipt."""
+import errno
 import json
+import os
 from pathlib import Path
+import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.buddy.roles import run_controller
+from hey_my_buddy.buddy.roles import run_execution
+from hey_my_buddy.buddy.harnesses.runtime_selection import bound
+from hey_my_buddy.buddy.harnesses import controller
+from hey_my_buddy.errors import BoardError
+from buddy.harnesses.test_controller import (
+    NATIVE_STOPPED, NATIVE_UNKNOWN, controller_log_close_failure, partial_log_open_failure,
+)
 
 
 class ControllerDiscoveryStopTests(unittest.TestCase):
@@ -31,3 +41,181 @@ class ControllerDiscoveryStopTests(unittest.TestCase):
 
     def test_failed_read_without_evidence_never_implies_stop(self):
         self.assertIs(self.receipt(None)['processState']['shutdownConfirmed'], False)
+
+
+class PrivateControllerDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='buddy-controller-launch-failure-',
+                                                dir=os.environ.get('BUDDY_CHECKS_TMPDIR', '/tmp'))
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+
+    def discover(self):
+        environment = {key: value for key, value in os.environ.items()
+                       if key in ('PYTHONPATH', 'LANG', 'LC_ALL', 'SYSTEMROOT', 'WINDIR')}
+        environment.update(HOME=str(self.root), PATH=str(self.root / 'empty-path'), BUDDY_DEV_SOURCE='1',
+                           BUDDY_STATE_DIR=str(self.root / 'state'), BUDDY_RUNTIME_ROOT=str(self.root / 'runtime'),
+                           TMPDIR=str(self.root))
+        record = {'adapter': 'codex', 'status': 'unavailable', 'command': [],
+                  'reasonCode': 'HARNESS_UNAVAILABLE', 'remedy': 'fixture PATH has no harness'}
+        with patch.dict(os.environ, environment, clear=True), \
+             patch.object(run_execution.tempfile, 'tempdir', str(self.root)), \
+             bound([record], environment=environment):
+            return run_execution.discover_models('codex')
+
+    def test_emfile_before_spawn_keeps_confirmed_stop_through_role(self):
+        error = OSError(errno.EMFILE, 'fixture controller logs exhausted')
+        with patch.object(controller, 'open_logs', side_effect=error), \
+             patch.object(controller, 'owned_popen', wraps=controller.owned_popen) as spawn:
+            with self.assertRaises(OSError) as caught:
+                self.discover()
+        spawn.assert_not_called()
+        self.assertIs(caught.exception, error)
+        self.assertIs(error.discovery_shutdown_confirmed, True)
+        self.assertEqual(list(self.root.glob('buddy-codex-catalog-*')), [])
+
+    def test_launch_prepare_failure_keeps_no_child_stop_through_role(self):
+        error = ValueError('fixture launch command preparation failed')
+
+        def prepare():
+            raise error
+
+        def launch(**kwargs):
+            kwargs['prepare'] = prepare
+            return controller.launch_controller(**kwargs)
+
+        with patch.object(run_execution, 'launch_controller', launch), \
+             patch.object(controller, 'owned_popen', wraps=controller.owned_popen) as spawn:
+            with self.assertRaises(ValueError) as caught:
+                self.discover()
+        spawn.assert_not_called()
+        self.assertIs(caught.exception, error)
+        self.assertIs(error.discovery_shutdown_confirmed, True)
+        self.assertEqual(list(self.root.glob('buddy-codex-catalog-*')), [])
+
+    def test_partial_log_open_failure_closes_stdout_and_keeps_role_stop(self):
+        with partial_log_open_failure() as state, \
+             patch.object(controller, 'owned_popen', wraps=controller.owned_popen) as spawn:
+            with self.assertRaises(OSError) as caught:
+                self.discover()
+            spawn.assert_not_called()
+            self.assertIs(caught.exception, state['error'])
+            self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+            self.assertFalse(caught.exception.owned_popen_evidence.created)
+            with self.assertRaises(OSError) as closed:
+                os.fstat(state['stdout'])
+            self.assertEqual(closed.exception.errno, errno.EBADF)
+            self.assertEqual(list(self.root.glob('buddy-codex-catalog-*')), [])
+
+    def assert_created_failure(self, receipt, *, stopped):
+        with controller_log_close_failure(receipt=receipt) as state:
+            with self.assertRaises(OSError) as caught:
+                self.discover()
+            self.assertIs(caught.exception, state['error'])
+            evidence = caught.exception.owned_popen_evidence
+            self.assertTrue(evidence.created)
+            self.assertIs(evidence.shutdown_confirmed, True)
+            self.assertIsNotNone(state['process'].poll())
+            self.assertEqual(state['observations'], 1)
+            self.assertIs(caught.exception.discovery_shutdown_confirmed, stopped)
+            self.assertEqual(len(list(self.root.glob('buddy-codex-catalog-*'))), 0 if stopped else 1)
+
+    def test_created_fd_failure_without_native_receipt_keeps_role_unknown(self):
+        self.assert_created_failure(None, stopped=False)
+
+    def test_created_fd_failure_with_native_false_keeps_role_unknown(self):
+        self.assert_created_failure(NATIVE_UNKNOWN, stopped=False)
+
+    def test_created_fd_failure_with_both_stops_confirmed_keeps_role_stop(self):
+        self.assert_created_failure(NATIVE_STOPPED, stopped=True)
+
+    def test_created_fd_failure_with_invalid_native_receipt_keeps_role_unknown(self):
+        for receipt in (b'{broken', b'[]', b'{}', b'{"processState":null}',
+                        b'{"processState":[]}', b'{"processState":{"shutdownConfirmed":1}}',
+                        b'{"processState":{"shutdownConfirmed":"true"}}'):
+            with self.subTest(receipt=receipt):
+                previous = set(self.root.glob('buddy-codex-catalog-*'))
+                with controller_log_close_failure(receipt=receipt) as state:
+                    with self.assertRaises(OSError) as caught:
+                        self.discover()
+                    self.assertIs(caught.exception, state['error'])
+                    self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, True)
+                    self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
+                    self.assertEqual(state['observations'], 1)
+                    self.assertEqual(len(set(self.root.glob('buddy-codex-catalog-*')) - previous), 1)
+
+    def test_created_fd_failure_with_unknown_cleanup_retains_role_directory(self):
+        with controller_log_close_failure(receipt=NATIVE_STOPPED, observation_blocked=True) as state:
+            with self.assertRaises(OSError) as caught:
+                self.discover()
+            self.assertIs(caught.exception, state['error'])
+            self.assertTrue(caught.exception.owned_popen_evidence.created)
+            self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, False)
+            self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
+            self.assertEqual(state['observations'], 1)
+            self.assertEqual(len(list(self.root.glob('buddy-codex-catalog-*'))), 1)
+
+    def test_unregistered_controller_with_native_true_and_outer_unknown_keeps_role_unknown(self):
+        error = ValueError('fixture handle registration failed')
+        with controller_log_close_failure(log=None, receipt=NATIVE_STOPPED) as state, \
+             patch.object(controller, 'ProcessHandle', side_effect=error):
+            with self.assertRaises(ValueError) as caught:
+                self.discover()
+            self.assertIs(caught.exception, error)
+            self.assertTrue(error.owned_popen_evidence.created)
+            self.assertIs(error.owned_popen_evidence.shutdown_confirmed, False)
+            self.assertIs(error.discovery_shutdown_confirmed, False)
+            self.assertIsNone(state['process'].poll())
+            self.assertEqual(state['observations'], 0)
+            self.assertEqual(len(list(self.root.glob('buddy-codex-catalog-*'))), 1)
+
+    def test_simulated_windows_creation_receipt_alone_never_confirms_native_stop(self):
+        from buddy.runtime.test_windows_process import FakeAPI, FakeProcess
+        from hey_my_buddy.buddy.runtime import windows_process
+
+        for stopped in (True, False):
+            with self.subTest(outer_stopped=stopped):
+                process = FakeProcess()
+                api = FakeAPI(process)
+                api.fail_at = 'assign'
+                if not stopped:
+                    def refuse_kill():
+                        raise OSError('fixture child cannot be killed')
+                    process.kill = refuse_kill
+                original_spawn = windows_process.owned_popen
+
+                def spawn(*args, **kwargs):
+                    return original_spawn(*args, windows_api=api, **kwargs)
+
+                previous = set(self.root.glob('buddy-codex-catalog-*'))
+                with patch.object(windows_process.subprocess, 'Popen', return_value=process), \
+                     patch.object(controller, 'owned_popen', spawn):
+                    with self.assertRaises((OSError, RuntimeError)) as caught:
+                        self.discover()
+                self.assertTrue(caught.exception.owned_popen_evidence.created)
+                self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, stopped)
+                self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
+                self.assertNotIn(('resume', process._handle), api.events)
+                self.assertEqual(len(set(self.root.glob('buddy-codex-catalog-*')) - previous), 1)
+
+    def test_path_without_harness_keeps_no_child_fact_through_actual_controller(self):
+        with tempfile.TemporaryDirectory(prefix='buddy-controller-no-harness-',
+                                         dir=os.environ.get('BUDDY_CHECKS_TMPDIR', '/tmp')) as temporary:
+            root = Path(temporary)
+            empty_path = root / 'empty-path'
+            empty_path.mkdir()
+            self.assertEqual(list(empty_path.iterdir()), [])
+            environment = {key: value for key, value in os.environ.items()
+                           if key in ('PYTHONPATH', 'LANG', 'LC_ALL', 'SYSTEMROOT', 'WINDIR')}
+            environment.update(HOME=str(root), PATH=str(empty_path), BUDDY_DEV_SOURCE='1',
+                               BUDDY_STATE_DIR=str(root / 'state'), BUDDY_RUNTIME_ROOT=str(root / 'runtime'),
+                               TMPDIR=str(root))
+            record = {'adapter': 'codex', 'status': 'unavailable', 'command': [],
+                      'reasonCode': 'HARNESS_UNAVAILABLE', 'remedy': 'fixture PATH has no harness'}
+            with patch.dict(os.environ, environment, clear=True), bound([record], environment=environment):
+                with self.assertRaises(BoardError) as caught:
+                    run_execution.discover_models('codex')
+            self.assertEqual(caught.exception.code, 'ADAPTER_UNAVAILABLE')
+            self.assertEqual(caught.exception.message, record['remedy'])
+            self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+            self.assertEqual(list(root.glob('buddy-codex-catalog-*')), [])

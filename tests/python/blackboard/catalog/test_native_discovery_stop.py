@@ -1,5 +1,8 @@
 """Real private reservations around the three native reading call sites."""
+import errno
 import json
+import os
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -7,8 +10,16 @@ from hey_my_buddy.blackboard.catalog import catalog
 from hey_my_buddy.blackboard.service.service import BoardService
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.buddy.harnesses.runtime_selection import bound
+from hey_my_buddy.buddy.harnesses.codex import native_run
+from hey_my_buddy.buddy.harnesses import controller
+from hey_my_buddy.buddy.harnesses.base import ProcessHandle
+from hey_my_buddy.buddy.runtime.windows_process import owned_popen
+from hey_my_buddy.buddy.roles import run_execution
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
+from buddy.harnesses.test_controller import (
+    NATIVE_STOPPED, NATIVE_UNKNOWN, controller_log_close_failure, partial_log_open_failure,
+)
 
 
 class NativeStopMatrix:
@@ -61,7 +72,7 @@ class CatalogNativeStopTests(NativeStopMatrix, BoardTestCase):
             self.assertEqual([r['status'] for r in self.operations()], ['active'])
             if isinstance(value, Exception):
                 raise value
-            return value
+            return value() if callable(value) else value
         instance = SimpleNamespace(model_discovery=True, discovery_available=lambda: (True, None), discover_models=read)
         with patch('hey_my_buddy.buddy.harnesses.registry.adapters', return_value={'codex': instance}), \
              patch.object(catalog, '_override', return_value=None), bound([self.record]):
@@ -75,6 +86,172 @@ class CatalogNativeStopTests(NativeStopMatrix, BoardTestCase):
         result = self.invoke(payload)
         self.assertEqual(result['discoveries'][0].get('reason'), 'CATALOG_INVALID')
         self.assertEqual(self.operations(), [])
+
+    def test_codex_directory_creation_failure_removes_real_operation(self):
+        error = OSError('fixture catalog directory refused')
+        with patch.object(run_execution.tempfile, 'mkdtemp', side_effect=error):
+            with self.assertRaises(OSError) as caught:
+                self.invoke(lambda: run_execution.discover_models('codex'))
+        self.assertIs(caught.exception, error)
+        self.assertEqual(self.operations(), [])
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+
+    def controller_discovery(self):
+        # The actual private controller may only encounter an unavailable synthetic harness.
+        self.record.update(status='unavailable', command=[], reasonCode='HARNESS_UNAVAILABLE',
+                           remedy='fixture has no native harness')
+        with patch.dict(os.environ, {'HOME': str(self.directory), 'CODEX_HOME': str(self.directory / '.codex'),
+                                     'BUDDY_CODEX_CLI': ''}):
+            return self.invoke(lambda: run_execution.discover_models('codex'))
+
+    def test_controller_log_emfile_without_spawn_removes_real_operation(self):
+        error = OSError(errno.EMFILE, 'fixture controller logs exhausted')
+        with patch.object(controller, 'open_logs', side_effect=error), \
+             patch.object(controller, 'owned_popen', wraps=controller.owned_popen) as spawn:
+            with self.assertRaises(OSError) as caught:
+                self.controller_discovery()
+        spawn.assert_not_called()
+        self.assertIs(caught.exception, error)
+        self.assertEqual(self.operations(), [])
+        self.assertIs(error.discovery_shutdown_confirmed, True)
+
+    def test_controller_preparation_failure_removes_real_operation(self):
+        error = ValueError('fixture controller environment failed')
+        with patch('hey_my_buddy.buddy.harnesses.runtime_selection.controller_environment', side_effect=error), \
+             patch.object(controller, 'owned_popen', wraps=controller.owned_popen) as spawn:
+            with self.assertRaises(ValueError) as caught:
+                self.controller_discovery()
+        spawn.assert_not_called()
+        self.assertIs(caught.exception, error)
+        self.assertEqual(self.operations(), [])
+        self.assertIs(error.discovery_shutdown_confirmed, True)
+
+    def test_controller_partial_log_open_failure_closes_fd_and_removes_real_operation(self):
+        with partial_log_open_failure() as state, \
+             patch.object(controller, 'owned_popen', wraps=controller.owned_popen) as spawn:
+            with self.assertRaises(OSError) as caught:
+                self.controller_discovery()
+            spawn.assert_not_called()
+            self.assertIs(caught.exception, state['error'])
+            self.assertFalse(caught.exception.owned_popen_evidence.created)
+            self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+            self.assertEqual(self.operations(), [])
+            with self.assertRaises(OSError) as closed:
+                os.fstat(state['stdout'])
+            self.assertEqual(closed.exception.errno, errno.EBADF)
+
+    def test_controller_created_fd_failure_without_native_receipt_retains_uncertain(self):
+        with controller_log_close_failure() as state:
+            with self.assertRaises(OSError) as caught:
+                self.controller_discovery()
+            self.assertIs(caught.exception, state['error'])
+            self.assertEqual([record['status'] for record in self.operations()], ['uncertain'])
+            self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
+            self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, True)
+            self.assertTrue(caught.exception.owned_popen_evidence.created)
+            self.assertIsNotNone(state['process'].poll())
+            self.assertEqual(state['observations'], 1)
+
+    def test_controller_native_false_after_outer_stop_retains_uncertain_and_native_child(self):
+        native = owned_popen([sys.executable, '-c', 'import time; time.sleep(60)'],
+                             cwd=str(self.directory), env=dict(os.environ), start_new_session=True)
+        handle = ProcessHandle(native, own_group=True, log_paths={})
+        try:
+            with controller_log_close_failure(receipt=NATIVE_UNKNOWN) as state:
+                with self.assertRaises(OSError) as caught:
+                    self.controller_discovery()
+                self.assertIs(caught.exception, state['error'])
+                self.assertTrue(caught.exception.owned_popen_evidence.created)
+                self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, True)
+                self.assertIsNotNone(state['process'].poll())
+                self.assertIsNone(native.poll())
+                self.assertTrue(handle.group_alive())
+                self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
+                self.assertEqual([record['status'] for record in self.operations()], ['uncertain'])
+                self.assertEqual(state['observations'], 1)
+        finally:
+            handle.terminate(grace_seconds=0.2)
+            self.assertTrue(handle.shutdown_confirmed())
+
+    def test_controller_invalid_native_receipt_after_outer_stop_retains_uncertain(self):
+        with controller_log_close_failure(receipt=b'{"processState":null}') as state:
+            with self.assertRaises(OSError) as caught:
+                self.controller_discovery()
+            self.assertIs(caught.exception, state['error'])
+            self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, True)
+            self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
+            self.assertEqual([record['status'] for record in self.operations()], ['uncertain'])
+
+    def test_controller_native_true_and_outer_stop_remove_real_operation(self):
+        with controller_log_close_failure(receipt=NATIVE_STOPPED) as state:
+            with self.assertRaises(OSError) as caught:
+                self.controller_discovery()
+            self.assertIs(caught.exception, state['error'])
+            self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, True)
+            self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+            self.assertEqual(self.operations(), [])
+            self.assertEqual(state['observations'], 1)
+
+    def test_controller_native_false_after_normal_exit_retains_uncertain(self):
+        receipt = json.dumps({'status': 'ok', 'catalog': self.payload,
+                              'processState': {'shutdownConfirmed': False}}).encode()
+        with controller_log_close_failure(log=None, receipt=receipt, exit_after_receipt=True) as state:
+            result = self.controller_discovery()
+            self.assertEqual(result['discoveries'][0].get('reason'), 'ADAPTER_UNAVAILABLE')
+            self.assertEqual(result['discoveries'][0]['status'], 'unknown')
+            self.assertEqual(state['process'].poll(), 0)
+            self.assertEqual([record['status'] for record in self.operations()], ['uncertain'])
+
+    def test_controller_native_true_after_normal_exit_removes_real_operation(self):
+        receipt = json.dumps({'status': 'ok', 'catalog': self.payload,
+                              'processState': {'shutdownConfirmed': True}}).encode()
+        with controller_log_close_failure(log=None, receipt=receipt, exit_after_receipt=True) as state:
+            result = self.controller_discovery()
+            self.assertEqual(result['source'], self.payload['source'])
+            self.assertEqual(state['process'].poll(), 0)
+            self.assertEqual(self.operations(), [])
+            self.assertEqual(state['observations'], 1)
+
+    def test_controller_created_fd_failure_with_unknown_cleanup_retains_uncertain(self):
+        with controller_log_close_failure(receipt=NATIVE_STOPPED, observation_blocked=True) as state:
+            with self.assertRaises(OSError) as caught:
+                self.controller_discovery()
+            self.assertIs(caught.exception, state['error'])
+            self.assertEqual([record['status'] for record in self.operations()], ['uncertain'])
+            self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
+            self.assertTrue(caught.exception.owned_popen_evidence.created)
+            self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, False)
+            self.assertEqual(state['observations'], 1)
+
+    def native_discovery(self):
+        return native_run.run_discovery(cwd=str(self.directory), invocation_root=self.directory / 'discovery',
+                                        native_root=self.directory / 'native', timeout_seconds=2,
+                                        cancelled=lambda: False)
+
+    def private_version_command(self):
+        script = self.directory / 'diagnostic.py'
+        script.write_text("import sys\nprint('fixture diagnostic refused')\nsys.exit(7)\n")
+        self.record.update(status='ready', command=[sys.executable, str(script)])
+
+    def test_codex_version_failure_with_actual_stop_removes_real_operation(self):
+        self.private_version_command()
+        with patch.dict(os.environ, {'HOME': str(self.directory), 'CODEX_HOME': str(self.directory / '.codex'),
+                                     'BUDDY_CODEX_CLI': ''}):
+            with self.assertRaises(native_run.CodexProtocolError) as caught:
+                self.invoke(self.native_discovery)
+        self.assertEqual(caught.exception.code, 'native-version-probe-failed')
+        self.assertEqual(self.operations(), [])
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+
+    def test_codex_version_unknown_stop_retains_real_uncertain_operation(self):
+        self.private_version_command()
+        with patch.dict(os.environ, {'HOME': str(self.directory), 'CODEX_HOME': str(self.directory / '.codex'),
+                                     'BUDDY_CODEX_CLI': ''}), \
+             patch('hey_my_buddy.buddy.harnesses.discovery.probe', return_value=('shutdown-unverified', b'')):
+            with self.assertRaises(native_run.CodexProtocolError) as caught:
+                self.invoke(self.native_discovery)
+        self.assertEqual([record['status'] for record in self.operations()], ['uncertain'])
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
 
 
 class ServiceCatalogNativeStopTests(NativeStopMatrix, BoardTestCase):

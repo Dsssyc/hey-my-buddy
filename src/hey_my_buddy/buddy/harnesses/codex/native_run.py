@@ -457,17 +457,22 @@ def _prepare(request: RunRequest, services: RunServices, mode: str) -> _Preparat
 # -- phase 2: initialization (version probe, owned spawn, handshake) ---------------
 
 
-def _probe_version(command: list, environment: dict, cwd: str, deadline: float, mode: str) -> str | None:
-    """Version is diagnostic only; a failed probe never refuses the run."""
+def _probe_version(command: list, environment: dict, cwd: str, deadline: float, owned: list) -> str:
+    """Keep the public probe's diagnostic outcome and actual stop fact together."""
+    from ..discovery import probe
+
     try:
-        timeout = max(0.1, min(5, deadline - time.monotonic())) if mode == "fast" else 5
-        result = subprocess.run([*command, "--version"], cwd=cwd, env=environment,
-                                capture_output=True, timeout=timeout)
-        if result.returncode == 0:
-            return result.stdout.decode(errors="replace").strip()[:80]
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-    return None
+        reason, output = probe([*command, "--version"], environment, cwd=cwd,
+                               deadline=min(deadline, time.monotonic() + 5))
+    except Exception as error:
+        owned[:] = [{"shutdown": getattr(error, "discovery_shutdown_confirmed", False) is True,
+                     "exit_code": None}]
+        raise
+    owned[:] = [{"shutdown": reason != "shutdown-unverified", "exit_code": None}]
+    if reason is not None:
+        raise CodexProtocolError("native-shutdown-failed" if reason == "shutdown-unverified"
+                                 else "native-version-probe-failed", "Codex version probe failed: " + reason)
+    return output.decode(errors="replace").strip()[:80]
 
 
 def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _Spawn:
@@ -475,28 +480,38 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
 
     The handshake itself stays with the caller, so a failure there flows
     through the run's own stop collection like every other native failure.
-    The moment ``owned_popen`` succeeds this helper records the handle on
-    ``owned`` and, if the connection cannot be built, stops what it started
-    itself and leaves the observed stop facts — no child is ever left alive
-    by a lost handle.
+    Creation failures consume ``owned_popen_evidence`` before registration.
+    Once created, the handle is retained before descriptor cleanup or connection
+    setup, and each failure leaves the actual cleanup receipt or unknown handle.
     """
     fd = os.open(prep.stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    process = None
     try:
-        process = owned_popen([*prep.command, "app-server", "--listen", "stdio://"], cwd=prep.cwd,
-                              env=prep.environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                              stderr=fd, start_new_session=True, close_fds=True)
-    except OSError:
-        raise CodexProtocolError("adapter-unavailable",
-                                 "The selected Codex executable could not start") from None
-    finally:
-        os.close(fd)
-    handle = ProcessHandle(process, own_group=True, log_paths={})
-    owned[:] = [handle]
-    try:
+        try:
+            try:
+                process = owned_popen([*prep.command, "app-server", "--listen", "stdio://"], cwd=prep.cwd,
+                                      env=prep.environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                      stderr=fd, start_new_session=True, close_fds=True)
+            except BaseException as error:
+                evidence = error.owned_popen_evidence
+                owned[:] = [{"created": evidence.created, "shutdown": evidence.shutdown_confirmed,
+                             "exit_code": evidence.exit_code}]
+                if isinstance(error, OSError):
+                    raise CodexProtocolError("adapter-unavailable",
+                                             "The selected Codex executable could not start") from None
+                raise
+            handle = ProcessHandle(process, own_group=True, log_paths={})
+            owned[:] = [handle]
+        finally:
+            os.close(fd)
         connection = Connection(process, prep.deadline, cancel)
     except BaseException:
-        shutdown, _signalled = _halt_owned_group(process, handle, time.monotonic() + 5.0)
-        owned[:] = [{"created": True, "shutdown": shutdown, "exit_code": process.returncode}]
+        if process is not None:
+            try:
+                shutdown, _signalled = _halt_owned_group(process, handle, time.monotonic() + 5.0)
+                owned[:] = [{"created": True, "shutdown": shutdown, "exit_code": process.returncode}]
+            finally:
+                process.stdout.close()
         raise
     return _Spawn(process=process, handle=handle, connection=connection)
 
@@ -1025,7 +1040,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
                          "deniedRequests": [], "truncated": False}
     prep: _Preparation | None = None
     spawn: _Spawn | None = None
-    owned_spawn: list = []
+    owned_spawn: list = [{"created": False, "shutdown": True, "exit_code": None}]
     connection: Connection | None = None
     # Every carrier projects its real native tool facts on the one collector;
     # the governed turn's own frames are evidence like the structured calls',
@@ -1040,7 +1055,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         prep = _prepare(request, services, mode)
         state.coding_home_prepared = prep.coding_home_prepared
         state.coding_home = prep.home if prep.coding_home_prepared else None
-        prep.version = _probe_version(prep.command, prep.environment, request.cwd, prep.deadline, mode)
+        prep.version = _probe_version(prep.command, prep.environment, request.cwd, prep.deadline, owned_spawn)
         state.version = prep.version
         spawn = _spawn_app_server(prep, cancel, owned_spawn)
         connection = spawn.connection
@@ -1367,18 +1382,12 @@ def _stop_collection(request: RunRequest, services: RunServices, prep: _Preparat
                      mode: str, cancel: CancelFlag) -> None:
     """Stop phase: the owned group's conservative confirmation, then cleanup."""
     if spawn is None:
-        created = owned_spawn[0] if owned_spawn and isinstance(owned_spawn[0], dict) else None
-        if created is not None:
-            # The spawn helper itself stopped the child it had created.
-            state.shutdown = bool(created["shutdown"])
-            state.exit_code = created["exit_code"]
-        else:
-            # No process object ever existed: the holding side itself confirms
-            # the spawn never happened — a known not-started fact, never an
-            # unknown, and never inferred from a missing pid after a spawn.
-            state.shutdown = True
-            state.exit_code = None
-        if mode in ("fast", "review"):
+        receipt = owned_spawn[0]
+        # The initial no-child fact, public probe result and creation receipt
+        # occupy the same boundary. A retained handle without a receipt is unknown.
+        state.shutdown = isinstance(receipt, dict) and receipt["shutdown"] is True
+        state.exit_code = receipt["exit_code"] if isinstance(receipt, dict) else receipt.process.returncode
+        if mode in ("fast", "review") and state.shutdown:
             _remove_private_auth(prep.native_root if prep is not None
                                  else Path(request.private_state.native_root))
         return
@@ -1627,61 +1636,59 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
     whether to trust the reading. The return value is the catalog receipt
     shape the current callers consume.
     """
-    deadline = execution_deadline(timeout_seconds)
-    cancel = CancelFlag(cancelled)
-    invocation_root = ensure_private_dir(Path(invocation_root))
-    native_root = ensure_private_dir(Path(native_root))
-    incoming = dict(os.environ)
+    owned: list = [{"created": False, "shutdown": True, "exit_code": None}]
+    shutdown = True
     try:
-        command = cli_command(incoming)
-    except CodexUnavailable as error:
-        raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter="codex") from None
-    environment = native_environment(incoming)
-    version = _probe_version(command, environment, cwd, deadline, "discovery")
-    prep = _Preparation(command=command, environment=environment, native_root=native_root,
-                        invocation_root=invocation_root,
-                        stderr_path=invocation_root / _NATIVE_STDERR_FILE,
-                        deadline=deadline, incoming=incoming, cwd=cwd, version=version)
-    spawn = _spawn_app_server(prep, cancel, [])
-    error: Exception | None = None
-    catalog_value = None
-    try:
-        connection = spawn.connection
-        connection.call("initialize", _INIT_CLIENT)
-        connection.send({"method": "initialized", "params": {}})
+        deadline = execution_deadline(timeout_seconds)
+        cancel = CancelFlag(cancelled)
+        invocation_root = ensure_private_dir(Path(invocation_root))
+        native_root = ensure_private_dir(Path(native_root))
+        incoming = dict(os.environ)
         try:
-            account = connection.call("account/read", {"refreshToken": False}).get("account")
-        except CodexProtocolError:
-            account = None
-        independent = _account_binding(prep, RunServices()).get("source") == "worker"
-        account_status = _discovery_account_status(account, independent)
-        catalog_value, _listed_ids = _catalog(connection, version)
-        catalog_value["discoveries"] = [{"adapter": "codex", "status": "complete",
-                                         "accountStatus": account_status}]
-        if account_status == "unknown":
-            catalog_value["warnings"] = [*catalog_value["warnings"],
-                                         "The discovery session could not confirm the Codex account; "
-                                         "whether to trust this reading is the board's judgment"]
-    except Exception as caught:
-        error = caught
-    finally:
-        shutdown, _signalled = _halt_owned_group(spawn.process, spawn.handle, deadline)
+            command = cli_command(incoming)
+        except CodexUnavailable as error:
+            raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter="codex") from None
+        environment = native_environment(incoming)
         try:
-            spawn.process.stdout.close()
-        except OSError:
-            pass
-    if error is not None:
-        # The stop fact of the process this run really owned, handed to the
-        # role controller beside the original reason: never inferred from an
-        # error code, and an unconfirmed halt stays False.
-        error.discovery_shutdown_confirmed = shutdown is True
-        raise error
-    if not shutdown or spawn.process.returncode != 0:
-        failure = CodexProtocolError("native-shutdown-failed",
+            version = _probe_version(command, environment, cwd, deadline, owned)
+            prep = _Preparation(command=command, environment=environment, native_root=native_root,
+                                invocation_root=invocation_root,
+                                stderr_path=invocation_root / _NATIVE_STDERR_FILE,
+                                deadline=deadline, incoming=incoming, cwd=cwd, version=version)
+            spawn = _spawn_app_server(prep, cancel, owned)
+        except Exception:
+            shutdown = isinstance(owned[0], dict) and owned[0]["shutdown"] is True
+            raise
+        shutdown = False
+        try:
+            connection = spawn.connection
+            connection.call("initialize", _INIT_CLIENT)
+            connection.send({"method": "initialized", "params": {}})
+            try:
+                account = connection.call("account/read", {"refreshToken": False}).get("account")
+            except CodexProtocolError:
+                account = None
+            independent = _account_binding(prep, RunServices()).get("source") == "worker"
+            account_status = _discovery_account_status(account, independent)
+            catalog_value, _listed_ids = _catalog(connection, version)
+            catalog_value["discoveries"] = [{"adapter": "codex", "status": "complete",
+                                             "accountStatus": account_status}]
+            if account_status == "unknown":
+                catalog_value["warnings"] = [*catalog_value["warnings"],
+                                             "The discovery session could not confirm the Codex account; "
+                                             "whether to trust this reading is the board's judgment"]
+        finally:
+            try:
+                shutdown, _signalled = _halt_owned_group(spawn.process, spawn.handle, deadline)
+            finally:
+                spawn.process.stdout.close()
+        if not shutdown or spawn.process.returncode != 0:
+            raise CodexProtocolError("native-shutdown-failed",
                                      "the native app server did not exit normally with confirmed group shutdown")
-        failure.discovery_shutdown_confirmed = shutdown is True
-        raise failure
-    return catalog_value
+        return catalog_value
+    except Exception as error:
+        error.discovery_shutdown_confirmed = shutdown
+        raise
 
 
 # -- the registered seam's role-facing operations ----------------------------------

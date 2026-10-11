@@ -354,7 +354,14 @@ class ProcessHandle:
 def open_logs(paths: dict) -> tuple[Any, Any]:
     Path(paths["stdout"]).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     stdout = os.open(paths["stdout"], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    stderr = os.open(paths["stderr"], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        stderr = os.open(paths["stderr"], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    except BaseException as error:
+        try:
+            os.close(stdout)
+        except BaseException as cleanup_error:
+            raise error from cleanup_error
+        raise
     return stdout, stderr
 
 
