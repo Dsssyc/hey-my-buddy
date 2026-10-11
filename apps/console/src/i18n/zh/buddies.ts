@@ -1,3 +1,6 @@
+import harness from "./buddies-harness";
+import roles from "./buddies-roles";
+
 /** The Buddy page: the catalogue of buddies and the roles they hold. */
 export default {
   sections: {
@@ -112,4 +115,7 @@ export default {
       pinShort: "需先启用",
     },
   },
+  /** The two other views keep their texts in files of their own. */
+  harness,
+  roles,
 };

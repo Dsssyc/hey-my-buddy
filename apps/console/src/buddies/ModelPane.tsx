@@ -22,10 +22,10 @@ import type { ConsoleView, OverrideMode, PreferenceMode, Snapshot } from "../typ
 import type { Editor } from "../use-editor";
 import { modelIdentity, reasonTexts } from "./models";
 import type { BuddyChip, ModelRow } from "./models";
+import { paneBlockHead, paneField, paneFields } from "./styles";
 
 const MODES = ["prefer", "pin", "exclude"] as const satisfies readonly PreferenceMode[];
-const field = "h-8 rounded-md border border-input bg-card px-2.5 outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50 aria-invalid:border-destructive";
-const blockHead = "flex items-center justify-between border-t px-5 pt-4 pb-1.5 text-xs text-ink3";
+const field = paneField, blockHead = paneBlockHead;
 
 /** The DOM id of one buddy's row in the side column, so that an address can land on it. */
 export function buddyRowId(profileId: string): string {
@@ -149,7 +149,7 @@ export function ModelPane({ row, harnessState, data, recorded, editor, onBack, c
     </div>
     {!row.available && (harnessState || row.reasons.length > 0) && <p className="px-5 pb-1.5 text-xs text-ink3">
       {[harnessState, ...reasonTexts(row.reasons, t, !!harnessState)].filter(Boolean).join(" · ")}</p>}
-    <div className="grid grid-cols-[76px_1fr] items-center gap-x-3 gap-y-2 px-5 pt-1 pb-4">
+    <div className={paneFields}>
       {/* The four choices, with the reason under them, go below their name where the two do not fit on one line. */}
       <div className="col-span-2 flex flex-wrap items-start gap-x-3 gap-y-2">
       <div className="flex h-8 items-center">{name(t("pane.defaultPreference"), preferenceUnsaved, { id: `${id}-preference` })}</div>

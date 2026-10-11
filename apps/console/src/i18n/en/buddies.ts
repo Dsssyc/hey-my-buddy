@@ -1,4 +1,6 @@
 import type zh from "../zh/buddies";
+import harness from "./buddies-harness";
+import roles from "./buddies-roles";
 
 export default {
   sections: {
@@ -112,4 +114,6 @@ export default {
       pinShort: "Enable first",
     },
   },
+  harness,
+  roles,
 } satisfies typeof zh;

@@ -174,7 +174,7 @@ B0 的第一部分于 2026-10-11 完成（[记录](../acceptance/console-fronten
 模型一项做完之后留给后面几步的事：
 
 - **B4 要接过来的断言。** "设为 Router"随旧的档位菜单一起从模型一项里拿掉了，分支上暂时没有任何界面能改 Router 的列表，直到 B4 做出"添加"。它原来的六项测试已经删除，B4 要用新的界面重新断言这些事：能把一个 buddy 加进列表并发布成一份只含 `configuration` 的补丁；Router 设置需要升级时不能添加并说明原因，别的设置照常可改；所属 Harness 不具备本地只读路由资格时不能添加并说明原因；buddy 没有启用时不能添加并说明要先启用；替换当前担任者之前要确认，确认框写明换下谁、换上谁；待确认的模型照常可以添加。规则本身在 `policy.ts` 的 `routerRefusal` 里，没有动。`draft.ts` 里只替换列表第一项的 `withFirstRouter` 没有了调用方，已连同测试删除，列表的增删与排序由 B4 自己定。
-- **B3 用的共用件。** 表、右栏、工具栏与说明的做法照 `src/buddies/ModelsView.tsx`、`ModelsTable.tsx`、`ModelPane.tsx`；测试里找元素的办法照 `src/buddies/page.testing.ts`。目录里两张表的切换由每张表自己放在工具栏的第一项，B3 做出 Harness 的工具栏时，把 `BuddyConfig.tsx` 里那一行临时的切换删掉。
+- **B3 与 B4 各自的位置。** 两个视图各有自己的文件，`src/buddies/HarnessView.tsx` 与 `RolesView.tsx`，现在里面包着原来的组件；各有自己的文案文件 `i18n/zh|en/buddies-harness.ts` 与 `buddies-roles.ts`，并进 `buddies` 命名空间的 `harness` 与 `roles` 之下。两个微任务只改自己的这几个文件和自己新建的文件，不动 `BuddyConfig.tsx`、`buddies.ts` 与对方的文件，这样两份产物可以先后直接合入。表与右栏共用的样式在 `src/buddies/styles.ts`；工具栏、说明与测试里找元素的办法照模型一项。旧样式表两个微任务都不动，整合之后由 Host 按"没有调用方的类"统一删除。
 - **评价分区要接过来的断言。** 发布者没有记录的历史卡片不能称为自动评价；没有证据的档位照实写没有记录；评价只读，没有提交观察的入口。
 - **B5 收口时的清理。** `console-data.ts` 的 `preferredVariant` 与 `profile-display.ts` 的 `profileTitleOr` 在这一步之前就没有调用方，连同测试删除；数据层与编辑器里的中文报错（`api.ts`、`policy.ts`、`use-editor.ts`、`console-session.ts`）还没有进文案，Buddy 页因此还有几句只有中文的话；黑板记下的不可用原因是英文的句子与代码，界面按字面认出其中四种，别的照原样显示。
 

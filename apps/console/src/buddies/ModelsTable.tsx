@@ -6,10 +6,10 @@ import { UnsavedMark } from "@/components/ui/state-mark";
 import { formatDateTime } from "../i18n/format";
 import { harnessStateText, modelIdentity, reasonTexts } from "./models";
 import type { BuddyChip, HarnessBlock, ModelRow } from "./models";
+import { tableCell, tableHandle, tableHead, tableRow } from "./styles";
 
-const cell = "border-b px-3 py-2.5 align-middle";
+const cell = tableCell, handle = tableHandle;
 const part = "whitespace-nowrap before:mr-3.5 before:text-line2 before:content-['/']";
-const handle = "inline-flex items-center rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
 /** One buddy: on or off at a glance, with the preference in effect written on it. */
 function Chip({ chip }: { chip: BuddyChip }) {
@@ -56,7 +56,7 @@ function Row({ block, index, selected, onSelect, onFold }: {
   const occupancy = model.occupancy === null ? t("models.occupancyUnknown")
     : t("models.occupancy", { active: model.occupancy, limit: model.limit });
   return <tr data-selected={selected} onClick={() => onSelect(model.key)}
-    className={cn("cursor-pointer hover:bg-sunk xl:data-[selected=true]:bg-live-wash xl:data-[selected=true]:hover:bg-live-wash", !model.available && "text-ink3")}>
+    className={cn(tableRow, !model.available && "text-ink3")}>
     <td className={cn(cell, "whitespace-nowrap pl-5", !first && "text-ink3")}>
       {first ? <HarnessHandle block={block} onFold={onFold} /> : <><span className="inline-block w-4" />{block.name}</>}
     </td>
@@ -111,7 +111,7 @@ export function ModelsTable({ blocks, current, onSelect, onFold }: {
   onSelect: (key: string) => void; onFold: (adapter: string, folded: boolean) => void;
 }) {
   const { t } = useTranslation("buddies");
-  const head = "border-b px-3 py-2.5 text-left text-xs font-normal whitespace-nowrap text-ink3";
+  const head = tableHead;
   return <table className="w-full min-w-[720px] border-separate border-spacing-0" aria-label={t("models.table")}>
     <thead className="sticky top-0 z-10 bg-card">
       <tr>
