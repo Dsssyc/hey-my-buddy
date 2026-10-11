@@ -11,7 +11,7 @@ Host owns acceptance and authorization; Workers cannot create goals.
 
 Use the absolute launcher (`~/.agents/skills/buddy/scripts/buddy`; Windows `scripts/buddy.cmd`) with one JSON object: positional, `--params-file PATH` or UTF-8 stdin `-`, mutually exclusive. `buddy help [METHOD]` reads validated parameters, starts nothing. Brief; use `"output":"full"`.
 
-Review needs a version certificate. Read `health` for routing slots, mode and capacity; report failures with decision code, `routingMode`/`fallback`. A sole candidate needs no Router: fast sends the task to its provider, review reads a frozen repository copy.
+Read `health` for the Router list, mode and capacity; report failures with decision code and `routingMode`. A sole candidate needs no Router: fast sends the task to its provider, review reads a frozen repository copy.
 
 [usage](../../docs/reference/usage.md), [CLI](../../docs/reference/cli.md), [workflow](../../docs/reference/workflow.md), [harnesses](../../docs/reference/harnesses.md), [Claude](../../docs/reference/claude.md).
 
@@ -21,7 +21,7 @@ Review needs a version certificate. Read `health` for routing slots, mode and ca
 2. Omit `adapter`/`provider`/`model`/`effort` for routing; a complete tuple is only for an explicit user choice or goal-boundary recovery. One agenda, one objective, split into delegations when long: the first delegation carries `objective: {title}` and an intent `title` (≤30 chars), later ones its `objectiveId` or `objectiveOf: "<runId>"`. Submit once with a stable `requestId`; keep `runId`/`objectiveId`/`controlFile`; use supported continuation/helper fields.
 3. Wait through your Host guide ([codex](../../docs/reference/host-codex.md), [claude](../../docs/reference/host-claude-code.md)); read only yours. One `await` per running goal; a timeout never cancels it; unknown never means stopped.
 4. At a boundary `decide` on helpers or `continue` with input; a routing one takes a legal configuration with a reason, or `reroute:true`. An enabled configuration may change with a reason unless `configurationLocked`; partial work is unverified. [Recovery](../../docs/reference/workflow.md).
-5. Verify changed paths, risky hunks and checks on the fixed artifact, then `integration-record` and `acknowledge` the exact sealed `artifactId` (`finalArtifactId` when delivered) and integration ID, or `notRequired` with a reason. Prose and RPC replies are not acceptance. A waiting Host may finish directly; failed/cancelled goals use `verdict:"recorded"` for a conclusion. Reclaim reviewed checkouts with `workspace-cleanup-plan`/`workspace-cleanup-apply`.
+5. Verify changed paths, risky hunks and checks on the fixed artifact, then `accept` the exact sealed `artifactId` (`finalArtifactId` when delivered) with a `note` and the integration `target`, or `notRequired` with a reason: it verifies the integration and reclaims the checkout. Prose and RPC replies are not acceptance. A waiting Host may finish directly; `conclude` ends a failed, cancelled or unaccepted goal with a note, and `reclaim` retries a blocked checkout removal.
 
 `buddy console` opens loopback, login off; `{"browser":false}` returns its URL ([console](../../docs/reference/console.md)).
 
@@ -31,7 +31,7 @@ Before install, run `backup-preflight '{}'`; resolve refusals ([operations](../.
 
 [Harnesses](../../docs/reference/harnesses.md) own capabilities and account controls. Shared login is read-only; keys use private stdin/form, never packets/argv/replay.
 
-Worker sessions stay private (DSH groups only with `workspace:true`); `worker-sessions` lists them ([details](../../docs/reference/operations.md)).
+Worker sessions stay private; `worker-sessions` lists them ([details](../../docs/reference/operations.md)).
 
 Preferences, enablement, capacity and Router settings are user-owned: change them only in the console, never in this skill. Routing and execution share capacity and family limits; native permissions need Host attention.
 

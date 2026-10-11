@@ -4,7 +4,7 @@ This page is the practical path from install to reviewed result. Read [cli.md](c
 
 ## The common path
 
-For coding work, use the governed lifecycle. Its normal path is one logical `runId`: `submit` → `await` → a `waiting-host` decision or continuation → `acknowledge` against the final artifact. The advanced `execution-*` commands serve the `command` and `external` adapters and internal decision infrastructure; they are not a hidden path to ungoverned coding work.
+For coding work, use the governed lifecycle. Its normal path is one logical `runId`: `submit` → `await` → a `waiting-host` decision or continuation → `accept` of the final artifact. The advanced `execution-*` commands serve the `command` and `external` adapters and internal decision infrastructure; they are not a hidden path to ungoverned coding work.
 
 ### 1. Install once
 
@@ -94,28 +94,27 @@ The [assistance examples](workflow.md#host-boundaries-and-requests) provide comp
 
 Each continuation gets a fresh attempt and recorded resume mode: DSH and ZCode resume their exact proven native session, or explicitly reconstruct a new one after an unproven prior turn. The named integrator applies exact helper commits/patches and checks the combined result. The private console displays the recorded decisions read-only; the Host performs these operations through the CLI.
 
-### 7. Inspect the final artifact, record integration and acknowledge
+### 7. Inspect the final artifact and accept it
 
 ```sh
 "$BUDDY" get '{"runId":"<runId>"}'
-"$BUDDY" integration-record '{"runId":"<runId>","commandId":"integrate-1","expectedRevision":7,"controlFile":"<controlFile>","artifactId":"<finalArtifactId>","strategy":"cherry-pick","target":{"path":"/abs/target/checkout","ref":"main"},"beforeCommit":"<target commit before the integration>","verification":"Applied the sealed artifact commit to the target and ran the combined checks."}'
-"$BUDDY" acknowledge '{"runId":"<runId>","commandId":"review-1","controlFile":"<controlFile>","artifactId":"<finalArtifactId>","integrationId":"<returned integrationId>","note":"Inspected the integrated target diff and ran the combined regression suite.","verdict":"accepted"}'
+"$BUDDY" accept '{"runId":"<runId>","controlFile":"<controlFile>","artifactId":"<finalArtifactId>","note":"Inspected the integrated target diff and ran the combined regression suite.","target":{"path":"/abs/target/checkout","ref":"main"}}'
 ```
 
-Once the goal is delivered (the `get` view reports `state: "delivered"`, exposed as `workflowState` on task and wait envelopes), `finalArtifactId` names the selected fixed output. Inspect the actual output commit/diff, changed paths, hashes and logs yourself, then record what you really checked. Artifact verification covers the whole governed goal — the service checks immutable Git objects for the delta from the original goal input tree to the final output tree, including earlier continuation changes, and missing or mismatched objects fail instead of being skipped. An `accepted` verdict requires a verified integration record or an explicit `notRequired` record bound to that artifact; the service resolves the target commit/tree relationship from the repository itself rather than trusting a client hash, and `get` exposes the recorded `integrations`. A task with no repository change records `{"notRequired": true, "reason": "..."}` instead. Acceptance is separate from execution, is tied to that artifact rather than to whichever branch or directory exists later, and never converts a failed execution into a success. A governed wait's `shutdownConfirmed` requires both self and descendant stop evidence, so a delivered or cancelled goal whose descendants are unconfirmed keeps waiting instead of inventing a stopped state.
+Once the goal is delivered (the `get` view reports `state: "delivered"`, exposed as `workflowState` on task and wait envelopes), `finalArtifactId` names the selected fixed output. Inspect the actual output commit/diff, changed paths, hashes and logs yourself, integrate the artifact into the target, then `accept` it with a `note` that says what you really checked. One `accept` verifies the integration against the real `target` itself, records the acceptance for that exact artifact and reclaims the managed checkout; when nothing needs integrating, give a nonempty `notRequired` reason in place of `target`. Paths that differ from the artifact are refused by name; the Host's own adjustments are confirmed with `adjusted: true` (and `hostPaths` with `beforeCommit` for changes outside the artifact's paths). The same payload replays its recorded answer and a changed one conflicts. The [CLI reference](cli.md) lists every field and the [workspace lifecycle](workspace-lifecycle.md) has a complete example.
 
-If a deliverable fails acceptance, record `acknowledge` with `verdict: "rejected"`, the artifact ID and concrete findings before requesting a correction through `continue`. A later accepted review should name any material Host correction or extra verification it required; avoid implying first-pass success from the final status alone. These review records do not invoke an evaluation model. A user-requested batch maintenance can later use them without regenerating cards after every task. Choose checks that exercise the changed boundary; expand or repeat them when code changes or a failure warrants it, not merely because another inspection occurred.
+If a deliverable fails acceptance, send the concrete findings back through `continue`; the same micro task repairs them. A later acceptance note should name any material Host correction or extra verification it required; avoid implying first-pass success from the final status alone. Acceptance does not invoke an evaluation model. Choose checks that exercise the changed boundary; expand or repeat them when code changes or a failure warrants it, not merely because another inspection occurred.
 
-### 8. Reclaim the managed checkout
-
-After acceptance and integration, plan and apply the removal of exactly this run's registered managed checkout:
+### 8. End a goal without accepting it, or retry a reclaim
 
 ```sh
-"$BUDDY" workspace-cleanup-plan '{"runId":"<runId>","commandId":"cleanup-plan-1","expectedRevision":7,"controlFile":"<controlFile>"}'
-"$BUDDY" workspace-cleanup-apply '{"runId":"<runId>","planId":"<returned plan.planId>","commandId":"cleanup-apply-1","expectedRevision":7,"confirmPath":"<returned plan.path>","controlFile":"<controlFile>"}'
+"$BUDDY" conclude '{"runId":"<runId>","controlFile":"<controlFile>","note":"Failed after the schema change; the partial work is kept for the next attempt."}'
+"$BUDDY" reclaim '{"runId":"<runId>","controlFile":"<controlFile>"}'
 ```
 
-The plan names the exact path, its eligibility evidence and retention list and expires after 900 seconds; apply rechecks ownership, acceptance, integration, shutdown, dependencies and Git state — including the final tree and fingerprint against the original allocation — and deletes only that checkout, keeping outputs, manifests, fixed refs and receipts. A plan with reasons is blocked, not authorizing; re-read the run and plan again. A repaired workspace conflict is settled first with `workspace-resolve` or `scope-amend` as described in the [workspace lifecycle reference](workspace-lifecycle.md), which owns the complete example and field list.
+`conclude` ends a failed, cancelled or delivered-but-unaccepted goal with a required `note`: it records the Host's own conclusion beside the real execution result, seals unsealed managed changes as a partial output and reclaims the checkout. A conclusion never counts as a success. `reclaim` retries the removal of this goal's own managed checkout after a blocked or kept removal; a blocked removal reports its reasons and changes nothing.
+
+A workspace conflict is settled first with `workspace-resolve` or `scope-amend`, as described in the [workspace lifecycle reference](workspace-lifecycle.md), which owns the complete example and field list.
 
 ## Non-coding execution records
 

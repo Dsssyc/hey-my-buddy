@@ -54,11 +54,11 @@ class SkillWorkflowTests(unittest.TestCase):
             "objectiveId",
             'objectiveOf: "<runId>"',  # joining an existing run's objective
             "controlFile",
-            "integration-record",
-            "acknowledge",
+            "`accept`",
+            "`conclude`",
+            "`reclaim`",
             "finalArtifactId",
             "await",
-            "workspace-cleanup-plan",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.text)

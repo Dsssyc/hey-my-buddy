@@ -1,6 +1,6 @@
 # Waiting from Claude Code
 
-This page owns the Claude Code Host's way of waiting on a governed goal: the background-`await` flow, the launcher's sandbox allowance and the session-wakeup boundary. The common submit → await → decision → acknowledge path is in [usage.md](usage.md); every other Host reads only its own guide.
+This page owns the Claude Code Host's way of waiting on a governed goal: the background-`await` flow, the launcher's sandbox allowance and the session-wakeup boundary. The common submit → await → decision → accept path is in [usage.md](usage.md); every other Host reads only its own guide.
 
 ## One background `await` per running goal
 
@@ -9,7 +9,7 @@ Claude Code runs each wait as its own background command and keeps working:
 1. `submit` the goal and keep `runId` and `controlFile`.
 2. Run `"$BUDDY" await '{"runId":"<runId>"}'` with the Bash tool's `run_in_background: true`. Start one background wait per running goal; concurrent goals each have their own.
 3. Continue with other Host work, including reviewing goals that already finished. The harness delivers a notification when the command exits: during an active turn it arrives with the next step, and an idle session is woken. The notification carries the brief `await` envelope.
-4. At the notification read `get`, verify the artifact, then `integration-record` and `acknowledge` as usual. An `outcome` of `wait-timeout` or `unavailable` ends only that wait; start another background `await` for the same `runId`.
+4. At the notification read `get`, verify the artifact, then `accept` it as usual. An `outcome` of `wait-timeout` or `unavailable` ends only that wait; start another background `await` for the same `runId`.
 
 Do not add a polling loop of `get`, `status` or `wait` beside the background wait.
 
