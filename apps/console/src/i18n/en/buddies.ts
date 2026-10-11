@@ -85,7 +85,8 @@ export default {
   pane: {
     back: "Models",
     efforts: "Levels",
-    samples: "Samples",
+    counted: "Counted",
+    countedHint: "Executions a Host accepted or rejected that were recorded as evidence; cancelled, unreviewed and infrastructure failures do not count",
     enable: "Enable {{effort}}",
     override: "Preference of {{effort}}",
     follow: "Follow model",

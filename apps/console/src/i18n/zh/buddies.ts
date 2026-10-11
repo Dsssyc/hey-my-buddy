@@ -85,7 +85,8 @@ export default {
   pane: {
     back: "模型",
     efforts: "档位",
-    samples: "样本",
+    counted: "计入评价",
+    countedHint: "Host 验收或打回过、并且记为证据的执行次数；取消的、没有结论的与环境故障不算",
     enable: "启用 {{effort}}",
     override: "{{effort}} 的偏好",
     follow: "跟随模型",

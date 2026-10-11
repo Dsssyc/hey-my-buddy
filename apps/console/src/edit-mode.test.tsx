@@ -448,7 +448,7 @@ describe("direct editing and the save bar", () => {
     expect(f.published[0]).not.toHaveProperty("profiles");
   });
 
-  it("shows each level's recorded samples and offers nothing that records evidence", async () => {
+  it("shows how many results of each level count towards its evaluation and offers nothing that records evidence", async () => {
     const f = fixture();
     f.setSnapshot({ ...f.snapshot(), evidence: [{ evidenceId: "ev-1", profileId: flashOff, kind: "observation",
       summary: "单次观察", project: "fixture", conditions: ["React"], source: "user", runId: null,
@@ -457,6 +457,9 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     expect(within(level("off")).getByText("5")).toBeTruthy();
     expect(within(level("high")).getByText("2")).toBeTruthy();
+    // The column says what the number counts, in its name and in the explanation of that name.
+    expect(within(pane()).getByText("计入评价").getAttribute("aria-description"))
+      .toBe("Host 验收或打回过、并且记为证据的执行次数；取消的、没有结论的与环境故障不算");
     // The side column holds settings only: the two reason-less levels offer a switch and a preference, nothing else.
     expect(within(level("off")).getAllByRole("switch")).toHaveLength(1);
     expect(within(level("off")).getAllByRole("combobox")).toHaveLength(1);

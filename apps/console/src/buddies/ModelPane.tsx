@@ -32,7 +32,7 @@ export function buddyRowId(profileId: string): string {
   return `buddy-${profileId}`;
 }
 
-/** One level: its switch, its own preference where it departs from the model's, and its samples. */
+/** One level: its switch, its own preference where it departs from the model's, and how many of its results count towards its evaluation. */
 function EffortRow({ chip, data, recorded, editor, alone }: {
   chip: BuddyChip; data: ConsoleView; recorded: Snapshot; editor: Editor;
   /** This buddy cannot work while others of its model can, so it says so itself. */
@@ -53,7 +53,7 @@ function EffortRow({ chip, data, recorded, editor, alone }: {
     editor.update(draft => setPreferenceOverride(draft, profile.profileId, mode, mode ? override?.reason ?? "" : ""));
   }
   return <div id={buddyRowId(profile.profileId)} tabIndex={-1} role="group" aria-label={effort}
-    className="grid grid-cols-[34px_64px_1fr_auto] items-center gap-x-2.5 gap-y-1.5 px-5 py-[7px] outline-none focus-visible:bg-sunk">
+    className="grid grid-cols-[34px_minmax(0,1fr)_124px_56px] items-center gap-x-2.5 gap-y-1.5 px-5 py-[7px] outline-none focus-visible:bg-sunk">
     <Hint text={locked}>
       <Switch checked={profile.enabled} aria-label={t("pane.enable", { effort })} aria-disabled={!canToggle || undefined}
         onCheckedChange={enabled => {
@@ -72,7 +72,7 @@ function EffortRow({ chip, data, recorded, editor, alone }: {
         </SelectItem>)}
       </SelectContent>
     </Select>
-    <span className="text-xs text-ink2 tabular-nums">{recordedSampleCount(data, profile.profileId)}</span>
+    <span className="text-right text-xs text-ink2 tabular-nums">{recordedSampleCount(data, profile.profileId)}</span>
     {override && <input className={cn(field, "col-span-3 col-start-2 h-7 text-xs")} aria-label={t("pane.overrideReason", { effort })}
       placeholder={t("pane.reason")} maxLength={500} value={override.reason} readOnly={!editor.editing}
       onChange={event => editor.update(draft => setPreferenceOverride(draft, profile.profileId, override.mode, event.target.value))} />}
@@ -133,7 +133,10 @@ export function ModelPane({ row, harnessState, data, recorded, editor, onBack, c
       {attention.length > 0 && <p className="mt-3 border-l-2 border-hand-mark pl-3 text-xs text-hand" role="status">{attention.map(issue => issue.message).join(" ")}</p>}
     </div>
 
-    <div className={blockHead}><b className="font-medium text-foreground">{t("pane.efforts")}</b><span>{t("pane.samples")}</span></div>
+    <div className={blockHead}>
+      <b className="font-medium text-foreground">{t("pane.efforts")}</b>
+      <Hint text={t("pane.countedHint")}><span>{t("pane.counted")}</span></Hint>
+    </div>
     {row.chips.map(chip => <EffortRow key={chip.profile.profileId} chip={chip} data={data} recorded={recorded} editor={editor}
       alone={row.available && !chip.profile.available} />)}
 
