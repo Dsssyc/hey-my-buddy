@@ -33,11 +33,22 @@
 <div class="stp sel"><i></i><b>回合 2</b><span class="d num">3 分</span><small class="mono">claude-sonnet-5-5 / high</small></div>
 <div class="cn op">等待验收 2 时 24 分</div>
 <div class="stp last op"><i class="dia y"></i><b>验收</b></div>
-</div><div class="pane">
+</div><div class="pane turn">
 <div class="pt"><h3>回合 2</h3><span class="s12" style="color:var(--ink2)">已结束</span><span class="tm"><span class="mono num">14:45:10 – 14:48:18</span><b class="num">3 分 08 秒</b></span></div>
-<div class="sec"><label>执行</label><div class="g"><i>伙伴</i><span class="w mono">claude / anthropic / claude-sonnet-5-5 / high</span><i>接续</i><span>恢复会话</span><i>会话</i><span class="mono">01a2f7c4…9e31</span><i>用量</i><span class="w num">输入 23.4k　输出 3.1k　缓存 18.0k</span></div></div>
-<div class="sec"><label>结果</label><div><p class="p">设置页已换到新组件，四张卡片改为分节；版本一节在合成预览里读不到数据，已注明。</p><ul class="rm"><li>合成预览缺少版本接口</li><li>存储一节的确认对话框仍是旧样式</li></ul></div></div>
-<div class="sec"><label>产物</label><div><div class="g"><i>提交</i><span class="mono">3f9a2c1</span><i>文件</i><span class="num">9</span><i>补丁</i><span class="w mono">d286db0 → 3f9a2c1</span></div>
-<div class="fl"><span>apps/console/src/Settings.tsx</span><span>apps/console/src/StoragePanel.tsx</span><span>apps/console/src/RuntimeVersion.tsx</span><span>apps/console/src/i18n/zh/settings.ts</span><em>另 5 个</em></div></div></div>
+<div class="strip"><i>Worker</i><span class="mono">claude / anthropic / claude-sonnet-5-5 / high</span><i>用量</i><span class="num">输入 23.4k　输出 3.1k　缓存 18.0k</span></div>
+<div class="flow">
+<span class="lb">输入</span><p class="in2">继续。版本一节在合成预览里读不到数据是预览的缺口，照实注明即可，不要为它改页面。</p>
+<div class="ev"><span class="cv"></span><i>会话</i><b>恢复</b><span class="mono" style="color:var(--ink3)">01a2f7c4…9e31</span></div>
+<div class="ev"><span class="cv">▸</span><i>推理</i><em class="num">4 秒</em></div>
+<div class="ev"><span class="cv">▸</span><i>读取</i><span class="mono">apps/console/src/Settings.tsx</span></div>
+<p class="msg">四张卡片的结构相同，可以统一成分节。先改设置页本身，再处理版本一节的说明。</p>
+<div class="ev"><span class="cv">▸</span><i>修改</i><span class="mono">apps/console/src/Settings.tsx</span><em class="num">+48　−61</em></div>
+<div class="ev"><span class="cv">▸</span><i>修改</i><span class="mono">apps/console/src/RuntimeVersion.tsx</span><em class="num">+12　−9</em></div>
+<div class="ev"><span class="cv">▾</span><i>运行</i><span class="mono">npm --prefix apps/console test -- settings</span><em class="num">38 秒</em></div>
+<div class="term"> Test Files  5 passed (5)
+      Tests  40 passed (40)</div>
+<div class="blk"><span class="lb">结果</span><p class="msg">设置页已换到新组件，四张卡片改为分节；版本一节在合成预览里读不到数据，已注明。</p><ul class="rm"><li>存储一节的确认对话框仍是旧样式</li></ul></div>
+<div class="ev blk"><span class="cv">▸</span><i>产物</i><span class="mono">3f9a2c1</span><b class="num">9 个文件</b><em class="mono">d286db0 → 3f9a2c1</em></div>
+</div>
 </div></div>
 </div></div></html>

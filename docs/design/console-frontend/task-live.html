@@ -29,11 +29,21 @@
 <div class="cn">路由 14 秒</div>
 <div class="cn">排队 1 分 46 秒</div>
 <div class="stp sel last"><i class="on"></i><b>回合 1</b><span class="d num">6 分</span><small class="mono">gpt-6.1-sol / high</small><em class="live">进行中</em></div>
-</div><div class="pane">
+</div><div class="pane turn">
 <div class="pt"><h3>回合 1</h3><span class="live s12">进行中</span><span class="tm"><span class="mono num">17:06:20 –</span><b class="num">6 分 02 秒</b></span></div>
-<div class="sec"><label>路由</label><div><div class="g"><i>方式</i><span>Router 选择</span><i>模式</i><span>快速</span><i>Router</i><span class="w mono">codex / openai / gpt-6-luna / high</span><i>用量</i><span class="w num">输入 2.1k　输出 0.2k</span><i>候选</i><span class="w"><span class="ch on"><i></i>gpt-6.1-sol / high<em>优先</em></span><span class="ch"><i></i>gpt-6.1-sol / max</span><span class="ch"><i></i>deepseek-flash / max</span><span class="ch"><i></i>gpt-6-luna / high</span></span></div>
-<p class="p" style="margin-top:12px;color:var(--ink2)">改动集中在比例尺与刻度，需要先读懂现有的布局代码；近期同类的微任务里这个伙伴一次通过。</p></div></div>
-<div class="sec"><label>执行</label><div class="g"><i>伙伴</i><span class="w mono">codex / openai / gpt-6.1-sol / high</span><i>接续</i><span>首次</span><i>会话</i><span class="mono">01a3b0d8…47aa</span></div></div>
-<div class="sec"><label>活动</label><div class="g"><i>阶段</i><span>工具执行中</span><i>上报</i><span class="num">3 秒前</span><i>工具</i><span class="w"><span class="mono">npm --prefix apps/console test</span>　<span class="num" style="color:var(--ink2)">41 秒</span></span><i>计数</i><span class="w num">模型回合 7　工具调用 23</span></div></div>
+<div class="strip"><i>Worker</i><span class="mono">codex / openai / gpt-6.1-sol / high</span><i>计数</i><span class="num">模型回合 7　工具调用 23</span></div>
+<div class="flow">
+<div class="ev"><span class="cv">▾</span><i>路由</i><b>Router 选择</b><b>快速</b><em class="num">14 秒</em></div>
+<div class="sub"><div class="g"><i>Router</i><span class="w mono">codex / openai / gpt-6-luna / high</span><i>用量</i><span class="w num">输入 2.1k　输出 0.2k</span><i>候选</i><span class="w"><span class="ch on"><i></i>gpt-6.1-sol / high<em>优先</em></span><span class="ch"><i></i>gpt-6.1-sol / max</span><span class="ch"><i></i>deepseek-flash / max</span><span class="ch"><i></i>gpt-6-luna / high</span></span></div>
+<p class="p" style="margin-top:10px;color:var(--ink2)">改动集中在比例尺与刻度，需要先读懂现有的布局代码；近期同类的微任务里这个 buddy 一次通过。</p></div>
+<span class="lb" style="margin-top:10px">输入</span><p class="in2">把时间轴的比例尺改成纯函数：输入是片段与等待的区间，输出是时间与像素的互换和刻度……</p>
+<div class="ev"><span class="cv">▸</span><i>推理</i><em class="num">11 秒</em></div>
+<div class="ev"><span class="cv">▸</span><i>读取</i><span class="mono">apps/console/src/objective-timeline-scale.ts</span></div>
+<div class="ev"><span class="cv">▸</span><i>搜索</i><span class="mono">timeScale(</span><em class="num">14 处</em></div>
+<p class="msg">现有的换算把时间先变成百分比再变成像素，断口的位置算了两遍。先写新的比例尺和它的测试。</p>
+<div class="ev"><span class="cv">▸</span><i>修改</i><span class="mono">apps/console/src/timeline/scale.ts</span><em class="num">+164</em></div>
+<div class="ev"><span class="cv">▸</span><i>运行</i><span class="mono">npm --prefix apps/console test -- scale</span><em class="num live"><svg viewBox="0 0 12 12"><use href="#run"/></svg>41 秒</em></div>
+</div>
+<div class="lf"><svg class="m"><use href="#run"/></svg><span class="live">工具执行中</span><em class="num">上报 3 秒前</em></div>
 </div></div>
 </div></div></html>
