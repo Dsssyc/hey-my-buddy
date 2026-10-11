@@ -93,3 +93,4 @@ th.grp{color:var(--ink);font-weight:500;font-size:13px;border-bottom:0;padding:1
 .st2{width:760px;margin-top:14px}.st2 th,.st2 td{padding:8px 12px 8px 0}.st2 th.r,.st2 td.r{text-align:right;padding-right:0;padding-left:24px;white-space:nowrap}.st2 td.why{padding-top:0;font-size:12px;color:var(--ink2)}.st2 td.why b{font-weight:400;color:var(--ink);margin:0 14px 0 4px}.st2 td.z{color:var(--ink3)}
 .lnk{font-size:12px;color:var(--ink2);border-bottom:1px solid var(--line2)}.row2{display:flex;align-items:center;gap:12px}.x{color:var(--ink3);font-size:12px;padding:0 4px}.grip{color:var(--line2);letter-spacing:-2px;font-size:12px}
 .btn{white-space:nowrap}
+.hint{margin-top:8px;max-width:560px;font-size:12px;line-height:1.6;color:var(--ink2)}
