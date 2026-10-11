@@ -32,5 +32,5 @@ A cold start must write the private state directory and open local IPC; a Host s
 
 ## Known limits
 
-- These waits do not wake a closed Host session after its turn ends: when a monitor returns after the Host's turn has ended, a user reminder must bring the result back to the Host. This is why the turn does not end with a micro task left open ([above](#before-the-turn-ends)).
+- These waits do not wake a closed Host session after its turn ends: when a monitor returns after the Host's turn has ended, a user reminder must bring the result back to the Host. This is why the turn does not end with a micro task left open ([above](#before-the-turn-ends)). A subagent cannot do the waking either: on desktop 0.162.0-alpha.17.2 a subagent's `followup_task` aimed at the root agent was refused, and the subagent's completion started no turn in a parent whose turn had ended.
 - Monitoring is the chosen Host workflow, not a promise that total tokens or money always decrease; tool definitions and base instructions also enter a fresh child's context.
