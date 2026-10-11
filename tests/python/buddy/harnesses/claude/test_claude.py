@@ -381,6 +381,13 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(settled.status, "ok", settled.to_report())
         self.assertTrue(settled.result["turn"]["provenance"]["backgroundSettled"])
 
+    def test_a_completed_task_notification_does_not_block_the_turn(self):
+        # A foreground task reported by the real task_started/task_notification
+        # pair has settled; the turn must not end as background-work-unsettled.
+        outcome = self.execute(self.context("bg-notification", index=4))
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.result["turn"]["provenance"]["backgroundSettled"])
+
     def test_model_output_before_the_user_message_is_rejected(self):
         outcome = self.execute(self.context("early-result"))
         self.assertEqual(outcome.status, "failed", outcome.to_report())

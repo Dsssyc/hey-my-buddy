@@ -43,9 +43,10 @@ MAX_ASSISTANT_USAGE_RECORDS = 256
 # task or workflow. Substring matching would wrongly settle "incomplete" or
 # "not_completed", so equality is required. A terminal result frame may arrive
 # while such work still runs; the controller must not then declare the turn
-# completed over live native children.
+# completed over live native children. A ``task_notification`` reports one of
+# ``completed``, ``failed`` or ``stopped`` per the Claude Agent SDK types.
 BACKGROUND_TASK_TERMINAL_STATUSES = ("completed", "succeeded", "failed", "cancelled", "canceled",
-                                     "error", "aborted", "done")
+                                     "error", "aborted", "done", "stopped")
 
 #: Quota exhaustion is temporary infrastructure unavailability, never a model
 #: capability result. The existing evaluation-store exclusion matches error text
@@ -434,7 +435,10 @@ class TurnEvidence:
                 else:
                     raise ClaudeProtocolError("invalid-protocol", "Claude exceeded the background task bound")
                 return None
-            if subtype == "task_updated":
+            if subtype in ("task_updated", "task_notification"):
+                # The native CLI ends a foreground task that ran long enough to
+                # get a task identity with ``task_notification`` and never sends
+                # ``task_updated``; both end frames settle through this one path.
                 identity = _task_identity(frame)
                 status = _task_status(frame)
                 terminal = status in BACKGROUND_TASK_TERMINAL_STATUSES

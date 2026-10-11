@@ -187,6 +187,51 @@ class TurnEvidenceTests(unittest.TestCase):
         evidence.observe({"type": "system", "subtype": "task_updated", "patch": {"status": "failed"}})
         self.assertEqual(evidence.unsettled_background_tasks(), ["<unnamed>"])
 
+    def test_a_completed_task_notification_settles_the_started_task(self):
+        # The real 2.1.284 pair for a foreground Bash command that ran a few
+        # seconds: no task_updated ever arrives, and the notification ends it.
+        evidence = TurnEvidence("session-1", "/tmp/checkout-a")
+        evidence.observe({"type": "system", "subtype": "task_started", "task_id": "b67sc680t",
+                          "tool_use_id": "toolu_1", "description": "Sleep briefly and print short",
+                          "is_backgrounded": False, "task_type": "local_bash"})
+        self.assertEqual(evidence.unsettled_background_tasks(), ["b67sc680t"])
+        evidence.observe({"type": "system", "subtype": "task_notification", "task_id": "b67sc680t",
+                          "tool_use_id": "toolu_1", "status": "completed", "output_file": "",
+                          "summary": "Sleep briefly and print short"})
+        self.assertEqual(evidence.unsettled_background_tasks(), [])
+
+    def test_a_non_terminal_or_absent_task_notification_leaves_the_task_unsettled(self):
+        evidence = TurnEvidence("session-1", "/tmp/checkout-a")
+        evidence.observe({"type": "system", "subtype": "task_started", "task_id": "task-note-1"})
+        # A notification whose status is outside the exact terminal set must
+        # not settle a still-running task.
+        evidence.observe({"type": "system", "subtype": "task_notification",
+                          "task_id": "task-note-1", "status": "running"})
+        self.assertEqual(evidence.unsettled_background_tasks(), ["task-note-1"])
+        # A task with no end frame at all stays unsettled.
+        evidence.observe({"type": "system", "subtype": "task_started", "task_id": "task-note-2"})
+        self.assertEqual(evidence.unsettled_background_tasks(), ["task-note-1", "task-note-2"])
+
+    def test_task_notification_failed_and_stopped_each_settle_the_task(self):
+        for status in ("failed", "stopped"):
+            with self.subTest(status=status):
+                evidence = TurnEvidence("session-1", "/tmp/checkout-a")
+                evidence.observe({"type": "system", "subtype": "task_started", "task_id": "task-note-1"})
+                evidence.observe({"type": "system", "subtype": "task_notification",
+                                  "task_id": "task-note-1", "status": status})
+                self.assertEqual(evidence.unsettled_background_tasks(), [])
+
+    def test_a_notification_without_identity_matches_an_update_without_identity(self):
+        notified = TurnEvidence("session-1", "/tmp/checkout-a")
+        notified.observe({"type": "system", "subtype": "task_started", "task_type": "local_bash"})
+        notified.observe({"type": "system", "subtype": "task_notification",
+                          "status": "completed", "summary": "Sleep briefly and print short"})
+        updated = TurnEvidence("session-1", "/tmp/checkout-a")
+        updated.observe({"type": "system", "subtype": "task_started", "task_type": "local_bash"})
+        updated.observe({"type": "system", "subtype": "task_updated", "patch": {"status": "completed"}})
+        self.assertEqual(notified.unsettled_background_tasks(), ["<unnamed>"])
+        self.assertEqual(notified.unsettled_background_tasks(), updated.unsettled_background_tasks())
+
     def test_background_overflow_cannot_hide_an_unsettled_task(self):
         evidence = TurnEvidence("session-1", "/tmp/checkout-a")
         for index in range(32):

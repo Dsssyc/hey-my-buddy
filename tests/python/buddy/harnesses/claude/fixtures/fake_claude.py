@@ -253,6 +253,16 @@ def run_turn(case):
             # A status outside the exact terminal set must not settle the task.
             send({"type": "system", "subtype": "task_updated", "task_id": "task-bg-1",
                   "patch": {"status": "not_completed"}})
+    if case == "bg-notification":
+        # The 2.1.284 shape the Host reproduced for a foreground Bash command
+        # that ran long enough to get a task identity: the CLI closes it with
+        # ``task_notification`` and sends no ``task_updated``.
+        send({"type": "system", "subtype": "task_started", "task_id": "b67sc680t",
+              "tool_use_id": "toolu_fixture_bg_1", "description": "Sleep briefly and print short",
+              "is_backgrounded": False, "task_type": "local_bash"})
+        send({"type": "system", "subtype": "task_notification", "task_id": "b67sc680t",
+              "tool_use_id": "toolu_fixture_bg_1", "status": "completed", "output_file": "",
+              "summary": "Sleep briefly and print short"})
     if case == "quota-warning":
         send({"type": "rate_limit_event", "rate_limit_info": {
             "status": "allowed_warning", "rateLimitType": "seven_day", "resetsAt": "2026-09-27T00:00:00Z",

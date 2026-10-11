@@ -236,6 +236,15 @@ class WorkerCarrierTests(NativeRunCase):
         self.assertEqual(settled.end.status, "ok", settled.end.message)
         self.assertTrue(settled.completion_evidence.stream_end)
 
+    def test_a_completed_task_notification_does_not_block_the_turn(self):
+        # A foreground task reported by the real task_started/task_notification
+        # pair has settled; the turn must not end as background-work-unsettled.
+        self.fixture_case("bg-notification")
+        result = self.execute(self.request())
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIsNone(result.end.reason_code)
+        self.assertTrue(result.completion_evidence.stream_end)
+
 
 class ReadCarrierTests(NativeRunCase):
     #: The review-read posture the role passes explicitly: offline plus the
