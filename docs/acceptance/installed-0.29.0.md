@@ -14,8 +14,13 @@ After installation `health` reports status `ok`, contract 0.29.0, schema 16, a s
 
 ## Not established
 
-- No micro task had run on the new runtime when this was written; the first ones were submitted right after.
 - Whether C-Two 0.7.4 ends the descriptor growth of the daily service takes a day or two of running to show.
 - The model catalog still lists the provider entry ZCode offered earlier. The user's ZCode now offers two other entries, which a catalog read brings in; enabling their buddies is the user's setting.
 - The 48 uncertain account operations still have no way to be concluded; the backlog records what becomes of them.
 - The items the [0.27.0 record](installed-0.27.0.md) left open were not rechecked, the installed console was not inspected in a browser, and Windows remains unverified.
+
+## After the installation
+
+The first micro task on the new runtime ran end to end the same hour (run `ee030ada`, a read-only inventory written by Codex GPT-6.1-Sol at high effort): delivered in sixteen minutes with confirmed shutdown, accepted by the Host with `accept` against the integration branch, and its managed checkout was reclaimed.
+
+Two defects showed within minutes of the installation, and the backlog records both. The installed skill text still named the acceptance commands that this version removed; the Host had not compared the text with the commands before installing. A macro task created before the upgrade refuses new micro tasks, because the upgrade could not prove most of the project identities the old version had recorded.
