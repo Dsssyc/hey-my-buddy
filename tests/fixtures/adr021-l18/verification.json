@@ -1,0 +1,322 @@
+{
+  "addedTestIds": [],
+  "artifactSha256": {
+    "docs/design/adr021-l18-inventory.md": "f3f9f050abce4d8cdb6f249663a502f33762a440353e5bad02df84f6ced00a54",
+    "packaging/generate-upgrade-fixture.py": "8fad21338c421a3860401323af39ed3f7106846ee8755966aa4be558c64b9871",
+    "tests/fixtures/adr021-l18/board.sql": "564f058712ec8f8be223133a88505437ad9814f09f89e1fffe01fb0b2a5c9719",
+    "tests/fixtures/adr021-l18/catalog.json": "97adfc1ebcf05769ba1447a8fdde2bbed248847b1bb3e36b1e07af5bdfa44336",
+    "tests/fixtures/adr021-l18/metadata.json": "6da2932b322d7eac1d43414f5293fc884c77635020ec2712aa08e5a4c05664cb",
+    "tests/fixtures/adr021-l18/operations.json": "8f267509810336d9b75de8fd96b6f4ce77983d7ce02e5b639412e8307c920f36",
+    "tests/fixtures/adr021-l18/storage-inventory.json": "7f96dab2b2b45b380c0eeb050e8aedb17340d7f508a99ef6503cfcc8c2d8c2d8"
+  },
+  "commands": [
+    {
+      "command": "env -u BUDDY_STATE_DIR -u BUDDY_RUNTIME_ROOT -u BUDDY_RUNTIME -u BUDDY_RUNTIME_IDENTITY -u BUDDY_WORKER_STATE -u BUDDY_WORKER_ID -u BUDDY_AGENT_CREDENTIAL -u BUDDY_AGENT_CREDENTIAL_FILE -u VIRTUAL_ENV -u UV_PROJECT_ENVIRONMENT UV_CACHE_DIR=\"$PWD/tmp/adr021-l18/uv-cache\" uv run --offline --no-project python packaging/generate-upgrade-fixture.py --offline --work-dir tmp/adr021-l18/run6 --output-dir tests/fixtures/adr021-l18",
+      "exitCode": 0,
+      "result": {
+        "events": 37,
+        "foreignKeyViolations": 0,
+        "integrity": "ok",
+        "schema": 15,
+        "sourceSchemaMatches": true,
+        "states": {
+          "00000000-0000-0000-0000-000000000007": "delivered",
+          "00000000-0000-0000-0000-00000000000f": "accepted",
+          "00000000-0000-0000-0000-000000000017": "awaiting-host",
+          "00000000-0000-0000-0000-00000000001e": "cancelled"
+        },
+        "tables": 49
+      }
+    },
+    {
+      "command": "env -u BUDDY_STATE_DIR -u BUDDY_RUNTIME_ROOT -u BUDDY_RUNTIME -u BUDDY_RUNTIME_IDENTITY -u BUDDY_WORKER_STATE -u BUDDY_WORKER_ID -u BUDDY_AGENT_CREDENTIAL -u BUDDY_AGENT_CREDENTIAL_FILE -u VIRTUAL_ENV -u UV_PROJECT_ENVIRONMENT UV_CACHE_DIR=\"$PWD/tmp/adr021-l18/uv-cache\" uv run --offline --no-project python packaging/generate-upgrade-fixture.py --verify --work-dir tmp/adr021-l18/verify-final --output-dir tests/fixtures/adr021-l18",
+      "exitCode": 0,
+      "result": {
+        "events": 37,
+        "foreignKeyViolations": 0,
+        "integrity": "ok",
+        "schema": 15,
+        "sourceSchemaMatches": true,
+        "states": {
+          "00000000-0000-0000-0000-000000000007": "delivered",
+          "00000000-0000-0000-0000-00000000000f": "accepted",
+          "00000000-0000-0000-0000-000000000017": "awaiting-host",
+          "00000000-0000-0000-0000-00000000001e": "cancelled"
+        },
+        "tables": 49
+      }
+    },
+    {
+      "command": "env -u BUDDY_STATE_DIR -u BUDDY_RUNTIME_ROOT -u BUDDY_RUNTIME -u BUDDY_RUNTIME_IDENTITY -u BUDDY_WORKER_STATE -u BUDDY_WORKER_ID -u BUDDY_AGENT_CREDENTIAL -u BUDDY_AGENT_CREDENTIAL_FILE -u VIRTUAL_ENV -u UV_PROJECT_ENVIRONMENT UV_CACHE_DIR=\"$PWD/tmp/adr021-l18/uv-cache\" uv run --offline --no-project python tmp/adr021-l18/provenance_check.py",
+      "exitCode": 0,
+      "result": {
+        "fixtureMatchesBaseSQL": true,
+        "generatorHashMatches": true,
+        "loadedBaseModules": 60,
+        "machineHomePathsInArtifacts": 0,
+        "publicOperations": 27,
+        "sourceCommits": [
+          "e4fbc91696f354991252ea2abddc73d45f286aa5",
+          "df9318f38b732681e1004cf190e71bb4bc25fe17"
+        ],
+        "sourceFilesMatchedGit": 108,
+        "sqlDefinitionsAndPragmasMatchedGit": true
+      }
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0,
+      "result": "no whitespace errors; changes are new files only"
+    }
+  ],
+  "date": "2026-10-11",
+  "inputCommit": "df9318f38b732681e1004cf190e71bb4bc25fe17",
+  "inventoryCorrection": {
+    "boundary": "narrow static correction; original generation and SQLite checks above are retained earlier evidence, not rerun",
+    "command": "env -u BUDDY_STATE_DIR -u BUDDY_RUNTIME_ROOT -u BUDDY_RUNTIME -u BUDDY_RUNTIME_IDENTITY -u BUDDY_WORKER_STATE -u BUDDY_WORKER_ID -u BUDDY_AGENT_CREDENTIAL -u BUDDY_AGENT_CREDENTIAL_FILE -u BUDDY_PYTHON -u BUDDY_DEV_SOURCE -u VIRTUAL_ENV -u UV_PROJECT_ENVIRONMENT UV_CACHE_DIR=\"$PWD/tmp/adr021-l18/uv-cache\" uv run --offline --no-project python tmp/adr021-l18/revision1/check_corrections.py",
+    "exitCode": 0,
+    "result": {
+      "addedTestIds": [],
+      "baseTerminalFinishCalls": [
+        {
+          "line": 910,
+          "status": "needs-host"
+        },
+        {
+          "line": 933,
+          "status": "needs-host"
+        },
+        {
+          "line": 938,
+          "status": "needs-host"
+        },
+        {
+          "line": 945,
+          "status": "stale"
+        },
+        {
+          "line": 950,
+          "status": "stale"
+        },
+        {
+          "line": 1031,
+          "status": "failed"
+        },
+        {
+          "line": 1047,
+          "status": "cancelled"
+        },
+        {
+          "line": 1072,
+          "status": "stale"
+        },
+        {
+          "line": 1107,
+          "status": "needs-host"
+        },
+        {
+          "line": 1127,
+          "status": "failed"
+        },
+        {
+          "line": 1179,
+          "status": "cancelled"
+        },
+        {
+          "line": 1186,
+          "status": "needs-host"
+        },
+        {
+          "line": 1196,
+          "status": "failed"
+        },
+        {
+          "line": 1202,
+          "status": "needs-host"
+        },
+        {
+          "line": 1207,
+          "status": "stale"
+        },
+        {
+          "line": 1216,
+          "status": "stale"
+        },
+        {
+          "line": 1224,
+          "status": "needs-host"
+        },
+        {
+          "line": 1261,
+          "status": "needs-host"
+        },
+        {
+          "line": 1269,
+          "status": "needs-host"
+        },
+        {
+          "line": 1277,
+          "status": "needs-host"
+        },
+        {
+          "line": 1284,
+          "status": "needs-host"
+        },
+        {
+          "line": 1297,
+          "status": "needs-host"
+        },
+        {
+          "line": 1311,
+          "status": "stale"
+        },
+        {
+          "line": 1337,
+          "status": "completed"
+        },
+        {
+          "line": 1474,
+          "status": "completed"
+        }
+      ],
+      "identitySchemaCheck": "imported SCHEMA_VERSION; literal 15 only in diagnostic text",
+      "jsonAndIntegerColumns": {
+        "baseSchema": {
+          "attempts.log_paths": {
+            "default": "'{}'",
+            "notNull": 1,
+            "sqlType": "TEXT"
+          },
+          "decision_requests.considered_evidence": {
+            "default": "0",
+            "notNull": 1,
+            "sqlType": "INTEGER"
+          },
+          "workers.capabilities": {
+            "default": "'[]'",
+            "notNull": 1,
+            "sqlType": "TEXT"
+          }
+        },
+        "inputSchema": {
+          "attempts.log_paths": {
+            "default": "'{}'",
+            "notNull": 1,
+            "sqlType": "TEXT"
+          },
+          "decision_requests.considered_evidence": {
+            "default": "0",
+            "notNull": 1,
+            "sqlType": "INTEGER"
+          },
+          "workers.capabilities": {
+            "default": "'[]'",
+            "notNull": 1,
+            "sqlType": "TEXT"
+          }
+        }
+      },
+      "notRerun": [
+        "fixture generation",
+        "fixture reload",
+        "full suite",
+        "service",
+        "model execution"
+      ],
+      "removedTestIds": [],
+      "routerIdleConclusion": "base public queued/running paths bind active tasks; needs-host is terminal; retain terminal history without new Router facts",
+      "sources": {
+        "baseDecision": {
+          "commit": "e4fbc91696f354991252ea2abddc73d45f286aa5",
+          "path": "src/buddy/decision.py",
+          "sha256": "a3c276bd54d90d1091209ab8689a14fb981d7333a4449d7109c2f583b73a2ddb"
+        },
+        "baseSchema": {
+          "commit": "e4fbc91696f354991252ea2abddc73d45f286aa5",
+          "path": "src/buddy/db.py",
+          "sha256": "941ab32b600296792a7ac9cf7e06085628183e41814fdaa165379a422712aede"
+        },
+        "baseStore": {
+          "commit": "e4fbc91696f354991252ea2abddc73d45f286aa5",
+          "path": "src/buddy/store.py",
+          "sha256": "6dfe31ecc1956fbe360e19064c8f98916655836ee64eaae4d9dd922f1170679a"
+        },
+        "baseUpgrade": {
+          "commit": "e4fbc91696f354991252ea2abddc73d45f286aa5",
+          "path": "src/buddy/upgrade.py",
+          "sha256": "5c5f83ca426d23fe6d4f828cff48b3f6a6b537fa8ef3adca20f35009a0ce61db"
+        },
+        "inputDecision": {
+          "commit": "df9318f38b732681e1004cf190e71bb4bc25fe17",
+          "path": "src/hey_my_buddy/blackboard/routing/decision.py",
+          "sha256": "8d4a9667814da87da8548ba5336ff297adaed0ad592c9bcc7a104f676fa5be30"
+        },
+        "inputIdentity": {
+          "commit": "df9318f38b732681e1004cf190e71bb4bc25fe17",
+          "path": "src/hey_my_buddy/blackboard/store/workspace_identity_migration.py",
+          "sha256": "5e9b5ecabf72e68c0f2b5bba6b309934dc0293fdaace7f23710856f71fbba60c"
+        },
+        "inputSchema": {
+          "commit": "df9318f38b732681e1004cf190e71bb4bc25fe17",
+          "path": "src/hey_my_buddy/blackboard/store/db.py",
+          "sha256": "99f298a380b118a26cf8399a3d950f3f0ba2f164c82049090a3d883561579fc4"
+        },
+        "inputUpgrade": {
+          "commit": "df9318f38b732681e1004cf190e71bb4bc25fe17",
+          "path": "src/hey_my_buddy/install/upgrade.py",
+          "sha256": "c09d1e304ec8b0bbf9abcabd6fb59fd8300bb27460d0a145d669582659c8e610"
+        }
+      },
+      "staticOnly": true,
+      "unchangedArtifactSha256": {
+        "packaging/generate-upgrade-fixture.py": "8fad21338c421a3860401323af39ed3f7106846ee8755966aa4be558c64b9871",
+        "tests/fixtures/adr021-l18/board.sql": "564f058712ec8f8be223133a88505437ad9814f09f89e1fffe01fb0b2a5c9719",
+        "tests/fixtures/adr021-l18/catalog.json": "97adfc1ebcf05769ba1447a8fdde2bbed248847b1bb3e36b1e07af5bdfa44336",
+        "tests/fixtures/adr021-l18/metadata.json": "6da2932b322d7eac1d43414f5293fc884c77635020ec2712aa08e5a4c05664cb",
+        "tests/fixtures/adr021-l18/operations.json": "8f267509810336d9b75de8fd96b6f4ce77983d7ce02e5b639412e8307c920f36",
+        "tests/fixtures/adr021-l18/storage-inventory.json": "7f96dab2b2b45b380c0eeb050e8aedb17340d7f508a99ef6503cfcc8c2d8c2d8"
+      },
+      "unchangedArtifacts": 6,
+      "unchangedArtifactsMatchedSealedCommit": "2f6a4f5ca035c4ff6a45db2f7039afc3edcf8dcf",
+      "whitespaceCheck": "git diff --no-index --check: exit 1 for differing files, no whitespace diagnostics"
+    }
+  },
+  "kind": "worker-verification-only",
+  "notVerified": [
+    "schema 15 to 16 migration",
+    "install/upgrade/service IPC",
+    "Host conclusion mutation",
+    "real harness/model/account/native sessions",
+    "live workspace identity/integration/resume from redacted paths",
+    "Windows",
+    "daily board",
+    "full check suite"
+  ],
+  "processData": "<allocated-checkout>/tmp/adr021-l18/; exact local directory manifest retained in ignored retained-directories.txt; no cleanup performed",
+  "removedTestIds": [],
+  "samples": {
+    "evaluationCards": 1,
+    "familyAnnotations": 1,
+    "finishedSyntheticAttempts": 3,
+    "microTasks": 4,
+    "modelCatalog": "two fictional Codex/OpenAI models with high effort; two observations and current pointer",
+    "objectives": 1,
+    "reviewEvent": "workflow.acknowledged verdict=accepted/rejected",
+    "routerSlots": 2
+  },
+  "sourceAudit": "108 archived source/resource files match git show at the base commit; 60 loaded buddy modules all come from archived base. Independently reconstructed both commits SQLite objects and every recorded PRAGMA result; restored fixture exactly matches base SQL.",
+  "sourceCommit": "e4fbc91696f354991252ea2abddc73d45f286aa5",
+  "sqlInventory": {
+    "base": {
+      "indexesIncludingAuto": 114,
+      "tables": 49,
+      "views": 1
+    },
+    "input": {
+      "indexesIncludingAuto": 117,
+      "tables": 50,
+      "views": 1
+    },
+    "sqlite_sequence": "excluded from business table counts"
+  }
+}
