@@ -13,56 +13,13 @@
 
 用户据此要求调研开源的多 harness 聚合平台如何处理同一问题。
 
-### 调研（2026-10-02）
+### 调研
 
-以下依据各项目当日的公开文档，未做实测。
+两次调研的记录在调研目录里：[2026-10-02，聚合多个 harness 的平台怎样保持一致](../research/2026-10-02-consistency-across-harnesses.md)，[2026-10-09，各 harness 的原生权限](../research/2026-10-09-native-harness-permissions.md)。本文用到的结论如下。
 
-| 项目 | 做法 |
-| --- | --- |
-| [Vibe Kanban](https://vibekanban.com/docs/configuration-customisation/agent-configurations) | 每个代理只用自己的原生参数：Claude Code 是计划模式与跳过权限，Codex 是三档沙盒与审批策略，Gemini 是免确认开关。没有跨代理通用的只读模式 |
-| Omnigent | 策略分服务器、代理、会话三级。统一强制靠在代理进程外套 bwrap 或 seatbelt，再加出口代理。维护一张能力矩阵，并用测试台核对矩阵与实际行为。自述 Windows 上只约束进程树，不隔离文件系统与网络 |
-| Rivet sandbox-agent | 统一的是 HTTP 接口与事件格式；隔离交给外层沙盒，自己不做限制 |
-| [Agent Client Protocol](https://agentclientprotocol.com/protocol/v1/tool-calls) | 为工具调用规定统一的类别：read、edit、delete、move、search、execute、think、fetch、switch_mode、other。类别由代理上报，用于展示与权限提示，协议不强制 |
-| [Anthropic sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime) | 可以包裹任意进程的系统沙盒：写入与网络默认拒绝，按白名单放行。支持 macOS 与 Linux，Windows 为 alpha |
-
-各 harness 自带的沙盒也不齐全。按[一份 2026 年 5 月的汇总](https://gist.github.com/wincent/2752d8d97727577050c043e4ff9e386e)，Codex 在 macOS、Linux 与 Windows 上都有，Claude Code 只有 macOS 与 Linux，Cursor 没有。
-
-结论：没有一家靠"给每个 harness 换上同一套工具"来保证一致。它们统一的是三样东西：通用设置到各 harness 原生开关的映射，差异记入能力矩阵；进程之外的系统级隔离；事件的词汇。
-
-### 调研（2026-10-09）：各 harness 的原生权限
-
-起因是角色层的工具范围里"可写"一档在各家落成的东西不同：Codex 的 Worker 被写死为只写检出并禁网，Claude Code 的只允许访问包管理的域名，DSH 只限制文件，ZCode 不限制。一个靠 Unix 套接字与共享内存做测试的项目里，Codex 的 Worker 有一半的回合以请 Host 协助结束，其他 Codex Host 是 12%。下表的"依据"一栏写明每一行是怎么得到的。
-
-| harness | 原生的档位 | 靠什么阻止 | 无人值守时越界 | 依据 |
-| --- | --- | --- | --- | --- |
-| Codex 0.160.1 | `:read-only`、`:workspace`、`:danger-full-access`，另有自定义权限档（beta） | 系统沙箱，管文件与网络；macOS、Linux、Windows 都有 | 批准策略为 never 时直接拒绝 | 本机实测，官方文档 |
-| Claude Code 2.1.284 | 模式 `default`、`acceptEdits`、`plan`、`auto`、`dontAsk`、`bypassPermissions` | Bash 的系统沙箱，管文件与网络；文件工具靠权限规则；Windows 没有沙箱 | 权限回调或 `dontAsk` 拒绝 | 官方文档，2026-09 的原生检查，本机实测 |
-| DSH 0.1.5-rc.1 | 沙箱模式 `read-only`、`workspace-write`、`danger-full-access`，批准策略 `ask`、`never` | 系统沙箱，只管文件；网络与进程不在它的词汇里；Windows 上只能部分强制 | 拒绝并提示可以申请升级，申请交给应答方 | 随包文档，ADR-025 可行性核对的真实运行 |
-| ZCode（本机安装包） | 模式 `build`（改动前询问）、`edit`（自动编辑工作区文件）、`plan`、`yolo`（完全访问） | 模式是工具级的关口；没有找到它自己的系统沙箱 | 权限请求交给控制器 | 静态查看安装包，第三方评测；各模式的实际行为没有实测 |
-| OpenCode（未接入） | `permission` 表，按工具给出 allow、ask、deny，可按模式匹配；内置 `build` 与 `plan` 两个代理；`--auto` 自动批准没有被拒绝的请求 | 工具级的规则；`external_directory` 管触及启动目录之外路径的工具调用；文档没有提到系统沙箱 | 文档没有说明 | 官方文档，未安装，未实测 |
-| Kimi Code CLI（未接入） | 默认逐项批准；`--plan` 只用只读工具；`--yolo` 常规操作自动、有风险的仍询问；`--auto` 从不询问 | 批准与静态的拒绝规则；没有找到系统沙箱 | 非交互运行按 `auto` 处理；经 ACP 时发出权限请求 | 官方文档，未安装，未实测 |
-
-另外查了几家只用来检验档位是否通用，依据都是二手资料：Gemini CLI 与 Qwen Code 有 default、auto_edit、yolo 几种批准模式，沙箱是 Seatbelt 或容器；Pi 没有权限系统；Cursor、Copilot 与 Aider 没有内置的系统沙箱。
-
-评估的结果：
-
-- **三档的名字本来就通用。** 只读、只写工作区、完全访问是 Codex 与 DSH 的原生词汇，Claude Code、Gemini CLI 与 Qwen Code 能直接表达，其余几家有对应的模式。
-- **只读与放开两档，六家都给得出。** 只读在 Codex、Claude Code 与 DSH 上由系统沙箱或工具限制强制，在 ZCode、OpenCode 与 Kimi Code 上是工具级的模式。
-- **分歧集中在写检出一档。** Codex、Claude Code 的 Bash 与 DSH 能由系统阻止检出之外的写入。ZCode、OpenCode 与 Kimi Code 没有原生手段约束命令的写入范围：要么逐条批准，无人值守时命令就跑不了；要么全部放行。
-- **能强制写入范围的三家，范围之外的事并不一致。**
-
-    | | Codex | Claude Code | DSH |
-    | --- | --- | --- | --- |
-    | 网络 | 默认关，可以开，可以按域名 | 只放行列出的域名 | 不限制 |
-    | Unix 套接字 | 默认拒绝，可以按目录放行 | 默认拒绝，可以按路径放行 | 不限制 |
-    | 本机端口 | 随网络开关 | 默认拒绝，可以开 | 不限制 |
-    | POSIX 共享内存 | 拒绝，没有开关 | 允许 | 不限制 |
-    | 临时目录 | 可写 | 只有列出的路径可写 | 可写 |
-
-    Codex 的套接字、端口、共享内存、临时目录，与 Claude Code 的套接字、端口、共享内存，是 2026-10-09 在本机用同一个探针实测的，探针不调用模型；其余各格依据文档，DSH 一列没有实测。受管检出是源仓库的一个 worktree，它的 Git 元数据在检出之外，所以在 Codex 上 `git add` 被拒绝，这一项也是实测的；另外两家没有核对。
-- **越界时的表现基本一致。** 已接入的四家在无人值守时都能拒绝并把请求交给控制器，通道各不相同。Kimi Code 经 ACP 发出权限请求；OpenCode 的文档没有说明。
-
-这次补查的聚合项目没有改变 2026-10-02 的结论：Rivet sandbox-agent 的模式仍是各家原生的名字；ZCode 自己能驱动五种 CLI，统一的也是模式；把一份策略翻译成各家设置文件的项目（agent-perms、agentperms、praetor）只到工具级规则，都很早期。与 harness 无关的系统级包装除 sandbox-runtime 外还有带 Python 绑定的 nono。Omnigent 用一组探针核对能力矩阵与实际行为是否一致，这一点被"接入新 harness 时"一节采用。
+- 没有一家靠"给每个 harness 换上同一套工具"来保证一致。它们统一的是三样东西：通用设置到各 harness 原生开关的映射，差异记入能力矩阵；进程之外的系统级隔离；事件的词汇。
+- 只读、只写工作区、完全访问这三档的名字本来就通用；只读与放开两档各家都给得出；分歧集中在写检出一档，而能由系统强制写入范围的三家，对范围之外的网络、套接字、端口、共享内存与临时目录并不一致；越界时已接入的四家都能拒绝并把请求交给控制器。
+- 用一组探针核对能力矩阵与实际行为是否一致的做法，被"接入新 harness 时"一节采用。
 
 ## 决定
 

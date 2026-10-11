@@ -25,7 +25,7 @@ While the version is 0.x the source keeps neither defensive redundancy nor compa
   - Imports that still cross the two sides are registered in `docs/acceptance/adr025-step5-cross-imports.tsv`. ADR-025 ended with 56 of them instead of removing them; code both sides need belongs under `protocol/` or the root package (ADR-025 decision 12).
 - `apps/console/`: React/Vite frontend; built assets are packaged for users without npm.
 - `tests/python/`: Python and cross-component verification, mirroring the package layout. Every test directory is a package; a test file outside one fails the check suite.
-- `docs/reference/`: current operational contracts; `docs/decisions/` and `docs/acceptance/`: decisions and evidence.
+- `docs/reference/`: current operational contracts; `docs/decisions/` and `docs/acceptance/`: decisions and evidence; `docs/research/`: what was looked at before a decision.
 - `packaging/`: explicit runtime resources and the shared skill build.
 - `skills/buddy/`: the shared agent skill (`SKILL.md` and its `scripts/buddy` launcher).
 
@@ -44,6 +44,8 @@ Build the skill with `uv run --frozen python packaging/build-skill.py --destinat
 Each Markdown prose paragraph occupies one source line; preserve structural newlines. Use the domain language in `CONTEXT.md` ([ADR-013](docs/decisions/013-buddy-roles-and-blackboard-terminology.md)): Host and Worker buddies act only through the blackboard, and "Buddy" never names the product, the blackboard or a runtime. Keep setup instructions independent of temporary branches. README and its Chinese counterpart describe purpose and use with language parity. Detailed commands belong in their owning reference, routed from `docs/README.md` and the skill; update the owning page first and the entrypoint summaries when behavior changes.
 
 Record actual verification in `docs/acceptance/`; never present a draft or a worker's success message as acceptance. State the verification boundary in public docs: a capability that is unverified, partially wired or waiting on installation is named as such rather than described as working.
+
+Record an investigation of other projects, papers or products in `docs/research/`, one dated note per question in the form its README gives: the question, what was read and how far, the facts in our own words with their basis, what was taken and what was not, and what would make the note stale. A note carries no code from another project and no address of its repository or of files inside it. An implementation is written from the note and the decision, never from that project's source; reuse happens only through a library or framework whose licence allows it, added as a dependency. Decisions cite the note instead of repeating the survey.
 
 Records, fixtures and saved evidence name locations with `~` or a placeholder, never a machine's absolute home directory or the layout of its project directories; the check suite fails when a tracked file carries those of the machine running it.
 

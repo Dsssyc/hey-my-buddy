@@ -21,6 +21,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 | `packaging/runtime-assets.json` | The explicit runtime resource manifest consumed by `packaging/build-skill.py` and the stable-runtime materializer |
 | `skills/buddy/` | The shared agent skill: `SKILL.md` and its `scripts/buddy` launcher |
 | `docs/reference/`, `docs/decisions/`, `docs/acceptance/` | Current operational contracts, the design record, and versioned evidence |
+| `docs/research/` | What was looked at before a decision: dated notes on other projects, papers and products |
 
 ## Current references
 
@@ -128,6 +129,10 @@ The [Host review of two runtime fixes](acceptance/routing-and-claude-fixes-host-
 [ADR-004 proposal: decision support, evaluation maintenance and the local console](decisions/004-buddy-decision-support-and-console.md) preserves the consolidated discussion of Host/Worker comparative advantage, blackboard and C-Two boundaries, turn-end yield and continuation, explicit workspaces, bounded assessment cards, evaluation maintenance and a local console. Its section III governance choices were resolved by ADR-005; the remaining recommendations retain their proposal status. Its original interface sketches are historical design text. Supported runtime behavior and callable operations are maintained in the [workflow](reference/workflow.md), [evaluation](reference/evaluation.md), [architecture](reference/architecture.md) and [CLI](reference/cli.md) references.
 
 [ADR-003 draft](decisions/003-harness-model-selection.md) is retained as historical discussion; ADR-004 superseded it as the proposal for model selection, and implemented routing is owned by [workflow.md](reference/workflow.md).
+
+## Research notes
+
+[docs/research](research/README.md) holds what was looked at before a decision, one dated note per question: [model selection references](research/2026-09-21-model-selection-references.md) (2026-09-21, ADR-003), [model routing literature](research/2026-10-01-model-routing-literature.md) (2026-10-01, ADR-021), [consistency across harnesses](research/2026-10-02-consistency-across-harnesses.md) (2026-10-02, ADR-023), [native harness permissions](research/2026-10-09-native-harness-permissions.md) (2026-10-09, ADR-023) and [plan quota and paid usage](research/2026-10-11-plan-quota-and-paid-usage.md) (2026-10-11, ADR-021 decision 22). A note names what was read and how far, states facts in our own words and carries neither another project's code nor the address of its repository. The four notes before 2026-10-11 were moved out of their decision records.
 
 ## History and evidence
 
