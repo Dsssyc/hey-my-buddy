@@ -31,9 +31,6 @@ OUTCOMES = ("answered", "no_answer")
 #: Attempt states that still own capacity: active execution or unconfirmed stop.
 #: Missing PIDs and expired leases never prove a stop, so ``uncertain`` stays here.
 ACTIVE_ATTEMPT_STATES = ("starting", "executing", "finalizing", "uncertain")
-#: The receipt key prefix in ``meta``; every recorded outcome stores one receipt in
-#: the same transaction as its event, so a replay either matches it or conflicts.
-RECEIPT_PREFIX = "router-outcome:"
 #: Terminal decision kinds whose immutable records can prove an effective outcome.
 _RECORD_KINDS = ("decision.completed", "decision.failed", "decision.needs_host",
                  "decision.cancelled", "decision.stale")
@@ -102,7 +99,7 @@ def record_outcome(connection, *, profile_id: str, plane: str, request_id: str, 
     """Record one idempotent Router outcome fact for any plane; never executes anything.
 
     The idempotency key is plane/requestId/routerIndex/phase/taskId/attemptId/outcome
-    with ``routerIndex`` taken from ``facts``; its receipt lives in ``meta`` and
+    with ``routerIndex`` taken from ``facts``; its receipt lives in ``router_outcomes`` and
     commits in the caller's transaction together with the event. A replay with the
     same facts returns the original record, different facts raise ``CONFLICT``.
     Only callers that observed an actual outcome record one: cancellations, input or
@@ -127,23 +124,23 @@ def record_outcome(connection, *, profile_id: str, plane: str, request_id: str, 
     payload = {"plane": plane, "requestId": request_id, "routerIndex": router_index,
                "profileId": profile_id, "phase": phase, "taskId": task_id,
                "attemptId": attempt_id, "outcome": outcome, "code": code}
-    key = RECEIPT_PREFIX + hashlib.sha256(canonical_json(
+    key = hashlib.sha256(canonical_json(
         [plane, request_id, router_index, phase, task_id, attempt_id, outcome]).encode("utf-8")).hexdigest()
     kind = f"router.{outcome}"
-    stored = connection.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    stored = connection.execute("SELECT plane,request_id,router_index,profile_id,phase,task_id,attempt_id,"
+                                "outcome,code,event_seq FROM router_outcomes WHERE receipt_id=?", (key,)).fetchone()
     if stored is not None:
-        try:
-            receipt = json.loads(stored[0])
-        except ValueError:
-            receipt = None
-        if receipt is None or receipt.get("payload") != payload:
+        expected = (plane, request_id, router_index, profile_id, phase, task_id, attempt_id, outcome, code)
+        if tuple(stored)[:-1] != expected:
             raise BoardError("CONFLICT", "router outcome facts conflict with the recorded receipt",
                              profileId=profile_id, requestId=request_id)
-        return {"recorded": False, "seq": int(receipt["seq"]), "event": kind}
+        return {"recorded": False, "seq": int(stored[-1]), "event": kind}
     seq = _append_event(connection, kind=kind, task_id=task_id, attempt_id=attempt_id,
                         payload=payload, now=now)
-    connection.execute("INSERT INTO meta(key,value) VALUES(?,?)",
-                       (key, canonical_json({"payload": payload, "seq": seq, "recordedAt": now})))
+    connection.execute("INSERT INTO router_outcomes(receipt_id,plane,request_id,router_index,profile_id,phase,"
+                       "task_id,attempt_id,outcome,code,event_seq,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                       (key, plane, request_id, router_index, profile_id, phase, task_id, attempt_id,
+                        outcome, code, seq, now))
     return {"recorded": True, "seq": seq, "event": kind}
 
 
@@ -406,5 +403,5 @@ def router_state(connection, *, profile_id: str, interval_seconds: int, now: str
             "activeAttempts": attempts}
 
 
-__all__ = ["ACTIVE_ATTEMPT_STATES", "OUTCOMES", "PLANES", "RECEIPT_PREFIX", "active_executions",
+__all__ = ["ACTIVE_ATTEMPT_STATES", "OUTCOMES", "PLANES", "active_executions",
            "profile_timeline", "record_outcome", "router_state", "summarize", "unattributed_records"]

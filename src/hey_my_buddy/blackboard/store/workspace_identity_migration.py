@@ -1,4 +1,4 @@
-"""Offline, atomic schema-15 identity normalization under upgrade's fences.
+"""Offline, atomic current-schema identity normalization under upgrade's fences.
 
 Immutable manifests, turn inputs, receipts and history never change. Exact
 legacy-digest reconstruction proves the old directory inode, in addition to
@@ -320,7 +320,7 @@ def migrate_workspace_identity(state: Path, before: dict) -> tuple[dict, dict]:
         try:
             schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if schema is None or int(schema[0]) != SCHEMA_VERSION:
-                raise BoardError("UPGRADE_MIGRATION_FAILED", "Workspace identity migration requires schema 15")
+                raise BoardError("UPGRADE_MIGRATION_FAILED", f"Workspace identity migration requires schema {SCHEMA_VERSION}")
             baseline = _snapshot(connection)
             if any(before.get(key) != baseline[key] for key in ("tables", "fingerprints", "eventHead")):
                 raise BoardError("UPGRADE_MIGRATION_FAILED", "Identity migration no longer matches its verified backup")

@@ -27,7 +27,6 @@ CONFIG_KEYS = {
     "defaultRoutingMode": "router_default_mode",
     "routingBudget": "router_budget_preset",
 }
-CONFIG_META_KEYS = frozenset((*CONFIG_KEYS.values(), "router_configuration_version"))
 
 INSTRUCTIONS = """Router protocol version 11.
 Choose one legal configuration for the delegated work, or abstain with profileId null.
@@ -204,9 +203,8 @@ def _write_settings(connection, settings: dict) -> None:
 def configuration(connection) -> dict:
     """Read current version-3 settings only.
 
-    Version 2 and older slot settings stay untouched until the explicit L15
-    upgrade: reads, startup and publications never run the pure conversion or
-    migrate the old keys, and surface ``router-settings-upgrade-required`` instead.
+    Schema 15 must pass the explicit 15-to-16 upgrade before this reader is
+    reached. Reads and publications never reinterpret older settings.
     """
     from .router_settings import RouterSettings, validate_router_settings_patch
     values = {row[0]: row[1] for row in connection.execute("SELECT key,value FROM meta WHERE key LIKE 'router_%'")}

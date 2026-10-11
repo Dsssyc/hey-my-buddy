@@ -114,7 +114,7 @@ def validate_router_settings_patch(value: object) -> dict:
 def convert_legacy_router_settings(value: object) -> RouterConversion:
     """Convert dual-slot legacy settings into the ordered list; no state access.
 
-    Only L15's explicit upgrade may call this for production state. The default
+    Only L18's explicit schema upgrade may call this for production state. The default
     mode's slot leads and the other slot follows it even when unavailable, so no
     user-entered ID is dropped; source_slots keeps the two raw slots in fixed
     fast/review order for audit.

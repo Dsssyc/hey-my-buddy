@@ -1,6 +1,6 @@
 # Work objectives and delegation timelines
 
-Implementation contract for the user-authorized section X of the [Claude proposal](../decisions/012-claude-code-distribution-and-evidence-routing.md), introduced in 0.14.0 and revised by the authorized 0.15.0 presentation repair; the current schema is 13 and the offline preparation tool chains the 12 → 13 migration. The separately authorized [0.14.0 daily installation](../acceptance/installed-0.14.0.md) on 2026-09-27 retained the previous schema-11 data through a verified offline copy; the 0.15.0 daily installation is recorded in [installed-0.15.0](../acceptance/installed-0.15.0.md), and the daily 0.15.1 installation is recorded in [installed-0.15.1](../acceptance/installed-0.15.1.md); 0.16.0 source changes require separate installation authorization. This feature supplies archival grouping and read-only browsing; it adds no scheduler, dependency graph, execution permission, result ledger or model-routing input.
+Implementation contract for the user-authorized section X of the [Claude proposal](../decisions/012-claude-code-distribution-and-evidence-routing.md), introduced in 0.14.0 and revised by the authorized 0.15.0 presentation repair; the current schema is 16 and schema-15 upgrades use the explicit idle upgrade path. The separately authorized [0.14.0 daily installation](../acceptance/installed-0.14.0.md) on 2026-09-27 retained the previous schema-11 data through a verified offline copy; the 0.15.0 daily installation is recorded in [installed-0.15.0](../acceptance/installed-0.15.0.md), and the daily 0.15.1 installation is recorded in [installed-0.15.1](../acceptance/installed-0.15.1.md); 0.16.0 source changes require separate installation authorization. This feature supplies archival grouping and read-only browsing; it adds no scheduler, dependency graph, execution permission, result ledger or model-routing input.
 
 ## Submission metadata
 
@@ -67,16 +67,9 @@ The desktop label column stays visible while the timeline scrolls horizontally. 
 
 ## Schema and verification
 
+Startup accepts schema 16 only. An idle schema-15 board written by the upgrade base must use the explicit `upgrade` path described in [operations](operations.md); startup performs no conversion. The schema-11 offline preparation chain is retired. Other unsupported boards remain archives and have no conversion entrypoint in this source.
 
-Startup accepts schema 13 only and contains no automatic schema conversion or version facade. The explicit offline preparation tool copies an idle, verified schema-11 board into a separate new destination, applies the schema-12 additions, and then chains the same 12 → 13 migration `upgrade` uses, while preserving all original rows, secrets and relationships:
-
-```sh
-uv run --frozen python -m hey_my_buddy.blackboard.store.board_prepare --source "/path/to/schema-11-state" --destination "/path/to/new-schema-13-state"
-```
-
-It refuses a source whose daemon owner locks are held, a source with open tasks or attempts without confirmed stop, a source that is not schema 11 or fails its integrity/foreign-key checks, an existing destination and a destination inside the source. It reads the source through a read-only connection and the SQLite backup API, applies the schema-12 additions to the copy only, replays the recorded event order through the same activity projection the runtime maintains, then applies 12 → 13 — merging each family's shared preference into a family default and its notes into one family note — and reports the migration counts under `migration`. It finally verifies integrity, foreign keys, the exact schema shape (tables, indexes and views) of a fresh schema-13 board, unchanged row counts for every table outside the migrated preference/note tables and `meta`, the preserved capability secret and the unchanged source file hash. It creates no objectives: historical roots stay standalone delegations. The production switch remains separate; this candidate is tested with private boards and synthetic historical fixtures.
-
-Verification covers grouping/replay conflicts, cross-project and source-Host checks, helper inheritance, Worker/Router isolation, event-derived ordering, filters/keysets/truncation, recorded attempts/requests/markers, cancellation with uncertain shutdown, and idle folding across overlapping or incomplete data. The old records and the new grouping must survive explicit offline preparation without reconstructing missing history. Claude supplies the design; implementation and final correctness review remain separate verified work.
+The 15 → 16 transaction converts SQL constraints and indexes, Router settings and current catalog trust together, preserving macro and micro tasks, immutable inputs and outputs, Host conclusions, native observations, event order and historical hashes. It creates no macro tasks or Router execution facts. Verification uses the fixed upgrade-base fixture, compares its migrated schema with a fresh board and checks retained rows; service reads and Host conclusion writes require separate private-service evidence. Installation and integration acceptance are recorded by the Host after verification.
 
 ## 0.15.1 presentation and metadata
 

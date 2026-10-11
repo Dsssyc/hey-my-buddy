@@ -1,0 +1,249 @@
+{
+  "format": 2,
+  "originalInputCommit": "fcb4639de37d6be52cb813595e51427dd365274e",
+  "inputArtifactCommit": "cccf3714bd2631ea7b09a1f9343379dfc3492361",
+  "attemptId": "849c6fb7-12da-4baf-8859-7085fd8382e9",
+  "turnId": "708d8611-49f8-48fc-824a-bb623cb44b01",
+  "executor": "Codex Worker；本轮无委派",
+  "summary": "已原样接入 accepted fixture 和唯一还原 helper，公开 delivered 结论与幂等通过；正式服务测试已加强，等待 Codex 实现 Host 在最新固定产物复跑。",
+  "fixedArtifacts": [
+    "docs/reference/objectives.md",
+    "src/hey_my_buddy/blackboard/catalog/catalog.py",
+    "src/hey_my_buddy/blackboard/catalog/catalog_store.py",
+    "src/hey_my_buddy/blackboard/routing/router.py",
+    "src/hey_my_buddy/blackboard/routing/router_boundary_data.py",
+    "src/hey_my_buddy/blackboard/routing/router_history.py",
+    "src/hey_my_buddy/blackboard/routing/router_sequence.py",
+    "src/hey_my_buddy/blackboard/routing/router_settings.py",
+    "src/hey_my_buddy/blackboard/store/backup.py",
+    "src/hey_my_buddy/blackboard/store/db.py",
+    "src/hey_my_buddy/blackboard/store/migrations.py",
+    "src/hey_my_buddy/blackboard/store/workspace_identity_migration.py",
+    "src/hey_my_buddy/install/upgrade.py",
+    "tests/fixtures/adr021-l18/board.sql",
+    "tests/fixtures/adr021-l18/catalog.json",
+    "tests/fixtures/adr021-l18/metadata.json",
+    "tests/fixtures/adr021-l18/operations.json",
+    "tests/fixtures/adr021-l18/storage-inventory.json",
+    "tests/fixtures/adr021-l18/verification.json",
+    "tests/fixtures/adr021-l18/workspace-resources.json",
+    "tests/python/blackboard/catalog/test_catalog_trust.py",
+    "tests/python/blackboard/routing/test_current_router.py",
+    "tests/python/blackboard/routing/test_router_boundary_integration.py",
+    "tests/python/blackboard/routing/test_router_dispatch.py",
+    "tests/python/blackboard/routing/test_router_list_health.py",
+    "tests/python/blackboard/routing/test_router_sequence.py",
+    "tests/python/blackboard/store/test_current_core.py",
+    "tests/python/blackboard/store/test_migrations.py",
+    "tests/python/blackboard/store/test_upgrade_fixture.py",
+    "tests/python/blackboard/store/upgrade_fixture.py",
+    "tests/python/blackboard/tasks/test_console_objective_fixture.py",
+    "tests/python/install/adr021-l18-retirements.json",
+    "tests/python/install/adr021-l18-test-changes.json",
+    "tests/python/install/adr021-l18-upgrade-delivery.json",
+    "tests/python/install/adr021-l18-upgrade-delivery.md",
+    "tests/python/install/test_upgrade.py",
+    "tests/python/install/test_upgrade_migration.py",
+    "tests/python/install/test_upgrade_service.py",
+    "tests/python/install/test_workspace_identity_migration.py"
+  ],
+  "acceptedDependency": {
+    "outputCommit": "513e97da90477bc9e8dd12bda5efaa89b5db8924",
+    "hostCommit": "322cab0041c5c1d2f675d7e3180f479cb3570ac6",
+    "artifactId": "bb884da8-44f8-4b2f-80d7-c4f16be9558d",
+    "integrationId": "int-f287794d-a091-4cd5-8f7a-ad5ec7872efd",
+    "status": "accepted",
+    "filesSha256": {
+      "tests/fixtures/adr021-l18/board.sql": "59d2e866c5ec8b0805605dcb66c9d70d6eca56d5fe426d78deb02521d6ff01f3",
+      "tests/fixtures/adr021-l18/catalog.json": "97adfc1ebcf05769ba1447a8fdde2bbed248847b1bb3e36b1e07af5bdfa44336",
+      "tests/fixtures/adr021-l18/metadata.json": "1e14357d635f00bde4b847e760c2aeb7b7e9588bca7f2286e5ddc7f1c0cf95a4",
+      "tests/fixtures/adr021-l18/operations.json": "4b9c4e11535ff9a8ec72256a9f1ed05a908c347fcb3312ee713f7c4d481d4747",
+      "tests/fixtures/adr021-l18/storage-inventory.json": "7f96dab2b2b45b380c0eeb050e8aedb17340d7f508a99ef6503cfcc8c2d8c2d8",
+      "tests/fixtures/adr021-l18/verification.json": "bef134a330a0276a67d0344b7c4c1342f4c8db09896e78060fe0b5bb9a326cd7",
+      "tests/fixtures/adr021-l18/workspace-resources.json": "96218aea97644911e63b81b87bbc08d7065482e62ef52aa1880671d4e74a0ef2",
+      "tests/python/blackboard/store/test_upgrade_fixture.py": "ff44d3a29add7fa3671830c391677bb074d3a2e7c04460a3f423d1c7f2ef401f",
+      "tests/python/blackboard/store/upgrade_fixture.py": "2da13ed3819d81ef8264b92500564f44ff179699d4a5633942bee4f8c86ecc3a"
+    },
+    "preparation": "仅从共享 Git 对象原样复制 9 文件；不复制 generator/inventory 文档，不重生成。load_fixture 绑定私有路径、基点旧身份和相关摘要后仍为 schema 15，之后才记录保留基线与备份。"
+  },
+  "currentTestSourcesSha256": {
+    "tests/python/blackboard/store/test_migrations.py": "156827897a4d9e574bd97ff01b38efe56791f97f73f815b84fa5ba5700d8290c",
+    "tests/python/install/test_upgrade_migration.py": "c3c611fe98bccf5636f5ad4dd61a0a2f8a2719a74299a71d8208620ea2abf87d",
+    "tests/python/install/test_upgrade_service.py": "cbe5089cdad78035ae412dcb449e9cca5c3b64cb389c3ad8f43023ba7c53126d"
+  },
+  "productSourcesUnchangedSinceInputArtifact": [
+    "docs/reference/objectives.md",
+    "src/hey_my_buddy/blackboard/catalog/catalog.py",
+    "src/hey_my_buddy/blackboard/catalog/catalog_store.py",
+    "src/hey_my_buddy/blackboard/routing/router.py",
+    "src/hey_my_buddy/blackboard/routing/router_boundary_data.py",
+    "src/hey_my_buddy/blackboard/routing/router_history.py",
+    "src/hey_my_buddy/blackboard/routing/router_sequence.py",
+    "src/hey_my_buddy/blackboard/routing/router_settings.py",
+    "src/hey_my_buddy/blackboard/store/backup.py",
+    "src/hey_my_buddy/blackboard/store/db.py",
+    "src/hey_my_buddy/blackboard/store/migrations.py",
+    "src/hey_my_buddy/blackboard/store/workspace_identity_migration.py",
+    "src/hey_my_buddy/install/upgrade.py"
+  ],
+  "designDecisions": [
+    "唯一显式 15→16；独立冻结 DDL、Router 双位置到有序列表及目录 unknown 投影在同一事务完成；备份 trial 与升级使用同一迁移。源 Router 仅接受完整基点 marker 1，拒绝 2/3/缺失/混合形式。",
+    "五类结构化事实使用独立表及身份/绑定/唯一性/外键/索引；router_requests 以单一 snapshot_json 保存全部不可变冻结正文。当前读写不留开发 meta/pending 字符串兼容。",
+    "保留旧终态 Router、原始观察、历史行/哈希、模型 available/enabled 与目录旧指针；当前目录 unknown/ACCOUNT_STATUS_UNKNOWN，不制造可信读取或确认窗口。L14 原有身份别名边界保留。",
+    "升级响应与 upgrade-last.json 携带同一结构化原因和涉及表；原行/设置/schema 失败原样回滚。",
+    "本轮测试使用唯一 accepted loader 和真实 migrate_workspace_identity；公开 delivered 结论要求一次实际写入、同请求 duplicate、独立 Host 封存及原 Worker 输出不变。正式服务测试直接验证相同行为，移除旧负向方法和临时子类挂接点。"
+  ],
+  "verification": {
+    "environment": "uv run --offline --frozen --no-sync；忽略 tmp 内私有 venv/cache；child_environment 清除继承 BUDDY_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT，设置独立状态/运行时/HOME/TMPDIR。",
+    "focusedExecutions": [
+      {
+        "module": "blackboard.store.test_migrations",
+        "tests": 18,
+        "exitCode": 0,
+        "executor": "Codex Worker 第 4 回合 849c6fb7-12da-4baf-8859-7085fd8382e9",
+        "entryCommand": "sh tmp/adr021-l18-upgrade/focused.sh --label accepted-fixture-green-18 blackboard.store.test_migrations install.test_upgrade_migration",
+        "childCommand": [
+          "<checkout>/tmp/adr021-l18-upgrade/venv/bin/python3",
+          "-m",
+          "unittest",
+          "-v",
+          "blackboard.store.test_migrations"
+        ],
+        "log": "tmp/adr021-l18-upgrade/accepted-fixture-green-18/blackboard.store.test_migrations.log",
+        "privateRoot": "tmp/adr021-l18-upgrade/accepted-fixture-green-18/1"
+      },
+      {
+        "module": "install.test_upgrade_migration",
+        "tests": 14,
+        "exitCode": 0,
+        "executor": "Codex Worker 第 4 回合 849c6fb7-12da-4baf-8859-7085fd8382e9",
+        "entryCommand": "sh tmp/adr021-l18-upgrade/focused.sh --label accepted-fixture-green-19 install.test_upgrade_migration",
+        "childCommand": [
+          "<checkout>/tmp/adr021-l18-upgrade/venv/bin/python3",
+          "-m",
+          "unittest",
+          "-v",
+          "install.test_upgrade_migration"
+        ],
+        "log": "tmp/adr021-l18-upgrade/accepted-fixture-green-19/install.test_upgrade_migration.log",
+        "privateRoot": "tmp/adr021-l18-upgrade/accepted-fixture-green-19/1"
+      }
+    ],
+    "passedTestsInSuccessfulSelectedRuns": 32,
+    "initialFailedExecution": {
+      "module": "install.test_upgrade_migration",
+      "tests": 14,
+      "exitCode": 1,
+      "executor": "Codex Worker 第 4 回合 849c6fb7-12da-4baf-8859-7085fd8382e9",
+      "entryCommand": "sh tmp/adr021-l18-upgrade/focused.sh --label accepted-fixture-green-18 blackboard.store.test_migrations install.test_upgrade_migration",
+      "childCommand": [
+        "<checkout>/tmp/adr021-l18-upgrade/venv/bin/python3",
+        "-m",
+        "unittest",
+        "-v",
+        "install.test_upgrade_migration"
+      ],
+      "log": "tmp/adr021-l18-upgrade/accepted-fixture-green-18/install.test_upgrade_migration.log",
+      "privateRoot": "tmp/adr021-l18-upgrade/accepted-fixture-green-18/2",
+      "result": "13/14 通过；delivered 结论和重放已成功，新增断言错误要求 partial-output 行。已按现有快照身份复用契约改为独立 Host 文件/摘要绑定及原 Worker 产物保留验证，并完整复跑该模块通过。"
+    },
+    "scope": "仅 migrations 与 upgrade_migration；未重跑 Router、已通过的 fixture 封存模块、真实服务/原生端点或完整检查。"
+  },
+  "previousEvidence": [
+    {
+      "outputCommit": "3eeace68ce910d527693e090129bd06f8e5a0ce8",
+      "executor": "Codex Worker 第 1 回合",
+      "passedTests": 342
+    },
+    {
+      "outputCommit": "d8c55d94b275b2fe0d9a5b366f297d40b68fb80a",
+      "executor": "Codex Worker 第 2 回合",
+      "passedTests": 32
+    },
+    {
+      "outputCommit": "cccf3714bd2631ea7b09a1f9343379dfc3492361",
+      "executor": "Codex Worker 第 3 回合",
+      "passedTests": 180
+    }
+  ],
+  "previousEvidenceInterface": "各固定提交同路径 adr021-l18-upgrade-delivery.json/md 保存当轮精确命令、日志、源码/夹具摘要及执行者；本报告精简当前交付，不重复历史全文。前轮原始 tmp 证据全部保留，重复覆盖不累计为新增测试。",
+  "hostEvidence": [
+    {
+      "executor": "Codex 实现 Host",
+      "evidenceSource": "Host 续修输入；Worker 未复跑或读取范围外日志",
+      "module": "blackboard.catalog.test_account_bindings",
+      "passedTests": 5,
+      "log": "Host tmp/adr021-l18-host/host-account-bindings-1.log",
+      "privateRoot": "Host tmp/adr021-l18-host/buddy-checks-hpvl4x8a",
+      "processesAndLocks": "空",
+      "command": null
+    },
+    {
+      "executor": "Codex 实现 Host",
+      "evidenceSource": "第 4 回合 Host 续修输入；未记为 Worker 通过",
+      "module": "blackboard.store.test_upgrade_fixture",
+      "passedTests": 5,
+      "log": "Host host-fixture-repair-1.log",
+      "fixtureCommit": "513e97da90477bc9e8dd12bda5efaa89b5db8924",
+      "command": null
+    },
+    {
+      "executor": "Codex 实现 Host",
+      "evidenceSource": "第 4 回合 Host 提供的真实探针，未记为最新正式服务测试通过",
+      "sourceCommit": "d8c55d94b275b2fe0d9a5b366f297d40b68fb80a",
+      "fixtureCommit": "513e97da90477bc9e8dd12bda5efaa89b5db8924",
+      "result": "backup verify→migrate_board→migrate_workspace_identity→真实私有 daemon/C-Two RPC；Router/unknown 目录/delivered 读取、conclude 成功、重放 duplicate、SQL 1 条；进程与锁空。",
+      "log": "Host tmp/adr021-l18-host/host-strict-service-1.log",
+      "script": "Host tmp/adr021-l18-host/strict-service-probe.py",
+      "privateRoot": "Host buddy-checks-dt2ns1ix",
+      "command": null
+    }
+  ],
+  "testChanges": {
+    "manifest": "tests/python/install/adr021-l18-test-changes.json",
+    "currentCountsRelativeToOriginalInput": {
+      "added": 47,
+      "removedFromReplacedContents": 12,
+      "pendingRemovalWithRetiredFiles": 9
+    },
+    "thisTurn": {
+      "added": 6,
+      "copiedFromAcceptedDependency": 5,
+      "workerAuthoredAdded": 1,
+      "removed": 1
+    },
+    "boundary": "撤换的负向编号由本微任务创建，不增加相对原基点的移除计数；依赖 5 编号与 Worker 新定义 1 编号单列。Host 退休后收集最终编号。"
+  },
+  "retirements": {
+    "manifest": "tests/python/install/adr021-l18-retirements.json",
+    "manifestSha256": "4f3f55e1d1e9da0000a4e5cd959482de318dc7985f75cc06047f3564b074027f",
+    "files": 10,
+    "status": "清单及 10 个逐文件 SHA-256 均与输入产物一致；Worker 保留全部文件，由 Codex 实现 Host 机械删除。",
+    "referenceCheck": "退休集外无运行时调用；历史/静态文案及固定来源元数据保留。旧严格子类文件已列入原清单，当前正式测试无挂接点。"
+  },
+  "privateRoot": "tmp/adr021-l18-upgrade/",
+  "hostCommands": [
+    "sh tmp/adr021-l18-upgrade/focused.sh --label host-final-delivered-service-20 install.test_upgrade_service"
+  ],
+  "hostCommandPrerequisite": "在允许私有服务端口的环境，用最新固定源码及本轮 accepted fixture；使用已准备的私有 uv venv/cache 和 tmp 中的 focused.sh/run_focused.py。若从固定 archive 复跑，复制这两个忽略脚本并把 venv/cache 指向 Host 自己的私有环境；不安装产品。测试自动创建自己的状态与运行时。",
+  "hostResponsibilities": {
+    "implementationHost": [
+      "复核当前交付",
+      "最新固定产物上的正式私有服务测试",
+      "机械退休 10 文件及最终测试编号",
+      "自己的验收记录"
+    ],
+    "integrationHostAfterMerge": [
+      "完整检查",
+      "逐处源码变异",
+      "空 HOME 旧包升级演练",
+      "最终 operations/architecture 文档"
+    ]
+  },
+  "unverified": [
+    "最新固定产物的正式真实服务测试仍待 Codex 实现 Host；沙盒禁止服务 socket，本轮按指令未重试。",
+    "清单文件机械退休及最终运行编号仍待 Codex 实现 Host。",
+    "完整检查、逐处变异、安装演练及最终 operations/architecture 文档仍由合入后的整合 Host 执行。"
+  ],
+  "hostBoundary": "依赖已接入且授权聚焦验证完成；在 Codex 实现 Host 对最新固定产物验收处停止。"
+}

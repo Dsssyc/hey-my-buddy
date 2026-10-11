@@ -145,7 +145,7 @@ class UpgradeTests(BoardTestCase):
              mock.patch('hey_my_buddy.blackboard.tasks.storage.prune_old_runtimes', return_value={'complete':True}):
             result = upgrade.upgrade({})
         self.assertFalse(result['upgraded'], result)
-        self.assertEqual(result['failure'], 'INJECTED')
+        self.assertEqual(result['failure']['code'], 'INJECTED')
         self.assertEqual((old / 'session.jsonl').read_text(), 'retained session')
         self.assertFalse((private_dirs.attempt_root(state, 'dsh', task_id, 'attempt') / 'sessions').exists())
         self.assertEqual(relocation_started, [True])

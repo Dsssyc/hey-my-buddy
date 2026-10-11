@@ -1,4 +1,4 @@
-"""Schema-15 identity migration, exact preservation and atomic failure witnesses."""
+"""Current-schema identity migration, exact preservation and atomic failure witnesses."""
 from __future__ import annotations
 
 import copy
@@ -69,7 +69,7 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
         self.assertEqual(self.fixed_files(), old_files)
         self.assertEqual(self.snapshot(board), expected)
         self.assertEqual(expected["eventHead"], before["eventHead"])
-        self.assertEqual(expected["schema"], 15)
+        self.assertEqual(expected["schema"], 16)
         for table, fingerprint in before["fingerprints"].items():
             if table not in {"meta", "objectives", "workspace_reservations"}:
                 self.assertEqual(expected["fingerprints"][table], fingerprint, table)

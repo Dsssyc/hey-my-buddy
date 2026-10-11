@@ -6,6 +6,7 @@ further confirmed absence past the one-hour window; reappearance recovers; each
 transition is one event and idempotent or unknown readings invent none.
 """
 import json
+import sqlite3
 
 from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.catalog import catalog, catalog_store
@@ -40,6 +41,59 @@ class CatalogTrustTests(BoardTestCase):
             read_at = catalog.catalog_read_at(db, adapter)
             profiles = db.execute('SELECT profile_id, available, unavailable_reason FROM evaluation_profiles WHERE adapter=?', (adapter,)).fetchall()
         return row, pending, read_at, profiles
+
+    def test_pending_owned_table_persists_the_first_absence_and_efforts_without_meta(self):
+        self.record(reading(efforts=('high', 'max')))
+        self.record(reading(models=()))
+        with self.board.store.db.read() as db:
+            first = tuple(db.execute('SELECT adapter,provider,model,since,efforts_json FROM catalog_pending').fetchone())
+            self.assertEqual(first[:3], ('dsh', 'fixture', 'alpha'))
+            self.assertEqual(json.loads(first[4]), ['high', 'max'])
+            self.assertIsNone(db.execute("SELECT key FROM meta WHERE key LIKE 'catalog-pending:%'").fetchone())
+        self.clock.advance(60)
+        self.record(reading(models=()))
+        with self.board.store.db.read() as db:
+            self.assertEqual(tuple(db.execute('SELECT adapter,provider,model,since,efforts_json FROM catalog_pending').fetchone()), first)
+        self.record(reading(efforts=('high', 'max')))
+        with self.board.store.db.read() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM catalog_pending').fetchone()[0], 0)
+
+    def test_pending_identity_and_current_directory_foreign_key_are_enforced(self):
+        self.record(reading())
+        self.record(reading(models=()))
+        for adapter in ('dsh', 'missing'):
+            with self.subTest(adapter=adapter), self.assertRaises(sqlite3.IntegrityError):
+                with self.board.store.db.write() as db:
+                    db.execute("INSERT INTO catalog_pending(adapter,provider,model,since,efforts_json)"
+                               " VALUES(?,'fixture','alpha','other','[]')", (adapter,))
+        self.assertEqual(len(self.state()[1]), 1)
+
+    def test_pending_replacement_rolls_back_with_the_publisher_transaction(self):
+        self.record(reading())
+        self.record(reading(models=()))
+        before = self.state()[1]
+        before_events = self.events()
+        with self.assertRaises(AssertionError):
+            with self.board.store.db.write() as db:
+                catalog._write_pending_map(db, 'dsh', {catalog._family_key('fixture', 'beta'):
+                                                      {'since':'later','efforts':['max']}})
+                raise AssertionError('private publisher rollback')
+        self.assertEqual(self.state()[1], before)
+        self.assertEqual(self.events(), before_events)
+
+    def test_failed_pending_insert_rolls_back_the_whole_catalog_publication(self):
+        from blackboard.store.test_migrations import rows
+        self.record(reading())
+        observation = catalog_store.begin(self.evaluation)['observationId']
+        with self.board.store.db.write() as db:
+            db.execute("CREATE TRIGGER refuse_pending BEFORE INSERT ON catalog_pending BEGIN"
+                       " SELECT RAISE(ABORT,'private pending failure'); END")
+        with self.board.store.db.read() as db:
+            before = rows(db)
+        with self.assertRaisesRegex(sqlite3.IntegrityError, 'private pending failure'):
+            self.record(reading(models=()), observation)
+        with self.board.store.db.read() as db:
+            self.assertEqual(rows(db), before)
 
     def test_c01_unknown_account_reading_replaces_nothing(self):
         self.record(reading())

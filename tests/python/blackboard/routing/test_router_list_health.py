@@ -49,7 +49,7 @@ class RouterListHealthTestCase(BoardTestCase):
             db.execute("UPDATE evaluation_state SET configuration_revision=? WHERE id=1", (revision + 1,))
 
     def record(self, profile_id, *, outcome="no_answer", request=None, code="timeout", index=0,
-               phase="runtime", now=None, attempt=None):
+               phase="runtime", now=None, task=None, attempt=None):
         """One real R2 fact with its idempotent receipt, through the recording entry.
 
         The fact rows stay unbound (no task/attempt ids) unless the caller
@@ -59,7 +59,7 @@ class RouterListHealthTestCase(BoardTestCase):
         with self.db.write() as db:
             return router_history.record_outcome(
                 db, profile_id=profile_id, plane="work", request_id=request or f"route-{self.sequence}",
-                task_id=None, attempt_id=attempt,
+                task_id=task, attempt_id=attempt,
                 outcome=outcome, code=code, phase=phase,
                 facts={"routerIndex": index}, now=now or self.clock.value)
 
@@ -74,7 +74,7 @@ class RouterListHealthTestCase(BoardTestCase):
         with self.db.read() as db:
             events = int(db.execute("SELECT COUNT(*) FROM events").fetchone()[0])
             receipts = int(db.execute(
-                "SELECT COUNT(*) FROM meta WHERE key LIKE 'router-outcome:%'").fetchone()[0])
+                "SELECT COUNT(*) FROM router_outcomes").fetchone()[0])
             return events, receipts
 
     def add_legacy_record(self, decision, *, profile_id=None, kind="decision.failed", code="timeout",
@@ -284,7 +284,6 @@ class CurrentRoleTests(RouterListHealthTestCase):
     def test_retry_in_progress_names_the_active_execution(self):
         self.add_profile(A)
         self.set_settings(ids=[A], interval=600)
-        self.record(A, code="timeout", index=0, now=T0, attempt="attempt-live")
         with self.db.write() as db:
             db.execute(
                 "INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
@@ -300,6 +299,7 @@ class CurrentRoleTests(RouterListHealthTestCase):
                 "INSERT INTO events(task_id,attempt_id,revision,kind,payload_json,created_at)"
                 " VALUES('task-live','attempt-live',NULL,'router.claimed',?,?)",
                 (canonical_json({"profileId": A}), T0))
+        self.record(A, code="timeout", index=0, now=T0, task="task-live", attempt="attempt-live")
         summary = self.state()
         entry = self.entry(summary, A)
         self.assertTrue(entry["retryInProgress"])
@@ -395,14 +395,14 @@ class NoWriteTests(RouterListHealthTestCase):
         self.record(A, outcome="answered", code=None, index=0)
         with self.db.read() as db:
             revision = int(db.execute("SELECT configuration_revision FROM evaluation_state WHERE id=1").fetchone()[0])
-            receipts = db.execute("SELECT key, value FROM meta WHERE key LIKE 'router-outcome:%'").fetchall()
+            receipts = db.execute("SELECT * FROM router_outcomes ORDER BY receipt_id").fetchall()
         self.state()
         with self.db.read() as db:
             self.assertEqual(int(db.execute(
                 "SELECT configuration_revision FROM evaluation_state WHERE id=1").fetchone()[0]), revision)
             self.assertEqual(db.execute(
-                "SELECT key, value FROM meta WHERE key LIKE 'router-outcome:%'").fetchall(), receipts)
-            self.assertEqual(json.loads(receipts[0]["value"])["payload"]["outcome"], "answered")
+                "SELECT * FROM router_outcomes ORDER BY receipt_id").fetchall(), receipts)
+            self.assertEqual(receipts[0]["outcome"], "answered")
 
 
 if __name__ == "__main__":

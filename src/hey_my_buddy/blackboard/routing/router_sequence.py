@@ -1,10 +1,10 @@
-"""Immutable Router request, dispatch and claim facts over the board's meta store.
+"""Immutable Router request, dispatch and claim facts in their owned relational tables.
 
-One request freezes its ordered Router facts, the actor-free base input every
-dispatch copies, and the admission inspections; each dispatched item owns one
+One request freezes its complete snapshot body, including ordered Router facts,
+the actor-free base input, admission inspections and any Host packet; each dispatched item owns one
 immutable document under its internal task; one claim binds an attempt to that
 dispatch and appends the ``router.claimed`` fact in the same transaction. An
-existing key replays only identical content and conflicts on any difference;
+existing identity replays only identical content and conflicts on any difference;
 nothing here starts a process, and no recorded document, hash or receipt is ever
 rewritten.
 """
@@ -16,9 +16,6 @@ from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
 from ...protocol.schemas import IDENTIFIER_PATTERN
 
-REQUEST_KEY_PREFIX = "router-request:"
-DISPATCH_KEY_PREFIX = "router-dispatch:"
-ATTEMPT_KEY_PREFIX = "attempt-router:"
 CLAIM_EVENT = "router.claimed"
 _IDENTITY_FIELDS = ("adapter", "provider", "model", "effort")
 
@@ -29,21 +26,30 @@ def _bounded_id(value: object, name: str) -> str:
     return value
 
 
-def _store(connection, key: str, payload: dict, *, clock_field: str | None = None) -> tuple[dict, bool]:
-    """Insert one immutable meta document; identical content replays, any difference conflicts."""
-    encoded = canonical_json(payload)
-    stored = connection.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+def _store(connection, table: str, key: str, values: dict, *, clock_field: str | None = None) -> tuple[dict, bool]:
+    """Insert one immutable row; identical semantic fields replay its first clock."""
+    columns = list(values)
+    stored = connection.execute(f"SELECT {','.join(columns)} FROM {table} WHERE {key}=?",
+                                (values[key],)).fetchone()
     if stored is not None:
-        if clock_field:
-            previous = json.loads(stored[0])
-            # A retry's wall clock is not a new request or dispatch fact. Keep
-            # the first timestamp while comparing every semantic field.
-            encoded = canonical_json({**payload, clock_field: previous[clock_field]})
-        if stored[0] != encoded:
-            raise BoardError("CONFLICT", f"{key} is immutable and the recorded facts differ", key=key)
-        return json.loads(stored[0]), False
-    connection.execute("INSERT INTO meta(key,value) VALUES(?,?)", (key, encoded))
-    return json.loads(encoded), True
+        previous = dict(zip(columns, stored))
+        if any(value != previous[column] for column, value in values.items() if column != clock_field):
+            raise BoardError("CONFLICT", f"{table} record is immutable and the facts differ", identity=values[key])
+        return previous, False
+    connection.execute(f"INSERT INTO {table}({','.join(columns)}) VALUES({','.join('?' for _ in columns)})",
+                       tuple(values.values()))
+    return values, True
+
+
+def _request(row: dict) -> dict:
+    return {**json.loads(row["snapshot_json"]), "frozenAt": row["frozen_at"]}
+
+
+def _dispatch(row: dict) -> dict:
+    return {"decisionId": row["decision_id"], "taskId": row["task_id"], "routerIndex": row["router_index"],
+            "profileId": row["profile_id"], "profile": {key: row[key] for key in _IDENTITY_FIELDS},
+            "document": json.loads(row["document_json"]), "inputSha256": row["input_sha256"],
+            "createdAt": row["created_at"]}
 
 
 def freeze_request(connection, decision_id: str, *, snapshot: dict, now: str) -> dict:
@@ -52,6 +58,7 @@ def freeze_request(connection, decision_id: str, *, snapshot: dict, now: str) ->
     The stored document is the request's own evidence: the settings snapshot the
     request lives in, the complete common candidate packet every dispatch copies
     (never just an unavailability reason), and the inspections admission observed.
+    Every admitted snapshot field is retained and participates in replay equality.
     Only the first freeze wins; replays of the same snapshot are idempotent.
     """
     decision_id = _bounded_id(decision_id, "decision_id")
@@ -61,36 +68,30 @@ def freeze_request(connection, decision_id: str, *, snapshot: dict, now: str) ->
         raise BoardError("INVALID_ARGUMENT", "snapshot baseInput must be an object")
     if not isinstance(snapshot["inspections"], list):
         raise BoardError("INVALID_ARGUMENT", "snapshot inspections must be a list")
-    document, _created = _store(
-        connection,
-        REQUEST_KEY_PREFIX + decision_id,
-        {**snapshot, "frozenAt": now}, clock_field="frozenAt",
-    )
-    return document
+    body = {key: value for key, value in snapshot.items() if key != "frozenAt"}
+    row, _created = _store(connection, "router_requests", "decision_id", {
+        "decision_id": decision_id, "snapshot_json": canonical_json(body), "frozen_at": now,
+    }, clock_field="frozen_at")
+    return _request(row)
 
 
 def request_snapshot(connection, decision_id: str) -> dict | None:
-    """The frozen request snapshot of one decision, as a fresh copy, or ``None``."""
-    row = connection.execute("SELECT value FROM meta WHERE key=?", (REQUEST_KEY_PREFIX + decision_id,)).fetchone()
-    return json.loads(row[0]) if row is not None else None
+    """The frozen request snapshot of one decision, as a fresh copy, or None."""
+    row = connection.execute("SELECT * FROM router_requests WHERE decision_id=?", (decision_id,)).fetchone()
+    return _request(dict(row)) if row is not None else None
 
 
 def dispatch(connection, task_id: str) -> dict | None:
-    """The immutable dispatch document of one internal Router task, or ``None``."""
-    row = connection.execute("SELECT value FROM meta WHERE key=?", (DISPATCH_KEY_PREFIX + task_id,)).fetchone()
-    return json.loads(row[0]) if row is not None else None
+    """The immutable dispatch document of one internal Router task, or None."""
+    row = connection.execute("SELECT * FROM router_dispatches WHERE task_id=?", (task_id,)).fetchone()
+    return _dispatch(dict(row)) if row is not None else None
 
 
 def dispatches(connection, decision_id: str) -> tuple[dict, ...]:
-    """Fresh immutable dispatch copies in stable Router order, without results.
-
-    A result belongs to the dispatch's own attempt receipt. The mutable request
-    output must never be projected as an earlier dispatch's answer.
-    """
-    rows = connection.execute("SELECT value FROM meta WHERE key LIKE ? ORDER BY key", (DISPATCH_KEY_PREFIX + "%",))
-    documents = (json.loads(row[0]) for row in rows)
-    return tuple(sorted((item for item in documents if item["decisionId"] == decision_id),
-                        key=lambda item: (item["routerIndex"], item["taskId"])))
+    """Fresh dispatch copies in indexed Router order, each retaining its own input."""
+    rows = connection.execute("SELECT * FROM router_dispatches WHERE decision_id=? ORDER BY router_index,task_id",
+                              (decision_id,))
+    return tuple(_dispatch(dict(row)) for row in rows)
 
 
 def reserve_dispatch(connection, *, decision_id: str, task_id: str, router_index: int,
@@ -113,21 +114,23 @@ def reserve_dispatch(connection, *, decision_id: str, task_id: str, router_index
     if not isinstance(document, dict):
         raise BoardError("INVALID_ARGUMENT", "document must be the dispatch input object")
     encoded = canonical_json(document)
-    stored, _created = _store(
-        connection,
-        DISPATCH_KEY_PREFIX + task_id,
-        {
-            "decisionId": decision_id,
-            "taskId": task_id,
-            "routerIndex": router_index,
-            "profileId": profile["profileId"],
-            "profile": {key: profile[key] for key in _IDENTITY_FIELDS},
-            "document": document,
-            "inputSha256": sha256_text(encoded),
-            "createdAt": now,
-        }, clock_field="createdAt",
-    )
-    return stored
+    row, _created = _store(connection, "router_dispatches", "task_id", {
+        "task_id": task_id, "decision_id": decision_id, "router_index": router_index,
+        "profile_id": profile["profileId"], **{key: profile[key] for key in _IDENTITY_FIELDS},
+        "document_json": encoded, "input_sha256": sha256_text(encoded), "created_at": now,
+    }, clock_field="created_at")
+    return _dispatch(row)
+
+
+def claim(connection, attempt_id: str) -> dict | None:
+    """The attempt's relational binding, with its immutable dispatch identity."""
+    row = connection.execute("SELECT c.*,d.decision_id,d.router_index,d.profile_id FROM router_claims c"
+                             " JOIN router_dispatches d ON d.task_id=c.task_id WHERE c.attempt_id=?",
+                             (attempt_id,)).fetchone()
+    if row is None:
+        return None
+    return {"attemptId": row["attempt_id"], "taskId": row["task_id"], "generation": row["generation"],
+            "decisionId": row["decision_id"], "routerIndex": row["router_index"], "profileId": row["profile_id"]}
 
 
 def record_claim(connection, *, task_id: str, attempt_id: str, generation: int, now: str) -> dict:
@@ -142,27 +145,14 @@ def record_claim(connection, *, task_id: str, attempt_id: str, generation: int, 
     attempt_id = _bounded_id(attempt_id, "attempt_id")
     if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
         raise BoardError("INVALID_ARGUMENT", "generation must be a positive integer")
-    dispatch_row = connection.execute(
-        "SELECT value FROM meta WHERE key=?", (DISPATCH_KEY_PREFIX + task_id,)
-    ).fetchone()
-    if dispatch_row is None:
+    dispatch_document = dispatch(connection, task_id)
+    if dispatch_document is None:
         raise BoardError("INVALID_ARGUMENT", "an attempt may only claim a frozen dispatch", taskId=task_id)
-    dispatch_document = json.loads(dispatch_row[0])
-    request = connection.execute(
-        "SELECT request_id FROM decision_requests WHERE decision_id=?", (dispatch_document["decisionId"],)
-    ).fetchone()
-    if request is None:
-        raise BoardError("INVALID_ARGUMENT", "the dispatch has no decision request",
-                         decisionId=dispatch_document["decisionId"])
-    binding = {
-        "taskId": task_id,
-        "attemptId": attempt_id,
-        "generation": generation,
-        "decisionId": dispatch_document["decisionId"],
-        "routerIndex": dispatch_document["routerIndex"],
-        "profileId": dispatch_document["profileId"],
-    }
-    stored, created = _store(connection, ATTEMPT_KEY_PREFIX + attempt_id, binding)
+    request = connection.execute("SELECT request_id FROM decision_requests WHERE decision_id=?",
+                                 (dispatch_document["decisionId"],)).fetchone()
+    stored, created = _store(connection, "router_claims", "attempt_id", {
+        "attempt_id": attempt_id, "task_id": task_id, "generation": generation,
+    })
     if created:
         from .router_history import _append_event
         _append_event(
@@ -181,14 +171,12 @@ def record_claim(connection, *, task_id: str, attempt_id: str, generation: int, 
             },
             now=now,
         )
-    return stored
+    return claim(connection, attempt_id)
 
 
 __all__ = [
-    "ATTEMPT_KEY_PREFIX",
     "CLAIM_EVENT",
-    "DISPATCH_KEY_PREFIX",
-    "REQUEST_KEY_PREFIX",
+    "claim",
     "dispatch",
     "dispatches",
     "freeze_request",

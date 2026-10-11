@@ -183,14 +183,22 @@ class BoundaryReadingTests(RouterDispatchTestCase):
     def test_freeze_retains_additional_host_packet_without_rewriting_other_snapshot_fields(self):
         self.set_settings(ids=[])
         request = self.request()
-        snapshot = self.snapshot_of(request["decisionId"])
+        original = self.snapshot_of(request["decisionId"])
+        private = self.request(request_id="private-extra")
+        snapshot = self.snapshot_of(private["decisionId"])
         snapshot.pop("frozenAt")
         packet = {"profiles": [], "privateHostFact": "retained, never sent"}
         with self.board_.store.db.write() as db:
-            frozen = router_sequence.freeze_request(db, "dec-private-extra", snapshot={**snapshot, "hostPacket": packet}, now=T0)
+            # Recreate only this second public parent's snapshot; no dispatch
+            # references it. Keep the first request's frozen evidence untouched.
+            self.assertEqual(router_sequence.dispatches(db, private["decisionId"]), ())
+            db.execute("DELETE FROM router_requests WHERE decision_id=?", (private["decisionId"],))
+            frozen = router_sequence.freeze_request(db, private["decisionId"], snapshot={**snapshot, "hostPacket": packet}, now=T0)
         self.assertEqual(frozen["hostPacket"], packet)
         self.assertEqual(frozen["baseInput"], snapshot["baseInput"])
-        self.assertEqual(self.snapshot_of(request["decisionId"])["baseInput"], snapshot["baseInput"])
+        self.assertEqual(frozen, {**snapshot, "hostPacket": packet, "frozenAt": T0})
+        self.assertEqual(self.snapshot_of(private["decisionId"]), frozen)
+        self.assertEqual(self.snapshot_of(request["decisionId"]), original)
 
     def test_settings_and_table_changes_are_changed_without_model_reason_guessing(self):
         request, first = self.start()

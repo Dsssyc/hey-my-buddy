@@ -84,7 +84,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
         from .accounts import identity, selection
         from .catalog import (CONFIRMATION_SECONDS, CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON,
                               TRUSTED_ACCOUNT_STATUSES, _family_key, _parse_time, _pending_map,
-                              _write_pending_map, identities_from_payload, _pending_entry, note_confirmed_read,
+                              _write_pending_map, identities_from_payload, note_confirmed_read,
                               restore_retained_availability, catalog_account_matches, clear_confirmed_read)
         saved_accounts = db.execute('SELECT value FROM meta WHERE key=?', ('catalog-accounts:' + str(observation_id),)).fetchone()
         frozen_accounts = json.loads(saved_accounts[0]) if saved_accounts else {}
@@ -169,7 +169,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                 # effort that vanished while its model remains is a metadata
                 # retirement, never a model disappearance.
                 key = _family_key(*family)
-                since = _pending_entry(pending.get(key))['since']
+                since = pending[key]['since'] if key in pending else None
                 first_absence, moment = _parse_time(since), _parse_time(now)
                 if since is None:
                     efforts = sorted(effort for provider, model, effort in retained_identities
@@ -215,7 +215,8 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                 key = _family_key(*family)
                 if key not in pending and family not in absent_before:
                     continue
-                since = _pending_entry(pending.pop(key, None))['since']
+                window = pending.pop(key, None)
+                since = window['since'] if window is not None else None
                 usable = db.execute('SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND available=1 LIMIT 1',
                                     (name, *family)).fetchone() is not None
                 if usable:

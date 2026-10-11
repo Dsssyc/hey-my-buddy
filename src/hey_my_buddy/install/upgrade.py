@@ -278,13 +278,15 @@ def _private_summary(journal: dict, *, rolled_back: bool = False) -> dict | None
 
 def verify_started(state: Path, target: Path, health: dict, before: dict) -> dict:
     if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != before.get('schema', SCHEMA_VERSION):
-        raise BoardError('UPGRADE_VERIFY_FAILED', 'Replacement runtime identity or schema did not match')
+        raise BoardError('UPGRADE_VERIFY_FAILED', 'Replacement runtime identity or schema did not match',
+                         tables=['meta'] if health.get('schemaVersion') != before.get('schema', SCHEMA_VERSION) else [])
     settings = before.get('runtimeSettings', {})
     if any(health.get(key) != value for key, value in settings.items()):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Configured runtime capacity changed')
     actual = idle_snapshot(state, event_head=before.get('eventHead'))
     if set(actual['tables']) != set(before['tables']):
-        raise BoardError('UPGRADE_VERIFY_FAILED', 'Database table inventory changed')
+        raise BoardError('UPGRADE_VERIFY_FAILED', 'Database table inventory changed',
+                         tables=sorted(set(actual['tables']) ^ set(before['tables'])))
     changed = [name for name, value in before['fingerprints'].items() if actual['fingerprints'].get(name) != value]
     if changed:
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Retained database values changed', tables=changed)
@@ -295,57 +297,27 @@ def verify_started(state: Path, target: Path, health: dict, before: dict) -> dic
 
 
 def migrate_board(state: Path, before: dict) -> tuple[dict, dict]:
-    """Migrate the idle, backed-up board in place; prove untouched tables kept their values."""
+    """Run the one migration after backup, retaining its exact data-verification boundary."""
     from ..blackboard.store import migrations
-    board = state / 'board.sqlite3'
-    def meta_rows():
-        with closing(sqlite3.connect(board.as_uri() + '?mode=ro', uri=True)) as connection:
-            return sorted(row for row in connection.execute('SELECT key, value FROM meta') if row[0] != 'schema_version')
-    meta_before = meta_rows()
-    with closing(sqlite3.connect(board)) as connection:
-        retained_names, retained_before = migrations.retained_columns(connection)
-    try:
-        with closing(sqlite3.connect(board, isolation_level=None, timeout=10)) as connection:
-            summary = migrations.migrate_14_to_15(connection)
-    except (sqlite3.Error, ValueError) as error:
-        raise BoardError('UPGRADE_MIGRATION_FAILED', f'Board migration failed: {error}') from None
-    expected = idle_snapshot(state, event_head=before.get('eventHead'))
+    baseline = idle_snapshot(state, event_head=before.get('eventHead'))
     changed = [name for name, value in before['fingerprints'].items()
-               if name not in migrations.MIGRATED_TABLES and expected['fingerprints'].get(name) != value]
-    with closing(sqlite3.connect(board)) as connection:
-        retained_after = migrations.retained_columns(connection, retained_names)[1]
-    changed.extend(name for name in retained_before if retained_before[name] != retained_after[name])
-    if changed or meta_rows() != meta_before or expected.get('schema') != SCHEMA_VERSION:
-        raise BoardError('UPGRADE_MIGRATION_FAILED', 'Migration changed data outside its declared tables', tables=changed)
+               if baseline['fingerprints'].get(name) != value]
+    inventory = sorted(set(baseline['tables']) ^ set(before['tables']))
+    if changed or inventory or baseline['schema'] != before['schema']:
+        raise BoardError('UPGRADE_MIGRATION_FAILED', 'Board no longer matches its verified backup',
+                         tables=sorted(set(changed + inventory)))
+    with closing(sqlite3.connect(state / 'board.sqlite3', isolation_level=None, timeout=10)) as connection:
+        summary = migrations.migrate_15_to_16(connection)
+    expected = idle_snapshot(state, event_head=before.get('eventHead'))
     expected['runtimeSettings'] = before.get('runtimeSettings', {})
     return summary, expected
 
 
-def migrate_routing_configuration(state: Path, before: dict) -> tuple[dict, dict]:
-    """Materialize ADR-018 meta keys under the existing upgrade locks and backup."""
-    from ..blackboard.routing import router
-    with closing(sqlite3.connect(state / 'board.sqlite3', isolation_level=None, timeout=10)) as connection:
-        connection.row_factory = sqlite3.Row
-        connection.execute('BEGIN IMMEDIATE')
-        try:
-            retained = [tuple(row) for row in connection.execute('SELECT key,value FROM meta ORDER BY key')
-                        if row['key'] not in router.CONFIG_META_KEYS]
-            settings = router.initialize_configuration(connection)
-            after = [tuple(row) for row in connection.execute('SELECT key,value FROM meta ORDER BY key')
-                     if row['key'] not in router.CONFIG_META_KEYS]
-            if retained != after:
-                raise BoardError('UPGRADE_MIGRATION_FAILED', 'Routing migration changed unrelated meta values')
-            connection.execute('COMMIT')
-        except BaseException:
-            connection.execute('ROLLBACK')
-            raise
-    expected = idle_snapshot(state, event_head=before.get('eventHead'))
-    changed = [name for name, value in before['fingerprints'].items()
-               if name != 'meta' and expected['fingerprints'].get(name) != value]
-    if changed or expected['schema'] != before['schema'] or set(expected['tables']) != set(before['tables']):
-        raise BoardError('UPGRADE_MIGRATION_FAILED', 'Routing migration changed unrelated tables or schema', tables=changed)
-    expected['runtimeSettings'] = before.get('runtimeSettings', {})
-    return settings, expected
+def _failure_reason(error: Exception) -> dict:
+    """The same structured cause goes to the returned error and the durable journal."""
+    reason = error.payload() if isinstance(error, BoardError) else {'code':type(error).__name__, 'message':str(error)}
+    reason.setdefault('details', {}).setdefault('tables', [])
+    return reason
 
 
 def _skill_paths(journal: dict) -> tuple[Path, Path, Path] | None:
@@ -532,9 +504,6 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     migration, expected = migrate_board(state, before)
                     journal.update(phase='migrated', migration=migration, expected=expected)
                     write_journal(marker, journal)
-                routing_migration, expected = migrate_routing_configuration(state, expected)
-                journal.update(phase='migrated', routingMigration=routing_migration, expected=expected)
-                write_journal(marker, journal)
                 from ..blackboard.store.workspace_identity_migration import migrate_workspace_identity
                 identity_migration, expected = migrate_workspace_identity(state, expected)
                 journal.update(phase='identity-migrated', identityMigration=identity_migration, expected=expected)
@@ -567,6 +536,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     'privateMigration': private_summary,
                     'rollback':None, 'runtimePruning':pruning}
         except Exception as failure:
+            reason = _failure_reason(failure)
             try:
                 _restore_skill(journal)
                 if active == previous and not detached:
@@ -574,9 +544,12 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     if surviving is not None:
                         from .launcher import write_active_runtime
                         write_active_runtime(state, previous, preserved)
+                        journal.update(phase='not-switched', failure=reason)
+                        write_journal(state / 'upgrade-last.json', journal)
                         clear_journal(marker)
                         error = failure.payload() if isinstance(failure, BoardError) and failure.code in ('UPGRADE_NOT_IDLE', 'BACKUP_PREFLIGHT_FAILED') else {'code':'UPGRADE_NOT_SWITCHED','message':'Upgrade could not detach; the previous service remains available'}
-                        return {'upgraded':False, 'error':error, 'failure':getattr(failure,'code',type(failure).__name__)}
+                        error.setdefault('details', {})['reason'] = reason
+                        return {'upgraded':False, 'error':error, 'failure':reason}
                 endpoint_now = json.loads((state / 'control.json').read_text()) if (state / 'control.json').exists() else None
                 if detached and endpoint_now and endpoint_now.get('runtimeIdentity') == 'runtime:' + active.name:
                     detach(state, active)
@@ -590,17 +563,20 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 evidence = verify_started(state, previous, recovered, before) if backed_up else {'runtimeContentId':previous.name, 'workPreserved':True}
                 from .launcher import write_active_runtime
                 write_active_runtime(state, previous, preserved)
-                journal.update(phase='rolled-back', rollback=evidence, failure=getattr(failure, 'code', type(failure).__name__))
+                journal.update(phase='rolled-back', rollback=evidence, failure=reason)
                 write_journal(state / 'upgrade-last.json', journal)
                 clear_journal(marker)
                 error = failure.payload() if backed_up is None and isinstance(failure, BoardError) and failure.code in ('UPGRADE_NOT_IDLE', 'BACKUP_PREFLIGHT_FAILED') else {'code':'UPGRADE_ROLLED_BACK','message':'Upgrade failed; the previous runtime and backup were restored'}
+                error.setdefault('details', {})['reason'] = reason
                 return {'upgraded':False, 'error':error,
                         'backup':backed_up, 'rollback':evidence, 'failure':journal['failure'],
                         'privateMigration':_private_summary(journal, rolled_back=True)}
             except Exception as recovery:
-                journal.update(phase='recovery-required', failure=getattr(failure,'code',type(failure).__name__), recoveryFailure=getattr(recovery,'code',type(recovery).__name__))
+                journal.update(phase='recovery-required', failure=reason, recoveryFailure=_failure_reason(recovery))
                 write_journal(marker, journal)
-                raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Automatic rollback could not prove recovery; journal and backup retained', journal=str(marker)) from recovery
+                write_journal(state / 'upgrade-last.json', journal)
+                raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Automatic rollback could not prove recovery; journal and backup retained', journal=str(marker),
+                                 reason=reason, recoveryReason=journal['recoveryFailure']) from recovery
 
 
 def recover(state: Path, root: Path) -> dict:
