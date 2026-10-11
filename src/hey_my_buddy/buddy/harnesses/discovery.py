@@ -451,8 +451,11 @@ def _probe_windows(process: subprocess.Popen, stop_at: float) -> tuple[str | Non
 
 
 def probe(command: list[str], environment: dict, *, deadline: float | None = None,
-           cwd: str | None = None) -> tuple[str | None, bytes]:
+           cwd: str | None = None, owned: list | None = None) -> tuple[str | None, bytes]:
     """Run one noninteractive probe with bounded time, output and child lifetime."""
+    receipt = {"created": False, "shutdown": True, "exit_code": None}
+    if owned is not None:
+        owned[:] = [receipt]
     start = time.monotonic()
     if deadline is not None and start >= deadline:
         return "scan-timeout", b""
@@ -463,9 +466,16 @@ def probe(command: list[str], environment: dict, *, deadline: float | None = Non
                                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
     except (OSError, ValueError):
         return "launch-failed", b""
+    receipt.update(created=True, shutdown=False)
     stop_at = min(start + _TIMEOUT, deadline) if deadline is not None else start + _TIMEOUT
-    code, output, stopped = (_probe_windows(process, stop_at) if os.name == "nt" else
-                             _probe_posix(process, stop_at, deadline))
+    try:
+        code, output, stopped = (_probe_windows(process, stop_at) if os.name == "nt" else
+                                 _probe_posix(process, stop_at, deadline))
+    except Exception as error:
+        receipt.update(shutdown=getattr(error, "discovery_shutdown_confirmed", False) is True,
+                       exit_code=process.returncode)
+        raise
+    receipt.update(shutdown=stopped, exit_code=process.returncode)
     return (code, output) if stopped else ("shutdown-unverified", b"")
 
 

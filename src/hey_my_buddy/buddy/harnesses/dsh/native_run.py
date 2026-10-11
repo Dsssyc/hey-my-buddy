@@ -78,6 +78,7 @@ from ....private_dirs import ensure_private_dir, open_regular_fd
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ...roles.turn_io import private_json
 from ..base import BoundSessionServices
+from ..version import version_text
 from ..native_support import (
     CancelFlag,
     ObserverInterrupt,
@@ -764,7 +765,7 @@ def _initialize(client: AcpClient) -> str | None:
     result = _native_call(lambda: client.initialize(timeout=_SESSION_TIMEOUT),
                           code="adapter-unavailable", message="the ACP initialize failed")
     version = (result.get("agentInfo") or {}).get("version") if isinstance(result, dict) else None
-    return version if isinstance(version, str) and version else None
+    return version_text(version)
 
 
 # -- the configuration stage -------------------------------------------------------

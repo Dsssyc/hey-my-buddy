@@ -55,11 +55,13 @@ from ....protocol.activity import ActivityPublisher
 from ..c_two_live import CTwoLiveEndpoint
 from ....protocol.usage import identifier as _usage_identifier
 from ...roles.turn_io import private_json
+from ..version import VersionShutdownError, probe_version
 from ..base import ProcessHandle
 from ..native_support import (
     CancelFlag,
     ObserverInterrupt,
     execution_deadline,
+    halt_owned_group as _halt_owned_group,
     identity_or_none,
     utc_now,
 )
@@ -322,43 +324,44 @@ def _prepare(request: RunRequest) -> _Preparation:
 # -- phase 2: the owned native process -------------------------------------------
 
 
-def _probe_version(command: list[str], cwd: str, environment: dict) -> str:
-    """The bounded diagnostic version probe; never a paid call."""
-    try:
-        version_result = subprocess.run([*command, "--version"], cwd=cwd, env=environment,
-                                        capture_output=True, timeout=5)
-        if version_result.returncode != 0:
-            return "unknown"
-        return version_result.stdout.decode(errors="replace").strip()[:80]
-    except (OSError, subprocess.TimeoutExpired):
-        return "unknown"
-
-
 def _spawn_native(*, command: list[str], args: list[str], cwd: str, environment: dict,
                   invocation_root: Path, deadline: float, cancel: CancelFlag,
                   owned: list | None = None) -> _Spawn:
     """Spawn the one owned native CLI and connect its stdio protocol."""
-    version = _probe_version(command, cwd, environment)
+    version = probe_version(command, environment, cwd=cwd, deadline=deadline, owned=owned)
     stderr_path = invocation_root / _NATIVE_STDERR_FILE
     fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    process = None
     try:
-        process = owned_popen([*command, *args], cwd=cwd, env=environment, stdin=subprocess.PIPE,
-                              stdout=subprocess.PIPE, stderr=fd, start_new_session=True, close_fds=True)
-    finally:
-        os.close(fd)
-    handle = ProcessHandle(process, own_group=True, log_paths={})
-    try:
+        try:
+            try:
+                process = owned_popen([*command, *args], cwd=cwd, env=environment, stdin=subprocess.PIPE,
+                                      stdout=subprocess.PIPE, stderr=fd, start_new_session=True, close_fds=True)
+            except BaseException as error:
+                evidence = error.owned_popen_evidence
+                if owned is not None:
+                    owned[:] = [{"created": evidence.created, "shutdown": evidence.shutdown_confirmed,
+                                 "exit_code": evidence.exit_code}]
+                if isinstance(error, OSError):
+                    raise ClaudeProtocolError("adapter-unavailable",
+                                              "The selected Claude executable could not start") from None
+                raise
+            handle = ProcessHandle(process, own_group=True, log_paths={})
+            if owned is not None:
+                owned[:] = [handle]
+        finally:
+            os.close(fd)
         connection = Connection(process, deadline, cancel)
     except BaseException:
-        # The spawn helper is the only holder: it stops the child itself and
-        # leaves its observed facts for the result's stop layer, so a failed
-        # connection setup never leaks a process behind a protocol error.
-        handle.wait(3.0)
-        if not handle.shutdown_confirmed(settle_seconds=0.2):
-            handle.terminate(grace_seconds=1.0)
-        if owned is not None:
-            owned.append({"shutdown": handle.shutdown_confirmed(settle_seconds=0.5),
-                          "exit_code": process.returncode})
+        # Retain the main child's handle before log cleanup or connection setup;
+        # only its actual stop can replace the earlier diagnostic receipt.
+        if process is not None:
+            try:
+                shutdown, _signalled = _halt_owned_group(process, handle, time.monotonic() + 5.0)
+                if owned is not None:
+                    owned[:] = [{"created": True, "shutdown": shutdown, "exit_code": process.returncode}]
+            finally:
+                process.stdout.close()
         raise
     return _Spawn(process=process, handle=handle, connection=connection, version=version)
 
@@ -842,13 +845,10 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
             _retain(evidence_refs, invocation_root, "native-turn-facts", "native-turn-facts.json",
                     _native_turn_facts(collector, session_id, native_result.get("subtype")))
     if spawn is None:
-        if owned_spawn and isinstance(owned_spawn[0], dict):
-            created = owned_spawn[0]
-            stop_native = StopLayer(group_state="gone" if created["shutdown"] else "unknown")
-        else:
-            # No process object ever existed: the holding side itself confirms
-            # the spawn never happened, the one honest "gone" without a process.
-            stop_native = StopLayer(group_state="gone")
+        receipt = owned_spawn[0]
+        # A held main-process handle without a completed receipt stays unknown.
+        stopped = isinstance(receipt, dict) and receipt["shutdown"]
+        stop_native = StopLayer(group_state="gone" if stopped else "unknown")
     else:
         stop_native = StopLayer(group_state="gone" if state.shutdown else "unknown")
     interrupt = InterruptEvidence(
@@ -917,7 +917,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         raise BoardError("INVALID_ARGUMENT",
                          "claude has no native session service; the value carrier is the native schema")
     state = _RunState()
-    owned_spawn: list = []
+    owned_spawn: list = [{"created": False, "shutdown": True, "exit_code": None}]
     spawn: _Spawn | None = None
     preparation: _Preparation | None = None
     collector: _TurnCollector | None = None
@@ -982,7 +982,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                                "source": "claude/stream-json-rate-limit-event",
                                "observedAt": utc_now(), "resetsAt": error.resets_at}
         request_interrupt()
-    except ClaudeProtocolError as error:
+    except (ClaudeProtocolError, VersionShutdownError) as error:
         state.status = "cancelled" if error.code == "user-cancel" else "error"
         state.reason = error.code
         state.error_text = str(error)
@@ -1064,14 +1064,14 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
         environment = native_environment(incoming)
     except ClaudeUnavailable as error:
         raise _with_stop_fact(error, True) from None
-    owned_spawn: list = []
+    owned_spawn: list = [{"created": False, "shutdown": True, "exit_code": None}]
     try:
         spawn = _spawn_native(command=command, args=discovery_args(), cwd=cwd, environment=environment,
                               invocation_root=invocation_root, deadline=deadline, cancel=cancel,
                               owned=owned_spawn)
     except BaseException as error:
-        stopped = (owned_spawn[0]["shutdown"] is True
-                   if owned_spawn and isinstance(owned_spawn[0], dict) else True)
+        receipt = owned_spawn[0]
+        stopped = isinstance(receipt, dict) and receipt["shutdown"]
         raise _with_stop_fact(error, stopped)
     catalog: dict | None = None
     error: Exception | None = None

@@ -297,7 +297,7 @@ class FastSeamTests(SeamCase):
                 self.assertIsNone(result.model_started)
                 self.assertIsNone(result.effective_policy.tools)
 
-    def test_an_unrunnable_executable_fails_the_version_probe_without_a_child(self):
+    def test_an_unrunnable_executable_fails_native_creation_without_a_child(self):
         garbage = self.base / "not-a-cli"
         garbage.write_bytes(b"\x00\x01not an executable")
         garbage.chmod(0o755)
@@ -308,8 +308,8 @@ class FastSeamTests(SeamCase):
         result = run(request, observer=correction.observer, services=None,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "native-version-probe-failed")
-        self.assertIn("launch-failed", result.end.message)
+        self.assertEqual(result.end.reason_code, "adapter-unavailable")
+        self.assertIn("could not start", result.end.message)
         self.assertIsNone(result.model_started)
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "gone")
@@ -971,77 +971,6 @@ class DiscoveryBoundaryTests(unittest.TestCase):
         self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
         probe.assert_not_called()
         create.assert_not_called()
-
-    def test_failed_version_command_stays_failed_with_actual_stop(self):
-        self.command.write_text("import sys\nprint('fixture diagnostic refused')\nsys.exit(7)\n")
-        with mock.patch.object(native_run, 'owned_popen', wraps=native_run.owned_popen) as create:
-            with self.assertRaises(CodexProtocolError) as caught:
-                self.discover()
-        create.assert_not_called()
-        self.assertEqual(caught.exception.code, 'native-version-probe-failed')
-        self.assertIn('probe-failed', str(caught.exception))
-        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
-
-    def test_version_probe_reasons_keep_the_public_stop_fact(self):
-        for reason in ('launch-failed', 'scan-timeout', 'timeout', 'output-limit', 'probe-failed', 'shutdown-unverified'):
-            with self.subTest(reason=reason):
-                with mock.patch('hey_my_buddy.buddy.harnesses.discovery.probe', return_value=(reason, b'')), \
-                     mock.patch.object(native_run, 'owned_popen') as create:
-                    with self.assertRaises(CodexProtocolError) as caught:
-                        self.discover()
-                create.assert_not_called()
-                self.assertIn(reason, str(caught.exception))
-                self.assertIs(caught.exception.discovery_shutdown_confirmed, reason != 'shutdown-unverified')
-
-    def test_version_probe_exception_keeps_actual_stop(self):
-        for stopped in (True, False, None):
-            with self.subTest(stopped=stopped):
-                error = ValueError('fixture version read failed')
-                if stopped is not None:
-                    error.discovery_shutdown_confirmed = stopped
-                with mock.patch('hey_my_buddy.buddy.harnesses.discovery.probe', side_effect=error), \
-                     mock.patch.object(native_run, 'owned_popen') as create:
-                    with self.assertRaises(ValueError) as caught:
-                        self.discover()
-                create.assert_not_called()
-                self.assertIs(caught.exception, error)
-                self.assertIs(caught.exception.discovery_shutdown_confirmed, stopped is True)
-
-    def test_run_version_unknown_stop_never_becomes_a_no_child_stop(self):
-        request = RunRequest(identity=RunIdentity(task_id='fixture', attempt_id='fixture', generation=1,
-                                                 invocation_id='fixture'), harness='codex',
-                             configuration=RunConfiguration(provider='openai', model='fixture', effort='low'),
-                             cwd=str(self.base), tool_scope='read', input_text='fixture', output_schema=FAST_SCHEMA,
-                             private_state=PrivateStatePaths(invocation_root=str(self.base / 'invocation'),
-                                                             native_root=str(self.base / 'native')),
-                             budget=RunBudget(timeout_seconds=2))
-        with bound([self.record], environment=self.environment), \
-             mock.patch('hey_my_buddy.buddy.harnesses.discovery.probe', return_value=('shutdown-unverified', b'')), \
-             mock.patch.object(native_run, 'owned_popen') as create:
-            result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
-                         services=RunServices(), cancelled=lambda: False)
-        create.assert_not_called()
-        self.assertEqual((result.end.status, result.end.reason_code), ('error', 'native-shutdown-failed'))
-        self.assertEqual(result.stop_evidence.native.group_state, 'unknown')
-        self.assertFalse(result.model_started)
-
-    def test_run_failed_version_with_actual_stop_stays_failed(self):
-        self.command.write_text("import sys\nprint('fixture diagnostic refused')\nsys.exit(7)\n")
-        request = RunRequest(identity=RunIdentity(task_id='fixture', attempt_id='fixture', generation=1,
-                                                 invocation_id='fixture'), harness='codex',
-                             configuration=RunConfiguration(provider='openai', model='fixture', effort='low'),
-                             cwd=str(self.base), tool_scope='read', input_text='fixture', output_schema=FAST_SCHEMA,
-                             private_state=PrivateStatePaths(invocation_root=str(self.base / 'invocation'),
-                                                             native_root=str(self.base / 'native')),
-                             budget=RunBudget(timeout_seconds=2))
-        with bound([self.record], environment=self.environment), \
-             mock.patch.object(native_run, 'owned_popen') as create:
-            result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
-                         services=RunServices(), cancelled=lambda: False)
-        create.assert_not_called()
-        self.assertEqual((result.end.status, result.end.reason_code), ('error', 'native-version-probe-failed'))
-        self.assertEqual(result.stop_evidence.native.group_state, 'gone')
-        self.assertFalse(result.model_started)
 
     def test_app_server_creation_failure_consumes_no_child_receipt(self):
         popen = subprocess.Popen

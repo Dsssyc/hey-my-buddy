@@ -42,6 +42,7 @@ from ....errors import BoardError
 from ....json_codec import canonical_json, decode_strict_json
 from ....private_dirs import ensure_private_dir
 from ...roles.turn_io import private_json
+from ..version import VersionShutdownError, probe_version
 from ..base import BoundSessionServices, ProcessHandle
 from ...runtime.windows_process import owned_popen
 from ....protocol.internal_models import OptionalFrozenJsonAt
@@ -637,7 +638,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     Failures inside ``owned_popen`` carry creation/cleanup evidence before
     registration, including a suspended child whose stop remains unknown.
     """
-    from ..discovery import native_environment, probe
+    from ..discovery import native_environment
     root = ensure_private_dir(native_root)
     incoming = dict(os.environ)
     command = cli_command(incoming)
@@ -656,22 +657,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     environment.update({"ZCODE_STORAGE_DIR": str(root / "storage"), "ZCODE_SESSION_DB_PATH": str(root / "sessions.sqlite"),
                         "ZCODE_LOG_DIR": str(private / "native-logs"), "ZCODE_LOG_CONSOLE": "0",
                         "ZCODE_MODEL_TELEMETRY_ENABLED": "0"})
-    try:
-        version_code, version_output = probe([*command, "--version"], environment, cwd=cwd,
-                                              deadline=min(deadline, time.monotonic() + 5))
-    except Exception as error:
-        if owned is not None:
-            owned[:] = [{"created": True,
-                         "shutdown": getattr(error, "discovery_shutdown_confirmed", False) is True,
-                         "exit_code": None}]
-        raise
-    if version_code == "shutdown-unverified":
-        if owned is not None:
-            owned[:] = [{"created": True, "shutdown": False, "exit_code": None}]
-        raise NativeError("native-shutdown-failed", "the native version probe shutdown is unconfirmed")
-    # Version metadata is optional after a bounded, confirmed stop. An ordinary
-    # timeout must not suppress the capability/catalog handshake below.
-    version = version_output.decode(errors="replace").strip()[:80] if version_code is None else None
+    version = probe_version(command, environment, cwd=cwd, deadline=deadline, owned=owned)
     fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
     process = None
     try:
@@ -1049,7 +1035,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
         state.reason = "observer-interrupt"
         state.observer_stopped = True
         outcome.record = None
-    except NativeError as error:
+    except (NativeError, VersionShutdownError) as error:
         state.status = "cancelled" if error.code == "cancelled" else "error"
         state.reason = error.code
         state.error_text = str(error)

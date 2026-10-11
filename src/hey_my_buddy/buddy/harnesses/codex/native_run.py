@@ -50,6 +50,7 @@ from ..c_two_live import CTwoLiveEndpoint
 from ....private_dirs import account_root, ensure_private_dir
 from ...roles.turn_io import canonical_json, guard_private_path, private_json
 from ...runtime.windows_process import owned_popen
+from ..version import VersionShutdownError, probe_version
 from ..base import ProcessHandle
 from ..native_support import (
     CancelFlag,
@@ -455,24 +456,6 @@ def _prepare(request: RunRequest, services: RunServices, mode: str) -> _Preparat
 
 
 # -- phase 2: initialization (version probe, owned spawn, handshake) ---------------
-
-
-def _probe_version(command: list, environment: dict, cwd: str, deadline: float, owned: list) -> str:
-    """Keep the public probe's diagnostic outcome and actual stop fact together."""
-    from ..discovery import probe
-
-    try:
-        reason, output = probe([*command, "--version"], environment, cwd=cwd,
-                               deadline=min(deadline, time.monotonic() + 5))
-    except Exception as error:
-        owned[:] = [{"shutdown": getattr(error, "discovery_shutdown_confirmed", False) is True,
-                     "exit_code": None}]
-        raise
-    owned[:] = [{"shutdown": reason != "shutdown-unverified", "exit_code": None}]
-    if reason is not None:
-        raise CodexProtocolError("native-shutdown-failed" if reason == "shutdown-unverified"
-                                 else "native-version-probe-failed", "Codex version probe failed: " + reason)
-    return output.decode(errors="replace").strip()[:80]
 
 
 def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _Spawn:
@@ -1055,7 +1038,8 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         prep = _prepare(request, services, mode)
         state.coding_home_prepared = prep.coding_home_prepared
         state.coding_home = prep.home if prep.coding_home_prepared else None
-        prep.version = _probe_version(prep.command, prep.environment, request.cwd, prep.deadline, owned_spawn)
+        prep.version = probe_version(prep.command, prep.environment, cwd=request.cwd,
+                                     deadline=prep.deadline, owned=owned_spawn)
         state.version = prep.version
         spawn = _spawn_app_server(prep, cancel, owned_spawn)
         connection = spawn.connection
@@ -1078,7 +1062,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         state.interrupt_basis = state.interrupt_basis or "observer-request"
         if connection is not None and state.thread_id and state.turn_id:
             _interrupt(connection, state)
-    except CodexProtocolError as error:
+    except (CodexProtocolError, VersionShutdownError) as error:
         state.status = "cancelled" if error.code == "user-cancel" else "error"
         state.reason, state.error_text = error.code, str(error)
         if connection is not None and state.thread_id and state.turn_id \
@@ -1650,7 +1634,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
             raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter="codex") from None
         environment = native_environment(incoming)
         try:
-            version = _probe_version(command, environment, cwd, deadline, owned)
+            version = probe_version(command, environment, cwd=cwd, deadline=deadline, owned=owned)
             prep = _Preparation(command=command, environment=environment, native_root=native_root,
                                 invocation_root=invocation_root,
                                 stderr_path=invocation_root / _NATIVE_STDERR_FILE,
