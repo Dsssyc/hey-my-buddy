@@ -263,6 +263,17 @@ class ReserveDispatchTests(RouterSequenceTestCase):
         stored = self.stored("router_dispatches", "task_id", "task-alpha")
         self.assertNotIn("mutated", stored)
 
+    def test_dispatches_follow_router_index_when_task_ids_have_reverse_order(self):
+        first = self.reserved("task-bravo")
+        second = self.reserved("task-alpha", profile=BRAVO, document=bravo_document(), router_index=1)
+        with self.board_.store.db.read() as db:
+            dispatches = router_sequence.dispatches(db, "dec-1")
+            self.assertEqual([item["taskId"] for item in dispatches], ["task-bravo", "task-alpha"])
+            self.assertEqual(dispatches, (first, second))
+            self.assertEqual(router_sequence.dispatches(db, "dec-missing"), ())
+            dispatches[0]["document"]["task"] = "caller mutation"
+            self.assertEqual(router_sequence.dispatches(db, "dec-1"), (first, second))
+
     def test_incomplete_identity_or_document_is_rejected(self):
         broken_identity = {**ALPHA, "effort": ""}
         for profile, index in ((broken_identity, 0), ({"profileId": "x"}, 0), (ALPHA, -1), (ALPHA, True)):
@@ -392,6 +403,49 @@ class RelationalBindingTests(RouterSequenceTestCase):
             router_sequence.record_claim(db, task_id="task-alpha", attempt_id="actual-binding", generation=1, now=T0)
             self.seed_attempt(db, "actual-binding", "task-alpha", 1)
         self.assertEqual(len(self.events()), 1)
+
+    def test_claim_task_generation_is_unique_before_deferred_attempt_binding(self):
+        with self.board_.store.db.write() as db:
+            self.reserve(db)
+            # Both candidate attempts are absent: the second INSERT must fail
+            # immediately on router_claims, independently of attempts' UNIQUE
+            # and its deferred composite FK. Bind the first before committing.
+            db.execute("INSERT INTO router_claims(attempt_id,task_id,generation)"
+                       " VALUES('first-pending','task-alpha',1)")
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM attempts WHERE task_id='task-alpha'").fetchone()[0], 0)
+            with self.assertRaisesRegex(sqlite3.IntegrityError,
+                                        r"UNIQUE constraint failed: router_claims.task_id, router_claims.generation"):
+                db.execute("INSERT INTO router_claims(attempt_id,task_id,generation)"
+                           " VALUES('second-pending','task-alpha',1)")
+            self.seed_attempt(db, "first-pending", "task-alpha", 1)
+        with self.board_.store.db.read() as db:
+            self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM router_claims")],
+                             [("first-pending", "task-alpha", 1)])
+            self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+    def test_outcome_event_sequence_cannot_be_shared_by_two_receipts(self):
+        with self.board_.store.db.write() as db:
+            first = self.outcome(db)
+            # Different receipt, same existing event: only event_seq uniqueness
+            # can reject this row; every FK already has its parent.
+            with self.assertRaisesRegex(sqlite3.IntegrityError,
+                                        r"UNIQUE constraint failed: router_outcomes.event_seq"):
+                db.execute("INSERT INTO router_outcomes SELECT 'another-receipt',plane,request_id,router_index,"
+                           "profile_id,phase,task_id,attempt_id,outcome,code,event_seq,recorded_at FROM router_outcomes")
+        with self.board_.store.db.read() as db:
+            self.assertEqual([row[0] for row in db.execute("SELECT event_seq FROM router_outcomes")], [first['seq']])
+        self.assertEqual(len(self.events("router.answered")), 1)
+
+    def test_outcome_event_sequence_requires_an_existing_event(self):
+        with self.board_.store.db.write() as db:
+            first = self.outcome(db)
+            absent_seq = db.execute("SELECT MAX(seq)+1 FROM events").fetchone()[0]
+            # The new sequence is unique. Only the events FK can reject it.
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "FOREIGN KEY constraint failed"):
+                db.execute("UPDATE router_outcomes SET event_seq=?", (absent_seq,))
+        with self.board_.store.db.read() as db:
+            self.assertEqual([row[0] for row in db.execute("SELECT event_seq FROM router_outcomes")], [first['seq']])
+        self.assertEqual(len(self.events("router.answered")), 1)
 
     def test_outcome_attempt_cannot_name_a_different_task_or_omit_its_task(self):
         with self.board_.store.db.write() as db:

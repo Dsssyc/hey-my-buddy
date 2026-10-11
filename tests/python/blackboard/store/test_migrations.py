@@ -240,6 +240,51 @@ class Schema15UpgradeTests(BoardTestCase):
         self.assertEqual(rows(self.connection), old_rows)
         self.assertEqual(schema_shape(self.connection), old_shape)
 
+    def test_trigger_cannot_change_exempt_event_sequence_during_migration(self):
+        # Ordinary snapshots exempt the events allocator, but migration must
+        # preserve it too. No event or row count changes can mask this guard.
+        self.connection.execute("CREATE TRIGGER corrupt_event_allocator AFTER UPDATE ON catalog_current BEGIN"
+                                " UPDATE sqlite_sequence SET seq=seq+1 WHERE name='events'; END")
+        old_rows, old_shape = rows(self.connection), schema_shape(self.connection)
+        self.assertTrue(any(row[0] == 'events' for row in old_rows['sqlite_sequence']))
+        with self.assertRaises(BoardError) as caught:
+            migrations.migrate_15_to_16(self.connection)
+        self.assertEqual(caught.exception.message, 'Migration changed values outside its exact plan')
+        self.assertEqual(caught.exception.details['tables'], ['sqlite_sequence'])
+        self.assertEqual(rows(self.connection), old_rows)
+        self.assertEqual(schema_shape(self.connection), old_shape)
+        self.assertFalse(self.connection.in_transaction)
+
+    def test_trigger_cannot_change_planned_meta_value_during_migration(self):
+        self.connection.execute("CREATE TRIGGER corrupt_planned_meta AFTER UPDATE ON meta"
+                                " WHEN NEW.key='schema_version' BEGIN"
+                                " UPDATE meta SET value='brief' WHERE key='router_budget_preset'; END")
+        self.assertEqual(self.connection.execute("SELECT value FROM meta WHERE key='router_budget_preset'")
+                         .fetchone()[0], 'standard')
+        old_rows, old_shape = rows(self.connection), schema_shape(self.connection)
+        with self.assertRaises(BoardError) as caught:
+            migrations.migrate_15_to_16(self.connection)
+        self.assertEqual(caught.exception.message, 'Migration changed values outside its exact plan')
+        self.assertEqual(caught.exception.details['tables'], ['meta'])
+        self.assertEqual(rows(self.connection), old_rows)
+        self.assertEqual(schema_shape(self.connection), old_shape)
+        self.assertFalse(self.connection.in_transaction)
+
+    def test_complete_legacy_router_keys_with_non_one_version_are_rejected(self):
+        for version in ('2', '3'):
+            with self.subTest(version=version):
+                self.connection.execute("UPDATE meta SET value=? WHERE key='router_configuration_version'", (version,))
+                old_rows, old_shape = rows(self.connection), schema_shape(self.connection)
+                with self.assertRaises(BoardError) as caught:
+                    migrations.migrate_15_to_16(self.connection)
+                self.assertEqual(caught.exception.details, {'tables':['meta'], 'routerForm':{
+                    'expectedVersion':'1', 'actualVersion':version,
+                    'missingKeys':[], 'unexpectedKeys':[],
+                }})
+                self.assertEqual(rows(self.connection), old_rows)
+                self.assertEqual(schema_shape(self.connection), old_shape)
+                self.assertFalse(self.connection.in_transaction)
+
     def test_invalid_source_router_settings_fail_without_any_conversion(self):
         self.connection.execute("UPDATE meta SET value='invalid-mode' WHERE key='router_default_mode'")
         old_rows, old_shape = rows(self.connection), schema_shape(self.connection)

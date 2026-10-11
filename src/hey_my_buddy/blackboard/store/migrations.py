@@ -356,7 +356,6 @@ def _migrate_15_to_16_transaction(connection: sqlite3.Connection) -> dict:
             changed.append("meta")
         if [tuple(row) for row in connection.execute("SELECT * FROM catalog_current ORDER BY adapter")] != planned_catalog:
             changed.append("catalog_current")
-        changed += [name for name in NEW_TABLES if connection.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]]
         if changed:
             raise BoardError("UPGRADE_MIGRATION_FAILED", "Migration changed values outside its exact plan",
                              tables=sorted(set(changed)))

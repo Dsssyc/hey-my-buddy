@@ -309,6 +309,36 @@ class UpgradeMigrationTests(BoardTestCase):
                     self.assertEqual(rows(connection), old_rows)
                     self.assertEqual(schema_shape(connection), old_shape)
 
+    def test_non_board_error_rolls_back_with_tables_in_response_and_durable_journal(self):
+        old = self.all_rows()
+        with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
+            old_shape = schema_shape(connection)
+
+        def fail_target_verification(state, runtime_path, observed, expected):
+            # The real backup and migration have finished before a plain Python
+            # exception reaches the coordinator's rollback/error boundary.
+            if runtime_path.name == 'b' * 32:
+                self.assertEqual(upgrade.idle_snapshot(state)['schema'], 16)
+                raise RuntimeError('private target verification failure')
+            return {'retainedDataFingerprints':True}
+
+        result = self.failed_upgrade(fail_target_verification)
+        journal = json.loads((self.state / 'upgrade-last.json').read_text())
+        self.assertFalse(result['upgraded'])
+        self.assertEqual(result['error']['code'], 'UPGRADE_ROLLED_BACK')
+        self.assertNotIn('failure', result)
+        self.assertEqual(result['error']['details']['reason'], {
+            'code':'RuntimeError', 'message':'private target verification failure', 'details':{'tables':[]},
+        })
+        self.assertEqual(journal['failure'], result['error']['details']['reason'])
+        self.assertEqual(journal['failure']['details']['tables'], [])
+        self.assertEqual(journal['phase'], 'rolled-back')
+        self.assertIsNotNone(result['backup'])
+        self.assertFalse((self.state / 'upgrade.json').exists())
+        self.assertEqual(self.all_rows(), old)
+        with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
+            self.assertEqual(schema_shape(connection), old_shape)
+
     def test_unproven_recovery_keeps_the_same_structured_reason_in_both_journals_and_error(self):
         failure = BoardError('UPGRADE_VERIFY_FAILED', 'declared target failure', tables=['catalog_current'])
         recovery = BoardError('UPGRADE_VERIFY_FAILED', 'declared recovery failure', tables=['events'])
