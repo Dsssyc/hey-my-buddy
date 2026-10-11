@@ -170,7 +170,7 @@ describe("routing configuration", () => {
       task: "不应出现在配置页的长任务说明。".repeat(200),
     }));
     const command = vi.fn();
-    window.location.hash = "#buddies/router";
+    window.location.hash = "#buddies/roles";
     const user = userEvent.setup();
     render(<App suppliedApi={apiFor(state, command)} />);
     await screen.findByRole("region", { name: "路由状态" });

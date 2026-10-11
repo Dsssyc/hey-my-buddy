@@ -757,18 +757,8 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .segment:has(input:disabled) { cursor: not-allowed; opacity: .6; }
 
 /* Buddy 配置: the active section owns the remaining shell height. */
-.buddy-page { height: 100%; min-height: 0; display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 12px; overflow: hidden; }
-.buddy-sections { display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
-.buddy-sections a { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 6px 12px; border-radius: 4px; color: var(--muted); font-size: 13px; }
-.buddy-sections svg { flex-shrink: 0; }
-.buddy-sections a:hover { background: var(--subtle); }
-.buddy-sections a[aria-current="page"] { color: var(--accent); background: var(--accent-wash); font-weight: 600; }
 .buddy-section-page { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
-.buddy-status { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; min-height: 36px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); font-size: 12px; }
-.buddy-status a { overflow-wrap: anywhere; text-underline-offset: 3px; }
-.buddy-status a:hover { text-decoration: underline; }
-.buddy-status .status-attention { color: var(--warning); }
-.buddy-page .segment { min-height: 32px; }
+.buddy-section-page .segment { min-height: 32px; }
 .buddy-section { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
 .buddy-models { overflow: hidden; scrollbar-gutter: auto; }
 .buddy-models > .workspace-grid { height: 100%; min-height: 0; }
@@ -902,10 +892,6 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .settings-page .panel-heading h2 { font-size: 16px; font-weight: 600; }
 .settings-page .segment { min-height: 36px; justify-content: center; }
 @media (max-width: 760px) {
-  .buddy-page { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 8px; }
-  .buddy-sections { flex-direction: row; gap: 0; padding: 0; overflow: hidden; }
-  .buddy-sections a { flex: 1; justify-content: center; border-radius: 0; }
-  .buddy-sections a + a { border-left: 1px solid var(--line); }
   .routing-details { grid-template-columns: minmax(0, 1fr); }
   .family-field { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .routing-status-line > .button { margin-left: 0; }

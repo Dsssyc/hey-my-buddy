@@ -136,11 +136,12 @@ describe("desktop console", () => {
     const user = userEvent.setup();
     const { container } = render(<App suppliedApi={f.api} />);
     const navigation = await screen.findByRole("navigation", { name: "主要导航" });
-    expect(within(navigation).getAllByRole("link").map(link => link.textContent)).toEqual(["任务", "Buddy", "设置"]);
+    // A mark on a tab adds words for a screen reader after its name; the name itself is the first text.
+    expect(within(navigation).getAllByRole("link").map(link => link.firstChild?.textContent)).toEqual(["任务", "Buddy", "设置"]);
     expect(navigation.closest("header")).not.toBeNull();
     expect(container.querySelector(".sidebar")).toBeNull();
     expect(screen.getAllByRole("navigation")).toHaveLength(1);
-    await user.click(within(navigation).getByRole("link", { name: "Buddy" }));
+    await user.click(within(navigation).getByRole("link", { name: /^Buddy/ }));
     expect(await screen.findByRole("heading", { name: "模型 6" })).toBeTruthy();
     const list = screen.getByRole("region", { name: "模型家族" });
     expect(list.querySelectorAll(".family-row")).toHaveLength(6);

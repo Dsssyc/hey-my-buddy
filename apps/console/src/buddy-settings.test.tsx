@@ -305,11 +305,11 @@ describe("the model family list", () => {
     expect(within(screen.getByRole("region", { name: "模型家族" })).getByText("Router")).toBeTruthy();
   });
 
-  it("opens recorded harness health from the global status without calling anything", async () => {
+  it("opens recorded harness health from the Harness table without calling anything", async () => {
     const f = fixture();
     const user = userEvent.setup();
     await openBuddy(f.api, user);
-    await user.click(screen.getByRole("link", { name: "Harness 可用 1/2" }));
+    await user.click(within(screen.getByRole("navigation", { name: "目录的内容" })).getByRole("link", { name: /^Harness/ }));
     const strip = screen.getByRole("region", { name: "Harness 状态" });
     expect(within(strip).getByText("可用 1/2")).toBeTruthy();
     expect(within(strip).getByText(/^找到：路径 \/Users\/fixture\/\.local\/bin\/claude · 版本 2\.0\.1/)).toBeTruthy();
@@ -454,8 +454,11 @@ describe("the Router menu", () => {
     await selectFamily(user, "Claude Sonnet 5");
     await user.click(screen.getByRole("button", { name: "medium 档位菜单" }));
     const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
+    // Without a Router the roles section carries a mark; once one is chosen it carries none.
+    const sections = screen.getByRole("navigation", { name: "Buddy 的分区" });
+    expect(within(sections).getByRole("link", { name: /^角色\s*未指定 Router$/ })).toBeTruthy();
     await user.click(within(menu).getByRole("button", { name: "设为 Router" }));
-    expect(screen.getByRole("region", { name: "全局状态" }).textContent).toContain("Router：可用");
+    expect(within(sections).getByRole("link", { name: "角色" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本");
     expect(f.published[0].configuration).toEqual({ routerProfileIds: [mediumId] });

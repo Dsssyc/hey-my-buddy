@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { ConsoleApi, HarnessCandidate, HarnessHealth, HarnessStatus as HarnessStatusValue } from "./api";
 import { ApiError, errorText, snapshotHarnesses } from "./api";
 import type { Snapshot } from "./types";
-import type { BuddyLocation } from "./buddy-navigation";
+import type { BuddyLocation } from "./buddies/navigation";
 import { Badge } from "./ui";
 import { harnessName } from "./buddy-display";
 import { dayClock } from "./objective-display";

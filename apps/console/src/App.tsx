@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { buddyAttention } from "./buddies/attention";
+import { attentionHints } from "./buddies/BuddyHeader";
 import { createApi } from "./api";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
@@ -121,9 +123,11 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   const draftTab = tab === "buddies";
   const verifiedAt = api.readVerifiedAt?.(snapshot) ?? null;
   // What a mark on a tab means; the tab shows it on hover and on focus.
+  const buddies = useTranslation("buddies");
+  const waiting = attentionHints(buddyAttention(editor.view, snapshot), buddies.t);
   const tabHints: Partial<Record<Tab, string>> = {
     tasks: pending > 0 ? t("nav.pendingHost") : undefined,
-    buddies: editor.dirty ? t("nav.unsaved") : undefined,
+    buddies: editor.dirty ? t("nav.unsaved") : waiting.roles ?? waiting.harness,
   };
   return <TooltipProvider delayDuration={300}><div className="flex h-dvh min-h-0 flex-col overflow-hidden">
     <a className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground"
@@ -141,7 +145,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
             className="relative flex items-center gap-[7px] px-3.5 whitespace-nowrap text-bar-ink2 outline-none hover:text-bar-ink focus-visible:bg-bar-ink/10 aria-[current=page]:font-medium aria-[current=page]:text-bar-ink aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-3.5 aria-[current=page]:after:bottom-0 aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-bar-live">
             {t(`nav.${key}`)}
             {key === "tasks" && pending > 0 && <span className="min-w-[18px] rounded-sm bg-bar-hand px-[5px] text-center text-xs leading-[18px] font-semibold text-bar tabular-nums">{pending}</span>}
-            {key === "buddies" && editor.dirty && <span className="size-1.5 rounded-full bg-bar-hand" aria-hidden="true" />}
+            {key === "buddies" && hint && <span className="size-1.5 rounded-full bg-bar-hand" aria-hidden="true" />}
             {hint && <span className="sr-only">{hint}</span>}
           </a>;
           return hint ? <Tooltip key={key}><TooltipTrigger asChild>{link}</TooltipTrigger><TooltipContent>{hint}</TooltipContent></Tooltip> : link;
@@ -160,37 +164,40 @@ function Connected({ api, snapshot, refresh, connectionError }: {
         </p>
       </div>
     </header>
-    <main id="main" className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden p-2 outline-none sm:p-4" tabIndex={-1}>
+    <main id="main" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden outline-none" tabIndex={-1}>
       <h1 className="sr-only">{t(`nav.${tab}`)}</h1>
-      {connectionError && <p className="flex shrink-0 flex-wrap items-center gap-3 rounded-md border border-fail bg-fail-wash px-3 py-2 text-fail" role="alert">
-        <span className="min-w-0 wrap-anywhere">{connectionError}</span>
-        <Button variant="outline" size="sm" onClick={() => void refresh()}>{t("connection.retry")}</Button>
-      </p>}
-      {draftTab && editor.conflict && !editor.confirming && <div className="banner conflict-banner" role="alert">
-        <span title={conflictTitle}>设置已更新；请核对草稿。</span>
-        {editor.rebaseConflicts.length > 0 && <ul className="conflict-details">
-          {editor.rebaseConflicts.map(issue => <li key={`${issue.kind}:${issue.field}:${issue.profileId}`}>{issue.message}</li>)}
-        </ul>}
-        <button type="button" className="button small-button" aria-disabled={editor.busy}
-          onClick={() => void editor.reloadLatest()}>重新加载最新版本</button>
-        <button type="button" className="button small-button danger" aria-disabled={editor.busy}
-          onClick={() => void editor.discard()}>放弃修改</button>
-      </div>}
-      {draftTab && editor.confirming && editor.uncertain && <div className="banner conflict-banner" role="status">
-        <span>{UNRESOLVED_SAVE_NOTE}</span>
-        <button type="button" className="button small-button" aria-disabled={editor.busy}
-          onClick={() => void editor.save()}>重试同一保存</button>
-        <button type="button" className="button small-button" aria-disabled={editor.busy}
-          onClick={() => void editor.reloadLatest()}>重新加载最新版本</button>
-      </div>}
-      {draftTab && editor.blocked && <p className="banner guard-banner" role="status">{editor.blocked}</p>}
-      {draftTab && editor.error && !editor.confirming && <p className="banner error-banner" role="alert">{editor.error}</p>}
-      {draftTab && editor.notice && <p className="publication-notice" role="status">{editor.notice}</p>}
+      {/* What is said above a page: the lost connection and the state of a draft. */}
+      <div className="flex shrink-0 flex-col gap-2 px-2 pt-2 pb-2 empty:hidden sm:px-4 sm:pt-4">
+        {connectionError && <p className="flex shrink-0 flex-wrap items-center gap-3 rounded-md border border-fail bg-fail-wash px-3 py-2 text-fail" role="alert">
+          <span className="min-w-0 wrap-anywhere">{connectionError}</span>
+          <Button variant="outline" size="sm" onClick={() => void refresh()}>{t("connection.retry")}</Button>
+        </p>}
+        {draftTab && editor.conflict && !editor.confirming && <div className="banner conflict-banner" role="alert">
+          <span title={conflictTitle}>设置已更新；请核对草稿。</span>
+          {editor.rebaseConflicts.length > 0 && <ul className="conflict-details">
+            {editor.rebaseConflicts.map(issue => <li key={`${issue.kind}:${issue.field}:${issue.profileId}`}>{issue.message}</li>)}
+          </ul>}
+          <button type="button" className="button small-button" aria-disabled={editor.busy}
+            onClick={() => void editor.reloadLatest()}>重新加载最新版本</button>
+          <button type="button" className="button small-button danger" aria-disabled={editor.busy}
+            onClick={() => void editor.discard()}>放弃修改</button>
+        </div>}
+        {draftTab && editor.confirming && editor.uncertain && <div className="banner conflict-banner" role="status">
+          <span>{UNRESOLVED_SAVE_NOTE}</span>
+          <button type="button" className="button small-button" aria-disabled={editor.busy}
+            onClick={() => void editor.save()}>重试同一保存</button>
+          <button type="button" className="button small-button" aria-disabled={editor.busy}
+            onClick={() => void editor.reloadLatest()}>重新加载最新版本</button>
+        </div>}
+        {draftTab && editor.blocked && <p className="banner guard-banner" role="status">{editor.blocked}</p>}
+        {draftTab && editor.error && !editor.confirming && <p className="banner error-banner" role="alert">{editor.error}</p>}
+        {draftTab && editor.notice && <p className="publication-notice" role="status">{editor.notice}</p>}
+      </div>
       {saveRefusal && <p id="editor-save-reason" className="sr-only">{saveRefusal}</p>}
       {/* Stable positions preserve page selections, drafts and scroll offsets.
           https://react.dev/learn/preserving-and-resetting-state */}
       {tabs.map(key => visited.has(key) && <section key={key} hidden={tab !== key}
-        className="min-h-0 min-w-0 flex-1 overflow-hidden" aria-label={t(`nav.${key}`)}>
+        className={"min-h-0 min-w-0 flex-1 overflow-hidden" + (key === "buddies" ? "" : " p-2 sm:p-4")} aria-label={t(`nav.${key}`)}>
         {key === "tasks" ? <Objectives snapshot={snapshot} api={api} refresh={refresh} active={tab === key}
           authority={authority} writesAvailable={writesAvailable} /> :
           key === "buddies" ? <BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
@@ -199,8 +206,8 @@ function Connected({ api, snapshot, refresh, connectionError }: {
               active={tab === "settings"}
               theme={theme.choice} onTheme={theme.setChoice} />}
       </section>)}
-      {draftTab && editor.mode && <SaveBar editor={editor} mutationsAvailable={mutationsAvailable}
-        describedBy={saveRefusal ? "editor-save-reason" : undefined} />}
+      {draftTab && editor.mode && <div className="shrink-0 px-2 pb-2 sm:px-4 sm:pb-4"><SaveBar editor={editor} mutationsAvailable={mutationsAvailable}
+        describedBy={saveRefusal ? "editor-save-reason" : undefined} /></div>}
     </main>
   </div></TooltipProvider>;
 }

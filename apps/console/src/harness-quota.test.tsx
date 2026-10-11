@@ -98,9 +98,8 @@ describe("harness quota observations", () => {
   it("warns about the near-limit window and names source, window and reset time", async () => {
     const user = await openBuddy();
     expect(screen.getByText("额度接近上限")).toBeTruthy();
-    // The status line carries the reminder without expanding a row, and states
-    // that it is the latest recorded observation.
-    expect(screen.getByText(/额度提醒：DSH/)).toBeTruthy();
+    // The Harness table carries the mark without a row being opened, and names the harness.
+    expect(within(screen.getByRole("navigation", { name: "目录的内容" })).getByRole("link", { name: /^Harness\s*额度接近上限：DSH$/ })).toBeTruthy();
     const dsh = screen.getByText(/^找到：路径 \/usr\/local\/bin\/dsh/).closest("li")!;
     await user.click(screen.getByRole("button", { name: "DSH 检测详情" }));
     const facts = within(dsh).getByText("额度观测").closest("div")!;
@@ -121,10 +120,10 @@ describe("harness quota observations", () => {
     expect(within(zcode).getByText(/最近一次观测，可能已过期 · 来源 zcode-native/)).toBeTruthy();
     expect(within(zcode).getAllByText(/已过期/).length).toBeGreaterThan(0);
     // The stale observation raises no near-limit reminder of its own: the only
-    // reminder is DSH's row badge plus the status line naming DSH.
+    // reminder is DSH's row badge plus the mark on the Harness table, which names DSH alone.
     expect(within(zcode).queryByText(/接近上限/)).toBeNull();
-    expect(screen.getAllByText(/额度接近上限/)).toHaveLength(1);
-    expect(screen.getByText(/额度提醒：DSH$/)).toBeTruthy();
+    expect(screen.getAllByText("额度接近上限")).toHaveLength(1);
+    expect(within(screen.getByRole("navigation", { name: "目录的内容" })).getByRole("link", { name: /^Harness\s*额度接近上限：DSH$/ })).toBeTruthy();
   });
 
   it("reports a harness with no recorded observation as unknown", async () => {

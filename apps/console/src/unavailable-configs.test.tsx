@@ -390,10 +390,10 @@ describe("stale settings and unrelated saves", () => {
     render(<App suppliedApi={f.api} />);
     // The unavailable decision family stays hidden behind the filter.
     await screen.findByRole("heading", { name: "模型 1" });
-    // The stale review Router is no longer a stacked detail page: the global
-    // status strip carries the attention and links to the effort it names.
-    const status = screen.getByRole("region", { name: "全局状态" });
-    expect(within(status).getByRole("link", { name: "Router 需处理，去处理" })).toBeTruthy();
+    // The stale review Router is no longer a stacked detail page: the roles
+    // section carries the mark.
+    const sections = screen.getByRole("navigation", { name: "Buddy 的分区" });
+    expect(within(sections).getByRole("link", { name: /^角色\s*Router 不可用$/ })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.type(await screen.findByLabelText("家族备注"), "只改这条意见");
@@ -534,8 +534,7 @@ describe("deep links preserve manually saved filters", () => {
     await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
     expect(localStorage.getItem(enabledKey)).toBe("false");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
-    const status = screen.getByRole("region", { name: "全局状态" });
-    await user.click(within(status).getByRole("link", { name: "Router 需处理，去处理" }));
+    jump(retiredMax);
     await screen.findByRole("heading", { name: "retired-model" });
     expect(screen.getByRole("switch", { name: "启用 max" }).getAttribute("aria-checked")).toBe("true");
     expect(screen.getByRole("checkbox", { name: /^显示不可用配置/ })).toHaveProperty("checked", true);

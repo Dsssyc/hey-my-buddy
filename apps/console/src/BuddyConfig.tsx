@@ -4,7 +4,7 @@ import { errorText } from "./api";
 import { historyView } from "./draft";
 import type { Editor } from "./use-editor";
 import type { Snapshot } from "./types";
-import { Empty, Icon } from "./ui";
+import { Empty } from "./ui";
 import { familyKey, familyPending, modelFamilies } from "./console-data";
 import { MAX_HISTORY_PROFILES, PROFILE_PAGE_SIZE, useProfileHistory } from "./use-profile-history";
 import { SplitView } from "./SplitView";
@@ -16,9 +16,10 @@ import { pendingMark } from "./profile-display";
 import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
 import { HarnessStatus } from "./HarnessStatus";
 import { useViewPreference } from "./view-preferences";
-import { BuddyStatusBar } from "./BuddyStatusBar";
-import { BUDDY_SECTIONS, buddyHash, buddyLocation } from "./buddy-navigation";
-import type { BuddyLocation, BuddySection } from "./buddy-navigation";
+import { buddyAttention } from "./buddies/attention";
+import { BuddyHeader } from "./buddies/BuddyHeader";
+import { buddyHash, buddyLocation } from "./buddies/navigation";
+import type { BuddyLocation } from "./buddies/navigation";
 
 /**
  * "Buddy 配置": which configurations may work as a buddy, and which effort is
@@ -30,7 +31,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
   snapshot: Snapshot; editor: Editor; api: ConsoleApi; refresh: () => Promise<Snapshot | null>;
   active?: boolean; mutationsAvailable?: boolean;
 }) {
-  const [location, setLocation] = useState<BuddyLocation>(() => buddyLocation(window.location.hash) ?? { section: "models" });
+  const [location, setLocation] = useState<BuddyLocation>(() => buddyLocation(window.location.hash) ?? { view: "models" });
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -46,7 +47,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [note, setNote] = useState("");
   const [guard, setGuard] = useState("");
   const history = useProfileHistory(api, snapshot.csrfToken, snapshot.tableRevision,
-    { query, adapter: "", enabled: active && location.section === "models" && showUnavailable, autoOpen: showUnavailable });
+    { query, adapter: "", enabled: active && location.view === "models" && showUnavailable, autoOpen: showUnavailable });
   const data = editor.view;
   const recorded = historyView(snapshot, history.page);
   const sessionWritable = editor.sessionWritable;
@@ -83,12 +84,12 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
   useEffect(() => { autoPages.current = 0; }, [query, snapshot.tableRevision]);
   useEffect(() => {
     if (!showUnavailable) { autoPages.current = 0; return; }
-    if (!active || location.section !== "models") return;
+    if (!active || location.view !== "models") return;
     if (history.error || history.loading || !history.hasMore) return;
     if (autoPages.current >= Math.ceil(MAX_HISTORY_PROFILES / PROFILE_PAGE_SIZE)) return;
     autoPages.current += 1;
     history.loadMore();
-  }, [active, location.section, showUnavailable, history.error, history.loading, history.hasMore, history.loadMore]);
+  }, [active, location.view, showUnavailable, history.error, history.loading, history.hasMore, history.loadMore]);
   // The family mark keeps the list-membership fact: every family holding a
   // buddy in the configured Router list is marked, not only the role holder.
   const routerIds = new Set(snapshot.configuration === null ? [] : data.configuration?.routerProfileIds ?? []);
@@ -111,7 +112,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
   }, []);
   useEffect(() => {
     if (!active || !location.target || handledLocation.current === location) return;
-    if (location.section === "models") {
+    if (location.view === "models") {
       const target = data.profiles.find(p => p.profileId === location.target);
       if (!target) return;
       setHistoryOpen(false);
@@ -121,7 +122,7 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
       if (!target.available) setShowUnavailableForView(true);
       setFolded(previous => ({ ...previous, [target.adapter]: false }));
       setFocusRequest(previous => ({ profileId: target.profileId, n: (previous?.n ?? 0) + 1 }));
-    } else if (location.section === "router") {
+    } else if (location.view === "roles") {
       const target = location.target === "health" ? document.querySelector<HTMLElement>(".routing-status[aria-label='路由健康']")
         : document.getElementById("router-current");
       target?.focus(); target?.scrollIntoView?.({ block: "nearest" });
@@ -129,17 +130,17 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
     handledLocation.current = location;
   }, [location, active, data.profiles]);
   useEffect(() => {
-    if (active && location.section === "models" && focusRequest) {
+    if (active && location.view === "models" && focusRequest) {
       const target = document.getElementById(effortTagId(focusRequest.profileId));
       target?.focus(); target?.scrollIntoView?.({ block: "nearest" });
     }
-  }, [focusRequest, active, location.section]);
+  }, [focusRequest, active, location.view]);
   function navigate(next: BuddyLocation) {
     setLocation(next);
     window.location.hash = buddyHash(next);
   }
   function showRouter(profileId: string) {
-    navigate({ section: "models", target: profileId });
+    navigate({ view: "models", target: profileId });
   }
   async function discover() {
     if (busy || !mutationsAvailable) {
@@ -238,22 +239,14 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
         {data.profiles.length ? "试试其他搜索或筛选。" : "点击“发现模型”查找本机模型。"}</Empty>}
     </div>
   </section>;
-  return <div className="buddy-page">
-    <nav className="buddy-sections" aria-label="Buddy 配置分区">
-      {(Object.keys(BUDDY_SECTIONS) as BuddySection[]).map(section => <a key={section} href={buddyHash({ section })}
-        aria-current={location.section === section ? "page" : undefined}
-        onClick={event => { event.preventDefault(); navigate({ section }); }}>
-        <Icon name={section === "models" ? "models" : section === "router" ? "route" : "terminal"} size={16} />
-        <span>{BUDDY_SECTIONS[section]}</span>
-      </a>)}
-    </nav>
-    <div className="buddy-section-page">
-      <BuddyStatusBar data={data} snapshot={snapshot} onNavigate={navigate} />
-      <section className="buddy-section buddy-models" hidden={location.section !== "models"} aria-label="模型分区">
+  return <div className="flex h-full min-h-0 flex-col">
+    <BuddyHeader location={location} attention={buddyAttention(data, snapshot)} onNavigate={navigate} />
+    <div className="buddy-section-page flex-1 p-3 sm:px-6 sm:py-4">
+      <section className="buddy-section buddy-models" hidden={location.view !== "models"} aria-label="模型分区">
         <SplitView selected={historyOpen || !!family} list={list} detail={
           <aside className="panel detail-panel" aria-label="模型家族详情">
             <div className="model-detail-content" hidden={!historyOpen}>
-              <EvaluationHistory snapshot={recorded} api={api} active={active && location.section === "models" && historyOpen} onBack={() => setHistoryOpen(false)} />
+              <EvaluationHistory snapshot={recorded} api={api} active={active && location.view === "models" && historyOpen} onBack={() => setHistoryOpen(false)} />
             </div>
             <div className="model-detail-content" hidden={historyOpen}>
               {family ? <FamilyDetail key={family.key} family={family} data={data} recorded={recorded} editor={editor}
@@ -263,11 +256,11 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
           </aside>
         } />
       </section>
-      <section className="buddy-section" hidden={location.section !== "router"} aria-label="Router 分区">
+      <section className="buddy-section" hidden={location.view !== "roles"} aria-label="Router 分区">
         <RoutingStatusBar data={data} snapshot={snapshot} editor={editor} onShowRouter={showRouter} expanded />
       </section>
-      <section className="buddy-section" hidden={location.section !== "harness"} aria-label="Harness 分区">
-        <HarnessStatus snapshot={snapshot} api={api} refresh={refresh} location={location} active={active && location.section === "harness"}
+      <section className="buddy-section" hidden={location.view !== "harness"} aria-label="Harness 分区">
+        <HarnessStatus snapshot={snapshot} api={api} refresh={refresh} location={location} active={active && location.view === "harness"}
           mutationsAvailable={mutationsAvailable} sessionWritable={sessionWritable} />
       </section>
     </div>

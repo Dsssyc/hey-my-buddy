@@ -174,7 +174,7 @@ describe("console interactions", () => {
     render(<App suppliedApi={api} />);
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await screen.findByRole("heading", { name: "选择一项委派" });
-    await user.click(screen.getByRole("link", { name: "Buddy" }));
+    await user.click(screen.getByRole("link", { name: /^Buddy/ }));
     await screen.findByRole("heading", { name: "模型 1" });
     // There is no global edit switch: controls are directly editable, and no
     // save bar appears until the user actually changes something.
@@ -221,7 +221,7 @@ describe("console interactions", () => {
     window.location.hash = "#settings";
     render(<App suppliedApi={api} />);
     await screen.findByRole("heading", { name: "显示" });
-    await user.click(screen.getByRole("link", { name: "Buddy" }));
+    await user.click(screen.getByRole("link", { name: /^Buddy/ }));
     await screen.findByRole("heading", { name: "模型 1" });
     await user.click(screen.getByRole("link", { name: "设置" }));
     await screen.findByRole("heading", { name: "显示" });
