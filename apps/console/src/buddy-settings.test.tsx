@@ -1,10 +1,11 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { PREFERENCE_ICON } from "./buddy-display";
+import {
+  chip, choosePreference, defaultPreference, foldHandle, level, levelPreference, listed, modelButton, modelsTable, pane,
+  queryFoldHandle, queryModel, search, selectModel,
+} from "./buddies/page.testing";
 import type { ConsoleApi, HarnessHealth } from "./api";
 import type {
   FamilyPreference,
@@ -16,11 +17,10 @@ import type {
 } from "./types";
 
 /**
- * The Buddy settings page tests the requirements docs/design/buddy-settings.md
- * names explicitly: the enabled-only filter, the harness grouping with a
- * collapsed unavailable harness, effort overrides (including an explicit
- * "无偏好" and a return to "跟随家族"), the non-colour preference marker, the
- * Router refusal reason, and the storage panel on the settings page.
+ * The models table of the Buddy page: the two filters and the search, the
+ * harnesses that fold, each buddy drawn as a chip, a level's own preference
+ * (including an explicit 不设 and a return to 跟随模型), the preference written
+ * in words instead of colour, and the settings page that carries none of this.
  */
 
 const sonnet = { adapter: "claude", provider: "anthropic", model: "claude-sonnet-5" };
@@ -32,6 +32,11 @@ const highId = "claude:anthropic:claude-sonnet-5:high";
 const solMediumId = "codex:openai:gpt-6-sol:medium";
 const solLowId = "codex:openai:gpt-6-sol:low";
 const glmId = "zcode:zhipu:glm-5:default";
+
+/** The rows are named by the first three parts of a buddy's identity. */
+const SONNET = "claude / anthropic / claude-sonnet-5";
+const SOL = "codex / openai / gpt-6-sol";
+const GLM = "zcode / zhipu / glm-5";
 
 function profile(entry: Partial<Profile> & Pick<Profile, "profileId" | "label" | "adapter" | "provider" | "model" | "effort">): Profile {
   return {
@@ -167,7 +172,7 @@ function fixture(options: Options = {}) {
   const command = vi.fn(async (operation: string, params: Record<string, any>, _csrfToken?: string) => {
     operations.push(operation);
     if (operation === "model_profiles") {
-      // Only a checked 显示不可用配置 asks for this page; it mirrors the board's
+      // Only a checked 显示不可用 asks for this page; it mirrors the board's
       // bounded contract and just returns the current rows.
       return { profiles: state.profiles, cards: state.cards, familyAnnotations: state.familyAnnotations,
         preferences: state.preferences, preferenceOverrides: state.preferenceOverrides,
@@ -204,25 +209,16 @@ function fixture(options: Options = {}) {
   return { api, command, operations, published };
 }
 
-async function openBuddy(api: ConsoleApi, user: ReturnType<typeof userEvent.setup>) {
+async function openBuddy(api: ConsoleApi) {
   window.location.hash = "#buddies";
   render(<App suppliedApi={api} />);
-  // The unavailable ZCode family is hidden by default, so two families show.
-  await screen.findByRole("heading", { name: "模型 2" });
-}
-
-function familyRow(name: string) {
-  return screen.getByRole("button", { name: new RegExp(`^${name}`) });
-}
-
-async function selectFamily(user: ReturnType<typeof userEvent.setup>, name: string) {
-  if (name === "GPT-6 Sol" && !screen.queryByRole("button", { name: /^GPT-6 Sol/ })) {
-    await user.click(screen.getByRole("button", { name: /^▸ Codex/ }));
-  }
-  await user.click(familyRow(name));
+  // The unavailable ZCode model is hidden by default, so two models with four buddies show.
+  await listed(1, 4);
 }
 
 const saveButton = () => within(screen.getByRole("region", { name: "未保存的修改" })).getByRole("button", { name: /^(保存|重试同一保存)$/ });
+const enabledOnly = () => screen.getByRole("checkbox", { name: "只看已启用" });
+const showUnavailable = () => screen.getByRole("checkbox", { name: "显示不可用 1" });
 
 afterEach(() => {
   cleanup();
@@ -232,83 +228,98 @@ afterEach(() => {
   document.documentElement.dataset.theme = "";
 });
 
-describe("the model family list", () => {
-  it("filters to families with an enabled effort and restores the full list", async () => {
+describe("the models table", () => {
+  it("filters to models with an enabled buddy and restores the full list", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    // Families without an enabled effort start folded; the filter still counts them.
-    expect(familyRow("Claude Sonnet 5")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /^▸ Codex/ }).getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByRole("button", { name: /^GPT-6 Sol/ })).toBeNull();
-    // The all-unavailable ZCode harness is hidden until the user asks for it,
-    // and the checkbox names how many configurations that hides.
-    expect(screen.queryByRole("button", { name: /^▸ ZCode/ })).toBeNull();
-    expect(screen.getByRole("checkbox", { name: "显示不可用配置（1）" })).toBeTruthy();
+    await openBuddy(f.api);
+    // A harness without an enabled buddy starts folded; the filter still counts its buddies.
+    expect(modelButton(SONNET)).toBeTruthy();
+    expect(foldHandle("Codex").getAttribute("aria-expanded")).toBe("false");
+    expect(queryModel(SOL)).toBeNull();
+    // The harness with nothing available is hidden until the user asks for it,
+    // and the filter says how many buddies that hides.
+    expect(queryFoldHandle("ZCode")).toBeNull();
+    expect(showUnavailable()).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
-    // GPT-6 Sol has no enabled effort; the whole ZCode harness stays unusable.
-    await screen.findByRole("heading", { name: "模型 1" });
-    expect(screen.queryByRole("button", { name: /^GPT-6 Sol/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^▸ ZCode/ })).toBeNull();
-    expect(familyRow("Claude Sonnet 5")).toBeTruthy();
+    await user.click(enabledOnly());
+    // GPT-6 Sol has no enabled buddy; the whole ZCode harness stays unusable.
+    await listed(1, 2);
+    expect(queryFoldHandle("Codex")).toBeNull();
+    expect(queryFoldHandle("ZCode")).toBeNull();
+    expect(modelButton(SONNET)).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
-    await screen.findByRole("heading", { name: "模型 2" });
-    expect(screen.getByRole("button", { name: /^▸ Codex/ })).toBeTruthy();
-    // The two filters combine: with 显示不可用配置 on, the offline family is
-    // listed, and 只看已启用 still hides it once it has no enabled effort.
-    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（1）" }));
-    await screen.findByRole("heading", { name: "模型 3" });
-    expect(screen.getByRole("button", { name: /^▸ ZCode（不可用）/ })).toBeTruthy();
-    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
-    await screen.findByRole("heading", { name: "模型 1" });
-    expect(screen.queryByRole("button", { name: /^▸ ZCode/ })).toBeNull();
-    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
-    await screen.findByRole("heading", { name: "模型 3" });
+    await user.click(enabledOnly());
+    await listed(1, 4);
+    expect(foldHandle("Codex")).toBeTruthy();
+    // The two filters combine: with 显示不可用 on, the offline model is listed,
+    // and 只看已启用 still hides it because none of its buddies is enabled.
+    await user.click(showUnavailable());
+    await listed(1, 5);
+    expect(foldHandle("ZCode").getAttribute("aria-expanded")).toBe("false");
+    await user.click(enabledOnly());
+    await listed(1, 2);
+    expect(queryFoldHandle("ZCode")).toBeNull();
+    await user.click(enabledOnly());
+    await listed(1, 5);
   });
 
-  it("folds harnesses with no enabled efforts, shows enabled and total counts, and preserves the unavailable reason", async () => {
+  it("folds a harness without enabled buddies into one row of counts, and says why a harness cannot work", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（1）" }));
-    const claude = screen.getByRole("button", { name: /^▾ Claude Code/ });
-    expect(claude.getAttribute("aria-expanded")).toBe("true");
-    expect(claude.textContent).toContain("已启用 1/2");
-    const codex = screen.getByRole("button", { name: /^▸ Codex/ });
+    await openBuddy(f.api);
+    await user.click(showUnavailable());
+    await listed(1, 5);
+    expect(foldHandle("Claude Code").getAttribute("aria-expanded")).toBe("true");
+    const codex = foldHandle("Codex");
     expect(codex.getAttribute("aria-expanded")).toBe("false");
-    expect(codex.textContent).toContain("已启用 0/2");
-    expect(screen.queryByRole("button", { name: /^GPT-6 Sol/ })).toBeNull();
+    expect(codex.closest("tr")!.textContent).toContain("1 个模型");
+    expect(codex.closest("tr")!.textContent).toContain("启用 0 / 2");
+    expect(queryModel(SOL)).toBeNull();
     await user.click(codex);
-    expect(familyRow("GPT-6 Sol")).toBeTruthy();
-    const zcode = screen.getByRole("button", { name: /^▸ ZCode（不可用）/ });
+    expect(modelButton(SOL)).toBeTruthy();
+    // Folding a harness that has an enabled buddy keeps that count in sight.
+    await user.click(foldHandle("Claude Code"));
+    expect(foldHandle("Claude Code").closest("tr")!.textContent).toContain("启用 1 / 2");
+    expect(queryModel(SONNET)).toBeNull();
+    // The harness that cannot work is written with its recorded state; the
+    // recorded reason is its explanation, on hover and for a screen reader.
+    const zcode = foldHandle("ZCode");
     expect(zcode.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.getByText("本机未检测到 zcode CLI")).toBeTruthy();
-    // A folded harness hides its families but never drops its explanation.
-    expect(screen.queryByRole("button", { name: /^GLM-5/ })).toBeNull();
+    const state = within(zcode.closest("td")!).getByText("未找到");
+    expect(state.getAttribute("aria-description")).toBe("本机未检测到 zcode CLI");
+    await user.hover(state);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("本机未检测到 zcode CLI");
+    // A folded harness hides its models; unfolded, the model says nothing the harness already said.
+    expect(queryModel(GLM)).toBeNull();
     await user.click(zcode);
-    expect(familyRow("GLM-5")).toBeTruthy();
-    // The family row itself carries the recorded reason next to 不可用.
-    expect(screen.getByText("不可用 · 本机未检测到 zcode CLI")).toBeTruthy();
+    expect(within(modelButton(GLM).closest("td")!).queryByText("不可用")).toBeNull();
+    // Its side column says once that it cannot work, and why.
+    await user.click(modelButton(GLM));
+    expect(within(pane(GLM)).getByText("ZCode 未找到 · 本机未检测到 zcode CLI")).toBeTruthy();
   });
 
-  it("counts enabled efforts and marks the Router's family", async () => {
+  it("draws each buddy as a chip that says whether it is on, and names no role in the catalogue", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    expect(screen.getByRole("button", { name: "Claude Sonnet 5，已启用 1/2，Router" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: /^▸ Codex/ }));
-    expect(screen.getByRole("button", { name: "GPT-6 Sol，已启用 0/2" })).toBeTruthy();
-    // The Router mark belongs to the model list; the hidden Router section's
-    // own heading is a different element with the same word.
-    expect(within(screen.getByRole("region", { name: "模型家族" })).getByText("Router")).toBeTruthy();
+    await openBuddy(f.api);
+    expect(chip(SONNET, "medium").textContent).toBe("medium已启用");
+    expect(chip(SONNET, "high").textContent).toBe("high未启用");
+    await user.click(foldHandle("Codex"));
+    expect(chip(SOL, "low").textContent).toBe("low未启用");
+    // Who holds the Router role is said in the roles section only.
+    expect(within(modelsTable()).queryByText("Router")).toBeNull();
+    // Selecting a row opens its settings beside the table and marks the row.
+    await user.click(modelButton(SOL));
+    expect(modelButton(SOL).getAttribute("aria-pressed")).toBe("true");
+    expect(modelButton(SONNET).getAttribute("aria-pressed")).toBe("false");
+    expect(pane(SOL)).toBeTruthy();
   });
 
   it("opens recorded harness health from the Harness table without calling anything", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    await openBuddy(f.api, user);
+    await openBuddy(f.api);
     await user.click(within(screen.getByRole("navigation", { name: "目录的内容" })).getByRole("link", { name: /^Harness/ }));
     const strip = screen.getByRole("region", { name: "Harness 状态" });
     expect(within(strip).getByText("可用 1/2")).toBeTruthy();
@@ -322,65 +333,61 @@ describe("the model family list", () => {
   it("matches adapter id, harness display name, provider and model name, case-insensitively", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    const search = screen.getByLabelText("搜索模型");
+    await openBuddy(f.api);
     // Harness display name ("Claude Code"), not only the `claude` adapter id.
-    await user.type(search, "claude code");
-    await screen.findByRole("heading", { name: "模型 1" });
-    expect(familyRow("Claude Sonnet 5")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /^GPT-6 Sol/ })).toBeNull();
+    await user.type(search(), "claude code");
+    await listed(1, 2);
+    expect(modelButton(SONNET)).toBeTruthy();
+    expect(queryFoldHandle("Codex")).toBeNull();
     // While the unavailable filter is off, searching stays a local filter.
     expect(f.command).not.toHaveBeenCalled();
-    // Provider, uppercase: case does not matter. The offline ZCode family is
-    // searched once 显示不可用配置 is on; its own search then also reaches the
+    // Provider, uppercase: case does not matter. The offline ZCode model is
+    // searched once 显示不可用 is on; its own search then also reaches the
     // server so retained rows beyond the snapshot stay findable.
-    await user.clear(search);
-    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（1）" }));
-    await user.type(search, "ZHIPU");
-    await screen.findByRole("heading", { name: "模型 1" });
-    expect(screen.getByRole("button", { name: /^▸ ZCode（不可用）/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /^Claude Sonnet 5/ })).toBeNull();
-    // Model display name, lowercase.
-    await user.clear(search);
-    await user.type(search, "gpt-6 sol");
-    await screen.findByRole("heading", { name: "模型 1" });
-    await user.click(screen.getByRole("button", { name: /^▸ Codex/ }));
-    expect(familyRow("GPT-6 Sol")).toBeTruthy();
+    await user.clear(search());
+    await user.click(showUnavailable());
+    await user.type(search(), "ZHIPU");
+    await listed(0, 1);
+    expect(foldHandle("ZCode")).toBeTruthy();
+    expect(queryFoldHandle("Claude Code")).toBeNull();
+    // The model's display label, lowercase, still finds the row that shows its id.
+    await user.clear(search());
+    await user.type(search(), "gpt-6 sol");
+    await listed(0, 2);
+    await user.click(foldHandle("Codex"));
+    expect(modelButton(SOL)).toBeTruthy();
     // The recorded adapter id matches as before.
-    await user.clear(search);
-    await user.type(search, "codex");
-    await screen.findByRole("heading", { name: "模型 1" });
-    expect(familyRow("GPT-6 Sol")).toBeTruthy();
+    await user.clear(search());
+    await user.type(search(), "codex");
+    await listed(0, 2);
+    expect(modelButton(SOL)).toBeTruthy();
   });
 });
 
-describe("effort tags and preference overrides", () => {
-  const familyReason = "用于日常工作的稳定配置";
+describe("a level's own preference", () => {
+  const defaultReason = "用于日常工作的稳定配置";
 
-  it("shows the family default, sets an explicit 无偏好 override and publishes mode none", async () => {
-    const f = fixture({ familyPreferences: [{ ...sonnet, mode: "prefer", reason: familyReason }] });
+  it("shows the model's default, sets an explicit 不设 on one level and publishes mode none", async () => {
+    const f = fixture({ familyPreferences: [{ ...sonnet, mode: "prefer", reason: defaultReason }] });
     const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await selectFamily(user, "Claude Sonnet 5");
-    const tag = screen.getByRole("group", { name: "medium 档位" });
-    // The family default colours the tag, and the glyph and border carry the
-    // same meaning without colour (see the styles.css check below).
-    expect(tag.className).toContain("pref-prefer");
-    expect(tag.className).not.toContain("override");
-    expect(tag.querySelector(".pref-icon")!.textContent).toBe("▲");
-    expect(tag.textContent).toContain("偏好：优先（来自家族）");
-    expect(tag.getAttribute("title")).toBe(`优先：${familyReason}`);
+    await openBuddy(f.api);
+    await selectModel(user, SONNET, "Claude Code");
+    // The default is written on every chip that follows it, in words.
+    expect(chip(SONNET, "medium").textContent).toBe("medium已启用优先");
+    expect(chip(SONNET, "high").textContent).toBe("high未启用优先");
+    // The side column holds the default with its reason; the level follows the model.
+    expect(defaultPreference("优先").getAttribute("aria-checked")).toBe("true");
+    expect(within(pane()).getByRole("textbox", { name: "默认偏好的理由" })).toHaveProperty("value", defaultReason);
+    expect(levelPreference("medium").textContent).toBe("跟随模型");
+    expect(within(level("medium")).queryByRole("textbox")).toBeNull();
 
-    await user.click(within(tag).getByRole("button", { name: "medium 档位菜单" }));
-    const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
-    expect(within(menu).getByRole("radio", { name: "跟随家族（优先）" })).toHaveProperty("checked", true);
-    await user.click(within(menu).getByRole("radio", { name: "无偏好" }));
+    await choosePreference(user, "medium", "不设");
 
-    const overridden = screen.getByRole("group", { name: "medium 档位" });
-    expect(overridden.className).toContain("override");
-    expect(overridden.className).not.toContain("pref-");
-    expect(overridden.querySelector(".pref-icon")).toBeNull();
-    expect(overridden.textContent).toContain("偏好：无偏好（档位覆盖）");
+    expect(levelPreference("medium").textContent).toBe("不设");
+    expect(chip(SONNET, "medium").textContent).toBe("medium已启用");
+    expect(within(chip(SONNET, "medium")).getByRole("img", { name: "未保存" })).toBeTruthy();
+    expect(within(level("medium")).getByRole("img", { name: "未保存" })).toBeTruthy();
+    expect(chip(SONNET, "high").textContent).toBe("high未启用优先");
     expect(within(screen.getByRole("region", { name: "未保存的修改" })).getByText("1 项未保存")).toBeTruthy();
     await user.click(saveButton());
     await screen.findByText("已发布新版本");
@@ -389,160 +396,60 @@ describe("effort tags and preference overrides", () => {
     expect(f.published.at(-1)).not.toHaveProperty("familyPreferenceChanges");
   });
 
-  it("returns an overridden effort to 跟随家族 and publishes mode null", async () => {
+  it("returns a level to 跟随模型 and publishes mode null", async () => {
     const f = fixture({
-      familyPreferences: [{ ...sonnet, mode: "prefer", reason: familyReason }],
+      familyPreferences: [{ ...sonnet, mode: "prefer", reason: defaultReason }],
       preferenceOverrides: [{ profileId: mediumId, mode: "exclude", reason: "成本过高" }],
     });
     const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await selectFamily(user, "Claude Sonnet 5");
-    const tag = screen.getByRole("group", { name: "medium 档位" });
-    // The menu shows that this effort does not follow the family.
-    expect(tag.className).toContain("pref-exclude");
-    expect(tag.className).toContain("override");
-    expect(tag.querySelector(".pref-icon")!.textContent).toBe("⊘");
-    expect(tag.textContent).toContain("偏好：排除（档位覆盖）");
-    // The other effort still follows the family default.
-    const other = screen.getByRole("group", { name: "high 档位" });
-    expect(other.className).toContain("pref-prefer");
-    expect(other.className).not.toContain("override");
+    await openBuddy(f.api);
+    await selectModel(user, SONNET, "Claude Code");
+    // The level shows its own preference with its reason; the other still follows the model.
+    expect(chip(SONNET, "medium").textContent).toBe("medium已启用排除");
+    expect(chip(SONNET, "high").textContent).toBe("high未启用优先");
+    expect(levelPreference("medium").textContent).toBe("排除");
+    expect(within(level("medium")).getByRole("textbox", { name: "medium 的偏好理由" })).toHaveProperty("value", "成本过高");
+    expect(levelPreference("high").textContent).toBe("跟随模型");
 
-    await user.click(within(tag).getByRole("button", { name: "medium 档位菜单" }));
-    const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
-    expect(within(menu).getByLabelText("覆盖理由")).toHaveProperty("value", "成本过高");
-    expect(within(menu).getByRole("radio", { name: "排除" })).toHaveProperty("checked", true);
-    await user.click(within(menu).getByRole("radio", { name: "跟随家族（优先）" }));
+    await choosePreference(user, "medium", "跟随模型");
 
-    const following = screen.getByRole("group", { name: "medium 档位" });
-    expect(following.className).toContain("pref-prefer");
-    expect(following.className).not.toContain("override");
-    expect(following.textContent).toContain("偏好：优先（来自家族）");
+    expect(chip(SONNET, "medium").textContent).toContain("优先");
+    expect(within(level("medium")).queryByRole("textbox")).toBeNull();
     await user.click(saveButton());
     await screen.findByText("已发布新版本");
     expect(f.published.at(-1)!.preferenceChanges).toEqual([{ profileId: mediumId, mode: null, reason: "" }]);
     expect(f.published.at(-1)).not.toHaveProperty("annotationChanges");
   });
 
-  it("marks every preference with a glyph and a distinct border, never colour alone", () => {
-    const styles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
-    const rule = (selector: string) => {
-      const start = styles.indexOf(selector);
-      expect(start, `missing ${selector}`).toBeGreaterThan(-1);
-      return styles.slice(start, styles.indexOf("}", start));
-    };
-    // Each effort tag keeps the icon and its own border style/width weight.
-    expect(rule(".effort-tag.pref-prefer")).toMatch(/border:\s*2px solid/);
-    expect(rule(".effort-tag.pref-pin")).toMatch(/border:\s*3px double/);
-    expect(rule(".effort-tag.pref-exclude")).toMatch(/border:\s*2px dashed/);
-    // 排除 keeps the dashed border and the ⊘ icon as its non-colour cues; the
-    // name is no longer struck through.
-    expect(styles).not.toMatch(/\.effort-tag\.pref-exclude \.effort-name \{[^}]*line-through/);
-    expect(styles).not.toContain("text-decoration: line-through");
-    expect(styles).not.toContain(".effort-tag.override::after");
-    // Every mode also has its own glyph, so the tag never depends on colour.
-    expect(Object.values(PREFERENCE_ICON).every(icon => icon.length > 0)).toBe(true);
-    expect(new Set(Object.values(PREFERENCE_ICON)).size).toBe(3);
-  });
-});
-
-describe("the Router menu", () => {
-  it("assigns the single Router through the enabled effort menu", async () => {
-    const f = fixture({ routerProfileId: null });
+  it("writes every preference as a word on the chip, never as a colour", async () => {
+    const f = fixture({ preferenceOverrides: [
+      { profileId: highId, mode: "prefer", reason: "" },
+      { profileId: solMediumId, mode: "pin", reason: "" },
+      { profileId: solLowId, mode: "exclude", reason: "" },
+    ] });
     const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await selectFamily(user, "Claude Sonnet 5");
-    await user.click(screen.getByRole("button", { name: "medium 档位菜单" }));
-    const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
-    // Without a Router the roles section carries a mark; once one is chosen it carries none.
-    const sections = screen.getByRole("navigation", { name: "Buddy 的分区" });
-    expect(within(sections).getByRole("link", { name: /^角色\s*未指定 Router$/ })).toBeTruthy();
-    await user.click(within(menu).getByRole("button", { name: "设为 Router" }));
-    expect(within(sections).getByRole("link", { name: "角色" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本");
-    expect(f.published[0].configuration).toEqual({ routerProfileIds: [mediumId] });
-  });
-  it("disables only Router setting actions when configuration requires upgrade", async () => {
-    const f = fixture({ configurationUnavailable: true });
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await selectFamily(user, "Claude Sonnet 5");
-    await user.click(screen.getByRole("button", { name: "medium 档位菜单" }));
-    const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
-    expect(within(menu).getByRole("button", { name: "设为 Router" })).toHaveProperty("disabled", true);
-    expect(within(menu).getByText("Router 设置升级不可用")).toBeTruthy();
-    expect(within(menu).getByRole("radio", { name: "优先" })).toHaveProperty("disabled", false);
-    await user.click(within(menu).getByRole("radio", { name: "优先" }));
-    await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本");
-    expect(f.published[0]).not.toHaveProperty("configuration");
-    expect(f.published[0].preferenceChanges).toEqual([{ profileId: mediumId, mode: "prefer", reason: "" }]);
-  });
-  it("closes an effort menu when its main tab becomes hidden, without reopening on return", async () => {
-    const f = fixture();
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await selectFamily(user, "GPT-6 Sol");
-    const trigger = screen.getByRole("button", { name: "medium 档位菜单" });
-    await user.click(trigger);
-    expect(screen.getByRole("dialog", { name: "GPT-6 Sol · medium 档位设置" })).toBeTruthy();
-    // A programmatic navigation has no outside pointer press to dismiss the portal.
-    fireEvent.click(screen.getByRole("link", { name: "设置" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "GPT-6 Sol · medium 档位设置" })).toBeNull());
-    fireEvent.click(screen.getByRole("link", { name: /Buddy/ }));
-    expect(screen.queryByRole("dialog", { name: "GPT-6 Sol · medium 档位设置" })).toBeNull();
-    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await openBuddy(f.api);
+    await user.click(foldHandle("Codex"));
+    const chips = [chip(SONNET, "high"), chip(SOL, "medium"), chip(SOL, "low")];
+    expect(chips.map(item => item.textContent)).toEqual(["high未启用优先", "medium未启用固定", "low未启用排除"]);
+    // The three buddies are equally off, so their chips are drawn alike: only the word differs.
+    expect(new Set(chips.map(item => item.className)).size).toBe(1);
+    expect(new Set(chips.map(item => item.lastElementChild!.className)).size).toBe(1);
   });
 
-  it("lays out native radios at their own width and shows current Router as status", async () => {
+  it("closes a level's open list when the page leaves the front, without reopening it on return", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await selectFamily(user, "Claude Sonnet 5");
-    await user.click(screen.getByRole("button", { name: "medium 档位菜单" }));
-    const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · medium 档位设置" });
-    expect(within(menu).getByText("当前 Router")).toBeTruthy();
-    expect(within(menu).queryByRole("button", { name: "设为 Router" })).toBeNull();
-    expect(within(menu).getAllByRole("radio")).toHaveLength(5);
-    const mediumEvaluation = screen.getByText("medium", { selector: ".effort-evaluation summary strong" }).closest(".effort-evaluation")!;
-    const capabilityName = [...mediumEvaluation.querySelectorAll("dt")].find(item => item.textContent === "能力")!;
-    const capabilityText = capabilityName.nextElementSibling!.textContent!;
-    expect(capabilityText).toContain("支持无工具路由调用");
-    expect(capabilityText).toContain("具备本地只读路由资格");
-    expect(capabilityText).not.toMatch(/routing:fast|\bdecision\b/);
-    const styles = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
-    expect(styles).toMatch(/\.effort-menu \.menu-radio input\[type="radio"\] \{[^}]*width: auto/);
-    expect(styles).toMatch(/\.menu-radio \{[^}]*white-space: nowrap/);
-  });
-  it("disables 设为 Router without the decision capability and writes the reason", async () => {
-    const f = fixture();
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await selectFamily(user, "GPT-6 Sol");
-    await user.click(screen.getByRole("button", { name: "medium 档位菜单" }));
-    const menu = screen.getByRole("dialog", { name: "GPT-6 Sol · medium 档位设置" });
-    const action = within(menu).getByRole("button", { name: "设为 Router" });
-    expect((action as HTMLButtonElement).disabled).toBe(true);
-    expect(within(menu).getByText("所属 Harness 尚不具备本地只读路由资格")).toBeTruthy();
-    await user.click(action);
-    action.focus();
-    expect(document.activeElement).not.toBe(action);
-    expect(screen.queryByRole("dialog", { name: "替换 Router" })).toBeNull();
-    expect(screen.getByRole("dialog", { name: "GPT-6 Sol · medium 档位设置" })).toBeTruthy();
-    expect(f.published).toHaveLength(0);
-  });
-
-  it("disables 设为 Router for a disabled effort and names the switch to turn on", async () => {
-    const f = fixture();
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await selectFamily(user, "Claude Sonnet 5");
-    await user.click(screen.getByRole("button", { name: "high 档位菜单" }));
-    const menu = screen.getByRole("dialog", { name: "Claude Sonnet 5 · high 档位设置" });
-    const action = within(menu).getByRole("button", { name: "设为 Router" });
-    expect((action as HTMLButtonElement).disabled).toBe(true);
-    expect(within(menu).getByText("该档位未启用：先打开它的开关")).toBeTruthy();
+    await openBuddy(f.api);
+    await selectModel(user, SOL, "Codex");
+    await user.click(levelPreference("medium"));
+    expect(await screen.findByRole("listbox")).toBeTruthy();
+    // Going back in the browser's history has no outside pointer press to dismiss the list.
+    window.location.hash = "#settings";
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    window.location.hash = "#buddies/models";
+    await waitFor(() => expect(levelPreference("medium").getAttribute("aria-expanded")).toBe("false"));
+    expect(screen.queryByRole("listbox")).toBeNull();
   });
 });
 
@@ -572,6 +479,6 @@ describe("the settings page", () => {
     expect(overview.textContent).toContain("可回收977 KB");
     // No buddy settings leak into the system settings page.
     expect(screen.queryByRole("checkbox", { name: "只看已启用" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /设为 Router/ })).toBeNull();
+    expect(screen.queryByRole("table", { name: "模型" })).toBeNull();
   });
 });

@@ -21,6 +21,22 @@ export default {
     lost: "连接中断",
     retry: "重试连接",
   },
+  /** The state of the page's draft: what waits to be saved, and what a save ran into. */
+  draft: {
+    label: "未保存的修改",
+    unsaved: "{{n}} 项未保存",
+    unresolved: "保存结果待核对",
+    save: "保存",
+    saving: "正在保存…",
+    waiting: "等待其他保存完成…",
+    retry: "重试同一保存",
+    discard: "放弃",
+    cancelWait: "取消等待",
+    waitingRefusal: "正在等待其他保存完成；可先取消等待。",
+    conflict: "设置已更新；请核对草稿。",
+    reload: "重新加载最新版本",
+    discardChanges: "放弃修改",
+  },
   startup: {
     connecting: "正在连接本地黑板",
     waiting: "正在连接…",

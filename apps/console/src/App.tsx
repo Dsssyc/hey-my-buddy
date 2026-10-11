@@ -1,6 +1,10 @@
+import { cn } from "cn";
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { Hint } from "@/components/hint";
 import { Button } from "@/components/ui/button";
+import { StateMark } from "@/components/ui/state-mark";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { buddyAttention } from "./buddies/attention";
 import { attentionHints } from "./buddies/BuddyHeader";
@@ -58,26 +62,35 @@ export function App({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
 }
 
 /**
- * The bottom save bar replaces the old global edit switch: it appears only
- * while the page holds a draft (unsaved or still unresolved edits) and offers
- * exactly 放弃 and 保存, plus 取消等待 while another save is ahead.
+ * The save bar exists only while the page holds a draft: changes that are not
+ * saved, or a save whose result is not settled. It offers 放弃 and 保存, and
+ * 取消等待 while another save is ahead. A button that cannot act now still takes
+ * the click, so that the editor can say why.
  */
 function SaveBar({ editor, mutationsAvailable, describedBy }: {
   editor: Editor; mutationsAvailable: boolean; describedBy?: string;
 }) {
-  const label = editor.busy ? (editor.waiting ? "等待其他保存完成…" : "正在保存…")
-    : editor.confirming ? "重试同一保存" : "保存";
-  return <div className="save-bar" role="region" aria-label="未保存的修改">
-    <span className="save-bar-state" role="status">{editor.dirty
-      ? `${editor.changeCount} 项未保存`
-      : "保存结果待核对"}</span>
-    <div className="actions">
-      {editor.waiting && <button type="button" className="button small-button" onClick={editor.cancelSave}>取消等待</button>}
-      <button type="button" className="button small-button" aria-disabled={editor.busy || editor.confirming || undefined}
-        onClick={() => void editor.discard()}>放弃</button>
-      <button type="button" className="button primary small-button" aria-disabled={!mutationsAvailable || editor.busy || undefined}
-        aria-describedby={describedBy} onClick={() => void editor.save()}>{label}</button>
-    </div>
+  const { t } = useTranslation("shell");
+  const label = editor.busy ? (editor.waiting ? t("draft.waiting") : t("draft.saving"))
+    : editor.confirming ? t("draft.retry") : t("draft.save");
+  return <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-2 border-t bg-card px-3 py-2.5 sm:px-6" role="region" aria-label={t("draft.label")}>
+    <span className="mr-auto flex items-center gap-2 text-hand" role="status"><StateMark kind="hand" />{editor.dirty
+      ? t("draft.unsaved", { n: editor.changeCount })
+      : t("draft.unresolved")}</span>
+    {editor.waiting && <Button variant="outline" onClick={editor.cancelSave}>{t("draft.cancelWait")}</Button>}
+    <Button variant="outline" aria-disabled={editor.busy || editor.confirming || undefined}
+      onClick={() => void editor.discard()}>{t("draft.discard")}</Button>
+    <Button aria-disabled={!mutationsAvailable || editor.busy || undefined}
+      aria-describedby={describedBy} onClick={() => void editor.save()}>{label}</Button>
+  </div>;
+}
+
+/** One line said above a page; its mark and colour tell a failure from something that waits for the user. */
+function Notice({ tone, role, children }: { tone: "fail" | "hand" | "plain"; role: "alert" | "status"; children: ReactNode }) {
+  return <div role={role} className={cn("flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b px-3 py-2 sm:px-6",
+    tone === "fail" ? "bg-fail-wash text-fail" : tone === "hand" ? "bg-hand-wash text-hand" : "bg-card text-ink2")}>
+    {tone !== "plain" && <StateMark kind={tone} />}
+    {children}
   </div>;
 }
 
@@ -117,8 +130,8 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   // computed over every run, never inferred from a page of recent rows.
   const pending = snapshot.tasks.pendingCount;
   const saveRefusal = editor.saveBlockedReason
-    || (editor.waiting ? "正在等待其他保存完成；可先取消等待。" : "");
-  const conflictTitle = editor.conflict ? `V${editor.conflict.basedOn} → V${editor.conflict.latest}` : undefined;
+    || (editor.waiting ? t("draft.waitingRefusal") : "");
+  const conflictVersions = editor.conflict ? `V${editor.conflict.basedOn} → V${editor.conflict.latest}` : undefined;
   // Draft banners belong to the Buddy settings page; the records page shows none.
   const draftTab = tab === "buddies";
   const verifiedAt = api.readVerifiedAt?.(snapshot) ?? null;
@@ -167,31 +180,31 @@ function Connected({ api, snapshot, refresh, connectionError }: {
     <main id="main" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden outline-none" tabIndex={-1}>
       <h1 className="sr-only">{t(`nav.${tab}`)}</h1>
       {/* What is said above a page: the lost connection and the state of a draft. */}
-      <div className="flex shrink-0 flex-col gap-2 px-2 pt-2 pb-2 empty:hidden sm:px-4 sm:pt-4">
-        {connectionError && <p className="flex shrink-0 flex-wrap items-center gap-3 rounded-md border border-fail bg-fail-wash px-3 py-2 text-fail" role="alert">
+      <div className="flex shrink-0 flex-col empty:hidden">
+        {connectionError && <Notice tone="fail" role="alert">
           <span className="min-w-0 wrap-anywhere">{connectionError}</span>
           <Button variant="outline" size="sm" onClick={() => void refresh()}>{t("connection.retry")}</Button>
-        </p>}
-        {draftTab && editor.conflict && !editor.confirming && <div className="banner conflict-banner" role="alert">
-          <span title={conflictTitle}>设置已更新；请核对草稿。</span>
-          {editor.rebaseConflicts.length > 0 && <ul className="conflict-details">
+        </Notice>}
+        {draftTab && editor.conflict && !editor.confirming && <Notice tone="hand" role="alert">
+          <Hint text={conflictVersions}><span>{t("draft.conflict")}</span></Hint>
+          {editor.rebaseConflicts.length > 0 && <ul className="order-last basis-full list-disc pl-8 text-xs">
             {editor.rebaseConflicts.map(issue => <li key={`${issue.kind}:${issue.field}:${issue.profileId}`}>{issue.message}</li>)}
           </ul>}
-          <button type="button" className="button small-button" aria-disabled={editor.busy}
-            onClick={() => void editor.reloadLatest()}>重新加载最新版本</button>
-          <button type="button" className="button small-button danger" aria-disabled={editor.busy}
-            onClick={() => void editor.discard()}>放弃修改</button>
-        </div>}
-        {draftTab && editor.confirming && editor.uncertain && <div className="banner conflict-banner" role="status">
+          <Button variant="outline" size="sm" aria-disabled={editor.busy || undefined}
+            onClick={() => void editor.reloadLatest()}>{t("draft.reload")}</Button>
+          <Button variant="outline" size="sm" aria-disabled={editor.busy || undefined}
+            onClick={() => void editor.discard()}>{t("draft.discardChanges")}</Button>
+        </Notice>}
+        {draftTab && editor.confirming && editor.uncertain && <Notice tone="hand" role="status">
           <span>{UNRESOLVED_SAVE_NOTE}</span>
-          <button type="button" className="button small-button" aria-disabled={editor.busy}
-            onClick={() => void editor.save()}>重试同一保存</button>
-          <button type="button" className="button small-button" aria-disabled={editor.busy}
-            onClick={() => void editor.reloadLatest()}>重新加载最新版本</button>
-        </div>}
-        {draftTab && editor.blocked && <p className="banner guard-banner" role="status">{editor.blocked}</p>}
-        {draftTab && editor.error && !editor.confirming && <p className="banner error-banner" role="alert">{editor.error}</p>}
-        {draftTab && editor.notice && <p className="publication-notice" role="status">{editor.notice}</p>}
+          <Button variant="outline" size="sm" aria-disabled={editor.busy || undefined}
+            onClick={() => void editor.save()}>{t("draft.retry")}</Button>
+          <Button variant="outline" size="sm" aria-disabled={editor.busy || undefined}
+            onClick={() => void editor.reloadLatest()}>{t("draft.reload")}</Button>
+        </Notice>}
+        {draftTab && editor.blocked && <Notice tone="plain" role="status">{editor.blocked}</Notice>}
+        {draftTab && editor.error && !editor.confirming && <Notice tone="fail" role="alert">{editor.error}</Notice>}
+        {draftTab && editor.notice && <Notice tone="plain" role="status">{editor.notice}</Notice>}
       </div>
       {saveRefusal && <p id="editor-save-reason" className="sr-only">{saveRefusal}</p>}
       {/* Stable positions preserve page selections, drafts and scroll offsets.
@@ -206,8 +219,8 @@ function Connected({ api, snapshot, refresh, connectionError }: {
               active={tab === "settings"}
               theme={theme.choice} onTheme={theme.setChoice} />}
       </section>)}
-      {draftTab && editor.mode && <div className="shrink-0 px-2 pb-2 sm:px-4 sm:pb-4"><SaveBar editor={editor} mutationsAvailable={mutationsAvailable}
-        describedBy={saveRefusal ? "editor-save-reason" : undefined} /></div>}
+      {draftTab && editor.mode && <SaveBar editor={editor} mutationsAvailable={mutationsAvailable}
+        describedBy={saveRefusal ? "editor-save-reason" : undefined} />}
     </main>
   </div></TooltipProvider>;
 }

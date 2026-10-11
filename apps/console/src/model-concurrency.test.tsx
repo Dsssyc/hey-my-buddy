@@ -5,10 +5,13 @@ import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import type { ModelConcurrencyEntry, Profile, Snapshot, WriterGrant } from "./types";
+import { conflictNotice, listed, modelRow, pane, selectModel } from "./buddies/page.testing";
 
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
 const flashHigh = "dsh:deepseek-official:deepseek-flash:high";
 const retiredMax = "dsh:deepseek-official:retired-model:max";
+const FLASH = "dsh / deepseek-official / deepseek-flash";
+const RETIRED = "dsh / deepseek-official / retired-model";
 
 function catalog(): Profile[] {
   const base = {
@@ -103,10 +106,10 @@ function fixture(options: { discoveryLimit?: number } = {}) {
 async function openFlashCard(f: ReturnType<typeof fixture>, user: ReturnType<typeof userEvent.setup>) {
   window.location.hash = "#buddies";
   render(<App suppliedApi={f.api} />);
-  await screen.findByRole("heading", { name: "模型 1" });
-  await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
-  await screen.findByRole("heading", { name: "deepseek-flash" });
+  await listed(1, 2);
+  await selectModel(user, FLASH, "DSH");
 }
+const unsaved = () => within(pane()).findByRole("img", { name: "未保存" });
 
 function concurrencyInput() {
   return screen.getByRole("spinbutton", { name: "并发上限" }) as HTMLInputElement;
@@ -132,7 +135,7 @@ afterEach(() => {
   document.documentElement.dataset.theme = "";
 });
 
-describe("model family concurrency", () => {
+describe("a model's concurrency", () => {
   it("shows the shared limit as a directly editable field, with read-only occupancy", async () => {
     const f = fixture();
     const user = userEvent.setup();
@@ -140,8 +143,9 @@ describe("model family concurrency", () => {
     // Directly editable: there is no global edit switch gating the field.
     expect(screen.queryByRole("switch", { name: "编辑设置" })).toBeNull();
     expect(concurrencyInput()).toHaveProperty("value", "2");
-    expect(screen.getByText(/当前占用 1/)).toBeTruthy();
-    expect(screen.getByText(/同一模型的路由与执行共用/)).toBeTruthy();
+    expect(within(pane()).getByText("占用 1")).toBeTruthy();
+    // The table writes the same two numbers in its own column.
+    expect(within(modelRow(FLASH)).getByLabelText("占用 1，上限 2").textContent).toBe("1 / 2");
     expect(f.command).not.toHaveBeenCalled();
   });
 
@@ -152,8 +156,8 @@ describe("model family concurrency", () => {
     const input = concurrencyInput();
     await user.clear(input);
     await user.type(input, "6");
-    await screen.findByText("未保存");
-    // The single family setting is the only unsaved change.
+    await unsaved();
+    // The one setting of the model is the only unsaved change.
     await screen.findByText(/1 项未保存/);
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本");
@@ -166,19 +170,22 @@ describe("model family concurrency", () => {
     expect(wire).not.toContain("profileId");
     // The raise is visible immediately and the occupancy stays observation.
     expect(concurrencyInput()).toHaveProperty("value", "6");
-    expect(screen.getByText(/当前占用 1/)).toBeTruthy();
+    expect(within(pane()).getByText("占用 1")).toBeTruthy();
+    expect(within(pane()).queryByRole("img", { name: "未保存" })).toBeNull();
   });
 
-  it("edits one shared setting across the family's effort variants", async () => {
+  it("edits one setting shared by all the model's levels", async () => {
     const f = fixture();
     const user = userEvent.setup();
     await openFlashCard(f, user);
     await user.clear(concurrencyInput());
     await user.type(concurrencyInput(), "6");
-    await screen.findByText("未保存");
-    // The draft limit is a single family-level field, not tied to one tag.
+    await unsaved();
+    // The draft limit is one field of the model, not tied to a level; the table follows it.
+    expect(within(pane()).getAllByRole("spinbutton")).toHaveLength(1);
     expect(concurrencyInput()).toHaveProperty("value", "6");
-    expect(screen.getByText(/当前占用 1/)).toBeTruthy();
+    expect(within(pane()).getByText("占用 1")).toBeTruthy();
+    expect(within(modelRow(FLASH)).getByLabelText("占用 1，上限 6").textContent).toBe("1 / 6");
   });
 
   it("keeps an out-of-range input unsaved until it is corrected", async () => {
@@ -190,7 +197,7 @@ describe("model family concurrency", () => {
     await user.type(input, "33");
     expect(input).toHaveProperty("value", "33");
     expect(input.getAttribute("aria-invalid")).toBe("true");
-    expect(screen.getByText(/需要输入 1–32 的整数，当前修改不会保存/)).toBeTruthy();
+    expect(within(pane()).getByText("需要 1–32 的整数")).toBeTruthy();
     // Blurring must not silently publish the intermediate valid prefix (3).
     await user.tab();
     expect(input).toHaveProperty("value", "33");
@@ -204,23 +211,22 @@ describe("model family concurrency", () => {
     expect(f.published[0].modelConcurrency[0].limit).toBe(4);
   });
 
-  it("edits the concurrency limit of an unavailable family", async () => {
+  it("edits the concurrency limit of an unavailable model", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    // The retired family is hidden until 显示不可用配置 is checked.
-    await screen.findByRole("heading", { name: "模型 1" });
-    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（1）" }));
-    await screen.findByRole("heading", { name: "模型 2" });
-    await user.click(screen.getByRole("button", { name: /^retired-model/ }));
-    await screen.findByRole("heading", { name: "retired-model" });
+    // The retired model is hidden until 显示不可用 is checked.
+    await listed(1, 2);
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用 1" }));
+    await listed(2, 3);
+    await selectModel(user, RETIRED, "DSH");
     const input = concurrencyInput();
     expect(input).toHaveProperty("value", "3");
     expect(input.disabled).toBe(false);
     await user.clear(input);
     await user.type(input, "4");
-    await screen.findByText("未保存");
+    await unsaved();
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本");
     expect(f.published[0].modelConcurrency).toEqual([
@@ -234,10 +240,10 @@ describe("model family concurrency", () => {
     await openFlashCard(f, user);
     await user.clear(concurrencyInput());
     await user.type(concurrencyInput(), "6");
-    await screen.findByText("未保存");
+    await unsaved();
     await user.click(screen.getByRole("button", { name: "发现模型" }));
-    await screen.findByText(/目录已更新/);
-    const banner = document.querySelector<HTMLElement>(".conflict-banner")!;
+    await screen.findByText("没有新的 buddy");
+    const banner = conflictNotice()!;
     expect(banner).toBeTruthy();
     expect(banner.textContent).toContain("并发上限");
     expect(banner.textContent).toContain("已在 V");

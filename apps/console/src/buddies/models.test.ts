@@ -1,0 +1,165 @@
+import i18n from "i18next";
+import { describe, expect, it } from "vitest";
+import { historyView } from "../draft";
+import type { ConsoleView, HarnessHealth, Profile, Snapshot } from "../types";
+import { harnessBlocks, harnessStateText, listedModels, modelIdentity, reasonTexts } from "./models";
+
+/**
+ * What the models table is made of, apart from how it is drawn: which models
+ * the filters leave, how they are grouped by harness and in what order, what
+ * starts folded, and how a recorded reason is worded.
+ */
+
+const t = i18n.getFixedT(null, "buddies");
+
+function profile(adapter: string, provider: string, model: string, effort: string, extra: Partial<Profile> = {}): Profile {
+  return {
+    profileId: `${adapter}:${provider}:${model}:${effort}`, label: `${model.toUpperCase()} · ${effort}`, adapter, provider, model, effort,
+    available: true, enabled: false, capabilities: [], contextWindow: null, description: "", source: "catalog:fixture", ...extra,
+  };
+}
+
+/** A working harness with a used and an unused model, an unused harness, and one that is not logged in. */
+function profiles(): Profile[] {
+  return [
+    profile("dsh", "deepseek-official", "flash", "off", { enabled: true }),
+    profile("dsh", "deepseek-official", "flash", "max"),
+    profile("dsh", "second-provider", "pro", "high"),
+    profile("codex", "openai", "sol", "high"),
+    profile("claude", "anthropic", "opus", "high", { enabled: true, available: false, unavailableReason: "HARNESS_UNHEALTHY" }),
+    profile("claude", "anthropic", "opus", "max", { available: false, unavailableReason: "HARNESS_UNHEALTHY" }),
+  ];
+}
+
+function snapshot(list: Profile[] = profiles()): Snapshot {
+  return {
+    csrfToken: "csrf", consoleSession: { id: "s", canWrite: true, reason: null }, tableRevision: 1,
+    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+    configuration: null, profiles: list, preferences: [], familyPreferences: [], preferenceOverrides: [],
+    cards: [], familyAnnotations: [], evidence: [], decisions: [], sampleCounts: {},
+    modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "flash", limit: 3, active: 1 }],
+    tasks: { pendingCount: 0 }, capabilities: {},
+  };
+}
+
+const harnesses: HarnessHealth[] = [
+  { adapter: "dsh", status: "ready", available: true, revision: 1, manualPath: null },
+  { adapter: "codex", status: "ready", available: true, revision: 1, manualPath: null },
+  { adapter: "claude", status: "login-required", available: false, revision: 1, manualPath: null },
+];
+
+function blocks(options: { recorded?: Snapshot; data?: ConsoleView; folded?: Record<string, boolean>; fresh?: string[]; health?: HarnessHealth[] } = {}) {
+  const recorded = options.recorded ?? snapshot();
+  const data = options.data ?? historyView(recorded, null);
+  return harnessBlocks({
+    listed: listedModels(data.profiles, { query: "", enabledOnly: false, showUnavailable: true }),
+    data, recorded, harnesses: options.health ?? harnesses, folded: options.folded ?? {}, fresh: new Set(options.fresh ?? []),
+  });
+}
+
+describe("which models are listed", () => {
+  const names = (filters: Partial<Parameters<typeof listedModels>[1]>) =>
+    listedModels(profiles(), { query: "", enabledOnly: false, showUnavailable: false, ...filters }).map(modelIdentity);
+
+  it("hides a model none of whose buddies is available until the filter asks for it", () => {
+    expect(names({})).toEqual(["codex / openai / sol", "dsh / deepseek-official / flash", "dsh / second-provider / pro"]);
+    expect(names({ showUnavailable: true })).toContain("claude / anthropic / opus");
+  });
+
+  it("keeps the models with an enabled buddy among those shown", () => {
+    expect(names({ enabledOnly: true })).toEqual(["dsh / deepseek-official / flash"]);
+    // The unavailable model's enabled buddy counts once unavailable buddies are shown.
+    expect(names({ enabledOnly: true, showUnavailable: true })).toEqual(["claude / anthropic / opus", "dsh / deepseek-official / flash"]);
+  });
+
+  it("searches the label, the model, the provider, the adapter and the harness's name without regard to case", () => {
+    expect(names({ query: "  SOL " })).toEqual(["codex / openai / sol"]);
+    expect(names({ query: "second-prov" })).toEqual(["dsh / second-provider / pro"]);
+    expect(names({ query: "claude code", showUnavailable: true })).toEqual(["claude / anthropic / opus"]);
+    expect(names({ query: "nothing-like-this" })).toEqual([]);
+  });
+});
+
+describe("the table's blocks", () => {
+  it("puts the harnesses that can work first and writes the state of the one that cannot", () => {
+    const all = blocks();
+    expect(all.map(block => [block.adapter, block.state])).toEqual([["codex", null], ["dsh", null], ["claude", "login-required"]]);
+    expect(all.map(block => block.name)).toEqual(["Codex", "DSH", "Claude Code"]);
+  });
+
+  it("starts a harness folded when none of its buddies is enabled, and when it cannot work at all", () => {
+    const folded = Object.fromEntries(blocks().map(block => [block.adapter, block.folded]));
+    // Codex has nothing enabled; Claude Code has an enabled buddy but is not logged in.
+    expect(folded).toEqual({ codex: true, dsh: false, claude: true });
+    // What the user folded or unfolded by hand wins over both defaults.
+    const chosen = Object.fromEntries(blocks({ folded: { codex: false, dsh: true, claude: false } }).map(block => [block.adapter, block.folded]));
+    expect(chosen).toEqual({ codex: false, dsh: true, claude: false });
+  });
+
+  it("counts a harness's models, providers and enabled buddies for its folded row", () => {
+    const dsh = blocks().find(block => block.adapter === "dsh")!;
+    expect([dsh.models.length, dsh.providers, dsh.enabled, dsh.total]).toEqual([2, ["deepseek-official", "second-provider"], 1, 3]);
+    const claude = blocks().find(block => block.adapter === "claude")!;
+    expect([claude.models.length, claude.providers, claude.enabled, claude.total]).toEqual([1, ["anthropic"], 1, 2]);
+  });
+
+  it("falls back to plain unavailability for a harness without a health record, and keeps an unknown state as recorded", () => {
+    const without = blocks({ health: [] }).find(block => block.adapter === "claude")!;
+    expect(without.state).toBe("unavailable");
+    const future = blocks({ health: [{ adapter: "claude", status: "quarantined" as HarnessHealth["status"], available: false, revision: 1, manualPath: null }] })
+      .find(block => block.adapter === "claude")!;
+    expect(future.state).toBe("quarantined");
+    expect(harnessStateText("quarantined", t)).toBe("quarantined");
+    expect(harnessStateText("login-required", t)).toBe("未登录");
+    expect(harnessStateText("unavailable", t)).toBe("不可用");
+  });
+
+  it("reads the limit from the draft and the occupancy from what is published, unknown when unreported", () => {
+    const recorded = snapshot();
+    const data = { ...historyView(recorded, null), modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "flash", limit: 7 }] };
+    const dsh = blocks({ recorded, data }).find(block => block.adapter === "dsh")!;
+    const flash = dsh.models.find(model => model.family.profiles[0].model === "flash")!;
+    expect([flash.limit, flash.occupancy]).toEqual([7, 1]);
+    // A model the board has not reported keeps the default limit and an unknown occupancy, never 0.
+    const pro = dsh.models.find(model => model.family.profiles[0].model === "pro")!;
+    expect([pro.limit, pro.occupancy]).toEqual([2, null]);
+  });
+
+  it("marks a buddy whose switch or own preference differs from what is published, and nothing else", () => {
+    const recorded = snapshot();
+    const view = historyView(recorded, null);
+    const data: ConsoleView = {
+      ...view,
+      profiles: view.profiles.map(entry => entry.profileId === "dsh:deepseek-official:flash:max" ? { ...entry, enabled: true } : entry),
+      preferenceOverrides: [{ profileId: "codex:openai:sol:high", mode: "exclude", reason: "" }],
+      preferences: [{ profileId: "codex:openai:sol:high", mode: "exclude", reason: "", source: "override" }],
+    };
+    const chips = blocks({ recorded, data }).flatMap(block => block.models).flatMap(model => model.chips);
+    expect(chips.filter(chip => chip.unsaved).map(chip => chip.profile.profileId))
+      .toEqual(["codex:openai:sol:high", "dsh:deepseek-official:flash:max"]);
+    expect(chips.find(chip => chip.profile.profileId === "codex:openai:sol:high")!.preference).toBe("exclude");
+    expect(chips.find(chip => chip.profile.profileId === "dsh:deepseek-official:flash:off")!.preference).toBeNull();
+  });
+
+  it("marks a model as new when this page discovered it or the board says so", () => {
+    const list = profiles().map(entry => entry.model === "sol" ? { ...entry, newlyDiscovered: true } : entry);
+    const recorded = snapshot(list);
+    const fresh = JSON.stringify(["dsh", "second-provider", "pro"]);
+    const marked = blocks({ recorded, fresh: [fresh] }).flatMap(block => block.models).filter(model => model.fresh).map(model => modelIdentity(model.family));
+    expect(marked).toEqual(["codex / openai / sol", "dsh / second-provider / pro"]);
+  });
+});
+
+describe("recorded reasons in words", () => {
+  it("words the reasons the board is known to record and shows any other as recorded", () => {
+    expect(reasonTexts(["HARNESS_UNHEALTHY", "ACCOUNT_BINDING_CHANGED", "provider paused"], t))
+      .toEqual(["Harness 不可用", "账户已更换", "provider paused"]);
+    expect(reasonTexts(["not present in the latest confirmed native discovery", "not present in the latest complete native discovery"], t))
+      .toEqual(["已不在 Harness 的模型目录里"]);
+  });
+
+  it("leaves out the reason that only repeats the harness's state where that state is already written", () => {
+    expect(reasonTexts(["HARNESS_UNHEALTHY"], t, true)).toEqual([]);
+    expect(reasonTexts(["HARNESS_UNHEALTHY", "provider paused"], t, true)).toEqual(["provider paused"]);
+  });
+});

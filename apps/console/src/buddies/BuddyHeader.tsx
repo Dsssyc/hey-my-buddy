@@ -17,36 +17,41 @@ export function attentionHints(attention: BuddyAttention, t: TFunction<"buddies"
   };
 }
 
-/**
- * The Buddy page's own navigation: its two sections, and inside the catalogue
- * its two tables. A mark shows where something waits for the user; it says what
- * on hover, on focus and to a screen reader.
- */
+/** A link to one view of the page; a mark on it says where something waits, and what on hover, on focus and to a screen reader. */
+function ViewLink({ view, label, current, className, hint, onNavigate }: {
+  view: BuddyView; label: string; current: boolean; className: string; hint?: string; onNavigate: (next: BuddyLocation) => void;
+}) {
+  const anchor = <a href={buddyHash({ view })} aria-current={current ? "page" : undefined} className={className}
+    onClick={event => { event.preventDefault(); onNavigate({ view }); }}>
+    {label}
+    {hint && <span className="size-1.5 rounded-full bg-hand-mark" aria-hidden="true" />}
+    {hint && <span className="sr-only">{hint}</span>}
+  </a>;
+  return hint ? <Tooltip><TooltipTrigger asChild>{anchor}</TooltipTrigger><TooltipContent>{hint}</TooltipContent></Tooltip> : anchor;
+}
+
+/** The Buddy page's two sections: the catalogue and the roles. */
 export function BuddyHeader({ location, attention, onNavigate }: {
   location: BuddyLocation; attention: BuddyAttention; onNavigate: (next: BuddyLocation) => void;
 }) {
   const { t } = useTranslation("buddies");
   const hints = attentionHints(attention, t);
   const inCatalog = location.view !== "roles";
-  function link(view: BuddyView, label: string, current: boolean, className: string, hint?: string) {
-    const anchor = <a key={view} href={buddyHash({ view })} aria-current={current ? "page" : undefined} className={className}
-      onClick={event => { event.preventDefault(); onNavigate({ view }); }}>
-      {label}
-      {hint && <span className="size-1.5 rounded-full bg-hand-mark" aria-hidden="true" />}
-      {hint && <span className="sr-only">{hint}</span>}
-    </a>;
-    return hint ? <Tooltip key={view}><TooltipTrigger asChild>{anchor}</TooltipTrigger><TooltipContent>{hint}</TooltipContent></Tooltip> : anchor;
-  }
-  return <div className="shrink-0 border-b bg-card">
-    <nav aria-label={t("sections.label")} className="flex gap-[22px] border-b px-3 pt-3.5 sm:px-6 [&:last-child]:border-b-0">
-      {link(inCatalog ? location.view : "models", t("sections.catalog"), inCatalog, sectionClass, inCatalog ? undefined : hints.harness)}
-      {link("roles", t("sections.roles"), !inCatalog, sectionClass, hints.roles)}
-    </nav>
-    {inCatalog && <nav aria-label={t("catalog.label")} className="flex px-3 py-3 sm:px-6">
-      <div className="flex overflow-hidden rounded-md border border-line2">
-        {link("models", t("catalog.models"), location.view === "models", tableClass)}
-        {link("harness", t("catalog.harness"), location.view === "harness", tableClass, hints.harness)}
-      </div>
-    </nav>}
-  </div>;
+  return <nav aria-label={t("sections.label")} className="flex shrink-0 gap-[22px] border-b bg-card px-3 pt-3.5 sm:px-6">
+    <ViewLink view={inCatalog ? location.view : "models"} label={t("sections.catalog")} current={inCatalog} className={sectionClass}
+      hint={inCatalog ? undefined : hints.harness} onNavigate={onNavigate} />
+    <ViewLink view="roles" label={t("sections.roles")} current={!inCatalog} className={sectionClass} hint={hints.roles} onNavigate={onNavigate} />
+  </nav>;
+}
+
+/** The choice between the catalogue's two tables; it sits first in the toolbar of each. */
+export function CatalogPick({ location, attention, onNavigate }: {
+  location: BuddyLocation; attention: BuddyAttention; onNavigate: (next: BuddyLocation) => void;
+}) {
+  const { t } = useTranslation("buddies");
+  return <nav aria-label={t("catalog.label")} className="flex shrink-0 overflow-hidden rounded-md border border-line2">
+    <ViewLink view="models" label={t("catalog.models")} current={location.view === "models"} className={tableClass} onNavigate={onNavigate} />
+    <ViewLink view="harness" label={t("catalog.harness")} current={location.view === "harness"} className={tableClass}
+      hint={attentionHints(attention, t).harness} onNavigate={onNavigate} />
+  </nav>;
 }

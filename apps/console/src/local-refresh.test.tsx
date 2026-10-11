@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConsoleApi } from "./api";
 import { readVerificationText } from "./api";
 import type { Snapshot, Task } from "./types";
-import { EvaluationHistory, HISTORY_PAGE_SIZE } from "./EvaluationHistory";
 import { TaskDetails } from "./TaskDetails";
 import { RunDetailPane } from "./RunDetailPane";
 import { Tasks } from "./Tasks";
@@ -17,10 +16,6 @@ const task = (runId = "command-1", extra: Partial<Task> = {}): Task => ({
   acceptedAt: null, acceptanceVerdict: null,
   selectedAttempt: { result: { result: { stdout: `结果 ${runId}` } } }, ...extra,
 });
-const historyPage = (revision: number, nextCursor: number | null = null) => ({
-  revisions: [{ revision, kind: "human", actor: null, counts: { profiles: 1 }, createdAt: "2026-10-01T00:00:00Z" }],
-  total: 42, nextCursor,
-});
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(done => { resolve = done; });
@@ -28,7 +23,7 @@ function deferred<T>() {
 }
 function fixture() {
   const api = {
-    task: vi.fn(async () => task()), command: vi.fn(async () => historyPage(42, 22)),
+    task: vi.fn(async () => task()), command: vi.fn(),
     snapshot: vi.fn(), tasks: vi.fn(), objectives: vi.fn(), objectiveTimeline: vi.fn(),
     readVerifiedAt: vi.fn(() => null as number | null),
   } as unknown as ConsoleApi;
@@ -40,59 +35,6 @@ function Detail({ api, refresh, initial = task() }: { api: ConsoleApi; refresh: 
     active onTaskUpdate={setValue} />;
 }
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
-
-describe("configuration history local refresh", () => {
-  it("refreshes only the bounded current cursor and preserves page, scroll, and server verification", async () => {
-    const f = fixture(); const user = userEvent.setup();
-    const command = f.api.command as ReturnType<typeof vi.fn>;
-    command.mockResolvedValueOnce(historyPage(42, 22)).mockResolvedValueOnce(historyPage(21, 1)).mockResolvedValueOnce(historyPage(20, 1));
-    const serverAt = Date.parse("2026-10-02T06:07:08Z");
-    (f.api.readVerifiedAt as ReturnType<typeof vi.fn>).mockReturnValue(serverAt);
-    const view = render(<EvaluationHistory snapshot={snapshot} api={f.api} active onBack={vi.fn()} />);
-    await screen.findByText("V42");
-    await user.click(screen.getByRole("button", { name: "加载更早记录" }));
-    await screen.findByText("V21");
-    const body = view.container.querySelector(".detail-body")!; body.scrollTop = 87;
-    await user.click(screen.getByRole("button", { name: "刷新配置更新记录" }));
-    await waitFor(() => expect(screen.queryByText("V20")).not.toBeNull());
-    expect(command.mock.calls).toEqual([
-      ["evaluation_history", { limit: HISTORY_PAGE_SIZE }, "csrf"],
-      ["evaluation_history", { limit: HISTORY_PAGE_SIZE, before: 22 }, "csrf"],
-      ["evaluation_history", { limit: HISTORY_PAGE_SIZE, before: 22 }, "csrf"],
-    ]);
-    expect(body.scrollTop).toBe(87);
-    expect(screen.getByRole("button", { name: "较新记录" })).toBeTruthy();
-    expect(screen.queryByText(readVerificationText(serverAt))).not.toBeNull();
-    for (const name of ["task", "tasks", "snapshot", "objectives", "objectiveTimeline"] as const) expect(f.api[name]).not.toHaveBeenCalled();
-  });
-
-  it("retains a failed page and timestamp and retries only that page", async () => {
-    const f = fixture(); const user = userEvent.setup();
-    const command = f.api.command as ReturnType<typeof vi.fn>;
-    command.mockResolvedValueOnce(historyPage(42)).mockRejectedValueOnce(new Error("离线更新记录")).mockResolvedValueOnce(historyPage(41));
-    render(<EvaluationHistory snapshot={snapshot} api={f.api} active onBack={vi.fn()} />);
-    await screen.findByText("V42");
-    expect(screen.getByText("核对时间未记录")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "刷新配置更新记录" }));
-    await screen.findByRole("alert");
-    expect(screen.getByText("V42")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "重试读取" }));
-    await screen.findByText("V41");
-    expect(command.mock.calls.every(([operation, params]) => operation === "evaluation_history" && params.limit === HISTORY_PAGE_SIZE)).toBe(true);
-  });
-
-  it("ignores a late refresh after leaving and reentering the page", async () => {
-    const f = fixture(); const user = userEvent.setup(); const late = deferred<ReturnType<typeof historyPage>>();
-    const command = f.api.command as ReturnType<typeof vi.fn>;
-    command.mockResolvedValueOnce(historyPage(42)).mockReturnValueOnce(late.promise).mockResolvedValueOnce(historyPage(40));
-    const view = render(<EvaluationHistory snapshot={snapshot} api={f.api} active onBack={vi.fn()} />);
-    await screen.findByText("V42"); await user.click(screen.getByRole("button", { name: "刷新配置更新记录" }));
-    view.rerender(<EvaluationHistory snapshot={snapshot} api={f.api} active={false} onBack={vi.fn()} />);
-    view.rerender(<EvaluationHistory snapshot={snapshot} api={f.api} active onBack={vi.fn()} />);
-    await screen.findByText("V40"); await act(async () => { late.resolve(historyPage(99)); });
-    expect(screen.queryByText("V99")).toBeNull(); expect(screen.getByText("V40")).toBeTruthy();
-  });
-});
 
 describe("opened microtask local refresh", () => {
   it("refreshes the current plain command without resetting the detail or reading other APIs", async () => {
@@ -299,10 +241,10 @@ describe("opened microtask local refresh", () => {
     expect(f.refresh).not.toHaveBeenCalled();
   });
 
-  it("starts no periodic reads for command details or configuration history", async () => {
+  it("starts no periodic reads for command details", async () => {
     const f = fixture();
     const interval = vi.spyOn(globalThis, "setInterval"); const timeout = vi.spyOn(globalThis, "setTimeout");
-    render(<><Detail api={f.api} refresh={f.refresh} /><EvaluationHistory snapshot={snapshot} api={f.api} active onBack={vi.fn()} /></>);
+    render(<Detail api={f.api} refresh={f.refresh} />);
     await act(async () => {});
     expect(interval).not.toHaveBeenCalled(); expect(timeout).not.toHaveBeenCalled();
   });

@@ -5,6 +5,7 @@ import { App } from "./App";
 import { ApiError, createApi, snapshotHarnesses } from "./api";
 import type { ConsoleApi, HarnessHealth } from "./api";
 import type { Profile, Snapshot } from "./types";
+import { listed } from "./buddies/page.testing";
 
 /**
  * ADR-017 §15 on the Buddy 配置 page: each harness shows its found path,
@@ -231,8 +232,8 @@ describe("the harness status strip", () => {
     const f = fixture({ harnesses: [] });
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    // The offline ZCode family stays hidden; the page is loaded with one family.
-    await screen.findByRole("heading", { name: "模型 1" });
+    // The offline ZCode model stays hidden; the page is loaded with one buddy.
+    await listed(1, 1);
     expect(screen.queryByRole("region", { name: "Harness 状态" })).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });

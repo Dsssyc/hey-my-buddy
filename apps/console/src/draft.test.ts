@@ -20,10 +20,8 @@ import {
   setFamilyAnnotation,
   setFamilyPreference,
   setPreferenceOverride,
-  withFirstRouter,
   withHistory,
 } from "./draft";
-import type { Configuration } from "./types";
 import { blockingIssues } from "./policy";
 import type { HistoryEntries } from "./draft";
 import type { Draft, FamilyAnnotation, Profile, Snapshot, WriterGrant } from "./types";
@@ -686,22 +684,6 @@ describe("private same-origin API", () => {
     await expect(
       createApi("/private", fetcher).command("save", {}, "csrf"),
     ).rejects.toMatchObject({ code: "REVISION_CONFLICT" });
-  });
-});
-
-describe("the ordered Router list (withFirstRouter)", () => {
-  const base = { revision: 1, routerProfileIds: ["a", "b", "c"], routerRetryIntervalSeconds: 600,
-    defaultRoutingMode: "review" as const, routingBudget: "standard" as const } as Configuration;
-  it("replaces only the head and keeps the user's tail order", () => {
-    expect(withFirstRouter(base, "d").routerProfileIds).toEqual(["d", "b", "c"]);
-    expect(withFirstRouter(base, "d").routerRetryIntervalSeconds).toBe(600);
-  });
-  it("removes the new head's old duplicate from the tail", () => {
-    expect(withFirstRouter(base, "c").routerProfileIds).toEqual(["c", "b"]);
-    expect(withFirstRouter(base, "b").routerProfileIds).toEqual(["b", "c"]);
-  });
-  it("keeps the list when the head is chosen again", () => {
-    expect(withFirstRouter(base, "a").routerProfileIds).toEqual(["a", "b", "c"]);
   });
 });
 

@@ -4,12 +4,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import type { Card, FamilyAnnotation, Preference, Profile, ProfilePage, Snapshot, WriterGrant } from "./types";
+import {
+  chip, choosePreference, conflictNotice, level, levelPreference, levelSwitch, listed, modelButton, note, pane, queryModel, search, selectModel,
+} from "./buddies/page.testing";
 
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
 const flashHigh = "dsh:deepseek-official:deepseek-flash:high";
 const retiredMax = "dsh:deepseek-official:retired-model:max";
 const retiredLow = "dsh:deepseek-official:retired-model:low";
 const retiredFamily = { adapter: "dsh", provider: "deepseek-official", model: "retired-model" };
+const FLASH = "dsh / deepseek-official / deepseek-flash";
+const RETIRED = "dsh / deepseek-official / retired-model";
 
 function catalog(): Profile[] {
   const base = {
@@ -131,12 +136,16 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
   return { api, command, published, operations, snapshot: () => state };
 }
 
-async function openRetired(f: ReturnType<typeof fixture>, user: ReturnType<typeof userEvent.setup>) {
-  await screen.findByRole("heading", { name: "模型 1" });
-  await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
-  await screen.findByRole("heading", { name: "模型 2" });
-  await user.click(screen.getByRole("button", { name: /^retired-model/ }));
-  await screen.findByRole("heading", { name: "retired-model" });
+const enabledOnly = () => screen.getByRole("checkbox", { name: "只看已启用" });
+const showUnavailable = () => screen.getByRole("checkbox", { name: /^显示不可用/ });
+const checked = (box: HTMLElement | null) => box?.getAttribute("aria-checked");
+
+/** Shows the unavailable buddies and opens the retired model's settings. */
+async function openRetired(user: ReturnType<typeof userEvent.setup>) {
+  await listed(1, 2);
+  await user.click(showUnavailable());
+  await listed(2, 4);
+  await selectModel(user, RETIRED, "DSH");
 }
 
 afterEach(() => {
@@ -147,55 +156,57 @@ afterEach(() => {
   document.documentElement.dataset.theme = "";
 });
 
-describe("unavailable configurations", () => {
-  it("hides them by default and reveals them with the 显示不可用配置（N） filter", async () => {
+describe("unavailable buddies", () => {
+  it("hides them by default and reveals them with the 显示不可用 filter, which says how many there are", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 1" });
+    await listed(1, 2);
     // The snapshot keeps retired identities as a count, and the unchecked filter
-    // hides their family; nothing is fetched until the user asks for them.
-    expect(screen.getByRole("checkbox", { name: "显示不可用配置（2）" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /^retired-model/ })).toBeNull();
+    // hides their model; nothing is fetched until the user asks for them.
+    expect(screen.getByRole("checkbox", { name: "显示不可用 2" })).toBeTruthy();
+    expect(queryModel(RETIRED)).toBeNull();
     expect(f.operations).not.toContain("model_profiles");
 
-    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（2）" }));
-    await screen.findByRole("heading", { name: "模型 2" });
+    await user.click(showUnavailable());
+    await listed(2, 4);
     expect(f.command).toHaveBeenCalledWith("model_profiles",
       { includeUnavailable: true, limit: 100 }, "csrf");
-    // The retired family joins its DSH harness group, marked 不可用 with the
-    // recorded reason instead of the old history footer.
-    expect(screen.getByRole("button", { name: /^retired-model，已启用 1\/2，不可用（provider paused）/ })).toBeTruthy();
-    expect(screen.getByText("不可用 · provider paused")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: /^retired-model/ }));
-    await screen.findByRole("heading", { name: "retired-model" });
-    expect(screen.getByText("不可用", { selector: ".badge" })).toBeTruthy();
-    expect(screen.getAllByText(/退役前的历史评价/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/用户保留的历史意见/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/验证样本 9 个/)).toBeTruthy();
+    // The retired model joins its harness's rows. Its harness works, so the
+    // row says itself that it cannot, with the recorded reason as explanation.
+    const state = within(modelButton(RETIRED).closest("td")!).getByText("不可用");
+    expect(state.getAttribute("aria-description")).toBe("provider paused");
+    expect(chip(RETIRED, "max").textContent).toBe("max已启用 不可用");
+    expect(chip(RETIRED, "low").textContent).toBe("low未启用 不可用");
+    expect(within(modelButton(FLASH).closest("td")!).queryByText("不可用")).toBeNull();
+    await user.click(modelButton(RETIRED));
+    // The side column says it once for the model, keeps the note and the samples.
+    expect(within(pane(RETIRED)).getByText("provider paused")).toBeTruthy();
+    expect(within(pane()).getAllByText("不可用")).toHaveLength(1);
+    expect(note()).toHaveProperty("value", "用户保留的历史意见");
+    expect(within(level("max")).getByText("9")).toBeTruthy();
   });
 
-  it("counts a listed offline decision selector once and pages the rest in by itself", async () => {
+  it("counts a listed offline Router once and pages the rest in by itself", async () => {
     const f = fixture({ staleDecision: true, pageSize: 2 });
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    // The listed decision selector is unavailable too, so its family is hidden
-    // by default; the count is the table-wide 2, never 3.
-    await screen.findByRole("heading", { name: "模型 1" });
-    expect(screen.queryByRole("button", { name: /^retired-model/ })).toBeNull();
-    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（2）" }));
-    await screen.findByRole("heading", { name: "模型 2" });
+    // The listed Router is unavailable too, so its model is hidden by default;
+    // the count is the table-wide 2, never 3.
+    await listed(1, 2);
+    expect(queryModel(RETIRED)).toBeNull();
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用 2" }));
+    await listed(2, 4);
     // The snapshot's own row is shown first; the bounded second page then joins
     // it without any manual "load more" control.
     await waitFor(() => expect(f.operations.filter(op => op === "model_profiles")).toHaveLength(2));
     expect(f.command).toHaveBeenCalledWith("model_profiles",
       { includeUnavailable: true, limit: 100, after: expect.any(String) }, "csrf");
-    await user.click(screen.getByRole("button", { name: /^retired-model/ }));
-    await screen.findByRole("heading", { name: "retired-model" });
-    expect(screen.getByRole("switch", { name: "启用 max" })).toBeTruthy();
-    expect(screen.getByRole("switch", { name: "启用 low" })).toBeTruthy();
+    await user.click(modelButton(RETIRED));
+    expect(levelSwitch("max")).toBeTruthy();
+    expect(levelSwitch("low")).toBeTruthy();
   });
 
   it("reads the remaining unavailable pages through the server cursor on its own", async () => {
@@ -203,67 +214,69 @@ describe("unavailable configurations", () => {
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 1" });
-    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（2）" }));
-    // Both retired efforts are readable and the cursor is exhausted, so the
+    await listed(1, 2);
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用 2" }));
+    // Both retired buddies are readable and the cursor is exhausted, so the
     // chain of bounded reads stops there.
-    await screen.findByRole("heading", { name: "模型 2" });
-    expect(screen.getByRole("button", { name: /^retired-model，已启用 1\/2/ })).toBeTruthy();
+    await listed(2, 4);
+    expect(modelButton(RETIRED)).toBeTruthy();
     await waitFor(() => expect(f.operations.filter(op => op === "model_profiles")).toHaveLength(2));
     expect(f.command).toHaveBeenCalledWith("model_profiles",
       { includeUnavailable: true, limit: 100, after: expect.any(String) }, "csrf");
     expect(f.operations.filter(op => op === "model_profiles")).toHaveLength(2);
   });
 
-  it("combines 只看已启用 with 显示不可用配置", async () => {
+  it("combines 只看已启用 with 显示不可用", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 1" });
-    // 只看已启用 alone still hides the family: none of its available rows exist.
-    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
-    await screen.findByRole("heading", { name: "模型 1" });
-    expect(screen.queryByRole("button", { name: /^retired-model/ })).toBeNull();
-    // With both boxes on, the retired family qualifies through its enabled
-    // effort (max) and appears with its reason; the filters combine.
-    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（2）" }));
-    await screen.findByRole("heading", { name: "模型 2" });
-    expect(screen.getByRole("button", { name: /^retired-model，已启用 1\/2，不可用（provider paused）/ })).toBeTruthy();
-    expect(screen.getByText("不可用 · provider paused")).toBeTruthy();
-    // Turning the unavailable filter off hides the family again.
-    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（2）" }));
-    await screen.findByRole("heading", { name: "模型 1" });
-    expect(screen.queryByRole("button", { name: /^retired-model/ })).toBeNull();
+    await listed(1, 2);
+    // 只看已启用 alone still hides the model: none of its available buddies exist.
+    await user.click(enabledOnly());
+    await listed(1, 2);
+    expect(queryModel(RETIRED)).toBeNull();
+    // With both boxes on, the retired model qualifies through its enabled
+    // buddy (max) and appears; the filters combine.
+    await user.click(showUnavailable());
+    await listed(2, 4);
+    expect(within(modelButton(RETIRED).closest("td")!).getByText("不可用")).toBeTruthy();
+    // Turning the unavailable filter off hides the model again.
+    await user.click(showUnavailable());
+    await listed(1, 2);
+    expect(queryModel(RETIRED)).toBeNull();
   });
 
-  it("allows disabling a retired configuration but never re-enabling it", async () => {
+  it("allows disabling a retired buddy but never re-enabling it", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    await openRetired(f, user);
+    await openRetired(user);
     // "max" is currently enabled, so the user may turn it off.
-    const maxSwitch = screen.getByRole("switch", { name: "启用 max" });
-    expect(maxSwitch).toHaveProperty("disabled", false);
-    await user.click(maxSwitch);
-    expect(screen.getByRole("switch", { name: "启用 max" }).getAttribute("aria-checked")).toBe("false");
+    expect(levelSwitch("max").hasAttribute("aria-disabled")).toBe(false);
+    await user.click(levelSwitch("max"));
+    expect(levelSwitch("max").getAttribute("aria-checked")).toBe("false");
     expect(screen.getByText(/1 项未保存/)).toBeTruthy();
-    // "low" is disabled and unavailable: it cannot be switched on at all.
-    const lowSwitch = screen.getByRole("switch", { name: "启用 low" });
-    expect(lowSwitch).toHaveProperty("disabled", true);
-    expect(lowSwitch).toHaveProperty("title", "该档位当前不可用，不能新启用");
+    // "low" is off and unavailable: it cannot be switched on at all, and says why.
+    expect(levelSwitch("low").getAttribute("aria-disabled")).toBe("true");
+    expect(levelSwitch("low").getAttribute("aria-description")).toBe("已不可用，不能启用");
+    await user.click(levelSwitch("low"));
+    expect(levelSwitch("low").getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByText(/1 项未保存/)).toBeTruthy();
+    // Once "max" is off it is in the same position: off for good until it is discarded.
+    expect(levelSwitch("max").getAttribute("aria-disabled")).toBe("true");
     expect(f.operations).not.toContain("user_policy_publish");
   });
 
-  it("publishes a disable and a family note as patches without program fields", async () => {
+  it("publishes a disable and a note as patches without program fields", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    await openRetired(f, user);
-    await user.click(screen.getByRole("switch", { name: "启用 max" }));
-    await user.type(screen.getByLabelText("家族备注"), "，仍可用于历史对照");
+    await openRetired(user);
+    await user.click(levelSwitch("max"));
+    await user.type(note(), "，仍可用于历史对照");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本");
     expect(f.operations.slice(0, 3)).toEqual(["model_profiles", "evaluation_write_begin", "user_policy_publish"]);
@@ -282,26 +295,24 @@ describe("unavailable configurations", () => {
     expect(wire).not.toContain("cards");
   });
 
-  it("allows a reason-only edit of a retired pin while a new pin on an unavailable effort stays blocked", async () => {
+  it("allows a reason-only edit of a retired pin while a new pin on an unavailable buddy stays blocked", async () => {
     const f = fixture({ stalePin: true });
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    await openRetired(f, user);
+    await openRetired(user);
     await screen.findByText(/固定选择指向.*请启用或改回/);
-    // The existing pin stays a reachable, selectable value on its own tag menu;
-    // only its reason changes.
-    await user.click(screen.getByRole("button", { name: "max 档位菜单" }));
-    const reason = await screen.findByLabelText("覆盖理由");
+    // The existing pin stays a reachable value on its own level; only its reason changes.
+    expect(levelPreference("max").textContent).toBe("固定");
+    const reason = within(level("max")).getByRole("textbox", { name: "max 的偏好理由" });
     expect(reason).toHaveProperty("value", "以前固定");
     await user.clear(reason);
     await user.type(reason, "仍然适用");
-    // "low" has no existing pin and is unavailable and disabled: a new pin there is blocked.
-    await user.keyboard("{Escape}");
-    await user.click(screen.getByRole("button", { name: "low 档位菜单" }));
-    const lowMenu = screen.getByRole("dialog", { name: /low 档位设置/ });
-    const lowPin = within(lowMenu).getByRole("radio", { name: "固定" });
-    expect(lowPin).toHaveProperty("disabled", true);
+    // "low" has no pin, is unavailable and off: a new pin there is not offered.
+    await user.click(levelPreference("low"));
+    const pin = await screen.findByRole("option", { name: /^固定/ });
+    expect(pin.getAttribute("aria-disabled")).toBe("true");
+    expect(pin.textContent).toBe("固定需先启用");
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本");
@@ -316,16 +327,16 @@ describe("unavailable configurations", () => {
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    await openRetired(f, user);
-    await user.click(screen.getByRole("switch", { name: "启用 max" }));
+    await openRetired(user);
+    await user.click(levelSwitch("max"));
     await user.click(screen.getByRole("button", { name: "发现模型" }));
-    await screen.findByText(/目录已更新/);
+    await screen.findByText("没有新的 buddy");
     // The retired row is absent from the bounded V3 snapshot: the edit stays
     // unresolved instead of being dropped or rebased from the V2 cache.
-    const banner = document.querySelector(".conflict-banner")!;
+    const banner = conflictNotice()!;
     expect(banner).toBeTruthy();
     expect(banner.textContent).toContain("尚待读取最新版本");
-    expect(screen.getByRole("switch", { name: "启用 max" }).getAttribute("aria-checked")).toBe("false");
+    expect(levelSwitch("max").getAttribute("aria-checked")).toBe("false");
     // No save of the disable under V3 while the conflict is unresolved.
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect((await screen.findAllByText(/设置已更新/)).length).toBeGreaterThan(0);
@@ -333,7 +344,7 @@ describe("unavailable configurations", () => {
     expect(f.operations).not.toContain("evaluation_write_begin");
     // The revision-bound history reload supplies the fresh V3 row; the pending
     // rebase resolves on its own and the same edit publishes at V3.
-    await waitFor(() => expect(document.querySelector(".conflict-banner")).toBeNull());
+    await waitFor(() => expect(conflictNotice()).toBeUndefined());
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本");
     expect(f.published[0]).toMatchObject({
@@ -347,13 +358,11 @@ describe("unavailable configurations", () => {
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    await openRetired(f, user);
-    await user.click(screen.getByRole("button", { name: "max 档位菜单" }));
-    await user.click(screen.getByRole("radio", { name: "跟随家族（无）" }));
-    await user.keyboard("{Escape}");
+    await openRetired(user);
+    await choosePreference(user, "max", "跟随模型");
     // A same-revision retained page still contains the published pin. Reading it
     // (here a search-filter reload) must not silently re-add the removed row.
-    await user.type(screen.getByPlaceholderText("搜索模型、Harness、提供方"), "retired");
+    await user.type(search(), "retired");
     await waitFor(() => expect(f.command).toHaveBeenCalledWith("model_profiles",
       { includeUnavailable: true, limit: 100, query: "retired" }, "csrf"));
     await waitFor(() => expect(f.operations.filter(op => op === "model_profiles").length).toBeGreaterThan(1));
@@ -364,39 +373,39 @@ describe("unavailable configurations", () => {
     ]);
   });
 
-  it("sends the search text to the unavailable-configuration request", async () => {
+  it("sends the search text to the request for unavailable buddies", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 1" });
-    await user.click(screen.getByRole("checkbox", { name: "显示不可用配置（2）" }));
-    await screen.findByRole("heading", { name: "模型 2" });
+    await listed(1, 2);
+    await user.click(screen.getByRole("checkbox", { name: "显示不可用 2" }));
+    await listed(2, 4);
     expect(f.command).toHaveBeenCalledWith("model_profiles",
       { includeUnavailable: true, limit: 100 }, "csrf");
     // A search is a bounded server query, so matching rows past the display
     // budget are reachable instead of a local-only filter.
-    await user.type(screen.getByPlaceholderText("搜索模型、Harness、提供方"), "retired");
+    await user.type(search(), "retired");
     await waitFor(() => expect(f.command).toHaveBeenCalledWith("model_profiles",
       { includeUnavailable: true, limit: 100, query: "retired" }, "csrf"));
   });
 });
 
 describe("stale settings and unrelated saves", () => {
-  it("shows a stale decision setting as attention and still saves a family note elsewhere", async () => {
+  it("shows a stale Router as a mark on the roles section and still saves a note elsewhere", async () => {
     const f = fixture({ staleDecision: true });
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    // The unavailable decision family stays hidden behind the filter.
-    await screen.findByRole("heading", { name: "模型 1" });
+    // The unavailable Router's model stays hidden behind the filter.
+    await listed(1, 2);
     // The stale review Router is no longer a stacked detail page: the roles
     // section carries the mark.
     const sections = screen.getByRole("navigation", { name: "Buddy 的分区" });
     expect(within(sections).getByRole("link", { name: /^角色\s*Router 不可用$/ })).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
-    await user.type(await screen.findByLabelText("家族备注"), "只改这条意见");
+    await selectModel(user, FLASH, "DSH");
+    await user.type(note(), "只改这条意见");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本");
     // The stale selector stays untouched and does not block the unrelated patch.
@@ -412,11 +421,11 @@ describe("stale settings and unrelated saves", () => {
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    await openRetired(f, user);
+    await openRetired(user);
     await screen.findByText(/固定选择指向.*请启用或改回/);
-    await user.click(screen.getByRole("button", { name: "返回模型列表" }));
-    await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
-    await user.type(await screen.findByLabelText("家族备注"), "，补充说明");
+    expect(chip(RETIRED, "max").textContent).toBe("max已启用 不可用固定");
+    await selectModel(user, FLASH, "DSH");
+    await user.type(note(), "，补充说明");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本");
     expect(f.published[0]).not.toHaveProperty("preferenceChanges");
@@ -426,31 +435,31 @@ describe("stale settings and unrelated saves", () => {
   });
 });
 
-describe("browser model view preferences", () => {
+describe("the two filters as browser habits", () => {
   it("restores both filters across unmount/remount and a reload with one bounded history read", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     let view = render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 1" });
-    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
-    await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
-    await screen.findByRole("heading", { name: "模型 2" });
+    await listed(1, 2);
+    await user.click(enabledOnly());
+    await user.click(showUnavailable());
+    await listed(2, 4);
     expect(f.command).toHaveBeenCalledWith("model_profiles", { includeUnavailable: true, limit: 100 }, "csrf");
     view.unmount();
     const reloaded = fixture();
     view = render(<App suppliedApi={reloaded.api} />);
-    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "只看已启用" })).toHaveProperty("checked", true));
-    expect(screen.getByRole("checkbox", { name: /^显示不可用配置/ })).toHaveProperty("checked", true);
-    await screen.findByRole("heading", { name: "模型 2" });
-    await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
-    await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
+    await waitFor(() => expect(checked(screen.queryByRole("checkbox", { name: "只看已启用" }))).toBe("true"));
+    expect(checked(showUnavailable())).toBe("true");
+    await listed(2, 4);
+    await user.click(showUnavailable());
+    await user.click(showUnavailable());
     view.rerender(<App suppliedApi={reloaded.api} />);
     await new Promise(resolve => setTimeout(resolve, 450));
     expect(reloaded.operations).toEqual(["model_profiles"]);
   });
 
-  it("keeps the stored unavailable preference when the checkbox is hidden and still reads once", async () => {
+  it("keeps the stored unavailable habit when the filter is hidden and still reads once", async () => {
     window.localStorage.setItem("hey-my-buddy.console.view.models.showUnavailable", "true");
     const f = fixture();
     const state = f.snapshot();
@@ -458,9 +467,9 @@ describe("browser model view preferences", () => {
     f.command.mockImplementation(async () => ({ profiles: state.profiles, cards: [], preferences: [], sampleCounts: {}, modelConcurrency: [], tableRevision: state.tableRevision, nextCursor: null }));
     window.location.hash = "#buddies";
     const view = render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 1" });
+    await listed(1, 2);
     await waitFor(() => expect(f.command).toHaveBeenCalledTimes(1));
-    expect(screen.queryByRole("checkbox", { name: /^显示不可用配置/ })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /^显示不可用/ })).toBeNull();
     expect(window.localStorage.getItem("hey-my-buddy.console.view.models.showUnavailable")).toBe("true");
     view.rerender(<App suppliedApi={f.api} />);
     await new Promise(resolve => setTimeout(resolve, 450));
@@ -474,16 +483,16 @@ describe("browser model view preferences", () => {
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 1" });
-    expect(screen.getByRole("checkbox", { name: "只看已启用" })).toHaveProperty("checked", false);
-    expect(screen.getByRole("checkbox", { name: /^显示不可用配置/ })).toHaveProperty("checked", false);
-    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
-    expect(screen.getByRole("checkbox", { name: "只看已启用" })).toHaveProperty("checked", true);
+    await listed(1, 2);
+    expect(checked(enabledOnly())).toBe("false");
+    expect(checked(showUnavailable())).toBe("false");
+    await user.click(enabledOnly());
+    expect(checked(enabledOnly())).toBe("true");
     expect(f.command).not.toHaveBeenCalled();
   });
 });
 
-describe("deep links preserve manually saved filters", () => {
+describe("an address that names a buddy keeps the filters set by hand", () => {
   const enabledKey = "hey-my-buddy.console.view.models.enabledOnly";
   const unavailableKey = "hey-my-buddy.console.view.models.showUnavailable";
   function jump(profileId: string) {
@@ -499,24 +508,26 @@ describe("deep links preserve manually saved filters", () => {
     const user = userEvent.setup();
     window.location.hash = "#buddies/models";
     let view = render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 1" });
-    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
-    await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
+    await listed(0, 2);
+    await user.click(enabledOnly());
+    await user.click(showUnavailable());
     await waitFor(() => expect(f.command).toHaveBeenCalledWith("model_profiles", { includeUnavailable: true, limit: 100 }, "csrf"));
-    await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
+    await user.click(showUnavailable());
     expect(localStorage.getItem(enabledKey)).toBe("true");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
     jump(flashHigh);
-    await screen.findByRole("heading", { name: "deepseek-flash" });
-    expect(screen.getByRole("switch", { name: "启用 high" }).getAttribute("aria-checked")).toBe("false");
-    expect(screen.getByRole("checkbox", { name: "只看已启用" })).toHaveProperty("checked", false);
+    await waitFor(() => pane(FLASH));
+    expect(levelSwitch("high").getAttribute("aria-checked")).toBe("false");
+    // The address lands on the buddy it names.
+    await waitFor(() => expect(document.activeElement).toBe(level("high")));
+    expect(checked(enabledOnly())).toBe("false");
     expect(localStorage.getItem(enabledKey)).toBe("true");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
     view.unmount();
     window.location.hash = "#buddies/models";
     view = render(<App suppliedApi={f.api} />);
-    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "只看已启用" })).toHaveProperty("checked", true));
-    expect(screen.getByRole("checkbox", { name: /^显示不可用配置/ })).toHaveProperty("checked", false);
+    await waitFor(() => expect(checked(screen.queryByRole("checkbox", { name: "只看已启用" }))).toBe("true"));
+    expect(checked(showUnavailable())).toBe("false");
     expect(localStorage.getItem(enabledKey)).toBe("true");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
   });
@@ -526,26 +537,26 @@ describe("deep links preserve manually saved filters", () => {
     const user = userEvent.setup();
     window.location.hash = "#buddies/models";
     let view = render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 1" });
-    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
-    await user.click(screen.getByRole("checkbox", { name: "只看已启用" }));
-    await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
-    await screen.findByRole("heading", { name: "模型 2" });
-    await user.click(screen.getByRole("checkbox", { name: /^显示不可用配置/ }));
+    await listed(1, 2);
+    await user.click(enabledOnly());
+    await user.click(enabledOnly());
+    await user.click(showUnavailable());
+    await listed(2, 4);
+    await user.click(showUnavailable());
     expect(localStorage.getItem(enabledKey)).toBe("false");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
     jump(retiredMax);
-    await screen.findByRole("heading", { name: "retired-model" });
-    expect(screen.getByRole("switch", { name: "启用 max" }).getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByRole("checkbox", { name: /^显示不可用配置/ })).toHaveProperty("checked", true);
+    await waitFor(() => pane(RETIRED));
+    expect(levelSwitch("max").getAttribute("aria-checked")).toBe("true");
+    expect(checked(showUnavailable())).toBe("true");
     expect(localStorage.getItem(enabledKey)).toBe("false");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
     view.unmount();
     window.location.hash = "#buddies/models";
     view = render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 1" });
-    expect(screen.getByRole("checkbox", { name: "只看已启用" })).toHaveProperty("checked", false);
-    expect(screen.getByRole("checkbox", { name: /^显示不可用配置/ })).toHaveProperty("checked", false);
+    await listed(1, 2);
+    expect(checked(enabledOnly())).toBe("false");
+    expect(checked(showUnavailable())).toBe("false");
     expect(localStorage.getItem(enabledKey)).toBe("false");
     expect(localStorage.getItem(unavailableKey)).toBe("false");
   });

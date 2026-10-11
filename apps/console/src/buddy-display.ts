@@ -1,6 +1,6 @@
 import type { ModelFamilyGroup } from "./console-data";
 import { effortText, profileName } from "./profile-display";
-import type { OverrideMode, PreferenceMode, Profile } from "./types";
+import type { Profile } from "./types";
 
 /** Product names for the known harness ids; an unknown id is shown as recorded. */
 const HARNESS_NAMES: Record<string, string> = {
@@ -26,28 +26,6 @@ export function familySearchText(profile: Profile): string {
     profile.provider, profile.adapter, harnessName(profile.adapter), effortText(profile.effort),
   ].join(" ").toLowerCase();
 }
-
-/**
- * Each preference has its own colour class *and* a glyph and border style, so
- * the tag never relies on colour alone (the timeline's accessibility rule).
- */
-export const PREFERENCE_LABEL: Record<PreferenceMode, string> = {
-  prefer: "优先",
-  pin: "固定",
-  exclude: "排除",
-};
-export const PREFERENCE_ICON: Record<PreferenceMode, string> = {
-  prefer: "▲",
-  pin: "◆",
-  exclude: "⊘",
-};
-export const OVERRIDE_LABEL: Record<OverrideMode, string> = {
-  ...PREFERENCE_LABEL,
-  none: "无偏好",
-};
-
-/** Help text for the preference modes, shared by the family field and the tag menu. */
-export const PREFERENCE_HELP = "优先先考虑；固定限定候选；排除不参与选择。";
 
 export type HarnessGroup = {
   adapter: string;
@@ -76,9 +54,4 @@ export function harnessGroups(families: ModelFamilyGroup[], all: Profile[]): Har
     group.families.push(family);
   }
   return [...groups.values()];
-}
-
-/** Why a harness is folded away: its recorded reasons, or a plain fallback. */
-export function harnessUnavailableText(group: HarnessGroup): string {
-  return group.reasons.length ? group.reasons.join("；") : "目录中当前没有可用的配置";
 }

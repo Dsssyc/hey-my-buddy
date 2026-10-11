@@ -1,14 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import { RoutingPanel } from "./RoutingPanel";
 import type { ConsoleApi } from "./api";
-import type { Profile, Snapshot, WriterGrant } from "./types";
+import type { Profile, Snapshot } from "./types";
 import type { Workflow } from "./workflow-types";
-import { formatDate } from "./ui";
+import { chip, listed, modelButton, modelsTable, pane } from "./buddies/page.testing";
 import {
-  catalogStateText,
   effortText,
   profileName,
   profileTitle,
@@ -143,101 +142,8 @@ describe("profile display", () => {
   });
 });
 
-describe("catalog state text", () => {
-  it("reads an explicit catalog state as recorded, never from availability", () => {
-    // The board's own state wins even when harness health marks the
-    // configuration unavailable right now.
-    expect(catalogStateText({ available: false, catalogStatus: "available", pendingSince: null })).toBe("可用");
-    expect(catalogStateText({ available: true, catalogStatus: "unavailable", pendingSince: null })).toBe("不可用");
-  });
-
-  it("keeps pending with the recorded time and stays honest when none was recorded", () => {
-    expect(catalogStateText({ available: true, catalogStatus: "pending", pendingSince: "2026-10-07T01:23:45Z" }))
-      .toBe(`待确认 · 自 ${formatDate("2026-10-07T01:23:45Z")}`);
-    expect(catalogStateText({ available: true, catalogStatus: "pending", pendingSince: null })).toBe("待确认");
-  });
-
-  it("falls back to recorded availability only for fixtures without the field", () => {
-    expect(catalogStateText({ available: true, pendingSince: null })).toBe("可用");
-    expect(catalogStateText({ available: false, pendingSince: null })).toBe("不可用");
-  });
-});
-
-describe("decision profile selector", () => {
-  it("sets the Router from an effort tag menu, confirms a replacement, and publishes one configuration patch", async () => {
-    let state = catalogSnapshot();
-    let published: Record<string, any> | null = null;
-    const grant: WriterGrant = {
-      writerId: "fixture-writer",
-      generation: 1,
-      writerToken: "fixture-secret",
-      phase: "writing",
-      tableRevision: 2,
-      expiresAt: new Date(Date.now() + 120000).toISOString(),
-    };
-    const command = vi.fn(async (operation: string, params: any) => {
-      if (operation === "evaluation_write_begin") {
-        state = {
-          ...state,
-          gate: {
-            ...state.gate,
-            phase: "writing",
-            writer: { ...grant, kind: "human" },
-          },
-        };
-        return grant;
-      }
-      if (operation === "user_policy_publish") {
-        published = params;
-        state = {
-          ...state,
-          tableRevision: 3,
-          gate: { ...state.gate, phase: "open", writer: null },
-        };
-        return { tableRevision: 3 };
-      }
-      return {};
-    });
-    const api = {
-      snapshot: vi.fn(async () => structuredClone(state)),
-      command,
-      task: vi.fn(),
-      tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-      objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
-    } as unknown as ConsoleApi;
-    window.location.hash = "#buddies";
-    const user = userEvent.setup();
-    render(<App suppliedApi={api} />);
-    // The Router is a role on an effort tag now: no "路由模型配置" selector exists.
-    expect(screen.queryByLabelText("路由模型配置")).toBeNull();
-    expect((await screen.findAllByText("DeepSeek-V4-Pro · max")).length).toBeGreaterThan(0);
-    await user.click(screen.getByRole("button", { name: /^DeepSeek-V41-Flash/ }));
-    await user.click(screen.getByRole("button", { name: "off 档位菜单" }));
-    await user.click(screen.getByRole("button", { name: "设为 Router" }));
-    // An existing Router asks for confirmation before being replaced.
-    expect(await screen.findByRole("heading", { name: "替换 Router" })).toBeTruthy();
-    expect(screen.getByText(/将替换当前 Router DeepSeek-V4-Pro · max，改为 DeepSeek-V41-Flash · off/)).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "替换" }));
-    expect((await screen.findAllByText("DeepSeek-V41-Flash · off")).length).toBeGreaterThan(0);
-
-    await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本");
-    expect(published!.configuration.routerProfileIds?.[0]).toBe(flashOffId);
-    expect(published!.configuration).not.toHaveProperty("autoMaintain");
-    // Only the decision selector changed, so nothing else is sent: no full table,
-    // no provider/model/effort/available field and no card.
-    expect(published).not.toHaveProperty("profiles");
-    expect(published).not.toHaveProperty("cards");
-    expect(published).not.toHaveProperty("preferenceChanges");
-    expect(published).not.toHaveProperty("familyAnnotationChanges");
-    expect(Object.keys(published!).sort()).toEqual([
-      "commandId", "configuration", "expectedRevision", "generation", "writerId", "writerToken",
-    ]);
-  });
-});
-
-describe("model list display", () => {
-  it("shows the family name once and the native effort on its tag", async () => {
+describe("the models table's names", () => {
+  it("names a row by its identity and writes the native level on its chip", async () => {
     const api = {
       snapshot: vi.fn(async () => catalogSnapshot()),
       command: vi.fn(),
@@ -248,18 +154,18 @@ describe("model list display", () => {
     window.location.hash = "#buddies";
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    expect(
-      await screen.findByRole("button", { name: /^DeepSeek-V41-Flash/ }),
-    ).toBeTruthy();
-    expect(screen.getByRole("button", { name: /^DeepSeek-V4-Pro/ })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: /^DeepSeek-V41-Flash/ }));
-    // `off` keeps its native name on the effort tag, exactly like `max`/`low`;
-    // the family list itself never repeats the effort inside the family name.
-    expect(screen.getAllByText("off").length).toBeGreaterThan(0);
+    await listed(2, 2);
+    // A row shows the model's own id, the fourth part of the identity is the chip.
+    expect(modelButton("dsh / deepseek-official / deepseek-flash").textContent).toBe("deepseek-flash");
+    expect(modelButton("dsh / deepseek-official / deepseek-v4-pro").textContent).toBe("deepseek-v4-pro");
+    // `off` keeps its native name on the chip, exactly like `max`; the catalogue's
+    // display label with the level in it is never repeated in the table.
+    expect(chip("dsh / deepseek-official / deepseek-flash", "off").textContent).toBe("off已启用");
+    expect(chip("dsh / deepseek-official / deepseek-v4-pro", "max").textContent).toBe("max已启用");
     expect(screen.queryByText("非思考")).toBeNull();
-    await user.click(screen.getByRole("button", { name: /^DeepSeek-V4-Pro/ }));
-    expect(screen.getAllByText("max").length).toBeGreaterThan(0);
-    expect(screen.queryByText("DeepSeek-V41-Flash · off")).toBeNull();
+    expect(within(modelsTable()).queryByText(/DeepSeek-V41-Flash/)).toBeNull();
+    await user.click(modelButton("dsh / deepseek-official / deepseek-v4-pro"));
+    expect(within(pane("dsh / deepseek-official / deepseek-v4-pro")).getByRole("group", { name: "max" })).toBeTruthy();
   });
 });
 
