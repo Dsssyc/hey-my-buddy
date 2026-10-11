@@ -41,7 +41,8 @@ class UpgradeFixtureTests(unittest.TestCase):
     def proof(self, state, manifest):
         # Use the existing conversion's actual inode, fixed-ref and source-input
         # evidence. This proves the aliases without running a schema migration.
-        evidence = migration._proof(state, manifest, [manifest])
+        evidence, denied = migration._proof(state, manifest, [manifest])
+        self.assertEqual(denied, {})
         mapping = {old: new for old, (new, anchors) in evidence.items()}
         for old, (new, anchors) in evidence.items():
             self.assertNotEqual(old, new)
@@ -178,8 +179,10 @@ class UpgradeFixtureTests(unittest.TestCase):
         with self.assertRaises(BoardError) as ref_drift:
             migration._fixed_refs(manifest)
         self.assertEqual(ref_drift.exception.code, "IDENTITY_UNPROVEN")
-        with self.assertRaises(BoardError):
-            migration._proof(fixture["state"], manifest, [manifest])
+        evidence, denied = migration._proof(fixture["state"], manifest, [manifest])
+        self.assertNotIn(manifest["checkoutId"], evidence)
+        self.assertEqual(denied[manifest["checkoutId"]], "fixed-evidence-unverified")
+        self.assertIn(manifest["repositoryId"], evidence)
 
     def test_r8_base_native_operation_provenance_and_raw_uncertainty_are_restored(self):
         fixture, connection = self.restored()

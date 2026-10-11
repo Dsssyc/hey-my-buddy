@@ -1,8 +1,9 @@
 """Offline, atomic current-schema identity normalization under upgrade's fences.
 
 Immutable manifests, turn inputs, receipts and history never change. Exact
-legacy-digest reconstruction proves the old directory inode, in addition to
-fixed Git and allocation evidence. Unprovable or conflicting identities stay
+legacy-digest reconstruction proves a repository independently of the lifetime
+of its execution checkouts. Checkout proofs also require fixed Git and allocation
+evidence. Unprovable or conflicting identities stay
 recorded, with a persistent explanation. Several witnessed old devices may
 name one stable directory; this is not an identity collision.
 """
@@ -95,11 +96,8 @@ def _fixed_refs(manifest):
             raise BoardError("IDENTITY_UNPROVEN", "fixed-refs-unverified")
 
 
-def _proof(state, manifest, retained):
-    """Prove each recorded identity before installing any aliases."""
-    workspace._validate_manifest(manifest)
-    if not workspace._workspace_identifier(manifest["workspaceId"]):
-        raise BoardError("IDENTITY_UNPROVEN", "invalid-workspace-id")
+def _execution_proof(state, manifest, retained, repository):
+    """Prove execution/allocation evidence without making it a repository gate."""
     if not Path(manifest["path"]).is_dir():
         raise BoardError("IDENTITY_UNPROVEN", "path-missing")
     actual = workspace.inspect(manifest["path"])
@@ -107,7 +105,7 @@ def _proof(state, manifest, retained):
         raise BoardError("IDENTITY_UNPROVEN", "checkout-root-changed")
     if actual["repositoryPath"] != manifest["snapshot"]["repositoryPath"]:
         raise BoardError("IDENTITY_UNPROVEN", "repository-path-changed")
-    result = {}
+    result = {old: (new, list(anchors)) for old, (new, anchors) in repository.items()}
 
     def collect(recorded, directory, value, role):
         new, anchor = _anchor(directory, recorded, value, role)
@@ -115,11 +113,10 @@ def _proof(state, manifest, retained):
         if anchor is not None and anchor not in entry[1]:
             entry[1].append(anchor)
 
-    for role, directory in (("checkoutId", actual["gitDir"]), ("repositoryId", actual["repositoryPath"])):
-        recorded = manifest[role]
-        if not identity.digest(recorded):
-            raise BoardError("IDENTITY_UNPROVEN", "invalid-recorded-identity")
-        collect(recorded, directory, manifest, role)
+    recorded = manifest["checkoutId"]
+    if not identity.digest(recorded):
+        raise BoardError("IDENTITY_UNPROVEN", "invalid-recorded-identity")
+    collect(recorded, actual["gitDir"], manifest, "checkoutId")
     # The primary checkout can use one digest in both roles. Its mapping works
     # for every declared index column; no single-kind normalization switch.
     local = {old: new for old, (new, anchors) in result.items() if anchors}
@@ -160,13 +157,49 @@ def _proof(state, manifest, retained):
     return result
 
 
-def _report(connection):
-    row = connection.execute("SELECT value FROM meta WHERE key=?", (identity.MIGRATION_META_KEY,)).fetchone()
+def _reason(error):
+    if isinstance(error, BoardError):
+        if error.code == "IDENTITY_UNPROVEN":
+            return error.message
+        if error.code in ("INVALID_WORKSPACE", "WORKSPACE_MANIFEST_CHANGED"):
+            return "invalid-manifest"
+        if error.code == "WORKSPACE_CONFLICT":
+            return "fixed-input-unverified"
+        if error.code == "WORKSPACE_UNSUPPORTED":
+            return "execution-checkout-unverified"
+        if error.code == "WORKSPACE_IO_ERROR":
+            return "execution-checkout-unreadable"
+    return "fixed-evidence-unverified"
+
+
+def _proof(state, manifest, retained):
+    """A bound manifest supplies paths; only a reconstructed digest proves an ID.
+
+    The common Git directory outlives a reclaimed managed checkout and its refs.
+    Proving that directory does not authorize a checkout allocation or removal.
+    """
+    workspace._validate_manifest(manifest)
+    if not workspace._workspace_identifier(manifest["workspaceId"]):
+        raise BoardError("IDENTITY_UNPROVEN", "invalid-workspace-id")
+    recorded = manifest["repositoryId"]
+    if not identity.digest(recorded):
+        raise BoardError("IDENTITY_UNPROVEN", "invalid-recorded-identity")
+    repository, reasons = {}, {}
     try:
-        value = json.loads(row[0]) if row else {}
-        return value if isinstance(value, dict) else {}
-    except (ValueError, TypeError):
-        return {}
+        directory = manifest["snapshot"]["repositoryPath"]
+        if not Path(directory).is_dir():
+            raise BoardError("IDENTITY_UNPROVEN", "repository-path-missing")
+        new, anchor = _anchor(directory, recorded, manifest, "repositoryId")
+        repository[recorded] = (new, [anchor] if anchor is not None else [])
+    except (OSError, BoardError) as error:
+        reasons[recorded] = _reason(error)
+    try:
+        return _execution_proof(state, manifest, retained, repository), reasons
+    except (OSError, BoardError, KeyError, TypeError, ValueError) as error:
+        for old in (manifest["checkoutId"], manifest["snapshot"].get("sourceCheckoutId")):
+            if identity.digest(old) and old not in repository:
+                reasons.setdefault(old, _reason(error))
+        return repository, reasons
 
 
 def _plan(connection, state):
@@ -174,8 +207,6 @@ def _plan(connection, state):
     retained = [value for value, bound in records if bound]
     observed = set(identity.load_alias_map(connection))
     candidates, reasons = {}, {}
-    previous = _report(connection)
-    sticky = {old: reason for old, reason in previous.get("kept", {}).items() if reason == "path-missing"}
     proofs, denials = {}, {}
     for manifest, bound in records:
         ids = {manifest.get(field) for field in ("checkoutId", "repositoryId") if identity.digest(manifest.get(field))}
@@ -195,19 +226,17 @@ def _plan(connection, state):
                 raise BoardError("IDENTITY_UNPROVEN", denials[key])
             if key not in proofs:
                 proofs[key] = _proof(state, manifest, retained)
-            proven = proofs[key]
+            proven, denied = proofs[key]
+            for old, reason in denied.items():
+                reasons.setdefault(old, set()).add(reason)
         except (OSError, BoardError, KeyError, TypeError, ValueError) as error:
-            reason = error.message if isinstance(error, BoardError) and error.code == "IDENTITY_UNPROVEN" else (
-                "invalid-manifest" if isinstance(error, BoardError) and error.code in ("INVALID_WORKSPACE", "WORKSPACE_MANIFEST_CHANGED")
-                else "fixed-evidence-unverified")
+            reason = _reason(error)
             if bound and key is not None:
                 denials[key] = reason
             for old in ids:
                 reasons.setdefault(old, set()).add(reason)
             continue
         for old, (new, anchors) in proven.items():
-            if old in sticky:
-                continue
             entry = candidates.setdefault(old, {})
             entry.setdefault(new, [])
             for anchor in anchors:
@@ -216,14 +245,12 @@ def _plan(connection, state):
     for table, column in _RECORDED_COLUMNS:
         observed.update(row[0] for row in connection.execute(f"SELECT DISTINCT {column} FROM {table}") if identity.digest(row[0]))
     registered = identity.load_alias_map(connection)
-    mapping, additions, kept = {}, {}, dict(sticky)
+    mapping, additions, kept = {}, {}, {}
     proven_targets = {next(iter(choices)) for old, choices in candidates.items()
-                      if len(choices) == 1 and old not in sticky
+                      if len(choices) == 1
                       and (old not in registered or registered[old] == next(iter(choices)))}
     for old in sorted(observed):
         choices = candidates.get(old, {})
-        if old in sticky:
-            continue
         if len(choices) > 1:
             kept[old] = "identity-collision"
             continue

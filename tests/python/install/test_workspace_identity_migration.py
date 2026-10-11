@@ -20,13 +20,21 @@ from hey_my_buddy.errors import BoardError
 class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture):
     reuse_repository_template = True
 
-    def retained(self, summary, manifest, reason=None):
+    def retained(self, summary, manifest, reason=None, *, roles=("checkoutId", "repositoryId")):
         aliases = self.aliases(self._stack[-1])
-        for old in {manifest["checkoutId"], manifest["repositoryId"]}:
+        for old in {manifest[role] for role in roles}:
             self.assertNotIn(old, aliases, summary)
             self.assertIn(old, summary["kept"], summary)
             if reason is not None:
                 self.assertEqual(summary["kept"][old], reason, summary)
+
+    def repository_proven(self, board, summary, manifest):
+        current = workspace.inspect(str(self.repo))["repositoryId"]
+        self.assertEqual(self.aliases(board)[manifest["repositoryId"]], current, summary)
+        self.assertNotIn(manifest["repositoryId"], summary["kept"])
+        with board.store.db.read() as connection:
+            projects = {row[0] for row in connection.execute("SELECT project_id FROM objectives")}
+        self.assertEqual(projects, {current})
 
     def rewrite_manifest(self, board, run, manifest, mutate, *, valid_checksum=True):
         modified = copy.deepcopy(manifest)
@@ -86,6 +94,84 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
                                 and anchor["legacyDevice"] == directory.stat().st_dev + 2
                                 and anchor["manifestSha256"] == manifest["manifestSha256"]
                                 for anchor in witnesses), entry)
+
+    def test_reclaimed_execution_checkout_does_not_strand_the_source_macro_task(self):
+        board, run, manifest = self.legacy_run(device_delta=0)
+        root = Path(manifest["checkoutRoot"])
+        root.rename(root.parent / "retained-reclaimed-checkout")
+        self.assertTrue(Path(manifest["snapshot"]["repositoryPath"]).is_dir())
+        self.migrate(board)
+        added = self.submit(board, request_id="same-macro-after-upgrade", cwd=str(self.repo),
+                            objectiveId=run["objectiveId"],
+                            executionWorkspace={"kind": "worktree", "access": "write"})
+        self.assertEqual(added["objectiveId"], run["objectiveId"])
+
+    def first_identity_report(self, board, manifest, reason):
+        # Exact first-migration report shape on an already upgraded schema-16
+        # board, with untouched legacy indexes and immutable manifest bindings.
+        report = {"version": 1, "mapped": [], "kept": {
+            old: reason for old in {manifest["checkoutId"], manifest["repositoryId"],
+                                    manifest["snapshot"]["sourceCheckoutId"]}}, "entries": {}}
+        with board.store.db.write() as connection:
+            self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], "16")
+            connection.execute("INSERT INTO meta(key,value) VALUES(?,?)",
+                               (workspace_identity.MIGRATION_META_KEY, migration._json(report)))
+
+    def test_schema16_with_first_path_missing_report_is_repaired_on_explicit_reupgrade(self):
+        board, run, manifest = self.legacy_run(device_delta=0)
+        root = Path(manifest["checkoutRoot"])
+        root.rename(root.parent / "retained-first-migration-checkout")
+        self.first_identity_report(board, manifest, "path-missing")
+        history, files = self.historical(board), self.fixed_files()
+        summary, expected = self.migrate(board)
+        self.repository_proven(board, summary, manifest)
+        self.assertEqual(self.historical(board), history)
+        self.assertEqual(self.fixed_files(), files)
+        self.assertEqual(self.snapshot(board), expected)
+        self.assertEqual(expected["schema"], 16)
+        added = self.submit(board, request_id="same-macro-after-second-upgrade", cwd=str(self.repo),
+                            objectiveId=run["objectiveId"],
+                            executionWorkspace={"kind": "worktree", "access": "write"})
+        self.assertEqual(added["objectiveId"], run["objectiveId"])
+
+    def test_first_fixed_evidence_denial_does_not_block_a_provable_repository(self):
+        board, run, manifest = self.legacy_run()
+        ref_path = Path(manifest["snapshot"]["repositoryPath"]) / manifest["snapshot"]["inputRef"]
+        ref_path.rename(self.directory / "retained-first-migration-ref")
+        self.first_identity_report(board, manifest, "fixed-evidence-unverified")
+        summary, _expected = self.migrate(board)
+        self.repository_proven(board, summary, manifest)
+        self.retained(summary, manifest, roles=("checkoutId",))
+        added = self.submit(board, request_id="same-macro-with-new-fixed-input", cwd=str(self.repo),
+                            objectiveId=run["objectiveId"],
+                            executionWorkspace={"kind": "worktree", "access": "write"})
+        self.assertEqual(added["objectiveId"], run["objectiveId"])
+
+    def test_unprovable_repository_still_refuses_the_old_macro_task(self):
+        board, run, manifest = self.legacy_run(device_delta=1 << 32)
+        summary, _expected = self.migrate(board)
+        self.retained(summary, manifest, "legacy-inode-unproven")
+        with self.assertRaises(BoardError) as caught:
+            self.submit(board, request_id="unprovable-macro-after-upgrade", cwd=str(self.repo),
+                        objectiveId=run["objectiveId"],
+                        executionWorkspace={"kind": "worktree", "access": "write"})
+        self.assertEqual(caught.exception.code, "CONFLICT")
+        self.assertEqual(caught.exception.details["identityReason"], "legacy-inode-unproven")
+
+    def test_project_path_alone_cannot_authorize_an_unwitnessed_identity(self):
+        board, run, _manifest = self.legacy_run()
+        recorded = "e" * 64
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE objectives SET project_id=? WHERE objective_id=?", (recorded, run["objectiveId"]))
+        summary, _expected = self.migrate(board)
+        self.assertEqual(summary["kept"][recorded], "no-recorded-evidence")
+        self.assertNotIn(recorded, self.aliases(board))
+        with self.assertRaises(BoardError) as caught:
+            self.submit(board, request_id="unwitnessed-macro-after-upgrade", cwd=str(self.repo),
+                        objectiveId=run["objectiveId"],
+                        executionWorkspace={"kind": "worktree", "access": "write"})
+        self.assertEqual(caught.exception.code, "CONFLICT")
+        self.assertEqual(caught.exception.details["identityReason"], "no-recorded-evidence")
 
     def test_multiple_old_devices_map_to_one_current_inode_without_collision(self):
         board, first, old = self.legacy_run(kind="existing", access="read", request_id="before-first-restart")
@@ -148,32 +234,31 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
         self.assertEqual(self.all_rows(board), before)
         self.assertEqual(self.fixed_files(), before_files)
 
-    def test_missing_checkout_keeps_old_indexes_and_does_not_reanchor_after_return(self):
+    def test_missing_checkout_keeps_its_index_but_repository_and_later_return_are_provable(self):
         board, run, manifest = self.legacy_run()
         root = Path(manifest["checkoutRoot"])
         retained = root.parent / "retained-missing-checkout"
         root.rename(retained)
         before = self.historical(board)
         summary, _expected = self.migrate(board)
-        self.retained(summary, manifest, "path-missing")
+        self.retained(summary, manifest, "path-missing", roles=("checkoutId",))
+        self.repository_proven(board, summary, manifest)
         with board.store.db.read() as connection:
-            self.assertEqual(connection.execute("SELECT project_id FROM objectives WHERE objective_id=?", (run["objectiveId"],)).fetchone()[0],
-                             manifest["repositoryId"])
             self.assertEqual(connection.execute("SELECT checkout_id FROM workspace_reservations WHERE holder_task_id=?", (run["runId"],)).fetchone()[0],
                              manifest["checkoutId"])
             self.assertEqual(workspace_identity.identity_reason(connection, manifest["checkoutId"]), "path-missing")
         task = board.call("task_get", {"runId": run["runId"]})["task"]
-        self.assertEqual(task["delegation"]["project"]["id"], manifest["repositoryId"])
-        self.assertEqual(task["delegation"]["project"]["identityReason"], "path-missing")
+        self.assertEqual(task["delegation"]["project"]["id"], self.aliases(board)[manifest["repositoryId"]])
+        self.assertNotIn("identityReason", task["delegation"]["project"])
         timeline = board.call("objective_timeline", {"objectiveId": run["objectiveId"]})
-        self.assertEqual(timeline["objective"]["project"]["identityReason"], "path-missing")
+        self.assertNotIn("identityReason", timeline["objective"]["project"])
         retained.rename(root)
         second, _expected = self.migrate(board)
-        self.retained(second, manifest, "path-missing")
+        self.assertEqual(self.aliases(board)[manifest["checkoutId"]], workspace.inspect(str(root))["checkoutId"], second)
+        self.assertNotIn(manifest["checkoutId"], second["kept"])
         self.assertEqual(self.historical(board), before)
         with patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory)}):
-            with self.assertRaises(BoardError):
-                workspace.verify(manifest, require_unchanged=False)
+            workspace.verify(manifest, require_unchanged=False)
 
     def test_copying_all_fixed_refs_to_a_new_inode_does_not_prove_the_old_directory(self):
         board, run, manifest = self.legacy_run(kind="existing")
@@ -255,7 +340,7 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
         saved = root.parent / "saved-absent-checkout"
         root.rename(saved)
         summary, _expected = self.migrate(board)
-        self.retained(summary, manifest, "path-missing")
+        self.retained(summary, manifest, "path-missing", roles=("checkoutId",))
         saved.rename(root)
         self.assertEqual(root.stat().st_ino, root_inode)
         self.assertEqual(Path(actual["gitDir"]).stat().st_ino, git_inode)
@@ -291,7 +376,7 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
         fixed = self.fixed_files()
         root.rename(saved)
         summary, _expected = self.migrate(board)
-        self.retained(summary, manifest, "path-missing")
+        self.retained(summary, manifest, "repository-path-missing")
         saved.rename(root)
         actual = workspace.inspect(str(root))
         root_inode = root.stat().st_ino
@@ -304,7 +389,7 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
             self.assertEqual(caught.exception.code, "PREPARATION_CONFLICT")
             self.assertEqual(caught.exception.details, {
                 "checkoutId": actual["checkoutId"], "holderTaskId": run["runId"],
-                "recordedCheckoutId": manifest["checkoutId"], "identityReason": "path-missing",
+                "recordedCheckoutId": manifest["checkoutId"], "identityReason": "repository-path-missing",
             })
             prepare.assert_called_once()
             reserve.assert_called_once()
@@ -323,14 +408,16 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
         board, run, manifest = self.legacy_run()
         self.rewrite_manifest(board, run, manifest, lambda value: value.update(checkoutRoot=str(self.repo)))
         summary, _expected = self.migrate(board)
-        self.retained(summary, manifest, "checkout-root-changed")
+        self.retained(summary, manifest, "checkout-root-changed", roles=("checkoutId",))
+        self.repository_proven(board, summary, manifest)
 
-    def test_missing_fixed_input_ref_is_retained_with_no_alias(self):
+    def test_missing_fixed_input_ref_blocks_checkout_proof_but_not_repository_proof(self):
         board, _run, manifest = self.legacy_run()
         ref_path = Path(manifest["snapshot"]["repositoryPath"]) / manifest["snapshot"]["inputRef"]
         ref_path.rename(self.directory / "saved-input-ref")
         summary, _expected = self.migrate(board)
-        self.retained(summary, manifest)
+        self.retained(summary, manifest, roles=("checkoutId",))
+        self.repository_proven(board, summary, manifest)
 
     def tag_object(self, manifest, field):
         commit = manifest["inputCommit"] if field == "inputRef" else manifest["snapshot"]["stagedCommit"]
@@ -348,25 +435,24 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
         self.assertEqual(self.git(self.repo, "for-each-ref", "refs/tags"), tags_before)
 
     def tagged_ref_is_retained(self, field):
-        board, run, manifest = self.legacy_run(kind="existing")
+        board, run, manifest = self.legacy_run()
         self.tag_object(manifest, field)
         history = self.historical(board)
         files = self.fixed_files()
         summary, _expected = self.migrate(board)
-        self.retained(summary, manifest, "fixed-refs-unverified")
+        self.retained(summary, manifest, "fixed-refs-unverified", roles=("checkoutId",))
+        self.repository_proven(board, summary, manifest)
         with board.store.db.read() as connection:
-            self.assertEqual(connection.execute("SELECT project_id FROM objectives WHERE objective_id=?",
-                                                (run["objectiveId"],)).fetchone()[0], manifest["repositoryId"])
             reservation = connection.execute("SELECT checkout_id,repository_id FROM workspace_reservations WHERE holder_task_id=?",
                                              (run["runId"],)).fetchone()
-            self.assertEqual(tuple(reservation), (manifest["checkoutId"], manifest["repositoryId"]))
+            self.assertEqual(tuple(reservation), (manifest["checkoutId"], self.aliases(board)[manifest["repositoryId"]]))
         self.assertEqual(self.historical(board), history)
         self.assertEqual(self.fixed_files(), files)
 
-    def test_annotated_tag_input_ref_with_the_same_commit_cannot_prove_an_alias(self):
+    def test_annotated_tag_input_ref_cannot_prove_a_managed_checkout(self):
         self.tagged_ref_is_retained("inputRef")
 
-    def test_annotated_tag_staged_ref_with_the_same_commit_cannot_prove_an_alias(self):
+    def test_annotated_tag_staged_ref_cannot_prove_a_managed_checkout(self):
         self.tagged_ref_is_retained("stagedRef")
 
     def save_manifest_artifact(self, connection, run, manifest, label, *, binding=None):
@@ -519,18 +605,19 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
         self.retained(summary, manifest, "record-binding-invalid")
 
     def test_next_plan_rechecks_physical_refs_instead_of_reusing_a_saved_proof(self):
-        board, _run, manifest = self.legacy_run(kind="existing")
+        board, _run, manifest = self.legacy_run()
         first, _records, before = self.proof_cost(board)
         self.assertIn(manifest["repositoryId"], first[1])
         self.assertGreater(before["gitProcesses"], 0)
         self.tag_object(manifest, "inputRef")
         second, _records, after = self.proof_cost(board)
         self.assertGreater(after["gitProcesses"], 0)
-        self.assertNotIn(manifest["repositoryId"], second[0])
-        self.assertNotIn(manifest["repositoryId"], second[1])
-        self.assertEqual(second[2][manifest["repositoryId"]], "fixed-refs-unverified")
+        self.assertIn(manifest["repositoryId"], second[1])
+        self.assertNotIn(manifest["checkoutId"], second[0])
+        self.assertNotIn(manifest["checkoutId"], second[1])
+        self.assertEqual(second[2][manifest["checkoutId"]], "fixed-refs-unverified")
 
-    def test_symbolic_input_ref_with_the_same_commit_cannot_prove_an_alias(self):
+    def test_symbolic_input_ref_cannot_prove_a_managed_checkout(self):
         board, run, manifest = self.legacy_run()
         reference = "refs/buddy/identity-proof-fixture/" + manifest["workspaceId"]
         self.git(self.repo, "update-ref", reference, manifest["inputCommit"])
@@ -539,9 +626,8 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
         self.assertEqual(self.git(self.repo, "rev-parse", manifest["snapshot"]["inputRef"]), manifest["inputCommit"])
         original = self.historical(board)
         summary, _expected = self.migrate(board)
-        with board.store.db.read() as connection:
-            self.assertEqual(connection.execute("SELECT project_id FROM objectives WHERE objective_id=?", (run["objectiveId"],)).fetchone()[0], manifest["repositoryId"])
-        self.retained(summary, manifest, "fixed-refs-unverified")
+        self.retained(summary, manifest, "fixed-refs-unverified", roles=("checkoutId",))
+        self.repository_proven(board, summary, manifest)
         self.assertEqual(self.historical(board), original)
 
     def test_drifted_alias_value_cannot_redirect_public_project_reads_or_filters(self):
@@ -566,12 +652,13 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
                 workspace.verify(manifest, require_unchanged=False)
         self.assertEqual(self.historical(board), original)
 
-    def test_foreign_managed_worktree_lock_cannot_prove_an_alias(self):
+    def test_foreign_managed_worktree_lock_blocks_checkout_proof_but_not_repository_proof(self):
         board, _run, manifest = self.legacy_run()
         actual = workspace.inspect(manifest["path"])
         (Path(actual["gitDir"]) / "locked").write_text("foreign fixture owner\n")
         summary, _expected = self.migrate(board)
-        self.retained(summary, manifest)
+        self.retained(summary, manifest, "allocation-lock-unverified", roles=("checkoutId",))
+        self.repository_proven(board, summary, manifest)
 
     def test_reservation_collision_keeps_both_old_writers_and_rejects_a_third(self):
         board, first, old = self.legacy_run(kind="existing", access="read", request_id="old-writer-one")
