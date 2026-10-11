@@ -310,7 +310,6 @@ def _migrate_15_to_16_transaction(connection: sqlite3.Connection) -> dict:
         planned_meta["schema_version"] = str(SCHEMA_VERSION)
         current = [tuple(row) for row in connection.execute("SELECT * FROM catalog_current ORDER BY adapter")]
         adapters = [row[0] for row in current]
-        planned_meta.update({"catalog-account-status:" + name: "unknown" for name in adapters})
         planned_catalog = [(row[0], row[1], row[2], "unknown", "ACCOUNT_STATUS_UNKNOWN", row[5])
                            for row in current]
         retained_tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -344,8 +343,6 @@ def _migrate_15_to_16_transaction(connection: sqlite3.Connection) -> dict:
         for key in ROUTER_META_KEYS:
             connection.execute("DELETE FROM meta WHERE key=?", (key,))
         connection.executemany("INSERT INTO meta(key,value) VALUES(?,?)", converted.items())
-        connection.executemany("INSERT INTO meta(key,value) VALUES(?,?)",
-                               [("catalog-account-status:" + name, "unknown") for name in adapters])
         tables = ["catalog_current"]
         connection.execute("UPDATE catalog_current SET status='unknown',reason='ACCOUNT_STATUS_UNKNOWN'")
         tables = ["meta"]

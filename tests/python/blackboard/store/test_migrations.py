@@ -105,8 +105,7 @@ class Schema15UpgradeTests(BoardTestCase):
             if table not in ('meta', 'catalog_current'):
                 self.assertEqual(old[table], new[table], table)
         old_meta, new_meta = dict(old['meta']), dict(new['meta'])
-        allowed = migrations.ROUTER_META_KEYS | {'schema_version'} | {
-            'catalog-account-status:' + row[0] for row in old['catalog_current']}
+        allowed = migrations.ROUTER_META_KEYS | {'schema_version'}
         self.assertEqual({key: value for key, value in old_meta.items() if key not in allowed},
                          {key: value for key, value in new_meta.items() if key not in allowed})
         self.assertEqual([row[:3] + row[5:] for row in old['catalog_current']],
@@ -160,6 +159,8 @@ class Schema15UpgradeTests(BoardTestCase):
         for adapter, observation, discovery, _status, _reason, updated_at in original:
             current = self.connection.execute('SELECT * FROM catalog_current WHERE adapter=?', (adapter,)).fetchone()
             self.assertEqual(tuple(current), (adapter, observation, discovery, 'unknown', 'ACCOUNT_STATUS_UNKNOWN', updated_at))
+            self.assertIsNone(self.connection.execute('SELECT value FROM meta WHERE key=?',
+                                                     ('catalog-account-status:' + adapter,)).fetchone(), adapter)
             self.assertEqual(catalog.catalog_account_status(self.connection, adapter), 'unknown')
             self.assertIsNone(catalog.catalog_read_at(self.connection, adapter))
             self.assertEqual(catalog._pending_map(self.connection, adapter), {})

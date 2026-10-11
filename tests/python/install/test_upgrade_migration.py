@@ -97,6 +97,9 @@ class UpgradeMigrationTests(BoardTestCase):
         self.assertEqual(delivered['state'], 'delivered')
         self.assertIsNone(delivered['hostConclusion'])
         with board.store.db.read() as db:
+            for adapter in migration['catalogUnknown']:
+                self.assertIsNone(db.execute('SELECT value FROM meta WHERE key=?',
+                                            ('catalog-account-status:' + adapter,)).fetchone(), adapter)
             worker_output = db.execute("SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output'",
                                        (DELIVERED,)).fetchone()
         worker_manifest = json.loads(worker_output['manifest_json'])
