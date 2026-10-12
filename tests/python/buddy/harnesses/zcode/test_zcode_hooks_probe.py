@@ -3,8 +3,8 @@
 These tests are free: they never start a native model prompt and never write
 outside per-test temporary directories. They verify the probe's isolation
 machinery itself — credential scrubbing, snapshot/diff, hook self-test, private
-environment construction — and, when the installed bundle is present, a free
-``--version`` run plus the full unpaid probe pipeline.
+environment construction. Installed bundle identity and native plugin loading
+are checked explicitly by tests/probes/zcode_hooks_native.py.
 """
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ from unittest import mock
 _PROBE_PATH = Path(__file__).resolve().parents[4] / "probes" / "zcode_hooks.py"
 
 
-def _load_probe():
-    spec = importlib.util.spec_from_file_location("zcode_hooks_probe", _PROBE_PATH)
+def _load_probe(filename="zcode_hooks.py"):
+    spec = importlib.util.spec_from_file_location("zcode_hooks_probe", _PROBE_PATH.with_name(filename))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -80,15 +80,12 @@ class EnvironmentIsolationTests(unittest.TestCase):
 
     def test_free_probe_fixture_replaces_inherited_home_and_provider_pins(self):
         with tempfile.TemporaryDirectory() as tmp:
-            bundle = Path(tmp) / "fake-zcode.cjs"
-            bundle.write_text("")
-            fixture = FreeProbePipelineTests("test_gather_versions_reports_native_identities")
+            native_probe = _load_probe("zcode_hooks_native.py")
+            fixture = native_probe.FreeProbePipelineTests("test_gather_versions_reports_native_identities")
             inherited = {"HOME": str(Path(tmp) / "user-home"),
                          "ZCODE_DATA_BASE_DIR": str(Path(tmp) / "user-data"),
                          "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE": str(Path(tmp) / "user-provider.json")}
-            with mock.patch.dict(os.environ, inherited), mock.patch.object(
-                FreeProbePipelineTests, "BUNDLE", str(bundle)
-            ), mock.patch.object(probe, "resolve_node", return_value="fixture-node"):
+            with mock.patch.dict(os.environ, inherited):
                 try:
                     fixture.setUp()
                     home = Path(os.environ["HOME"])
@@ -184,58 +181,6 @@ class HookAssemblyTests(unittest.TestCase):
             self.assertIsNotNone(record["tool_input_sha256"])
             # The redaction-by-construction rule: raw tool input never reaches the log.
             self.assertNotIn("echo hi", json.dumps(record))
-
-
-class FreeProbePipelineTests(unittest.TestCase):
-    BUNDLE = probe.DEFAULT_BUNDLE
-
-    def setUp(self):
-        if not Path(self.BUNDLE).exists() or not probe.resolve_node(None):
-            self.skipTest("native bundle or node runtime not present")
-        temporary = tempfile.TemporaryDirectory(prefix="zcode-hooks-native-test-")
-        self.addCleanup(temporary.cleanup)
-        self.private_root = Path(temporary.name)
-        home = self.private_root / "home"
-        home.mkdir(mode=0o700)
-        environment = {key: value for key, value in os.environ.items()
-                       if not key.startswith(("BUDDY_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_"))
-                       and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        environment.update(HOME=str(home), USERPROFILE=str(home), ZCODE_DATA_BASE_DIR=str(home))
-        self.enterContext(mock.patch.dict(os.environ, environment, clear=True))
-
-    def test_free_probe_pipeline_is_isolated_and_selftested(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            work = Path(tmp) / "probe-work"
-            global_root = Path(tmp) / "fake-global-root"
-            global_root.mkdir()
-            (global_root / "keep.txt").write_text("stable", encoding="utf-8")
-            summary = probe.run_probe(
-                bundle=self.BUNDLE,
-                node=probe.resolve_node(None),
-                work_dir=str(work),
-                paid=False,
-                timeout=60,
-                global_root=str(global_root),
-                hook_via="plugin",
-            )
-            self.assertTrue(summary["verdict"]["hook_selftest_ok"])
-            self.assertTrue(summary["verdict"]["global_root_unchanged"])
-            self.assertTrue(summary["verdict"]["plugin_listed_free"])
-            self.assertEqual(summary["global_root_diff"], {"added": [], "removed": [], "changed": []})
-            self.assertEqual(summary["version_run"]["exit_code"], 0)
-            self.assertEqual(summary["plugins_list_run"]["exit_code"], 0)
-            self.assertIn("cli", summary["versions"])
-            self.assertTrue((work / "summary.json").exists())
-            joined_files = " ".join(summary["private_work_files"])
-            self.assertIn("plugin/hooks/hooks.json", joined_files)
-            self.assertIn("cwd/.zcode/config.json", joined_files)
-
-    def test_gather_versions_reports_native_identities(self):
-        versions = probe.gather_versions(probe.resolve_node(None), self.BUNDLE)
-        self.assertTrue(versions["node"].startswith("v"))
-        self.assertEqual(len(versions["bundle_sha256"]), 64)
-        self.assertRegex(versions["cli"], r"\d+\.\d+\.\d+")
-
 
 if __name__ == "__main__":
     unittest.main()
