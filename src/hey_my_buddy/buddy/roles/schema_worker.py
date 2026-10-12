@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
-from .turn_io import validate_outcome
+from .turn_io import truncate_outcome_summaries, validate_outcome
 from .prompts import worker_prompt
 
 
@@ -68,9 +68,10 @@ class NativeSchemaWorker:
     def prompt(self, task_text: str, turn_input: dict) -> str:
         return worker_prompt(task_text, turn_input, delivery=self.prefixes)
 
-    def parse_value(self, result) -> tuple[dict | None, str | None]:
+    def parse_value(self, result) -> tuple[dict | None, str | None, dict]:
         """Use the same outcome validator for the decision and its diagnostic."""
         outcome = None
+        truncated = {}
         error = "no completed final message"
         value = result.value
         if value is not None:
@@ -78,12 +79,13 @@ class NativeSchemaWorker:
                 wrapper = value.parsed.value if value.parsed is not None else decode_strict_json(value.raw)
                 if not isinstance(wrapper, dict) or set(wrapper) != {"outcome"}:
                     raise ValueError("The native result must contain exactly the structured outcome")
-                error = validate_outcome(wrapper["outcome"])
+                bounded, truncated = truncate_outcome_summaries(wrapper["outcome"])
+                error = validate_outcome(bounded)
                 if error is None:
-                    outcome = wrapper["outcome"]
+                    outcome = bounded
             except (ValueError, TypeError, RecursionError) as problem:
                 error = str(problem)[:500]
-        return outcome, error
+        return outcome, error, truncated
 
     def receipt_fields(self, result) -> dict:
         fields = {}
@@ -92,14 +94,14 @@ class NativeSchemaWorker:
             if all(identity.get(key) is not None for key in self.native_identity_keys):
                 fields["nativeIdentity"] = {key: identity[key] for key in self.native_identity_keys}
         if self.validation_error_key and result.end.status == "ok" and result.value is not None:
-            _outcome, error = self.parse_value(result)
+            _outcome, error, _truncated = self.parse_value(result)
             if error is not None:
                 fields[self.validation_error_key] = error
         return fields
 
-    def delivery(self, result, facts: dict) -> tuple[dict, dict]:
+    def delivery(self, result, facts: dict) -> tuple[dict, dict, dict]:
         """Validate the role value, retaining the old denied-request decision."""
-        outcome, error = self.parse_value(result)
+        outcome, error, truncated = self.parse_value(result)
         if self.interaction_kind == "request":
             denied = bool(facts.get("nativeRequestMethod"))
         else:
@@ -107,6 +109,7 @@ class NativeSchemaWorker:
         attention = denied and (outcome is None or outcome["disposition"] == "completed")
         if attention:
             outcome = self.attention_outcome(facts)
+            truncated = {}
         elif outcome is None:
             message = "the native root turn has no strict structured final outcome"
             if self.interaction_kind == "request":
@@ -115,7 +118,7 @@ class NativeSchemaWorker:
         provenance = {**facts, "turnEnd": "completed", self.validation_key: not attention}
         if attention:
             provenance["controllerAttention"] = True
-        return outcome, provenance
+        return outcome, provenance, truncated
 
     def attention_outcome(self, facts: dict) -> dict:
         if self.interaction_kind == "request":
