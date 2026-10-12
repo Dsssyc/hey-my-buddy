@@ -121,6 +121,7 @@ class FakeAgent:
         self.no_finish = args.no_finish
         self.forge_receipt = args.forge_receipt
         self.stop_reason = args.stop_reason
+        self.stop_reason_unread = args.stop_reason_unread
         self.hang_prompt = args.hang_prompt
         self.park_prompt = args.park_prompt
         self.emit_tool_update = args.emit_tool_update
@@ -451,6 +452,7 @@ class FakeAgent:
             # in the pinned root, exactly what a later native resume needs.
             self.sessions.pop(params.get("sessionId"), None)
             self.close_stubs()
+            log(self.log_path, {"event": "session-closed", "sessionId": params.get("sessionId")})
             return {"result": {}}
         return {"error": {"code": -32601, "message": f"Method not found: {method}"}}
 
@@ -555,7 +557,8 @@ class FakeAgent:
                                               "update": {"sessionUpdate": "agent_message_chunk",
                                                          "content": {"type": "text", "text": answer}}})
         self.send({"jsonrpc": "2.0", "id": request_id,
-                   "result": {"stopReason": self.stop_reason or "end_turn"}})
+                   "result": {} if self.stop_reason_unread
+                   else {"stopReason": self.stop_reason or "end_turn"}})
 
     def run_governed_prompt(self, message: dict) -> None:
         """The governed carrier: real session tools through the role's own rules.
@@ -575,6 +578,9 @@ class FakeAgent:
         self.last_session_id = session_id
         self.write_session_record(session_id, self.prompt_text(params))
         sys.path.insert(0, str(Path(__file__).resolve().parents[6] / "src"))
+        if self.stop_reason_unread:
+            self.send({"jsonrpc": "2.0", "id": request_id, "result": {}})
+            return
         if self.stop_reason:
             self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": self.stop_reason}})
             return
@@ -1050,6 +1056,8 @@ def main() -> int:
                         help="mutate the checkpoint receipt under its stale signature")
     parser.add_argument("--stop-reason", default=None,
                         help="end the prompt with this stop reason instead of end_turn")
+    parser.add_argument("--stop-reason-unread", action="store_true",
+                        help="answer the prompt with no stop reason at all")
     parser.add_argument("--replay-history", action="store_true",
                         help="replay the previous turns' notifications before the resume answer")
     parser.add_argument("--resume-echo-foreign-id", action="store_true",

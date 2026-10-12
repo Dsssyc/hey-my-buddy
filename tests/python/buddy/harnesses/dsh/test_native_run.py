@@ -789,6 +789,29 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(checked.model.value, "m1")
         self.assertEqual(checked.effort.value, "high")
 
+    def test_a_missing_stop_reason_ends_unknown_without_a_turn_or_binding(self):
+        # The governed carrier's unreadable end: the session still closes and
+        # the owned group stop is the same confirmed fact, but no receipt
+        # becomes a turn, no provenance is written and the session stays
+        # non-resumable.
+        request, bound, mount = self.worker_request()
+        self.governed_agent_args(mount)
+        self.extra_agent_args.append("--stop-reason-unread")
+        result = run(request, observer=worker_observer, services=bound.services,
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "unknown")
+        self.assertEqual(result.end.reason_code, native_run.UNREAD_STOP_REASON)
+        self.assertIsNone(result.value, "an unreadable end owns no settled finish value")
+        self.assertIsNone(result.completion_evidence)
+        self.assertIsNone(result.continuation)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.assertFalse([ref for ref in result.evidence_refs if ref.kind == "turn-provenance"],
+                         "an unreadable end writes no accepted-turn provenance")
+        self.assertTrue(self.wait_for(lambda: any(
+            entry.get("event") == "session-closed" for entry in self.agent_log())))
+        self.assertFalse(any(self.root.glob("*.json")),
+                         "an unreadable end establishes no goal binding")
+
     def test_a_worker_turn_reports_the_record_usage_and_mirrors_its_stderr(self):
         # The Worker token-usage capability: a governed turn whose native record
         # exists reports the shared usage facts — the fact must not degrade to

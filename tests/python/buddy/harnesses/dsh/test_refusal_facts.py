@@ -225,22 +225,99 @@ class RefusalFactsTests(NativeRunCase):
         self.assertEqual(result.end.reason_code, "wrong-native-session")
         self.assertNotIn("session/prompt", self.methods)
 
-    def test_missing_stop_reason_remains_refused_pending_shared_unknown_end(self):
+    def test_missing_stop_reason_ends_unknown_after_close_and_stop(self):
         self.stop_reason = None
         result = self.run_final()
-        self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "invalid-protocol")
+        self.assertEqual(result.end.status, "unknown")
+        self.assertEqual(result.end.reason_code, native_run.UNREAD_STOP_REASON)
+        self.assertIsNone(result.value, "an unreadable turn end owes no settled answer")
+        self.assertIsNone(result.completion_evidence)
+        self.assertIsNone(result.continuation, "an unknown end establishes no resumable binding")
         self.assertFalse(result.tool_evidence.value["streamComplete"])
+        self.assertIn("session/close", self.methods)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.client.shutdown.assert_called_once()
 
-    def test_unknown_catalog_shape_remains_refused_pending_aggregate_fix(self):
+    def test_unknown_catalog_shape_reports_an_unknown_read_with_reason(self):
         self.session_value["configOptions"] = {}
-        with self.assertRaises(native_run.NativeError) as caught:
-            native_run.run_discovery(cwd=str(self.base / "cwd"),
-                                    invocation_root=self.base / "discovery",
-                                    native_root=self.root, timeout_seconds=30, cancelled=lambda: False)
-        self.assertEqual(caught.exception.code, "catalog-unavailable")
+        catalog = native_run.run_discovery(cwd=str(self.base / "cwd"),
+                                           invocation_root=self.base / "discovery",
+                                           native_root=self.root, timeout_seconds=30, cancelled=lambda: False)
+        self.assertEqual(catalog["discoveries"],
+                         [{"adapter": "dsh", "status": "unknown", "accountStatus": "not-applicable",
+                           "reason": native_run.UNREAD_CATALOG_REASON}])
+        self.assertEqual(catalog["providers"], [])
+        self.assertTrue(any("configuration options had an unrecognized shape" in warning
+                            for warning in catalog["warnings"]), catalog["warnings"])
         self.assertNotIn("session/prompt", self.methods)
-        self.assertTrue(caught.exception.discovery_shutdown_confirmed)
+        self.assertIn("session/close", self.methods)
+        self.assertEqual(self.client.shutdown.call_count, 1)
+
+    def test_unread_catalog_shape_still_refuses_an_unconfirmed_stop(self):
+        self.session_value["configOptions"] = "new-selector-shape"
+        self.shutdown = {"shutdownConfirmed": False, "groupObserved": "unknown",
+                         "leaderExited": True, "leaderExitCode": 0}
+        with mock.patch.object(native_run, "stop_evidence", return_value=self.shutdown):
+            with self.assertRaises(native_run.NativeError) as caught:
+                native_run.run_discovery(cwd=str(self.base / "cwd"),
+                                         invocation_root=self.base / "discovery",
+                                         native_root=self.root, timeout_seconds=30,
+                                         cancelled=lambda: False)
+        self.assertEqual(caught.exception.code, "native-shutdown-failed")
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
+
+    def test_unread_shapes_reach_the_shared_outlet_as_unknown_events(self):
+        self.initialize_value = []
+        self.session_value["configOptions"] = {}
+        result = self.run_final()
+        self.assert_continued(result)
+        evidence = result.native_evidence
+        self.assertEqual(evidence.unknown_events.counts_by_type,
+                         (("initialize", 1), ("configOptions", 1)))
+        self.assertEqual(evidence.unknown_events.total, 2)
+        self.assertEqual(evidence.unconfirmed, ())
+
+    def test_unread_configuration_readback_stays_an_unknown_event(self):
+        self.echoes["model"] = {"configOptions": []}
+        result = self.run_final()
+        self.assert_continued(result)
+        evidence = result.native_evidence
+        self.assertEqual(evidence.unknown_events.counts_by_type, (("modelReadback", 1),))
+        self.assertIsNone(result.configuration.checked.model,
+                          "the unread readback confirms nothing")
+        self.assertEqual(evidence.unconfirmed, (),
+                         "a readback that confirmed nothing is not an unconfirmed request fact")
+
+    def test_unconfirmed_tool_scope_reaches_the_shared_outlet(self):
+        with mock.patch.object(native_run, "NONE_SCOPE_DISABLED_ROWS", ()):
+            result = self.run_final()
+        self.assert_continued(result)
+        evidence = result.native_evidence
+        self.assertIsNone(evidence.unknown_events)
+        self.assertEqual(evidence.unconfirmed, (native_run.UNCONFIRMED_TOOL_SCOPE,))
+        # The unknown-event kind names and the unconfirmed names stay the bounded
+        # vocabulary: no payload, path or credential travels in either.
+        rendered = json.dumps(evidence.to_payload())
+        self.assertNotIn("private", rendered)
+        self.assertNotIn("/", rendered)
+
+    def test_the_three_role_results_carry_the_shared_native_facts(self):
+        from hey_my_buddy.buddy.roles import run_execution
+
+        self.initialize_value = []
+        request = self.fast_request("prompt")
+        result = native_run.run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                                services=None, cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        facts = result.native_evidence.to_payload()
+        self.assertEqual(facts["unknownEvents"],
+                         {"countsByType": {"initialize": 1}, "total": 1})
+        verdict = {"stopReason": None, "elapsedMs": 1}
+        payloads = (run_execution._fast_result(result, request, verdict),
+                    run_execution._review_result(result, request, verdict),
+                    run_execution._worker_facts(result))
+        for payload in payloads:
+            self.assertEqual(payload["nativeEvidence"]["unknownEvents"], facts["unknownEvents"])
 
     def test_discovery_keeps_unknown_handshake_fact_without_prompt(self):
         self.initialize_value = []
@@ -262,18 +339,16 @@ class RefusalFactsTests(NativeRunCase):
         self.launch.assert_not_called()
 
     def test_continuation_boundary_rejects_invalid_previous_session(self):
-        for value in (None, "", 42):
+        # The request boundary is the one place a blank previous session
+        # identity is refused, for both continuation modes; the run module no
+        # longer repeats that check.
+        for value in (None, "", 42, "   ", "\t\n"):
             with self.subTest(value=value), self.assertRaises(BoardError):
                 RunContinuation(mode="native-session", previous_session_id=value)
-
-    def test_blank_previous_session_is_still_refused_at_dsh_until_boundary_fix(self):
-        request = self.fast_request("prompt")
-        fields = {name: getattr(request, name) for name in type(request).model_fields}
-        for mode in ("native-session", "reconstructed-new-session"):
-            continuation = RunContinuation(mode=mode, previous_session_id="   ")
-            with self.subTest(mode=mode), self.assertRaises(native_run.NativeError) as caught:
-                native_run._continuation_of(type(request)(**{**fields, "continuation": continuation}))
-            self.assertEqual(caught.exception.code, "invalid-resume-mode")
+        with self.assertRaises(BoardError):
+            RunContinuation(mode="reconstructed-new-session", previous_session_id="   ")
+        self.assertEqual(RunContinuation(mode="reconstructed-new-session",
+                                         previous_session_id=None).previous_session_id, None)
 
     def test_client_transmits_boundary_validated_cwd_for_new_and_resume(self):
         cwd = str(self.base / "cwd")

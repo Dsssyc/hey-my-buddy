@@ -58,6 +58,7 @@ from ..run_contract import (
     EvidenceRef,
     InterruptEvidence,
     LastAssistantMessagePackage,
+    NativeEvidence,
     NativeFailurePackage,
     PolicyFact,
     ResultConfiguration,
@@ -71,6 +72,7 @@ from ..run_contract import (
     StopEvidence,
     StopLayer,
     ToolEvidencePackage,
+    UnknownEvents,
     UsagePackage,
 )
 from ..runtime_selection import command_for
@@ -145,6 +147,25 @@ _ABANDON_SECONDS = 5.0
 
 _END_REASONS = {"end_turn": None, "max_tokens": "native-max-tokens",
                 "max_turn_requests": "native-max-turn-requests", "refusal": "native-refusal"}
+
+#: The end reason of a prompt that returned without any readable stop reason:
+#: the native turn's end is a real unknown, never a completed turn and never a
+#: refusal of the request.
+UNREAD_STOP_REASON = "native-stop-reason-unread"
+#: The fixed stage labels whose unrecognized native shapes this run counts as
+#: unknown events in the shared outlet; the labels are the bounded kind names,
+#: never a native payload, path or credential.
+UNREAD_SHAPE_KINDS = ("initialize", "agentInfo", "configOptions",
+                      "modelReadback", "effortReadback")
+#: The one shared unconfirmed name this run can produce: the tool rows the
+#: scope declares but the launch patch cannot confirm. Whether the model and
+#: effort readback confirmed the selection is read from the result's own
+#: checked configuration, never from a second unconfirmed name.
+UNCONFIRMED_TOOL_SCOPE = "tool-scope"
+#: The discovery read that could not recognize the session's configuration
+#: options: the catalog stays unknown with this reason instead of a complete
+#: empty reading.
+UNREAD_CATALOG_REASON = "config-options-shape-unreadable"
 
 
 def tool_scope_launch(scope: str) -> tuple[list[dict], dict[str, str]]:
@@ -372,14 +393,15 @@ def _goal_binding(request: RunRequest, session_id: str) -> dict:
 
 
 def _continuation_of(request: RunRequest) -> tuple[str, str | None]:
-    """The request's continuation mode and the previous session it names."""
+    """The request's continuation mode and the previous session it names.
+
+    The request boundary already refuses a blank previous session identity for
+    both modes; this projection only reads the validated value.
+    """
     continuation = request.continuation
     if continuation is None:
         return "initial", None
     previous = continuation.previous_session_id
-    if previous is not None and not previous.strip():
-        raise NativeError("invalid-resume-mode",
-                          "the previous native session identity must be a nonblank string")
     if continuation.mode == "native-session":
         return "native-session", previous
     return "reconstructed-new-session", previous
@@ -1017,14 +1039,16 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                             inquiry_bridge=inquiry_bridge, sessions_root=sessions_root,
                             fold=fold, notify=notify,
                             denied=denied_count, send_cancel=send_cancel)
-            state.status = "ok"
-            notify(settled=True)
+            if state.status != "unknown":
+                state.status = "ok"
+                notify(settled=True)
         else:
             raw_answer, correction_count = _final_message_rounds(
                 client=client, pump=pump, request=request, deadline=deadline, cancel=cancel,
                 state=state, facts=facts, tools=tools, activity=activity, sessions=sessions,
                 fold=fold, notify=notify, denied=denied_count, send_cancel=send_cancel)
-            state.status = "ok"
+            if state.status != "unknown":
+                state.status = "ok"
     except ObserverInterrupt:
         state.status = "cancelled"
         state.reason = "observer-interrupt"
@@ -1201,9 +1225,18 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
 
 
 def _settle_stop_reason(state: _RunState, stop_reason: object) -> str | None:
-    """Map the native stop reason to the run's end; ``None`` means success."""
+    """Map the native stop reason to the run's end; ``None`` means success.
+
+    A prompt that returns without a readable stop reason is a real unknown end:
+    the state keeps that fact, the carrier still closes the session and collects
+    its evidence, and no unreadable end ever becomes a completed turn or a
+    refusal of the run.
+    """
     if not isinstance(stop_reason, str) or not stop_reason:
-        raise NativeError("invalid-protocol", "the native prompt returned no stop reason")
+        state.status = "unknown"
+        state.reason = UNREAD_STOP_REASON
+        state.error_text = "the native prompt returned no readable stop reason"
+        return UNREAD_STOP_REASON
     state.prompt_stop_reason = stop_reason
     if stop_reason == "end_turn":
         # The native stop reason is itself the model turn's end fact; turn
@@ -1277,6 +1310,13 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
                                     state=state, fold=chunk_fold, notify=notify, activity=activity,
                                     denied=denied, send_cancel=send_cancel)
         failure = _settle_stop_reason(state, value.get("stopReason"))
+        if state.status == "unknown":
+            # The turn's end could not be read: the session still closes and the
+            # stream still drains, but no answer of an unreadable turn is ever
+            # published as settled.
+            tools.close_root(session_id)
+            _close_session(client, session_id)
+            return None, correction_count
         if failure is not None:
             raise NativeError(failure, f"the native turn stopped with reason {state.prompt_stop_reason!r}")
         raw = "".join(raw_parts)
@@ -1359,6 +1399,12 @@ def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
         # tool, is what the turn's end means.
         raise NativeError("native-cancelled", "the native root turn stopped cancelled")
     failure = _settle_stop_reason(state, value.get("stopReason"))
+    if state.status == "unknown":
+        # The end is a real unknown: the session close still completes, but the
+        # turn is never settled, so no receipt becomes a turn, no provenance is
+        # written and no resumable binding is established.
+        _close_session(client, session_id)
+        return
     if failure is not None:
         raise NativeError(failure, f"the native turn stopped with reason {state.prompt_stop_reason!r}")
     evidence.settle(state.event_count, value.get("stopReason"))
@@ -1467,6 +1513,31 @@ _message_package = shape_guard(LastAssistantMessagePackage)
 _activity_package = shape_guard(ActivityPackage)
 
 
+def _native_evidence_facts(state: _RunState) -> NativeEvidence | None:
+    """This run's unread shapes and requested things left unconfirmed.
+
+    Only the run's own recorded facts are projected: every unrecognized shape
+    fact of :func:`_note_native_shape` — the readbacks included — becomes a
+    bounded kind count, and a tool scope the launch patch could not confirm
+    becomes ``tool-scope``. A run with neither fact carries no outlet.
+    """
+    counts = {}
+    for kind in UNREAD_SHAPE_KINDS:
+        fact = state.native_facts.get(kind)
+        if isinstance(fact, dict) and fact.get("status") == "unknown":
+            counts[kind] = fact["count"]
+    unconfirmed = []
+    scope = state.native_facts.get("toolScope")
+    if isinstance(scope, dict) and scope.get("status") == "unknown":
+        unconfirmed.append(UNCONFIRMED_TOOL_SCOPE)
+    if not counts and not unconfirmed:
+        return None
+    return NativeEvidence(
+        unknown_events=(UnknownEvents(counts_by_type=counts, total=sum(counts.values()))
+                        if counts else None),
+        unconfirmed=tuple(unconfirmed))
+
+
 def _build_result(request: RunRequest, *, state: _RunState,
                   tools: DshToolFacts, activity: DshActivity, client: AcpClient | None, sessions: list,
                   evidence: RootTurnEvidence | None, raw_answer: str | None,
@@ -1537,6 +1608,7 @@ def _build_result(request: RunRequest, *, state: _RunState,
                    message=state.error_text),
         harness_version=state.harness_version,
         native_event_count=state.event_count or None,
+        native_evidence=_native_evidence_facts(state),
         model_started=True if state.model_started else None,
         configuration=ResultConfiguration(
             requested=RunConfiguration(provider=request.configuration.provider,
@@ -1716,10 +1788,11 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
                                                            timeout=_SESSION_TIMEOUT),
                                 code="session-open-failed", message="the discovery session failed")
         session_id = snapshot.get("sessionId") if isinstance(snapshot, dict) else None
+        if not isinstance(session_id, str) or not session_id:
+            raise NativeError("catalog-unavailable", "the native agent did not open a discovery session")
         options = snapshot.get("configOptions") if isinstance(snapshot, dict) else None
-        if not isinstance(session_id, str) or not session_id or not isinstance(options, list):
-            raise NativeError("catalog-unavailable", "the native session exposed no configuration options")
-        catalog_value = _catalog(options, version)
+        catalog_value = (_catalog(options, version) if isinstance(options, list)
+                         else _unread_catalog(options, version))
         if native_facts:
             catalog_value["warnings"].append(
                 "ACP initialize response shape unrecognized; capability check unknown: "
@@ -1804,10 +1877,33 @@ def _catalog(options: list, version: str) -> dict:
     for bucket in providers.values():
         for model in bucket["models"]:
             model["efforts"] = list(efforts)
+    return _catalog_receipt(version, list(providers.values()),
+                            [{"adapter": "dsh", "status": "complete",
+                              "accountStatus": "not-applicable"}])
+
+
+def _unread_catalog(options: object, version: str) -> dict:
+    """One unrecognized selector shape: the reading stays unknown, with its reason.
+
+    The no-prompt session's configuration options were not the declared list
+    shape, so nothing about this DSH's selectors was read. The receipt is never
+    a complete empty catalog; the session close and the confirmed process stop
+    after it are the same checks as a recognized read.
+    """
+    return _catalog_receipt(
+        version, [],
+        [{"adapter": "dsh", "status": "unknown", "accountStatus": "not-applicable",
+          "reason": UNREAD_CATALOG_REASON}],
+        extra_warnings=["The native session's configuration options had an unrecognized shape; "
+                        f"this catalog reading stays unknown (shape: {type(options).__name__})."])
+
+
+def _catalog_receipt(version: str, providers: list, discoveries: list,
+                     extra_warnings: list = ()) -> dict:
+    """The common catalog receipt: the reading's facts and its fixed warnings."""
     return {
         "source": "dsh-acp-session-config", "adapter": "dsh", "harnessVersion": version,
-        "discoveredAt": utc_now(), "providers": list(providers.values()),
-        "discoveries": [{"adapter": "dsh", "status": "complete", "accountStatus": "not-applicable"}],
+        "discoveredAt": utc_now(), "providers": providers, "discoveries": discoveries,
         "warnings": [
             "The no-prompt ACP surface exposes the declared model and effort selectors only; "
             "per-model effort availability and context windows stay unknown until a real session.",
@@ -1815,6 +1911,7 @@ def _catalog(options: list, version: str) -> dict:
             "installed DSH with the user's inherited HOME and DSH_HOME, so DSH loads its own "
             "configuration and login without this module reading or copying credential content, and "
             "the no-prompt session carries no separate account read.",
+            *extra_warnings,
         ],
     }
 
