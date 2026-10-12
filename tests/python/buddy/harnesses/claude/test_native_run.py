@@ -143,6 +143,8 @@ class Batch4FactsTests(NativeRunCase):
         self.assertEqual(facts["catalogStatus"], "unknown")
         self.assertEqual(facts["configurationStatus"], "unknown")
         self.assertIn("unread", facts["catalogWarnings"][0])
+        self.assertEqual(result.native_evidence.unconfirmed, ("model-catalog",))
+        self.assertIsNone(result.native_evidence.unknown_events)
 
     def test_readable_empty_catalog_refuses_before_the_user_message(self):
         self.fixture_case("empty-catalog")
@@ -163,6 +165,9 @@ class Batch4FactsTests(NativeRunCase):
         self.assertEqual(facts["protocol"]["status"], "incomplete")
         self.assertEqual(facts["protocol"]["unreadResponses"], 1)
         self.assertEqual(facts["protocol"]["samples"][0]["requestId"], "buddy-1")
+        self.assertEqual(result.native_evidence.unknown_events.to_payload(),
+                         {"countsByType": {"control-response-unread": 1}, "total": 1})
+        self.assertEqual(result.native_evidence.unconfirmed, ("model-catalog",))
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
                                 native_root=self.base / "discovery-native", timeout_seconds=10,
                                 cancelled=lambda: False)
@@ -184,7 +189,35 @@ class Batch4FactsTests(NativeRunCase):
         self.assertEqual(facts["status"], "incomplete")
         self.assertEqual(facts["samples"][0]["kind"], "event-type-unread")
         self.assertNotIn("credential-fragment", json.dumps(facts))
-        self.assertTrue(any(item["protocolObservations"]["unknownEvents"] == 1 for item in callbacks))
+        expected = {"countsByType": {"event-type-unread": 1}, "total": 1}
+        self.assertEqual(result.native_evidence.unknown_events.to_payload(), expected)
+        self.assertEqual(result.native_evidence.unconfirmed, ())
+        self.assertTrue(any(item["unknownEvents"] == expected for item in callbacks))
+        self.assertTrue(all("protocolObservations" not in item for item in callbacks))
+
+    def test_shared_native_facts_reach_all_three_role_results_without_samples(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result, encode_run_result
+        from hey_my_buddy.buddy.roles import run_execution
+        self.fixture_case("unknown-initialize-with-untyped-event")
+        for scope in ("write", "read"):
+            with self.subTest(scope=scope):
+                request = self.request(scope=scope, schema=READ_SCHEMA).model_copy(
+                    update={"capture_evidence": False})
+                result = decode_run_result(encode_run_result(self.execute(request)))
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                verdict = {"stopReason": None, "elapsedMs": 1}
+                payloads = (run_execution._fast_result(result, request, verdict),
+                            run_execution._review_result(result, request, verdict),
+                            run_execution._worker_facts(result))
+                expected = {"unknownEvents": {"countsByType": {
+                    "event-type-unread": 1, "control-response-unread": 1}, "total": 2},
+                    "unconfirmed": ["model-catalog"]}
+                for payload in payloads:
+                    self.assertEqual(payload["nativeEvidence"], expected)
+                    self.assertNotIn("unknownEvents", payload)
+                    self.assertNotIn("unconfirmed", payload)
+                    self.assertNotIn("samples", json.dumps(payload))
+                    self.assertNotIn("credential-fragment", json.dumps(payload))
 
     def test_oversized_catalog_still_refuses_with_confirmed_stop(self):
         self.fixture_case("oversized-catalog")
@@ -199,7 +232,9 @@ class Batch4FactsTests(NativeRunCase):
         from hey_my_buddy.protocol.activity import ActivityPublisher
         collector = native_run._TurnCollector(self.request(), ActivityPublisher(None),
                                              lambda _facts: FEEDBACK_CONTINUE)
-        collector.install(mock.Mock(unknown_events=0))
+        connection = mock.Mock()
+        connection.observations.return_value = {"unknownEvents": 0, "unreadResponses": 0}
+        collector.install(connection)
         for _ in range(128):
             collector.buffer({"type": "future"})
         with self.assertRaises(native_run.ClaudeProtocolError) as frames:
@@ -218,16 +253,96 @@ class Batch4FactsTests(NativeRunCase):
         connection.call.return_value = None
         self.assertFalse(native_run._interrupt(connection))
 
-    def test_unknown_terminal_remains_refused_pending_shared_contract(self):
+    def test_terminal_checks_separate_success_errors_and_unread_shapes(self):
         from hey_my_buddy.buddy.harnesses.claude.protocol import TurnEvidence
-        for subtype, is_error in (("future", False), ("success", None),
-                                  ("error_during_execution", True)):
+        for subtype, is_error, success in (("future", False, False), ("success", None, False),
+                                           (None, False, False), (42, False, False),
+                                           ("success", 0, False), ("success", False, True)):
             evidence = TurnEvidence("session", str(self.cwd))
             evidence.init_observed = True
             evidence.result = {"session_id": "session", "subtype": subtype, "is_error": is_error}
-            with self.assertRaises(native_run.ClaudeProtocolError) as caught:
-                native_run._check_terminal(evidence, "session")
-            self.assertEqual(caught.exception.code, "native-turn-failed")
+            with self.subTest(subtype=subtype, is_error=is_error):
+                self.assertIs(native_run._check_terminal(evidence, "session"), success)
+
+    def test_explicit_native_errors_remain_failures(self):
+        for case in ("failed", "error-subtype-without-flag", "error-flag-with-unknown-subtype"):
+            with self.subTest(case=case):
+                self.fixture_case(case)
+                result = self.execute(self.request())
+                self.assertEqual(result.end.status, "error")
+                self.assertEqual(result.end.reason_code, "native-turn-failed")
+                self.assertIsNone(result.completion_evidence)
+                self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
+    def test_unread_terminal_ends_unknown_without_completed_delivery(self):
+        from hey_my_buddy.buddy.roles import run_execution
+        for case in ("bad-subtype", "missing-is-error", "unknown-initialize-with-unread-terminal"):
+            for scope in ("read", "write"):
+                with self.subTest(case=case, scope=scope):
+                    self.fixture_case(case)
+                    callbacks = []
+                    def observe(facts):
+                        callbacks.append(facts)
+                        return FEEDBACK_CONTINUE
+                    request = self.request(scope=scope, schema=READ_SCHEMA)
+                    result = self.execute(request, observer=observe)
+                    self.assertEqual(result.end.status, "unknown")
+                    self.assertEqual(result.end.reason_code, "native-terminal-unread")
+                    self.assertIsNone(result.end.message)
+                    self.assertIsNone(result.native_failure)
+                    self.assertIsNone(result.completion_evidence)
+                    self.assertNotIn("native-turn-facts", [ref.kind for ref in result.evidence_refs])
+                    self.assertTrue(result.tool_evidence.value["streamComplete"])
+                    self.assertEqual(result.stop_evidence.native.group_state, "gone")
+                    self.assertTrue(result.model_started)
+                    self.assertFalse(any(facts["settled"] for facts in callbacks))
+                    self.assertIsNotNone(result.last_assistant_message)
+                    verdict = {"stopReason": None, "elapsedMs": 1}
+                    for payload in (run_execution._fast_result(result, request, verdict),
+                                    run_execution._review_result(result, request, verdict)):
+                        self.assertEqual(payload["status"], "unknown")
+                        self.assertEqual(payload["code"], "native-terminal-unread")
+                        self.assertNotIn("rawAnswer", payload)
+                    output = self.base / f"unread-{case}-{scope}.json"
+                    payload = run_execution._worker_facts(result)
+                    if case == "unknown-initialize-with-unread-terminal":
+                        expected = {"unknownEvents": {"countsByType": {
+                            "event-type-unread": 1, "control-response-unread": 1}, "total": 2},
+                            "unconfirmed": ["model-catalog"]}
+                        for projected in (payload,
+                                          run_execution._fast_result(result, request, verdict),
+                                          run_execution._review_result(result, request, verdict)):
+                            self.assertEqual(projected["nativeEvidence"], expected)
+                    with mock.patch.object(run_execution, "worker_delivery") as delivery:
+                        run_execution._worker_result(result, {"outputFile": str(output)}, {}, "", payload)
+                    delivery.assert_not_called()
+                    self.assertFalse(output.exists())
+
+    def test_unread_terminal_still_requires_confirmed_native_stop(self):
+        self.fixture_case("bad-subtype")
+        stop_native = native_run._stop_native
+        def unconfirmed(spawn, deadline):
+            _, exit_code = stop_native(spawn, deadline)
+            return False, exit_code
+        with mock.patch.object(native_run, "_stop_native", side_effect=unconfirmed):
+            result = self.execute(self.request())
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-shutdown-failed")
+        self.assertEqual(result.stop_evidence.native.group_state, "unknown")
+        self.assertIsNone(result.completion_evidence)
+
+    def test_imported_turn_provenance_still_requires_explicit_success(self):
+        result = self.execute(self.request())
+        ref = next(ref for ref in result.evidence_refs if ref.kind == "native-turn-facts")
+        facts = json.loads(Path(ref.location).read_bytes())
+        provenance = {**facts, "turnEnd": "completed", "structuredOutputValidated": True}
+        record = {"sessionId": result.native_identity.session_id, "provenance": provenance,
+                  "resumeMode": "initial", "previousSessionId": None}
+        self.assertIsNone(native_run.validate_turn_provenance(record))
+        for change in ({"resultSubtype": "future"}, {"resultIsError": None}, {"resultIsError": True}):
+            with self.subTest(change=change):
+                self.assertIsNotNone(native_run.validate_turn_provenance(
+                    {**record, "provenance": {**provenance, **change}}))
 
 
 class WorkerCarrierTests(NativeRunCase):

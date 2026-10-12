@@ -75,6 +75,7 @@ from ..run_contract import (
     EffectivePolicy,
     EvidenceRef,
     InterruptEvidence,
+    NativeEvidence,
     PolicyFact,
     ResultConfiguration,
     RunConfiguration,
@@ -116,6 +117,7 @@ _MAX_EARLY_FRAMES = 128
 _MAX_DENIED_REQUESTS = 32
 _DRAIN_SECONDS = 10.0
 
+
 #: The request controls this run module actually consumes: the sandbox network
 #: allowlist (None keeps the native default, an explicit sequence — empty
 #: included — is written verbatim) and the session-wide extra denied tools.
@@ -123,6 +125,16 @@ _DRAIN_SECONDS = 10.0
 #: does not declare; declaring one commits the module to reading that field,
 #: never to inferring the policy from the tool scope or the caller's role.
 supported_request_controls = ("network_allowed_domains", "additional_denied_tools")
+
+
+def _unknown_events(connection: Connection | None) -> dict | None:
+    if connection is None:
+        return None
+    observations = connection.observations()
+    counts = {kind: observations[field] for kind, field in (
+        ("event-type-unread", "unknownEvents"),
+        ("control-response-unread", "unreadResponses")) if observations[field]}
+    return {"countsByType": counts, "total": sum(counts.values())} if counts else None
 
 
 def _catalog(initialize: dict | None, version: str) -> dict:
@@ -504,10 +516,7 @@ class _TurnCollector:
         return {"settled": settled, "rawAnswer": raw,
                 "toolCalls": self.tools.tool_calls,
                 "deniedInteractions": len(self.denied),
-                # General event classification remains unknown; the transport
-                # separately knows exactly which fields it could not read.
-                "unknownEvents": None,
-                "protocolObservations": self._connection.observations() if self._connection else None}
+                "unknownEvents": _unknown_events(self._connection)}
 
     def _notify(self, *, settled: bool, raw: str | None) -> None:
         if self._quiet:
@@ -555,8 +564,8 @@ def _send_and_settle(collector: _TurnCollector, spawn: _Spawn, preparation: _Pre
     return evidence.result
 
 
-def _check_terminal(evidence: TurnEvidence, session_id: str) -> dict:
-    """The explicit terminal criteria; never a silent win, quota classified first."""
+def _check_terminal(evidence: TurnEvidence, session_id: str) -> bool:
+    """Confirm success, raise a native failure, or leave the terminal unread."""
     native_result = evidence.result
     result_denials = native_result.get("permission_denials")
     if isinstance(result_denials, list):
@@ -572,14 +581,15 @@ def _check_terminal(evidence: TurnEvidence, session_id: str) -> dict:
                                   "Claude reported unsettled background work at the terminal result")
     subtype = native_result.get("subtype")
     # Success is explicit: subtype "success" with is_error exactly false.
-    # Missing fields, wrong types or unknown subtypes are failures (with the
-    # structured quota denial classified first), never silent wins.
-    if subtype != "success" or native_result.get("is_error") is not False:
-        if result_quota_denial(native_result):
-            raise QuotaRejected(*_latest_rejected(evidence.rate_limits))
+    if subtype == "success" and native_result.get("is_error") is False:
+        return True
+    if result_quota_denial(native_result):
+        raise QuotaRejected(*_latest_rejected(evidence.rate_limits))
+    if (native_result.get("is_error") is True or subtype == "error"
+            or isinstance(subtype, str) and subtype.startswith("error_")):
         raise ClaudeProtocolError("native-turn-failed",
-                                  "the Claude native turn did not end with an explicit success result")
-    return native_result
+                                  "the Claude native turn reported an error result")
+    return False
 
 
 # -- phase 5: the conservative stop ----------------------------------------------
@@ -830,6 +840,10 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     interrupt = InterruptEvidence(
         requested=True if state.interrupt_requested else None,
         basis="claude/control-request-interrupt" if state.interrupt_requested else None)
+    native_evidence = NativeEvidence(
+        unknown_events=_unknown_events(collector._connection) if collector is not None else None,
+        unconfirmed=("model-catalog",) if state.catalog is not None
+        and state.catalog["discoveries"][0]["status"] == "unknown" else ())
 
     def compose(*, packages: bool) -> RunResult:
         return RunResult(
@@ -839,6 +853,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
                        message=state.error_text),
             harness_version=spawn.version if spawn is not None else None,
             native_event_count=evidence.event_seq if evidence is not None and evidence.event_seq else None,
+            native_evidence=native_evidence,
             model_started=True if user_sent else None,
             configuration=ResultConfiguration(
                 requested=RunConfiguration(provider=request.configuration.provider,
@@ -938,9 +953,10 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         state.catalog_checked = _check_catalog(request, catalog)
         _send_and_settle(collector, spawn, preparation, request)
         state.drained = True
-        native_result = _check_terminal(collector.evidence, preparation.session_id)
-        state.terminal_ok = True
-        state.status = "ok"
+        state.terminal_ok = _check_terminal(collector.evidence, preparation.session_id)
+        native_result = collector.evidence.result
+        state.status = "ok" if state.terminal_ok else "unknown"
+        state.reason = None if state.terminal_ok else "native-terminal-unread"
         # The delivery verification freezes here, before the settled facts
         # reach the role: candidates that did not prove themselves against the
         # final structured value return to the count now, so a budget stop at
@@ -948,9 +964,10 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         # publish. Failure paths never settle, and their packages count every
         # candidate; the settled callback is the one place the role's last
         # count and the package must not diverge.
-        state.verified_delivery = collector.tools.settle_delivery(
-            native_result.get("structured_output"), {"sessionId": preparation.session_id})
-        collector.settled_notify(native_result)
+        if state.terminal_ok:
+            state.verified_delivery = collector.tools.settle_delivery(
+                native_result.get("structured_output"), {"sessionId": preparation.session_id})
+            collector.settled_notify(native_result)
     except ObserverInterrupt:
         state.status = "cancelled"
         state.reason = "observer-interrupt"
@@ -988,7 +1005,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             state.last_assistant_message = collector.evidence.last_assistant_message()
         if spawn is not None:
             state.shutdown, state.exit_code = _stop_native(spawn, preparation.deadline)
-            if state.status == "ok" and (not state.shutdown or state.exit_code != 0):
+            if state.status in ("ok", "unknown") and (not state.shutdown or state.exit_code != 0):
                 state.status = "error"
                 state.reason = "native-shutdown-failed"
                 state.error_text = ("the Claude native process did not exit with confirmed "
