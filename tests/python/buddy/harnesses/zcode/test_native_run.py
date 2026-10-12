@@ -226,8 +226,10 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.value.correction_count, 0)
         self.assertEqual(correction.stop_reason, None)
         # The observer's own cumulative statistics carry the unknown-event
-        # count; a clean run saw none.
+        # count; a clean run saw none, so the shared native evidence stays
+        # absent instead of an empty shell.
         self.assertTrue(all(facts["unknownEvents"]["total"] == 0 for facts in seen))
+        self.assertIsNone(result.native_evidence)
         self.assertIsNotNone(result.native_identity.session_id)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         policy = result.effective_policy.tools

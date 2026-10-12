@@ -103,27 +103,32 @@ class BoundaryAndDrainTests(unittest.TestCase):
                 self.assertEqual(error.exception.code, code)
                 connection.call.assert_not_called()
 
-    def test_whitespace_configuration_guard_remains_until_shared_boundary_is_fixed(self):
+    def test_blank_configuration_fields_are_refused_at_the_request_boundary(self):
         for key in ("provider", "model", "effort"):
             spec = {"provider": "api", "model": "model", "effort": "low", key: " \t"}
-            RunConfiguration(**spec)  # Current shared boundary does not reject whitespace.
-            connection = mock.Mock()
-            with self.assertRaises(NativeError) as error:
-                native_run.configure_session(connection, {"session": {"sessionId": "root"}}, spec)
-            self.assertEqual(error.exception.code, "invalid-configuration")
-            connection.call.assert_not_called()
+            with self.subTest(key=key), self.assertRaises(BoardError):
+                RunConfiguration(**spec)
 
     def test_continuation_boundary_rejects_invalid_mode_and_missing_session(self):
         for spec in ({"mode": "other"}, {"mode": "native-session"},
-                     {"mode": "native-session", "previous_session_id": ""}):
+                     {"mode": "native-session", "previous_session_id": ""},
+                     {"mode": "native-session", "previous_session_id": " \t"}):
             with self.subTest(spec=spec), self.assertRaises((BoardError, ValidationError)):
                 RunContinuation(**spec)
         request = types.SimpleNamespace(continuation=RunContinuation(
             mode="native-session", previous_session_id="root"))
         self.assertEqual(native_run._continuation_of(request), ("native-session", "root"))
-        request.continuation = RunContinuation(mode="native-session", previous_session_id=" \t")
-        with self.assertRaises(NativeError):
-            native_run._continuation_of(request)
+
+    def test_shared_unknown_events_summary_stays_bounded_and_keeps_the_total(self):
+        self.assertIsNone(native_run._shared_unknown_events(native_run._RunFacts()))
+        facts = native_run._RunFacts()
+        for index in range(70):
+            facts.note_unknown(f"future-method-{index}")
+        summary = native_run._shared_unknown_events(facts)
+        self.assertEqual(len(summary.unknown_events.counts_by_type), 64)
+        self.assertEqual(summary.unknown_events.total, 70)
+        self.assertEqual(sum(count for _, count in summary.unknown_events.counts_by_type), 70)
+        self.assertEqual(summary.unconfirmed, ())
 
     def drain(self, message):
         connection = types.SimpleNamespace(messages=queue.Queue())
@@ -189,6 +194,11 @@ class NativeShapeRoundTests(NativeRunCase):
         ref = next(ref for ref in result.evidence_refs if ref.kind == "native-run-facts")
         retained = json.loads(Path(ref.location).read_text())["unknownEvents"]["countsByType"]
         self.assertTrue(any(f["unknownEvents"]["total"] for f in seen))
+        # The shared outlet carries the same counts the evidence file retains.
+        shared = result.native_evidence.unknown_events
+        self.assertEqual(dict(shared.counts_by_type), retained)
+        self.assertEqual(shared.total, sum(retained.values()))
+        self.assertEqual(result.native_evidence.unconfirmed, ())
         self.assertNotIn("evidenceRefs", native_run.native_evidence(result))
         return result, retained
 
