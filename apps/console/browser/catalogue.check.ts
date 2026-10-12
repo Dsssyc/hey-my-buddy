@@ -1,14 +1,20 @@
 import { expect } from "@playwright/test";
+import enBuddies from "../src/i18n/en/buddies";
+import zhBuddies from "../src/i18n/zh/buddies";
 import { TOOLBAR_ITEMS, contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
 
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 const CODEX = "codex / openai / gpt-5-codex";
+
+/** The section mark's alert for the harness it names, worded by the catalogue's own text. */
+const withHarness = (template: string) => template.replace("{{names}}", "Claude Code");
+
 const languages = [
-  { locale: "zh-CN", catalog: "目录", unsaved: "未保存的修改", settings: "设置", account: "账户", manage: "管理账户", check: "检测", checked: "已检测 Codex：已找到", stale: "过期", unavailable: /^显示不可用/ },
-  { locale: "en-US", catalog: "Catalog", unsaved: "Unsaved changes", settings: "settings", account: "account", manage: "Manage account", check: "Check", checked: "Checked Codex: Found", stale: "Stale", unavailable: /^Show unavailable/ },
+  { locale: "zh-CN", catalog: "目录", quotaAlert: withHarness(zhBuddies.attention.quota), unsaved: "未保存的修改", settings: "设置", account: "账户", manage: "管理账户", check: "检测", checked: "已检测 Codex：已找到", stale: "过期", unavailable: /^显示不可用/ },
+  { locale: "en-US", catalog: "Catalog", quotaAlert: withHarness(enBuddies.attention.quota), unsaved: "Unsaved changes", settings: "settings", account: "account", manage: "Manage account", check: "Check", checked: "Checked Codex: Found", stale: "Stale", unavailable: /^Show unavailable/ },
 ];
 
-for (const { locale, catalog, unsaved, settings, account, manage, check, checked, stale, unavailable } of languages)
+for (const { locale, catalog, quotaAlert, unsaved, settings, account, manage, check, checked, stale, unavailable } of languages)
   for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const) {
     test.describe(`the catalogue in ${locale} at ${width}px in ${theme}`, () => {
       test.use({ locale, viewport: { width, height: 900 } });
@@ -42,7 +48,7 @@ for (const { locale, catalog, unsaved, settings, account, manage, check, checked
             expect(box.height).toBe(28);
           }
         } else expect(searchBox.x).toBeGreaterThan(navBox.x + navBox.width + 24);
-        await expect(toolbar.getByRole("link").first()).toHaveAccessibleName(catalog);
+        await expect(toolbar.getByRole("link").first()).toHaveAccessibleName(new RegExp(`^${catalog}.*${quotaAlert}$`));
         await expect(page.locator("[data-slot=unsaved-mark]")).toHaveCount(0);
         const metered = page.getByRole("button", { name: `DSH ${account}`, exact: true });
         await expect(metered).toContainText(locale === "zh-CN" ? "余额为零" : "Balance zero");

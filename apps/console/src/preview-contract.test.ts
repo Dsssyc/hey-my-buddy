@@ -129,7 +129,11 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
         harnesses: harnesses.map(row => ({
           adapter: row.adapter,
           status: row.status,
-          quota: quotaView(row.quota),
+          // The display view drops the raw metered balance fact the Python
+          // regression checks; keep it on the report row.
+          quota: row.quota?.balanceZero === true
+            ? { ...quotaView(row.quota)!, balanceZero: true }
+            : quotaView(row.quota),
         })),
       };
     } else if (entry.kind === "task-page") {
@@ -267,9 +271,10 @@ describe("synthetic preview fixtures through the real console parsers", () => {
       billingByProvider: { "deepseek-official": { kind: "metered" } },
       quota: { balanceZero: true, windows: [] },
     });
-    // Recorded quota: normal, stale and unknown observations stay distinct.
+    // Recorded quota: the near-limit, normal, stale-and-unknown and absent
+    // observations stay four distinct states; only claude alerts.
     const quotaFacts = snapshotFacts.harnesses as { adapter: string; quota: ReturnType<typeof quotaView> }[];
-    expect(quotaFacts.some(row => row.quota?.alert)).toBe(false);
+    expect(quotaFacts.filter(row => row.quota?.alert).map(row => row.adapter)).toEqual(["claude"]);
     expect(quotaFacts.some(row => row.quota === null)).toBe(true);
     expect(quotaFacts.some(row => row.quota?.stale && row.quota.windows.some(window => window.usedPercent === null))).toBe(true);
 

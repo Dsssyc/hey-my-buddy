@@ -1370,7 +1370,7 @@ def harness_rows() -> list[dict]:
          "quota": {"observedAt": instant(9, 40), "source": "claude-native", "provider": "anthropic",
                    "stale": False,
                    "windows": [{"name": "5h", "usedPercent": 18, "resetsAt": instant(14, 30)},
-                               {"name": "weekly", "usedPercent": 67, "resetsAt": instant(77, 0)}]}},
+                               {"name": "weekly", "usedPercent": 93, "resetsAt": instant(77, 0)}]}},
     ]
 
 

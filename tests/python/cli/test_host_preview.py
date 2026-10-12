@@ -166,8 +166,8 @@ class PreviewFixtureTest(unittest.TestCase):
         version = outcomes["normal/runtime-version.json"]["facts"]
         self.assertEqual({"mode": "runtime", "softwareVersion": "0.0.0", "installed": True}, version)
 
-        # Recorded quota: a near-limit window, a stale unknown window, and a harness
-        # with no observation at all are three distinct, explicit states.
+        # Recorded quota: near-limit, normal, stale-and-unknown and absent
+        # observations are four distinct, explicit states.
         quotas = [row["quota"] for row in normal["harnesses"]]
         near = [quota for quota in quotas if quota and quota["alert"]]
         self.assertTrue(near, "the preview must record one near-limit quota window")
@@ -184,7 +184,8 @@ class PreviewFixtureTest(unittest.TestCase):
                 continue
             self.assertTrue(isinstance(quota["source"], str) and quota["source"],
                             "a recorded observation names its source")
-            self.assertTrue(quota["windows"], "a recorded observation carries its windows")
+            self.assertTrue(quota["windows"] or (quota.get("balanceZero") is True and not quota["windows"]),
+                            "a recorded observation carries its windows or is a metered balance fact")
             self.assertIn('已过期' if quota['stale'] else '非实时', quota['note'],
                           'the short status must retain freshness without implying live quota')
 

@@ -347,13 +347,14 @@ for (const { locale, catalog } of languages) for (const width of [700, 800, 900,
 
     test("keeps the current section's name with its underline, wherever the band wraps", async ({ page }) => {
       await open(page, "#buddies/catalog");
-      const current = page.locator("[data-slot=catalogue-toolbar]").getByRole("link", { name: catalog, exact: true });
+      const current = page.locator("[data-slot=catalogue-toolbar] a[aria-current=page]");
       await expect(current).toHaveAttribute("aria-current", "page");
       const gap = await current.evaluate(node => {
         // The underline is the link's ::after: 2px tall, with its bottom edge 1px below the link.
+        // Only the name is measured: a mark and its screen-reader text may follow inside the link.
         const after = getComputedStyle(node, "::after");
         const range = document.createRange();
-        range.selectNodeContents(node);
+        range.selectNode(node.firstChild!);
         const text = range.getBoundingClientRect();
         const underlineTop = node.getBoundingClientRect().bottom - parseFloat(after.bottom) - parseFloat(after.height);
         return { text: text.bottom, underline: underlineTop };
