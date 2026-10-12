@@ -61,6 +61,7 @@ class SchemaWorkerTests(NativeRunCase):
         self.assertEqual(record["outcome"]["disposition"], "completed")
         self.assertTrue(record["provenance"]["structuredOutputValidated"])
         self.assertEqual(record["attemptId"], request.identity.attempt_id)
+        self.assertEqual(record["promptSha256"], hashlib.sha256(request.input_text.encode()).hexdigest())
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
     def test_native_success_with_an_invalid_role_value_returns_a_failed_controller_exit(self):
@@ -117,18 +118,18 @@ class SchemaWorkerTests(NativeRunCase):
                 self.assertIs(payload["modelStarted"], False)
                 self.assertIs(payload["processState"]["shutdownConfirmed"], stopped is True)
 
-    def test_the_moved_schemas_and_prompt_prefixes_equal_the_accepted_baseline(self):
-        # Captured from the two old protocol/runner implementations at
-        # 02b1f76; keep their intentional description/optional-field differences.
+    def test_native_schemas_stay_fixed_and_full_prompt_hashes_include_the_worker_role(self):
+        # Schemas retain their description/optional-field differences; ADR-030
+        # pins the full assembled prompt, including the published Worker text.
         hashes = {
             "codex": ("71b8134b2e41ebe2045afa8f3808f0f04b3cee52e0d979918ba4381c150dedec",
-                      "5763aa5435a21a02d83f481a0a77f6d5062adace6862442617a17382fc2bf61c"),
+                      "ea7db0557cc9718b5f5b8ecb2b89b8b82c05535c5dda1fe3c0dce6137ffdbc7f"),
             "claude": ("cd91d26ede0d45b6bed2b7747520a1358ab334874c26f9d19bd2f348ae5e15a3",
-                       "6714f3aa9afe52e9a10be75b2dd219abbc3234f6c2f77bdda644745db252b0a6"),
+                       "99f649f8eae95e65bbf7d902bc84efb594024b9ad779e44d1930e2e5a16819a4"),
         }
-        for name, (schema_hash, prefix_hash) in hashes.items():
+        for name, (schema_hash, prompt_hash) in hashes.items():
             with self.subTest(harness=name):
                 format = worker_format(name)
                 self.assertEqual(hashlib.sha256(canonical_json(format.schema).encode()).hexdigest(), schema_hash)
-                self.assertEqual(hashlib.sha256("\n\n".join(format.prefixes).encode()).hexdigest(), prefix_hash)
+                self.assertEqual(hashlib.sha256(format.prompt("task", {"turn": 1}).encode()).hexdigest(), prompt_hash)
         self.assertEqual(worker_format("codex").tool_scope({"executionWorkspace": {"access": "read"}}), "write")

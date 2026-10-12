@@ -9,6 +9,7 @@ from ...errors import BoardError
 from ...private_dirs import context_root, ensure_private_dir
 from ...blackboard.routing import router
 from . import router_input
+from .prompts import router_prompt
 from . import controller as role_seam
 from ..harnesses.base import (
     Adapter,
@@ -34,7 +35,7 @@ def prepare_router_fast(document: dict, profile: dict, native: Adapter,
     root = ensure_private_dir(context_root(context, native.name) / "no-tool-cwd")
     if any(root.iterdir()):
         raise BoardError("CONFLICT", "The private no-tool cwd already contains files")
-    request = NoToolStructuredRequest(str(root), router.render_prompt(document), document["outputSchema"], timeout_seconds=60,
+    request = NoToolStructuredRequest(str(root), router_prompt(router.render_prompt(document)), document["outputSchema"], timeout_seconds=60,
                                       capture_evidence=document.get("captureEvidence") is True)
     child_context = replace(context, spec={**context.spec, **profile, "cwd": str(root)}, turn=None, agent_credential=None)
     return role_seam.FastPreparation(harness=native.name, request=request, context=child_context,
@@ -54,7 +55,7 @@ def prepare_router_review(document: dict, profile: dict, native: Adapter,
         raise BoardError("router-review-unsupported", f"Router 不可用：{detail}")
     manifest = document.get("executionWorkspace")
     root, digest = router_input.prepare(manifest, ensure_private_dir(context_root(context, native.name)))
-    request = ReadOnlyStructuredRequest(str(root), router.render_prompt(document), document["outputSchema"],
+    request = ReadOnlyStructuredRequest(str(root), router_prompt(router.render_prompt(document)), document["outputSchema"],
                                         document["budget"], capture_evidence=document.get("captureEvidence") is True)
     child_context = replace(context, spec={**context.spec, **profile, "cwd": str(root)}, turn=None, agent_credential=None)
     return role_seam.ReviewPreparation(harness=native.name, native=native, request=request, context=child_context,

@@ -21,26 +21,6 @@ from ..harnesses.session_receipts import MAX_OUTCOME_BYTES  # noqa: F401 - the s
 MAX_INPUT_BYTES = 262144
 MAX_RECORD_BYTES = 98304
 
-#: Bounded, shared capability hints. A coding harness prompt carries exactly these
-#: trigger conditions so a Worker ends its turn with assistance/attention instead of
-#: silently overreaching, and so it asks the Host for an authorized helper/reviewer
-#: rather than creating a peer Buddy itself. The shared governed prompt and the
-#: native-schema Worker prompt both embed this harness-neutral wording.
-ASSISTANCE_HINTS = (
-    "End your turn with assistance or attention instead of guessing when any of these is true: "
-    "the work needs files or permissions outside the authorized scope; validation keeps failing and "
-    "you have no further evidence for the next step; the assigned capability clearly does not fit; "
-    "or the Host/user agreed review condition has been reached.",
-    "Ask the Host for help through your turn outcome, not by acting outside scope. Put what you "
-    "already tried in attempted, the exact work you need in neededWork and the acceptance condition "
-    "in acceptance, with expectedArtifacts listing the fixed artifacts the help must produce; a "
-    "suggestedProfileId is only a suggestion the Host may ignore.",
-    "You may not create or dispatch another Buddy task, worker or peer job yourself, and you must "
-    "never claim that a reviewer or helper already ran. The Host decides whether to handle the work, "
-    "authorize a helper or continue you; your internal subagents remain available for work inside "
-    "this authorized scope.",
-)
-
 
 def input_hash(value: dict) -> str:
     return hashlib.sha256(canonical_json(value).encode()).hexdigest()

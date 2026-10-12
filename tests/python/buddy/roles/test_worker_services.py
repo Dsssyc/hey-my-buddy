@@ -24,6 +24,7 @@ from pathlib import Path
 from hey_my_buddy.buddy.harnesses.session_receipts import sign_receipt
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles import worker_services
+from hey_my_buddy.install.runtime import resource_path
 
 IDENTITY = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "turnId": "turn-1"}
 OTHER_IDENTITY = {"taskId": "task-2", "attemptId": "attempt-9", "generation": 1, "turnId": "turn-9"}
@@ -83,7 +84,7 @@ class GovernedPromptTests(unittest.TestCase):
         for resume in ("initial", "reconstructed-new-session", "native-session"):
             with self.subTest(resume=resume):
                 prompt = worker_services.governed_prompt("task", {"resumeMode": resume}, "finish")
-                scope = prompt.split("\n\n")[0]
+                scope = prompt.split("\n\n")[1]
                 self.assertIn("share Git stash, branches and tags", scope)
                 self.assertIn("owner's repository", scope)
                 self.assertIn("do not use git stash", scope)
@@ -91,17 +92,16 @@ class GovernedPromptTests(unittest.TestCase):
                 self.assertIn("leave changes in the workspace", scope)
                 self.assertIn("commit on the current detached HEAD", scope)
 
-    def test_the_prompt_assembles_scope_finish_contract_hints_task_and_input_in_order(self):
+    def test_the_prompt_assembles_role_scope_finish_contract_task_and_input_in_order(self):
         prompt = worker_services.governed_prompt("task text", {"resumeMode": "initial"}, "mcp__srv__buddy_finish_turn")
         sections = prompt.split("\n\n")
-        self.assertTrue(sections[0].startswith("This is a governed Buddy root turn."))
-        self.assertIn("obtain one successful receipt from mcp__srv__buddy_finish_turn", sections[1])
-        self.assertIn("all six fields: disposition, summary, remaining, decisions, artifacts, request", sections[1])
-        for hint in turn_io.ASSISTANCE_HINTS:
-            self.assertIn(hint, sections)
+        self.assertEqual(sections[0] + "\n", resource_path("roles.worker").read_text())
+        self.assertTrue(sections[1].startswith("This is a governed Buddy root turn."))
+        self.assertIn("obtain one successful receipt from mcp__srv__buddy_finish_turn", sections[2])
+        self.assertIn("all six fields: disposition, summary, remaining, decisions, artifacts, request", sections[2])
         self.assertEqual(sections[-2], "task text")
         self.assertEqual(sections[-1], turn_io.canonical_json({"resumeMode": "initial"}))
-        self.assertNotIn("buddy_checkpoint", prompt, "no inquiry paragraph without both inquiry tools")
+        self.assertNotIn("Host inquiries arrive cooperatively", prompt, "no inquiry paragraph without both inquiry tools")
         self.assertLessEqual(len(prompt.encode()), 64 * 1024)
 
     def test_the_inquiry_paragraph_arrives_only_with_both_fully_qualified_tool_names(self):

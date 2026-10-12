@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import select
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -458,6 +459,39 @@ class RuntimeMaterializationTests(unittest.TestCase):
             self.assertEqual(runtime.read_ready(target)["resources"], record["resources"])
             for value in record["resources"].values():
                 self.assertTrue(Path(value).is_relative_to(target), value)
+        finally:
+            replaced.rename(self.root)
+
+    def test_installed_role_resources_and_prompts_survive_source_replacement(self):
+        for relative, source in runtime.iter_assets(REAL_ROOT):
+            copied = self.root / relative
+            copied.parent.mkdir(parents=True, exist_ok=True)
+            copied.write_bytes(source.read_bytes())
+        target = self.materialize()
+        expected = {name: runtime.resource_path("roles." + name, self.root).read_text()
+                    for name in ("worker", "router", "lead")}
+        replaced = self.root.with_name("project-replaced")
+        self.root.rename(replaced)
+        try:
+            environment = {name: value for name, value in os.environ.items()
+                           if not name.startswith("BUDDY_") and name not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
+            environment["PYTHONPATH"] = str(target / "src")
+            probe = subprocess.run(
+                [sys.executable, "-c",
+                 "import json; from hey_my_buddy.install.runtime import resource_path; "
+                 "from hey_my_buddy.buddy.roles.prompts import worker_prompt, router_prompt; "
+                 "print(json.dumps({'resources': {n: [str(resource_path('roles.'+n)), "
+                 "resource_path('roles.'+n).read_text()] for n in ('worker','router','lead')}, "
+                 "'worker': worker_prompt('ROLE: task', {}, delivery=()), 'router': router_prompt('ROLE: task')}))"],
+                cwd=target, env=environment, capture_output=True, text=True, timeout=30)
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+            actual = json.loads(probe.stdout)
+            for name, (path, text) in actual["resources"].items():
+                self.assertTrue(Path(path).is_relative_to(target), name)
+                self.assertEqual(text, expected[name])
+            self.assertTrue(actual["worker"].startswith(expected["worker"] + "\n"))
+            self.assertTrue(actual["router"].startswith(expected["router"] + "\n"))
+            self.assertTrue(runtime.is_ready(target))
         finally:
             replaced.rename(self.root)
 

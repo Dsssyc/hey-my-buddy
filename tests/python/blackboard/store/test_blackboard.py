@@ -1451,8 +1451,10 @@ class TestPackaging(BoardTestCase):
         self.assertTrue(actual["executable"].startswith(str(runtime_dir)), actual)
         self.assertTrue(os.path.realpath(actual["prefix"]).startswith(root), actual)
         self.assertTrue(os.path.realpath(actual["package"]).startswith(root), actual)
-        self.assertEqual(set(actual["resources"]), {"console.assets"})
-        self.assertTrue(os.path.realpath(actual["resources"]["console.assets"]).startswith(root), actual)
+        self.assertEqual(set(actual["resources"]), {"console.assets", "roles.worker", "roles.router", "roles.lead"})
+        for name, value in actual["resources"].items():
+            self.assertTrue(os.path.realpath(value).startswith(root), actual)
+            self.assertTrue(Path(value).exists(), name)
         self.assertFalse(info["identity"]["leaks"])
         # Real work runs through the runtime-hosted daemon and its worker.
         code, task = self.cli(

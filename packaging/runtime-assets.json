@@ -23,6 +23,9 @@
     }
   ],
   "resources": {
-    "console.assets": "src/hey_my_buddy/console/assets"
+    "console.assets": "src/hey_my_buddy/console/assets",
+    "roles.worker": "src/hey_my_buddy/buddy/roles/texts/worker.txt",
+    "roles.router": "src/hey_my_buddy/buddy/roles/texts/router.txt",
+    "roles.lead": "src/hey_my_buddy/buddy/roles/texts/lead.txt"
   }
 }

@@ -2,7 +2,7 @@
 
 These are the harness-neutral rules of one governed Worker root turn
 (ADR-025 decision 7): the governed prompt's full text and assembly, the
-six-field finish contract, the assistance hints it embeds, and the completion
+six-field finish contract, the fixed Worker role text, and the completion
 rules that refuse a ``completed`` outcome while a native interactive request is
 outstanding or a Host inquiry is still unanswered. Nothing here knows a
 harness: the native, fully qualified tool names arrive as arguments, no branch
@@ -34,7 +34,8 @@ import json
 import secrets
 from pathlib import Path
 
-from .turn_io import ASSISTANCE_HINTS, canonical_json, validate_outcome
+from .turn_io import canonical_json, validate_outcome
+from .prompts import worker_prompt
 from ..harnesses.session_receipts import (
     INQUIRY_JOURNAL_VERSION,
     MAX_ANSWER_BYTES,
@@ -128,13 +129,11 @@ def governed_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
         f"does not block it. Checkpointing is voluntary and never on a timer, and no input is ever injected into "
         "your turn."
     ) if checkpoint_tool and answer_tool else ""
-    return "\n\n".join([
+    return worker_prompt(task_text, turn_input, delivery=(
         "This is a governed Buddy root turn. Complete the authorized task using the available coding tools and internal subagents. Follow the frozen Host input and its allocated workspace. Allocated workspaces share Git stash, branches and tags with the owner's repository: do not use git stash or create, switch, move or delete branches or tags; leave changes in the workspace or commit on the current detached HEAD.",
         f"Only the root may conclude this Buddy turn. After your work and internal subagents settle, obtain one successful receipt from {finish_tool} with the complete structured outcome. Include all six fields: disposition, summary, remaining, decisions, artifacts, request. Completed requires request: null. Use assistance for bounded help or attention for a Host decision. If a native permission or user-input request was refused, you must conclude with attention instead of completed. If a session tool refuses your call — including with a signed JSON refusal envelope naming the correction — correct the arguments and retry in this same turn. Plain final text is not a recorded outcome. After a successful finish receipt, do not start more tools; end the native turn.",
         inquiry,
-        *ASSISTANCE_HINTS,
-        task_text, canonical_json(turn_input),
-    ])
+    ))
 
 
 def attention_requests(configuration: dict) -> int:

@@ -9,8 +9,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ...errors import BoardError
-from ...json_codec import canonical_json, decode_strict_json
-from .turn_io import ASSISTANCE_HINTS, validate_outcome
+from ...json_codec import decode_strict_json
+from .turn_io import validate_outcome
+from .prompts import worker_prompt
 
 
 def outcome_schema(*, summary_description: str | None = None, suggested_profile: bool = False) -> dict:
@@ -64,7 +65,7 @@ class NativeSchemaWorker:
     reject_previous_on_initial: bool = False
 
     def prompt(self, task_text: str, turn_input: dict) -> str:
-        return "\n\n".join([*self.prefixes, *ASSISTANCE_HINTS, task_text, canonical_json(turn_input)])
+        return worker_prompt(task_text, turn_input, delivery=self.prefixes)
 
     def tool_scope(self, turn_input: dict) -> str:
         workspace = turn_input.get("executionWorkspace") or {}
