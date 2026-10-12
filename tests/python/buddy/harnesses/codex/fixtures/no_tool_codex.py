@@ -50,6 +50,7 @@ def main():
             send({"id": ident, "result": {}})
         elif method == "account/read":
             send({"id": ident, "result": {"account": {"type": "chatgpt", "planType": "plus"}}})
+            send({"method": "account/updated", "params": {"authMode": "chatgpt", "planType": "plus"}})
         elif method == "model/list":
             entry = {"model": "fixture-model", "displayName": "Fixture",
                      "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}
@@ -101,7 +102,11 @@ def main():
                 send({"method": "thread/status/changed" if case == "foreign-turn" else "thread/futureNotification", "params": {
                     "threadId": "thread-foreign" if case == "foreign-thread" else "thread-1",
                     **({"turnId": "turn-foreign"} if case == "foreign-turn" else {})}})
+            if case == "foreign-thread-started":
+                send({"method": "thread/started", "params": {"thread": {"id": "thread-foreign"}}})
             event("turn/started", turn_id, turn={"id": turn_id})
+            if case == "connection-notification":
+                send({"method": "account/updated", "params": {"authMode": "chatgpt", "planType": "plus"}})
             if case == "native-failure":
                 event("turn/completed", turn_id, turn={"id": turn_id, "status": "failed", "items": [],
                       "error": {"message": "Native request failed: invalid_json_schema", "codexErrorInfo": "badRequest"}})

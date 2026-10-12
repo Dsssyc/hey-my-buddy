@@ -168,6 +168,7 @@ def main():
                 account = {"type": "apiKey" if case == "api-key" or os.environ.get("OPENAI_API_KEY") or os.environ.get("CODEX_API_KEY") else "chatgpt",
                            "email": None, "planType": "plus"}
             send({"id": ident, "result": {"account": account, "requiresOpenaiAuth": True}})
+            send({"method": "account/updated", "params": {"authMode": account["type"], "planType": account.get("planType")}})
         elif method == "account/rateLimits/read":
             if case in ("usage", "quota-failure"):
                 # The rolling notifications already carried the quota; a failed

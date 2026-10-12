@@ -15,6 +15,7 @@ from hey_my_buddy.buddy.harnesses.codex.protocol import Connection, CodexProtoco
 from hey_my_buddy.buddy.harnesses.run_contract import (
     PrivateStatePaths, RunBudget, RunConfiguration, RunIdentity, RunRequest,
 )
+from hey_my_buddy.buddy.roles import run_execution
 
 
 class NativeFactsTests(unittest.TestCase):
@@ -226,6 +227,93 @@ class NativeFactsTests(unittest.TestCase):
                     carrier(message)
                 self.assertEqual(caught.exception.code, "invalid-native-result")
         self.assertEqual(facts.unknown_counts, {"unknown-method": 3})
+
+    def test_fast_connection_notifications_without_thread_identity_continue(self):
+        facts = native_run._RunFacts()
+        classifier = native_run._Classifier(facts)
+        state = {"started": False, "final": None, "completed": None}
+        carrier = native_run._FastProtocol("thread", "turn", state, TurnEvidence("thread", "turn"),
+                                           native_run._RunState())
+        for params in (None, [], {}, {"turnId": "unbound-turn"}):
+            message = {"method": "account/updated", "params": params}
+            classifier.observe(message)
+            carrier(message)
+        self.assertEqual(facts.unknown_counts, {"account/updated": 4})
+        self.assertEqual(state, {"started": False, "final": None, "completed": None})
+
+    def test_fast_connection_notification_names_do_not_bypass_explicit_identity(self):
+        carrier = native_run._FastProtocol("thread", "turn", {}, TurnEvidence("thread", "turn"),
+                                           native_run._RunState())
+        for method in ("account/updated", "account/rateLimits/updated",
+                       "remoteControl/status/changed", "deprecationNotice", "thread/started"):
+            for params in ({"threadId": "foreign"}, {"threadId": None},
+                           {"threadId": "thread", "turnId": "foreign"}):
+                with self.subTest(method=method, params=params):
+                    with self.assertRaises(CodexProtocolError) as caught:
+                        carrier({"method": method, "params": params})
+                    self.assertEqual(caught.exception.code, "invalid-native-result")
+
+    def test_thread_started_checks_nested_session_identity(self):
+        state = {"started": False, "final": None, "completed": None}
+        carrier = native_run._FastProtocol("thread", "turn", state, TurnEvidence("thread", "turn"),
+                                           native_run._RunState())
+        for thread in ({"id": "foreign"}, {"id": ""}):
+            with self.subTest(thread=thread):
+                with self.assertRaises(CodexProtocolError) as caught:
+                    carrier({"method": "thread/started", "params": {"thread": thread}})
+                self.assertEqual(caught.exception.code, "invalid-native-result")
+        for params in (None, [], {}, {"thread": None}, {"thread": []}, {"thread": {}},
+                       {"thread": {"id": None}}, {"thread": {"id": 17}}, {"thread": {"id": "thread"}}):
+            with self.subTest(params=params):
+                carrier({"method": "thread/started", "params": params})
+        self.assertEqual(state, {"started": False, "final": None, "completed": None})
+
+    def test_shared_native_facts_reach_all_three_carrier_results_without_duplicate_keys(self):
+        expected = {"unknownEvents": {"countsByType": {"account/updated": 1}, "total": 1},
+                    "unconfirmed": ["settings-readback", "thread-receipt", "model-catalog"]}
+        for mode, scope in (("fast", "none"), ("review", "read"), ("worker", "write")):
+            with self.subTest(mode=mode):
+                root = self.root / mode
+                root.mkdir(mode=0o700)
+                request = self.request.model_copy(update={"tool_scope": scope, "private_state": PrivateStatePaths(
+                    invocation_root=str(root), native_root=str(root / "native"))})
+                state = native_run._RunState(status="ok", raw_answer='{"answer": "retained"}', shutdown=True,
+                    policy_checks={"configReadback": {"status": "unknown"},
+                                   "threadReceipt": {"status": "unknown"}, "selectedModel": {"status": "unknown"}},
+                    catalog_read={"discovery": {"status": "unknown", "reason": "model-list-shape-unreadable"},
+                                  "warnings": ["incomplete reading"]})
+                facts = native_run._RunFacts()
+                facts.note_unknown("account/updated")
+                result = native_run._build_result(request, None, state, mode, None, facts,
+                                                  SimpleNamespace(last_payload=None))
+                self.assertEqual(result.native_evidence.to_payload(), expected)
+                self.assertEqual(native_run._read_evidence_ref(result, "unknown-events"), expected["unknownEvents"])
+                projection = native_run.native_evidence(result)
+                self.assertEqual(projection["catalogRead"], state.catalog_read)
+                self.assertEqual(projection["policyCheck"], state.policy_checks)
+                self.assertNotIn("unknownEvents", projection)
+                self.assertNotIn("unconfirmed", projection)
+                verdict = {"stopReason": None, "elapsedMs": 1}
+                if mode == "fast":
+                    payload = run_execution._fast_result(result, request, verdict)
+                elif mode == "review":
+                    payload = run_execution._review_result(result, request, verdict)
+                else:
+                    payload = run_execution._worker_facts(result)
+                self.assertEqual(payload["nativeEvidence"], expected)
+                self.assertNotIn("unknownEvents", payload)
+                self.assertNotIn("unconfirmed", payload)
+
+    def test_confirmed_reads_and_unreadable_selected_model_add_no_unconfirmed_name(self):
+        state = native_run._RunState(policy_checks={"configReadback": {"status": "confirmed"},
+                                                   "threadReceipt": {"status": "confirmed"},
+                                                   "selectedModel": {"status": "unknown"}},
+                                     catalog_read={"discovery": {"status": "complete"}, "warnings": []})
+        result = native_run._build_result(self.request, None, state, "fast", None, native_run._RunFacts(),
+                                          SimpleNamespace(last_payload=None))
+        self.assertEqual(result.native_evidence.unconfirmed, ())
+        self.assertIsNone(result.native_evidence.unknown_events)
+        self.assertNotIn("nativeEvidence", run_execution._base_result(result))
 
 
 if __name__ == "__main__":
