@@ -972,6 +972,22 @@ class EndpointLifecycleTests(unittest.TestCase):
         self.enterContext(mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": self.temp.name}))
         self.addCleanup(cc.shutdown)
 
+    def test_registration_failure_preserves_the_start_failure_code_and_cause(self):
+        message = "server failed to start: IO error: Operation not permitted"
+        for error_type in (ValueError, RuntimeError):
+            cause = error_type(message)
+            with self.subTest(error_type=error_type), \
+                    mock.patch.object(cc, "register", side_effect=cause), \
+                    mock.patch.object(cc, "server_address") as address:
+                target = endpoint(state_dir=Path(self.temp.name))
+                with self.assertRaises(BoardError) as refused:
+                    target.start()
+                self.assertEqual(refused.exception.code, "LIVE_ENDPOINT_START_FAILED")
+                self.assertEqual(refused.exception.message, message)
+                self.assertIs(refused.exception.__cause__, cause)
+                self.assertIsNone(target._descriptor)
+                address.assert_not_called()
+
     def test_both_profiles_are_applied_before_the_register_call(self):
         fake = FakeC2()
         real_cc = ctl.cc

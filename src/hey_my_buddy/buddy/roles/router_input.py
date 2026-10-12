@@ -91,8 +91,10 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
             metadata, raw_path = entry.split(b"\t", 1)
             mode, kind, object_id = metadata.decode('ascii').split()
             relative = PurePosixPath(os.fsdecode(raw_path))
-            if relative.is_absolute() or any(part in ("..", ".git") for part in relative.parts) or kind != "blob":
-                raise BoardError("router-input-unavailable", "Unsupported frozen tree entry")
+            if relative.is_absolute() or any(part in ("..", ".git") for part in relative.parts):
+                raise BoardError("router-input-unavailable", "A frozen tree path is unsafe: absolute paths, parent traversal and Git metadata are forbidden")
+            if kind != "blob":
+                raise BoardError("router-input-unavailable", "Frozen Router input with submodules is not supported")
             path = root.joinpath(*relative.parts)
             path.parent.mkdir(parents=True, exist_ok=True)
             contents = blob(object_id)

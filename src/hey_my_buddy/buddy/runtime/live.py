@@ -93,7 +93,7 @@ class WorkerLiveRuntime:
                         cc.register(WorkerRuntimeLive, self, name=self._name,
                                     concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
                     except (ValueError, RuntimeError) as error:
-                        raise BoardError("PRIVATE_PATH_UNSAFE", str(error)) from error
+                        raise BoardError("LIVE_ENDPOINT_START_FAILED", str(error)) from error
                     registered = True
                     address = cc.server_address()
                     self._descriptor = LiveEndpointDescriptor(

@@ -488,6 +488,26 @@ class WorkerLiveUnitTests(unittest.TestCase):
         self.assertFalse(self.board.attachments)
         self.assertEqual(self.channel.closes, ["binding-unavailable"])
 
+    def test_registration_failure_preserves_the_start_failure_code_and_cause(self):
+        message = "server failed to start: IO error: Operation not permitted"
+        for error_type in (ValueError, RuntimeError):
+            cause = error_type(message)
+            with self.subTest(error_type=error_type), \
+                    patch.object(self.c2, "register", side_effect=cause), \
+                    patch.object(self.c2, "server_address") as address, \
+                    patch.object(self.c2, "unregister") as unregister, \
+                    patch.object(self.c2, "shutdown") as shutdown:
+                with self.assertRaises(BoardError) as refused:
+                    self.runtime.start()
+                self.assertEqual(refused.exception.code, "LIVE_ENDPOINT_START_FAILED")
+                self.assertEqual(refused.exception.message, message)
+                self.assertIs(refused.exception.__cause__, cause)
+                self.assertIsNone(self.runtime._descriptor)
+                self.assertFalse(self.board.attachments)
+                address.assert_not_called()
+                unregister.assert_not_called()
+                shutdown.assert_called_once_with()
+
     def test_b2_23_failed_register_shuts_own_session_and_does_not_keep_channel(self):
         def failed_register(*args, **options):
             self.events.append(("register-failed",))

@@ -485,7 +485,7 @@ class CTwoLiveEndpoint:
             cc.register(self._contract, self, name=self._name,
                         concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
         except (ValueError, RuntimeError) as error:
-            raise BoardError("PRIVATE_PATH_UNSAFE", str(error)) from error
+            raise BoardError("LIVE_ENDPOINT_START_FAILED", str(error)) from error
         address = cc.server_address()
         if not isinstance(address, str) or not address:
             raise fail("the registered live endpoint reported no server address")
