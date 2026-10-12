@@ -69,7 +69,7 @@ The desktop label column stays visible while the timeline scrolls horizontally. 
 
 ## Schema and verification
 
-Startup accepts schema 16 only. An idle schema-15 board written by the upgrade base must use the explicit `upgrade` path described in [operations](operations.md); startup performs no conversion. The schema-11 offline preparation chain is retired. Other unsupported boards remain archives and have no conversion entrypoint in this source.
+Startup accepts schema 18 only. An idle schema-17 board written by the upgrade base must use the explicit `upgrade` path described in [operations](operations.md); startup performs no conversion. The schema-11 offline preparation chain is retired. Other unsupported boards remain archives and have no conversion entrypoint in this source.
 
 The 15 → 16 transaction converts SQL constraints and indexes, Router settings and current catalog trust together, preserving macro and micro tasks, immutable inputs and outputs, Host conclusions, native observations, event order and historical hashes. It creates no macro tasks or Router execution facts. Verification uses the fixed upgrade-base fixture, compares its migrated schema with a fresh board and checks retained rows; service reads and Host conclusion writes require separate private-service evidence. Installation and integration acceptance are recorded by the Host after verification.
 

@@ -115,7 +115,7 @@ The fixed artifact the blackboard makes of a checkout's content when a turn ends
 _Avoid_: 第 N 封 (say 第 N 回合的封存), 快照
 
 **权限档位 / permission level**:
-How far a Worker buddy may go in one turn, chosen by the Host when it delegates and changeable between turns: 只读 / read-only (read and search; no file may be modified), 写检出 / checkout-write (edit and run commands; files may be modified only inside the micro task's checkout) or 放开 / full access (no limit on where files are modified). A level says where files may be modified and nothing about the network.
+How far a Worker buddy may go in one turn, chosen by the Host when it delegates and changeable between turns: 只读 / read-only (read and search; no file may be modified), 写检出 / checkout-write (edit and run commands; files may be modified only inside the micro task's checkout) or 放开 / full access (no limit on where files are modified). A level says where files may be modified and nothing about the network. A harness carries a level out either 强制 / enforced, when its sandbox or tool limits stop a write outside the level, or 约定 / by convention, when it is only asked to stay inside and the blackboard checks afterwards what it can.
 _Avoid_: 权限清单, sandbox mode (a level is not a list of grants, and a sandbox mode is only how one harness carries a level out)
 
 **换手 / handoff**:
