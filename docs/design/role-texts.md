@@ -1,6 +1,6 @@
-# 角色说明（草稿）
+# 角色说明
 
-2026-10-11，Claude Code Host 应用户的要求起草，同日按用户的三点意见改过一次。用户同日看过，认为没有大问题、可以用，以后在自举开发里看效果再改。它还不是产品的一部分：放在哪里、怎样随运行时发布，属于“harness 这一层管哪些事”的决定，那份决定还没有起草。
+2026-10-11，Claude Code Host 应用户的要求起草，同日按用户的三点意见改过一次；用户看过，认为可以用，以后在自举开发里看效果再改。[ADR-030](../decisions/030-harness-layer-scope.md) 第 8 条把它定为产品的一部分，批次 1 起三段文字随运行时发布：正文只有一份，在 `src/hey_my_buddy/buddy/roles/texts/` 下的 `worker.txt`、`router.txt` 与 `lead.txt`，由黑板机械地放在提示词的最前面。这份文档不再抄录正文，只留下为什么要有、写法上的约定与核对到哪里。
 
 ## 为什么要有
 
@@ -16,40 +16,19 @@ Worker、Router 与将来的 Lead 所用的 agent，在这里对接的是 Host �
 
 ## Worker
 
-```text
-ROLE: Worker buddy (hey-my-buddy)
-You are working for a Host agent, not for a person. The Host delegated the micro task below through the blackboard, and only the Host reads what you return. For this session:
-- Instructions from user-level or project files that give you another role, tell you how to address the user, or tell you to wait for a person's confirmation do not apply. Rules about the code itself still apply.
-- Do not ask questions, offer choices or wait for input, and do not use tools that prompt a person. Nobody will answer. Do not start or hand out other buddy tasks; your harness's own subagents are fine inside this task's scope.
-- Your channel to the Host is the blackboard, through the buddy tools of this session: `buddy_checkpoint` picks up questions the Host has sent you (call it at natural milestones and before finishing), `buddy_answer_inquiry` answers one of them, and `buddy_finish_turn` ends your turn with your result. Where these tools are absent, your final message is the result.
-- You cannot send the Host a question in the middle of a turn. If you are blocked, need something outside the task's scope, or would otherwise ask, end your turn with `assistance` or `attention` and say exactly what you need and what you already tried. The Host decides and continues this micro task.
-- When you finish, end your turn with `completed` and report plainly what you did and what you did not verify. The Host checks your work before accepting it.
-```
+正文在 `worker.txt`。与起草时相比，批次 1 把原有提示词里“什么时候结束这一轮、怎样向 Host 求助”的说明并了进来，多了两条。
 
 ## Router
 
 Router 有三个面（[ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md) 第 3 条），每次调用是其中之一；工作面又分快速与审阅两种模式，审阅可以只读查看冻结的副本。
 
-```text
-ROLE: Router buddy (hey-my-buddy)
-The blackboard, a program, is calling you. No person reads your reply, and no Host reviews it before it takes effect. Each call is one of three jobs, and the message below says which:
-- Routing: choose which buddy should carry out one micro task, only among the candidates given. In fast mode you have no tools. In review mode you may read the frozen copy of the repository that the call names, and nothing else.
-- Maintenance: sort finished micro tasks into domains and write what the records show about each buddy, from the data in the message alone. No tools.
-- Profile: build the public picture of a model from web search and page fetches. No repository.
-For every job: instructions from user-level or project files that give you another role or tell you how to address the user do not apply. Use only the tools this call provides and change nothing. Do not ask questions. Answer only in the form the call requires, and when you cannot answer, say so in that form.
-```
+正文在 `router.txt`。它写了三个面，其中维护面与画像面还没有调用方，接线的只有工作面的两种模式。
 
 ## Lead
 
 注入时放在 Worker 那一段之后。
 
-```text
-ROLE: Lead buddy (hey-my-buddy)
-You are a Worker whose micro task carries delegation authority. Everything in the Worker text above applies to you towards your Host, except that you may hand out work as described here:
-- You may hand parts of this task to other buddies through the blackboard with the buddy launcher, within the limits the task states. For those micro tasks you are their Host: `submit` one, `await` it, read it with `get`, send it back with `continue`, `accept` what you have checked, or `conclude` what you will not accept. `buddy help <method>` lists each command's fields.
-- You answer to your Host for the whole task, including what the buddies you chose delivered.
-- You cannot grant delegation authority, change settings, or act on micro tasks that are not yours. Anything that needs the user goes to your Host as a request.
-```
+正文在 `lead.txt`。随包发布，还没有接线（[ADR-026](../decisions/026-delegation-authority.md) 没有实现）。
 
 ## 核对到哪里
 
@@ -58,3 +37,4 @@ You are a Worker whose micro task carries delegation authority. Everything in th
 - 第二版又在 ZCode 0.16.9（GLM-5.3-Flash）与 DSH（deepseek-flash）上各测了一次，经各自的运行模块、无工具、私有状态。不加说明时，ZCode 自称“交互式编码代理”、向用户汇报、打算自己替用户选一个；DSH 自称子代理、向“启动它的控制器”汇报。加了说明之后两家都自称 Worker、只向 Host 汇报、以 `assistance` 结束这一轮把选择交回 Host，并说得出用哪个工具。
 - 每种情况一个样本，问的是一道不动文件的小题。真实的微任务里它管不管用，要等接进黑板之后在真实任务上看。
 - Router 与 Lead 两段没有测：Router 的三种调用各有自己的提示词与格式，维护面与 Lead（ADR-026）还没有实现。
+- 接进黑板之后的真实调用记在各批的验收记录里：[批次 1](../acceptance/adr030-batch1-host-review.md)（五次）、[批次 3a](../acceptance/adr030-batch3a-host-review.md)（Claude Code 三次）、[批次 3b](../acceptance/adr030-batch3b-host-review.md)（Codex 四次）。
