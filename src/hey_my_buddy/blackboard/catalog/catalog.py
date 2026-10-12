@@ -418,11 +418,11 @@ def discover(*, directory: Path, harnesses=None) -> dict:
             discoveries.append({"adapter": name, "status": "unknown", "accountStatus": "unknown", "reason": error.code})
             continue
         providers.extend(payload["providers"])
-        # The harness's own observation carries the account-status fact of this
-        # native session; the aggregate never hardcodes it over that fact.
+        # Preserve this native session's reading status, reason and account fact.
         native_fact = next((item for item in payload["discoveries"] if item["adapter"] == name), None)
-        discoveries.append({"adapter": name, "status": "complete",
-                            "accountStatus": (native_fact or {}).get("accountStatus", "unknown")})
+        discoveries.append({"adapter": name, "status": native_fact["status"] if native_fact else "complete",
+                            "accountStatus": (native_fact or {}).get("accountStatus", "unknown"),
+                            **({"reason": native_fact["reason"]} if native_fact and native_fact.get("reason") is not None else {})})
         warnings.extend(payload["warnings"])
         sources.append(payload["source"])
         if payload.get("harnessVersion"):

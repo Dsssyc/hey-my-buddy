@@ -544,8 +544,9 @@ class BoardService(_BaseResource):
                 payload = adapter(name).discover_models()
             native_fact = next((item for item in payload.get('discoveries', [])
                                 if isinstance(item, dict) and item.get('adapter') == name), None)
-            payload['discoveries'] = [{'adapter': name, 'status': 'complete',
-                                       'accountStatus': (native_fact or {}).get('accountStatus', 'unknown')}]
+            payload['discoveries'] = [{'adapter': name, 'status': native_fact['status'] if native_fact else 'complete',
+                                       'accountStatus': (native_fact or {}).get('accountStatus', 'unknown'),
+                                       **({'reason': native_fact['reason']} if native_fact and native_fact.get('reason') is not None else {})}]
             catalog_store.record(self.evaluation, payload, observation['observationId'], health_generation=(name, record['revision']))
         except BoardError as error:
             if error.code != 'UPGRADE_IN_PROGRESS':
