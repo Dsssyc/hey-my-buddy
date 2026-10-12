@@ -154,7 +154,12 @@ def main():
             configured = dict(native_config)
             if case == 'readonly-config-mismatch' and 'permissions' in configured:
                 configured['permissions']['buddy-router']['network']['enabled'] = True
-            send({'id': ident, 'result': {'config': [] if case == 'config-unreadable' else configured}})
+            result = {'config': [] if case == 'config-unreadable' else configured}
+            if case == 'config-result-unreadable':
+                result = []
+            elif case == 'config-missing':
+                result = {}
+            send({'id': ident, 'result': result})
         elif method == "account/read":
             if case == "account-unknown":
                 account = {"type": "unrecognized"}
@@ -227,8 +232,15 @@ def main():
                 del policy['model']
             elif case == 'readonly-model-unreadable':
                 policy['model'] = 17
-            send({"id": ident, "result": {**policy, "thread": {"id": thread_id, "cwd": params["cwd"],
-                                                       "modelProvider": provider, "turns": []}}})
+            receipt = {**policy, "modelProvider": provider, "thread": {"id": thread_id, "cwd": params["cwd"],
+                                                                       "turns": []}}
+            if case == 'provider-wrong':
+                receipt['modelProvider'] = 'different-provider'
+            elif case == 'provider-unreadable':
+                receipt['modelProvider'] = []
+            elif case == 'provider-missing':
+                del receipt['modelProvider']
+            send({"id": ident, "result": receipt})
         elif method == "thread/read":
             if case == 'read-refused':
                 send({"id": ident, "error": {"code": -32600, "message":
@@ -255,8 +267,15 @@ def main():
             if not state or state.get('codexHome') != os.environ.get('CODEX_HOME'):
                 send({"id": ident, "error": {"code": -1, "message": "missing"}})
             else:
-                send({"id": ident, "result": {"thread": {"id": params["threadId"], "cwd": state["cwd"],
-                                                           "modelProvider": provider, "turns": state["turns"]}}})
+                receipt = {"modelProvider": provider, "thread": {"id": params["threadId"], "cwd": state["cwd"],
+                                                                 "turns": state["turns"]}}
+                if case == 'provider-wrong':
+                    receipt['modelProvider'] = 'different-provider'
+                elif case == 'provider-unreadable':
+                    receipt['modelProvider'] = []
+                elif case == 'provider-missing':
+                    del receipt['modelProvider']
+                send({"id": ident, "result": receipt})
         elif method == "turn/start":
             thread_id = params["threadId"]
             state = read_state()

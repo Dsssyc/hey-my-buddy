@@ -98,7 +98,7 @@ from .config import (
     cli_command,
     native_environment,
     native_provider,
-    policy_matches,
+    policy_status,
     read_only_config,
 )
 from .protocol import (
@@ -494,7 +494,7 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
     return _Spawn(process=process, handle=handle, connection=connection)
 
 
-def _catalog(connection: Connection, version: str | None, provider: str) -> tuple[dict, set[str]]:
+def _catalog(connection: Connection, version: str | None, provider: str | None) -> tuple[dict, set[str]]:
     data, cursor, seen = [], None, set()
     read_status, read_reason = "complete", None
     while True:
@@ -520,8 +520,11 @@ def _catalog(connection: Connection, version: str | None, provider: str) -> tupl
         seen.add(cursor)
     models = []
     warnings = [f"The native model reading is incomplete: {read_reason}"] if read_reason else []
+    if provider is None:
+        read_status, read_reason = "unknown", "config-shape-unreadable"
+        warnings.append("The native config/read configuration is unreadable; no provider or models can be attributed")
     listed_ids: set[str] = set()
-    for item in data:
+    for item in data if provider is not None else []:
         if not isinstance(item, dict) or item.get("hidden") is True:
             continue
         model_id = item.get("model")
@@ -541,7 +544,8 @@ def _catalog(connection: Connection, version: str | None, provider: str) -> tupl
     catalog = {"source": "codex-native-app-server", "adapter": "codex", "harnessVersion": version or "unknown",
                "discoveredAt": datetime.now(timezone.utc).isoformat(),
                "providers": [{"adapter": "codex", "provider": provider, "displayName": provider,
-                              "packageName": "codex", "packageVersion": version or "unknown", "models": models}],
+                              "packageName": "codex", "packageVersion": version or "unknown", "models": models}]
+                            if provider is not None else [],
                "warnings": list(dict.fromkeys(warnings)),
                "discoveries": [{"adapter": "codex", "status": read_status,
                                 **({"reason": read_reason} if read_reason else {})}]}
@@ -584,8 +588,8 @@ def _initialize(connection: Connection, prep: _Preparation, mode: str, spec: dic
     connection.send({"method": "initialized", "params": {}})
     connection.call("account/read", {"refreshToken": False})
     configured = connection.call("config/read", {"cwd": prep.cwd, "includeLayers": False}).get("config")
-    configured = configured if isinstance(configured, dict) else {}
-    catalog, listed_ids = _catalog(connection, prep.version, native_provider(configured))
+    provider = native_provider(configured) if isinstance(configured, dict) else None
+    catalog, listed_ids = _catalog(connection, prep.version, provider)
     state.catalog_read = {"discovery": catalog["discoveries"][0], "warnings": catalog["warnings"]}
     if spec.get("model") not in listed_ids:
         return False if catalog["discoveries"][0]["status"] == "complete" else None
@@ -687,7 +691,10 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
         raise CodexProtocolError("invalid-resume-mode",
                                  "Codex requires an explicit initial, native or reconstructed turn")
     thread_id = _check_thread_receipt(response, request.cwd, mode=mode, previous=previous)
-    state.native_provider = _bounded((response.get("thread") or {}).get("modelProvider"), 128)
+    provider = response.get("modelProvider")
+    if isinstance(provider, str) and provider != requested["provider"]:
+        raise CodexProtocolError("configuration-mismatch", "Codex acknowledged a different Worker provider")
+    state.native_provider = _bounded(provider, 128)
     state.thread_opened = True
     state.thread_id = thread_id
     state.configured = True
@@ -730,11 +737,9 @@ def _configure_review(connection: Connection, request: RunRequest,
     profile = permissions.get("buddy-router") if isinstance(permissions, dict) else None
     state.review_config["features"] = {"apps": _readback_fact(features.get("apps")) if isinstance(features, dict) else None}
     state.review_config["permissions"] = {"buddy-router": _readback_fact(profile)}
-    grants = profile.get("filesystem") if isinstance(profile, dict) else None
-    filesystem = {key: value for key, value in grants.items() if value is not None} if isinstance(grants, dict) else {}
+    config_status = policy_status(configured, expected)
     state.policy_checks["configReadback"] = {
-        "status": "confirmed" if (policy_matches(configured, expected)
-                                  and filesystem == expected["permissions"]["buddy-router"]["filesystem"]) else "unknown"}
+        "status": "confirmed" if config_status == "confirmed" else "unknown"}
     receipt_profile = response.get("activePermissionProfile")
     sandbox = response.get("sandbox")
     acknowledged = {"activePermissionProfile": receipt_profile, "sandbox": sandbox,
@@ -758,6 +763,15 @@ def _configure_review(connection: Connection, request: RunRequest,
     if isinstance(response.get("model"), str) and response["model"] != spec["model"]:
         raise CodexProtocolError("readonly-configuration-mismatch",
                                  "Codex acknowledged a different read-only model")
+    if isinstance(response.get("modelProvider"), str) and response["modelProvider"] != spec["provider"]:
+        raise CodexProtocolError("readonly-configuration-mismatch",
+                                 "Codex acknowledged a different read-only provider")
+    profile_id = receipt_profile.get("id") if isinstance(receipt_profile, dict) else None
+    approval = response.get("approvalPolicy")
+    if config_status == "mismatch" or isinstance(profile_id, str) and profile_id != "buddy-router" \
+            or isinstance(approval, str) and approval != "never" or sandbox.get("networkAccess") is True:
+        raise CodexProtocolError("readonly-policy-unverified",
+                                 "Codex acknowledged conflicting read-only restrictions")
     if not isinstance(response.get("cwd"), str) or Path(response["cwd"]).resolve() != Path(cwd).resolve():
         raise CodexProtocolError("readonly-configuration-mismatch",
                                  "Codex acknowledged a different read-only checkout")
@@ -796,6 +810,8 @@ def _configure_fast(connection: Connection, request: RunRequest, state: _RunStat
     state.policy_checks["threadReceipt"] = {"status": "confirmed" if response.get("approvalPolicy") == "never" else "unknown"}
     if isinstance(response.get("model"), str) and response["model"] != spec["model"]:
         raise CodexProtocolError("configuration-mismatch", "Codex acknowledged a different no-tool model")
+    if isinstance(response.get("modelProvider"), str) and response["modelProvider"] != spec["provider"]:
+        raise CodexProtocolError("configuration-mismatch", "Codex acknowledged a different no-tool provider")
     if not isinstance(thread_id, str) or not thread_id:
         raise CodexProtocolError("wrong-native-thread", "Codex returned no no-tool thread identity")
     if not isinstance(thread.get("cwd"), str) or Path(thread["cwd"]).resolve() != Path(cwd).resolve():
@@ -1238,6 +1254,8 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
             items = turn.get("items")
             if items is not None and not isinstance(items, list):
                 chain.observe_facts({"method": "turn/start-items-unreadable"})
+                chain.projector._incomplete({"threadId": thread_id, "turnId": turn_id},
+                                            tool_name=None, phase=None)
             elif items:
                 for item in items:
                     chain.observe_facts({"method": "item/started", "params": {
@@ -1736,14 +1754,13 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
                 account = None
             account_status = _discovery_account_status(account)
             configured = connection.call("config/read", {"cwd": cwd, "includeLayers": False}).get("config")
-            configured = configured if isinstance(configured, dict) else {}
-            catalog_value, _listed_ids = _catalog(connection, version, native_provider(configured))
+            provider = native_provider(configured) if isinstance(configured, dict) else None
+            catalog_value, _listed_ids = _catalog(connection, version, provider)
             from ....protocol.billing import codex_account, fact
-            provider = native_provider(configured)
             observed_at = utc_now()
             catalog_value["billingByProvider"] = {provider: (
                 codex_account(account, observed_at) if provider == "openai"
-                else fact("unknown", "codex/account-read", observed_at))}
+                else fact("unknown", "codex/account-read", observed_at))} if provider is not None else {}
             catalog_value["discoveries"][0]["accountStatus"] = account_status
             if facts.unknown_counts:
                 catalog_value["unknownEvents"] = {"countsByType": facts.unknown_counts,

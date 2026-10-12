@@ -308,6 +308,30 @@ class CodexToolEventProjectionTests(unittest.TestCase):
             CodexToolEventProjector({"adapter": "codex", "taskId": "t"})
 
 
+class UnreadableCodexToolEvidenceTests(unittest.TestCase):
+    def test_unreadable_typed_and_raw_items_cannot_prove_no_tools(self):
+        from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
+        for method in ("item/started", "item/updated", "item/completed", "rawResponseItem/completed"):
+            for item in (None, [], "opaque", {}, {"type": 17}, {"type": []}):
+                with self.subTest(method=method, item=item):
+                    projector = new_projector()
+                    projector.observe_root("thread-1", "turn-1")
+                    projector.observe_notification(frame(method, item))
+                    evidence = projector.finish(True)
+                    self.assertFalse(evidence["streamComplete"])
+                    self.assertIsNotNone(judge_tool_evidence(evidence, "fast", False))
+
+    def test_unknown_connection_and_thread_notifications_preserve_tool_completeness(self):
+        from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
+        projector = new_projector()
+        projector.observe_root("thread-1", "turn-1")
+        projector.observe_notification({"method": "account/updated", "params": {}})
+        projector.observe_notification({"method": "thread/futureNotification", "params": {"threadId": "thread-1"}})
+        evidence = projector.finish(True)
+        self.assertTrue(evidence["streamComplete"])
+        self.assertIsNone(judge_tool_evidence(evidence, "fast", False))
+
+
 class CodexReviewToolEvidenceTests(unittest.TestCase):
     """The review controller projects unified evidence over the fixture stream."""
 

@@ -422,25 +422,27 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertNotIn("turn", outcome.result)
 
-    def test_read_only_continues_with_an_unacknowledged_policy_receipt(self):
+    def test_read_only_refuses_a_conflicting_policy_receipt(self):
         result, _context = self.review('readonly-policy-mismatch', index=41)
-        self.assertEqual(result.status, 'ok', result.result)
-        self.assertIs(result.result['modelStarted'], True)
+        self.assertEqual(result.status, 'failed', result.result)
+        self.assertEqual(result.result['code'], 'readonly-policy-unverified')
+        self.assertIs(result.result['modelStarted'], False)
         self.assertEqual(result.result['policyCheck']['threadReceipt']['status'], 'unknown')
         self.assertIn('nativeConfigPolicy', result.result)
         # The native receipt keeps its actual networkAccess value.
         self.assertIn('nativePolicy', result.result)
         self.assertIs(result.result['nativePolicy']['sandbox']['networkAccess'], True)
-        self.assertTrue(result.result['toolEvidence']['streamComplete'])
+        self.assertFalse(result.result['toolEvidence']['streamComplete'])
         self.assertTrue(result.shutdown_confirmed)
 
-    def test_config_readback_difference_survives_a_completed_model_turn(self):
+    def test_config_readback_conflict_refuses_before_model_input(self):
         result, _context = self.review('readonly-config-mismatch', index=42)
-        self.assertEqual(result.status, 'ok', result.result)
-        self.assertIs(result.result['modelStarted'], True)
+        self.assertEqual(result.status, 'failed', result.result)
+        self.assertEqual(result.result['code'], 'readonly-policy-unverified')
+        self.assertIs(result.result['modelStarted'], False)
         self.assertEqual(result.result['policyCheck']['configReadback']['status'], 'unknown')
         self.assertIs(result.result['nativeConfigPolicy']['permissions']['buddy-router']['network']['enabled'], True)
-        self.assertTrue(result.result['toolEvidence']['streamComplete'])
+        self.assertFalse(result.result['toolEvidence']['streamComplete'])
         self.assertTrue(result.shutdown_confirmed)
 
     def test_read_only_accepts_user_features_and_external_configuration(self):
