@@ -41,7 +41,7 @@
 
 ### 批次 2：删除独立账户
 
-实现方的[读者清单](adr030-batch2-readers.md)（随这一批交付）查出这一批比最初写的大，Host 于 2026-10-12 按它冻结了下面的方案。
+已于 2026-10-12 验收并合入整合分支（`cedd9e47`、`775fe7df`、`da367304`），版本 0.30.0、schema 17，还没有安装；[验收记录](../acceptance/adr030-batch2-host-review.md)。实现方的[读者清单](adr030-batch2-readers.md)（随这一批交付）查出这一批比最初写的大，Host 于 2026-10-12 按它冻结了下面的方案。
 
 - **量到的事实。** 额度现在按“账户来源加凭据代次”分桶，目录、路由与健康也都绑着这个选择。除了最初列的四类记录，还有第五类 `account-operation:<uuid>`（原生读取前后的预留，了结不了的就是它）与一串派生记录：`account-quota:*`、`account-read-at:*`、`catalog-accounts:*`、`catalog-account:*`、`attempt-routing-accounts:*`，以及带账户段的 `quota-routing` 与 `quota-retry`。在真实看板的一份副本上量到：没有任何独立账户的选择、凭据或变更记录，782 条执行绑定的账户全是本机来源，48 条账户操作全是本机来源且停止未确认，状态目录下没有任何账户目录。
 - **删除。** 六个命令连同帮助、契约与服务入口；来源的选择、冻结、凭据比对、账户目录与执行环境；`account_operations.py`、`account_keystore.py`、`account_native.py`、`account_integrations.py` 整个文件；控制台“管理账户”的对话框与它的写入；升级的空闲检查与启动对账里账户专属的部分；清单 E 类 10 处与这几个文件里的其余各行；绑定文档里描述这些命令的段落。
