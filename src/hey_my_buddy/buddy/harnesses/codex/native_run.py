@@ -296,8 +296,8 @@ class _RunState:
     """The run's own end facts, recorded per stage as it actually happened.
 
     ``thread_opened`` and ``configured`` carry what the run really reached: a
-    result never claims an effective policy before the readbacks confirmed it
-    and never reports a completed native outcome without an observed turn.
+    result records requested policy only when sent, keeps native readbacks
+    separate and never reports a completed native outcome without an observed turn.
     """
 
     status: str = "error"
@@ -310,6 +310,7 @@ class _RunState:
     thread_id: str | None = None
     turn_id: str | None = None
     requested: dict | None = None
+    worker_policy: dict | None = None
     shutdown: bool = False
     exit_code: int | None = None
     interrupt_requested: bool = False
@@ -899,7 +900,7 @@ def _capture_frame(capture: dict, message: dict) -> None:
 
 
 def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
-                input_text: str, mode: str) -> dict:
+                input_text: str, mode: str, state: _RunState) -> dict:
     """The one turn admission site: send this round's input and schema."""
     params: dict = {"threadId": thread_id, "cwd": request.cwd, "model": request.configuration.model,
                     "effort": request.configuration.effort, "approvalPolicy": "never",
@@ -907,10 +908,14 @@ def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
                     "outputSchema": request.output_schema.value}
     if mode == "worker":
         params["sandboxPolicy"] = {"type": "workspaceWrite", "writableRoots": [request.cwd],
-                                   "networkAccess": False}
+                                   "networkAccess": True}
     elif mode == "review":
         params["permissions"] = "buddy-router"
-    return connection.call("turn/start", params)
+    response = connection.call("turn/start", params)
+    if mode == "worker":
+        state.worker_policy = {"sandboxPolicy": params["sandboxPolicy"],
+                               "approvalPolicy": params["approvalPolicy"]}
+    return response
 
 
 def _observe_quota(connection: Connection, evidence: TurnEvidence) -> dict | None:
@@ -1090,7 +1095,7 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
                  observer: Callable[[Mapping], RunFeedback], activity: _ActivityWriter) -> None:
     """The governed turn: one admission, settlement, usage, quota, checkpoint."""
     state.model_started = True
-    response = _admit_turn(connection, request, thread_id, request.input_text, "worker")
+    response = _admit_turn(connection, request, thread_id, request.input_text, "worker", state)
     turn = response.get("turn")
     turn_id = turn.get("id") if isinstance(turn, dict) else None
     if not isinstance(turn_id, str) or not turn_id:
@@ -1172,7 +1177,7 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
         fast_state = {"started": False, "completed": None, "final": None}
         chain.unbind()
         state.model_started = True
-        response = _admit_turn(connection, request, thread_id, input_text, mode)
+        response = _admit_turn(connection, request, thread_id, input_text, mode, state)
         turn = response.get("turn")
         turn_id = turn.get("id") if isinstance(turn, dict) else None
         if mode == "fast":
@@ -1454,7 +1459,8 @@ def _effective_policy(state: _RunState, mode: str,
     if not state.configured:
         return EffectivePolicy()
     if mode == "worker":
-        return EffectivePolicy()
+        return EffectivePolicy(
+            tools=PolicyFact(requested=_json_package(state.worker_policy)) if state.worker_policy else None)
     if mode == "fast":
         return EffectivePolicy(
             tools=PolicyFact(requested=_json_package({"sandbox": "read-only", "approvalPolicy": "never"})))

@@ -601,6 +601,7 @@ class ReviewSeamTests(CodexSeamCase):
                          package["nativeIdentity"][0]["sessionId"])
         policy = result.effective_policy.tools
         self.assertEqual(policy.requested.value["activePermissionProfile"]["id"], "buddy-router")
+        self.assertIs(policy.requested.value["sandbox"]["networkAccess"], False)
         # The read-back native configuration — the acknowledged state, with its
         # own filesystem grant for this checkout — is the retained evidence.
         retained = {ref.kind: ref for ref in result.evidence_refs}
@@ -697,6 +698,15 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(json.loads(result.value.raw)["outcome"]["disposition"], "completed")
         self.assertEqual(result.native_identity.turn_id, "native-turn-1")
+        expected_policy = {"sandboxPolicy": {"type": "workspaceWrite", "writableRoots": [str(self.cwd)],
+                                             "networkAccess": True}, "approvalPolicy": "never"}
+        self.assertEqual(result.effective_policy.tools.requested.value, expected_policy)
+        self.assertEqual(native_run.native_evidence(result)["nativePolicy"], expected_policy)
+        trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        thread = trace["threads"][result.native_identity.session_id]
+        self.assertEqual(thread["turnRequests"], [{"cwd": str(self.cwd), **expected_policy}])
+        self.assertEqual(thread["start"]["sandbox"], "workspace-write")
+        self.assertEqual(thread["start"]["approvalPolicy"], "never")
         retained = Path(next(ref.location for ref in result.evidence_refs
                              if ref.kind == "native-checkpoint"))
         checkpoint = json.loads(retained.read_text())
@@ -962,6 +972,12 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(second.end.status, "ok", second.end.message)
         self.assertEqual(second.native_identity.session_id, previous)
         self.assertEqual(second.native_identity.turn_id, "native-turn-2")
+        expected_policy = {"sandboxPolicy": {"type": "workspaceWrite", "writableRoots": [str(self.cwd)],
+                                             "networkAccess": True}, "approvalPolicy": "never"}
+        self.assertEqual(second.effective_policy.tools.requested.value, expected_policy)
+        trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        self.assertEqual(trace["threads"][previous]["turnRequests"],
+                         [{"cwd": str(self.cwd), **expected_policy}] * 2)
 
     def assert_resume_failed_without_new_thread(self, case, code, text=None):
         first = self.worker_run('ok')
