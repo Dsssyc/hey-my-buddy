@@ -9,6 +9,7 @@ import json
 import unittest
 from unittest.mock import patch
 
+from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
@@ -195,12 +196,14 @@ class FailoverTests(RouterDispatchTestCase):
 
     def test_frozen_inside_candidate_loses_required_capability(self):
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET capabilities_json='[\"coding\"]'")
+            db.execute("UPDATE evaluation_profiles SET capabilities_json=?",
+                       (canonical_json(["coding", *permission_capabilities("dsh")]),))
         request = self.board_.call("selection_request", {"requestId": "capability", "task": "choose",
                                                          "requiredCapabilities": ["coding"]})
         first = self.claim("first", task_id=request["runId"])["claim"]
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET capabilities_json='[]' WHERE profile_id=?", (B,))
+            db.execute("UPDATE evaluation_profiles SET capabilities_json=? WHERE profile_id=?",
+                       (canonical_json(permission_capabilities("dsh")), B))
         self.assert_boundary(request, first, self.answer(first))
         self.assertEqual(self.decision_row(request["decisionId"])["error"], "router-out-of-bounds")
 

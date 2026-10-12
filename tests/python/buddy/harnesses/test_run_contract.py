@@ -157,13 +157,12 @@ class NativeEvidenceContractTests(unittest.TestCase):
 class CodecRoundtripTests(unittest.TestCase):
     def test_full_scope_crosses_the_run_contract_and_is_refused_before_native_launch(self):
         from hey_my_buddy.buddy.harnesses.claude import native_run as claude
-        from hey_my_buddy.buddy.harnesses.codex import native_run as codex
         from hey_my_buddy.buddy.harnesses.dsh import native_run as dsh
         from hey_my_buddy.buddy.harnesses.zcode import native_run as zcode
 
         request = edited(full_request(Path("/private/tmp")), tool_scope="full")
         self.assertEqual(rc.decode_run_request(rc.encode_run_request(request)).tool_scope, "full")
-        for name, module in (("claude", claude), ("codex", codex),
+        for name, module in (("claude", claude),
                              ("dsh", dsh), ("zcode", zcode)):
             with self.subTest(harness=name), mock.patch("subprocess.Popen",
                                                         side_effect=AssertionError("native launch")) as spawn:
@@ -181,14 +180,36 @@ class CodecRoundtripTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             edited(request, tool_scope="read")
 
+    def test_codex_full_worker_selects_the_worker_carrier(self):
+        from hey_my_buddy.buddy.harnesses.codex import native_run as codex
+        from hey_my_buddy.buddy.harnesses.registry import require_permission, worker_permission
+        permission = worker_permission("codex", "full")
+        request = edited(full_request(Path("/private/tmp")), harness="codex",
+                         tool_scope="full", worker_permission=permission)
+        require_permission({"adapter": "codex"}, "full")
+        with mock.patch.object(codex, "_run", return_value=object()) as native:
+            codex.run(request, observer=lambda _event: None, services=None, cancelled=lambda: False)
+        self.assertEqual(native.call_args.args[2], "worker")
+        for harness in ("claude", "dsh", "zcode"):
+            with self.subTest(harness=harness), self.assertRaises(BoardError) as caught:
+                require_permission({"adapter": harness}, "full")
+            self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")
+
+    def test_codex_write_or_full_without_worker_level_is_a_caller_error(self):
+        from hey_my_buddy.buddy.harnesses.codex import native_run as codex
+        for scope in ("write", "full"):
+            with self.subTest(scope=scope), self.assertRaises(BoardError) as caught:
+                codex.run(edited(full_request(Path("/private/tmp")), harness="codex", tool_scope=scope),
+                          observer=lambda _event: None, services=None, cancelled=lambda: False)
+            self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+
     def test_full_level_is_refused_even_when_native_scope_is_write(self):
         from hey_my_buddy.buddy.harnesses.claude import native_run as claude
-        from hey_my_buddy.buddy.harnesses.codex import native_run as codex
         from hey_my_buddy.buddy.harnesses.dsh import native_run as dsh
         from hey_my_buddy.buddy.harnesses.zcode import native_run as zcode
         permission = rc.WorkerPermission(level="full", tool_scope="write", enforcement="convention")
         request = edited(full_request(Path("/private/tmp")), tool_scope="write", worker_permission=permission)
-        for name, module in (("claude", claude), ("codex", codex),
+        for name, module in (("claude", claude),
                              ("dsh", dsh), ("zcode", zcode)):
             with self.subTest(harness=name), mock.patch("subprocess.Popen",
                                                         side_effect=AssertionError("native launch")) as spawn:

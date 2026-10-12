@@ -9,13 +9,17 @@ class CodexAdapter:
     """Native availability and facts, with no inherited execution entries."""
 
     name = "codex"
-    capabilities = ("codex", "workspace", "cancel", "artifacts", "deadline", "native-session", "permission:read", "permission:write")
+    capabilities = ("codex", "workspace", "cancel", "artifacts", "deadline", "native-session")
     native_resume = True
     model_discovery = True
     read_only_structured = True
     system_sandbox_platforms = ("darwin", "linux", "win32")
     read_only_structured_resume = True
     no_tool_structured = True
+
+    def __init__(self):
+        from ..registry import worker_permission_capabilities
+        self.capabilities = (*type(self).capabilities, *worker_permission_capabilities(self.name))
 
     def local_read_only_check(self) -> dict:
         # Qualification confirms this project's registered mechanism exists;

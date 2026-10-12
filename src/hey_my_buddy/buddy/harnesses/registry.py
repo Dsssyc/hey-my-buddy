@@ -135,14 +135,20 @@ register_run_seam("dsh", dsh_run)
 EXTERNAL_CAPABILITIES = ("external", "artifacts", "task-text")
 
 # Worker levels name the Host's chosen boundary. Native tool scope is a
-# separate harness fact: three current Worker paths require their existing
+# separate harness fact: two current Worker paths require their existing
 # write execution path even for a read reservation, which the board seals.
 _WORKER_PERMISSIONS = {
-    "codex": {"read": ("write", "convention"), "write": ("write", "enforced")},
+    "codex": {"read": ("read", "enforced"), "write": ("write", "enforced"),
+              "full": ("full", "enforced")},
     "claude": {"read": ("read", "enforced"), "write": ("write", "enforced")},
     "dsh": {"read": ("write", "convention"), "write": ("write", "enforced")},
     "zcode": {"read": ("write", "convention"), "write": ("write", "convention")},
 }
+
+
+def worker_permission_capabilities(harness: str) -> tuple[str, ...]:
+    """Derive advertised levels from the same declaration used by each turn."""
+    return tuple(f"permission:{level}" for level in _WORKER_PERMISSIONS.get(harness, {}))
 
 
 def worker_permission(harness: str, level: str) -> WorkerPermission:
@@ -282,4 +288,5 @@ __all__ = [
     "run_seam",
     "supported_capabilities",
     "worker_permission",
+    "worker_permission_capabilities",
 ]

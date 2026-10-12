@@ -31,13 +31,17 @@ class ClaudeAdapter:
     """Native availability and facts, with no inherited execution entries."""
 
     name = "claude"
-    capabilities = ("claude", "workspace", "cancel", "artifacts", "deadline", "permission:read", "permission:write")
+    capabilities = ("claude", "workspace", "cancel", "artifacts", "deadline")
     native_resume = False
     model_discovery = True
     read_only_structured = True
     read_only_structured_resume = False
     no_tool_structured = False
     system_sandbox_platforms = ("darwin", "linux")
+
+    def __init__(self):
+        from ..registry import worker_permission_capabilities
+        self.capabilities = (*type(self).capabilities, *worker_permission_capabilities(self.name))
 
     def local_read_only_check(self) -> dict:
         from ..base import registered_read_only_check

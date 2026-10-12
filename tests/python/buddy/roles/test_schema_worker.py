@@ -24,15 +24,32 @@ from buddy.harnesses.claude.test_native_run import CONFIGURATION, NativeRunCase
 
 class CodexSchemaTests(unittest.TestCase):
     def test_worker_permission_capabilities_match_role_paths(self):
+        expected = {
+            "codex": ("codex", "workspace", "cancel", "artifacts", "deadline", "native-session",
+                      "permission:read", "permission:write", "permission:full"),
+            "claude": ("claude", "workspace", "cancel", "artifacts", "deadline", "permission:read", "permission:write"),
+            "dsh": ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",
+                    "permission:read", "permission:write"),
+            "zcode": ("zcode", "observe", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",
+                      "permission:read", "permission:write"),
+        }
+        for harness, capabilities in expected.items():
+            with self.subTest(harness=harness):
+                self.assertEqual(adapter(harness).capabilities, capabilities)
+
+    def test_capabilities_are_derived_from_the_turn_declaration(self):
+        from hey_my_buddy.buddy.harnesses.registry import _WORKER_PERMISSIONS
         for harness in ("codex", "claude", "dsh", "zcode"):
-            capabilities = set(adapter(harness).capabilities)
-            self.assertIn("permission:write", capabilities)
-            self.assertIn("permission:read", capabilities)
-            self.assertNotIn("permission:full", capabilities)
+            with self.subTest(harness=harness), mock.patch.dict(_WORKER_PERMISSIONS, {
+                    harness: {"read": ("read", "enforced")}}):
+                capabilities = adapter(harness).capabilities
+                self.assertEqual([value for value in capabilities if value.startswith("permission:")],
+                                 ["permission:read"])
 
     def test_worker_levels_declare_native_scope_and_enforcement(self):
         expected = {
-            "codex": {"read": ("write", "convention"), "write": ("write", "enforced")},
+            "codex": {"read": ("read", "enforced"), "write": ("write", "enforced"),
+                      "full": ("full", "enforced")},
             "claude": {"read": ("read", "enforced"), "write": ("write", "enforced")},
             "dsh": {"read": ("write", "convention"), "write": ("write", "enforced")},
             "zcode": {"read": ("write", "convention"), "write": ("write", "convention")},
@@ -43,12 +60,13 @@ class CodexSchemaTests(unittest.TestCase):
                     permission = worker_permission(harness, level)
                     self.assertEqual((permission.level, permission.tool_scope, permission.enforcement),
                                      (level, scope, strength))
-            with self.subTest(harness=harness, level="full"), self.assertRaises(BoardError):
-                worker_permission(harness, "full")
+            if harness != "codex":
+                with self.subTest(harness=harness, level="full"), self.assertRaises(BoardError):
+                    worker_permission(harness, "full")
 
     def test_every_worker_path_carries_the_frozen_workspace_access(self):
         for harness in ("codex", "claude", "dsh", "zcode"):
-            for access in ("read", "write"):
+            for access in (("read", "write", "full") if harness == "codex" else ("read", "write")):
                 with self.subTest(harness=harness, access=access), tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
                     turn = {"taskId": "task", "attemptId": "attempt", "generation": 1,
@@ -209,4 +227,4 @@ class SchemaWorkerTests(NativeRunCase):
                 format = worker_format(name)
                 self.assertEqual(hashlib.sha256(canonical_json(format.schema).encode()).hexdigest(), schema_hash)
                 self.assertEqual(hashlib.sha256(format.prompt("task", {"turn": 1}).encode()).hexdigest(), prompt_hash)
-        self.assertEqual(worker_permission("codex", "read").tool_scope, "write")
+        self.assertEqual(worker_permission("codex", "read").tool_scope, "read")

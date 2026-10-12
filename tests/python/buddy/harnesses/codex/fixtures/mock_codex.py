@@ -247,7 +247,11 @@ def main():
                 continue
             if case == 'resume-no-answer':
                 continue
-            state = read_state()["threads"].get(params["threadId"])
+            full_state = read_state()
+            state = full_state["threads"].get(params["threadId"])
+            if state:
+                state.setdefault("resumeRequests", []).append(params)
+                write_state(full_state)
             if not state or state.get('codexHome') != os.environ.get('CODEX_HOME'):
                 send({"id": ident, "error": {"code": -1, "message": "missing"}})
             else:

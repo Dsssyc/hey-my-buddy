@@ -8,6 +8,7 @@ from unittest import mock
 
 from support import BoardTestCase
 from blackboard.store.upgrade_fixture import FIXTURE, load_fixture
+from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 from hey_my_buddy.blackboard.store import migrations
 from hey_my_buddy.blackboard.store.db import Database, Corruption
 from hey_my_buddy.errors import BoardError
@@ -80,28 +81,36 @@ class Schema17UpgradeTests(BoardTestCase):
             if table not in ('meta', 'workflow_turns', 'evaluation_profiles'):
                 self.assertEqual(actual[table], values, table)
         cap_index = [row[1] for row in self.connection.execute('PRAGMA table_info(evaluation_profiles)')].index('capabilities_json')
+        adapter_index = [row[1] for row in self.connection.execute('PRAGMA table_info(evaluation_profiles)')].index('adapter')
         for before, after in zip(old['evaluation_profiles'], actual['evaluation_profiles']):
             self.assertEqual(after[:cap_index] + after[cap_index + 1:], before[:cap_index] + before[cap_index + 1:])
-            self.assertEqual(set(json.loads(after[cap_index])), set(json.loads(before[cap_index])) | {'permission:read', 'permission:write'})
+            self.assertEqual(set(json.loads(after[cap_index])),
+                             {cap for cap in json.loads(before[cap_index]) if not cap.startswith('permission:')}
+                             | set(permission_capabilities(before[adapter_index])))
+            if before[adapter_index] == 'codex':
+                self.assertIn('permission:full', json.loads(after[cap_index]))
         expected_turns = [row[:access_index] + (run_access[row[1]], None) + row[access_index:]
                           for row in old['workflow_turns']]
         self.assertEqual(actual['workflow_turns'], sorted(expected_turns, key=repr))
         self.assertEqual(dict(actual['meta']), {**dict(old['meta']), 'schema_version': '18'})
 
-    def test_existing_published_profiles_remain_eligible_for_read_after_upgrade(self):
+    def test_existing_published_profiles_gain_read_and_full_eligibility_after_upgrade(self):
         from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
         self.connection.row_factory = sqlite3.Row
-        original = self.connection.execute('SELECT profile_id,enabled,available FROM evaluation_profiles ORDER BY profile_id').fetchall()
+        original = self.connection.execute('SELECT profile_id,adapter,enabled,available FROM evaluation_profiles ORDER BY profile_id').fetchall()
         migrations.migrate_17_to_18(self.connection)
-        self.assertEqual([tuple(row) for row in self.connection.execute('SELECT profile_id,enabled,available FROM evaluation_profiles ORDER BY profile_id')],
+        self.assertEqual([tuple(row) for row in self.connection.execute('SELECT profile_id,adapter,enabled,available FROM evaluation_profiles ORDER BY profile_id')],
                          [tuple(row) for row in original])
         # Quota records remain real preserved stock. Clear only this private
         # fixture's quota stop so the scan isolates permission eligibility.
         self.connection.execute('DELETE FROM quota_current')
-        candidates, _ = DecisionCoordinator._scan_candidates(self.connection, ['permission:read'], coding_only=True)
-        self.assertTrue(candidates)
-        self.assertEqual({row['profile_id'] for row in candidates},
-                         {row['profile_id'] for row in original if row['enabled'] and row['available']})
+        for level in ('read', 'full'):
+            with self.subTest(level=level):
+                expected = {row['profile_id'] for row in original if row['enabled'] and row['available']
+                            and f'permission:{level}' in permission_capabilities(row['adapter'])}
+                candidates, _ = DecisionCoordinator._scan_candidates(
+                    self.connection, [f'permission:{level}'], coding_only=True)
+                self.assertEqual({row['profile_id'] for row in candidates}, expected)
 
     def test_historical_write_access_uses_owning_run_without_changing_turn_evidence(self):
         run_id = DELIVERED

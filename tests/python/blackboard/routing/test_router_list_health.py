@@ -12,6 +12,7 @@ import json
 import unittest
 
 from support import BoardTestCase, FakeClock
+from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 
 from hey_my_buddy.blackboard.routing import router, router_history
 from hey_my_buddy.blackboard.store.db import canonical_json
@@ -35,8 +36,9 @@ class RouterListHealthTestCase(BoardTestCase):
         with self.db.write() as db:
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
                        "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES(?,?,?,?,?,?,?,?,'[]',0,0)",
-                       (profile_id, profile_id, adapter, provider, profile_id, "max", available, enabled))
+                       " VALUES(?,?,?,?,?,?,?,?,?,0,0)",
+                       (profile_id, profile_id, adapter, provider, profile_id, "max", available, enabled,
+                        canonical_json(permission_capabilities(adapter))))
 
     def set_settings(self, *, ids, interval=600, mode="fast"):
         with self.db.write() as db:

@@ -12,12 +12,16 @@ class ZcodeAdapter:
     """Native availability and facts, with no inherited execution entries."""
 
     name = "zcode"
-    capabilities = ("zcode", "observe", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session", "permission:read", "permission:write")
+    capabilities = ("zcode", "observe", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session")
     native_resume = True
     model_discovery = True
     no_tool_structured = True
     read_only_structured = False
     read_only_structured_resume = False
+
+    def __init__(self):
+        from ..registry import worker_permission_capabilities
+        self.capabilities = (*type(self).capabilities, *worker_permission_capabilities(self.name))
 
     def local_read_only_check(self) -> dict:
         return {"eligible": False, "reasonCode": "readonly-worker-carrier-unimplemented",

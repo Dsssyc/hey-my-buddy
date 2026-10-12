@@ -544,9 +544,8 @@ def _check_recorded(selected: dict, view: "CatalogView", *, pending_efforts: lis
 
 def permission_capabilities(name: str) -> list[str]:
     """The permission facts copied into catalog rows from this source's harness."""
-    from ...buddy.harnesses.registry import adapters
-    native = adapters().get(name)
-    return sorted(capability for capability in native.capabilities if capability.startswith("permission:")) if native else []
+    from ...buddy.harnesses.registry import worker_permission_capabilities
+    return sorted(worker_permission_capabilities(name))
 
 
 class CatalogView:

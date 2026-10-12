@@ -13,7 +13,9 @@ import unittest
 from unittest import mock
 
 from support import BoardTestCase
+from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 from hey_my_buddy.blackboard.routing import router, router_settings
+from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 
 A = "dsh:fixture:alpha:max"
@@ -32,8 +34,9 @@ class RouterListConfigurationTests(BoardTestCase):
             for profile_id in (A, B):
                 db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
                            "available,enabled,capabilities_json,created_revision,updated_revision)"
-                           " VALUES(?,?,?,?,?,?,1,1,'[]',0,0)",
-                           (profile_id, profile_id, "dsh", "fixture", profile_id, "max"))
+                           " VALUES(?,?,?,?,?,?,1,1,?,0,0)",
+                           (profile_id, profile_id, "dsh", "fixture", profile_id, "max",
+                            canonical_json(permission_capabilities("dsh"))))
 
     def meta(self):
         with self.board_.store.db.read() as db:
@@ -131,7 +134,8 @@ class RouterListConfigurationTests(BoardTestCase):
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
                        "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES('incomplete','incomplete','dsh','fixture','','',1,1,'[]',0,0)")
+                       " VALUES('incomplete','incomplete','dsh','fixture','','',1,1,?,0,0)",
+                       (canonical_json(permission_capabilities("dsh")),))
         with self.assertRaises(BoardError) as caught:
             self.publish({"routerProfileIds": ["incomplete"]})
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
@@ -140,17 +144,20 @@ class RouterListConfigurationTests(BoardTestCase):
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
                        "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES(?,?,?,?,?,?,?,1,'[]',0,0)",
-                       ("disabled", "disabled", "dsh", "fixture", "disabled", "max", 1))
+                       " VALUES(?,?,?,?,?,?,?,1,?,0,0)",
+                       ("disabled", "disabled", "dsh", "fixture", "disabled", "max", 1,
+                        canonical_json(permission_capabilities("dsh"))))
             db.execute("UPDATE evaluation_profiles SET enabled=0 WHERE profile_id='disabled'")
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
                        "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES(?,?,?,?,?,?,0,1,'[]',0,0)",
-                       ("offline", "offline", "dsh", "fixture", "offline", "max"))
+                       " VALUES(?,?,?,?,?,?,0,1,?,0,0)",
+                       ("offline", "offline", "dsh", "fixture", "offline", "max",
+                        canonical_json(permission_capabilities("dsh"))))
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
                        "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES(?,?,?,?,?,?,1,1,'[]',0,0)",
-                       ("reviewonly", "reviewonly", "zcode", "fixture", "reviewonly", "max"))
+                       " VALUES(?,?,?,?,?,?,1,1,?,0,0)",
+                       ("reviewonly", "reviewonly", "zcode", "fixture", "reviewonly", "max",
+                        canonical_json(permission_capabilities("zcode"))))
         self.publish({"routerProfileIds": [A, "disabled", "offline", "reviewonly"], "defaultRoutingMode": "review"})
         self.assertEqual(self.board_.call("console_snapshot", {})["configuration"]["routerProfileIds"],
                          [A, "disabled", "offline", "reviewonly"])
@@ -159,8 +166,9 @@ class RouterListConfigurationTests(BoardTestCase):
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
                        "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES(?,?,?,?,?,?,0,1,'[]',0,0)",
-                       ("offline", "offline", "dsh", "fixture", "offline", "max"))
+                       " VALUES(?,?,?,?,?,?,0,1,?,0,0)",
+                       ("offline", "offline", "dsh", "fixture", "offline", "max",
+                        canonical_json(permission_capabilities("dsh"))))
         self.publish({"routerProfileIds": ["offline"]})
         self.publish({"routerRetryIntervalSeconds": 1, "routingBudget": "brief", "defaultRoutingMode": "review"})
         configuration = self.board_.call("console_snapshot", {})["configuration"]
