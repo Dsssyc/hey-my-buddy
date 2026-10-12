@@ -70,6 +70,10 @@ class ChecksEnvironmentTests(unittest.TestCase):
             "BUDDY_CONSOLE_PORT": "8642",
             "BUDDY_UNLISTED_TEST_PIN": "inherited",
             "ANTHROPIC_UNLISTED_TEST_PIN": "inherited",
+            "ZCODE_UNLISTED_TEST_PIN": "inherited",
+            "ZAI_API_KEY": "synthetic-secret",
+            "ZHIPU_API_KEY": "synthetic-secret",
+            "GLM_API_KEY": "synthetic-secret",
             "C2_IPC_ROOT": "/public-native-domain",
             "C2_UNLISTED_TEST_PIN": "inherited",
         }
@@ -77,7 +81,7 @@ class ChecksEnvironmentTests(unittest.TestCase):
             environment = checks.test_environment(Path("/repo"))
         for key in checks.SANITIZED_VARIABLES:
             self.assertNotIn(key, environment)
-        for key in ("BUDDY_UNLISTED_TEST_PIN", "ANTHROPIC_UNLISTED_TEST_PIN", "C2_IPC_ROOT", "C2_UNLISTED_TEST_PIN"):
+        for key in ("BUDDY_UNLISTED_TEST_PIN", "ANTHROPIC_UNLISTED_TEST_PIN", "C2_IPC_ROOT", "C2_UNLISTED_TEST_PIN", "ZCODE_UNLISTED_TEST_PIN", "ZAI_API_KEY", "ZHIPU_API_KEY", "GLM_API_KEY"):
             self.assertNotIn(key, environment)
         self.assertEqual(environment["BUDDY_DEV_SOURCE"], "1")
         self.assertEqual(environment["BUDDY_CONSOLE_PORT"], "0")

@@ -309,6 +309,13 @@ def decode_native_failure(payload: object) -> dict | None:
     return failure
 
 
+def native_turn_failure(payload: object) -> NativeError:
+    """The canonical failure event, decoded identically for both carriers."""
+    failure = decode_native_failure(payload)
+    detail = f" ({failure['summary']})" if failure is not None else ""
+    return NativeError("native-turn-failed", f"the native root turn failed{detail}", failure=failure)
+
+
 def quota_failure(failure: dict) -> dict | None:
     """Classify native rate-limit attribution before code-only quota errors.
 
@@ -599,10 +606,30 @@ class ZcodeAttemptUsage:
         return self.message_usage() or self.delta_usage()
 
 
+def combined_usage(rounds: list[ZcodeAttemptUsage]) -> dict | None:
+    """Sum the observed root usage across this run's correction sessions."""
+    readings = [round.raw_usage() for round in rounds]
+    known = [reading for reading in readings if reading is not None]
+    if not known:
+        return None
+    if len(readings) == 1:
+        return known[0]
+    result = {"source": "zcode/root-session-rounds", "scope": "attempt",
+              "coverage": "native-root-session", "inputBasis": "includes-cached",
+              "completeness": "complete" if len(known) == len(readings)
+              and all(reading["completeness"] == "complete" for reading in known) else "partial"}
+    for key in ("inputTokens", "outputTokens", "cachedInputTokens", "reasoningOutputTokens", "nativeRecords"):
+        result[key] = sum(reading[key] for reading in known)
+    return result
+
+
 class NativeConnection:
     """Responses and reverse requests are pumped together; no request holds a reader."""
 
-    def __init__(self, process: subprocess.Popen, deadline: float, cancelled: threading.Event, *, no_tools: bool = False):
+    def __init__(self, process: subprocess.Popen, deadline: float, cancelled: threading.Event, *,
+                 runtime_preferences: dict, no_tools: bool = False):
+        self.runtime_preferences = runtime_preferences
+        self.runtime_preferences_facts: dict | None = None
         self.process, self.deadline, self.cancelled = process, deadline, cancelled
         self.no_tools = no_tools
         self.messages: queue.Queue = queue.Queue(maxsize=128)
@@ -680,27 +707,17 @@ class NativeConnection:
         self.ordinal += 1
         if "id" in message and "method" in message:
             if message["method"] == "session/requestRuntimePreferences":
-                self.send({"id": message["id"], "result": {
-                    "nativeSearchEnhancementsEnabled": not self.no_tools, "memoryEnabled": False,
-                    "askUserQuestionAutoResolutionEnabled": False, "modelContextBudgetStrategy": "preflight-v1",
-                }})
+                self.answer_runtime_preferences(message)
                 return
             if self.no_tools:
                 # Every native interaction in a no-tool call — provider headers
                 # included — is answered with the documented refusal and
                 # recorded as a denied interaction. Whether it ends the run is
                 # the role observer's immediate decision over the retained
-                # fact, never this pump's; the fast rule keeps its own legacy
-                # stop reason instead of unsupported-provider.
+                # fact, never this pump's.
                 self.attention_request(message, outcome="refused-with-jsonrpc-error")
                 self.send({"id": message["id"], "error": {"code": -32601, "message": "No interactions are allowed in a no-tool call"}})
                 return
-            if message["method"] == "interaction/requestProviderRuntimeHeaders":
-                # OAuth account providers need a native authentication host that this
-                # adapter deliberately cannot impersonate. It stays a hard error.
-                self.attention_request(message, outcome="refused-with-jsonrpc-error")
-                self.send({"id": message["id"], "error": {"code": -32601, "message": "This Buddy execution requires a structured attention outcome"}})
-                raise NativeError("unsupported-provider", "OAuth account providers require a native ZCode authentication host")
             # Interactive host capabilities this execution cannot grant. Answer the
             # two known schemas with their documented refusal body so the owned turn
             # continues and reports attention, instead of crashing the controller.
@@ -729,6 +746,23 @@ class NativeConnection:
             self.responses[message["id"]] = message
         else:
             self.observe(message, self.ordinal)
+
+    def answer_runtime_preferences(self, message: dict) -> None:
+        """Answer from the startup reading, then retain only the values sent."""
+        memory = self.runtime_preferences["memoryEnabled"]
+        search = self.runtime_preferences["nativeSearchEnhancementsEnabled"]
+        result = {"memoryEnabled": memory["value"],
+                  "nativeSearchEnhancementsEnabled": search["value"] and not self.no_tools,
+                  "askUserQuestionAutoResolutionEnabled": False,
+                  "modelContextBudgetStrategy": "preflight-v1"}
+        self.send({"id": message["id"], "result": result})
+        self.runtime_preferences_facts = {
+            "memoryEnabled": dict(memory),
+            "nativeSearchEnhancementsEnabled": {
+                "value": result["nativeSearchEnhancementsEnabled"], "source": search["source"],
+                "configuredValue": search["value"], "restrictedByToolScope": self.no_tools},
+            "askUserQuestionAutoResolutionEnabled": {"value": False, "source": "governed-role"},
+            "modelContextBudgetStrategy": {"value": "preflight-v1", "source": "harness-controller"}}
 
     def attention_request(self, message: dict, *, outcome: str = "refused-with-jsonrpc-error") -> None:
         """Record one unsupported interactive request; never raises on its own."""
@@ -836,11 +870,7 @@ class RootTurnEvidence:
         if not self.turn_id or p.get("turnId") != self.turn_id:
             return
         if p.get("type") == "turn.failed":
-            # Only the exported turn.failed event carries structured failure
-            # attribution; the summary is composed of whitelisted values only.
-            failure = decode_native_failure(data)
-            detail = f" ({failure['summary']})" if failure is not None else ""
-            raise NativeError("native-turn-failed", f"the native root turn failed{detail}", failure=failure)
+            raise native_turn_failure(data)
         if p.get("type") == "turn.completed":
             if self.completed_ordinal or data.get("resultType") != "success" or data.get("inputId") != self.input_id:
                 raise NativeError("native-turn-failed", "the native root turn did not complete successfully")

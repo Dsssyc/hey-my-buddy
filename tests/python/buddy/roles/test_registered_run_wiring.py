@@ -53,26 +53,26 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
     def test_native_evidence_preserves_settings_eof_and_the_consumed_native_identity(self):
         projected = self.project(
             policy=rc.PolicyFact(
-                                 requested={"toolAllowlist": ["Read"], "titleGenerationEnabled": True}),
+                                 requested={"toolAllowlist": ["Read"]}),
             completion=rc.CompletionEvidence( stream_end=False),
             native_identity=rc.NativeIdentity(session_id="actual-session",
                                               turn_id="actual-turn", ),
             event_count=3)
         self.assertEqual(projected["nativeEvidence"], {"eventCount": 3, "toolAllowlist": ["Read"],
-                                                     "titleGenerationEnabled": True, "streamEof": False})
+                                                     "streamEof": False})
         self.assertEqual(projected["nativeIdentity"], {"sessionId": "actual-session", "turnId": "actual-turn"})
 
     def test_missing_native_settings_or_completion_remain_unknown(self):
-        for policy, completion, title in (
-            (None, None, None),
+        for policy, completion in (
+            (None, None),
             (rc.PolicyFact(),
-             rc.CompletionEvidence(), None),
-            (rc.PolicyFact( requested={"titleGenerationEnabled": True}), None, True),
+             rc.CompletionEvidence()),
+            (rc.PolicyFact( requested={}), None),
         ):
             with self.subTest(policy=policy):
                 projected = self.project(policy=policy, completion=completion)
                 self.assertEqual(projected["nativeEvidence"], {"eventCount": None, "toolAllowlist": None,
-                                                             "titleGenerationEnabled": title, "streamEof": None})
+                                                             "streamEof": None})
                 self.assertNotIn("nativeIdentity", projected)
 
     def test_capture_evidence_selects_whether_the_native_projection_is_published(self):
@@ -152,7 +152,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
         self.assertEqual(result.value.correction_count, 1)
         self.assertEqual(outcome.result["rawAnswer"], result.value.raw)
         self.assertEqual(outcome.result["nativeEvidence"], {"eventCount": result.native_event_count,
-                                                         "toolAllowlist": [], "titleGenerationEnabled": False,
+                                                         "toolAllowlist": [],
                                                          "streamEof": True})
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertEqual(handle.process.args[2], "hey_my_buddy.buddy.roles.run_controller")

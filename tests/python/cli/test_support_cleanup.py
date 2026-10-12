@@ -58,6 +58,10 @@ class FixtureCleanupTests(unittest.TestCase):
             "BUDDY_MODEL_CATALOG_FILE": "/inherited-catalog",
             "BUDDY_UNKNOWN_PIN": "inherited-pin",
             "ANTHROPIC_BASE_URL": "https://gateway.invalid",
+            "ZCODE_UNLISTED_TEST_PIN": "inherited-config",
+            "ZAI_API_KEY": "synthetic-secret",
+            "ZHIPU_API_KEY": "synthetic-secret",
+            "GLM_API_KEY": "synthetic-secret",
             "ANTHROPIC_API_KEY": "synthetic-secret",
             "ANTHROPIC_MODEL": "inherited-model",
             "C2_IPC_ROOT": "/inherited-ipc",
@@ -73,7 +77,7 @@ class FixtureCleanupTests(unittest.TestCase):
             self.assertEqual(environment["BUDDY_STATE_DIR"], str(directory))
             self.assertEqual(environment["BUDDY_RUNTIME_ROOT"], str(directory / "runtime-root"))
             for key in inherited.keys() - {"BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT"}:
-                if key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_")) or key in (
+                if key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_")) or key in (
                         "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"):
                     self.assertNotIn(key, environment)
             self.assertFalse(any(key.startswith("CLAUDE_CODE_") for key in environment))

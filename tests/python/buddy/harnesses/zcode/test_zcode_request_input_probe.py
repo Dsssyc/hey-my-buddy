@@ -214,6 +214,7 @@ def handle(message):
     if method == "runtime/capabilities":
         send({"id": request_id, "result": {"independentPlanState": True}})
     elif method == "session/create":
+        assert "titleGenerationEnabled" not in params
         workspace_cwd = params["workspace"]["workspacePath"]
         ask_runtime_preferences()
         send({"id": request_id, "result": snapshot()})
@@ -361,27 +362,24 @@ class ProbeFixtureCase(unittest.TestCase):
         self.fake = self.root / "fake-app-server.py"
         self.fake.write_text(FAKE_SERVER)
         self.fake.chmod(0o755)
-        self.builtin = self.root / "builtin.json"
-        self.personal = self.root / "personal.json"
-        self.builtin.write_text(json.dumps({"config": {"providerConfigRules": {"templateRules": [], "providerRules": []}}}))
-        self.personal.write_text(json.dumps({"config": {"providerConfigRules": {"providerRules": [
-            {"providerId": "fixture-api", "config": {"access": {"type": "api-key", "apiKey": "fixture-secret"}}}]}}}))
+        builtin = self.root / "provider/zcode-builtin.json"
+        builtin.parent.mkdir()
+        builtin.write_text('{"config":{"providerConfigRules":{"templateRules":[],"providerRules":[]}}}')
         self.nonce = "probe-nonce-4f0c2a"
         self.fake_report = self.root / "fake-report.json"
 
     def run_fake_probe(self, case: str) -> tuple[dict, dict]:
-        # The fake's control variables ride the environment; the provider files are
-        # passed explicitly because the probe strips every inherited ZCODE_*/BUDDY_*
-        # pin before building its private child environment.
+        # The fake's control variables ride the environment; inherited native pins
+        # never reach the probe child.
         environment = {k: v for k, v in os.environ.items() if not k.startswith("BUDDY_")
                        and not k.startswith("ZCODE_") and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         environment.update({"PROBE_FAKE_CASE": case, "PROBE_FAKE_REPORT": str(self.fake_report),
-                            "PROBE_FAKE_NONCE": self.nonce, "PROBE_FAKE_CWD": str(self.root / "scratch")})
+                            "PROBE_FAKE_NONCE": self.nonce, "PROBE_FAKE_CWD": str(self.root / "scratch"),
+                            "HOME": str(self.root), "USERPROFILE": str(self.root)})
         with mock.patch.dict(os.environ, environment):
             report = self.probe.run_probe(self.root / "probe", cwd=self.root / "scratch",
                                           provider="fixture-api", model="fixture-model", effort="low",
-                                          nonce=self.nonce, wall_seconds=30.0, zcode_cli=str(self.fake),
-                                          builtin_provider=str(self.builtin), personal_provider=str(self.personal))
+                                          nonce=self.nonce, wall_seconds=30.0, zcode_cli=str(self.fake))
         fake = json.loads(self.fake_report.read_text()) if self.fake_report.exists() else {}
         return report, fake
 
@@ -432,9 +430,8 @@ class ProbeAcceptFlowTests(ProbeFixtureCase):
     def test_inherited_buddy_and_native_pins_never_reach_the_probe_child(self):
         _report, fake = self.run_fake_probe("ok")
         pins = fake["nativePins"]
-        self.assertEqual(sorted(pins), ["BUDDY_ZCODE_CLI", "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
-                                        "ZCODE_LOG_CONSOLE", "ZCODE_LOG_DIR", "ZCODE_MODEL_TELEMETRY_ENABLED",
-                                        "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", "ZCODE_SESSION_DB_PATH",
+        self.assertEqual(sorted(pins), ["BUDDY_ZCODE_CLI", "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_LOG_CONSOLE", "ZCODE_LOG_DIR",
+                                        "ZCODE_SESSION_DB_PATH",
                                         "ZCODE_STORAGE_DIR"], pins)
         self.assertEqual(pins["ZCODE_LOG_CONSOLE"], "0")
         for key in ("ZCODE_LOG_DIR", "ZCODE_SESSION_DB_PATH", "ZCODE_STORAGE_DIR"):

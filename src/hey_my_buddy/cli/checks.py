@@ -68,7 +68,7 @@ def test_environment(root: Path) -> dict:
     """The child environment every test suite runs with: checkout first, no pins."""
     # Test isolation is independent of the product's native configuration:
     # inherited ownership, credentials and Claude provider flags cannot select a fixture.
-    values = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES and not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_"))}
+    values = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES and not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_"))}
     source = str(root / "src")
     tests = str(root / "tests" / "python")
     inherited = values.get("PYTHONPATH")

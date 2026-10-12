@@ -439,6 +439,7 @@ def handle_message(message):
             return
         result = {"independentPlanState": True}
     elif method in ("session/create", "session/resume"):
+        assert "titleGenerationEnabled" not in params
         workspace, mcp = params["workspace"], params.get("mcpServers", [])
         if method == "session/resume":
             if not state.exists() or case == "resume-missing":

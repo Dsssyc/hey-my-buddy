@@ -41,7 +41,14 @@ case = os.environ.get('BUDDY_ZCODE_TEST_CASE', 'ok')
 session = 0
 subscribed = False
 closed = False
+prompt_sent = False
 workspace = {}
+provider = 'fixture-api'
+if case == 'native-config':
+    personal = Path(os.environ['ZCODE_DATA_BASE_DIR']) / '.zcode/v2/provider_config.json'
+    provider = json.loads(personal.read_text())['config']['providerConfigRules']['providerRules'][0]['providerId']
+Path(__file__).with_name('launch-environment.json').write_text(json.dumps(
+    {key: value for key, value in os.environ.items() if key.startswith('ZCODE_')}))
 def send(data):
     print(json.dumps(data), flush=True)
 def event(kind, seq, payload):
@@ -52,25 +59,38 @@ for line in sys.stdin:
     result = {}
     if method == 'runtime/capabilities':
         send({'method':'startup/storageState','params':{'phase':'ready','elapsedMs':10}})
-        send({'id':'runtime-preferences','method':'session/requestRuntimePreferences','params':{}})
-        reply = json.loads(sys.stdin.readline())
-        assert reply['result']['nativeSearchEnhancementsEnabled'] is (case in ('write-final', 'write-post-close'))
     if method == 'session/create':
-        if case == 'discovery':
-            assert p['toolAllowlist'] == [] and p['titleGenerationEnabled'] is False
+        assert 'titleGenerationEnabled' not in p
+        if case == 'discovery' or case == 'native-config' and 'mcpServers' not in p:
+            assert p['toolAllowlist'] == []
         elif case in ('write-final', 'write-post-close'):
-            assert p.get('mode') == 'yolo' and p['mcpServers'] == [] and p['titleGenerationEnabled'] is False
+            assert p.get('mode') == 'yolo' and p['mcpServers'] == []
         else:
-            assert p['toolAllowlist'] == [] and p['titleGenerationEnabled'] is False and p['mcpServers'] == []
+            assert p['toolAllowlist'] == [] and p['mcpServers'] == []
             assert p['offPeakToolEnabled'] is False and p['dynamicWorkflowEnabled'] is False
-        session += 1; workspace = p['workspace']; subscribed = False; closed = False
+        session += 1; workspace = p['workspace']; subscribed = False; closed = False; prompt_sent = False
         result = {'session':{'sessionId':f's-{session}','sessionKind':'interactive','workspace':workspace},
-          'settings':{'model':{'available':[{'ref':{'providerId':'fixture-api','modelId':'fixture-model'},
+          'settings':{'model':{'available':[{'ref':{'providerId':provider,'modelId':'fixture-model'},
           'reasoning':{'levels':[{'value':'low'}]}}]},'thoughtLevel':{'current':'low'}}}
+        send({'id':'runtime-preferences','method':'session/requestRuntimePreferences',
+              'params':{'sessionId':f's-{session}','scope':'runtime-materialization'}})
+        reply = json.loads(sys.stdin.readline())
+        Path(__file__).with_name('runtime-preferences-reply.json').write_text(json.dumps(reply['result']))
+        if case == 'preference-correct' and session == 1:
+            settings = Path(os.environ['ZCODE_DATA_BASE_DIR']) / '.zcode/v2/setting.json'
+            settings.write_text(json.dumps({'memoryEnabled':False, 'nativeSearchEnhancementsEnabled':False}))
     elif method in ('session/setModel','session/setThoughtLevel'):
         result = {'session':{'sessionId':f's-{session}','workspace':workspace},
-          'settings':{'model':{'current':{'providerId':'fixture-api','modelId':'fixture-model',
+          'settings':{'model':{'current':{'providerId':provider,'modelId':'fixture-model',
           'options':{'reasoningLevel':'low'}}},'thoughtLevel':{'current':'low'}}}
+    elif method == 'session/messages':
+        if case in ('usage-ok', 'usage-quota', 'usage-projection-quota', 'usage-correct', 'usage-correct-quota') and subscribed and prompt_sent:
+            result = {'messages':[{'info':{'sessionId':f's-{session}', 'messageId':f'a-{session}',
+                'parentMessageId':f'u-{session}', 'role':'assistant',
+                'tokens':{'input':12, 'output':3, 'reasoning':1, 'cache':{'read':2,'write':1}}},
+                'parts':[]}]}
+        else:
+            result = {'messages':[]}
     elif method == 'session/subscribe':
         assert p['deliveryKind'] == 'web-remote-replayable' and p['includeSnapshot'] is False
         subscribed = True
@@ -108,6 +128,7 @@ for line in sys.stdin:
                   else {'kind':'scheduled','toolName':'mcp'}
         event('tool.updated',3,payload)
     if method == 'session/send':
+        prompt_sent = True
         ident = p['inputId']
         if case == 'native-stream':
             send({'method':'computer-use/operation-event','params':{'sessionId':f's-{session}',
@@ -133,7 +154,16 @@ for line in sys.stdin:
             send({'id':'srv-2','method':'interaction/requestProviderRuntimeHeaders',
                   'params':{'sessionId':f's-{session}','providerId':'fixture-account'}})
             time.sleep(30)
-        if case == 'tool':
+        if case in ('usage-quota', 'usage-projection-quota') or case == 'usage-correct-quota' and session == 2:
+            if case == 'usage-projection-quota':
+                send({'method':'computer-use/operation-event','params':{'sessionId':f's-{session}',
+                      'turnId':f't-{session}','kind':'turn-failed','sequenceNumber':2}})
+            event('turn.failed',2,{'inputId':ident, 'turnPhase':'execute', 'error':{
+                'type':'AiSdkModelAdapterError','code':'model_rate_limited','retryable':False,
+                'message':'private-test-secret', 'attribution':{'source':'provider', 'reason':'rate_limited', 'errorPhase':'stream',
+                'exceptionKind':'provider_business', 'providerId':provider, 'modelId':'fixture-model', 'transport':'sse',
+                'statusCode':429,'providerErrorCode':'1310','retryable':False}}})
+        elif case == 'tool':
             event('tool.updated',2,{'kind':'scheduled','toolName':'shell'})
         elif case == 'tool-foreign':
             send({'method':'session/event','params':{'sessionId':'s-child','turnId':'t-child',
@@ -147,7 +177,7 @@ for line in sys.stdin:
         elif case == 'truncated':
             sys.exit(0)
         else:
-            answer = ('bad JSON' if case == 'correct' and session == 1 else
+            answer = ('bad JSON' if case in ('correct', 'usage-correct', 'usage-correct-quota', 'preference-correct') and session == 1 else
                       '{"choice":"b"}' if case == 'enum' else '{"choice":"a"}')
             if case == 'native-stream':
                 send({'method':'computer-use/operation-event','params':{'sessionId':f's-{session}',
@@ -475,18 +505,18 @@ class FakeAppServerTests(unittest.TestCase):
         self.fake = self.root / "fake-zcode"
         self.fake.write_text(textwrap.dedent(FAKE))
         self.fake.chmod(0o755)
-        self.builtin = self.root / "builtin.json"
-        self.personal = self.root / "personal.json"
-        self.builtin.write_text(json.dumps({"config": {"providerConfigRules": {"templateRules": [], "providerRules": []}}}))
-        self.personal.write_text(json.dumps({"config": {"providerConfigRules": {"providerRules": [
-            {"providerId": "fixture-api", "config": {"access": {"type": "api-key", "apiKey": "private-test-secret"}}}]}}}))
-        self.environment = {k: v for k, v in os.environ.items() if not k.startswith("BUDDY_")
+        builtin = self.root / "provider/zcode-builtin.json"
+        builtin.parent.mkdir()
+        builtin.write_text('{"config":{"providerConfigRules":{"templateRules":[],"providerRules":[]}}}')
+        native_home = self.root / "native-user-home"
+        native_home.mkdir(mode=0o700)
+        self.environment = {k: v for k, v in os.environ.items() if not k.startswith(("BUDDY_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_"))
                             and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         self.environment["PYTHONPATH"] = str(Path(__file__).parents[5] / "src") + os.pathsep + os.environ.get("PYTHONPATH", "")
         self.environment.update(BUDDY_DEV_SOURCE="1", BUDDY_STATE_DIR=str(self.root / "state"),
                                 BUDDY_RUNTIME_ROOT=str(self.root / "runtime"), BUDDY_ZCODE_CLI=str(self.fake),
-                                ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(self.builtin),
-                                ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(self.personal))
+                                HOME=str(native_home), USERPROFILE=str(native_home),
+                                ZCODE_DATA_BASE_DIR=str(native_home))
 
     def execute(self, case="ok", *, timeout=3, cancel=False):
         ready = self.root / "prompt-ready"

@@ -1,8 +1,10 @@
 """ZCode capability description; execution belongs to the registered run."""
 from __future__ import annotations
 
+import os
+
 from . import native_run
-from .config import SUPPORTED_ACCESS, cli_command, provider_access_types, provider_paths
+from .config import cli_command, provider_paths
 from .protocol import NativeError
 
 
@@ -28,10 +30,8 @@ class ZcodeAdapter:
         if record is not None:
             return record.get('status') == 'ready', record.get('reasonCode')
         try:
-            cli_command()
-            paths = provider_paths()
-            if not any(t in SUPPORTED_ACCESS for t in provider_access_types(*paths).values()):
-                return False, "ZCode has no configured API-key provider; OAuth account providers are unavailable through this adapter"
+            command = cli_command()
+            provider_paths(os.environ, command)
             return True, None
         except NativeError as error:
             return False, str(error)
