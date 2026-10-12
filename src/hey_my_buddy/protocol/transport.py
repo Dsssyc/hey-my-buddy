@@ -235,7 +235,9 @@ def _request(endpoint: dict, operation: str, params: dict, resource: str = "cont
         reply = json.loads(raw)
         if "error" in reply:
             error = reply["error"]
-            raise ServiceError(error.get("code", "SERVICE_ERROR"), error.get("message", "operation failed"))
+            details = error.get("details")
+            raise ServiceError(error.get("code", "SERVICE_ERROR"), error.get("message", "operation failed"),
+                               **(details if isinstance(details, dict) else {}))
         if not isinstance(reply, dict):
             raise ValueError("Expected a result object")
         return reply

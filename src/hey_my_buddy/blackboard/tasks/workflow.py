@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
 import json
+import re
 import threading
 import uuid
 from pathlib import Path
@@ -401,10 +402,14 @@ class WorkflowCoordinator:
         if boundary is not None:
             view["routingBoundary"] = boundary
         if isinstance(payload.get("preparationError"), dict):
+            problem = payload["preparationError"]
             view["preparationError"] = {
-                "code": _head(payload["preparationError"].get("code"), 100),
-                "message": _head(payload["preparationError"].get("message"), 2000),
+                "code": _head(problem.get("code"), 100),
+                "message": _head(problem.get("message"), 2000),
             }
+            reason = _preparation_reason(problem.get("details"))
+            if reason is not None:
+                view["preparationError"]["reason"] = reason
         if include_audit:
             view["decision"] = json.loads(row["decision_json"]) if row["decision_json"] else None
             view["decisionCommandId"] = row["decision_command_id"]
@@ -7224,6 +7229,41 @@ def _head(value, limit: int):
     if not isinstance(value, str):
         return value
     return value if len(value) <= limit else value[:limit]
+
+
+#: The default request view names a Git preparation failure with one bounded
+#: line; the complete command, exit status and output tail stay in the record
+#: that ``includeAudit`` reads.
+PREPARATION_REASON_LIMIT = 256
+
+_REMOTE_USER_INFO = re.compile(
+    r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s@]*@"
+    r"|(?<![\w.@-])[\w.+-]+@(?=[\w.-]+[:/])"
+)
+
+
+def _without_remote_user_info(text: str) -> str:
+    """Drop the user-information segment of any remote address in process output."""
+    return _REMOTE_USER_INFO.sub(lambda match: match.group("scheme") or "", text)
+
+
+def _preparation_reason(details) -> str | None:
+    """One bounded line for the default view: the Git operation and its last output line.
+
+    The line quotes another process's output, so it is length-capped and carries
+    no remote address's user information. Details without a Git operation behind
+    them have nothing to name here and yield None.
+    """
+    if not isinstance(details, dict):
+        return None
+    operation = details.get("operation")
+    reason = details.get("reason")
+    if not isinstance(operation, str) or not operation or not isinstance(reason, str):
+        return None
+    lines = [line.strip() for line in reason.splitlines() if line.strip()]
+    if not lines:
+        return None
+    return f"git {operation}: {_without_remote_user_info(lines[-1])}"[:PREPARATION_REASON_LIMIT]
 
 
 def _string_list(value) -> list[str]:

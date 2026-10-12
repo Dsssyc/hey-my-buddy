@@ -151,6 +151,47 @@ class PreparationTests(WorkflowTestCase):
             self.assertLessEqual(len(error["details"][field]), 2000)
             self.assertTrue(error["details"][field + "Truncated"])
 
+    def test_preparation_attention_default_view_names_the_git_operation(self):
+        board, run_id, _first, _continuation_id = self.pending()
+        stderr = (b"warning: another Git process seems to be running\n"
+                  b"fatal: unable to access 'https://user:token@example.invalid/owner/repo.git/':"
+                  b" The requested URL returned error: 403\n")
+        failure = workspace._git_failure(["git", "-C", "<private-checkout>", "read-tree", "<fixed-tree>"],
+                                         "read-tree", returncode=128, stdout=b"", stderr=stderr)
+        with patch.object(workspace, "prepare", side_effect=failure):
+            self.claim(board, run_id=run_id, claim_request_id="git-error-claim")
+        view = board.call("workflow_get", {"runId": run_id})
+        problem = view["activeRequest"]["preparationError"]
+        self.assertEqual(problem["code"], "WORKSPACE_GIT_ERROR")
+        self.assertEqual(problem["reason"], "git read-tree: fatal: unable to access"
+                         " 'https://example.invalid/owner/repo.git/': The requested URL returned error: 403")
+        self.assertNotIn("user:token", problem["reason"])
+        self.assertNotIn("details", problem)
+        audited = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
+        recorded = next(request["payload"]["preparationError"] for request in audited["audit"]["requests"]
+                        if request.get("payload", {}).get("preparationError"))
+        self.assertIn("user:token@example.invalid", recorded["details"]["stderr"])
+        self.assertIn("read-tree", recorded["details"]["argv"])
+
+    def test_preparation_reason_line_is_bounded_and_redacted(self):
+        limit = workflow_module.PREPARATION_REASON_LIMIT
+        overlong = workflow_module._preparation_reason({"operation": "fetch", "reason": "x" * 4000})
+        self.assertEqual(overlong, "git fetch: " + "x" * (limit - len("git fetch: ")))
+        self.assertLessEqual(len(overlong), limit)
+        mixed = workflow_module._preparation_reason({
+            "operation": "fetch",
+            "reason": "fatal: unable to access 'https://user:token@example.invalid/owner/repo.git/': " + "y" * 300,
+        })
+        self.assertNotIn("user:token", mixed)
+        self.assertIn("https://example.invalid", mixed)
+        self.assertLessEqual(len(mixed), limit)
+        scp = workflow_module._preparation_reason({
+            "operation": "fetch", "reason": "git@example.invalid: Permission denied (publickey).\r\n",
+        })
+        self.assertEqual(scp, "git fetch: example.invalid: Permission denied (publickey).")
+        self.assertIsNone(workflow_module._preparation_reason({"code": "PREPARATION_CONFLICT"}))
+        self.assertIsNone(workflow_module._preparation_reason(None))
+
     def test_unvalidated_seal_in_failed_report_cannot_block_partial_recovery(self):
         board, parent, helper_id, failed, checkout = self.failed_helper(unvalidated_seal=True)
         view = board.call("workflow_get", {"runId": parent["runId"]})
