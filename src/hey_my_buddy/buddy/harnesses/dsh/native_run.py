@@ -569,6 +569,10 @@ class _RunState:
     update_overflow: bool = False
     prompt_stop_reason: str | None = None
     event_count: int = 0
+    #: The update pump's cumulative unknown-notification counts. The run's
+    #: result projection reads this same mapping; an empty one carries no
+    #: stream unknown fact.
+    unknown_counts: dict[str, int] = dataclasses.field(default_factory=dict)
     #: The cooperative bridge's own reports, set at settlement; a run without an
     #: inquiry channel reports neither.
     inquiry: dict | None = None
@@ -713,14 +717,20 @@ def _configure(client: AcpClient, session_id: str, snapshot: dict,
     """The one model/effort selection site: declared values in, readback out.
 
     Recognized selectors are set through ``session/set_config_option`` and
-    confirmed only from the response's own option group. Unknown shapes retain
-    redacted facts and leave checked values unset; requested values never stand
-    in for checked ones. DSH emits no configuration notifications to wait for.
+    confirmed only from the response's own option group. A session whose
+    configuration options were not read at all is a run that cannot hand its
+    requested selection to the native side: the shape fact is recorded and the
+    run refuses before any prompt, instead of letting the session's own
+    configuration answer for a buddy this run never selected. A readback that
+    is merely unreadable stays a fact: the call was made, so the turn
+    continues, checked values stay unset and requested values never stand in
+    for checked ones. DSH emits no configuration notifications to wait for.
     """
     options = snapshot.get("configOptions") if isinstance(snapshot, dict) else None
     if not isinstance(options, list):
         _note_native_shape(facts, "configOptions", options)
-        return {"provider": None, "model": None, "effort": None}
+        raise NativeError("configuration-unavailable",
+                          "the native session configuration options had an unrecognized shape")
     model_value = _declared_model_value(options, configuration)
     effort_value = _declared_effort_value(options, configuration)
     echoed = _native_call(lambda: client.set_config_option(session_id, "model", model_value,
@@ -749,20 +759,36 @@ def _configure(client: AcpClient, session_id: str, snapshot: dict,
 # -- the update pump and the observer seam ------------------------------------------
 
 
-class _RunFacts:
-    """The cumulative, normalized facts of one run, as the observer sees them."""
+def _fold_unknown_count(counts: dict[str, int], name: str, count: int) -> None:
+    """One bounded fold of an unknown kind into a cumulative count map.
 
-    def __init__(self):
-        self.unknown_counts: dict[str, int] = {}
+    The shared contract bounds the distinct kinds, and this module produces them
+    in two places — the update pump's own classification and the fixed unread
+    shape labels — so the one rule lives here: a name that no longer fits folds
+    into one surplus bucket, and no event is ever dropped from the total.
+    """
+    if name in counts:
+        counts[name] += count
+    elif len(counts) < MAX_UNKNOWN_EVENT_TYPES - 1:
+        counts[name] = count
+    else:
+        counts["unclassified-surplus"] = counts.get("unclassified-surplus", 0) + count
+
+
+class _RunFacts:
+    """The cumulative, normalized facts of one run, as the observer sees them.
+
+    The unknown-kind counts accumulate in the run state's own mapping, so the
+    live observer statistics and the result's native-evidence projection read
+    one object rather than two copies.
+    """
+
+    def __init__(self, unknown_counts: dict[str, int]):
+        self.unknown_counts = unknown_counts
 
     def note_unknown(self, label: object) -> None:
         name = label if isinstance(label, str) and re.fullmatch(r"[A-Za-z0-9/._-]{1,64}", label) else "unknown"
-        if name not in self.unknown_counts and len(self.unknown_counts) >= MAX_UNKNOWN_EVENT_TYPES - 1:
-            # The shared contract bounds the distinct kinds. The surplus folds
-            # into one bucket so an over-wide classification can never cost the
-            # run its total, its stop facts or its result.
-            name = "unclassified-surplus"
-        self.unknown_counts[name] = self.unknown_counts.get(name, 0) + 1
+        _fold_unknown_count(self.unknown_counts, name, 1)
 
     def mapping(self, *, tool_calls: int, settled: bool, raw_answer: str | None,
                 denied: int) -> dict:
@@ -928,7 +954,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         sessions_root = ensure_private_dir(native_root / "dsh-home" / _SESSIONS_DIRNAME)
         launch_root = native_root
     state = _RunState()
-    facts = _RunFacts()
+    facts = _RunFacts(state.unknown_counts)
     tools = DshToolFacts({"adapter": "dsh", "taskId": request.identity.task_id,
                           "attemptId": request.identity.attempt_id,
                           "generation": request.identity.generation})
@@ -1514,18 +1540,23 @@ _activity_package = shape_guard(ActivityPackage)
 
 
 def _native_evidence_facts(state: _RunState) -> NativeEvidence | None:
-    """This run's unread shapes and requested things left unconfirmed.
+    """This run's unread shapes, unknown notifications and unconfirmed requests.
 
     Only the run's own recorded facts are projected: every unrecognized shape
-    fact of :func:`_note_native_shape` — the readbacks included — becomes a
-    bounded kind count, and a tool scope the launch patch could not confirm
-    becomes ``tool-scope``. A run with neither fact carries no outlet.
+    fact of :func:`_note_native_shape` — the readbacks included — and every
+    unknown notification kind the update pump counted become bounded kind
+    counts, and a tool scope the launch patch could not confirm becomes
+    ``tool-scope``. The union keeps the shared distinct-kind bound through the
+    one fold rule and loses no event from the total. A run with neither fact
+    carries no outlet.
     """
-    counts = {}
+    counts: dict[str, int] = {}
     for kind in UNREAD_SHAPE_KINDS:
         fact = state.native_facts.get(kind)
         if isinstance(fact, dict) and fact.get("status") == "unknown":
             counts[kind] = fact["count"]
+    for name, count in state.unknown_counts.items():
+        _fold_unknown_count(counts, name, count)
     unconfirmed = []
     scope = state.native_facts.get("toolScope")
     if isinstance(scope, dict) and scope.get("status") == "unknown":
