@@ -110,6 +110,10 @@ A micro task explicitly authorized by the Host to help another micro task.
 **执行回合 / turn**:
 One Worker buddy execution ending in a result, assistance request or attention boundary.
 
+**封存 / seal**:
+The fixed artifact the blackboard makes of a checkout's content when a turn ends; acceptance judges it, never the Worker's own report.
+_Avoid_: 第 N 封 (say 第 N 回合的封存), 快照
+
 **权限档位 / permission level**:
 How far a Worker buddy may go in one turn, chosen by the Host when it delegates and changeable between turns: 只读 / read-only (read and search; no file may be modified), 写检出 / checkout-write (edit and run commands; files may be modified only inside the micro task's checkout) or 放开 / full access (no limit on where files are modified). A level says where files may be modified and nothing about the network.
 _Avoid_: 权限清单, sandbox mode (a level is not a list of grants, and a sandbox mode is only how one harness carries a level out)
