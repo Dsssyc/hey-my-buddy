@@ -67,9 +67,14 @@ def main():
         elif method == "thread/start":
             trace = Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"])
             trace.write_text(json.dumps({"thread": params, "home": os.environ["CODEX_HOME"], "userHome": os.environ["HOME"], "argv": sys.argv}))
-            send({"id": ident, "result": {"thread": {"id": "thread-1", "cwd": params["cwd"], "environments": []},
-                "model": "other" if case == "wrong-model" else params["model"],
-                "modelProvider": native_config.get("model_provider") or "openai", "approvalPolicy": "never"}})
+            receipt = {"thread": {"id": "thread-1", "cwd": params["cwd"], "environments": []},
+                       "model": "other" if case == "wrong-model" else params["model"],
+                       "modelProvider": native_config.get("model_provider") or "openai", "approvalPolicy": "never"}
+            if case == "missing-model":
+                del receipt["model"]
+            elif case == "unreadable-model":
+                receipt["model"] = ["new-native-shape"]
+            send({"id": ident, "result": receipt})
         elif method == "turn/start":
             turns += 1
             trace = Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"])
@@ -88,7 +93,10 @@ def main():
                 send({'method':'thread/settings/updated','params':{'threadId':'thread-1','threadSettings':{}}})
                 send({'method':'thread/status/changed','params':{'threadId':'thread-1','status':{'type':'active'}}})
                 send({'method':'account/rateLimits/updated','params':{'rateLimits':{}}})
-            send({"id": ident, "result": {"turn": {"id": turn_id}}})
+            startup_items = {"startup-unknown": [{"type": "futureThing", "id": "future-1"}],
+                             "startup-tool": [{"type": "commandExecution", "id": "command-1"}],
+                             "startup-unreadable": "new-native-shape"}.get(case)
+            send({"id": ident, "result": {"turn": {"id": turn_id, "items": startup_items}}})
             if case in ("thread-notification", "foreign-turn", "foreign-thread"):
                 send({"method": "thread/status/changed" if case == "foreign-turn" else "thread/futureNotification", "params": {
                     "threadId": "thread-foreign" if case == "foreign-thread" else "thread-1",
@@ -132,6 +140,8 @@ def main():
             if case == "turn-item":
                 items.append({"type": "dynamicToolCall"})
             event("turn/completed", turn_id, turn={"id": turn_id, "status": "completed", "items": items})
+            if case == "late-unknown-frame":
+                send({"method": []})
             if case == "late":
                 event("rawResponseItem/completed", turn_id, item={"type": "custom_tool_call_output"})
         elif method == "turn/interrupt":

@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -10,7 +11,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from hey_my_buddy.buddy.harnesses.codex.native_run import _checkpoint, execution_deadline
+from hey_my_buddy.buddy.harnesses.codex.native_run import _Classifier, _RunFacts, _checkpoint, execution_deadline
 from hey_my_buddy.buddy.harnesses.codex.protocol import (
     CodexProtocolError,
     Connection,
@@ -223,6 +224,102 @@ class NativeUsageEvidenceTests(unittest.TestCase):
                                       "reasoningOutputTokens": 0, "totalTokens": 0}, "total": {}}):
             self.notify(evidence, token_usage.get("last"), token_usage.get("total"))
         self.assertIsNone(attempt_token_usage(evidence))
+
+
+class NativeMessageShapeTests(unittest.TestCase):
+    def connection(self, *messages) -> Connection:
+        connection = Connection.__new__(Connection)
+        connection.deadline = time.monotonic() + 5
+        connection.cancelled = threading.Event()
+        connection.messages = queue.Queue()
+        for message in messages:
+            connection.messages.put(message)
+        connection.responses = {}
+        connection.next_id = 1
+        connection.strict_responses = False
+        connection.pending_ids = set()
+        connection.on_notification = lambda _message: None
+        connection.on_request = lambda _message: None
+        connection.after_pump = None
+        connection.send = lambda _message: None
+        return connection
+
+    def test_unknown_frame_shapes_reach_classifier_and_call_continues(self):
+        connection = self.connection(
+            {"params": {"threadId": "foreign-thread", "turnId": "foreign-turn",
+                        "credential": "private-value"}},
+            {"method": 47, "params": {"credential": "private-value"}},
+            {"method": "future/event", "params": {}},
+            {"id": 1, "result": {"capabilities": []}},
+        )
+        facts = _RunFacts()
+        received = []
+        classifier = _Classifier(facts)
+
+        def observe(message):
+            received.append(message)
+            classifier.observe(message)
+
+        connection.on_notification = observe
+        self.assertEqual(connection.call("initialize", {}), {"capabilities": []})
+        self.assertEqual(facts.unknown_counts["unknown-method"], 2)
+        self.assertEqual(facts.unknown_counts["future/event"], 1)
+        self.assertEqual(received[0]["params"]["threadId"], "foreign-thread")
+        self.assertEqual(received[0]["params"]["turnId"], "foreign-turn")
+        self.assertEqual(received[0]["params"]["credential"], "private-value")
+        self.assertEqual(received[1]["method"], 47)
+        self.assertEqual(received[2]["method"], "future/event")
+        self.assertNotIn("private-value", repr(facts.unknown_counts))
+
+    def test_unreadable_rpc_result_is_a_bounded_fact_and_call_continues(self):
+        connection = self.connection({"id": 1, "result": "private-value"})
+        facts = _RunFacts()
+        received = []
+        classifier = _Classifier(facts)
+
+        def observe(message):
+            received.append(message)
+            classifier.observe(message)
+
+        connection.on_notification = observe
+        self.assertEqual(connection.call("thread/start", {}), {})
+        self.assertEqual(received, [{"method": "rpc/result-unreadable/thread/start"}])
+        self.assertEqual(facts.unknown_counts, {"rpc/result-unreadable/thread/start": 1})
+        self.assertNotIn("private-value", repr(received))
+
+        unsafe = self.connection({"id": 1, "result": None})
+        unsafe.on_notification = received.append
+        self.assertEqual(unsafe.call("unsafe\nprivate-value", {}), {})
+        self.assertEqual(received[-1], {"method": "rpc/result-unreadable"})
+
+    def test_response_identity_is_checked_independently_of_backlog(self):
+        for identity in (True, "1"):
+            with self.subTest(identity=identity):
+                connection = self.connection({"id": identity, "result": {}})
+                with self.assertRaises(CodexProtocolError) as caught:
+                    connection.pump()
+                self.assertEqual(caught.exception.code, "invalid-protocol")
+                self.assertEqual(str(caught.exception), "invalid native response identity")
+
+    def test_response_backlog_still_has_a_quantity_cap(self):
+        connection = self.connection({"id": 17, "result": {}})
+        connection.responses = {identity: {} for identity in range(1, 17)}
+        with self.assertRaises(CodexProtocolError) as caught:
+            connection.pump()
+        self.assertEqual(caught.exception.code, "invalid-protocol")
+        self.assertEqual(str(caught.exception), "too many pending native responses")
+
+    def test_strict_response_association_still_rejects_foreign_and_duplicate_ids(self):
+        for pending, responses in ((set(), {}), ({1}, {1: {}})):
+            with self.subTest(pending=pending, responses=responses):
+                connection = self.connection({"id": 1, "result": {}})
+                connection.strict_responses = True
+                connection.pending_ids = pending
+                connection.responses = responses
+                with self.assertRaises(CodexProtocolError) as caught:
+                    connection.pump()
+                self.assertEqual(caught.exception.code, "invalid-protocol")
+                self.assertEqual(str(caught.exception), "uncorrelated or duplicate native sandbox reply")
 
 
 class NativeRpcErrorTests(unittest.TestCase):

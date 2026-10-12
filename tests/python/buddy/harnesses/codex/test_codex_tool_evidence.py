@@ -421,9 +421,10 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         self.assertFalse(evidence["streamComplete"])
 
     def test_failure_before_any_turn_still_carries_an_incomplete_package(self):
-        outcome, context = self.run_review("readonly-policy-mismatch", index=6)
+        outcome, context = self.run_review("no-efforts-row", index=6)
         self.assertNotEqual(outcome.status, "ok")
-        self.assertEqual(outcome.result["code"], "readonly-policy-unverified")
+        self.assertEqual(outcome.result["code"], "invalid-configuration")
+        self.assertIs(outcome.result["modelStarted"], False)
         evidence = outcome.result["toolEvidence"]
         self.assertEqual(evidence["binding"], {"adapter": "codex", "taskId": context.task_id,
                                                "attemptId": context.attempt_id, "generation": context.generation})
