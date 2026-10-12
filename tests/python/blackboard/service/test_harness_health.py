@@ -1,9 +1,10 @@
 """Discovery generations, expiry, settings and cache reads use private boards."""
 from datetime import datetime, timedelta, timezone
+import os
 import threading
 from unittest.mock import patch
 
-from hey_my_buddy.blackboard.service.harness_health import HarnessHealth, _later
+from hey_my_buddy.blackboard.service.harness_health import HarnessHealth, MAX_PATH_HINTS, _later
 from support import BoardTestCase, FakeClock
 
 
@@ -16,7 +17,8 @@ class HarnessHealthTests(BoardTestCase):
         self.refreshed = []
         self.health = HarnessHealth(self.board, catalog_refresh=lambda name, record, catalog_scan_claimed=False: self.refreshed.append((name, record)))
         self.health.initialize()
-        self.snapshot = {'paths': [{'path': '/native/codex', 'mtimeNs': 1}]}
+        self.snapshot = {'adapter': 'codex', 'managerRecords': [], 'candidates': [
+            {'path': '/native/codex', 'exists': True, 'fingerprint': {'mtimeNs': 1}}]}
         self.discovered = {'adapter': 'codex', 'status': 'ready', 'command': ['/native/codex'],
                            'executable': '/native/codex', 'version': '1.0', 'source': 'common', 'available': True}
         self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)))
@@ -38,23 +40,131 @@ class HarnessHealthTests(BoardTestCase):
         self.assertEqual(len(self.refreshed), 1)
 
     def test_caller_path_is_a_transient_hint_and_never_stored(self):
-        self.health.add_path_hint('/private/new-cli:/other/bin:relative')
+        cli_dir = self.directory / 'new-cli'
+        node_dir = self.directory / 'other-bin'
+        cli_dir.mkdir()
+        node_dir.mkdir()
+        (cli_dir / 'codex').write_text('fixture')
+        (node_dir / 'node').write_text('fixture')
+        self.health.add_path_hint(os.pathsep.join([str(cli_dir), str(node_dir), 'relative']))
         self.health.refresh('codex', force=True)
         environment = self.native.call_args.args[2]
-        self.assertTrue(environment['PATH'].startswith('/private/new-cli:/other/bin:'))
+        self.assertTrue(environment['PATH'].startswith(os.pathsep.join([str(cli_dir), str(node_dir)]) + os.pathsep))
         with self.board.db.read() as db:
             stored = db.execute("SELECT record_json FROM harness_health WHERE adapter='codex'").fetchone()[0]
-        self.assertNotIn('/private/new-cli', stored)
+        self.assertNotIn(str(cli_dir), stored)
+
+    def test_path_hints_keep_first_seen_order_and_ignore_empty_directories_at_the_limit(self):
+        directories = []
+        for index in range(MAX_PATH_HINTS + 1):
+            directory = self.directory / f'cli-{index}'
+            directory.mkdir()
+            (directory / ('node' if index % 2 else 'codex')).write_text('fixture')
+            directories.append(str(directory))
+        empty = [str(self.directory / f'empty-{index}') for index in range(100)]
+        unrelated = self.directory / 'unrelated'
+        unrelated.mkdir()
+        (unrelated / 'other-tool').write_text('fixture')
+        (unrelated / 'codex').mkdir()
+        self.health.add_path_hint(os.pathsep.join([*empty, str(unrelated), *directories]))
+        self.assertEqual(self.health._path_hints, tuple(directories[:MAX_PATH_HINTS]))
+        self.health.add_path_hint(os.pathsep.join(reversed(directories)))
+        self.assertEqual(self.health._path_hints, tuple(directories[:MAX_PATH_HINTS]))
+
+    def test_reversed_caller_path_appends_new_candidates_without_reordering_known_directories(self):
+        directories = []
+        for name in ('a', 'b', 'c'):
+            directory = self.directory / name
+            directory.mkdir()
+            if name != 'c':
+                (directory / 'codex').write_text('fixture')
+            directories.append(str(directory))
+        self.health.add_path_hint(os.pathsep.join(directories[:2]))
+        self.health.add_path_hint(os.pathsep.join([directories[2], directories[1], directories[0]]))
+        self.assertEqual(self.health._path_hints, tuple(directories[:2]))
+        (self.directory / 'c/codex').write_text('appeared')
+        self.health.add_path_hint(os.pathsep.join([directories[2], directories[1], directories[0]]))
+        self.assertEqual(self.health._path_hints, tuple(directories))
+
+    def test_alternating_empty_path_hints_do_not_rebuild_health_or_reread_catalog(self):
+        from hey_my_buddy.buddy.harnesses import discovery
+        self.scan.stop()
+        cli = self.directory / 'bin/codex'
+        cli.parent.mkdir()
+        cli.write_text('fixture')
+        other = self.directory / 'empty'
+        paths = [str(cli.parent), str(other) + ':' + str(cli.parent),
+                 ':'.join([*(str(self.directory / f'empty-{index}') for index in range(100)),
+                           str(cli.parent)])]
+        with patch.object(discovery, '_home', return_value=self.directory), \
+             patch.object(discovery, '_common_dirs', return_value=[]), \
+             patch.object(discovery, '_app_paths', return_value=[]), \
+             patch.dict('os.environ', {'PATH': ''}):
+            self.health.add_path_hint(paths[0])
+            first = self.health.refresh('codex')
+            for path in [paths[1], paths[0], paths[2], paths[0], paths[1], paths[0]]:
+                with self.board.db.write() as db:
+                    db.execute("UPDATE harness_health SET scan_after=NULL WHERE adapter='codex'")
+                self.health.add_path_hint(path)
+                current = self.health.refresh('codex')
+                self.assertEqual(current['revision'], first['revision'])
+                self.assertEqual(current['checkedAt'], first['checkedAt'])
+                self.assertEqual(current['locationFingerprint'], first['locationFingerprint'])
+        self.native.assert_called_once()
+        self.assertEqual(len(self.refreshed), 1)
+
+    def test_alternating_callers_with_distinct_executables_do_not_rebuild_health_or_reread_catalog(self):
+        from hey_my_buddy.buddy.harnesses import discovery
+        self.scan.stop()
+        directories = [self.directory / name for name in ('caller-a', 'caller-b')]
+        for directory in directories:
+            directory.mkdir()
+            (directory / 'codex').write_text('fixture')
+        with patch.object(discovery, '_home', return_value=self.directory), \
+             patch.object(discovery, '_common_dirs', return_value=[]), \
+             patch.object(discovery, '_app_paths', return_value=[]), \
+             patch.dict('os.environ', {'PATH': ''}):
+            for directory in directories:
+                self.health.add_path_hint(str(directory))
+            first = self.health.refresh('codex')
+            for directory in [directories[1], directories[0], directories[1], directories[0]]:
+                with self.board.db.write() as db:
+                    db.execute("UPDATE harness_health SET scan_after=NULL WHERE adapter='codex'")
+                self.health.add_path_hint(os.pathsep.join([str(self.directory / 'temporary-empty'), str(directory)]))
+                current = self.health.refresh('codex')
+                self.assertEqual(current['revision'], first['revision'])
+                self.assertEqual(current['checkedAt'], first['checkedAt'])
+                self.assertEqual(current['locationFingerprint'], first['locationFingerprint'])
+        self.native.assert_called_once()
+        self.assertEqual(len(self.refreshed), 1)
 
     def test_preflight_checks_fingerprints_without_reprobing_unchanged_binary(self):
         self.health.refresh('codex')
         self.health.refresh('codex', preflight=True)
         self.native.assert_called_once()
-        self.snapshot = {'paths': [{'path': '/native/codex', 'mtimeNs': 2}]}
+        self.snapshot['candidates'][0]['fingerprint'] = {'mtimeNs': 2}
         self.discovered = {**self.discovered, 'version': '2.0'}
         self.assertEqual(self.health.refresh('codex', preflight=True)['version'], '2.0')
         self.assertEqual(self.native.call_count, 2)
         self.assertEqual(len(self.refreshed), 2)
+
+    def test_stat_change_reprobes_without_advancing_unchanged_catalog_revision(self):
+        from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore
+        evaluation = EvaluationStore(self.board)
+        readings = []
+        payload = {'source': 'stat-change-fixture',
+                   'discoveries': [{'adapter': 'codex', 'status': 'complete', 'accountStatus': 'confirmed'}],
+                   'providers': [{'adapter': 'codex', 'provider': 'fixture', 'models': [
+                       {'id': 'alpha', 'efforts': ['high']}]}]}
+        self.health.catalog_refresh = lambda name, record, catalog_scan_claimed=False: readings.append(
+            evaluation.record_catalog(payload))
+        self.health.refresh('codex', preflight=True)
+        self.snapshot['candidates'][0]['fingerprint'] = {'mtimeNs': 2}
+        self.health.refresh('codex', preflight=True)
+        self.assertEqual(self.native.call_count, 2)
+        self.assertEqual(len(readings), 2)
+        self.assertGreater(readings[1]['observationId'], readings[0]['observationId'])
+        self.assertEqual(readings[1]['tableRevision'], readings[0]['tableRevision'])
 
     def test_negative_auth_observation_expires_even_without_file_changes(self):
         self.discovered = {'adapter': 'codex', 'status': 'login-required', 'reasonCode': 'HARNESS_LOGIN_REQUIRED'}
@@ -105,7 +215,8 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.refreshed = []
         self.health = HarnessHealth(self.board, catalog_refresh=lambda name, record, catalog_scan_claimed=False: self.refreshed.append(name))
         self.health.initialize()
-        self.snapshot = {'paths': [{'path': '/native/codex', 'mtimeNs': 1}]}
+        self.snapshot = {'adapter': 'codex', 'managerRecords': [], 'candidates': [
+            {'path': '/native/codex', 'exists': True, 'fingerprint': {'mtimeNs': 1}}]}
         self.discovered = {'adapter': 'codex', 'status': 'ready', 'command': ['/native/codex'],
                            'executable': '/native/codex', 'version': '1.0', 'source': 'common', 'available': True}
         self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)))
@@ -277,7 +388,7 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
         self.evaluation = self.board.evaluation
         self.ready = {'adapter': 'dsh', 'status': 'ready', 'version': '1.0',
                       'command': ['/fixture/dsh'], 'executable': '/fixture/dsh'}
-        for target, result in (('_snapshot', {'paths': [{'path': '/fixture/dsh', 'mtimeNs': 1}]}),
+        for target, result in (('_snapshot', {'adapter': 'dsh', 'managerRecords': [], 'candidates': []}),
                                ('_discover', self.ready)):
             stub = patch('hey_my_buddy.blackboard.service.harness_health.' + target, return_value=result)
             stub.start()
@@ -406,7 +517,7 @@ class HealthRecoveryRestoreTests(BoardTestCase):
         self.health = HarnessHealth(self.board.store, catalog_refresh=None)
         self.ready = {'adapter': 'dsh', 'status': 'ready', 'version': '1.0', 'command': ['/fixture/dsh']}
         for target, result in (
-            ('_snapshot', {'paths': [{'path': '/fixture/dsh', 'mtimeNs': 1}]}),
+            ('_snapshot', {'adapter': 'dsh', 'managerRecords': [], 'candidates': []}),
             ('_discover', self.ready),
         ):
             stub = patch('hey_my_buddy.blackboard.service.harness_health.' + target, return_value=result)
@@ -458,7 +569,7 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         self.health = HarnessHealth(self.board.store, catalog_refresh=self.unknown_read)
         self.ready = {'adapter': 'dsh', 'status': 'ready', 'version': '1.0', 'command': ['/fixture/dsh']}
         for target, result in (
-            ('_snapshot', {'paths': [{'path': '/fixture/dsh', 'mtimeNs': 1}]}),
+            ('_snapshot', {'adapter': 'dsh', 'managerRecords': [], 'candidates': []}),
             ('_discover', self.ready),
         ):
             stub = patch('hey_my_buddy.blackboard.service.harness_health.' + target, return_value=result)
@@ -565,7 +676,7 @@ class StaleRereadServiceCallbackTests(BoardTestCase):
         service = board.service
         health = HarnessHealth(service.store, catalog_refresh=service._refresh_harness_catalog)
         health.initialize()
-        snapshot = {'paths': [{'path': '/native/dsh', 'mtimeNs': 1}]}
+        snapshot = {'adapter': 'dsh', 'managerRecords': [], 'candidates': []}
         ready = {'adapter': 'dsh', 'status': 'ready', 'version': '1.0',
                  'command': ['/fixture/dsh'], 'executable': '/fixture/dsh'}
         good = {'source': 'fixture-native', 'providers': [{'adapter': 'dsh', 'provider': 'fixture',
@@ -603,7 +714,7 @@ class HealthProbeFailureTests(BoardTestCase):
         self.board.initialize()
         self.health = HarnessHealth(self.board)
         self.addCleanup(self.health.close)
-        self.enterContext(patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={}))
+        self.enterContext(patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'adapter': 'codex', 'managerRecords': [], 'candidates': []}))
 
     def test_unconfirmed_probe_shutdown_remains_unavailable(self):
         with patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value={
@@ -636,7 +747,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
         self.health = HarnessHealth(self.board, catalog_refresh=lambda *args, **kwargs: self.catalog_reads.append(args))
         self.health.initialize()
         self.addCleanup(self.health.close)
-        self.enterContext(patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={}))
+        self.enterContext(patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'adapter': 'codex', 'managerRecords': [], 'candidates': []}))
         self.enterContext(patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value={
             'adapter': 'codex', 'status': 'ready', 'command': ['fixture-codex'], 'version': 'fixture'}))
 

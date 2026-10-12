@@ -1286,10 +1286,12 @@ class EvaluationEvidenceTests(EvaluationTestCase):
         self.assertIn("refreshed", refreshed["note"])
         self.assertEqual(self.snapshot(board)["tableRevision"], refreshed["tableRevision"])
         self.assertEqual(len(self.snapshot(board)["profiles"]), len(proposals))
-        # Identical native metadata is recognized while a new observation still advances the table.
+        # A new observation of identical native metadata keeps the table revision.
         repeated = board.call("model_catalog_refresh", {"requestId": "cat-2"})
         self.assertTrue(repeated["duplicate"])
+        self.assertEqual(repeated["tableRevision"], refreshed["tableRevision"])
         self.assertEqual(self.snapshot(board)["tableRevision"], repeated["tableRevision"])
+
         # A failed discovery keeps the previous recorded catalog and the table.
         from hey_my_buddy.blackboard.catalog import catalog
         from hey_my_buddy.errors import BoardError as _BoardError
@@ -1301,6 +1303,28 @@ class EvaluationEvidenceTests(EvaluationTestCase):
         finally:
             catalog.discover = original
         self.assertEqual(self.snapshot(board)["tableRevision"], repeated["tableRevision"])
+
+    def assert_noop_read_preserves_grant(self, kind):
+        board = self.board()
+        self.seed_catalog(board)
+        grant = self.begin(board, kind=kind)
+        reread = board.call('model_catalog_refresh', {'requestId': 'during-publication'})
+        self.assertEqual(reread['tableRevision'], grant['tableRevision'])
+        if kind == 'human':
+            published = self.publish_with(board, grant, 'publish-after-reread',
+                                          profileSettings=[{'profileId': PROFILE_ID, 'enabled': True}])
+        else:
+            published = board.call('assessment_publish', {
+                'commandId': 'publish-after-reread', 'writerId': grant['writerId'],
+                'generation': grant['generation'], 'writerToken': grant['writerToken'],
+                'expectedRevision': grant['tableRevision'], 'cards': [CARD]})
+        self.assertEqual(published['revision'], grant['tableRevision'] + 1)
+
+    def test_noop_catalog_read_preserves_user_publication_grant(self):
+        self.assert_noop_read_preserves_grant('human')
+
+    def test_noop_catalog_read_preserves_assessment_publication_grant(self):
+        self.assert_noop_read_preserves_grant('maintenance')
 
 
 

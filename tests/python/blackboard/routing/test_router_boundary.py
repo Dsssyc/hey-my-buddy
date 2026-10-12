@@ -53,6 +53,11 @@ class RouterBoundaryTests(unittest.TestCase):
         self.assertEqual(choice["method"], "continue")
         self.assertNotEqual(params["commandId"], reroute["params"]["commandId"])
 
+    def test_table_change_keeps_the_one_reroute_reason(self):
+        reason = '评价表在请求冻结之后已变化；请由 Host 显式 reroute'
+        result = self.build(kind='routing-changed', code='router-table-changed', reason=reason)
+        self.assertEqual(result['reason'], reason)
+
     def test_stop_unknown_and_hard_gate_block_both_operations(self):
         for changes in ({"shutdown_confirmed": False}, {"continuation_problem": "固定 buddy 约束不满足"}):
             with self.subTest(changes=changes):

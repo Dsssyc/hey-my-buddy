@@ -517,6 +517,67 @@ class WorkflowWiringTests(RouterDispatchTestCase):
 
 
 class HostReviewRegressionTests(RouterDispatchTestCase):
+    def catalog_read(self, *, changed=False):
+        return self.board_.evaluation.record_catalog({
+            'source': 'routing-reread-fixture',
+            'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}],
+            'providers': [{'adapter': 'dsh', 'provider': 'fixture', 'models': [
+                {'id': model, 'efforts': ['max'], 'description': 'changed' if changed else ''}
+                for model in ('alpha', 'bravo')]}]})
+
+    def frozen_problem(self, result):
+        with self.board_.store.db.read() as db:
+            return self.board_.store.decisions._frozen_circumstances_problem(
+                db, self.board_.store.decisions._row(db, result['decisionId']),
+                router_sequence.request_snapshot(db, result['decisionId']),
+                router_sequence.dispatch(db, result['runId']))
+
+    def test_noop_catalog_read_passes_frozen_dispatch_and_claim_checks(self):
+        self.catalog_read()
+        frozen = self.request()
+        self.clock.advance(21601)
+        reread = self.catalog_read()
+        self.assertEqual(reread['tableRevision'], self.snapshot_of(frozen['decisionId'])['baseInput']['tableRevision'])
+        self.assertIsNone(self.frozen_problem(frozen))
+        committed = self.claim('catalog-noop')
+        self.assertIsNotNone(committed['claim'])
+        self.assertEqual(committed['claim']['decisionInput']['tableRevision'], reread['tableRevision'])
+
+    def test_changed_catalog_read_stops_both_checks_with_the_same_reroute_reason(self):
+        self.catalog_read()
+        frozen = self.request()
+        self.catalog_read(changed=True)
+        problem = self.frozen_problem(frozen)
+        reason = '评价表在请求冻结之后已变化；请由 Host 显式 reroute'
+        self.assertEqual(problem['code'], 'router-table-changed')
+        self.assertEqual(problem['reason'], reason)
+        blocked = self.claim('catalog-changed')
+        self.assertIsNone(blocked['claim'])
+        decision = self.decision_row(frozen['decisionId'])
+        self.assertEqual(decision['error'], 'router-table-changed')
+        self.assertEqual(decision['reason'], reason)
+        from hey_my_buddy.blackboard.routing.router_boundary_data import routing_boundary
+        with self.board_.store.db.read() as db:
+            row = self.board_.store.decisions._row(db, frozen['decisionId'])
+            boundary = routing_boundary(db, row, now=self.clock.value)
+        self.assertEqual(boundary['reason'], reason)
+        self.assertEqual(self.router_events('router.no_answer'), [])
+
+    def test_claim_time_revision_check_has_the_same_reason_without_preclaim_preparation(self):
+        self.catalog_read()
+        frozen = self.request()
+        self.catalog_read(changed=True)
+        # Exercise claim's own fence independently of pre-claim preparation.
+        with self.board_.store.db.write() as db:
+            task = db.execute('SELECT * FROM tasks WHERE task_id=?', (frozen['runId'],)).fetchone()
+            outcome = self.board_.store.decisions.claim(
+                db, task=task, spec=json.loads(task['spec_json']),
+                attempt_id='not-started', generation=1, now=self.clock.value)
+        self.assertEqual(outcome, ('decision-closed', None))
+        decision = self.decision_row(frozen['decisionId'])
+        self.assertEqual(decision['error'], 'router-table-changed')
+        self.assertEqual(decision['reason'], '评价表在请求冻结之后已变化；请由 Host 显式 reroute')
+
     def test_actor_graft_is_included_in_admission_byte_ceiling(self):
         first = self.request(request_id="pick-1")
         bound = len(canonical_json(self.snapshot_of(first["decisionId"])["baseInput"]).encode("utf-8"))

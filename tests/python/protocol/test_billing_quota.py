@@ -110,7 +110,7 @@ class BillingQuotaTests(BoardTestCase):
             db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'",
                        (json.dumps({"reviewVerification": {"verified": True}}),))
         record = {"status": "ready", "command": ["mock-codex"], "fingerprint": {"id": 1}}
-        with patch("hey_my_buddy.blackboard.service.harness_health._snapshot", return_value={"fixture": 1}), \
+        with patch("hey_my_buddy.blackboard.service.harness_health._snapshot", return_value={"adapter": "codex", "managerRecords": [], "candidates": []}), \
              patch("hey_my_buddy.blackboard.service.harness_health._discover", return_value=record), \
              patch("hey_my_buddy.buddy.harnesses.codex.account_probe.read", return_value=({**codex_account({"type": "chatgpt", "planType": "pro"}, stamp()), "provider": "openai"}, None, None)) as probe:
             health.refresh("codex", force=True)

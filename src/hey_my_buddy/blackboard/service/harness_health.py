@@ -8,12 +8,13 @@ import os
 from pathlib import Path
 import threading
 
-from ..store.db import canonical_json, sha256_text, utc_now
+from ..store.db import canonical_json, utc_now
 from ...errors import BoardError
 
 HARNESSES = ('dsh', 'zcode', 'codex', 'claude')
 SCAN_SECONDS = 180
 READY_SECONDS = 3600
+MAX_PATH_HINTS = 64
 
 
 def _later(seconds):
@@ -80,13 +81,22 @@ class HarnessHealth:
         self._closed = False
         self._thread = None
         self._path_hints = ()
+        self._path_hint_lock = threading.Lock()
 
     def add_path_hint(self, path):
         """PATH is an ephemeral low-priority hint, never a stored environment."""
         if not isinstance(path, str) or len(path) > 32768:
             return
-        parts = [part for part in path.split(os.pathsep) if part and Path(part).is_absolute()]
-        self._path_hints = tuple(dict.fromkeys([*parts, *self._path_hints]))[:64]
+        from ...buddy.harnesses.discovery import has_candidate
+        parts = dict.fromkeys(part for part in path.split(os.pathsep) if part and Path(part).is_absolute())
+        with self._path_hint_lock:
+            hints = list(self._path_hints)
+            for part in parts:
+                if len(hints) == MAX_PATH_HINTS:
+                    break
+                if part not in hints and has_candidate(Path(part)):
+                    hints.append(part)
+            self._path_hints = tuple(hints)
 
     def environment(self):
         if not self._path_hints:
@@ -183,7 +193,8 @@ class HarnessHealth:
                 return old
             environment = self.environment()
             snapshot = _snapshot(name, old['manualPath'], environment)
-            signature = sha256_text(canonical_json(snapshot))
+            from ...buddy.harnesses.discovery import location_fingerprint
+            signature = location_fingerprint(snapshot)
             unchanged = old.get('locationFingerprint') == signature
             if not force and unchanged and (old.get('expiresAt') or '') > now:
                 with self.board.db.write() as db:

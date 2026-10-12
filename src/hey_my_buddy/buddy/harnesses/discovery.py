@@ -213,9 +213,15 @@ def _variants(directory: Path, name: str) -> list[Path]:
     return [directory / name]
 
 
+def has_candidate(directory: Path) -> bool:
+    """Whether this PATH directory currently holds a harness or Node candidate."""
+    return any(file_fingerprint(path) is not None for name in _NAMES.values()
+               for path in _variants(directory, name))
+
+
 def candidate_snapshot(adapter: str, *, manual_path: str | None = None,
                        environment: dict | None = None) -> dict:
-    """Cheap cache key inputs: file existence and fingerprints, with PATH as a clue."""
+    """Full candidate diagnostics and file identities, with PATH as a clue."""
     if adapter not in _NAMES:
         raise ValueError("unknown harness")
     home = _home()
@@ -236,8 +242,6 @@ def candidate_snapshot(adapter: str, *, manual_path: str | None = None,
     candidates = []
     seen = set()
     for source, path in places:
-        if len(candidates) >= _MAX_CANDIDATES:
-            break
         label = str(path)
         if label in seen:
             continue
@@ -253,8 +257,6 @@ def candidate_snapshot(adapter: str, *, manual_path: str | None = None,
         seen_nodes = set()
         snapshot["nodeCandidates"] = []
         for path in node_paths:
-            if len(snapshot["nodeCandidates"]) >= _MAX_CANDIDATES:
-                break
             if str(path) in seen_nodes:
                 continue
             seen_nodes.add(str(path))
@@ -265,6 +267,15 @@ def candidate_snapshot(adapter: str, *, manual_path: str | None = None,
 def _scan_hash(snapshot: dict) -> str:
     data = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     return hashlib.sha256(data).hexdigest()
+
+
+def location_fingerprint(snapshot: dict) -> str:
+    """Hash what discovery can find, retaining the order of present candidates."""
+    return _scan_hash({"adapter": snapshot["adapter"],
+                       "managerRecords": snapshot["managerRecords"],
+                       "candidates": [item for item in snapshot["candidates"] if item["exists"]],
+                       "nodeCandidates": [item for item in snapshot.get("nodeCandidates", [])
+                                          if item["fingerprint"] is not None]})
 
 
 def native_environment(environment: dict, *, command: tuple[str, ...] | list[str] = (), adapter=None) -> dict:
@@ -720,7 +731,7 @@ def _discover(adapter: str, *, manual_path: str | None = None,
         snapshot = candidate_snapshot(adapter, manual_path=manual_path, environment=environment)
         environment = os.environ if environment is None else environment
         candidates = sorted((item for item in snapshot["candidates"] if item["exists"]),
-                            key=lambda item: _priority(item["source"]))
+                            key=lambda item: _priority(item["source"]))[:_MAX_CANDIDATES]
         attempts = []
         ready_tier = None
         incomplete = False

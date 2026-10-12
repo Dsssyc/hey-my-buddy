@@ -44,7 +44,7 @@ class HarnessServiceTests(BoardTestCase):
 
     def test_explicit_refresh_returns_selected_version_and_path(self):
         ready = {'adapter': 'codex', 'status': 'ready', 'version': '1.2.3', 'command': ['/native/codex'], 'executable': '/native/codex'}
-        with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=ready) as native:
+        with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'adapter': 'codex', 'managerRecords': [], 'candidates': []}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=ready) as native:
             result = self.call('capabilities', refresh=True, adapter='codex')
         self.assertNotIn('error', result)
         self.assertTrue(result['adapters']['codex']['available'])
@@ -60,7 +60,7 @@ class HarnessServiceTests(BoardTestCase):
             db.execute("INSERT INTO meta(key,value) VALUES('catalog-scan-after:codex',?)"
                        " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (until,))
         ready = {'adapter': 'codex', 'status': 'ready', 'version': '1.2.3', 'command': ['/native/codex'], 'executable': '/native/codex'}
-        with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=ready) as native:
+        with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'adapter': 'codex', 'managerRecords': [], 'candidates': []}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=ready) as native:
             result = self.call('capabilities', refresh=True, adapter='codex')
         self.assertNotIn('error', result)
         self.assertTrue(result['adapters']['codex']['available'])
@@ -79,7 +79,7 @@ class HarnessServiceTests(BoardTestCase):
 
     def test_manual_path_requires_current_revision(self):
         missing = {'adapter': 'codex', 'status': 'missing', 'reasonCode': 'not-found'}
-        with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=missing):
+        with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'adapter': 'codex', 'managerRecords': [], 'candidates': []}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=missing):
             saved = self.call('harness_set', adapter='codex', path='/custom/codex', expectedRevision=0)
         self.assertEqual(saved['harness']['manualPath'], '/custom/codex')
         refused = self.call('harness_set', adapter='codex', path='/other/codex', expectedRevision=0)
@@ -92,7 +92,7 @@ class HarnessServiceTests(BoardTestCase):
             'discoveries': [{'adapter': 'codex', 'status': 'complete', 'accountStatus': 'confirmed'}]}
         with patch('hey_my_buddy.buddy.harnesses.base.sys.platform', 'darwin'), \
              patch('hey_my_buddy.buddy.harnesses.codex.adapter.CodexAdapter.discover_models', return_value=payload), \
-             patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={}):
+             patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'adapter': 'codex', 'managerRecords': [], 'candidates': []}):
             for version in ('0.157.0', '0.158.0'):
                 with self.subTest(version=version), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value={
                         'adapter': 'codex', 'status': 'ready', 'version': version,
@@ -117,7 +117,7 @@ class HarnessServiceTests(BoardTestCase):
 
     def test_accounts_reports_cached_native_login_without_source_management(self):
         ready = {'adapter': 'codex', 'status': 'ready', 'version': '1.2.3', 'command': ['/native/codex']}
-        with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=ready):
+        with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'adapter': 'codex', 'managerRecords': [], 'candidates': []}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=ready):
             self.call('capabilities', refresh=True, adapter='codex')
         with patch('hey_my_buddy.blackboard.service.harness_health._discover') as native:
             result = self.call('accounts')
