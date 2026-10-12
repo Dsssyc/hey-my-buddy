@@ -16,7 +16,7 @@
 
 - 服务状态正常，schema 17，完整性检查通过，7 个 Worker 重新起来。升级后的看板按设计从“未核对”开始，四个 harness 的状态是未知，路由暂不可用；Host 触发一次发现之后，四个 harness 都是就绪（DSH 0.1.5-rc.1、ZCode 0.16.9、Codex 0.162.1、Claude Code 2.1.284），路由恢复。
 - 133 个 buddy 的名字与启用状态同装前完全相同。
-- **发现一处缺陷：Claude Code 的 49 个 buddy 全部不可用，原因码是账户状态未知。** harness 本身就绪，登录也读到了。原因是批次 3a 之后目录读取只凭 `tokenSource` 这一个字段判断账户是否确认，而真实的 Claude Code 在订阅登录时不给这个字段；测试的假程序给了，所以测试没有守住，Host 验收 3a 时只做了真实的回合，没有用真实的命令行跑一次发现。Codex、DSH、ZCode 的 buddy 不受影响，路由用的也不是 Claude Code，所以日常的委派没有被挡住。已另起一个微任务修，修好后需要再装一次。
+- **发现一处缺陷：Claude Code 的 49 个 buddy 全部不可用，原因码是账户状态未知。** harness 本身就绪，登录也读到了。原因是批次 3a 之后目录读取只凭 `tokenSource` 这一个字段判断账户是否确认，而真实的 Claude Code 在订阅登录时不给这个字段；测试的假程序给了，所以测试没有守住，Host 验收 3a 时只做了真实的回合，没有用真实的命令行跑一次发现。Codex、DSH、ZCode 的 buddy 不受影响，路由用的也不是 Claude Code，所以日常的委派没有被挡住。修复已在源码里（`d7aed27d`，验收见[批次 3a 的记录](adr030-batch3a-host-review.md)），还没有安装。
 - 冒烟：一个 DSH 的微任务（deepseek-flash / off）经装好的服务走完了提交、Worker 接手、在用户的 DSH 主目录下执行、封存与交付，用户主目录下的会话索引没有新增。
 
 ## 没有核对的
