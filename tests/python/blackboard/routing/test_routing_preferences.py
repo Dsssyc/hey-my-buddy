@@ -21,12 +21,14 @@ from unittest import mock
 from hey_my_buddy.protocol import schemas
 from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.roles.router import DecisionAdapter
+from hey_my_buddy.buddy.roles.prompts import router_prompt
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.install.runtime import resource_path
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.routing.test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID, THIRD_PROFILE, THIRD_PROFILE_ID
 from blackboard.evaluation.test_evaluation import family_key
@@ -216,7 +218,11 @@ class DecisionCapabilityTests(unittest.TestCase):
             child, request = calls[0]
             self.assertIsInstance(request, ReadOnlyStructuredRequest)
             self.assertEqual(request.cwd, str(frozen))
-            self.assertEqual(request.prompt, router.render_prompt(document))
+            body = router.render_prompt(document)
+            self.assertEqual(request.prompt, router_prompt(body))
+            role = resource_path("roles.router").read_text(encoding="utf-8")
+            self.assertTrue(request.prompt.startswith(role + "\n"))
+            self.assertEqual(request.prompt[len(role) + 1:], body)
             self.assertEqual(request.output_schema, document["outputSchema"])
             self.assertEqual(request.budget, budget)
             self.assertIsNone(child.turn)
