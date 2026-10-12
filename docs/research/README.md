@@ -34,5 +34,6 @@
 | 2026-10-11 | [harness 的标志，通行的做法与最后的决定](2026-10-11-harness-marks-in-practice.md) | 同上；改掉了上一份里的两处取舍 |
 | 2026-10-11 | [Codex 做 Host 时怎样等子代理，能不能结束回合等唤醒](2026-10-11-codex-host-waiting.md) | `docs/reference/host-codex.md` |
 | 2026-10-11 | [Codex 的子代理能不能叫醒已经结束回合的主代理（实验）](2026-10-11-codex-subagent-wakeup-experiment.md) | 同上；否定了上一份里待验证的办法 |
+| 2026-10-12 | [四个 harness 各自从哪里读代理，现在子进程的环境里有没有代理变量](2026-10-12-harness-proxy-sources.md) | ADR-030 执行计划的批次 5，尚未实现 |
 
 2026-10-11 之前的四份是从各自的决定里移过来的，当时没有按上面的写法记录读到哪里为止，这一点在各份记录里照实写明。
