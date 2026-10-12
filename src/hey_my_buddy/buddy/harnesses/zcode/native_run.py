@@ -125,6 +125,13 @@ def selected(snapshot: dict) -> dict:
     return result
 
 
+def _readable_ref(row: object) -> bool:
+    """One catalog row is comparable only when its provider/model ref is readable."""
+    return (isinstance(row, dict) and isinstance(row.get("ref"), dict)
+            and all(isinstance(row["ref"].get(key), str) and row["ref"][key].strip()
+                    for key in ("providerId", "modelId")))
+
+
 def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, *,
                       note_unknown: Callable[[str], None] = lambda _label: None) -> dict:
     session_id = snapshot["session"]["sessionId"]
@@ -132,14 +139,13 @@ def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, 
     # were refused when the RunRequest was built, so nothing is re-checked here.
     provider, model, effort = spec["provider"], spec["model"], spec["effort"]
     choices = _model_settings(snapshot).get("available")
-    catalog_known = isinstance(choices, list) and all(
-        isinstance(x, dict) and isinstance(x.get("ref"), dict)
-        and all(isinstance(x["ref"].get(key), str) and x["ref"][key].strip()
-                for key in ("providerId", "modelId")) for x in choices)
-    choice = next((x for x in choices if x.get("ref") == {"providerId": provider, "modelId": model}), None) if catalog_known else None
-    if catalog_known and choice is None:
+    rows = choices if isinstance(choices, list) else []
+    catalog_known = isinstance(choices, list) and all(_readable_ref(x) for x in rows)
+    target = next((x for x in rows if _readable_ref(x)
+                   and x["ref"] == {"providerId": provider, "modelId": model}), None)
+    if catalog_known and target is None:
         raise NativeError("configuration-unavailable", "the requested ZCode provider/model is not in the native available catalog")
-    reasoning = choice.get("reasoning") if choice is not None else None
+    reasoning = target.get("reasoning") if target is not None else None
     levels = reasoning.get("levels") if isinstance(reasoning, dict) else None
     efforts_known = isinstance(levels, list) and all(isinstance(x, dict) and isinstance(x.get("value"), str) for x in levels)
     efforts = [x["value"] for x in levels] if efforts_known else []
@@ -421,6 +427,12 @@ def validate_turn_provenance(record: dict) -> str | None:
     return "the ZCode native resume identity is invalid"
 
 
+#: Beyond the shared contract's type cap, further distinct unknown kinds fold
+#: into this one residual name; the parentheses keep it outside the allowed
+#: label charset, so no native label can ever collide with the bucket.
+_UNLISTED_UNKNOWN_TYPES = "(unlisted-native-events)"
+
+
 class _RunFacts:
     """The cumulative, normalized facts of one run, as the observer sees them."""
 
@@ -431,6 +443,11 @@ class _RunFacts:
 
     def note_unknown(self, label: object) -> None:
         name = label if isinstance(label, str) and re.fullmatch(r"[A-Za-z0-9/._-]{1,64}", label) else "unknown"
+        if name not in self.unknown_counts and len(self.unknown_counts) >= MAX_UNKNOWN_EVENT_TYPES - 1:
+            # The shared contract bounds the distinct kinds. The surplus folds
+            # into one bucket so an over-wide classification can never cost the
+            # run its total, its stop facts or its result.
+            name = _UNLISTED_UNKNOWN_TYPES
         self.unknown_counts[name] = self.unknown_counts.get(name, 0) + 1
 
     def mapping(self, *, tool_calls: int, settled: bool, raw_answer: str | None) -> dict:
@@ -1487,23 +1504,12 @@ def _evidence_refs(*, invocation_root: Path, stderr_path: Path, state: _RunState
 
 
 def _shared_unknown_events(facts: _RunFacts) -> NativeEvidence | None:
-    """The run's unknown-event counts as the shared result's bounded summary.
-
-    The private ``native-run-facts`` evidence file keeps every kind; beyond
-    the shared contract's type cap the remaining kinds count under the
-    established unretained-name bucket, and the total stays exact.
-    """
+    """The run's already-bounded unknown-event counts as the shared summary."""
     counts = facts.unknown_counts
     if not counts:
         return None
-    if len(counts) <= MAX_UNKNOWN_EVENT_TYPES:
-        return NativeEvidence(unknown_events=UnknownEvents(
-            counts_by_type=dict(counts), total=sum(counts.values())))
-    kept = dict(list(counts.items())[:MAX_UNKNOWN_EVENT_TYPES - 1])
-    kept["unknown"] = kept.get("unknown", 0) + sum(
-        count for _, count in list(counts.items())[MAX_UNKNOWN_EVENT_TYPES - 1:])
     return NativeEvidence(unknown_events=UnknownEvents(
-        counts_by_type=kept, total=sum(counts.values())))
+        counts_by_type=dict(counts), total=sum(counts.values())))
 
 
 def _finish_result(*, request: RunRequest, spawn: _Spawn | None, state: _RunState,
