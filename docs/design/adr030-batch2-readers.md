@@ -481,3 +481,16 @@ account_probe.read当前内部接口明确返回计费、额度和可选额度�
 
 
 用Host授权的只读解释器、src:tests/python优先与清除十个继承绑定的环境，最终按文件独立subprocess执行：blackboard.service.test_harness_health 30项、test_harness_service 12项、blackboard.evaluation.test_native_observations 12项、blackboard.routing.test_quota_retry 20项、test_nonretryable_quota 5项、protocol.test_billing_quota 11项，合计六文件90项全部通过，本回合没有未运行的指定文件；git diff --check通过。未重跑完整检查、前端、浏览器或其他由Host负责的检查。
+
+
+## 15. 第七回合：键盘提示检查与0.30.0版本
+
+Host报告候选ae842f9f在整合分支的前端78文件／1119项、完整Python3657项／216文件均通过；控制台已重建并检查账户区域，空主目录启动器安装0.29.0后升源码16→17、真实数据副本35万行升级／逐行保留与逐个服务读取、三处升级故障注入均由Host实际完成。本回合只改剩余的浏览器输入路径和当前版本，不复做这些Host检查或改升级基点。
+
+catalogue.check.ts的expands accounts independently and keeps checks and hints inside the window先聚焦同一位置区块中的检测按钮，再由键盘Shift+Tab回到“可用／Eligible”控件，新增toBeFocused断言；焦点由真实键盘输入抵达，保留原来的提示出现、宽度不超过320、完整位于窗口和无横向滚动断言，没有更改Hint的focus-visible规则，也没有靠无关的Escape制造键盘模式。该项覆盖两语言／两主题／两宽度共8种，按Host指示未运行浏览器，需Host补验。
+
+pyproject.toml的项目版本、uv.lock中hey-my-buddy自己的唯一版本行与protocol/contracts.py的CONTRACT_VERSION统一为0.30.0；test_current_core的当前契约断言和test_console_version_info中的当前软件版本示例同步更新。0.29.0仍是唯一已安装升级基点，schema16的五个固定夹具、metadata和生成器均不改；搜索后测试中的0.29.0只剩这份基点版本断言。源码仍只有唯一16→17升级，没有增加兼容或链式转换。
+
+用Host授权的只读解释器、src:tests/python优先并清除十个继承绑定，逐文件执行：blackboard.store.test_current_core 6项、install.test_runtime 32项、blackboard.store.test_upgrade_fixture 4项全文件通过；console.test_console_version_info中14项通过，install.test_packaging中10项通过（含生成技能的版本与契约标记检查）。合计71项尝试、66项通过；以下5个方法未获得通过证据，均为环境限制，不改测试规避它们：console.test_console_version_info.VersionInfoHTTPTests.test_periodic_snapshot_never_reads_runtime_or_preflight、test_runtime_read_failure_is_explicit_and_does_not_expose_private_details、test_version_route_is_login_protected_and_whitelisted在监听127.0.0.1:0时被拒绝；install.test_packaging.CwdIndependentCliTests.test_the_launcher_is_cwd_independent与test_the_launcher_reaches_the_private_cli_from_an_unrelated_cwd被既有launcher的uv缓存写入与清理时进程枚举拒绝。
+
+本回合没有构建或运行浏览器／完整检查，没有安装或写入只读解释器。最终核验uv.lock相对候选仅本项目版本一行变化，五个基点夹具字节不变，git diff --check通过；待Host补跑上述2个Python文件的受阻部分及浏览器的8种键盘提示检查。

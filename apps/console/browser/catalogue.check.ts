@@ -1,7 +1,7 @@
 import { expect } from "@playwright/test";
 import enBuddies from "../src/i18n/en/buddies";
 import zhBuddies from "../src/i18n/zh/buddies";
-import { TOOLBAR_ITEMS, contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
+import { TOOLBAR_ITEMS, contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle, test } from "./preview";
 
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 const CODEX = "codex / openai / gpt-5-codex";
@@ -176,7 +176,13 @@ for (const { locale, catalog, quotaAlert, unsaved, settings, account, check, che
         // Account guidance may be absent; the recorded review word always has a hint.
         const review = codex.locator("[aria-description]").filter({ hasText: /^(可用|Eligible)$/ }).first();
         await expect(review).toHaveAttribute("aria-description", /本地资格检查不调用模型|The local eligibility check calls no model/);
-        await review.focus();
+        // Scrolling closes hints: bring the word into view and let scrolling settle before keyboard focus.
+        await review.scrollIntoViewIfNeeded();
+        await settle(page);
+        await codex.getByRole("button", { name: check, exact: true }).focus();
+        await settle(page);
+        await page.keyboard.press("Shift+Tab");
+        await expect(review).toBeFocused();
         const hint = page.locator("[data-slot=tooltip-content][data-state$=open]");
         await expect(hint).toBeVisible();
         expect((await hint.boundingBox())!.width).toBeLessThanOrEqual(320);
