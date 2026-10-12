@@ -69,7 +69,8 @@ class ClaudeNativeRecordTests(unittest.TestCase):
     cwd = "/tmp/buddy-fixture-checkout"
 
     def evidence(self) -> TurnEvidence:
-        evidence = TurnEvidence(CLAUDE_SESSION, self.cwd)
+        # This recording uses the first-party handshake supplied by its fake CLI.
+        evidence = TurnEvidence(CLAUDE_SESSION, self.cwd, provider="anthropic")
         evidence.observe({"type": "system", "subtype": "init", "session_id": CLAUDE_SESSION,
                           "cwd": self.cwd, "model": CLAUDE_MODEL})
         return evidence
@@ -186,7 +187,6 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
         self.state = self.root / "fixture-state.json"
         self.environment = clean_environment()
         self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_CLAUDE_CLI=str(FAKE_CLAUDE_USAGE),
-                                BUDDY_CLAUDE_SETTINGS_POLICY="isolated",
                                 BUDDY_CLAUDE_FIXTURE_STATE=str(self.state),
                                 BUDDY_STATE_DIR=str(self.root / "state"),
                                 BUDDY_RUNTIME_ROOT=str(self.root / "runtime"), BUDDY_DEV_SOURCE="1")

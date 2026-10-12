@@ -90,39 +90,7 @@ def initialize_response(case):
         account = {"apiProvider": "firstParty", "tokenSource": None}
     if case == "missing-token":
         account = {"apiProvider": "firstParty"}
-    return {"models": DEFAULT_MODELS, "account": account}
-
-
-# The auth status shape the Host verified on the real 2.1.283 CLI after user
-# login (2026-09-26), plus the shapes the bounded readback must refuse.
-AUTH_STATUS_RESPONSES = {
-    "ok": {"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty",
-           "subscriptionType": "pro"},
-    "logged-out": {"loggedIn": False},
-    "third-party": {"loggedIn": True, "authMethod": "api_key", "apiProvider": "bedrock"},
-    "missing-provider": {"loggedIn": True},
-}
-
-
-def auth_status():
-    """The bounded ``auth status --json`` subcommand; state and exit only."""
-    state = read_state()
-    state["authStatusRuns"] = state.get("authStatusRuns", 0) + 1
-    write_state(state)
-    case = os.environ.get("BUDDY_CLAUDE_FIXTURE_AUTH_STATUS", "ok")
-    if case == "nonzero":
-        raise SystemExit(3)
-    if case == "timeout":
-        time.sleep(60)
-    if case == "malformed":
-        sys.stdout.write("{not json\n")
-        sys.stdout.flush()
-        return
-    payload = AUTH_STATUS_RESPONSES.get(case)
-    if payload is None:
-        sys.stderr.write("unknown fixture auth status case\n")
-        raise SystemExit(2)
-    send(payload)
+    return {"models": None if case == "invalid-catalog" else DEFAULT_MODELS, "account": None if case == "missing-account" else account}
 
 
 def result_frame(case, session_id):
@@ -166,14 +134,16 @@ def handle_control(frame, case):
         state = read_state()
         state["initialize"] = True
         write_state(state)
-        send({"type": "control_response", "response": {"subtype": "success", "request_id": rid,
-                                                       "response": initialize_response(case)}})
         if case == "early-result":
-            # Model output emitted before the controller sends the user message.
+            # Emit before the initialize acknowledgement: the controller cannot
+            # send its user message until it has consumed these preceding frames.
             send({"type": "assistant", "message": {"role": "assistant",
                                                    "content": [{"type": "text", "text": "premature"}]}})
             send({"type": "result", "subtype": "success", "session_id": "whatever",
                   "structured_output": {"outcome": outcome("ok")}})
+        send({"type": "control_response", "response": {"subtype": "success", "request_id": rid,
+                                                       "response": initialize_response(case)}})
+        if case == "early-result":
             for _ in sys.stdin:
                 pass
             sys.exit(0)
@@ -289,7 +259,7 @@ def main():
         print("2.1.282 (Claude Code fixture)")
         return
     if "auth" in sys.argv and "status" in sys.argv:
-        auth_status()
+        send({"loggedIn": True, "apiProvider": "firstParty"})
         return
     case = os.environ.get("BUDDY_CLAUDE_FIXTURE_CASE", "ok")
     state = read_state()

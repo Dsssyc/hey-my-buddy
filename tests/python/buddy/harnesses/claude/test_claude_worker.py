@@ -38,7 +38,7 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
         FIXTURE.chmod(0o755)
 
     def env(self):
-        return {"BUDDY_CLAUDE_CLI": str(FIXTURE), "BUDDY_CLAUDE_SETTINGS_POLICY": "isolated",
+        return {"BUDDY_CLAUDE_CLI": str(FIXTURE),
                 "BUDDY_CLAUDE_FIXTURE_STATE": str(self.directory / "native-fixture.json"),
                 "BUDDY_CLAUDE_FIXTURE_CASE": getattr(self, "case", "ok")}
 
@@ -79,7 +79,7 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
             self.assertIsNotNone(view["finalArtifactId"])
             native = receipt["result"]["nativeSession"]
             self.assertFalse(native["resumable"])
-            self.assertEqual(native["storageScope"], "harness-user-store")
+            self.assertEqual(native["storageScope"], "none")
             self.assertEqual(receipt["result"]["turn"]["provenance"]["adapter"], "claude")
             self.assertEqual((self.repo / "tracked.txt").read_text(), "base\n")
 
@@ -111,7 +111,7 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
 
 class ClaudeCatalogRuleTests(unittest.TestCase):
     def test_effort_directory_never_mixes_default_with_explicit_efforts(self):
-        catalog, _ = _catalog({"account": {"apiProvider": "firstParty", "tokenSource": "subscription"},
+        catalog = _catalog({"account": {"apiProvider": "firstParty", "tokenSource": "subscription"},
             "models": [{"value": "bad", "resolvedModel": "bad-model", "supportedEffortLevels": ["default", "high"]},
                        {"value": "haiku", "resolvedModel": "haiku"}]}, "fixture")
         self.assertEqual([m["id"] for m in catalog["providers"][0]["models"]], ["haiku"])

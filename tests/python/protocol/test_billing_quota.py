@@ -9,7 +9,7 @@ import subprocess
 import sys
 from unittest.mock import patch
 
-from hey_my_buddy.protocol.billing import claude_status, codex_account, zcode_access
+from hey_my_buddy.protocol.billing import claude_status, codex_account, native_provider, zcode_access
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
 from hey_my_buddy.blackboard.service.harness_health import HarnessHealth
 from hey_my_buddy.blackboard.evaluation.native_observations import exhausted, record_quota, warnings
@@ -51,14 +51,24 @@ class BillingQuotaTests(BoardTestCase):
         self.assertEqual(codex_account({"type": "chatgpt", "planType": "free"}, stamp())["kind"], "unknown")
         self.assertEqual(codex_account({"type": "apiKey"}, stamp())["kind"], "metered")
         self.assertEqual(codex_account({"type": "other"}, stamp())["kind"], "unknown")
-        self.assertEqual(claude_status({"loggedIn": True, "apiProvider": "firstParty",
+        self.assertEqual(claude_status({"loggedIn": True, "apiProvider": "anthropic",
                                        "authMethod": "claude.ai", "subscriptionType": "pro"}, stamp())["kind"], "subscription")
-        self.assertEqual(claude_status({"loggedIn": True, "apiProvider": "firstParty",
-                                       "authMethod": "api_key"}, stamp())["kind"], "metered")
-        self.assertEqual(claude_status({"loggedIn": True, "apiProvider": "firstParty"}, stamp())["kind"], "unknown")
+        self.assertEqual(claude_status({"loggedIn": True, "apiProvider": "anthropic",
+                                       "authMethod": "api_key"}, stamp())["kind"], "unknown")
+        self.assertEqual(claude_status({"loggedIn": True, "apiProvider": "anthropic"}, stamp())["kind"], "unknown")
         self.assertEqual(zcode_access("zhipu-coding-plan-api-key", stamp())["kind"], "subscription")
         self.assertEqual(zcode_access("api-key", stamp())["kind"], "metered")
         self.assertEqual(zcode_access("oauth", stamp())["kind"], "unknown")
+
+    def test_native_provider_spelling_and_unknown_gateway_funding_are_preserved(self):
+        for provider in ("bedrock", "vertex", "foundry", "custom-gateway", "firstParty"):
+            self.assertEqual(native_provider({"apiProvider": provider}, "apiProvider"), provider)
+        for account in (None, {}, {"apiProvider": None}, {"apiProvider": ""}):
+            self.assertEqual(native_provider(account, "apiProvider"), "unknown")
+        for provider in ("anthropic", "bedrock", "vertex", "foundry", "custom-gateway", None):
+            billing = claude_status({"loggedIn": True, "apiProvider": provider, "authMethod": "api_key"}, stamp())
+            self.assertEqual(billing["kind"], "unknown")
+            self.assertEqual(billing["source"], "claude/auth-status")
 
     def test_catalog_access_types_project_billing_per_provider(self):
         from copy import deepcopy

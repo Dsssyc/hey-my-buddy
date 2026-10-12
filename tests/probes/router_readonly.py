@@ -129,7 +129,7 @@ def clean_environment(root):
     from hey_my_buddy.buddy.harnesses.discovery import native_environment
     environment = native_environment(os.environ)
     environment.update(BUDDY_STATE_DIR=str(root / "state"), BUDDY_RUNTIME_ROOT=str(root / "runtime"),
-                       BUDDY_DEV_SOURCE="1", BUDDY_CLAUDE_SETTINGS_POLICY="isolated",
+                       BUDDY_DEV_SOURCE="1",
                        PYTHONPATH=str(REPO / "src"))
     return environment
 

@@ -77,7 +77,6 @@ class NativeRunCase(unittest.TestCase):
                        and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_DEV_SOURCE="1", BUDDY_CLAUDE_CLI=str(FIXTURE),
                            BUDDY_CLAUDE_FIXTURE_STATE=str(self.state_path),
-                           BUDDY_CLAUDE_SETTINGS_POLICY="isolated",
                            BUDDY_STATE_DIR=str(self.base / "state"),
                            BUDDY_RUNTIME_ROOT=str(self.base / "runtime"))
         self.patcher = mock.patch.dict(os.environ, environment, clear=True)
@@ -142,8 +141,8 @@ class WorkerCarrierTests(NativeRunCase):
     def test_the_catalog_check_confirms_only_what_native_readback_proved(self):
         result = self.execute(self.request())
         checked = result.configuration.checked
-        # The checked block restates exactly the requested values the native
-        # checks confirmed; no per-check ledger travels beside it.
+        # Provider comes from initialize, while the directory confirms the
+        # requested model and effort; no per-check ledger travels beside it.
         self.assertEqual(checked.provider.value, "anthropic")
         self.assertEqual(checked.model.value, CONFIGURATION["model"])
         self.assertEqual(checked.effort.value, CONFIGURATION["effort"])
@@ -262,7 +261,7 @@ class ReadCarrierTests(NativeRunCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.parsed.value["profileId"], "legal")
         policy = result.effective_policy.tools
-        self.assertEqual(policy.requested.value["tools"], ["Glob", "Grep", "LS", "Read"])
+        self.assertEqual(policy.requested.value["tools"], ["Glob", "Grep", "LS", "Read", "Skill"])
         self.assertEqual(policy.requested.value["permissionMode"], "default")
         # The denials and the offline allowlist are the request's own values.
         self.assertEqual(policy.requested.value["disallowedTools"],
@@ -392,22 +391,6 @@ class RequestGateTests(NativeRunCase):
         self.assertEqual(description.validate_turn_provenance({"provenance": {}}),
                          "the Claude turn lacks native completion and initialization evidence")
 
-    def test_third_party_provider_overrides_are_refused_before_spawn(self):
-        os.environ["ANTHROPIC_BASE_URL"] = "https://gateway.example"
-        result = self.execute(self.request())
-        self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "third-party-provider")
-        # Nothing was ever spawned: the confirmed never-spawned fact and no
-        # native exit code.
-        self.assertEqual(result.stop_evidence.native.group_state, "gone")
-        self.assertIsNone(result.end.native_exit_code)
-        self.assertFalse(self.state_path.exists())
-
-    def test_an_unsupported_settings_policy_is_refused(self):
-        os.environ["BUDDY_CLAUDE_SETTINGS_POLICY"] = "inherit"
-        result = self.execute(self.request())
-        self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "settings-policy-unsupported")
 
 
 class SettlementGuardTests(NativeRunCase):
@@ -621,6 +604,54 @@ class ObserverContractTests(NativeRunCase):
 
 
 class DiscoveryTests(NativeRunCase):
+    def test_non_first_party_handshake_can_be_selected_and_executed(self):
+        from hey_my_buddy.blackboard.catalog.catalog import CatalogView, _check_recorded
+
+        self.fixture_case("third-party")
+        os.environ["ANTHROPIC_BASE_URL"] = "https://shell-only.example.invalid"
+        catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "third-party-discovery",
+                                native_root=self.base / "third-party-native", timeout_seconds=25,
+                                cancelled=lambda: False)
+        view = CatalogView.from_payload(catalog)
+        selected = {"adapter": "claude", **CONFIGURATION, "provider": "bedrock"}
+        self.assertEqual(_check_recorded(selected, view, pending_efforts=None), selected)
+        profiles = view.proposed_profiles()
+        self.assertTrue(profiles)
+        self.assertTrue(all(p["provider"] == "bedrock" and p["profileId"].startswith("claude:bedrock:")
+                            for p in profiles))
+        self.assertEqual(catalog["discoveries"][0]["accountStatus"], "confirmed")
+        self.assertEqual(self.fixture_state()["userTurns"], 0)
+        for flag in ("--restricted", "--setting-sources", "--strict-mcp-config", "--mcp-config", "--safe-mode"):
+            self.assertNotIn(flag, self.fixture_state()["argv"])
+        request = self.request().model_copy(update={"configuration": RunConfiguration(**{k: selected[k] for k in ("provider", "model", "effort")})})
+        result = self.execute(request)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.configuration.checked.provider.value, "bedrock")
+        state = self.fixture_state()
+        self.assertIn("--no-session-persistence", state["argv"])
+        self.assertEqual(state["seenAnthropicEnv"], [])
+        settings = json.loads(Path(flag_value(state["argv"], "--settings")).read_text())
+        self.assertEqual(set(settings), {"sandbox"})
+
+    def test_unknown_account_does_not_require_a_login_proof_process(self):
+        for case in ("no-auth", "missing-token", "null-token", "missing-account"):
+            with self.subTest(case=case):
+                self.fixture_case(case)
+                catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / f"discovery-{case}",
+                                        native_root=self.base / f"native-{case}", timeout_seconds=25,
+                                        cancelled=lambda: False)
+                self.assertEqual(catalog["discoveries"][0]["accountStatus"], "unknown")
+                self.assertEqual(catalog["providers"][0]["provider"], "unknown" if case == "missing-account" else "anthropic")
+                self.assertNotIn("authStatusRuns", self.fixture_state())
+                result = self.execute(self.request())
+                self.assertEqual(result.end.status, "ok", result.end.message)
+
+    def test_early_fixture_is_ordered_before_initialize_acknowledgement(self):
+        self.fixture_case("early-result")
+        result = self.execute(self.request())
+        self.assertEqual(result.end.reason_code, "native-turn-started-early")
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
     def test_discovery_initializes_only_and_never_sends_a_user_message(self):
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discover-invocation",
                                 native_root=self.base / "discover-native", timeout_seconds=25,
@@ -638,22 +669,19 @@ class DiscoveryTests(NativeRunCase):
     def test_discovery_failures_carry_the_actual_native_stop_fact(self):
         # A pre-spawn refusal never started anything: the known never-started
         # fact, not a guess from the error code — and no native child exists.
-        os.environ["ANTHROPIC_BASE_URL"] = "https://gateway.example"
-        try:
-            with self.assertRaises(native_run.ClaudeProtocolError) as caught:
+        with mock.patch.object(native_run, "cli_command", side_effect=native_run.ClaudeUnavailable("missing CLI")):
+            with self.assertRaises(native_run.ClaudeUnavailable) as caught:
                 run_discovery(cwd=str(self.cwd), invocation_root=self.base / "ds-pre",
                               native_root=self.base / "ds-pre-n", timeout_seconds=25, cancelled=lambda: False)
-            self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
-            self.assertFalse(self.state_path.exists(), "no native child may exist for a pre-spawn refusal")
-        finally:
-            del os.environ["ANTHROPIC_BASE_URL"]
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+        self.assertFalse(self.state_path.exists())
         # A settled refusal after a confirmed stop carries the true fact, and
         # the outer layer may recycle its directory on it.
-        self.fixture_case("no-auth")
+        self.fixture_case("invalid-catalog")
         with self.assertRaises(native_run.ClaudeProtocolError) as caught:
             run_discovery(cwd=str(self.cwd), invocation_root=self.base / "ds-ok",
                           native_root=self.base / "ds-ok-n", timeout_seconds=25, cancelled=lambda: False)
-        self.assertEqual(caught.exception.code, "first-party-auth-required")
+        self.assertEqual(caught.exception.code, "invalid-catalog")
         self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
 
     def test_discovery_metadata_error_with_an_unknown_stop_reports_false(self):
@@ -661,24 +689,18 @@ class DiscoveryTests(NativeRunCase):
         # must stay false: the outer layer keeps the directory for inspection
         # instead of trusting the error to mean the group is gone.
         from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-        self.fixture_case("no-auth")
+        self.fixture_case("invalid-catalog")
         with mock.patch.object(ProcessHandle, "shutdown_confirmed",
                                side_effect=lambda settle_seconds=2.0: False):
             with self.assertRaises(native_run.ClaudeProtocolError) as caught:
                 run_discovery(cwd=str(self.cwd), invocation_root=self.base / "ds-unk",
                               native_root=self.base / "ds-unk-n", timeout_seconds=25, cancelled=lambda: False)
-        self.assertEqual(caught.exception.code, "first-party-auth-required")
+        self.assertEqual(caught.exception.code, "invalid-catalog")
         self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
         # The witness is the real fact, never the error code: the same code
         # carried True when the stop was actually observed.
 
-    def test_discovery_refuses_third_party_overrides_and_bad_cli(self):
-        os.environ["ANTHROPIC_BASE_URL"] = "https://gateway.example"
-        with self.assertRaises(native_run.ClaudeProtocolError) as caught:
-            run_discovery(cwd=str(self.cwd), invocation_root=self.base / "d2",
-                          native_root=self.base / "d2n", timeout_seconds=25, cancelled=lambda: False)
-        self.assertEqual(caught.exception.code, "third-party-provider")
-        del os.environ["ANTHROPIC_BASE_URL"]
+    def test_discovery_refuses_an_unusable_cli(self):
         os.environ["BUDDY_CLAUDE_CLI"] = str(self.base / "missing-cli")
         with self.assertRaises(native_run.ClaudeUnavailable) as caught:
             run_discovery(cwd=str(self.cwd), invocation_root=self.base / "d3",
@@ -691,19 +713,8 @@ class RoleSurfaceTests(NativeRunCase):
 
     def test_check_preparation_refuses_before_any_spawn(self):
         from hey_my_buddy.buddy.harnesses.claude.config import ClaudeUnavailable
-        with self.assertRaises(BoardError) as caught:
-            native_run.check_preparation({"provider": "openai"}, dict(os.environ))
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-        self.assertIn("first-party Anthropic provider", caught.exception.message)
-        with self.assertRaises(BoardError) as caught:
-            native_run.check_preparation({"provider": "anthropic"},
-                                         {**os.environ, "BUDDY_CLAUDE_SETTINGS_POLICY": "global"})
-        self.assertIn("BUDDY_CLAUDE_SETTINGS_POLICY=isolated", caught.exception.message)
-        with self.assertRaises(BoardError) as caught:
-            native_run.check_preparation({"provider": "anthropic"},
-                                         {**os.environ, "ANTHROPIC_BASE_URL": "https://gw.example"})
-        self.assertIn("ANTHROPIC_BASE_URL", caught.exception.message)
-        self.assertNotIn("gw.example", caught.exception.message)
+        native_run.check_preparation({"provider": "bedrock"},
+                                     {**os.environ, "ANTHROPIC_BASE_URL": "https://gateway.example"})
         with mock.patch.dict(os.environ, {"BUDDY_DEV_SOURCE": "1", "BUDDY_CLAUDE_CLI": str(self.base / "nope")}):
             with mock.patch.object(native_run, "cli_command", side_effect=ClaudeUnavailable("CLI missing")):
                 with self.assertRaises(BoardError) as caught:
@@ -725,12 +736,12 @@ class RoleSurfaceTests(NativeRunCase):
             run(self.request(), observer=lambda _facts: FEEDBACK_CONTINUE,
                 services={"live": endpoint}, cancelled=lambda: False)
 
-    def test_session_facts_report_the_user_store_without_a_binding_claim(self):
+    def test_session_facts_report_disabled_persistence(self):
         facts = native_run.session_facts(self.base / "native", "session-x")
         self.assertEqual(facts["adapter"], "claude")
         self.assertEqual((facts["sessionId"], facts["captured"]), ("session-x", True))
-        self.assertEqual(facts["storageScope"], "harness-user-store")
-        self.assertEqual(facts["nativeAppVisibility"], "unknown")
+        self.assertEqual(facts["storageScope"], "none")
+        self.assertEqual(facts["nativeAppVisibility"], "none")
         self.assertNotIn("bindingPresent", facts)
         empty = native_run.session_facts(self.base / "native", None)
         self.assertFalse(empty["captured"])

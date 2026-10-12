@@ -46,7 +46,6 @@ class CatalogTests(unittest.TestCase):
         claude._reset_metadata_cache()
         self.addCleanup(claude._reset_metadata_cache)
         with patch.object(claude, "cli_command", return_value=["/fixture/claude"]), \
-             patch.object(claude, "third_party_overrides", return_value=[]), \
              patch.object(claude, "_probe_native_metadata", side_effect=[
                  BoardError("ADAPTER_UNAVAILABLE", "fixture not logged in"), {"catalog": native}]) as probe, \
              patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={"claude": instance}), \

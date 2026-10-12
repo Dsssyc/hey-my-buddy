@@ -65,6 +65,7 @@ class FixtureCleanupTests(unittest.TestCase):
             "CLAUDE_CODE_USE_BEDROCK": "1",
             "CLAUDE_CODE_USE_VERTEX": "1",
             "CLAUDE_CODE_USE_FOUNDRY": "1",
+            "CLAUDE_CODE_UNLISTED_PROVIDER": "inherited-provider",
             "AZURE_API_INGESTION_URL": "https://gateway.invalid",
         }
         with private_state_dir() as directory, patch.dict(os.environ, inherited):
@@ -72,7 +73,10 @@ class FixtureCleanupTests(unittest.TestCase):
             self.assertEqual(environment["BUDDY_STATE_DIR"], str(directory))
             self.assertEqual(environment["BUDDY_RUNTIME_ROOT"], str(directory / "runtime-root"))
             for key in inherited.keys() - {"BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT"}:
-                self.assertNotIn(key, environment)
+                if key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_")) or key in (
+                        "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"):
+                    self.assertNotIn(key, environment)
+            self.assertFalse(any(key.startswith("CLAUDE_CODE_") for key in environment))
 
     def test_child_environment_preserves_explicit_private_paths(self):
         with private_state_dir() as directory:

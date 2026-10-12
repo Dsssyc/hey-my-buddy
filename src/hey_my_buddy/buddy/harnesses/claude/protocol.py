@@ -347,8 +347,9 @@ def _task_status(frame: dict) -> str | None:
 class TurnEvidence:
     """What the controller observed of one native root turn."""
 
-    def __init__(self, session_id: str, cwd: str):
+    def __init__(self, session_id: str, cwd: str, *, provider: str = "unknown"):
         self.session_id, self.cwd = session_id, cwd
+        self.provider = provider
         self.init_observed = False
         self.init_session_id: str | None = None
         self.session_model: str | None = None
@@ -633,7 +634,7 @@ class TurnEvidence:
         if not windows and reached is None:
             return None
         candidate = {"source": "claude/stream-json-rate-limit-event", "observedAt": self.quota_observed_at,
-                     "provider": "anthropic", "windows": windows[:MAX_QUOTA_WINDOWS]}
+                     "provider": self.provider, "windows": windows[:MAX_QUOTA_WINDOWS]}
         if reached is not None:
             candidate["reachedType"] = reached
         return candidate

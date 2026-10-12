@@ -66,12 +66,9 @@ EVIDENCE_FILE_NAME = "teardown-evidence.json"
 
 def test_environment(root: Path) -> dict:
     """The child environment every test suite runs with: checkout first, no pins."""
-    from ..buddy.harnesses.claude.config import THIRD_PARTY_OVERRIDE_VARIABLES
-
-    # A Claude Code Host session exports ANTHROPIC_BASE_URL. Claude fixtures model the
-    # first-party account explicitly, so an inherited gateway must not decide them.
-    removed = {*SANITIZED_VARIABLES, *THIRD_PARTY_OVERRIDE_VARIABLES}
-    values = {key: value for key, value in os.environ.items() if key not in removed and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
+    # Test isolation is independent of the product's native configuration:
+    # inherited ownership, credentials and Claude provider flags cannot select a fixture.
+    values = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES and not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_"))}
     source = str(root / "src")
     tests = str(root / "tests" / "python")
     inherited = values.get("PYTHONPATH")

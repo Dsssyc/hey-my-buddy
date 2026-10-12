@@ -15,6 +15,23 @@ from hey_my_buddy.buddy.harnesses import discovery
 
 
 class HarnessDiscoveryTests(unittest.TestCase):
+    def test_claude_reports_native_provider_and_unknown_billing_without_refusal(self):
+        for account, provider in (({"loggedIn": True, "apiProvider": "bedrock", "authMethod": "api_key"}, "bedrock"),
+                                  ({"loggedIn": True, "apiProvider": "firstParty"}, "anthropic"),
+                                  ({"loggedIn": True, "apiProvider": "firstParty", "authMethod": "api_key"}, "anthropic"),
+                                  ({"loggedIn": True}, "unknown")):
+            with self.subTest(provider=provider), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                cli = self.executable(home / "claude", "import sys\nprint('claude 2.1.0' if sys.argv[1:] == ['--version'] else "
+                                      + repr(json.dumps(account)) + ")\n")
+                with patch.object(discovery, "_home", return_value=home), \
+                     patch.object(discovery, "_common_dirs", return_value=[]), \
+                     patch.object(discovery, "_app_paths", return_value=[]):
+                    result = discovery.discover("claude", manual_path=str(cli), environment={"PATH": ""})
+                self.assertEqual(result["status"], "ready")
+                self.assertEqual(set(result["billingByProvider"]), {provider})
+                self.assertEqual(result["billingByProvider"][provider]["kind"], "unknown")
+
     @staticmethod
     def executable(path: Path, source: str) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)

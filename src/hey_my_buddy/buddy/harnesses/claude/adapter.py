@@ -3,8 +3,8 @@
 P1 scope (ADR-012 section six): a ``--json-schema`` structured result, native
 permission requests converted to controller attention, and a freshly allocated
 ``--session-id`` per attempt with no native resume. Availability reports the
-native initialize metadata and the first-party login fact; the bounded
-failure of an unauthenticated account is cached briefly so repeated
+native initialize metadata; bounded native metadata failures are cached
+briefly so repeated
 capability reads do not respawn the CLI. The governed Worker turn, the
 read-only structured call and model discovery all execute through the
 registered :mod:`~hey_my_buddy.buddy.harnesses.claude.native_run` under the
@@ -17,7 +17,7 @@ import threading
 import time
 
 from ....errors import BoardError
-from .config import ClaudeUnavailable, cli_command, third_party_overrides
+from .config import ClaudeUnavailable, cli_command
 from .native_run import validate_turn_provenance
 
 #: Native initialize metadata is cached briefly so repeated capability reads do
@@ -64,9 +64,6 @@ class ClaudeAdapter:
             cli_command()
         except ClaudeUnavailable as error:
             return False, str(error)
-        overrides = third_party_overrides()
-        if overrides:
-            return False, "Claude refuses third-party provider overrides: " + ", ".join(overrides)
         return True, None
 
     validate_turn_provenance = staticmethod(validate_turn_provenance)
@@ -78,7 +75,7 @@ class ClaudeAdapter:
         (``roles.run_execution.discover_models``) — the same carrier the
         availability probe uses — so the explicit call and the probe share
         one cache: an explicit discovery bypasses a briefly cached
-        unauthenticated failure, and its result warms the same entry. This
+        metadata failure, and its result warms the same entry. This
         harness's availability fact depends on that same bounded metadata,
         which is why the description keeps the cache here.
         """
@@ -97,7 +94,7 @@ def _cache_key() -> tuple:
         command = cli_command()
     except ClaudeUnavailable as error:
         return ("missing", str(error))
-    return (tuple(command), tuple(sorted(third_party_overrides())))
+    return (tuple(command),)
 
 
 def _probe_native_metadata() -> dict:
@@ -107,8 +104,7 @@ def _probe_native_metadata() -> dict:
     (``roles.run_execution.discover_models``), which owns its private
     directory, its launch and the two-layer stop confirmation around this
     module's own operation; this description adds only the TTL cache around
-    it. The bounded account reasons — the first-party login fact above all —
-    arrive on that layer's ``ADAPTER_UNAVAILABLE`` refusal and are what
+    it. Bounded native metadata failures arrive on that layer's ``ADAPTER_UNAVAILABLE`` refusal and are what
     availability reports.
     """
     from ...roles.run_execution import discover_models
@@ -127,9 +123,9 @@ def _cached_native_metadata() -> dict:
 def _load_native_metadata() -> dict:
     """Cached initialize metadata for repeated capability reads.
 
-    Bounded failures (a missing first-party login, an unusable CLI) are cached
+    Bounded failures (a missing native metadata, an unusable CLI) are cached
     too, so console and capability checks do not respawn the native CLI on
-    every call while the account stays unauthenticated. ``discover_models``
+    every call while the native read stays unavailable. ``discover_models``
     always resets the cache for an explicit fresh discovery.
     """
     global _metadata_cache

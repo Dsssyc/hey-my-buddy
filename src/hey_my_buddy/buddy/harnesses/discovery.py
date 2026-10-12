@@ -675,13 +675,12 @@ def _candidate_handshake(adapter: str, candidate: dict, environment: dict, deadl
             if code is not None:
                 result["reasonCode"] = code
                 return result
-            if account.get("apiProvider") not in ("anthropic", "firstParty"):
-                result["reasonCode"] = "auth-unverified"
-                return result
+            from .claude.config import provider_from_account
             from ...protocol.billing import claude_status
             from datetime import datetime, timezone
             observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            result["billingByProvider"] = {"anthropic": claude_status(account, observed_at)}
+            provider = provider_from_account(account)
+            result["billingByProvider"] = {provider: claude_status({**account, "apiProvider": provider}, observed_at)}
         result.update(status="ready", command=command,
                       reasonCode="version-unknown" if match is None else None)
         return result
@@ -770,6 +769,8 @@ def _discover(adapter: str, *, manual_path: str | None = None,
                 "source": selected["source"] if selected else None,
                 "fingerprint": selected["fingerprint"] if selected else None,
                 "scanFingerprint": _scan_hash(snapshot), "candidates": diagnostics,
+                **({"billingByProvider": selected["billingByProvider"]}
+                   if selected is not None and "billingByProvider" in selected else {}),
                 "reasonCode": reason, "remedy": _REMEDIES.get(reason) if reason else None}
     except Exception as error:
         if hasattr(error, "discovery_shutdown_confirmed"):

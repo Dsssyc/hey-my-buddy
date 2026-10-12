@@ -200,10 +200,7 @@ def offline_facts_source(directory: Path) -> str:
 
 
 def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
-    from hey_my_buddy.buddy.harnesses.claude.config import THIRD_PARTY_OVERRIDE_VARIABLES
-
-    removed = _INHERITED_CHILD_KEYS | set(THIRD_PARTY_OVERRIDE_VARIABLES)
-    environment = {key: value for key, value in os.environ.items() if key not in removed and not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))}
+    environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS and not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_"))}
     # HOME and SDK locations belong to this fixture, never to the interpreter's
     # inherited account. Do not create native configuration files in this home.
     private_home = directory / "home"
