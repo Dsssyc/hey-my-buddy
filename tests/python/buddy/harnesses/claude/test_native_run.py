@@ -603,6 +603,41 @@ class ObserverContractTests(NativeRunCase):
         self.assertEqual(self.fixture_state()["userTurns"], 1)
 
 
+class CatalogAccountTests(unittest.TestCase):
+    def account_status(self, initialize):
+        return native_run._catalog({"models": [], **initialize}, "fixture")["discoveries"][0]["accountStatus"]
+
+    def test_subscription_account_without_token_source_is_confirmed(self):
+        account = {"apiProvider": "firstParty", "email": "subscriber@example.invalid",
+                   "organization": "fixture-organization", "subscriptionType": "max"}
+        self.assertEqual(self.account_status({"account": account}), "confirmed")
+        self.assertEqual(self.account_status({"account": {**account, "tokenSource": None}}), "confirmed")
+
+    def test_nonempty_account_facts_do_not_select_a_provider_or_login_method(self):
+        for field, value in (("email", "subscriber@example.invalid"), ("organization", "fixture-organization"),
+                             ("subscriptionType", "max"), ("tokenSource", "subscription"),
+                             ("tokenSource", "none"), ("apiKeySource", "ANTHROPIC_API_KEY"),
+                             ("futureAccountField", {"identity": "fixture"})):
+            for provider in (None, ""):
+                with self.subTest(field=field, value=value, provider=provider):
+                    self.assertEqual(self.account_status({"account": {"apiProvider": provider, field: value}}),
+                                     "confirmed")
+
+    def test_provider_only_accounts_are_confirmed(self):
+        for provider in ("firstParty", "bedrock", "vertex", "future-provider"):
+            with self.subTest(provider=provider):
+                self.assertEqual(self.account_status({"account": {"apiProvider": provider}}), "confirmed")
+
+    def test_absent_malformed_and_empty_account_facts_are_unknown(self):
+        self.assertEqual(self.account_status({}), "unknown")
+        for account in (None, "account", [], ["account"], True, 1, {}, {"apiProvider": ""},
+                        {"apiProvider": None},
+                        {"apiProvider": "", "email": "", "tokenSource": None,
+                         "futureAccountField": {}, "anotherField": [], "flag": False, "count": 0}):
+            with self.subTest(account=account):
+                self.assertEqual(self.account_status({"account": account}), "unknown")
+
+
 class DiscoveryTests(NativeRunCase):
     def test_non_first_party_handshake_can_be_selected_and_executed(self):
         from hey_my_buddy.blackboard.catalog.catalog import CatalogView, _check_recorded
@@ -634,17 +669,32 @@ class DiscoveryTests(NativeRunCase):
         self.assertEqual(set(settings), {"sandbox"})
 
     def test_unknown_account_does_not_require_a_login_proof_process(self):
-        for case in ("no-auth", "missing-token", "null-token", "missing-account"):
+        for case in ("empty-account", "invalid-account", "null-account", "missing-account"):
             with self.subTest(case=case):
                 self.fixture_case(case)
                 catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / f"discovery-{case}",
                                         native_root=self.base / f"native-{case}", timeout_seconds=25,
                                         cancelled=lambda: False)
                 self.assertEqual(catalog["discoveries"][0]["accountStatus"], "unknown")
-                self.assertEqual(catalog["providers"][0]["provider"], "unknown" if case == "missing-account" else "anthropic")
+                self.assertEqual(catalog["providers"][0]["provider"], "unknown")
                 self.assertNotIn("authStatusRuns", self.fixture_state())
                 result = self.execute(self.request())
                 self.assertEqual(result.end.status, "ok", result.end.message)
+
+    def test_account_facts_are_confirmed_in_one_initialize_without_a_user_message(self):
+        for case in ("ok", "null-token", "token-source", "api-key-source", "provider-only"):
+            with self.subTest(case=case):
+                self.fixture_case(case)
+                previous_runs = self.fixture_state()["runs"] if self.state_path.exists() else 0
+                catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / f"discovery-{case}",
+                                        native_root=self.base / f"native-{case}", timeout_seconds=25,
+                                        cancelled=lambda: False)
+                self.assertEqual(catalog["discoveries"][0]["accountStatus"], "confirmed")
+                state = self.fixture_state()
+                self.assertTrue(state["initialize"])
+                self.assertEqual(state["userTurns"], 0)
+                self.assertEqual(state["runs"], previous_runs + 1)
+                self.assertNotIn("authStatusRuns", state)
 
     def test_early_fixture_is_ordered_before_initialize_acknowledgement(self):
         self.fixture_case("early-result")

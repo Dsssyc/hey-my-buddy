@@ -79,18 +79,28 @@ def outcome(case):
 
 
 def initialize_response(case):
-    account = {"apiProvider": "firstParty", "tokenSource": "subscription"}
-    if case == "no-auth":
-        account = {"apiProvider": "firstParty", "tokenSource": "none"}
+    # Host's initialize-only read of Claude Code 2.1.284 (2026-10-12):
+    # subscription login supplies account details without tokenSource.
+    account = {"apiProvider": "firstParty", "email": "subscriber@example.invalid",
+               "organization": "fixture-organization", "subscriptionType": "max"}
+    if case == "token-source":
+        account = {"apiProvider": "firstParty", "tokenSource": "subscription"}
     if case == "third-party":
-        account = {"apiProvider": "bedrock", "tokenSource": "api-key"}
+        account = {"apiProvider": "bedrock"}
+    if case == "api-key-source":
+        account = {"apiProvider": "firstParty", "tokenSource": "none", "apiKeySource": "ANTHROPIC_API_KEY"}
     if case == "null-token":
-        # The real 2.1.283 readback after a claude.ai login: a first-party
-        # provider whose tokenSource is null (Host-verified, 2026-09-26).
-        account = {"apiProvider": "firstParty", "tokenSource": None}
-    if case == "missing-token":
+        account["tokenSource"] = None
+    if case == "provider-only":
         account = {"apiProvider": "firstParty"}
-    return {"models": None if case == "invalid-catalog" else DEFAULT_MODELS, "account": None if case == "missing-account" else account}
+    if case == "empty-account":
+        account = {}
+    if case == "invalid-account":
+        account = "not-an-account-object"
+    response = {"models": None if case == "invalid-catalog" else DEFAULT_MODELS}
+    if case != "missing-account":
+        response["account"] = None if case == "null-account" else account
+    return response
 
 
 def result_frame(case, session_id):
@@ -259,6 +269,8 @@ def main():
         print("2.1.282 (Claude Code fixture)")
         return
     if "auth" in sys.argv and "status" in sys.argv:
+        state = read_state()
+        write_state({"authStatusRuns": state.get("authStatusRuns", 0) + 1})
         send({"loggedIn": True, "apiProvider": "firstParty"})
         return
     case = os.environ.get("BUDDY_CLAUDE_FIXTURE_CASE", "ok")

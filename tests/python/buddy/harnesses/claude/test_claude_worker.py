@@ -111,7 +111,8 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
 
 class ClaudeCatalogRuleTests(unittest.TestCase):
     def test_effort_directory_never_mixes_default_with_explicit_efforts(self):
-        catalog = _catalog({"account": {"apiProvider": "firstParty", "tokenSource": "subscription"},
+        catalog = _catalog({"account": {"apiProvider": "firstParty", "email": "subscriber@example.invalid",
+                                      "organization": "fixture-organization", "subscriptionType": "max"},
             "models": [{"value": "bad", "resolvedModel": "bad-model", "supportedEffortLevels": ["default", "high"]},
                        {"value": "haiku", "resolvedModel": "haiku"}]}, "fixture")
         self.assertEqual([m["id"] for m in catalog["providers"][0]["models"]], ["haiku"])

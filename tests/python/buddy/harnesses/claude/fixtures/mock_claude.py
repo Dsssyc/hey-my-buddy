@@ -136,7 +136,9 @@ def handle_control(frame, case):
         send({"type": "control_response", "response": {"subtype": "success", "request_id": rid,
                                                        "response": {"models": DEFAULT_MODELS,
                                                                     "account": {"apiProvider": "firstParty",
-                                                                                "tokenSource": "subscription"}}}})
+                                                                                "email": "subscriber@example.invalid",
+                                                                                "organization": "fixture-organization",
+                                                                                "subscriptionType": "max"}}}})
         if case == "premature":
             for _ in sys.stdin:
                 pass
