@@ -257,11 +257,20 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
                 self.assertEqual(outcome.result["resolved"], outcome.result["requested"])
                 self.assertIsNone(outcome.result["observed"])
 
-    def test_model_readback_mismatch_fails_before_work(self):
+    def test_confirmed_model_readback_mismatch_is_rejected_before_work(self):
         _, outcome = self.execute(self.context("config-mismatch", effort="high"))
-        self.assertEqual(outcome.result.get("code"), "configuration-mismatch", outcome.to_report())
-        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result["code"], "configuration-mismatch")
+        self.assertFalse(outcome.result["modelStarted"])
         self.assertIsNone(outcome.result["resolved"])
+        self.assertNotIn("turn", outcome.result)
+
+    def test_unrecognized_model_readback_continues_and_retains_unknown_facts(self):
+        _, outcome = self.execute(self.context("config-unrecognized"))
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.result["modelStarted"])
+        self.assertIsNone(outcome.result["resolved"])
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
 
     def test_native_turn_failure_attribution_is_whitelisted_and_secret_free(self):
         from hey_my_buddy.buddy.runtime.worker import classify_termination

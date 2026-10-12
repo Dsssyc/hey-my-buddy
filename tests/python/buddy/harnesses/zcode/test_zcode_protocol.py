@@ -2,6 +2,7 @@
 import errno
 import json
 import math
+import queue
 import subprocess
 import sys
 import threading
@@ -10,6 +11,7 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
+from hey_my_buddy.buddy.harnesses.run_contract import RunConfiguration
 from hey_my_buddy.buddy.harnesses.session_receipts import sign_receipt
 from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
@@ -24,6 +26,7 @@ from hey_my_buddy.buddy.harnesses.zcode.protocol import (
 )
 from hey_my_buddy.buddy.harnesses.zcode.native_run import catalog, configure_session, execution_deadline
 from hey_my_buddy.json_codec import canonical_json
+from hey_my_buddy.errors import BoardError
 
 # The session tools one run actually mounts; refusal envelopes verify only
 # against this set, never a fixed global one.
@@ -81,6 +84,78 @@ class ReceiptTests(unittest.TestCase):
                                           validate_outcome=validate_outcome, mounted_tools=("buddy_finish_turn",))
         self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
         return tracker
+
+    def test_nonobject_ordinary_events_are_retained_and_root_receipt_can_complete(self):
+        unknown = []
+        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge,
+                                   validate_outcome=validate_outcome, mounted_tools=("buddy_finish_turn",),
+                                   on_unknown=unknown.append)
+        self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
+        for seq, payload in enumerate(("secret prompt text", ["secret", "content"], None), start=2):
+            self.root_event(tracker, seq, "message.upserted", payload)
+        self.root_event(tracker, 5, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "finish-1"})
+        self.root_event(tracker, 6, "tool.updated", {"kind": "result", "toolCallId": "finish-1",
+            "result": {"success": True, "truncated": False, "content": self.receipt()}})
+        self.root_event(tracker, 7, "turn.completed", {"inputId": "input-root", "resultType": "success"})
+        tracker.observe({"method": "state.updated", "params": {"sessionId": "sess-root", "reason": "prompt_completed"}}, 8)
+        tracker.close_ordinal = 9
+        self.assertEqual(tracker.provenance()["toolCallId"], "finish-1")
+        self.assertEqual(unknown, ["event-payload/message.upserted/string",
+                                   "event-payload/message.upserted/array",
+                                   "event-payload/message.upserted/null"])
+        self.assertNotIn("secret", str(unknown))
+
+    def test_nonobject_evidence_events_keep_identity_and_completion_guards(self):
+        for kind, payload, expected in (("turn.started", [], "wrong-native-turn"),
+                                        ("turn.completed", None, "invalid-provenance"),
+                                        ("turn.failed", "provider secret", "native-turn-failed"),
+                                        ("tool.updated", [], "invalid-provenance")):
+            with self.subTest(kind=kind):
+                unknown = []
+                tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge,
+                                           validate_outcome=validate_outcome,
+                                           mounted_tools=("buddy_finish_turn",), on_unknown=unknown.append)
+                if kind != "turn.started":
+                    self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
+                if kind == "tool.updated":
+                    self.root_event(tracker, 2, kind, {"kind": "scheduled", "toolName": "finish", "toolCallId": "finish-1"})
+                with self.assertRaises(NativeError) as error:
+                    self.root_event(tracker, 3, kind, payload)
+                self.assertEqual(error.exception.code, expected)
+                self.assertEqual(len(unknown), 1)
+                self.assertTrue(unknown[0].startswith(f"event-payload/{kind}/"))
+                self.assertNotIn("secret", str(unknown))
+
+    def test_unrecognized_tool_payload_without_pending_receipt_is_a_fact(self):
+        unknown = []
+        tracker = RootTurnEvidence("sess-root", "input-root", "finish", self.bridge,
+                                   validate_outcome=validate_outcome, mounted_tools=("buddy_finish_turn",),
+                                   on_unknown=unknown.append)
+        self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
+        self.root_event(tracker, 2, "tool.updated", [])
+        self.assertEqual(unknown, ["event-payload/tool.updated/array"])
+        self.assertIsNone(tracker.receipt)
+        with self.assertRaises(NativeError) as error:
+            self.root_event(tracker, 3, "turn.completed", {"inputId": "input-root", "resultType": "success"})
+        self.assertEqual(error.exception.code, "missing-finish")
+
+    def test_completion_duplicate_and_wrong_input_remain_provenance_failures(self):
+        for completed in (False, True):
+            with self.subTest(completed=completed):
+                tracker = self.started_tracker()
+                self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": "finish", "toolCallId": "finish-1"})
+                self.root_event(tracker, 3, "tool.updated", {"kind": "result", "toolCallId": "finish-1",
+                    "result": {"success": True, "truncated": False, "content": self.receipt()}})
+                if completed:
+                    self.root_event(tracker, 4, "turn.completed", {"inputId": "input-root", "resultType": "success"})
+                with self.assertRaises(NativeError) as error:
+                    self.root_event(tracker, 5, "turn.completed", {"inputId": "input-root" if completed else "wrong",
+                                                                    "resultType": "success"})
+                self.assertEqual(error.exception.code, "invalid-provenance")
+        tracker = self.started_tracker()
+        with self.assertRaises(NativeError) as error:
+            self.root_event(tracker, 2, "turn.completed", {"inputId": "input-root", "resultType": "failure"})
+        self.assertEqual(error.exception.code, "native-turn-failed")
 
     def test_verified_delivery_keys_come_only_from_the_verified_root_and_call(self):
         tracker = self.started_tracker()
@@ -616,22 +691,64 @@ class NativeFailureAttributionTests(unittest.TestCase):
 
 
 class ConfigurationTests(unittest.TestCase):
-    def test_controller_refuses_incomplete_configuration_before_native_setters(self):
+    def test_run_configuration_boundary_refuses_missing_or_blank_fields(self):
         configuration = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
-        snapshot = {"session": {"sessionId": "native-default"}, "settings": {"model": {"current": {
-            "providerId": "fixture-api", "modelId": "fixture-model", "options": {"reasoningLevel": "low"},
-        }}}}
         for key in configuration:
-            for value in (None, "", " \t", False):
+            for value in (None, "", False):
                 with self.subTest(key=key, value=value):
                     requested = {**configuration, key: value}
                     if value is None:
                         requested.pop(key)
-                    connection = mock.Mock()
-                    with self.assertRaises(NativeError) as error:
-                        configure_session(connection, snapshot, requested)
-                    self.assertEqual(error.exception.code, "invalid-configuration")
-                    connection.call.assert_not_called()
+                    with self.assertRaises(BoardError):
+                        RunConfiguration(**requested)
+
+    def test_unknown_selection_readback_continues_with_retained_facts(self):
+        unknown = []
+        connection = mock.Mock()
+        connection.call.side_effect = [{}, {}]
+        result = configure_session(connection, {"session": {"sessionId": "native-default"}},
+                                   {"provider": "fixture-api", "model": "fixture-model", "effort": "low"},
+                                   note_unknown=unknown.append)
+        self.assertEqual(connection.call.call_count, 2)
+        self.assertEqual(result, {"provider": None, "model": None, "effort": None})
+        self.assertEqual(unknown, ["configuration-catalog-unrecognized",
+                                   "configuration-selection-unrecognized",
+                                   "configuration-readback-unconfirmed"])
+
+    def test_identified_selection_mismatch_is_rejected_even_with_other_unknown_fields(self):
+        requested = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
+        for current, thought in (
+            ({"providerId": "other-api"}, None),
+            ({"modelId": "other-model"}, None),
+            ({"options": {"reasoningLevel": "high"}}, None),
+            ({}, "high"),
+            ({"options": {"reasoningLevel": "low"}}, "high"),
+            ({"options": {"reasoningLevel": "high"}}, "low"),
+        ):
+            with self.subTest(current=current, thought=thought):
+                connection = mock.Mock()
+                connection.call.side_effect = [{}, {"settings": {
+                    "model": {"current": current}, "thoughtLevel": {"current": thought}}}]
+                with self.assertRaises(NativeError) as error:
+                    configure_session(connection, {"session": {"sessionId": "native-default"}}, requested)
+                self.assertEqual(error.exception.code, "configuration-mismatch")
+                self.assertEqual([call.args[0] for call in connection.call.call_args_list],
+                                 ["session/setModel", "session/setThoughtLevel"])
+
+    def test_unrecognized_thought_level_is_unknown_and_configuration_continues(self):
+        for thought in (None, [], False, "", " \t", "x" * 129):
+            with self.subTest(thought=thought):
+                unknown = []
+                connection = mock.Mock()
+                connection.call.side_effect = [{}, {"settings": {
+                    "model": {"current": {"providerId": "fixture-api", "modelId": "fixture-model",
+                                          "options": {"reasoningLevel": "low"}}},
+                    "thoughtLevel": {"current": thought}}}]
+                result = configure_session(connection, {"session": {"sessionId": "native-default"}},
+                    {"provider": "fixture-api", "model": "fixture-model", "effort": "low"},
+                    note_unknown=unknown.append)
+                self.assertEqual(result, {"provider": "fixture-api", "model": "fixture-model", "effort": None})
+                self.assertIn("configuration-readback-unconfirmed", unknown)
 
     def test_catalog_preserves_each_models_real_efforts_and_omits_unconfigurable_models(self):
         def model(identifier, efforts, provider="api"):
@@ -685,6 +802,54 @@ class UnlimitedDeadlineTests(unittest.TestCase):
         with self.assertRaises(NativeError) as error:
             connection.pump()
         self.assertEqual(error.exception.code, "cancelled")
+
+
+class NativeConnectionShapeTests(unittest.TestCase):
+    def test_nonobject_rpc_results_continue_with_bounded_content_free_facts(self):
+        unknown = []
+        connection = NativeConnection.__new__(NativeConnection)
+        connection.next_id = 1
+        connection.responses = {}
+        connection.send = lambda _message: None
+        connection.pump = lambda: None
+        connection.on_unknown = unknown.append
+        for result in (["provider secret"], "provider secret", 42, False, None):
+            connection.responses[connection.next_id] = {"result": result}
+            self.assertEqual(connection.call("session/messages", {}), {})
+        self.assertEqual(unknown, ["rpc-result/session/messages/array", "rpc-result/session/messages/string",
+                                   "rpc-result/session/messages/number", "rpc-result/session/messages/boolean",
+                                   "rpc-result/session/messages/null"])
+        self.assertNotIn("secret", str(unknown))
+        connection.responses[connection.next_id] = {"result": "secret"}
+        self.assertEqual(connection.call("provider/secret-token", {}), {})
+        self.assertEqual(unknown[-1], "rpc-result/unknown/string")
+
+    def test_native_rpc_error_still_rejects_without_retaining_error_content(self):
+        unknown = []
+        connection = NativeConnection.__new__(NativeConnection)
+        connection.next_id = 1
+        connection.responses = {1: {"error": {"message": "provider secret"}}}
+        connection.send = lambda _message: None
+        connection.pump = lambda: None
+        connection.on_unknown = unknown.append
+        with self.assertRaises(NativeError) as error:
+            connection.call("session/messages", {})
+        self.assertEqual(error.exception.code, "native-rpc-error")
+        self.assertNotIn("secret", str(error.exception))
+        self.assertEqual(unknown, [])
+
+    def test_sixteen_unclaimed_native_responses_remain_a_resource_cap(self):
+        connection = NativeConnection.__new__(NativeConnection)
+        connection.cancelled = threading.Event()
+        connection.deadline = math.inf
+        connection.messages = queue.Queue()
+        connection.messages.put({"id": 17, "result": {}})
+        connection.responses = {index: {"result": {}} for index in range(1, 17)}
+        connection.ordinal = 0
+        with self.assertRaises(NativeError) as error:
+            connection._pump()
+        self.assertEqual(error.exception.code, "invalid-protocol")
+        self.assertEqual(len(connection.responses), 16)
 
 
 class OwnedProcessEvidenceTests(unittest.TestCase):

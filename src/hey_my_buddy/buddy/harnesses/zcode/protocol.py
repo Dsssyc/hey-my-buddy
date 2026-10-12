@@ -53,6 +53,22 @@ MAX_RETAINED_INQUIRY_CALLS = 64
 
 _WINDOWS_PIPE = os.name == "nt"
 
+# The fact vocabulary is finite even if a native event invents many type names.
+# Unknown names collapse to one bucket; their raw text never reaches evidence.
+_FACT_RPC_METHODS = frozenset({
+    "runtime/capabilities", "session/close", "session/create", "session/messages",
+    "session/resume", "session/send", "session/setModel", "session/setThoughtLevel",
+    "session/subscribe",
+})
+_FACT_EVENT_TYPES = frozenset({
+    "turn.started", "turn.completed", "turn.failed", "tool.updated",
+    "message.upserted", "message.removed", "part.started", "part.delta",
+    "part.upserted", "part.removed", "model.streaming", "permission.requested",
+    "userInput.requested", "session.created", "session.resumed", "session.updated",
+    "session.titleUpdated", "session.closed",
+})
+
+
 class NativeError(Exception):
     def __init__(self, code: str, message: str, failure: dict | None = None):
         super().__init__(message)
@@ -160,6 +176,29 @@ class ActivityProjection:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _unknown_shape(value: object) -> str:
+    """Name a JSON shape without retaining any value or member name."""
+    if value is None:
+        return "null"
+    if type(value) is bool:
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    return "object"
+
+
+def _unknown_label(prefix: str, name: object, value: object) -> str:
+    # Native method names are observed input. Only a short identifier reaches
+    # retained evidence; values, object keys and unknown free text never do.
+    allowed = _FACT_RPC_METHODS if prefix == "rpc-result" else _FACT_EVENT_TYPES
+    safe_name = name if isinstance(name, str) and name in allowed else "unknown"
+    return f"{prefix}/{safe_name}/{_unknown_shape(value)}"
 
 
 # -- the shared session-receipt verification --------------------------------------
@@ -627,7 +666,8 @@ class NativeConnection:
     """Responses and reverse requests are pumped together; no request holds a reader."""
 
     def __init__(self, process: subprocess.Popen, deadline: float, cancelled: threading.Event, *,
-                 runtime_preferences: dict, no_tools: bool = False):
+                 runtime_preferences: dict, no_tools: bool = False,
+                 on_unknown: Callable[[str], None] | None = None):
         self.runtime_preferences = runtime_preferences
         self.runtime_preferences_facts: dict | None = None
         self.process, self.deadline, self.cancelled = process, deadline, cancelled
@@ -637,6 +677,7 @@ class NativeConnection:
         self.next_id = 1
         self.ordinal = 0
         self.observe: Callable[[dict, int], None] = lambda _message, _ordinal: None
+        self.on_unknown = on_unknown or (lambda _label: None)
         self.attention: Callable[[dict], None] = lambda _record: None
         self.after_pump: Callable[[], None] = lambda: None
         os.set_blocking(process.stdin.fileno(), False)
@@ -792,7 +833,11 @@ class NativeConnection:
             raise NativeError("native-rpc-error", f"ZCode rejected {method}")
         result = response.get("result")
         if not isinstance(result, dict):
-            raise NativeError("invalid-protocol", f"ZCode returned no object for {method}")
+            self.on_unknown(_unknown_label("rpc-result", method, result))
+            # The operation's required fields, including session and turn
+            # identity, are checked by its caller. An unfamiliar optional
+            # result shape alone is not a failed native operation.
+            return {}
         return result
 
 
@@ -813,11 +858,13 @@ class RootTurnEvidence:
                  on_delivery: Callable[[dict, str], None] | None = None,
                  on_answer: Callable[[dict, str], None] | None = None,
                  validate_outcome: Callable[[object], str | None],
-                 mounted_tools: tuple[str, ...] | list[str]):
+                 mounted_tools: tuple[str, ...] | list[str],
+                 on_unknown: Callable[[str], None] | None = None):
         self.session_id, self.input_id, self.tool_name, self.bridge = session_id, input_id, tool_name, bridge
         self.checkpoint_name, self.answer_name = checkpoint_name, answer_name
         self.on_delivery, self.on_answer = on_delivery, on_answer
         self.validate_outcome = validate_outcome
+        self.on_unknown = on_unknown or (lambda _label: None)
         #: The bare session tools this run actually mounted — a required,
         #: caller-provided set with no default: a signed refusal envelope
         #: verifies only for a tool this run really bound, and the verifier
@@ -859,9 +906,22 @@ class RootTurnEvidence:
         if type(seq) is not int or seq <= self.last_seq:
             raise NativeError("invalid-provenance", "native root event order is invalid")
         self.last_seq = seq
-        data = p.get("payload") or {}
+        data = p.get("payload")
         if not isinstance(data, dict):
-            raise NativeError("invalid-protocol", "native event payload is not an object")
+            kind = p.get("type")
+            self.on_unknown(_unknown_label("event-payload", kind, data))
+            if kind == "turn.started":
+                raise NativeError("wrong-native-turn", "the native root start has no input identity")
+            if self.turn_id and p.get("turnId") == self.turn_id:
+                if kind == "turn.failed":
+                    raise native_turn_failure(data)
+                if kind == "turn.completed":
+                    raise NativeError("invalid-provenance", "the native root completion has no input identity")
+                if kind == "tool.updated" and (self.call_id is not None or any(
+                        call["result"] is None for calls in (self.checkpoint_calls, self.answer_calls)
+                        for call in calls.values())):
+                    raise NativeError("invalid-provenance", "the native root tool update has no call evidence")
+            return
         if p.get("type") == "turn.started":
             if data.get("inputId") != self.input_id or self.turn_id is not None or not p.get("turnId"):
                 raise NativeError("wrong-native-turn", "the native root turn did not match the submitted input identity")
@@ -872,7 +932,9 @@ class RootTurnEvidence:
         if p.get("type") == "turn.failed":
             raise native_turn_failure(data)
         if p.get("type") == "turn.completed":
-            if self.completed_ordinal or data.get("resultType") != "success" or data.get("inputId") != self.input_id:
+            if self.completed_ordinal or data.get("inputId") != self.input_id:
+                raise NativeError("invalid-provenance", "the native root completion identity is duplicate or mismatched")
+            if data.get("resultType") != "success":
                 raise NativeError("native-turn-failed", "the native root turn did not complete successfully")
             if self.receipt is None:
                 if self.finish_failed:

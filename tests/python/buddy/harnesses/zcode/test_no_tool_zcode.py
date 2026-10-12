@@ -90,8 +90,14 @@ class NoToolPolicyTests(unittest.TestCase):
             evidence.observe(self.event("turn.started", {"inputId": "input"}, turn="foreign", seq=1), 2)
         self.assertEqual(caught.exception.code, "wrong-native-turn")
 
-    def test_unknown_or_reordered_metadata_fails_closed(self):
-        for kinds in (("compaction.terminal",), ("usage.delta", "usage.delta")):
+    def test_unknown_metadata_continues_with_fact_but_reordered_metadata_is_refused(self):
+        unknown = []
+        evidence = NoToolProtocol("root", "input", on_unknown=unknown.append)
+        evidence.observe({"method": "v4/telemetry/event", "params": {
+            "sessionId": "root", "turnId": "turn", "kind": "compaction.terminal", "eventSeq": 1}}, 1)
+        self.assertEqual(unknown, ["metadata-kind-unrecognized"])
+        self.assertFalse(evidence.completed)
+        for kinds in (("usage.delta", "usage.delta"),):
             evidence = NoToolProtocol("root", "input")
             with self.assertRaises(NativeError) as caught:
                 for kind in kinds:

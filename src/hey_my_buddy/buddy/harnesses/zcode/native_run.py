@@ -104,67 +104,116 @@ _END_FACTS_FILE = "run-end-facts.json"
 _NATIVE_STDERR_FILE = "native.stderr.log"
 
 
+def _model_settings(snapshot: dict) -> dict:
+    settings = snapshot.get("settings")
+    model = settings.get("model") if isinstance(settings, dict) else None
+    return model if isinstance(model, dict) else {}
+
+
 def selected(snapshot: dict) -> dict:
-    value = snapshot.get("settings", {}).get("model", {}).get("current")
-    if not isinstance(value, dict) or not value.get("providerId") or not value.get("modelId"):
-        raise NativeError("configuration-unavailable", "ZCode has no usable native model selection")
-    return {"provider": value["providerId"], "model": value["modelId"],
-            "effort": value.get("options", {}).get("reasoningLevel")}
+    value = _model_settings(snapshot).get("current")
+    value = value if isinstance(value, dict) else {}
+    options = value.get("options")
+    options = options if isinstance(options, dict) else {}
+    result = {}
+    for name, item in (("provider", value.get("providerId")), ("model", value.get("modelId")),
+                       ("effort", options.get("reasoningLevel"))):
+        result[name] = item if isinstance(item, str) and item.strip() and len(item.encode()) <= 128 else None
+    return result
 
 
-def configure_session(connection: NativeConnection, snapshot: dict, spec: dict) -> dict:
+def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, *,
+                      note_unknown: Callable[[str], None] = lambda _label: None) -> dict:
     session_id = snapshot["session"]["sessionId"]
     if any(not isinstance(spec.get(k), str) or not spec[k].strip() for k in ("provider", "model", "effort")):
         raise NativeError("invalid-configuration", "ZCode coding requires a complete provider, model and effort after routing")
     provider, model, effort = spec["provider"], spec["model"], spec["effort"]
-    choices = snapshot.get("settings", {}).get("model", {}).get("available", [])
-    choice = next((x for x in choices if x.get("ref") == {"providerId": provider, "modelId": model}), None)
-    if choice is None:
+    choices = _model_settings(snapshot).get("available")
+    catalog_known = isinstance(choices, list) and all(
+        isinstance(x, dict) and isinstance(x.get("ref"), dict)
+        and all(isinstance(x["ref"].get(key), str) and x["ref"][key].strip()
+                for key in ("providerId", "modelId")) for x in choices)
+    choice = next((x for x in choices if x.get("ref") == {"providerId": provider, "modelId": model}), None) if catalog_known else None
+    if catalog_known and choice is None:
         raise NativeError("configuration-unavailable", "the requested ZCode provider/model is not in the native available catalog")
-    reasoning = choice.get("reasoning", {})
-    efforts = [x["value"] for x in reasoning.get("levels", []) if isinstance(x, dict) and isinstance(x.get("value"), str)]
-    if effort not in efforts:
+    reasoning = choice.get("reasoning") if choice is not None else None
+    levels = reasoning.get("levels") if isinstance(reasoning, dict) else None
+    efforts_known = isinstance(levels, list) and all(isinstance(x, dict) and isinstance(x.get("value"), str) for x in levels)
+    efforts = [x["value"] for x in levels] if efforts_known else []
+    if efforts_known and effort not in efforts:
         raise NativeError("invalid-configuration", "the requested reasoning effort is not supported by this native model")
+    if not catalog_known or not efforts_known:
+        note_unknown("configuration-catalog-unrecognized")
     target = {"providerId": provider, "modelId": model, "options": {"reasoningLevel": effort}}
     snapshot = connection.call("session/setModel", {"sessionId": session_id, "model": target, "persistAsWorkspaceLastUsed": False})
     snapshot = connection.call("session/setThoughtLevel", {"sessionId": session_id, "thoughtLevel": effort, "persistAsWorkspaceLastUsed": False})
     actual = selected(snapshot)
     expected = {"provider": provider, "model": model, "effort": effort}
-    if actual != expected or snapshot.get("settings", {}).get("thoughtLevel", {}).get("current") != effort:
+    if any(item is None for item in actual.values()):
+        note_unknown("configuration-selection-unrecognized")
+    settings = snapshot.get("settings")
+    thought = settings.get("thoughtLevel") if isinstance(settings, dict) else None
+    thought = thought.get("current") if isinstance(thought, dict) else None
+    thought = thought if isinstance(thought, str) and thought.strip() and len(thought.encode()) <= 128 else None
+    if (any(value is not None and value != expected[key] for key, value in actual.items())
+            or thought is not None and thought != effort):
         raise NativeError("configuration-mismatch", "native ZCode did not retain the requested model and reasoning settings")
+    if any(item is None for item in actual.values()) or thought is None:
+        note_unknown("configuration-readback-unconfirmed")
+    if thought != actual["effort"]:
+        actual["effort"] = None
     return actual
 
 
 def catalog(snapshot: dict, access: dict, version: str) -> dict:
     providers: dict[str, dict] = {}
     missing_effort = False
-    for model in snapshot.get("settings", {}).get("model", {}).get("available", []):
-        ref = model.get("ref") or {}
-        provider = ref.get("providerId")
-        if not provider or not ref.get("modelId"):
+    models = _model_settings(snapshot).get("available")
+    incomplete = not isinstance(models, list)
+    for model in models if isinstance(models, list) else []:
+        if not isinstance(model, dict):
+            incomplete = True
             continue
-        efforts = [x["value"] for x in model.get("reasoning", {}).get("levels", [])
+        ref = model.get("ref")
+        if not isinstance(ref, dict):
+            incomplete = True
+            continue
+        provider = ref.get("providerId")
+        if any(not isinstance(ref.get(key), str) or not ref[key].strip() for key in ("providerId", "modelId")):
+            incomplete = True
+            continue
+        reasoning = model.get("reasoning")
+        levels = reasoning.get("levels") if isinstance(reasoning, dict) else None
+        if not isinstance(levels, list):
+            incomplete = True
+            continue
+        efforts = [x["value"] for x in levels
                    if isinstance(x, dict) and isinstance(x.get("value"), str) and x["value"].strip()]
         if not efforts:
             missing_effort = True
             continue
         entry = providers.setdefault(provider, {"provider": provider, "displayName": model.get("providerLabel") or provider,
                                                  "adapter": "zcode", "packageVersion": version, "accessType": access.get(provider, "unknown"), "models": []})
+        properties = model.get("properties")
+        formats = properties.get("inputFormat") if isinstance(properties, dict) else None
+        formats = formats if isinstance(formats, dict) else {}
         entry["models"].append({"id": ref["modelId"], "name": model.get("label") or ref["modelId"],
                                 "efforts": efforts,
                                 "contextWindow": model.get("contextWindow"), "available": True,
                                 "inputModalities": [name for name in ("text", "image", "audio", "video", "pdf")
-                                                    if model.get("properties", {}).get("inputFormat", {}).get("supports" + name.capitalize()) is True]})
+                                                    if formats.get("supports" + name.capitalize()) is True]})
     warnings = []
     if missing_effort:
         warnings.append("Models exposing no configurable native reasoning efforts were omitted")
-    if not providers:
+    if incomplete:
+        warnings.append("The native model catalog shape was not fully recognized; this reading cannot retire missing profiles")
+    if not providers and not incomplete:
         warnings.append("The native app server returned no models with configurable reasoning efforts; this complete empty observation retires missing ZCode profiles")
     warnings.append("The account status is not applicable to this reading: the no-prompt native "
                     "model snapshot carries no separate account check")
     return {"source": "zcode-native-app-server", "adapter": "zcode", "harnessVersion": version,
             "discoveredAt": datetime.now(timezone.utc).isoformat(), "providers": list(providers.values()),
-            "discoveries": [{"adapter": "zcode", "status": "complete", "accountStatus": "not-applicable"}],
+            "discoveries": [{"adapter": "zcode", "status": "unknown" if incomplete else "complete", "accountStatus": "not-applicable"}],
             "warnings": warnings}
 
 
@@ -477,9 +526,11 @@ class NoToolProtocol:
     OPERATION_EVENTS = {"turn-started", "turn-completed", "turn-failed", "session-closed"}
     TELEMETRY_EVENTS = {"turn.started", "model.request.status", "stream.chunk", "usage.delta", "turn.terminal"}
 
-    def __init__(self, session_id: str, input_id: str, tools: ZcodeToolFacts | None = None):
+    def __init__(self, session_id: str, input_id: str, tools: ZcodeToolFacts | None = None, *,
+                 on_unknown: Callable[[str], None] = lambda _label: None):
         self.session_id, self.input_id = session_id, input_id
         self.tools = tools
+        self.on_unknown = on_unknown
         self.turn_id = None
         self.last_seq = -1
         self.completed = False
@@ -494,11 +545,15 @@ class NoToolProtocol:
         operation = method == "computer-use/operation-event"
         kinds = self.OPERATION_EVENTS if operation else self.TELEMETRY_EVENTS
         sequence = params.get("sequenceNumber" if operation else "eventSeq")
-        if (params.get("kind") not in kinds or params.get("sessionId") != self.session_id
+        if (params.get("sessionId") != self.session_id
                 or type(sequence) is not int or sequence <= self.metadata_sequences.get(method, -1)):
             raise NativeError("invalid-protocol", "invalid no-tool native lifecycle metadata")
         self.metadata_sequences[method] = sequence
-        if params["kind"] == "session-closed":
+        if params.get("kind") not in kinds:
+            self.on_unknown("metadata-kind-unrecognized")
+            if params.get("turnId") is None:
+                return
+        if params.get("kind") == "session-closed":
             return
         turn = params.get("turnId")
         if (not isinstance(turn, str) or not turn
@@ -512,7 +567,10 @@ class NoToolProtocol:
     def observe(self, message: dict, _ordinal: int) -> None:
         method, params = message.get("method"), message.get("params")
         if not isinstance(params, dict):
-            raise NativeError("invalid-protocol", "no-tool native event has no object parameters")
+            self.on_unknown("notification-parameters-unrecognized")
+            if method in ("session/event", "state.updated", "computer-use/operation-event", "v4/telemetry/event"):
+                raise NativeError("invalid-protocol", "native lifecycle notification has no identity parameters")
+            return
         if method in ('startup/storageState', 'process/mcpTelemetry', 'process/mcpResourceSamples', 'process/resourceSample'):
             return
         if method in ("computer-use/operation-event", "v4/telemetry/event"):
@@ -529,7 +587,8 @@ class NoToolProtocol:
             self.events += 1
             data = params.get("payload")
             if not isinstance(data, dict):
-                raise NativeError("invalid-protocol", "no-tool native event payload is invalid")
+                self.on_unknown("event-payload-unrecognized")
+                data = {}
             if kind in self.SESSION_EVENTS:
                 return
             if kind == "turn.started":
@@ -547,11 +606,16 @@ class NoToolProtocol:
             elif kind == "turn.failed":
                 raise native_turn_failure(data)
             elif kind == "turn.completed":
-                if self.completed or data.get("inputId") != self.input_id or data.get("resultType") != "success":
+                if self.completed or data.get("inputId") != self.input_id:
+                    raise NativeError("wrong-native-turn", "no-tool completion differs from the admitted input or is duplicate")
+                if data.get("resultType") != "success":
                     raise NativeError("native-turn-failed", "no-tool native turn did not complete successfully")
                 self.raw_answer = data.get("response")
-                if not isinstance(self.raw_answer, str) or len(self.raw_answer.encode()) > 65536:
-                    raise NativeError("invalid-native-result", "no bounded native answer")
+                if isinstance(self.raw_answer, str) and len(self.raw_answer.encode()) > 65536:
+                    raise NativeError("invalid-native-result", "native answer exceeds the byte limit")
+                if not isinstance(self.raw_answer, str):
+                    self.on_unknown("final-answer-unrecognized")
+                    self.raw_answer = None
                 self.completed = True
         elif method == "state.updated":
             if params.get("sessionId") not in (None, self.session_id):
@@ -574,7 +638,7 @@ class _RunState:
     ``session_opened``, ``configured`` and ``completion_ordinal`` carry what
     the run really reached: a result never claims an effective policy before a
     session was opened, never lists configuration checks before the readback
-    confirmed them, and never reports a completed native outcome without an
+    returned them (including unknown fields), and never reports a completed native outcome without an
     observed completion.
     """
     status: str = "error"
@@ -702,9 +766,9 @@ def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Cla
     classification, then the role's answer to the retained facts — its stop,
     not the driver's scope reading, is what marks the stream incomplete — and
     only then the protocol layer's own settlement checks, which keep their
-    established codes. A native interaction or an unclaimed response after
-    settlement, or a frame that cannot be recorded, stays a protocol failure
-    of the settlement itself. Whether any recorded call was allowed is judged
+    established codes. An unclaimed response after settlement or a frame that
+    cannot be recorded stays a protocol failure of the settlement itself.
+    Late interactions become facts. Whether any recorded call was allowed is judged
     only by the blackboard, never here.
     """
     complete = True
@@ -742,7 +806,14 @@ def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Cla
                         "the role observer stopped the run during the EOF drain") from None
             protocol.observe(message, 0)
             if "id" in message and "method" in message:
-                raise NativeError("no-tool-violation", "native interaction after settlement")
+                # The stopped process cannot receive a reply; retain only the
+                # interaction fact, which carries no result attribution.
+                facts.note_unknown("interaction-after-settlement")
+                try:
+                    notify()
+                except ObserverInterrupt:
+                    raise NativeError("observer-interrupt", "the role observer stopped the EOF drain") from None
+                continue
             if "id" in message:
                 raise NativeError("invalid-protocol", "unclaimed native response after settlement")
         except NativeError as error:
@@ -764,13 +835,7 @@ def _continuation_of(request: RunRequest) -> tuple[str, str | None]:
     previous = continuation.previous_session_id
     if previous is not None and (not isinstance(previous, str) or not previous.strip()):
         raise NativeError("invalid-resume-mode", "the previous native session identity must be null or a nonblank string")
-    if continuation.mode == "native-session":
-        if not isinstance(previous, str) or not previous:
-            raise NativeError("native-resume-unavailable", "native resume requires the exact previous session identity")
-        return "native-session", previous
-    if continuation.mode == "reconstructed-new-session":
-        return "reconstructed-new-session", previous
-    raise NativeError("invalid-resume-mode", "ZCode requires initial, an explicitly bound native-session or a reconstructed-new-session turn")
+    return continuation.mode, continuation.previous_session_id
 
 
 def _checked_root_session(snapshot: dict, cwd: str, *, previous: str | None, mode: str,
@@ -818,10 +883,10 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
     """
     session_id = _checked_root_session(snapshot, request.cwd, previous=previous, mode=mode,
                                        require_interactive=require_interactive)
-    resolved = configure_session(connection, snapshot, spec)
+    resolved = configure_session(connection, snapshot, spec, note_unknown=connection.on_unknown)
     if on_configured is not None:
         # The run keeps its configuration facts the moment the native readback
-        # confirmed them, so a later failure still reports what was resolved.
+        # returned them, so a later failure still reports known values and unknown fields.
         on_configured(session_id, resolved)
     connection.call("session/subscribe", {"sessionId": session_id,
                                           "deliveryKind": "web-remote-replayable",
@@ -832,7 +897,9 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
     state.model_started = True
     accepted = connection.call("session/send", {"sessionId": session_id, "inputId": input_id,
                                                 "content": input_text})
-    if accepted.get("accepted") is not True or accepted.get("sessionId") != session_id:
+    if accepted.get("sessionId") != session_id:
+        raise NativeError("wrong-native-session", "native input admission belongs to a different session")
+    if accepted.get("accepted") is not True:
         raise NativeError("native-admission-failed", "the root input was not admitted by the native session")
     if after_admit is not None:
         after_admit(session_id)
@@ -1004,11 +1071,16 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             feedback_due[0] = False
             notify()
 
+    def unknown_sink(label: str) -> None:
+        facts.note_unknown(label)
+        feedback_due[0] = True
+
     try:
         spawn = _spawn_app_server(cwd=request.cwd, invocation_root=invocation_root, native_root=native_root,
                                   deadline=deadline, cancel=cancel, stderr_path=stderr_path, no_tools=no_tool,
                                   owned=owned_spawn)
         connection = spawn.connection
+        connection.on_unknown = unknown_sink
         connection.attention = attention_sink
         connection.after_pump = dispatch_feedback
         connection.call("runtime/capabilities", {})
@@ -1110,7 +1182,7 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
         state.configured = True
 
     def bind_protocol(opened_session: str) -> None:
-        outcome.last_protocol = NoToolProtocol(opened_session, input_id, tools)
+        outcome.last_protocol = NoToolProtocol(opened_session, input_id, tools, on_unknown=connection.on_unknown)
         outcome.attempt_usage = ZcodeAttemptUsage(opened_session, resumed=False)
         outcome.usage_rounds.append(outcome.attempt_usage)
         protocol_holder[:] = [outcome.last_protocol]
@@ -1253,7 +1325,7 @@ def _governed_turn(*, connection: NativeConnection, request: RunRequest, service
             on_delivery=(lambda receipt, call_id: outcome.inquiry_bridge.deliver_inquiries(receipt, call_id)),
             on_answer=(lambda receipt, call_id: outcome.inquiry_bridge.record_answer(receipt, call_id)),
             validate_outcome=services.validate_outcome,
-            mounted_tools=mount.bare_tools)
+            mounted_tools=mount.bare_tools, on_unknown=connection.on_unknown)
         outcome.projection.session_id = opened_session
         outcome.attempt_usage.session_id = opened_session
         connection.observe = observe
@@ -1396,6 +1468,9 @@ def _evidence_refs(*, invocation_root: Path, stderr_path: Path, state: _RunState
         retain("attention-report", "attention-report.json", state.attention)
     if state.runtime_preferences is not None:
         retain("native-runtime-preferences", "native-runtime-preferences.json", state.runtime_preferences)
+    if facts.unknown_counts:
+        retain("native-run-facts", "native-run-facts.json", {
+            "unknownEvents": {"countsByType": dict(facts.unknown_counts), "total": sum(facts.unknown_counts.values())}})
     if facts.denied:
         # The refused interactions' own full records — timestamps included —
         # stay as their clearly-sourced evidence reference; the common result
@@ -1495,9 +1570,7 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
     checked = CheckedConfiguration()
     if resolved is not None:
         checked = CheckedConfiguration(
-            provider=CheckedValue(value=resolved["provider"]),
-            model=CheckedValue(value=resolved["model"]),
-            effort=CheckedValue(value=resolved["effort"]))
+            **{key: CheckedValue(value=value) for key, value in resolved.items() if value is not None})
     value = None
     completion = None
     if completion_carrier:
@@ -1597,6 +1670,8 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
             raise
         shutdown = False
         try:
+            discovery_facts = _RunFacts()
+            spawn.connection.on_unknown = discovery_facts.note_unknown
             spawn.connection.call("runtime/capabilities", {})
             workspace = {"workspacePath": cwd, "workspaceKey": cwd}
             snapshot = spawn.connection.call("session/create", {"workspace": workspace,
@@ -1609,15 +1684,20 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
             environment = native_environment(dict(os.environ))
             access = provider_access_types(*provider_paths(environment, spawn.command))
             catalog_value = catalog(snapshot, access, version)
+            if discovery_facts.unknown_counts:
+                catalog_value["discoveries"][0]["status"] = "unknown"
+                catalog_value["warnings"].append("Native replies included unrecognized shapes: " + ", ".join(discovery_facts.unknown_counts))
             spawn.connection.call("session/close", {"sessionId": session_id})
         finally:
             try:
                 shutdown, _interrupted = _stop_native(spawn, deadline)
             finally:
                 spawn.process.stdout.close()
-        if not shutdown or spawn.process.returncode != 0:
+        if not shutdown:
             raise NativeError("native-shutdown-failed",
-                              "the native app server did not exit normally with confirmed group shutdown")
+                              "the native app server group shutdown was not confirmed")
+        if spawn.process.returncode != 0:
+            raise NativeError("native-process-failed", "the native app server exited unsuccessfully")
         return catalog_value
     except Exception as error:
         error.discovery_shutdown_confirmed = shutdown
