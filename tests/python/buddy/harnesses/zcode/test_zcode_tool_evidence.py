@@ -171,6 +171,8 @@ for line in sys.stdin:
                   'toolName':'Glob','source':'sub-agent'}}})
         elif case == 'unknown':
             event('future.unknown',2,{})
+            event('turn.completed',3,{'inputId':ident,'resultType':'success','response':'{"choice":"a"}'})
+            send({'method':'state.updated','params':{'sessionId':f's-{session}','reason':'prompt_completed'}})
         elif case == 'timeout':
             Path(__file__).with_name('prompt-ready').write_text(ident)
             time.sleep(5)

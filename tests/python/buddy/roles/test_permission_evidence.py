@@ -52,12 +52,12 @@ class WorkerPermissionEvidenceTests(unittest.TestCase):
         self.assertEqual(native_run.call_args.args[1], request)
         return rc.decode_run_result(frame), code
 
-    def test_success_and_native_failure_retain_the_declaration_and_stop(self):
-        for status in ("ok", "error"):
+    def test_success_failure_and_unknown_end_retain_the_declaration_and_stop(self):
+        for status in ("ok", "error", "unknown"):
             with self.subTest(status=status):
                 # Each controller invocation gets its own private root.
-                if status == "error":
-                    self.root = ensure_private_dir(self.root.parent / "next-inv")
+                if status != "ok":
+                    self.root = ensure_private_dir(self.root.parent / (status + "-inv"))
                 request = self.request()
                 result, code = self.execute(request, status=status)
                 self.assertEqual(code, 0 if status == "ok" else 1)

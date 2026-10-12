@@ -367,7 +367,7 @@ class FastSeamTests(NativeRunCase):
                          "an unrecognized native tool name stays other")
         self.assertTrue(all(event["toolName"] == "run-command" for event in package["events"]))
 
-    def test_an_unknown_event_is_retained_then_stopped_by_the_role(self):
+    def test_an_unknown_event_is_retained_and_continues_to_a_result(self):
         self.extra_agent_args = ["--prompt-mode", "final", "--emit-unknown-update",
                                  "--final-answer", '{"choice":"a"}']
         correction = FastCorrection(SCHEMA, "prompt")
@@ -379,8 +379,8 @@ class FastSeamTests(NativeRunCase):
 
         result = run(self.fast_request("prompt"), observer=observer,
                      services=None, cancelled=lambda: False)
-        self.assertEqual(result.end.status, "cancelled")
-        self.assertEqual(correction.stop_reason, "invalid-protocol")
+        self.assertEqual(result.end.status, "ok")
+        self.assertIsNone(correction.stop_reason)
         # The unknown event's own count is the observer statistics' fact.
         self.assertTrue(any(facts["unknownEvents"] == {"countsByType": {"buddy_probe_unknown": 1},
                                                       "total": 1} for facts in seen),

@@ -95,6 +95,65 @@ def full_result() -> rc.RunResult:
                                       size_bytes=120, sha256="c" * 64),))
 
 
+class NativeEvidenceContractTests(unittest.TestCase):
+    def test_blank_configuration_and_previous_session_are_refused_at_the_boundary(self):
+        request = full_request(Path("/private/tmp")).to_payload()
+        for blank in (" ", "\t\n", "\u3000"):
+            for field in ("provider", "model", "effort"):
+                with self.subTest(field=field, blank=blank):
+                    fields = {**request, "configuration": {**request["configuration"], field: blank}}
+                    with self.assertRaises(BoardError):
+                        rc.decode_run_request(fields)
+            for mode in ("native-session", "reconstructed-new-session"):
+                with self.subTest(mode=mode, blank=blank):
+                    with self.assertRaises(BoardError):
+                        rc.decode_run_request({**request, "continuation": {
+                            "mode": mode, "previousSessionId": blank}})
+        configured = rc.RunConfiguration(provider=" provider ", model="model", effort="off")
+        self.assertEqual(configured.provider, " provider ")
+        self.assertIsNone(rc.RunContinuation(mode="reconstructed-new-session").previous_session_id)
+
+    def test_unknown_end_and_bounded_native_evidence_roundtrip_losslessly(self):
+        evidence = rc.NativeEvidence(unknown_events={"countsByType": {"future-event": 2}, "total": 2},
+                                     unconfirmed=["configuration-readback", "tool-scope"])
+        result = full_result().model_copy(update={
+            "end": rc.RunEnd(status="unknown", reason_code="native-end-unread"),
+            "native_evidence": evidence})
+        decoded = rc.decode_run_result(rc.encode_run_result(result))
+        self.assertEqual(decoded, result)
+        self.assertEqual(decoded.native_evidence.to_payload(), {
+            "unknownEvents": {"countsByType": {"future-event": 2}, "total": 2},
+            "unconfirmed": ["configuration-readback", "tool-scope"]})
+        self.assertEqual(decoded.native_evidence.unknown_events.counts_by_type, (("future-event", 2),))
+
+    def test_native_evidence_refuses_bad_shapes_counts_and_unconfirmed_names(self):
+        malformed = [
+            {"unknownEvents": {"countsByType": [], "total": 0}},
+            {"unknownEvents": {"countsByType": [["future", 1]], "total": 1}},
+            {"unknownEvents": {"countsByType": {str(i): 1 for i in range(65)}, "total": 65}},
+            {"unknownEvents": {"countsByType": {"future": True}, "total": 1}},
+            {"unknownEvents": {"countsByType": {"future": -1}, "total": 1}},
+            {"unknownEvents": {"countsByType": {"future": rc.MAX_COUNT + 1}, "total": 1}},
+            {"unknownEvents": {"countsByType": {"": 1}, "total": 1}},
+            {"unknownEvents": {"countsByType": {"a" * 129: 1}, "total": 1}},
+            {"unknownEvents": {"countsByType": {}, "total": False}},
+            {"unknownEvents": {"countsByType": {}, "total": rc.MAX_COUNT + 1}},
+            {"unconfirmed": ["field"] * 17},
+            {"unconfirmed": "field"},
+            {"unconfirmed": [42]},
+            {"extra": "field"},
+        ] + [{"unconfirmed": [name]} for name in ("", "Readback", "tool_scope", "a b", "a" * 65, "a\n")]
+        fields = full_result().to_payload()
+        for bad in malformed:
+            with self.subTest(evidence=bad), self.assertRaises(BoardError):
+                rc.decode_run_result({**fields, "nativeEvidence": bad})
+        maximum = rc.NativeEvidence(unknown_events={
+            "countsByType": {str(i): rc.MAX_COUNT for i in range(64)}, "total": rc.MAX_COUNT},
+            unconfirmed=["a" * 64] * 16)
+        self.assertEqual(len(maximum.unknown_events.counts_by_type), 64)
+        self.assertEqual(len(maximum.unconfirmed), 16)
+
+
 class CodecRoundtripTests(unittest.TestCase):
     def test_full_scope_crosses_the_run_contract_and_is_refused_before_native_launch(self):
         from hey_my_buddy.buddy.harnesses.claude import native_run as claude

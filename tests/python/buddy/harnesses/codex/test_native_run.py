@@ -239,8 +239,8 @@ class FastSeamTests(SeamCase):
         self.assertEqual(facts, {"countsByType": {"thread/futureNotification": 1}, "total": 1})
 
     def test_explicit_foreign_identity_is_refused_with_method_in_message(self):
-        # A known method isolates the identity guard from the still-pending
-        # batch 4 rule that refuses unknown turn-scoped methods.
+        # A known method isolates the identity guard; unknown turn-scoped
+        # methods likewise remain facts in batch 4.
         for case, text, method in (("foreign-turn", "Foreign native turn", "thread/status/changed"),
                                    ("foreign-thread", "Unbound native event", "thread/futureNotification")):
             with self.subTest(case=case):
@@ -332,7 +332,7 @@ class FastSeamTests(SeamCase):
         self.assertTrue(any(event["toolName"] == "commandExecution" for event in package["events"]))
         self.assertTrue(result.stop_evidence.interrupt.requested)
 
-    def test_unknown_events_stop_as_invalid_protocol_through_the_observer(self):
+    def test_unknown_events_continue_through_the_observer_to_a_result(self):
         correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
         seen = []
 
@@ -341,9 +341,9 @@ class FastSeamTests(SeamCase):
             return correction.observer(facts)
 
         result = self.fast_run("unknown", correction, observer=observer)
-        self.assertEqual(result.end.status, "cancelled")
-        self.assertEqual(result.end.reason_code, "observer-interrupt")
-        self.assertEqual(correction.stop_reason, "invalid-protocol")
+        self.assertEqual(result.end.status, "ok")
+        self.assertIsNone(result.end.reason_code)
+        self.assertIsNone(correction.stop_reason)
         # The unknown event's own count is the observer statistics' fact.
         self.assertTrue(any(facts["unknownEvents"] == {"countsByType": {"futureThing": 1},
                                                       "total": 1} for facts in seen),
@@ -548,10 +548,6 @@ class ReviewCorrection:
             return self._stop("no-tool-violation")
         if int(facts.get("toolMarkerFrames") or 0) > 0 or int(facts.get("toolCalls") or 0) > 0:
             return self._stop("no-tool-violation")
-        unknown = facts.get("unknownEvents")
-        total = int(unknown.get("total") or 0) if isinstance(unknown, dict) else 0
-        if total > 0:
-            return self._stop("invalid-protocol")
         if facts.get("settled") and self.correction_count == 0:
             raw = facts.get("rawAnswer")
             code = correction_code(raw, self.output_schema) if isinstance(raw, str) else "answer-invalid-json"
