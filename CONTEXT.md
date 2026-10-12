@@ -118,6 +118,18 @@ _Avoid_: 第 N 封 (say 第 N 回合的封存), 快照
 How far a Worker buddy may go in one turn, chosen by the Host when it delegates and changeable between turns: 只读 / read-only (read and search; no file may be modified), 写检出 / checkout-write (edit and run commands; files may be modified only inside the micro task's checkout) or 放开 / full access (no limit on where files are modified). A level says where files may be modified and nothing about the network. A harness carries a level out either 强制 / enforced, when its sandbox or tool limits stop a write outside the level, or 约定 / by convention, when it is only asked to stay inside and the blackboard checks afterwards what it can.
 _Avoid_: 权限清单, sandbox mode (a level is not a list of grants, and a sandbox mode is only how one harness carries a level out)
 
+**未知事件 / unknown event**:
+A native event or reply shape that a harness's run module does not recognize. It is a fact, never a failure: it is counted by type and returned with the run's result for the Host to see.
+_Avoid_: 没读懂的事件, protocol error (an unknown event is not an error)
+
+**未证实项 / unconfirmed item**:
+Something a run asked its harness for and could not confirm from what the harness reported back, such as a restriction or the reading of the model catalog. The run continues and its result names the item; it does not mean the harness refused or ignored the request.
+_Avoid_: 未验证的限制 (as a reason to refuse a run)
+
+**未知结束 / unknown end**:
+A run whose native side ended in a way the run module could not read as success or as failure. It is never treated as success: the turn fails with a reason that names what was unread.
+_Avoid_: 结束未确认 (that says a process's stop was not confirmed, a different fact)
+
 **换手 / handoff**:
 A micro task passing to a different buddy between turns: the buddy that executed its earlier turns stops, and another executes the next. The micro task, its Host and the micro tasks under it stay the same.
 _Avoid_: 接管, takeover (those name a Host taking over the ownership of a micro task)
