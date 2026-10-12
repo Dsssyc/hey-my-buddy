@@ -34,7 +34,7 @@ import type { Snapshot } from "./types";
 type ManifestEntry = {
   scenario: string;
   path: string;
-  kind: "console-snapshot" | "task-page" | "backup-preflight" | "objectives-page" | "objective-timeline" | "workflow-get";
+  kind: "console-snapshot" | "task-page" | "backup-preflight" | "runtime-version" | "objectives-page" | "objective-timeline" | "workflow-get";
   endpoint: string;
   httpStatus: number;
   expected: "accepted" | "rejected";
@@ -139,6 +139,10 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
       const report = await api.backupPreflight();
       outcome.facts = { policy: report.policy, needsAttention: report.needsAttention,
         skipped: report.skipped.count, rejected: report.rejected.count };
+    } else if (entry.kind === "runtime-version") {
+      const version = await api.runtimeVersion();
+      outcome.facts = { mode: version.running.mode, softwareVersion: version.running.softwareVersion,
+        installed: version.installed !== null };
     } else if (entry.kind === "objectives-page") {
       const page = await api.objectives({});
       outcome.facts = { total: page.total, cursor: page.cursor, changed: page.changed };
@@ -193,7 +197,7 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     expect(manifest.source).toBe("tests/probes/objective_console_preview.py");
     expect(manifest.scenarios).toEqual(["normal", "readonly", "truncated", "error"]);
     expect(new Set(manifest.files.map(entry => entry.kind))).toEqual(
-      new Set(["console-snapshot", "task-page", "backup-preflight", "objectives-page", "objective-timeline", "workflow-get"]));
+      new Set(["console-snapshot", "task-page", "backup-preflight", "runtime-version", "objectives-page", "objective-timeline", "workflow-get"]));
     for (const entry of manifest.files) {
       expect(entry.expected === "accepted" ? entry.expectedCode === undefined : typeof entry.expectedCode === "string").toBe(true);
     }
@@ -257,10 +261,15 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     expect("decisionProfileId" in snapshotFacts.configuration).toBe(false);
     expect("routerProfileId" in snapshotFacts.configuration).toBe(false);
 
+    // DSH is metered: a zero balance is recorded without invented percentage windows.
+    const normalSnapshot = await apiFor(manifest.files.find(entry => entry.scenario === "normal" && entry.kind === "console-snapshot")!).snapshot();
+    expect(snapshotHarnesses(normalSnapshot).find(row => row.adapter === "dsh")).toMatchObject({
+      billingByProvider: { "deepseek-official": { kind: "metered" } },
+      quota: { balanceZero: true, windows: [] },
+    });
     // Recorded quota: normal, stale and unknown observations stay distinct.
     const quotaFacts = snapshotFacts.harnesses as { adapter: string; quota: ReturnType<typeof quotaView> }[];
-    const near = quotaFacts.find(row => row.quota?.alert)!;
-    expect(near.quota!.windows.some(window => window.nearLimit)).toBe(true);
+    expect(quotaFacts.some(row => row.quota?.alert)).toBe(false);
     expect(quotaFacts.some(row => row.quota === null)).toBe(true);
     expect(quotaFacts.some(row => row.quota?.stale && row.quota.windows.some(window => window.usedPercent === null))).toBe(true);
 

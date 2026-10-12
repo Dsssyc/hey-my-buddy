@@ -55,19 +55,6 @@ export function makeDraft(snapshot: Snapshot): Draft {
   });
 }
 
-export function emptyCard(profileId: string): Card {
-  return {
-    profileId,
-    revision: 0,
-    summary: "",
-    strengths: [],
-    limitations: [],
-    risks: [],
-    evidenceIds: [],
-    updatedAt: null,
-  };
-}
-
 export function emptyFamilyAnnotation(family: ModelFamily): FamilyAnnotation {
   return { ...familyOf(family), text: "", revision: 0, updatedAt: null };
 }
@@ -420,16 +407,6 @@ export function routerListEqual(a: string[] | undefined, b: string[] | undefined
 
 export const ROUTER_FIELDS = ["routerProfileIds", "defaultRoutingMode", "routerRetryIntervalSeconds"] as const;
 
-/**
- * Replaces the head of the Router list: the user's tail order stays, and the
- * new head's old duplicate in the tail goes. The list patch is always the whole
- * array, so clearing the first choice publishes `[]` and clears the list.
- */
-export function withFirstRouter(configuration: Configuration, profileId: string): Configuration {
-  const tail = configuration.routerProfileIds.slice(1).filter(id => id !== profileId);
-  return { ...configuration, routerProfileIds: [profileId, ...tail] };
-}
-
 export function routerFieldChanged(baseline: Draft, draft: Draft, field: typeof ROUTER_FIELDS[number]): boolean {
   if (!baseline.configuration || !draft.configuration) return false;
   const before = baseline.configuration[field];
@@ -568,7 +545,7 @@ export type RebaseOutcome = {
 const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
   enabled: "启用状态",
   familyPreference: "家族偏好",
-  preference: "档位偏好",
+  preference: "推理强度偏好",
   familyAnnotation: "家族备注",
   configuration: "Router 列表",
   defaultRoutingMode: "默认路由模式",

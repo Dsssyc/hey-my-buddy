@@ -1,0 +1,46 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>task-router.html</title>
+<link rel="stylesheet" href="base.css">
+<svg width="0" height="0" style="position:absolute"><defs>
+<symbol id="run" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.5" fill="var(--live)"/></symbol>
+<symbol id="hand" viewBox="0 0 12 12"><path d="M6 .8 11.2 6 6 11.2.8 6Z" fill="var(--hand-mark)"/></symbol>
+<symbol id="ok" viewBox="0 0 12 12"><path d="M2 6.4 4.8 9 10 3.2" fill="none" stroke="var(--past)" stroke-width="1.8"/></symbol>
+<symbol id="bad" viewBox="0 0 12 12"><path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" fill="none" stroke="var(--fail)" stroke-width="1.8"/></symbol>
+<symbol id="wait" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="none" stroke="var(--ink3)" stroke-width="1.5"/></symbol>
+<symbol id="i-read" viewBox="0 0 12 12"><path d="M3 1.5h4L9.5 4v6.5H3zM7 1.5V4h2.5" fill="none" stroke="currentColor" stroke-width="1.2"/></symbol>
+<symbol id="i-find" viewBox="0 0 12 12"><circle cx="5.2" cy="5.2" r="3.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M7.6 7.6 10.6 10.6" stroke="currentColor" stroke-width="1.2"/></symbol>
+<symbol id="i-edit" viewBox="0 0 12 12"><path d="M2 10l.5-2.4L8.3 1.8l1.9 1.9L4.4 9.5z" fill="none" stroke="currentColor" stroke-width="1.2"/></symbol>
+<symbol id="i-run" viewBox="0 0 12 12"><path d="M2 3l3 3-3 3M6.5 9.5H10" fill="none" stroke="currentColor" stroke-width="1.3"/></symbol>
+<symbol id="i-think" viewBox="0 0 12 12"><circle cx="2.6" cy="6" r="1" fill="currentColor"/><circle cx="6" cy="6" r="1" fill="currentColor"/><circle cx="9.4" cy="6" r="1" fill="currentColor"/></symbol>
+</defs></svg>
+<div class="bar"><div class="brand"><svg width="22" height="22" viewBox="3 3 58 58"><polygon fill="#7CC79F" points="12,13 22,13 22,61 12,54"/><polygon fill="#7CC79F" points="22,32 30,28 30,38 22,42"/><polygon fill="#F1EFE8" points="42,3 52,10 52,51 42,51"/><polygon fill="#F1EFE8" points="34,26 42,22 42,32 34,36"/><polygon fill="#F0997B" points="30,28 34,26 34,36 30,38"/></svg>Hey my buddy</div>
+<div class="tabs"><div class="tab on">任务<span class="cnt num">3</span></div><div class="tab">Buddy</div><div class="tab">设置</div></div><div class="clock mono num">17:12:05</div></div>
+<div class="body"><div class="list"><div class="lhead"><div class="h">宏任务<span class="fold"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1.5" y="2.5" width="11" height="9" rx="1"/><path d="M5.2 2.5v9"/></svg></span></div><div class="search">搜索标题、项目、Host 或编号</div>
+<div class="seg"><span class="on">全部<b class="num">12</b></span><span>进行中<b class="num">2</b></span><span class="y">等待 Host<b class="num">1</b></span><span class="y">等待验收<b class="num">2</b></span></div></div>
+<div class="grp"><span>hey-my-buddy</span><span class="num">3</span></div>
+<div class="row sel"><svg class="m"><use href="#hand"/></svg><span class="t">控制台前端重建</span><span class="w num">2 分钟前</span><span class="s"><span class="c num"><svg class="m"><use href="#hand"/></svg>2</span><span class="c num"><svg class="m"><use href="#run"/></svg>1</span><span class="c num"><svg class="m"><use href="#ok"/></svg>3</span><span class="c num"><svg class="m"><use href="#bad"/></svg>1</span></span></div>
+<div class="row"><svg class="m"><use href="#run"/></svg><span class="t">C-Two 0.7.4 接入</span><span class="w num">11 分钟前</span><span class="s"><span class="c num"><svg class="m"><use href="#run"/></svg>2</span><span class="c num"><svg class="m"><use href="#ok"/></svg>3</span></span></div>
+<div class="row"><svg class="m"><use href="#ok"/></svg><span class="t">跨边界引用清零</span><span class="w num">昨天</span><span class="s"><span class="c num"><svg class="m"><use href="#ok"/></svg>9</span></span></div>
+<div class="grp"><span>geo-buddy</span><span class="num">2</span></div>
+<div class="row"><svg class="m"><use href="#hand"/></svg><span class="t">栅格重采样方案比较</span><span class="w num">3 小时前</span><span class="s"><span class="c num"><svg class="m"><use href="#hand"/></svg>1</span><span class="c num"><svg class="m"><use href="#ok"/></svg>3</span></span></div>
+<div class="row"><svg class="m"><use href="#bad"/></svg><span class="t">坐标系转换的回归测试</span><span class="w num">10-09</span><span class="s"><span class="c num"><svg class="m"><use href="#bad"/></svg>1</span><span class="c num"><svg class="m"><use href="#ok"/></svg>2</span></span></div>
+</div>
+<div class="main"><div class="mh"><div><h1>控制台前端重建</h1><div class="kv2 num"><span><i>项目</i>hey-my-buddy</span><span><i>Host</i>claude-code</span><span><i>开始</i>14:00</span><span><i>历时</i>3 时 12 分</span></div></div>
+<div class="stats"><div class="st"><i class="num hand">2</i><em><svg class="m"><use href="#hand"/></svg>等待验收</em></div><div class="st"><i class="num live">1</i><em><svg class="m"><use href="#run"/></svg>进行中</em></div><div class="st"><i class="num">3</i><em><svg class="m"><use href="#ok"/></svg>已验收</em></div><div class="st"><i class="num fail">1</i><em><svg class="m"><use href="#bad"/></svg>失败</em></div></div><span class="more">···</span></div>
+
+<div class="dh"><span class="back">‹ 时间轴</span><svg class="m"><use href="#run"/></svg><h2>时间轴比例尺</h2><span class="live s12">进行中</span>
+<div class="kv2 num"><span><i>开始</i>17:04</span><span><i>历时</i>8 分</span><span><i>回合</i>1</span></div><span class="ib">↻</span></div>
+<div class="dt"><div class="rail">
+<div class="stp first"><i class="dot"></i><b>委派</b><span class="d num">17:04</span><small>claude-code</small></div>
+<div class="stp sel"><i class="rt"></i><b>路由</b><span class="d num">14 秒</span><small class="mono">gpt-6-luna / high</small></div>
+<div class="cn">排队 1 分 46 秒</div>
+<div class="stp last"><i class="on"></i><b>回合 1</b><span class="d num">6 分</span><small class="mono">gpt-6.1-sol / high</small><em class="live">进行中</em></div>
+</div><div class="pane turn">
+<div class="pt"><h3>路由</h3><span class="s12" style="color:var(--ink2)">已结束</span><span class="tm"><span class="mono num">17:04:18 – 17:04:32</span><b class="num">14 秒</b></span></div>
+<div class="bh"><span class="role">Router</span><span class="mono">codex / openai / gpt-6-luna / high</span><span class="r">快速</span><span class="l2 num">输入 2.1k　输出 0.2k</span><span></span></div>
+<div class="thr" style="--t:24px;--b:132px">
+<div class="n"><svg><use href="#i-think"/></svg><i>推理</i><em class="num">3 秒</em></div>
+<div class="n end"><div><b>选择</b><span class="mono" style="font-size:12px">codex / openai / gpt-6.1-sol / high</span><p style="margin-top:4px">改动集中在比例尺与刻度，需要先读懂现有的布局代码；近期同类的微任务里这个 buddy 一次通过。</p></div></div>
+</div>
+<div class="fill"></div>
+</div></div>
+</div></div></html>

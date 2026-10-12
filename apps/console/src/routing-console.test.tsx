@@ -87,7 +87,7 @@ afterEach(() => { cleanup(); window.location.hash = ""; });
 describe("sole candidate routing basis", () => {
   const routingBasis = { candidateCount: 1, excludedCount: 1, excludedProfiles: [
     { ...worker, profileId: "dsh:deepseek-official:deepseek-flash:off", effort: "off",
-      reason: "提交时排除低档位", source: "override" },
+      reason: "提交时排除低推理强度", source: "override" },
   ] };
   it("shows frozen bounds, exclusions and program policy without inventing a Router call", async () => {
     const audit = { ...decision("sole"), input: null, runId: null,
@@ -102,7 +102,7 @@ describe("sole candidate routing basis", () => {
     expect(await screen.findByText(/本次由程序直接选定/)).toBeTruthy();
     expect(screen.getByText(/硬约束：dsh/)).toBeTruthy();
     expect(screen.getByText("所需能力：execution:dsh")).toBeTruthy();
-    expect(screen.getByText(/用户排除 1 个：.*deepseek-flash.*off.*提交时排除低档位/)).toBeTruthy();
+    expect(screen.getByText(/用户排除 1 个：.*deepseek-flash.*off.*提交时排除低推理强度/)).toBeTruthy();
     expect(screen.queryByText("当前已改为排除")).toBeNull();
     expect(screen.getByText(/固定选择：当时固定此配置/)).toBeTruthy();
     expect(screen.queryByText(/快速路由固定 60 秒/)).toBeNull();
@@ -119,7 +119,7 @@ describe("sole candidate routing basis", () => {
     expect(screen.getByText("程序直选（唯一合法候选，未调用 Router）")).toBeTruthy();
     expect(screen.getByText(/提交时硬约束：dsh/)).toBeTruthy();
     expect(screen.getByText("所需能力：execution:dsh")).toBeTruthy();
-    expect(screen.getByText(/用户排除 1 个：.*提交时排除低档位/)).toBeTruthy();
+    expect(screen.getByText(/用户排除 1 个：.*提交时排除低推理强度/)).toBeTruthy();
     expect(command).not.toHaveBeenCalled();
   });
 });
@@ -160,33 +160,6 @@ describe("zero candidate routing source", () => {
     expect(within(detail).getByText("实际模式").nextElementSibling!.textContent).toBe("未调用 Router");
     expect(within(detail).getByText("预算配置").nextElementSibling!.textContent).toBe("未调用 Router");
     expect(within(detail).queryByText(/本次由程序直接选定/)).toBeNull();
-  });
-});
-
-describe("routing configuration", () => {
-  it("keeps a large decision history out of the Buddy config page and performs no decision request", async () => {
-    const state = snapshot();
-    state.decisions = Array.from({ length: 50 }, (_, i) => decision(`history-${i}`, {
-      task: "不应出现在配置页的长任务说明。".repeat(200),
-    }));
-    const command = vi.fn();
-    window.location.hash = "#buddy/router";
-    const user = userEvent.setup();
-    render(<App suppliedApi={apiFor(state, command)} />);
-    await screen.findByRole("region", { name: "路由状态" });
-    // The Router section is the expanded page itself; the old stacked page's
-    // "详情" fold step is gone.
-    expect(screen.queryByRole("button", { name: "详情" })).toBeNull();
-    const budget = screen.getByRole("radiogroup", { name: "审阅预算" });
-    expect(within(budget).getByRole("radio", { name: "标准" })).toHaveProperty("checked", true);
-    expect(screen.getAllByText(/快速路由固定 60 秒/).length).toBeGreaterThan(0);
-    expect(screen.queryByRole("checkbox", { name: "自动采纳常规整理结果" })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "最近决策" })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "试算一次推荐" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "请求整理" })).toBeNull();
-    expect(screen.queryByText(/整理经验/)).toBeNull();
-    expect(screen.queryByText(/不应出现在配置页的长任务说明/)).toBeNull();
-    expect(command).not.toHaveBeenCalled();
   });
 });
 

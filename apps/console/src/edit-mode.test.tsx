@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiError, type ConsoleApi } from "./api";
 import type { FamilyAnnotation, Profile, Snapshot, WriterGrant } from "./types";
+import { chip, conflictNotice, defaultPreference, effortCell, level, levelSwitch, listed, modelRow, pane, selectModel } from "./buddies/page.testing";
 
 /** One family with an enabled and a disabled effort, plus a second enabled family. */
 function catalog(): Profile[] {
@@ -22,6 +23,7 @@ function catalog(): Profile[] {
 }
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
 const flashFamily = { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
+const FLASH = "dsh / deepseek-official / deepseek-flash";
 const flashNote = (text: string, revision = 1): FamilyAnnotation => ({ ...flashFamily, text, revision, updatedAt: null });
 /** A configuration that only a completed program discovery can add. */
 const discovered = "dsh:deepseek-official:deepseek-v5:medium";
@@ -125,12 +127,13 @@ function fixture(script: Script = {}, options: { queuedForever?: boolean; discov
 }
 
 async function openBuddy(api: ConsoleApi, user: ReturnType<typeof userEvent.setup>) {
-  window.location.hash = "#buddy";
+  window.location.hash = "#buddies";
   render(<App suppliedApi={api} />);
-  await screen.findByRole("heading", { name: "模型 2" });
-  await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
+  await listed(2, 3);
+  await selectModel(user, FLASH, "DSH");
 }
-const note = () => screen.getByLabelText("家族备注") as HTMLTextAreaElement;
+const note = () => within(pane()).getByRole("textbox", { name: "备注" }) as HTMLTextAreaElement;
+
 const saveBar = () => screen.queryByRole("region", { name: "未保存的修改" });
 const save = () => within(saveBar()!).getByRole("button", { name: /^(保存|重试同一保存)$/ });
 const PUBLISHED = "已发布新版本";
@@ -196,14 +199,15 @@ describe("direct editing and the save bar", () => {
     const user = userEvent.setup();
     await openBuddy(f.api, user);
     await user.type(note(), "，补充");
-    await user.click(screen.getByRole("switch", { name: "启用 high" }));
-    await user.click(screen.getByRole("radio", { name: /优先/ }));
+    await user.click(effortCell("high"));
+    await user.click(levelSwitch("high"));
+    await user.click(defaultPreference("优先"));
     expect(within(saveBar()!).getByText("3 项未保存")).toBeTruthy();
     // The records page shows neither the save bar nor any draft state.
-    await user.click(screen.getByRole("link", { name: "委派记录" }));
+    await user.click(screen.getByRole("link", { name: "任务" }));
     expect(saveBar()).toBeNull();
     // The navigation still says a draft is waiting on the Buddy page.
-    await user.click(screen.getByRole("link", { name: /^Buddy 配置\s*有未保存的修改$/ }));
+    await user.click(screen.getByRole("link", { name: /^Buddy\s*有未保存的修改$/ }));
     expect(within(saveBar()!).getByText("3 项未保存")).toBeTruthy();
   });
 
@@ -322,8 +326,7 @@ describe("direct editing and the save bar", () => {
     await user.clear(note());
     await user.type(note(), "基于 V2 的草稿");
     await user.click(save());
-    const banner = (await screen.findAllByRole("alert")).find(node => node.className.includes("conflict-banner"))!;
-    expect(banner).toBeTruthy();
+    const banner = await waitFor(() => { const found = conflictNotice(); expect(found).toBeTruthy(); return found!; });
     expect(within(banner).getByText(/设置已更新/)).toBeTruthy();
     expect(note().value).toBe("基于 V2 的草稿");
     expect(f.operations).toContain("evaluation_write_abort");
@@ -367,16 +370,20 @@ describe("direct editing and the save bar", () => {
   it("refreshes program directory facts on discovery without uploading a draft", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    window.location.hash = "#buddy";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 2" });
+    await listed(2, 3);
     await user.click(screen.getByRole("button", { name: "发现模型" }));
-    await screen.findByText(/目录已更新：新增 1 个配置/);
+    await screen.findByText("新增 1 个 buddy，默认不启用");
     expect(f.operations).toEqual(["model_catalog_refresh"]);
     expect(f.published).toHaveLength(0);
-    // The new family is listed, marked "新" and starts disabled.
-    expect(await screen.findByRole("heading", { name: "模型 3" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /^deepseek-v5，已启用 0\/1.*新/ })).toBeTruthy();
+    // The new model is listed, marked 新 and starts disabled.
+    await listed(2, 4);
+    const added = modelRow("dsh / deepseek-official / deepseek-v5");
+    expect(within(added).getByText("新")).toBeTruthy();
+    expect(within(added).queryByText("medium")).toBeNull();
+    await selectModel(user, "dsh / deepseek-official / deepseek-v5", "DSH");
+    expect(levelSwitch("medium").getAttribute("aria-checked")).toBe("false");
     expect(saveBar()).toBeNull();
   });
 
@@ -386,10 +393,10 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     await user.type(note(), "，我的草稿");
     await user.click(screen.getByRole("button", { name: "发现模型" }));
-    await screen.findByText(/目录已更新/);
+    await screen.findByText("新增 1 个 buddy，默认不启用");
     // Field-level three-way check: C was published for the same field our draft
     // changes, so the draft keeps B and its own expectedRevision.
-    const banner = document.querySelector<HTMLElement>(".conflict-banner")!;
+    const banner = conflictNotice()!;
     expect(banner).toBeTruthy();
     expect(banner.textContent).toContain("已在 V");
     expect(note().value).toBe("原备注，我的草稿");
@@ -413,8 +420,7 @@ describe("direct editing and the save bar", () => {
     // re-reads state and must not rebase, rewrite or discard the local draft.
     f.setSnapshot({ ...f.snapshot(), tableRevision: 3, familyAnnotations: [flashNote("他人 V3", 2)] });
     await readSnapshotOnForeground(f.api.snapshot);
-    const banner = await waitFor(() => document.querySelector<HTMLElement>(".conflict-banner")!);
-    expect(banner).toBeTruthy();
+    const banner = await waitFor(() => { const found = conflictNotice(); expect(found).toBeTruthy(); return found!; });
     expect(note().value).toBe("原备注，未保存");
     expect(f.published).toHaveLength(0);
     await user.click(save());
@@ -434,7 +440,7 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     await user.type(note(), "，保留的备注");
     await user.click(screen.getByRole("button", { name: "发现模型" }));
-    await screen.findByText(/目录已更新：新增 1 个配置/);
+    await screen.findByText("新增 1 个 buddy，默认不启用");
     expect(f.operations).toEqual(["model_catalog_refresh"]);
     expect(note().value).toBe("原备注，保留的备注");
     // The rebased draft publishes only the human patch at the refreshed revision.
@@ -445,102 +451,50 @@ describe("direct editing and the save bar", () => {
     expect(f.published[0]).not.toHaveProperty("profiles");
   });
 
-  it("keeps evidence read-only and never records an observation", async () => {
+  it("shows how many results of each level count towards its evaluation and offers nothing that records evidence", async () => {
     const f = fixture();
     f.setSnapshot({ ...f.snapshot(), evidence: [{ evidenceId: "ev-1", profileId: flashOff, kind: "observation",
       summary: "单次观察", project: "fixture", conditions: ["React"], source: "user", runId: null,
       createdAt: "2026-09-22T00:00:00Z" }] });
     const user = userEvent.setup();
     await openBuddy(f.api, user);
-    const section = screen.getByRole("region", { name: "评价（只读）" });
-    await user.click(within(section).getByText("off"));
-    expect(within(section).getByText("单次观察")).toBeTruthy();
-    expect(within(section).queryByRole("textbox")).toBeNull();
-    expect(within(section).queryByRole("checkbox")).toBeNull();
-    // The only button is the explanation's `?`.
-    expect(within(section).getAllByRole("button").map(button => button.className)).toEqual(["help-button"]);
-    expect(f.operations).not.toContain("evaluation_evidence_record");
+    expect(within(level("off")).getByText("5")).toBeTruthy();
+    await user.click(effortCell("high"));
+    expect(within(level("high")).getByText("2")).toBeTruthy();
+    await user.click(effortCell("off"));
+    // The column says what the number counts, in its name and in the explanation of that name.
+    expect(within(pane()).getByText("计入评价").getAttribute("aria-description"))
+      .toBe("Host 验收或打回过、并且记为证据的执行次数；取消的、没有结论的与环境故障不算");
+    // The side column holds settings only: the two reason-less levels offer a switch and a preference, nothing else.
+    expect(within(level("off")).getAllByRole("switch")).toHaveLength(1);
+    expect(within(level("off")).getAllByRole("radiogroup")).toHaveLength(1);
+    expect(within(level("off")).getByRole("textbox")).toHaveProperty("readOnly", true);
+    expect(within(level("off")).queryByRole("button")).toBeNull();
+    expect(f.command).not.toHaveBeenCalled();
   });
 
-  it("shows the family summary and the required muted message when an effort has no evidence", async () => {
+  it("toggles a level from its switch and marks it unsaved until publication", async () => {
     const f = fixture();
     const user = userEvent.setup();
     await openBuddy(f.api, user);
-    const section = screen.getByRole("region", { name: "评价（只读）" });
-    expect(within(section).getByText("2/2 个档位有评价 · 验证样本 7 个")).toBeTruthy();
-    await user.click(within(section).getByText("high"));
-    const high = within(section).getByText("high").closest("details")!;
-    expect(high.open).toBe(true);
-    const empty = within(high).getByText("评价证据未记录");
-    expect(empty.className).toContain("muted");
-  });
-
-  it("toggles an effort from its tag switch and marks it unsaved until publication", async () => {
-    const f = fixture();
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    const off = screen.getByRole("switch", { name: "启用 off" });
-    const high = screen.getByRole("switch", { name: "启用 high" });
-    expect(off.getAttribute("aria-checked")).toBe("true");
-    expect(high.getAttribute("aria-checked")).toBe("false");
-    await user.click(off);
-    expect(screen.getByRole("switch", { name: "启用 off" }).getAttribute("aria-checked")).toBe("false");
-    const tag = screen.getByRole("group", { name: "off 档位" });
-    expect(tag.textContent).toContain("未保存");
+    expect(levelSwitch("off").getAttribute("aria-checked")).toBe("true");
+    expect(effortCell("high").getAttribute("aria-pressed")).toBe("false");
+    expect(chip(FLASH, "off").textContent).toBe("off");
+    await user.click(levelSwitch("off"));
+    expect(levelSwitch("off").getAttribute("aria-checked")).toBe("false");
+    expect(within(level("off")).getByRole("img", { name: "未保存" })).toBeTruthy();
     expect(within(saveBar()!).getByText("1 项未保存")).toBeTruthy();
-    // The list row follows the draft immediately.
-    expect(screen.getByRole("button", { name: /^deepseek-flash，已启用 0\/2/ })).toBeTruthy();
+    // The table's row follows the draft immediately, with the same mark.
+    expect(within(modelRow(FLASH)).queryByText("off")).toBeNull();
+    expect(within(effortCell("off")).getByRole("img", { name: "未保存" })).toBeTruthy();
     await user.click(save());
     await screen.findByText(PUBLISHED);
-    expect(screen.getByRole("group", { name: "off 档位" }).textContent).not.toContain("未保存");
+    expect(within(level("off")).queryByRole("img", { name: "未保存" })).toBeNull();
+    expect(within(effortCell("off")).queryByRole("img", { name: "未保存" })).toBeNull();
     // A disable publishes one enablement patch and nothing program-owned.
     expect(f.published.at(-1)!.profileSettings).toEqual([{ profileId: flashOff, enabled: false }]);
     expect(f.published.at(-1)).not.toHaveProperty("profiles");
     expect(f.published.at(-1)).not.toHaveProperty("cards");
-  });
-
-  it("shows the publication history read-only and pages it without model calls", async () => {
-    const f = fixture();
-    const recent = Array.from({ length: 20 }, (_, index) => ({ revision: 40 - index, kind: "human",
-      actor: "codex-buddy", counts: { profiles: 12, cards: 8, preferences: 2 }, createdAt: "2026-09-24T10:00:00Z" }));
-    const history = vi.fn(async (_operation: string, params: { before?: number }) => params.before === 21
-      ? { revisions: [{ revision: 20, kind: "maintenance", actor: "dsh",
-          counts: { profiles: 9, cards: 6, preferences: 1, provided: ["profiles", "cards"] }, createdAt: "2026-09-01T10:00:00Z" }],
-        nextCursor: null, total: 41 }
-      : { revisions: recent, nextCursor: 21, total: 41 });
-    const api = { runtimeVersion: f.api.runtimeVersion, snapshot: f.api.snapshot, tasks: f.api.tasks, task: f.api.task, command: history } as unknown as ConsoleApi;
-    const user = userEvent.setup();
-    await openBuddy(api, user);
-    await user.click(screen.getByRole("button", { name: "更新记录" }));
-    await screen.findByText(/已发布版本 · 41/);
-    expect(screen.getAllByText(/配置 12 · 卡片 8 · 偏好 2/)).toHaveLength(20);
-    expect(history).toHaveBeenCalledWith("evaluation_history", { limit: 20 }, "csrf");
-    await user.click(screen.getByRole("button", { name: "加载更早记录" }));
-    await screen.findByText(/配置 9 · 卡片 6 · 偏好 1 · 提供：profiles、cards/);
-    expect(history).toHaveBeenCalledWith("evaluation_history", { limit: 20, before: 21 }, "csrf");
-    expect(history.mock.calls.every(([operation]) => operation === "evaluation_history")).toBe(true);
-    await user.click(screen.getByRole("button", { name: "返回 Buddy 配置" }));
-    expect(screen.getByLabelText("家族备注")).toBeTruthy();
-  });
-
-  it("renders family and legacy patch counts from the publication history", async () => {
-    const f = fixture();
-    const history = vi.fn(async () => ({ revisions: [
-      { revision: 13, kind: "human", actor: "console",
-        counts: { profileSettings: 1, familyPreferenceChanges: 1, preferenceChanges: 2, familyAnnotationChanges: 1,
-          provided: ["familyAnnotationChanges", "familyPreferenceChanges", "preferenceChanges", "profileSettings"] },
-        createdAt: "2026-09-28T10:00:00Z" },
-      { revision: 12, kind: "human", actor: "console",
-        counts: { profileSettings: 1, preferenceChanges: 1, annotationChanges: 2 }, createdAt: "2026-09-25T10:00:00Z" },
-    ], nextCursor: null, total: 2 }));
-    const api = { runtimeVersion: f.api.runtimeVersion, snapshot: f.api.snapshot, tasks: f.api.tasks, task: f.api.task, command: history } as unknown as ConsoleApi;
-    const user = userEvent.setup();
-    await openBuddy(api, user);
-    await user.click(screen.getByRole("button", { name: "更新记录" }));
-    await screen.findByText(/已发布版本 · 2/);
-    expect(screen.getByText("启用补丁 1 · 家族偏好补丁 1 · 偏好补丁 2 · 备注补丁 1 · 提供：familyAnnotationChanges、familyPreferenceChanges、preferenceChanges、profileSettings")).toBeTruthy();
-    // Older publications keep their per-profile opinion counts.
-    expect(screen.getByText("启用补丁 1 · 偏好补丁 1 · 意见补丁 2")).toBeTruthy();
   });
 
   it("uses the three-page navigation without any global edit switch", async () => {
@@ -548,7 +502,7 @@ describe("direct editing and the save bar", () => {
     const user = userEvent.setup();
     await openBuddy(f.api, user);
     const nav = screen.getByRole("navigation", { name: "主要导航" });
-    expect(within(nav).getAllByRole("link").map(link => link.textContent)).toEqual(["委派记录", "Buddy 配置", "设置"]);
+    expect(within(nav).getAllByRole("link").map(link => link.textContent)).toEqual(["任务", "Buddy", "设置"]);
     expect(screen.queryByText("模型卡片")).toBeNull();
     expect(screen.queryByText("路由配置")).toBeNull();
     expect(screen.queryByText("编辑设置")).toBeNull();
@@ -556,18 +510,10 @@ describe("direct editing and the save bar", () => {
     // An open gate is normal, so no "评价表可读" badge is needed.
     expect(screen.queryByText("评价表可读")).toBeNull();
     expect(screen.queryByText("独占编辑中")).toBeNull();
-    for (const page of ["委派记录", "设置", "Buddy 配置"]) {
+    for (const page of ["任务", "设置", "Buddy"]) {
       await user.click(within(nav).getByRole("link", { name: page }));
       expect(screen.queryByText("编辑设置")).toBeNull();
     }
-  });
-
-  it("lands an old 模型卡片 bookmark on Buddy 配置", async () => {
-    const f = fixture();
-    window.location.hash = "#models";
-    render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 2" });
-    expect(screen.getByRole("link", { name: "Buddy 配置" }).getAttribute("aria-current")).toBe("page");
   });
 
   it("shows only an actionable gate state instead of a readable badge", async () => {

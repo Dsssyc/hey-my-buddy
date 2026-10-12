@@ -156,7 +156,7 @@ describe("U5: audited controls retain the shared global box model and normal siz
   it("uses the existing global border-box reset for badges, segments, filters, titles and floating layers", () => {
     const { container } = render(<>
       <Status status="waiting-host" />
-      <div className="segmented"><button>档位</button></div>
+      <div className="segmented"><button>推理强度</button></div>
       <input type="checkbox" />
       <div className="inspector-card-head">标题</div>
       <div className="marker-popover">详情</div>

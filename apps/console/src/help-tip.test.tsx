@@ -45,10 +45,10 @@ function stubViewport(width: number, height: number) {
 function renderHelp() {
   const view = render(
     <div className="clipper" style={{ overflow: "hidden", width: 40 }}>
-      <Help label="档位说明">档位说明：点开关即启用或停用该档位。</Help>
+      <Help label="推理强度说明">推理强度说明：点开关即启用或停用该推理强度。</Help>
     </div>,
   );
-  return { clipper: view.container.querySelector(".clipper")!, button: screen.getByRole("button", { name: "档位说明" }) };
+  return { clipper: view.container.querySelector(".clipper")!, button: screen.getByRole("button", { name: "推理强度说明" }) };
 }
 
 function tipBox() {
@@ -88,7 +88,7 @@ describe("the `?` explanation layer", () => {
     rects.button = { left: 1004, top: 100, width: 20, height: 20 };
     rects.tip = { width: 300, height: 40 };
     renderHelp();
-    fireEvent.focus(screen.getByRole("button", { name: "档位说明" }));
+    fireEvent.focus(screen.getByRole("button", { name: "推理强度说明" }));
     const { left, top } = tipBox();
     // Centring would end at 1164; the panel is pulled back to the right margin.
     expect(left).toBe(716);
@@ -101,7 +101,7 @@ describe("the `?` explanation layer", () => {
     rects.button = { left: 500, top: 740, width: 20, height: 20 };
     rects.tip = { width: 300, height: 40 };
     renderHelp();
-    fireEvent.focus(screen.getByRole("button", { name: "档位说明" }));
+    fireEvent.focus(screen.getByRole("button", { name: "推理强度说明" }));
     const { left, top } = tipBox();
     expect(top + rects.tip.height).toBeLessThanOrEqual(rects.button.top);
     insideViewport(left, top);
@@ -113,7 +113,7 @@ describe("the `?` explanation layer", () => {
     rects.button = { left: 10, top: 100, width: 20, height: 20 };
     rects.tip = { width: 600, height: 40 };
     renderHelp();
-    fireEvent.focus(screen.getByRole("button", { name: "档位说明" }));
+    fireEvent.focus(screen.getByRole("button", { name: "推理强度说明" }));
     const { tip, left, top } = tipBox();
     expect(tip.style.maxWidth).toBe("384px");
     expect(left).toBe(8);

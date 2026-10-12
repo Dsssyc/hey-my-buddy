@@ -2,9 +2,14 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { readVerificationText, type ConsoleApi } from "./api";
+import type { ConsoleApi } from "./api";
+import { formatDateTime } from "./i18n/format";
 import type { Profile, Snapshot, Task, TaskQuery, WriterGrant } from "./types";
 import type { Workflow } from "./workflow-types";
+import { catalogue, effortCell, level, levelSwitch, listed, modelButton, note, pane, selectModel } from "./buddies/page.testing";
+
+const dsh = (model: string) => `dsh / deepseek-official / ${model}`;
+const GLM = "zcode / bigmodel-api / GLM-5.3";
 
 // The installed catalog contains four DSH families with four efforts each and
 // two ZCode families with three each. Only the four recorded choices are enabled.
@@ -87,10 +92,11 @@ describe("desktop console", () => {
     const { container } = render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "还没有工作目标" });
     expect(screen.queryByRole("button", { name: "刷新工作台" })).toBeNull();
-    const timestamp = container.querySelector(".snapshot-read-state")!;
-    expect(timestamp.textContent).toBe(`黑板快照 · ${readVerificationText(Date.parse("2026-01-02T03:04:05Z"))}`);
-    expect(timestamp.textContent).toContain("核对时间");
-    expect(timestamp.textContent).not.toContain("未记录");
+    // A read from an earlier day is written with its date; the top bar holds the only copy.
+    const read = within(screen.getByRole("banner")).getByText(formatDateTime(Date.parse("2026-01-02T03:04:05Z")));
+    expect(read.getAttribute("datetime")).toBe("2026-01-02T03:04:05.000Z");
+    expect(read.parentElement!.textContent).toBe(`核对时间 ${read.textContent}`);
+    expect(within(screen.getByRole("main")).queryByText(/黑板快照/)).toBeNull();
     expect(screen.queryByText("已连接")).toBeNull();
   });
 
@@ -100,7 +106,7 @@ describe("desktop console", () => {
     try {
       render(<App suppliedApi={f.api} />);
       await act(async () => { await vi.advanceTimersByTimeAsync(200); });
-      expect(screen.getByText("黑板快照 · 核对时间未记录")).toBeTruthy();
+      expect(within(screen.getByRole("banner")).getByText("核对时间未记录")).toBeTruthy();
       (f.api.snapshot as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("合成连接中断"));
       await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
       expect(screen.getByRole("button", { name: "重试连接" })).toBeTruthy();
@@ -121,88 +127,73 @@ describe("desktop console", () => {
     // The fixture's rows contain no awaiting-Host goal at all; the count only
     // comes from the slim snapshot's server-side field.
     f.snapshot.tasks.pendingCount = 5;
-    const { container } = render(<App suppliedApi={f.api} />);
+    render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "还没有工作目标" });
-    const badge = container.querySelector(".nav-count");
-    expect(badge?.textContent).toBe("5");
-    expect(badge?.getAttribute("title")).toBe("全部委派中等待 Host 决定的目标");
+    // The count and what it counts are both part of the tab's name.
+    expect(screen.getByRole("link", { name: /^任务\s*5\s*等待 Host 决定的微任务$/ })).toBeTruthy();
     f.snapshot.tasks.pendingCount = 0;
-    await waitFor(() => expect(container.querySelector(".nav-count")).toBeNull(), { timeout: 5000 });
+    await waitFor(() => expect(screen.getByRole("link", { name: "任务" })).toBeTruthy(), { timeout: 5000 });
   });
 
-  it("uses the exact top navigation and presents the 22 native configurations as six read-only model families", async () => {
+  it("uses the exact top navigation and presents the 22 native buddies as six rows of models", async () => {
     const f = fixture();
     const user = userEvent.setup();
     const { container } = render(<App suppliedApi={f.api} />);
     const navigation = await screen.findByRole("navigation", { name: "主要导航" });
-    expect(within(navigation).getAllByRole("link").map(link => link.textContent)).toEqual(["委派记录", "Buddy 配置", "设置"]);
+    // A mark on a tab adds words for a screen reader after its name; the name itself is the first text.
+    expect(within(navigation).getAllByRole("link").map(link => link.firstChild?.textContent)).toEqual(["任务", "Buddy", "设置"]);
     expect(navigation.closest("header")).not.toBeNull();
     expect(container.querySelector(".sidebar")).toBeNull();
     expect(screen.getAllByRole("navigation")).toHaveLength(1);
-    await user.click(within(navigation).getByRole("link", { name: "Buddy 配置" }));
-    expect(await screen.findByRole("heading", { name: "模型 6" })).toBeTruthy();
-    const list = screen.getByRole("region", { name: "模型家族" });
-    expect(list.querySelectorAll(".family-row")).toHaveLength(6);
-    await user.click(within(list).getByRole("button", { name: /^deepseek-flash/ }));
-    const detail = screen.getByRole("complementary", { name: "模型家族详情" });
-    // The automatic assessment stays read-only; there is no editable opinion field.
-    expect(within(detail).getAllByText("原评价 deepseek-flash off").length).toBeGreaterThan(0);
+    await user.click(within(navigation).getByRole("link", { name: /^Buddy/ }));
+    await listed(4, 22);
+    expect(within(catalogue()).getAllByRole("button").filter(button => button.closest("[data-slot=model-row]") && button.hasAttribute("aria-expanded"))).toHaveLength(6);
+    expect(document.querySelector("[data-slot=model-drawer]")).toBeNull();
+    await selectModel(user, dsh("deepseek-flash"), "DSH");
+    const detail = pane(dsh("deepseek-flash"));
+    // Each effort selects its buddy; only that buddy has an editable panel.
+    expect(levelSwitch("off")).toBeTruthy();
+    expect(within(level("off")).getByText("4")).toBeTruthy();
+    await user.click(effortCell("low"));
+    expect(levelSwitch("low")).toBeTruthy();
+    expect(within(detail).queryByRole("switch", { name: "启用 off" })).toBeNull();
+    // The automatic assessment is program-owned: there is no field for it or for an observation.
     expect(within(detail).queryByRole("textbox", { name: "当前评价" })).toBeNull();
-    expect(within(detail).getByRole("switch", { name: "启用 off" })).toBeTruthy();
-    expect(within(detail).getByRole("switch", { name: "启用 low" })).toBeTruthy();
-    expect(within(detail).getAllByText(/由维护 Harness 依据证据发布/).length).toBeGreaterThan(0);
     expect(within(detail).queryByRole("textbox", { name: "补充观察" })).toBeNull();
     expect(within(detail).queryByRole("checkbox")).toBeNull();
-    expect(within(detail).getAllByText(/评价证据未记录/).length).toBeGreaterThan(0);
     expect(f.command).not.toHaveBeenCalled();
   });
 
-  it("keeps one note draft per family across models, models detail and main pages without a lease", async () => {
+  it("keeps one note draft per model across rows and main pages without a lease", async () => {
     const f = fixture();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: /^deepseek-flash/ }));
-    await user.type(await screen.findByLabelText("家族备注"), "flash 家族备注");
-    await user.click(screen.getByRole("button", { name: /^deepseek-v4-pro/ }));
-    expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "");
-    await user.type(screen.getByLabelText("家族备注"), "pro 家族备注");
-    await user.click(screen.getByRole("button", { name: /^GLM-5\.3(?!-Flash)/ }));
-    expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "");
-    await user.type(screen.getByLabelText("家族备注"), "ZCode 家族备注");
+    await listed(4, 22);
+    await selectModel(user, dsh("deepseek-flash"), "DSH");
+    await user.type(note(), "flash 的备注");
+    await user.click(modelButton(dsh("deepseek-v4-pro")));
+    expect(note()).toHaveProperty("value", "");
+    await user.type(note(), "pro 的备注");
+    await user.click(modelButton(GLM));
+    expect(note()).toHaveProperty("value", "");
+    await user.type(note(), "ZCode 的备注");
     await user.click(screen.getByRole("link", { name: "设置" }));
-    expect(screen.queryByRole("textbox", { name: "家族备注" })).toBeNull();
-    await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
-    expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "ZCode 家族备注");
-    await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
-    expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "flash 家族备注");
-    await user.click(screen.getByRole("button", { name: /^deepseek-v4-pro/ }));
-    expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "pro 家族备注");
+    expect(screen.queryByRole("textbox", { name: "备注" })).toBeNull();
+    await user.click(screen.getByRole("link", { name: /Buddy/ }));
+    expect(note()).toHaveProperty("value", "ZCode 的备注");
+    await user.click(modelButton(dsh("deepseek-flash")));
+    expect(note()).toHaveProperty("value", "flash 的备注");
+    await user.click(modelButton(dsh("deepseek-v4-pro")));
+    expect(note()).toHaveProperty("value", "pro 的备注");
     // Snapshot polling keeps the draft; only Save would take a lease.
     await waitFor(() => expect((f.api.snapshot as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(1), { timeout: 4500 });
-    expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "pro 家族备注");
+    expect(note()).toHaveProperty("value", "pro 的备注");
     // The automatic card stays program-owned and cannot be typed into.
-    expect(screen.getAllByText(/原评价 deepseek-v4-pro/).length).toBeGreaterThan(0);
     expect(screen.queryByLabelText("当前评价")).toBeNull();
     expect(screen.queryByRole("textbox", { name: "补充观察" })).toBeNull();
     expect(screen.queryByLabelText("作为卡片依据")).toBeNull();
     await user.click(await screen.findByRole("button", { name: "放弃" }));
-    expect(f.command).not.toHaveBeenCalled();
-  });
-
-  it("labels an unattributed historical card honestly instead of as an automatic assessment", async () => {
-    const f = fixture();
-    f.snapshot.cards = f.snapshot.cards.map(card => ({ ...card, origin: "unattributed" }));
-    const user = userEvent.setup();
-    window.location.hash = "#models";
-    render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: /^deepseek-flash/ }));
-    const detail = screen.getByRole("complementary", { name: "模型家族详情" });
-    // The card was not recorded as maintenance-published, so it is not called
-    // an automatic assessment; it stays read-only either way.
-    expect(within(detail).getAllByText(/发布者未记录/).length).toBeGreaterThan(0);
-    expect(within(detail).getAllByText("原评价 deepseek-flash off").length).toBeGreaterThan(0);
-    expect(within(detail).queryByRole("textbox", { name: "当前评价" })).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });
 
@@ -225,8 +216,8 @@ describe("desktop console", () => {
       query: "目标", projectId: "source-project", hostId: "codex-source" }), expect.any(AbortSignal)));
     const scroll = screen.getByLabelText("委派条目");
     scroll.scrollTop = 280;
-    await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
-    await user.click(screen.getByRole("link", { name: "委派记录" }));
+    await user.click(screen.getByRole("link", { name: /Buddy/ }));
+    await user.click(screen.getByRole("link", { name: "任务" }));
     expect(screen.getByLabelText("搜索委派")).toHaveProperty("value", "目标");
     expect(screen.getByLabelText("项目筛选")).toHaveProperty("value", "source-project");
     expect(screen.getByLabelText("委派方筛选")).toHaveProperty("value", "codex-source");
@@ -302,8 +293,8 @@ describe("desktop console", () => {
     expect(screen.queryByRole("button", { name: "批准所列协助" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /目标 two/ }));
     expect((await screen.findAllByText(/协助 two/)).length).toBeGreaterThan(0);
-    await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
-    await user.click(screen.getByRole("link", { name: "委派记录" }));
+    await user.click(screen.getByRole("link", { name: /Buddy/ }));
+    await user.click(screen.getByRole("link", { name: "任务" }));
     expect((await screen.findAllByText(/协助 two/)).length).toBeGreaterThan(0);
     expect(f.command.mock.calls.every(([operation]) => operation === "workflow_get")).toBe(true);
   });

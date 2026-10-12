@@ -20,6 +20,10 @@ _Avoid_: Buddy, Buddy service
 A participant, normally an agent, that acts on the blackboard in the Host, Worker or Router role. A buddy is identified by its harness, provider, model and reasoning effort, for example `dsh / deepseek-official / deepseek-flash / off`; anything of that shape is a buddy, and one run of it is an execution of that buddy. Buddies are peers in standing and interact only through the blackboard.
 _Avoid_: Buddy (for the product or the blackboard), peer Buddy; configuration, profile, model or template (for a buddy); 伙伴 (Chinese text keeps the word buddy, as it keeps Host, Worker, Router and harness)
 
+**推理强度 / reasoning effort**:
+The fourth part of a buddy's identity: how much reasoning its model is asked to spend. A harness offers it in levels such as `off`, `high` and `max`; one level is a 档位, and each level of a model is a different buddy.
+_Avoid_: 思考强度, thinking level; 权限档位 is unrelated and is always written in full
+
 **角色 / role**:
 The authority a buddy acts with on the blackboard, Host, Worker or Router, established by its authorized operation rather than by its harness or model. Host and Worker operations use scoped credentials; a Router has no direct blackboard credential and returns only a structured answer collected by its Worker runtime.
 

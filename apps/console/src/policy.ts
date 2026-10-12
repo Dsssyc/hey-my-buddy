@@ -76,8 +76,8 @@ export function executionCandidates(profiles: Profile[]): Profile[] {
 export function routerRefusal(profile: Profile, mode: "fast" | "review" = "review"): string | null {
   if (mode === "fast" && !hasFastRoutingCapability(profile)) return "所属 Harness 尚不支持无工具路由调用";
   if (mode === "review" && !hasDecisionCapability(profile)) return "所属 Harness 尚不具备本地只读路由资格";
-  if (!profile.available) return "该档位当前不可用";
-  if (!profile.enabled) return "该档位未启用：先打开它的开关";
+  if (!profile.available) return "该推理强度当前不可用";
+  if (!profile.enabled) return "该推理强度未启用：先打开它的开关";
   return null;
 }
 
@@ -166,7 +166,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
         profileId: members[0]?.profileId ?? key,
         family: key,
         label: subject,
-        message: `${subject} 没有可用档位；请先启用档位再固定。`,
+        message: `${subject} 没有可用推理强度；请先启用推理强度再固定。`,
       });
     }
   }
@@ -181,7 +181,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       issues.push({
         profileId: change.profileId,
         label: labelOf(profile, change.profileId),
-        message: `${labelOf(profile, change.profileId)} ${refusal}；无法固定，请选择可用档位。`,
+        message: `${labelOf(profile, change.profileId)} ${refusal}；无法固定，请选择可用推理强度。`,
       });
     }
   }
@@ -215,7 +215,7 @@ export function routerAttention(source: Pick<Draft, "configuration" | "profiles"
   const profile = source.profiles.find(p => p.profileId === id);
   const refusal = profile ? routerRefusal(profile, mode) : "已不在目录中";
   return refusal ? { profileId: id, router: true, label: labelOf(profile, id),
-    message: `当前 Router ${labelOf(profile, id)} ${refusal}：请在合格的档位菜单中选择“设为 Router”，或更改模式。` } : null;
+    message: `当前 Router ${labelOf(profile, id)} ${refusal}：请在合格的推理强度菜单中选择“设为 Router”，或更改模式。` } : null;
 }
 
 export function decisionAttention(source: Pick<Draft, "configuration" | "profiles">): PolicyIssue | null {
@@ -260,7 +260,7 @@ export function attentionIssues(
       profileId: pinned[0].profileId,
       family: key,
       label: subject,
-      message: `家族 ${subject} 的固定档位不可用；请启用档位或更改家族偏好。`,
+      message: `家族 ${subject} 的固定推理强度不可用；请启用推理强度或更改家族偏好。`,
     });
   }
   return issues;

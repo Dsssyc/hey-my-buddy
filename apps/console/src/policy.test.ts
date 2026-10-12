@@ -240,7 +240,7 @@ describe("blocking new changes", () => {
     const overridden = setPreference(baseline, worker.profileId, "none");
     const issues = blockingIssues(overridden, setFamilyPreference(overridden, worker, "pin"));
     expect(issues).toHaveLength(1);
-    expect(issues[0].message).toContain("请先启用档位再固定");
+    expect(issues[0].message).toContain("请先启用推理强度再固定");
     expect(issues[0].family).toBe(JSON.stringify(["dsh", "deepseek-official", "deepseek-flash"]));
     // A reason-only edit of an existing family pin never needs current legality.
     const pinned = setFamilyPreference(overridden, worker, "pin", "旧");
@@ -319,7 +319,7 @@ describe("stale settings needing attention", () => {
     const issues = attentionIssues(stale);
     expect(issues).toHaveLength(1);
     expect(issues[0].family).toBe(JSON.stringify(["dsh", "deepseek-official", "deepseek-flash"]));
-    expect(issues[0].message).toContain("固定档位不可用");
+    expect(issues[0].message).toContain("固定推理强度不可用");
   });
 
   it("is silent when every recorded setting is still legal", () => {

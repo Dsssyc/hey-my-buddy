@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task, TaskQuery } from "./types";
+import { listed, note, pane, selectModel } from "./buddies/page.testing";
+
+const FLASH = "dsh / deepseek-official / deepseek-flash";
 
 const initial = (): Snapshot => ({
   csrfToken: "fixture-csrf",
@@ -174,30 +177,31 @@ describe("console interactions", () => {
     render(<App suppliedApi={api} />);
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await screen.findByRole("heading", { name: "选择一项委派" });
-    await user.click(screen.getByRole("link", { name: "Buddy 配置" }));
-    await screen.findByRole("heading", { name: "模型 1" });
+    await user.click(screen.getByRole("link", { name: /^Buddy/ }));
+    await listed(1, 1);
     // There is no global edit switch: controls are directly editable, and no
     // save bar appears until the user actually changes something.
     expect(screen.queryByRole("switch", { name: "编辑设置" })).toBeNull();
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
-    await user.click(await screen.findByRole("button", { name: /Flash 决策/ }));
-    await user.type(await screen.findByLabelText("家族备注"), "本地草稿");
+    await selectModel(user, FLASH, "DSH");
+    await user.type(note(), "本地草稿");
     expect(await screen.findByRole("region", { name: "未保存的修改" })).toBeTruthy();
     await user.click(screen.getByRole("link", { name: "设置" }));
     // The save bar belongs to Buddy 配置 alone; the draft is kept without any
     // leave confirmation and no save happens by navigating away.
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
-    await user.click(screen.getByRole("link", { name: /Buddy 配置/ }));
-    expect(screen.getByLabelText("家族备注")).toHaveProperty("value", "本地草稿");
+    await user.click(screen.getByRole("link", { name: /Buddy/ }));
+    expect(note()).toHaveProperty("value", "本地草稿");
     expect(screen.getByRole("region", { name: "未保存的修改" })).toBeTruthy();
-    // The automatic assessment is program-owned and stays read-only.
+    // The automatic assessment is program-owned: the page offers no field for it.
     expect(screen.queryByLabelText("当前评价")).toBeNull();
-    expect(screen.getAllByText("待积累实际证据").length).toBeGreaterThan(0);
+    expect(within(pane()).getAllByRole("textbox")).toHaveLength(2);
+    expect(within(pane()).getByRole("textbox", { name: "off 的偏好理由" })).toHaveProperty("readOnly", true);
     await user.click(screen.getByRole("button", { name: "放弃" }));
     expect(api.command).not.toHaveBeenCalled();
   });
 
-  it("opens Buddy 配置 from the retired #settings and #models bookmarks and keeps 设置 at #system", async () => {
+  it("addresses each page by its own name and opens the tasks for any other hash", async () => {
     const state = initial();
     const api = {
       runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
@@ -208,26 +212,24 @@ describe("console interactions", () => {
       objectives: vi.fn(async () => emptyObjectives()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
-    // The old 路由配置 bookmark opens Buddy 配置, where its settings moved.
-    window.location.hash = "#settings";
+    window.location.hash = "#buddies";
     const first = render(<App suppliedApi={api} />);
-    await screen.findByRole("heading", { name: "模型 1" });
-    expect(screen.getByRole("heading", { name: "Buddy 配置" })).toBeTruthy();
+    await listed(1, 1);
+    expect(screen.getByRole("heading", { name: "Buddy" })).toBeTruthy();
     first.unmount();
-    // The old 模型卡片 bookmark keeps landing on the same successor.
+    // A retired bookmark is a hash like any other the console does not know.
     window.location.hash = "#models";
     const second = render(<App suppliedApi={api} />);
-    await screen.findByRole("heading", { name: "模型 1" });
+    expect((await screen.findByRole("link", { name: "任务" })).getAttribute("aria-current")).toBe("page");
     second.unmount();
-    // The system settings page keeps a hash of its own, addressable on reload.
-    window.location.hash = "#system";
+    window.location.hash = "#settings";
     render(<App suppliedApi={api} />);
     await screen.findByRole("heading", { name: "显示" });
-    await user.click(screen.getByRole("link", { name: "Buddy 配置" }));
-    await screen.findByRole("heading", { name: "模型 1" });
+    await user.click(screen.getByRole("link", { name: /^Buddy/ }));
+    await listed(1, 1);
     await user.click(screen.getByRole("link", { name: "设置" }));
     await screen.findByRole("heading", { name: "显示" });
-    expect(window.location.hash).toBe("#system");
+    expect(window.location.hash).toBe("#settings");
     expect(api.command).not.toHaveBeenCalled();
   });
 
@@ -237,7 +239,6 @@ describe("console interactions", () => {
       summary: "一条只读证据", project: null, conditions: [], source: "user", runId: null,
       createdAt: "2026-09-22T00:00:00Z" }];
     const command = vi.fn(async (operation: string) => {
-      if (operation === "evaluation_history") return { revisions: [], nextCursor: null, total: 0 };
       throw new Error(`Unexpected command: ${operation}`);
     });
     const api = {
@@ -249,19 +250,17 @@ describe("console interactions", () => {
       objectives: vi.fn(async () => emptyObjectives()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
-    window.location.hash = "#models";
+    window.location.hash = "#buddies";
     render(<App suppliedApi={api} />);
-    await screen.findByRole("heading", { name: "模型 1" });
-    await user.click(screen.getByRole("button", { name: /Flash 决策/ }));
-    await user.click(screen.getAllByText("待积累实际证据", { exact: false })[0]);
-    expect(await screen.findByText("一条只读证据")).toBeTruthy();
+    await listed(1, 1);
+    await selectModel(user, FLASH, "DSH");
     expect(screen.queryByLabelText("补充观察")).toBeNull();
     expect(screen.queryByLabelText("作为卡片依据")).toBeNull();
     expect(screen.queryByRole("button", { name: "记录待整理观察" })).toBeNull();
     expect(screen.queryByRole("button", { name: "评价维护" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "更新记录" }));
-    await screen.findByText("暂无已发布评价");
-    expect(command.mock.calls.map(([operation]) => operation)).toEqual(["evaluation_history"]);
+    // The drawer's only button selects its one native reasoning effort; it sends no request.
+    expect(within(pane()).getAllByRole("button").map(button => button.getAttribute("aria-label"))).toEqual(["off"]);
+    expect(command).not.toHaveBeenCalled();
   });
 
   // D2-A1/A2: a hidden bootstrap leaves startup or shows the existing error UI.

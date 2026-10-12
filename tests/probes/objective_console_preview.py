@@ -15,7 +15,9 @@ Safety boundary:
 * All mutation POSTs are refused. ``POST /api/command`` serves the same five
   read-only operations the real console allows (``workflow_get``,
   ``selection_get``, ``selection_list``, ``model_profiles``,
-  ``evaluation_history``) with fixed-shape fixture payloads. Operations the
+  ``evaluation_history``) with fixed-shape fixture payloads, and answers a
+  check of the harnesses (``capabilities``) with the same synthetic rows
+  without probing anything. Operations the
   0.15.1 browser allowlist removed (decide/continue/acknowledge/takeover/
   per-run cancel/retry and friends) answer ``METHOD_NOT_FOUND`` exactly like
   the real console; the still-allowed writes (settings operations and
@@ -113,6 +115,27 @@ CFG_CODEX = {"adapter": "codex", "provider": "openai", "model": "gpt-5-codex", "
 CFG_GLM = {"adapter": "zcode", "provider": "zai", "model": "glm-5", "effort": "high"}
 CFG_CLAUDE = {"adapter": "claude", "provider": "anthropic", "model": "claude-opus-5-5", "effort": "high"}
 CONFIGS = (CFG_FLASH, CFG_CODEX, CFG_GLM, CFG_CLAUDE)
+#: The synthetic model catalogue: every model with its reasoning-effort levels,
+#: and the levels that are enabled. The four buddies above, which the runs use,
+#: are among them. The other rows only fill the catalogue, so that the models
+#: table shows every kind of row: several levels, a model nobody enabled, a
+#: pending model, a new one, and a harness that is not logged in.
+CATALOG = (
+    ("dsh", "deepseek-official", "deepseek-flash", ("off", "max"), ("off", "max")),
+    ("dsh", "deepseek-official", "deepseek-v4-pro", ("high", "max"), ()),
+    ("codex", "openai", "gpt-5-codex", ("medium", "high", "max"), ("high", "max")),
+    ("codex", "openai", "gpt-5-mini", ("low", "medium", "high", "max"), ("high",)),
+    ("zcode", "zai", "glm-5", ("high", "max"), ("high",)),
+    ("claude", "anthropic", "claude-opus-5-5", ("medium", "high", "max"), ("high",)),
+    ("claude", "anthropic", "claude-sonnet-5-5", ("low", "medium", "high", "max"), ()),
+    ("claude", "anthropic", "claude-haiku-4-5", ("default",), ()),
+)
+#: The harness whose buddies cannot work in the preview, and the recorded reason.
+LOGGED_OUT_HARNESS = "claude"
+PENDING_MODEL = ("zcode", "zai", "glm-5")
+NEW_MODEL = ("codex", "openai", "gpt-5-mini")
+SAMPLE_COUNTS = {"dsh:deepseek-official:deepseek-flash:off": 41, "dsh:deepseek-official:deepseek-flash:max": 12,
+                 "codex:openai:gpt-5-codex:high": 7}
 
 #: The one 503 message both the server's error scenario and the emitted
 #: ``error/`` fixtures use, so the frontend test asserts the same string.
@@ -132,7 +155,7 @@ TOKEN_USAGE_KEYS = {"inputTokens", "cachedInputTokens", "outputTokens", "source"
 EMIT_SOURCE = "tests/probes/objective_console_preview.py"
 EMIT_SCENARIOS = ("normal", "readonly", "truncated", "error")
 EMIT_LAYOUT = {
-    "normal": ("backup-preflight.json", "console.json", "objectives.json", "tasks.json",
+    "normal": ("backup-preflight.json", "console.json", "objectives.json", "runtime-version.json", "tasks.json",
                "timeline-obj-a.json", "timeline-standalone.json",
                "workflow-preview-run-a1.json", "workflow-preview-run-a2.json",
                "workflow-preview-run-b1-h1.json", "workflow-preview-run-b1.json",
@@ -165,7 +188,7 @@ MARKER_SUMMARY = {"dispatch": "synthetic dispatch · preview fixture",
 ALLOWED_OPERATIONS = (
     "evaluation_history", "selection_get", "selection_list", "model_profiles", "workflow_get",
     "evaluation_write_begin", "evaluation_write_renew", "user_policy_publish", "evaluation_write_abort",
-    "model_catalog_refresh", "objective_stop",
+    "model_catalog_refresh", "objective_stop", "capabilities",
 )
 #: Operations the 0.15.1 read-only repair removed from the browser surface.
 REMOVED_OPERATIONS = (
@@ -1215,35 +1238,60 @@ def task_page(params: dict) -> dict:
 def profile_views() -> list[dict]:
     # All profile claims here are synthetic, including decision support. They
     # provide UI choices without asserting native verification of real models.
-    return [{"profileId": f"{cfg['adapter']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}",
-             "label": f"{cfg['model']} · {cfg['effort']} (synthetic preview)",
-             "adapter": cfg["adapter"], "provider": cfg["provider"], "model": cfg["model"],
-             "effort": cfg["effort"], "available": True, "enabled": True,
-             "capabilities": (["execution:dsh", "routing:fast"] if cfg["adapter"] == "dsh" else
-                              ["execution:codex", "routing:fast"] if cfg["adapter"] == "codex" else
-                              [f"execution:{cfg['adapter']}", "routing:fast"]),
-             "contextWindow": 200000, "description": "synthetic preview profile",
-             "source": "synthetic-preview", "catalogState": "ready", "catalogReason": None,
-             "billing": {'kind': 'subscription' if cfg['adapter'] in ('codex','claude') else 'metered',
-                         'source': 'synthetic-preview', 'observedAt': OBSERVED_AT}, 'quotaExhausted': False}
-            for cfg in CONFIGS]
+    views = []
+    for adapter, provider, model, efforts, enabled in CATALOG:
+        for effort in efforts:
+            available = adapter != LOGGED_OUT_HARNESS
+            pending = (adapter, provider, model) == PENDING_MODEL
+            view = {"profileId": f"{adapter}:{provider}:{model}:{effort}",
+                    "label": f"{model} · {effort} (synthetic preview)",
+                    "adapter": adapter, "provider": provider, "model": model,
+                    "effort": effort, "available": available, "enabled": effort in enabled,
+                    "capabilities": [f"execution:{adapter}", "routing:fast"],
+                    "contextWindow": 200000, "description": "synthetic preview profile",
+                    "source": "synthetic-preview", "catalogState": "ready", "catalogReason": None,
+                    "catalogStatus": "pending" if pending else "available",
+                    "billing": {'kind': 'subscription' if adapter in ('codex', 'claude') else 'metered',
+                                'source': 'synthetic-preview', 'observedAt': OBSERVED_AT}, 'quotaExhausted': False}
+            if not available:
+                view["unavailableReason"] = "HARNESS_UNHEALTHY"
+            if pending:
+                view["pendingSince"] = "2026-09-26T03:00:00Z"
+            if (adapter, provider, model) == NEW_MODEL and effort not in enabled:
+                view["newlyDiscovered"] = True
+            views.append(view)
+    # The four buddies the runs use come first, as the snapshot always listed them.
+    used = [f"{cfg['adapter']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}" for cfg in CONFIGS]
+    return sorted(views, key=lambda view: used.index(view["profileId"]) if view["profileId"] in used else len(used))
 
 
 def policy_views() -> dict:
-    """Synthetic schema-14 user policy: one family default, one per-effort override and one family note."""
+    """Synthetic user policy: one model default, two per-buddy overrides and one note.
+
+    The effective preferences follow from the two lists as the board's own view
+    does: a buddy's override wins, otherwise its model's default applies.
+    """
     def family(cfg: dict) -> dict:
         return {key: cfg[key] for key in ("adapter", "provider", "model")}
 
     def profile_id(cfg: dict) -> str:
         return f"{cfg['adapter']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}"
 
-    default = {"mode": "prefer", "reason": "synthetic preview family default"}
-    override = {"mode": "exclude", "reason": "synthetic preview override"}
-    effective = [{"profileId": profile_id(CFG_FLASH), **default, "source": "family"},
-                 {"profileId": profile_id(CFG_CLAUDE), **override, "source": "override"}]
+    defaults = [{**family(CFG_FLASH), "mode": "prefer", "reason": "synthetic preview family default"}]
+    overrides = [{"profileId": profile_id(CFG_CLAUDE), "mode": "exclude", "reason": "synthetic preview override"},
+                 {"profileId": profile_id(CFG_CODEX), "mode": "pin", "reason": ""}]
+    effective = []
+    for view in profile_views():
+        override = next((entry for entry in overrides if entry["profileId"] == view["profileId"]), None)
+        default = next((entry for entry in defaults if family(entry) == family(view)), None)
+        if override:
+            effective.append({**override, "source": "override"})
+        elif default:
+            effective.append({"profileId": view["profileId"], "mode": default["mode"], "reason": default["reason"],
+                              "source": "family"})
     return {
-        "familyPreferences": [{**family(CFG_FLASH), **default}],
-        "preferenceOverrides": [{"profileId": profile_id(CFG_CLAUDE), **override}],
+        "familyPreferences": defaults,
+        "preferenceOverrides": overrides,
         "preferences": sorted(effective, key=lambda entry: entry["profileId"]),
         "familyAnnotations": [{**family(CFG_CODEX), "text": "synthetic preview family note", "revision": 1,
                                "updatedAt": "2026-09-26T00:00:00Z"}],
@@ -1251,12 +1299,35 @@ def policy_views() -> dict:
 
 
 def concurrency_rows() -> list[dict]:
-    return [{key: cfg[key] for key in ("adapter", "provider", "model")}
-            | {"limit": 2, "active": 1 if cfg["adapter"] == "claude" else 0} for cfg in CONFIGS]
+    return [{"adapter": adapter, "provider": provider, "model": model,
+             "limit": 1 if model == "deepseek-v4-pro" else 2,
+             "active": 1 if (adapter, model) in (("claude", CFG_CLAUDE["model"]), ("codex", CFG_CODEX["model"])) else 0}
+            for adapter, provider, model, _efforts, _enabled in CATALOG]
+
+
+def sample_counts() -> dict:
+    return {view["profileId"]: SAMPLE_COUNTS.get(view["profileId"], 0) for view in profile_views()}
+
+
+def harness_account(adapter: str, source: str, status: str, *, account_type: str | None = None,
+                    reason: str | None = None, guidance: str | None = None, worker_account: bool = True,
+                    oauth: bool = False, api_key: bool = False) -> dict:
+    """One account record in the shape the console parses; a separate account can be logged out and removed."""
+    separate = source == "worker"
+    return {"adapter": adapter, "source": source, "status": status, "revision": 1,
+            "credentialRevision": 1 if separate else 0, "accountType": account_type, "checkedAt": instant(9, 55),
+            "reasonCode": reason, "guidance": guidance,
+            "capabilities": {"workerAccount": worker_account, "oauth": oauth, "apiKey": api_key,
+                             "logout": separate, "remove": separate}}
 
 
 def harness_rows() -> list[dict]:
-    """The four ADR-018 console harness rows, in adapter order, with quota.
+    """The four ADR-018 console harness rows, in adapter order, with account and quota.
+
+    The accounts cover a separate account with a key, a shared login on a
+    harness that has no separate account, a shared login with a known account
+    type, and a login that is missing. One provider carries the exhaustion
+    record of the run that failed on quota, with its retry window open.
 
     Retained quota observations are display-only: an absent observation is
     ``null``, a stale one keeps its old ``observedAt``, and an unknown window is
@@ -1265,13 +1336,20 @@ def harness_rows() -> list[dict]:
     return [
         {"adapter": "dsh", "status": "ready", "available": True, "revision": 3, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/dsh/dsh", "version": "synthetic-preview-1.0",
+         "account": harness_account("dsh", "worker", "ready", account_type="apiKey", api_key=True),
+         "billingByProvider": {"deepseek-official": {"kind": "metered", "source": "synthetic-preview",
+                                                     "observedAt": OBSERVED_AT}},
          "source": "synthetic-preview", "checkedAt": instant(9, 55),
          "quota": {"observedAt": instant(9, 50), "source": "dsh-native",
-                   "provider": "deepseek-official", "stale": False,
-                   "windows": [{"name": "5h", "usedPercent": 93, "resetsAt": instant(14, 30)},
-                               {"name": "weekly", "usedPercent": 41, "resetsAt": instant(77, 0)}]}},
+                   "provider": "deepseek-official", "stale": False, "balanceZero": True,
+                   "windows": []}},
         {"adapter": "zcode", "status": "ready", "available": True, "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/zcode/zcode", "version": "synthetic-preview-0.4",
+         "account": harness_account("zcode", "native", "ready", worker_account=False),
+         "quotaRouting": [{"provider": "zai", "limitId": None, "code": "HARNESS_QUOTA_EXHAUSTED",
+                           "source": "zcode-native", "observedAt": instant(6, 26), "resetsAt": None, "blocked": True,
+                           "retry": {"eligibleAt": instant(7, 26), "open": True, "pendingManual": False,
+                                     "manualAt": None, "consumedAt": None, "consumedBy": None}}],
          "source": "synthetic-preview", "checkedAt": instant(9, 55),
          "quota": {"observedAt": instant(2, 30), "source": "zcode-native", "provider": "zai",
                    "stale": True,
@@ -1279,13 +1357,16 @@ def harness_rows() -> list[dict]:
                                {"name": "weekly", "usedPercent": 12, "resetsAt": instant(77, 0)}]}},
         {"adapter": "codex", "status": "ready", "available": True, "revision": 1, "manualPath": None,
          'executable': '/synthetic-preview/codex', 'version': '0.159.0',
+         "account": harness_account("codex", "native", "ready", account_type="chatgpt", oauth=True),
          'billingByProvider': {'openai': {'kind': 'subscription', 'source': 'synthetic-preview', 'observedAt': OBSERVED_AT}},
          'systemSandbox': True,
          'readOnlyStructured': {'eligible': True, 'reasonCode': None, 'reason': None, 'systemSandbox': True, 'sameAttemptContinuation': True},
          "source": "synthetic-preview", "checkedAt": instant(9, 55), "quota": None},
-        {"adapter": "claude", "status": "ready", "available": True, "revision": 1, "manualPath": None,
+        {"adapter": "claude", "status": "login-required", "available": False, "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/claude/claude", "version": "synthetic-preview-2.1",
-         "source": "synthetic-preview", "checkedAt": instant(9, 55),
+         "account": harness_account("claude", "native", "logged-out", reason="ACCOUNT_LOGIN_REQUIRED",
+                                    guidance="完成当前来源的登录后重新检测。", oauth=True),
+         "source": "synthetic-preview", "checkedAt": instant(9, 55), "reasonCode": "HARNESS_LOGIN_REQUIRED",
          "quota": {"observedAt": instant(9, 40), "source": "claude-native", "provider": "anthropic",
                    "stale": False,
                    "windows": [{"name": "5h", "usedPercent": 18, "resetsAt": instant(14, 30)},
@@ -1320,8 +1401,35 @@ def backup_preflight_report() -> dict:
             "copied": inventory(3, []), "skipped": inventory(1, skipped), "rejected": inventory(0, [])}
 
 
+def runtime_version_report() -> dict:
+    """The version facts the settings page reads once: one synthetic installed runtime, in use."""
+    facts = {"softwareVersion": "0.0.0", "contractVersion": "0.0.0", "schemaVersion": 0,
+             "sourceCommit": "0" * 40, "installedAt": "2026-09-26T00:00:00Z"}
+    return {"running": {"mode": "runtime", **facts}, "installed": dict(facts)}
+
+
+def router_records(profiles: list[dict]) -> list[dict]:
+    """The Router list with one record each: one serving, one waiting to be tried again, one that cannot serve."""
+    def record(profile_id: str, index: int, **facts) -> dict:
+        profile = next(item for item in profiles if item["profileId"] == profile_id)
+        return {"profileId": profile_id, "index": index,
+                "identity": {key: profile[key] for key in ("adapter", "provider", "model", "effort")},
+                "eligible": True, "code": None, "inSkipWindow": False, "skipUntil": None, "retryAt": None,
+                "retryInProgress": False, "answeredCount": 0, "noAnswerCount": 0, "consecutiveNoAnswers": 0,
+                "lastAnsweredAt": None, "lastNoAnswerAt": None, "lastError": None, **facts}
+    return [
+        record(profiles[0]["profileId"], 0, answeredCount=3, noAnswerCount=1, lastAnsweredAt=instant(6, 5),
+               lastNoAnswerAt=instant(4, 12), lastError={"code": "routing-bounds-rejected", "at": instant(4, 12), "phase": "answer"}),
+        record("codex:openai:gpt-5-mini:high", 1, inSkipWindow=True, skipUntil=instant(8, 46), retryAt=instant(8, 46),
+               answeredCount=1, noAnswerCount=2, consecutiveNoAnswers=2, lastAnsweredAt=instant(3, 2),
+               lastNoAnswerAt=instant(8, 36), lastError={"code": "router-no-answer", "at": instant(8, 36), "phase": "start"}),
+        record("claude:anthropic:claude-opus-5-5:high", 2, eligible=False, code="harness-unavailable"),
+    ]
+
+
 def console_snapshot(scenario: str, assets_ready: bool) -> dict:
     profiles = profile_views()
+    routers = router_records(profiles)
     writable = scenario != "readonly"
     return {
         "csrfToken": SYNTHETIC_CSRF,
@@ -1330,7 +1438,8 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
                            "reason": None if writable else "superseded"},
         "tableRevision": 7,
         "gate": {"phase": "open", "readers": 0, "waitingWriters": 0, "writer": None},
-        "configuration": {"revision": 1, "routerProfileIds": [profiles[0]["profileId"]], "routerRetryIntervalSeconds": 600,
+        "configuration": {"revision": 1, "routerProfileIds": [entry["profileId"] for entry in routers],
+                          "routerRetryIntervalSeconds": 600,
                           "defaultRoutingMode": "fast", "routingBudget": "standard",
                           "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300,
                                                   "toolCalls": 24, "bytesRead": 524288}},
@@ -1338,15 +1447,17 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
         "profiles": profiles,
         "modelConcurrency": concurrency_rows(),
         "harnesses": harness_rows(),
-        "unavailableProfileCount": 0,
+        "unavailableProfileCount": sum(1 for profile in profiles if not profile["available"]),
         **policy_views(), "cards": [], "evidence": [], "decisions": [],
         "routingHealth": {"windowSize": 20, "sampleCount": 4, "failureCount": 1,
                           "consecutiveFailures": 0, "abstentionCount": 1, "cancelledCount": 1, "staleCount": 0,
                           "budgetExhaustedCount": 0, "boundsRejectedCount": 1, "inputChangedCount": 0,
                           "lastSuccessAt": instant(6, 5), "lastSuccessDecisionId": ROUTING_A1["decisionId"],
+                          "available": True, "reasonCode": None, "currentRouterProfileId": routers[0]["profileId"],
+                          "routers": routers,
                           "recentFailures": [{"decisionId": ROUTING_A2["decisionId"], "runId": "preview-run-a2",
                                               "at": instant(8, 36), "code": "routing-bounds-rejected"}]},
-        "pendingEvidence": 0, "sampleCounts": {profile["profileId"]: 0 for profile in profiles},
+        "pendingEvidence": 0, "sampleCounts": sample_counts(),
         "tasks": {"pendingCount": pending_root_count()},
         "capabilities": {"selection": True, "maintenance": False, "maintenanceMode": "harness-owned",
                          "decisionAdapter": True, "decisionAdapterReason": "synthetic preview only",
@@ -1456,7 +1567,13 @@ def command_result(scenario: str, operation: str, params: Any) -> dict:
             raise PreviewError("INVALID_ARGUMENT", "commandId is required")
         if len(str(params.get("reason") or "")) > 500:
             raise PreviewError("INVALID_ARGUMENT", "reason is too long")
-    if operation not in READ_OPERATIONS:
+    # A check of the harnesses changes nothing here: it answers the same synthetic rows, and nothing is probed.
+    checking = operation == "capabilities" and scenario != "readonly"
+    if checking:
+        unknown = sorted(set(params) - {"refresh", "adapter"})
+        if unknown:
+            raise PreviewError("INVALID_ARGUMENT", f"Unknown parameter: {unknown[0]}")
+    if operation not in READ_OPERATIONS and not checking:
         # Includes objective_stop: allowed by the 0.15.1 contract for the current
         # writer, but this preview never mutates, so it answers the same refusal
         # the board would give a session without write authority.
@@ -1470,10 +1587,15 @@ def command_result(scenario: str, operation: str, params: Any) -> dict:
         decisions = [decision_view(item) for item in FIXTURES["runs"].values()
                      if item["kind"] == "decision"]
         result = {"decisions": decisions, "nextCursor": None, "total": len(decisions)}
+    elif operation == "capabilities":
+        rows = [row for row in harness_rows() if params.get("adapter") in (None, row["adapter"])]
+        if not rows:
+            raise PreviewError("INVALID_ARGUMENT", "adapter names no harness of the preview")
+        result = {"harnesses": rows}
     elif operation == "model_profiles":
         profiles = profile_views()
         result = {"profiles": profiles, "cards": [], **policy_views(),
-                  "sampleCounts": {profile["profileId"]: 0 for profile in profiles},
+                  "sampleCounts": sample_counts(),
                   "modelConcurrency": concurrency_rows(), "tableRevision": 7, "nextCursor": None}
     else:
         result = {"revisions": [], "nextCursor": None, "total": 0}
@@ -1497,6 +1619,7 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
         f"GET  {base}/api/tasks",
         f"GET  {base}/api/tasks/preview-run-a1",
         f"GET  {base}/api/backup-preflight",
+        f"GET  {base}/api/runtime-version",
         f"POST {base}/api/command  workflow_get · selection_get · selection_list · "
         f"model_profiles · evaluation_history   (removed ops: 404; writes incl. objective_stop: 403)",
     )
@@ -1597,6 +1720,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
                 return self._json(200, task_page(params))
             if path == "/api/backup-preflight":
                 return self._json(200, backup_preflight_report())
+            if path == "/api/runtime-version":
+                return self._json(200, runtime_version_report())
             if path.startswith("/api/objectives/") and path.endswith("/timeline"):
                 identifier = path[len("/api/objectives/"):-len("/timeline")]
                 if not OBJECTIVE_ID.match(identifier) or identifier not in FIXTURES["groups"]:
@@ -2033,7 +2158,7 @@ def validate_fixtures() -> list[str]:
                                                                                         "codex", "claude"]:
         problems.append("harnesses must list dsh, zcode, codex and claude in that order")
         harnesses = []
-    near_limit = stale_unknown = False
+    stale_unknown = False
     for row in harnesses:
         if (row.get("available") is True) != (row.get("status") == "ready"):
             problems.append(f"harness {row.get('adapter')}: available must mirror status")
@@ -2048,6 +2173,9 @@ def validate_fixtures() -> list[str]:
                 or not isinstance(quota.get("source"), str) or not isinstance(quota.get("windows"), list):
             problems.append(f"harness {row.get('adapter')}: malformed quota observation")
             continue
+        if row["adapter"] == "dsh" and (row["billingByProvider"]["deepseek-official"]["kind"] != "metered"
+                                         or quota.get("balanceZero") is not True or quota["windows"]):
+            problems.append("DSH must be metered with a zero balance and no quota windows")
         if quota.get("stale") is True and any(window.get("usedPercent") is None
                                               for window in quota["windows"]):
             stale_unknown = True
@@ -2057,10 +2185,6 @@ def validate_fixtures() -> list[str]:
                 continue
             if type(used) is not int or not 0 <= used <= 100:
                 problems.append(f"harness {row.get('adapter')}: window usage must be 0..100 or null")
-            elif used >= 90:
-                near_limit = True
-    if not near_limit:
-        problems.append("one harness quota window must sit at or over the near-limit threshold")
     if not stale_unknown:
         problems.append("one harness quota observation must be stale with an unknown window")
     if not any(row.get("quota") is None for row in harnesses):
@@ -2172,12 +2296,15 @@ def emit_fixture_files() -> list[dict]:
             add(scenario, "console.json", "console-snapshot", "GET /api/console", 200, "accepted",
                 console_snapshot(scenario, assets_ready=False), request={})
         if scenario == "normal":
-            # The records view's own paginated read and the storage panel's
-            # on-demand preflight: the two reads the slim snapshot no longer carries.
+            # The records view's own paginated read, the storage panel's on-demand
+            # preflight and the settings page's version facts: reads the slim
+            # snapshot does not carry.
             add(scenario, "tasks.json", "task-page", "GET /api/tasks", 200, "accepted",
                 task_page({}), request={})
             add(scenario, "backup-preflight.json", "backup-preflight", "GET /api/backup-preflight",
                 200, "accepted", backup_preflight_report(), request={})
+            add(scenario, "runtime-version.json", "runtime-version", "GET /api/runtime-version",
+                200, "accepted", runtime_version_report(), request={})
         add(scenario, "objectives.json", "objectives-page", "GET /api/objectives", 200, "accepted",
             objective_page({}), request={})
         if scenario == "error":
@@ -2365,6 +2492,10 @@ def smoke(assets: Path, scenario: str) -> int:
         check("GET /api/backup-preflight serves the on-demand report", status == 200
               and preflight.get("needsAttention") is True and preflight.get("skipped", {}).get("count") == 1
               and preflight.get("rejected", {}).get("count") == 0, f"status={status}")
+        status, version, _headers = call("GET", "/api/runtime-version")
+        check("GET /api/runtime-version serves the version facts", status == 200
+              and version.get("running", {}).get("mode") == "runtime"
+              and version.get("installed", {}).get("softwareVersion") == "0.0.0", f"status={status}")
         status, page, _headers = call("GET", "/api/objectives")
         check("GET /api/objectives", status == 200 and len(page["objectives"]) == 3
               and page["cursor"] == FIXTURES["head"] and page["changed"] is False, f"status={status}")

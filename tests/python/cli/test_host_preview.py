@@ -163,6 +163,8 @@ class PreviewFixtureTest(unittest.TestCase):
         self.assertTrue(preflight["needsAttention"])
         self.assertEqual(1, preflight["skipped"])
         self.assertEqual(0, preflight["rejected"])
+        version = outcomes["normal/runtime-version.json"]["facts"]
+        self.assertEqual({"mode": "runtime", "softwareVersion": "0.0.0", "installed": True}, version)
 
         # Recorded quota: a near-limit window, a stale unknown window, and a harness
         # with no observation at all are three distinct, explicit states.
