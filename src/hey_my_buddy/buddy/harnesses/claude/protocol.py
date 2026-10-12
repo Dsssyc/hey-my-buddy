@@ -10,6 +10,7 @@ request exactly.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import queue
@@ -84,6 +85,9 @@ class Connection:
         self.messages: queue.Queue = queue.Queue(maxsize=128)
         self.pending: dict[str, dict | None] = {}
         self.next_id = 1
+        self.unknown_events = 0
+        self.unread_responses = 0
+        self.shape_observations: list[dict] = []
         self.on_request = lambda _frame: None
         self.on_message = lambda _frame: None
         os.set_blocking(process.stdin.fileno(), False)
@@ -200,12 +204,29 @@ class Connection:
             if not isinstance(request_id, str) or not request_id or len(request_id) > 256 or not isinstance(request, dict):
                 raise ClaudeProtocolError("invalid-protocol", "Claude sent an invalid native control request")
             self.on_request(message)
-        elif isinstance(frame_type, str):
-            self.on_message(message)
         else:
-            raise ClaudeProtocolError("invalid-protocol", "Claude sent a frame without a type")
+            if not isinstance(frame_type, str):
+                self.unknown_events += 1
+                self._observe_shape("event-type-unread", message,
+                                    typeShape=type(frame_type).__name__)
+            self.on_message(message)
 
-    def call(self, request: dict) -> dict:
+    def _observe_shape(self, kind: str, frame: dict, **fields) -> None:
+        # Frames have already crossed the bounded strict-JSON transport. Keep
+        # only shape and a digest: arbitrary native text can contain secrets.
+        # The fixed sample cap does not grow with the number of unread frames.
+        if len(self.shape_observations) < 16:
+            raw = canonical_json(frame).encode()
+            self.shape_observations.append({"kind": kind, "frameBytes": len(raw),
+                                            "frameSha256": hashlib.sha256(raw).hexdigest(), **fields})
+
+    def observations(self) -> dict:
+        return {"status": "incomplete" if self.unknown_events or self.unread_responses else "complete",
+                "unknownEvents": self.unknown_events, "unreadResponses": self.unread_responses,
+                "samples": list(self.shape_observations),
+                "samplesTruncated": self.unknown_events + self.unread_responses > len(self.shape_observations)}
+
+    def call(self, request: dict) -> dict | None:
         if len(self.pending) >= MAX_PENDING_RESPONSES:
             raise ClaudeProtocolError("invalid-protocol", "too many pending Claude control requests")
         request_id = f"buddy-{self.next_id}"
@@ -220,7 +241,11 @@ class Connection:
         if response.get("subtype") == "error":
             raise ClaudeProtocolError("native-rpc-error", f"Claude rejected {request.get('subtype')}")
         if response.get("subtype") != "success" or not isinstance(response.get("response"), dict):
-            raise ClaudeProtocolError("invalid-protocol", "Claude returned no success object")
+            self.unread_responses += 1
+            self._observe_shape("control-response-unread", response, requestId=request_id,
+                                subtypeShape=type(response.get("subtype")).__name__,
+                                responseShape=type(response.get("response")).__name__)
+            return None
         return response["response"]
 
 

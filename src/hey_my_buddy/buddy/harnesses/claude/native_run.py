@@ -25,8 +25,9 @@ validation and the attention assembly — stays with the roles; the delivered
 value travels with its own facts and the role re-validates it.
 
 This harness has no native no-tool run, no in-run session service and no
-native session resume, and this module adds none: the request gates refuse
-them before any process starts. Model discovery (:func:`run_discovery`) is a
+native session resume. The role request boundary rejects native resume;
+this module rejects no-tool runs and in-run services before any process starts.
+Model discovery (:func:`run_discovery`) is a
 separate initialize-only operation that reuses the same spawn and stop
 primitives and never sends a user message.
 
@@ -124,18 +125,21 @@ _DRAIN_SECONDS = 10.0
 supported_request_controls = ("network_allowed_domains", "additional_denied_tools")
 
 
-def _catalog(initialize: dict, version: str) -> dict:
+def _catalog(initialize: dict | None, version: str) -> dict:
     """Read native model and account facts without selecting a provider or login."""
-    account = initialize.get("account")
+    account = initialize.get("account") if initialize is not None else None
     provider = provider_from_account(account)
     has_account_facts = isinstance(account, dict) and any(account.values())
     account_status = "confirmed" if has_account_facts else "unknown"
-    entries = initialize.get("models")
+    entries = initialize.get("models") if initialize is not None else None
+    models, warnings, seen = [], [], set()
+    status = "complete"
     if not isinstance(entries, list):
-        raise ClaudeProtocolError("invalid-catalog", "Claude returned no model list")
+        status = "unknown"
+        warnings.append(f"Claude model list was unread (shape: {type(entries).__name__})")
+        entries = []
     if len(entries) > 200:
         raise ClaudeProtocolError("invalid-catalog", "Claude model list exceeds the catalog bound")
-    models, warnings, seen = [], [], set()
     for item in entries:
         if not isinstance(item, dict) or item.get("value") == DEFAULT_MODEL_ALIAS:
             continue
@@ -163,7 +167,7 @@ def _catalog(initialize: dict, version: str) -> dict:
                "providers": [{"adapter": "claude", "provider": provider,
                               "displayName": provider, "packageName": "claude-code",
                               "packageVersion": version, "models": models}],
-               "discoveries": [{"adapter": "claude", "status": "complete",
+               "discoveries": [{"adapter": "claude", "status": status,
                                 "accountStatus": account_status}],
                "warnings": list(dict.fromkeys(warnings))}
     return catalog
@@ -176,8 +180,7 @@ def _interrupt(connection: Connection | None) -> bool:
         # A fresh short control budget permits a native interrupt after the main deadline.
         connection.cancelled = threading.Event()
         connection.deadline = time.monotonic() + 2
-        connection.call({"subtype": "interrupt"})
-        return True
+        return connection.call({"subtype": "interrupt"}) is not None
     except (ClaudeProtocolError, QuotaRejected, OSError, ValueError):
         # A late quota frame while awaiting interrupt acknowledgement must not
         # escape the cleanup path and suppress the controller's stop receipt.
@@ -228,6 +231,7 @@ class _RunState:
     error_text: str | None = None
     quota_failure: dict | None = None
     catalog_checked: bool = False
+    catalog: dict | None = None
     provider: str | None = None
     terminal_ok: bool = False
     drained: bool | None = None
@@ -263,10 +267,6 @@ def _prepare(request: RunRequest) -> _Preparation:
                          "claude has no native no-tool run; the fast structured call is not a capability "
                          "of this harness")
     read_only = request.tool_scope == "read"
-    if request.continuation is not None and request.continuation.mode == "native-session":
-        raise BoardError("INVALID_ARGUMENT",
-                         "claude has no native session resume; a continuation must reconstruct a "
-                         "fresh session")
     invocation_root = ensure_private_dir(Path(request.private_state.invocation_root))
     native_root = ensure_private_dir(Path(request.private_state.native_root))
     session_id = str(uuid.uuid4())
@@ -355,17 +355,24 @@ def _native_request_response(frame: dict) -> dict:
 def _initialize(spawn: _Spawn) -> dict:
     """Initialize once and return the catalog the response itself reported."""
     initialize = spawn.connection.call({"subtype": "initialize"})
-    return _catalog(initialize, spawn.version or "unknown")
+    catalog = _catalog(initialize, spawn.version or "unknown")
+    if spawn.connection.unknown_events or spawn.connection.unread_responses:
+        catalog["warnings"].append("Claude initialize protocol observations are incomplete")
+        for sample in spawn.connection.observations()["samples"][:14]:
+            catalog["warnings"].append("Claude unread initialization: " + canonical_json(sample))
+    return catalog
 
 
-def _check_catalog(request: RunRequest, catalog: dict) -> None:
-    """The requested model and effort must be in the current native catalog."""
+def _check_catalog(request: RunRequest, catalog: dict) -> bool:
+    """Unknown catalogs prove nothing; readable catalogs gate native capability."""
+    if catalog["discoveries"][0]["status"] == "unknown":
+        return False
     configuration = request.configuration
-    if not any(
-            model["id"] == configuration.model and configuration.effort in model["efforts"]
-            for model in catalog["providers"][0]["models"]):
+    if not any(model["id"] == configuration.model and configuration.effort in model["efforts"]
+               for model in catalog["providers"][0]["models"]):
         raise ClaudeProtocolError("invalid-configuration",
                                   "the selected Claude model and effort are not in the current native catalog")
+    return True
 
 
 # -- the live collectors of one execution run ------------------------------------
@@ -497,9 +504,10 @@ class _TurnCollector:
         return {"settled": settled, "rawAnswer": raw,
                 "toolCalls": self.tools.tool_calls,
                 "deniedInteractions": len(self.denied),
-                # This harness's projection does not classify unknown events;
-                # the honest absence is reported, never a fabricated zero.
-                "unknownEvents": None}
+                # General event classification remains unknown; the transport
+                # separately knows exactly which fields it could not read.
+                "unknownEvents": None,
+                "protocolObservations": self._connection.observations() if self._connection else None}
 
     def _notify(self, *, settled: bool, raw: str | None) -> None:
         if self._quiet:
@@ -637,6 +645,12 @@ def _native_observations(collector: _TurnCollector, native_result: dict | None,
                     "observedModels": model_usage_keys(native_result) if native_result is not None else [],
                     "totalCostUsd": total_cost_usd(native_result) if native_result is not None else None,
                     "unsupportedNativeRequests": min(collector.unsupported_requests, 128)}
+    if collector._connection is not None:
+        observations["protocol"] = collector._connection.observations()
+    if state.catalog is not None:
+        observations["catalogStatus"] = state.catalog["discoveries"][0]["status"]
+        observations["catalogWarnings"] = state.catalog["warnings"][:16]
+        observations["configurationStatus"] = "confirmed" if state.catalog_checked else "unknown"
     if state.quota_failure is not None:
         observations["quotaFailure"] = _quota_failure(
             {"rateLimitType": state.quota_failure.get("nativeCode"), "resetsAt": state.quota_failure.get("resetsAt")})
@@ -800,7 +814,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
             # reference consumed by the role.
             _retain(evidence_refs, invocation_root, "denied-interactions", "denied-interactions.json",
                     {"records": collector.denied})
-        if evidence is not None or state.interrupt_requested:
+        if evidence is not None or state.interrupt_requested or state.catalog is not None:
             _retain(evidence_refs, invocation_root, "native-observations", "native-observations.json",
                     _native_observations(collector, native_result, state))
         if state.status == "ok" and native_result is not None:
@@ -915,10 +929,10 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                               cancel=cancel, owned=owned_spawn)
         collector.install(spawn.connection)
         catalog = _initialize(spawn)
+        state.catalog = catalog
         state.provider = catalog["providers"][0]["provider"]
         collector.provider = state.provider
-        _check_catalog(request, catalog)
-        state.catalog_checked = True
+        state.catalog_checked = _check_catalog(request, catalog)
         _send_and_settle(collector, spawn, preparation, request)
         state.drained = True
         native_result = _check_terminal(collector.evidence, preparation.session_id)
@@ -1036,8 +1050,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
     shutdown = False
     try:
         spawn.connection.on_request = lambda frame: spawn.connection.send(_native_request_response(frame))
-        initialize = spawn.connection.call({"subtype": "initialize"})
-        catalog = _catalog(initialize, spawn.version or "unknown")
+        catalog = _initialize(spawn)
     except (ClaudeProtocolError, OSError, ValueError, TypeError, KeyError, AttributeError,
             RecursionError) as caught:
         error = caught

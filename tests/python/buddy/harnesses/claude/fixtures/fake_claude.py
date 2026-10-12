@@ -98,6 +98,10 @@ def initialize_response(case):
     if case == "invalid-account":
         account = "not-an-account-object"
     response = {"models": None if case == "invalid-catalog" else DEFAULT_MODELS}
+    if case == "empty-catalog":
+        response["models"] = []
+    if case == "oversized-catalog":
+        response["models"] = [{}] * 201
     if case != "missing-account":
         response["account"] = None if case == "null-account" else account
     return response
@@ -151,8 +155,12 @@ def handle_control(frame, case):
                                                    "content": [{"type": "text", "text": "premature"}]}})
             send({"type": "result", "subtype": "success", "session_id": "whatever",
                   "structured_output": {"outcome": outcome("ok")}})
-        send({"type": "control_response", "response": {"subtype": "success", "request_id": rid,
-                                                       "response": initialize_response(case)}})
+        if case == "missing-event-type":
+            send({"payload": "credential-fragment"})
+        send({"type": "control_response", "response": {
+            "subtype": "future" if case == "unknown-initialize" else
+                       "error" if case == "initialize-error" else "success",
+            "request_id": rid, "response": initialize_response(case)}})
         if case == "early-result":
             for _ in sys.stdin:
                 pass

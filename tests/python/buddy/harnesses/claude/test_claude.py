@@ -65,6 +65,9 @@ class ClaudeFixtureCase(unittest.TestCase):
         self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_CLAUDE_CLI=str(FIXTURE), BUDDY_CLAUDE_FIXTURE_STATE=str(self.root / "fixture.json"),
                                 BUDDY_STATE_DIR=str(self.root / "state"), BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
                                 BUDDY_DEV_SOURCE="1")
+        # Controllers change cwd to the fixture checkout; a relative
+        # PYTHONPATH would import the interpreter's installed source instead.
+        self.environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[5] / "src")
         claude_module._reset_metadata_cache()
         self.addCleanup(claude_module._reset_metadata_cache)
         self.adapter = ClaudeAdapter()
@@ -455,15 +458,19 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
 
 
 
-    def test_model_and_effort_must_be_in_the_native_catalog(self):
+    def test_model_and_effort_absence_in_readable_catalog_refuses_before_model_start(self):
         for index, (model, effort) in enumerate((("claude-unknown", "low"),
                                                  ("claude-haiku-4-5-20251001", "medium"),
                                                  ("claude-opus-5-5[1m]", "default")), 1):
             with self.subTest(model=model, effort=effort):
-                outcome = self.execute(self.context(model=model, effort=effort, index=index))
+                context = self.context(model=model, effort=effort, index=index)
+                outcome = self.execute(context)
                 self.assertEqual(outcome.status, "failed", outcome.to_report())
                 self.assertEqual(outcome.result["code"], "invalid-configuration")
+                self.assertFalse(outcome.result["modelStarted"])
                 self.assertNotIn("turn", outcome.result)
+                self.assertIsNone(outcome.result["resolved"])
+                self.assertEqual(self.fixture_state()["userTurns"], 0)
 
     def test_default_effort_omits_the_flag_for_a_model_without_levels(self):
         outcome = self.execute(self.context(model="claude-haiku-4-5-20251001", effort="default"))

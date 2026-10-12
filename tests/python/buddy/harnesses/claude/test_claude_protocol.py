@@ -313,10 +313,63 @@ class ConnectionTests(unittest.TestCase):
         reply = json.loads(self.process.native_reads.readline())
         self.assertEqual(reply["response"]["response"]["behavior"], "deny")
 
-    def test_frame_without_a_type_is_rejected(self):
-        self._write_frame({"payload": 1})
-        with self.assertRaises(ClaudeProtocolError):
+    def test_frame_without_a_type_continues_with_bounded_shape_facts(self):
+        frames = []
+        self.connection.on_message = frames.append
+        for value in (None, 7, {"secret": "credential-fragment"}):
+            self._write_frame({"type": value, "payload": "credential-fragment"})
             self.connection.pump()
+        self.assertEqual(len(frames), 3)
+        facts = self.connection.observations()
+        self.assertEqual(facts["status"], "incomplete")
+        self.assertEqual(facts["unknownEvents"], 3)
+        self.assertEqual([item["typeShape"] for item in facts["samples"]], ["NoneType", "int", "dict"])
+        self.assertNotIn("credential-fragment", json.dumps(facts))
+        for _ in range(20):
+            self._write_frame({"payload": 1})
+            self.connection.pump()
+        self.assertEqual(len(self.connection.observations()["samples"]), 16)
+        self.assertTrue(self.connection.observations()["samplesTruncated"])
+
+    def test_unknown_control_response_continues_with_correlated_shape_facts(self):
+        for subtype, body in (("future", {}), ("success", []), (None, None)):
+            def respond():
+                rid = json.loads(self.process.native_reads.readline())["request_id"]
+                self._write_frame({"type": "control_response", "response": {
+                    "subtype": subtype, "request_id": rid, "response": body,
+                    "secret": "credential-fragment"}})
+            threading.Thread(target=respond, daemon=True).start()
+            self.assertIsNone(self.connection.call({"subtype": "initialize"}))
+        facts = self.connection.observations()
+        self.assertEqual(facts["status"], "incomplete")
+        self.assertEqual(facts["unreadResponses"], 3)
+        self.assertEqual([item["requestId"] for item in facts["samples"]], ["buddy-1", "buddy-2", "buddy-3"])
+        self.assertNotIn("credential-fragment", json.dumps(facts))
+
+    def test_control_request_resource_bounds_still_reject(self):
+        self.connection.pending = {str(i): None for i in range(16)}
+        with self.assertRaises(ClaudeProtocolError) as pending:
+            self.connection.call({"subtype": "initialize"})
+        self.assertEqual(pending.exception.code, "invalid-protocol")
+        self.connection.pending.clear()
+        self.connection.next_id = 100000
+        with self.assertRaises(ClaudeProtocolError) as budget:
+            self.connection.call({"subtype": "initialize"})
+        self.assertEqual(budget.exception.code, "invalid-protocol")
+
+    def test_oversized_native_frame_still_rejects(self):
+        from unittest import mock
+        from hey_my_buddy.buddy.harnesses.claude import protocol
+        # A separate reader sees the small test bound before reading its frame.
+        process = FakeProcess()
+        with mock.patch.object(protocol, "MAX_FRAME_BYTES", 64):
+            connection = Connection(process, time.monotonic() + 5, threading.Event())
+            process.native_writes.write(b'{"payload":"' + b'x' * 65 + b'"}\n')
+            with self.assertRaises(ClaudeProtocolError) as caught:
+                connection.pump()
+            self.assertEqual(caught.exception.code, "invalid-protocol")
+        for stream in (process.stdin, process.stdout, process.native_reads, process.native_writes):
+            stream.close()
 
     def test_drain_ends_only_on_the_observed_end_of_stream(self):
         self._write_frame({"type": "result", "subtype": "success", "session_id": "s"})
