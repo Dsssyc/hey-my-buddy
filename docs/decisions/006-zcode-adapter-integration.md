@@ -2,7 +2,7 @@
 
 ## 状态
 
-状态：已在 0.6 实现并接入。本文件最初是 2026-09-22 的技术可行性研究记录；下面的第一至第九节作为历史依据与实测证据保留，不再描述当前行为。当前行为以源码和 [architecture.md](../reference/architecture.md)、[workers.md](../reference/workers.md)、[workflow.md](../reference/workflow.md) 为准。
+状态：已在 0.6 实现并接入。本文件最初是 2026-09-22 的技术可行性研究记录；下面的第一至第九节作为历史依据与实测证据保留，不再描述当前行为。当前行为以源码和 [architecture.md](../reference/architecture.md)、[workers.md](../reference/workers.md)、[workflow.md](../reference/workflow.md) 为准。 2026-10-12：只接受密钥类供应方的做法已被 [ADR-030](030-harness-layer-scope.md) 取代，实现之前源码仍是原样。
 
 ## 当前实现路线（0.6）
 

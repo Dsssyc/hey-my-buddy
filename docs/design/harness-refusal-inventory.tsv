@@ -1,16 +1,16 @@
 path	line	function	code	class	action	guards	after
-src/hey_my_buddy/buddy/harnesses/account_integrations.py	21	_environment	PRIVATE_PATH_UNSAFE	B	keep	防止 Worker 账户私有目录含链接而把凭据导向外部。	
+src/hey_my_buddy/buddy/harnesses/account_integrations.py	21	_environment	PRIVATE_PATH_UNSAFE	B	delete	防止 Worker 账户私有目录含链接而把凭据导向外部。	随独立账户删除（ADR-030，批次 2）
 src/hey_my_buddy/buddy/harnesses/account_integrations.py	56	inject_claude_key	ACCOUNT_LOGIN_REQUIRED	E	delete	独立 Claude 账户必须在系统凭据库里已有密钥。	
 src/hey_my_buddy/buddy/harnesses/account_integrations.py	61	inject_claude_key	ACCOUNT_BINDING_UNAVAILABLE	E	delete	独立 Claude 账户选择、私有主目录与凭据库绑定必须可用。	
-src/hey_my_buddy/buddy/harnesses/account_native.py	31	key_value	ACCOUNT_KEY_INVALID	C	keep	我方密钥输入必须可编码为有界字符串。	
-src/hey_my_buddy/buddy/harnesses/account_native.py	34	key_value	ACCOUNT_KEY_INVALID	C	keep	我方密钥输入非空且不含 NUL 或换行，长度不超过 16384 字节。	
-src/hey_my_buddy/buddy/harnesses/account_native.py	48	descend	PRIVATE_PATH_UNSAFE	B	keep	账户私有目录中只容许普通目录和文件，不容许链接或重解析点。	
-src/hey_my_buddy/buddy/harnesses/account_native.py	60	descend	PRIVATE_PATH_UNSAFE	B	keep	凭据必须是没有其他硬链接的普通文件。	
-src/hey_my_buddy/buddy/harnesses/account_native.py	110	write_codex_key	ACCOUNT_STOP_UNCONFIRMED	A	keep	写密钥的原生进程组必须已实际确认停止。	
-src/hey_my_buddy/buddy/harnesses/account_native.py	112	write_codex_key	ACCOUNT_LOGIN_FAILED	H	keep	如实报告原生写密钥命令没有以零退出码完成。	
-src/hey_my_buddy/buddy/harnesses/account_native.py	152	initialize	<dynamic>	I	undecided	账户握手失败按实际停止与否分报登录失败或停止未确认，同一处同时承载 H 与 A。	
-src/hey_my_buddy/buddy/harnesses/account_native.py	179	start_login	ACCOUNT_LOGIN_FAILED	I	undecided	原生 OAuth 答复同时限制登录 ID、网址大小、HTTPS 与固定域名，凭据安全和供应方限制混在一起。	
-src/hey_my_buddy/buddy/harnesses/account_native.py	212	logout	ACCOUNT_LOGOUT_FAILED	H	keep	如实报告独立账户登出后原生仍显示已登录。	
+src/hey_my_buddy/buddy/harnesses/account_native.py	31	key_value	ACCOUNT_KEY_INVALID	C	delete	我方密钥输入必须可编码为有界字符串。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	34	key_value	ACCOUNT_KEY_INVALID	C	delete	我方密钥输入非空且不含 NUL 或换行，长度不超过 16384 字节。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	48	descend	PRIVATE_PATH_UNSAFE	B	delete	账户私有目录中只容许普通目录和文件，不容许链接或重解析点。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	60	descend	PRIVATE_PATH_UNSAFE	B	delete	凭据必须是没有其他硬链接的普通文件。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	110	write_codex_key	ACCOUNT_STOP_UNCONFIRMED	A	delete	写密钥的原生进程组必须已实际确认停止。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	112	write_codex_key	ACCOUNT_LOGIN_FAILED	H	delete	如实报告原生写密钥命令没有以零退出码完成。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	152	initialize	<dynamic>	I	delete	账户握手失败按实际停止与否分报登录失败或停止未确认，同一处同时承载 H 与 A。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	179	start_login	ACCOUNT_LOGIN_FAILED	I	delete	原生 OAuth 答复同时限制登录 ID、网址大小、HTTPS 与固定域名，凭据安全和供应方限制混在一起。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	212	logout	ACCOUNT_LOGOUT_FAILED	H	delete	如实报告独立账户登出后原生仍显示已登录。	随独立账户删除（ADR-030，批次 2）
 src/hey_my_buddy/buddy/harnesses/base.py	202	discover_models	CATALOG_UNAVAILABLE	I	undecided	基类实际没有模型发现实现，属于能力缺失而非调用参数错误或未经证实。	
 src/hey_my_buddy/buddy/harnesses/c_two_live.py	186	_secret	{…} must be a lowercase hex digest of 64 characters	C	keep	我方实时端点实例 ID 和令牌参数必须为 64 位小写十六进制文本。	
 src/hey_my_buddy/buddy/harnesses/c_two_live.py	194	_timeout_ms	{…} must be an integer between {…} and {…}	C	keep	我方传输超时参数必须为规定范围内的整数且不能是布尔值。	
@@ -113,19 +113,19 @@ src/hey_my_buddy/buddy/harnesses/codex/config.py	35	cli_command	the configured C
 src/hey_my_buddy/buddy/harnesses/codex/config.py	134	prepare_no_tool_home	no-tool-policy-unverified	G	fact	本机模型缓存缺失、形状不符、模型不唯一或推理强度不匹配，无法证明无工具改写成立。	缓存与工具限制记为未证实，运行结果保留原因，Router 按工具证据判断。
 src/hey_my_buddy/buddy/harnesses/codex/home.py	25	frozen_account	INVALID_ARGUMENT	E	delete	兼容的 workerAccount 选择必须仅含独立来源与正整数代次。	
 src/hey_my_buddy/buddy/harnesses/codex/home.py	36	_pinned_home	CODEX_PRIVATE_HOME_UNSUPPORTED	B	keep	平台缺少目录描述符操作，无法固定凭据清理的目标目录。	
-src/hey_my_buddy/buddy/harnesses/codex/home.py	38	_pinned_home	PRIVATE_PATH_UNSAFE	B	keep	凭据操作的私有主目录祖先含链接，可能重定向到别处。	
-src/hey_my_buddy/buddy/harnesses/codex/home.py	49	_pinned_home	PRIVATE_PATH_UNSAFE	B	keep	凭据清理期间私有主目录的祖先或设备与 inode 身份发生改变。	
+src/hey_my_buddy/buddy/harnesses/codex/home.py	38	_pinned_home	PRIVATE_PATH_UNSAFE	B	delete	凭据操作的私有主目录祖先含链接，可能重定向到别处。	随私有主目录删除（ADR-030，批次 3b）
+src/hey_my_buddy/buddy/harnesses/codex/home.py	49	_pinned_home	PRIVATE_PATH_UNSAFE	B	delete	凭据清理期间私有主目录的祖先或设备与 inode 身份发生改变。	随私有主目录删除（ADR-030，批次 3b）
 src/hey_my_buddy/buddy/harnesses/codex/home.py	66	credential_source	INVALID_ARGUMENT	E	delete	服务冻结的账户选择必须带 Codex 来源与合法选择代次、凭据代次。	
 src/hey_my_buddy/buddy/harnesses/codex/home.py	71	credential_source	CODEX_ACCOUNT_UNAVAILABLE	E	delete	选中的独立账户主目录含链接或不存在，禁止回退本机账户。	
 src/hey_my_buddy/buddy/harnesses/codex/home.py	76	credential_source	INVALID_ARGUMENT	E	delete	旧独立账户选择必须只有 worker 来源与正整数代次。	
 src/hey_my_buddy/buddy/harnesses/codex/home.py	79	credential_source	CODEX_ACCOUNT_UNAVAILABLE	E	delete	旧独立账户选择指向的私有账户主目录含链接或不存在。	
 src/hey_my_buddy/buddy/harnesses/codex/home.py	96	prepare_coding_home	CODEX_ACCOUNT_UNAVAILABLE	E	delete	独立账户凭据源不能经过链接指向另一账户，本机来源没有此限制。	
-src/hey_my_buddy/buddy/harnesses/codex/home.py	103	prepare_coding_home	CODEX_ACCOUNT_UNAVAILABLE	B	keep	可供链接的原生凭据源存在但不是普通文件。	
+src/hey_my_buddy/buddy/harnesses/codex/home.py	103	prepare_coding_home	CODEX_ACCOUNT_UNAVAILABLE	B	delete	可供链接的原生凭据源存在但不是普通文件。	随私有主目录删除（ADR-030，批次 3b）
 src/hey_my_buddy/buddy/harnesses/codex/home.py	105	prepare_coding_home	CODEX_ACCOUNT_UNAVAILABLE	E	delete	独立账户没有文件式原生登录，禁止改用本机登录。	
-src/hey_my_buddy/buddy/harnesses/codex/home.py	113	prepare_coding_home	CODEX_CREDENTIAL_RETAINED	B	keep	微任务私有主目录留有未结清的凭据，禁止覆盖或再次挂载。	
-src/hey_my_buddy/buddy/harnesses/codex/home.py	123	remove_coding_auth	PRIVATE_PATH_UNSAFE	B	keep	停止后清理凭据时私有主目录含链接，禁止向重定向目录操作。	
+src/hey_my_buddy/buddy/harnesses/codex/home.py	113	prepare_coding_home	CODEX_CREDENTIAL_RETAINED	B	delete	微任务私有主目录留有未结清的凭据，禁止覆盖或再次挂载。	随私有主目录删除（ADR-030，批次 3b）
+src/hey_my_buddy/buddy/harnesses/codex/home.py	123	remove_coding_auth	PRIVATE_PATH_UNSAFE	B	delete	停止后清理凭据时私有主目录含链接，禁止向重定向目录操作。	随私有主目录删除（ADR-030，批次 3b）
 src/hey_my_buddy/buddy/harnesses/codex/home.py	133	remove_coding_auth	PRIVATE_PATH_UNSAFE	B	keep	待删凭据既非普通文件也非允许的凭据链接，或为重解析点。	
-src/hey_my_buddy/buddy/harnesses/codex/native_run.py	405	_coding_home	<dynamic>	I	undecided	把 `prepare_coding_home` 的各种错误重新包装，实际检查混合凭据安全与独立账户限制。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	405	_coding_home	<dynamic>	I	delete	把 `prepare_coding_home` 的各种错误重新包装，实际检查混合凭据安全与独立账户限制。	随私有主目录删除（ADR-030，批次 3b）
 src/hey_my_buddy/buddy/harnesses/codex/native_run.py	424	_prepare	no-tool-policy-unverified	C	merge	调用方提供的无工具时限必须是 1 至 60 秒整数；与 `start_fast` 的时限校验重复，合并到该调用边界。	
 src/hey_my_buddy/buddy/harnesses/codex/native_run.py	432	_prepare	ADAPTER_UNAVAILABLE	H	keep	准备运行时未能定位 Codex 可执行文件。	
 src/hey_my_buddy/buddy/harnesses/codex/native_run.py	483	_spawn_app_server	adapter-unavailable	H	keep	原生 App Server 的创建实际失败，转报可执行文件无法启动。	
@@ -140,7 +140,7 @@ src/hey_my_buddy/buddy/harnesses/codex/native_run.py	659	_check_thread_receipt	w
 src/hey_my_buddy/buddy/harnesses/codex/native_run.py	661	_check_thread_receipt	wrong-native-workspace	A	keep	原生会话检出必须等于本次获配工作区。	
 src/hey_my_buddy/buddy/harnesses/codex/native_run.py	664	_check_thread_receipt	wrong-native-provider	D	delete	原生会话供应方仅允许缺省或 openai，其他供应方一律拒绝。	运行结果记原生供应方与请求供应方，由 Host 判断配置差异或原生失败。
 src/hey_my_buddy/buddy/harnesses/codex/native_run.py	676	_configure_worker	native-resume-unavailable	C	merge	请求原生续接时调用方必须给出非空的前一会话标识；与 `RunContinuation._native_resume_names_its_session` 重复，合并到该输入边界。	
-src/hey_my_buddy/buddy/harnesses/codex/native_run.py	685	_configure_worker	native-resume-unavailable	A	keep	保留会话必须绑定本微任务、会话、检出、配置、私有主目录及凭据来源，并有最近回合。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	685	_configure_worker	native-resume-unavailable	A	keep	保留会话必须绑定本微任务、会话、检出、配置、私有主目录及凭据来源，并有最近回合。	去掉私有主目录与凭据来源两项（ADR-030，批次 3b）
 src/hey_my_buddy/buddy/harnesses/codex/native_run.py	692	_configure_worker	native-resume-unavailable	A	keep	会话私有绑定的最近回合、attempt 与输入摘要必须符合上次检查点。	
 src/hey_my_buddy/buddy/harnesses/codex/native_run.py	698	_configure_worker	native-resume-unavailable	A	keep	原生最近一次回合必须正好是绑定中已完成的回合，不能续接被外部推进的历史。	
 src/hey_my_buddy/buddy/harnesses/codex/native_run.py	708	_configure_worker	invalid-resume-mode	C	keep	调用方续接模式与前一会话必须符合初始、原生续接或重建新会话的组合。	
