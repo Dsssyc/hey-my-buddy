@@ -79,9 +79,7 @@
 
 **检查套件里还有两组测试会启动本机安装的 ZCode。** `buddy.harnesses.zcode.test_zcode_native.InstalledZcodeTests` 的六条在本机装着 ZCode 时用真实的命令行对着测试自己的本地模型桩运行，`test_zcode_hooks_probe` 里有两条会加载已安装的包做版本与插件的探测。批次 3d 之后检查运行器给每个测试进程私有的主目录，它们碰不到用户的配置，但检查的结果仍然取决于这台机器上装了什么。迁成 `tests/probes/` 下显式运行的探针，或者改用模拟。
 
-**ZCode 这一块留给下一批的小项。** 共用的目录代码（`blackboard/catalog/catalog.py`）里还留着 `zhipu-account` 这个访问类型的字面量，批次 3c 之后没有读法会产生它，删掉。
-
-**Codex 这一块留给下一批的两个小项。** 一是结果格式里的 `suggestedProfileId`：Codex 的严格模式要求它必填且可为空，Claude Code 那一份仍是可省略，于是 `outcome_schema` 多了一个只有一处使用的开关；两家统一成“必填、可为空”就能删掉它，但要在 Claude Code 上用一次真实调用确认。二是 `account_probe.py` 从运行模块里引用了带下划线的 `_native_provider`；读供应方名字的这一处应当放在两边都能正当引用的地方。
+**Codex 与 Claude Code 的结果格式里 `suggestedProfileId` 是两种形态。** Codex 的严格模式要求它必填且可为空，Claude Code 那一份仍是可省略，于是 `outcome_schema` 多了一个只有一处使用的开关；两家统一成“必填、可为空”就能删掉它，但要在 Claude Code 上用一次真实调用确认。
 
 **Router 选了它自己认定与任务要求冲突的 buddy。** 同一次路由（`dec-9aa8476f`，Router 为 `dsh / deepseek-flash`，快速模式）的理由写明任务已排除这条执行途径，却仍然选了它，并补了一句"如果排除指的是全部走这条途径的执行，证据支持放弃选择"。黑板只检查答案是否在边界之内、结构是否合法，不判断理由；任务描述里的排除只是给 Router 看的文字，Host 没有按任务排除某个 buddy 的参数（任务级的路由偏好已按 ADR-021 取消），出路是失败之后用 `continue` 指定完整的配置并写明理由。上一条解决之后这种情形不会再出现；这次路由可以作为评价 Router 的一个样本。
 
