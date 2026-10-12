@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 from contextlib import contextmanager
 from dataclasses import replace
@@ -18,7 +19,7 @@ from ..harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
 from ...json_codec import canonical_json, decode_strict_json
 from ..harnesses.registry import adapter, run_seam
 from ..harnesses.run_contract import (
-    ResultConfiguration, RunEnd, RunResult, StopEvidence, StopLayer,
+    EvidenceRef, ResultConfiguration, RunEnd, RunResult, StopEvidence, StopLayer,
     decode_run_request, encode_run_request, encode_run_result,
 )
 from . import run_execution
@@ -87,6 +88,19 @@ def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple
             end=RunEnd(status="error", reason_code=input_error.code, message=input_error.message),
             configuration=ResultConfiguration(requested=request.configuration), model_started=False,
             stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
+    if control["operation"] == "worker" and request.worker_permission is not None:
+        # This is the harness mapping selected for the call, not an observation
+        # that the native process obeyed it. Bind it to this exact run on both
+        # sides of the controller frame, including failed native runs.
+        path = Path(request.private_state.invocation_root) / "worker-permission.json"
+        declaration = {"source": "harness-permission-declaration",
+                       "binding": request.identity.to_payload(),
+                       "permission": request.worker_permission.to_payload()}
+        raw = canonical_json(declaration).encode()
+        _private_bytes(path, raw, exclusive=True)
+        ref = EvidenceRef(kind="worker-permission", location=str(path),
+                          size_bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+        result = result.model_copy(update={"evidence_refs": (*result.evidence_refs, ref)})
     verdict = {
         "stopReason": correction.stop_reason if correction is not None else None,
         "elapsedMs": round((time.monotonic() - started) * 1000),

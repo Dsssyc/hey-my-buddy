@@ -19,7 +19,7 @@ class DshAdapter:
     """Native availability and facts, with no inherited execution entries."""
 
     name = "dsh"
-    capabilities = ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session")
+    capabilities = ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session", "permission:read", "permission:write")
     native_resume = True
     model_discovery = True
     no_tool_structured = True

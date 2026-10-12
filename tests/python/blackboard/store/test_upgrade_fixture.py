@@ -1,4 +1,4 @@
-"""Portable schema-16 stock from the released base's real named operations."""
+"""Portable schema-17 stock from the released base's real named operations."""
 from __future__ import annotations
 
 import hashlib
@@ -33,12 +33,12 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_public_operation_stock_retains_source_schema_and_history_hashes(self):
         fixture, connection = self.restored()
-        self.assertEqual(fixture['sourceCommit'], '2bee001e9ef37acb256c19f97a29b2a5ece3a7fb')
-        self.assertEqual(fixture['sourceVersion'], '0.29.0')
-        self.assertEqual(fixture['schemaVersion'], 16)
+        self.assertEqual(fixture['sourceCommit'], '9131a1bda057f5ec3790393ec3e31ca5c96ba06c')
+        self.assertEqual(fixture['sourceVersion'], '0.30.0')
+        self.assertEqual(fixture['schemaVersion'], 17)
         self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
         self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
-        self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '16')
+        self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '17')
         schema = [list(row) for row in connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
         encoded = json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
         self.assertEqual(hashlib.sha256(encoded).hexdigest(), fixture['schemaSha256'])
@@ -82,18 +82,3 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual([tuple(row) for row in c1.execute(query)], [tuple(row) for row in c2.execute(query)])
         with self.assertRaises(ValueError):
             load_fixture(first['state'])
-
-    def test_synthetic_native_operation_keeps_actual_unknown_stop_provenance(self):
-        fixture, connection = self.restored()
-        provenance = fixture['accountOperation']
-        self.assertEqual(provenance['source'], 'hey_my_buddy.blackboard.catalog.accounts.native_operation')
-        self.assertIs(provenance['shutdownConfirmed'], False)
-        recorded = connection.execute('SELECT value FROM meta WHERE key=?', (provenance['operationId'],)).fetchone()[0]
-        self.assertEqual(json.loads(recorded), {
-            'adapter': provenance['account']['adapter'], 'source': provenance['account']['source'],
-            'credentialRevision': provenance['account']['credentialRevision'],
-            'purpose': provenance['purpose'], 'status': 'uncertain'})
-        self.assertEqual(fixture['operations'][-1]['operation'], 'accounts.native_operation')
-        self.assertEqual(fixture['retiredReadAliasesWithoutWriters'], ['codex_account_read_at'])
-        self.assertGreater(fixture['retiredRecordCounts']['attempt-harness:'], 0)
-        self.assertEqual(connection.execute("SELECT COUNT(*) FROM meta WHERE key LIKE 'attempt-harness:%'").fetchone()[0], fixture['retiredRecordCounts']['attempt-harness:'])

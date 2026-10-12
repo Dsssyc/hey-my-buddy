@@ -20,6 +20,7 @@ import subprocess
 import tempfile
 
 from ...errors import BoardError
+from ...protocol.schemas import normalize_access
 from . import windows_paths
 from . import workspace_identity
 
@@ -576,11 +577,12 @@ def _pin(root, ref, commit):
 
 
 def _intent(intent):
-    allowed = {"kind", "cwd", "access", "base", "includeUntracked", "writeScope", "integrator", "targetRef"}
+    allowed = {"kind", "cwd", "access", "accessReason", "base", "includeUntracked", "writeScope", "integrator", "targetRef"}
     if not isinstance(intent, dict) or set(intent) - allowed:
         raise BoardError("INVALID_WORKSPACE", "Unknown executionWorkspace fields")
-    if intent.get("kind") not in ("existing", "worktree") or intent.get("access") not in ("read", "write"):
+    if intent.get("kind") not in ("existing", "worktree") or intent.get("access") not in ("read", "write", "full"):
         raise BoardError("INVALID_WORKSPACE", "Workspace kind and access must be explicit")
+    normalize_access(intent)
     base = intent.get("base")
     if not isinstance(base, dict) or set(base) - {"kind", "ref"} or base.get("kind") not in ("commit", "working-tree"):
         raise BoardError("INVALID_WORKSPACE", "Workspace base must select commit or working-tree")
@@ -599,7 +601,7 @@ def _intent(intent):
             raise BoardError("INVALID_WORKSPACE", field + " must be a list")
         result[field] = sorted({_relative(value, allow_root=True) for value in values})
     result.setdefault("targetRef", None)
-    if result["access"] == "write" and not result["writeScope"]:
+    if result["access"] != "read" and not result["writeScope"]:
         raise BoardError("INVALID_WORKSPACE", "Write access requires an explicit writeScope")
     if base["kind"] == "commit" and result["includeUntracked"]:
         raise BoardError("INVALID_WORKSPACE", "Untracked input requires a working-tree base")
@@ -816,6 +818,8 @@ def _record_preparation_cleanup(error, target, facts):
 def _validate_manifest(manifest):
     fields = {"version", "workspaceId", "kind", "path", "checkoutRoot", "checkoutId", "repositoryId", "access",
               "baseCommit", "inputCommit", "inputTree", "writeScope", "integrator", "targetRef", "exclusionPolicy", "snapshot", "manifestSha256"}
+    if isinstance(manifest, dict) and manifest.get("access") == "full":
+        fields.add("accessReason")
     if not isinstance(manifest, dict) or set(manifest) != fields or type(manifest.get("version")) is not int or manifest["version"] != 1:
         raise BoardError("INVALID_WORKSPACE", "Invalid workspace manifest schema")
     expected = _sha(_json({key: value for key, value in manifest.items() if key != "manifestSha256"}))
@@ -827,8 +831,9 @@ def _validate_manifest(manifest):
                        "executionFingerprint", "excludedEntries"}
     if not isinstance(manifest["snapshot"], dict) or not snapshot_fields <= manifest["snapshot"].keys():
         raise BoardError("INVALID_WORKSPACE", "Invalid workspace snapshot")
-    if manifest["kind"] not in ("existing", "worktree") or manifest["access"] not in ("read", "write"):
+    if manifest["kind"] not in ("existing", "worktree") or manifest["access"] not in ("read", "write", "full"):
         raise BoardError("INVALID_WORKSPACE", "Invalid manifest kind or access")
+    normalize_access(manifest)
     for value in (manifest["path"], manifest["checkoutRoot"], manifest["snapshot"]["repositoryPath"]):
         if not isinstance(value, str) or not Path(value).is_absolute():
             raise BoardError("INVALID_WORKSPACE", "Manifest paths must be absolute")
@@ -1010,6 +1015,8 @@ def _prepare_locked(directory, workspace_id, request_id, intent):
                     "baseCommit": pinned["baseCommit"], "inputCommit": pinned["inputCommit"], "inputTree": pinned["inputTree"],
                     "writeScope": intent["writeScope"], "integrator": intent["integrator"], "targetRef": intent["targetRef"],
                     "exclusionPolicy": dict(_EXCLUSION_POLICY), "snapshot": snapshot}
+        if intent["access"] == "full":
+            manifest["accessReason"] = intent["accessReason"]
         manifest["manifestSha256"] = _sha(_json(manifest))
         _write_once(directory / "manifest.json", _json(manifest))
         return manifest

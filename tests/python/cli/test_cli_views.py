@@ -167,7 +167,10 @@ class CliViewTests(RealWorkspaceTestCase):
         self.assertNotIn("summary", accepted.get("currentTurn", {}))
         self.assertTrue(accepted["reclaim"]["removed"])
         self.assertEqual(accepted["cleanup"]["state"], "applied")
-        self.assertLess(len(text), 4000)
+        # Measure the projection independently of the runner's temporary-root
+        # length; the path values themselves are asserted above and elsewhere.
+        portable_text = text.replace(json.dumps(str(self.directory))[1:-1], "<fixture-root>")
+        self.assertLess(len(portable_text), 4000)
 
     def test_list_status_result_and_await_drop_duplicates(self):
         submitted, _view = self.delivered()

@@ -1,66 +1,11 @@
-"""The single explicit upgrade from the frozen 0.29.0 schema-16 board.
-
-SQL retirement has no filesystem, credential or process side effects.
-"""
+"""The single explicit upgrade from the released 0.30.0 schema-17 board."""
 from __future__ import annotations
 
+import json
 import sqlite3
 
-from .db import SCHEMA_VERSION, PREVIOUS_SCHEMA_VERSION
+from .db import PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, WORKFLOW_TURNS_DDL
 from ...errors import BoardError
-
-NEW_TABLES = frozenset({'quota_current', 'harness_quota_observations', 'harness_account_reads'})
-RETIRED_META_PREFIXES = (
-    'account-selection:', 'account-credential:', 'account-mutation:', 'attempt-account:',
-    'account-operation:', 'account-quota:', 'account-read-at:', 'attempt-harness:', 'catalog-accounts:',
-    'catalog-account:', 'attempt-routing-accounts:', 'quota-routing:', 'quota-retry:',
-    'catalog-read-at:', 'catalog-account-status:', 'catalog-scan-after:', 'catalog-harnesses:',
-)
-RETIRED_META_KEYS = frozenset({'codex_account_read_at'})
-
-_NEW_DDL = (
-    ("quota_current", """CREATE TABLE quota_current (
-    adapter TEXT NOT NULL,
-    provider TEXT NOT NULL,
-    limit_id TEXT NOT NULL,
-    blocked INTEGER NOT NULL CHECK (blocked IN (0,1)),
-    code TEXT,
-    source TEXT NOT NULL,
-    observed_at TEXT NOT NULL,
-    last_observed_at TEXT NOT NULL,
-    resets_at TEXT,
-    native_account_id TEXT,
-    retry_manual_at TEXT,
-    retry_consumed_at TEXT,
-    retry_consumed_by TEXT,
-    PRIMARY KEY (adapter, provider, limit_id),
-    CHECK ((blocked=1 AND code IS NOT NULL AND code IN ('HARNESS_BALANCE_ZERO','HARNESS_QUOTA_EXHAUSTED'))
-           OR (blocked=0 AND code IS NULL))
-);"""),
-    ("harness_quota_observations", """CREATE TABLE harness_quota_observations (
-    adapter TEXT PRIMARY KEY,
-    quota_json TEXT NOT NULL
-);"""),
-    ("harness_account_reads", """CREATE TABLE harness_account_reads (
-    adapter TEXT PRIMARY KEY,
-    checked_at TEXT NOT NULL
-);"""),
-)
-_HEALTH_DDL = """CREATE TABLE harness_health_17 (
-    adapter TEXT PRIMARY KEY CHECK (adapter IN ('dsh','zcode','codex','claude')),
-    manual_path TEXT,
-    revision INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'unknown'
-        CHECK (status IN ('unknown','ready','missing','login-required','unhealthy')),
-    record_json TEXT NOT NULL DEFAULT '{}',
-    checked_at TEXT,
-    expires_at TEXT,
-    scan_after TEXT
-)"""
-
-
-def retired_meta(key: str) -> bool:
-    return key in RETIRED_META_KEYS or key.startswith(RETIRED_META_PREFIXES)
 
 
 def schema_version(connection: sqlite3.Connection) -> int:
@@ -68,57 +13,75 @@ def schema_version(connection: sqlite3.Connection) -> int:
     return int(row[0]) if row else 0
 
 
-def migrate_16_to_17(connection: sqlite3.Connection) -> dict:
-    """Retire account state atomically; preserve all sealed execution history."""
+def migrate_17_to_18(connection: sqlite3.Connection) -> dict:
+    """Freeze each historical turn's owning-run access in one transaction."""
     if schema_version(connection) != PREVIOUS_SCHEMA_VERSION:
-        raise BoardError('UPGRADE_MIGRATION_FAILED', 'Migration expects schema 16', tables=['meta'])
+        raise BoardError('UPGRADE_MIGRATION_FAILED', 'Migration expects schema 17', tables=['meta'])
     foreign_keys = connection.execute('PRAGMA foreign_keys').fetchone()[0]
     connection.execute('PRAGMA foreign_keys=OFF')
     try:
         connection.execute('BEGIN IMMEDIATE')
-        return _migrate_16_to_17_transaction(connection)
+        return _migrate_17_to_18_transaction(connection)
     finally:
         connection.execute(f'PRAGMA foreign_keys={foreign_keys}')
 
 
-def _migrate_16_to_17_transaction(connection: sqlite3.Connection) -> dict:
+def _migrate_17_to_18_transaction(connection: sqlite3.Connection) -> dict:
     from .backup import database_snapshot
+    from ..catalog.catalog import permission_capabilities
+    from .db import canonical_json
 
     tables = ['meta']
     try:
         original_meta = dict(connection.execute('SELECT key,value FROM meta'))
-        planned_meta = {key: value for key, value in original_meta.items() if not retired_meta(key)}
-        planned_meta['schema_version'] = str(SCHEMA_VERSION)
-        health = [tuple(row) for row in connection.execute(
-            'SELECT adapter,manual_path,revision FROM harness_health ORDER BY adapter')]
-        planned_health = [(adapter, manual_path, revision, 'unknown', '{}', None, None, None)
-                          for adapter, manual_path, revision in health]
-        planned_catalog = [(row[0], 0, None, 'unknown', 'ACCOUNT_STATUS_UNKNOWN', row[1])
-                           for row in connection.execute('SELECT adapter,updated_at FROM catalog_current ORDER BY adapter')]
+        planned_meta = {**original_meta, 'schema_version': str(SCHEMA_VERSION)}
+        old_columns = [row[1] for row in connection.execute('PRAGMA table_info(workflow_turns)')]
+        access_index = old_columns.index('state')
+        turn_columns = old_columns[:access_index] + ['access', 'access_reason'] + old_columns[access_index:]
+        planned_turns = []
+        for row in connection.execute(
+            'SELECT t.*, r.execution_workspace_json FROM workflow_turns AS t'
+            ' LEFT JOIN workflow_runs AS r ON r.run_id=t.run_id ORDER BY t.turn_id'
+        ):
+            values = tuple(row)
+            workspace = json.loads(values[-1])
+            access = workspace.get('access') if isinstance(workspace, dict) else None
+            if access not in ('read', 'write'):
+                raise ValueError(f'Unsupported historical turn access: {access}')
+            planned_turns.append(values[:access_index] + (access, None) + values[access_index:-1])
         profile_columns = [row[1] for row in connection.execute('PRAGMA table_info(evaluation_profiles)')]
-        planned_profiles = [tuple(0 if column == 'available' else 'ACCOUNT_STATUS_UNKNOWN' if column == 'unavailable_reason' else value
-                                  for column, value in zip(profile_columns, row))
-                            for row in connection.execute('SELECT * FROM evaluation_profiles ORDER BY profile_id')]
+        profile_cap_index = profile_columns.index('capabilities_json')
+        profile_adapter_index = profile_columns.index('adapter')
+        profile_id_index = profile_columns.index('profile_id')
+        permissions = {name: permission_capabilities(name) for name in
+                       {row[0] for row in connection.execute('SELECT DISTINCT adapter FROM evaluation_profiles')}}
+        planned_profiles = []
+        for row in connection.execute('SELECT * FROM evaluation_profiles ORDER BY profile_id'):
+            values = list(row)
+            capabilities = [item for item in json.loads(values[profile_cap_index]) if not item.startswith('permission:')]
+            values[profile_cap_index] = canonical_json(capabilities + permissions[values[profile_adapter_index]])
+            planned_profiles.append(tuple(values))
         retained_tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        retained_tables -= {'meta', 'harness_health', 'catalog_current', 'catalog_pending', 'evaluation_profiles'}
+        retained_tables -= {'meta', 'workflow_turns', 'evaluation_profiles'}
         retained = database_snapshot(connection, exact=True, table_names=retained_tables)
-        for table, statement in _NEW_DDL:
-            tables = [table]
-            connection.execute(statement)
-        tables = ['harness_health']
-        connection.execute(_HEALTH_DDL)
-        connection.executemany('INSERT INTO harness_health_17 VALUES(?,?,?,?,?,?,?,?)', planned_health)
-        connection.execute('DROP TABLE harness_health')
-        connection.execute('ALTER TABLE harness_health_17 RENAME TO harness_health')
-        tables = ['catalog_current']
-        connection.execute("UPDATE catalog_current SET observation_id=0,discovery_id=NULL,status='unknown',reason='ACCOUNT_STATUS_UNKNOWN'")
+
+        tables = ['workflow_turns']
+        connection.execute(WORKFLOW_TURNS_DDL.replace('workflow_turns (', 'workflow_turns_18 (', 1))
+        placeholders = ','.join('?' for _ in turn_columns)
+        connection.executemany(
+            f"INSERT INTO workflow_turns_18({','.join(turn_columns)}) VALUES({placeholders})",
+            planned_turns,
+        )
+        connection.execute('DROP TABLE workflow_turns')
+        connection.execute('ALTER TABLE workflow_turns_18 RENAME TO workflow_turns')
+        connection.execute('CREATE INDEX workflow_turns_run_idx ON workflow_turns(run_id, turn_index)')
+        connection.execute('CREATE INDEX workflow_turns_attempt_idx ON workflow_turns(attempt_id)')
         tables = ['evaluation_profiles']
-        connection.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='ACCOUNT_STATUS_UNKNOWN'")
-        tables = ['catalog_pending']
-        connection.execute('DELETE FROM catalog_pending')
+        connection.executemany('UPDATE evaluation_profiles SET capabilities_json=? WHERE profile_id=?',
+                               [(row[profile_cap_index], row[profile_id_index]) for row in planned_profiles])
         tables = ['meta']
-        connection.executemany('DELETE FROM meta WHERE key=?', [(key,) for key in original_meta if retired_meta(key)])
         connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
+
         actual = database_snapshot(connection, exact=True, table_names=retained_tables)
         changed = [name for name in retained['fingerprints']
                    if retained['fingerprints'][name] != actual['fingerprints'].get(name)
@@ -127,15 +90,10 @@ def _migrate_16_to_17_transaction(connection: sqlite3.Connection) -> dict:
                     if retained['exemptFingerprints'][name] != actual['exemptFingerprints'].get(name)]
         if dict(connection.execute('SELECT key,value FROM meta')) != planned_meta:
             changed.append('meta')
-        if [tuple(row) for row in connection.execute('SELECT * FROM harness_health ORDER BY adapter')] != planned_health:
-            changed.append('harness_health')
-        if [tuple(row) for row in connection.execute('SELECT * FROM catalog_current ORDER BY adapter')] != planned_catalog:
-            changed.append('catalog_current')
+        if [tuple(row) for row in connection.execute('SELECT * FROM workflow_turns ORDER BY turn_id')] != planned_turns:
+            changed.append('workflow_turns')
         if [tuple(row) for row in connection.execute('SELECT * FROM evaluation_profiles ORDER BY profile_id')] != planned_profiles:
             changed.append('evaluation_profiles')
-        for table in NEW_TABLES | {'catalog_pending'}:
-            if connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]:
-                changed.append(table)
         if changed:
             raise BoardError('UPGRADE_MIGRATION_FAILED', 'Migration changed values outside its exact plan', tables=sorted(set(changed)))
         violations = connection.execute('PRAGMA foreign_key_check').fetchall()
@@ -147,8 +105,8 @@ def _migrate_16_to_17_transaction(connection: sqlite3.Connection) -> dict:
         connection.execute('COMMIT')
     except BaseException as error:
         connection.execute('ROLLBACK')
-        if isinstance(error, (sqlite3.Error, ValueError)):
+        if isinstance(error, (sqlite3.Error, ValueError, TypeError)):
             raise BoardError('UPGRADE_MIGRATION_FAILED', str(error), tables=tables) from error
         raise
     return {'fromSchema': PREVIOUS_SCHEMA_VERSION, 'toSchema': SCHEMA_VERSION,
-            'newTables': sorted(NEW_TABLES), 'catalogUnknown': [row[0] for row in planned_catalog]}
+            'migratedTurns': len(planned_turns), 'migratedProfiles': len(planned_profiles)}

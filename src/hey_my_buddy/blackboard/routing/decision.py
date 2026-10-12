@@ -826,10 +826,14 @@ class DecisionCoordinator:
             task_text += "\n\nContinuation:\n" + continuation["input_text"]
             task_text += "\nHelper outcomes:\n" + continuation["helper_outcomes_json"]
         task_bytes = len(task_text.encode("utf-8"))
+        access = manifest.get("access", "write") if manifest is not None else "write"
+        required_capabilities = list(spec.get("requiredCapabilities", []))
+        if f"permission:{access}" not in required_capabilities:
+            required_capabilities.append(f"permission:{access}")
         request = {
             "kind": "select", "task": task_text,
             "executionWorkspace": manifest,
-            "requiredCapabilities": spec.get("requiredCapabilities", []),
+            "requiredCapabilities": required_capabilities,
             "constraints": schemas.configuration_constraints(spec),
             "workflowRouting": True,
         }

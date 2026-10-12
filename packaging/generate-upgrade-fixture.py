@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate schema-16 upgrade stock using the frozen released base source.
+"""Generate schema-17 upgrade stock using the frozen released base source.
 
 No product installation, daemon, native harness or model is started. The base
 named service operations run in process; only native discovery is synthetic.
@@ -26,7 +26,7 @@ import tarfile
 import tempfile
 import uuid
 
-BASE = "2bee001e9ef37acb256c19f97a29b2a5ece3a7fb"
+BASE = "9131a1bda057f5ec3790393ec3e31ca5c96ba06c"
 # An existing five-file repository commit keeps workspace capture bounded.
 # This is the workspace input, never the source used to create the database.
 WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
@@ -52,7 +52,7 @@ def private_environment(work):
            if not key.startswith(("BUDDY_", "OPENAI_", "ANTHROPIC_", "DEEPSEEK_", "ZAI_", "CODEX_", "CLAUDE_", "C2_", "GIT_"))
            and key not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"}}
     env.update(BUDDY_STATE_DIR=str(work / "state"), BUDDY_RUNTIME_ROOT=str(work / "runtime"),
-               BUDDY_DEV_SOURCE="1", UV_CACHE_DIR=str(work.parent / "uv-cache"),
+               BUDDY_DEV_SOURCE="1", BUDDY_DEBUG="1", UV_CACHE_DIR=str(work.parent / "uv-cache"),
                UV_PYTHON_DOWNLOADS="never", PYTHONDONTWRITEBYTECODE="1", TMPDIR=str(work / "scratch"))
     return env
 
@@ -73,7 +73,10 @@ def generate(args):
     with tarfile.open(archive) as stream:
         stream.extractall(source, filter="data")
     env = private_environment(work)
-    env["HOME"] = str(work / "home")
+    env.update(HOME=str(work / "home"), CODEX_HOME=str(work / "home/codex"),
+               CLAUDE_CONFIG_DIR=str(work / "home/claude"), DSH_HOME=str(work / "home/dsh"),
+               ZCODE_DATA_BASE_DIR=str(work / "home/zcode"), XDG_CONFIG_HOME=str(work / "home/config"),
+               XDG_DATA_HOME=str(work / "home/data"), XDG_CACHE_HOME=str(work / "home/cache"))
     if args.python is None:
         run(["uv", "sync", "--frozen", "--no-install-project", "--link-mode", "copy",
              *(["--offline"] if args.offline else []), "--project", str(source)], cwd=root, env=env)
@@ -110,14 +113,13 @@ def populate(args):
     from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
     from hey_my_buddy.blackboard.service.service import BoardService, dispatch_local
     from hey_my_buddy.blackboard.store.store import BoardStore
-    from hey_my_buddy.blackboard.catalog import accounts, catalog_store, catalog as catalog_module
+    from hey_my_buddy.blackboard.catalog import catalog_store, catalog as catalog_module
     from hey_my_buddy.blackboard.tasks import workspace
     from hey_my_buddy.blackboard.evaluation import native_observations
     from hey_my_buddy.blackboard.routing import quota_routing
-    from hey_my_buddy.errors import BoardError
 
     assert Path(db_module.__file__).resolve() == source / "src/hey_my_buddy/blackboard/store/db.py"
-    assert db_module.SCHEMA_VERSION == 16
+    assert db_module.SCHEMA_VERSION == 17
     catalog = {"source": "fixture:upgrade-base", "harnessVersion": "fixture-only",
                "discoveredAt": AT, "discoveries": [{"adapter": "codex", "status": "complete", "accountStatus": "confirmed"}],
                "providers": [{"adapter": "codex", "provider": "openai", "efforts": ["high"],
@@ -157,11 +159,11 @@ def populate(args):
         stack.enter_context(patch.object(health_module, "_later", return_value="2026-01-01T01:00:00.000Z"))
         # Replace external native discovery only. The old health/catalog writers,
         # validators and certificate lookup remain the real implementations.
-        stack.enter_context(patch.object(health_module, "_snapshot", return_value={"fixture": True}))
+        stack.enter_context(patch.object(health_module, "_snapshot", return_value={"adapter": "codex", "manualPath": None, "managerRecords": [], "candidates": [], "fixture": True}))
         stack.enter_context(patch.object(health_module, "_discover", return_value={
             "adapter": "codex", "status": "ready", "version": "0.157.0", "command": ["fixture-codex"], "accountStatus": "confirmed", "fixture": True}))
         stack.enter_context(patch.object(CodexAdapter, "discover_models", return_value=catalog))
-        stack.enter_context(patch("hey_my_buddy.buddy.harnesses.codex.account_probe.read", return_value=(None, None)))
+        stack.enter_context(patch("hey_my_buddy.buddy.harnesses.codex.account_probe.read", return_value=(None, None, None)))
         store = BoardStore(work / "state", clock=lambda: AT)
         store.initialize()
         service = BoardService(store, token="fixture-service-token", control={},
@@ -197,7 +199,7 @@ def populate(args):
                 "submissionToken": "fixture-submission-token-" + label, "task": "fixture " + label,
                 "adapter": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
                 "cwd": str(work / "workspaces" / label), "executionWorkspace": {"kind": "existing", "access": "read"},
-                **({"objective": {"title": "ADR-030 账户退休升级夹具"}} if not ids else {"objectiveOf": ids["delivered"]})})
+                **({"objective": {"title": "Worker 权限档位升级夹具"}} if not ids else {"objectiveOf": ids["delivered"]})})
             run_id = submitted["runId"]
             ids[label] = run_id
             control = submitted["control"]
@@ -251,18 +253,6 @@ def populate(args):
             requested = call("selection_get", {"decisionId": requested["decisionId"]})["decision"]
             if requested["status"] != "queued":
                 break
-        # Exercise account writes only on this private base board. Native mutation
-        # contexts publish bookkeeping; no login, key, or credential is touched.
-        call("account_set", {"adapter": "claude", "source": "worker", "expectedRevision": 0}, human=True)
-        with service.account_settings.credential_change("claude", "native", expected_credential_revision=0):
-            pass
-        operations.append({"operation": "Accounts.credential_change", "params": {"adapter": "claude", "source": "native"}, "response": "completed"})
-        try:
-            with service.account_settings.credential_change("zcode", "native", expected_credential_revision=0):
-                raise BoardError("FIXTURE_UNCONFIRMED", "Synthetic native stop remains unknown")
-        except BoardError as error:
-            assert error.code == "FIXTURE_UNCONFIRMED"
-        operations.append({"operation": "Accounts.credential_change", "params": {"adapter": "zcode", "source": "native"}, "response": "uncertain"})
         quota = {"source": "fixture/native-quota", "provider": "openai", "observedAt": AT,
                  "ordinaryUsageAllowed": False, "windows": []}
         with store.db.write() as connection:
@@ -273,29 +263,14 @@ def populate(args):
         missing_catalog = {**catalog, "source": "fixture:missing-beta", "providers": [{**catalog["providers"][0], "models": [catalog["providers"][0]["models"][0]]}]}
         catalog_store.record(store.evaluation, missing_catalog)
         operations.append({"operation": "catalog_store.record", "params": missing_catalog, "response": "missing-model-pending"})
-        catalog_module.coordinate_catalog_reread(store.directory, "codex", reader=lambda binding: None, wait=True)
+        catalog_module.coordinate_catalog_reread(store.directory, "codex", reader=lambda: None, wait=True)
         operations.append({"operation": "coordinate_catalog_reread", "params": {"adapter": "codex"}, "response": "window-written"})
-        # Add the reservation only after the sample workflows: their stable IDs
-        # keep the same UUID sequence. The base owns the active→uncertain write;
-        # no native process is started and no shutdown evidence is fabricated.
-        with store.db.read() as connection:
-            account = accounts.selection(connection, "codex")
-        purpose = "fixture-shutdown-unconfirmed"
-        with accounts.native_operation(store.db, account, purpose) as stop:
-            assert stop["shutdownConfirmed"] is False
-        account_operation = {"source": "hey_my_buddy.blackboard.catalog.accounts.native_operation", "account": account,
-                             "purpose": purpose, **stop}
-        operations.append({"operation": "accounts.native_operation", "params": {"account": account, "purpose": purpose},
-                           "response": dict(stop)})
         hashing.close()
         # All rows were created by base public operations. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
         # graph before any migration or data-preservation baseline is taken.
         with store.db.read() as connection:
             raw_sql = "\n".join(connection.iterdump()) + "\n"
-            record_counts = {prefix: sum(key.startswith(prefix) for key, in connection.execute("SELECT key FROM meta"))
-                             for prefix in ("account-selection:", "account-credential:", "account-mutation:", "attempt-account:", "attempt-harness:", "account-operation:", "account-quota:", "account-read-at:", "catalog-accounts:", "catalog-account:", "attempt-routing-accounts:", "quota-routing:", "quota-retry:", "catalog-harnesses:", "catalog-read-at:", "catalog-account-status:", "catalog-scan-after:")}
-            assert all(record_counts.values()), record_counts
             assert connection.execute("SELECT COUNT(*) FROM catalog_pending").fetchone()[0] > 0
             source_schema = list(connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"))
         (work / "raw.sql").write_text(raw_sql)
@@ -303,7 +278,7 @@ def populate(args):
         sql = raw_sql
         for old, new in redactions:
             sql = sql.replace(old, new)
-        header = f"-- Upgrade base: source {BASE}; 0.29.0 / schema 16\n-- Generated by packaging/generate-upgrade-fixture.py; native facts/results are synthetic.\n-- Path template: restore with tests/python/blackboard/store/upgrade_fixture.py before use.\n"
+        header = f"-- Upgrade base: source {BASE}; 0.30.0 / schema 17\n-- Generated by packaging/generate-upgrade-fixture.py; native facts/results are synthetic.\n-- Path template: restore with tests/python/blackboard/store/upgrade_fixture.py before use.\n"
         output = args.output_dir.resolve()
         output.mkdir(parents=True, exist_ok=True)
         sql_path = output / "board.sql"
@@ -313,7 +288,7 @@ def populate(args):
         (output / "operations.json").write_text(operations_text + "\n")
         resources = export_resources(work, workspace, preimages)
         (output / "workspace-resources.json").write_text(json.dumps(resources, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-        metadata = {"format": 2, "sourceCommit": BASE, "sourceVersion": "0.29.0", "schemaVersion": 16,
+        metadata = {"format": 2, "sourceCommit": BASE, "sourceVersion": "0.30.0", "schemaVersion": 17,
             "sourceTree": subprocess.check_output(["git", "rev-parse", BASE + "^{tree}"], text=True).strip(),
             "workspaceInputCommit": WORKSPACE_INPUT,
             "generationCommand": "python packaging/generate-upgrade-fixture.py " +
@@ -325,11 +300,11 @@ def populate(args):
             "sourceFiles": {str(p.relative_to(source)): digest(p.read_bytes()) for p in
                             [*sorted((source / "src/hey_my_buddy").rglob("*.py")), source / "pyproject.toml",
                              source / "uv.lock", source / "packaging/runtime-assets.json"]},
-            "stableIds": ids, "accountOperation": account_operation, "retiredReadAliasesWithoutWriters": ["codex_account_read_at"], "retiredRecordCounts": record_counts,
+            "stableIds": ids,
             "routerProfileIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
             "boundary": "Old BoardService named operations in process; synthetic native discovery and worker result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before upgrade; this preparation is not migration or new native execution. Real host_seal is tested separately; service workflow_conclude after upgrade remains Host verification.",
-            "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 16; baseline only after return",
+            "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 17; baseline only after return",
             "schemaSha256": digest(json_text([list(row) for row in source_schema]).encode()),
             "sqlSha256": digest(sql_path.read_bytes()), "operationsSha256": digest((output / "operations.json").read_bytes()),
             "catalogSha256": digest((output / "catalog.json").read_bytes()),
@@ -415,7 +390,7 @@ def verify(output, restored):
         connection.execute("PRAGMA foreign_keys=ON")
         assert connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert dict(connection.execute("SELECT key,value FROM meta"))["schema_version"] == "16"
+        assert dict(connection.execute("SELECT key,value FROM meta"))["schema_version"] == "17"
         assert connection.execute("SELECT COUNT(*) FROM objectives").fetchone()[0] == 1
         states = dict(connection.execute("SELECT run_id,state FROM workflow_runs"))
         assert states == {metadata["stableIds"][key]: value for key, value in
@@ -424,14 +399,6 @@ def verify(output, restored):
         assert keys["router_configuration_version"] == "3"
         assert json.loads(keys["router_profile_ids"]) == PROFILES
         assert keys["capability_secret"] == "ab" * 32
-        provenance = metadata["accountOperation"]
-        assert provenance["source"] == "hey_my_buddy.blackboard.catalog.accounts.native_operation"
-        assert provenance["shutdownConfirmed"] is False
-        account = provenance["account"]
-        assert json.loads(keys[provenance["operationId"]]) == {
-            "adapter": account["adapter"], "source": account["source"],
-            "credentialRevision": account["credentialRevision"],
-            "purpose": provenance["purpose"], "status": "uncertain"}
         for table in ("evaluation_cards", "family_annotations", "evaluation_catalog", "catalog_current"):
             assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] >= 1
         reviews = {json.loads(row[0])["verdict"] for row in connection.execute(
@@ -442,7 +409,7 @@ def verify(output, restored):
         assert digest(json_text(schema).encode()) == metadata["schemaSha256"]
         assert "<fixture-root>" in (output / "board.sql").read_text()
         assert "/Users/" not in (output / "board.sql").read_text()
-        return {"integrity": "ok", "foreignKeyViolations": 0, "schema": 16, "states": states,
+        return {"integrity": "ok", "foreignKeyViolations": 0, "schema": 17, "states": states,
                 "tables": sum(row[0] == "table" and row[1] != "sqlite_sequence" for row in schema),
                 "events": connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], "sourceSchemaMatches": True}
 

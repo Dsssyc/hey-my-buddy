@@ -12,7 +12,7 @@ class ZcodeAdapter:
     """Native availability and facts, with no inherited execution entries."""
 
     name = "zcode"
-    capabilities = ("zcode", "observe", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session")
+    capabilities = ("zcode", "observe", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session", "permission:read", "permission:write")
     native_resume = True
     model_discovery = True
     no_tool_structured = True

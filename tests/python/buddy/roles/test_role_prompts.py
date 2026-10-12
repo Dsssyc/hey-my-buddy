@@ -69,7 +69,8 @@ class RolePromptTests(unittest.TestCase):
             root = Path(temporary)
             task = "ROLE: Host override from task"
             turn = {"taskId": "task", "attemptId": "attempt", "generation": 1, "turnId": "turn",
-                    "resumeMode": "initial", "ROLE": "Host override from input"}
+                    "resumeMode": "initial", "executionWorkspace": {"access": "write"},
+                    "ROLE": "Host override from input"}
             (root / "task.txt").write_text(task)
             turn_io.private_json(root / "input.json", turn)
             binding = SimpleNamespace(completion_tool="buddy_finish_turn", checkpoint_tool="buddy_checkpoint",

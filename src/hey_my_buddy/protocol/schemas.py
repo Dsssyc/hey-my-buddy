@@ -327,6 +327,28 @@ def reject_untrusted_override(params: dict) -> None:
         )
 
 
+def normalize_access(intent: dict) -> tuple[str, str | None]:
+    """Validate the Worker access choice and its optional full-access reason."""
+    access = optional_string(intent, "access") or "write"
+    if "access" in intent and intent["access"] is None:
+        raise BoardError("INVALID_ARGUMENT", "executionWorkspace.access cannot be null",
+                         field="executionWorkspace.access")
+    if access not in ("read", "write", "full"):
+        raise BoardError("INVALID_ARGUMENT", "executionWorkspace.access must be 'read', 'write' or 'full'",
+                         field="executionWorkspace.access")
+    if access == "full":
+        reason = required_string(intent, "accessReason", max_length=1000)
+        raw_reason = intent["accessReason"]
+        if raw_reason.splitlines() != [raw_reason]:
+            raise BoardError("INVALID_ARGUMENT", "executionWorkspace.accessReason must be a single line",
+                             field="executionWorkspace.accessReason")
+        return access, reason
+    if "accessReason" in intent:
+        raise BoardError("INVALID_ARGUMENT", "executionWorkspace.accessReason requires full access",
+                         field="executionWorkspace.accessReason")
+    return access, None
+
+
 def normalize_execution_workspace(params: dict) -> dict:
     """Validate one explicitly chosen ``executionWorkspace`` intent.
 
@@ -351,17 +373,17 @@ def normalize_execution_workspace(params: dict) -> dict:
             )
     reject_unknown(
         intent,
-        {"kind", "access", "base", "includeUntracked", "writeScope", "targetRef"},
+        {"kind", "access", "accessReason", "base", "includeUntracked", "writeScope", "targetRef"},
         "executionWorkspace",
     )
     kind = optional_string(intent, "kind")
     if kind not in ("existing", "worktree"):
         raise BoardError("INVALID_ARGUMENT", "executionWorkspace.kind must explicitly be 'existing' or 'worktree'",
                          field="executionWorkspace.kind")
-    access = optional_string(intent, "access") or "write"
-    if access not in ("read", "write"):
-        raise BoardError("INVALID_ARGUMENT", "executionWorkspace.access must be 'read' or 'write'")
+    access, access_reason = normalize_access(intent)
     normalized: dict[str, Any] = {"kind": kind, "access": access}
+    if access_reason is not None:
+        normalized["accessReason"] = access_reason
     base = intent.get("base")
     if base is None:
         # The documented default: the current working tree, with ref omitted (a
@@ -383,7 +405,7 @@ def normalize_execution_workspace(params: dict) -> dict:
     if include_untracked and normalized["base"]["kind"] == "commit":
         raise BoardError("INVALID_ARGUMENT", "Untracked input requires a working-tree base")
     write_scope = string_list(intent, "writeScope", limit=256)
-    if access == "write":
+    if access in ("write", "full"):
         # An ordinary governed task may write inside its own checkout; the module
         # requires the scope explicitly, so the default is the checkout root.
         normalized["writeScope"] = write_scope or ["."]

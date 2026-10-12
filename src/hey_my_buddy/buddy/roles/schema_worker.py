@@ -60,7 +60,6 @@ class NativeSchemaWorker:
     validation_key: str
     display_name: str
     interaction_kind: str
-    follow_workspace_access: bool = False
     native_quota_failure: bool = False
     native_identity_keys: tuple[str, ...] = ()
     validation_error_key: str | None = None
@@ -68,10 +67,6 @@ class NativeSchemaWorker:
 
     def prompt(self, task_text: str, turn_input: dict) -> str:
         return worker_prompt(task_text, turn_input, delivery=self.prefixes)
-
-    def tool_scope(self, turn_input: dict) -> str:
-        workspace = turn_input.get("executionWorkspace") or {}
-        return "read" if self.follow_workspace_access and workspace.get("access") == "read" else "write"
 
     def parse_value(self, result) -> tuple[dict | None, str | None]:
         """Use the same outcome validator for the decision and its diagnostic."""

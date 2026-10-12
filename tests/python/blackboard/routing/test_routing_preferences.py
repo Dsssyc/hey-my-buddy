@@ -377,7 +377,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE),
                   preferences=[{"profileId": THIRD_PROFILE_ID, "mode": "prefer", "reason": "prefer flash-high"}])
         view = self.routed(board, request_id="route-caps", requiredCapabilities=["effort:high"])
-        self.assertEqual(view["routing"]["requiredCapabilities"], ["effort:high"])
+        self.assertEqual(view["routing"]["requiredCapabilities"], ["effort:high", "permission:write"])
         self.assertEqual(view["routing"]["constraints"], {})
         board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
         owned = self.claim(board, "router", run_id=view["routing"]["taskId"], claim_request_id="cap-claim")

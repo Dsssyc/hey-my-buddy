@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
+from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing.router_boundary_data import routing_boundary
@@ -463,7 +464,8 @@ class GovernedBoundaryTests(WorkflowTestCase):
             for profile_id, model in ((A, "alpha"), (B, "bravo")):
                 db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
                            "available,enabled,capabilities_json,created_revision,updated_revision) "
-                           "VALUES(?,?,'dsh','fixture',?,'max',1,1,'[]',0,0)", (profile_id, profile_id, model))
+                           "VALUES(?,?,'dsh','fixture',?,'max',1,1,?,0,0)",
+                           (profile_id, profile_id, model, canonical_json(permission_capabilities("dsh"))))
             router._write_settings(db, {**router.configuration(db), "routerProfileIds": []})
 
     def routed(self, request_id="goal-1", *, access="write", kind="existing"):

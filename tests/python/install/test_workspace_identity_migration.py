@@ -465,10 +465,10 @@ class WorkspaceIdentityMigrationTests(identity_fixtures.WorkspaceIdentityFixture
     def save_manifest_turn(self, connection, run, manifest, index, *, valid_binding=True):
         value = migration._json({"executionWorkspace": manifest, "fixtureTurn": index})
         connection.execute(
-            "INSERT INTO workflow_turns(turn_id,run_id,turn_index,resume_mode,input_json,input_sha256,state,created_at,updated_at)"
-            " VALUES(?,?,?,'initial',?,?,'prepared','then','then')",
+            "INSERT INTO workflow_turns(turn_id,run_id,turn_index,resume_mode,input_json,input_sha256,access,state,created_at,updated_at)"
+            " VALUES(?,?,?,'initial',?,?,?,'prepared','then','then')",
             ("identity-duplicate-turn-" + str(index), run["runId"], index, value,
-             hashlib.sha256(value.encode()).hexdigest() if valid_binding else "0" * 64))
+             hashlib.sha256(value.encode()).hexdigest() if valid_binding else "0" * 64, manifest["access"]))
 
     def proof_cost(self, board):
         counts = {"legacyHashes": 0}

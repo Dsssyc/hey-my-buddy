@@ -348,6 +348,24 @@ class HelpTests(unittest.TestCase):
         self.assertIn("note", accept)
         self.assertIn("10000", accept)
 
+    def test_workspace_access_help_tracks_the_validation_contract(self):
+        submit = self.help_text("submit")
+        continuation = self.help_text("continue")
+        submit_access = next(line.strip() for line in submit.splitlines() if line.strip().startswith("access "))
+        continue_access = next(line.strip() for line in continuation.splitlines() if line.strip().startswith("access "))
+        for line in (submit_access, continue_access):
+            self.assertIn("one of: full, read, write", line)
+            self.assertNotIn("required", line)
+        self.assertIn("default write", submit_access)
+        self.assertNotIn("default write", continue_access)  # Omission keeps the current choice.
+        for text in (submit, continuation):
+            reason = next(line.strip() for line in text.splitlines() if line.strip().startswith("accessReason "))
+            self.assertIn("required when access is full", reason)
+            self.assertIn("≤1000 characters", reason)
+            self.assertIn("single line", reason)
+            self.assertNotIn("splitlines()", reason)
+            self.assertNotIn("any((", text)
+
     def test_accept_and_conclude_help_require_the_note(self):
         for method in ("accept", "conclude"):
             with self.subTest(method=method):

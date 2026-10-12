@@ -96,6 +96,49 @@ def full_result() -> rc.RunResult:
 
 
 class CodecRoundtripTests(unittest.TestCase):
+    def test_full_scope_crosses_the_run_contract_and_is_refused_before_native_launch(self):
+        from hey_my_buddy.buddy.harnesses.claude import native_run as claude
+        from hey_my_buddy.buddy.harnesses.codex import native_run as codex
+        from hey_my_buddy.buddy.harnesses.dsh import native_run as dsh
+        from hey_my_buddy.buddy.harnesses.zcode import native_run as zcode
+
+        request = edited(full_request(Path("/private/tmp")), tool_scope="full")
+        self.assertEqual(rc.decode_run_request(rc.encode_run_request(request)).tool_scope, "full")
+        for name, module in (("claude", claude), ("codex", codex),
+                             ("dsh", dsh), ("zcode", zcode)):
+            with self.subTest(harness=name), mock.patch("subprocess.Popen",
+                                                        side_effect=AssertionError("native launch")) as spawn:
+                with self.assertRaises(BoardError) as caught:
+                    module.run(edited(request, harness=name), observer=lambda _event: None,
+                               services=None, cancelled=lambda: False)
+                self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+                self.assertIn("full access is not implemented", caught.exception.message)
+                spawn.assert_not_called()
+
+    def test_worker_permission_roundtrips_and_keeps_native_scope_consistent(self):
+        permission = rc.WorkerPermission(level="read", tool_scope="write", enforcement="convention")
+        request = edited(full_request(Path("/private/tmp")), tool_scope="write", worker_permission=permission)
+        self.assertEqual(rc.decode_run_request(rc.encode_run_request(request)).worker_permission, permission)
+        with self.assertRaises(BoardError):
+            edited(request, tool_scope="read")
+
+    def test_full_level_is_refused_even_when_native_scope_is_write(self):
+        from hey_my_buddy.buddy.harnesses.claude import native_run as claude
+        from hey_my_buddy.buddy.harnesses.codex import native_run as codex
+        from hey_my_buddy.buddy.harnesses.dsh import native_run as dsh
+        from hey_my_buddy.buddy.harnesses.zcode import native_run as zcode
+        permission = rc.WorkerPermission(level="full", tool_scope="write", enforcement="convention")
+        request = edited(full_request(Path("/private/tmp")), tool_scope="write", worker_permission=permission)
+        for name, module in (("claude", claude), ("codex", codex),
+                             ("dsh", dsh), ("zcode", zcode)):
+            with self.subTest(harness=name), mock.patch("subprocess.Popen",
+                                                        side_effect=AssertionError("native launch")) as spawn:
+                with self.assertRaises(BoardError) as caught:
+                    module.run(edited(request, harness=name), observer=lambda _event: None,
+                               services=None, cancelled=lambda: False)
+                self.assertIn("full access is not implemented", caught.exception.message)
+                spawn.assert_not_called()
+
     def test_a_resume_checkpoint_is_absent_or_carries_all_three_bound_facts(self):
         fields = {"mode": "native-session", "previousSessionId": "previous",
                   "checkpoint": {"nativeTurnId": "native-turn", "attemptId": "previous-attempt",
