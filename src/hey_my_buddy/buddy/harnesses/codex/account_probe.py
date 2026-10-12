@@ -35,8 +35,8 @@ def read(command: list[str], environment: dict) -> tuple[dict | None, dict | Non
         connection.send({"method": "initialized", "params": {}})
         account = connection.call("account/read", {"refreshToken": False}).get("account")
         configured = connection.call("config/read", {"includeLayers": False}).get("config") or {}
-        from .native_run import _native_provider
-        provider = _native_provider(configured)
+        from .config import native_provider
+        provider = native_provider(configured)
         observed_at = utc_now()
         billing = (codex_account(account, observed_at) if provider == "openai"
                    else fact("unknown", "codex/account-read", observed_at))

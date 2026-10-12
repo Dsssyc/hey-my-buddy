@@ -96,6 +96,7 @@ from .config import (
     CodexUnavailable,
     cli_command,
     native_environment,
+    native_provider,
     policy_matches,
     read_only_config,
 )
@@ -123,7 +124,6 @@ _REFUSAL_MESSAGE = ("This Buddy Worker cannot approve interactive requests; "
                     "report attention in the structured outcome")
 _REFUSED_REQUEST_KEYS = ("threadId", "turnId", "itemId", "command", "cwd", "reason")
 _INIT_CLIENT = {"clientInfo": {"name": "hey_my_buddy", "title": "Hey My Buddy", "version": "0.9.0"}}
-DEFAULT_MODEL_PROVIDER = "openai"
 _BOUND_NOTIFICATIONS = 128
 #: The one residual bucket when a run sees more distinct unclassified native
 #: event types than the public result carries. The parenthesised name cannot
@@ -519,11 +519,6 @@ def _catalog(connection: Connection, version: str | None, provider: str) -> tupl
     return catalog, listed_ids
 
 
-def _native_provider(configured: dict) -> str:
-    provider = configured.get("model_provider")
-    return provider if isinstance(provider, str) and provider else DEFAULT_MODEL_PROVIDER
-
-
 def _discovery_account_status(account) -> str:
     """The same session's account fact, reported and never judged (ADR-027).
 
@@ -559,7 +554,7 @@ def _initialize(connection: Connection, prep: _Preparation, mode: str, spec: dic
     connection.send({"method": "initialized", "params": {}})
     connection.call("account/read", {"refreshToken": False})
     configured = connection.call("config/read", {"cwd": prep.cwd, "includeLayers": False}).get("config") or {}
-    catalog, listed_ids = _catalog(connection, prep.version, _native_provider(configured))
+    catalog, listed_ids = _catalog(connection, prep.version, native_provider(configured))
     if spec.get("model") not in listed_ids:
         return False
     listed = next((model for model in catalog["providers"][0]["models"]
@@ -1652,9 +1647,9 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
                 account = None
             account_status = _discovery_account_status(account)
             configured = connection.call("config/read", {"cwd": cwd, "includeLayers": False}).get("config") or {}
-            catalog_value, _listed_ids = _catalog(connection, version, _native_provider(configured))
+            catalog_value, _listed_ids = _catalog(connection, version, native_provider(configured))
             from ....protocol.billing import codex_account, fact
-            provider = _native_provider(configured)
+            provider = native_provider(configured)
             observed_at = utc_now()
             catalog_value["billingByProvider"] = {provider: (
                 codex_account(account, observed_at) if provider == "openai"
