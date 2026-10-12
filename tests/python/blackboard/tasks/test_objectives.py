@@ -1,5 +1,6 @@
 """Work-objective grouping is atomic display metadata, never Worker input."""
 import json
+from unittest.mock import patch
 
 from hey_my_buddy.protocol import schemas
 from hey_my_buddy.errors import BoardError
@@ -287,6 +288,40 @@ class ObjectiveReadTests(WorkflowTestCase):
         self.assertEqual([row['depth'] for row in timeline['rows']], [0, 0])
         self.assertEqual(timeline['events'][0]['label'], '派发')
         self.assertNotIn('controlToken', json.dumps(timeline))
+
+    def test_a_lease_expired_execution_that_reported_and_confirmed_its_stop_ends_definitely(self):
+        board = self.board()
+        self.register(board)
+        run = self.submit(board, kind='worktree')
+        claim = self.claim(board, run_id=run['runId'])
+        with patch.object(board.store, '_now_minus', return_value='9999-01-01T00:00:00.000Z'):
+            self.assertEqual(board.store.mark_expired_leases(), 1)
+        # The worker reports after its lease expired: the recorded result and its
+        # stop evidence settle the end even though ownership stayed uncertain.
+        self.finish_turn(board, claim)
+        timeline = board.call('objective_timeline', {'objectiveId': f"run:{run['runId']}"})
+        execution = next(span for span in timeline['spans'] if span['kind'] == 'execution')
+        self.assertEqual(execution['state'], 'finished')
+        self.assertTrue(execution['shutdownConfirmed'])
+        self.assertFalse(execution['uncertain'])
+        self.assertIsNotNone(execution['endAt'])
+        self.assertTrue(timeline['rows'][0]['shutdownConfirmed'])
+
+    def test_a_lease_expired_execution_without_a_confirmed_stop_stays_uncertain(self):
+        board = self.board()
+        self.register(board)
+        run = self.submit(board, kind='worktree')
+        claim = self.claim(board, run_id=run['runId'])
+        with patch.object(board.store, '_now_minus', return_value='9999-01-01T00:00:00.000Z'):
+            self.assertEqual(board.store.mark_expired_leases(), 1)
+        self.finish_turn(board, claim, disposition='attention', shutdown=False)
+        timeline = board.call('objective_timeline', {'objectiveId': f"run:{run['runId']}"})
+        execution = next(span for span in timeline['spans'] if span['kind'] == 'execution')
+        self.assertEqual(execution['state'], 'uncertain')
+        self.assertFalse(execution['shutdownConfirmed'])
+        self.assertTrue(execution['uncertain'])
+        self.assertIsNone(execution['endAt'])
+        self.assertFalse(timeline['rows'][0]['shutdownConfirmed'])
 
     def test_a_run_parked_on_its_host_has_one_open_wait_that_cancellation_closes(self):
         board, first, _second, _loose = self.grouped_board()
