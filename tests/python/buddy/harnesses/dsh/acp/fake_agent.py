@@ -8,8 +8,7 @@ session/list, session/resume, session/close, prompt with interleaved permission
 requests and notifications, and the cancel notification. Fault switches let a
 test inject delayed responses, duplicate responses, garbage frames, a
 silently-exiting leader with a surviving group member, and a slow EOF. At
-startup it verifies it runs under a forced private HOME and DSH_HOME and exits
-when it has not.
+startup it verifies its inherited homes belong to the test and exits otherwise.
 
 The resume face mirrors the Host-confirmed observations: a resumed session is
 found in the persistent store under the patch-pinned sessions root (the marker
@@ -39,21 +38,27 @@ def log(log_path: Path, event: dict) -> None:
 
 
 def check_private_home(log_path: Path) -> bool:
-    """Refuse to run outside a forced private HOME/DSH_HOME; the check result is
-    the first log line so a test can assert the launch contract held.
-
-    A private root anywhere under the user's home tree is legitimate - the
-    product's own state lives there - so this tripwire checks the exact
-    identities: the real home itself and the default DSH home.
-    """
-    real_home = pwd.getpwuid(os.getuid()).pw_dir
+    """Keep the simulated native program away from the person's real homes."""
+    real_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
     home = os.environ.get("HOME")
-    dsh_home = os.environ.get("DSH_HOME")
-    ok = bool(home and dsh_home
-              and Path(home).resolve() != Path(real_home).resolve()
-              and Path(dsh_home).resolve() != (Path(real_home) / ".dsh").resolve())
-    log(log_path, {"event": "home-check", "ok": ok,
-                   "homeSet": home is not None, "dshHomeSet": dsh_home is not None})
+    native_home = os.environ.get("DSH_HOME") or str(Path(home or "/") / ".dsh")
+    ok = bool(home and Path(home).resolve() != real_home.resolve()
+              and Path(native_home).resolve() != (real_home / ".dsh").resolve())
+    entry = {"event": "home-check", "ok": ok, "home": home, "dshHome": native_home,
+             "homeSet": home is not None, "dshHomeSet": "DSH_HOME" in os.environ,
+             "permissionMode": os.environ.get("DSH_PERMISSION_MODE")}
+    if ok:
+        # JSON is valid YAML. Only synthetic fixture settings are opened, by
+        # this fake native program rather than by the production run module.
+        settings = Path(native_home) / "settings.yaml"
+        if settings.is_file():
+            entry["settings"] = json.loads(settings.read_text())
+        for field, relative in (("homePatch", "cordis.patch.yml"),
+                                ("profilePatch", "profiles/acp/cordis.patch.yml")):
+            path = Path(native_home) / relative
+            if path.is_file():
+                entry[field] = path.read_text()
+    log(log_path, entry)
     return ok
 
 
@@ -220,8 +225,8 @@ class FakeAgent:
 
         The public ``session-persistence-jsonl`` row names the root DSH writes
         its rollouts under; the fake reads it from its own patch so a Worker
-        run's records land in the task's shared native root while its DSH_HOME
-        stays invocation-private. An unreadable or absent patch falls back to
+        run's records land in the task's shared native root while configuration
+        stays in the inherited user home. An unreadable or absent patch falls back to
         this fake's own ``DSH_HOME`` sessions directory.
         """
         if self.patch_path:
@@ -233,7 +238,7 @@ class FakeAgent:
                         return Path(row["config"]["root"])
             except (OSError, ValueError, TypeError):
                 pass
-        return Path(os.environ["DSH_HOME"]) / "sessions"
+        return Path(os.environ.get("DSH_HOME") or Path(os.environ["HOME"]) / ".dsh") / "sessions"
 
     def persist_session(self, session_id: str, session: dict) -> None:
         """Record the session in the pinned root's store so another process can resume it."""
@@ -242,6 +247,14 @@ class FakeAgent:
         marker = directory / f"{session_id}.fake-session.json"
         marker.write_text(json.dumps({"cwd": session["cwd"], "model": session["model"],
                                       "effort": session["effort"]}))
+        storage = Path(os.environ.get("DSH_HOME") or Path(os.environ["HOME"]) / ".dsh") / "storages"
+        if self.patch_path:
+            for row in json.loads(Path(self.patch_path).read_text()):
+                if row.get("id") == "storage-json":
+                    storage = Path(row["config"]["root"])
+        index = storage / "session_projcache" / "sessions"
+        index.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (index / f"{session_id}.json").write_text(json.dumps({"sessionId": session_id, "cwd": session["cwd"]}))
 
     def restore_session(self, session_id):
         """The persisted session state, or ``None`` when no store carries it."""

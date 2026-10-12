@@ -169,7 +169,7 @@ class FixtureCleanupTests(unittest.TestCase):
             self.assertEqual(probe["environment"]["BUDDY_MODEL_CATALOG_FILE"], str(catalog))
             for key in inherited.keys() - {"BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_MODEL_CATALOG_FILE",
                                            "HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"}:
-                if key in {"DSH_HOME", "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"}:
+                if key == "DSH_HOME":
                     self.assertNotEqual(probe["environment"][key], inherited[key])
                     continue
                 self.assertNotIn(key, probe["environment"])
@@ -180,7 +180,7 @@ class FixtureCleanupTests(unittest.TestCase):
             self.assertTrue(database.is_relative_to(directory))
             self.assertEqual(database.read_bytes()[:16], b"SQLite format 3\x00")
             for key in ("HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "ZCODE_DATA_BASE_DIR",
-                        "DSH_HOME", "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
+                        "DSH_HOME",
                         "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
                         "XDG_RUNTIME_DIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA"):
                 self.assertTrue(Path(probe["environment"][key]).is_relative_to(directory), key)

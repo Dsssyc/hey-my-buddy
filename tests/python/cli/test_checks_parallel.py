@@ -83,8 +83,10 @@ class ScheduledModulesTests(unittest.TestCase):
 
     def test_this_checkout_schedules_exactly_what_discovery_loads(self):
         modules = checks.python_test_modules(REPOSITORY)
-        environment = checks.child_environment(REPOSITORY, self.directory)
-        (self.directory / "tmp").mkdir()
+        child_root = self.directory / "suite"
+        environment = checks.child_environment(REPOSITORY, child_root,
+                                               home_root=self.directory / "suite-home")
+        (child_root / "tmp").mkdir(parents=True)
         loaded = loaded_ids(REPOSITORY / "tests" / "python", modules, environment)
         self.assertEqual(loaded["perFile"], loaded["discovered"])
         self.assertEqual(len(set(loaded["perFile"])), len(loaded["perFile"]), "a test is scheduled twice")
@@ -218,6 +220,9 @@ class ParallelOutcomeTests(RunnerTestCase):
                     root = Path(os.environ["BUDDY_STATE_DIR"]).parent
                     self.assertEqual(Path(os.environ["TMPDIR"]), root / "tmp")
                     self.assertEqual(Path(os.environ["BUDDY_RUNTIME_ROOT"]), root / "runtime")
+                    home = Path(os.environ["HOME"])
+                    self.assertEqual(home.parent, root.parent)
+                    self.assertFalse(home.is_relative_to(root))
                     (Path(os.environ["CHECKS_FIXTURE_MARKERS"]) / "root").write_text(str(root))
 
                 @unittest.skip("fixture")

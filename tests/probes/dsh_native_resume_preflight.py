@@ -5,7 +5,7 @@ accepted public ACP client only - what a cross-process native resume can do
 today. Two separately rooted owned launches share one micro-task sessions root
 (``private_dirs.native_root(state, "dsh", <fake task>)/sessions``), which every
 launch patch pins through DSH's own public ``session-persistence-jsonl`` row;
-each attempt keeps its DSH home, profile, patch, launch log and frame metadata
+each attempt keeps its patch, launch log and frame metadata
 log inside its own ``private_dirs.attempt_root``. Attempt A initializes,
 creates one empty root session, reads back the declared configuration (and
 switches one option and reads it back), lists sessions, closes the session and
@@ -15,9 +15,8 @@ description, lists sessions, classifies the native rejection for a
 nonexistent session, closes what it resumed and stops the same way.
 
 The probe never sends a prompt, never calls ``authenticate``, never calls a
-model and never reads a credential file's content: the owning home's settings
-and credentials stay at their original paths and are only named in the public
-launch patch rows. Every client call is logged by method name before it is
+model and never reads a credential file's content: DSH inherits the user's
+HOME and DSH_HOME and loads its own settings, credentials and ACP profile. Every client call is logged by method name before it is
 sent, and the per-attempt frame metadata log plus the connection facts must
 agree with that log, so the report can prove what crossed the wire. The
 mounted MCP service is the minimal embedded stub in this same file (it answers
@@ -27,12 +26,10 @@ rejections, errors and unverifiable items are recorded as exactly that - the
 probe never falls back to ``session/new``, never seeds a private format and
 never sends content to reach a green result.
 
-The launch rows, the patch order and the profile materialization reuse the
-accepted production mechanisms (``source_binding_rows``, the
-``session-persistence-jsonl`` pin, the two always-off rows last,
-``materialize_acp_profile``, the ``AcpClient.start`` wrapper) without changing
-any production module; the literal row ids are asserted against the production
-constants at startup. Materials land under the registered task root only -
+The launch rows reuse the production session-root pin and JSON storage root,
+with the same AcpClient.start wrapper and inherited native configuration. No
+private home or profile is built. The literal row ids are asserted against the
+production constants at startup. Materials land under the registered task root only -
 ``<task-root>/m/<run-label>/`` for this run's state and evidence - and the run
 label must be new, so an earlier failure is never overwritten and nothing is
 ever deleted.
@@ -62,7 +59,6 @@ ALLOWED_INSIDE_TASK_ROOT = ("TMPDIR", "BUDDY_CHECKS_TMPDIR", "BUDDY_STATE_DIR",
 #: The public row ids this probe pins, kept literally beside the production
 #: constants they mirror (asserted against them before any launch).
 SESSION_ROOT_ROW = "session-persistence-jsonl"
-ALWAYS_OFF_ROWS = ("session-title-llm", "session-telemetry-otel")
 
 #: The embedded MCP stub's one catalog entry; a name only, never invoked.
 STUB_TOOL_NAME = "r1_probe_catalog_tool"
@@ -319,8 +315,6 @@ class Probe:
         from hey_my_buddy.buddy.harnesses.dsh.acp import AcpClient
         from hey_my_buddy.buddy.harnesses.dsh.acp.client import PermissionPolicy
         from hey_my_buddy.buddy.harnesses.dsh.acp.connection import FrameMetaLog
-        from hey_my_buddy.buddy.harnesses.dsh.native_run import (
-            materialize_acp_profile, source_binding_rows, source_home)
         from hey_my_buddy.buddy.harnesses.discovery import discover
         from hey_my_buddy.buddy.harnesses.runtime_selection import selected
         from hey_my_buddy.buddy.roles.turn_io import private_json
@@ -329,15 +323,11 @@ class Probe:
         assert self.state_root is not None and self.fake_task_id is not None
         root = ensure_private_dir(attempt_root(self.state_root, "dsh", self.fake_task_id,
                                                attempt_id))
-        dsh_home = ensure_private_dir(root / "dsh-home")
         logs = ensure_private_dir(root / "logs")
         patch_path = root / "dsh-launch-patch.json"
         stub_evidence = root / "mcp-stub-evidence.jsonl"
-        materialize_acp_profile(dsh_home)
-        binding = source_binding_rows(source_home(os.environ))
-        rows = [*binding,
-                {"id": SESSION_ROOT_ROW, "config": {"root": str(sessions_root)}},
-                *[{"id": name, "disabled": True} for name in ALWAYS_OFF_ROWS]]
+        rows = [{"id": SESSION_ROOT_ROW, "config": {"root": str(sessions_root)}},
+                {"id": "storage-json", "config": {"root": str(sessions_root.parent / "storages")}}]
         private_json(patch_path, rows, exclusive=True)
         # The same selection check_preparation runs, kept whole so the
         # selected version travels with the launch evidence.
@@ -350,11 +340,11 @@ class Probe:
         command = list(selection["command"])
         argv = [*command, "--profile", "acp", "--patch", str(patch_path)]
         entry: dict = {
-            "attemptId": attempt_id, "attemptRoot": str(root), "dshHome": str(dsh_home),
+            "attemptId": attempt_id, "attemptRoot": str(root),
             "patchPath": str(patch_path), "patchRowIds": [row["id"] for row in rows],
             "patchSessionRoot": str(sessions_root),
-            "sourceBindingRowIds": [row["id"] for row in binding],
-            "sourceHome": str(source_home(os.environ)),
+            "patchStorageRoot": str(sessions_root.parent / "storages"),
+            "sourceHome": os.environ.get("DSH_HOME") or str(Path.home() / ".dsh"),
             "launchLog": str(logs / "launches.jsonl"), "frameLog": str(logs / "frames.jsonl"),
             "stubEvidence": str(stub_evidence), "stubServerName": f"r1_{attempt_id}",
             "mcpServer": {
@@ -374,7 +364,7 @@ class Probe:
         from hey_my_buddy.buddy.harnesses.dsh.acp.launch import LaunchOwnershipError
 
         try:
-            client = AcpClient.start(argv, private_root=root, dsh_home=dsh_home, cwd=cwd,
+            client = AcpClient.start(argv, private_root=root, cwd=cwd,
                                      launch_log=Path(entry["launchLog"]),
                                      frame_log=FrameMetaLog(Path(entry["frameLog"])),
                                      permission_policy=PermissionPolicy())
@@ -464,11 +454,9 @@ def production_anchor() -> dict:
     drift = []
     if SESSION_ROOT_ROW != getattr(native_run, "_SESSION_ROOT_ROW", None):
         drift.append("sessionRootRow")
-    if list(ALWAYS_OFF_ROWS) != list(getattr(native_run, "_ALWAYS_DISABLED_ROWS", ())):
-        drift.append("alwaysOffRows")
     if drift:
         raise ProbeError(f"probe row literals drifted from production constants: {drift}")
-    return {"sessionRootRowMatchesProduction": True, "alwaysOffRowsMatchProduction": True}
+    return {"sessionRootRowMatchesProduction": True}
 
 
 # -- the two processes -----------------------------------------------------------------

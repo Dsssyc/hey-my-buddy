@@ -186,6 +186,7 @@ _INHERITED_CHILD_KEYS = {
     "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL",
     "BUDDY_AGENT_CREDENTIAL_FILE", "BUDDY_DEV_SOURCE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
     "BUDDY_SUPERVISOR_START_ID",
+    "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
 }
 
 
@@ -200,7 +201,7 @@ def offline_facts_source(directory: Path) -> str:
 
 
 def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
-    environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS and not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_"))}
+    environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS and not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_", "DSH_", "DEEPSEEK_"))}
     # HOME and SDK locations belong to this fixture, never to the interpreter's
     # inherited account. Do not create native configuration files in this home.
     private_home = directory / "home"
@@ -211,8 +212,6 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
         CODEX_HOME=str(private_home / ".codex"),
         CLAUDE_CONFIG_DIR=str(private_home / ".claude"),
         ZCODE_DATA_BASE_DIR=str(private_home / ".zcode"),
-        ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(private_home / ".zcode/builtin-provider.json"),
-        ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(private_home / ".zcode/personal-provider.json"),
         DSH_HOME=str(private_home / ".dsh"),
         XDG_CONFIG_HOME=str(private_home / ".config"),
         XDG_DATA_HOME=str(private_home / ".local/share"),

@@ -21,6 +21,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 FAKE_AGENT = Path(__file__).resolve().parent / "fake_agent.py"
 MCP_STUB = Path(__file__).resolve().parent / "mcp_stub.py"
@@ -36,12 +37,15 @@ class AcpTestCase(unittest.TestCase):
         self.addCleanup(self.container.cleanup)
         self.test_dir = Path(self.container.name).resolve()
         self.root = self.test_dir / "native-root"
-        self.dsh_home = self.root / "dsh-home"
-        self.home = self.root / "home"
+        self.dsh_home = self.test_dir / "user.dsh 配置"
+        self.home = self.test_dir / "user.home 用户"
         self.logs = self.root / "logs"
         self.dsh_home.mkdir(mode=0o700, parents=True)
         self.home.mkdir(mode=0o700)
-        self.logs.mkdir(mode=0o700)
+        self.logs.mkdir(mode=0o700, parents=True)
+        environment = mock.patch.dict(os.environ, {"HOME": str(self.home), "DSH_HOME": str(self.dsh_home)})
+        environment.start()
+        self.addCleanup(environment.stop)
 
     def sibling_dir(self, name: str) -> Path:
         """A directory inside this test's dir but outside the native private
@@ -61,8 +65,7 @@ class AcpTestCase(unittest.TestCase):
 
         if "frame_log" not in kwargs:
             kwargs["frame_log"] = FrameMetaLog(self.logs / "frames.jsonl")
-        client = AcpClient.start(self.agent_argv(*extra), private_root=self.root,
-                                 dsh_home=self.dsh_home, home=self.home, **kwargs)
+        client = AcpClient.start(self.agent_argv(*extra), private_root=self.root, **kwargs)
         self.addCleanup(self._shutdown_client, client)
         return client
 

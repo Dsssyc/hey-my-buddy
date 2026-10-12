@@ -88,17 +88,15 @@ class AcpClient:
         self.connection = connection
 
     @classmethod
-    def start(cls, argv: list[str], *, private_root: Path, dsh_home: Path | None = None,
-              home: Path | None = None, extra_env: dict | None = None,
+    def start(cls, argv: list[str], *, private_root: Path, extra_env: dict | None = None,
               cwd: Path | None = None, launch_log: Path | None = None,
               frame_log: FrameMetaLog | None = None,
               permission_policy: PermissionPolicy | None = None) -> "AcpClient":
         """Launch the process and start its connection; a fake agent under test
-        launches through the same wrapper and the same private-home contract."""
+        launches through the same wrapper with inherited native configuration."""
         if frame_log is not None:
             ensure_private_log_path(Path(frame_log.path), private_root)
-        process, handle = launch(argv, private_root=private_root, dsh_home=dsh_home,
-                                 home=home, extra_env=extra_env, cwd=cwd,
+        process, handle = launch(argv, private_root=private_root, extra_env=extra_env, cwd=cwd,
                                  launch_log=launch_log)
         policy = permission_policy if permission_policy is not None else PermissionPolicy()
         connection = AcpConnection(process, handle, frame_log=frame_log,

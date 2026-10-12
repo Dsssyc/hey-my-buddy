@@ -277,7 +277,7 @@ def native_environment(environment: dict, *, command: tuple[str, ...] | list[str
     # its keychain login by USER and reports "not logged in" without it.
     allowed = ("HOME", "USER", "LOGNAME", "USERNAME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
                "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
-               "XDG_RUNTIME_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "ZCODE_DATA_BASE_DIR",
+               "XDG_RUNTIME_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "ZCODE_DATA_BASE_DIR", "DSH_HOME",
                "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LC_COLLATE",
                "LC_NUMERIC", "LC_TIME", "LC_MONETARY", "LC_PAPER", "LC_NAME",
                "LC_ADDRESS", "LC_TELEPHONE", "LC_MEASUREMENT", "LC_IDENTIFICATION",
@@ -477,9 +477,9 @@ def probe(command: list[str], environment: dict, *, deadline: float | None = Non
 
 
 def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -> tuple[str | None, bytes]:
-    """Use the same private DSH launcher for the no-input version check.
+    """Use the same owned DSH launcher for the no-input version check.
 
-    Keep the caller's HOME and native environment, force only DSH_HOME, and
+    Keep the caller's HOME, DSH_HOME and native environment unchanged, and
     retain the directory if the owned group cannot be confirmed stopped.
     """
     from .dsh.acp.launch import LaunchOwnershipError, LaunchRejected, launch
@@ -488,7 +488,6 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -
     if start >= deadline:
         return "scan-timeout", b""
     root = Path(tempfile.mkdtemp(prefix="buddy-dsh-probe-")).resolve()
-    (root / "dsh-home").mkdir(mode=0o700)
     process = handle = None
     stopped = True  # No child exists until launch returns or transfers ownership.
     code, output = "launch-failed", b""

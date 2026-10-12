@@ -28,7 +28,7 @@ misattributed one).
 
 The launch the daemon chain composes passes only the public launch face
 (``--profile acp --patch <path>``), so ``--log`` is optional: the default log
-lives inside this run's private ``DSH_HOME``.
+lives under this run's patch-pinned private session root.
 """
 from __future__ import annotations
 
@@ -153,7 +153,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
     def write_quota_record(self, session_id: str) -> None:
         """One synthetic ``session.v3`` rollout: partial usage, retained root
         assistant text, and the machine error turn end. A fixture written by the
-        fake agent under this run's private DSH_HOME, never a native record."""
+        fake agent under this run's private session root, never a native record."""
         directory = self.sessions_dir()
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         now_ms = int(time.time() * 1000)
@@ -214,7 +214,7 @@ def main() -> int:
     parser.add_argument("--native-error-code", default="QUOTA")
     args = parser.parse_args()
     if not args.log:
-        args.log = str(Path(os.environ.get("DSH_HOME", os.getcwd())) / "fixture-agent.log")
+        args.log = str(Path(args.patch).parent / "fixture-agent.log")
     # The shared agent's construction face, pinned to the governed carrier with
     # no checkpoint call: the mount binding is derived from session/new instead.
     shared = SimpleNamespace(

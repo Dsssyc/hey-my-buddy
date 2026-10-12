@@ -56,6 +56,8 @@ SANITIZED_VARIABLES = (
     "BUDDY_AGENT_CREDENTIAL_FILE",
     "VIRTUAL_ENV",
     "UV_PROJECT_ENVIRONMENT",
+    "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
+    "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
 )
 
 #: A held lock with one of these names observes a live Buddy daemon or supervisor.
@@ -67,8 +69,8 @@ EVIDENCE_FILE_NAME = "teardown-evidence.json"
 def test_environment(root: Path) -> dict:
     """The child environment every test suite runs with: checkout first, no pins."""
     # Test isolation is independent of the product's native configuration:
-    # inherited ownership, credentials and Claude provider flags cannot select a fixture.
-    values = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES and not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_"))}
+    # inherited ownership, credentials and harness flags cannot select a fixture.
+    values = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES and not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_", "DSH_", "DEEPSEEK_"))}
     source = str(root / "src")
     tests = str(root / "tests" / "python")
     inherited = values.get("PYTHONPATH")
@@ -92,9 +94,21 @@ def create_private_root(*, directory: Path | None = None) -> Path:
     return root
 
 
-def child_environment(root: Path, private_root: Path) -> dict:
-    """The suite environment, with every child temp file inside the private root."""
+def child_environment(root: Path, private_root: Path, *, home_root: Path) -> dict:
+    """The suite's private state and a separately owned native home."""
     values = test_environment(root)
+    home = home_root
+    home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    values.update({
+        "HOME": str(home), "USERPROFILE": str(home),
+        "HOMEDRIVE": home.drive, "HOMEPATH": str(home),
+        "CODEX_HOME": str(home / ".codex"), "CLAUDE_CONFIG_DIR": str(home / ".claude"),
+        "DSH_HOME": str(home / ".dsh"), "ZCODE_DATA_BASE_DIR": str(home / ".zcode"),
+        "XDG_CONFIG_HOME": str(home / ".config"), "XDG_DATA_HOME": str(home / ".local/share"),
+        "XDG_CACHE_HOME": str(home / ".cache"), "XDG_STATE_HOME": str(home / ".local/state"),
+        "XDG_RUNTIME_DIR": str(private_root / "runtime"),
+        "APPDATA": str(home / "AppData/Roaming"), "LOCALAPPDATA": str(home / "AppData/Local"),
+    })
     values["TMPDIR"] = str(private_root / "tmp")
     values["BUDDY_CHECKS_TMPDIR"] = str(private_root / "tmp")
     values['BUDDY_STATE_DIR'] = str(private_root / 'state')
@@ -246,7 +260,8 @@ def run_suite_child(root: Path, private_root: Path, directory_name: str, label: 
     detached process that inherited the pipes cannot hold the runner.
     """
     child_root = private_root / directory_name
-    environment = child_environment(root, child_root)
+    environment = child_environment(root, child_root,
+                                    home_root=private_root / f"{directory_name}-home")
     started = time.monotonic()
     with guard:
         # The interrupt check, the spawn and the registration share one lock: an
@@ -387,7 +402,7 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int) -> str | None
 
 def run_suites_serially(root: Path, private_root: Path) -> str | None:
     """One Python discovery process using the same private environment."""
-    env = child_environment(root, private_root)
+    env = child_environment(root, private_root, home_root=private_root / "home")
     python = subprocess.run(
         [sys.executable, "-m", "unittest", "discover", "-s", str(root / "tests" / "python"), "-v"],
         cwd=str(root),

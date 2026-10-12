@@ -78,17 +78,16 @@ class NativeRunCase(unittest.TestCase):
         self.addCleanup(container.cleanup)
         self.base = Path(container.name).resolve()
         self.root = self.base / "native-root"
-        self.dsh_home = self.root / "dsh-home"
+        self.sessions_root = self.root / "dsh-home" / "sessions"
         self.home = self.base / "home"
         self.logs = self.root / "logs"
-        self.dsh_home.mkdir(mode=0o700, parents=True)
         self.home.mkdir(mode=0o700)
-        self.logs.mkdir(mode=0o700)
+        self.logs.mkdir(mode=0o700, parents=True)
         self.agent_log_path = self.logs / "fake-agent.log"
         self.extra_agent_args: list[str] = []
         (self.base / "cwd").mkdir(mode=0o700)
         # A run inherits HOME by contract; these tests pin it to this test's
-        # private directory, which the launch wrapper validates like DSH_HOME.
+        # private directory; it models the user's home, outside native evidence.
         environment = mock.patch.dict(os.environ, {"HOME": str(self.home),
                                                   "DSH_HOME": str(self.base / "source-dsh-home")})
         environment.start()
@@ -415,8 +414,10 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(policy.tools.requested.value, {"permissionMode": "read-only"})
         record = self.launch_records()[-1]
         self.assertIn(native_run.PERMISSION_MODE_ENV, record["envKeys"])
-        self.assertTrue(record["dshHome"].startswith(str(self.root)),
-                        "the forced private home lives inside this run's native root")
+        observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
+        self.assertEqual(observed["home"], str(self.home))
+        self.assertEqual(observed["dshHome"], os.environ["DSH_HOME"])
+        self.assertEqual(observed["permissionMode"], "read-only")
 
     def test_the_none_scope_patch_reaches_the_launch_argv_and_policy(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
@@ -429,18 +430,16 @@ class FastSeamTests(NativeRunCase):
         self.assertIn("--patch", record["argv"])
         patch_path = Path(record["argv"][record["argv"].index("--patch") + 1])
         rows = json.loads(patch_path.read_text())
-        # The uniform order: the private session-record root pin (this test's
-        # source home binds nothing), then the disabled tool rows with
-        # plan-mode, then the two always-off rows last.
+        # The storage roots precede the disabled tool rows and plan-mode.
         self.assertEqual([row["id"] for row in rows],
-                         ["session-persistence-jsonl", *CONFIRMED_NONE_ROWS,
-                          native_run.PLAN_MODE_ROW, *native_run._ALWAYS_DISABLED_ROWS])
+                         ["session-persistence-jsonl", "storage-json", *CONFIRMED_NONE_ROWS,
+                          native_run.PLAN_MODE_ROW])
         pin = rows[0]
         self.assertTrue(pin["config"]["root"].startswith(str(self.root)))
         self.assertTrue(pin["config"]["root"].endswith("/sessions"))
         policy = result.effective_policy.tools
         self.assertEqual(policy.requested.value["disabledRows"],
-                         [row["id"] for row in rows[1:]])
+                         [row["id"] for row in rows[2:]])
 
     def test_the_shipped_none_scope_rows_are_the_confirmed_inventory(self):
         self.assertEqual(native_run.NONE_SCOPE_DISABLED_ROWS, CONFIRMED_NONE_ROWS,
@@ -1370,14 +1369,13 @@ class DiscoveryTests(NativeRunCase):
         prompts = [entry for entry in self.agent_log()
                    if entry.get("dir") == "in" and (entry.get("raw") or {}).get("method") == "session/prompt"]
         self.assertEqual(prompts, [], "discovery never sends a prompt")
-        # Discovery carries the uniform launch patch: the private session-record
-        # root pin and the two always-off rows, with no tool-scope rows.
+        # Discovery pins private session and JSON storage roots, with no tool-scope rows.
         launch = self.launch_records()[-1]
         self.assertIn("--patch", launch["argv"])
         patch_path = Path(launch["argv"][launch["argv"].index("--patch") + 1])
         rows = json.loads(patch_path.read_text())
         self.assertEqual([row["id"] for row in rows],
-                         ["session-persistence-jsonl", *native_run._ALWAYS_DISABLED_ROWS])
+                         ["session-persistence-jsonl", "storage-json"])
 
     def discover(self, **kwargs):
         return native_run.run_discovery(
@@ -1411,117 +1409,79 @@ class DiscoveryTests(NativeRunCase):
             entry.get("event") == "dying-before-answer" for entry in self.agent_log())))
 
 
-class AlwaysOffPatchRowsTests(NativeRunCase):
-    """The two accepted always-off rows, named literally, on the real launch.
+class NativeConfigurationTests(NativeRunCase):
+    """Every carrier lets the simulated native program read the user's home."""
 
-    The witnesses read the patch the real run and discovery startup
-    construction wrote through the launch wrapper and assert each literal
-    row's own presence and ``disabled`` fact. Neither the expected names nor
-    the expected flag may come from the module's row constant: an expectation
-    built from the same value stays self-consistent when a row is dropped, so
-    each row here fails its own witness instead of a tautology.
-    """
-
-    def assert_patch_row_disabled(self, row_id):
-        records = self.launch_records()
-        self.assertTrue(records, "the launch must record its argv and patch")
-        argv = records[-1]["argv"]
-        patch_path = Path(argv[argv.index("--patch") + 1])
-        matches = [row for row in json.loads(patch_path.read_text())
-                   if row.get("id") == row_id]
-        self.assertEqual(len(matches), 1,
-                         f"the launch patch must carry the {row_id} row exactly once")
-        self.assertIs(matches[0].get("disabled"), True,
-                      f"the launch patch must disable the {row_id} row")
-
-    def test_a_run_launch_disables_the_session_title_llm_row(self):
+    def test_discovery_worker_and_fast_read_user_configuration_without_overlays(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
-        self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
-        result = run(self.fast_request("prompt", scope="write"),
-                     observer=lambda _facts: FEEDBACK_CONTINUE, services=None,
-                     cancelled=lambda: False)
-        self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assert_patch_row_disabled("session-title-llm")
-
-    def test_a_run_launch_disables_the_session_telemetry_otel_row(self):
-        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
-        self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
-        result = run(self.fast_request("prompt", scope="write"),
-                     observer=lambda _facts: FEEDBACK_CONTINUE, services=None,
-                     cancelled=lambda: False)
-        self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assert_patch_row_disabled("session-telemetry-otel")
-
-    def test_a_discovery_launch_disables_both_always_off_rows(self):
-        self.extra_agent_args = ["--prompt-mode", "final"]
-        catalog = native_run.run_discovery(
-            cwd=str(self.base / "cwd"), invocation_root=self.base / "disc-inv",
-            native_root=self.root, timeout_seconds=FAST_TIMEOUT, cancelled=lambda: False)
-        self.assertEqual(catalog["discoveries"], [{"adapter": "dsh", "status": "complete",
-                                                   "accountStatus": "not-applicable"}])
-        self.assert_patch_row_disabled("session-title-llm")
-        self.assert_patch_row_disabled("session-telemetry-otel")
-
-
-class SourceBindingTests(NativeRunCase):
-    """The owning home's settings/credentials binding and the acp profile."""
-
-    def test_source_rows_point_at_the_owning_home_without_reading_them(self):
-        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
-        source = self.base / "owning-dsh-home"
-        source.mkdir(mode=0o700)
-        settings = source / "settings.yaml"
-        credentials = source / ".credentials.yaml"
-        settings.write_text("model: fixture\n")
-        credentials.write_text("provider:\n  deepseek-official:\n    apiKey: fixture-secret\n")
-        # The strongest proof the module never reads the content: the credential
-        # file is made unreadable to this user; is_file() still sees it and the
-        # run must still launch with the binding row in place.
-        credentials.chmod(0o000)
-        self.addCleanup(credentials.chmod, 0o600)
+        source = self.base / "user.config.v2 用户 设置"
+        profile = source / "profiles" / "acp"
+        profile.mkdir(mode=0o700, parents=True)
+        materials = {source / "settings.yaml": json.dumps({"marker": "user-settings"}),
+                     source / "cordis.patch.yml": "home-user-patch\n",
+                     profile / "cordis.patch.yml": "profile-user-patch\n",
+                     profile / "package.json": '{"custom":"user-profile"}'}
+        for path, content in materials.items():
+            path.write_text(content)
+        before = {path: path.read_bytes() for path in materials}
         with mock.patch.dict(os.environ, {"DSH_HOME": str(source)}):
-            result = run(self.fast_request("prompt", scope="write"),
-                         observer=lambda _f: FEEDBACK_CONTINUE,
+            for carrier in ("discovery", "worker", "fast"):
+                with self.subTest(carrier=carrier):
+                    if carrier == "discovery":
+                        catalog = native_run.run_discovery(
+                            cwd=str(self.base / "cwd"), invocation_root=self.base / "disc-inv",
+                            native_root=self.root, timeout_seconds=FAST_TIMEOUT, cancelled=lambda: False)
+                        provider = catalog["providers"][0]
+                        self.assertEqual(provider["provider"], "fake")
+                        self.assertEqual([model["id"] for model in provider["models"]], ["m1", "m2"])
+                        self.assertEqual(provider["models"][0]["efforts"], ["off", "low", "high", "max"])
+                    elif carrier == "worker":
+                        request, bound, mount = self.worker_request()
+                        self.extra_agent_args = ["--prompt-mode", "governed", "--bridge-config",
+                                                 mount.bridge_config_path, "--finish-tool", mount.finish_tool]
+                        from hey_my_buddy.buddy.roles.run_observers import worker_observer
+                        result = run(request, observer=worker_observer, services=bound.services,
+                                     cancelled=lambda: False)
+                        self.assertEqual(result.end.status, "ok", result.end.message)
+                        self.assertFalse((Path(request.private_state.invocation_root) / "dsh-home").exists())
+                    else:
+                        self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
+                        result = run(self.fast_request("prompt"), observer=lambda _f: FEEDBACK_CONTINUE,
+                                     services=None, cancelled=lambda: False)
+                        self.assertEqual(result.end.status, "ok", result.end.message)
+                    observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
+                    self.assertEqual(observed["home"], str(self.home))
+                    self.assertEqual(observed["dshHome"], str(source))
+                    self.assertEqual(observed["settings"], {"marker": "user-settings"})
+                    self.assertEqual(observed["homePatch"], "home-user-patch\n")
+                    self.assertEqual(observed["profilePatch"], "profile-user-patch\n")
+                    launch = self.launch_records()[-1]
+                    rows = json.loads(Path(launch["argv"][launch["argv"].index("--patch") + 1]).read_text())
+                    expected = (["session-persistence-jsonl", "storage-json"]
+                                + ([*CONFIRMED_NONE_ROWS, "plan-mode"] if carrier == "fast" else []))
+                    self.assertEqual([row["id"] for row in rows], expected)
+                    self.assertEqual({path: path.read_bytes() for path in materials}, before)
+        self.assertFalse((source / "sessions").exists(), "native records remain private")
+        self.assertFalse((source / "storages").exists(), "projection cache stays with private session storage")
+        self.assertTrue(list((self.root / "storages/session_projcache/sessions").glob("*.json")))
+        self.assertTrue(list((self.root / "dsh-home/storages/session_projcache/sessions").glob("*.json")))
+        self.assertFalse((self.root / "dsh-home" / "profiles").exists())
+
+    def test_an_unset_dsh_home_uses_the_inherited_home_without_a_private_config(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
+        self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
+        default = self.home / ".dsh"
+        default.mkdir()
+        (default / "settings.yaml").write_text('{"marker":"default-user-home"}')
+        with mock.patch.dict(os.environ):
+            os.environ.pop("DSH_HOME", None)
+            result = run(self.fast_request("prompt", scope="write"), observer=lambda _f: FEEDBACK_CONTINUE,
                          services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        record = self.launch_records()[-1]
-        patch_path = Path(record["argv"][record["argv"].index("--patch") + 1])
-        rows = json.loads(patch_path.read_text())
-        self.assertEqual([row["id"] for row in rows[:3]],
-                         ["settings", "credentials", "session-persistence-jsonl"])
-        self.assertEqual(rows[0]["config"]["path"], str(settings))
-        self.assertEqual(rows[1]["config"]["path"], str(credentials))
-        self.assertFalse(rows[0]["config"]["watch"])
-        self.assertTrue(rows[2]["config"]["root"].startswith(str(self.root)))
-        self.assertEqual([row["id"] for row in rows[3:]], list(native_run._ALWAYS_DISABLED_ROWS))
+        observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
+        self.assertFalse(observed["dshHomeSet"])
+        self.assertEqual(observed["settings"], {"marker": "default-user-home"})
 
-    def test_an_absent_owning_home_binds_nothing(self):
-        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
-        with mock.patch.dict(os.environ, {"DSH_HOME": str(self.base / "absent-home")}):
-            result = run(self.fast_request("prompt", scope="write"),
-                         observer=lambda _f: FEEDBACK_CONTINUE,
-                         services=None, cancelled=lambda: False)
-        self.assertEqual(result.end.status, "ok", result.end.message)
-        patch_path = Path(self.launch_records()[-1]["argv"][
-            self.launch_records()[-1]["argv"].index("--patch") + 1])
-        rows = json.loads(patch_path.read_text())
-        self.assertEqual([row["id"] for row in rows],
-                         ["session-persistence-jsonl", *native_run._ALWAYS_DISABLED_ROWS])
-
-    def test_the_private_home_carries_the_host_proven_acp_profile(self):
-        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
-        result = run(self.fast_request("prompt", scope="write"),
-                     observer=lambda _f: FEEDBACK_CONTINUE,
-                     services=None, cancelled=lambda: False)
-        self.assertEqual(result.end.status, "ok", result.end.message)
-        profile = self.dsh_home / "profiles" / "acp"
-        manifest = json.loads((profile / "package.json").read_text())
-        self.assertEqual(manifest["dsh"]["profile"]["bundles"],
-                         ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-acp-app"])
-        self.assertEqual(manifest["dsh"]["profile"]["patchReload"], "startup")
-        self.assertEqual((profile / "cordis.patch.yml").read_text().splitlines()[-1], "[]")
-        self.assertEqual((profile / "cordis.yml").read_text().splitlines()[-1], "[]")
-        self.assertIn("packages:", (profile / "pnpm-workspace.yaml").read_text())
 
 
 if __name__ == "__main__":  # pragma: no cover - direct execution convenience
