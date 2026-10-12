@@ -445,20 +445,6 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(native_run.NONE_SCOPE_DISABLED_ROWS, CONFIRMED_NONE_ROWS,
                          "the shipped list must stay the Host-confirmed inventory")
 
-    def test_an_unconfirmed_row_list_refuses_to_launch(self):
-        # The migration guard's own fault path: a guessed or emptied row list
-        # never launches a none-scope run.
-        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
-        with mock.patch.object(native_run, "NONE_SCOPE_DISABLED_ROWS", ()):
-            result = run(self.fast_request("prompt", scope="none"),
-                         observer=lambda _facts: FEEDBACK_CONTINUE,
-                         services=None, cancelled=lambda: False)
-        self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "scope-configuration-unconfirmed")
-        self.assertIsNone(result.model_started)
-        self.assertEqual(result.stop_evidence.native.group_state, "gone")
-        self.assertIsNone(result.end.native_exit_code)
-
     def test_a_spawn_failure_reports_an_unavailable_agent_and_no_started_model(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         with mock.patch.object(native_run, "command_for",

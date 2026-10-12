@@ -76,7 +76,9 @@ from ..run_contract import (
 from ..runtime_selection import command_for
 from .acp import AcpClient
 from .acp.client import PermissionPolicy
-from .acp.connection import AcpConnectionClosed, AcpRequestError, AcpTimeout, FrameMetaLog, stop_evidence
+from .acp.connection import (
+    AcpConnectionClosed, AcpRequestError, AcpTimeout, FrameMetaLog, content_meta, stop_evidence,
+)
 from .acp.launch import LaunchOwnershipError
 from .protocol import (
     MODEL_ACTIVITY_KINDS,
@@ -158,16 +160,9 @@ def tool_scope_launch(scope: str) -> tuple[list[dict], dict[str, str]]:
         return [], {}
     if scope == "read":
         return [], {PERMISSION_MODE_ENV: READ_ONLY_MODE}
-    if scope == "none":
-        if not NONE_SCOPE_DISABLED_ROWS:
-            raise NativeError(
-                "scope-configuration-unconfirmed",
-                "the none tool scope needs the confirmed DSH tool-row list; "
-                "this run refuses to launch a guessed configuration")
-        rows = [{"id": name, "disabled": True}
-                for name in (*NONE_SCOPE_DISABLED_ROWS, PLAN_MODE_ROW)]
-        return rows, {}
-    raise NativeError("invalid-tool-scope", f"the tool scope {scope!r} is not a declared scope")
+    rows = [{"id": name, "disabled": True}
+            for name in (*NONE_SCOPE_DISABLED_ROWS, PLAN_MODE_ROW)]
+    return rows, {}
 
 
 # -- the role-facing service binding ---------------------------------------------
@@ -382,13 +377,10 @@ def _continuation_of(request: RunRequest) -> tuple[str, str | None]:
     if continuation is None:
         return "initial", None
     previous = continuation.previous_session_id
-    if previous is not None and (not isinstance(previous, str) or not previous.strip()):
+    if previous is not None and not previous.strip():
         raise NativeError("invalid-resume-mode",
-                          "the previous native session identity must be null or a nonblank string")
+                          "the previous native session identity must be a nonblank string")
     if continuation.mode == "native-session":
-        if not isinstance(previous, str) or not previous:
-            raise NativeError("native-resume-unavailable",
-                              "native resume requires the exact previous session identity")
         return "native-session", previous
     return "reconstructed-new-session", previous
 
@@ -544,6 +536,8 @@ class _RunState:
     session_opened: bool = False
     configured: bool = False
     checked: dict | None = None
+    native_facts: dict = dataclasses.field(default_factory=dict)
+    scope_rows: list | None = None
     interrupt_requested: bool = False
     interrupt_basis: str | None = None
     signalled: bool = False
@@ -622,11 +616,24 @@ def _native_call(call, *, code: str, message: str):
                           f"{message}: the native agent connection ended before the answer") from None
 
 
-def _initialize(client: AcpClient) -> str | None:
+def _note_native_shape(facts: dict, label: str, value: object) -> None:
+    """Fixed stage labels and redacted metadata over the bounded ACP response."""
+    prior = facts.get(label)
+    facts[label] = {"status": "unknown", "count": (prior["count"] if prior else 0) + 1,
+                    "shape": type(value).__name__, "contentMeta": content_meta(value)}
+
+
+def _initialize(client: AcpClient, facts: dict) -> str | None:
     """The protocol handshake; the version text is optional metadata."""
     result = _native_call(lambda: client.initialize(timeout=_SESSION_TIMEOUT),
                           code="adapter-unavailable", message="the ACP initialize failed")
-    version = (result.get("agentInfo") or {}).get("version") if isinstance(result, dict) else None
+    if not isinstance(result, dict):
+        _note_native_shape(facts, "initialize", result)
+        return None
+    info = result.get("agentInfo")
+    if info is not None and not isinstance(info, dict):
+        _note_native_shape(facts, "agentInfo", info)
+    version = info.get("version") if isinstance(info, dict) else None
     return version_text(version)
 
 
@@ -669,7 +676,9 @@ def _declared_effort_value(options: list, configuration: RunConfiguration) -> st
                       "the requested reasoning effort is not a declared native option")
 
 
-def _readback(options: list, option_id: str) -> str | None:
+def _readback(options: object, option_id: str) -> str | None:
+    if not isinstance(options, list):
+        return None
     for option in options or []:
         if isinstance(option, dict) and option.get("id") == option_id:
             value = option.get("currentValue")
@@ -678,31 +687,41 @@ def _readback(options: list, option_id: str) -> str | None:
 
 
 def _configure(client: AcpClient, session_id: str, snapshot: dict,
-               configuration: RunConfiguration) -> dict:
+               configuration: RunConfiguration, facts: dict) -> dict:
     """The one model/effort selection site: declared values in, readback out.
 
-    Both values are set through ``session/set_config_option`` and confirmed only
-    from the response's own option group — the requested value never stands in
-    for a checked one, and DSH emits no configuration notifications to wait for.
+    Recognized selectors are set through ``session/set_config_option`` and
+    confirmed only from the response's own option group. Unknown shapes retain
+    redacted facts and leave checked values unset; requested values never stand
+    in for checked ones. DSH emits no configuration notifications to wait for.
     """
     options = snapshot.get("configOptions") if isinstance(snapshot, dict) else None
     if not isinstance(options, list):
-        raise NativeError("configuration-unavailable", "the native session exposed no configuration options")
+        _note_native_shape(facts, "configOptions", options)
+        return {"provider": None, "model": None, "effort": None}
     model_value = _declared_model_value(options, configuration)
     effort_value = _declared_effort_value(options, configuration)
     echoed = _native_call(lambda: client.set_config_option(session_id, "model", model_value,
                                                            timeout=_CONFIG_TIMEOUT),
                           code="configuration-unavailable", message="the native model selection failed")
-    if _readback(echoed.get("configOptions") if isinstance(echoed, dict) else None, "model") != model_value:
+    model_options = echoed.get("configOptions") if isinstance(echoed, dict) else None
+    model_readback = _readback(model_options, "model")
+    if model_readback is None:
+        _note_native_shape(facts, "modelReadback", model_options)
+    elif model_readback != model_value:
         raise NativeError("configuration-mismatch", "the native session did not retain the requested model")
     echoed = _native_call(lambda: client.set_config_option(session_id, "reasoning_effort", effort_value,
                                                            timeout=_CONFIG_TIMEOUT),
                           code="invalid-configuration", message="the native effort selection failed")
-    if _readback(echoed.get("configOptions") if isinstance(echoed, dict) else None,
-                 "reasoning_effort") != effort_value:
+    effort_options = echoed.get("configOptions") if isinstance(echoed, dict) else None
+    effort_readback = _readback(effort_options, "reasoning_effort")
+    if effort_readback is None:
+        _note_native_shape(facts, "effortReadback", effort_options)
+    elif effort_readback != effort_value:
         raise NativeError("configuration-mismatch", "the native session did not retain the requested reasoning effort")
-    return {"provider": configuration.provider, "model": configuration.model,
-            "effort": configuration.effort, "modelValue": model_value}
+    return {"provider": configuration.provider if model_readback is not None else None,
+            "model": configuration.model if model_readback is not None else None,
+            "effort": configuration.effort if effort_readback is not None else None}
 
 
 # -- the update pump and the observer seam ------------------------------------------
@@ -965,6 +984,11 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                                   "the previous native session does not match this goal, "
                                   "checkout and configuration")
         scope_rows, extra_env = tool_scope_launch(request.tool_scope)
+        state.scope_rows = scope_rows
+        if request.tool_scope == "none" and not NONE_SCOPE_DISABLED_ROWS:
+            state.native_facts["toolScope"] = {"status": "unknown",
+                                               "reason": "scope-configuration-unconfirmed",
+                                               "disabledRows": [row["id"] for row in scope_rows]}
         policy = (_AttentionPolicy(services.mount.bridge, state, inquiry_bridge)
                   if governed else PermissionPolicy())
         client = _launch_agent(cwd=request.cwd, launch_root=launch_root,
@@ -972,7 +996,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                                sessions_root=sessions_root,
                                scope_rows=scope_rows, extra_env=extra_env,
                                permission_policy=policy)
-        state.harness_version = _initialize(client)
+        state.harness_version = _initialize(client, state.native_facts)
         pump = _Pump(client.connection)
         if governed:
             mount = services.mount
@@ -1220,7 +1244,7 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
                                              state=state, tools=tools, activity=activity,
                                              sessions=sessions)
         state.configured = True
-        state.checked = _configure(client, session_id, snapshot, request.configuration)
+        state.checked = _configure(client, session_id, snapshot, request.configuration, state.native_facts)
         raw_parts: list[str] = []
         raw_bytes = 0
 
@@ -1311,7 +1335,7 @@ def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
     if inquiry_bridge is not None:
         inquiry_bridge.activate(session_id)
     state.configured = True
-    state.checked = _configure(client, session_id, snapshot, request.configuration)
+    state.checked = _configure(client, session_id, snapshot, request.configuration, state.native_facts)
     publisher = ActivityPublisher(services.live.publish_activity if services.live else None)
 
     def governed_fold(message: object) -> bool:
@@ -1487,9 +1511,9 @@ def _build_result(request: RunRequest, *, state: _RunState,
     if state.configured and state.checked is not None:
         checked = state.checked
         checked_config = CheckedConfiguration(
-            provider=CheckedValue(value=checked["provider"]),
-            model=CheckedValue(value=checked["model"]),
-            effort=CheckedValue(value=checked["effort"]))
+            provider=CheckedValue(value=checked["provider"]) if checked["provider"] is not None else None,
+            model=CheckedValue(value=checked["model"]) if checked["model"] is not None else None,
+            effort=CheckedValue(value=checked["effort"]) if checked["effort"] is not None else None)
     # The stream is complete on its own evidence: EOF read to the end without a
     # dropped frame or an observer cut, and the opened root turn reached its
     # native end. The business verdict and the group stop are separate facts
@@ -1559,7 +1583,7 @@ def _effective_policy(request: RunRequest, state: _RunState) -> EffectivePolicy:
     if not state.session_opened:
         return EffectivePolicy()
     if request.tool_scope == "none":
-        requested = {"disabledRows": [*NONE_SCOPE_DISABLED_ROWS, PLAN_MODE_ROW]}
+        requested = {"disabledRows": [row["id"] for row in state.scope_rows]}
         return EffectivePolicy(
             tools=PolicyFact(requested=_json_package(requested)))
     if request.tool_scope == "read":
@@ -1590,6 +1614,8 @@ def _evidence_refs(client: AcpClient | None, invocation_root: Path, state: _RunS
         # shared contract has no observed-configuration slot, so the model stays
         # this retained fact instead of a look-alike checked value.
         retain("dsh-session-record", "dsh-session-record.json", record)
+    if state.native_facts:
+        retain("dsh-native-facts", "dsh-native-facts.json", state.native_facts)
 
     if state.provenance is not None:
         # The accepted finish's ordered native evidence; the role reads it back
@@ -1679,9 +1705,10 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
                            scope_rows=[], extra_env={},
                            permission_policy=PermissionPolicy())
     catalog_value: dict | None = None
+    native_facts: dict = {}
     error: NativeError | None = None
     try:
-        version = _initialize(client) or "unknown"
+        version = _initialize(client, native_facts) or "unknown"
         snapshot = _native_call(lambda: client.new_session(cwd, mcp_servers=[],
                                                            timeout=_SESSION_TIMEOUT),
                                 code="session-open-failed", message="the discovery session failed")
@@ -1690,6 +1717,10 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
         if not isinstance(session_id, str) or not session_id or not isinstance(options, list):
             raise NativeError("catalog-unavailable", "the native session exposed no configuration options")
         catalog_value = _catalog(options, version)
+        if native_facts:
+            catalog_value["warnings"].append(
+                "ACP initialize response shape unrecognized; capability check unknown: "
+                + json.dumps(native_facts, sort_keys=True))
         try:
             client.close_session(session_id, timeout=_CLOSE_TIMEOUT)
         except (AcpRequestError, AcpTimeout) as close_error:

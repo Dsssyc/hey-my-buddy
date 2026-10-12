@@ -17,7 +17,6 @@ them.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from .....errors import BoardError
@@ -112,31 +111,25 @@ class AcpClient:
 
     # -- session path ----------------------------------------------------------
 
-    def initialize(self, timeout: float = INITIALIZE_TIMEOUT) -> dict:
+    def initialize(self, timeout: float = INITIALIZE_TIMEOUT) -> object:
         """Negotiate the protocol; returns the agent's raw initialize result."""
         result = self.connection.request("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
             "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False},
                                    "terminal": False},
         }, timeout)
-        if not isinstance(result, dict):
-            raise BoardError("ACP_PROTOCOL_FAULT", "initialize returned a non-object result")
         return result
 
     def new_session(self, cwd: str, mcp_servers: list | None = None,
                     timeout: float = SESSION_TIMEOUT) -> dict:
         """Create a session; ``mcpServers`` is always present on the wire."""
         servers = self._checked_mcp_servers(mcp_servers)
-        if not os.path.isabs(str(cwd)):
-            raise BoardError("ACP_SESSION_CWD", "session cwd must be an absolute path", cwd=str(cwd))
         return self.connection.request("session/new", {"cwd": str(cwd), "mcpServers": servers}, timeout)
 
     def resume_session(self, session_id: str, cwd: str, mcp_servers: list | None = None,
                        timeout: float = SESSION_TIMEOUT) -> dict:
         """Resume a persisted session; the response carries no session id."""
         servers = self._checked_mcp_servers(mcp_servers)
-        if not os.path.isabs(str(cwd)):
-            raise BoardError("ACP_SESSION_CWD", "session cwd must be an absolute path", cwd=str(cwd))
         return self.connection.request("session/resume", {"sessionId": str(session_id),
                                                           "cwd": str(cwd),
                                                           "mcpServers": servers}, timeout)
