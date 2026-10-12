@@ -104,10 +104,10 @@ def outcome(case):
     if case == "assistance":
         disposition = "assistance"
         request = {"summary": "Need helper", "attempted": "Inspected source", "neededWork": "Check dependency",
-                   "expectedArtifacts": [], "acceptance": "Dependency verified"}
+                   "expectedArtifacts": [], "acceptance": "Dependency verified", "suggestedProfileId": None}
     if case == "completed-request":
         request = {"summary": "Contradictory request", "attempted": "Finished", "neededWork": "None",
-                   "expectedArtifacts": [], "acceptance": "Already complete"}
+                   "expectedArtifacts": [], "acceptance": "Already complete", "suggestedProfileId": None}
     summary = "fixture work completed"
     if case == "long-summary-citation":
         summary = "调研结论。" * 600 + "\n<oai-mem-citation>reference</oai-mem-citation>"
@@ -120,6 +120,29 @@ def main():
         print("codex-cli fixture")
         return
     case = os.environ.get("BUDDY_CODEX_FIXTURE_CASE", "ok")
+    native_config = {"mcp_servers": {"user-tool": {}},
+                     "features": {"apps": True}, "web_search": "enabled", "approval_policy": "on-request"}
+    if case == "custom-provider":
+        native_config["model_provider"] = "fixture-provider"
+    elif case == "provider-null":
+        native_config["model_provider"] = None
+    user_config = Path(os.environ.get("CODEX_HOME") or Path(os.environ["HOME"]) / ".codex") / "config.toml"
+    if user_config.is_file():
+        native_config.update(tomllib.loads(user_config.read_text()))
+    provider = native_config.get("model_provider") or "openai"
+    def merge(target, update):
+        for key, value in update.items():
+            if isinstance(value, dict):
+                merge(target.setdefault(key, {}), value)
+            else:
+                target[key] = value
+    for index, argument in enumerate(sys.argv[:-1]):
+        if argument == "-c":
+            key, _, literal = sys.argv[index + 1].partition("=")
+            patch = tomllib.loads("value = " + literal)["value"]
+            for segment in reversed(key.split(".")):
+                patch = {segment: patch}
+            merge(native_config, patch)
     for raw in sys.stdin:
         req = json.loads(raw)
         if "id" not in req:
@@ -128,9 +151,9 @@ def main():
         if method == "initialize":
             send({"id": ident, "result": {"userAgent": "fixture"}})
         elif method == 'config/read':
-            configured = tomllib.loads((Path(os.environ['CODEX_HOME']) / 'config.toml').read_text())
-            if case == 'readonly-config-mismatch':
-                configured['features']['apps'] = True
+            configured = dict(native_config)
+            if case == 'readonly-config-mismatch' and 'permissions' in configured:
+                configured['permissions']['buddy-router']['network']['enabled'] = True
             send({'id': ident, 'result': {'config': configured}})
         elif method == "account/read":
             if case == "account-unknown":
@@ -180,31 +203,42 @@ def main():
             thread_id = f"thread-{state['next']}"
             state["next"] += 1
             state["threads"][thread_id] = {"cwd": params["cwd"], "turns": [],
-                                         'model': params['model'],
+                                         'model': params['model'], 'home': os.environ.get('HOME'), 'start': params, 'argv': sys.argv,
                                          'codexHome': os.environ.get('CODEX_HOME'),
                                          'sqliteHome': os.environ.get('CODEX_SQLITE_HOME')}
             write_state(state)
             policy = ({'activePermissionProfile': {'id': params['permissions']},
                        'sandbox': {'type': 'readOnly', 'networkAccess': False}, 'approvalPolicy': 'never',
-                       'model': params['model'], 'modelProvider': 'openai', 'cwd': params['cwd']}
+                       'model': params['model'], 'home': os.environ.get('HOME'), 'start': params, 'argv': sys.argv, 'modelProvider': provider, 'cwd': params['cwd']}
                       if params.get('permissions') else {})
             if case == 'readonly-policy-mismatch':
                 policy['sandbox']['networkAccess'] = True
             send({"id": ident, "result": {**policy, "thread": {"id": thread_id, "cwd": params["cwd"],
-                                                       "modelProvider": "openai", "turns": []}}})
+                                                       "modelProvider": provider, "turns": []}}})
         elif method == "thread/read":
+            if case == 'read-refused':
+                send({"id": ident, "error": {"code": -32600, "message":
+                      f"thread not loaded: {params['threadId']}"}})
+                continue
             state = read_state()["threads"].get(params["threadId"])
             if not state or state.get('codexHome') != os.environ.get('CODEX_HOME'):
                 send({"id": ident, "error": {"code": -1, "message": "missing"}})
             else:
                 send({"id": ident, "result": {"thread": {"id": params["threadId"], **state}}})
         elif method == "thread/resume":
+            if case in ('resume-refused', 'resume-other-refusal'):
+                message = (f"no rollout found for thread id {params['threadId']}" if case == 'resume-refused'
+                           else 'required MCP server failed')
+                send({"id": ident, "error": {"code": -32600, "message": message}})
+                continue
+            if case == 'resume-no-answer':
+                continue
             state = read_state()["threads"].get(params["threadId"])
             if not state or state.get('codexHome') != os.environ.get('CODEX_HOME'):
                 send({"id": ident, "error": {"code": -1, "message": "missing"}})
             else:
                 send({"id": ident, "result": {"thread": {"id": params["threadId"], "cwd": state["cwd"],
-                                                           "modelProvider": "openai", "turns": state["turns"]}}})
+                                                           "modelProvider": provider, "turns": state["turns"]}}})
         elif method == "turn/start":
             thread_id = params["threadId"]
             state = read_state()
@@ -226,6 +260,16 @@ def main():
             send({"id": ident, "result": {"turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send_usage(case, thread_id, turn_id, turn_index)
+            if case in ("schema-failure", "long-schema-failure"):
+                turn = {"id": turn_id, "status": "failed", "items": [], "error": {
+                    "message": "Invalid schema: required is missing suggestedProfileId" if case == "schema-failure" else "原生格式错误𝄞" * 2000,
+                    "codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 400}},
+                    "additionalDetails": "invalid_request_error / invalid_json_schema",
+                    "unrelated": "do not retain this field"}}
+                send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn}})
+                state["threads"][thread_id]["turns"].append(turn)
+                write_state(state)
+                continue
             if case == "hang":
                 # Only the hang scenario records an explicit start fact, and only
                 # after the turn/start response and the turn/started notification
@@ -323,7 +367,7 @@ def main():
             status = "failed" if case in ("failed", "approval-failed", "quota-failure") else "completed"
             turn = {"id": turn_id, "status": status, "items": [] if case == "no-final" else [item]}
             if case == "quota-failure":
-                turn["error"] = {"message": "provider wording that must never be retained",
+                turn["error"] = {"message": "native usage limit exceeded",
                                  "codexErrorInfo": "usageLimitExceeded"}
             send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn}})
             state["threads"][thread_id]["turns"].append(turn)

@@ -1,8 +1,8 @@
-"""Codex fast Router uses a private native catalog and verifies the full stream.
+"""Codex fast Router uses the user's native configuration and verifies the full stream.
 
 Every case runs through the registered role seam — the same
 ``start_router_preparation`` entry the Router's DecisionAdapter uses — so the
-no-tool parameters, the policy layers readback and the EOF drain are asserted
+permission parameters, the policy readback and the EOF drain are asserted
 on the production path with the offline ``no_tool_codex.py`` App Server.
 """
 from __future__ import annotations
@@ -15,8 +15,6 @@ from pathlib import Path
 
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
-from hey_my_buddy.buddy.harnesses.codex.config import prepare_no_tool_home
-from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
 from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_preparation
 from hey_my_buddy.buddy.roles.structured_call import collect, correction_code
 
@@ -43,6 +41,7 @@ class NoToolCodexTests(unittest.TestCase):
             "apply_patch_tool_type": "freeform", "experimental_supported_tools": ["clock"],
             "supported_reasoning_levels": [{"effort": "low"}], "tool_mode": "code_mode_only",
             "multi_agent_version": "v2"}]}))
+        (self.home / "config.toml").write_text('model_provider = "openai"\n[features]\napps = true\n\n[mcp_servers.fixture]\ncommand = "fixture-mcp"\n')
         self.cwd = self.root / "empty"
         self.cwd.mkdir(mode=0o700)
 
@@ -65,7 +64,7 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertIsNotNone(handle.wait(timeout + 9), "the fast role controller did not exit")
         return collect(handle), handle.role_run_control, directory
 
-    def test_capability_and_empty_native_tool_configuration(self):
+    def test_capability_inherits_user_configuration_and_observes_zero_tools(self):
         self.assertTrue(CodexAdapter().no_tool_structured)
         outcome, control, directory = self.run_case()
         self.assertEqual(outcome.status, "ok", outcome.result)
@@ -80,19 +79,16 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual((evidence["events"], evidence["toolCalls"], evidence["unsettledToolCalls"],
                           evidence["truncated"]), ([], 0, 0, False))
         trace = json.loads((directory / "trace.json").read_text())
-        self.assertEqual(trace["thread"]["environments"], [])
-        self.assertEqual(trace["thread"]["dynamicTools"], [])
-        self.assertEqual(trace["thread"]["selectedCapabilityRoots"], [])
-        self.assertEqual(trace["turns"][0]["environments"], [])
-        self.assertNotIn("Pick a profile", trace["thread"]["baseInstructions"])
-        private = json.loads((Path(trace["home"]) / "no-tool-models.json").read_text())["models"][0]
-        self.assertEqual(private["shell_type"], "disabled")
-        self.assertIsNone(private["apply_patch_tool_type"])
-        self.assertEqual(private["experimental_supported_tools"], [])
-        self.assertEqual(private["tool_mode"], "direct")
-        self.assertIsNone(private["multi_agent_version"])
-        self.assertFalse((Path(control["nativeRoot"]) / "codex-home/auth.json").is_symlink())
-        self.assertTrue((self.home / "auth.json").is_file())
+        self.assertEqual(trace["home"], str(self.home))
+        self.assertEqual(trace["userHome"], str(self.root))
+        self.assertIs(trace["thread"]["ephemeral"], True)
+        for name in ("baseInstructions", "environments", "dynamicTools", "selectedCapabilityRoots", "allowProviderModelFallback"):
+            self.assertNotIn(name, trace["thread"])
+        self.assertNotIn("environments", trace["turns"][0])
+        self.assertFalse(list(Path(control["nativeRoot"]).rglob("codex-home")))
+        self.assertFalse((self.home / "auth.json").is_symlink())
+        self.assertEqual((self.home / "auth.json").read_text(), '{"test":"fake-auth-only"}')
+        self.assertEqual(json.loads((self.home / "models_cache.json").read_text())["models"][0]["multi_agent_version"], "v2")
 
     def test_adapter_entrypoint_and_collector(self):
         directory = self.root / "adapter"
@@ -122,18 +118,24 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual(outcome.status, 'ok', outcome.result)
         self.assertTrue(outcome.result['zeroToolVerified'])
 
-    def test_compatible_cache_from_another_client_version_and_private_instructions(self):
+    def test_user_cache_and_configuration_are_not_rewritten(self):
+        config = self.home / 'config.toml'
         cache = self.home / 'models_cache.json'
-        data = json.loads(cache.read_text())
-        data['client_version'] = '0.158.0'
-        cache.write_text(json.dumps(data))
-        outcome, control, _directory = self.run_case()
+        before_config, before_cache = config.read_bytes(), cache.read_bytes()
+        outcome, _control, _directory = self.run_case()
         self.assertEqual(outcome.status, 'ok', outcome.result)
-        import tomllib
-        config = tomllib.loads((Path(control['nativeRoot']) / 'codex-home/config.toml').read_text())
-        self.assertEqual(config['project_doc_max_bytes'], 0)
-        self.assertFalse(config['skills']['include_instructions'])
-        self.assertFalse(config['skills']['bundled']['enabled'])
+        self.assertEqual(config.read_bytes(), before_config)
+        self.assertEqual(cache.read_bytes(), before_cache)
+
+    def test_native_usage_is_returned_for_no_tool_turns(self):
+        outcome, _control, _directory = self.run_case('usage')
+        self.assertEqual(outcome.status, 'ok', outcome.result)
+        self.assertEqual(outcome.result['tokenUsage']['inputTokens'], 17)
+        self.assertEqual(outcome.result['tokenUsage']['outputTokens'], 5)
+        self.assertEqual(outcome.result['tokenUsage']['cachedInputTokens'], 3)
+        self.assertEqual(outcome.result['tokenUsage']['reasoningOutputTokens'], 1)
+        self.assertEqual(outcome.result['tokenUsage']['completeness'], 'complete')
+        self.assertNotIn('totalTokens', outcome.result['tokenUsage'])
 
     def test_every_tool_shape_and_late_tool_fails_closed(self):
         for case in ("typed", "collab", "raw", "raw-no-id", "turn-item", "late", "request"):
@@ -204,19 +206,13 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertIs(outcome.result["zeroToolVerified"], False)
         self.assertIs(outcome.result["nativeInterruptRequested"], True)
         self.assertTrue(outcome.result["processState"]["shutdownConfirmed"])
-        self.assertFalse((Path(control["nativeRoot"]) / "codex-home/auth.json").is_symlink())
+        self.assertFalse(list(Path(control["nativeRoot"]).rglob("codex-home")))
 
-    def test_missing_or_mismatched_native_metadata_refused(self):
-        cache = self.home / 'models_cache.json'
-        cache.unlink()
-        with self.assertRaises(CodexProtocolError) as caught:
-            prepare_no_tool_home(self.root / "private", {"CODEX_HOME": str(self.home)},
-                                 {"model": "fixture-model", "effort": "low"})
-        self.assertEqual(caught.exception.code, "no-tool-policy-unverified")
-        outcome, _control, _directory = self.run_case('missing-metadata')
-        self.assertEqual(outcome.status, 'failed', outcome.result)
-        self.assertIs(outcome.result['modelStarted'], False)
-        self.assertTrue(outcome.result['processState']['shutdownConfirmed'])
+    def test_absent_user_model_cache_does_not_refuse_a_native_catalog(self):
+        (self.home / 'models_cache.json').unlink()
+        outcome, _control, _directory = self.run_case()
+        self.assertEqual(outcome.status, 'ok', outcome.result)
+        self.assertTrue(outcome.result['zeroToolVerified'])
 
 
 if __name__ == "__main__":

@@ -95,6 +95,7 @@ class BillingQuotaTests(BoardTestCase):
         billing, quota, failure = read([sys.executable, str(path)], {"HOME": str(self.directory), "PATH": os.environ.get("PATH", "")})
         self.assertIsNone(failure)
         self.assertEqual(billing["kind"], "subscription")
+        self.assertEqual(billing["provider"], "openai")
         self.assertEqual(quota["scope"]["provider"], "openai")
         self.assertEqual(quota["windows"][0]["usedPercent"], 42.5)
         self.assertNotIn("balanceZero", quota)  # A subscription credit balance of zero proves no exhaustion.
@@ -111,7 +112,7 @@ class BillingQuotaTests(BoardTestCase):
         record = {"status": "ready", "command": ["mock-codex"], "fingerprint": {"id": 1}}
         with patch("hey_my_buddy.blackboard.service.harness_health._snapshot", return_value={"fixture": 1}), \
              patch("hey_my_buddy.blackboard.service.harness_health._discover", return_value=record), \
-             patch("hey_my_buddy.buddy.harnesses.codex.account_probe.read", return_value=(codex_account({"type": "chatgpt", "planType": "pro"}, stamp()), None, None)) as probe:
+             patch("hey_my_buddy.buddy.harnesses.codex.account_probe.read", return_value=({**codex_account({"type": "chatgpt", "planType": "pro"}, stamp()), "provider": "openai"}, None, None)) as probe:
             health.refresh("codex", force=True)
             health.refresh("codex", force=True)
             self.assertEqual(probe.call_count, 1)

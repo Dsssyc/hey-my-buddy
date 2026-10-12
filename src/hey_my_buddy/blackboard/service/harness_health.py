@@ -374,7 +374,7 @@ class HarnessHealth:
             if row['revision'] == health['revision']:
                 if quota is not None:
                     from ..evaluation.native_observations import record_quota
-                    record_quota(db, 'codex', {**quota, 'provider': 'openai'})
+                    record_quota(db, 'codex', quota)
                 record = json.loads(row['record_json'])
                 previous_failure = record.pop('accountReadFailure', None)
                 recovered_stop = previous_failure is not None and previous_failure['reasonCode'] == 'HARNESS_ACCOUNT_STOP_UNCONFIRMED'
@@ -387,7 +387,9 @@ class HarnessHealth:
                 if billing is None:
                     from ...protocol.billing import fact
                     billing = fact('unknown', 'codex/account-read', observed_at)
-                record['billingByProvider'] = {'openai': billing}
+                provider = billing.get('provider', 'unknown')
+                billing = {key: value for key, value in billing.items() if key != 'provider'}
+                record['billingByProvider'] = {provider: billing}
                 db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'", (canonical_json(record),))
                 if recovered_stop:
                     db.execute("UPDATE harness_health SET status='ready',expires_at=? WHERE adapter='codex'", (_later(READY_SECONDS),))

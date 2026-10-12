@@ -7,6 +7,7 @@ import hashlib
 import json
 import threading
 import uuid
+import unittest
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.claude import native_run
@@ -15,6 +16,30 @@ from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request, decode
 from hey_my_buddy.buddy.roles import run_controller, run_execution
 from hey_my_buddy.json_codec import canonical_json
 from buddy.harnesses.claude.test_native_run import CONFIGURATION, NativeRunCase
+
+
+class CodexSchemaTests(unittest.TestCase):
+    def test_every_codex_object_has_required_properties_and_rejects_additions(self):
+        def check(node):
+            if isinstance(node, dict):
+                if node.get("type") == "object":
+                    self.assertEqual(set(node["required"]), set(node["properties"]))
+                    self.assertIs(node["additionalProperties"], False)
+                for child in node.values():
+                    check(child)
+            elif isinstance(node, list):
+                for child in node:
+                    check(child)
+
+        check(worker_format("codex").schema)
+
+    def test_codex_profile_suggestion_is_required_and_nullable(self):
+        request = worker_format("codex").schema["properties"]["outcome"]["anyOf"][1]["properties"]["request"]
+        self.assertIn("suggestedProfileId", request["required"])
+        self.assertEqual(request["properties"]["suggestedProfileId"],
+                         {"anyOf": [{"type": "string"}, {"type": "null"}]})
+        claude_request = worker_format("claude").schema["properties"]["outcome"]["anyOf"][1]["properties"]["request"]
+        self.assertNotIn("suggestedProfileId", claude_request["required"])
 
 
 class SchemaWorkerTests(NativeRunCase):
@@ -119,10 +144,10 @@ class SchemaWorkerTests(NativeRunCase):
                 self.assertIs(payload["processState"]["shutdownConfirmed"], stopped is True)
 
     def test_native_schemas_stay_fixed_and_full_prompt_hashes_include_the_worker_role(self):
-        # Schemas retain their description/optional-field differences; ADR-030
+        # Codex requires a nullable profile suggestion; ADR-030
         # pins the full assembled prompt, including the published Worker text.
         hashes = {
-            "codex": ("71b8134b2e41ebe2045afa8f3808f0f04b3cee52e0d979918ba4381c150dedec",
+            "codex": ("6757ce37fb0a6de3395b1cda877c5d4b5d78e4b9cff2bee6b6a4ee250dbafd8d",
                       "ea7db0557cc9718b5f5b8ecb2b89b8b82c05535c5dda1fe3c0dce6137ffdbc7f"),
             "claude": ("cd91d26ede0d45b6bed2b7747520a1358ab334874c26f9d19bd2f348ae5e15a3",
                        "99f649f8eae95e65bbf7d902bc84efb594024b9ad779e44d1930e2e5a16819a4"),

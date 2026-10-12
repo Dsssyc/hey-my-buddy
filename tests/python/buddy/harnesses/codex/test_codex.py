@@ -111,8 +111,9 @@ class CodexAdapterTests(unittest.TestCase):
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
-        self.assertEqual(outcome.result["nativeSession"]["nativeAppVisibility"], "not-listed-in-native-app")
-        self.assertEqual(outcome.result["nativeSession"]["storageScope"], "buddy-goal-private")
+        self.assertEqual(outcome.result["nativeSession"]["nativeAppVisibility"], "listed-in-native-app")
+        self.assertEqual(outcome.result["nativeSession"]["storageScope"], "harness-user-store")
+        self.assertEqual(outcome.result["nativeSession"]["storageOwner"], "harness-user-store")
         self.assertTrue(outcome.result["nativeSession"]["resumable"])
         turn = outcome.result["turn"]
         self.assertEqual(turn["outcome"]["disposition"], "completed")
@@ -174,129 +175,8 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.result["selectedModel"],
                          {"provider": "openai", "model": "fixture-model", "effort": "low"})
 
-    def test_coding_home_is_private_per_goal_and_keeps_source_auth_untouched(self):
-        from hey_my_buddy.private_dirs import native_root
-        auth = self.home / 'auth.json'
-        auth.write_text('fixture login')
-        context = self.context()
-        first = self.execute(context)
-        self.assertEqual(first.status, 'ok', first.to_report())
-        home = native_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex', context.task_id) / 'codex-home'
-        stored = json.loads(Path(self.environment['BUDDY_CODEX_FIXTURE_STATE']).read_text())
-        thread = stored['threads'][first.result['sessionId']]
-        self.assertEqual(thread['codexHome'], str(home))
-        self.assertEqual(thread['sqliteHome'], str(home))
-        self.assertEqual(stat.S_IMODE(home.stat().st_mode), 0o700)
-        self.assertFalse((home / 'auth.json').exists())
-        self.assertFalse((home / 'auth.json').is_symlink())
-        self.assertEqual(auth.read_text(), 'fixture login')
-        other = self.context(index=2)
-        other.task_id = other.turn_input['taskId'] = 'other-goal'
-        second = self.execute(other)
-        self.assertEqual(second.status, 'ok', second.to_report())
-        stored = json.loads(Path(self.environment['BUDDY_CODEX_FIXTURE_STATE']).read_text())
-        self.assertNotEqual(stored['threads'][second.result['sessionId']]['codexHome'], str(home))
-
-    def test_resumed_thread_reuses_home_and_recreates_only_a_private_auth_link(self):
-        from hey_my_buddy.private_dirs import native_root
-        (self.home / 'auth.json').write_text('fixture login')
-        first = self.execute(self.context())
-        home = native_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex', 'goal-1') / 'codex-home'
-        marker = home / 'retained-native-state'
-        marker.write_text('native state')
-        second = self.execute(self.context(index=2, previous=first.result['sessionId']))
-        self.assertEqual(second.status, 'ok', second.to_report())
-        self.assertEqual(second.result['sessionId'], first.result['sessionId'])
-        self.assertEqual(marker.read_text(), 'native state')
-        self.assertFalse((home / 'auth.json').is_symlink())
-
-
-    def test_native_credential_source_preserves_the_private_binding_shape(self):
-        from hey_my_buddy.buddy.harnesses.codex.home import credential_source
-        import hashlib
-        self.assertEqual(credential_source(self.environment), {
-            'home': str(self.home), 'source': 'native', 'credentialRevision': 0,
-            'identity': hashlib.sha256(str(self.home).encode()).hexdigest()})
-
-    def test_previous_unsettled_auth_is_retained_and_cannot_be_replaced(self):
-        from hey_my_buddy.private_dirs import native_root
-        root = native_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex', 'goal-1')
-        home = root / 'codex-home'
-        home.mkdir(parents=True)
-        source = self.home / 'auth.json'
-        source.write_text('source login')
-        (home / 'auth.json').symlink_to(source)
-        outcome = self.execute(self.context())
-        self.assertEqual(outcome.status, 'failed')
-        self.assertEqual(outcome.result['code'], 'codex-credential-retained')
-        self.assertTrue((home / 'auth.json').is_symlink())
-        self.assertFalse(Path(self.environment['BUDDY_CODEX_FIXTURE_STATE']).exists())
-
-    def test_unconfirmed_stop_retains_goal_auth_and_confirmed_cleanup_handles_refresh(self):
-        from hey_my_buddy.private_dirs import native_root
-        from hey_my_buddy.buddy.harnesses.codex.home import remove_coding_auth
-        context = self.context()
-        handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(15))
-        home = native_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex', 'goal-1') / 'codex-home'
-        # A native refresh can replace a login link with an attempt-private file.
-        (home / 'auth.json').write_text('refreshed private login')
-        frame = json.loads(Path(handle.log_paths['stdout']).read_text())
-        frame['stopEvidence']['native']['groupState'] = 'unknown'
-        Path(handle.log_paths['stdout']).write_text(json.dumps(frame))
-        outcome = self.adapter.collect(handle, context)
-        self.assertFalse(outcome.shutdown_confirmed)
-        self.assertTrue((home / 'auth.json').exists())
-        self.assertEqual(remove_coding_auth(home.parent), 1)
-        self.assertFalse((home / 'auth.json').exists())
-
-    def test_cleanup_failure_preserves_the_completed_turn_and_stop_evidence(self):
-        context = self.context()
-        handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(15))
-        with mock.patch('hey_my_buddy.buddy.harnesses.codex.home.remove_coding_auth', side_effect=OSError('fixture cleanup failure')):
-            outcome = self.adapter.collect(handle, context)
-        self.assertEqual(outcome.status, 'ok', outcome.to_report())
-        self.assertTrue(outcome.shutdown_confirmed)
-        self.assertEqual(outcome.result['turn']['outcome']['disposition'], 'completed')
-        self.assertEqual(outcome.result['credentialCleanup'], {'complete': False, 'error': 'filesystem-error'})
-
-    def test_pinned_credential_operations_never_follow_a_replaced_parent(self):
-        from contextlib import contextmanager
-        from hey_my_buddy.buddy.harnesses.codex import home as codex_home
-        from hey_my_buddy.errors import BoardError
-        real_pin = codex_home._pinned_home
-        source = self.home / 'auth.json'
-        source.write_text('source login')
-        outside = self.root / 'outside'
-        outside.mkdir()
-        sentinel = outside / 'auth.json'
-        sentinel.write_text('unrelated login')
-        for operation in ('create', 'remove'):
-            root = self.root / operation
-            home = root / 'codex-home'
-            home.mkdir(parents=True)
-            if operation == 'remove':
-                (home / 'auth.json').symlink_to(source)
-            @contextmanager
-            def replaced(path):
-                with real_pin(path) as fd:
-                    path.rename(root / 'pinned-old-home')
-                    path.symlink_to(outside, target_is_directory=True)
-                    yield fd
-            with mock.patch.object(codex_home, '_pinned_home', replaced), self.assertRaises(BoardError):
-                if operation == 'create':
-                    codex_home.prepare_coding_home(root, {'home': str(self.home)})
-                else:
-                    codex_home.remove_coding_auth(root)
-            self.assertEqual(sentinel.read_text(), 'unrelated login')
-            self.assertEqual(source.read_text(), 'source login')
-
-    def test_known_native_launch_failure_cleans_the_current_private_auth(self):
+    def test_known_native_launch_failure_leaves_user_auth_untouched(self):
         import stat as stat_module
-        from hey_my_buddy.private_dirs import native_root
         (self.home / 'auth.json').write_text('source login')
         broken = self.root / 'broken-codex'
         broken.write_text('not an executable payload')
@@ -307,8 +187,59 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.status, 'failed', outcome.to_report())
         self.assertIs(outcome.result['modelStarted'], False)
         self.assertTrue(outcome.shutdown_confirmed)
-        self.assertFalse((native_root(Path(context.environment['BUDDY_STATE_DIR']), 'codex', 'goal-1') / 'codex-home/auth.json').is_symlink())
+        self.assertFalse(list(Path(context.environment['BUDDY_STATE_DIR']).rglob('codex-home')))
         self.assertEqual((self.home / 'auth.json').read_text(), 'source login')
+
+    def test_worker_inherits_native_home_and_preserves_user_configuration(self):
+        auth = self.home / 'auth.json'
+        auth.write_text('fixture login')
+        config = self.home / 'config.toml'
+        config.write_text('model_provider = "fixture-provider"\n[features]\napps = true\n')
+        context = self.context()
+        context.spec['provider'] = 'fixture-provider'
+        outcome = self.execute(context)
+        self.assertEqual(outcome.status, 'ok', outcome.to_report())
+        state = json.loads(Path(self.environment['BUDDY_CODEX_FIXTURE_STATE']).read_text())
+        thread = state['threads'][outcome.result['sessionId']]
+        self.assertEqual(thread['codexHome'], str(self.home))
+        self.assertEqual(thread['home'], self.environment['HOME'])
+        self.assertIsNone(thread['sqliteHome'])
+        self.assertEqual(thread['start']['modelProvider'], 'fixture-provider')
+        self.assertNotIn('ephemeral', thread['start'])
+        self.assertFalse(list(Path(self.environment['BUDDY_STATE_DIR']).rglob('codex-home')))
+        self.assertEqual(auth.read_text(), 'fixture login')
+        self.assertFalse(auth.is_symlink())
+        self.assertEqual(config.read_text(), 'model_provider = "fixture-provider"\n[features]\napps = true\n')
+
+    def test_native_binding_contains_only_current_task_and_session_facts(self):
+        from hey_my_buddy.private_dirs import native_root
+        from hey_my_buddy.buddy.harnesses.codex.native_run import _binding_path
+        first = self.execute(self.context())
+        self.assertEqual(first.status, 'ok', first.to_report())
+        path = _binding_path(native_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex', 'goal-1'),
+                             first.result['sessionId'])
+        binding = json.loads(path.read_text())
+        self.assertEqual(set(binding), {'taskId', 'threadId', 'cwd', 'configuration',
+                                        'lastTurnId', 'lastAttemptId', 'lastInputSha256'})
+        second = self.execute(self.context(index=2, previous=first.result['sessionId']))
+        self.assertEqual(second.status, 'ok', second.to_report())
+        self.assertEqual(second.result['sessionId'], first.result['sessionId'])
+        binding = json.loads(path.read_text())
+        binding.update(codexHome='retired-private-home', credentialSource={'source': 'native'})
+        path.write_text(json.dumps(binding))
+        refused = self.execute(self.context(index=3, previous=first.result['sessionId']))
+        self.assertEqual(refused.result['code'], 'native-resume-unavailable')
+        rebuilt = self.execute(self.context(index=4, previous=first.result['sessionId'],
+                                            mode='reconstructed-new-session'))
+        self.assertEqual(rebuilt.status, 'ok', rebuilt.to_report())
+        self.assertNotEqual(rebuilt.result['sessionId'], first.result['sessionId'])
+
+    def test_discovery_reports_user_configured_provider(self):
+        (self.home / 'config.toml').write_text('model_provider = "fixture-provider"\n')
+        with mock.patch.dict(os.environ, self.environment, clear=True):
+            catalog = CodexAdapter().discover_models()
+        self.assertEqual([provider['provider'] for provider in catalog['providers']], ['fixture-provider'])
+        self.assertEqual(catalog['providers'][0]['models'][0]['id'], 'fixture-model')
 
     def test_long_report_survives_native_collection_and_remains_resumable(self):
         first = self.execute(self.context("long-summary-citation"))
@@ -368,7 +299,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(second.status, "failed")
         self.assertEqual(second.result["code"], "native-resume-unavailable")
 
-    def test_native_resume_requires_matching_private_binding_and_history(self):
+    def test_native_resume_requires_matching_task_binding_and_history(self):
         first = self.execute(self.context())
         self.assertEqual(first.status, "ok", first.to_report())
         thread_id = first.result["turn"]["sessionId"]
@@ -382,11 +313,10 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(reconstructed.status, "ok", reconstructed.to_report())
         self.assertNotEqual(reconstructed.result["turn"]["sessionId"], thread_id)
 
-    def test_api_key_auth_never_falls_back_to_billed_execution(self):
+    def test_api_key_auth_is_allowed_to_execute(self):
         outcome = self.execute(self.context("api-key"))
-        self.assertEqual(outcome.status, "failed")
-        self.assertEqual(outcome.result["code"], "account-plan-required")
-        self.assertNotIn("turn", outcome.result)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
 
     def test_capability_readiness_does_not_start_a_native_probe(self):
         with mock.patch("hey_my_buddy.buddy.harnesses.codex.adapter.cli_command", return_value=[str(FIXTURE)]), \
@@ -399,7 +329,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(catalog["providers"][0]["models"], [])
         self.assertFalse((self.root / "fixture.json").exists(), "discovery must not start a thread")
 
-    def test_inherited_api_key_is_removed_before_native_account_check(self):
+    def test_inherited_api_key_is_not_exposed_in_the_public_result(self):
         context = self.context()
         context.environment["OPENAI_API_KEY"] = "fixture-secret"
         outcome = self.execute(context)
@@ -509,7 +439,14 @@ class CodexAdapterTests(unittest.TestCase):
         result, _context = self.review('readonly-config-mismatch', index=42)
         self.assertEqual(result.result['code'], 'readonly-policy-unverified')
         self.assertIs(result.result['modelStarted'], False)
+        self.assertIs(result.result['nativeConfigPolicy']['permissions']['buddy-router']['network']['enabled'], True)
+        self.assertTrue(result.shutdown_confirmed)
+
+    def test_read_only_accepts_user_features_and_external_configuration(self):
+        result, _context = self.review('ok', index=46)
+        self.assertEqual(result.status, 'ok', result.result)
         self.assertIs(result.result['nativeConfigPolicy']['features']['apps'], True)
+        self.assertTrue(result.result['nativeConfigPolicy']['mcp_servers'])
         self.assertTrue(result.shutdown_confirmed)
 
     def test_generic_read_only_call_has_no_workflow_turn_or_agent_credential(self):
@@ -522,7 +459,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIsNone(result.result["usage"]["bytesRead"])
         self.assertFalse((self.root / "attempt-43" / "turn-output.json").exists())
 
-    def test_read_only_shutdown_removes_only_private_auth_link(self):
+    def test_read_only_inherits_user_home_and_leaves_user_auth_untouched(self):
         account_home = self.root / 'account-home'
         account_home.mkdir()
         source_auth = account_home / 'auth.json'
@@ -540,18 +477,12 @@ class CodexAdapterTests(unittest.TestCase):
         result = collect(handle)
         self.assertEqual(result.status, 'ok', result.result)
         self.assertTrue(result.shutdown_confirmed)
-        from hey_my_buddy.private_dirs import context_root
-        self.assertFalse((context_root(context, "codex") / 'review-native/codex-home/auth.json').is_symlink())
+        state = json.loads(Path(self.environment["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        thread = state["threads"][result.result["sessionId"]]
+        self.assertEqual(thread["codexHome"], str(account_home))
+        self.assertEqual(thread["home"], context.environment["HOME"])
+        self.assertFalse(list(Path(context.environment["BUDDY_STATE_DIR"]).rglob("codex-home")))
         self.assertEqual(source_auth.read_text(), 'private fixture auth')
-
-    def test_auth_cleanup_preserves_a_regular_file(self):
-        from hey_my_buddy.buddy.harnesses.codex.native_run import _remove_private_auth
-        home = self.root / 'native/codex-home'
-        home.mkdir(parents=True)
-        auth = home / 'auth.json'
-        auth.write_text('retain regular file')
-        _remove_private_auth(self.root / 'native')
-        self.assertEqual(auth.read_text(), 'retain regular file')
 
     def test_read_only_budget_interrupts_the_native_turn_and_keeps_unknown_read_bytes(self):
         result, _context = self.review('readonly-budget', index=45, budget_options={'toolCalls': 0})

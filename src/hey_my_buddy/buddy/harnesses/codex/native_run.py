@@ -1,7 +1,7 @@
 """The one native Codex run: a frozen request in, one factual result out.
 
 ADR-025 step 3-A1. This module is the single native execution body of the
-Codex harness: private-home preparation, the owned App Server spawn and
+Codex harness: evidence-directory preparation, the owned App Server spawn and
 handshake, the account/catalog initialization, the per-carrier thread
 configuration, turn admission and the event pump, the fast EOF drain and the
 conservative group stop each exist exactly once here, driven only by the
@@ -26,7 +26,7 @@ operation over the same spawn and handshake primitives; it never masquerades
 as a model run. The role-facing seam operations beside it —
 :func:`check_preparation`, :func:`prepare_run_services`,
 :func:`validate_turn_provenance`, :func:`session_facts`,
-:func:`cleanup_after_run` and :func:`native_evidence` — carry this harness's
+:func:`native_evidence` — carry this harness's
 own narrow facts to the shared role executor, which owns every prompt, completion rule and observer.
 """
 from __future__ import annotations
@@ -76,6 +76,7 @@ from ..run_contract import (
     MAX_UNKNOWN_EVENT_TYPES,
     MAX_VALUE_BYTES,
     NativeFailurePackage,
+    NativeErrorRecord,
     OptionalFrozenJsonAt,
     PolicyFact,
     ResultConfiguration,
@@ -96,7 +97,6 @@ from .config import (
     cli_command,
     native_environment,
     policy_matches,
-    prepare_no_tool_home,
     read_only_config,
 )
 from .protocol import (
@@ -123,6 +123,7 @@ _REFUSAL_MESSAGE = ("This Buddy Worker cannot approve interactive requests; "
                     "report attention in the structured outcome")
 _REFUSED_REQUEST_KEYS = ("threadId", "turnId", "itemId", "command", "cwd", "reason")
 _INIT_CLIENT = {"clientInfo": {"name": "hey_my_buddy", "title": "Hey My Buddy", "version": "0.9.0"}}
+DEFAULT_MODEL_PROVIDER = "openai"
 _BOUND_NOTIFICATIONS = 128
 #: The one residual bucket when a run sees more distinct unclassified native
 #: event types than the public result carries. The parenthesised name cannot
@@ -142,20 +143,28 @@ class _RunFacts:
 
     def __init__(self):
         self.unknown_counts: dict[str, int] = {}
+        self.thread_notifications: dict[str, int] = {}
         self.markers = 0
         self.denied: list[dict] = []
         self.dirty = False
 
     def note_unknown(self, label: object) -> None:
+        self._note_count(self.unknown_counts, label)
+
+    def note_thread_notification(self, label: object) -> None:
+        self._note_count(self.thread_notifications, label)
+
+    @staticmethod
+    def _note_count(counts: dict[str, int], label: object) -> None:
         name = label if isinstance(label, str) and re.fullmatch(r"[A-Za-z0-9/._-]{1,64}", label) else "unknown"
-        if name not in self.unknown_counts and len(self.unknown_counts) >= MAX_UNKNOWN_EVENT_TYPES - 1:
+        if name not in counts and len(counts) >= MAX_UNKNOWN_EVENT_TYPES - 1:
             # The public result carries at most MAX_UNKNOWN_EVENT_TYPES distinct
             # types; the reserved residual name holds one of those slots, so
             # beyond MAX-1 real types further distinct types merge into it and
             # the total stays exact, with no occurrence silently dropped. The
             # observer's live mapping reads the same bounded dict.
             name = _UNLISTED_UNKNOWN_TYPES
-        self.unknown_counts[name] = self.unknown_counts.get(name, 0) + 1
+        counts[name] = counts.get(name, 0) + 1
 
     def note_marker(self) -> None:
         self.markers += 1
@@ -165,6 +174,8 @@ class _RunFacts:
                 "toolMarkerFrames": self.markers,
                 "unknownEvents": {"countsByType": dict(self.unknown_counts),
                                   "total": sum(self.unknown_counts.values())},
+                "threadNotifications": {"countsByType": dict(self.thread_notifications),
+                                        "total": sum(self.thread_notifications.values())},
                 "deniedInteractions": len(self.denied)}
 
 
@@ -203,7 +214,10 @@ class _Classifier:
                                         or method.startswith("rawResponseItem/")):
             return self._tool_shaped(method, params)
         if method not in _KNOWN_METHODS:
-            facts.note_unknown(method if isinstance(method, str) else "unknown-method")
+            if isinstance(params, dict) and isinstance(params.get("threadId"), str) and _event_turn(params) is None:
+                facts.note_thread_notification(method)
+            else:
+                facts.note_unknown(method if isinstance(method, str) else "unknown-method")
             return True
         if method in ("item/started", "item/updated", "item/completed"):
             return self._item(params)
@@ -265,13 +279,12 @@ class _Classifier:
 
 @dataclasses.dataclass(frozen=True)
 class RunServices:
-    """The native credential source and controller-owned live endpoint.
+    """The controller-owned live endpoint.
 
     No blackboard client, ExecutionContext or credential file content travels here.
     Direct fixtures can omit the endpoint while retaining native activity facts.
     """
 
-    credential_source: dict | None = None
     live: CTwoLiveEndpoint | None = None
 
 
@@ -310,23 +323,21 @@ class _RunState:
     binding_saved: bool = False
     binding_path: Path | None = None
     token_usage: dict | None = None
+    usage_rounds: list[TurnEvidence] = dataclasses.field(default_factory=list)
     quota: dict | None = None
     quota_failure: dict | None = None
+    native_error: dict | None = None
     capture: dict | None = None
     native_turn_facts: dict | None = None
     #: The review thread/start receipt as the native side actually answered it,
     #: retained before any verdict over it.
     review_receipt: dict | None = None
-    #: The Worker coding home this run really prepared, and the review
-    #: config/read result observed before any policy verdict: each is a real
-    #: preparation fact, never back-derived from a process id or a mode label.
-    coding_home_prepared: bool = False
-    coding_home: Path | None = None
     review_config: dict | None = None
     #: Whether the on-the-spot native catalog listed the selected model. ADR-027
     #: rule 5: an absent model is handed to the native turn under its own name,
     #: the absence becomes this run's public fact, and the native answer decides.
     selected_model_listed: bool | None = None
+    native_provider: str | None = None
 
 
 @dataclasses.dataclass
@@ -339,11 +350,8 @@ class _Preparation:
     invocation_root: Path
     stderr_path: Path
     deadline: float
-    incoming: dict
     cwd: str
-    home: Path | None = None
     version: str | None = None
-    coding_home_prepared: bool = False
 
 
 @dataclasses.dataclass
@@ -392,32 +400,11 @@ class _ActivityWriter:
             return
 
 
-# -- phase 1: preparation (private roots, home, environment) ----------------------
+# -- phase 1: preparation (private evidence roots and environment) ----------------------
 
 
-def _coding_home(native_root: Path, credential_source: dict) -> Path:
-    """The Worker's task-private Codex home; its auth cleanup stays outer."""
-    from .home import prepare_coding_home
-    try:
-        return prepare_coding_home(native_root, credential_source)
-    except BoardError as error:
-        raise CodexProtocolError(error.code.lower().replace("_", "-"), error.message) from None
-
-
-def _review_home(native_root: Path, environment: dict, cwd: str) -> Path:
-    """An independent native server: linked existing auth, read-only config."""
-    old_home = Path(environment.get("CODEX_HOME") or Path.home() / ".codex")
-    private_home = native_root / "codex-home"
-    private_home.mkdir(mode=0o700, parents=True, exist_ok=True)
-    auth = old_home / "auth.json"
-    if auth.is_file() and not (private_home / "auth.json").exists():
-        (private_home / "auth.json").symlink_to(auth)
-    (private_home / "config.toml").write_text(read_only_config(cwd))
-    return private_home
-
-
-def _prepare(request: RunRequest, services: RunServices, mode: str) -> _Preparation:
-    """Preparation phase: private roots, the carrier's native home, environment."""
+def _prepare(request: RunRequest, mode: str) -> _Preparation:
+    """Preparation phase: private evidence roots and native environment."""
     if mode == "fast" and (type(request.budget.timeout_seconds) is not int
                            or not 0 < request.budget.timeout_seconds <= 60):
         raise CodexProtocolError("no-tool-policy-unverified",
@@ -430,28 +417,16 @@ def _prepare(request: RunRequest, services: RunServices, mode: str) -> _Preparat
     except CodexUnavailable as error:
         raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter="codex") from None
     environment = native_environment(incoming)
-    home = None
-    prepared = False
-    if mode == "fast":
-        home = prepare_no_tool_home(native_root, environment, configuration_spec(request))
-        environment["CODEX_HOME"] = str(home)
-    elif mode == "review":
-        home = _review_home(native_root, environment, request.cwd)
-        environment["CODEX_HOME"] = str(home)
-    elif mode == "worker":
-        home = _coding_home(native_root, services.credential_source)
-        environment["CODEX_HOME"] = str(home)
-        environment["CODEX_SQLITE_HOME"] = str(home)
-        # Command overrides keep repository config from redirecting native state.
-        command = [*command, "-c", "sqlite_home=" + json.dumps(str(home)),
-                   "-c", 'cli_auth_credentials_store="file"']
-        prepared = True
+    if mode in ("review", "fast"):
+        policy = (tomllib.loads(read_only_config(request.cwd)) if mode == "review"
+                  else {"web_search": "disabled", "approval_policy": "never"})
+        for key, value in _config_overrides(policy).items():
+            command.extend(("-c", key + "=" + value))
     return _Preparation(command=command, environment=environment, native_root=native_root,
                         invocation_root=invocation_root,
                         stderr_path=invocation_root / _NATIVE_STDERR_FILE,
                         deadline=execution_deadline(request.budget.timeout_seconds),
-                        incoming=incoming, cwd=request.cwd, home=home,
-                        coding_home_prepared=prepared)
+                        cwd=request.cwd)
 
 
 # -- phase 2: initialization (version probe, owned spawn, handshake) ---------------
@@ -498,7 +473,7 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
     return _Spawn(process=process, handle=handle, connection=connection)
 
 
-def _catalog(connection: Connection, version: str | None) -> dict:
+def _catalog(connection: Connection, version: str | None, provider: str) -> tuple[dict, set[str]]:
     data, cursor, seen = [], None, set()
     while True:
         params = {"limit": 100, "includeHidden": False}
@@ -538,10 +513,15 @@ def _catalog(connection: Connection, version: str | None) -> dict:
                        "inputModalities": item.get("inputModalities") or ["text"], "available": True})
     catalog = {"source": "codex-native-app-server", "adapter": "codex", "harnessVersion": version or "unknown",
                "discoveredAt": datetime.now(timezone.utc).isoformat(),
-               "providers": [{"adapter": "codex", "provider": "openai", "displayName": "OpenAI ChatGPT plan",
+               "providers": [{"adapter": "codex", "provider": provider, "displayName": provider,
                               "packageName": "codex", "packageVersion": version or "unknown", "models": models}],
                "warnings": list(dict.fromkeys(warnings))}
     return catalog, listed_ids
+
+
+def _native_provider(configured: dict) -> str:
+    provider = configured.get("model_provider")
+    return provider if isinstance(provider, str) and provider else DEFAULT_MODEL_PROVIDER
 
 
 def _discovery_account_status(account) -> str:
@@ -551,7 +531,11 @@ def _discovery_account_status(account) -> str:
     missing, empty or ``unknown`` — stays an unknown account; type alone never
     confirms it; the board decides whether to trust any reading.
     """
-    if not isinstance(account, dict) or account.get("type") != "chatgpt":
+    if not isinstance(account, dict):
+        return "unknown"
+    if account.get("type") == "apiKey":
+        return "confirmed"
+    if account.get("type") != "chatgpt":
         return "unknown"
     plan = account.get("planType")
     if not isinstance(plan, str) or not plan or plan == "unknown":
@@ -559,11 +543,10 @@ def _discovery_account_status(account) -> str:
     return "confirmed"
 
 
-def _initialize(connection: Connection, prep: _Preparation, services: RunServices,
-                mode: str, spec: dict) -> bool:
+def _initialize(connection: Connection, prep: _Preparation, mode: str, spec: dict) -> bool:
     """Initialization phase: handshake, account check, catalog and membership.
 
-    The provider gate stays exact. The listed/unlisted fact comes from every
+    The listed/unlisted fact comes from every
     non-hidden identity this model/list read named, even a row whose efforts
     are empty or invalid: a listed model without the selected effort is
     refused here and never reaches a thread or turn, while a model this read
@@ -574,14 +557,9 @@ def _initialize(connection: Connection, prep: _Preparation, services: RunService
     experimental = {"capabilities": {"experimentalApi": True}} if mode in ("fast", "review") else {}
     connection.call("initialize", {**_INIT_CLIENT, **experimental})
     connection.send({"method": "initialized", "params": {}})
-    account = connection.call("account/read", {"refreshToken": False}).get("account")
-    if not isinstance(account, dict) or account.get("type") != "chatgpt":
-        raise CodexProtocolError("account-plan-required",
-                                 "Codex requires an existing ChatGPT account-plan login")
-    catalog, listed_ids = _catalog(connection, prep.version)
-    if spec.get("provider") != "openai":
-        raise CodexProtocolError("invalid-configuration",
-                                 "the selected Codex model and effort are not in the current native catalog")
+    connection.call("account/read", {"refreshToken": False})
+    configured = connection.call("config/read", {"cwd": prep.cwd, "includeLayers": False}).get("config") or {}
+    catalog, listed_ids = _catalog(connection, prep.version, _native_provider(configured))
     if spec.get("model") not in listed_ids:
         return False
     listed = next((model for model in catalog["providers"][0]["models"]
@@ -625,7 +603,7 @@ def _continuation_of(request: RunRequest) -> tuple[str, str | None]:
 
 
 def _check_thread_receipt(response: dict, cwd: str, *, mode: str, previous: str | None) -> str:
-    """The one Worker thread-receipt check: identity, checkout and provider."""
+    """The one Worker thread-receipt check: identity, checkout."""
     thread = response.get("thread")
     thread_id = thread.get("id") if isinstance(thread, dict) else None
     if not isinstance(thread_id, str) or not thread_id \
@@ -635,13 +613,10 @@ def _check_thread_receipt(response: dict, cwd: str, *, mode: str, previous: str 
     if not isinstance(thread.get("cwd"), str) or Path(thread["cwd"]).resolve() != Path(cwd).resolve():
         raise CodexProtocolError("wrong-native-workspace",
                                  "Codex thread checkout differs from the allocated workspace")
-    if thread.get("modelProvider") not in (None, "openai"):
-        raise CodexProtocolError("wrong-native-provider", "Codex thread selected a different provider")
     return thread_id
 
 
-def _configure_worker(connection: Connection, request: RunRequest, services: RunServices,
-                      prep: _Preparation, state: _RunState) -> str:
+def _configure_worker(connection: Connection, request: RunRequest, prep: _Preparation, state: _RunState) -> str:
     """Worker configuration: continuation checks, then one start or resume."""
     mode, previous = _continuation_of(request)
     requested = configuration_spec(request)
@@ -652,10 +627,9 @@ def _configure_worker(connection: Connection, request: RunRequest, services: Run
                                      "native continuation requires the bound Codex thread")
         binding = _read_binding(prep.native_root, previous)
         expected = {"taskId": request.identity.task_id, "threadId": previous,
-                    "cwd": request.cwd, "configuration": requested,
-                    "codexHome": prep.environment["CODEX_HOME"],
-                    "credentialSource": services.credential_source}
-        if {key: binding.get(key) for key in expected} != expected \
+                    "cwd": request.cwd, "configuration": requested}
+        if set(binding) != set(expected) | {"lastTurnId", "lastAttemptId", "lastInputSha256"} \
+                or {key: binding.get(key) for key in expected} != expected \
                 or not isinstance(binding.get("lastTurnId"), str):
             raise CodexProtocolError("native-resume-unavailable",
                                      "the Codex thread binding differs from this goal, checkout or configuration")
@@ -666,27 +640,48 @@ def _configure_worker(connection: Connection, request: RunRequest, services: Run
                         ("lastInputSha256", "input_sha256"))):
             raise CodexProtocolError("native-resume-unavailable",
                                      "the Codex binding differs from the previous attempt checkpoint")
-        read = connection.call("thread/read", {"threadId": previous, "includeTurns": True}).get("thread")
-        turns = read.get("turns") if isinstance(read, dict) else None
-        if not isinstance(turns, list) or not turns or turns[-1].get("id") != binding["lastTurnId"] \
-                or turns[-1].get("status") != "completed":
-            raise CodexProtocolError("native-resume-unavailable",
-                                     "the Codex thread has changed since its bound completed turn")
-        response = connection.call("thread/resume", {"threadId": previous, "cwd": request.cwd,
-                                                     "model": requested["model"], "modelProvider": "openai",
-                                                     "approvalPolicy": "never", "sandbox": "workspace-write"})
+        try:
+            read = connection.call("thread/read", {"threadId": previous, "includeTurns": True}).get("thread")
+            turns = read.get("turns") if isinstance(read, dict) else None
+            if not isinstance(turns, list) or not turns or turns[-1].get("id") != binding["lastTurnId"] \
+                    or turns[-1].get("status") != "completed":
+                raise CodexProtocolError("native-resume-unavailable",
+                                         "the Codex thread has changed since its bound completed turn")
+            response = connection.call("thread/resume", {"threadId": previous, "cwd": request.cwd,
+                                                         "model": requested["model"], "modelProvider": requested["provider"],
+                                                         "approvalPolicy": "never", "sandbox": "workspace-write"})
+        except CodexProtocolError as error:
+            if error.code != "native-rpc-error":
+                raise
+            raise CodexProtocolError("native-resume-unavailable", str(error)) from None
     elif mode == "initial" and previous is None or mode == "reconstructed-new-session":
         response = connection.call("thread/start", {"cwd": request.cwd, "model": requested["model"],
-                                                    "modelProvider": "openai", "approvalPolicy": "never",
+                                                    "modelProvider": requested["provider"], "approvalPolicy": "never",
                                                     "sandbox": "workspace-write", "serviceName": "hey-my-buddy"})
     else:
         raise CodexProtocolError("invalid-resume-mode",
                                  "Codex requires an explicit initial, native or reconstructed turn")
     thread_id = _check_thread_receipt(response, request.cwd, mode=mode, previous=previous)
+    state.native_provider = (response.get("thread") or {}).get("modelProvider")
     state.thread_opened = True
     state.thread_id = thread_id
     state.configured = True
     return thread_id
+
+
+def _toml_value(value) -> str:
+    if isinstance(value, dict):
+        return "{ " + ", ".join(json.dumps(key, ensure_ascii=False) + " = " + _toml_value(item)
+                                for key, item in value.items()) + " }"
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _config_overrides(config: dict) -> dict[str, str]:
+    """Filesystem paths stay inside whole permission-profile table values."""
+    overrides = {key: _toml_value(value) for key, value in config.items() if key != "permissions"}
+    for name, profile in config.get("permissions", {}).items():
+        overrides["permissions." + name] = _toml_value(profile)
+    return overrides
 
 
 def _configure_review(connection: Connection, request: RunRequest,
@@ -694,25 +689,24 @@ def _configure_review(connection: Connection, request: RunRequest,
     """Review configuration: exact policy readback, then the buddy-router thread."""
     cwd, spec = request.cwd, configuration_spec(request)
     expected = tomllib.loads(read_only_config(cwd))
+    response = connection.call("thread/start", {
+        "cwd": cwd, "model": spec["model"], "modelProvider": spec["provider"],
+        "approvalPolicy": "never", "permissions": "buddy-router", "serviceName": "hey-my-buddy",
+        "experimentalRawEvents": True, "ephemeral": True,
+    })
     configured = connection.call("config/read", {"cwd": cwd, "includeLayers": False}).get("config") or {}
-    if isinstance(configured, dict):
-        # The observed readback is retained before any verdict, so a mismatch
-        # run still carries the configuration it actually read.
-        state.review_config = configured
-    # The retained policy evidence is the acknowledged native state, never the
-    # run's own proposal.
+    # Retain permission facts and presence, never user MCP arguments or credentials.
+    state.review_config = {key: configured[key] for key in
+                           ("web_search", "approval_policy", "default_permissions") if key in configured}
+    state.review_config["mcp_servers"] = bool(configured.get("mcp_servers"))
+    state.review_config["features"] = {"apps": (configured.get("features") or {}).get("apps")}
+    state.review_config["permissions"] = {"buddy-router": (configured.get("permissions") or {}).get("buddy-router")}
     profile = (configured.get("permissions") or {}).get("buddy-router") or {}
     filesystem = {key: value for key, value in (profile.get("filesystem") or {}).items() if value is not None}
-    if (not policy_matches(configured, expected) or configured.get("mcp_servers")
-            or filesystem != expected["permissions"]["buddy-router"]["filesystem"] or profile.get("extends")):
+    if (not policy_matches(configured, expected)
+            or filesystem != expected["permissions"]["buddy-router"]["filesystem"]):
         raise CodexProtocolError("readonly-policy-unverified",
-                                 "Codex effective configuration differs from the private read-only policy")
-    response = connection.call("thread/start", {
-        "cwd": cwd, "model": spec["model"], "modelProvider": "openai",
-        "approvalPolicy": "never", "permissions": "buddy-router", "serviceName": "hey-my-buddy",
-        "experimentalRawEvents": True,
-        "config": {"web_search": "disabled", "features.apps": False, "features.multi_agent": False},
-    })
+                                 "Codex effective configuration differs from the read-only policy")
     receipt_profile = response.get("activePermissionProfile") or {}
     sandbox = response.get("sandbox") or {}
     acknowledged = {"activePermissionProfile": receipt_profile, "sandbox": sandbox,
@@ -725,8 +719,8 @@ def _configure_review(connection: Connection, request: RunRequest,
     if (receipt_profile.get("id") != "buddy-router" or response.get("approvalPolicy") != "never"
             or sandbox.get("type") != "readOnly" or sandbox.get("networkAccess", False) is not False):
         raise CodexProtocolError("readonly-policy-unverified",
-                                 "Codex did not acknowledge the private read-only permission profile")
-    if response.get("model") != spec["model"] or response.get("modelProvider") != "openai" \
+                                 "Codex did not acknowledge the read-only permission profile")
+    if response.get("model") != spec["model"] \
             or Path(response.get("cwd") or "").resolve() != Path(cwd).resolve():
         raise CodexProtocolError("readonly-configuration-mismatch",
                                  "Codex acknowledged a different read-only configuration")
@@ -738,50 +732,35 @@ def _configure_review(connection: Connection, request: RunRequest,
     state.thread_id = thread_id
     state.configured = True
     state.requested = spec
+    state.native_provider = response.get("modelProvider")
     return thread_id, {"acknowledged": acknowledged, "filesystem": filesystem}
 
 
-def _configure_fast(connection: Connection, request: RunRequest, state: _RunState,
-                    home: Path) -> str:
-    """Fast configuration: the private no-tool layers readback, then the thread."""
+def _configure_fast(connection: Connection, request: RunRequest, state: _RunState) -> str:
+    """Fast configuration: native permission parameters, preserving user settings."""
     cwd, spec = request.cwd, configuration_spec(request)
-    expected = tomllib.loads((home / "config.toml").read_text())
-    config_read = connection.call("config/read", {"cwd": cwd, "includeLayers": True})
-    configured, layers = config_read.get("config"), config_read.get("layers")
-    own = [layer for layer in layers or [] if isinstance(layer, dict)
-           and isinstance(layer.get("name"), dict) and layer["name"].get("type") == "user"
-           and layer["name"].get("file") == str(home / "config.toml")]
-    foreign = [layer for layer in layers or [] if isinstance(layer, dict)
-               and isinstance(layer.get("name"), dict)
-               and layer["name"].get("type") not in ("user", "packagedDefaults") and layer.get("config")]
-    if (not isinstance(configured, dict) or configured.get("web_search") != "disabled"
-            or configured.get("approval_policy") != "never" or configured.get("mcp_servers")
-            or not isinstance(layers, list) or len(own) != 1 or foreign
-            or not policy_matches(own[0].get("config"), expected)
-            or any(layer is not own[0] and isinstance(layer, dict)
-                   and isinstance(layer.get("name"), dict) and layer["name"].get("type") == "user"
-                   for layer in layers)):
-        raise CodexProtocolError("no-tool-policy-unverified", "Codex effective no-tool policy differs")
     response = connection.call("thread/start", {
-        "cwd": cwd, "model": spec["model"], "modelProvider": "openai",
+        "cwd": cwd, "model": spec["model"], "modelProvider": spec["provider"],
         "approvalPolicy": "never", "sandbox": "read-only", "serviceName": "hey-my-buddy",
-        "experimentalRawEvents": True, "environments": [], "dynamicTools": [],
-        "selectedCapabilityRoots": [],
-        "allowProviderModelFallback": False, "ephemeral": True,
-        "baseInstructions": "Return only JSON matching the supplied output schema. Do not call tools.",
+        "experimentalRawEvents": True, "ephemeral": True,
     })
+    configured = connection.call("config/read", {"cwd": cwd, "includeLayers": True}).get("config")
+    if (not isinstance(configured, dict) or configured.get("web_search") != "disabled"
+            or configured.get("approval_policy") != "never"):
+        raise CodexProtocolError("no-tool-policy-unverified", "Codex effective no-tool policy differs")
     thread = response.get("thread")
     thread_id = thread.get("id") if isinstance(thread, dict) else None
     if (not isinstance(thread_id, str) or not thread_id
             or Path(thread.get("cwd") or "").resolve() != Path(cwd).resolve()
             or thread.get("turns") not in (None, [])
-            or response.get("model") != spec["model"] or response.get("modelProvider") != "openai"
-            or response.get("approvalPolicy") != "never" or thread.get("environments") != []):
+            or response.get("model") != spec["model"]
+            or response.get("approvalPolicy") != "never"):
         raise CodexProtocolError("no-tool-policy-unverified", "Codex did not acknowledge the no-tool thread")
     state.thread_opened = True
     state.thread_id = thread_id
     state.configured = True
     state.requested = spec
+    state.native_provider = response.get("modelProvider")
     return thread_id
 
 
@@ -848,44 +827,56 @@ class _FastProtocol:
     observer, never raised here.
     """
 
-    def __init__(self, thread_id: str, turn_id: str, state: dict):
+    def __init__(self, thread_id: str, turn_id: str, state: dict, evidence: TurnEvidence,
+                 run_state: _RunState):
         self.thread_id, self.turn_id, self.state = thread_id, turn_id, state
+        self.evidence = evidence
+        self.run_state = run_state
 
     def __call__(self, message: dict) -> None:
         method = message.get("method")
+        label = _truncate_utf8(method if isinstance(method, str) else "unknown", 96)
         params = message.get("params")
         if method in ("account/rateLimits/updated", "remoteControl/status/changed", "deprecationNotice"):
             return
         if method == "thread/started" and isinstance(params, dict):
             thread = params.get("thread") or {}
-            if thread.get("id") == self.thread_id and thread.get("environments") == []:
+            if thread.get("id") == self.thread_id:
                 return
         if not isinstance(params, dict) or params.get("threadId") != self.thread_id:
-            raise CodexProtocolError("invalid-native-result", "Unbound native event in no-tool stream")
+            raise CodexProtocolError("invalid-native-result", f"Unbound native event in no-tool stream ({label})")
+        event_turn = _event_turn(params)
+        if event_turn is not None and event_turn != self.turn_id:
+            raise CodexProtocolError("invalid-native-result", f"Foreign native turn in no-tool stream ({label})")
+        _capture_native_error(self.run_state, message, self.thread_id, self.turn_id)
         if method == "error":
             if params.get("willRetry") is True:
                 return
-            raise CodexProtocolError("native-turn-failed", "Native no-tool turn reported an error")
-        if method in ("thread/tokenUsage/updated", "thread/status/changed", "thread/settings/updated", "warning"):
+            raise CodexProtocolError("native-turn-failed", f"Native no-tool turn reported an error ({label})")
+        if event_turn is None:
             return
-        turn = params.get("turn") if isinstance(params, dict) else None
-        event_turn = turn.get("id") if isinstance(turn, dict) else params.get("turnId")
-        if event_turn != self.turn_id:
-            raise CodexProtocolError("invalid-native-result", "Foreign native turn in no-tool stream")
+        if method == "thread/tokenUsage/updated":
+            self.evidence.observe(message)
+            return
+        if method in ("thread/status/changed", "thread/settings/updated", "warning"):
+            return
+        turn = params.get("turn")
+        if method in ("turn/started", "turn/completed"):
+            self.evidence.observe(message)
         if method == "turn/started":
             if self.state["started"]:
-                raise CodexProtocolError("invalid-native-result", "Duplicate native turn start")
+                raise CodexProtocolError("invalid-native-result", f"Duplicate native turn start ({label})")
             self.state["started"] = True
         elif method in ("item/started", "item/updated", "item/completed"):
             item = params.get("item") if isinstance(params, dict) else None
             if method == "item/completed" and isinstance(item, dict) \
                     and item.get("type") == "agentMessage" and item.get("phase") == "final_answer":
                 if self.state["final"] is not None:
-                    raise CodexProtocolError("invalid-native-result", "Multiple final answers")
+                    raise CodexProtocolError("invalid-native-result", f"Multiple final answers ({label})")
                 self.state["final"] = item
         elif method == "turn/completed":
             if self.state["completed"] is not None:
-                raise CodexProtocolError("invalid-native-result", "Duplicate native turn completion")
+                raise CodexProtocolError("invalid-native-result", f"Duplicate native turn completion ({label})")
             self.state["completed"] = turn
 
 
@@ -922,8 +913,6 @@ def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
     if mode == "worker":
         params["sandboxPolicy"] = {"type": "workspaceWrite", "writableRoots": [request.cwd],
                                    "networkAccess": False}
-    elif mode == "fast":
-        params["environments"] = []
     elif mode == "review":
         params["permissions"] = "buddy-router"
     return connection.call("turn/start", params)
@@ -979,9 +968,6 @@ def run(request: RunRequest, *, observer: Callable[[Mapping], RunFeedback],
     binding = services if services is not None else RunServices()
     mode = _mode(request)
     if mode == "worker":
-        if not isinstance(binding.credential_source, dict):
-            raise BoardError("INVALID_ARGUMENT",
-                             "a governed codex turn requires the frozen coding-home credential source")
         if not request.identity.input_sha256 or not request.identity.turn_id:
             raise BoardError("INVALID_ARGUMENT",
                              "a governed codex turn carries its turn identity and input digest")
@@ -1010,22 +996,20 @@ def _run(request: RunRequest, services: RunServices, mode: str,
     chain = _EventChain(facts, _Classifier(facts), projector, overflow_raises=mode == "fast")
     review_policy: dict | None = None
     try:
-        prep = _prepare(request, services, mode)
-        state.coding_home_prepared = prep.coding_home_prepared
-        state.coding_home = prep.home if prep.coding_home_prepared else None
+        prep = _prepare(request, mode)
         prep.version = probe_version(prep.command, prep.environment, cwd=request.cwd,
                                      deadline=prep.deadline, owned=owned_spawn)
         state.version = prep.version
         spawn = _spawn_app_server(prep, cancel, owned_spawn)
         connection = spawn.connection
         _wire(connection, chain, facts, observer, request, state, mode)
-        state.selected_model_listed = _initialize(connection, prep, services, mode, configuration_spec(request))
+        state.selected_model_listed = _initialize(connection, prep, mode, configuration_spec(request))
         if mode == "worker":
-            thread_id = _configure_worker(connection, request, services, prep, state)
+            thread_id = _configure_worker(connection, request, prep, state)
             _worker_turn(connection, chain, request, state, thread_id, observer, activity)
         else:
             if mode == "fast":
-                thread_id = _configure_fast(connection, request, state, prep.home)
+                thread_id = _configure_fast(connection, request, state)
             else:
                 thread_id, review_policy = _configure_review(connection, request, state)
             _structured_rounds(connection, chain, request, state, thread_id,
@@ -1050,7 +1034,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         # A preparation failure also reaches the stop collection: nothing was
         # ever spawned, and that known fact — not an unknown — is what the
         # result must carry.
-        _stop_collection(request, services, prep, state, spawn, owned_spawn, mode, cancel)
+        _stop_collection(request, prep, state, spawn, owned_spawn, mode, cancel)
     return _build_result(request, prep, state, mode, projector, facts, review_policy, activity)
 
 
@@ -1123,6 +1107,7 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
     evidence = TurnEvidence(thread_id, turn_id)
 
     def carrier(message: dict) -> None:
+        _capture_native_error(state, message, thread_id, turn_id)
         observed = evidence.observe(message)
         if observed:
             activity.write(evidence, observed[0], observed[1])
@@ -1145,7 +1130,6 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
         state.checkpoint = _checkpoint(request, evidence)
         state.event_count = evidence.event_seq
         state.token_usage = attempt_token_usage(evidence)
-    state.quota = _observe_quota(connection, evidence)
     state.quota = _observe_quota(connection, evidence)
     failure_code = turn_failure_code(native_turn)
     if failure_code is not None:
@@ -1210,11 +1194,11 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
         if chain.projector is not None:
             # The trusted root identity comes only from this native turn receipt.
             chain.projector.observe_root(thread_id, turn_id)
-        evidence = None
+        evidence = TurnEvidence(thread_id, turn_id)
+        state.usage_rounds.append(evidence)
         if mode == "fast":
-            chain.bind(_FastProtocol(thread_id, turn_id, fast_state))
+            chain.bind(_FastProtocol(thread_id, turn_id, fast_state, evidence, state))
         else:
-            evidence = TurnEvidence(thread_id, turn_id)
 
             def carrier(message: dict, _evidence=evidence, _turn_id=turn_id, _round=round_index) -> None:
                 params = message.get("params")
@@ -1223,19 +1207,21 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
                     return
                 if state.capture is not None:
                     _capture_frame(state.capture, message)
+                _capture_native_error(state, message, thread_id, _turn_id)
                 observed = _evidence.observe(message)
                 if observed:
                     activity.write(_evidence, observed[0], observed[1], model_turns_base=_round,
                                    tool_calls=chain.projector.tool_calls)
             chain.bind(carrier)
-        if mode == "fast":
-            while fast_state["completed"] is None:
-                connection.pump()
-        else:
-            while evidence.completed is None:
-                connection.pump()
-        raw = _fast_final_checks(fast_state) if mode == "fast" else _review_final_checks(evidence)
-        if evidence is not None:
+        try:
+            if mode == "fast":
+                while fast_state["completed"] is None:
+                    connection.pump()
+            else:
+                while evidence.completed is None:
+                    connection.pump()
+            raw = _fast_final_checks(fast_state) if mode == "fast" else _review_final_checks(evidence)
+        finally:
             state.event_count += evidence.event_seq
         state.raw_answer = raw
         state.rounds_complete = True
@@ -1259,6 +1245,8 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
 
 def _fast_final_checks(fast_state: dict) -> str:
     final = fast_state["final"]
+    if (fast_state["completed"] or {}).get("status") in ("failed", "interrupted"):
+        raise CodexProtocolError("native-turn-failed", "Native no-tool turn did not complete (turn/completed)")
     if (not fast_state["started"] or (fast_state["completed"] or {}).get("status") != "completed"
             or not isinstance(final, dict) or not isinstance(final.get("text"), str)
             or not isinstance(final.get("id"), str)):
@@ -1337,7 +1325,7 @@ def _interrupt(connection: Connection, state: _RunState) -> None:
 # -- phase 5: stop collection -------------------------------------------------------
 
 
-def _stop_collection(request: RunRequest, services: RunServices, prep: _Preparation,
+def _stop_collection(request: RunRequest, prep: _Preparation,
                      state: _RunState, spawn: _Spawn | None, owned_spawn: list,
                      mode: str, cancel: CancelFlag) -> None:
     """Stop phase: the owned group's conservative confirmation, then cleanup."""
@@ -1347,9 +1335,6 @@ def _stop_collection(request: RunRequest, services: RunServices, prep: _Preparat
         # occupy the same boundary. A retained handle without a receipt is unknown.
         state.shutdown = isinstance(receipt, dict) and receipt["shutdown"] is True
         state.exit_code = receipt["exit_code"] if isinstance(receipt, dict) else receipt.process.returncode
-        if mode in ("fast", "review") and state.shutdown:
-            _remove_private_auth(prep.native_root if prep is not None
-                                 else Path(request.private_state.native_root))
         return
     shutdown, _signalled = _halt_owned_group(spawn.process, spawn.handle, prep.deadline)
     state.shutdown = shutdown
@@ -1358,10 +1343,8 @@ def _stop_collection(request: RunRequest, services: RunServices, prep: _Preparat
         spawn.process.stdout.close()
     except OSError:
         pass
-    if mode in ("fast", "review") and shutdown:
-        _remove_private_auth(prep.native_root)
     if mode == "worker":
-        _save_binding(request, services, prep, state)
+        _save_binding(request, prep, state)
     if state.status == "ok" and (not shutdown or spawn.process.returncode != 0):
         state.status, state.reason = "error", "native-shutdown-failed"
         state.error_text = "Codex App Server did not exit with confirmed process-group shutdown"
@@ -1370,7 +1353,7 @@ def _stop_collection(request: RunRequest, services: RunServices, prep: _Preparat
         state.error_text = "the Codex execution was cancelled"
 
 
-def _save_binding(request: RunRequest, services: RunServices, prep: _Preparation,
+def _save_binding(request: RunRequest, prep: _Preparation,
                   state: _RunState) -> None:
     checkpoint = state.checkpoint
     if not checkpoint or checkpoint.get("nativeTurnStarted") is not True \
@@ -1379,19 +1362,11 @@ def _save_binding(request: RunRequest, services: RunServices, prep: _Preparation
         return
     binding = {"taskId": checkpoint["taskId"], "threadId": state.thread_id, "cwd": request.cwd,
                "configuration": state.requested, "lastTurnId": state.turn_id,
-               "lastAttemptId": checkpoint["attemptId"], "lastInputSha256": checkpoint["inputSha256"],
-               "codexHome": prep.environment["CODEX_HOME"],
-               "credentialSource": services.credential_source}
+               "lastAttemptId": checkpoint["attemptId"], "lastInputSha256": checkpoint["inputSha256"]}
     _write_binding(prep.native_root, state.thread_id, binding)
     checkpoint["bindingSaved"] = True
     state.binding_saved = True
     state.binding_path = _binding_path(prep.native_root, state.thread_id)
-
-
-def _remove_private_auth(native_root: Path) -> None:
-    auth = native_root / "codex-home" / "auth.json"
-    if auth.is_symlink():
-        auth.unlink()
 
 
 # -- the factual result --------------------------------------------------------------
@@ -1401,12 +1376,61 @@ _tool_evidence_package = shape_guard(ToolEvidencePackage)
 _json_package = shape_guard(OptionalFrozenJsonAt(MAX_SCHEMA_BYTES))
 _usage_package = shape_guard(UsagePackage)
 _quota_package = shape_guard(NativeFailurePackage)
+_native_error_package = shape_guard(NativeErrorRecord)
 _message_package = shape_guard(LastAssistantMessagePackage)
 _activity_package = shape_guard(ActivityPackage)
 
 
 def _bounded(value: str | None, limit: int) -> str | None:
     return value if value is not None and len(value.encode()) <= limit else None
+
+
+def _truncate_utf8(value: str, limit: int) -> str:
+    return value.encode()[:limit].decode("utf-8", errors="ignore")
+
+
+def _event_turn(params: dict):
+    turn = params.get("turn")
+    if isinstance(turn, dict) and turn.get("id") is not None:
+        return turn["id"]
+    return params.get("turnId")
+
+
+def _capture_native_error(state: _RunState, message: dict, thread_id: str, turn_id: str) -> None:
+    """Retain only bound native error fields, separate from quota attribution."""
+    params = message.get("params")
+    if not isinstance(params, dict) or params.get("threadId") != thread_id:
+        return
+    event_turn = _event_turn(params)
+    if event_turn is not None and event_turn != turn_id:
+        return
+    method = message.get("method")
+    if method == "turn/completed" and event_turn == turn_id:
+        error = (params.get("turn") or {}).get("error")
+    elif method == "error" and params.get("willRetry") is not True:
+        error = params.get("error")
+    else:
+        return
+    if not isinstance(error, dict):
+        return
+    retained = {}
+    for key in ("message", "additionalDetails"):
+        value = error.get(key)
+        if isinstance(value, str):
+            retained[key] = _truncate_utf8(value, 4096)
+            if retained[key] != value:
+                retained[key + "Truncated"] = True
+    info = error.get("codexErrorInfo")
+    if isinstance(info, (str, dict)):
+        if len(canonical_json(info).encode()) <= 2048:
+            retained["codexErrorInfo"] = info
+        else:
+            retained["codexErrorInfoTruncated"] = True
+    if retained:
+        state.native_error = {"source": "codex/app-server-turn-error", "method": method,
+                              "nativeThreadId": thread_id, "error": retained}
+        if event_turn == turn_id:
+            state.native_error["nativeTurnId"] = turn_id
 
 
 def _checked_configuration(request: RunRequest, state: _RunState, mode: str) -> ResultConfiguration:
@@ -1416,11 +1440,11 @@ def _checked_configuration(request: RunRequest, state: _RunState, mode: str) -> 
         catalog_effort = CheckedValue(value=request.configuration.effort)
         if mode == "worker":
             checked = CheckedConfiguration(
-                provider=CheckedValue(value=request.configuration.provider),
+                provider=CheckedValue(value=state.native_provider) if isinstance(state.native_provider, str) else None,
                 model=catalog_model, effort=catalog_effort)
         else:
             checked = CheckedConfiguration(
-                provider=CheckedValue(value=request.configuration.provider),
+                provider=CheckedValue(value=state.native_provider) if isinstance(state.native_provider, str) else None,
                 model=CheckedValue(value=request.configuration.model),
                 effort=catalog_effort)
     return ResultConfiguration(
@@ -1431,16 +1455,14 @@ def _checked_configuration(request: RunRequest, state: _RunState, mode: str) -> 
 
 
 def _effective_policy(state: _RunState, mode: str,
-                      review_policy: dict | None, home: Path | None) -> EffectivePolicy:
+                      review_policy: dict | None) -> EffectivePolicy:
     if not state.configured:
         return EffectivePolicy()
     if mode == "worker":
         return EffectivePolicy()
     if mode == "fast":
         return EffectivePolicy(
-            tools=PolicyFact(requested=_json_package({"configuration": "private-no-tool",
-                                                      "environments": [], "dynamicTools": [],
-                                                      "modelCatalog": str(home / "no-tool-models.json") if home else ""})))
+            tools=PolicyFact(requested=_json_package({"sandbox": "read-only", "approvalPolicy": "never"})))
     return EffectivePolicy(
         tools=PolicyFact(requested=_json_package(review_policy["acknowledged"] if review_policy else {})))
 
@@ -1504,24 +1526,24 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
                state.review_receipt)
     if state.checkpoint is not None:
         retain("native-checkpoint", invocation_root / "native-checkpoint.json", state.checkpoint)
-    if state.coding_home_prepared:
-        # The Worker run's own preparation fact: the home it really created in
-        # this native root. The outer cleanup reads exactly this marker, never
-        # an inference from a pid or a mode label.
-        retain("coding-home", invocation_root / "coding-home.json",
-               {"adapter": "codex", "nativeRoot": str(Path(request.private_state.native_root)),
-                "home": str(state.coding_home) if state.coding_home is not None else None})
-    stderr = invocation_root / _NATIVE_STDERR_FILE
-    if stderr.is_file():
-        raw = stderr.read_bytes()
-        refs.append(EvidenceRef(kind="native-stderr", location=str(stderr), size_bytes=len(raw),
-                                sha256=hashlib.sha256(raw).hexdigest()))
+    if facts.thread_notifications:
+        retain("thread-notifications", invocation_root / "thread-notifications.json",
+               {"countsByType": facts.thread_notifications, "total": sum(facts.thread_notifications.values())})
     return tuple(refs)
 
 
 def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunState, mode: str,
                   projector: CodexToolEventProjector | None, facts: _RunFacts,
                   review_policy: dict | None, activity: _ActivityWriter) -> RunResult:
+    if state.usage_rounds:
+        usages = [attempt_token_usage(evidence) for evidence in state.usage_rounds]
+        known = [usage for usage in usages if usage is not None]
+        if known:
+            state.token_usage = dict(known[0])
+            for key in ("inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens", "nativeRecords"):
+                state.token_usage[key] = sum(usage[key] for usage in known)
+            if len(known) != len(usages) or any(usage["completeness"] != "complete" for usage in known):
+                state.token_usage["completeness"] = "partial"
     native_identity = None
     if state.thread_id is not None:
         fields = {"session_id": state.thread_id}
@@ -1565,11 +1587,11 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
         native_identity=native_identity,
         value=value, completion_evidence=completion,
         tool_evidence=_tool_evidence_package(tool_package),
-        effective_policy=_effective_policy(state, mode, review_policy,
-                                           prep.home if prep is not None else None),
+        effective_policy=_effective_policy(state, mode, review_policy),
         activity=_activity_package(activity.last_payload),
         usage=_usage_package(state.token_usage),
         native_failure=_quota_package(state.quota_failure),
+        native_error=_native_error_package(state.native_error),
         last_assistant_message=_message_package(_last_assistant_message(state.checkpoint)),
         continuation=_continuation_facts(state, mode),
         stop_evidence=StopEvidence(
@@ -1614,7 +1636,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
             prep = _Preparation(command=command, environment=environment, native_root=native_root,
                                 invocation_root=invocation_root,
                                 stderr_path=invocation_root / _NATIVE_STDERR_FILE,
-                                deadline=deadline, incoming=incoming, cwd=cwd, version=version)
+                                deadline=deadline, cwd=cwd, version=version)
             spawn = _spawn_app_server(prep, cancel, owned)
         except Exception:
             shutdown = isinstance(owned[0], dict) and owned[0]["shutdown"] is True
@@ -1629,7 +1651,14 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
             except CodexProtocolError:
                 account = None
             account_status = _discovery_account_status(account)
-            catalog_value, _listed_ids = _catalog(connection, version)
+            configured = connection.call("config/read", {"cwd": cwd, "includeLayers": False}).get("config") or {}
+            catalog_value, _listed_ids = _catalog(connection, version, _native_provider(configured))
+            from ....protocol.billing import codex_account, fact
+            provider = _native_provider(configured)
+            observed_at = utc_now()
+            catalog_value["billingByProvider"] = {provider: (
+                codex_account(account, observed_at) if provider == "openai"
+                else fact("unknown", "codex/account-read", observed_at))}
             catalog_value["discoveries"] = [{"adapter": "codex", "status": "complete",
                                              "accountStatus": account_status}]
             if account_status == "unknown":
@@ -1654,10 +1683,9 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
 
 
 def check_preparation(spec: dict, environment: dict) -> None:
-    """Confirm the native command and the one provider this harness runs.
+    """Confirm the native command without selecting a provider or account.
 
-    This is the harness's own share of the Worker and fast preparation: the
-    command selection without a spawn and the native-provider rule. Every
+    This is the harness's own share of Worker and fast preparation. Every
     governed-turn, resume-mode and private-state rule belongs to the shared
     role executor and is not repeated here.
     """
@@ -1665,22 +1693,13 @@ def check_preparation(spec: dict, environment: dict) -> None:
         cli_command(environment)
     except CodexUnavailable as error:
         raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter="codex") from None
-    if spec.get("provider") != "openai":
-        raise BoardError("INVALID_ARGUMENT",
-                         "Codex account-plan execution requires the native OpenAI provider", adapter="codex")
 
 
 def prepare_run_services(*, tool_scope: str = "write") -> RunServices:
-    """Bind private coding state to the harness's native login location."""
-    if tool_scope in ("none", "read"):
-        return RunServices()
-    if tool_scope != "write":
-        raise BoardError("INVALID_ARGUMENT", "codex binds its native services for the none, read and write tool scopes", adapter="codex")
-    environment = dict(os.environ)
-    if not environment.get("BUDDY_STATE_DIR"):
-        raise BoardError("INVALID_ARGUMENT", "a governed codex turn requires the owning private state directory", adapter="codex")
-    from .home import credential_source
-    return RunServices(credential_source=credential_source(environment))
+    """Bind the harness's native services without selecting credentials."""
+    if tool_scope not in ("none", "read", "write"):
+        raise BoardError("INVALID_ARGUMENT", "codex accepts none, read and write tool scopes", adapter="codex")
+    return RunServices()
 
 
 def validate_turn_provenance(record: dict) -> str | None:
@@ -1734,29 +1753,13 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
         "adapter": "codex",
         "sessionId": session_id if captured else None,
         "captured": captured,
-        "storageScope": "buddy-goal-private",
-        "storageOwner": "buddy-goal",
-        "nativeAppVisibility": "not-listed-in-native-app",
-        "note": ("The native thread stays in this goal's private CODEX_HOME. Native continuation rechecks "
-                 "the goal, home, credential source, checkout, configuration and last completed turn "
-                 "binding; live App visibility requires native verification."),
+        "storageScope": "harness-user-store",
+        "storageOwner": "harness-user-store",
+        "nativeAppVisibility": "listed-in-native-app",
+        "note": ("Codex stores ordinary threads in the user's native directory. Native continuation "
+                 "rechecks task, checkout, configuration and the last completed turn binding; "
+                 "application visibility still needs installed-run verification."),
     }
-
-
-def cleanup_after_run(native_root: Path, result: RunResult) -> dict:
-    """Remove the Worker coding home's private auth link after a confirmed stop.
-
-    The caller has confirmed both stop layers. The coding-home marker is this
-    run's own SHA-verified preparation fact, so a preparation that failed, a
-    foreign native root or a fast/review run removes nothing and reports no
-    credential fact.
-    """
-    marker = _read_evidence_ref(result, "coding-home")
-    if not isinstance(marker, dict) or marker.get("nativeRoot") != str(native_root):
-        return {}
-    from .home import remove_coding_auth
-    removed = remove_coding_auth(Path(native_root))
-    return {"codingHomePrepared": True, "credentialCleanup": {"complete": True, "removed": removed}}
 
 
 def native_evidence(result: RunResult) -> dict:
@@ -1774,6 +1777,11 @@ def native_evidence(result: RunResult) -> dict:
     absent, never filled with a placeholder.
     """
     projection: dict = {}
+    if result.native_error is not None:
+        projection["nativeFailure"] = result.native_error.value
+    notifications = _read_evidence_ref(result, "thread-notifications")
+    if notifications is not None:
+        projection["threadNotifications"] = notifications
     receipt = _read_evidence_ref(result, "review-thread-receipt")
     if isinstance(receipt, dict):
         projection["nativePolicy"] = receipt
@@ -1828,7 +1836,7 @@ def _read_evidence_ref(result: RunResult, kind: str) -> dict | None:
 supported_request_controls = ("resume_checkpoint",)
 
 __all__ = [
-    "RunServices", "check_preparation", "cleanup_after_run",
+    "RunServices", "check_preparation",
     "execution_deadline", "native_evidence", "prepare_run_services", "run",
     "run_discovery", "session_facts", "validate_turn_provenance",
 ]

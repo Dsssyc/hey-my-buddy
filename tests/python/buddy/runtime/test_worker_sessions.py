@@ -104,7 +104,8 @@ class WorkerSessionTests(unittest.TestCase):
                    'result_json': json.dumps(receipt)}
             result = worker_sessions.handle(FakeStore(self.state, [row]), {'adapter': 'codex'})
             self.assertEqual(result['count'], 1)
-            self.assertEqual(result['sessions'][0]['storageOwner'], 'buddy-goal')
+            self.assertEqual(outcome.result['nativeSession']['storageScope'], 'harness-user-store')
+            self.assertEqual(result['sessions'][0]['storageOwner'], 'harness-user-store')
             # Receipts before the checkpoint/nativeSession additions still have
             # a strictly correlated completed turn. Do not lose that history.
             legacy = json.loads(row['result_json'])
