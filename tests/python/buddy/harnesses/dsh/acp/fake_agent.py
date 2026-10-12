@@ -970,9 +970,17 @@ class FakeAgent:
         threading.Thread(target=self.handle, args=(message,), daemon=True).start()
 
 
-def main() -> int:
+def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
+    """This fake agent's own construction face, with its defaults.
+
+    A derived fixture builds on this parser and overrides only the defaults it
+    changes, so a switch added here reaches every fixture instead of having to
+    be copied into a hand-written argument list. ``log_required`` serves the
+    derived fixtures whose launch face, like the installed agent's, may omit
+    ``--log``.
+    """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--log", required=True)
+    parser.add_argument("--log", required=log_required)
     # The public launch face the run module's driver always passes, accepted and
     # recorded like the installed agent's: the profile name and the patch file.
     parser.add_argument("--profile", default=None)
@@ -1064,7 +1072,11 @@ def main() -> int:
                         help="echo a foreign sessionId in the resume answer the observed agent omits")
     parser.add_argument("--resume-foreign-root", action="store_true",
                         help="frame the resumed turn's notifications under a session this run never requested")
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
     log_path = Path(args.log)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     if not check_private_home(log_path):
