@@ -234,7 +234,7 @@ class DecisionCoordinator:
         return rows
 
     @staticmethod
-    def _scan_candidates(connection: sqlite3.Connection, required_capabilities: list[str], *, constraints: dict | None = None, coding_only: bool = False, decision_id: str | None = None, consume_retries: bool = False, now: str | None = None, materialize_observations: bool = False) -> tuple[list[sqlite3.Row], list[str]]:
+    def _scan_candidates(connection: sqlite3.Connection, required_capabilities: list[str], *, constraints: dict | None = None, coding_only: bool = False, decision_id: str | None = None, consume_retries: bool = False, now: str | None = None) -> tuple[list[sqlite3.Row], list[str]]:
         """Legal candidates, plus the single-use quota retry windows a decision may use.
 
         Pin/exclude is enforced here in Python and never delegated to the model;
@@ -254,7 +254,7 @@ class DecisionCoordinator:
         clauses.append("(NOT EXISTS(SELECT 1 FROM effective_preferences WHERE mode='pin') OR f.mode='pin')")
         values.append(MAX_DECISION_PROFILES + 1)
         from ..evaluation.native_observations import exhausted
-        from .quota_routing import claim, materialize
+        from .quota_routing import claim
         selected: list[sqlite3.Row] = []
         retried: list[str] = []
         health_available = {}
@@ -266,8 +266,6 @@ class DecisionCoordinator:
                 health_available[row['adapter']] = read_health(connection, row['adapter'])['available']
             if not health_available[row['adapter']]:
                 continue
-            if materialize_observations:
-                materialize(connection, row['adapter'], row['provider'], now=now)
             if exhausted(connection, row, now=now) is None:
                 selected.append(row)
             elif decision_id is not None and claim(
@@ -631,7 +629,7 @@ class DecisionCoordinator:
             candidates, quota_retry = self._scan_candidates(
                 connection, request.get("requiredCapabilities", []),
                 constraints=request.get("constraints"), coding_only=True,
-                decision_id=decision_id, consume_retries=False, now=now, materialize_observations=True)
+                decision_id=decision_id, consume_retries=False, now=now)
             request["routingBasis"] = self._freeze_routing_basis(
                 connection, candidates=candidates,
                 required_capabilities=request.get("requiredCapabilities", []),
@@ -661,8 +659,8 @@ class DecisionCoordinator:
                 status, reason = "needs-host", NEEDS_HOST_NO_CANDIDATE
             else:
                 # Admission freezes the complete common packet — candidates, cards,
-                # preferences, program facts, every Router identity, the candidate
-                # and Router account bindings and the input manifest — before the
+                # preferences, program facts, every Router identity
+                # and the input manifest — before the
                 # resolution selects an item, so even a fully unavailable list
                 # leaves the Host the same frozen packet, never only a reason.
                 resolution = router.current_router(connection, now=now)
@@ -721,10 +719,6 @@ class DecisionCoordinator:
                 if facts["routingMode"] is not None:
                     base_input["outputSchema"] = router.answer_schema(
                         [item["profileId"] for item in base_input["profiles"]], facts["routingMode"])
-                from ..catalog.accounts import identity, selection
-                names = {item["adapter"] for item in base_input["profiles"]}
-                names.update(item["adapter"] for item in facts["routerIdentities"] if item)
-                base_input["accounts"] = {name: identity(selection(connection, name)) for name in sorted(names)}
                 snapshot = {"facts": facts, "baseInput": base_input,
                             "inspections": [dict(entry) for entry in resolution.inspections]}
                 input_bytes = len(canonical_json(base_input).encode("utf-8"))
@@ -1016,8 +1010,7 @@ class DecisionCoordinator:
     def _frozen_circumstances_problem(self, connection, row: sqlite3.Row, snapshot: dict, dispatch: dict) -> dict | None:
         """Why the frozen request's circumstances no longer hold; ``None`` when they do.
 
-        Settings, mode, budget, retry interval, revision, the frozen account
-        bindings, the dispatched buddy's complete identity and the request's reader
+        Settings, mode, budget, retry interval, revision, the dispatched buddy's complete identity and the request's reader
         binding are checked against the live board. Any drift is a changed
         boundary: the request never borrows a newer configuration and never treats
         the drift as an ordinary no-answer that switches Router.
@@ -1041,11 +1034,6 @@ class DecisionCoordinator:
         if drifted:
             return {"status": "stale", "code": "router-configuration-changed",
                     "reason": "Router 不可用：请求冻结后的共享 Router 设置已变化；不借新配置执行老请求，请显式 reroute"}
-        from ..catalog.accounts import identity, selection
-        bindings = snapshot["baseInput"].get("accounts") or {}
-        if any(account != identity(selection(connection, name)) for name, account in bindings.items()):
-            return {"status": "stale", "code": "ACCOUNT_BINDING_CHANGED",
-                    "reason": "The frozen routing accounts changed before claim"}
         published = connection.execute(
             "SELECT * FROM evaluation_profiles WHERE profile_id=?", (dispatch["profileId"],)).fetchone()
         if router._identity(published) != dispatch["profile"]:
@@ -1196,13 +1184,6 @@ class DecisionCoordinator:
             self._cancel_queued_task(connection, task, now, "missing frozen Router dispatch")
             return "decision-closed", None
         document = dispatch["document"]
-        from ..catalog.accounts import identity, selection
-        bindings = document.get('accounts') or {name: {'source': 'native', 'credentialRevision': 0}
-            for name in {item['adapter'] for item in document.get('profiles', [])}}
-        if any(account != identity(selection(connection, name)) for name, account in bindings.items()):
-            self._finish(connection, row, status='stale', reason='The frozen candidate accounts changed before claim', now=now)
-            self._cancel_queued_task(connection, task, now, 'Account selection changed')
-            return 'decision-closed', None
         published = connection.execute("SELECT * FROM evaluation_profiles WHERE profile_id=?",
                                        (dispatch["profileId"],)).fetchone()
         if router._identity(published) != dispatch["profile"]:
@@ -1220,7 +1201,7 @@ class DecisionCoordinator:
         # the claim transaction (ADR-021 §4): publication judges tool evidence
         # against the board's own read_health fact captured here, never a value
         # the answer claims. The fact lives in this attempt's durable row, beside
-        # the claim-frozen account binding, so the frozen model-input document
+        # its frozen model identity, so the frozen model-input document
         # itself stays byte-identical from admission to publication.
         from ..service.harness_health import read_health
         connection.execute(
@@ -1481,8 +1462,6 @@ class DecisionCoordinator:
             # R3's reader branch is a preclaim check: an active reader is normal
             # here. Reuse its other frozen checks, then check this reader's lease.
             problem = self._frozen_circumstances_problem(connection, {**dict(row), "reader_id": None}, snapshot, dispatch)
-            if problem is None and self._account_binding_changed(connection, attempt):
-                problem = {"status": "stale", "code": "ACCOUNT_BINDING_CHANGED", "reason": "The frozen routing account changed"}
             if problem is None and (row["input_sha256"] != dispatch["inputSha256"]
                     or row["input_json"] != canonical_json(dispatch["document"])):
                 problem = {"code": "router-input-changed", "reason": "The current input differs from the immutable dispatch"}
@@ -1556,12 +1535,6 @@ class DecisionCoordinator:
         return {**summary, "status": current["status"], "outcome": outcome, "profileId": current["profile_id"],
                 "reason": current["reason"], "publishedRevision": current["published_revision"]}
 
-    @staticmethod
-    def _account_binding_changed(connection, attempt):
-        from ..catalog.accounts import identity, selection
-        row = connection.execute('SELECT value FROM meta WHERE key=?', ('attempt-routing-accounts:' + attempt['attempt_id'],)).fetchone()
-        bindings = json.loads(row[0]) if row else {}
-        return any(account != identity(selection(connection, name)) for name, account in bindings.items())
 
     @staticmethod
     def _attempt_tool_policy(connection: sqlite3.Connection, attempt_id: str) -> dict | None:

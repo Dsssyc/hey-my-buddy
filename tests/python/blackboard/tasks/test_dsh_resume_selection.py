@@ -179,29 +179,6 @@ class DshResumeSelectionTests(WorkflowTestCase):
         self.assertEqual(turn["resumeMode"], "reconstructed-new-session")
         self.assertEqual(turn["input"]["context"]["resumeReason"], "harness-version-changed")
 
-    def test_an_account_credential_change_reconstructs_with_the_account_reason(self):
-        before = registry_adapter("dsh").native_resume
-        self.elect_candidate()
-        self.assert_declaration_stable(before)
-        board = self.board()
-        self.register(board)
-        submitted = self.submit(board)
-        first = self.claim(board)
-        self.finish_turn(board, first, disposition="attention", session_id=CANDIDATE_SESSION,
-                         result_mutator=self.goal_owned_storage())
-        # The real credential-revision boundary, with no credential file or login:
-        # this fixture bump is exactly what makes the next frozen account identity
-        # differ from the previous attempt's.
-        with board.service.account_settings.credential_change("dsh", "native",
-                                                              expected_credential_revision=0):
-            pass
-        view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.continue_run(board, view, command_id="continue-after-credential-change")
-        resumed = self.claim(board, claim_request_id="turn-after-credential-change")
-        self.assertEqual(resumed["claim"]["account"]["credentialRevision"], 1)
-        turn = resumed["claim"]["turn"]
-        self.assertEqual(turn["resumeMode"], "reconstructed-new-session")
-        self.assertEqual(turn["input"]["context"]["resumeReason"], "account-credentials-changed")
 
     def test_a_configuration_change_reconstructs_without_a_resume_reason(self):
         self.elect_candidate()
@@ -225,7 +202,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
         """A pre-wiring DSH result reporting attempt-private storage never resumes.
 
         The prior turn is otherwise fully qualified: concluded, same session,
-        configuration, harness version and account. The common ownership
+        configuration and harness version. The common ownership
         judgment — the same storageOwner qualification codex already applies —
         must reconstruct with an explicit reason instead of selecting
         native-session and failing later inside the native module.

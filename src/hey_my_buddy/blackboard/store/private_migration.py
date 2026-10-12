@@ -339,7 +339,7 @@ def preview(state: Path) -> dict:
             continue
         hash_to_task = {hashlib.sha256(task.encode()).hexdigest(): task for task in tasks}
         for source in old_parent.iterdir():
-            if source.name in ('goals', 'accounts'):
+            if source.name == 'goals':
                 continue
             if private_dirs.linked(source) or not source.is_dir():
                 blocked.append({'path': str(source.relative_to(state)), 'reason': 'legacy-goal-not-directory'})

@@ -47,7 +47,7 @@ from typing import Any, Callable, Mapping
 from ....errors import BoardError
 from ....protocol.activity import ActivityPublisher
 from ..c_two_live import CTwoLiveEndpoint
-from ....private_dirs import account_root, ensure_private_dir
+from ....private_dirs import ensure_private_dir
 from ...roles.turn_io import canonical_json, guard_private_path, private_json
 from ...runtime.windows_process import owned_popen
 from ..version import VersionShutdownError, probe_version
@@ -265,14 +265,13 @@ class _Classifier:
 
 @dataclasses.dataclass(frozen=True)
 class RunServices:
-    """The native credential source, frozen account and controller-owned live endpoint.
+    """The native credential source and controller-owned live endpoint.
 
     No blackboard client, ExecutionContext or credential file content travels here.
     Direct fixtures can omit the endpoint while retaining native activity facts.
     """
 
     credential_source: dict | None = None
-    account: dict | None = None
     live: CTwoLiveEndpoint | None = None
 
 
@@ -545,40 +544,18 @@ def _catalog(connection: Connection, version: str | None) -> dict:
     return catalog, listed_ids
 
 
-def _account_binding(prep: _Preparation, services: RunServices) -> dict:
-    """The frozen account binding: coding source, structured account, or the
-    locally selected Worker account from the incoming environment."""
-    binding = services.credential_source or services.account or {}
-    if binding:
-        return binding
-    incoming = prep.incoming
-    if not incoming.get("BUDDY_ACCOUNT_SELECTION"):
-        return {}
-    try:
-        selected = decode_json(incoming["BUDDY_ACCOUNT_SELECTION"])
-        if (selected.get("adapter") == "codex" and selected.get("source") == "worker"
-                and incoming.get("CODEX_HOME") == str(account_root(Path(incoming["BUDDY_STATE_DIR"]), "codex"))):
-            return selected
-    except (KeyError, ValueError, TypeError, AttributeError, OSError):
-        pass
-    return {}
-
-
-def _discovery_account_status(account, independent: bool) -> str:
+def _discovery_account_status(account) -> str:
     """The same session's account fact, reported and never judged (ADR-027).
 
     A chatgpt account whose plan the readback does not name — the field
     missing, empty or ``unknown`` — stays an unknown account; type alone never
-    confirms it. An independent worker's apiKey binding keeps its existing
-    rule; the board decides whether to trust any reading.
+    confirms it; the board decides whether to trust any reading.
     """
-    if not isinstance(account, dict) or account.get("type") not in (
-            ("chatgpt", "apiKey") if independent else ("chatgpt",)):
+    if not isinstance(account, dict) or account.get("type") != "chatgpt":
         return "unknown"
-    if account.get("type") == "chatgpt":
-        plan = account.get("planType")
-        if not isinstance(plan, str) or not plan or plan == "unknown":
-            return "unknown"
+    plan = account.get("planType")
+    if not isinstance(plan, str) or not plan or plan == "unknown":
+        return "unknown"
     return "confirmed"
 
 
@@ -598,9 +575,7 @@ def _initialize(connection: Connection, prep: _Preparation, services: RunService
     connection.call("initialize", {**_INIT_CLIENT, **experimental})
     connection.send({"method": "initialized", "params": {}})
     account = connection.call("account/read", {"refreshToken": False}).get("account")
-    independent = _account_binding(prep, services).get("source") == "worker"
-    if (not isinstance(account, dict) or account.get("type") not in
-            (("chatgpt", "apiKey") if independent else ("chatgpt",))):
+    if not isinstance(account, dict) or account.get("type") != "chatgpt":
         raise CodexProtocolError("account-plan-required",
                                  "Codex requires an existing ChatGPT account-plan login")
     catalog, listed_ids = _catalog(connection, prep.version)
@@ -1653,8 +1628,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
                 account = connection.call("account/read", {"refreshToken": False}).get("account")
             except CodexProtocolError:
                 account = None
-            independent = _account_binding(prep, RunServices()).get("source") == "worker"
-            account_status = _discovery_account_status(account, independent)
+            account_status = _discovery_account_status(account)
             catalog_value, _listed_ids = _catalog(connection, version)
             catalog_value["discoveries"] = [{"adapter": "codex", "status": "complete",
                                              "accountStatus": account_status}]
@@ -1696,52 +1670,17 @@ def check_preparation(spec: dict, environment: dict) -> None:
                          "Codex account-plan execution requires the native OpenAI provider", adapter="codex")
 
 
-def _incoming_worker_selection(environment: dict, state: Path) -> dict | None:
-    """The checked Worker selection the account environment already bound."""
-    if not environment.get("BUDDY_ACCOUNT_SELECTION"):
-        return None
-    try:
-        selected = decode_json(environment["BUDDY_ACCOUNT_SELECTION"])
-        if (isinstance(selected, dict) and selected.get("adapter") == "codex"
-                and selected.get("source") == "worker"
-                and environment.get("CODEX_HOME") == str(account_root(state, "codex"))):
-            return selected
-    except (ValueError, TypeError, AttributeError, OSError):
-        pass
-    return None
-
-
-def prepare_run_services(*, account: dict | None, tool_scope: str = "write") -> RunServices:
-    """Bind this harness's narrow run services from the controller process.
-
-    The Worker (``write``) coding home's credential source is resolved exactly
-    as the legacy carrier did: the service-frozen account when one is bound,
-    else the checked Worker selection the account environment already carries
-    — never a native fallback for a bound selection. The structured calls
-    (``none`` and ``read``) bind only the frozen account identity: no coding
-    home is prepared and no coding credential source exists on those carriers. Only paths and identities
-    enter the binding; no credential content is read.
-    """
+def prepare_run_services(*, tool_scope: str = "write") -> RunServices:
+    """Bind private coding state to the harness's native login location."""
     if tool_scope in ("none", "read"):
-        return RunServices(account=account if isinstance(account, dict) else None)
+        return RunServices()
     if tool_scope != "write":
-        raise BoardError("INVALID_ARGUMENT",
-                         "codex binds its native services for the none, read and write tool scopes",
-                         adapter="codex")
+        raise BoardError("INVALID_ARGUMENT", "codex binds its native services for the none, read and write tool scopes", adapter="codex")
     environment = dict(os.environ)
-    state = environment.get("BUDDY_STATE_DIR")
-    if not state:
-        raise BoardError("INVALID_ARGUMENT",
-                         "a governed codex turn requires the owning private state directory", adapter="codex")
-    frozen = account if isinstance(account, dict) else None
-    if frozen is None:
-        frozen = _incoming_worker_selection(environment, Path(state))
+    if not environment.get("BUDDY_STATE_DIR"):
+        raise BoardError("INVALID_ARGUMENT", "a governed codex turn requires the owning private state directory", adapter="codex")
     from .home import credential_source
-    source = credential_source(Path(state), environment, account=frozen)
-    # The write carrier's account gate reads the credential source, which is
-    # always present and always preferred here; the account field belongs to
-    # the structured calls alone.
-    return RunServices(credential_source=source)
+    return RunServices(credential_source=credential_source(environment))
 
 
 def validate_turn_provenance(record: dict) -> str | None:

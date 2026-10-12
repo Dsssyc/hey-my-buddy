@@ -10,11 +10,11 @@ const CODEX = "codex / openai / gpt-5-codex";
 const withHarness = (template: string) => template.replace("{{names}}", "Claude Code");
 
 const languages = [
-  { locale: "zh-CN", catalog: "目录", quotaAlert: withHarness(zhBuddies.attention.quota), unsaved: "未保存的修改", settings: "设置", account: "账户", manage: "管理账户", check: "检测", checked: "已检测 Codex：已找到", stale: "过期", unavailable: /^显示不可用/ },
-  { locale: "en-US", catalog: "Catalog", quotaAlert: withHarness(enBuddies.attention.quota), unsaved: "Unsaved changes", settings: "settings", account: "account", manage: "Manage account", check: "Check", checked: "Checked Codex: Found", stale: "Stale", unavailable: /^Show unavailable/ },
+  { locale: "zh-CN", catalog: "目录", quotaAlert: withHarness(zhBuddies.attention.quota), unsaved: "未保存的修改", settings: "设置", account: "账户", check: "检测", checked: "已检测 Codex：已找到", stale: "过期", unavailable: /^显示不可用/ },
+  { locale: "en-US", catalog: "Catalog", quotaAlert: withHarness(enBuddies.attention.quota), unsaved: "Unsaved changes", settings: "settings", account: "account", check: "Check", checked: "Checked Codex: Found", stale: "Stale", unavailable: /^Show unavailable/ },
 ];
 
-for (const { locale, catalog, quotaAlert, unsaved, settings, account, manage, check, checked, stale, unavailable } of languages)
+for (const { locale, catalog, quotaAlert, unsaved, settings, account, check, checked, stale, unavailable } of languages)
   for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const) {
     test.describe(`the catalogue in ${locale} at ${width}px in ${theme}`, () => {
       test.use({ locale, viewport: { width, height: 900 } });
@@ -161,7 +161,7 @@ for (const { locale, catalog, quotaAlert, unsaved, settings, account, manage, ch
         await expectNoSidewaysScroll(page);
       });
 
-      test("expands accounts independently and keeps checks, hints and account dialogs inside the window", async ({ page }) => {
+      test("expands accounts independently and keeps checks and hints inside the window", async ({ page }) => {
         await open(page, "#buddies/catalog");
         await page.getByRole("button", { name: `Codex ${account}`, exact: true }).click();
         await page.getByRole("button", { name: `DSH ${account}`, exact: true }).click();
@@ -173,16 +173,6 @@ for (const { locale, catalog, quotaAlert, unsaved, settings, account, manage, ch
         await codex.getByRole("button", { name: check, exact: true }).click();
         await expect(page.locator("[data-slot=harness-feedback]")).toHaveText(checked);
         await expectWholeAndApart(page.getByRole("main"), page.locator("[data-slot=harness-feedback]"));
-        await codex.getByRole("button", { name: manage }).click();
-        const dialog = page.getByRole("dialog");
-        await expect(dialog).toBeVisible();
-        await expect(dialog.locator(":focus")).toHaveCount(1);
-        await expect(page.getByRole("tooltip")).toHaveCount(0);
-        expect(await dialog.evaluate(node => getComputedStyle(node).borderTopLeftRadius)).toBe("0px");
-        await expectWholeAndApart(page.locator("body"), dialog);
-        await page.keyboard.press("Escape");
-        await expect(dialog).toHaveCount(0);
-        await codex.getByRole("button", { name: manage }).focus();
         // Account guidance may be absent; the recorded review word always has a hint.
         const review = codex.locator("[aria-description]").filter({ hasText: /^(可用|Eligible)$/ }).first();
         await expect(review).toHaveAttribute("aria-description", /本地资格检查不调用模型|The local eligibility check calls no model/);

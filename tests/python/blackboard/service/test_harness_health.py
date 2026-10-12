@@ -14,11 +14,12 @@ class HarnessHealthTests(BoardTestCase):
         self.board = BoardStore(self.directory / 'health')
         self.board.initialize()
         self.refreshed = []
-        self.health = HarnessHealth(self.board, catalog_refresh=lambda name, record, expected_binding=None: self.refreshed.append((name, record)))
+        self.health = HarnessHealth(self.board, catalog_refresh=lambda name, record, catalog_scan_claimed=False: self.refreshed.append((name, record)))
         self.health.initialize()
         self.snapshot = {'paths': [{'path': '/native/codex', 'mtimeNs': 1}]}
         self.discovered = {'adapter': 'codex', 'status': 'ready', 'command': ['/native/codex'],
                            'executable': '/native/codex', 'version': '1.0', 'source': 'common', 'available': True}
+        self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)))
         self.scan = patch('hey_my_buddy.blackboard.service.harness_health._snapshot', side_effect=lambda *args: self.snapshot)
         self.probe = patch('hey_my_buddy.blackboard.service.harness_health._discover', side_effect=lambda *args: self.discovered)
         self.scan.start()
@@ -102,11 +103,12 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.board.initialize()
         self.board.evaluation = EvaluationStore(self.board)
         self.refreshed = []
-        self.health = HarnessHealth(self.board, catalog_refresh=lambda name, record, expected_binding=None: self.refreshed.append(name))
+        self.health = HarnessHealth(self.board, catalog_refresh=lambda name, record, catalog_scan_claimed=False: self.refreshed.append(name))
         self.health.initialize()
         self.snapshot = {'paths': [{'path': '/native/codex', 'mtimeNs': 1}]}
         self.discovered = {'adapter': 'codex', 'status': 'ready', 'command': ['/native/codex'],
                            'executable': '/native/codex', 'version': '1.0', 'source': 'common', 'available': True}
+        self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)))
         self.scan = patch('hey_my_buddy.blackboard.service.harness_health._snapshot', side_effect=lambda *args: self.snapshot)
         self.probe = patch('hey_my_buddy.blackboard.service.harness_health._discover', side_effect=lambda *args: self.discovered)
         self.scan.start()
@@ -213,7 +215,7 @@ class CatalogShelfLifeTests(BoardTestCase):
     def test_cold_start_unknown_then_confirmed_publishes_the_catalog(self):
         self.record_native('unknown', observed_seconds_ago=7 * 3600)
 
-        def confirmed_on_reread(name, record, expected_binding=None):
+        def confirmed_on_reread(name, record, catalog_scan_claimed=False):
             self.refreshed.append(name)
             if len(self.refreshed) > 1:
                 self.record_native('confirmed')
@@ -243,7 +245,7 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.set_read_at(6 * 3600 + 1)
         self.expire_catalog_throttle()
 
-        def failing_refresh(name, record, expected_binding=None):
+        def failing_refresh(name, record, catalog_scan_claimed=False):
             self.refreshed.append(name)
             self.health.invalidate(name, record['revision'], 'CATALOG_UNAVAILABLE')
 
@@ -299,12 +301,12 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
     def test_an_explicit_request_joins_a_health_stale_read_in_flight(self):
         from hey_my_buddy.blackboard.catalog import catalog
         quiet = []
-        health = HarnessHealth(self.board, catalog_refresh=lambda name, record, expected_binding=None: quiet.append(name))
+        health = HarnessHealth(self.board, catalog_refresh=lambda name, record, catalog_scan_claimed=False: quiet.append(name))
         health.initialize()
         self.prime_ready_health(health)
         refreshed, entered, release = [], threading.Event(), threading.Event()
 
-        def slow_refresh(name, record, expected_binding=None):
+        def slow_refresh(name, record, catalog_scan_claimed=False):
             refreshed.append(name)
             entered.set()
             self.assertTrue(release.wait(timeout=10), "The parked health read was never released")
@@ -312,7 +314,7 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
 
         health.catalog_refresh = slow_refresh
         hook_calls = []
-        catalog.register_catalog_reread(self.board.directory, lambda name, binding: hook_calls.append(name))
+        catalog.register_catalog_reread(self.board.directory, lambda name: hook_calls.append(name))
         self.addCleanup(lambda: catalog.register_catalog_reread(self.board.directory, None))
         target = {'adapter': 'dsh', 'provider': 'fixture', 'model': 'beta', 'effort': 'max'}
         outcome, error = {}, {}
@@ -344,12 +346,12 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
         from hey_my_buddy.blackboard.catalog import catalog
         from hey_my_buddy.errors import BoardError
         quiet = []
-        health = HarnessHealth(self.board, catalog_refresh=lambda name, record, expected_binding=None: quiet.append(name))
+        health = HarnessHealth(self.board, catalog_refresh=lambda name, record, catalog_scan_claimed=False: quiet.append(name))
         health.initialize()
         self.prime_ready_health(health)
         hook_calls, entered, release = [], threading.Event(), threading.Event()
 
-        def slow_hook(name, binding):
+        def slow_hook(name):
             hook_calls.append(name)
             entered.set()
             self.assertTrue(release.wait(timeout=10), "The parked explicit read was never released")
@@ -478,7 +480,7 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         return {'source': 'fixture-native', 'providers': [{'adapter': 'dsh', 'provider': 'fixture', 'models': models}],
                 'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
 
-    def unknown_read(self, *args):
+    def unknown_read(self, *args, catalog_scan_claimed=False):
         self.evaluation.record_catalog({'source': 'fixture-native', 'providers': [],
             'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'unknown'}]})
 
@@ -551,31 +553,6 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         self.assertTrue(self.health.refresh('dsh', force=True)['available'])
         self.assert_catalog_survives()
 
-    def test_new_credential_health_refresh_cannot_restore_old_catalog_profiles(self):
-        from hey_my_buddy.blackboard.catalog import accounts, catalog
-        from hey_my_buddy.blackboard.store.db import canonical_json
-        from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
-        with self.board.store.db.write() as db:
-            accounts._write(db, 'account-credential:' + canonical_json(['dsh', 'native']), 1)
-            accounts._invalidate(db, 'dsh', accounts.selection(db, 'dsh'))
-        self.assertTrue(self.health.refresh('dsh', force=True)['available'])
-        profiles = self.profiles()
-        self.assertEqual(set(profiles), set(self.before))
-        self.assertTrue(all(item['enabled'] and not item['available'] for item in profiles.values()))
-        self.assertTrue(all(item['catalogStatus'] == 'unavailable' for item in profiles.values()))
-        # A path recheck and non-ready health write must preserve the binding
-        # reason, so later unknown reads cannot disguise these historical rows.
-        with patch.object(self.health, 'refresh', return_value={}):
-            self.health.set_path('dsh', None)
-        self.health.invalidate('dsh', self.health.get('dsh')['revision'], 'HARNESS_HANDSHAKE_FAILED')
-        self.assertTrue(self.health.refresh('dsh', force=True)['available'])
-        self.assertTrue(all(item.get('unavailableReason') == 'ACCOUNT_BINDING_CHANGED'
-                            for item in self.profiles().values()))
-        with self.board.store.db.read() as db:
-            self.assertIsNone(catalog.catalog_read_at(db, 'dsh'))
-            self.assertEqual(catalog.pending_families(db), {})
-            self.assertEqual(DecisionCoordinator._select_candidates(db, [], coding_only=True), [])
-
 
 class StaleRereadServiceCallbackTests(BoardTestCase):
     """The stale-catalog re-read through the real service callback (rule 4)."""
@@ -618,7 +595,7 @@ class StaleRereadServiceCallbackTests(BoardTestCase):
         self.assertEqual(health.get('dsh')['revision'], again['revision'])
 
 
-class HealthNativeStopTests(BoardTestCase):
+class HealthProbeFailureTests(BoardTestCase):
     def setUp(self):
         super().setUp()
         from hey_my_buddy.blackboard.store.store import BoardStore
@@ -628,49 +605,156 @@ class HealthNativeStopTests(BoardTestCase):
         self.addCleanup(self.health.close)
         self.enterContext(patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={}))
 
-    def operations(self):
+    def test_unconfirmed_probe_shutdown_remains_unavailable(self):
+        with patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value={
+                'adapter': 'codex', 'status': 'unhealthy', 'reasonCode': 'shutdown-unverified'}):
+            result = self.health.refresh('codex', force=True)
+        self.assertFalse(result['available'])
+        self.assertEqual(result['reasonCode'], 'shutdown-unverified')
+
+    def test_failed_probe_remains_unavailable(self):
+        with patch('hey_my_buddy.blackboard.service.harness_health._discover', side_effect=ValueError('fixture probe failed')):
+            result = self.health.refresh('codex', force=True)
+        self.assertFalse(result['available'])
+        self.assertEqual(result['reasonCode'], 'HARNESS_HANDSHAKE_FAILED')
+
+    def test_invalid_native_return_is_refused(self):
+        from hey_my_buddy.errors import BoardError
+        with patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value={'adapter': 'codex', 'status': 'illegal'}):
+            with self.assertRaises(BoardError) as caught:
+                self.health.refresh('codex', force=True)
+        self.assertEqual(caught.exception.code, 'HARNESS_INVALID_RESULT')
+
+
+class NativeAccountReadFailureTests(BoardTestCase):
+    def setUp(self):
+        super().setUp()
+        from hey_my_buddy.blackboard.store.store import BoardStore
+        self.board = BoardStore(self.directory / 'account-read-health')
+        self.board.initialize()
+        self.catalog_reads = []
+        self.health = HarnessHealth(self.board, catalog_refresh=lambda *args, **kwargs: self.catalog_reads.append(args))
+        self.health.initialize()
+        self.addCleanup(self.health.close)
+        self.enterContext(patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={}))
+        self.enterContext(patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value={
+            'adapter': 'codex', 'status': 'ready', 'command': ['fixture-codex'], 'version': 'fixture'}))
+
+    def events(self, kind):
         import json
         with self.board.db.read() as db:
-            return [json.loads(row[0]) for row in db.execute("SELECT value FROM meta WHERE key LIKE 'account-operation:%'")]
+            return [json.loads(row[0]) for row in db.execute('SELECT payload_json FROM events WHERE kind=?', (kind,))]
 
-    def invoke(self, value):
-        def read(*args):
-            self.assertEqual([r['status'] for r in self.operations()], ['active'])
-            if isinstance(value, Exception):
-                raise value
-            return value
-        with patch('hey_my_buddy.blackboard.service.harness_health._discover', side_effect=read):
-            return self.health.refresh('codex', force=True)
-
-    def fail_read(self, stopped):
-        error = ValueError('fixture probe failed')
-        if stopped is not None:
-            error.discovery_shutdown_confirmed = stopped
-        self.invoke(error)
-
-    def test_read_failure_with_confirmed_stop_removes_operation(self):
-        self.fail_read(True)
-        self.assertEqual(self.operations(), [])
-
-    def test_read_failure_with_unconfirmed_stop_retains_uncertain(self):
-        self.fail_read(False)
-        self.assertEqual([r['status'] for r in self.operations()], ['uncertain'])
-
-    def test_read_failure_without_stop_evidence_retains_uncertain(self):
-        self.fail_read(None)
-        self.assertEqual([r['status'] for r in self.operations()], ['uncertain'])
-
-    def test_shutdown_unverified_return_retains_uncertain(self):
-        self.invoke({'adapter': 'codex', 'status': 'unhealthy', 'reasonCode': 'shutdown-unverified'})
-        self.assertEqual([r['status'] for r in self.operations()], ['uncertain'])
-
-    def test_failed_probe_with_confirmed_stop_removes_operation(self):
-        self.invoke({'adapter': 'codex', 'status': 'unhealthy', 'reasonCode': 'timeout'})
-        self.assertEqual(self.operations(), [])
-
-    def test_invalid_return_after_confirmed_stop_removes_operation(self):
+    def test_unconfirmed_account_stop_stays_unavailable_until_a_real_successful_read(self):
         from hey_my_buddy.errors import BoardError
-        with self.assertRaises(BoardError) as caught:
-            self.invoke({'adapter': 'codex', 'status': 'illegal'})
-        self.assertEqual(caught.exception.code, 'HARNESS_INVALID_RESULT')
-        self.assertEqual(self.operations(), [])
+        with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read',
+                   side_effect=BoardError('HARNESS_ACCOUNT_STOP_UNCONFIRMED', 'fixture stop was not confirmed')) as probe:
+            first = self.health.refresh('codex', force=True)
+            self.assertFalse(first['available'])
+            self.assertEqual(first['status'], 'unhealthy')
+            self.assertEqual(first['reasonCode'], 'HARNESS_ACCOUNT_STOP_UNCONFIRMED')
+            again = self.health.refresh('codex', force=True)
+            self.assertFalse(again['available'])
+            self.assertEqual(again['reasonCode'], first['reasonCode'])
+            probe.assert_called_once()  # Read throttling cannot erase the failure.
+        self.assertEqual(self.catalog_reads, [])
+        self.assertEqual(self.events('harness.account_observed'), [])
+        self.assertEqual(self.events('harness.invalidated')[0]['reasonCode'], first['reasonCode'])
+        with self.board.db.write() as db:
+            db.execute("UPDATE harness_account_reads SET checked_at='2000' WHERE adapter='codex'")
+        with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)):
+            recovered = self.health.refresh('codex', force=True)
+        self.assertTrue(recovered['available'])
+        self.assertNotIn('reasonCode', recovered)
+        self.assertNotIn('accountReadFailure', recovered)
+        self.assertEqual(len(self.catalog_reads), 1)
+        self.assertEqual(len(self.events('harness.account_observed')), 1)
+
+    def test_ordinary_account_read_failure_records_its_reason_without_success_event(self):
+        from hey_my_buddy.errors import BoardError
+        from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+        for error, reason in ((BoardError('ACCOUNT_QUERY_DENIED', 'fixture query denied'), 'ACCOUNT_QUERY_DENIED'),
+                              (CodexProtocolError('native-rpc-error', 'fixture RPC denied'), 'native-rpc-error'),
+                              (OSError('fixture read transport failed'), 'HARNESS_ACCOUNT_READ_FAILED')):
+            with self.subTest(reason=reason):
+                with self.board.db.write() as db:
+                    db.execute("DELETE FROM harness_account_reads WHERE adapter='codex'")
+                with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', side_effect=error):
+                    result = self.health.refresh('codex', force=True)
+                self.assertTrue(result['available'])
+                self.assertEqual(result['status'], 'ready')
+                self.assertNotIn('reasonCode', result)
+                self.assertEqual(result['accountReadFailure']['reasonCode'], reason)
+                self.assertEqual(result['billingByProvider']['openai']['kind'], 'unknown')
+                self.assertEqual(result['accountReadFailure']['errorType'], type(error).__name__)
+                self.assertEqual(result['accountReadFailure']['message'], str(error))
+                self.assertEqual(self.events('harness.account_read_failed')[-1]['reasonCode'], reason)
+        self.assertEqual(self.events('harness.account_observed'), [])
+        self.assertEqual(self.events('harness.invalidated'), [])
+        self.assertEqual(len(self.catalog_reads), 3)
+        with self.board.db.read() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM harness_quota_observations').fetchone()[0], 0)
+        with self.board.db.write() as db:
+            db.execute("DELETE FROM harness_account_reads WHERE adapter='codex'")
+        with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)):
+            recovered = self.health.refresh('codex', force=True)
+        self.assertTrue(recovered['available'])
+        self.assertNotIn('accountReadFailure', recovered)
+
+    def test_late_account_failure_cannot_invalidate_a_new_health_generation(self):
+        from hey_my_buddy.errors import BoardError
+        def fail_after_setting_change(*args):
+            with self.board.db.write() as db:
+                db.execute("UPDATE harness_health SET revision=revision+1,status='unknown',record_json='{}' WHERE adapter='codex'")
+            raise BoardError('HARNESS_ACCOUNT_STOP_UNCONFIRMED', 'old fixture read')
+        with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', side_effect=fail_after_setting_change):
+            result = self.health.refresh('codex', force=True)
+        self.assertEqual(result['status'], 'unknown')
+        self.assertEqual(self.events('harness.invalidated'), [])
+        failure = self.events('harness.account_read_failed')[0]
+        self.assertEqual(failure['reasonCode'], 'HARNESS_ACCOUNT_STOP_UNCONFIRMED')
+        self.assertLess(failure['revision'], failure['currentRevision'])
+
+    def test_account_success_survives_quota_rpc_failure_after_confirmed_stop(self):
+        from hey_my_buddy.buddy.harnesses.codex import account_probe
+        from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+        with patch.object(account_probe, 'owned_popen'), patch.object(account_probe, 'ProcessHandle') as handle, \
+             patch.object(account_probe, 'Connection') as connection:
+            handle.return_value.shutdown_confirmed.return_value = True
+            connection.return_value.call.side_effect = [{}, {'account': {'type': 'chatgpt', 'planType': 'pro'}},
+                                                       CodexProtocolError('native-rpc-error', 'quota RPC denied')]
+            result = self.health.refresh('codex', force=True)
+            handle.return_value.terminate.assert_called_once()
+        self.assertTrue(result['available'])
+        self.assertEqual(result['billingByProvider']['openai']['kind'], 'subscription')
+        self.assertEqual(result['accountReadFailure']['reasonCode'], 'native-rpc-error')
+        self.assertEqual(self.events('harness.account_read_failed')[0]['reasonCode'], 'native-rpc-error')
+        self.assertEqual(self.events('harness.account_observed')[0]['billing']['openai']['kind'], 'subscription')
+        self.assertFalse(self.events('harness.account_observed')[0]['quotaRecorded'])
+        self.assertEqual(self.events('harness.invalidated'), [])
+        with self.board.db.read() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM harness_quota_observations').fetchone()[0], 0)
+
+    def test_confirmed_stop_with_account_data_failure_restores_health_and_records_failure(self):
+        from hey_my_buddy.errors import BoardError
+        from hey_my_buddy.buddy.harnesses.codex import account_probe
+        from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+        with patch.object(account_probe, 'read', side_effect=BoardError('HARNESS_ACCOUNT_STOP_UNCONFIRMED', 'unknown stop')):
+            self.assertFalse(self.health.refresh('codex', force=True)['available'])
+        with self.board.db.write() as db:
+            db.execute("DELETE FROM harness_account_reads WHERE adapter='codex'")
+        with patch.object(account_probe, 'owned_popen'), patch.object(account_probe, 'ProcessHandle') as handle, \
+             patch.object(account_probe, 'Connection') as connection:
+            handle.return_value.shutdown_confirmed.return_value = True
+            connection.return_value.call.side_effect = [{}, CodexProtocolError('native-rpc-error', 'account RPC denied')]
+            result = self.health.refresh('codex', force=True)
+        self.assertTrue(result['available'])
+        self.assertNotIn('reasonCode', result)
+        self.assertEqual(result['accountReadFailure']['reasonCode'], 'native-rpc-error')
+        self.assertEqual(result['billingByProvider']['openai']['kind'], 'unknown')
+
+    def test_unexpected_account_reader_exception_is_not_silently_recorded(self):
+        with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', side_effect=TypeError('fixture programming error')):
+            with self.assertRaises(TypeError):
+                self.health.refresh('codex', force=True)
+        self.assertEqual(self.events('harness.account_read_failed'), [])

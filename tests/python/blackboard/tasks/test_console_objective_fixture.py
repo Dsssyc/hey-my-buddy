@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from support import private_state_dir
+from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 
 # fixtures/ is an executable helper directory, not a new test package.
 HELPER = Path(__file__).resolve().parents[2] / "fixtures/console_objective_board.py"
@@ -25,7 +26,7 @@ class ConsoleObjectiveFixtureTests(unittest.TestCase):
             with fixture_module.SyntheticBoard(root / "state", root / "runtime", SOURCE,
                                                 recipe=fixture_module.Recipe.smoke(), seed=613) as fixture:
                 facts = fixture.initial_facts
-                self.assertEqual(facts["schemaVersion"], 16)
+                self.assertEqual(facts["schemaVersion"], SCHEMA_VERSION)
                 self.assertEqual(facts["governedRuns"], 12)
                 self.assertEqual(facts["counts"]["objectives"], 3)
                 self.assertEqual(facts["plainRecords"], 2)

@@ -43,7 +43,6 @@ BASE_INPUT = {
     "annotations": [],
     "policyFacts": {},
     "outputSchema": {"type": "object"},
-    "accounts": {"dsh": {"source": "native", "credentialRevision": 0}},
     "budget": {"timeoutSeconds": 60},
     "routingMode": "fast",
 }

@@ -210,61 +210,13 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(marker.read_text(), 'native state')
         self.assertFalse((home / 'auth.json').is_symlink())
 
-    def test_selected_worker_account_never_falls_back_to_native_credentials(self):
-        from hey_my_buddy.private_dirs import account_root
-        from hey_my_buddy.blackboard.catalog.accounts import WorkerAccountProvider, using_provider
 
-        def environment(state, account, environment, purpose):
-            # The production provider binds the private home and serializes the
-            # frozen selection; the run-side credential source reads exactly this.
-            return {**environment, 'CODEX_HOME': str(account_root(state, 'codex')),
-                    'BUDDY_ACCOUNT_SELECTION': json.dumps(account, separators=(',', ':'))}
-
-        provider = WorkerAccountProvider(capabilities={'workerAccount': True}, environment=environment)
-        approved = using_provider('codex', provider)
-        approved.__enter__()
-        self.addCleanup(approved.__exit__, None, None, None)
-        (self.home / 'auth.json').write_text('shared login')
-        context = self.context()
-        context.runtime['workerAccount'] = {'source': 'worker', 'revision': 1}
-        root = account_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex')
-        root.mkdir(mode=0o700, parents=True)
-        first = self.execute(context)
-        self.assertEqual(first.status, 'failed')
-        self.assertEqual(first.result['code'], 'codex-account-unavailable')
-        self.assertFalse(Path(self.environment['BUDDY_CODEX_FIXTURE_STATE']).exists())
-        (root / 'auth.json').write_text('worker login')
-        (root / 'auth.json').chmod(0o600)
-        second_context = self.context(index=2)
-        second_context.runtime['workerAccount'] = dict(context.runtime['workerAccount'])
-        second = self.execute(second_context)
-        self.assertEqual(second.status, 'ok', second.to_report())
-        changed = self.context(index=3, previous=second.result['sessionId'])
-        changed.runtime['workerAccount'] = {'source': 'worker', 'revision': 2}
-        third = self.execute(changed)
-        self.assertEqual(third.result['code'], 'native-resume-unavailable')
-        self.assertEqual((root / 'auth.json').read_text(), 'worker login')
-
-    def test_worker_selection_resolves_the_private_account_home_in_run_services(self):
-        from hey_my_buddy.private_dirs import account_root
-        from hey_my_buddy.buddy.harnesses.codex.native_run import prepare_run_services
-        root = account_root(self.root, 'codex')
-        root.mkdir(mode=0o700, parents=True)
-        environment = {**self.environment, 'CODEX_HOME': str(root),
-                       'BUDDY_STATE_DIR': str(self.root),
-                       'BUDDY_ACCOUNT_SELECTION': json.dumps({'adapter': 'codex', 'source': 'worker',
-                                                               'revision': 1, 'credentialRevision': 1})}
-        with mock.patch.dict(os.environ, environment):
-            services = prepare_run_services(account=None)
-        self.assertEqual(services.credential_source['home'], str(root))
-        self.assertEqual(services.credential_source['source'], 'worker')
-        self.assertEqual(services.credential_source['credentialRevision'], 1)
-        # The structured carriers bind only the frozen account identity: they
-        # prepare no coding home and carry no credential source at all.
-        with mock.patch.dict(os.environ, environment):
-            read_only = prepare_run_services(account=None, tool_scope="read")
-        self.assertIsNone(read_only.credential_source)
-        self.assertIsNone(read_only.account)
+    def test_native_credential_source_preserves_the_private_binding_shape(self):
+        from hey_my_buddy.buddy.harnesses.codex.home import credential_source
+        import hashlib
+        self.assertEqual(credential_source(self.environment), {
+            'home': str(self.home), 'source': 'native', 'credentialRevision': 0,
+            'identity': hashlib.sha256(str(self.home).encode()).hexdigest()})
 
     def test_previous_unsettled_auth_is_retained_and_cannot_be_replaced(self):
         from hey_my_buddy.private_dirs import native_root
@@ -336,7 +288,7 @@ class CodexAdapterTests(unittest.TestCase):
                     yield fd
             with mock.patch.object(codex_home, '_pinned_home', replaced), self.assertRaises(BoardError):
                 if operation == 'create':
-                    codex_home.prepare_coding_home(root, {'home': str(self.home), 'source': 'native'})
+                    codex_home.prepare_coding_home(root, {'home': str(self.home)})
                 else:
                     codex_home.remove_coding_auth(root)
             self.assertEqual(sentinel.read_text(), 'unrelated login')

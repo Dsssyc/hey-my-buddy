@@ -349,29 +349,3 @@ Every CLI JSON envelope carries `contractVersion`. `adapters` aliases `capabilit
 ## Worker session history
 
 `worker-sessions` maps to the named `worker_sessions` operation. It accepts `adapter: codex` (the default) and `action: list` (the default); anything else is rejected. `list` reads only board-recorded native identities and reports `sessions`, `count` and `nativeAccess:false`, labelling Codex historical user-store and private goal threads; actual archive or deletion requires separate user confirmation and a native Codex action. A `dsh` request is `UNSUPPORTED`: DSH sessions are execution-private and the grouped-session listing and archiving were removed with the grouping feature ([ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md)). Worker credentials are denied. [Operations](operations.md#worker-session-history) owns the read boundary and the upgrade boundary.
-
-## Independent Worker accounts (0.26.0)
-
-All account methods are Host or authenticated-console operations. The CLI uses hyphens and the named C-Two operations use underscores. An attempt-scoped Worker credential grants no account mutation. `accounts` reads sanitized cached facts without a native refresh; the Harness section exposes the same facts and explicit actions.
-
-| CLI | Parameters and behavior |
-| --- | --- |
-| `accounts` | `{}`; returns `accounts[]` with `adapter`, `source`, selection `revision`, `credentialRevision`, status/type/time, capability flags and nonsecret guidance. |
-| `account-set` | `adapter`, `source: native|worker`, required nonnegative `expectedRevision`; changes future attempts only. |
-| `account-login` | `adapter`, `mode: oauth|api-key`, required nonnegative `expectedRevision`; only Worker source and verified native paths. API key enters through stdin or the authenticated form, never argv or a parameter file. |
-| `account-status` | `adapter`, `loginId` (≤128); reads one owned operation, with no authorization link or device code. |
-| `account-cancel` | `adapter`, `loginId`; correlates cancellation and actual stop, retaining uncertain credentials. |
-| `account-logout` | `adapter`, required `expectedRevision`; refuses active or uncertain users of that private credential. |
-| `account-remove` | Same fields and guard as logout; removes private native content or the dedicated system-store entry, never shared native login. The Worker source needs new credentials afterward. |
-
-Use `account-login` with nonsecret JSON metadata and a separate key pipe, or put the entire request in stdin JSON with `account-login -`. A key supplied in positional JSON or a parameter file is refused with `ACCOUNT_KEY_STDIN_REQUIRED`. Terminal input uses the authenticated form or a secret-producing command whose stdout is piped to the CLI; the CLI does not echo a key. Keys are bounded to 16 KiB, contain no NUL/newline, and are never saved in command receipts or replay fingerprints. After an unknown reply, inspect cached account facts and enter the key again if needed; no secret request is automatically replayed.
-
-```sh
-"$BUDDY" accounts '{}'
-"$BUDDY" account-set '{"adapter":"codex","source":"worker","expectedRevision":0}'
-"$BUDDY" account-login '{"adapter":"codex","mode":"oauth","expectedRevision":1}'
-# A helper prompts without echo and writes only into the private pipe.
-python3 -c 'import getpass; print(getpass.getpass("API key: "))' | "$BUDDY" account-login '{"adapter":"codex","mode":"api-key","expectedRevision":1}'
-```
-
-OAuth returns one private `login` response containing a browser URL. The user completes it; the link never enters SQLite, audit events, snapshots or later status replies. A nonsecret pending operation identity can survive folding/reloading; after owner loss the status remains uncertain. Login lasts at most ten minutes, and a deadline or missing owner is not stop evidence. Stable refusals include `ACCOUNT_NATIVE_READ_ONLY`, `ACCOUNT_CAPABILITY_UNVERIFIED`, `ACCOUNT_IN_USE`, `ACCOUNT_BINDING_CHANGED`, `ACCOUNT_KEY_INVALID`, `ACCOUNT_SECRET_STORE_UNAVAILABLE` and `ACCOUNT_STOP_UNCONFIRMED`; source/revision races use `REVISION_CONFLICT`.

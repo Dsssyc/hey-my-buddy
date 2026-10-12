@@ -42,12 +42,6 @@ METHODS = [
     "capabilities",
     "adapters",
     "accounts",
-    "account-set",
-    "account-login",
-    "account-status",
-    "account-cancel",
-    "account-logout",
-    "account-remove",
     "harness-set",
     "quota-redetect",
     "runtime",
@@ -690,21 +684,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         params = _parse_parameters(_parameters_text(args))
         state_dir = get_state_dir(params.get("stateDir") if args.method in LOCAL_METHODS else None)
-        if (args.method == 'account-login' and 'apiKey' in params
-                and not (args.params == '-' or args.params_file == '-')):
-            params.pop('apiKey', None)
-            raise BoardError('ACCOUNT_KEY_STDIN_REQUIRED', 'API keys must arrive through standard input')
-        if args.method == 'account-login' and params.get('mode') == 'api-key':
-            if 'apiKey' in params:
-                pass
-            else:
-                if args.params == '-' or args.params_file == '-':
-                    raise BoardError('ACCOUNT_KEY_STDIN_REQUIRED', 'Supply metadata separately from the key input stream')
-                if sys.stdin.isatty():
-                    raise BoardError('ACCOUNT_KEY_STDIN_REQUIRED', 'Pipe the key through standard input or use the authenticated form')
-                value = sys.stdin.read(16385)
-                from ..buddy.harnesses.account_native import key_value
-                params['apiKey'] = key_value(value.rstrip('\r\n'))
         # `output` is CLI-local: it selects the printed projection and never reaches RPC.
         # Console validates its own local options, so it keeps its complete response.
         mode = cli_views.OUTPUT_FULL if args.method == "console" else cli_views.pop_output_mode(params)

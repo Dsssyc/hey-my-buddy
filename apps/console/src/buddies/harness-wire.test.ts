@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApi, snapshotHarnesses } from "../api";
 import type { HarnessHealth } from "../api";
-import { parseAccountLogin, parseHarnessAccount } from "../harness-account";
+import { parseHarnessAccount } from "../harness-account";
 import type { HarnessAccount } from "../harness-account";
 import type { Snapshot } from "../types";
 import { CHECKED_AT, harness } from "./harness.fixtures";
@@ -120,25 +120,27 @@ describe("a quota observation on the wire", () => {
       observedAt: CHECKED_AT, resetsAt: null, blocked: true, retry: null };
     const parse = (quotaRouting: unknown) => snapshotHarnesses({ harnesses: [harness({ adapter: "dsh", status: "ready", quotaRouting: quotaRouting as never })] } as unknown as Snapshot)[0].quotaRouting;
     expect(parse([record])).toEqual([record]);
+    const available = { ...record, blocked: false, code: null };
+    expect(parse([record, available])).toEqual([record, available]);
+    expect(parse([{ ...record, code: null }])).toBeUndefined();
+    expect(parse([{ ...available, code: "HARNESS_QUOTA_EXHAUSTED" }])).toBeUndefined();
     expect(parse([record, { ...record, retry: { eligibleAt: 42, open: "yes" } }])).toBeUndefined();
     expect(parse([{ ...record, provider: " " }])).toBeUndefined();
     expect(parse("blocked")).toBeUndefined();
   });
 });
 
-describe("an account on the wire", () => {
-  const facts: HarnessAccount = { adapter: "codex", source: "worker", revision: 3, credentialRevision: 2,
-    status: "logged-out", accountType: null, checkedAt: null, reasonCode: null, guidance: null,
-    capabilities: { workerAccount: true, oauth: true, apiKey: true, logout: true, remove: true } };
-  const ticket = { loginId: "login-fixture", state: "pending", expiresAt: "2026-09-30T14:00:00Z",
-    authUrl: "https://auth.openai.com/fixture-private" };
+describe("native login facts on the wire", () => {
+  const facts: HarnessAccount = { adapter: "codex", status: "logged-out", accountType: null,
+    checkedAt: null, reasonCode: null, guidance: null };
 
-  it("rejects malformed capability flags and unsafe or credential-bearing URLs", () => {
-    expect(parseHarnessAccount({ ...facts, capabilities: { ...facts.capabilities, apiKey: "true" } }, "codex")).toBeNull();
+  it("accepts only the named login facts of the requested harness", () => {
+    expect(parseHarnessAccount(facts, "codex")).toEqual(facts);
     expect(parseHarnessAccount(facts, "claude")).toBeNull();
-    expect(parseAccountLogin({ ...ticket, authUrl: "javascript:alert(1)" })).toBeNull();
-    expect(parseAccountLogin({ ...ticket, authUrl: "https://user:secret@auth.openai.com/" })).toBeNull();
-    expect(parseHarnessAccount({ ...facts, apiKey: "not-public" }, "codex")).not.toHaveProperty("apiKey");
-    expect(parseHarnessAccount({ ...facts, pendingLogin: ticket }, "codex")?.pendingLogin).not.toHaveProperty("authUrl");
+    expect(parseHarnessAccount({ ...facts, status: "configured" }, "codex")).toBeNull();
+    expect(parseHarnessAccount({ ...facts, checkedAt: 42 }, "codex")).toBeNull();
+    expect(parseHarnessAccount({ ...facts, apiKey: "not-public" }, "codex")).toEqual(facts);
+    expect(parseHarnessAccount({ ...facts, plan: "plus" }, "codex")).toEqual({ ...facts, plan: "plus" });
+    expect(parseHarnessAccount({ ...facts, plan: false }, "codex")).toBeNull();
   });
 });

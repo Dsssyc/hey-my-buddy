@@ -27,6 +27,7 @@ from ...json_codec import canonical_json, decode_bounded_frame
 from ...protocol import activity as activity_protocol
 from ...protocol import tool_evidence as tool_evidence_protocol
 from ...protocol import usage as usage_protocol
+from ...protocol.harness_names import HARNESS_NAMES
 from ...protocol.run_identity import RunIdentity
 from ...protocol.internal_models import (
     AbsolutePath,
@@ -54,7 +55,6 @@ from pydantic import BeforeValidator, Field, model_serializer, model_validator
 #: The only internal format version. It never changes a public board contract.
 FORMAT_VERSION = 1
 
-HARNESS_NAMES = ("codex", "claude", "zcode", "dsh")
 #: The native-provided identifier fields, matching the tool-evidence identity set.
 NATIVE_ID_KEYS = {"sessionId": "session_id", "threadId": "thread_id", "turnId": "turn_id",
                   "inputId": "input_id", "callId": "call_id"}

@@ -401,7 +401,7 @@ test.describe("the Buddy page in English", () => {
       await settle(page);
       expect(await chinese(page), name).toEqual([]);
     }
-    for (const name of ["Manage account", "Set path"]) {
+    for (const name of ["Set path"]) {
       await page.getByRole("button", { name, exact: true }).first().click();
       await expect(page.getByRole("dialog")).toBeVisible();
       expect(await chinese(page), name).toEqual([]);

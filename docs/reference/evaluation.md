@@ -128,10 +128,6 @@ Source lives in `apps/console/` (React 19, Vite 8, TypeScript); a relative-base 
 
 Profile reads include bounded native `billing` and derived `quotaExhausted`; neither is user-editable. Billing never changes enablement, preference or routing eligibility. Native exhaustion temporarily filters candidates without changing user policy. Review capability is projected from the local eligibility check without certificates. Current snapshots include `configurationError:null`; old settings return `configuration:null` and `configurationError:{code,message,revision}` while preserving other readable data. See [harnesses](harnesses.md) for the separate native verification boundary.
 
-## Credential lineage for quota (0.26.0)
-
-Native quota, exhaustion and retry facts are keyed by adapter/provider/limit plus service-selected source and credential revision. A delayed result uses its claim-time lineage, never its own account label or the current selection. Current reminders, billing and automatic eligibility read only the current lineage; switching back to the same unchanged lineage retains its observations, while replacing credentials requires fresh native facts. Quota re-detection and atomic retry claims stay in that same lineage. Token usage remains the existing per-attempt record; no new usage snapshot or account-driven model-card publication is added.
-
 ## Public model facts snapshots (ADR-021 L8)
 
 Facts that belong to the model itself — price, billing unit and method, context length, release date and machine-readable capabilities — are program-owned and come from one public machine-readable source, [models.dev](https://models.dev). The Router never writes them, and neither family notes nor local evaluations ever count as public facts. A refresh stores one durable dated snapshot per model family in `model_facts`: the extracted facts, the resolved models.dev provider/model identity, the exact source, the payload hash and the fetch date.

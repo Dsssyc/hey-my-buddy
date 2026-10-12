@@ -1,11 +1,12 @@
-"""Restore the fixed schema-15 stock; private binding precedes upgrade.
+"""Restore the fixed schema-16 stock; private binding precedes upgrade.
 
 No old-source imports, generator, daemon, account or model is used here. The
-returned board is the preservation baseline, including its rebound old-format
+returned board is the preservation baseline, including its rebound base-format
 identities and digests. This module performs fixture preparation, not migration.
 """
 from __future__ import annotations
 
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -14,7 +15,7 @@ import re
 import sqlite3
 import subprocess
 
-FIXTURE = Path(__file__).resolve().parents[3] / "fixtures/adr021-l18"
+FIXTURE = Path(__file__).resolve().parents[3] / "fixtures/upgrade-base"
 
 
 def _sha(data: bytes) -> str:
@@ -37,7 +38,7 @@ def load_fixture(state: Path) -> dict:
     ``state`` and ``fixtureRoot`` are Paths; ``operations`` is the rebound old
     operation log; ``bindings`` maps template-era identities/digests to restored
     ones. Other keys are the fixed metadata (including stableIds/sourceCommit).
-    Schema remains 15. Take the upgrade baseline only after this returns.
+    Schema remains 16. Take the upgrade baseline only after this returns.
     """
     metadata = json.loads((FIXTURE / "metadata.json").read_text())
     stock = {}
@@ -84,8 +85,8 @@ def load_fixture(state: Path) -> dict:
     for old, template in resources["identities"].items():
         directory = Path(replace(template)).resolve(strict=True)
         facts = directory.stat()
-        # The base's exact [path, device, inode] identity, not the current form.
-        bindings[old] = _sha(_json([str(directory), facts.st_dev, facts.st_ino], ascii_json=True).encode())
+        # The released base uses stable path/inode identity.
+        bindings[old] = _sha(_json([str(directory), facts.st_ino], ascii_json=True).encode())
     for recipe in resources["hashBindings"]:
         payload = replace(recipe["template"], ascii_json=recipe["asciiJson"], json_payload=True)
         bindings[recipe["oldSha256"]] = _sha(payload.encode())
@@ -106,7 +107,7 @@ def load_fixture(state: Path) -> dict:
         target.parent.mkdir(parents=True, exist_ok=True)
         content = _json(bind(json.loads(text)), ascii_json=True) if target.suffix == ".json" else replace(text)
         target.write_text(content)
-    with sqlite3.connect(state / "board.sqlite3") as connection:
+    with closing(sqlite3.connect(state / "board.sqlite3")) as connection, connection:
         connection.executescript(stock["board.sql"])
         # Change values only. Never initialize with the current schema, insert a
         # conclusion, add a migration alias, or rewrite native provenance.

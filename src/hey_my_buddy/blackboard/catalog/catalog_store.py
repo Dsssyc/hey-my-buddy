@@ -15,36 +15,24 @@ def begin(evaluation, request_id=None, *, harnesses=None):
     with evaluation.db.write() as db:
         db.execute('INSERT OR IGNORE INTO catalog_observations(request_id,created_at) VALUES(?,?)', (request_id, evaluation._now()))
         row = db.execute('SELECT * FROM catalog_observations WHERE request_id=?', (request_id,)).fetchone()
-        from .accounts import ADAPTERS
+        from ...protocol.harness_names import HARNESS_NAMES
         from ..service.harness_health import read_health
-        records = harnesses if harnesses is not None else [read_health(db, name) for name in ADAPTERS]
-        db.execute('INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)', ('catalog-accounts:' + str(row['observation_id']),
-                   canonical_json({record['adapter']: record['account'] for record in records})))
+        records = harnesses if harnesses is not None else [read_health(db, name) for name in HARNESS_NAMES]
         db.execute('INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)', ('catalog-harnesses:' + str(row['observation_id']), canonical_json(records)))
-        bindings = db.execute('SELECT value FROM meta WHERE key=?', ('catalog-accounts:' + str(row['observation_id']),)).fetchone()
         frozen = db.execute('SELECT value FROM meta WHERE key=?', ('catalog-harnesses:' + str(row['observation_id']),)).fetchone()
         return {'observationId': row['observation_id'], 'response': json.loads(row['response_json']) if row['response_json'] else None,
-                'accounts': json.loads(bindings[0]), 'harnesses': json.loads(frozen[0])}
+                'harnesses': json.loads(frozen[0])}
 
 
-def current(db, *, accounts=None):
+def current(db):
     providers, results = [], []
     for row in db.execute('SELECT c.*, d.payload_json FROM catalog_current c LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id ORDER BY c.adapter'):
-        from .accounts import identity
         from .catalog import catalog_account_status
-        saved = db.execute('SELECT value FROM meta WHERE key=?', ('catalog-account:' + row['adapter'],)).fetchone()
-        account = json.loads(saved[0]) if saved else {'source': 'native', 'credentialRevision': 0}
-        if accounts is not None and (row['adapter'] not in accounts or account != identity(accounts[row['adapter']])):
-            results.append({'adapter': row['adapter'], 'status': 'unknown', 'accountStatus': 'unknown',
-                            'reason': 'ACCOUNT_BINDING_CHANGED'})
-            continue
         results.append({'adapter': row['adapter'], 'status': row['status'],
                         'accountStatus': catalog_account_status(db, row['adapter']), 'reason': row['reason']})
         if row['payload_json']:
             from ..service.harness_health import read_health
             healthy = read_health(db, row['adapter'])['available']
-            from .accounts import selection
-            healthy = healthy and account == identity(selection(db, row['adapter']))
             providers.extend({**p, 'models': [{**m, 'available': bool(m.get('available', True)) and healthy,
                               'unavailableReason': m.get('unavailableReason') if healthy else 'HARNESS_UNHEALTHY'} for m in p['models']]}
                              for p in json.loads(row['payload_json'])['providers'] if p['adapter'] == row['adapter'])
@@ -81,40 +69,23 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
         revision = int(evaluation._state(db)['table_revision']) + 1
         applied, stale, changed = [], [], 0
         transitions = []
-        from .accounts import identity, selection
         from .catalog import (CONFIRMATION_SECONDS, CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON,
                               TRUSTED_ACCOUNT_STATUSES, _family_key, _parse_time, _pending_map,
                               _write_pending_map, identities_from_payload, note_confirmed_read,
-                              restore_retained_availability, catalog_account_matches, clear_confirmed_read)
-        saved_accounts = db.execute('SELECT value FROM meta WHERE key=?', ('catalog-accounts:' + str(observation_id),)).fetchone()
-        frozen_accounts = json.loads(saved_accounts[0]) if saved_accounts else {}
+                              restore_retained_availability)
         for result in payload['discoveries']:
             name = result['adapter']
-            account = frozen_accounts.get(name, {'source': 'native', 'credentialRevision': 0})
-            if identity(account) != identity(selection(db, name)):
-                stale.append(name)
-                continue
             prior = db.execute('SELECT c.*, d.payload_json FROM catalog_current c LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.adapter=?', (name,)).fetchone()
             if prior and int(prior['observation_id']) > observation_id:
                 stale.append(name)
                 continue
-            # Check before adopting the new binding: old-account metadata is
-            # never the new account's last trusted catalog or absence window.
-            same_account = catalog_account_matches(db, name, account=account)
-            if not same_account:
-                clear_confirmed_read(db, name)
-                db.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='ACCOUNT_BINDING_CHANGED'"
-                           " WHERE adapter=?", (name,))
             # ADR-027 rule 1: the blackboard, not the harness, decides trust. A
             # complete reading without a confirmed (or not-applicable) account
             # fact is recorded as an unknown observation and replaces nothing.
             trusted = result['status'] == 'complete' and result.get('accountStatus') in TRUSTED_ACCOUNT_STATUSES
             stored_reason = None if trusted else (
                 'ACCOUNT_STATUS_UNKNOWN' if result['status'] == 'complete' else result.get('reason'))
-            if trusted:
-                db.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                           ('catalog-account:' + name, canonical_json(identity(account))))
-            selected_discovery = discovery_id if trusted else (prior['discovery_id'] if prior and same_account else None)
+            selected_discovery = discovery_id if trusted else (prior['discovery_id'] if prior else None)
             db.execute('INSERT INTO catalog_current(adapter,observation_id,discovery_id,status,reason,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(adapter) DO UPDATE SET observation_id=excluded.observation_id,discovery_id=excluded.discovery_id,status=excluded.status,reason=excluded.reason,updated_at=excluded.updated_at', (name, observation_id, selected_discovery, 'complete' if trusted else 'unknown', stored_reason, now))
             applied.append(name)
             if not trusted:
@@ -152,7 +123,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             # Health 0s on profile rows are deliberately absent here: they are
             # not evidence that a native model disappeared (ADR-027 rule 2).
             retained_identities = identities_from_payload(
-                prior['payload_json'] if prior is not None and same_account else None, name)
+                prior['payload_json'] if prior is not None else None, name)
             retained = {(provider, model) for provider, model, _effort in retained_identities}
             existing = db.execute('SELECT profile_id,provider,model,effort,available,unavailable_reason'
                                   ' FROM evaluation_profiles WHERE adapter=?', (name,)).fetchall()
@@ -160,7 +131,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             for row in existing:
                 family_rows.setdefault((row['provider'], row['model']), []).append(row)
             absent_before = {family for family, rows in family_rows.items()
-                             if same_account and rows and all(not row['available'] for row in rows)
+                             if rows and all(not row['available'] for row in rows)
                              and any(row['unavailable_reason'] == CONFIRMED_ABSENCE_REASON for row in rows)}
             for family, rows in family_rows.items():
                 if family in families or (_family_key(*family) not in pending and family not in retained):

@@ -431,9 +431,8 @@ describe("entering the view", () => {
 });
 
 describe("the account block", () => {
-  const account = { adapter: "dsh", source: "native", revision: 4, credentialRevision: 1, status: "ready", accountType: "chatgpt",
-    checkedAt: "2026-09-29T09:00:00.000Z", reasonCode: null, guidance: null,
-    capabilities: { workerAccount: true, oauth: true, apiKey: true, logout: true, remove: true } };
+  const account = { adapter: "dsh", status: "ready", accountType: "chatgpt",
+    checkedAt: "2026-09-29T09:00:00.000Z", reasonCode: null, guidance: null };
   const billing = { openai: { kind: "subscription", source: "native", observedAt: CHECKED_AT } };
   const withAccount = (extra: object = {}) => [
     harness({ adapter: "dsh", status: "ready", executable: "/usr/local/bin/dsh", version: "0.4.2", checkedAt: CHECKED_AT,
@@ -441,22 +440,20 @@ describe("the account block", () => {
     harness({ adapter: "zcode", status: "ready", executable: "/opt/bin/zcode", version: "0.4.1", checkedAt: CHECKED_AT }),
   ];
 
-  it("writes the source on its head, then its status, the billing of each provider and the guidance", async () => {
+  it("writes its status, the billing of each provider and the guidance", async () => {
     await openHarness(fixture({ harnesses: withAccount({ status: "logged-out", accountType: null, checkedAt: null,
       reasonCode: "ACCOUNT_LOGIN_REQUIRED", guidance: "log in" }) }));
     const block = paneBlock("账户");
-    expect(block.firstElementChild!.textContent).toBe("账户共用登录");
+    expect(block.firstElementChild!.textContent).toBe("账户");
     expect(fieldValue(block, "状态").textContent).toBe("未登录");
     expect(fieldValue(block, "计费").textContent).toBe("openai 订阅");
-    expect(within(block).getByText("未登录").getAttribute("aria-description")).toBe("完成当前来源的登录后检测。");
-    expect(within(block).getByRole("button", { name: "管理账户" })).toBeTruthy();
-    expect(paneBlock("账户").textContent).toContain("共用登录");
+    expect(within(block).getByText("未登录").getAttribute("aria-description")).toBe("在 Harness 中登录后检测。");
+    expect(within(block).queryByRole("button")).toBeNull();
   });
 
   it("adds the account's type and when it was checked to its status", async () => {
     await openHarness(fixture({ harnesses: withAccount() }));
     expect(fieldValue(paneBlock("账户"), "状态").textContent).toBe(`已配置 · ChatGPT · ${clock("2026-09-29T09:00:00.000Z")}`);
-    expect(paneBlock("账户").textContent).toContain("共用登录");
   });
 
   it("writes only that nothing is recorded where there is no account record, and offers nothing to manage", async () => {
@@ -469,36 +466,11 @@ describe("the account block", () => {
     expect(harnessButton("ZCode").textContent).toContain("—");
   });
 
-  it("changes the source in the dialog, and the table and the column follow the record read again", async () => {
-    const user = userEvent.setup();
-    const rows = withAccount();
-    const f = fixture({ harnesses: rows, replies: { account_set: params => {
-      rows[0] = { ...rows[0], account: { ...account, source: params.source, revision: params.expectedRevision + 1 } as never };
-      return {};
-    } } });
+  it("keeps native login facts readable in a session that cannot write", async () => {
+    const f = fixture({ harnesses: withAccount(), readOnly: true });
     await openHarness(f);
-    await user.click(within(paneBlock("账户")).getByRole("button", { name: "管理账户" }));
-    const dialog = await screen.findByRole("dialog", { name: "DSH 账户" });
-    await user.click(within(dialog).getByRole("radio", { name: "独立账户" }));
-    expect(f.calls).toEqual([{ operation: "account_set", params: { adapter: "dsh", expectedRevision: 4, source: "worker" } }]);
-    await waitFor(() => expect(within(dialog).getByRole("radio", { name: "独立账户" }).getAttribute("aria-checked")).toBe("true"));
-    // The separate account's own controls appear, and the column behind the dialog is already updated.
-    expect(within(dialog).getByRole("button", { name: "登录" })).toBeTruthy();
-    await user.click(within(dialog).getByRole("button", { name: "关闭" }));
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(paneBlock("账户").firstElementChild!.textContent).toBe("账户独立账户");
-    expect(paneBlock("账户").textContent).toContain("独立账户");
-  });
-
-  it("opens the dialog to be read in a session that cannot write, with every change inert", async () => {
-    const user = userEvent.setup();
-    const f = fixture({ harnesses: withAccount({ source: "worker" }), readOnly: true });
-    await openHarness(f);
-    await user.click(within(paneBlock("账户")).getByRole("button", { name: "管理账户" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByRole("button", { name: "登录" }).getAttribute("aria-disabled")).toBe("true");
-    await user.click(within(dialog).getByRole("radio", { name: "共用登录" }));
-    await user.click(within(dialog).getByRole("button", { name: "登录" }));
+    expect(fieldValue(paneBlock("账户"), "状态").textContent).toContain("ChatGPT");
+    expect(within(paneBlock("账户")).queryByRole("button")).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });
 });

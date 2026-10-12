@@ -116,8 +116,6 @@ export type HarnessDetailsView = {
     exception: null | { reason: string | null; remedy: string | null; tried: { path: string | null; source: string | null; result: string }[] };
   };
   account: null | {
-    parsed: HarnessAccount;
-    source: string;
     state: string;
     billing: { provider: string; plan: string }[];
     guidance: string | null;
@@ -185,8 +183,6 @@ export function harnessDetailsView(row: HarnessHealth, t: T): HarnessDetailsView
       },
     },
     account: parsed && {
-      parsed,
-      source: t(`harness.account.source.${parsed.source}`),
       state: [accountStatusText(parsed.status, t),
         parsed.accountType ? t(`harness.account.type.${ACCOUNT_TYPES.find(name => name === parsed.accountType) ?? "unknown"}`) : "",
         harnessTime(parsed.checkedAt) ?? ""].filter(Boolean).join(" · "),

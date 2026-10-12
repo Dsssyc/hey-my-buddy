@@ -1,4 +1,4 @@
-"""Schema 11 store facts: frozen attempt families, shared admission, capacity.
+"""Current store facts: frozen attempt families, shared admission, capacity.
 
 Every test uses the production store and resource implementations against a private
 state directory. Governed tasks use the deterministic workspace double, so real
@@ -124,6 +124,10 @@ class FrozenFamilyTests(StoreConcurrencyTestCase):
                 "SELECT model_adapter, model_provider, model_model FROM attempts WHERE attempt_id=?",
                 (attempt["attemptId"],),
             ).fetchone()
+            self.assertIsNone(connection.execute(
+                "SELECT value FROM meta WHERE key=?",
+                (f"attempt-harness:{attempt['attemptId']}",),
+            ).fetchone())
         self.assertEqual(tuple(row), FAMILY_A)
 
     def test_a_command_attempt_has_no_family_and_counts_only_against_the_total(self):

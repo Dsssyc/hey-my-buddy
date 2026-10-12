@@ -226,12 +226,11 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
                   onToggleAccount={() => toggleAccount(block.adapter)} />
                 <Collapsible open={!!health && !!accounts[block.adapter]}>
                   <CollapsibleContent>
-                    {health && active && <HarnessDetails row={health} name={block.name} api={api} csrfToken={snapshot.csrfToken}
+                    {health && active && <HarnessDetails row={health} name={block.name}
                       canWrite={!actions.refusal} refusal={actions.refusal} busy={actions.busy}
                       onCheck={() => void actions.run({ kind: "check", adapter: block.adapter })}
                       onSavePath={path => void actions.run({ kind: "set", adapter: block.adapter, path })}
-                      onRetry={provider => void actions.run({ kind: "retry", adapter: block.adapter, provider })}
-                      onRefreshed={actions.reloadSnapshot} />}
+                      onRetry={provider => void actions.run({ kind: "retry", adapter: block.adapter, provider })} />}
                   </CollapsibleContent>
                 </Collapsible>
                 <CollapsibleContent>

@@ -25,7 +25,6 @@ class RegisteredReviewTests(NativeRunCase):
             "taskId": "task", "attemptId": "attempt", "generation": 1,
             "invocationId": uuid.uuid4().hex, "privateRoot": str(root),
             "directory": str(root),
-            "account": {"adapter": "claude", "source": "native", "revision": 3},
             "nativeRoot": str(root / "native"), "cwd": str(self.cwd), "timeoutSeconds": 10,
             "requestFile": str(root / "request.json"), "verdictFile": str(root / "verdict.json"),
             "canCorrect": False,
@@ -52,12 +51,12 @@ class RegisteredReviewTests(NativeRunCase):
         self.assertEqual(result.identity, request.identity)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
-    def test_native_binding_keeps_the_frozen_account_and_paths_out_of_the_request(self):
+    def test_native_binding_keeps_paths_out_of_the_request(self):
         with mock.patch.object(native_run, "prepare_run_services", return_value=None, create=True) as bind:
             _result, request, _payload, code = self.review()
         self.assertEqual(code, 0)
-        # This fixture's service factory has no declared inputs. Account and
-        # private roots remain held by the role; no unread factory arguments.
+        # This fixture's service factory has no declared inputs. Private
+        # roots remain held by the role; no unread factory arguments.
         bind.assert_called_once_with()
         self.assertTrue(request.private_state.invocation_root.startswith(str(self.base)))
         self.assertNotIn("account", request.to_payload())

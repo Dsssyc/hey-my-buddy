@@ -27,8 +27,8 @@ class UpgradeServiceTests(BoardTestCase):
         before = {**verified['databaseSnapshot'], 'schema':verified['schema']}
         migration, expected = upgrade.migrate_board(self.directory, before)
         identity, expected = migrate_workspace_identity(self.directory, expected)
-        self.assertEqual(migration['toSchema'], 16)
-        self.assertTrue(identity['mapped'])
+        self.assertEqual(migration['toSchema'], 17)
+        self.assertEqual(identity['mapped'], [])
         self.assertEqual(identity['kept'], {})
         self.assertEqual(upgrade.idle_snapshot(self.directory), {key:value for key,value in expected.items()
                                                                 if key != 'runtimeSettings'})
@@ -47,13 +47,13 @@ class UpgradeServiceTests(BoardTestCase):
 
         try:
             with self.daemon(env={'BUDDY_MAX_CONCURRENT':'1'}):
-                self.assertEqual(call('health', {})['schemaVersion'], 16)
+                self.assertEqual(call('health', {})['schemaVersion'], 17)
                 with database.read() as db:
-                    self.assertEqual(db.execute('SELECT value FROM meta WHERE key=?', (operation_id,)).fetchone()[0],
-                                     original_operation)
+                    self.assertEqual(db.execute('SELECT value FROM meta WHERE key=?', (operation_id,)).fetchone(),
+                                     None)
                 snapshot = call('console_snapshot', {})
-                self.assertEqual(snapshot['configuration']['routerProfileIds'], migration['routerProfileIds'])
-                models = call('model_profiles', {})['profiles']
+                self.assertEqual(snapshot['configuration']['routerProfileIds'], fixture['routerProfileIds'])
+                models = call('model_profiles', {'includeUnavailable': True})['profiles']
                 self.assertTrue(models)
                 self.assertTrue(all(model['catalogState'] == 'unknown' for model in models))
                 self.assertTrue(all(model['catalogReason'] == 'ACCOUNT_STATUS_UNKNOWN' for model in models))
@@ -92,12 +92,12 @@ class UpgradeServiceTests(BoardTestCase):
                 self.assertEqual(sealed['snapshotSha256'], artifact[0])
                 self.assertEqual(worker_file.read_bytes(), worker_bytes)
                 with database.read() as db:
-                    self.assertEqual(db.execute('SELECT value FROM meta WHERE key=?', (operation_id,)).fetchone()[0],
-                                     original_operation)
+                    self.assertEqual(db.execute('SELECT value FROM meta WHERE key=?', (operation_id,)).fetchone(),
+                                     None)
         finally:
             # The focused runner retains this raw child log after normal harness
             # teardown removes the private test state.
             log = self.directory / 'test-daemon.log'
             if log.exists():
-                retained = Path(os.environ['TMPDIR']) / 'adr021-l18-service.log'
+                retained = Path(os.environ['TMPDIR']) / 'upgrade-base-service.log'
                 retained.write_bytes(log.read_bytes())

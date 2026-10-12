@@ -152,8 +152,8 @@ describe("the table's blocks", () => {
 
 describe("recorded reasons in words", () => {
   it("words the reasons the board is known to record and shows any other as recorded", () => {
-    expect(reasonTexts(["HARNESS_UNHEALTHY", "ACCOUNT_BINDING_CHANGED", "provider paused"], t))
-      .toEqual(["Harness 不可用", "账户已更换", "provider paused"]);
+    expect(reasonTexts(["HARNESS_UNHEALTHY", "provider paused"], t))
+      .toEqual(["Harness 不可用", "provider paused"]);
     expect(reasonTexts(["not present in the latest confirmed native discovery", "not present in the latest complete native discovery"], t))
       .toEqual(["已不在 Harness 的模型目录里"]);
   });

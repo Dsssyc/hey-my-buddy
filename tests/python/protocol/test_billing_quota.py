@@ -12,9 +12,9 @@ from unittest.mock import patch
 from hey_my_buddy.protocol.billing import claude_status, codex_account, zcode_access
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
 from hey_my_buddy.blackboard.service.harness_health import HarnessHealth
-from hey_my_buddy.blackboard.evaluation.native_observations import exhausted, warnings
+from hey_my_buddy.blackboard.evaluation.native_observations import exhausted, record_quota, warnings
 from hey_my_buddy.blackboard.routing import router
-from support import BoardTestCase
+from support import BoardTestCase, FakeClock
 from blackboard.routing.test_decision import DecisionTestCase, PROFILE_ID, SECOND_PROFILE_ID
 
 
@@ -30,10 +30,11 @@ class BillingQuotaTests(BoardTestCase):
         self.catalog_fixture()
 
     def _quota(self, board, **changes):
-        value = {"source": "native-fixture", "observedAt": stamp(), "provider": "deepseek-official",
+        observed_at = self.quota_clock() if hasattr(self, "quota_clock") else stamp()
+        value = {"source": "native-fixture", "observedAt": observed_at, "provider": "deepseek-official",
                  "windows": [], **changes}
         with board.store.db.write() as db:
-            db.execute("UPDATE harness_health SET quota_json=? WHERE adapter='dsh'", (json.dumps(value),))
+            record_quota(db, "dsh", value, now=observed_at)
 
     def _git_workdir(self):
         path = self.workdir()
@@ -81,7 +82,8 @@ class BillingQuotaTests(BoardTestCase):
     def test_mock_codex_account_read_has_no_model_turn(self):
         from hey_my_buddy.buddy.harnesses.codex.account_probe import read
         path = Path(__file__).resolve().parents[1] / "buddy/harnesses/codex/fixtures/mock_codex.py"
-        billing, quota = read([sys.executable, str(path)], {"HOME": str(self.directory), "PATH": os.environ.get("PATH", "")})
+        billing, quota, failure = read([sys.executable, str(path)], {"HOME": str(self.directory), "PATH": os.environ.get("PATH", "")})
+        self.assertIsNone(failure)
         self.assertEqual(billing["kind"], "subscription")
         self.assertEqual(quota["scope"]["provider"], "openai")
         self.assertEqual(quota["windows"][0]["usedPercent"], 42.5)
@@ -99,7 +101,7 @@ class BillingQuotaTests(BoardTestCase):
         record = {"status": "ready", "command": ["mock-codex"], "fingerprint": {"id": 1}}
         with patch("hey_my_buddy.blackboard.service.harness_health._snapshot", return_value={"fixture": 1}), \
              patch("hey_my_buddy.blackboard.service.harness_health._discover", return_value=record), \
-             patch("hey_my_buddy.buddy.harnesses.codex.account_probe.read", return_value=(codex_account({"type": "chatgpt", "planType": "pro"}, stamp()), None)) as probe:
+             patch("hey_my_buddy.buddy.harnesses.codex.account_probe.read", return_value=(codex_account({"type": "chatgpt", "planType": "pro"}, stamp()), None, None)) as probe:
             health.refresh("codex", force=True)
             health.refresh("codex", force=True)
             self.assertEqual(probe.call_count, 1)
@@ -108,38 +110,49 @@ class BillingQuotaTests(BoardTestCase):
         health.close()
 
     def test_only_fresh_matching_explicit_exhaustion_filters_candidates_and_router(self):
-        board = self.board()
+        self.quota_clock = FakeClock("2026-09-29T10:00:00Z")
+        self.enterContext(patch("hey_my_buddy.blackboard.routing.quota_routing.utc_now", self.quota_clock))
+        self.enterContext(patch("hey_my_buddy.blackboard.evaluation.native_observations.utc_now", self.quota_clock))
+        board = self.board(clock=self.quota_clock)
         self.seed(board, decision_profile=None)
+        config = {"adapter": "dsh", "provider": "deepseek-official"}
+        reset = "2026-09-29T11:00:00Z"
         with board.store.db.read() as db:
             baseline = DecisionCoordinator._select_candidates(db, [], coding_only=True)
             self.assertEqual({row["profile_id"] for row in baseline}, {PROFILE_ID, SECOND_PROFILE_ID})
-        self._quota(board, windows=[{"name": "hour", "usedPercent": 90, "resetsAt": stamp(3600)}])
+        self._quota(board, windows=[{"name": "hour", "usedPercent": 90, "resetsAt": reset}])
         with board.store.db.read() as db:
             self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
-        self._quota(board, windows=[{'name': 'hour', 'usedPercent': 100, 'resetsAt': stamp(3600)}])
+        self.quota_clock.advance(1)
+        self._quota(board, windows=[{"name": "hour", "usedPercent": 100, "resetsAt": reset}])
         with board.store.db.read() as db:
             self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
-
+        self.quota_clock.advance(1)
         self._quota(board, reachedType="rate_limit_reached")
         with board.store.db.read() as db:
             self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
-            self.assertEqual(warnings(db, {"adapter": "dsh", "provider": "deepseek-official"})[0]["code"], "HARNESS_RATE_LIMIT_REPORTED")
+            self.assertEqual(warnings(db, config)[0]["code"], "HARNESS_RATE_LIMIT_REPORTED")
+        self.quota_clock.advance(1)
         self._quota(board, reachedType="usage_limit_reached", scope={"provider": "deepseek-official", "limitId": "other-model"})
         with board.store.db.read() as db:
             self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
-        self._quota(board, reachedType="usage_limit_reached", observedAt=stamp(300))
+        self._quota(board, reachedType="usage_limit_reached", observedAt="2026-09-29T10:05:00Z")
         with board.store.db.read() as db:
             self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
+        self.quota_clock.advance(1)
         self._quota(board, reachedType="usage_limit_reached", windows=[{"name": "hour", "usedPercent": 100, "resetsAt": "not-a-time"}])
         with board.store.db.read() as db:
             self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 0)
+        self.quota_clock.advance(1)
         self._quota(board, reachedType="usage_limit_reached")
         with board.store.db.read() as db:
             self.assertEqual(DecisionCoordinator._select_candidates(db, [], coding_only=True), [])
             self.assertEqual(router.profile_problem(db, PROFILE_ID, "fast")[1], "router-quota-exhausted")
-            self.assertEqual(exhausted(db, {"adapter": "dsh", "provider": "other"}), None)
-            self.assertEqual(warnings(db, {"adapter": "dsh", "provider": "deepseek-official"})[0]["code"], "HARNESS_QUOTA_EXHAUSTED")
-        self._quota(board, reachedType="usage_limit_reached", observedAt=stamp(-60), windows=[{"name": "hour", "usedPercent": 100, "resetsAt": stamp(-1)}])
+            self.assertIsNone(exhausted(db, {**config, "provider": "other"}))
+            self.assertEqual(warnings(db, config)[0]["code"], "HARNESS_QUOTA_EXHAUSTED")
+        self.quota_clock.advance(1)
+        self._quota(board, reachedType="usage_limit_reached", resetsAt=reset)
+        self.quota_clock.advance(3600)
         with board.store.db.read() as db:
             self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
         self._quota(board, ordinaryUsageAllowed=True)
@@ -153,17 +166,18 @@ class BillingQuotaTests(BoardTestCase):
         with board.store.db.read() as db:
             self.assertEqual(exhausted(db, {"adapter": "dsh", "provider": "deepseek-official"})["code"], "HARNESS_BALANCE_ZERO")
         with board.store.db.write() as db:
-            db.execute("UPDATE harness_health SET record_json=?, quota_json=? WHERE adapter='codex'",
-                       (json.dumps({"billingByProvider": {"openai": codex_account({"type": "chatgpt", "planType": "pro"}, stamp())}}),
-                        json.dumps({"source": "codex/app-server-rate-limits", "observedAt": stamp(),
-                                    "provider": "openai", "balanceZero": True, "windows": []})))
+            observed_at = stamp()
+            db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'",
+                       (json.dumps({"billingByProvider": {"openai": codex_account({"type": "chatgpt", "planType": "pro"}, stamp())}}),))
+            record_quota(db, "codex", {"source": "codex/app-server-rate-limits", "observedAt": observed_at,
+                                      "provider": "openai", "balanceZero": True, "windows": []}, now=observed_at)
         with board.store.db.read() as db:
             self.assertEqual(exhausted(db, {"adapter": "codex", "provider": "openai"})['code'], 'HARNESS_BALANCE_ZERO')
         with board.store.db.write() as db:
-            db.execute("UPDATE harness_health SET quota_json=? WHERE adapter='codex'",
-                       (json.dumps({"source": "codex/app-server-rate-limits", "observedAt": stamp(),
-                                    "provider": "openai", "balanceZero": True,
-                                    "ordinaryUsageAllowed": False, "windows": []}),))
+            observed_at = stamp()
+            record_quota(db, "codex", {"source": "codex/app-server-rate-limits", "observedAt": observed_at,
+                                      "provider": "openai", "balanceZero": True,
+                                      "ordinaryUsageAllowed": False, "windows": []}, now=observed_at)
         with board.store.db.read() as db:
             self.assertEqual(exhausted(db, {"adapter": "codex", "provider": "openai"})["code"], "HARNESS_BALANCE_ZERO")
 

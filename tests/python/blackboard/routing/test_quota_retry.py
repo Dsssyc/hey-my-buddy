@@ -11,7 +11,6 @@ model call or balance query. Every case uses a private board and a fake clock.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import json
 import unittest
 
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
@@ -64,10 +63,13 @@ class QuotaRetryBoard(BoardTestCase):
 
     def marker_value(self):
         with self.board.store.db.read() as db:
-            from hey_my_buddy.blackboard.store.db import canonical_json
-            row = db.execute("SELECT value FROM meta WHERE key=?",
-                             ("quota-retry:" + canonical_json(["dsh", "deepseek-official", None]),)).fetchone()
-        return json.loads(row[0]) if row else None
+            row = db.execute("SELECT retry_manual_at,retry_consumed_at,retry_consumed_by "
+                             "FROM quota_current WHERE adapter='dsh' AND provider='deepseek-official' "
+                             "AND limit_id='' ").fetchone()
+        if row is None or all(row[key] is None for key in row.keys()):
+            return None
+        return {'manualAt': row['retry_manual_at'],
+                'consumedAt': row['retry_consumed_at'], 'consumedBy': row['retry_consumed_by']}
 
 
 class QuotaRetryTests(QuotaRetryBoard):
@@ -138,6 +140,24 @@ class QuotaRetryTests(QuotaRetryBoard):
         rows, _retried = self.candidates("dec-a")
         self.assertEqual(rows, [PROFILE_ID, SECOND_PROFILE_ID])
 
+    def test_unknown_observation_preserves_the_consumed_retry_and_state_identity(self):
+        self.clock.advance(RETRY_WAIT_SECONDS)
+        self.candidates("dec-first")
+        marker = self.marker_value()
+        self.clock.advance(60)
+        with self.board.store.db.write() as db:
+            record(db, "dsh", {"provider": CONFIG["provider"], "source": "native-fixture",
+                               "observedAt": self.clock.value, "windows": [],
+                               "scope": {"nativeAccountId": "different-login"}}, now=self.clock.value)
+            item = routing_facts(db, "dsh", now=self.clock.value)[0]
+            self.assertIsNone(item["nativeAccountId"])
+            self.assertEqual(item["observedAt"], T0)
+            self.assertEqual(item["lastObservedAt"], self.clock.value)
+        self.assertEqual(self.marker_value(), marker)
+        self.assertEqual(self.candidates("dec-next"), ([], []))
+        self.clock.advance(RETRY_WAIT_SECONDS - 60)
+        self.assertEqual(self.candidates("dec-next")[0], [PROFILE_ID, SECOND_PROFILE_ID])
+
     def test_newer_available_observation_clears_exhaustion_and_drops_the_marker(self):
         self.clock.advance(RETRY_WAIT_SECONDS)
         self.candidates("dec-a")
@@ -165,7 +185,7 @@ class QuotaRetryTests(QuotaRetryBoard):
     def test_known_reset_keeps_scheduled_recovery_and_no_retry_window(self):
         self.exhaust_provider(observedAt=moment(10), resetsAt=moment(7200))
         with self.board.store.db.write() as db:
-            item = json.loads(db.execute("SELECT value FROM meta WHERE key LIKE 'quota-routing:%'").fetchone()[0])
+            item = {"adapter": "dsh", **routing_facts(db, "dsh", now=self.clock.value)[0]}
             self.assertIsNone(retry_facts(db, item, now=self.clock.value))
             self.assertIsNone(configuration_retry(db, CONFIG, now=self.clock.value))
         self.clock.advance(RETRY_WAIT_SECONDS)
@@ -179,28 +199,6 @@ class QuotaRetryTests(QuotaRetryBoard):
         self.assertEqual(retried, [])
         self.assertIsNone(self.marker_value())
 
-    def test_retained_display_observation_alone_blocks_without_a_window(self):
-        # A display observation that was never processed into a persisted record
-        # (upgrade-era data) keeps blocking, but only a persisted record can carry
-        # a retry window, so it never opens one.
-        config = {"requestId": "recheck-1", "adapter": "dsh", "provider": "display-only", "model": "any-model"}
-        value = {"source": "native-fixture", "observedAt": T0, "provider": "display-only",
-                 "reachedType": "usage_limit_reached", "windows": []}
-        with self.board.store.db.write() as db:
-            db.execute("UPDATE harness_health SET quota_json=? WHERE adapter='dsh'", (json.dumps(value),))
-            self.assertIsNotNone(exhausted(db, config, now=self.clock.value))
-            rows, retried = DecisionCoordinator._scan_candidates(
-                db, [], coding_only=True, decision_id="dec-fallback", now=self.clock.value)
-            self.assertEqual(rows, [])
-            self.assertEqual(retried, [])
-            self.assertIsNone(configuration_retry(db, config, now=self.clock.value))
-        self.clock.advance(RETRY_WAIT_SECONDS)
-        with self.board.store.db.write() as db:
-            from hey_my_buddy.blackboard.routing.quota_routing import claim
-            # Even with the hour elapsed, a retained display observation alone
-            # carries no claimable window.
-            self.assertIsNone(claim(db, config, decision_id="dec-fallback-open", now=self.clock.value))
-            self.assertIsNotNone(exhausted(db, config, now=self.clock.value))
 
     def test_limit_scope_and_projection_surfaces(self):
         with self.board.store.db.write() as db:
@@ -280,18 +278,6 @@ class QuotaRetryTests(QuotaRetryBoard):
             states = list(pool.map(choose, (1, 2)))
         self.assertEqual(sorted(states), ["completed", "needs-host"])
 
-    def test_legacy_native_exhaustion_is_materialized_by_admission_not_reads(self):
-        with self.board.store.db.write() as db:
-            db.execute("DELETE FROM meta WHERE key LIKE 'quota-routing:%'")
-            db.execute("UPDATE harness_health SET quota_json=? WHERE adapter='dsh'",
-                (json.dumps({"provider": CONFIG["provider"], "observedAt": T0, "source": "native-fixture",
-                             "reachedType": "insufficient_quota", "balanceZero": True}),))
-        self.clock.advance(RETRY_WAIT_SECONDS)
-        self.candidates()
-        self.assertIsNone(self.marker_value())
-        reply = self.board.call("selection_request", {"requestId": "legacy-retry", "task": "image",
-            "requiredCapabilities": ["input:image"]})
-        self.assertEqual(reply["status"], "completed")
 
     def git_workdir(self):
         import subprocess
@@ -351,7 +337,7 @@ class RedetectTests(QuotaRetryBoard):
         self.assertIsNone(reply["records"][0]["retry"])
         self.assertEqual(parse(reply["records"][0]["resetsAt"]), parse(moment(7200)))
         with self.board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM meta WHERE key LIKE 'quota-retry:%'").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM quota_current WHERE retry_manual_at IS NOT NULL OR retry_consumed_at IS NOT NULL OR retry_consumed_by IS NOT NULL").fetchone()[0], 0)
 
     def test_redetect_is_honest_about_unknown_providers_and_refuses_free_text(self):
         reply = self.board.call("quota_redetect", {"requestId": "recheck-1", "adapter": "dsh", "provider": "not-recorded"})["quota"]

@@ -19,9 +19,9 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 #: The one earlier schema that ``upgrade`` migrates in place (see ``migrations``).
-PREVIOUS_SCHEMA_VERSION = 15
+PREVIOUS_SCHEMA_VERSION = 16
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CAPABILITY_VERSION = 1
@@ -1071,6 +1071,32 @@ CREATE INDEX IF NOT EXISTS workflow_suggestions_run_idx ON workflow_suggestions(
 WORKFLOW_SCHEMA = "\n".join(WORKFLOW_TABLES)
 
 HARNESS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS quota_current (
+    adapter TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    limit_id TEXT NOT NULL,
+    blocked INTEGER NOT NULL CHECK (blocked IN (0,1)),
+    code TEXT,
+    source TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    last_observed_at TEXT NOT NULL,
+    resets_at TEXT,
+    native_account_id TEXT,
+    retry_manual_at TEXT,
+    retry_consumed_at TEXT,
+    retry_consumed_by TEXT,
+    PRIMARY KEY (adapter, provider, limit_id),
+    CHECK ((blocked=1 AND code IS NOT NULL AND code IN ('HARNESS_BALANCE_ZERO','HARNESS_QUOTA_EXHAUSTED'))
+           OR (blocked=0 AND code IS NULL))
+);
+CREATE TABLE IF NOT EXISTS harness_quota_observations (
+    adapter TEXT PRIMARY KEY,
+    quota_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS harness_account_reads (
+    adapter TEXT PRIMARY KEY,
+    checked_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS harness_health (
     adapter TEXT PRIMARY KEY CHECK (adapter IN ('dsh','zcode','codex','claude')),
     manual_path TEXT,
@@ -1080,8 +1106,7 @@ CREATE TABLE IF NOT EXISTS harness_health (
     record_json TEXT NOT NULL DEFAULT '{}',
     checked_at TEXT,
     expires_at TEXT,
-    scan_after TEXT,
-    quota_json TEXT
+    scan_after TEXT
 );
 """
 

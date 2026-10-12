@@ -40,16 +40,15 @@ function chinese(): string[] {
 
 const AT = "2026-09-29T09:30:00.000Z";
 const LATER = "2026-09-29T13:00:00.000Z";
-const account = (adapter: string, source: "native" | "worker") => ({
-  adapter, source, revision: 1, credentialRevision: 0, status: "ready", accountType: null, checkedAt: AT, reasonCode: null, guidance: null,
-  capabilities: { workerAccount: true, oauth: true, apiKey: true, logout: true, remove: true },
+const account = (adapter: string) => ({
+  adapter, status: "ready", accountType: null, checkedAt: AT, reasonCode: null, guidance: null,
 });
 const harnesses = [
   { adapter: "dsh", status: "ready", available: true, revision: 1, manualPath: null, executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH", checkedAt: AT, candidates: [],
-    account: account("dsh", "native"), billingByProvider: { "deepseek-official": { kind: "metered", source: "native", observedAt: AT } },
+    account: account("dsh"), billingByProvider: { "deepseek-official": { kind: "metered", source: "native", observedAt: AT } },
     quota: { source: "dsh-native", observedAt: AT, balanceZero: true, windows: [] } },
   { adapter: "codex", status: "ready", available: true, revision: 2, manualPath: null, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: AT, candidates: [],
-    account: account("codex", "worker"),
+    account: account("codex"),
     readOnlyStructured: { implemented: true, eligible: false, systemSandbox: false, sameAttemptContinuation: false, reasonCode: "READ_ONLY_RESOURCE_UNAVAILABLE", reason: "The local read-only resources are unavailable" },
     quota: { source: "codex-native", observedAt: AT, provider: "openai", windows: [{ name: "5h", usedPercent: 93, resetsAt: LATER }, { name: "weekly", usedPercent: 41, resetsAt: null }] },
     quotaRouting: [{ provider: "openai", limitId: "5h", code: "HARNESS_QUOTA_EXHAUSTED", source: "codex-native", observedAt: AT, resetsAt: null, blocked: true,
@@ -121,7 +120,7 @@ describe("the catalogue in English", () => {
     expect(screen.getByRole("region", { name: "Unsaved changes" })).toBeTruthy();
     expect(chinese()).toEqual([]);
     // The dialogs the sections open.
-    for (const name of [/^Manage account$/, /^Set path$/]) {
+    for (const name of [/^Set path$/]) {
       await user.click(within(catalog).getAllByRole("button", { name })[0]);
       await screen.findByRole("dialog");
       expect(chinese(), String(name)).toEqual([]);
@@ -139,12 +138,7 @@ describe("the catalogue in English", () => {
     for (const summary of [...catalog.querySelectorAll<HTMLElement>("[data-slot=account-summary]")]) await user.click(summary);
     await user.click(catalog.querySelector<HTMLElement>("[data-slot=model-row] > button")!);
     expect(chinese()).toEqual([]);
-    for (const dialog of [/^Manage account$/]) {
-      await user.click(within(catalog).getAllByRole("button", { name: dialog })[0]);
-      await screen.findByRole("dialog");
-      expect(chinese()).toEqual([]);
-      await user.keyboard("{Escape}");
-    }
+    expect(within(catalog).queryByRole("button", { name: "Manage account" })).toBeNull();
   });
 
   it("says nothing in Chinese in the save bar and its marks while a draft is held", async () => {

@@ -177,18 +177,15 @@ class RouterListConfigurationTests(BoardTestCase):
     def test_version_two_reads_report_upgrade_required_and_never_migrate(self):
         self.version_two_board()
         before = self.meta()
-        tripwire = mock.patch.object(router_settings, "convert_legacy_router_settings",
-                                     side_effect=AssertionError("pure conversion ran on a read path"))
-        with tripwire:
-            with self.assertRaises(BoardError) as caught:
-                with self.board_.store.db.read() as db:
-                    router.configuration(db)
-            self.assertEqual(caught.exception.code, "router-settings-upgrade-required")
-            with self.assertRaises(BoardError) as caught:
-                with self.board_.store.db.write() as db:
-                    router.initialize_configuration(db)
-            self.assertEqual(caught.exception.code, "router-settings-upgrade-required")
-            snapshot = self.board_.call("console_snapshot", {})
+        with self.assertRaises(BoardError) as caught:
+            with self.board_.store.db.read() as db:
+                router.configuration(db)
+        self.assertEqual(caught.exception.code, "router-settings-upgrade-required")
+        with self.assertRaises(BoardError) as caught:
+            with self.board_.store.db.write() as db:
+                router.initialize_configuration(db)
+        self.assertEqual(caught.exception.code, "router-settings-upgrade-required")
+        snapshot = self.board_.call("console_snapshot", {})
         self.assertIsNone(snapshot["configuration"])
         self.assertEqual(snapshot["configurationError"]["code"], "router-settings-upgrade-required")
         self.assertEqual(self.meta(), before)
@@ -196,9 +193,7 @@ class RouterListConfigurationTests(BoardTestCase):
     def test_version_two_publication_rejects_configuration_and_keeps_unrelated_fields(self):
         self.version_two_board()
         before = self.meta()
-        tripwire = unittest.mock.patch.object(router_settings, "convert_legacy_router_settings",
-                                              side_effect=AssertionError("pure conversion ran on a publish path"))
-        with tripwire, self.assertRaises(BoardError) as caught:
+        with self.assertRaises(BoardError) as caught:
             self.publish({"routerRetryIntervalSeconds": 30})
         self.assertEqual(caught.exception.code, "router-settings-upgrade-required")
         self.assertEqual(self.meta(), before)

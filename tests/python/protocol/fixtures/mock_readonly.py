@@ -92,7 +92,7 @@ def start(harness, context, request, fixture, options):
     from hey_my_buddy.buddy.harnesses.base import ProcessHandle, open_logs
     from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
     from hey_my_buddy.buddy.harnesses.runtime_selection import controller_environment
-    from hey_my_buddy.buddy.roles.run_execution import _REQUEST, _VERDICT, _account_environment
+    from hey_my_buddy.buddy.roles.run_execution import _REQUEST, _VERDICT
     from hey_my_buddy.buddy.roles.turn_io import canonical_json, guard_private_path, private_json
     from hey_my_buddy.json_codec import decode_strict_json
     from hey_my_buddy.private_dirs import context_root, ensure_private_dir
@@ -108,7 +108,6 @@ def start(harness, context, request, fixture, options):
         "operation": "review", "harness": harness, "privateRoot": str(private),
         "directory": str(context.directory),
         "nativeRoot": str(ensure_private_dir(context_root(context, harness) / "review-native")),
-        "account": context.runtime.get("account"),
         "cwd": request.cwd, "timeoutSeconds": request.budget["timeoutSeconds"],
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
@@ -129,7 +128,7 @@ def start(harness, context, request, fixture, options):
     for log_path in context.log_paths().values():
         guard_private_path(Path(log_path))
     environment = controller_environment(context.directory,
-                                         _account_environment(harness, context, purpose="review"),
+                                         context.environment,
                                          read_only=True)
     stdout, stderr = open_logs(context.log_paths())
     try:

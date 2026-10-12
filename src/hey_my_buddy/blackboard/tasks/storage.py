@@ -407,7 +407,7 @@ def inspect(store) -> dict:
         add('zcode', state / 'harnesses' if private_dirs.linked(state / 'harnesses') else home_root, ['linked-path'])
     elif home_root.exists():
         for path in sorted(home_root.iterdir()):
-            if path.name in ('goals', 'accounts'):
+            if path.name == 'goals':
                 continue
             run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
             add('zcode', path, reasons, runId=run_id)
@@ -430,7 +430,7 @@ def inspect(store) -> dict:
                     add('harnesses', path, reasons, runId=run_id, adapter=adapter)
             if adapter != 'zcode':
                 for path in sorted(adapter_root.iterdir()):
-                    if path.name not in ('goals', 'accounts'):
+                    if path.name != 'goals':
                         add('harnesses', path, ['legacy-layout-unmigrated'], adapter=adapter)
     seen = set()
     # Board knowledge is independent of whether physical ownership is proved.
@@ -548,9 +548,6 @@ def inspect(store) -> dict:
             if path.name not in private_dirs.ADAPTERS:
                 add('durable', path, ['durable-record'])
                 continue
-            accounts = path / 'accounts'
-            if accounts.exists() or private_dirs.linked(accounts):
-                add('durable', accounts, ['user-account-protected'])
     categories = []
     for key, label in LABELS.items():
         members = [r for r in rows if r['category'] == key]

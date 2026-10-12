@@ -100,19 +100,6 @@ def no_tool_prompt(prompt: str, schema: dict) -> str:
     return prompt + "\n\nReturn only one JSON value matching this schema: " + canonical_json(schema)
 
 
-def _account_environment(name: str, context: ExecutionContext, *, purpose: str) -> dict:
-    """Consume the same service-frozen selection as the coding attempt."""
-    from ..harnesses.registry import frozen_account_for
-    account = frozen_account_for(name, context.runtime)
-    if account is None:
-        return context.environment
-    if not isinstance(account, dict) or account.get('adapter') != name:
-        raise BoardError('INVALID_ARGUMENT', 'Structured calls require the matching frozen account')
-    state = context.environment['BUDDY_STATE_DIR']
-    from ...blackboard.catalog.accounts import execution_environment
-    return execution_environment(Path(state), account, context.environment, purpose=purpose)
-
-
 def _retain_no_tool_evidence(binding: _NoToolEvidence, payload: dict) -> None:
     observed_calls = 0
     # These paths and the request are frozen at start, never reconstructed from

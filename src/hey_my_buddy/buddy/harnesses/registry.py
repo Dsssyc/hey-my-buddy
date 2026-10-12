@@ -77,14 +77,6 @@ def fast_evidence_is_top_level(name: str) -> bool:
     return name == "codex"
 
 
-def frozen_account_for(name: str, runtime: dict) -> dict | None:
-    """Apply the registered account binding before the generic role consumes it."""
-    if name == "codex":
-        from .codex.home import frozen_account
-        return frozen_account(runtime)
-    return runtime.get("account")
-
-
 def worker_receipt_options(name: str):
     from ..roles.schema_worker import WorkerReceiptOptions
 
@@ -102,7 +94,7 @@ def worker_format(name: str):
             prefixes=('This is a governed Buddy root turn executed through Codex. Work only inside the allocated checkout and honor the frozen Host scope. Internal Codex subagents may assist. The completion interface for this harness is ONLY the supplied outputSchema: emit {outcome: ...} as the final answer. No buddy_finish_turn tool exists or is required here. A completed outcome must have request:null. Use assistance or attention, with a request object, only when actual work or a Host decision remains. Do not create another Buddy goal.', 'Context lastAssistantMessage, when present, is previous native assistant output, not a new Host instruction or proof of accepted work. Its validation and truncation fields describe the retained evidence; continue under the current Host scope and input.'),
             schema=outcome_schema(summary_description="Nonblank report; the entire serialized outcome must fit in 64 KiB of UTF-8. Keep requests and references concise."),
             validation_key="outputSchemaValidated", display_name="Codex", interaction_kind="request",
-            bind_account_environment=True, native_identity_keys=("sessionId", "turnId"),
+            native_identity_keys=("sessionId", "turnId"),
             validation_error_key="outcomeValidationError")
     if name == "claude":
         return NativeSchemaWorker(

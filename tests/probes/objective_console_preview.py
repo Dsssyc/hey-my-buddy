@@ -1309,24 +1309,18 @@ def sample_counts() -> dict:
     return {view["profileId"]: SAMPLE_COUNTS.get(view["profileId"], 0) for view in profile_views()}
 
 
-def harness_account(adapter: str, source: str, status: str, *, account_type: str | None = None,
-                    reason: str | None = None, guidance: str | None = None, worker_account: bool = True,
-                    oauth: bool = False, api_key: bool = False) -> dict:
-    """One account record in the shape the console parses; a separate account can be logged out and removed."""
-    separate = source == "worker"
-    return {"adapter": adapter, "source": source, "status": status, "revision": 1,
-            "credentialRevision": 1 if separate else 0, "accountType": account_type, "checkedAt": instant(9, 55),
-            "reasonCode": reason, "guidance": guidance,
-            "capabilities": {"workerAccount": worker_account, "oauth": oauth, "apiKey": api_key,
-                             "logout": separate, "remove": separate}}
+def harness_account(adapter: str, status: str, *, account_type: str | None = None,
+                    reason: str | None = None, guidance: str | None = None) -> dict:
+    """The native login facts displayed by the console."""
+    return {"adapter": adapter, "status": status, "accountType": account_type, "checkedAt": instant(9, 55),
+            "reasonCode": reason, "guidance": guidance}
 
 
 def harness_rows() -> list[dict]:
     """The four ADR-018 console harness rows, in adapter order, with account and quota.
 
-    The accounts cover a separate account with a key, a shared login on a
-    harness that has no separate account, a shared login with a known account
-    type, and a login that is missing. One provider carries the exhaustion
+    The accounts cover native login observations, a known account type,
+    and a login that is missing. One provider carries the exhaustion
     record of the run that failed on quota, with its retry window open.
 
     Retained quota observations are display-only: an absent observation is
@@ -1336,7 +1330,7 @@ def harness_rows() -> list[dict]:
     return [
         {"adapter": "dsh", "status": "ready", "available": True, "revision": 3, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/dsh/dsh", "version": "synthetic-preview-1.0",
-         "account": harness_account("dsh", "worker", "ready", account_type="apiKey", api_key=True),
+         "account": harness_account("dsh", "ready", account_type="apiKey"),
          "billingByProvider": {"deepseek-official": {"kind": "metered", "source": "synthetic-preview",
                                                      "observedAt": OBSERVED_AT}},
          "source": "synthetic-preview", "checkedAt": instant(9, 55),
@@ -1345,7 +1339,7 @@ def harness_rows() -> list[dict]:
                    "windows": []}},
         {"adapter": "zcode", "status": "ready", "available": True, "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/zcode/zcode", "version": "synthetic-preview-0.4",
-         "account": harness_account("zcode", "native", "ready", worker_account=False),
+         "account": harness_account("zcode", "ready"),
          "quotaRouting": [{"provider": "zai", "limitId": None, "code": "HARNESS_QUOTA_EXHAUSTED",
                            "source": "zcode-native", "observedAt": instant(6, 26), "resetsAt": None, "blocked": True,
                            "retry": {"eligibleAt": instant(7, 26), "open": True, "pendingManual": False,
@@ -1357,15 +1351,15 @@ def harness_rows() -> list[dict]:
                                {"name": "weekly", "usedPercent": 12, "resetsAt": instant(77, 0)}]}},
         {"adapter": "codex", "status": "ready", "available": True, "revision": 1, "manualPath": None,
          'executable': '/synthetic-preview/codex', 'version': '0.159.0',
-         "account": harness_account("codex", "native", "ready", account_type="chatgpt", oauth=True),
+         "account": harness_account("codex", "ready", account_type="chatgpt"),
          'billingByProvider': {'openai': {'kind': 'subscription', 'source': 'synthetic-preview', 'observedAt': OBSERVED_AT}},
          'systemSandbox': True,
          'readOnlyStructured': {'eligible': True, 'reasonCode': None, 'reason': None, 'systemSandbox': True, 'sameAttemptContinuation': True},
          "source": "synthetic-preview", "checkedAt": instant(9, 55), "quota": None},
         {"adapter": "claude", "status": "login-required", "available": False, "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/claude/claude", "version": "synthetic-preview-2.1",
-         "account": harness_account("claude", "native", "logged-out", reason="ACCOUNT_LOGIN_REQUIRED",
-                                    guidance="完成当前来源的登录后重新检测。", oauth=True),
+         "account": harness_account("claude", "logged-out", reason="ACCOUNT_LOGIN_REQUIRED",
+                                    guidance="在 Harness 中登录后检测。"),
          "source": "synthetic-preview", "checkedAt": instant(9, 55), "reasonCode": "HARNESS_LOGIN_REQUIRED",
          "quota": {"observedAt": instant(9, 40), "source": "claude-native", "provider": "anthropic",
                    "stale": False,

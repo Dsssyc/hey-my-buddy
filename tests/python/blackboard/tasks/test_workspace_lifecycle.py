@@ -532,14 +532,11 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         run_id = submitted["runId"]
         private_goal = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, 'codex', run_id))
         (private_goal / 'session.json').write_text('private native binding')
-        account = private_dirs.ensure_private_dir(private_dirs.account_root(board.directory, 'codex'))
-        (account / 'account.json').write_text('protected account fixture')
         applied = self.reclaim(board, view)
         self.assertTrue(applied["removed"])
         self.assertEqual(applied["path"], manifest["checkoutRoot"])
         self.assertFalse(checkout.exists())
         self.assertFalse(private_goal.exists())
-        self.assertEqual((account / 'account.json').read_text(), 'protected account fixture')
         # Only the checkout was removed: manifests, patches and Git refs stay readable.
         workspace_dir = Path(self.directory) / "workspaces" / manifest["workspaceId"]
         self.assertTrue((workspace_dir / "manifest.json").exists())

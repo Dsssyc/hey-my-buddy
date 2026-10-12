@@ -38,7 +38,7 @@ def _name(name):
 
 def read_health(connection, adapter):
     from ...buddy.harnesses.registry import adapter as executor
-    from ..catalog.accounts import view as account_view, identity
+    from ..catalog.accounts import view as account_view
     eligibility = executor(adapter).local_read_only_check()
     account = account_view(connection, adapter)
     row = connection.execute('SELECT * FROM harness_health WHERE adapter=?', (adapter,)).fetchone()
@@ -51,12 +51,8 @@ def read_health(connection, adapter):
     from ..routing.quota_routing import routing_facts
     record = json.loads(row['record_json'])
     record.pop('reviewVerification', None)
-    observed_account = record.get('account') or {'source': 'native', 'credentialRevision': 0}
-    matching = identity(observed_account) == identity(account)
-    billing = record.get("billingByProvider") if isinstance(record.get("billingByProvider"), dict) else {}
-    if not matching:
-        billing = {}
-    if adapter == "dsh" and matching:
+    billing = record.get('billingByProvider') or {}
+    if adapter == "dsh":
         from ...protocol.billing import fact
         catalog = connection.execute("SELECT d.payload_json,c.updated_at FROM catalog_current c JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.adapter='dsh' AND c.status='complete'").fetchone()
         if catalog:
@@ -67,10 +63,10 @@ def read_health(connection, adapter):
             billing = {entry["provider"]: fact("metered" if entry.get("packageName") == "@deepseek-ai/dsh-llm-deepseek" else "unknown",
                                                 "dsh/deepseek-api-key", catalog["updated_at"])
                        for entry in entries if entry.get("adapter") == adapter and isinstance(entry.get("provider"), str)}
-    status = row['status'] if matching and account['status'] != 'unsupported' else 'unknown'
+    status = row['status']
     record = {**record, "billingByProvider": billing, "quota": quota_view(latest_quota(connection, adapter)),
             "quotaRouting": routing_facts(connection, adapter), 'adapter': adapter,
-            'available': status == 'ready' and account['status'] == 'ready', 'status': status, 'account': account, 'revision': row['revision'], 'manualPath': row['manual_path'],
+            'available': status == 'ready', 'status': status, 'account': account, 'revision': row['revision'], 'manualPath': row['manual_path'],
             'checkedAt': row['checked_at'], 'expiresAt': row['expires_at'], 'scanAfter': row['scan_after']}
     return {**record, 'systemSandbox': eligibility['systemSandbox'], 'readOnlyStructured': eligibility}
 
@@ -106,30 +102,39 @@ class HarnessHealth:
                     db.execute('INSERT INTO harness_health(adapter) VALUES(?)', (name,))
                     from ..catalog.catalog import CATALOG_FACT_REASONS
                     db.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='HARNESS_NOT_CHECKED'"
-                               ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?,?))',
+                               ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?))',
                                (name, *CATALOG_FACT_REASONS))
 
     def get(self, name):
         with self.board.db.read() as db:
             return read_health(db, _name(name))
 
-    def invalidate(self, name, revision, reason='HARNESS_START_FAILED', *, account=None):
+    def invalidate(self, name, revision, reason='HARNESS_START_FAILED', *, account_read_failure=None):
         with self.board.db.write() as db:
             row = read_health(db, _name(name))
-            from ..catalog.accounts import identity
-            if account is not None and identity(account) != identity(row['account']):
+            if account_read_failure is not None and (self._closed or (self.board.directory / 'upgrade.json').exists()):
                 return row
             if row['revision'] != revision:
-                return row
-            db.execute("UPDATE harness_health SET status='unhealthy',record_json=?,expires_at=NULL,scan_after=NULL,revision=revision+1 WHERE adapter=?", (canonical_json({**row, "reasonCode": reason, "available": False}), name))
-            # ADR-027: a health failure must not erase catalog facts. Rows a
-            # confirmed absence or an effort retirement already grounded stay
-            # with their own reason; health only grounds the rest.
-            from ..catalog.catalog import CATALOG_FACT_REASONS
-            db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
-                       ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?,?))',
-                       (reason, name, *CATALOG_FACT_REASONS))
-            self.board._append_event(db, 'harness.invalidated', payload={'adapter': name, 'reasonCode': reason})
+                if account_read_failure is None:
+                    return row
+                self.board._append_event(db, 'harness.account_read_failed', payload={
+                    'adapter': name, 'reasonCode': reason, 'revision': revision,
+                    'currentRevision': row['revision'], 'accountReadFailure': account_read_failure})
+            else:
+                record = json.loads(db.execute('SELECT record_json FROM harness_health WHERE adapter=?', (name,)).fetchone()[0])
+                record.update(reasonCode=reason, available=False)
+                if account_read_failure is not None:
+                    record['accountReadFailure'] = account_read_failure
+                db.execute("UPDATE harness_health SET status='unhealthy',record_json=?,expires_at=NULL,scan_after=NULL,revision=revision+1 WHERE adapter=?", (canonical_json(record), name))
+                # ADR-027: a health failure must not erase catalog facts. Rows a
+                # confirmed absence or an effort retirement already grounded stay
+                # with their own reason; health only grounds the rest.
+                from ..catalog.catalog import CATALOG_FACT_REASONS
+                db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
+                           ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?))',
+                           (reason, name, *CATALOG_FACT_REASONS))
+                self.board._append_event(db, 'harness.invalidated', payload={'adapter': name, 'reasonCode': reason,
+                    **({'accountReadFailure': account_read_failure} if account_read_failure is not None else {})})
             head = self.board._head_of(db)
         self.board._notify(head)
         return self.get(name)
@@ -149,35 +154,19 @@ class HarnessHealth:
             db.execute("INSERT INTO harness_health(adapter,manual_path,revision) VALUES(?,?,1) ON CONFLICT(adapter) DO UPDATE SET manual_path=excluded.manual_path,revision=revision+1,status='unknown',record_json='{}',checked_at=NULL,expires_at=NULL,scan_after=NULL", (name, str(Path(path).expanduser()) if path else None))
             from ..catalog.catalog import CATALOG_FACT_REASONS
             db.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='HARNESS_NOT_CHECKED'"
-                       ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?,?))',
+                       ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?))',
                        (name, *CATALOG_FACT_REASONS))
             self.board._append_event(db, 'harness.path_changed', payload={'adapter': name, 'manualPath': path})
             head = self.board._head_of(db)
         self.board._notify(head)
         return self.refresh(name, force=True)
 
-    def refresh(self, name, *, force=False, preflight=False, account=None, expected_binding=None):
+    def refresh(self, name, *, force=False, preflight=False, catalog_scan_claimed=False):
         name = _name(name)
         with self._locks[name]:
             old = self.get(name)
-            from ..catalog.accounts import identity
-            if account is not None and identity(account) != identity(old['account']):
-                raise BoardError('ACCOUNT_BINDING_CHANGED', 'The selected account changed before native preflight')
-            if expected_binding is not None and not self._binding_is_current(name, expected_binding):
-                # A reread claim made under one account binding never refreshes
-                # under another: the selection moved on between the claim and
-                # this admission, and the new binding claims its own read.
-                return old
             if (self.board.directory / 'upgrade.json').exists():
                 return old
-            from ..catalog.accounts import assert_credentials_current
-            try:
-                with self.board.db.read() as db:
-                    assert_credentials_current(db, old['account'])
-            except BoardError as error:
-                if error.code == 'ACCOUNT_IN_USE':
-                    return old
-                raise
             now = utc_now()
             if not force and not preflight and (old.get('scanAfter') or '') > now:
                 # ADR-027 rule 4: even a throttled scan owes one bounded catalog
@@ -193,15 +182,6 @@ class HarnessHealth:
                         return self.get(name)
                 return old
             environment = self.environment()
-            from ..catalog.accounts import execution_environment
-            try:
-                from ...buddy.harnesses.runtime_selection import bound
-                with bound([old]):
-                    environment = execution_environment(self.board.directory, old['account'], environment, purpose='health')
-            except BoardError as error:
-                if error.code == 'ACCOUNT_CAPABILITY_UNVERIFIED':
-                    return old
-                raise
             snapshot = _snapshot(name, old['manualPath'], environment)
             signature = sha256_text(canonical_json(snapshot))
             unchanged = old.get('locationFingerprint') == signature
@@ -226,26 +206,20 @@ class HarnessHealth:
                 generation = old['revision'] + 1
                 db.execute('INSERT INTO harness_health(adapter,revision) VALUES(?,?) ON CONFLICT(adapter) DO UPDATE SET revision=excluded.revision', (name, generation))
             try:
-                from ..catalog.accounts import native_operation
-                with native_operation(self.board.db, old['account'], 'health') as stop:
-                    try:
-                        record = _discover(name, old['manualPath'], environment)
-                    except Exception as error:
-                        stop['shutdownConfirmed'] = getattr(error, 'discovery_shutdown_confirmed', False) is True
-                        raise
-                    else:
-                        # The bounded probe returns shutdown-unverified whenever
-                        # its owned process could not be confirmed stopped.
-                        stop['shutdownConfirmed'] = record.get('reasonCode') != 'shutdown-unverified'
+                record = _discover(name, old['manualPath'], environment)
             except Exception:
                 record = {'adapter': name, 'status': 'unhealthy', 'reasonCode': 'HARNESS_HANDSHAKE_FAILED',
                           'remedy': 'Repair the native CLI installation and run buddy adapters with refresh:true'}
-            retained = {key: old[key] for key in ("billingByProvider", "quotaCheckedAt") if key in old}
+            retained = {key: old[key] for key in ("billingByProvider", "accountReadFailure") if key in old}
             if record.get("status") != "ready" or old.get("fingerprint") != record.get("fingerprint"):
                 retained.pop("billingByProvider", None)
-            record = {**retained, **record, 'locationFingerprint': signature, 'account': identity(old['account']),
+            record = {**retained, **record, 'locationFingerprint': signature,
                       'systemSandbox': old['systemSandbox']}
             status = record.get('status')
+            native_ready = status == 'ready'
+            if native_ready and record.get('accountReadFailure', {}).get('reasonCode') == 'HARNESS_ACCOUNT_STOP_UNCONFIRMED':
+                status = 'unhealthy'
+                record.update(status=status, available=False, reasonCode=record['accountReadFailure']['reasonCode'])
             if status not in ('ready', 'missing', 'login-required', 'unhealthy'):
                 raise BoardError('HARNESS_INVALID_RESULT', 'Discovery returned an invalid health status')
             if len(canonical_json(record).encode()) > 65536:
@@ -262,7 +236,7 @@ class HarnessHealth:
                     # marks, never the ones a catalog fact already grounded.
                     from ..catalog.catalog import CATALOG_FACT_REASONS
                     db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
-                               ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?,?))',
+                               ' WHERE adapter=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?))',
                                (record.get('reasonCode') or 'HARNESS_UNHEALTHY', name, *CATALOG_FACT_REASONS))
                 elif old['status'] != 'ready':
                     # ADR-027: health availability and adopted catalog facts are
@@ -278,32 +252,21 @@ class HarnessHealth:
                 head = self.board._head_of(db)
             self.board._notify(head)
             current = self.get(name)
-            if identity(current['account']) != identity(old['account']):
-                return current
-            if name == "codex" and status == "ready":
+            if name == "codex" and native_ready:
                 self._codex_account_read(current)
+                current = self.get(name)
+                status = current['status']
             # Necessary eager reads (manual force, a status or version change, a
             # moved binary) stay outside the shared window; only the stale-catalog
             # read shares rule 3's claim and single flight.
             if not self._closed and status == 'ready' and self.catalog_refresh:
                 if force or old['status'] != 'ready' or old.get('version') != record.get('version') or not unchanged:
-                    self.catalog_refresh(name, current, expected_binding)
-                    if expected_binding is None:
-                        # An unclaimed eager read notes its own window. A claimed
-                        # read (a reread claim passed its binding) already wrote
-                        # the window at its claim; noting again here could land
-                        # after a switch cleared it and steal the new binding's
-                        # fresh window even when admission skipped the read.
+                    self.catalog_refresh(name, current, catalog_scan_claimed=catalog_scan_claimed)
+                    if not catalog_scan_claimed:
                         self._note_catalog_scan(name)
                 elif self._stale_catalog(name, now):
                     self._shared_stale_catalog_read(name, current)
             return self.get(name)
-
-    def _binding_is_current(self, name, expected_binding):
-        """Whether the selected account binding still equals a reread claim's one."""
-        from ..catalog.accounts import binding_key
-        with self.board.db.read() as db:
-            return binding_key(db, name) == expected_binding
 
     def _stale_catalog(self, name, now):
         """True when this harness owes one bounded stale-catalog re-read now.
@@ -321,8 +284,6 @@ class HarnessHealth:
         The claim, its window and its in-process flight are the same mechanism
         an explicit validation rejection uses, so a health scan and an explicit
         request never start two native reads for one harness inside one window.
-        The reader receives the claimed account binding and carries it to the
-        catalog read admission, so a claim never reads under a later selection.
         An in-flight read is not waited for here — this refresh already holds the
         per-harness lock, and the explicit side's reader borrows that same lock;
         the facts arrive with the in-flight read, and the next scan window
@@ -331,7 +292,7 @@ class HarnessHealth:
         """
         from ..catalog.catalog import coordinate_catalog_reread
         coordinate_catalog_reread(self.board.directory, name,
-                                  reader=lambda binding: self.catalog_refresh(name, current, expected_binding=binding),
+                                  reader=lambda: self.catalog_refresh(name, current, catalog_scan_claimed=True),
                                   wait=False)
 
     def _catalog_scan_due(self, name, now):
@@ -353,7 +314,7 @@ class HarnessHealth:
 
         Only a confirmed (trusted) reading advances the confirmed-read time, so
         a streak of unknown readings never extends that deadline. A board with
-        no confirmed reading yet — cold start, or a cleared account binding —
+        no confirmed reading yet — cold start, or an explicit upgrade —
         measures the shelf life from the last recorded observation instead, and
         a harness with no observation at all has nothing stale to re-read.
         """
@@ -370,63 +331,71 @@ class HarnessHealth:
         return read is None or moment is None or (moment - read).total_seconds() >= CATALOG_SHELF_SECONDS
 
     def _codex_account_read(self, health):
-        """One on-demand account read per 180 seconds, even across forced refreshes."""
-        if health.get("status") != "ready" or not health.get("command"):
-            return
-        from ..evaluation.native_observations import _time
-        from ..catalog.accounts import execution_environment, identity, key, selection
-        account = health['account']
-        read_key = 'account-read-at:' + key(account)
-        try:
-            environment = execution_environment(self.board.directory, account, self.environment(), purpose='account-query')
-        except BoardError:
+        """One on-demand native read per harness every 180 seconds."""
+        stop_unconfirmed = health.get('accountReadFailure', {}).get('reasonCode') == 'HARNESS_ACCOUNT_STOP_UNCONFIRMED'
+        if (health.get('status') != 'ready' and not stop_unconfirmed) or not health.get('command'):
             return
         if self._closed or (self.board.directory / 'upgrade.json').exists():
             return
+        from ..evaluation.native_observations import _time
         with self.board.db.write() as db:
-            saved = db.execute('SELECT value FROM meta WHERE key=?', (read_key,)).fetchone()
-            if saved is None and identity(account) == {'source': 'native', 'credentialRevision': 0}:
-                saved = db.execute("SELECT value FROM meta WHERE key='codex_account_read_at'").fetchone()
-            checked = _time(saved[0]) if saved else _time(health.get('quotaCheckedAt'))
-            now = _time(utc_now())
-            if checked and now and 0 <= (now - checked).total_seconds() < SCAN_SECONDS:
+            row = db.execute("SELECT checked_at FROM harness_account_reads WHERE adapter='codex'").fetchone()
+            now = utc_now()
+            checked, moment = _time(row[0]) if row else None, _time(now)
+            if checked and 0 <= (moment - checked).total_seconds() < SCAN_SECONDS:
                 return
-            db.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (read_key, utc_now()))
-        billing = quota = None
+            db.execute('INSERT INTO harness_account_reads(adapter,checked_at) VALUES(?,?) '
+                       'ON CONFLICT(adapter) DO UPDATE SET checked_at=excluded.checked_at', ('codex', now))
+        from ...buddy.harnesses.codex.protocol import CodexProtocolError
+        billing = quota = failure = None
         try:
             from ...buddy.harnesses.codex.account_probe import read
-            from ..catalog.accounts import native_operation
-            with native_operation(self.board.db, account, 'account-query') as stop:
-                try:
-                    billing, quota = read(health["command"], environment)
-                except Exception as error:
-                    # The bounded reader always runs stop verification in finally;
-                    # its explicit unconfirmed-stop error is the sole exception.
-                    stop['shutdownConfirmed'] = not (isinstance(error, BoardError) and error.code == 'HARNESS_ACCOUNT_STOP_UNCONFIRMED')
-                    raise
-                else:
-                    stop['shutdownConfirmed'] = True
-        except Exception:
-            pass
+            billing, quota, error = read(health['command'], self.environment())
+        except (BoardError, CodexProtocolError, OSError, ValueError, RuntimeError) as caught:
+            error = caught
+        if error is not None:
+            reason = error.code if isinstance(error, (BoardError, CodexProtocolError)) else 'HARNESS_ACCOUNT_READ_FAILED'
+            failure = {'reasonCode': reason, 'errorType': type(error).__name__, 'message': str(error)[:512],
+                       'observedAt': utc_now()}
+            if reason == 'HARNESS_ACCOUNT_STOP_UNCONFIRMED':
+                self.invalidate('codex', health['revision'], reason, account_read_failure=failure)
+                return
+        account_observed = failure is None or billing is not None
         with self.board.db.write() as db:
             if self._closed or (self.board.directory / 'upgrade.json').exists():
                 return
-            row = db.execute("SELECT record_json,quota_json,revision FROM harness_health WHERE adapter='codex'").fetchone()
-            if quota is not None:
-                from ..evaluation.native_observations import record_quota
-                record_quota(db, 'codex', {**quota, 'provider': 'openai'}, account=account)
-            if row is None or row["revision"] != health["revision"] or identity(selection(db, 'codex')) != identity(account):
+            row = db.execute("SELECT record_json,revision FROM harness_health WHERE adapter='codex'").fetchone()
+            if row is None:
                 return
-            record = json.loads(row["record_json"])
-            record["quotaCheckedAt"] = utc_now()
-            if billing is not None:
-                record["billingByProvider"] = {"openai": billing}
-            else:
-                from ...protocol.billing import fact
-                record["billingByProvider"] = {"openai": fact("unknown", "codex/account-read", record["quotaCheckedAt"])}
-            db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'", (canonical_json(record),))
-            self.board._append_event(db, 'harness.account_observed', payload={'adapter': 'codex',
-                'account': identity(account), 'observedAt': record['quotaCheckedAt'], 'billing': record['billingByProvider'], 'quotaRecorded': quota is not None})
+            if failure is not None:
+                self.board._append_event(db, 'harness.account_read_failed', payload={
+                    'adapter': 'codex', 'reasonCode': failure['reasonCode'], 'revision': health['revision'],
+                    'currentRevision': row['revision'], 'accountReadFailure': failure})
+            if row['revision'] == health['revision']:
+                if quota is not None:
+                    from ..evaluation.native_observations import record_quota
+                    record_quota(db, 'codex', {**quota, 'provider': 'openai'})
+                record = json.loads(row['record_json'])
+                previous_failure = record.pop('accountReadFailure', None)
+                recovered_stop = previous_failure is not None and previous_failure['reasonCode'] == 'HARNESS_ACCOUNT_STOP_UNCONFIRMED'
+                if recovered_stop:
+                    record.pop('reasonCode', None)
+                    record.update(status='ready', available=True)
+                if failure is not None:
+                    record['accountReadFailure'] = failure
+                observed_at = utc_now()
+                if billing is None:
+                    from ...protocol.billing import fact
+                    billing = fact('unknown', 'codex/account-read', observed_at)
+                record['billingByProvider'] = {'openai': billing}
+                db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'", (canonical_json(record),))
+                if recovered_stop:
+                    db.execute("UPDATE harness_health SET status='ready',expires_at=? WHERE adapter='codex'", (_later(READY_SECONDS),))
+                    from ..catalog.catalog import restore_retained_availability
+                    restore_retained_availability(db, 'codex')
+                if account_observed:
+                    self.board._append_event(db, 'harness.account_observed', payload={'adapter': 'codex',
+                        'observedAt': observed_at, 'billing': record['billingByProvider'], 'quotaRecorded': quota is not None})
             head = self.board._head_of(db)
         self.board._notify(head)
 
