@@ -34,7 +34,7 @@ class CurrentCoreTests(BoardTestCase):
 
     def test_fresh_schema_has_only_current_fields_and_survives_reopen(self):
         self.assertEqual(CONTRACT_VERSION, "0.34.1")
-        self.assertEqual(SCHEMA_VERSION, 18)
+        self.assertEqual(SCHEMA_VERSION, 19)
         board = self.board()
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
@@ -54,7 +54,7 @@ class CurrentCoreTests(BoardTestCase):
     def test_unsupported_schema_is_rejected_without_rewriting_archive(self):
         # The immediately previous schema is included: only ``upgrade`` migrates it,
         # never startup.
-        for version in ("5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "999", None, "unrecognized"):
+        for version in ("5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "999", None, "unrecognized"):
             with self.subTest(version=version):
                 directory = self.directory / str(version)
                 path = self.old_database(directory, version)
@@ -65,7 +65,7 @@ class CurrentCoreTests(BoardTestCase):
                     Database(directory).initialize()
                 self.assertIn("Retain other unsupported state as an archive", str(caught.exception))
                 self.assertIn(f"only schema {SCHEMA_VERSION}", str(caught.exception))
-                self.assertIn("schema 17 requires an explicit idle upgrade", str(caught.exception))
+                self.assertIn("schema 18 requires an explicit idle upgrade", str(caught.exception))
                 self.assertNotIn("migrate", str(caught.exception))
                 self.assertEqual(path.read_bytes(), before)
                 self.assertEqual(sorted(item.name for item in directory.iterdir()), before_entries)

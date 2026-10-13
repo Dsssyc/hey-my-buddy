@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate schema-17 upgrade stock using the frozen released base source.
+"""Generate schema-18 upgrade stock using the frozen released base source.
 
 No product installation, daemon, native harness or model is started. The base
 named service operations run in process; only native discovery is synthetic.
@@ -26,7 +26,9 @@ import tarfile
 import tempfile
 import uuid
 
-BASE = "9131a1bda057f5ec3790393ec3e31ca5c96ba06c"
+BASE = "4b7f494670efe7a3fe053062f16cce9312a5e042"
+BASE_VERSION = "0.34.1"
+BASE_SCHEMA = 18
 # An existing five-file repository commit keeps workspace capture bounded.
 # This is the workspace input, never the source used to create the database.
 WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
@@ -80,15 +82,15 @@ def generate(args):
     if args.python is None:
         run(["uv", "sync", "--frozen", "--no-install-project", "--link-mode", "copy",
              *(["--offline"] if args.offline else []), "--project", str(source)], cwd=root, env=env)
-    # Import an existing commit into a private detached repository. No commit,
-    # branch or tag is created/moved; the allocated repository is read only.
+    # Import an existing commit into a private detached repository. No branch
+    # or tag is created/moved; the allocated repository is read only.
     repo = work / "repository"
     run(["git", "init", "--quiet", str(repo)], env=env)
     run(["git", "-C", str(repo), "fetch", "--quiet", "--no-tags", str(root), WORKSPACE_INPUT], env=env)
     (repo / ".git/HEAD").write_text(WORKSPACE_INPUT + "\n")
     run(["git", "-C", str(repo), "read-tree", WORKSPACE_INPUT], env=env)
     run(["git", "-C", str(repo), "checkout-index", "--all"], env=env)
-    for label in ("delivered", "accepted", "rejected", "cancelled"):
+    for label in ("delivered", "accepted", "failed", "cancelled"):
         run(["git", "-C", str(repo), "worktree", "add", "--quiet", "--detach",
              str(work / "workspaces" / label), WORKSPACE_INPUT], env=env)
     env["PYTHONPATH"] = str(source / "src")
@@ -119,7 +121,7 @@ def populate(args):
     from hey_my_buddy.blackboard.routing import quota_routing
 
     assert Path(db_module.__file__).resolve() == source / "src/hey_my_buddy/blackboard/store/db.py"
-    assert db_module.SCHEMA_VERSION == 17
+    assert db_module.SCHEMA_VERSION == BASE_SCHEMA
     catalog = {"source": "fixture:upgrade-base", "harnessVersion": "fixture-only",
                "discoveredAt": AT, "discoveries": [{"adapter": "codex", "status": "complete", "accountStatus": "confirmed"}],
                "providers": [{"adapter": "codex", "provider": "openai", "efforts": ["high"],
@@ -187,14 +189,19 @@ def populate(args):
         call("harness_set", {"adapter": "codex", "path": None})
         call("model_catalog_refresh", {"requestId": "fixture-catalog"})
         publish("human", profileSettings=[{"profileId": profile, "enabled": True} for profile in PROFILES])
+        publish("human", preferenceChanges=[{"profileId": PROFILES[0], "mode": "prefer", "reason": "fixture preference"}],
+                familyPreferenceChanges=[{"adapter": "codex", "provider": "openai", "model": "fixture-beta",
+                                          "mode": "exclude", "reason": "fixture family preference"}],
+                modelConcurrency=[{"adapter": "codex", "provider": "openai", "model": "fixture-alpha", "limit": 3}])
         publish("human", configuration={"routerProfileIds": PROFILES,
-                                        "defaultRoutingMode": "review", "routingBudget": "standard"},
+                                        "routerRetryIntervalSeconds": 47,
+                                        "defaultRoutingMode": "review", "routingBudget": "deep"},
                 familyAnnotationChanges=[{"adapter": "codex", "provider": "openai", "model": "fixture-alpha",
                                           "text": "升级夹具的家族备注；应保留。"}])
         publish("maintenance", cards=[{"profileId": PROFILES[0], "summary": "升级夹具的评价；应保留。",
                                        "strengths": [], "limitations": [], "risks": [], "evidenceIds": []}])
         call("worker_register", {"workerId": "fixture-worker", "capabilities": ["codex"]})
-        for label in ("delivered", "accepted", "rejected", "cancelled"):
+        for label in ("delivered", "accepted", "failed", "cancelled"):
             submitted = call("workflow_submit", {"requestId": "fixture-" + label, "hostId": "fixture-host",
                 "submissionToken": "fixture-submission-token-" + label, "task": "fixture " + label,
                 "adapter": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
@@ -209,6 +216,15 @@ def populate(args):
             claim = call("worker_claim", {"workerId": "fixture-worker", "claimRequestId": "claim-" + label,
                                           "nonce": "fixture-nonce-00000000000000000000", "runId": run_id})["claim"]
             attempt, turn = claim["attempt"], claim["turn"]
+            if label == "failed":
+                call("worker_result", {"workerId": "fixture-worker", "attemptId": attempt["attemptId"],
+                    "generation": attempt["generation"], "nonce": "fixture-nonce-00000000000000000000",
+                    "status": "failed", "shutdownConfirmed": True, "exitCode": 1,
+                    "result": {"status": "error", "code": "fixture-failed", "stopEvidence": {"shutdownConfirmed": True}}})
+                view = call("workflow_get", {"runId": run_id})
+                assert view["state"] == "failed", view
+                call("workflow_conclude", {"runId": run_id, "note": "Fixture Host concluded failed work", **control})
+                continue
             manifest = turn["input"]["executionWorkspace"]
             sealed = workspace.seal(work / "state", manifest, run_id, attempt["attemptId"])
             record = {"version": 1, "taskId": run_id, "attemptId": attempt["attemptId"],
@@ -232,12 +248,8 @@ def populate(args):
                 call("workflow_accept", {"runId": run_id, "artifactId": view["finalArtifactId"],
                     "note": "fixture accepted", "notRequired": "Read-only fixture has no separate target",
                     "keepCheckout": True, **control})
-            elif label == "rejected":
-                call("workflow_continue", {"runId": run_id, "commandId": "reject-fixture",
-                    "expectedRevision": view["revision"], "input": "fixture rejected; do not accept output",
-                    "reason": "fixture rejected", **control})
-                call("workflow_cancel", {"runId": run_id, "commandId": "cancel-rejected-fixture",
-                    "reason": "No model should run for the fixture", **control})
+            elif label == "delivered":
+                call("workflow_conclude", {"runId": run_id, "note": "Fixture Host concluded the delivered work", **control})
         # Freeze a real Router claim via base operations, then cancel it with
         # explicit synthetic result/stop input; no harness process is spawned.
         call("worker_register", {"workerId": "fixture-router", "adapter": "decision", "capabilities": ["decision"]})
@@ -265,6 +277,9 @@ def populate(args):
         operations.append({"operation": "catalog_store.record", "params": missing_catalog, "response": "missing-model-pending"})
         catalog_module.coordinate_catalog_reread(store.directory, "codex", reader=lambda: None, wait=True)
         operations.append({"operation": "coordinate_catalog_reread", "params": {"adapter": "codex"}, "response": "window-written"})
+        publish("human", profileSettings=[{"profileId": PROFILES[1], "enabled": False}],
+                familyPreferenceChanges=[{"adapter": "codex", "provider": "openai", "model": "fixture-alpha",
+                                          "mode": "pin", "reason": "fixture pinned family"}])
         hashing.close()
         # All rows were created by base public operations. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
@@ -278,7 +293,7 @@ def populate(args):
         sql = raw_sql
         for old, new in redactions:
             sql = sql.replace(old, new)
-        header = f"-- Upgrade base: source {BASE}; 0.30.0 / schema 17\n-- Generated by packaging/generate-upgrade-fixture.py; native facts/results are synthetic.\n-- Path template: restore with tests/python/blackboard/store/upgrade_fixture.py before use.\n"
+        header = f"-- Upgrade base: source {BASE}; {BASE_VERSION} / schema {BASE_SCHEMA}\n-- Generated by packaging/generate-upgrade-fixture.py; native facts/results are synthetic.\n-- Path template: restore with tests/python/blackboard/store/upgrade_fixture.py before use.\n"
         output = args.output_dir.resolve()
         output.mkdir(parents=True, exist_ok=True)
         sql_path = output / "board.sql"
@@ -288,7 +303,7 @@ def populate(args):
         (output / "operations.json").write_text(operations_text + "\n")
         resources = export_resources(work, workspace, preimages)
         (output / "workspace-resources.json").write_text(json.dumps(resources, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-        metadata = {"format": 2, "sourceCommit": BASE, "sourceVersion": "0.30.0", "schemaVersion": 17,
+        metadata = {"format": 2, "sourceCommit": BASE, "sourceVersion": BASE_VERSION, "schemaVersion": BASE_SCHEMA,
             "sourceTree": subprocess.check_output(["git", "rev-parse", BASE + "^{tree}"], text=True).strip(),
             "workspaceInputCommit": WORKSPACE_INPUT,
             "generationCommand": "python packaging/generate-upgrade-fixture.py " +
@@ -303,8 +318,8 @@ def populate(args):
             "stableIds": ids,
             "routerProfileIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
-            "boundary": "Old BoardService named operations in process; synthetic native discovery and worker result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before upgrade; this preparation is not migration or new native execution. Real host_seal is tested separately; service workflow_conclude after upgrade remains Host verification.",
-            "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 17; baseline only after return",
+            "boundary": "Base BoardService named operations in process; synthetic native discovery and worker result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before upgrade; this preparation is not migration or new native execution. Host conclusions are base history only; real host_seal is tested separately.",
+            "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 18; baseline only after return",
             "schemaSha256": digest(json_text([list(row) for row in source_schema]).encode()),
             "sqlSha256": digest(sql_path.read_bytes()), "operationsSha256": digest((output / "operations.json").read_bytes()),
             "catalogSha256": digest((output / "catalog.json").read_bytes()),
@@ -321,7 +336,7 @@ def export_resources(work, workspace, preimages):
         return text.replace(str(work), "<fixture-root>")
 
     identities, checkouts = {}, {}
-    for label in ("delivered", "accepted", "rejected", "cancelled"):
+    for label in ("delivered", "accepted", "failed", "cancelled"):
         actual = workspace.inspect(str(work / "workspaces" / label))
         checkouts[label] = template(actual["checkoutRoot"])
         for role, path in (("checkoutId", actual["gitDir"]), ("repositoryId", actual["repositoryPath"])):
@@ -390,11 +405,11 @@ def verify(output, restored):
         connection.execute("PRAGMA foreign_keys=ON")
         assert connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert dict(connection.execute("SELECT key,value FROM meta"))["schema_version"] == "17"
+        assert dict(connection.execute("SELECT key,value FROM meta"))["schema_version"] == str(BASE_SCHEMA)
         assert connection.execute("SELECT COUNT(*) FROM objectives").fetchone()[0] == 1
         states = dict(connection.execute("SELECT run_id,state FROM workflow_runs"))
         assert states == {metadata["stableIds"][key]: value for key, value in
-                          (("delivered", "delivered"), ("accepted", "accepted"), ("rejected", "cancelled"), ("cancelled", "cancelled"))}
+                          (("delivered", "delivered"), ("accepted", "accepted"), ("failed", "failed"), ("cancelled", "cancelled"))}
         keys = dict(connection.execute("SELECT key,value FROM meta"))
         assert keys["router_configuration_version"] == "3"
         assert json.loads(keys["router_profile_ids"]) == PROFILES
@@ -403,13 +418,14 @@ def verify(output, restored):
             assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] >= 1
         reviews = {json.loads(row[0])["verdict"] for row in connection.execute(
             "SELECT payload_json FROM events WHERE kind IN ('workflow.acknowledged','workflow.review_rejected')")}
-        assert reviews == {"accepted", "rejected"}
-        assert connection.execute("SELECT COUNT(*) FROM workflow_host_conclusions WHERE run_id=?", (metadata["stableIds"]["delivered"],)).fetchone()[0] == 0
+        assert reviews == {"accepted"}
+        assert connection.execute("SELECT COUNT(*) FROM workflow_host_conclusions WHERE run_id=?", (metadata["stableIds"]["delivered"],)).fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM workflow_host_conclusions WHERE run_id=?", (metadata["stableIds"]["failed"],)).fetchone()[0] == 1
         schema = [list(row) for row in connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")]
         assert digest(json_text(schema).encode()) == metadata["schemaSha256"]
         assert "<fixture-root>" in (output / "board.sql").read_text()
         assert "/Users/" not in (output / "board.sql").read_text()
-        return {"integrity": "ok", "foreignKeyViolations": 0, "schema": 17, "states": states,
+        return {"integrity": "ok", "foreignKeyViolations": 0, "schema": BASE_SCHEMA, "states": states,
                 "tables": sum(row[0] == "table" and row[1] != "sqlite_sequence" for row in schema),
                 "events": connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], "sourceSchemaMatches": True}
 

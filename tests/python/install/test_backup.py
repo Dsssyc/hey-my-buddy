@@ -34,6 +34,19 @@ class BackupTests(BoardTestCase):
         self.assertEqual([p.name for p in current.parent.iterdir() if p.is_dir()], ['current'])
         self.assertEqual((current / 'state/controls/x.json').stat().st_mode & 0o777, 0o600)
 
+    def test_offline_archive_refuses_an_uncheckpointed_wal_without_publication(self):
+        board = self.board()
+        with board.store.db.connect() as writer:
+            writer.execute("INSERT INTO meta(key,value) VALUES('live-wal','retained')")
+            before = (board.directory / 'board.sqlite3').read_bytes()
+            wal = (board.directory / 'board.sqlite3-wal').read_bytes()
+            with self.assertRaises(BoardError) as caught:
+                backup.create(board.store, offline=True)
+            self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
+            self.assertEqual((board.directory / 'board.sqlite3').read_bytes(), before)
+            self.assertEqual((board.directory / 'board.sqlite3-wal').read_bytes(), wal)
+            self.assertFalse((board.directory / 'backups').exists())
+
     def test_failed_validation_keeps_old_backup_and_retries_incoming(self):
         board = self.board()
         current = Path(board.call('backup', {})['path'])

@@ -134,7 +134,7 @@ class SkillPackageTests(unittest.TestCase):
                 journal.unlink()
             with mock.patch.dict(os.environ, {**self._upgrade_environment(root, state), 'BUDDY_AGENT_SKILLS_DIR': str(root / 'skills')}, clear=True), \
                  mock.patch('hey_my_buddy.install.upgrade.upgrade', side_effect=recover) as recovery, \
-                 mock.patch('hey_my_buddy.install.upgrade.idle_snapshot', side_effect=BoardError('UPGRADE_NOT_IDLE', 'raced work')), \
+                 mock.patch('hey_my_buddy.install.upgrade.require_archive_readiness', side_effect=BoardError('UPGRADE_NOT_IDLE', 'raced work')), \
                  mock.patch('hey_my_buddy.install.skill_install._place') as place:
                 with self.assertRaises(BoardError) as caught:
                     skill_install.install({})

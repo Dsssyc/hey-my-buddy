@@ -13,8 +13,6 @@ import tempfile
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
-from hey_my_buddy.blackboard.store import backup
-from hey_my_buddy.blackboard.store.workspace_identity_migration import migrate_workspace_identity
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace, workspace_identity
 from hey_my_buddy.errors import BoardError
 
@@ -70,11 +68,6 @@ class WorkspaceIdentityFixture(WorkflowTestCase):
         self.git(path, "commit", "-qm", "base")
         return path
 
-    def intent(self, path=None, **updates):
-        return {"kind": "existing", "cwd": str(path or self.repo), "access": "write",
-                "base": {"kind": "working-tree"}, "includeUntracked": [],
-                "writeScope": ["."], "integrator": "host-1", **updates}
-
     @contextmanager
     def legacy(self, device_delta=2):
         def old_identity(path):
@@ -105,29 +98,20 @@ class WorkspaceIdentityFixture(WorkflowTestCase):
                 "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (run_id,)
             ).fetchone()[0])
 
-    def snapshot(self, board):
-        with board.store.db.read() as connection:
-            result = backup.database_snapshot(connection)
-            result["schema"] = int(connection.execute(
-                "SELECT value FROM meta WHERE key='schema_version'"
-            ).fetchone()[0])
-        return result
-
-    def migrate(self, board):
-        return migrate_workspace_identity(self.directory, self.snapshot(board))
-
-    def all_rows(self, board):
-        with board.store.db.read() as connection:
-            names = [row[0] for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-            )]
-            return {name: tuple(tuple(row) for row in connection.execute(
-                'SELECT * FROM "' + name.replace('"', '""') + '" ORDER BY rowid'
-            )) for name in names}
-
-    def historical(self, board):
-        return {name: rows for name, rows in self.all_rows(board).items()
-                if name not in {"meta", "objectives", "workspace_reservations"}}
+    def register_aliases(self, board, manifest):
+        actual = workspace.inspect(manifest["path"])
+        directories = {"checkoutId": Path(actual["gitDir"]),
+                       "repositoryId": Path(actual["repositoryPath"])}
+        with board.store.db.write() as connection:
+            for role, directory in directories.items():
+                old = manifest[role]
+                entry = {"version": 1, "newId": actual[role], "source": "fixed-input-and-inode",
+                         "anchors": [{"directory": str(directory), "inode": directory.stat().st_ino,
+                                      "legacyDevice": directory.stat().st_dev + 2,
+                                      "manifestSha256": manifest["manifestSha256"],
+                                      "workspaceId": manifest["workspaceId"], "role": role}]}
+                connection.execute("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)",
+                                   (workspace_identity.META_KEY_PREFIX + old, json.dumps(entry)))
 
     def fixed_files(self):
         return {str(path.relative_to(self.directory)): path.read_bytes()
@@ -170,7 +154,7 @@ class WorkspaceIdentityTests(WorkspaceIdentityFixture):
     def test_old_manifest_verifies_without_a_coordinator_thread_context(self):
         board, _run, manifest = self.legacy_run()
         before_files = self.fixed_files()
-        self.migrate(board)
+        self.register_aliases(board, manifest)
         with patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory)}):
             verified = workspace.verify(manifest)
         self.assertTrue(verified["unchanged"])
@@ -181,7 +165,7 @@ class WorkspaceIdentityTests(WorkspaceIdentityFixture):
 
     def test_registered_alias_cannot_verify_a_copied_git_directory(self):
         board, _run, manifest = self.legacy_run(kind="existing")
-        self.migrate(board)
+        self.register_aliases(board, manifest)
         mapping = self.aliases(board)
         directory = self.repo / ".git"
         retained = self.directory / "original-git"
@@ -197,7 +181,7 @@ class WorkspaceIdentityTests(WorkspaceIdentityFixture):
 
     def test_valid_alias_cannot_bypass_fixed_manifest_checksum(self):
         board, _run, manifest = self.legacy_run()
-        self.migrate(board)
+        self.register_aliases(board, manifest)
         mapping = self.aliases(board)
         modified = dict(manifest, inputTree="0" * 40)
         with patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory)}):

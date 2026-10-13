@@ -70,6 +70,22 @@ class StorageTests(BoardTestCase):
             self.assertTrue((native / 'sessions.sqlite').exists())
             self.assertEqual(board.call('storage_apply', params), result)
 
+    def test_archived_upgrade_evidence_stays_out_of_storage_plan_and_apply(self):
+        board = self.board()
+        archive = board.directory / 'archives' / 'schema-18'
+        archive.mkdir(parents=True)
+        evidence = archive / 'board.sqlite3'
+        evidence.write_bytes(b'archived board evidence')
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
+            planned = board.call('storage_plan', {})
+            self.assertFalse(any(Path(row['path']) == archive or
+                                 Path(row['path']).is_relative_to(archive) or
+                                 archive.is_relative_to(Path(row['path']))
+                                 for row in planned['candidates']))
+            board.call('storage_apply', {'planId': planned['planId'],
+                                         'commandId': 'retain-archive-evidence', 'confirm': True})
+        self.assertEqual(evidence.read_bytes(), b'archived board evidence')
+
     def test_confirmation_expiry_and_command_binding(self):
         board = self.board()
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):

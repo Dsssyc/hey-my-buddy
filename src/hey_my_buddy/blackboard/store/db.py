@@ -19,9 +19,9 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 18
-#: The one earlier schema that ``upgrade`` migrates in place (see ``migrations``).
-PREVIOUS_SCHEMA_VERSION = 17
+SCHEMA_VERSION = 19
+#: The one earlier schema that ``upgrade`` archives and replaces (see ``migrations``).
+PREVIOUS_SCHEMA_VERSION = 18
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CAPABILITY_VERSION = 1

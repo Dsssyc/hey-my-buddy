@@ -1,94 +1,45 @@
-"""Real private RPC, delivered Host sealing and replay after the upgrade path."""
-from contextlib import closing
-import json
-import os
+"""A real private service starts on the fresh board produced from schema 18."""
 from pathlib import Path
-import sqlite3
+from unittest import mock
 
 from support import BoardTestCase
-from blackboard.store.test_migrations import DELIVERED
-from blackboard.store.upgrade_fixture import FIXTURE, load_fixture
+from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import backup
-from hey_my_buddy.blackboard.store.db import Database
+from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.store import BoardStore
-from hey_my_buddy.blackboard.store.workspace_identity_migration import migrate_workspace_identity
+from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.install import upgrade
-from hey_my_buddy.protocol.transport import _read_endpoint, _request
+from hey_my_buddy.protocol.transport import ServiceError, _read_endpoint, _request
 
 
 class UpgradeServiceTests(BoardTestCase):
-    def test_real_private_service_reads_the_fixed_upgrade_and_uses_public_host_conclusions(self):
-        fixture = load_fixture(self.directory)
-        current = Path(backup.create(BoardStore(self.directory))['path'])
+    def test_private_service_reads_settings_and_cannot_find_archived_work(self):
+        state = self.directory
+        fixture = load_fixture(state)
+        current = Path(backup.create(BoardStore(state))["path"])
         verified = backup.verify(current)
-        before = {**verified['databaseSnapshot'], 'schema':verified['schema']}
-        migration, expected = upgrade.migrate_board(self.directory, before)
-        identity, expected = migrate_workspace_identity(self.directory, expected)
-        self.assertEqual(migration['toSchema'], 18)
-        self.assertEqual(identity['mapped'], [])
-        self.assertEqual(identity['kept'], {})
-        self.assertEqual(upgrade.idle_snapshot(self.directory), {key:value for key,value in expected.items()
-                                                                if key != 'runtimeSettings'})
-        self.catalog_fixture(json.loads((FIXTURE / 'catalog.json').read_text()))
-        database = Database(self.directory)
-        database.initialize()
+        before = {**verified["databaseSnapshot"], "schema": verified["schema"]}
+        upgrade.migrate_board(state, before)
+        Database(state).initialize()
+        with mock.patch.object(CodexAdapter, "local_read_only_check", return_value={
+            "eligible": True, "reasonCode": None, "reason": None,
+            "systemSandbox": True, "sameAttemptContinuation": True,
+        }), Database(state).read() as connection:
+            resolution = router.current_router(connection, now="2026-01-01T00:00:00.000Z")
+        self.assertEqual(resolution.profile_id, fixture["routerProfileIds"][0], resolution.problem)
+        self.assertEqual(resolution.facts["routingMode"], "review")
+        self.assertEqual(resolution.facts["routingBudget"], "deep")
+        self.assertEqual(resolution.facts["routerRetryIntervalSeconds"], 47)
 
         def call(operation, params):
-            return _request(_read_endpoint(self.directory), operation, params, state_dir=self.directory)
+            return _request(_read_endpoint(state), operation, params, state_dir=state)
 
-        def control(run_id):
-            with database.read() as db:
-                row = db.execute('SELECT host_id,owner_generation FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()
-            return {'hostId':row['host_id'], 'ownerGeneration':row['owner_generation'],
-                    'controlToken':database.control_token(run_id, row['owner_generation'])}
-
-        try:
-            with self.daemon(env={'BUDDY_MAX_CONCURRENT':'1'}):
-                self.assertEqual(call('health', {})['schemaVersion'], 18)
-                snapshot = call('console_snapshot', {})
-                self.assertEqual(snapshot['configuration']['routerProfileIds'], fixture['routerProfileIds'])
-                models = call('model_profiles', {'includeUnavailable': True})['profiles']
-                self.assertTrue(models)
-                self.assertEqual({model['profileId'] for model in models},
-                                 set(fixture['routerProfileIds']))
-                delivered = call('workflow_get', {'runId':DELIVERED})
-                self.assertEqual(delivered['state'], 'delivered')
-                self.assertIsNone(delivered['hostConclusion'])
-                with database.read() as db:
-                    worker_output = db.execute("SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output'",
-                                               (DELIVERED,)).fetchone()
-                worker_manifest = json.loads(worker_output['manifest_json'])
-                worker_file = Path(worker_manifest['diffPath']).with_name('output.json')
-                worker_bytes = worker_file.read_bytes()
-                host_file = worker_file.parent.with_name(worker_file.parent.name + '-host') / 'output.json'
-                self.assertFalse(host_file.exists())
-                params = {'runId':DELIVERED, 'note':'private upgraded fixture', **control(DELIVERED)}
-                concluded = call('workflow_conclude', params)
-                self.assertFalse(concluded['duplicate'])
-                self.assertEqual(concluded['conclusion']['executionStatus'], 'delivered')
-                self.assertEqual(concluded['state'], 'delivered')
-                self.assertIsNotNone(concluded['conclusion']['artifactId'])
-                replay = call('workflow_conclude', params)
-                self.assertTrue(replay['duplicate'])
-                self.assertEqual(replay['conclusion'], concluded['conclusion'])
-                self.assertEqual(call('workflow_get', {'runId':DELIVERED})['hostConclusion'], concluded['conclusion'])
-                with closing(sqlite3.connect(self.directory / 'board.sqlite3')) as db:
-                    self.assertEqual(db.execute('SELECT COUNT(*) FROM workflow_host_conclusions WHERE run_id=?',
-                                                (DELIVERED,)).fetchone()[0], 1)
-                    self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE task_id=? AND kind='workflow.host_concluded'",
-                                                (DELIVERED,)).fetchone()[0], 1)
-                    artifact = db.execute('SELECT manifest_sha256 FROM workflow_artifacts WHERE artifact_id=?',
-                                          (concluded['conclusion']['artifactId'],)).fetchone()
-                    self.assertEqual(db.execute('SELECT * FROM workflow_artifacts WHERE artifact_id=?',
-                                                (worker_output['artifact_id'],)).fetchone(), tuple(worker_output))
-                sealed = json.loads(host_file.read_text())
-                self.assertEqual(sealed['kind'], 'host-output')
-                self.assertEqual(sealed['snapshotSha256'], artifact[0])
-                self.assertEqual(worker_file.read_bytes(), worker_bytes)
-        finally:
-            # The focused runner retains this raw child log after normal harness
-            # teardown removes the private test state.
-            log = self.directory / 'test-daemon.log'
-            if log.exists():
-                retained = Path(os.environ['TMPDIR']) / 'upgrade-base-service.log'
-                retained.write_bytes(log.read_bytes())
+        with self.daemon(env={"BUDDY_MAX_CONCURRENT": "1"}):
+            self.assertEqual(call("health", {})["schemaVersion"], SCHEMA_VERSION)
+            snapshot = call("console_snapshot", {})
+            self.assertEqual(snapshot["configuration"]["routerProfileIds"], fixture["routerProfileIds"])
+            self.assertEqual(call("task_list", {})["tasks"], [])
+            with self.assertRaises(ServiceError) as caught:
+                call("workflow_get", {"runId": fixture["stableIds"]["delivered"]})
+            self.assertEqual(caught.exception.code, "NOT_FOUND")
