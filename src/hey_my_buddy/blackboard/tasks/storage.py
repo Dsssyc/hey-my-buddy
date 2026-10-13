@@ -305,7 +305,7 @@ def _allocation_reference_sets(rows, allocations):
     return [sorted(item) for item in reasons]
 
 
-def _orphan_workspace(store, directory: Path) -> dict:
+def _orphan_workspace(store, directory: Path, *, git_proof: bool = True) -> dict:
     """Only the original allocation record can prove an orphan's exact checkout."""
     from . import workspace
     state = store.directory.resolve()
@@ -334,23 +334,24 @@ def _orphan_workspace(store, directory: Path) -> dict:
             raise BoardError('STORAGE_UNSAFE', 'Original allocation records do not prove this checkout')
         result['manifest'] = manifest
         result['allocationRequestId'] = request['requestId']
-        proof = workspace.cleanup_inspect(state, manifest)
-        result['reasons'].extend(proof['reasons'])
-        result['proof'] = proof
-        repository = Path(manifest['snapshot']['repositoryPath'])
         refs = {}
-        for suffix, commit in (('input', manifest['inputCommit']),
-                               ('staged', manifest['snapshot']['stagedCommit']),
-                               ('retained/input', manifest['inputCommit']),
-                               ('retained/staged', manifest['snapshot']['stagedCommit'])):
-            ref = 'refs/buddy/workspaces/' + directory.name + '/' + suffix
-            refs[ref] = workspace._line(repository, 'show-ref', '--verify', '--hash', ref)
-            if (suffix in ('input', 'staged') and manifest['snapshot'][suffix + 'Ref'] != ref
-                    or workspace._git(repository, 'symbolic-ref', '-q', ref, allowed=(0, 1)).strip()
-                    or refs[ref] != commit):
-                result['reasons'].append('fixed-reference-changed')
-        if workspace._git(path, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z'):
-            result['reasons'].append('unsealed-changes')
+        if git_proof:
+            proof = workspace.cleanup_inspect(state, manifest)
+            result['reasons'].extend(proof['reasons'])
+            result['proof'] = proof
+            repository = Path(manifest['snapshot']['repositoryPath'])
+            for suffix, commit in (('input', manifest['inputCommit']),
+                                   ('staged', manifest['snapshot']['stagedCommit']),
+                                   ('retained/input', manifest['inputCommit']),
+                                   ('retained/staged', manifest['snapshot']['stagedCommit'])):
+                ref = 'refs/buddy/workspaces/' + directory.name + '/' + suffix
+                refs[ref] = workspace._line(repository, 'show-ref', '--verify', '--hash', ref)
+                if (suffix in ('input', 'staged') and manifest['snapshot'][suffix + 'Ref'] != ref
+                        or workspace._git(repository, 'symbolic-ref', '-q', ref, allowed=(0, 1)).strip()
+                        or refs[ref] != commit):
+                    result['reasons'].append('fixed-reference-changed')
+            if workspace._git(path, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z'):
+                result['reasons'].append('unsealed-changes')
         identities = {}
         for name, item in (('allocation', directory), ('checkout', path), ('lock', directory / '.lock')):
             identity = item.lstat()
@@ -409,7 +410,7 @@ def _remove_orphan_workspace(store, candidate: dict) -> None:
             workspace.cleanup_remove(store.directory, fresh['manifest'])
 
 
-def inspect(store) -> dict:
+def inspect(store, *, git_proof: bool = True) -> dict:
     from . import workspace
     state = store.directory.resolve()
     rows = []
@@ -497,7 +498,7 @@ def inspect(store) -> dict:
             if path in seen or not path.exists():
                 continue
             seen.add(path)
-            if not reasons:
+            if not reasons and git_proof:
                 inspected = workspace.cleanup_inspect(state, manifest, sealed=sealed, retained=retained)
                 reasons.extend(inspected['reasons'])
             add('workspaces', path, reasons, runId=run_id, revision=revision)
@@ -515,7 +516,7 @@ def inspect(store) -> dict:
                 continue
             if not (path.exists() or private_dirs.linked_component(path) is not None):
                 continue
-            orphan_inputs.append(_orphan_workspace(store, directory))
+            orphan_inputs.append(_orphan_workspace(store, directory, git_proof=git_proof))
     pending = [item for item in orphan_inputs if not item['reasons']]
     if pending:
         with store.db.read() as connection:
@@ -740,6 +741,19 @@ def plan(store, params: dict) -> dict:
         return result
 
 
+def _changed_workspace_reasons(store, candidate: dict) -> list[str]:
+    """Diagnose a retained checkout without authorizing its changed storage plan."""
+    from . import workspace
+    with store.db.read() as connection:
+        run = store.workflow._run_row(connection, candidate['runId'])
+        manifest = json.loads(run['workspace_manifest_json'])
+        retained = store.workflow._allocation_provenance(connection, run)
+        sealed = store.workflow._latest_handoff(connection, run, manifest)
+    proof = workspace.cleanup_inspect(store.directory, manifest, sealed=sealed, retained=retained,
+                                      allowed=store.workflow._board_adopted_paths(run['run_id'], manifest))
+    return proof['reasons'] or ['candidate-changed']
+
+
 def apply(store, params: dict) -> dict:
     schemas.reject_unknown(params, {'planId', 'commandId', 'confirm'}, 'storage.apply')
     plan_id = schemas.required_string(params, 'planId', max_length=64, pattern=re.compile(r'^stg-[0-9a-f]{32}$'))
@@ -785,7 +799,9 @@ def apply(store, params: dict) -> dict:
                         if runtime_usage(remaining, commands, known):
                             raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
                 _finish_pending(result, receipt)
-        current = {row['id']: row for row in inspect(store)['candidates']}
+        # The plan proved Git state before confirmation. The removal paths prove
+        # it again under their own deletion fences, after this board inventory.
+        current = {row['id']: row for row in inspect(store, git_proof=False)['candidates']}
         done = {row['id'] for row in result['removed'] + result['skipped']}
         for candidate in planned['candidates']:
             if candidate['id'] in done:
@@ -797,11 +813,16 @@ def apply(store, params: dict) -> dict:
                     _save_receipt(receipt, result)
                 continue
             fresh = current.get(candidate['id'])
-            if (fresh is None or not fresh['eligible'] or
-                    any(fresh.get(key) != candidate.get(key) for key in ('category', 'path', 'fingerprint'))):
-                result['skipped'].append({'id': candidate['id'], 'path': candidate['path'], 'reasons': fresh['reasons'] if fresh and not fresh['eligible'] else ['candidate-changed']})
-                continue
             try:
+                if (fresh is None or not fresh['eligible'] or
+                        any(fresh.get(key) != candidate.get(key) for key in ('category', 'path', 'fingerprint'))):
+                    reasons = fresh['reasons'] if fresh and not fresh['eligible'] else ['candidate-changed']
+                    if (fresh is not None and fresh['eligible'] and fresh['category'] == 'workspaces'
+                            and not fresh.get('orphan')
+                            and all(fresh.get(key) == candidate.get(key) for key in ('category', 'path'))):
+                        reasons = _changed_workspace_reasons(store, fresh)
+                    result['skipped'].append({'id': candidate['id'], 'path': candidate['path'], 'reasons': reasons})
+                    continue
                 if candidate['category'] == 'workspaces':
                     if fresh.get('orphan') is True:
                         _remove_orphan_workspace(store, candidate)
@@ -841,7 +862,11 @@ def apply(store, params: dict) -> dict:
             except (BoardError, OSError) as error:
                 if result.get('pending'):
                     raise BoardError('STORAGE_INCOMPLETE', 'Removal is incomplete; retry the same commandId and planId', planId=plan_id) from error
-                result['skipped'].append({'id': candidate['id'], 'path': candidate['path'], 'reasons': [error.code if isinstance(error, BoardError) else 'filesystem-error']})
+                if isinstance(error, BoardError):
+                    reasons = (error.details.get('reasons') or [error.code]) if error.code == 'NOT_READY' else [error.code]
+                else:
+                    reasons = ['filesystem-error']
+                result['skipped'].append({'id': candidate['id'], 'path': candidate['path'], 'reasons': reasons})
             _save_receipt(receipt, result)
         result['complete'] = True
         _save_receipt(receipt, result)
