@@ -31,7 +31,7 @@ class CodexSchemaTests(unittest.TestCase):
             "dsh": ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",
                     "permission:read", "permission:write", "permission:full"),
             "zcode": ("zcode", "observe", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",
-                      "permission:read", "permission:write"),
+                      "permission:read", "permission:write", "permission:full"),
         }
         for harness, capabilities in expected.items():
             with self.subTest(harness=harness):
@@ -52,7 +52,7 @@ class CodexSchemaTests(unittest.TestCase):
                       "full": ("full", "enforced")},
             "claude": {"read": ("read", "enforced"), "write": ("write", "enforced"), "full": ("full", "enforced")},
             "dsh": {"read": ("read", "enforced"), "write": ("write", "enforced"), "full": ("full", "enforced")},
-            "zcode": {"read": ("write", "convention"), "write": ("write", "convention")},
+            "zcode": {"read": ("read", "enforced"), "write": ("write", "convention"), "full": ("full", "enforced")},
         }
         for harness, levels in expected.items():
             for level, (scope, strength) in levels.items():
@@ -60,13 +60,10 @@ class CodexSchemaTests(unittest.TestCase):
                     permission = worker_permission(harness, level)
                     self.assertEqual((permission.level, permission.tool_scope, permission.enforcement),
                                      (level, scope, strength))
-            if harness not in ("codex", "claude", "dsh"):
-                with self.subTest(harness=harness, level="full"), self.assertRaises(BoardError):
-                    worker_permission(harness, "full")
 
     def test_every_worker_path_carries_the_frozen_workspace_access(self):
         for harness in ("codex", "claude", "dsh", "zcode"):
-            for access in (("read", "write", "full") if harness in ("codex", "claude", "dsh") else ("read", "write")):
+            for access in ("read", "write", "full"):
                 with self.subTest(harness=harness, access=access), tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
                     turn = {"taskId": "task", "attemptId": "attempt", "generation": 1,
