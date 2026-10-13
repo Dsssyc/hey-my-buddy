@@ -13,7 +13,7 @@ Use the absolute launcher (`~/.agents/skills/buddy/scripts/buddy`; Windows `scri
 
 Read `health` for the Router list, mode and capacity; report failures with decision code and `routingMode`. A sole candidate needs no Router: fast sends the task to its provider, review reads a frozen repository copy.
 
-[usage](../../docs/reference/usage.md), [CLI](../../docs/reference/cli.md), [workflow](../../docs/reference/workflow.md), [harnesses](../../docs/reference/harnesses.md), [Claude](../../docs/reference/claude.md).
+[usage](../../docs/reference/usage.md), [CLI](../../docs/reference/cli.md), [workflow](../../docs/reference/workflow.md), [harnesses](../../docs/reference/harnesses.md), [Claude](../../docs/reference/claude-code.md).
 
 ## Delegate through acceptance
 

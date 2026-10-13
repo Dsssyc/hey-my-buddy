@@ -21,4 +21,4 @@ A cold start must write the private state directory and open local IPC; a Host s
 
 - The background `await` wakes the session when it ends: the exit notification arrives with the next step during an active turn and wakes an idle session.
 - The background command belongs to the Claude Code session: if the session or app closes, the goal keeps running and is resumed by awaiting the same `runId` later. This is a bounded wait, not a scheduler, and it gives no wakeup to a session that no longer exists.
-- Claude Code exports `ANTHROPIC_BASE_URL` to its commands, so a service cold-started from a Claude Code session cannot run Claude Workers ([Claude](claude.md)); attaching to an already running service is unaffected.
+- Claude Code exports `ANTHROPIC_BASE_URL` to its commands, so a service cold-started from a Claude Code session cannot run Claude Workers ([Claude](claude-code.md)); attaching to an already running service is unaffected.
