@@ -634,6 +634,9 @@ class WorkflowCoordinator:
         task_row = task_row or connection.execute(
             "SELECT * FROM tasks WHERE task_id=?", (run_row["run_id"],)
         ).fetchone()
+        # One read serves both the reported conclusion and the wait reason: a
+        # delivered goal closed by its Host is not still awaiting acknowledgement.
+        host_conclusion = host_conclusions.current(connection, run_row, task_row)
         turns = connection.execute(
             "SELECT t.*,a.token_usage_json FROM workflow_turns t LEFT JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=? ORDER BY t.turn_index DESC LIMIT ?",
             (run_row["run_id"], MAX_ACTIVE_TURNS_VIEW),
@@ -715,7 +718,7 @@ class WorkflowCoordinator:
             "status": task_row["state"],
             "queueReason": task_row["queue_reason"],
             "awaitingHost": state == "awaiting-host",
-            "waitReason": self._wait_reason(state, task_row, active_request),
+            "waitReason": self._wait_reason(state, task_row, active_request, host_conclusion),
             "goal": self._goal_view(goal, run_row["goal_fingerprint"]),
             "revision": run_row["revision"],
             "continuationCount": run_row["continuation_count"],
@@ -740,7 +743,7 @@ class WorkflowCoordinator:
             "workspaceConflicts": [self._conflict_view(row) for row in conflicts],
             "integrations": [self._integration_view(row) for row in integrations],
             "cleanup": self._plan_view(cleanup),
-            "hostConclusion": host_conclusions.view(host_conclusions.current(connection, run_row, task_row)),
+            "hostConclusion": host_conclusions.view(host_conclusion),
             "counts": {
                 "turns": turn_total,
                 "requests": request_total,
@@ -828,7 +831,7 @@ class WorkflowCoordinator:
         return summary
 
     @staticmethod
-    def _wait_reason(state: str, task_row, active_request) -> str:
+    def _wait_reason(state: str, task_row, active_request, host_conclusion) -> str:
         if state == "awaiting-host":
             if active_request is not None and active_request.get("routing") is True:
                 return "model routing needs Host configuration; no new coding turn was started"
@@ -840,6 +843,8 @@ class WorkflowCoordinator:
         if state == "waiting-helpers":
             return "authorized helpers are still running"
         if state == "delivered":
+            if host_conclusion is not None:
+                return "the goal work was concluded by its Host without acceptance"
             return "the goal work is delivered and awaits final acknowledgement"
         if state == "accepted":
             return "the final artifact was acknowledged"

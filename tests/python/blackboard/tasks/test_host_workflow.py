@@ -116,6 +116,36 @@ class HostCompletionTests(WorkflowTestCase):
         self.assertIsNone(continued["finalAttemptId"])
         self.assertIn(delivered["finalArtifactId"], [item["artifactId"] for item in continued["artifacts"]])
 
+    def test_delivered_goal_without_a_conclusion_still_awaits_final_acknowledgement(self):
+        board = self.board()
+        submitted = self.submit(board)
+        self.register(board)
+        self.finish_turn(board, self.claim(board))
+        delivered = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(delivered["state"], "delivered")
+        self.assertFalse(delivered["awaitingHost"])
+        self.assertIsNone(delivered["hostConclusion"])
+        self.assertEqual(delivered["waitReason"], "the goal work is delivered and awaits final acknowledgement")
+
+    def test_concluded_delivered_goal_reports_the_conclusion_instead_of_acknowledgement(self):
+        board = self.board()
+        submitted = self.submit(board)
+        self.register(board)
+        self.finish_turn(board, self.claim(board))
+        delivered = board.call("workflow_get", {"runId": submitted["runId"]})
+        concluded = board.call("workflow_conclude", {
+            "runId": delivered["runId"], "note": "Delivered without acceptance; the goal is closed",
+            **self.control(delivered)})
+        self.assertEqual(concluded["state"], "delivered")
+        self.assertFalse(concluded["awaitingHost"])
+        self.assertIsNotNone(concluded["hostConclusion"])
+        self.assertEqual(concluded["waitReason"], "the goal work was concluded by its Host without acceptance")
+        # A later read keeps the same honest reason; the state stays delivered.
+        current = board.call("workflow_get", {"runId": delivered["runId"]})
+        self.assertEqual(current["hostConclusion"], concluded["hostConclusion"])
+        self.assertFalse(current["awaitingHost"])
+        self.assertEqual(current["waitReason"], "the goal work was concluded by its Host without acceptance")
+
     def test_direct_helper_completion_settles_the_owned_graph_without_a_worker_round(self):
         board = self.board()
         parent = self.submit(board, kind="worktree")
