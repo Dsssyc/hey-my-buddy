@@ -266,14 +266,14 @@ macro-task	state-value	objective.timeline	macro_task.timeline	2	0	0	src/hey_my_b
 macro-task	table	objectives	macro_tasks	39	172	176	src/hey_my_buddy/blackboard/store/db.py:702	Current schema grouping table.
 micro-task	column	goal_fingerprint	micro_task_fingerprint	6	3	0	src/hey_my_buddy/blackboard/store/db.py:729	
 micro-task	column	goal_json	micro_task_json	17	29	0	src/hey_my_buddy/blackboard/store/db.py:728	
-micro-task	console-field	delegation	lineage	74	45	183	apps/console/src/types.ts:248	改：对象含任务的种类、项目、来源与当前的 Host、上级与根；用户 2026-10-13 定为 lineage
+micro-task	console-field	delegation	lineage	74	45	183	apps/console/src/types.ts:248	改：对象含任务的种类、项目、来源与当前的 Host、上级与根；开发者 2026-10-13 定为 lineage
 micro-task	console-field	goal	microTask	136	238	71	apps/console/src/objective-types.ts:67	控制台微任务详情中的本体对象
 micro-task	console-field	governed		220	172	35	apps/console/src/workflow-types.ts:138	删：由任务种类表达；此行仅指 workflow_get/控制台视图的布尔字段
 micro-task	error-code	GOVERNED_REQUIRED	MICRO_TASK_REQUIRED	2	4	0	src/hey_my_buddy/blackboard/tasks/workflow.py:7250	
 micro-task	parameter	delegationDepth	delegationDepth	0	6	0	tests/python/buddy/harnesses/dsh/test_session_records.py:48	不改：DSH 上游原生参数，不是黑板微任务名
 micro-task	path	goals	micro-tasks	17	9	1	src/hey_my_buddy/private_dirs.py:110	
 micro-task	path	harnesses/dsh/goals	harnesses/dsh/micro-tasks	0	2	0	tests/python/protocol/test_ctwo_integration.py:155	
-micro-task	response-field	delegation	lineage	74	45	183	src/hey_my_buddy/blackboard/tasks/workflow.py:817	改：对象含任务的种类、项目、来源与当前的 Host、上级与根；用户 2026-10-13 定为 lineage
+micro-task	response-field	delegation	lineage	74	45	183	src/hey_my_buddy/blackboard/tasks/workflow.py:817	改：对象含任务的种类、项目、来源与当前的 Host、上级与根；开发者 2026-10-13 定为 lineage
 micro-task	response-field	goal	microTask	136	238	71	src/hey_my_buddy/blackboard/tasks/workflow.py:722	
 micro-task	response-field	goalComplete	microTaskComplete	1	2	0	src/hey_my_buddy/cli/blocking.py:442	
 micro-task	response-field	goalFingerprint	microTaskFingerprint	4	0	0	src/hey_my_buddy/blackboard/tasks/workflow.py:1718	
@@ -288,21 +288,21 @@ micro-task	state-value	governed-role	micro-task-role	1	0	0	src/hey_my_buddy/budd
 micro-task	state-value	tool-goal	tool-goal	1	1	0	src/hey_my_buddy/buddy/harnesses/dsh/native_run.py:125	不改：DSH 上游原生工具功能名
 model-service	console-field	familyAnnotationChanges	modelServiceNoteChanges	4	28	23	apps/console/src/draft.ts:309	
 model-service	console-field	familyAnnotations	modelServiceNotes	1	14	94	apps/console/src/types.ts:469	
-model-service	console-field	familyPreferenceChanges		4	7	20	apps/console/src/draft.ts:307	删：模型服务一层的偏好整个删掉，改名之前的一行做（用户 2026-10-13 定）
-model-service	console-field	familyPreferences		2	7	102	apps/console/src/types.ts:464	删：模型服务一层的偏好整个删掉，改名之前的一行做（用户 2026-10-13 定）
+model-service	console-field	familyPreferenceChanges		4	7	20	apps/console/src/draft.ts:307	删：模型服务一层的偏好整个删掉，改名之前的一行做（开发者 2026-10-13 定）
+model-service	console-field	familyPreferences		2	7	102	apps/console/src/types.ts:464	删：模型服务一层的偏好整个删掉，改名之前的一行做（开发者 2026-10-13 定）
 model-service	console-field	font-family	font-family	0	0	1	apps/console/src/styles.css:155	不改：CSS 标准属性
 model-service	index	attempts_model_family_idx	attempts_model_service_idx	1	0	0	src/hey_my_buddy/blackboard/store/db.py:141	
 model-service	parameter	familyAnnotationChanges	modelServiceNoteChanges	4	28	23	src/hey_my_buddy/blackboard/evaluation/evaluation.py:2600	
-model-service	parameter	familyPreferenceChanges		4	7	20	src/hey_my_buddy/blackboard/evaluation/evaluation.py:2600	删：模型服务一层的偏好整个删掉，改名之前的一行做（用户 2026-10-13 定）
+model-service	parameter	familyPreferenceChanges		4	7	20	src/hey_my_buddy/blackboard/evaluation/evaluation.py:2600	删：模型服务一层的偏好整个删掉，改名之前的一行做（开发者 2026-10-13 定）
 model-service	response-field	family	modelService	171	94	192	src/hey_my_buddy/blackboard/evaluation/model_facts.py:359	The model-facts unknown-list key; distinguish from local family variables.；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换
 model-service	response-field	familyAnnotationChanges	modelServiceNoteChanges	4	28	23	src/hey_my_buddy/blackboard/evaluation/evaluation.py:2600	
 model-service	response-field	familyAnnotations	modelServiceNotes	1	14	94	src/hey_my_buddy/blackboard/evaluation/user_policy.py:102	
-model-service	response-field	familyPreferenceChanges		4	7	20	src/hey_my_buddy/blackboard/evaluation/evaluation.py:2600	删：模型服务一层的偏好整个删掉，改名之前的一行做（用户 2026-10-13 定）
-model-service	response-field	familyPreferences		2	7	102	src/hey_my_buddy/blackboard/evaluation/user_policy.py:86	删：模型服务一层的偏好整个删掉，改名之前的一行做（用户 2026-10-13 定）
+model-service	response-field	familyPreferenceChanges		4	7	20	src/hey_my_buddy/blackboard/evaluation/evaluation.py:2600	删：模型服务一层的偏好整个删掉，改名之前的一行做（开发者 2026-10-13 定）
+model-service	response-field	familyPreferences		2	7	102	src/hey_my_buddy/blackboard/evaluation/user_policy.py:86	删：模型服务一层的偏好整个删掉，改名之前的一行做（开发者 2026-10-13 定）
 model-service	response-field	modelFamily		1	9	0	src/hey_my_buddy/blackboard/store/store.py:383	删：只有测试在读；模型标识由 buddy 的各段可以得出，不另设对象
-model-service	state-value	family		171	94	192	src/hey_my_buddy/blackboard/store/db.py:655	删：模型服务一层的偏好整个删掉，改名之前的一行做（用户 2026-10-13 定）
+model-service	state-value	family		171	94	192	src/hey_my_buddy/blackboard/store/db.py:655	删：模型服务一层的偏好整个删掉，改名之前的一行做（开发者 2026-10-13 定）
 model-service	table	family_annotations	model_service_notes	8	3	0	src/hey_my_buddy/blackboard/evaluation/user_policy.py:118	
-model-service	table	family_preferences		10	0	0	src/hey_my_buddy/blackboard/evaluation/user_policy.py:197	删：模型服务一层的偏好整个删掉，改名之前的一行做（用户 2026-10-13 定）
+model-service	table	family_preferences		10	0	0	src/hey_my_buddy/blackboard/evaluation/user_policy.py:197	删：模型服务一层的偏好整个删掉，改名之前的一行做（开发者 2026-10-13 定）
 product	c-two-operation	buddy-control	hey-my-buddy-control	1	0	0	src/hey_my_buddy/protocol/contracts.py:17	改：指产品；C-Two 控制资源，不指某一个 Host、Worker 或 Router buddy
 product	c-two-operation	buddy-wait	hey-my-buddy-wait	1	0	0	src/hey_my_buddy/protocol/contracts.py:18	改：指产品；C-Two 等待资源，不指某一个 Host、Worker 或 Router buddy
 product	c-two-operation	hey.my.buddy	hey.my.buddy	4	1	0	src/hey_my_buddy/protocol/contracts.py:21	不改：已经是产品的全名，只是用点分隔的写法
@@ -364,7 +364,7 @@ harness	internal	adapter	harness	534	647	60	src/hey_my_buddy/private_dirs.py:15	
 macro-task	internal	objective	macro_task	53	158	1067	src/hey_my_buddy/protocol/schemas.py:499	内部标识符出现次数（代码词法 NAME/裸标识符、注释代码名字和内部引用字符串），不逐项列；对外名字处数为 git grep -o -w -F 的出现次数（同一行重复出现分别计数）；git grep -c 只核验存在；；仅词干工作量统计，不表示中性工程模块也要改名
 micro-task	internal	goal	micro_task	207	368	64	src/hey_my_buddy/private_dirs.py:107	内部标识符出现次数（代码词法 NAME/裸标识符、注释代码名字和内部引用字符串），不逐项列；对外名字处数为 git grep -o -w -F 的出现次数（同一行重复出现分别计数）；git grep -c 只核验存在；含 goal/delegation/governed；仅词干工作量统计，不表示中性工程模块也要改名
 model-service	internal	family	model_service	209	341	505	src/hey_my_buddy/blackboard/tasks/scheduling.py:60	内部标识符出现次数（代码词法 NAME/裸标识符、注释代码名字和内部引用字符串），不逐项列；对外名字处数为 git grep -o -w -F 的出现次数（同一行重复出现分别计数）；git grep -c 只核验存在；含 family/families；仅词干工作量统计，不表示中性工程模块也要改名
-model-service	table	model_concurrency	model_service_concurrency	7	11	0	src/hey_my_buddy/blackboard/store/db.py:430	按模型服务记的并发上限；用户 2026-10-13 把窄的一层定名为模型服务之后补上
+model-service	table	model_concurrency	model_service_concurrency	7	11	0	src/hey_my_buddy/blackboard/store/db.py:430	按模型服务记的并发上限；开发者 2026-10-13 把窄的一层定名为模型服务之后补上
 model-service	response-field	modelConcurrency	modelServiceConcurrency	10	21	120	src/hey_my_buddy/blackboard/evaluation/evaluation.py:119	同上；参数、回应与前端是同一个名字
 product	internal	buddy	hey-my-buddy	54	1629	210	src/hey_my_buddy/install/runtime.py:454	内部标识符出现次数（代码词法 NAME/裸标识符、注释代码名字和内部引用字符串），不逐项列；对外名字处数为 git grep -o -w -F 的出现次数（同一行重复出现分别计数）；git grep -c 只核验存在；；仅词干工作量统计，不表示中性工程模块也要改名
 task-text	internal	objective	task	6	0	0	src/hey_my_buddy/blackboard/tasks/workflow.py:6342	内部标识符出现次数（代码词法 NAME/裸标识符、注释代码名字和内部引用字符串），不逐项列；对外名字处数为 git grep -o -w -F 的出现次数（同一行重复出现分别计数）；git grep -c 只核验存在；objective 在回合输入投影或 roles/harnesses 内的任务文字用法；仅词干工作量统计，不表示中性工程模块也要改名

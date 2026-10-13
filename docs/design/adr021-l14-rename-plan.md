@@ -63,12 +63,12 @@
 | `objective` | 交给 Worker 的任务文字 | task | 回合输入里的 `objective`、`objectiveTruncated` 成为 `task`、`taskTruncated` |
 | `profile`、`configuration` | 一个 buddy | buddy | `profileId` 成为 `buddyId`；`evaluation_profiles` 表成为 `buddies`；`model-profiles` 成为 `buddy-list`；`routerProfileIds` 成为 `routerBuddyIds`；`executionConfiguration` 与继续时的 `configuration` 成为 `buddy`；`configurationLocked` 成为 `buddyLocked`；事件 `workflow.configuration_selected` 一类成为 `workflow.buddy_selected` |
 | `adapter` | buddy 的第一段，一个 harness | harness | 提交与继续时的 `adapter` 成为 `harness`；buddy、模型、目录、健康与额度各表的 `adapter` 列成为 `harness`；`adapters` 命令成为 `harnesses`；`ADAPTER_UNAVAILABLE` 成为 `HARNESS_UNAVAILABLE` |
-| `family` | 一个模型 | model | `family_annotations`、`family_preferences` 表成为 `model_notes`、`model_preferences`；`familyAnnotations`、`familyPreferences` 成为 `modelNotes`、`modelPreferences` |
+| `family` | 一个模型服务 | model service | `family_annotations` 表成为 `model_service_notes`；`familyAnnotations` 成为 `modelServiceNotes`；装三个字段的对象 `family` 成为 `modelService`；`model_concurrency`、`modelConcurrency` 成为 `model_service_concurrency`、`modelServiceConcurrency`；`family_preferences` 那一层已经删掉 |
 | `goal`、名词的 `delegation`、`governed` | 微任务 | micro task | `goal` 对象成为 `microTask`，任务种类 `goal` 成为 `micro-task`；视图里布尔的 `governed` 删掉，由任务种类表达；`delegation` 这个对象（种类、项目、来源与当前的 Host、上级与根）成为 `lineage`（开发者 2026-10-13 定）；`runId` 等标识字段的名字不变 |
 | `BUDDY_` | 环境变量的前缀 | `HMB_` | 全部变量，例如 `HMB_STATE_DIR` |
 | `buddy`（指产品的地方） | 产品 | `hey-my-buddy` | `skills/hey-my-buddy`、`scripts/hey-my-buddy`；C-Two 的资源名、控制台的会话 cookie 与 CSRF 请求头、Git 引用的命名空间、会话归属的取值与标识的前缀同样改；给 Worker 用的三个工具成为 `hey_my_buddy_finish_turn`、`hey_my_buddy_checkpoint`、`hey_my_buddy_answer_inquiry` |
 
-模型这一级的记录用三个字段 `harness`、`provider`、`model` 标识，不另起一个叫 `model` 的对象，免得它里面又有一个 `model`。
+模型服务这一级的记录用三个字段 `harness`、`provider`、`model` 标识；装这三个字段的对象叫 `modelService`。
 
 `adapter` 有两个意思，只改一个（开发者于 2026-10-13 定：buddy 的第一段就是 harness，术语表与通行的说法都是这样）。指一个 harness 的改称 `harness`。指连接件的不动：术语表里适配器 / adapter 是一个 harness 以某个角色接入黑板的连接件，命令任务与外部 Worker 也各有一个连接件而它们不是 harness；所以任务、执行与 Worker 运行时上记“由哪个连接件执行”的那一列，以及 `execution-submit` 这条只给命令任务与外部 Worker 用的路上的 `adapter` 参数，仍叫 `adapter`。微任务对 Host 显示的是它的 buddy，不显示连接件。两个意思的划分是整合 Host 的建议，逐个名字的归属由名字清单列出。
 
