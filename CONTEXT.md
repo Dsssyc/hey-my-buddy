@@ -54,7 +54,7 @@ The person on whose behalf buddies work: the source of their authority, the owne
 _Avoid_: 用户 or user for the developer of this project
 
 **开发者 / developer**:
-The person who builds this project and sets its direction with the integrating Host. Records say the developer whenever they mean that one person: who decided, asked for, reported or authorized something, and whose machine, board or accounts a record describes. A user is anyone who uses the product.
+The person who builds this project and sets its direction. Records say the developer whenever they mean that one person: who decided, asked for, reported or authorized something, and whose machine, board or accounts a record describes. A user is anyone who uses the product.
 _Avoid_: 用户, user (for the developer)
 
 ### Routing knowledge
