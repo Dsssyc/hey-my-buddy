@@ -60,7 +60,18 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
         if schema is None or str(schema[0]) not in (str(SCHEMA_VERSION), str(PREVIOUS_SCHEMA_VERSION)):
             raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade accepts schema {PREVIOUS_SCHEMA_VERSION} or {SCHEMA_VERSION} only; no conversion was performed')
-        active = connection.execute("SELECT task_id,state FROM tasks WHERE state IN ('queued','running','cancelling','reconciliation-needed')").fetchall()
+        # A governed Host boundary has no autonomous next turn. A recorded or
+        # queued continuation still has work to prepare/claim, even if the run
+        # currently reports a Host boundary. Routing and helper tasks are checked
+        # independently below through the complete task inventory.
+        active = connection.execute(
+            "SELECT t.task_id,t.state FROM tasks t"
+            " WHERE t.state IN ('queued','running','cancelling','reconciliation-needed')"
+            " AND NOT (t.state='queued' AND EXISTS ("
+            " SELECT 1 FROM workflow_runs r WHERE r.run_id=t.task_id AND r.state='awaiting-host'"
+            " AND NOT EXISTS (SELECT 1 FROM workflow_continuations c WHERE c.run_id=r.run_id"
+            " AND c.state IN ('recorded','queued'))))"
+        ).fetchall()
         unresolved = connection.execute("SELECT attempt_id FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1").fetchall()
         if active or unresolved:
             raise BoardError('UPGRADE_NOT_IDLE', 'Upgrade requires idle work and confirmed shutdown; no task was cancelled',

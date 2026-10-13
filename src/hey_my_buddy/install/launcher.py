@@ -283,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
         if args and args[0] not in {'upgrade','install','backup-preflight','--help','-h'}:
             if (state / 'upgrade.json').exists():
                 from hey_my_buddy.errors import BoardError
-                raise BoardError('UPGRADE_IN_PROGRESS', 'The launcher is fenced until upgrade verification or recovery finishes')
+                raise BoardError('UPGRADE_IN_PROGRESS', 'Upgrade verification or recovery is in progress; retry the same command and identity after it finishes')
             target = selected_runtime(state)
             if target is not None:
                 python = str(_runtime_python(target))
