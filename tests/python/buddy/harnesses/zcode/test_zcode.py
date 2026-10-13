@@ -165,6 +165,23 @@ class ZcodeFixtureCase(unittest.TestCase):
             time.sleep(0.05)
         return path.read_text() if path.exists() else None
 
+    def wait_native_input(self, context, timeout=20):
+        """Block until the fixture recorded this turn's input, bounded in time.
+
+        Cancelling before the controller installed its termination handler kills
+        the controller instead of stopping the owned native group, so a
+        cancellation test must wait for the turn to reach the fixture. The
+        fixture appends every handled method to ``methods.jsonl`` before it runs
+        it, and the ``hang`` case parks inside ``session/send``.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if "session/send" in self.native_log(context, "methods.jsonl").split():
+                return
+            time.sleep(0.05)
+        self.fail(f"the ZCode fixture never recorded session/send within {timeout}s "
+                  f"(methods: {self.native_log(context, 'methods.jsonl').split()})")
+
 
 class ZcodeAdapterTests(ZcodeFixtureCase):
     def test_slow_version_metadata_does_not_block_native_catalog_discovery(self):
@@ -405,7 +422,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertEqual(handle.deadline, math.inf)
-        time.sleep(0.4)
+        self.wait_native_input(context)
         self.adapter.cancel(handle)
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
@@ -469,7 +486,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
     def test_cancel_and_unconfirmed_stop_are_distinct(self):
         context = self.context("hang")
         handle = self.adapter.start(context)
-        time.sleep(0.4)
+        self.wait_native_input(context)
         self.adapter.cancel(handle)
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
