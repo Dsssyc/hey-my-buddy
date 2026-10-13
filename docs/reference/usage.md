@@ -36,7 +36,7 @@ The level says where a Worker may modify files: nowhere under `read`, inside the
 
 | Under `write` | Codex | Claude Code | DSH | ZCode |
 | --- | --- | --- | --- | --- |
-| A write outside the checkout | refused | refused | refused | not stopped |
+| A write outside the checkout | refused, except by a command the user's own Codex rules allow | refused | refused | not stopped |
 | A Unix socket | works | refused | works | works |
 | Shared memory | refused | works | works | works |
 | Listing processes | refused | refused | refused | works |
