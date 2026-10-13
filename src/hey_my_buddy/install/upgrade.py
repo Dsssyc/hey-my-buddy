@@ -106,8 +106,7 @@ def command(state: Path, target: Path, method: str, params: dict | None = None) 
     if method == 'restart':
         payload['action'] = 'restart'
     # No auto-start while holding the startup fence, including a stale endpoint.
-    # The client module is the target's own: an old-layout rollback target still
-    # imports ``buddy.client``; this coordinator's layout is not imposed on it.
+    # The client runs from the target's installed package.
     from .launcher import entry_modules
     client = entry_modules(target)['client']
     script = ("import json,sys; from pathlib import Path; from " + client + " import BoardClient; "
@@ -169,8 +168,7 @@ def start(state: Path, target: Path) -> dict:
     from .launcher import entry_modules
     log = os.open(state / 'upgrade-start.log', os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
     try:
-        # The daemon module is the target's own, so a rollback start brings the
-        # old layout's daemon back exactly as that runtime shipped it.
+        # A rollback starts the previous runtime's installed daemon.
         child = subprocess.Popen([str(runtime.runtime_python(target)), '-m', entry_modules(target)['daemon']], cwd=target,
                                  env=_environment(state, target), stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                  start_new_session=True, close_fds=True)

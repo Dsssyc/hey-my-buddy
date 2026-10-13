@@ -188,9 +188,8 @@ def entry_modules(target: Path) -> dict[str, str]:
     """The entry modules of a materialized runtime's *own* package layout.
 
     The lookup reads only the target's shipped ``src`` tree, so a coordinator
-    never guesses a package name for a runtime it did not install. Exactly one
-    known generation must be present; anything else fails explicitly instead of
-    imposing this layout on an unrecognized target. This runs in the
+    addresses only the current package layout. An unrecognized target fails
+    explicitly. This runs in the
     system-Python bootstrap, so the shared table is imported lazily: the module
     top level stays stdlib-only and works when the launcher is executed
     directly as a script, before any package dependency exists.
@@ -252,6 +251,11 @@ def service_environment(overrides: dict[str, str] | None = None) -> dict[str, st
     if os.environ.get('BUDDY_DEV_SOURCE') == '1':
         allowed = allowed | DEVELOPMENT_ENVIRONMENT_KEYS
     environment = {key: value for key, value in os.environ.items() if key in allowed}
+    if 'PATH' in environment and sys.prefix != sys.base_prefix:
+        executable_directory = os.path.join(sys.prefix, 'Scripts' if os.name == 'nt' else 'bin')
+        environment['PATH'] = os.pathsep.join(
+            entry for entry in environment['PATH'].split(os.pathsep)
+            if os.path.normcase(os.path.abspath(entry)) != os.path.normcase(os.path.abspath(executable_directory)))
     if overrides:
         environment.update(overrides)
     return environment

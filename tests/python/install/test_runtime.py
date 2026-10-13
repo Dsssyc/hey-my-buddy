@@ -365,6 +365,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
             self.assertTrue((target / relative).is_file(), relative)
         self.assertFalse((target / "tests").exists())
         self.assertFalse((target / ".venv").exists())
+        self.assertFalse((target.parent / f".{target.name}.install.lock").exists())
         self.assertFalse((target / "src" / "hey_my_buddy" / "__pycache__").exists())
         self.assertTrue(Path(record["python"]).is_file())
         self.assertEqual(runtime.find_ready(self.root, self.runtime_root), target)
@@ -430,9 +431,11 @@ class RuntimeMaterializationTests(unittest.TestCase):
         self.assertEqual(results[0]["runtimeDir"], results[1]["runtimeDir"])
         self.assertTrue(runtime.is_ready(target))
         self.assertEqual((self.uv.parent / "invocations").read_text().splitlines(), ["sync"])
-        self.assertEqual(lock_path.stat().st_ino, locked_inodes[0], "the lock inode must survive publication")
+        self.assertFalse(lock_path.exists(), "successful installers must remove their lock file")
+        self.assertGreaterEqual(len(locked_inodes), 3, "the waiter must reopen the unlinked lock inode")
+        self.assertNotEqual(locked_inodes[-1], locked_inodes[0])
 
-    def test_a_failed_install_can_retry_using_the_same_lock_inode(self):
+    def test_a_failed_install_retries_and_removes_its_lock_after_success(self):
         failure_marker = self.uv.parent / "fail"
         failure_marker.touch()
         target = runtime.runtime_dir(self.root, self.runtime_root)
@@ -442,11 +445,11 @@ class RuntimeMaterializationTests(unittest.TestCase):
         self.assertEqual(failure.exception.code, "RUNTIME_INSTALL_FAILED")
         self.assertFalse(runtime.is_ready(target))
         self.assertFalse(target.exists())
-        first_inode = lock_path.stat().st_ino
+        self.assertTrue(lock_path.is_file())
         failure_marker.unlink()
         self.assertEqual(self.materialize(), target)
         self.assertTrue(runtime.is_ready(target))
-        self.assertEqual(lock_path.stat().st_ino, first_inode)
+        self.assertFalse(lock_path.exists())
         self.assertEqual((self.uv.parent / "invocations").read_text().splitlines(), ["sync", "sync"])
 
     def test_a_ready_runtime_keeps_its_paths_after_the_source_tree_is_replaced(self):
