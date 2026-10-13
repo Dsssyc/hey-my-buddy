@@ -33,7 +33,7 @@
 
 两次日常安装都在升级前的备份阶段失败，服务按设计回滚，数据与运行中的工作都没有受影响，但安装只能中止：
 
-- **2026-09-29，0.20.0。** Codex Router 的只读调用在 `attempts/<runId>/<attemptId>/native/codex-home/` 建私有 CODEX_HOME，把 `auth.json` 做成指向开发者 `~/.codex/auth.json` 的符号链接，结束后不删。看板上有 4 个这样的目录，备份遇到链接即拒绝（`BACKUP_UNSAFE_PATH`）。修复 `0ca7bba` 按位置排除该目录与 ZCode 服务商快照，并在进程确认停止后删除该链接。
+- **2026-09-29，0.20.0。** Codex Router 的只读调用在 `attempts/<runId>/<attemptId>/native/codex-home/` 建私有 CODEX_HOME，把 `auth.json` 做成指向用户 `~/.codex/auth.json` 的符号链接，结束后不删。看板上有 4 个这样的目录，备份遇到链接即拒绝（`BACKUP_UNSAFE_PATH`）。修复 `0ca7bba` 按位置排除该目录与 ZCode 服务商快照，并在进程确认停止后删除该链接。
 - **2026-09-30，0.21.0。** 用户配置的 DSH 快速 Router 在 `attempts/<runId>/<attemptId>/no-tool-<hex>/dsh-home/` 建私有 DSH 目录，其中 `profiles/node_modules` 含 pnpm 式符号链接；6 个目录共 2,886 个链接，备份再次拒绝。Codex 快速 Router 的 `no-tool-<hex>/native/codex-home/auth.json` 也不在第一次的排除范围内，只是尚未运行过。修复 `f742488` 按位置排除无工具调用的私有目录，并加了兜底：`attempts/` 中其他位置的链接或特殊文件只跳过、不跟随，记入备份清单，不再让备份失败；仍被拒绝时错误给出状态目录内的相对路径。
 
 根本原因不是某个 harness，而是结构：每个适配器自行决定在 `attempts/` 里放什么，备份却把整棵 `attempts/` 当作证据复制，只用一份逐次追加的例外清单排除私有内容。harness 自带的工具（pnpm 的 node_modules、凭据链接、socket）随时可能在私有目录里产生链接或特殊文件，新功能一上线就可能让下一次升级失败，而且要到安装时才暴露。2026-09-30 日常看板上 attempt 目录中的内容说明了这种混放：

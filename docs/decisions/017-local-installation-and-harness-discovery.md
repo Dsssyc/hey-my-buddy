@@ -8,7 +8,7 @@
 
 2026-09-28 以 Claude Code 作为 Host 试用时观察到以下事实：
 
-- 日常服务与 Worker 进程继承"第一个拉起服务的进程"的环境。当日服务进程的 PATH 不含任何 nvm 目录，找不到用户终端里可用的 codex 0.157.0（node 24）；Claude Code 会话的 PATH 优先 node 22，那里的 codex 缺少原生依赖包、启动即退出。多次提交 GPT-6 Sol 都报 `ADAPTER_UNAVAILABLE`，而模型目录里它的两个档位仍显示 available。
+- 日常服务与 Worker 进程继承"第一个拉起服务的进程"的环境。当日服务进程的 PATH 不含任何 nvm 目录，找不到开发者终端里可用的 codex 0.157.0（node 24）；Claude Code 会话的 PATH 优先 node 22，那里的 codex 缺少原生依赖包、启动即退出。多次提交 GPT-6 Sol 都报 `ADAPTER_UNAVAILABLE`，而模型目录里它的两个档位仍显示 available。
 - 各 adapter 用 `BUDDY_<X>_CLI` 或服务 PATH 中的 `which` 查找可执行文件，个别带写死的兜底（ChatGPT.app 内的 codex、ZCode 默认路径），启动脚本另把 `~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 加到 PATH 前面。用户通常说不清 Codex app、Codex CLI 与各 app 自带二进制的关系，让用户配置环境变量并不现实；ZCode、DSH 依赖的 node 也有同样的问题。
 - 启动脚本每次调用都经过 `uv run`，在 Host 沙盒里会因 uv 缓存目录不可写而失败。Claude Code 与 Codex 默认在沙盒中执行命令，沙盒限制会被子进程继承。
 - Host 会话会带入服务内部变量与第三方模型端点变量（当日为 `BUDDY_*` 与 `ANTHROPIC_BASE_URL`），每次调用前都要手动清除，否则冷启动的服务会继承它们。
