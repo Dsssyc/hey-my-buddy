@@ -1,0 +1,368 @@
+族	面	旧名字	新名字	源码处数	测试处数	前端处数	例子	备注
+buddy	c-two-operation	model_profiles	buddy_list	7	13	41	src/hey_my_buddy/protocol/transport.py:110	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	cli-method	model-profiles	buddy-list	4	5	0	src/hey_my_buddy/protocol/transport.py:110	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	column	configuration_locked	buddy_locked	11	1	0	src/hey_my_buddy/blackboard/store/db.py:751	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	column	configuration_revision	configuration_revision	25	11	0	src/hey_my_buddy/blackboard/store/db.py:309	不改：Router 设置的版本号；计划第 4 步删除其闸门用法
+buddy	column	decision_profile_id	decision_buddy_id	2	0	0	src/hey_my_buddy/blackboard/store/db.py:310	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	column	execution_configuration_json	buddy_json	15	2	0	src/hey_my_buddy/blackboard/store/db.py:731	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	column	execution_configuration_revision	buddy_revision	18	0	0	src/hey_my_buddy/blackboard/store/db.py:732	微任务所选 buddy 的版本号；计划第 4 步由 Host 决定是否保留
+buddy	column	profile_id	buddy_id	383	243	0	src/hey_my_buddy/blackboard/store/db.py:328	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	column	validated_configuration_revision	validated_buddy_revision	11	0	0	src/hey_my_buddy/blackboard/store/db.py:733	微任务所选 buddy 的版本号；计划第 4 步由 Host 决定是否保留
+buddy	console-field	Profiler	Profiler	0	0	3	apps/console/src/timeline-idle-readout.test.tsx:1	不改：Windows 主目录变量 / Codex 原生权限字段 / React API / PowerShell 参数 / RPC 容量配置，均不表示一个 buddy
+buddy	console-field	configuration	buddy	468	404	363	apps/console/src/objective-types.ts:68	types.ts:226 / objective-types.ts:68 中承载 buddy 四元组。；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换；configuration/executionConfiguration/profile 按规则统一，当前静态字典未发现同时持有这些字段
+buddy	console-field	configuration	configuration	468	404	363	apps/console/src/types.ts:458	不改：Snapshot.configuration 是 Router 设置；原名保留。
+buddy	console-field	configurationError	configurationError	1	9	13	apps/console/src/types.ts:459	不改：Router 设置，不是一个 buddy；设置版本号的闸门另行删除
+buddy	console-field	configurationLocked	buddyLocked	11	7	6	apps/console/src/workflow-types.ts:148	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	console-field	configurationRevision	configurationRevision	27	20	8	apps/console/src/workflow-types.ts:36	不改：Router 设置，不是一个 buddy；设置版本号的闸门另行删除
+buddy	console-field	currentRouterProfileId	currentRouterBuddyId	2	6	47	apps/console/src/api.ts:152	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	console-field	excludedProfiles	excludedBuddies	1	5	4	apps/console/src/workflow-types.ts:27	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	console-field	executionConfiguration	buddy	19	43	25	apps/console/src/RoutingDetails.tsx:56	协议、CLI、存储或控制台可观察的 buddy 身份名称。；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换；configuration/executionConfiguration/profile 按规则统一，当前静态字典未发现同时持有这些字段
+buddy	console-field	executionConfigurationRevision	buddyRevision	5	11	8	apps/console/src/RoutingDetails.tsx:57	微任务的所选 buddy 身份版本号；计划第 4 步由 Host 决定存废
+buddy	console-field	profileId	buddyId	135	413	538	apps/console/src/App.tsx:190	协议、CLI、存储或控制台可观察的 buddy 身份名称。 单个 buddy 的稳定标识，含 Router 决策、用户偏好、评价等。
+buddy	console-field	profileSettings	buddySettings	4	52	19	apps/console/src/draft.ts:306	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	console-field	profiles	buddies	70	270	341	apps/console/src/draft.ts:28	协议、CLI、存储或控制台可观察的 buddy 身份名称。 buddy 列表；内部 native profile 用法逐调用点核对。；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换
+buddy	console-field	routerProfileIds	routerBuddyIds	33	124	96	apps/console/src/draft.ts:311	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	console-field	selectedProfile	selectedBuddy	7	27	17	apps/console/src/objective-types.ts:93	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	console-field	unavailableProfileCount	unavailableBuddyCount	1	2	13	apps/console/src/console-session.test.tsx:82	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	console-route	model_profiles	buddy_list	7	13	41	src/hey_my_buddy/protocol/transport.py:110	控制台透传的 method/route；与 CLI model-profiles 同步改为 buddy_list。
+buddy	env	USERPROFILE	USERPROFILE	3	12	0	src/hey_my_buddy/install/launcher.py:32	不改：Windows 主目录变量 / Codex 原生权限字段 / React API / PowerShell 参数 / RPC 容量配置，均不表示一个 buddy
+buddy	error-code	CONFIGURATION_CONFLICT	BUDDY_CONFLICT	2	4	0	src/hey_my_buddy/blackboard/tasks/workflow.py:2728	继续时的 buddy 四元组违反原微任务硬约束。
+buddy	error-code	CONFIGURATION_REQUIRED	BUDDY_REQUIRED	3	4	0	src/hey_my_buddy/blackboard/tasks/workflow.py:2111	Host 在路由边界必须提交完整 buddy 四元组或明确重路由。
+buddy	error-code	CONFIGURATION_UNAVAILABLE	BUDDY_UNAVAILABLE	11	19	0	src/hey_my_buddy/blackboard/tasks/workflow.py:2753	选中的 buddy 模型路线不可用、未启用，或用户固定了不可用 buddy。
+buddy	error-code	INVALID_CONFIGURATION	INVALID_BUDDY	1	0	0	src/hey_my_buddy/blackboard/tasks/workflow.py:1518	认领前经目录重新校验的 buddy 四元组与已选值不一致。
+buddy	error-code	configuration-mismatch	buddy-mismatch	10	20	0	src/hey_my_buddy/buddy/harnesses/zcode/native_run.py:188	在 configure_session 中指请求的模型与推理强度不一致
+buddy	error-code	configuration-mismatch	configuration-mismatch	10	20	0	src/hey_my_buddy/buddy/harnesses/zcode/native_run.py:151	不改：在 configure_mode 中指 harness 权限模式，不是一个 buddy
+buddy	error-code	configuration-unavailable	buddy-unavailable	4	5	0	src/hey_my_buddy/buddy/harnesses/zcode/native_run.py:166	原生运行模块报告所选 provider/model/effort 的拒绝或未知读回；指 buddy 身份
+buddy	error-code	invalid-configuration	invalid-buddy	5	10	0	src/hey_my_buddy/buddy/harnesses/zcode/native_run.py:172	原生运行模块报告所选 provider/model/effort 的拒绝或未知读回；指 buddy 身份
+buddy	error-code	readonly-configuration-mismatch	readonly-configuration-mismatch	3	6	0	src/hey_my_buddy/buddy/harnesses/codex/native_run.py:750	不改：Codex 权限/沙箱设置，不是一个 buddy
+buddy	event-kind	configuration-catalog-unrecognized	buddy-catalog-unrecognized	1	2	0	src/hey_my_buddy/buddy/harnesses/zcode/native_run.py:174	原生运行模块报告所选 provider/model/effort 的拒绝或未知读回；指 buddy 身份
+buddy	event-kind	configuration-readback-unconfirmed	buddy-readback-unconfirmed	1	2	0	src/hey_my_buddy/buddy/harnesses/zcode/native_run.py:190	原生运行模块报告所选 provider/model/effort 的拒绝或未知读回；指 buddy 身份
+buddy	event-kind	configuration-selection-unrecognized	buddy-selection-unrecognized	1	2	0	src/hey_my_buddy/buddy/harnesses/zcode/native_run.py:181	原生运行模块报告所选 provider/model/effort 的拒绝或未知读回；指 buddy 身份
+buddy	event-kind	configuration_update	configuration_update	1	1	0	src/hey_my_buddy/buddy/harnesses/codex/tool_evidence.py:64	不改：Codex 上游原生事件类型
+buddy	event-kind	workflow.configuration_overridden	workflow.buddy_overridden	2	3	0	src/hey_my_buddy/blackboard/tasks/workflow.py:1329	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	event-kind	workflow.configuration_selected	workflow.buddy_selected	2	1	0	src/hey_my_buddy/blackboard/tasks/workflow.py:1637	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	event-kind	workflow.configuration_validated	workflow.buddy_validated	1	0	0	src/hey_my_buddy/blackboard/tasks/workflow.py:1534	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	index	evaluation_card_history_profile_idx	evaluation_card_history_buddy_idx	1	0	0	src/hey_my_buddy/blackboard/store/db.py:519	计划第 3 步先删除相应记录；仅若保留则按此映射
+buddy	index	evaluation_evidence_pending_profile_idx	evaluation_evidence_pending_buddy_idx	1	0	0	src/hey_my_buddy/blackboard/store/db.py:465	计划第 3 步先删除相应记录；仅若保留则按此映射
+buddy	index	evaluation_evidence_profile_idx	evaluation_evidence_buddy_idx	1	0	0	src/hey_my_buddy/blackboard/store/db.py:390	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	index	evaluation_profiles_adapter_idx	buddies_harness_idx	1	0	0	src/hey_my_buddy/blackboard/store/db.py:361	改：evaluation_profiles 成为 buddies，adapter 指 harness；同一索引同时落实两族名字
+buddy	index	evaluation_profiles_current_idx	buddies_current_idx	1	0	0	src/hey_my_buddy/blackboard/store/db.py:360	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	index	evaluation_samples_profile_idx	evaluation_samples_buddy_idx	1	0	0	src/hey_my_buddy/blackboard/store/db.py:497	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	index	router_outcomes_profile_idx	router_outcomes_buddy_idx	1	0	0	src/hey_my_buddy/blackboard/store/db.py:1185	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	meta-key	router_configuration_version	router_configuration_version	3	7	0	src/hey_my_buddy/blackboard/routing/router.py:211	不改：Router 设置格式版本，不是一个 buddy
+buddy	meta-key	router_profile_ids	router_buddy_ids	10	14	0	src/hey_my_buddy/blackboard/routing/router_settings.py:26	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	parameter	-NoProfile	-NoProfile	1	1	0	src/hey_my_buddy/buddy/harnesses/discovery.py:614	不改：Windows 主目录变量 / Codex 原生权限字段 / React API / PowerShell 参数 / RPC 容量配置，均不表示一个 buddy
+buddy	parameter	configuration	buddy	468	404	363	src/hey_my_buddy/blackboard/tasks/workflow.py:2801	workflow 继续参数、事件 payload 或错误 details 中承载完整 buddy 四元组。；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换
+buddy	parameter	configuration	configuration	468	404	363	src/hey_my_buddy/blackboard/evaluation/user_policy.py:249	不改：Router 列表、模式、预算与重试间隔组成的用户设置；原名保留。
+buddy	parameter	configurationLocked	buddyLocked	11	7	6	src/hey_my_buddy/protocol/schemas.py:104	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	parameter	profileId	buddyId	135	413	538	src/hey_my_buddy/protocol/client.py:380	协议、CLI、存储或控制台可观察的 buddy 身份名称。 单个 buddy 的稳定标识，含 Router 决策、用户偏好、评价等。
+buddy	parameter	profileSettings	buddySettings	4	52	19	src/hey_my_buddy/blackboard/evaluation/evaluation.py:2599	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	parameter	routerProfileIds	routerBuddyIds	33	124	96	src/hey_my_buddy/cli/main.py:754	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	parameter	suggestedProfileId	suggestedBuddyId	13	28	0	src/hey_my_buddy/blackboard/tasks/workflow.py:393	改：这里只改名；它的形态（标识字符串还是完整的四段）留给下一步定
+buddy	parameter	userPreferredProfileIds	userPreferredBuddyIds	3	4	0	src/hey_my_buddy/blackboard/routing/selection_policy.py:28	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	queue-reason	awaiting-configuration-validation	awaiting-buddy-validation	3	1	0	src/hey_my_buddy/blackboard/tasks/workflow.py:1440	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	activePermissionProfile	activePermissionProfile	2	7	0	src/hey_my_buddy/buddy/harnesses/codex/native_run.py:729	不改：Windows 主目录变量 / Codex 原生权限字段 / React API / PowerShell 参数 / RPC 容量配置，均不表示一个 buddy
+buddy	response-field	configuration	buddy	468	404	363	src/hey_my_buddy/blackboard/tasks/workflow.py:1443	workflow 继续参数、事件 payload 或错误 details 中承载完整 buddy 四元组。；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换；configuration/executionConfiguration/profile 按规则统一，当前静态字典未发现同时持有这些字段
+buddy	response-field	configuration	configuration	468	404	363	src/hey_my_buddy/blackboard/evaluation/evaluation.py:721	不改：console_snapshot 返回的 Router 设置；原名保留。
+buddy	response-field	configurationError	configurationError	1	9	13	src/hey_my_buddy/blackboard/evaluation/evaluation.py:726	不改：Router 设置，不是一个 buddy；设置版本号的闸门另行删除
+buddy	response-field	configurationLocked	buddyLocked	11	7	6	src/hey_my_buddy/protocol/schemas.py:104	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	configurationRevision	configurationRevision	27	20	8	src/hey_my_buddy/cli/main.py:755	不改：Router 设置，不是一个 buddy；设置版本号的闸门另行删除
+buddy	response-field	configurationStatus	buddyStatus	1	1	0	src/hey_my_buddy/buddy/harnesses/claude/native_run.py:687	所选 buddy 模型目录检查的观测状态
+buddy	response-field	currentRouterProfileId	currentRouterBuddyId	2	6	47	src/hey_my_buddy/blackboard/routing/decision.py:1855	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	excludedProfiles	excludedBuddies	1	5	4	src/hey_my_buddy/blackboard/routing/decision.py:327	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	executionConfiguration	buddy	19	43	25	src/hey_my_buddy/cli/cli_views.py:209	协议、CLI、存储或控制台可观察的 buddy 身份名称。；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换；configuration/executionConfiguration/profile 按规则统一，当前静态字典未发现同时持有这些字段
+buddy	response-field	executionConfigurationRevision	buddyRevision	5	11	8	src/hey_my_buddy/cli/cli_views.py:340	微任务的所选 buddy 身份版本号；计划第 4 步由 Host 决定存废
+buddy	response-field	migratedProfiles	migratedBuddies	1	1	0	src/hey_my_buddy/blackboard/store/migrations.py:112	旧 schema 迁移报告；计划第 1 步先删除，映射仅诊断
+buddy	response-field	observedProfile	observedBuddy	1	1	0	src/hey_my_buddy/blackboard/routing/decision.py:2188	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	profile	buddy	226	293	373	src/hey_my_buddy/blackboard/routing/router_sequence.py:50	协议、CLI、存储或控制台可观察的 buddy 身份名称。 仅 Router actor 中的 buddy identity 字段；RPC/native profile 保持原名。；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换；configuration/executionConfiguration/profile 按规则统一，当前静态字典未发现同时持有这些字段
+buddy	response-field	profile	profile	226	293	373	src/hey_my_buddy/protocol/rpc_config.py:79	不改：RPC 资源配置的 profile；与 Router actor 的 buddy 字段分行
+buddy	response-field	profileId	buddyId	135	413	538	src/hey_my_buddy/protocol/client.py:380	协议、CLI、存储或控制台可观察的 buddy 身份名称。 单个 buddy 的稳定标识，含 Router 决策、用户偏好、评价等。
+buddy	response-field	profileIds	buddyIds	3	0	2	src/hey_my_buddy/blackboard/routing/router_settings.py:26	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	profileMatch	buddyMatch	12	2	0	src/hey_my_buddy/blackboard/evaluation/evaluation.py:1544	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	profileSettings	buddySettings	4	52	19	src/hey_my_buddy/blackboard/evaluation/evaluation.py:2599	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	profiles	buddies	70	270	341	src/hey_my_buddy/blackboard/catalog/catalog_store.py:278	协议、CLI、存储或控制台可观察的 buddy 身份名称。 buddy 列表；内部 native profile 用法逐调用点核对。；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换
+buddy	response-field	quotaRetryProfileIds	quotaRetryBuddyIds	1	2	0	src/hey_my_buddy/blackboard/routing/decision.py:329	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	requestedProfile	requestedBuddy	1	4	0	src/hey_my_buddy/blackboard/routing/decision.py:2186	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	resolvedProfile	resolvedBuddy	1	1	0	src/hey_my_buddy/blackboard/routing/decision.py:2187	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	routerProfile	routerBuddy	7	14	0	src/hey_my_buddy/cli/main.py:754	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	routerProfileId	routerBuddyId	11	27	14	src/hey_my_buddy/cli/main.py:754	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	routerProfileIds	routerBuddyIds	33	124	96	src/hey_my_buddy/cli/main.py:754	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	rpcProfile	rpcProfile	1	1	0	src/hey_my_buddy/blackboard/service/service.py:340	不改：Windows 主目录变量 / Codex 原生权限字段 / React API / PowerShell 参数 / RPC 容量配置，均不表示一个 buddy
+buddy	response-field	rpc_profile	rpc_profile	2	0	0	src/hey_my_buddy/blackboard/service/service.py:340	不改：Windows 主目录变量 / Codex 原生权限字段 / React API / PowerShell 参数 / RPC 容量配置，均不表示一个 buddy
+buddy	response-field	selectedProfile	selectedBuddy	7	27	17	src/hey_my_buddy/cli/cli_views.py:118	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	suggestedProfileId	suggestedBuddyId	13	28	0	src/hey_my_buddy/blackboard/tasks/workflow.py:393	改：这里只改名；它的形态（标识字符串还是完整的四段）留给下一步定
+buddy	response-field	unavailableProfileCount	unavailableBuddyCount	1	2	13	src/hey_my_buddy/blackboard/evaluation/evaluation.py:729	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	response-field	userPreferredProfileIds	userPreferredBuddyIds	3	4	0	src/hey_my_buddy/blackboard/routing/selection_policy.py:28	协议、CLI、存储或控制台可观察的 buddy 身份名称。
+buddy	state-value	model profile	model profile	4	0	0	src/hey_my_buddy/blackboard/evaluation/model_facts.py:10	不改：术语表里的模型画像；这是明确要求列明的术语例外，非协议枚举
+buddy	state-value	model.profiles	buddy.list	2	0	0	src/hey_my_buddy/blackboard/catalog/catalog_store.py:240	公开操作错误里的 operation 标签
+buddy	state-value	profile-not-assessed	buddy-not-assessed	1	1	0	src/hey_my_buddy/blackboard/evaluation/evaluation.py:2332	评价跳过原因，表示未评价 buddy；surface 是结果 reason，非排队原因。
+buddy	state-value	router-configuration-changed	router-configuration-changed	2	5	0	src/hey_my_buddy/blackboard/routing/router_boundary_data.py:19	不改：Router 设置变化；计划第 4 步先删此版本号闸门原因
+buddy	state-value	router-profile-changed	router-buddy-changed	3	5	0	src/hey_my_buddy/blackboard/routing/router_boundary_data.py:19	路由边界原因；计划第 4 步先删版本号闸门
+buddy	state-value	scope-configuration-unconfirmed	scope-configuration-unconfirmed	1	1	0	src/hey_my_buddy/buddy/harnesses/dsh/native_run.py:1039	不改：harness 权限范围未证实，不是一个 buddy
+buddy	table	evaluation_profiles	buddies	66	103	0	src/hey_my_buddy/blackboard/tasks/workflow.py:2743	协议、CLI、存储或控制台可观察的 buddy 身份名称。；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换
+env	env	BUDDY_	HMB_	2	41	0	src/hey_my_buddy/cli/checks.py:86	环境变量前缀；处数按 git grep -o -w -F 的出现次数，环境变量的完整名字另列
+env	env	BUDDY_AGENT_CREDENTIAL	HMB_AGENT_CREDENTIAL	8	45	1	src/hey_my_buddy/install/upgrade.py:415	
+env	env	BUDDY_AGENT_CREDENTIAL_FILE	HMB_AGENT_CREDENTIAL_FILE	9	38	1	src/hey_my_buddy/install/upgrade.py:415	
+env	env	BUDDY_AGENT_SKILLS_DIR	HMB_AGENT_SKILLS_DIR	2	6	0	src/hey_my_buddy/install/skill_install.py:30	
+env	env	BUDDY_ATTEMPT_ID	HMB_ATTEMPT_ID	4	2	0	src/hey_my_buddy/install/launcher.py:21	
+env	env	BUDDY_BOOTSTRAP_PYTHON	HMB_BOOTSTRAP_PYTHON	0	1	0	tests/python/install/test_launcher.py:64	
+env	env	BUDDY_CHECKS_JOBS	HMB_CHECKS_JOBS	3	3	0	src/hey_my_buddy/cli/checks.py:24	
+env	env	BUDDY_CHECKS_TMPDIR	HMB_CHECKS_TMPDIR	3	83	0	src/hey_my_buddy/cli/checks.py:59	
+env	env	BUDDY_CLAUDE_CLI	HMB_CLAUDE_CLI	6	23	0	src/hey_my_buddy/install/launcher.py:63	
+env	env	BUDDY_CLAUDE_FIXTURE_CASE	HMB_CLAUDE_FIXTURE_CASE	3	16	0	src/hey_my_buddy/install/launcher.py:65	
+env	env	BUDDY_CLAUDE_FIXTURE_STATE	HMB_CLAUDE_FIXTURE_STATE	3	9	0	src/hey_my_buddy/install/launcher.py:65	
+env	env	BUDDY_CLAUDE_SKILLS_DIR	HMB_CLAUDE_SKILLS_DIR	2	4	0	src/hey_my_buddy/install/skill_install.py:34	
+env	env	BUDDY_CODEX_CLI	HMB_CODEX_CLI	6	24	0	src/hey_my_buddy/install/launcher.py:63	
+env	env	BUDDY_CODEX_FIXTURE_CASE	HMB_CODEX_FIXTURE_CASE	3	13	0	src/hey_my_buddy/install/launcher.py:66	
+env	env	BUDDY_CODEX_FIXTURE_STATE	HMB_CODEX_FIXTURE_STATE	3	45	0	src/hey_my_buddy/install/launcher.py:66	
+env	env	BUDDY_CONSOLE_PORT	HMB_CONSOLE_PORT	5	24	0	src/hey_my_buddy/install/launcher.py:52	
+env	env	BUDDY_DEBUG	HMB_DEBUG	2	0	0	src/hey_my_buddy/install/launcher.py:53	
+env	env	BUDDY_DEV_SOURCE	HMB_DEV_SOURCE	22	62	0	src/hey_my_buddy/install/runtime.py:572	
+env	env	BUDDY_DISTRIBUTION_NO_BUILD_ISOLATION	HMB_DISTRIBUTION_NO_BUILD_ISOLATION	0	1	0	tests/python/install/test_distribution.py:34	
+env	env	BUDDY_DSH_CLI	HMB_DSH_CLI	1	2	0	src/hey_my_buddy/install/launcher.py:63	
+env	env	BUDDY_HARNESS_RECORD_FILE	HMB_HARNESS_RECORD_FILE	3	7	0	src/hey_my_buddy/install/launcher.py:21	
+env	env	BUDDY_INQUIRY_OWNER_MATERIAL_ROOT	HMB_INQUIRY_OWNER_MATERIAL_ROOT	0	1	0	tests/python/buddy/harnesses/test_inquiry_owner.py:43	
+env	env	BUDDY_LEASE_SECONDS	HMB_LEASE_SECONDS	2	1	0	src/hey_my_buddy/install/launcher.py:52	
+env	env	BUDDY_LIVE_TEST_MATERIALS	HMB_LIVE_TEST_MATERIALS	0	1	0	tests/python/buddy/runtime/test_live.py:763	
+env	env	BUDDY_LOG_DIR	HMB_LOG_DIR	1	0	0	src/hey_my_buddy/buddy/runtime/command.py:49	
+env	env	BUDDY_MAX_CONCURRENT	HMB_MAX_CONCURRENT	8	42	0	src/hey_my_buddy/install/upgrade.py:94	
+env	env	BUDDY_MAX_DECISIONS	HMB_MAX_DECISIONS	0	2	0	tests/python/blackboard/service/test_daemon.py:4	仅旧环境或注释/测试残留，未发现当前读取者
+env	env	BUDDY_MODEL_CATALOG_FILE	HMB_MODEL_CATALOG_FILE	3	36	0	src/hey_my_buddy/install/launcher.py:53	
+env	env	BUDDY_MODEL_FACTS_FILE	HMB_MODEL_FACTS_FILE	2	15	0	src/hey_my_buddy/cli/checks.py:133	
+env	env	BUDDY_NODE	HMB_NODE	3	1	0	src/hey_my_buddy/install/launcher.py:64	
+env	env	BUDDY_NOT_A_REAL_SETTING	HMB_NOT_A_REAL_SETTING	0	2	0	tests/python/blackboard/service/test_service_environment.py:125	测试用的环境变量名，前缀随规则改
+env	env	BUDDY_PREVIEW_FIXTURES	HMB_PREVIEW_FIXTURES	0	1	2	tests/python/cli/test_host_preview.py:109	
+env	env	BUDDY_PREVIEW_PYTHON	HMB_PREVIEW_PYTHON	0	0	1	apps/console/src/preview-contract.test.ts:62	
+env	env	BUDDY_PREVIEW_REPORT	HMB_PREVIEW_REPORT	0	1	1	tests/python/cli/test_host_preview.py:110	
+env	env	BUDDY_PYTHON	HMB_PYTHON	0	8	0	tests/python/install/test_launcher.py:87	仅旧环境或注释/测试残留，未发现当前读取者
+env	env	BUDDY_RUNTIME	HMB_RUNTIME	20	34	1	src/hey_my_buddy/install/runtime.py:501	
+env	env	BUDDY_RUNTIME_IDENTITY	HMB_RUNTIME_IDENTITY	8	19	1	src/hey_my_buddy/install/launcher.py:19	
+env	env	BUDDY_RUNTIME_ROOT	HMB_RUNTIME_ROOT	11	104	1	src/hey_my_buddy/home.py:6	
+env	env	BUDDY_STATE_DIR	HMB_STATE_DIR	23	259	1	src/hey_my_buddy/home.py:6	
+env	env	BUDDY_SUPERVISOR_START_ID	HMB_SUPERVISOR_START_ID	4	7	0	src/hey_my_buddy/install/launcher.py:21	
+env	env	BUDDY_TASK_FILE	HMB_TASK_FILE	1	0	0	src/hey_my_buddy/buddy/runtime/command.py:48	
+env	env	BUDDY_TASK_ID	HMB_TASK_ID	4	2	0	src/hey_my_buddy/install/launcher.py:21	
+env	env	BUDDY_UNKNOWN_FUTURE_CREDENTIAL	HMB_UNKNOWN_FUTURE_CREDENTIAL	0	3	0	tests/python/blackboard/tasks/test_console_objective_fixture.py:120	测试用的环境变量名，前缀随规则改
+env	env	BUDDY_UNKNOWN_PIN	HMB_UNKNOWN_PIN	0	2	0	tests/python/cli/test_support_cleanup.py:59	测试用的环境变量名，前缀随规则改
+env	env	BUDDY_UNLISTED_TEST_PIN	HMB_UNLISTED_TEST_PIN	0	2	0	tests/python/cli/test_checks_cleanup.py:88	测试用的环境变量名，前缀随规则改
+env	env	BUDDY_VIEWS	HMB_VIEWS	0	0	2	apps/console/src/buddies/navigation.ts:2	
+env	env	BUDDY_WAIT_CAPACITY	HMB_WAIT_CAPACITY	6	12	0	src/hey_my_buddy/install/upgrade.py:94	
+env	env	BUDDY_WORKER_ID	HMB_WORKER_ID	9	36	1	src/hey_my_buddy/install/upgrade.py:89	
+env	env	BUDDY_WORKER_STATE	HMB_WORKER_STATE	4	14	1	src/hey_my_buddy/install/upgrade.py:89	
+env	env	BUDDY_ZCODE_CLI	HMB_ZCODE_CLI	5	7	0	src/hey_my_buddy/install/launcher.py:63	
+env	env	BUDDY_ZCODE_TEST_CASE	HMB_ZCODE_TEST_CASE	5	58	0	src/hey_my_buddy/install/launcher.py:66	
+harness	cli-method	adapters	harnesses	48	33	0	src/hey_my_buddy/protocol/transport.py:44	改：指 harness 的查询命令；adapters 成为 harnesses，仍调用 capabilities。回应里的 adapters 是连接件 report，单列保留
+harness	column	adapter	adapter	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:109	不改：连接件列 attempts.adapter
+harness	column	adapter	adapter	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:72	不改：连接件列 tasks.adapter
+harness	column	adapter	adapter	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:147	不改：连接件列 workers.adapter
+harness	column	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:286	改：harness 身份列 catalog_current.adapter => catalog_current.harness
+harness	column	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:1191	改：harness 身份列 catalog_pending.adapter => catalog_pending.harness
+harness	column	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:330	改：harness 身份列 evaluation_profiles.adapter => buddies.harness
+harness	column	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:296	改：harness 身份列 family_annotations.adapter => model_notes.harness
+harness	column	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:616	改：harness 身份列 family_preferences.adapter => model_preferences.harness
+harness	column	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:1105	改：harness 身份列 harness_account_reads.adapter => harness_account_reads.harness
+harness	column	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:1109	改：harness 身份列 harness_health.adapter => harness_health.harness
+harness	column	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:1101	改：harness 身份列 harness_quota_observations.adapter => harness_quota_observations.harness
+harness	column	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:602	改：harness 身份列 model_concurrency.adapter => model_concurrency.harness
+harness	column	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:635	改：harness 身份列 model_facts.adapter => model_facts.harness
+harness	column	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:1083	改：harness 身份列 quota_current.adapter => quota_current.harness
+harness	column	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:1151	改：harness 身份列 router_dispatches.adapter => router_dispatches.harness
+harness	column	model_adapter	model_harness	11	13	0	src/hey_my_buddy/blackboard/store/db.py:115	改：attempts.model_adapter 是冻结模型标识的 harness 段；attempts.adapter 是执行连接件，另行保留
+harness	console-field	adapter	harness	972	1234	461	apps/console/src/types.ts:18	改：指 harness；HarnessHealth.adapter；Native harness status row.
+harness	console-field	adapter	harness	972	1234	461	apps/console/src/types.ts:343	改：指 harness；ModelFamily.adapter；Model family native identity.
+harness	console-field	adapter	harness	972	1234	461	apps/console/src/types.ts:132	改：指 harness；ModelProfile.adapter；Profile native identity.
+harness	console-field	adapter	harness	972	1234	461	apps/console/src/types.ts:370	改：指 harness；RouterHealthIdentity.adapter；Router buddy native identity.
+harness	error-code	ADAPTER_UNAVAILABLE	ADAPTER_UNAVAILABLE	16	26	0	src/hey_my_buddy/buddy/runtime/command.py:31	不改：CommandAdapter 的命令可执行文件不可用错误，指连接件；原生 harness 的同码另行改成 HARNESS_UNAVAILABLE
+harness	error-code	ADAPTER_UNAVAILABLE	HARNESS_UNAVAILABLE	16	26	0	src/hey_my_buddy/buddy/harnesses/codex/native_run.py:425	改：指 harness；ADAPTER_UNAVAILABLE；Requested rename for native process/readiness failures; command connector failure at runtime/command.py:31 needs separate connector code or deliberate mapping.
+harness	error-code	AiSdkModelAdapterError	AiSdkModelAdapterError	0	7	0	tests/python/blackboard/evaluation/test_other_native_observations.py:446	不改：上游 SDK 的原生错误 type/errorType；不是黑板 harness 或执行连接件的名字
+harness	error-code	UNSUPPORTED_ADAPTER	UNSUPPORTED_ADAPTER	7	4	0	src/hey_my_buddy/buddy/harnesses/registry.py:183	不改：指连接件；UNSUPPORTED_ADAPTER；Execution connector registry and task normalization can reject command/external as well as native connectors.
+harness	error-code	UNSUPPORTED_ADAPTER	UNSUPPORTED_HARNESS	7	4	0	src/hey_my_buddy/blackboard/service/harness_health.py:36	改：指 harness；UNSUPPORTED_ADAPTER；Native-only validation in harness health/catalog/tool evidence.
+harness	error-code	adapter-unavailable	harness-unavailable	13	14	0	src/hey_my_buddy/buddy/harnesses/zcode/config.py:26	改：指 harness；adapter-unavailable；NativeError / native protocol code from Codex, Claude, DSH and ZCode.
+harness	id-prefix	adapter:	adapter:	50	4	225	src/hey_my_buddy/blackboard/store/store.py:1625	不改：指连接件；adapter:<connector>；Worker claim capability token names execution connector.
+harness	index	evaluation_profiles_adapter_idx	buddies_harness_idx	1	0	0	src/hey_my_buddy/blackboard/store/db.py:361	改：指 harness；evaluation_profiles_adapter_idx；Index over evaluation_profiles.adapter; account for the planned table rename to buddies and column rename to harness together.
+harness	parameter	adapter	adapter	972	1234	461	src/hey_my_buddy/protocol/schemas.py:252	不改：execution-submit 的 adapter 指命令任务/外部 Worker 执行连接件；与 submit/continue 的 harness 身份参数分开
+harness	parameter	adapter	adapter	972	1234	461	src/hey_my_buddy/blackboard/store/store.py:993	不改：指连接件；list.adapter；Filters task connector in tasks.adapter.
+harness	parameter	adapter	adapter	972	1234	461	src/hey_my_buddy/blackboard/store/store.py:1409	不改：指连接件；worker-register.adapter；Registration declares the worker connector.
+harness	parameter	adapter	adapter	972	1234	461	src/hey_my_buddy/blackboard/store/store.py:2650	不改：指连接件；workers.adapter；Filters registered workers by connector.
+harness	parameter	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/service/service.py:350	改：指 harness；capabilities.adapter；Availability/readiness filter names a native harness.
+harness	parameter	adapter	harness	972	1234	461	src/hey_my_buddy/protocol/schemas.py:41	改：指 harness；configuration.adapter；Complete buddy identity tuple used by submit/continue, Router and policy.
+harness	parameter	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/tasks/workflow.py:10	改：指 harness；continue.configuration.adapter；workflow_continue selected buddy configuration; names native product.
+harness	parameter	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/evaluation/evaluation.py:2225	改：指 harness；evaluation-prepare.adapter；Limits maintenance preparation to published profiles of one native harness.
+harness	parameter	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/service/service.py:561	改：指 harness；harness-set.adapter；Manual executable selection already names a native harness.
+harness	parameter	adapter	harness	972	1234	461	src/hey_my_buddy/cli/main.py:222	改：指 harness；model-profiles.adapter；Filter model profiles by native harness.
+harness	parameter	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/service/service.py:628	改：指 harness；quota-redetect.adapter；Quota target is a native harness.
+harness	parameter	adapter	harness	972	1234	461	src/hey_my_buddy/protocol/schemas.py:578	改：指 harness；submit.adapter；workflow_submit native buddy selection; command/external execution-submit adapter remains connector.
+harness	parameter	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/tasks/worker_sessions.py:93	改：指 harness；worker-sessions.adapter；Native Codex session filter; distinct from registered workers.adapter.
+harness	response-field	adapter	adapter	972	1234	461	src/hey_my_buddy/buddy/harnesses/registry.py:193	不改：capabilities.adapters 的连接件报告，包含 command/decision 与原生连接件；与独立 harnesses 健康记录分开
+harness	response-field	adapter	adapter	972	1234	461	src/hey_my_buddy/blackboard/store/store.py:378	不改：指连接件；attempt.adapter；Attempt view exposes execution connector from attempts.adapter; model identity is separate.
+harness	response-field	adapter	adapter	972	1234	461	src/hey_my_buddy/blackboard/store/private_migration.py:61	不改：指连接件；private migration record.adapter；Migration relocation record identifies a private directory owner; source also admits command, so retain connector spelling pending data-form migration review.
+harness	response-field	adapter	adapter	972	1234	461	src/hey_my_buddy/blackboard/store/store.py:339	不改：指连接件；task.adapter；Task view exposes selected execution connector from tasks.adapter.
+harness	response-field	adapter	adapter	972	1234	461	src/hey_my_buddy/blackboard/store/store.py:1823	不改：指连接件；task.claimed payload.adapter；Claimed attempt connector identity.
+harness	response-field	adapter	adapter	972	1234	461	src/hey_my_buddy/blackboard/store/store.py:453	不改：指连接件；worker.adapter；Registered worker connector from workers.adapter.
+harness	response-field	adapter	adapter	972	1234	461	src/hey_my_buddy/blackboard/store/store.py:1443	不改：指连接件；worker.registered payload.adapter；Worker registration connector identity.
+harness	response-field	adapter	harness	972	1234	461	apps/console/src/types.ts:370	改：指 harness；Router health identity.adapter；Selected Router buddy identity.
+harness	response-field	adapter	harness	972	1234	461	apps/console/src/types.ts:370	改：指 harness；buddy.identity.adapter；Identity component of a buddy (harness/provider/model/effort), including Router candidates.
+harness	response-field	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/store/store.py:611	改：指 harness；capacity family.adapter；Capacity observation tuple is a model family.
+harness	response-field	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/catalog/catalog.py:331	改：指 harness；catalog discovery.adapter；Native model discovery result identifies the harness.
+harness	response-field	adapter	harness	972	1234	461	apps/console/src/api.ts:357	改：指 harness；console harness row.adapter；Console HarnessHealth row and refresh/set API.
+harness	response-field	adapter	harness	972	1234	461	apps/console/src/types.ts:18	改：指 harness；console profile.adapter；Console model profile/identity and family grouping.
+harness	response-field	adapter	harness	972	1234	461	apps/console/src/types.ts:226	改：指 harness；executionConfiguration.adapter；Selected native buddy execution configuration.
+harness	response-field	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/service/harness_health.py:353	改：指 harness；harness account.adapter；Account read belongs to the native harness.
+harness	response-field	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/service/harness_health.py:47	改：指 harness；harness health.adapter；Health record for an installed native harness.
+harness	response-field	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/service/harness_health.py:261	改：指 harness；harness.checked payload.adapter；Native harness identity in health event.
+harness	response-field	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/service/harness_health.py:146	改：指 harness；harness.invalidated payload.adapter；Native harness identity in health event.
+harness	response-field	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/service/harness_health.py:169	改：指 harness；harness.path_changed payload.adapter；Native harness identity in path event.
+harness	response-field	adapter	harness	972	1234	461	apps/console/src/types.ts:343	改：指 harness；model family.adapter；Family tuple shared across efforts; applies to preferences, facts and concurrency.
+harness	response-field	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/store/db.py:330	改：指 harness；model profile.adapter；Model catalog/evaluation identity.
+harness	response-field	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/tasks/worker_sessions.py:23	改：指 harness；native provenance.adapter；Native session provenance carries Codex harness identity.
+harness	response-field	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/routing/quota_routing.py:62	改：指 harness；quota record.adapter；Quota observation/routing marker belongs to the native harness.
+harness	response-field	adapter	harness	972	1234	461	src/hey_my_buddy/buddy/harnesses/run_contract.py:455	改：指 harness；toolEvidence.binding.adapter；Native tool evidence binding constrained to HARNESS_NAMES.
+harness	response-field	adapter	harness	972	1234	461	src/hey_my_buddy/blackboard/tasks/worker_sessions.py:101	改：指 harness；worker-sessions.adapter；Native Codex session response.
+harness	response-field	adapters	adapters	48	33	0	src/hey_my_buddy/blackboard/service/service.py:367	不改：capabilities.adapters 是连接件 report，含 command/decision；同一对象已经有 harnesses 健康记录，不能把此字段也改成 harnesses
+harness	response-field	appliedAdapters	appliedHarnesses	3	1	0	src/hey_my_buddy/blackboard/catalog/catalog_store.py:63	改：指 harness；appliedAdapters；Catalog discovery names whose native observation was applied.
+harness	response-field	appliedAdapters	appliedHarnesses	3	1	0	src/hey_my_buddy/blackboard/catalog/catalog_store.py:231	改：指 harness；evaluation.catalog_discovered payload.appliedAdapters；Native harness list in catalog event.
+harness	response-field	decisionAdapter	decisionAdapter	1	2	0	src/hey_my_buddy/blackboard/evaluation/evaluation.py:775	不改：指连接件；decisionAdapter；DecisionAdapter availability describes internal Router execution connector, not a buddy identity.
+harness	response-field	decisionAdapterReason	decisionAdapterReason	1	0	0	src/hey_my_buddy/blackboard/evaluation/evaluation.py:776	不改：指连接件；decisionAdapterReason；Reason for internal Router execution connector availability.
+harness	response-field	discovery.adapter	discovery.harness	1	0	0	src/hey_my_buddy/blackboard/catalog/catalog.py:331	改：model discovery 参数验证的公开 field 路径，指 harness
+harness	response-field	staleAdapters	staleHarnesses	3	2	0	src/hey_my_buddy/blackboard/catalog/catalog_store.py:231	改：指 harness；evaluation.catalog_discovered payload.staleAdapters；Native harness list in catalog event.
+harness	response-field	staleAdapters	staleHarnesses	3	2	0	src/hey_my_buddy/blackboard/catalog/catalog_store.py:63	改：指 harness；staleAdapters；Catalog discovery names whose native observation became stale.
+harness	response-field	toolEvidence.binding.adapter	toolEvidence.binding.harness	1	0	0	src/hey_my_buddy/buddy/harnesses/run_contract.py:456	改：toolEvidence 绑定要求 HARNESS_NAMES；此行是校验错误回应的 field 路径，原生证据对象内 adapter 字段另行改为 harness
+harness	state-value	adapter-mismatch	adapter-mismatch	1	0	0	src/hey_my_buddy/blackboard/store/store.py:1627	不改：指连接件；adapter-mismatch；Claim gate compares worker adapter/capabilities to task connector; not native harness identity.
+harness	state-value	adapter-unproven	adapter-unproven	3	0	0	src/hey_my_buddy/blackboard/store/private_migration.py:262	不改：旧私有目录迁移的归属验证，private_dirs.ADAPTERS 同时含原生连接件与 command；不是只指 harness；计划第 1 步删除迁移
+harness	state-value	adapter:	harness:	50	4	225	src/hey_my_buddy/blackboard/evaluation/evaluation.py:1850	改：指 harness；evaluation_maintenance_checkpoints.scope=adapter:<harness>；Durable evaluation progress scope uses native-harness filter and needs an explicit schema upgrade.
+harness	state-value	command	command	273	828	444	src/hey_my_buddy/private_dirs.py:15	不改：执行连接件名字，分别用于命令任务、外部 Worker、Router 执行；不是原生 harness 标识
+harness	state-value	decision	decision	398	780	158	src/hey_my_buddy/json_codec.py:3	不改：执行连接件名字，分别用于命令任务、外部 Worker、Router 执行；不是原生 harness 标识
+harness	state-value	external	external	51	76	4	src/hey_my_buddy/protocol/transport.py:37	不改：执行连接件名字，分别用于命令任务、外部 Worker、Router 执行；不是原生 harness 标识
+macro-task	c-two-operation	objective_list	macro_task_list	9	19	3	src/hey_my_buddy/protocol/contracts.py:237	Named service operation in C-Two contract.
+macro-task	c-two-operation	objective_stop	macro_task_stop	4	12	17	src/hey_my_buddy/protocol/contracts.py:243	Named service operation in C-Two contract; console also calls it.
+macro-task	c-two-operation	objective_timeline	macro_task_timeline	8	23	1	src/hey_my_buddy/protocol/contracts.py:240	Named service operation in C-Two contract.
+macro-task	cli-method	objective-list	macro-task-list	3	0	4	src/hey_my_buddy/protocol/transport.py:66	Host CLI read command; transport maps it to objective_list.
+macro-task	cli-method	objective-timeline	macro-task-timeline	3	0	22	src/hey_my_buddy/protocol/transport.py:67	Host CLI read command; transport maps it to objective_timeline.
+macro-task	column	objective_id	macro_task_id	38	46	0	src/hey_my_buddy/blackboard/store/db.py:703	Stored in objectives and workflow_runs; rename both columns and references.
+macro-task	console-field	objective	macroTask	78	75	339	apps/console/src/objective-types.ts:13	控制台宏任务列表/时间线/微任务读投影的字段
+macro-task	console-field	objectiveId	macroTaskId	36	144	197	apps/console/src/objective-types.ts:14	控制台宏任务列表/时间线/微任务读投影的字段
+macro-task	console-field	objectives	macroTasks	39	172	176	apps/console/src/objective-types.ts:41	控制台宏任务列表/时间线/微任务读投影的字段
+macro-task	console-route	/api/objectives	/api/macro-tasks	3	13	1	src/hey_my_buddy/console/server.py:798	Authenticated list and /<id>/timeline routes.
+macro-task	console-route	/api/objectives/	/api/macro-tasks/	2	2	0	src/hey_my_buddy/console/server.py:800	列表路由或时间线路由前缀，动态标识与 /timeline 后缀不变
+macro-task	console-route	/objectives	/macro-tasks	0	0	2	src/hey_my_buddy/console/server.py:798	列表路由或时间线路由前缀，动态标识与 /timeline 后缀不变
+macro-task	console-route	/private/api/objectives	/private/api/macro-tasks	0	0	2	apps/console/src/objective-api.test.ts:32	Frontend resolves /objectives against private API base; this is the resulting browser URL.
+macro-task	error-code	OBJECTIVE_REQUIRED	MACRO_TASK_REQUIRED	1	0	0	src/hey_my_buddy/blackboard/tasks/objectives.py:131	Raised when objectiveOf points to a run with no macro-task membership.
+macro-task	event-kind	workflow.objective_created	workflow.macro_task_created	3	16	0	src/hey_my_buddy/blackboard/tasks/workflow.py:1592	Durable event emitted on explicit macro-task creation.
+macro-task	id-prefix	obj-	macro-	9	2	1	src/hey_my_buddy/blackboard/tasks/objectives.py:147	Explicit macro-task IDs; standalone run: IDs are separate and unchanged.；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换
+macro-task	index	objectives_activity_idx	macro_tasks_activity_idx	1	0	0	src/hey_my_buddy/blackboard/store/db.py:712	SQLite index declared in current schema.
+macro-task	index	objectives_project_idx	macro_tasks_project_idx	1	0	0	src/hey_my_buddy/blackboard/store/db.py:713	SQLite index declared in current schema.
+macro-task	index	workflow_runs_objective_idx	workflow_runs_macro_task_idx	1	0	0	src/hey_my_buddy/blackboard/store/db.py:756	SQLite index declared in current schema.
+macro-task	parameter	objective	macroTask	78	75	339	src/hey_my_buddy/protocol/schemas.py:498	Structured macro-task creation object in workflow submission; title and description belong to grouping.
+macro-task	parameter	objectiveId	macroTaskId	36	144	197	src/hey_my_buddy/blackboard/tasks/objectives.py:447	Used by submit, timeline and stop requests; run:<rootRunId> still denotes a standalone root in timeline/stop.
+macro-task	parameter	objectiveOf	macroTaskOf	10	5	0	src/hey_my_buddy/protocol/schemas.py:493	Submit parameter that derives macro-task membership from another run.
+macro-task	response-field	normalizedObjectives	normalizedMacroTasks	1	1	0	src/hey_my_buddy/blackboard/store/workspace_identity_migration.py:411	Legacy workspace-identity migration report field; L14 plan deletes this migration before the rename, so this mapping is diagnostic only.
+macro-task	response-field	objective	macroTask	78	75	339	src/hey_my_buddy/blackboard/tasks/objectives.py:502	Timeline response contains a macro-task summary; separate from Worker task text.
+macro-task	response-field	objectiveId	macroTaskId	36	144	197	src/hey_my_buddy/blackboard/tasks/objectives.py:421	Present in summary, workflow views, event payload, and stop reply.
+macro-task	response-field	objectives	macroTasks	39	172	176	src/hey_my_buddy/blackboard/tasks/objectives.py:362	List response collection.
+macro-task	state-value	objective	macro-task	78	75	339	src/hey_my_buddy/blackboard/tasks/objectives.py:386	kind and titleSource values distinguish an explicit macro task from a standalone root.；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换
+macro-task	state-value	objective.list	macro_task.list	2	0	0	src/hey_my_buddy/blackboard/tasks/objectives.py:292	对外错误的 operation 标签；stop 也存为命令收据的 kind
+macro-task	state-value	objective.stop	macro_task.stop	4	0	0	src/hey_my_buddy/blackboard/tasks/workflow.py:3341	对外错误的 operation 标签；stop 也存为命令收据的 kind
+macro-task	state-value	objective.timeline	macro_task.timeline	2	0	0	src/hey_my_buddy/blackboard/tasks/objectives.py:446	对外错误的 operation 标签；stop 也存为命令收据的 kind
+macro-task	table	objectives	macro_tasks	39	172	176	src/hey_my_buddy/blackboard/store/db.py:702	Current schema grouping table.
+micro-task	column	goal_fingerprint	micro_task_fingerprint	6	3	0	src/hey_my_buddy/blackboard/store/db.py:729	
+micro-task	column	goal_json	micro_task_json	17	29	0	src/hey_my_buddy/blackboard/store/db.py:728	
+micro-task	console-field	delegation	lineage	74	45	183	apps/console/src/types.ts:248	改：对象含任务的种类、项目、来源与当前的 Host、上级与根；用户 2026-10-13 定为 lineage
+micro-task	console-field	goal	microTask	136	238	71	apps/console/src/objective-types.ts:67	控制台微任务详情中的本体对象
+micro-task	console-field	governed		220	172	35	apps/console/src/workflow-types.ts:138	删：由任务种类表达；此行仅指 workflow_get/控制台视图的布尔字段
+micro-task	error-code	GOVERNED_REQUIRED	MICRO_TASK_REQUIRED	2	4	0	src/hey_my_buddy/blackboard/tasks/workflow.py:7250	
+micro-task	parameter	delegationDepth	delegationDepth	0	6	0	tests/python/buddy/harnesses/dsh/test_session_records.py:48	不改：DSH 上游原生参数，不是黑板微任务名
+micro-task	path	goals	micro-tasks	17	9	1	src/hey_my_buddy/private_dirs.py:110	
+micro-task	path	harnesses/dsh/goals	harnesses/dsh/micro-tasks	0	2	0	tests/python/protocol/test_ctwo_integration.py:155	
+micro-task	response-field	delegation	lineage	74	45	183	src/hey_my_buddy/blackboard/tasks/workflow.py:817	改：对象含任务的种类、项目、来源与当前的 Host、上级与根；用户 2026-10-13 定为 lineage
+micro-task	response-field	goal	microTask	136	238	71	src/hey_my_buddy/blackboard/tasks/workflow.py:722	
+micro-task	response-field	goalComplete	microTaskComplete	1	2	0	src/hey_my_buddy/cli/blocking.py:442	
+micro-task	response-field	goalFingerprint	microTaskFingerprint	4	0	0	src/hey_my_buddy/blackboard/tasks/workflow.py:1718	
+micro-task	response-field	goalInputCommit	microTaskInputCommit	2	0	0	src/hey_my_buddy/blackboard/tasks/workflow.py:6360	
+micro-task	response-field	governed		220	172	35	src/hey_my_buddy/blackboard/tasks/workflow.py:710	删：由任务种类表达；此行仅指 workflow_get/控制台视图的布尔字段
+micro-task	response-field	governed	microTask	220	172	35	src/hey_my_buddy/blackboard/store/store.py:941	改：task.submitted 事件提交记录里的对象，内含 sourceHostId，成为 microTask；与已删的视图布尔字段分开
+micro-task	response-field	governed.sourceHostId	microTask.sourceHostId	6	2	0	src/hey_my_buddy/blackboard/tasks/delegation.py:118	改：提交记录对象的 JSON 字段路径；task.submitted.microTask.sourceHostId，事件种类 task.submitted 不改
+micro-task	response-field	governedError	microTaskError	2	2	0	src/hey_my_buddy/blackboard/tasks/workflow.py:6526	
+micro-task	response-field	legacy-goal-not-directory	legacy-micro-task-not-directory	1	0	0	src/hey_my_buddy/blackboard/store/private_migration.py:345	Old private migration is scheduled for deletion in L14 step 1; rule target shown only if retained.
+micro-task	state-value	goal	micro-task	136	238	71	src/hey_my_buddy/blackboard/tasks/delegation.py:40	；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换
+micro-task	state-value	governed-role	micro-task-role	1	0	0	src/hey_my_buddy/buddy/harnesses/zcode/protocol.py:805	
+micro-task	state-value	tool-goal	tool-goal	1	1	0	src/hey_my_buddy/buddy/harnesses/dsh/native_run.py:125	不改：DSH 上游原生工具功能名
+model	console-field	familyAnnotationChanges	modelNoteChanges	4	28	23	apps/console/src/draft.ts:309	
+model	console-field	familyAnnotations	modelNotes	1	14	94	apps/console/src/types.ts:469	
+model	console-field	familyPreferenceChanges	modelPreferenceChanges	4	7	20	apps/console/src/draft.ts:307	
+model	console-field	familyPreferences	modelPreferences	2	7	102	apps/console/src/types.ts:464	
+model	console-field	font-family	font-family	0	0	1	apps/console/src/styles.css:155	不改：CSS 标准属性
+model	index	attempts_model_family_idx	attempts_model_idx	1	0	0	src/hey_my_buddy/blackboard/store/db.py:141	
+model	parameter	familyAnnotationChanges	modelNoteChanges	4	28	23	src/hey_my_buddy/blackboard/evaluation/evaluation.py:2600	
+model	parameter	familyPreferenceChanges	modelPreferenceChanges	4	7	20	src/hey_my_buddy/blackboard/evaluation/evaluation.py:2600	
+model	response-field	family	model	171	94	192	src/hey_my_buddy/blackboard/evaluation/model_facts.py:359	The model-facts unknown-list key; distinguish from local family variables.；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换
+model	response-field	familyAnnotationChanges	modelNoteChanges	4	28	23	src/hey_my_buddy/blackboard/evaluation/evaluation.py:2600	
+model	response-field	familyAnnotations	modelNotes	1	14	94	src/hey_my_buddy/blackboard/evaluation/user_policy.py:102	
+model	response-field	familyPreferenceChanges	modelPreferenceChanges	4	7	20	src/hey_my_buddy/blackboard/evaluation/evaluation.py:2600	
+model	response-field	familyPreferences	modelPreferences	2	7	102	src/hey_my_buddy/blackboard/evaluation/user_policy.py:86	
+model	response-field	modelFamily		1	9	0	src/hey_my_buddy/blackboard/store/store.py:383	删：只有测试在读；模型标识由 buddy 的各段可以得出，不另设对象
+model	state-value	family	model	171	94	192	src/hey_my_buddy/blackboard/store/db.py:655	Preference source discriminator from family to model.；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换
+model	table	family_annotations	model_notes	8	3	0	src/hey_my_buddy/blackboard/evaluation/user_policy.py:118	
+model	table	family_preferences	model_preferences	10	0	0	src/hey_my_buddy/blackboard/evaluation/user_policy.py:197	
+product	c-two-operation	buddy-control	hey-my-buddy-control	1	0	0	src/hey_my_buddy/protocol/contracts.py:17	改：指产品；C-Two 控制资源，不指某一个 Host、Worker 或 Router buddy
+product	c-two-operation	buddy-wait	hey-my-buddy-wait	1	0	0	src/hey_my_buddy/protocol/contracts.py:18	改：指产品；C-Two 等待资源，不指某一个 Host、Worker 或 Router buddy
+product	c-two-operation	hey.my.buddy	hey.my.buddy	4	1	0	src/hey_my_buddy/protocol/contracts.py:21	不改：已经是产品的全名，只是用点分隔的写法
+product	cli-method	buddy	hey-my-buddy	383	1278	243	src/hey_my_buddy/cli/main.py:222	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	cli-method	buddy_answer_inquiry	hey_my_buddy_answer_inquiry	18	69	0	src/hey_my_buddy/buddy/harnesses/inquiry_bridge.py:361	改：指产品；产品的工具名字或 Git 存储引用命名空间，不指某一个 Host、Worker 或 Router buddy
+product	cli-method	buddy_checkpoint	hey_my_buddy_checkpoint	17	45	0	src/hey_my_buddy/buddy/harnesses/inquiry_bridge.py:361	改：指产品；产品的工具名字或 Git 存储引用命名空间，不指某一个 Host、Worker 或 Router buddy
+product	cli-method	buddy_finish_turn	hey_my_buddy_finish_turn	15	114	0	src/hey_my_buddy/buddy/harnesses/registry.py:94	改：指产品；产品的工具名字或 Git 存储引用命名空间，不指某一个 Host、Worker 或 Router buddy
+product	console-field	hey-my-buddy.console.theme	hey-my-buddy.console.theme	0	0	1	apps/console/src/theme.ts:8	不改：已经是产品全名 hey-my-buddy 的路径或持久化键，无旧短名需要替换
+product	console-field	hey-my-buddy.console.view	hey-my-buddy.console.view	0	0	5	apps/console/src/view-preferences.ts:4	不改：已经是产品全名 hey-my-buddy 的路径或持久化键，无旧短名需要替换
+product	git-ref	refs/buddy	refs/hey-my-buddy	18	13	0	tests/python/blackboard/tasks/test_workspace_submission_cleanup.py:94	改：指产品；产品的工具名字或 Git 存储引用命名空间，不指某一个 Host、Worker 或 Router buddy
+product	git-ref	refs/buddy/identity-proof-fixture	refs/hey-my-buddy/identity-proof-fixture	0	1	0	tests/python/install/test_workspace_identity_migration.py:623	改：指产品；产品的工具名字或 Git 存储引用命名空间，不指某一个 Host、Worker 或 Router buddy
+product	git-ref	refs/buddy/workspaces	refs/hey-my-buddy/workspaces	18	9	0	src/hey_my_buddy/blackboard/tasks/storage.py:302	改：指产品；产品的工具名字或 Git 存储引用命名空间，不指某一个 Host、Worker 或 Router buddy
+product	id-prefix	buddy-	hey-my-buddy-	4	1	1	src/hey_my_buddy/buddy/roles/run_execution.py:721	改：指产品；本产品生成的目录/运行会话标识前缀，不指某一个 Host、Worker 或 Router buddy
+product	id-prefix	buddy_	hey_my_buddy_	2	2	0	src/hey_my_buddy/buddy/harnesses/zcode/native_run.py:320	改：指产品；本产品生成的 MCP server 标识前缀，不指某一个 Host、Worker 或 Router buddy
+product	parameter	X-Buddy-CSRF	X-Hey-My-Buddy-CSRF	1	10	6	src/hey_my_buddy/console/server.py:43	改：指产品；控制台 CSRF 请求头，不指某一个 Host、Worker 或 Router buddy
+product	parameter	buddy_console_session	hey_my_buddy_console_session	1	3	0	src/hey_my_buddy/console/server.py:42	改：指产品；控制台会话 cookie，不指某一个 Host、Worker 或 Router buddy
+product	parameter	permissions.buddy-router	permissions.hey-my-buddy-router	2	2	0	src/hey_my_buddy/buddy/harnesses/codex/config.py:60	改：指产品生成的 Codex Router 权限配置名字，非参与者标识
+product	parameter	permissions.buddy-router.filesystem	permissions.hey-my-buddy-router.filesystem	1	0	0	src/hey_my_buddy/buddy/harnesses/codex/config.py:60	改：指产品生成的 Codex Router 权限配置名字，非参与者标识
+product	parameter	permissions.buddy-router.network	permissions.hey-my-buddy-router.network	1	0	0	src/hey_my_buddy/buddy/harnesses/codex/config.py:63	改：指产品生成的 Codex Router 权限配置名字，非参与者标识
+product	path	.agents/skills/buddy	.agents/skills/hey-my-buddy	1	2	0	src/hey_my_buddy/install/skill_install.py:3	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	.buddy-build-	.hey-my-buddy-build-	1	0	0	src/hey_my_buddy/install/skill_package.py:135	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	.buddy-install-	.hey-my-buddy-install-	1	0	0	src/hey_my_buddy/install/skill_install.py:98	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	.buddy-install-previous-	.hey-my-buddy-install-previous-	1	0	0	src/hey_my_buddy/install/skill_install.py:99	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	.buddy-source-	.hey-my-buddy-source-	1	0	0	src/hey_my_buddy/install/skill_install.py:187	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	.buddy-upgrade-previous-	.hey-my-buddy-upgrade-previous-	2	1	0	src/hey_my_buddy/install/upgrade.py:345	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	.buddy-upgrade-stage-	.hey-my-buddy-upgrade-stage-	3	1	0	src/hey_my_buddy/install/upgrade.py:339	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	.claude/skills/buddy	.claude/skills/hey-my-buddy	2	1	0	src/hey_my_buddy/install/skill_install.py:4	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	.local/share/hey-my-buddy	.local/share/hey-my-buddy	1	5	0	src/hey_my_buddy/home.py:3	不改：已经是产品全名 hey-my-buddy 的路径或持久化键，无旧短名需要替换
+product	path	buddy	hey-my-buddy	383	1278	243	src/hey_my_buddy/install/skill_package.py:1	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	buddy.cmd	hey-my-buddy.cmd	2	1	0	src/hey_my_buddy/install/skill_package.py:110	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	buddy.ps1	hey-my-buddy.ps1	2	1	0	src/hey_my_buddy/install/skill_package.py:110	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	buddy/SKILL.md	hey-my-buddy/SKILL.md	1	2	0	tests/python/install/test_first_install.py:87	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	buddy/scripts/buddy	hey-my-buddy/scripts/hey-my-buddy	1	4	0	tests/python/install/test_first_install.py:145	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	buddy/skill.json	hey-my-buddy/skill.json	0	4	0	tests/python/install/test_first_install.py:60	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	hey-my-buddy	hey-my-buddy	19	20	15	src/hey_my_buddy/home.py:1	不改：已经是产品全名 hey-my-buddy 的路径或持久化键，无旧短名需要替换
+product	path	hey_my_buddy/_distribution/scripts/buddy	hey_my_buddy/_distribution/scripts/hey-my-buddy	0	1	0	tests/python/install/test_distribution.py:55	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	scripts/buddy	scripts/hey-my-buddy	10	18	0	src/hey_my_buddy/install/skill_package.py:9	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	scripts/buddy.cmd	scripts/hey-my-buddy.cmd	1	0	0	src/hey_my_buddy/install/skill_install.py:74	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	scripts/buddy.ps1	scripts/hey-my-buddy.ps1	1	0	0	src/hey_my_buddy/install/skill_install.py:74	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	skills/buddy	skills/hey-my-buddy	6	8	0	tests/python/install/test_upgrade.py:165	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	skills/buddy/SKILL.md	skills/hey-my-buddy/SKILL.md	1	1	0	src/hey_my_buddy/install/skill_package.py:105	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	skills/buddy/scripts	skills/hey-my-buddy/scripts	2	2	0	src/hey_my_buddy/install/skill_package.py:111	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	skills/buddy/scripts/buddy	skills/hey-my-buddy/scripts/hey-my-buddy	1	2	0	src/hey_my_buddy/install/skill_package.py:108	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	path	src/hey_my_buddy/buddy	src/hey_my_buddy/buddy	0	2	0	tests/python/buddy/roles/test_role_prompts.py:124	不改：包内 buddy/ 工程模块目录；不是产品短名
+product	state-value	buddy	hey-my-buddy	383	1278	243	src/hey_my_buddy/install/skill_package.py:30	改：指产品；skill、启动器或其安装、构建与升级位置，统一使用产品全名
+product	state-value	buddy-attempt	hey-my-buddy-attempt	1	3	4	src/hey_my_buddy/buddy/harnesses/dsh/native_run.py:463	改：指产品；storageOwner 的本产品按执行回合保存会话的取值，不指某一个 Host、Worker 或 Router buddy
+product	state-value	buddy-finish-turn	hey-my-buddy	1	0	0	src/hey_my_buddy/buddy/roles/session_mcp.py:39	改：指产品；Worker 工具的 MCP 服务名，不指某一个 Host、Worker 或 Router buddy
+product	state-value	buddy-goal	hey-my-buddy-micro-task	4	11	1	src/hey_my_buddy/blackboard/tasks/worker_sessions.py:60	改：storageOwner 指产品保存的微任务会话；buddy 是产品短名，goal 是微任务，组合改为 hey-my-buddy-micro-task
+product	state-value	buddy-lightweight-1	hey-my-buddy-lightweight-1	1	0	0	src/hey_my_buddy/protocol/rpc_config.py:22	改：指产品；RPC 资源容量方案标识，不指某一个 Host、Worker 或 Router buddy
+product	state-value	buddy-router	hey-my-buddy-router	10	14	0	src/hey_my_buddy/buddy/harnesses/codex/config.py:59	改：指产品；产品生成的 Router 权限配置标识，不指某一个 Host、Worker 或 Router buddy
+product	state-value	tool:buddy_answer_inquiry	tool:hey_my_buddy_answer_inquiry	1	26	0	src/hey_my_buddy/buddy/harnesses/inquiry_bridge.py:321	改：指产品工具；inquiry 回执的 via 值随工具名字改
+product	state-value	tool:buddy_checkpoint	tool:hey_my_buddy_checkpoint	1	4	0	src/hey_my_buddy/buddy/harnesses/inquiry_bridge.py:285	改：指产品工具；inquiry 回执的 via 值随工具名字改
+product	state-value	tool:buddy_inquiry_reply	tool:hey_my_buddy_inquiry_reply	0	2	0	tests/python/buddy/harnesses/test_live_channel.py:514	改：测试保留的旧 inquiry via 值；指产品工具，前缀随产品名字改；当前源码没有写入者
+task-text	response-field	objective	task	78	75	339	src/hey_my_buddy/blackboard/tasks/workflow.py:6345	Turn audit input context carries the Worker task text.；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换
+task-text	response-field	objectiveTruncated	taskTruncated	1	1	0	src/hey_my_buddy/blackboard/tasks/workflow.py:6346	Turn audit input context flag for truncated Worker task text.；已有同名字面命中，分属其它对象/面或内部名字；须按此行语义替换
+buddy	internal	profile	buddy	879	1666	926	src/hey_my_buddy/install/runtime.py:426	内部标识符出现次数（代码词法 NAME/裸标识符、注释代码名字和内部引用字符串），不逐项列；对外名字处数为 git grep -o -w -F 的出现次数（同一行重复出现分别计数）；git grep -c 只核验存在；含 profile/configuration；仅词干工作量统计，不表示中性工程模块也要改名
+env	internal	BUDDY_	HMB_	0	0	0	src/hey_my_buddy/protocol/transport.py:110	内部标识符出现次数（代码词法 NAME/裸标识符、注释代码名字和内部引用字符串），不逐项列；对外名字处数为 git grep -o -w -F 的出现次数（同一行重复出现分别计数）；git grep -c 只核验存在；；仅词干工作量统计，不表示中性工程模块也要改名
+harness	internal	adapter	harness	534	647	60	src/hey_my_buddy/private_dirs.py:15	内部标识符出现次数，含代码词法名字、注释代码名字和内部引用字符串；包含 harness 与连接件两种含义，只汇总工作量，连接件及第三方名字依语义保留；对外出现次数按 git grep -o -w -F 计
+macro-task	internal	objective	macro_task	53	158	1067	src/hey_my_buddy/protocol/schemas.py:499	内部标识符出现次数（代码词法 NAME/裸标识符、注释代码名字和内部引用字符串），不逐项列；对外名字处数为 git grep -o -w -F 的出现次数（同一行重复出现分别计数）；git grep -c 只核验存在；；仅词干工作量统计，不表示中性工程模块也要改名
+micro-task	internal	goal	micro_task	207	368	64	src/hey_my_buddy/private_dirs.py:107	内部标识符出现次数（代码词法 NAME/裸标识符、注释代码名字和内部引用字符串），不逐项列；对外名字处数为 git grep -o -w -F 的出现次数（同一行重复出现分别计数）；git grep -c 只核验存在；含 goal/delegation/governed；仅词干工作量统计，不表示中性工程模块也要改名
+model	internal	family	model	209	341	505	src/hey_my_buddy/blackboard/tasks/scheduling.py:60	内部标识符出现次数（代码词法 NAME/裸标识符、注释代码名字和内部引用字符串），不逐项列；对外名字处数为 git grep -o -w -F 的出现次数（同一行重复出现分别计数）；git grep -c 只核验存在；含 family/families；仅词干工作量统计，不表示中性工程模块也要改名
+product	internal	buddy	hey-my-buddy	54	1629	210	src/hey_my_buddy/install/runtime.py:454	内部标识符出现次数（代码词法 NAME/裸标识符、注释代码名字和内部引用字符串），不逐项列；对外名字处数为 git grep -o -w -F 的出现次数（同一行重复出现分别计数）；git grep -c 只核验存在；；仅词干工作量统计，不表示中性工程模块也要改名
+task-text	internal	objective	task	6	0	0	src/hey_my_buddy/blackboard/tasks/workflow.py:6342	内部标识符出现次数（代码词法 NAME/裸标识符、注释代码名字和内部引用字符串），不逐项列；对外名字处数为 git grep -o -w -F 的出现次数（同一行重复出现分别计数）；git grep -c 只核验存在；objective 在回合输入投影或 roles/harnesses 内的任务文字用法；仅词干工作量统计，不表示中性工程模块也要改名
