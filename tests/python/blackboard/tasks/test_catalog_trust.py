@@ -18,12 +18,12 @@ from hey_my_buddy.errors import BoardError
 
 
 def reading(models=('alpha',), efforts=('max',), account_status='confirmed'):
-    return {'source': 'fixture-native', 'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': account_status}],
-            'providers': [{'adapter': 'dsh', 'provider': 'fixture',
+    return {'source': 'fixture-native', 'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': account_status}],
+            'providers': [{'harness': 'dsh', 'provider': 'fixture',
                            'models': [{'id': model, 'efforts': list(efforts), 'available': True} for model in models]}]}
 
 
-IDENTITY = {"adapter": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"}
+IDENTITY = {"harness": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"}
 
 
 def _later(seconds: int) -> str:
@@ -51,7 +51,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         harnesses = self.board.service.harnesses
         harnesses.invalidate('dsh', harnesses.get('dsh')['revision'], reason)
         with self.board.store.db.write() as db:
-            db.execute("UPDATE harness_health SET status='ready',expires_at=?,scan_after=? WHERE adapter='dsh'",
+            db.execute("UPDATE harness_health SET status='ready',expires_at=?,scan_after=? WHERE harness='dsh'",
                        (_later(3600), _later(180)))
 
     def listed_buddy(self):
@@ -80,12 +80,12 @@ class ExplicitCatalogTrustTests(BoardTestCase):
 
     def scan_marker(self):
         with self.board.store.db.read() as db:
-            row = db.execute("SELECT scan_after FROM harness_health WHERE adapter='dsh'").fetchone()
+            row = db.execute("SELECT scan_after FROM harness_health WHERE harness='dsh'").fetchone()
         return row['scan_after'] if row else None
 
     def expire_reread_window(self):
         with self.board.store.db.write() as db:
-            db.execute("UPDATE harness_health SET scan_after=NULL WHERE adapter='dsh'")
+            db.execute("UPDATE harness_health SET scan_after=NULL WHERE harness='dsh'")
 
     def reject_missing(self, identity=None):
         with self.assertRaises(BoardError) as rejected:
@@ -106,7 +106,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.assertEqual(error.details["catalogReadAt"], self.clock.value)
         self.assertEqual(error.details["remedy"], catalog.CATALOG_REMEDY)
         self.assertEqual(error.details["reason"], "catalog-unavailable")
-        self.assertIn("adapters", error.details["remedy"])
+        self.assertIn("harnesses", error.details["remedy"])
 
     def test_c05_a_successful_reread_admits_the_route_without_rejection(self):
         self.evaluation.record_catalog(reading())
@@ -127,7 +127,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.clock.advance(60)
 
         def reread(name):
-            raise BoardError("ADAPTER_UNAVAILABLE", "fixture refresh failed")
+            raise BoardError("HARNESS_UNAVAILABLE", "fixture refresh failed")
 
         catalog.register_catalog_reread(self.directory, reread)
         with self.assertRaises(BoardError) as rejected:
@@ -151,7 +151,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         with self.assertRaises(BoardError) as rejected:
             self.validate({**IDENTITY, "model": "beta"})
         error = rejected.exception
-        self.assertEqual(error.code, "ADAPTER_UNAVAILABLE")
+        self.assertEqual(error.code, "HARNESS_UNAVAILABLE")
         self.assertEqual(error.details["catalogReadAt"], read_at)
         self.assertEqual(error.details["remedy"], catalog.CATALOG_REMEDY)
         self.assertEqual(error.details["harness"]["reasonCode"], "HARNESS_HANDSHAKE_FAILED")
@@ -183,7 +183,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
 
         self.evaluation.record_catalog(reading())
         with self.board.store.db.write() as db:
-            db.execute("UPDATE harness_health SET scan_after=? WHERE adapter='dsh'", (_later(60),))
+            db.execute("UPDATE harness_health SET scan_after=? WHERE harness='dsh'", (_later(60),))
         calls = []
         catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))
         self.reject_missing()
@@ -339,7 +339,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         # rejection.
         self.evaluation.record_catalog(reading())
         with self.board.store.db.write() as db:
-            db.execute("UPDATE harness_health SET scan_after=? WHERE adapter='dsh'", (_later(120),))
+            db.execute("UPDATE harness_health SET scan_after=? WHERE harness='dsh'", (_later(120),))
         marker = self.scan_marker()
         calls = []
         catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))
@@ -416,10 +416,10 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.assertEqual(calls, ["dsh"])
         self.assertIsNotNone(self.scan_marker())
         with self.board.store.db.read() as db:
-            revision_before = db.execute("SELECT revision FROM harness_health WHERE adapter='dsh'").fetchone()[0]
+            revision_before = db.execute("SELECT revision FROM harness_health WHERE harness='dsh'").fetchone()[0]
         self.fail_health_then_recover()
         with self.board.store.db.read() as db:
-            self.assertGreater(db.execute("SELECT revision FROM harness_health WHERE adapter='dsh'").fetchone()[0],
+            self.assertGreater(db.execute("SELECT revision FROM harness_health WHERE harness='dsh'").fetchone()[0],
                                revision_before, "The fixture really revised the health record")
         again = self.reject_missing()
         self.assertEqual(again.details["reason"], "catalog-unavailable")
@@ -483,7 +483,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
     def test_confirmed_empty_after_health_recovery_pends_the_known_model(self):
         self.evaluation.record_catalog(reading())
         with self.board.store.db.write() as db:
-            db.execute("UPDATE buddies SET enabled=1 WHERE adapter='dsh'")
+            db.execute("UPDATE buddies SET enabled=1 WHERE harness='dsh'")
         self.fail_health_then_recover()
         self.evaluation.record_catalog(reading(models=()))
         buddy = self.listed_buddy()
@@ -552,7 +552,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         # only high is legal, even when no row keeps the retirement reason.
         with self.board.store.db.write() as db:
             db.execute("UPDATE buddies SET available=0,enabled=1,"
-                       "unavailable_reason='HARNESS_HANDSHAKE_FAILED' WHERE adapter='dsh'")
+                       "unavailable_reason='HARNESS_HANDSHAKE_FAILED' WHERE harness='dsh'")
 
     def test_health_mask_cannot_restore_a_retired_effort_on_unknown_read(self):
         self.masked_retired_effort()

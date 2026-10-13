@@ -748,7 +748,7 @@ describe("the records of routing", () => {
     const f = fixture(snapshot({
       routers: [MEDIUM_ID, FLASH_ID],
       routingHealth: health({ currentRouterBuddyId: MEDIUM_ID, routers: [
-        { buddyId: MEDIUM_ID, index: 0, eligible: true, identity: { adapter: "claude", provider: "anthropic", model: "claude-sonnet-5", effort: "medium" },
+        { buddyId: MEDIUM_ID, index: 0, eligible: true, identity: { harness: "claude", provider: "anthropic", model: "claude-sonnet-5", effort: "medium" },
           answeredCount: 7, noAnswerCount: 0, consecutiveNoAnswers: 0, lastAnsweredAt: "2026-09-27T07:00:00.000Z",
           lastError: { code: "router-out-of-bounds", at: "2026-09-26T06:30:00.000Z" } },
         { buddyId: FLASH_ID, index: 1, eligible: true, identity: null },

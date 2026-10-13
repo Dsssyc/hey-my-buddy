@@ -74,7 +74,7 @@ function LocationBlock({ row, name, view, gate, onCheck, onSavePath }: {
         onClick={onCheck}>{t("harness.check")}</Button></Hint>
       <Button variant="outline" onClick={() => setPathOpen(true)}>{t("harness.pane.pickPath")}</Button>
     </div>
-    {pathOpen && <HarnessPathDialog adapter={row.adapter} name={name} manualPath={row.manualPath} disabled={inert}
+    {pathOpen && <HarnessPathDialog harness={row.harness} name={name} manualPath={row.manualPath} disabled={inert}
       reason={refusal} onSave={path => { setPathOpen(false); onSavePath(path); }} onClose={() => setPathOpen(false)} />}
   </Block>;
 }

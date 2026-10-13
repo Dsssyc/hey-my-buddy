@@ -66,7 +66,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
             self.assertIn("outputSchema", facts)
         self.assertIn("routingMode", facts)
         for candidate in boundary["candidates"]:
-            self.assertTrue({"adapter", "provider", "model", "effort"} <= set(candidate))
+            self.assertTrue({"harness", "provider", "model", "effort"} <= set(candidate))
 
     def test_all_no_answers_are_unavailable_with_each_immutable_actor_receipt(self):
         request, first, second = self.finish_all()
@@ -434,7 +434,7 @@ class GovernedBoundaryTests(WorkflowTestCase):
         self.board_ = self.board(clock=self.clock)
         with self.board_.store.db.write() as db:
             for buddy_id, model in ((A, "alpha"), (B, "bravo")):
-                db.execute("INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,"
+                db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                            "available,enabled,capabilities_json) "
                            "VALUES(?,?,'dsh','fixture',?,'max',1,1,?)",
                            (buddy_id, buddy_id, model, canonical_json(permission_capabilities("dsh"))))
@@ -543,7 +543,7 @@ class GovernedBoundaryTests(WorkflowTestCase):
         with self.board_.store.db.write() as db:
             row = db.execute("SELECT goal_json FROM workflow_runs WHERE run_id=?", (view["runId"],)).fetchone()
             goal = json.loads(row[0])
-            goal.update({"adapter": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"})
+            goal.update({"harness": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"})
             db.execute("UPDATE workflow_runs SET goal_json=?,buddy_locked=1 WHERE run_id=?",
                        (canonical_json(goal), view["runId"]))
         latest = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]

@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import sqlite3
 
+from .db import canonical_json
+
 ROUTER_KEYS = ('router_profile_ids', 'router_default_mode', 'router_budget_preset',
                'router_retry_interval_seconds')
 SETTINGS_TABLES = ('buddies', 'evaluation_preferences',
@@ -16,13 +18,13 @@ UPGRADE_BASE_TABLES = {
     'harness_health': 'harness_health',
 }
 SETTINGS_COLUMNS = {
-    'buddies': ('buddy_id', 'label', 'adapter', 'provider', 'model', 'effort',
+    'buddies': ('buddy_id', 'label', 'harness', 'provider', 'model', 'effort',
                             'available', 'enabled', 'capabilities_json', 'context_window',
                             'description', 'source', 'unavailable_reason'),
     'evaluation_preferences': ('buddy_id', 'mode', 'reason'),
-    'model_service_notes': ('adapter', 'provider', 'model', 'text', 'updated_at'),
-    'model_service_concurrency': ('adapter', 'provider', 'model', 'concurrency_limit', 'created_at', 'updated_at'),
-    'harness_health': ('adapter', 'manual_path', 'revision', 'status', 'record_json',
+    'model_service_notes': ('harness', 'provider', 'model', 'text', 'updated_at'),
+    'model_service_concurrency': ('harness', 'provider', 'model', 'concurrency_limit', 'created_at', 'updated_at'),
+    'harness_health': ('harness', 'manual_path', 'revision', 'status', 'record_json',
                        'checked_at', 'expires_at'),
 }
 UPGRADE_BASE_COLUMNS = {
@@ -43,6 +45,19 @@ def read_settings(connection: sqlite3.Connection) -> dict:
     tables = {name: [tuple(row) for row in connection.execute(
         'SELECT ' + ','.join(UPGRADE_BASE_COLUMNS[name]) + ' FROM ' + UPGRADE_BASE_TABLES[name])]
               for name in SETTINGS_TABLES if name != 'evaluation_preferences'}
+    # The retained native health settings use the upgrade base's JSON identity.
+    health = []
+    for row in tables['harness_health']:
+        record = json.loads(row[4])
+        if 'adapter' in record:
+            record['harness'] = record.pop('adapter')
+        for field in ('reasonCode', 'code'):
+            if record.get(field) in ('ADAPTER_UNAVAILABLE', 'UNSUPPORTED_ADAPTER', 'adapter-unavailable'):
+                record[field] = {'ADAPTER_UNAVAILABLE': 'HARNESS_UNAVAILABLE',
+                                 'UNSUPPORTED_ADAPTER': 'UNSUPPORTED_HARNESS',
+                                 'adapter-unavailable': 'harness-unavailable'}[record[field]]
+        health.append((*row[:4], canonical_json(record), *row[5:]))
+    tables['harness_health'] = health
     # Read the upgrade base's composed policy once. A buddy override wins over
     # its model service default, including an explicit absence of preference.
     tables['evaluation_preferences'] = [tuple(row) for row in connection.execute(

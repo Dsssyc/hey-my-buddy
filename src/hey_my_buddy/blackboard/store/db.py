@@ -106,12 +106,12 @@ CREATE TABLE IF NOT EXISTS attempts (
     ownership           TEXT NOT NULL DEFAULT 'owned' CHECK (ownership IN ('owned','uncertain')),
     runtime_identity    TEXT,
     adapter             TEXT NOT NULL,
-    -- Frozen model-service identity (adapter/provider/model, no effort dimension).
+    -- Frozen model-service identity (harness/provider/model, no effort dimension).
     -- Written once by the claim transaction that resolved it and never updated
     -- afterwards, so a historical or shutdown-uncertain attempt can never change
     -- which model service's concurrency slot it occupies. NULL for model-less work
     -- (command/external) which counts only against the machine-wide ceiling.
-    model_adapter       TEXT,
+    model_harness       TEXT,
     model_provider      TEXT,
     model_model         TEXT,
     log_paths           TEXT NOT NULL DEFAULT '{}',
@@ -138,7 +138,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempts_effective_unique ON attempts(task_id)
     WHERE execution_state IN ('starting','executing','finalizing','uncertain');
 CREATE INDEX IF NOT EXISTS attempts_active_idx ON attempts(execution_state);
 CREATE INDEX IF NOT EXISTS attempts_model_service_idx
-    ON attempts(model_adapter, model_provider, model_model) WHERE model_model IS NOT NULL;
+    ON attempts(model_harness, model_provider, model_model) WHERE model_model IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS workers (
     worker_id           TEXT PRIMARY KEY,
@@ -282,7 +282,7 @@ CREATE TABLE IF NOT EXISTS catalog_observations (
     harnesses_json TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS catalog_current (
-    adapter TEXT PRIMARY KEY,
+    harness TEXT PRIMARY KEY,
     observation_id INTEGER NOT NULL,
     discovery_id TEXT,
     status TEXT NOT NULL,
@@ -294,12 +294,12 @@ CREATE TABLE IF NOT EXISTS catalog_current (
 """,
     """
 CREATE TABLE IF NOT EXISTS model_service_notes (
-    adapter    TEXT NOT NULL,
+    harness    TEXT NOT NULL,
     provider   TEXT NOT NULL,
     model      TEXT NOT NULL,
     text       TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    PRIMARY KEY (adapter, provider, model)
+    PRIMARY KEY (harness, provider, model)
 );
 """,
     """
@@ -314,7 +314,7 @@ CREATE TABLE IF NOT EXISTS evaluation_state (
 CREATE TABLE IF NOT EXISTS buddies (
     buddy_id          TEXT PRIMARY KEY,
     label               TEXT NOT NULL,
-    adapter             TEXT NOT NULL,
+    harness             TEXT NOT NULL,
     provider            TEXT NOT NULL,
     model               TEXT NOT NULL,
     effort              TEXT NOT NULL,
@@ -329,7 +329,7 @@ CREATE TABLE IF NOT EXISTS buddies (
 """,
     """
 CREATE INDEX IF NOT EXISTS buddies_current_idx ON buddies(available, buddy_id);
-CREATE INDEX IF NOT EXISTS buddies_harness_idx ON buddies(adapter, buddy_id);
+CREATE INDEX IF NOT EXISTS buddies_harness_idx ON buddies(harness, buddy_id);
 """,
     """
 CREATE TABLE IF NOT EXISTS evaluation_preferences (
@@ -392,20 +392,20 @@ CREATE INDEX IF NOT EXISTS evaluation_decisions_created_idx
     ON evaluation_decisions(created_at, decision_id);
 """,
     # User-owned per-model-service concurrent-attempt limits (ADR-011). A model service is the
-    # exact adapter/provider/model tuple; effort variants share one row. The row
+    # exact harness/provider/model tuple; effort variants share one row. The row
     # is independent of ``buddies`` availability on purpose: a setting
     # survives discovery marking a model unavailable, and a model service without a row
     # uses the code-owned default. Only the authenticated console writer patch in
     # ``user_policy.py`` ever writes here.
     """
 CREATE TABLE IF NOT EXISTS model_service_concurrency (
-    adapter           TEXT NOT NULL,
+    harness           TEXT NOT NULL,
     provider          TEXT NOT NULL,
     model             TEXT NOT NULL,
     concurrency_limit INTEGER NOT NULL DEFAULT 2 CHECK (concurrency_limit BETWEEN 1 AND 32),
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
-    PRIMARY KEY (adapter, provider, model)
+    PRIMARY KEY (harness, provider, model)
 );
 """,
     # Program-owned model facts snapshots (ADR-021 decision 12), one durable dated
@@ -418,7 +418,7 @@ CREATE TABLE IF NOT EXISTS model_service_concurrency (
     # remains owned by the upgrade module.
     """
 CREATE TABLE IF NOT EXISTS model_facts (
-    adapter          TEXT NOT NULL,
+    harness          TEXT NOT NULL,
     provider         TEXT NOT NULL,
     model            TEXT NOT NULL,
     status           TEXT NOT NULL CHECK (status IN ('current','unknown')),
@@ -428,7 +428,7 @@ CREATE TABLE IF NOT EXISTS model_facts (
     payload_sha256   TEXT NOT NULL,
     fetched_at       TEXT NOT NULL,
     reason           TEXT,
-    PRIMARY KEY (adapter, provider, model)
+    PRIMARY KEY (harness, provider, model)
 );
 """,
 )
@@ -853,7 +853,7 @@ WORKFLOW_SCHEMA = "\n".join(WORKFLOW_TABLES)
 
 HARNESS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS quota_current (
-    adapter TEXT NOT NULL,
+    harness TEXT NOT NULL,
     provider TEXT NOT NULL,
     limit_id TEXT NOT NULL,
     blocked INTEGER NOT NULL CHECK (blocked IN (0,1)),
@@ -866,20 +866,20 @@ CREATE TABLE IF NOT EXISTS quota_current (
     retry_manual_at TEXT,
     retry_consumed_at TEXT,
     retry_consumed_by TEXT,
-    PRIMARY KEY (adapter, provider, limit_id),
+    PRIMARY KEY (harness, provider, limit_id),
     CHECK ((blocked=1 AND code IS NOT NULL AND code IN ('HARNESS_BALANCE_ZERO','HARNESS_QUOTA_EXHAUSTED'))
            OR (blocked=0 AND code IS NULL))
 );
 CREATE TABLE IF NOT EXISTS harness_quota_observations (
-    adapter TEXT PRIMARY KEY,
+    harness TEXT PRIMARY KEY,
     quota_json TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS harness_account_reads (
-    adapter TEXT PRIMARY KEY,
+    harness TEXT PRIMARY KEY,
     checked_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS harness_health (
-    adapter TEXT PRIMARY KEY CHECK (adapter IN ('dsh','zcode','codex','claude')),
+    harness TEXT PRIMARY KEY CHECK (harness IN ('dsh','zcode','codex','claude')),
     manual_path TEXT,
     revision INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'unknown'
@@ -931,7 +931,7 @@ CREATE TABLE IF NOT EXISTS router_dispatches (
     decision_id  TEXT NOT NULL REFERENCES router_requests(decision_id) ON DELETE RESTRICT,
     router_index INTEGER NOT NULL CHECK (router_index >= 0),
     buddy_id   TEXT NOT NULL,
-    adapter      TEXT NOT NULL,
+    harness      TEXT NOT NULL,
     provider     TEXT NOT NULL,
     model        TEXT NOT NULL,
     effort       TEXT NOT NULL,
@@ -971,12 +971,12 @@ CREATE INDEX IF NOT EXISTS router_outcomes_attempt_idx ON router_outcomes(attemp
 """
 CATALOG_PENDING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS catalog_pending (
-    adapter      TEXT NOT NULL REFERENCES catalog_current(adapter) ON DELETE RESTRICT,
+    harness      TEXT NOT NULL REFERENCES catalog_current(harness) ON DELETE RESTRICT,
     provider     TEXT NOT NULL,
     model        TEXT NOT NULL,
     since        TEXT NOT NULL,
     efforts_json TEXT NOT NULL,
-    PRIMARY KEY (adapter, provider, model)
+    PRIMARY KEY (harness, provider, model)
 );
 """
 SCHEMA = "\n".join((CORE_SCHEMA, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,

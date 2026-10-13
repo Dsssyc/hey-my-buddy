@@ -220,7 +220,7 @@ def catalog(snapshot: dict, access: dict, version: str) -> dict:
             missing_effort = True
             continue
         entry = providers.setdefault(provider, {"provider": provider, "displayName": model.get("providerLabel") or provider,
-                                                 "adapter": "zcode", "packageVersion": version, "accessType": access.get(provider, "unknown"), "models": []})
+                                                 "harness": "zcode", "packageVersion": version, "accessType": access.get(provider, "unknown"), "models": []})
         properties = model.get("properties")
         formats = properties.get("inputFormat") if isinstance(properties, dict) else None
         formats = formats if isinstance(formats, dict) else {}
@@ -238,9 +238,9 @@ def catalog(snapshot: dict, access: dict, version: str) -> dict:
         warnings.append("The native app server returned no models with configurable reasoning efforts; this complete empty observation retires missing ZCode buddies")
     warnings.append("The account status is not applicable to this reading: the no-prompt native "
                     "model snapshot carries no separate account check")
-    return {"source": "zcode-native-app-server", "adapter": "zcode", "harnessVersion": version,
+    return {"source": "zcode-native-app-server", "harness": "zcode", "harnessVersion": version,
             "discoveredAt": datetime.now(timezone.utc).isoformat(), "providers": list(providers.values()),
-            "discoveries": [{"adapter": "zcode", "status": "unknown" if incomplete else "complete", "accountStatus": "not-applicable"}],
+            "discoveries": [{"harness": "zcode", "status": "unknown" if incomplete else "complete", "accountStatus": "not-applicable"}],
             "warnings": warnings}
 
 
@@ -376,7 +376,7 @@ def check_preparation(spec: dict, environment: dict) -> None:
         command = cli_command(environment)
         provider_paths(environment, command)
     except NativeError as error:
-        raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter="zcode") from None
+        raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="zcode") from None
 
 
 def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str,
@@ -401,7 +401,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
     """Report native storage and binding existence; the role decides reuse."""
     binding = native_root / (hashlib.sha256(session_id.encode()).hexdigest() + ".json") if session_id else None
     return {
-        "adapter": "zcode", "sessionId": session_id, "captured": session_id is not None,
+        "harness": "zcode", "sessionId": session_id, "captured": session_id is not None,
         "storageScope": "task-private", "storageOwner": "buddy-goal",
         "nativeAppVisibility": "not-listed-in-native-app",
         "bindingPresent": binding is not None and binding.is_file(),
@@ -414,7 +414,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
 
 def validate_turn_provenance(record: dict) -> str | None:
     p = record.get("provenance") or {}
-    expected = {"adapter": "zcode", "tool": "buddy_finish_turn", "turnEnd": "completed",
+    expected = {"harness": "zcode", "tool": "buddy_finish_turn", "turnEnd": "completed",
                 "rootSessionMatched": True, "receiptVerified": True, "toolResultSuccess": True,
                 "toolResultTruncated": False, "turnResultType": "success", "settlement": "session-closed"}
     if not isinstance(p, dict) or any(type(p.get(k)) is not type(v) or p.get(k) != v for k, v in expected.items()) or "flush" in p:
@@ -752,7 +752,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
                     owned[:] = [{"created": evidence.created, "shutdown": evidence.shutdown_confirmed,
                                  "exit_code": evidence.exit_code}]
                 if isinstance(error, OSError):
-                    raise NativeError("adapter-unavailable", "The selected ZCode executable could not start") from None
+                    raise NativeError("harness-unavailable", "The selected ZCode executable could not start") from None
                 raise
             # Take the actual process/group handle before releasing the stderr
             # descriptor: descriptor cleanup can fail after successful creation.
@@ -1063,7 +1063,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
     # runtime handshake so no native tool fact is lost, and a completion-tool
     # run excludes only its own mounted delivery calls — the final value's
     # evidence is the receipt, never a task-tool count of the delivery tool.
-    tools = ZcodeToolFacts({"adapter": "zcode", "taskId": request.identity.task_id,
+    tools = ZcodeToolFacts({"harness": "zcode", "taskId": request.identity.task_id,
                             "attemptId": request.identity.attempt_id,
                             "generation": request.identity.generation})
     outcome = _CarrierOutcome()

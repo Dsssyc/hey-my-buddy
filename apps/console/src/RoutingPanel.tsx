@@ -12,7 +12,7 @@ export function needsRouting(value: Workflow) {
  * Host through its existing CLI capability flow.
  */
 export function RoutingPanel({ value }: { value: Workflow }) {
-  const fields = [["adapter", "Harness"], ["provider", "Provider"], ["model", "模型"], ["effort", "Thinking effort"]] as const;
+  const fields = [["harness", "Harness"], ["provider", "Provider"], ["model", "模型"], ["effort", "Thinking effort"]] as const;
   const needsHost = needsRouting(value);
   return <section className="detail-section">
     <h3>模型路由</h3>

@@ -25,7 +25,7 @@ class DshWorkspaceDefaultTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="buddy-dsh-spec-") as root:
             common = {"requestId": "dsh-default", "task": "bounded task", "cwd": root}
             # Every DSH run is execution-private now: the grouping switch is an
-            # unknown submit field whatever adapter or value carries it.
+            # unknown submit field whatever harness or value carries it.
             for params in ({**common, "workspace": True}, {**common, "workspace": False},
                            {**common, "adapter": "codex", "workspace": False}):
                 with self.subTest(params=params):

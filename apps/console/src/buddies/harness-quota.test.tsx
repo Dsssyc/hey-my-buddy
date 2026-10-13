@@ -33,15 +33,15 @@ afterEach(() => {
 
 function observed(): HarnessHealth[] {
   return [
-    harness({ adapter: "dsh", status: "ready", revision: 3, executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH", checkedAt: CHECKED_AT,
+    harness({ harness: "dsh", status: "ready", revision: 3, executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH", checkedAt: CHECKED_AT,
       quota: { observedAt: "2026-09-29T09:00:00.000Z", source: "dsh-native", provider: "deepseek-official", stale: false, windows: [
         { name: "5h", usedPercent: 93, resetsAt: "2026-09-29T13:00:00.000Z" },
         { name: "weekly", usedPercent: 41, resetsAt: null },
       ] } }),
-    harness({ adapter: "zcode", status: "missing", revision: 1, checkedAt: CHECKED_AT, reasonCode: "HARNESS_NOT_FOUND", remedy: "安装 ZCode CLI。",
+    harness({ harness: "zcode", status: "missing", revision: 1, checkedAt: CHECKED_AT, reasonCode: "HARNESS_NOT_FOUND", remedy: "安装 ZCode CLI。",
       quota: { observedAt: "2026-09-20T09:00:00.000Z", source: "zcode-native", stale: true, windows: [{ name: "5h", usedPercent: null, resetsAt: null }] } }),
-    harness({ adapter: "codex", status: "ready", revision: 2, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: CHECKED_AT, quota: null }),
-    harness({ adapter: "claude", status: "unhealthy", revision: 5, reasonCode: "HARNESS_HANDSHAKE_FAILED", remedy: "检查该 CLI 能否独立运行。", checkedAt: CHECKED_AT }),
+    harness({ harness: "codex", status: "ready", revision: 2, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: CHECKED_AT, quota: null }),
+    harness({ harness: "claude", status: "unhealthy", revision: 5, reasonCode: "HARNESS_HANDSHAKE_FAILED", remedy: "检查该 CLI 能否独立运行。", checkedAt: CHECKED_AT }),
   ];
 }
 
@@ -71,7 +71,7 @@ describe("quota observations", () => {
   });
 
   it.each([false, true])("uses balance facts for a metered account with balanceZero=%s", async balanceZero => {
-    const rows = [harness({ adapter: "dsh", status: "ready", billingByProvider: {
+    const rows = [harness({ harness: "dsh", status: "ready", billingByProvider: {
       "deepseek-official": { kind: "metered", source: "native", observedAt: CHECKED_AT },
     }, quota: { source: "dsh-native", observedAt: CHECKED_AT, balanceZero, windows: [] } })];
     await openHarness(fixture({ harnesses: rows }));
@@ -81,7 +81,7 @@ describe("quota observations", () => {
   });
 
   it("keeps a stale metered balance factual without near-limit colour", async () => {
-    const rows = [harness({ adapter: "dsh", status: "ready", billingByProvider: {
+    const rows = [harness({ harness: "dsh", status: "ready", billingByProvider: {
       "deepseek-official": { kind: "metered", source: "native", observedAt: CHECKED_AT },
     }, quota: { source: "dsh-native", observedAt: CHECKED_AT, stale: true, balanceZero: true, windows: [] } })];
     await openHarness(fixture({ harnesses: rows }));
@@ -93,7 +93,7 @@ describe("quota observations", () => {
   });
 
   it("says a window at its limit and a limit the native record reports", async () => {
-    const rows = [harness({ adapter: "dsh", status: "ready", quota: { observedAt: "2026-09-29T09:00:00.000Z", source: "dsh-native", reachedType: "usage_limit_reached",
+    const rows = [harness({ harness: "dsh", status: "ready", quota: { observedAt: "2026-09-29T09:00:00.000Z", source: "dsh-native", reachedType: "usage_limit_reached",
       windows: [{ name: "5h", usedPercent: 100, resetsAt: null }, { name: "weekly", usedPercent: 12, resetsAt: null }] } })];
     await openHarness(fixture({ harnesses: rows }));
     const quota = paneBlock("额度");
@@ -126,7 +126,7 @@ describe("quota observations", () => {
   });
 
   it("does not draw a stale reading as near its limit", async () => {
-    const rows = [harness({ adapter: "dsh", status: "ready", quota: { observedAt: "2026-09-20T09:00:00.000Z", source: "dsh-native", stale: true,
+    const rows = [harness({ harness: "dsh", status: "ready", quota: { observedAt: "2026-09-20T09:00:00.000Z", source: "dsh-native", stale: true,
       windows: [{ name: "5h", usedPercent: 97, resetsAt: null }] } })];
     await openHarness(fixture({ harnesses: rows }));
     expect(harnessButton("DSH").textContent).toContain("97%过期");
@@ -152,8 +152,8 @@ function exhausted(extra: Partial<QuotaRoutingRecord> = {}): QuotaRoutingRecord 
 }
 function withRecords(...records: QuotaRoutingRecord[]): HarnessHealth[] {
   return [
-    harness({ adapter: "dsh", status: "ready", revision: 3, executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH", checkedAt: CHECKED_AT, quotaRouting: records }),
-    harness({ adapter: "codex", status: "ready", revision: 2, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: CHECKED_AT }),
+    harness({ harness: "dsh", status: "ready", revision: 3, executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH", checkedAt: CHECKED_AT, quotaRouting: records }),
+    harness({ harness: "codex", status: "ready", revision: 2, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: CHECKED_AT }),
   ];
 }
 const list = () => within(paneBlock("额度")).getByRole("list", { name: "额度耗尽记录" });
@@ -192,11 +192,11 @@ describe("an exhausted quota", () => {
 
   it("opens one window through quota_redetect and says it proves nothing", async () => {
     const user = userEvent.setup();
-    const f = fixture({ harnesses: withRecords(exhausted()), replies: { quota_redetect: () => ({ quota: { adapter: "dsh", provider: "deepseek-official", records: [], opened: [null], alreadyOpen: [] } }) } });
+    const f = fixture({ harnesses: withRecords(exhausted()), replies: { quota_redetect: () => ({ quota: { harness: "dsh", provider: "deepseek-official", records: [], opened: [null], alreadyOpen: [] } }) } });
     await openHarness(f);
     await user.click(open());
     expect(f.command).toHaveBeenCalledWith("quota_redetect",
-      expect.objectContaining({ adapter: "dsh", provider: "deepseek-official", requestId: expect.any(String) }), "csrf");
+      expect.objectContaining({ harness: "dsh", provider: "deepseek-official", requestId: expect.any(String) }), "csrf");
     expect((await screen.findByText(/已为 deepseek-official 开放一次重试机会/)).textContent).toContain("不代表额度已恢复");
     // The snapshot is read again, and the request number is let go.
     expect(f.snapshotMock.mock.calls.length).toBeGreaterThan(1);

@@ -40,30 +40,30 @@ function chinese(): string[] {
 
 const AT = "2026-09-29T09:30:00.000Z";
 const LATER = "2026-09-29T13:00:00.000Z";
-const account = (adapter: string) => ({
-  adapter, status: "ready", accountType: null, checkedAt: AT, reasonCode: null, guidance: null,
+const account = (harness: string) => ({
+  harness, status: "ready", accountType: null, checkedAt: AT, reasonCode: null, guidance: null,
 });
 const harnesses = [
-  { adapter: "dsh", status: "ready", available: true, revision: 1, manualPath: null, executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH", checkedAt: AT, candidates: [],
+  { harness: "dsh", status: "ready", available: true, revision: 1, manualPath: null, executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH", checkedAt: AT, candidates: [],
     account: account("dsh"), billingByProvider: { "deepseek-official": { kind: "metered", source: "native", observedAt: AT } },
     quota: { source: "dsh-native", observedAt: AT, balanceZero: true, windows: [] } },
-  { adapter: "codex", status: "ready", available: true, revision: 2, manualPath: null, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: AT, candidates: [],
+  { harness: "codex", status: "ready", available: true, revision: 2, manualPath: null, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: AT, candidates: [],
     account: account("codex"),
     readOnlyStructured: { implemented: true, eligible: false, systemSandbox: false, sameAttemptContinuation: false, reasonCode: "READ_ONLY_RESOURCE_UNAVAILABLE", reason: "The local read-only resources are unavailable" },
     quota: { source: "codex-native", observedAt: AT, provider: "openai", windows: [{ name: "5h", usedPercent: 93, resetsAt: LATER }, { name: "weekly", usedPercent: 41, resetsAt: null }] },
     quotaRouting: [{ provider: "openai", limitId: "5h", code: "HARNESS_QUOTA_EXHAUSTED", source: "codex-native", observedAt: AT, resetsAt: null, blocked: true,
       retry: { eligibleAt: LATER, open: false, pendingManual: false, manualAt: null, consumedAt: null, consumedBy: null } }] },
-  { adapter: "claude", status: "login-required", available: false, revision: 3, manualPath: "/home/user/bin/claude", source: "manual", checkedAt: AT,
+  { harness: "claude", status: "login-required", available: false, revision: 3, manualPath: "/home/user/bin/claude", source: "manual", checkedAt: AT,
     reasonCode: "HARNESS_LOGIN_REQUIRED", remedy: "Log in to Claude Code, then check again.",
     candidates: [{ path: "/home/user/bin/claude", source: "manual", status: "failed", reasonCode: "handshake_failed" }] },
-  { adapter: "zcode", status: "missing", available: false, revision: 1, manualPath: null, checkedAt: AT,
+  { harness: "zcode", status: "missing", available: false, revision: 1, manualPath: null, checkedAt: AT,
     reasonCode: "HARNESS_NOT_FOUND", remedy: "Install the ZCode CLI, or give the absolute path of its executable.",
     candidates: [{ path: "/opt/homebrew/bin/zcode", source: "Homebrew", status: "missing", reasonCode: "not_found" }] },
 ] as unknown as HarnessHealth[];
 
-function buddy(adapter: string, provider: string, model: string, effort: string, extra: Partial<Buddy> = {}): Buddy {
-  return { buddyId: `${adapter}:${provider}:${model}:${effort}`, label: `${model} · ${effort}`, adapter, provider, model, effort,
-    available: true, enabled: false, capabilities: [`execution:${adapter}`, "routing:fast", "decision"], contextWindow: null, description: "", source: "catalog:fixture", ...extra };
+function buddy(harness: string, provider: string, model: string, effort: string, extra: Partial<Buddy> = {}): Buddy {
+  return { buddyId: `${harness}:${provider}:${model}:${effort}`, label: `${model} · ${effort}`, harness, provider, model, effort,
+    available: true, enabled: false, capabilities: [`execution:${harness}`, "routing:fast", "decision"], contextWindow: null, description: "", source: "catalog:fixture", ...extra };
 }
 const buddies = [
   buddy("dsh", "deepseek-official", "deepseek-flash", "off", { enabled: true }),
@@ -79,7 +79,7 @@ function world(canWrite = true) {
     routers: [buddies[0].buddyId], canWrite,
     routingHealth: health({ consecutiveFailures: 2, failureCount: 3, abstentionCount: 1, boundsRejectedCount: 1,
       recentFailures: [{ decisionId: "decision-1", runId: "run-1", at: AT, code: "routing-bounds-rejected" }] }),
-    extra: { buddies, modelServiceConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }], harnesses, unavailableBuddyCount: 3 },
+    extra: { buddies, modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }], harnesses, unavailableBuddyCount: 3 },
   }));
 }
 

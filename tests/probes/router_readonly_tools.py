@@ -27,23 +27,23 @@ from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructur
 from hey_my_buddy.buddy.roles.turn_io import private_json
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 
-ADAPTERS = ('codex', 'claude')
+HARNESSES = ('codex', 'claude')
 CANDIDATES = ('dsh:deepseek-official:deepseek-flash:off', 'codex:openai:gpt-6-sol:high')
 
 
-def system_sandbox(adapter):
+def system_sandbox(harness):
     # The same shipped platform declaration used by the free eligibility
     # contract; native execution still checks the effective policy itself.
     from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
     from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
     platforms = {'codex': CodexAdapter.system_sandbox_platforms,
                  'claude': ClaudeAdapter.system_sandbox_platforms}
-    return sys.platform in platforms.get(adapter, ())
+    return sys.platform in platforms.get(harness, ())
 
 
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
-    result.add_argument('--adapter', choices=ADAPTERS, required=True)
+    result.add_argument('--harness', choices=HARNESSES, required=True)
     for field in ('provider', 'model', 'effort'):
         result.add_argument('--' + field, required=True)
     result.add_argument('--output-root', type=Path, required=True)
@@ -70,12 +70,12 @@ def _prepare(root, buddy):
     guide.chmod(0o600)
     packet = {
         'buddy': buddy,
-        'systemSandbox': system_sandbox(buddy['adapter']),
-        'binding': {'adapter': buddy['adapter'], 'taskId': 'probe-' + uuid.uuid4().hex,
+        'systemSandbox': system_sandbox(buddy['harness']),
+        'binding': {'harness': buddy['harness'], 'taskId': 'probe-' + uuid.uuid4().hex,
                     'attemptId': str(uuid.uuid4()), 'generation': 1},
         'expected': {'buddyId': CANDIDATES[1], 'marker': marker},
         'inputDigest': router_input.digest(frozen),
-        'request': {'prompt': ('Read selection-guide.txt using one native sandboxed command. ' if buddy['adapter'] == 'codex'
+        'request': {'prompt': ('Read selection-guide.txt using one native sandboxed command. ' if buddy['harness'] == 'codex'
                               else 'Read selection-guide.txt using the native read tool. ') + 'Follow its choice and marker instructions. '
                               'Return one Router selection and cite selection-guide.txt. Do not modify files or request other tools.',
                     'outputSchema': router.answer_schema(list(CANDIDATES), 'review'),
@@ -93,7 +93,7 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
     reported = reported if isinstance(reported, list) else [reported]
     usage = result.get('usage') or {}
     limits = packet['request']['budget']
-    sandbox = system_sandbox(packet['buddy']['adapter'])
+    sandbox = system_sandbox(packet['buddy']['harness'])
     try:
         answer = router.validate_answer(result.get('rawAnswer'), list(CANDIDATES), 'review')
     except Exception:
@@ -106,7 +106,7 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
         'shutdown': outcome.shutdown_confirmed is True and
                     (result.get('processState') or {}).get('shutdownConfirmed') is True,
         'buddy': all((result.get('resolved') or {}).get(key) == value
-                             for key, value in packet['buddy'].items() if key != 'adapter'),
+                             for key, value in packet['buddy'].items() if key != 'harness'),
         'binding': isinstance(evidence, dict) and evidence.get('binding') == packet['binding'],
         'policyClass': type(packet.get('systemSandbox', False)) is bool
                        and packet.get('systemSandbox', False) is sandbox,
@@ -129,8 +129,8 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
 
 
 def run(args):
-    buddy = {key: getattr(args, key) for key in ('adapter', 'provider', 'model', 'effort')}
-    if buddy['adapter'] not in ADAPTERS or any(not isinstance(value, str) or not value.strip()
+    buddy = {key: getattr(args, key) for key in ('harness', 'provider', 'model', 'effort')}
+    if buddy['harness'] not in HARNESSES or any(not isinstance(value, str) or not value.strip()
                                                       for value in buddy.values()):
         raise ValueError('a complete supported native buddy is required')
     root = args.output_root.expanduser().absolute()
@@ -139,8 +139,8 @@ def run(args):
     if not args.execute:
         return {'status': 'prepared', 'modelCalls': 0, 'packetSha256': digest,
                 'packet': str(root / 'prepared.json'), 'budget': packet['request']['budget'],
-                'maxAnswerRounds': 1 if buddy['adapter'] == 'claude' else 2,
-                'systemSandbox': system_sandbox(buddy['adapter'])}
+                'maxAnswerRounds': 1 if buddy['harness'] == 'claude' else 2,
+                'systemSandbox': system_sandbox(buddy['harness'])}
     if getattr(args, 'expected_packet_sha256', None) != digest:
         raise ValueError('execution requires the exact prepared packet digest covered by approval')
     with (root / 'execution.started').open('x') as stream:
@@ -159,13 +159,13 @@ def run(args):
     request = ReadOnlyStructuredRequest(str(root / 'frozen'), **{
         'prompt': packet['request']['prompt'], 'output_schema': packet['request']['outputSchema'],
         'budget': packet['request']['budget'], 'capture_evidence': False})
-    native = adapter_for(buddy['adapter'])
+    native = adapter_for(buddy['harness'])
     handle = None
     started = time.monotonic()
     report = {'status': 'failed', 'packetSha256': digest, 'buddy': buddy,
-              'modelCalls': None, 'systemSandbox': system_sandbox(buddy['adapter'])}
+              'modelCalls': None, 'systemSandbox': system_sandbox(buddy['harness'])}
     try:
-        handle = start_review(buddy['adapter'], context, request)
+        handle = start_review(buddy['harness'], context, request)
         if handle.wait(timeout=request.budget['timeoutSeconds'] + 10) is None:
             native.cancel(handle)
             handle.wait(timeout=15)

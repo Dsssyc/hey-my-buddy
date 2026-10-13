@@ -160,7 +160,7 @@ export function harnessDetailsView(row: HarnessHealth, t: T): HarnessDetailsView
   const eligibility = parseReadOnlyStructured(row.readOnlyStructured);
   const reviewNote = [t("harness.review.note"),
     eligibility ? t(eligibility.systemSandbox ? "harness.review.sandbox" : "harness.review.noSandbox") : ""].filter(Boolean).join(" ");
-  const parsed = parseHarnessAccount(row.account, row.adapter);
+  const parsed = parseHarnessAccount(row.account, row.harness);
   const quota = quotaView(row.quota);
   const records = row.quotaRouting ?? [];
   const found = row.status === "ready";

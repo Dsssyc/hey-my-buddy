@@ -27,8 +27,8 @@ export const GLM = "zcode / zhipu / glm-5 / default";
 export const PENDING = "claude / anthropic / claude-haiku-4 / low";
 
 function buddy(buddyId: string, capabilities: string[], extra: Partial<Buddy> = {}): Buddy {
-  const [adapter, provider, model, effort] = buddyId.split(":");
-  return { buddyId, label: `${model} · ${effort}`, adapter, provider, model, effort, available: true, enabled: true,
+  const [harness, provider, model, effort] = buddyId.split(":");
+  return { buddyId, label: `${model} · ${effort}`, harness, provider, model, effort, available: true, enabled: true,
     capabilities, contextWindow: null, description: "", source: "catalog:fixture", ...extra };
 }
 
@@ -67,8 +67,8 @@ export type RolesOptions = {
   extra?: Partial<Snapshot>;
 };
 
-const harnesses: HarnessHealth[] = ["claude", "codex", "dsh", "zcode"].map(adapter =>
-  ({ adapter, status: "ready", available: true, revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [] }) as HarnessHealth);
+const harnesses: HarnessHealth[] = ["claude", "codex", "dsh", "zcode"].map(harness =>
+  ({ harness, status: "ready", available: true, revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [] }) as HarnessHealth);
 
 export function snapshot({ routers = [], configuration = {}, routingHealth, canWrite = true, extra = {} }: RolesOptions = {}): Snapshot & { harnesses: HarnessHealth[] } {
   return {

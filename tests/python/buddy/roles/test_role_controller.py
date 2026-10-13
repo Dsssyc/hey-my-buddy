@@ -267,7 +267,7 @@ class WorkerSeamTests(unittest.TestCase):
         self.assertEqual(preparation.reason, "not installed")
         self.assertIsNone(preparation.error)
         self.assertEqual(unavailable.prepared, 0)
-        refusal = BoardError("ADAPTER_UNAVAILABLE", "no native binary")
+        refusal = BoardError("HARNESS_UNAVAILABLE", "no native binary")
         failing = Executor((True, None), error=refusal)
         preparation = controller.prepare_worker_run(failing, None)
         self.assertTrue(preparation.available)

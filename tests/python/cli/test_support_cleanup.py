@@ -138,8 +138,8 @@ class FixtureCleanupTests(unittest.TestCase):
                 from hey_my_buddy.blackboard.catalog.catalog import discover
                 from hey_my_buddy.install.runtime import runtime_root
                 from hey_my_buddy.buddy.harnesses import discovery
-                def reject_native(adapter, **kwargs):
-                    raise AssertionError('R-06: native discovery forbidden: ' + adapter)
+                def reject_native(harness, **kwargs):
+                    raise AssertionError('R-06: native discovery forbidden: ' + harness)
                 discovery.candidate_snapshot = reject_native
                 with patch.object(home, 'default_state_dir', side_effect=AssertionError('default state lookup')):
                     state = get_state_dir()

@@ -302,9 +302,9 @@ def _model_services(model_services) -> list[tuple[str, str, str]]:
     validated: list[tuple[str, str, str]] = []
     for model_service in model_services:
         if not isinstance(model_service, (tuple, list)) or len(model_service) != 3:
-            raise BoardError("INVALID_ARGUMENT", "A model facts model service is an (adapter, provider, model) triple")
-        adapter, provider, model = (_identity(item, "member") for item in model_service)
-        triple = (adapter, provider, model)
+            raise BoardError("INVALID_ARGUMENT", "A model facts model service is an (harness, provider, model) triple")
+        harness, provider, model = (_identity(item, "member") for item in model_service)
+        triple = (harness, provider, model)
         if triple not in validated:
             validated.append(triple)
     if len(validated) > MAX_MODEL_SERVICES:
@@ -338,7 +338,7 @@ def refresh_model_services(board, model_services, *, now: str | None = None, sou
     payload_sha256 = hashlib.sha256(raw).hexdigest()
     rows, refreshed, unknown = [], [], []
     for model_service in validated:
-        adapter, provider, model = model_service
+        harness, provider, model = model_service
         provider_id, model_id = resolve_identity(index, provider, model)
         if provider_id is None:
             status, facts, identity_view, reason = "unknown", {}, {}, UNKNOWN_IDENTITY
@@ -357,13 +357,13 @@ def refresh_model_services(board, model_services, *, now: str | None = None, sou
             refreshed.append(list(model_service))
         else:
             unknown.append({"modelService": list(model_service), "reason": reason})
-        rows.append((adapter, provider, model, status, canonical_json(facts), canonical_json(identity_view),
+        rows.append((harness, provider, model, status, canonical_json(facts), canonical_json(identity_view),
                      origin, payload_sha256, fetched_at, reason))
     with board.db.write() as connection:
         connection.executemany(
-            "INSERT INTO model_facts(adapter,provider,model,status,facts_json,identity_json,source,payload_sha256,fetched_at,reason)"
+            "INSERT INTO model_facts(harness,provider,model,status,facts_json,identity_json,source,payload_sha256,fetched_at,reason)"
             " VALUES(?,?,?,?,?,?,?,?,?,?)"
-            " ON CONFLICT(adapter,provider,model) DO UPDATE SET status=excluded.status,facts_json=excluded.facts_json,"
+            " ON CONFLICT(harness,provider,model) DO UPDATE SET status=excluded.status,facts_json=excluded.facts_json,"
             " identity_json=excluded.identity_json,source=excluded.source,payload_sha256=excluded.payload_sha256,"
             " fetched_at=excluded.fetched_at,reason=excluded.reason",
             rows,
@@ -384,17 +384,17 @@ def model_service_facts(board, model_services) -> dict[tuple[str, str, str], dic
     views: dict[tuple[str, str, str], dict] = {}
     with board.db.read() as connection:
         for model_service in validated:
-            adapter, provider, model = model_service
+            harness, provider, model = model_service
             row = connection.execute(
-                "SELECT * FROM model_facts WHERE adapter=? AND provider=? AND model=?", model_service
+                "SELECT * FROM model_facts WHERE harness=? AND provider=? AND model=?", model_service
             ).fetchone()
             if row is None:
-                views[model_service] = {"adapter": adapter, "provider": provider, "model": model, "status": "unknown",
+                views[model_service] = {"harness": harness, "provider": provider, "model": model, "status": "unknown",
                                  "facts": None, "identity": None, "source": None, "fetchedAt": None,
                                  "reason": UNKNOWN_NEVER}
                 continue
             views[model_service] = {
-                "adapter": adapter,
+                "harness": harness,
                 "provider": provider,
                 "model": model,
                 "status": row["status"],
@@ -411,7 +411,7 @@ def snapshot_marker(board) -> str:
     """A stable content marker for the whole stored snapshot set, for tests and audits."""
     with board.db.read() as connection:
         rows = connection.execute(
-            "SELECT adapter,provider,model,status,facts_json,identity_json,source,payload_sha256,fetched_at,reason"
-            " FROM model_facts ORDER BY adapter,provider,model"
+            "SELECT harness,provider,model,status,facts_json,identity_json,source,payload_sha256,fetched_at,reason"
+            " FROM model_facts ORDER BY harness,provider,model"
         ).fetchall()
     return sha256_text(canonical_json([list(row) for row in rows])) if rows else "empty"

@@ -165,7 +165,7 @@ def _answer(document, options, mode):
         # Not JSON at all: the raw carrier keeps the delivery text, nothing parsed.
         return "{not json", None, "invalid"
     if mode == "answer_extra":
-        answer["policyCheck"] = {"hardConstraints": {"adapter": "invented"}}
+        answer["policyCheck"] = {"hardConstraints": {"harness": "invented"}}
     elif mode == "answer_bad_evidence":
         answer["evidence"] = ["invalid-reference"]
     elif mode == "answer_escape":
@@ -206,7 +206,7 @@ def main(control_path):
     document = control["fixture"]["document"]
     if mode == "input_changed":
         (Path(control["cwd"]) / "input.txt").write_text("mutated input\n")
-    binding = {"adapter": control["harness"], "taskId": control["taskId"],
+    binding = {"harness": control["harness"], "taskId": control["taskId"],
                "attemptId": control["attemptId"], "generation": control["generation"]}
     raw, parsed, schema_status = _answer(document, options, mode)
     reason_code, exit_code = _END.get(mode, (None, 0))

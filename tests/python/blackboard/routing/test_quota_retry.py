@@ -22,7 +22,7 @@ import blackboard.routing.test_decision as _decision_fixtures
 from blackboard.routing.test_decision import BUDDY_ID, SECOND_BUDDY_ID
 
 T0 = "2026-01-01T00:00:00.000Z"
-CONFIG = {"requestId": "recheck-1", "adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash"}
+CONFIG = {"requestId": "recheck-1", "harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash"}
 
 
 def moment(offset: float) -> str:
@@ -64,7 +64,7 @@ class QuotaRetryBoard(BoardTestCase):
     def marker_value(self):
         with self.board.store.db.read() as db:
             row = db.execute("SELECT retry_manual_at,retry_consumed_at,retry_consumed_by "
-                             "FROM quota_current WHERE adapter='dsh' AND provider='deepseek-official' "
+                             "FROM quota_current WHERE harness='dsh' AND provider='deepseek-official' "
                              "AND limit_id='' ").fetchone()
         if row is None or all(row[key] is None for key in row.keys()):
             return None
@@ -185,7 +185,7 @@ class QuotaRetryTests(QuotaRetryBoard):
     def test_known_reset_keeps_scheduled_recovery_and_no_retry_window(self):
         self.exhaust_provider(observedAt=moment(10), resetsAt=moment(7200))
         with self.board.store.db.write() as db:
-            item = {"adapter": "dsh", **routing_facts(db, "dsh", now=self.clock.value)[0]}
+            item = {"harness": "dsh", **routing_facts(db, "dsh", now=self.clock.value)[0]}
             self.assertIsNone(retry_facts(db, item, now=self.clock.value))
             self.assertIsNone(buddy_retry(db, CONFIG, now=self.clock.value))
         self.clock.advance(RETRY_WAIT_SECONDS)
@@ -205,8 +205,8 @@ class QuotaRetryTests(QuotaRetryBoard):
             record(db, "codex", {"provider": "openai", "source": "native-fixture",
                                  "observedAt": moment(5), "reachedType": "usage_limit_reached",
                                  "scope": {"limitId": "limited-model"}})
-            self.assertIsNotNone(exhausted(db, {"adapter": "codex", "provider": "openai", "model": "limited-model"}, now=self.clock.value))
-            self.assertIsNone(exhausted(db, {"adapter": "codex", "provider": "openai", "model": "other-model"}, now=self.clock.value))
+            self.assertIsNotNone(exhausted(db, {"harness": "codex", "provider": "openai", "model": "limited-model"}, now=self.clock.value))
+            self.assertIsNone(exhausted(db, {"harness": "codex", "provider": "openai", "model": "other-model"}, now=self.clock.value))
             facts = routing_facts(db, "codex", now=self.clock.value)
             self.assertEqual(facts[0]["limitId"], "limited-model")
             self.assertEqual(parse(facts[0]["retry"]["eligibleAt"]), parse(moment(5 + RETRY_WAIT_SECONDS)))
@@ -219,7 +219,7 @@ class QuotaRetryTests(QuotaRetryBoard):
         listed = self.board.call("buddy_list", {"query": "flash"})
         entry = next(item for item in listed["buddies"] if item["buddyId"] == BUDDY_ID)
         self.assertEqual(parse(entry["quotaRetry"]["eligibleAt"]), parse(moment(RETRY_WAIT_SECONDS)))
-        health = next(row for row in self.board.call("capabilities", {})["harnesses"] if row["adapter"] == "dsh")
+        health = next(row for row in self.board.call("capabilities", {})["harnesses"] if row["harness"] == "dsh")
         self.assertEqual(health["quotaRouting"][0]["provider"], CONFIG["provider"])
         # Read views project against the wall clock; the frozen eligible time is
         # the recorded fact the console explains from.
@@ -230,7 +230,7 @@ class QuotaRetryTests(QuotaRetryBoard):
         result = self.board.call("workflow_submit", {"requestId": "explicit-after-window", "hostId": "host",
             "task": "Explicit choice", "cwd": str(self.git_workdir()),
             "executionWorkspace": {"kind": "existing", "access": "write"},
-            "adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"})
+            "harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"})
         self.assertEqual(result["buddy"]["model"], "deepseek-flash")
         self.assertEqual(result["quotaWarnings"][0]["code"], "HARNESS_QUOTA_EXHAUSTED")
         self.assertIsNone(self.marker_value())
@@ -293,7 +293,7 @@ class QuotaRetryTests(QuotaRetryBoard):
 
 class RedetectTests(QuotaRetryBoard):
     def test_same_request_after_consumption_never_reopens_and_input_change_conflicts(self):
-        params = {"requestId": "same-request", "adapter": "dsh", "provider": CONFIG["provider"]}
+        params = {"requestId": "same-request", "harness": "dsh", "provider": CONFIG["provider"]}
         self.board.call("quota_redetect", params)
         self.candidates("consume")
         before = self.marker_value()
@@ -307,23 +307,23 @@ class RedetectTests(QuotaRetryBoard):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='harness.quota_redetect'").fetchone()[0], 1)
 
     def test_redetect_opens_one_window_idempotently(self):
-        first = self.board.call("quota_redetect", {"requestId": "recheck-1", "adapter": "dsh", "provider": "deepseek-official"})["quota"]
+        first = self.board.call("quota_redetect", {"requestId": "recheck-1", "harness": "dsh", "provider": "deepseek-official"})["quota"]
         self.assertEqual(first["opened"], [None])
         self.assertEqual(first["alreadyOpen"], [])
         self.assertTrue(first["records"][0]["retry"]["open"])
         self.assertTrue(first["records"][0]["retry"]["pendingManual"])
         # Repeating the identical request changes nothing.
-        second = self.board.call("quota_redetect", {"requestId": "recheck-1", "adapter": "dsh", "provider": "deepseek-official"})["quota"]
+        second = self.board.call("quota_redetect", {"requestId": "recheck-1", "harness": "dsh", "provider": "deepseek-official"})["quota"]
         self.assertEqual(second, first)
         # The opened window admits exactly one decision, immediately.
         self.assertEqual(self.candidates("dec-manual")[0], [BUDDY_ID, SECOND_BUDDY_ID])
         self.assertEqual(self.candidates("dec-next")[0], [])
         # A lost reply replayed after consumption cannot reopen the chance.
-        replay = self.board.call("quota_redetect", {"requestId": "recheck-1", "adapter": "dsh", "provider": "deepseek-official"})
+        replay = self.board.call("quota_redetect", {"requestId": "recheck-1", "harness": "dsh", "provider": "deepseek-official"})
         self.assertTrue(replay["duplicate"])
         self.assertEqual(self.candidates("dec-replay")[0], [])
         # After the trial a new explicit re-detect opens a fresh window.
-        third = self.board.call("quota_redetect", {"requestId": "recheck-2", "adapter": "dsh", "provider": "deepseek-official"})["quota"]
+        third = self.board.call("quota_redetect", {"requestId": "recheck-2", "harness": "dsh", "provider": "deepseek-official"})["quota"]
         self.assertEqual(third["opened"], [None])
         self.assertEqual(self.candidates("dec-manual-2")[0], [BUDDY_ID, SECOND_BUDDY_ID])
 
@@ -331,7 +331,7 @@ class RedetectTests(QuotaRetryBoard):
         with self.board.store.db.write() as db:
             record(db, "dsh", {"provider": "other-provider", "source": "native-fixture",
                                "observedAt": T0, "reachedType": "usage_limit_reached", "resetsAt": moment(7200)})
-        reply = self.board.call("quota_redetect", {"requestId": "recheck-1", "adapter": "dsh", "provider": "other-provider"})["quota"]
+        reply = self.board.call("quota_redetect", {"requestId": "recheck-1", "harness": "dsh", "provider": "other-provider"})["quota"]
         self.assertEqual(reply["opened"], [])
         self.assertEqual(reply["alreadyOpen"], [])
         self.assertIsNone(reply["records"][0]["retry"])
@@ -340,21 +340,21 @@ class RedetectTests(QuotaRetryBoard):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM quota_current WHERE retry_manual_at IS NOT NULL OR retry_consumed_at IS NOT NULL OR retry_consumed_by IS NOT NULL").fetchone()[0], 0)
 
     def test_redetect_is_honest_about_unknown_providers_and_refuses_free_text(self):
-        reply = self.board.call("quota_redetect", {"requestId": "recheck-1", "adapter": "dsh", "provider": "not-recorded"})["quota"]
+        reply = self.board.call("quota_redetect", {"requestId": "recheck-1", "harness": "dsh", "provider": "not-recorded"})["quota"]
         self.assertEqual(reply["records"], [])
         self.assertEqual(reply["opened"], [])
         with self.assertRaises(BoardError) as refused:
-            self.board.call("quota_redetect", {"requestId": "recheck-1", "adapter": "dsh", "provider": "not an identifier"})
+            self.board.call("quota_redetect", {"requestId": "recheck-1", "harness": "dsh", "provider": "not an identifier"})
         self.assertEqual(refused.exception.code, "INVALID_ARGUMENT")
         with self.assertRaises(BoardError) as unsupported:
-            self.board.call("quota_redetect", {"requestId": "recheck-1", "adapter": "unknown-harness", "provider": "deepseek-official"})
-        self.assertEqual(unsupported.exception.code, "UNSUPPORTED_ADAPTER")
+            self.board.call("quota_redetect", {"requestId": "recheck-1", "harness": "unknown-harness", "provider": "deepseek-official"})
+        self.assertEqual(unsupported.exception.code, "UNSUPPORTED_HARNESS")
         with self.assertRaises(BoardError) as unknown_field:
-            self.board.call("quota_redetect", {"requestId": "recheck-1", "adapter": "dsh", "provider": "deepseek-official", "secret": "x"})
+            self.board.call("quota_redetect", {"requestId": "recheck-1", "harness": "dsh", "provider": "deepseek-official", "secret": "x"})
         self.assertEqual(unknown_field.exception.code, "INVALID_ARGUMENT")
 
     def test_console_surface_requires_a_writable_session(self):
-        reply = self.board.console_call("quota_redetect", {"requestId": "recheck-1", "adapter": "dsh", "provider": "deepseek-official"})
+        reply = self.board.console_call("quota_redetect", {"requestId": "recheck-1", "harness": "dsh", "provider": "deepseek-official"})
         self.assertEqual(reply["quota"]["opened"], [None])
         from hey_my_buddy.console.server import CONSOLE_OPERATIONS
         from hey_my_buddy.console.console_sessions import READ_OPERATIONS
@@ -364,7 +364,7 @@ class RedetectTests(QuotaRetryBoard):
         self.assertNotIn("quota_redetect", AGENT_OPERATIONS)
         # Without an authenticated console session the mutation is refused.
         with self.assertRaises(BoardError) as refused:
-            self.board.console.command("quota_redetect", {"requestId": "recheck-1", "adapter": "dsh", "provider": "deepseek-official"})
+            self.board.console.command("quota_redetect", {"requestId": "recheck-1", "harness": "dsh", "provider": "deepseek-official"})
         self.assertEqual(refused.exception.code, "CONSOLE_SESSION_EXPIRED")
 
 
@@ -383,7 +383,7 @@ class RedetectSurfaceTests(unittest.TestCase):
         self.assertIn("no model or balance query", summary)
         method = cli_help.method_help("quota-redetect")
         names = {parameter.name for parameter in method.parameters}
-        self.assertEqual(names, {"adapter", "provider", "requestId"})
+        self.assertEqual(names, {"harness", "provider", "requestId"})
         self.assertTrue(all(parameter.required for parameter in method.parameters))
 
 

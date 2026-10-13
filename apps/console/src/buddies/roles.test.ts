@@ -11,8 +11,8 @@ import {
 } from "./roles";
 
 function entry(buddyId: string, extra: Partial<RouterHealthEntry> = {}): RouterHealthEntry {
-  const [adapter, provider, model, effort] = buddyId.split(":");
-  return { buddyId, index: 0, identity: { adapter, provider, model, effort }, eligible: true, ...extra };
+  const [harness, provider, model, effort] = buddyId.split(":");
+  return { buddyId, index: 0, identity: { harness, provider, model, effort }, eligible: true, ...extra };
 }
 const draftOf = (...routers: string[]): Draft => makeDraft(snapshot({ routers }));
 const listOf = (draft: Draft) => draft.configuration!.routerBuddyIds;

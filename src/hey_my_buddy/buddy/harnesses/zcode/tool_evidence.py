@@ -17,7 +17,7 @@ from collections.abc import Iterable
 
 from ....protocol.tool_evidence import MAX_TOOL_EVENTS, ToolEventEvidence, normalize_tool_event
 
-ADAPTER = "zcode"
+HARNESS = "zcode"
 
 #: The real session/event ``tool.updated`` payload kinds: ``scheduled`` opens a
 #: call and ``result``/``error`` closes it. Any other kind is an unknown frame
@@ -160,7 +160,7 @@ class ZcodeToolFacts:
         if identity is not None and phase is not None and call_id is not None and name is not None:
             # The envelope type is not an operation type and is never passed as
             # one; the shared table classifies the scheduled tool name alone.
-            self.evidence.observe(normalize_tool_event(ADAPTER, {
+            self.evidence.observe(normalize_tool_event(HARNESS, {
                 "nativeIdentity": dict(identity), "callId": call_id, "toolName": name, "phase": phase}))
             return
         self._incomplete(params, identity, call_id, phase, name)
@@ -210,7 +210,7 @@ class ZcodeToolFacts:
             self._names.setdefault(key, name)
             self._metadata_starts.add(key)
             if identity is not None:
-                self.evidence.observe(normalize_tool_event(ADAPTER, {
+                self.evidence.observe(normalize_tool_event(HARNESS, {
                     "nativeIdentity": identity, "callId": call_id, "toolName": name, "phase": "start"}))
             return
         known = self._names.get(key)
@@ -249,7 +249,7 @@ class ZcodeToolFacts:
             value = params.get(key)
             if isinstance(value, str) and value:
                 bounded[key] = value
-        self.evidence.observe_incomplete(ADAPTER, {
+        self.evidence.observe_incomplete(HARNESS, {
             "nativeIdentity": bounded, "callId": call_id, "toolName": name, "phase": phase})
 
     # -- receipt ---------------------------------------------------------------
@@ -278,4 +278,4 @@ class ZcodeToolFacts:
                                     exclude_calls=exclude_calls)
 
 
-__all__ = ["ADAPTER", "ZcodeToolFacts"]
+__all__ = ["HARNESS", "ZcodeToolFacts"]

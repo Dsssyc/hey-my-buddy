@@ -105,7 +105,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         etag = changed("Router setting")
         # A harness health observation revision.
         with board.store.db.write() as connection:
-            connection.execute("UPDATE harness_health SET revision=revision+1, record_json='{}' WHERE adapter='dsh'")
+            connection.execute("UPDATE harness_health SET revision=revision+1, record_json='{}' WHERE harness='dsh'")
         etag = changed("harness health")
         # Console asset availability is part of the marker.
         (board.console.assets_dir).mkdir(parents=True, exist_ok=True)
@@ -276,7 +276,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         def stamp(delta):
             return datetime.fromtimestamp(now[0] + delta, timezone.utc).isoformat()
 
-        health = [{"adapter": "codex", "status": "ready", "available": True,
+        health = [{"harness": "codex", "status": "ready", "available": True,
                    "scanAfter": stamp(180), "expiresAt": stamp(3600)}]
         board.service.automatic_discovery = True
         with mock.patch.object(board.service.harnesses, "all", return_value=health), \
@@ -315,7 +315,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         now = [time.time()]
         board.console._clock = lambda: now[0]
         board.console.read_cache._clock = lambda: now[0]
-        health = [{"adapter": "codex", "status": "unknown", "available": False,
+        health = [{"harness": "codex", "status": "unknown", "available": False,
                    "scanAfter": None, "expiresAt": None}]
         board.service.automatic_discovery = True
         with mock.patch.object(board.service.harnesses, "all", return_value=health), \

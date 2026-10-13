@@ -50,7 +50,7 @@ BUDDY_ID = "dsh:deepseek-official:deepseek-flash:off"
 BUDDY = {
     "buddyId": BUDDY_ID,
     "label": "DeepSeek-V41-Flash · off",
-    "adapter": "dsh",
+    "harness": "dsh",
     "provider": "deepseek-official",
     "model": "deepseek-flash",
     "effort": "off",
@@ -61,7 +61,7 @@ BUDDY = {
     "description": "fixture decision model",
     "source": "manual",
 }
-BUDDY_MODEL_SERVICE = {"adapter": BUDDY["adapter"], "provider": BUDDY["provider"], "model": BUDDY["model"]}
+BUDDY_MODEL_SERVICE = {"harness": BUDDY["harness"], "provider": BUDDY["provider"], "model": BUDDY["model"]}
 
 NONCE = "n" * 32
 #: The adapters one generic worker can honestly serve. The real pool advertises the

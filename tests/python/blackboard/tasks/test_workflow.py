@@ -21,7 +21,7 @@ from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.errors import BoardError
 
 NONCE = "n" * 16
-BUDDY = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
+BUDDY = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
 
 
 class WorkflowTestCase(BoardTestCase):
@@ -45,7 +45,7 @@ class WorkflowTestCase(BoardTestCase):
     # -- driven helpers -----------------------------------------------------
     def submit(self, board, *, request_id="req-1", host_id="host-1", task="do the thing", cwd=None, **extra):
         params = {
-            **(BUDDY if extra.get("adapter", "dsh") in ("dsh", "zcode") else {}),
+            **(BUDDY if extra.get("adapter") not in ("command", "external") else {}),
             "requestId": request_id,
             "hostId": host_id,
             "task": task,

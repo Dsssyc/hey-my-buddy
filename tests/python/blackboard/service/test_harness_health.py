@@ -17,9 +17,9 @@ class HarnessHealthTests(BoardTestCase):
         self.refreshed = []
         self.health = HarnessHealth(self.board, catalog_refresh=lambda name, record, catalog_scan_claimed=False: self.refreshed.append((name, record)))
         self.health.initialize()
-        self.snapshot = {'adapter': 'codex', 'managerRecords': [], 'candidates': [
+        self.snapshot = {'harness': 'codex', 'managerRecords': [], 'candidates': [
             {'path': '/native/codex', 'exists': True, 'fingerprint': {'mtimeNs': 1}}]}
-        self.discovered = {'adapter': 'codex', 'status': 'ready', 'command': ['/native/codex'],
+        self.discovered = {'harness': 'codex', 'status': 'ready', 'command': ['/native/codex'],
                            'executable': '/native/codex', 'version': '1.0', 'source': 'common', 'available': True}
         self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)))
         self.scan = patch('hey_my_buddy.blackboard.service.harness_health._snapshot', side_effect=lambda *args: self.snapshot)
@@ -51,7 +51,7 @@ class HarnessHealthTests(BoardTestCase):
         environment = self.native.call_args.args[2]
         self.assertTrue(environment['PATH'].startswith(os.pathsep.join([str(cli_dir), str(node_dir)]) + os.pathsep))
         with self.board.db.read() as db:
-            stored = db.execute("SELECT record_json FROM harness_health WHERE adapter='codex'").fetchone()[0]
+            stored = db.execute("SELECT record_json FROM harness_health WHERE harness='codex'").fetchone()[0]
         self.assertNotIn(str(cli_dir), stored)
 
     def test_path_hints_keep_first_seen_order_and_ignore_empty_directories_at_the_limit(self):
@@ -104,7 +104,7 @@ class HarnessHealthTests(BoardTestCase):
             first = self.health.refresh('codex')
             for path in [paths[1], paths[0], paths[2], paths[0], paths[1], paths[0]]:
                 with self.board.db.write() as db:
-                    db.execute("UPDATE harness_health SET scan_after=NULL WHERE adapter='codex'")
+                    db.execute("UPDATE harness_health SET scan_after=NULL WHERE harness='codex'")
                 self.health.add_path_hint(path)
                 current = self.health.refresh('codex')
                 self.assertEqual(current['revision'], first['revision'])
@@ -129,7 +129,7 @@ class HarnessHealthTests(BoardTestCase):
             first = self.health.refresh('codex')
             for directory in [directories[1], directories[0], directories[1], directories[0]]:
                 with self.board.db.write() as db:
-                    db.execute("UPDATE harness_health SET scan_after=NULL WHERE adapter='codex'")
+                    db.execute("UPDATE harness_health SET scan_after=NULL WHERE harness='codex'")
                 self.health.add_path_hint(os.pathsep.join([str(self.directory / 'temporary-empty'), str(directory)]))
                 current = self.health.refresh('codex')
                 self.assertEqual(current['revision'], first['revision'])
@@ -200,8 +200,8 @@ class HarnessHealthTests(BoardTestCase):
         evaluation = EvaluationStore(self.board)
         readings = []
         payload = {'source': 'stat-change-fixture',
-                   'discoveries': [{'adapter': 'codex', 'status': 'complete', 'accountStatus': 'confirmed'}],
-                   'providers': [{'adapter': 'codex', 'provider': 'fixture', 'models': [
+                   'discoveries': [{'harness': 'codex', 'status': 'complete', 'accountStatus': 'confirmed'}],
+                   'providers': [{'harness': 'codex', 'provider': 'fixture', 'models': [
                        {'id': 'alpha', 'efforts': ['high']}]}]}
         self.health.catalog_refresh = lambda name, record, catalog_scan_claimed=False: readings.append(
             evaluation.record_catalog(payload))
@@ -214,20 +214,20 @@ class HarnessHealthTests(BoardTestCase):
         self.assertEqual(readings[1]['buddies'], readings[0]['buddies'])
 
     def test_negative_auth_observation_expires_even_without_file_changes(self):
-        self.discovered = {'adapter': 'codex', 'status': 'login-required', 'reasonCode': 'HARNESS_LOGIN_REQUIRED'}
+        self.discovered = {'harness': 'codex', 'status': 'login-required', 'reasonCode': 'HARNESS_LOGIN_REQUIRED'}
         self.assertFalse(self.health.refresh('codex')['available'])
         self.health.refresh('codex')
         self.native.assert_called_once()
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_health SET expires_at='2000',scan_after='2000' WHERE adapter='codex'")
-        self.discovered = {'adapter': 'codex', 'status': 'ready', 'version': '1.0'}
+            db.execute("UPDATE harness_health SET expires_at='2000',scan_after='2000' WHERE harness='codex'")
+        self.discovered = {'harness': 'codex', 'status': 'ready', 'version': '1.0'}
         self.assertTrue(self.health.refresh('codex')['available'])
         self.assertEqual(self.native.call_count, 2)
 
     def test_late_discovery_cannot_overwrite_new_manual_generation(self):
         def replaced(*args):
             with self.board.db.write() as db:
-                db.execute("UPDATE harness_health SET manual_path='/new/codex',revision=revision+1 WHERE adapter='codex'")
+                db.execute("UPDATE harness_health SET manual_path='/new/codex',revision=revision+1 WHERE harness='codex'")
             return self.discovered
         self.native.side_effect = replaced
         result = self.health.refresh('codex')
@@ -254,9 +254,9 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.refreshed = []
         self.health = HarnessHealth(self.board, catalog_refresh=lambda name, record, catalog_scan_claimed=False: self.refreshed.append(name))
         self.health.initialize()
-        self.snapshot = {'adapter': 'codex', 'managerRecords': [], 'candidates': [
+        self.snapshot = {'harness': 'codex', 'managerRecords': [], 'candidates': [
             {'path': '/native/codex', 'exists': True, 'fingerprint': {'mtimeNs': 1}}]}
-        self.discovered = {'adapter': 'codex', 'status': 'ready', 'command': ['/native/codex'],
+        self.discovered = {'harness': 'codex', 'status': 'ready', 'command': ['/native/codex'],
                            'executable': '/native/codex', 'version': '1.0', 'source': 'common', 'available': True}
         self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)))
         self.scan = patch('hey_my_buddy.blackboard.service.harness_health._snapshot', side_effect=lambda *args: self.snapshot)
@@ -268,37 +268,37 @@ class CatalogShelfLifeTests(BoardTestCase):
 
     def set_read_at(self, seconds_ago):
         with self.board.db.read() as db:
-            recorded = db.execute("SELECT 1 FROM catalog_current WHERE adapter='codex'").fetchone()
+            recorded = db.execute("SELECT 1 FROM catalog_current WHERE harness='codex'").fetchone()
         if recorded is None:
             self.record_native('confirmed')
         with self.board.db.write() as db:
-            db.execute("UPDATE catalog_current SET read_at=? WHERE adapter='codex'", (_stamp(seconds_ago),))
+            db.execute("UPDATE catalog_current SET read_at=? WHERE harness='codex'", (_stamp(seconds_ago),))
 
     def pass_throttles(self):
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_health SET scan_after='2000' WHERE adapter='codex'")
+            db.execute("UPDATE harness_health SET scan_after='2000' WHERE harness='codex'")
 
     def expire_catalog_throttle(self):
         """The bounded catalog re-read cadence (SCAN_SECONDS) has passed."""
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_health SET scan_after=NULL WHERE adapter='codex'")
+            db.execute("UPDATE harness_health SET scan_after=NULL WHERE harness='codex'")
 
     def record_native(self, account_status, *, observed_seconds_ago=None):
         from hey_my_buddy.blackboard.catalog import catalog_store
         payload = {'source': 'fixture-native',
-                   'providers': [{'adapter': 'codex', 'provider': 'openai',
+                   'providers': [{'harness': 'codex', 'provider': 'openai',
                                   'models': [{'id': 'sol', 'efforts': ['high'], 'available': True}]}],
-                   'discoveries': [{'adapter': 'codex', 'status': 'complete', 'accountStatus': account_status}]}
+                   'discoveries': [{'harness': 'codex', 'status': 'complete', 'accountStatus': account_status}]}
         catalog_store.record(self.board.evaluation, payload)
         if observed_seconds_ago is not None:
             with self.board.db.write() as db:
-                db.execute("UPDATE catalog_current SET updated_at=? WHERE adapter='codex'", (_stamp(observed_seconds_ago),))
+                db.execute("UPDATE catalog_current SET updated_at=? WHERE harness='codex'", (_stamp(observed_seconds_ago),))
 
     def catalog_state(self):
         with self.board.db.read() as db:
-            row = db.execute("SELECT status, reason FROM catalog_current WHERE adapter='codex'").fetchone()
-            buddies = db.execute("SELECT buddy_id, available FROM buddies WHERE adapter='codex'").fetchall()
-            read_at = db.execute("SELECT read_at FROM catalog_current WHERE adapter='codex'").fetchone()
+            row = db.execute("SELECT status, reason FROM catalog_current WHERE harness='codex'").fetchone()
+            buddies = db.execute("SELECT buddy_id, available FROM buddies WHERE harness='codex'").fetchall()
+            read_at = db.execute("SELECT read_at FROM catalog_current WHERE harness='codex'").fetchone()
         return row, buddies, (read_at[0] if read_at else None)
 
     def test_throttled_scan_still_rereads_a_stale_catalog_once(self):
@@ -329,14 +329,14 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.health.refresh('codex')
         self.set_read_at(60)
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_health SET scan_after='2000',expires_at='2000' WHERE adapter='codex'")
+            db.execute("UPDATE harness_health SET scan_after='2000',expires_at='2000' WHERE harness='codex'")
         self.health.refresh('codex')
         self.assertEqual(self.native.call_count, 2, 'The expired record reprobes the harness')
         self.assertEqual(self.refreshed, ['codex'], 'A fresh catalog needs no re-read')
         self.set_read_at(6 * 3600 + 1)
         self.expire_catalog_throttle()
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_health SET scan_after='2000',expires_at='2000' WHERE adapter='codex'")
+            db.execute("UPDATE harness_health SET scan_after='2000',expires_at='2000' WHERE harness='codex'")
         self.health.refresh('codex')
         self.assertEqual(self.refreshed, ['codex', 'codex'])
 
@@ -360,7 +360,7 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.health.refresh('codex')
         self.record_native('confirmed')
         with self.board.db.write() as db:
-            db.execute("UPDATE catalog_current SET read_at='not-a-time' WHERE adapter='codex'")
+            db.execute("UPDATE catalog_current SET read_at='not-a-time' WHERE harness='codex'")
         self.expire_catalog_throttle()
         self.pass_throttles()
         self.health.refresh('codex')
@@ -375,7 +375,7 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.assertEqual(self.refreshed, ['codex'])
         self.expire_catalog_throttle()
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_health SET scan_after='2000',expires_at='2000' WHERE adapter='codex'")
+            db.execute("UPDATE harness_health SET scan_after='2000',expires_at='2000' WHERE harness='codex'")
         self.health.refresh('codex')
         self.assertEqual(self.native.call_count, 2, 'The expired record reprobes the harness')
         self.assertEqual(self.refreshed, ['codex', 'codex'], 'A never-confirmed catalog is re-read')
@@ -443,9 +443,9 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
         self.board.initialize()
         self.board.evaluation = EvaluationStore(self.board, clock=self.clock)
         self.evaluation = self.board.evaluation
-        self.ready = {'adapter': 'dsh', 'status': 'ready', 'version': '1.0',
+        self.ready = {'harness': 'dsh', 'status': 'ready', 'version': '1.0',
                       'command': ['/fixture/dsh'], 'executable': '/fixture/dsh'}
-        for target, result in (('_snapshot', {'adapter': 'dsh', 'managerRecords': [], 'candidates': []}),
+        for target, result in (('_snapshot', {'harness': 'dsh', 'managerRecords': [], 'candidates': []}),
                                ('_discover', self.ready)):
             stub = patch('hey_my_buddy.blackboard.service.harness_health.' + target, return_value=result)
             stub.start()
@@ -453,8 +453,8 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
 
     def reading(self, models):
         return {'source': 'fixture-native',
-                'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}],
-                'providers': [{'adapter': 'dsh', 'provider': 'fixture',
+                'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}],
+                'providers': [{'harness': 'dsh', 'provider': 'fixture',
                                'models': [{'id': model, 'efforts': ['max'], 'available': True} for model in models]}]}
 
     def prime_ready_health(self, health):
@@ -462,7 +462,7 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
         self.evaluation.record_catalog(self.reading(('alpha',)))
         health.refresh('dsh', force=True)
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_health SET scan_after=NULL WHERE adapter='dsh'")
+            db.execute("UPDATE harness_health SET scan_after=NULL WHERE harness='dsh'")
         # The confirmed read time stays at the FakeClock epoch, far in the past.
 
     def test_an_explicit_request_joins_a_health_stale_read_in_flight(self):
@@ -483,7 +483,7 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
         hook_calls = []
         catalog.register_catalog_reread(self.board.directory, lambda name: hook_calls.append(name))
         self.addCleanup(lambda: catalog.register_catalog_reread(self.board.directory, None))
-        target = {'adapter': 'dsh', 'provider': 'fixture', 'model': 'beta', 'effort': 'max'}
+        target = {'harness': 'dsh', 'provider': 'fixture', 'model': 'beta', 'effort': 'max'}
         outcome, error = {}, {}
 
         def request():
@@ -526,7 +526,7 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
 
         catalog.register_catalog_reread(self.board.directory, slow_hook)
         self.addCleanup(lambda: catalog.register_catalog_reread(self.board.directory, None))
-        target = {'adapter': 'dsh', 'provider': 'fixture', 'model': 'beta', 'effort': 'max'}
+        target = {'harness': 'dsh', 'provider': 'fixture', 'model': 'beta', 'effort': 'max'}
         outcome, error = {}, {}
 
         def request():
@@ -571,9 +571,9 @@ class HealthRecoveryRestoreTests(BoardTestCase):
         self.board = self.board(clock=self.clock)
         self.evaluation = self.board.evaluation
         self.health = HarnessHealth(self.board.store, catalog_refresh=None)
-        self.ready = {'adapter': 'dsh', 'status': 'ready', 'version': '1.0', 'command': ['/fixture/dsh']}
+        self.ready = {'harness': 'dsh', 'status': 'ready', 'version': '1.0', 'command': ['/fixture/dsh']}
         for target, result in (
-            ('_snapshot', {'adapter': 'dsh', 'managerRecords': [], 'candidates': []}),
+            ('_snapshot', {'harness': 'dsh', 'managerRecords': [], 'candidates': []}),
             ('_discover', self.ready),
         ):
             stub = patch('hey_my_buddy.blackboard.service.harness_health.' + target, return_value=result)
@@ -583,8 +583,8 @@ class HealthRecoveryRestoreTests(BoardTestCase):
     def reading(self, efforts):
         models = [{'id': 'alpha', 'efforts': list(efforts), 'available': True},
                   {'id': 'gamma', 'efforts': ['max'], 'available': False, 'unavailableReason': 'native-disabled'}]
-        return {'source': 'fixture-native', 'providers': [{'adapter': 'dsh', 'provider': 'fixture', 'models': models}],
-                'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
+        return {'source': 'fixture-native', 'providers': [{'harness': 'dsh', 'provider': 'fixture', 'models': models}],
+                'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
 
     def buddies(self):
         from hey_my_buddy.blackboard.catalog import catalog_store
@@ -597,7 +597,7 @@ class HealthRecoveryRestoreTests(BoardTestCase):
         self.evaluation.record_catalog(self.reading(('max', 'high')))
         self.evaluation.record_catalog(self.reading(('max',)))  # alpha:high retires
         with self.board.store.db.write() as db:
-            db.execute("UPDATE buddies SET enabled=1 WHERE adapter='dsh'")
+            db.execute("UPDATE buddies SET enabled=1 WHERE harness='dsh'")
         self.health.invalidate('dsh', self.health.get('dsh')['revision'], 'HARNESS_HANDSHAKE_FAILED')
         broken = self.buddies()['dsh:fixture:alpha:max']
         self.assertFalse(broken['available'], 'The health failure zeroed the retained route')
@@ -623,9 +623,9 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         self.board = self.board(clock=self.clock)
         self.evaluation = self.board.evaluation
         self.health = HarnessHealth(self.board.store, catalog_refresh=self.unknown_read)
-        self.ready = {'adapter': 'dsh', 'status': 'ready', 'version': '1.0', 'command': ['/fixture/dsh']}
+        self.ready = {'harness': 'dsh', 'status': 'ready', 'version': '1.0', 'command': ['/fixture/dsh']}
         for target, result in (
-            ('_snapshot', {'adapter': 'dsh', 'managerRecords': [], 'candidates': []}),
+            ('_snapshot', {'harness': 'dsh', 'managerRecords': [], 'candidates': []}),
             ('_discover', self.ready),
         ):
             stub = patch('hey_my_buddy.blackboard.service.harness_health.' + target, return_value=result)
@@ -636,7 +636,7 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         self.clock.advance(3601)
         self.evaluation.record_catalog(self.reading(('high',), beta=False))
         with self.board.store.db.write() as db:
-            db.execute("UPDATE buddies SET enabled=1 WHERE adapter='dsh'")
+            db.execute("UPDATE buddies SET enabled=1 WHERE harness='dsh'")
         self.before = self.buddies()
 
     def reading(self, efforts, *, beta):
@@ -644,12 +644,12 @@ class CatalogHealthOwnershipTests(BoardTestCase):
                   {'id': 'gamma', 'efforts': ['high'], 'available': False, 'unavailableReason': 'native-disabled'}]
         if beta:
             models.append({'id': 'beta', 'efforts': ['high'], 'available': True})
-        return {'source': 'fixture-native', 'providers': [{'adapter': 'dsh', 'provider': 'fixture', 'models': models}],
-                'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
+        return {'source': 'fixture-native', 'providers': [{'harness': 'dsh', 'provider': 'fixture', 'models': models}],
+                'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
 
     def unknown_read(self, *args, catalog_scan_claimed=False):
         self.evaluation.record_catalog({'source': 'fixture-native', 'providers': [],
-            'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'unknown'}]})
+            'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'unknown'}]})
 
     def buddies(self):
         from hey_my_buddy.blackboard.catalog import catalog_store
@@ -695,7 +695,7 @@ class CatalogHealthOwnershipTests(BoardTestCase):
 
     def test_initialize_existing_buddies_preserves_catalog_reasons(self):
         with self.board.store.db.write() as db:
-            db.execute("DELETE FROM harness_health WHERE adapter='dsh'")
+            db.execute("DELETE FROM harness_health WHERE harness='dsh'")
         self.health.initialize()
         self.assert_not_checked_keeps_catalog_reasons()
         self.assertTrue(self.health.refresh('dsh', force=True)['available'])
@@ -712,7 +712,7 @@ class CatalogHealthOwnershipTests(BoardTestCase):
 
     def test_unhealthy_refresh_updates_null_reason_and_preserves_catalog_reasons(self):
         with patch('hey_my_buddy.blackboard.service.harness_health._discover',
-                   return_value={'adapter': 'dsh', 'status': 'unhealthy', 'reasonCode': 'HARNESS_HANDSHAKE_FAILED'}):
+                   return_value={'harness': 'dsh', 'status': 'unhealthy', 'reasonCode': 'HARNESS_HANDSHAKE_FAILED'}):
             self.assertFalse(self.health.refresh('dsh', force=True)['available'])
         high = self.buddies()['dsh:fixture:alpha:high']
         self.assertFalse(high['available'])
@@ -732,12 +732,12 @@ class StaleRereadServiceCallbackTests(BoardTestCase):
         service = board.service
         health = HarnessHealth(service.store, catalog_refresh=service._refresh_harness_catalog)
         health.initialize()
-        snapshot = {'adapter': 'dsh', 'managerRecords': [], 'candidates': []}
-        ready = {'adapter': 'dsh', 'status': 'ready', 'version': '1.0',
+        snapshot = {'harness': 'dsh', 'managerRecords': [], 'candidates': []}
+        ready = {'harness': 'dsh', 'status': 'ready', 'version': '1.0',
                  'command': ['/fixture/dsh'], 'executable': '/fixture/dsh'}
-        good = {'source': 'fixture-native', 'providers': [{'adapter': 'dsh', 'provider': 'fixture',
+        good = {'source': 'fixture-native', 'providers': [{'harness': 'dsh', 'provider': 'fixture',
                 'models': [{'id': 'alpha', 'efforts': ['max'], 'available': True}]}],
-                'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
+                'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
 
         def discover_models():
             if calls:
@@ -754,8 +754,8 @@ class StaleRereadServiceCallbackTests(BoardTestCase):
             first = health.refresh('dsh')
             self.assertTrue(first['available'])
             with board.store.db.write() as db:
-                db.execute("UPDATE catalog_current SET read_at=? WHERE adapter='dsh'", (_stamp(6 * 3600 + 1),))
-                db.execute("UPDATE harness_health SET scan_after=NULL WHERE adapter='dsh'")
+                db.execute("UPDATE catalog_current SET read_at=? WHERE harness='dsh'", (_stamp(6 * 3600 + 1),))
+                db.execute("UPDATE harness_health SET scan_after=NULL WHERE harness='dsh'")
             again = health.refresh('dsh')
         self.assertFalse(again['available'], 'The failed native re-read speaks through the record')
         self.assertEqual(again['reasonCode'], 'CATALOG_UNAVAILABLE')
@@ -770,11 +770,11 @@ class HealthProbeFailureTests(BoardTestCase):
         self.board.initialize()
         self.health = HarnessHealth(self.board)
         self.addCleanup(self.health.close)
-        self.enterContext(patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'adapter': 'codex', 'managerRecords': [], 'candidates': []}))
+        self.enterContext(patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'harness': 'codex', 'managerRecords': [], 'candidates': []}))
 
     def test_unconfirmed_probe_shutdown_remains_unavailable(self):
         with patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value={
-                'adapter': 'codex', 'status': 'unhealthy', 'reasonCode': 'shutdown-unverified'}):
+                'harness': 'codex', 'status': 'unhealthy', 'reasonCode': 'shutdown-unverified'}):
             result = self.health.refresh('codex', force=True)
         self.assertFalse(result['available'])
         self.assertEqual(result['reasonCode'], 'shutdown-unverified')
@@ -787,7 +787,7 @@ class HealthProbeFailureTests(BoardTestCase):
 
     def test_invalid_native_return_is_refused(self):
         from hey_my_buddy.errors import BoardError
-        with patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value={'adapter': 'codex', 'status': 'illegal'}):
+        with patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value={'harness': 'codex', 'status': 'illegal'}):
             with self.assertRaises(BoardError) as caught:
                 self.health.refresh('codex', force=True)
         self.assertEqual(caught.exception.code, 'HARNESS_INVALID_RESULT')
@@ -803,9 +803,9 @@ class NativeAccountReadFailureTests(BoardTestCase):
         self.health = HarnessHealth(self.board, catalog_refresh=lambda *args, **kwargs: self.catalog_reads.append(args))
         self.health.initialize()
         self.addCleanup(self.health.close)
-        self.enterContext(patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'adapter': 'codex', 'managerRecords': [], 'candidates': []}))
+        self.enterContext(patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'harness': 'codex', 'managerRecords': [], 'candidates': []}))
         self.enterContext(patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value={
-            'adapter': 'codex', 'status': 'ready', 'command': ['fixture-codex'], 'version': 'fixture'}))
+            'harness': 'codex', 'status': 'ready', 'command': ['fixture-codex'], 'version': 'fixture'}))
 
     def events(self, kind):
         import json
@@ -828,7 +828,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
         self.assertEqual(self.events('harness.account_observed'), [])
         self.assertEqual(self.events('harness.invalidated')[0]['reasonCode'], first['reasonCode'])
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_account_reads SET checked_at='2000' WHERE adapter='codex'")
+            db.execute("UPDATE harness_account_reads SET checked_at='2000' WHERE harness='codex'")
         with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)):
             recovered = self.health.refresh('codex', force=True)
         self.assertTrue(recovered['available'])
@@ -845,7 +845,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
                               (OSError('fixture read transport failed'), 'HARNESS_ACCOUNT_READ_FAILED')):
             with self.subTest(reason=reason):
                 with self.board.db.write() as db:
-                    db.execute("DELETE FROM harness_account_reads WHERE adapter='codex'")
+                    db.execute("DELETE FROM harness_account_reads WHERE harness='codex'")
                 with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', side_effect=error):
                     result = self.health.refresh('codex', force=True)
                 self.assertTrue(result['available'])
@@ -862,7 +862,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
         with self.board.db.read() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM harness_quota_observations').fetchone()[0], 0)
         with self.board.db.write() as db:
-            db.execute("DELETE FROM harness_account_reads WHERE adapter='codex'")
+            db.execute("DELETE FROM harness_account_reads WHERE harness='codex'")
         with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)):
             recovered = self.health.refresh('codex', force=True)
         self.assertTrue(recovered['available'])
@@ -872,7 +872,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
         from hey_my_buddy.errors import BoardError
         def fail_after_setting_change(*args):
             with self.board.db.write() as db:
-                db.execute("UPDATE harness_health SET revision=revision+1,status='unknown',record_json='{}' WHERE adapter='codex'")
+                db.execute("UPDATE harness_health SET revision=revision+1,status='unknown',record_json='{}' WHERE harness='codex'")
             raise BoardError('HARNESS_ACCOUNT_STOP_UNCONFIRMED', 'old fixture read')
         with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', side_effect=fail_after_setting_change):
             result = self.health.refresh('codex', force=True)
@@ -910,7 +910,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
         with patch.object(account_probe, 'read', side_effect=BoardError('HARNESS_ACCOUNT_STOP_UNCONFIRMED', 'unknown stop')):
             self.assertFalse(self.health.refresh('codex', force=True)['available'])
         with self.board.db.write() as db:
-            db.execute("DELETE FROM harness_account_reads WHERE adapter='codex'")
+            db.execute("DELETE FROM harness_account_reads WHERE harness='codex'")
         with patch.object(account_probe, 'owned_popen'), patch.object(account_probe, 'ProcessHandle') as handle, \
              patch.object(account_probe, 'Connection') as connection:
             handle.return_value.shutdown_confirmed.return_value = True
@@ -947,7 +947,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
                  patch.object(account_probe, 'owned_popen'), patch.object(account_probe, 'ProcessHandle') as handle, \
                  patch.object(account_probe, 'Connection') as connection:
                 with self.board.db.write() as db:
-                    db.execute("DELETE FROM harness_account_reads WHERE adapter='codex'")
+                    db.execute("DELETE FROM harness_account_reads WHERE harness='codex'")
                 handle.return_value.shutdown_confirmed.return_value = True
                 connection.return_value.call.side_effect = [
                     {}, {'account': {'type': 'chatgpt', 'planType': 'plus'}}, {'config': configured}, {},

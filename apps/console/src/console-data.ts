@@ -1,7 +1,7 @@
 import type { ModelService, Preference, Buddy, Task } from "./types";
 import { catalogPending, effortText, buddyName } from "./buddy-name";
 
-export const modelServiceKey = (p: ModelService) => JSON.stringify([p.adapter, p.provider, p.model]);
+export const modelServiceKey = (p: ModelService) => JSON.stringify([p.harness, p.provider, p.model]);
 
 /**
  * The model service's aggregated pending fact (ADR-027 §6): pending is a model-identity
@@ -19,7 +19,7 @@ export function modelServicePending(buddies: Buddy[]): { pending: boolean; since
 }
 /**
  * ADR-011 shared model service concurrency: one user-owned concurrent-task
- * limit per exact adapter/provider/model tuple. All effort variants, routing
+ * limit per exact harness/provider/model tuple. All effort variants, routing
  * decisions and execution attempts of the model service share the count; the default is 2 and
  * the accepted range is the integers 1–32.
  */
@@ -57,12 +57,12 @@ export function retryIntervalSeconds(value: unknown): number | null {
     ? value
     : null;
 }
-export type ModelServiceGroup = { key: string; name: string; adapter: string; provider: string; buddies: Buddy[] };
+export type ModelServiceGroup = { key: string; name: string; harness: string; provider: string; buddies: Buddy[] };
 export function modelServices(buddies: Buddy[]): ModelServiceGroup[] {
   const groups = new Map<string, ModelServiceGroup>();
   for (const buddy of buddies) {
     const key = modelServiceKey(buddy);
-    if (!groups.has(key)) groups.set(key, { key, name: buddyName(buddy), adapter: buddy.adapter, provider: buddy.provider, buddies: [] });
+    if (!groups.has(key)) groups.set(key, { key, name: buddyName(buddy), harness: buddy.harness, provider: buddy.provider, buddies: [] });
     groups.get(key)!.buddies.push(buddy);
   }
   // Display order only; default/off modes do not imply a capability score.
@@ -71,7 +71,7 @@ export function modelServices(buddies: Buddy[]): ModelServiceGroup[] {
     const rank = (value: string) => levels.includes(value) ? levels.indexOf(value) : levels.length;
     return rank(a.effort) - rank(b.effort) || a.effort.localeCompare(b.effort);
   });
-  return [...groups.values()].sort((a, b) => a.adapter.localeCompare(b.adapter)
+  return [...groups.values()].sort((a, b) => a.harness.localeCompare(b.harness)
     || Number(b.buddies.some(p => p.enabled)) - Number(a.buddies.some(p => p.enabled))
     || a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
 }
@@ -90,5 +90,5 @@ export function taskHost(task: Task) {
 }
 export function taskExecutor(task: Task) {
   const buddy = task.delegation?.buddy;
-  return buddy ? `${buddy.adapter} · ${buddy.model} / ${effortText(buddy.effort)}` : "执行配置待确定";
+  return buddy ? `${buddy.harness} · ${buddy.model} / ${effortText(buddy.effort)}` : "执行配置待确定";
 }

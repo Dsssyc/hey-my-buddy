@@ -72,7 +72,7 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
         self.assertEqual(json.loads(outcome.result["rawAnswer"]), {"buddyId": "legal"})
         evidence = outcome.result["toolEvidence"]
-        self.assertEqual(evidence["binding"], {"adapter": "codex", "taskId": "router-task",
+        self.assertEqual(evidence["binding"], {"harness": "codex", "taskId": "router-task",
                                                "attemptId": "router-attempt", "generation": 7})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": "thread-1", "turnId": "turn-1"}])
         self.assertTrue(evidence["streamComplete"])
@@ -117,7 +117,7 @@ class NoToolCodexTests(unittest.TestCase):
                     self.assertTrue(outcome.result["zeroToolVerified"])
 
     def test_adapter_entrypoint_and_collector(self):
-        directory = self.root / "adapter"
+        directory = self.root / "harness"
         environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
         environment.update(HOME=str(self.root), CODEX_HOME=str(self.home),
                            PYTHONPATH=os.pathsep.join(filter(None, (str(SOURCE), os.environ.get('PYTHONPATH')))),
@@ -137,7 +137,7 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertTrue(outcome.result["zeroToolVerified"])
         self.assertEqual(outcome.result["toolEvidence"]["binding"],
-                         {"adapter": "codex", "taskId": "task", "attemptId": "attempt", "generation": 1})
+                         {"harness": "codex", "taskId": "task", "attemptId": "attempt", "generation": 1})
 
     def test_native_metadata_notifications_do_not_hide_tools_or_break_the_turn(self):
         outcome, _control, _directory = self.run_case('native-metadata')

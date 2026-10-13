@@ -39,7 +39,7 @@ from ...errors import BoardError
 DELEGATION_KINDS = ("goal", "helper", "decision", "execution")
 
 #: The four fields of a complete resolved buddy.
-BUDDY_FIELDS = ("adapter", "provider", "model", "effort")
+BUDDY_FIELDS = ("harness", "provider", "model", "effort")
 
 #: Server-side task history filters. ``all`` adds no predicate.
 HISTORY_FILTERS = ("all", "active", "host", "review")
@@ -206,7 +206,7 @@ SELECT
         json_extract(root_run.workspace_manifest_json, '$.snapshot.repositoryPath')
     ) AS project_repository_path,
     COALESCE(json_extract(r.goal_json, '$.task'), json_extract(t.spec_json, '$.task')) AS task,
-    COALESCE(json_extract(r.buddy_json, '$.adapter'), t.adapter) AS effective_adapter,
+    COALESCE(json_extract(r.buddy_json, '$.harness'), t.adapter) AS effective_adapter,
     COALESCE(json_extract(r.buddy_json, '$.model'), json_extract(t.spec_json, '$.model'))
         AS effective_model,
     EXISTS(

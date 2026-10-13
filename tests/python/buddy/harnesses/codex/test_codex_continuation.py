@@ -20,7 +20,7 @@ class CodexContinuationTests(WorkflowTestCase):
         adapter = worker_executor("codex")
         board = self.board()
         board.call("worker_register", {"workerId": "w1", "capabilities": ["codex"]})
-        submitted = self.submit(board, adapter="codex", provider="openai", model="fixture-model", effort="low")
+        submitted = self.submit(board, harness="codex", provider="openai", model="fixture-model", effort="low")
 
         def execute(claim_response, case):
             claim = claim_response["claim"]
@@ -68,7 +68,7 @@ class CodexContinuationTests(WorkflowTestCase):
         self.executors["codex"] = CodexAdapter()
         board = self.board()
         board.call("worker_register", {"workerId": "w1", "capabilities": ["codex"]})
-        submitted = self.submit(board, adapter="codex", provider="openai", model="fixture-model", effort="low")
+        submitted = self.submit(board, harness="codex", provider="openai", model="fixture-model", effort="low")
         first = self.claim(board)
         document = first["claim"]["turn"]["input"]
         text = "上一轮已经完成的调研内容。"
@@ -89,7 +89,7 @@ class CodexContinuationTests(WorkflowTestCase):
             result.update(sessionId=checkpoint["sessionId"], nativeTurnId=checkpoint["nativeTurnId"],
                           nativeCheckpoint=checkpoint,
                           processState={"shutdownConfirmed": True, "nativeExitCode": 0},
-                          nativeSession={'adapter': 'codex', 'storageOwner': 'harness-user-store'},
+                          nativeSession={'harness': 'codex', 'storageOwner': 'harness-user-store'},
                           harnessAttempts=[{"harness": {"version": "previous-version"}}])
 
         self.finish_turn(board, first, runner_status="failed", exit_code=1, seal=False, result_mutator=payload)
@@ -135,8 +135,8 @@ class CodexContinuationTests(WorkflowTestCase):
     def test_harness_version_change_reconstructs_with_the_same_message(self):
         board, failed = self.failed_run()
         with board.store.db.write() as connection:
-            connection.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'", (
-                json.dumps({"adapter": "codex", "status": "ready", "version": "new-version"}),))
+            connection.execute("UPDATE harness_health SET record_json=? WHERE harness='codex'", (
+                json.dumps({"harness": "codex", "status": "ready", "version": "new-version"}),))
         document = self.continued_input(board, failed)
         self.assertEqual(document["resumeMode"], "reconstructed-new-session")
         self.assertEqual(document["context"]["resumeReason"], "harness-version-changed")

@@ -148,7 +148,7 @@ def prepare(root: Path) -> dict:
     try:
         health = board.service.harnesses.refresh("dsh", force=True)
         require(health.get("available") is True, "installed DSH is unavailable")
-        buddy = {"adapter": "dsh", "provider": "deepseek-official",
+        buddy = {"harness": "dsh", "provider": "deepseek-official",
                          "model": "deepseek-v4-flash", "effort": "off"}
         from hey_my_buddy.blackboard.catalog.catalog import validate_buddy
         validate_buddy(buddy, directory=board.directory)

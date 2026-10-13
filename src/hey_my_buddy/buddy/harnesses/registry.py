@@ -39,13 +39,13 @@ def register_run_seam(name: str, module: HarnessRun) -> None:
     without inspecting vendor code or claiming a native policy is enforced.
     """
     if name not in HARNESS_NAMES:
-        raise BoardError("INVALID_ARGUMENT", f"{name!r} is not a harness name", adapter=name)
+        raise BoardError("INVALID_ARGUMENT", f"{name!r} is not a harness name", harness=name)
     if name in RUN_SEAMS:
-        raise BoardError("CONFLICT", f"{name} already has a registered run seam", adapter=name)
+        raise BoardError("CONFLICT", f"{name} already has a registered run seam", harness=name)
     if not all(callable(getattr(module, operation, None)) for operation in ("run", "run_discovery")):
         raise BoardError("INVALID_ARGUMENT",
                          "a run seam must carry callable run and discovery operations, and nothing about "
-                         "the registration proves more than that", adapter=name)
+                         "the registration proves more than that", harness=name)
     RUN_SEAMS[name] = module
 
 
@@ -155,7 +155,7 @@ def worker_permission(harness: str, level: str) -> WorkerPermission:
     declaration = _WORKER_PERMISSIONS.get(harness, {}).get(level)
     if declaration is None:
         raise BoardError("UNSUPPORTED_CAPABILITY", "This harness does not declare the Worker permission",
-                         adapter=harness, access=level,
+                         harness=harness, access=level,
                          requiredCapability=f"permission:{level}",
                          missingCapabilities=[f"permission:{level}"])
     tool_scope, enforcement = declaration
@@ -227,15 +227,18 @@ def require_permission(buddy: dict | None, access: str) -> None:
     """
     if buddy is None:
         return
-    adapter = buddy["adapter"]
+    identity_key = "adapter" if buddy.get("adapter") in ("command", "external") else "harness"
+    name = buddy[identity_key]
     capability = f"permission:{access}"
-    if adapter in ("command", "external") and access in ("read", "write"):
+    if name in ("command", "external") and access in ("read", "write"):
         return
-    native = adapters().get(adapter)
+    native = adapters().get(name)
     if native is not None and capability in native.capabilities:
         return
-    raise BoardError("UNSUPPORTED_CAPABILITY", "This adapter does not support the requested Worker permission",
-                     adapter=adapter, access=access, requiredCapability=capability,
+    reason = ("This harness does not support the requested Worker permission" if identity_key == "harness"
+              else "This adapter does not support the requested Worker permission")
+    raise BoardError("UNSUPPORTED_CAPABILITY", reason,
+                     **{identity_key: name}, access=access, requiredCapability=capability,
                      missingCapabilities=[capability])
 
 

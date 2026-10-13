@@ -34,7 +34,7 @@ class QuotaVisibilityTests(BoardTestCase):
         with board.store.db.write() as db:
             record_quota(db, "codex", once, now=once["observedAt"])
             self.assertEqual(latest_quota(db, "codex"), once)
-            row = db.execute("SELECT native_account_id FROM quota_current WHERE adapter='codex'").fetchone()
+            row = db.execute("SELECT native_account_id FROM quota_current WHERE harness='codex'").fetchone()
             self.assertEqual(row["native_account_id"], "fixture-account")
 
 
@@ -52,9 +52,9 @@ class QuotaVisibilityTests(BoardTestCase):
                     "windows": [{"name": "five-hour", "usedPercent": 97, "resetsAt": "2026-09-29T12:00:00Z"}]}
         with board.store.db.write() as db:
             record_quota(db, "codex", observed, now=observed["observedAt"])
-            self.assertEqual(len(warnings(db, {"adapter": "codex", "provider": "openai"}, now="2026-09-29T10:01:00Z")), 1)
-            self.assertEqual(warnings(db, {"adapter": "codex", "provider": "different"}, now="2026-09-29T10:01:00Z"), [])
-            self.assertEqual(warnings(db, {"adapter": "codex", "provider": "openai"}, now="2026-09-29T12:01:00Z"), [])
+            self.assertEqual(len(warnings(db, {"harness": "codex", "provider": "openai"}, now="2026-09-29T10:01:00Z")), 1)
+            self.assertEqual(warnings(db, {"harness": "codex", "provider": "different"}, now="2026-09-29T10:01:00Z"), [])
+            self.assertEqual(warnings(db, {"harness": "codex", "provider": "openai"}, now="2026-09-29T12:01:00Z"), [])
         unknown = quota_view({**observed, "windows": [{"name": "five-hour", "usedPercent": None, "resetsAt": None}]}, now="2026-09-29T10:01:00Z")
         self.assertIsNone(unknown["windows"][0]["usedPercent"])
 
@@ -63,7 +63,7 @@ class QuotaVisibilityTests(BoardTestCase):
         quota = {"source": "native-fixture", "observedAt": "2026-09-29T10:00:00Z", "windows": []}
         with board.store.db.write() as db:
             record_quota(db, "codex", quota, now=quota["observedAt"])
-            db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'",
+            db.execute("UPDATE harness_health SET record_json=? WHERE harness='codex'",
                        (json.dumps({"quota": {"source": "stale-embedded-copy"}, "version": "new"}),))
             self.assertEqual(read_health(db, "codex")["quota"]["source"], "native-fixture")
             self.assertEqual(read_health(db, "codex")["version"], "new")
@@ -80,15 +80,15 @@ class QuotaVisibilityTests(BoardTestCase):
     def test_a_recent_native_quota_failure_warns_without_a_fabricated_window(self):
         from hey_my_buddy.blackboard.evaluation.native_observations import persist
         board = self.board()
-        attempt = {"attempt_id": "fixture", "adapter": "codex", "model_adapter": "codex", "model_provider": "openai"}
+        attempt = {"attempt_id": "fixture", "adapter": "codex", "model_harness": "codex", "model_provider": "openai"}
         with board.store.db.write() as db:
             persist(db, attempt, {"quotaFailure": {"code": "quota-exceeded", "nativeCode": "usageLimitExceeded", "source": "codex/turn-error",
                                                   "observedAt": "2026-09-29T10:00:00Z"}})
             observed = read_health(db, "codex")["quota"]
             self.assertEqual(observed["windows"], [])
-            warning = warnings(db, {"adapter": "codex", "provider": "openai"}, now="2026-09-29T10:01:00Z")
+            warning = warnings(db, {"harness": "codex", "provider": "openai"}, now="2026-09-29T10:01:00Z")
             self.assertEqual(warning[0]["code"], "HARNESS_QUOTA_EXHAUSTED")
-            self.assertEqual(warnings(db, {"adapter": "codex", "provider": "openai"}, now="2026-09-29T12:01:00Z")[0]['code'], 'HARNESS_QUOTA_EXHAUSTED')
+            self.assertEqual(warnings(db, {"harness": "codex", "provider": "openai"}, now="2026-09-29T12:01:00Z")[0]['code'], 'HARNESS_QUOTA_EXHAUSTED')
 
     def test_claude_normalized_rejection_without_quota_persists_and_keeps_its_native_limit_type(self):
         from unittest.mock import patch
@@ -119,23 +119,23 @@ class QuotaVisibilityTests(BoardTestCase):
         self.assertNotIn("quota", result)
         self.assertEqual(classify_quota_code("five_hour"), "unknown")
         with board.store.db.write() as db:
-            persist(db, {"attempt_id": "attempt", "adapter": "claude", "model_adapter": "claude",
+            persist(db, {"attempt_id": "attempt", "adapter": "claude", "model_harness": "claude",
                          "model_provider": "fixture-api"}, result)
             observed = read_health(db, "claude")["quota"]
             self.assertEqual(observed["reachedType"], "five_hour")
             self.assertIs(observed["ordinaryUsageAllowed"], False)
             self.assertEqual(observed["windows"], [])
             self.assertNotIn("resetsAt", observed)
-            self.assertEqual(warnings(db, {"adapter": "claude", "provider": "fixture-api"},
+            self.assertEqual(warnings(db, {"harness": "claude", "provider": "fixture-api"},
                                       now=observed_at)[0]["code"], "HARNESS_QUOTA_EXHAUSTED")
-        self.assertEqual(failure_view(result, adapter="claude"), run.native_failure.value)
-        self.assertEqual(failure_view(result, adapter="claude")["nativeCode"], "five_hour")
+        self.assertEqual(failure_view(result, harness="claude"), run.native_failure.value)
+        self.assertEqual(failure_view(result, harness="claude")["nativeCode"], "five_hour")
 
     def test_native_login_identity_is_a_fact_without_reopening_exhaustion(self):
         from support import FakeClock
         clock = FakeClock("2026-09-29T10:00:00Z")
         board = self.board(clock=clock)
-        config = {"adapter": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"}
+        config = {"harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"}
         base = {"source": "native-fixture", "provider": "openai", "windows": []}
         with board.store.db.write() as db:
             record_quota(db, "codex", {**base, "observedAt": clock(), "reachedType": "usage_limit_reached",
@@ -145,7 +145,7 @@ class QuotaVisibilityTests(BoardTestCase):
             record_quota(db, "codex", unknown, now=clock())
             self.assertIsNotNone(exhausted(db, config, now=clock()))
             self.assertEqual(latest_quota(db, "codex"), unknown)
-            row = db.execute("SELECT * FROM quota_current WHERE adapter='codex'").fetchone()
+            row = db.execute("SELECT * FROM quota_current WHERE harness='codex'").fetchone()
             self.assertEqual(row["native_account_id"], "first-login")
             self.assertEqual(row["observed_at"], "2026-09-29T10:00:00Z")
             self.assertEqual(row["last_observed_at"], clock())
@@ -180,7 +180,7 @@ class QuotaVisibilityTests(BoardTestCase):
             self.assertFalse(blocked["available"])
             self.assertEqual(blocked["code"], "HARNESS_QUOTA_EXHAUSTED")
             with self.assertRaises(sqlite3.IntegrityError):
-                db.execute("UPDATE quota_current SET code=NULL WHERE adapter='codex'")
+                db.execute("UPDATE quota_current SET code=NULL WHERE harness='codex'")
             record_quota(db, "codex", {**base, "observedAt": "2026-09-29T10:01:00Z",
                          "ordinaryUsageAllowed": True, "scope": {"nativeAccountId": "second-login"}})
             available = routing_facts(db, "codex")[0]
@@ -189,13 +189,13 @@ class QuotaVisibilityTests(BoardTestCase):
             self.assertIsNone(available["code"])
             self.assertEqual(available["nativeAccountId"], "second-login")
             with self.assertRaises(sqlite3.IntegrityError):
-                db.execute("UPDATE quota_current SET code='HARNESS_QUOTA_EXHAUSTED' WHERE adapter='codex'")
+                db.execute("UPDATE quota_current SET code='HARNESS_QUOTA_EXHAUSTED' WHERE harness='codex'")
 
     def test_temporary_rate_limit_warns_without_creating_exhaustion(self):
         board = self.board()
         observed = {"source": "native-fixture", "observedAt": "2026-09-29T10:00:00Z", "provider": "openai",
                     "reachedType": "rate_limit_reached", "ordinaryUsageAllowed": False, "windows": []}
-        config = {"adapter": "codex", "provider": "openai", "model": "fixture-model"}
+        config = {"harness": "codex", "provider": "openai", "model": "fixture-model"}
         with board.store.db.write() as db:
             record_quota(db, "codex", observed, now=observed["observedAt"])
             self.assertIsNone(exhausted(db, config, now=observed["observedAt"]))
@@ -218,16 +218,16 @@ class NativeReceiptTests(WorkflowTestCase):
         quota_record = deepcopy(CODEX_NATIVE["rateLimitsRead"])
         quota_record["rateLimitsByLimitId"]["codex"]["primary"]["usedPercent"] = 95
         quota = quota_candidate_from_response(quota_record, observed_at=clock())
-        for adapter, raw_usage in (("dsh", dsh_usage_record()), ("codex", codex_usage_record())):
-            with self.subTest(adapter=adapter):
-                config = {} if adapter == "dsh" else {"adapter": adapter, "provider": "openai", "model": "fixture-model", "effort": "low"}
-                submitted = self.submit(board, request_id=adapter, cwd=str(self.workdir(adapter)), **config)
-                worker = "worker-" + adapter
-                board.call("worker_register", {"workerId": worker, "adapter": adapter, "capabilities": [adapter]})
-                claim = self.claim(board, worker_id=worker, claim_request_id=adapter, run_id=submitted["runId"])
+        for harness, raw_usage in (("dsh", dsh_usage_record()), ("codex", codex_usage_record())):
+            with self.subTest(harness=harness):
+                config = {} if harness == "dsh" else {"harness": harness, "provider": "openai", "model": "fixture-model", "effort": "low"}
+                submitted = self.submit(board, request_id=harness, cwd=str(self.workdir(harness)), **config)
+                worker = "worker-" + harness
+                board.call("worker_register", {"workerId": worker, "adapter": harness, "capabilities": [harness]})
+                claim = self.claim(board, worker_id=worker, claim_request_id=harness, run_id=submitted["runId"])
                 captured = {}
                 def native_result(result):
-                    result.update(tokenUsage=raw_usage, quota=quota if adapter == "codex" else None)
+                    result.update(tokenUsage=raw_usage, quota=quota if harness == "codex" else None)
                     captured.update(result)
                 self.finish_turn(board, claim, worker_id=worker, result_mutator=native_result)
                 attempt = claim["claim"]["attempt"]

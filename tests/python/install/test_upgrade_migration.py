@@ -17,8 +17,8 @@ from hey_my_buddy.install import upgrade
 SETTING_COLUMNS = {
     "buddies": ("buddy_id", "enabled"),
     "evaluation_preferences": ("buddy_id", "mode", "reason"),
-    "model_service_notes": ("adapter", "provider", "model", "text"),
-    "model_service_concurrency": ("adapter", "provider", "model", "concurrency_limit"),
+    "model_service_notes": ("harness", "provider", "model", "text"),
+    "model_service_concurrency": ("harness", "provider", "model", "concurrency_limit"),
 }
 UPGRADE_BASE_TABLES = {
     "buddies": "evaluation_profiles",
@@ -28,6 +28,8 @@ UPGRADE_BASE_TABLES = {
 UPGRADE_BASE_COLUMNS = {
     "buddies": ("profile_id", "enabled"),
     "evaluation_preferences": ("profile_id", "mode", "reason"),
+    "model_service_notes": ("adapter", "provider", "model", "text"),
+    "model_service_concurrency": ("adapter", "provider", "model", "concurrency_limit"),
 }
 HISTORY_TABLES = (
     "tasks", "attempts", "workflow_runs", "workflow_host_conclusions",

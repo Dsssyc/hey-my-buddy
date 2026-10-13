@@ -69,7 +69,7 @@ export function needsReview(task: Task): boolean {
     (!task.workflow || task.workflow.state === "delivered") &&
     (!task.workflow || task.workflowShutdown?.descendantsConfirmed === true) &&
     !task.acceptedAt &&
-    task.spec?.adapter !== "decision" &&
+    task.spec?.harness !== "decision" &&
     ["completed", "failed", "cancelled"].includes(task.status) &&
     task.resultAvailable === true &&
     task.shutdownConfirmed === true
@@ -89,7 +89,7 @@ export function canRetry(task: Task): boolean {
     task.selectedAttemptId === null && task.activeAttemptId === null;
   return (
     !task.workflow &&
-    task.spec?.adapter !== "decision" &&
+    task.spec?.harness !== "decision" &&
     ["failed", "cancelled"].includes(task.status) &&
     (neverClaimed || task.shutdownConfirmed === true)
   );

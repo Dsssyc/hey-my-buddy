@@ -17,7 +17,7 @@ BUDDY_ID = "dsh:deepseek-official:deepseek-flash:off"
 BUDDY = {
     "buddyId": BUDDY_ID,
     "label": "DeepSeek-V41-Flash · off",
-    "adapter": "dsh",
+    "harness": "dsh",
     "provider": "deepseek-official",
     "model": "deepseek-flash",
     "effort": "off",
@@ -39,8 +39,8 @@ SECOND_BUDDY = {
 
 
 def model_service_key(buddy: dict) -> dict:
-    """The ``(adapter, provider, model)`` key a model-service-keyed row or patch uses."""
-    return {key: buddy[key] for key in ("adapter", "provider", "model")}
+    """The ``(harness, provider, model)`` key a model-service-keyed row or patch uses."""
+    return {key: buddy[key] for key in ("harness", "provider", "model")}
 
 
 class EvaluationTestCase(BoardTestCase):
@@ -284,8 +284,8 @@ class EvaluationPublishTests(EvaluationTestCase):
                              modelServiceNoteChanges=[{**model_service_key(BUDDY), "text": "first note"}])
         self.assertEqual(first["counts"]["modelServiceNoteChanges"], 1)
         note = self.snapshot(board)["modelServiceNotes"][0]
-        self.assertEqual((note["adapter"], note["provider"], note["model"]),
-                         (BUDDY["adapter"], BUDDY["provider"], BUDDY["model"]))
+        self.assertEqual((note["harness"], note["provider"], note["model"]),
+                         (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]))
         self.assertEqual(note["text"], "first note")
         self.assertTrue(note["updatedAt"])
         self.publish(board, request_id="w2", command_id="c2",

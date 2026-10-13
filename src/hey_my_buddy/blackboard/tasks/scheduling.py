@@ -6,7 +6,7 @@ here so there is exactly one scheduler, one naming rule and no second job engine
 
 ADR-011 removed the separate business/decision lanes: routing and execution share
 one machine-wide ceiling and the same per-model-service counters. A model service is the
-exact adapter/provider/model tuple; effort variants share one limit.
+exact harness/provider/model tuple; effort variants share one limit.
 
 Pool *ownership* is deliberately not inferred from these names: the daemon records
 the exact IDs it started in its private manifest (``worker-pool.json``) and only
@@ -60,7 +60,7 @@ def clamp_model_limit(value: int) -> int:
 def model_service(spec: dict) -> tuple[str, str, str] | None:
     """The model service a specification will consume, or ``None`` when it has none.
 
-    The model service is the exact adapter/provider/model tuple. Partial buddies and
+    The model service is the exact harness/provider/model tuple. Partial buddies and
     model-less work (``command``/``external``, an unresolved governed run) return
     ``None``: they are admitted against the machine-wide ceiling only. A governed
     run's effective specification already merges the resolved execution
@@ -69,15 +69,15 @@ def model_service(spec: dict) -> tuple[str, str, str] | None:
     """
     if not isinstance(spec, dict):
         return None
-    adapter = spec.get("adapter")
-    if adapter not in schemas.CODING_ADAPTERS:
+    harness = spec.get("harness")
+    if harness not in schemas.CODING_HARNESSES:
         return None
     provider = spec.get("provider")
     model = spec.get("model")
-    if not (isinstance(adapter, str) and adapter and isinstance(provider, str) and provider
+    if not (isinstance(harness, str) and harness and isinstance(provider, str) and provider
             and isinstance(model, str) and model):
         return None
-    return (adapter, provider, model)
+    return (harness, provider, model)
 
 
 def valid_worker_id(value: object) -> str | None:

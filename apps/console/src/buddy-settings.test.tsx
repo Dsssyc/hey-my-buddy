@@ -20,9 +20,9 @@ import type {
  * in words instead of colour, and the settings page that carries none of this.
  */
 
-const sonnet = { adapter: "claude", provider: "anthropic", model: "claude-sonnet-5" };
-const sol = { adapter: "codex", provider: "openai", model: "gpt-6-sol" };
-const glm = { adapter: "zcode", provider: "zhipu", model: "glm-5" };
+const sonnet = { harness: "claude", provider: "anthropic", model: "claude-sonnet-5" };
+const sol = { harness: "codex", provider: "openai", model: "gpt-6-sol" };
+const glm = { harness: "zcode", provider: "zhipu", model: "glm-5" };
 
 const mediumId = "claude:anthropic:claude-sonnet-5:medium";
 const highId = "claude:anthropic:claude-sonnet-5:high";
@@ -35,7 +35,7 @@ const SONNET = "claude / anthropic / claude-sonnet-5";
 const SOL = "codex / openai / gpt-6-sol";
 const GLM = "zcode / zhipu / glm-5";
 
-function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "adapter" | "provider" | "model" | "effort">): Buddy {
+function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "harness" | "provider" | "model" | "effort">): Buddy {
   return {
     available: true, enabled: false, capabilities: [], contextWindow: null,
     description: "", source: "catalog:fixture", ...entry,
@@ -67,10 +67,10 @@ type Options = { configurationUnavailable?: boolean; routerBuddyId?: string | nu
  */
 function harnesses(): HarnessHealth[] {
   return [
-    { adapter: "claude", status: "ready", available: true, revision: 2, manualPath: null,
+    { harness: "claude", status: "ready", available: true, revision: 2, manualPath: null,
       executable: "/Users/fixture/.local/bin/claude", version: "2.0.1",
       source: "版本管理器（nvm 默认版本）", checkedAt: "2026-09-28T09:30:00.000Z", candidates: [] },
-    { adapter: "zcode", status: "missing", available: false, revision: 1, manualPath: null,
+    { harness: "zcode", status: "missing", available: false, revision: 1, manualPath: null,
       reasonCode: "HARNESS_NOT_FOUND", remedy: "安装 ZCode CLI，或填写可执行文件的绝对路径。",
       checkedAt: "2026-09-28T09:30:00.000Z",
       candidates: [{ path: "/opt/homebrew/bin/zcode", source: "Homebrew", status: "missing" }] },
@@ -116,7 +116,7 @@ function applyPublication(state: HarnessSnapshot, params: Record<string, any>): 
   for (const setting of params.buddySettings ?? []) {
     next.buddies = next.buddies.map(entry => entry.buddyId === setting.buddyId ? { ...entry, enabled: setting.enabled } : entry);
   }
-  const key = (entry: { adapter: string; provider: string; model: string }) => JSON.stringify([entry.adapter, entry.provider, entry.model]);
+  const key = (entry: { harness: string; provider: string; model: string }) => JSON.stringify([entry.harness, entry.provider, entry.model]);
   for (const change of params.preferenceChanges ?? []) {
     next.preferences = next.preferences.filter(entry => entry.buddyId !== change.buddyId);
     if (change.mode !== null) {
@@ -283,11 +283,11 @@ describe("the harness directory", () => {
     expect(effortCell("medium").getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("matches adapter id, harness display name, provider and model name, case-insensitively", async () => {
+  it("matches harness id, harness display name, provider and model name, case-insensitively", async () => {
     const f = fixture();
     const user = userEvent.setup();
     await openBuddy(f.api);
-    // Harness display name ("Claude Code"), not only the `claude` adapter id.
+    // Harness display name ("Claude Code"), not only the `claude` harness id.
     await user.type(search(), "claude code");
     await listed(1, 2);
     expect(modelButton(SONNET)).toBeTruthy();
@@ -311,7 +311,7 @@ describe("the harness directory", () => {
     await listed(0, 2);
     await user.click(foldHandle("Codex"));
     expect(modelButton(SOL)).toBeTruthy();
-    // The recorded adapter id matches as before.
+    // The recorded harness id matches as before.
     await user.clear(search());
     await user.type(search(), "codex");
     await listed(0, 2);

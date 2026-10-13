@@ -11,8 +11,8 @@ import { absolutePath } from "./harness";
  * back to automatic detection. Saving checks the harness at once; the check and
  * its result belong to the view, which carries the recorded revision.
  */
-export function HarnessPathDialog({ adapter, name, manualPath, disabled, reason, onSave, onClose }: {
-  adapter: string; name: string;
+export function HarnessPathDialog({ harness, name, manualPath, disabled, reason, onSave, onClose }: {
+  harness: string; name: string;
   /** The path stored now; `null` while detection is automatic. */
   manualPath: string | null;
   /** The action cannot start now. */
@@ -39,7 +39,7 @@ export function HarnessPathDialog({ adapter, name, manualPath, disabled, reason,
       <form className="flex flex-col gap-4" onSubmit={event => { event.preventDefault(); submit(); }}>
         <div className="flex flex-col gap-1.5">
           <label htmlFor={id} className="text-xs text-ink3">{t("harness.path.field")}</label>
-          <Input id={id} className="h-8 font-mono text-xs shadow-none" value={value} placeholder={`/usr/local/bin/${adapter}`}
+          <Input id={id} className="h-8 font-mono text-xs shadow-none" value={value} placeholder={`/usr/local/bin/${harness}`}
             autoComplete="off" spellCheck={false} aria-invalid={invalid || undefined}
             onChange={event => { setValue(event.target.value); setInvalid(false); }} />
           {invalid && <p className="text-xs text-fail" role="alert">{t("harness.path.invalid")}</p>}

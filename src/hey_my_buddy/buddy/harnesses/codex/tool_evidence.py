@@ -16,7 +16,7 @@ from ....errors import BoardError
 from ....protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
 from ...roles.turn_io import canonical_json
 
-ADAPTER = "codex"
+HARNESS = "codex"
 
 #: Codex 0.162.1's generated ThreadItem and ResponseItem definitions. Both the
 #: projector and the run's marker classifier use these tables. Tool definitions
@@ -194,19 +194,19 @@ class CodexToolEventProjector:
                 or not isinstance(call_id, str) or not call_id or len(call_id) > 512):
             # A frame without a provable session/turn pair cannot be bound to
             # this attempt's root turns, so it is retained as incomplete.
-            self.evidence.observe_incomplete(ADAPTER, fact)
+            self.evidence.observe_incomplete(HARNESS, fact)
             return
         try:
-            event = normalize_tool_event(ADAPTER, fact)
+            event = normalize_tool_event(HARNESS, fact)
         except BoardError:
-            self.evidence.observe_incomplete(ADAPTER, fact)
+            self.evidence.observe_incomplete(HARNESS, fact)
             return
         self.evidence.observe(event)
         if phase == "start":
             self._started[(canonical_json(identity), call_id)] = (tool_name, native_type)
 
     def _incomplete(self, params, *, tool_name, phase) -> None:
-        self.evidence.observe_incomplete(ADAPTER, {"nativeIdentity": self._identity(params) or {},
+        self.evidence.observe_incomplete(HARNESS, {"nativeIdentity": self._identity(params) or {},
                                                    "callId": None, "toolName": tool_name, "phase": phase})
 
     @staticmethod
@@ -232,7 +232,7 @@ class CodexToolEventProjector:
 
 
 __all__ = [
-    "ADAPTER", "CodexToolEventProjector", "NAMED_RAW_CALLS", "NON_TOOL_ITEMS",
+    "HARNESS", "CodexToolEventProjector", "NAMED_RAW_CALLS", "NON_TOOL_ITEMS",
     "RAW_ITEM_KINDS", "RAW_NON_TOOL_ITEMS", "RAW_TOOL_OUTPUTS", "RAW_TOOL_STARTS",
     "THREAD_ITEM_KINDS", "TYPED_TOOL_ITEMS", "TYPED_TOOL_OUTPUTS",
 ]

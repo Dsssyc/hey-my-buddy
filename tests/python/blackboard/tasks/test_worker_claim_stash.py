@@ -19,7 +19,7 @@ from support import BoardTestCase
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 
 NONCE = "n" * 16
-BUDDY = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
+BUDDY = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
 
 
 def observed(entries):

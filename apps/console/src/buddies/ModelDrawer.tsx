@@ -62,7 +62,7 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
     className="mt-4 flex-1 border border-line bg-card p-3 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
     <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2 text-xs">
       <span className="min-w-0 font-mono wrap-anywhere text-ink2">
-        {buddy.adapter} / {buddy.provider} / {buddy.model} / <strong className="font-semibold text-foreground">{effort}</strong>
+        {buddy.harness} / {buddy.provider} / {buddy.model} / <strong className="font-semibold text-foreground">{effort}</strong>
       </span>
       {modelAvailable && !buddy.available && <Hint text={unavailableReason}><span className="text-ink3">{t("pane.unavailable")}</span></Hint>}
     </div>

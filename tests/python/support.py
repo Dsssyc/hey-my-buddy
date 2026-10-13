@@ -43,7 +43,7 @@ FIXTURE_CATALOG = {
             "displayName": "DeepSeek",
             "packageName": "@deepseek-ai/dsh-llm-deepseek",
             "packageVersion": "test",
-            "adapter": "dsh",
+            "harness": "dsh",
             "efforts": ["off", "low", "high", "max"],
             "models": [
                 {
@@ -303,7 +303,7 @@ class InProcessBoard:
         # Dedicated discovery/service tests start with empty real health records.
         with self.store.db.write() as db:
             for name in ('dsh', 'zcode', 'codex', 'claude'):
-                db.execute("INSERT OR IGNORE INTO harness_health(adapter,status,record_json) VALUES(?,'ready','{}')", (name,))
+                db.execute("INSERT OR IGNORE INTO harness_health(harness,status,record_json) VALUES(?,'ready','{}')", (name,))
         self.admission = WaitAdmission(options.get("wait_capacity", 4))
         self.control: dict = {"wait_admission": self.admission}
         self.stopped: list[dict] = []
@@ -555,9 +555,9 @@ def wait_for(predicate, timeout: float = 20.0, interval: float = 0.05):
 
 def enable_fixture_buddy(store, buddy):
     """Explicit private fixture policy; negative policy tests call the service directly."""
-    keys = ("adapter", "provider", "model", "effort")
+    keys = ("harness", "provider", "model", "effort")
     if not all(buddy.get(key) for key in keys):
         return
     with store.db.write() as db:
-        db.execute("INSERT OR IGNORE INTO buddies(buddy_id,label,adapter,provider,model,effort,enabled,available) VALUES(?,?,?,?,?,?,1,1) ON CONFLICT(buddy_id) DO UPDATE SET enabled=1,available=1",
+        db.execute("INSERT OR IGNORE INTO buddies(buddy_id,label,harness,provider,model,effort,enabled,available) VALUES(?,?,?,?,?,?,1,1) ON CONFLICT(buddy_id) DO UPDATE SET enabled=1,available=1",
                    (":".join(buddy[key] for key in keys), "Private enabled fixture", *(buddy[key] for key in keys)))

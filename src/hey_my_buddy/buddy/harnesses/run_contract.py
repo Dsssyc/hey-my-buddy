@@ -452,8 +452,8 @@ def _validated_tool_evidence(value: Any) -> Optional[FrozenJson]:
     binding = package["binding"]
     if not isinstance(binding, dict) or set(binding) != set(tool_evidence_protocol.BINDING_FIELDS):
         raise fail("the tool evidence binding must carry its exact field set", field="toolEvidence.binding")
-    if binding["adapter"] not in HARNESS_NAMES:
-        raise fail("the tool evidence binding adapter is not a harness name", field="toolEvidence.binding.adapter")
+    if binding["harness"] not in HARNESS_NAMES:
+        raise fail("the tool evidence binding harness is not a harness name", field="toolEvidence.binding.harness")
     check_text(binding["taskId"], "toolEvidence.binding.taskId", maximum=128)
     check_text(binding["attemptId"], "toolEvidence.binding.attemptId", maximum=128)
     if isinstance(binding["generation"], bool) or not isinstance(binding["generation"], int) \

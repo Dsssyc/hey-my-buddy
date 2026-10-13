@@ -15,12 +15,12 @@ DSH_ID = "dsh:deepseek-official:deepseek-flash:off"
 DSH_HIGH_ID = "dsh:deepseek-official:deepseek-flash:high"
 ZCODE_ID = "zcode:zai-api:GLM-5.3-Flash:max"
 DSH_BUDDY = {
-    "buddyId": DSH_ID, "adapter": "dsh", "provider": "deepseek-official",
+    "buddyId": DSH_ID, "harness": "dsh", "provider": "deepseek-official",
     "model": "deepseek-flash", "effort": "off", "enabled": True, "available": True,
 }
 DSH_HIGH_BUDDY = {**DSH_BUDDY, "buddyId": DSH_HIGH_ID, "effort": "high"}
 ZCODE_BUDDY = {
-    "buddyId": ZCODE_ID, "adapter": "zcode", "provider": "zai-api",
+    "buddyId": ZCODE_ID, "harness": "zcode", "provider": "zai-api",
     "model": "GLM-5.3-Flash", "effort": "max", "enabled": True, "available": True,
 }
 DISABLED_DSH_BUDDY = {**DSH_HIGH_BUDDY, "buddyId": "dsh:deepseek-official:deepseek-v4-pro:high", "enabled": False}
@@ -41,7 +41,7 @@ class PolicyFactsTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             selection_policy.policy_facts(
                 buddies=[], prefer_buddy_ids=[],
-                routing_preferences=[{"match": {"adapter": "dsh"}, "reason": "retired"}],
+                routing_preferences=[{"match": {"harness": "dsh"}, "reason": "retired"}],
                 hard_constraints={})
 
     def test_user_preference_records_a_legal_alternative_without_support(self):

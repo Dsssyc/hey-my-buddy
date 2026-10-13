@@ -375,9 +375,9 @@ def check_preparation(spec: dict, environment: dict) -> None:
         from ..discovery import discover
         record = discover("dsh", environment=environment)
     if not isinstance(record, dict) or record.get("status") != "ready" or not record.get("command"):
-        raise BoardError("ADAPTER_UNAVAILABLE",
+        raise BoardError("HARNESS_UNAVAILABLE",
                          "the dsh run needs a selected, ready installed dsh command; refresh the harness selection",
-                         adapter="dsh")
+                         harness="dsh")
 
 
 # The private goal-binding file name of one native session: the sha256 of the
@@ -416,7 +416,7 @@ def _continuation_of(request: RunRequest) -> tuple[str, str | None]:
 
 
 #: The task-shared native root's placement is exactly ``private_dirs``' goal
-#: layout: ``<state>/harnesses/<adapter>/goals/<sha256(task_id)>/native``.
+#: layout: ``<state>/harnesses/<harness>/goals/<sha256(task_id)>/native``.
 #: Matching that placement is a fact about where the sessions root lives —
 #: an attempt root hangs under ``attempts/``, a fast carrier's root under its
 #: own private tree — never a proof about the vendor.
@@ -470,7 +470,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
             "provenance and a confirmed group stop"
         )
     return {
-        "adapter": "dsh", "sessionId": session_id, "captured": session_id is not None,
+        "harness": "dsh", "sessionId": session_id, "captured": session_id is not None,
         "storageScope": scope, "storageOwner": owner,
         "nativeAppVisibility": "not-listed-in-native-app",
         "credentialsStore": "harness-user-store",
@@ -487,7 +487,7 @@ def validate_turn_provenance(record: dict) -> str | None:
     foreign-session or reordered record fails here before the turn is imported.
     """
     p = record.get("provenance")
-    expected = {"version": 1, "adapter": "dsh", "tool": "buddy_finish_turn", "turnEnd": "completed",
+    expected = {"version": 1, "harness": "dsh", "tool": "buddy_finish_turn", "turnEnd": "completed",
                 "stopReason": "end_turn", "rootSessionMatched": True, "receiptVerified": True,
                 "sessionClose": "acknowledged"}
     if not isinstance(p, dict) or any(type(p.get(k)) is not type(v) or p.get(k) != v for k, v in expected.items()):
@@ -633,12 +633,12 @@ def _launch_agent(*, cwd: str, launch_root: Path, invocation_root: Path,
     except LaunchOwnershipError as error:
         # The child existed and the launch wrapper itself finalized it; the run
         # keeps the observed stop facts instead of dropping them with the error.
-        failure = NativeError("adapter-unavailable",
+        failure = NativeError("harness-unavailable",
                               "the ACP agent failed during its launch bookkeeping")
         failure.spawn_evidence = error.evidence
         raise failure from None
     except OSError:
-        raise NativeError("adapter-unavailable", "The selected DSH executable could not start") from None
+        raise NativeError("harness-unavailable", "The selected DSH executable could not start") from None
 
 
 def _native_call(call, *, code: str, message: str):
@@ -664,7 +664,7 @@ def _note_native_shape(facts: dict, label: str, value: object) -> None:
 def _initialize(client: AcpClient, facts: dict) -> str | None:
     """The protocol handshake; the version text is optional metadata."""
     result = _native_call(lambda: client.initialize(timeout=_SESSION_TIMEOUT),
-                          code="adapter-unavailable", message="the ACP initialize failed")
+                          code="harness-unavailable", message="the ACP initialize failed")
     if not isinstance(result, dict):
         _note_native_shape(facts, "initialize", result)
         return None
@@ -952,7 +952,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         launch_root = native_root
     state = _RunState()
     facts = _RunFacts(state.unknown_counts)
-    tools = DshToolFacts({"adapter": "dsh", "taskId": request.identity.task_id,
+    tools = DshToolFacts({"harness": "dsh", "taskId": request.identity.task_id,
                           "attemptId": request.identity.attempt_id,
                           "generation": request.identity.generation})
     activity = DshActivity()
@@ -1896,7 +1896,7 @@ def _catalog(options: list, version: str) -> dict:
                     continue
                 provider, model_id = parsed
                 bucket = providers.setdefault(provider, {
-                    "provider": provider, "displayName": provider, "adapter": "dsh", "models": []})
+                    "provider": provider, "displayName": provider, "harness": "dsh", "models": []})
                 if any(model["id"] == model_id for model in bucket["models"]):
                     continue
                 bucket["models"].append({
@@ -1907,7 +1907,7 @@ def _catalog(options: list, version: str) -> dict:
         for model in bucket["models"]:
             model["efforts"] = list(efforts)
     return _catalog_receipt(version, list(providers.values()),
-                            [{"adapter": "dsh", "status": "complete",
+                            [{"harness": "dsh", "status": "complete",
                               "accountStatus": "not-applicable"}])
 
 
@@ -1921,7 +1921,7 @@ def _unread_catalog(options: object, version: str) -> dict:
     """
     return _catalog_receipt(
         version, [],
-        [{"adapter": "dsh", "status": "unknown", "accountStatus": "not-applicable",
+        [{"harness": "dsh", "status": "unknown", "accountStatus": "not-applicable",
           "reason": UNREAD_CATALOG_REASON}],
         extra_warnings=["The native session's configuration options had an unrecognized shape; "
                         f"this catalog reading stays unknown (shape: {type(options).__name__})."])
@@ -1931,7 +1931,7 @@ def _catalog_receipt(version: str, providers: list, discoveries: list,
                      extra_warnings: list = ()) -> dict:
     """The common catalog receipt: the reading's facts and its fixed warnings."""
     return {
-        "source": "dsh-acp-session-config", "adapter": "dsh", "harnessVersion": version,
+        "source": "dsh-acp-session-config", "harness": "dsh", "harnessVersion": version,
         "discoveredAt": utc_now(), "providers": providers, "discoveries": discoveries,
         "warnings": [
             "The no-prompt ACP surface exposes the declared model and effort selectors only; "

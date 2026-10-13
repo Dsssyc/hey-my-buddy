@@ -21,7 +21,7 @@ export type HistoryEntries = {
 };
 
 const modelServiceOf = (row: ModelService): ModelService =>
-  ({ adapter: row.adapter, provider: row.provider, model: row.model });
+  ({ harness: row.harness, provider: row.provider, model: row.model });
 
 export function makeDraft(snapshot: Snapshot): Draft {
   return structuredClone({
@@ -32,7 +32,7 @@ export function makeDraft(snapshot: Snapshot): Draft {
     // The draft carries the user limit settings only; occupancy is observation
     // and is dropped here so no publication path can ever emit it.
     modelServiceConcurrency: snapshot.modelServiceConcurrency.map(
-      ({ adapter, provider, model, limit }) => ({ adapter, provider, model, limit }),
+      ({ harness, provider, model, limit }) => ({ harness, provider, model, limit }),
     ),
   });
 }
@@ -106,7 +106,7 @@ export function withHistory<T extends UserRows>(
   if (!entries) return source;
   // A draft never carries occupancy, so retained model service entries join as settings.
   const retainedSettings = entries.modelServiceConcurrency?.map(
-    ({ adapter, provider, model, limit }) => ({ adapter, provider, model, limit }),
+    ({ harness, provider, model, limit }) => ({ harness, provider, model, limit }),
   );
   return {
     ...source,
@@ -131,7 +131,7 @@ export function historyView<T extends UserRows>(
 
 /**
  * Sets one model service's concurrent-task limit, identified by the exact
- * adapter/provider/model tuple of any of its effort variants. The setting
+ * harness/provider/model tuple of any of its effort variants. The setting
  * exists independently of availability and is keyed once per model service.
  */
 export function setConcurrencyLimit(
@@ -143,7 +143,7 @@ export function setConcurrencyLimit(
   const exists = draft.modelServiceConcurrency.some((entry) => modelServiceKey(entry) === key);
   const modelServiceConcurrency = exists
     ? draft.modelServiceConcurrency.map((entry) => (modelServiceKey(entry) === key ? { ...entry, limit } : entry))
-    : [...draft.modelServiceConcurrency, { adapter: modelService.adapter, provider: modelService.provider, model: modelService.model, limit }];
+    : [...draft.modelServiceConcurrency, { harness: modelService.harness, provider: modelService.provider, model: modelService.model, limit }];
   return { ...draft, modelServiceConcurrency };
 }
 
@@ -160,7 +160,7 @@ export function modelServiceConcurrencyChanges(
     const limit = concurrencyLimit(entry.limit);
     const old = before.get(modelServiceKey(entry));
     if (limit === null || (old && old.limit === limit)) continue;
-    changed.push({ adapter: entry.adapter, provider: entry.provider, model: entry.model, limit });
+    changed.push({ harness: entry.harness, provider: entry.provider, model: entry.model, limit });
   }
   return changed.sort(byModelService);
 }
@@ -315,7 +315,7 @@ function fingerprint(draft: UserEditable): string {
       routingBudget: draft.configuration.routingBudget,
     } : null,
     modelServiceConcurrency: [...draft.modelServiceConcurrency]
-      .map(({ adapter, provider, model, limit }) => ({ key: modelServiceKey({ adapter, provider, model }), limit }))
+      .map(({ harness, provider, model, limit }) => ({ key: modelServiceKey({ harness, provider, model }), limit }))
       .sort((a, b) => a.key.localeCompare(b.key)),
   });
 }
@@ -353,7 +353,7 @@ export type RebaseConflictKind = "changed" | "unread";
 export type RebaseConflict = {
   kind: RebaseConflictKind;
   field: "enabled" | "preference" | "modelServiceNote" | "configuration" | "defaultRoutingMode" | "routingBudget" | "routerRetryIntervalSeconds" | "modelServiceConcurrency";
-  /** The buddy id, or the `adapter/provider/model` of a model service field. */
+  /** The buddy id, or the `harness/provider/model` of a model service field. */
   buddyId: string;
   message: string;
 };
@@ -375,7 +375,7 @@ const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
   modelServiceConcurrency: "并发上限",
 };
 
-const modelServiceText = (modelService: ModelService) => `${modelService.adapter}/${modelService.provider}/${modelService.model}`;
+const modelServiceText = (modelService: ModelService) => `${modelService.harness}/${modelService.provider}/${modelService.model}`;
 
 function conflictSubject(field: RebaseConflict["field"], buddyId: string): string {
   if (field === "configuration") return buddyId ? `Router 列表（${buddyId}）` : "Router 列表";
@@ -486,7 +486,7 @@ export function rebaseDraft(
     fail("changed", "configuration", "", "（设置需升级）");
   }
 
-  // Model service concurrency limits: the key is the exact adapter/provider/model
+  // Model service concurrency limits: the key is the exact harness/provider/model
   // tuple, so effort variants and occupancy never take part in the comparison.
   const mergedConcurrency = new Map<string, ModelServiceConcurrencySetting>();
   for (const entry of draft.modelServiceConcurrency) {

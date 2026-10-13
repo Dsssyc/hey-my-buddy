@@ -197,14 +197,14 @@ def _common_dirs(home: Path) -> list[Path]:
             home / ".npm-global/bin", home / ".volta/bin"]
 
 
-def _app_paths(adapter: str) -> list[Path]:
+def _app_paths(harness: str) -> list[Path]:
     if sys.platform != "darwin":
         return []
     return {
         "codex": [Path("/Applications/ChatGPT.app/Contents/Resources/codex")],
         "zcode": [Path("/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs")],
         "claude": [Path("/Applications/Claude.app/Contents/Resources/claude")],
-    }.get(adapter, [])
+    }.get(harness, [])
 
 
 def _variants(directory: Path, name: str) -> list[Path]:
@@ -219,21 +219,21 @@ def has_candidate(directory: Path) -> bool:
                for path in _variants(directory, name))
 
 
-def candidate_snapshot(adapter: str, *, manual_path: str | None = None,
+def candidate_snapshot(harness: str, *, manual_path: str | None = None,
                        environment: dict | None = None) -> dict:
     """Full candidate diagnostics and file identities, with PATH as a clue."""
-    if adapter not in _NAMES:
+    if harness not in _NAMES:
         raise ValueError("unknown harness")
     home = _home()
     records, manager_dirs = _manager_records(home)
-    name = _NAMES[adapter]
+    name = _NAMES[harness]
     places: list[tuple[str, Path]] = []
     if manual_path:
         places.append(("manual", Path(manual_path).expanduser()))
     for source, directory in manager_dirs:
         places.extend((source, path) for path in _variants(directory, name))
     places.extend(("common", path) for directory in _common_dirs(home) for path in _variants(directory, name))
-    places.extend(("app", path) for path in _app_paths(adapter))
+    places.extend(("app", path) for path in _app_paths(harness))
     places.extend(("registry", path) for directory in _registry_paths() for path in _variants(Path(directory), name))
     caller_path = (os.environ if environment is None else environment).get("PATH", "")
     caller_path = caller_path if isinstance(caller_path, str) else ""
@@ -249,8 +249,8 @@ def candidate_snapshot(adapter: str, *, manual_path: str | None = None,
         fingerprint = file_fingerprint(path)
         candidates.append({"path": label, "source": source, "exists": fingerprint is not None,
                            "fingerprint": fingerprint})
-    snapshot = {"adapter": adapter, "managerRecords": records, "candidates": candidates}
-    if adapter != "node":
+    snapshot = {"harness": harness, "managerRecords": records, "candidates": candidates}
+    if harness != "node":
         node_paths = [Path(item["path"]) for item in candidate_snapshot("node", environment=environment)["candidates"]]
         node_paths = [path for item in candidates if item["exists"] for path in _variants(
             Path(item["path"]).parent, "node")] + node_paths
@@ -271,14 +271,14 @@ def _scan_hash(snapshot: dict) -> str:
 
 def location_fingerprint(snapshot: dict) -> str:
     """Hash what discovery can find, retaining the order of present candidates."""
-    return _scan_hash({"adapter": snapshot["adapter"],
+    return _scan_hash({"harness": snapshot["harness"],
                        "managerRecords": snapshot["managerRecords"],
                        "candidates": [item for item in snapshot["candidates"] if item["exists"]],
                        "nodeCandidates": [item for item in snapshot.get("nodeCandidates", [])
                                           if item["fingerprint"] is not None]})
 
 
-def native_environment(environment: dict, *, command: tuple[str, ...] | list[str] = (), adapter=None) -> dict:
+def native_environment(environment: dict, *, command: tuple[str, ...] | list[str] = ()) -> dict:
     """Build an account-preserving, credential-free environment for native CLIs.
 
     CA certificate path variables are preserved alongside the proxy variables:
@@ -617,7 +617,7 @@ def _launch_command(path: Path, environment: dict) -> list[str] | None:
     return [str(path)]
 
 
-def _candidate_handshake(adapter: str, candidate: dict, environment: dict, deadline: float) -> dict:
+def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadline: float) -> dict:
     shutdown = True  # No child has been created in this scan stage.
     try:
         path = Path(candidate["path"])
@@ -627,7 +627,7 @@ def _candidate_handshake(adapter: str, candidate: dict, environment: dict, deadl
             result["status"] = "missing"
             result["reasonCode"] = "not-found"
             return result
-        if adapter != "node" and _script_uses_node(path):
+        if harness != "node" and _script_uses_node(path):
             shutdown = False
             node, problem = _node_for(path, environment, deadline)
             shutdown = problem != "shutdown-unverified"
@@ -640,9 +640,9 @@ def _candidate_handshake(adapter: str, candidate: dict, environment: dict, deadl
             if command is None:
                 result["reasonCode"] = "interpreter-missing"
                 return result
-        child_env = native_environment(environment, command=command, adapter=adapter)
+        child_env = native_environment(environment, command=command)
         shutdown = False
-        code, output = (_probe_dsh_version(command, child_env, deadline) if adapter == "dsh" else
+        code, output = (_probe_dsh_version(command, child_env, deadline) if harness == "dsh" else
                         probe([*command, "--version"], child_env, deadline=deadline))
         shutdown = code != "shutdown-unverified"
         if code is not None:
@@ -650,7 +650,7 @@ def _candidate_handshake(adapter: str, candidate: dict, environment: dict, deadl
             return result
         match = _VERSION.search(output.decode("utf-8", "replace")[:256])
         result["version"] = match.group(0) if match else "unknown"
-        if adapter == "codex":
+        if harness == "codex":
             shutdown = False
             code, output = probe([*command, "login", "status"], child_env, deadline=deadline)
             shutdown = code != "shutdown-unverified"
@@ -667,7 +667,7 @@ def _candidate_handshake(adapter: str, candidate: dict, environment: dict, deadl
             if "logged in" not in status:
                 result["reasonCode"] = "auth-unverified"
                 return result
-        elif adapter == "claude":
+        elif harness == "claude":
             shutdown = False
             code, output = probe([*command, "auth", "status", "--json"], child_env, deadline=deadline)
             shutdown = code != "shutdown-unverified"
@@ -718,17 +718,17 @@ _REMEDIES = {
 }
 
 
-def discover(adapter: str, *, manual_path: str | None = None, environment: dict | None = None) -> dict:
+def discover(harness: str, *, manual_path: str | None = None, environment: dict | None = None) -> dict:
     """Bound the entire scan and avoid lower-priority work after a ready tier."""
-    return _discover(adapter, manual_path=manual_path, environment=environment,
+    return _discover(harness, manual_path=manual_path, environment=environment,
                      deadline=time.monotonic() + _SCAN_TIMEOUT)
 
 
-def _discover(adapter: str, *, manual_path: str | None = None,
+def _discover(harness: str, *, manual_path: str | None = None,
               environment: dict | None = None, deadline: float) -> dict:
     shutdown = True  # No child has been created in this scan stage.
     try:
-        snapshot = candidate_snapshot(adapter, manual_path=manual_path, environment=environment)
+        snapshot = candidate_snapshot(harness, manual_path=manual_path, environment=environment)
         environment = os.environ if environment is None else environment
         candidates = sorted((item for item in snapshot["candidates"] if item["exists"]),
                             key=lambda item: _priority(item["source"]))[:_MAX_CANDIDATES]
@@ -745,7 +745,7 @@ def _discover(adapter: str, *, manual_path: str | None = None,
                 incomplete_reason = "scan-timeout"
                 break
             shutdown = False
-            attempt = _candidate_handshake(adapter, item, environment, deadline)
+            attempt = _candidate_handshake(harness, item, environment, deadline)
             shutdown = attempt["reasonCode"] != "shutdown-unverified"
             attempts.append(attempt)
             if attempt["status"] == "ready":
@@ -772,7 +772,7 @@ def _discover(adapter: str, *, manual_path: str | None = None,
         if not attempts:
             diagnostics = [{"path": item["path"], "source": item["source"], "status": "missing",
                             "reasonCode": "not-found"} for item in snapshot["candidates"][:_MAX_DIAGNOSTICS]]
-        return {"adapter": adapter, "status": status, "available": selected is not None,
+        return {"harness": harness, "status": status, "available": selected is not None,
                 "command": selected["command"] if selected else [],
                 "executable": selected["path"] if selected else None,
                 "version": selected["version"] if selected else None,

@@ -27,7 +27,7 @@ from hey_my_buddy.buddy.roles.structured_call import collect
 from hey_my_buddy.blackboard.routing.router import answer_schema
 
 FIXTURE = Path(__file__).parent / "fixtures/mock_claude.py"
-BINDING = {"adapter": "claude", "taskId": "task-1", "attemptId": "attempt-1", "generation": 1}
+BINDING = {"harness": "claude", "taskId": "task-1", "attemptId": "attempt-1", "generation": 1}
 ROOT = {"sessionId": "session-root"}
 
 
@@ -529,7 +529,7 @@ class RunnerReceiptTests(unittest.TestCase):
         self.assertIsInstance(receipt["usage"]["elapsedMs"], int)
         evidence = receipt["toolEvidence"]
         self.assertEqual(evidence["version"], 1)
-        self.assertEqual(evidence["binding"], {"adapter": "claude", "taskId": "goal-1",
+        self.assertEqual(evidence["binding"], {"harness": "claude", "taskId": "goal-1",
                                                "attemptId": context.attempt_id, "generation": 1})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": session}])
         self.assertTrue(evidence["streamComplete"])

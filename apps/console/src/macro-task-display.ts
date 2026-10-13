@@ -257,7 +257,7 @@ export function titleLineTooltip(line: TitleLine): string {
 
 export function buddyKey(buddy: TimelineBuddy | null | undefined): string | null {
   if (!buddy) return null;
-  return JSON.stringify([buddy.adapter ?? "", buddy.provider ?? "", buddy.model ?? ""]);
+  return JSON.stringify([buddy.harness ?? "", buddy.provider ?? "", buddy.model ?? ""]);
 }
 
 /** Product names for known native model ids (0.16 0.3); unknown ids stay as is. */
@@ -268,10 +268,10 @@ const KNOWN_MODEL_NAMES: Record<string, string> = {
 };
 
 /** A snapshot buddy reduced to the fields friendly naming needs. */
-export type FriendlyBuddy = { adapter: string; provider: string; model: string; label?: string; effort?: string };
+export type FriendlyBuddy = { harness: string; provider: string; model: string; label?: string; effort?: string };
 
 /**
- * Builds the friendly-name resolver: a snapshot buddy whose adapter,
+ * Builds the friendly-name resolver: a snapshot buddy whose harness,
  * provider and model all match wins with its buddyName; then the fixed
  * known-id map; then the raw model id. Colour assignment keeps using
  * buddyKey, so renaming never changes an assigned colour.
@@ -279,14 +279,14 @@ export type FriendlyBuddy = { adapter: string; provider: string; model: string; 
 export function buddyNamer(buddies?: readonly FriendlyBuddy[] | null): (buddy: TimelineBuddy | null | undefined) => { text: string; title: string } {
   const byTuple = new Map<string, FriendlyBuddy>();
   for (const buddy of buddies ?? []) {
-    const key = JSON.stringify([buddy.adapter ?? "", buddy.provider ?? "", buddy.model ?? ""]);
+    const key = JSON.stringify([buddy.harness ?? "", buddy.provider ?? "", buddy.model ?? ""]);
     if (!byTuple.has(key)) byTuple.set(key, buddy);
   }
   return (buddy) => {
     if (!buddy) return { text: "配置未记录", title: "配置未记录" };
-    const raw = [buddy.adapter, buddy.provider, buddy.model, buddy.effort]
+    const raw = [buddy.harness, buddy.provider, buddy.model, buddy.effort]
       .map(part => (part ?? "").trim()).filter(Boolean).join(" / ");
-    const matched = byTuple.get(JSON.stringify([buddy.adapter ?? "", buddy.provider ?? "", buddy.model ?? ""]));
+    const matched = byTuple.get(JSON.stringify([buddy.harness ?? "", buddy.provider ?? "", buddy.model ?? ""]));
     const name = matched
       ? buddyDisplayName(matched)
       : KNOWN_MODEL_NAMES[(buddy.model ?? "").trim()] ?? (buddy.model ?? "").trim();
@@ -320,7 +320,7 @@ const defaultNamer = buddyNamer(null);
 
 /**
  * One consistent “友好名 · effort” form for the legend, row subtitles, the
- * inspector and details; the raw adapter/provider/model/effort belongs in the
+ * inspector and details; the raw harness/provider/model/effort belongs in the
  * tooltip (0.16 0.3).
  */
 export function buddyLabel(buddy: TimelineBuddy | null | undefined, buddies?: readonly FriendlyBuddy[] | null): string {

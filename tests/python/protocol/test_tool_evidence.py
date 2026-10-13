@@ -13,7 +13,7 @@ from hey_my_buddy.json_codec import canonical_json
 
 IDENTITY = {"sessionId": "session-1", "turnId": "turn-1"}
 SECOND_IDENTITY = {"sessionId": "session-2", "inputId": "input-2"}
-BINDING = {"adapter": "zcode", "taskId": "task-1", "attemptId": "attempt-1", "generation": 2}
+BINDING = {"harness": "zcode", "taskId": "task-1", "attemptId": "attempt-1", "generation": 2}
 
 CLASSIFICATION = {
     "dsh": {"read": "read", "glob": "search", "grep": "search", "bash": "execute"},
@@ -55,10 +55,10 @@ def collect(events, roots=None, stream_complete=True, binding=BINDING):
 
 class NormalizeToolEventTests(unittest.TestCase):
     def test_each_harness_maps_its_native_tools_to_the_fixed_categories(self):
-        for adapter, table in CLASSIFICATION.items():
+        for harness, table in CLASSIFICATION.items():
             for tool, category in table.items():
-                with self.subTest(adapter=adapter, tool=tool):
-                    event = tool_evidence.normalize_tool_event(adapter, native_fact(tool))
+                with self.subTest(harness=harness, tool=tool):
+                    event = tool_evidence.normalize_tool_event(harness, native_fact(tool))
                     self.assertEqual(event["category"], category)
                     self.assertEqual(
                         set(event),
@@ -72,10 +72,10 @@ class NormalizeToolEventTests(unittest.TestCase):
             "codex": ("Read", "read", "mcp__server__tool", "apply_patch"),
             "zcode": ("LS", "MultiEdit", "WebSearch", "mcp__server__tool", "dispatch_agent"),
         }
-        for adapter, tools in unregistered.items():
+        for harness, tools in unregistered.items():
             for tool in tools:
-                with self.subTest(adapter=adapter, tool=tool):
-                    event = tool_evidence.normalize_tool_event(adapter, native_fact(tool))
+                with self.subTest(harness=harness, tool=tool):
+                    event = tool_evidence.normalize_tool_event(harness, native_fact(tool))
                     self.assertEqual(event["category"], "other")
 
     def test_reasoning_text_is_not_a_tool_event(self):
@@ -99,10 +99,10 @@ class NormalizeToolEventTests(unittest.TestCase):
             ("zcode", {"toolName": "Read", "type": "read"}),
             ("dsh", {"toolName": "read", "type": "grep"}),
         )
-        for adapter, fact in disagreements:
-            with self.subTest(adapter=adapter, fact=fact):
+        for harness, fact in disagreements:
+            with self.subTest(harness=harness, fact=fact):
                 event = tool_evidence.normalize_tool_event(
-                    adapter, {"nativeIdentity": dict(IDENTITY), "callId": "call-1", "phase": "start", **fact})
+                    harness, {"nativeIdentity": dict(IDENTITY), "callId": "call-1", "phase": "start", **fact})
                 self.assertEqual(event["category"], "other")
 
     def test_one_identifier_alone_uses_its_own_mapping(self):
@@ -123,13 +123,13 @@ class NormalizeToolEventTests(unittest.TestCase):
             ("codex", {"nativeIdentity": {"sessionId": 4}, "callId": "call-1", "toolName": "shell", "phase": "start"}),
             ("dsh", None),
         )
-        for adapter, fact in invalid:
-            with self.subTest(adapter=adapter, fact=fact):
+        for harness, fact in invalid:
+            with self.subTest(harness=harness, fact=fact):
                 with self.assertRaises(BoardError):
-                    tool_evidence.normalize_tool_event(adapter, fact)
+                    tool_evidence.normalize_tool_event(harness, fact)
         with self.assertRaises(BoardError) as caught:
             tool_evidence.normalize_tool_event("unknown", native_fact("read"))
-        self.assertEqual(caught.exception.code, "UNSUPPORTED_ADAPTER")
+        self.assertEqual(caught.exception.code, "UNSUPPORTED_HARNESS")
 
     def test_arguments_bodies_and_model_claims_are_dropped(self):
         event = tool_evidence.normalize_tool_event("zcode", native_fact(
@@ -336,7 +336,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
         )
 
     def test_binding_and_identity_shapes_are_validated(self):
-        for binding in (None, {}, {"adapter": "zcode"}, {**BINDING, "generation": True},
+        for binding in (None, {}, {"harness": "zcode"}, {**BINDING, "generation": True},
                         {**BINDING, "extra": 1}, {**BINDING, "generation": -1}):
             with self.subTest(binding=binding):
                 with self.assertRaises(BoardError):
@@ -406,7 +406,7 @@ class JudgeToolEvidenceTests(unittest.TestCase):
     def test_summary_fields_with_wrong_types_or_values_are_unverified(self):
         for change in ({"toolCalls": "1"}, {"toolCalls": True}, {"toolCalls": -1},
                        {"unsettledToolCalls": -1}, {"streamComplete": "yes"}, {"truncated": 1},
-                       {"binding": {"adapter": "zcode"}}, {"nativeIdentity": IDENTITY},
+                       {"binding": {"harness": "zcode"}}, {"nativeIdentity": IDENTITY},
                        {"events": settled_events("read")[0]}):
             with self.subTest(change=change):
                 package = {**collect(settled_events("read")), **change}

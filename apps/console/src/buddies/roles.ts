@@ -3,7 +3,7 @@ import type { Configuration, Draft, Buddy, RouterHealthEntry, RouterHealthIdenti
 
 /** The four parts of a buddy's identity: `harness / provider / model / effort`. */
 export function buddyQuad(identity: RouterHealthIdentity): string {
-  return `${identity.adapter} / ${identity.provider} / ${identity.model} / ${identity.effort}`;
+  return `${identity.harness} / ${identity.provider} / ${identity.model} / ${identity.effort}`;
 }
 
 /** What the recorded window says is wrong with routing; the user has something to do about either. */

@@ -28,7 +28,7 @@ export function decisionCandidates(buddies: Buddy[]): Buddy[] {
   // Deterministic, locale-independent order: harness, then the stable identity.
   return buddies
     .filter(isDecisionCandidate)
-    .sort((a, b) => a.adapter.localeCompare(b.adapter) || a.buddyId.localeCompare(b.buddyId));
+    .sort((a, b) => a.harness.localeCompare(b.harness) || a.buddyId.localeCompare(b.buddyId));
 }
 
 export function isFastRouterCandidate(buddy: Buddy | undefined): boolean {
@@ -37,7 +37,7 @@ export function isFastRouterCandidate(buddy: Buddy | undefined): boolean {
 
 export function fastRouterCandidates(buddies: Buddy[]): Buddy[] {
   return buddies.filter(isFastRouterCandidate)
-    .sort((a, b) => a.adapter.localeCompare(b.adapter) || a.buddyId.localeCompare(b.buddyId));
+    .sort((a, b) => a.harness.localeCompare(b.harness) || a.buddyId.localeCompare(b.buddyId));
 }
 
 /**
@@ -49,7 +49,7 @@ export function fastRouterCandidates(buddies: Buddy[]): Buddy[] {
  */
 export function hasExecutionCapability(buddy: Buddy | undefined): boolean {
   if (!buddy) return false;
-  const token = `execution:${buddy.adapter.trim().toLowerCase()}`;
+  const token = `execution:${buddy.harness.trim().toLowerCase()}`;
   return (buddy.capabilities ?? []).some(
     (entry) => entry.trim().toLowerCase() === token,
   );
@@ -63,7 +63,7 @@ export function isExecutionCandidate(buddy: Buddy | undefined): boolean {
 export function executionCandidates(buddies: Buddy[]): Buddy[] {
   return buddies
     .filter(isExecutionCandidate)
-    .sort((a, b) => a.adapter.localeCompare(b.adapter) || a.buddyId.localeCompare(b.buddyId));
+    .sort((a, b) => a.harness.localeCompare(b.harness) || a.buddyId.localeCompare(b.buddyId));
 }
 
 /**
@@ -128,9 +128,9 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
   for (const entry of draft.modelServiceConcurrency) {
     if (concurrencyLimit(entry.limit) !== null) continue;
     const member = draft.buddies.find((buddy) => modelServiceKey(buddy) === modelServiceKey(entry));
-    const subject = member ? buddyName(member) : `${entry.adapter}/${entry.provider}/${entry.model}`;
+    const subject = member ? buddyName(member) : `${entry.harness}/${entry.provider}/${entry.model}`;
     issues.push({
-      buddyId: member?.buddyId ?? `${entry.adapter}/${entry.provider}/${entry.model}`,
+      buddyId: member?.buddyId ?? `${entry.harness}/${entry.provider}/${entry.model}`,
       modelService: modelServiceKey(entry),
       label: subject,
       message: `${subject} 并发上限须为 1–32 的整数；请修改。`,
@@ -176,7 +176,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
     for (const target of draft.configuration.routerBuddyIds) {
       const buddy = buddies.get(target);
       const refusal = !buddy ? "已不在当前目录中"
-        : [buddy.adapter, buddy.provider, buddy.model, buddy.effort].some(value => !value?.trim())
+        : [buddy.harness, buddy.provider, buddy.model, buddy.effort].some(value => !value?.trim())
           ? "buddy 身份不完整" : null;
       if (refusal) issues.push({ buddyId: target, label: labelOf(buddy, target),
         message: `${labelOf(buddy, target)} ${refusal}；无法保存 Router 列表。` });

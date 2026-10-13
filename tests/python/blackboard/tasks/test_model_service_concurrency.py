@@ -63,7 +63,7 @@ class ModelServiceConcurrencyTestCase(StoreConcurrencyTestCase):
         return next(
             row
             for row in rows
-            if (row["adapter"], row["provider"], row["model"]) == model_service
+            if (row["harness"], row["provider"], row["model"]) == model_service
         )
 
 
@@ -75,22 +75,22 @@ class PublicationInterfaceTests(ModelServiceConcurrencyTestCase):
 
     def test_snapshot_reports_one_row_per_represented_model_service_with_defaults(self):
         snapshot = self.board_.call("console_snapshot", {})
-        rows = {(row["adapter"], row["provider"], row["model"]): row for row in snapshot["modelServiceConcurrency"]}
+        rows = {(row["harness"], row["provider"], row["model"]): row for row in snapshot["modelServiceConcurrency"]}
         # The fixture catalog represents two dsh model services; every row carries exactly
         # the frozen fields, effort variants collapse, and defaults apply.
         self.assertEqual(set(rows), {MODEL_SERVICE_A, MODEL_SERVICE_B})
         for row in rows.values():
-            self.assertEqual(set(row), {"adapter", "provider", "model", "limit", "active"})
+            self.assertEqual(set(row), {"harness", "provider", "model", "limit", "active"})
             self.assertEqual(row["limit"], 2)
             self.assertEqual(row["active"], 0)
 
     def test_model_buddies_pages_carry_the_same_model_service_rows(self):
         first = self.board_.call("buddy_list", {"limit": 1})
         self.assertEqual(len(first["modelServiceConcurrency"]), 1)
-        self.assertEqual(set(first["modelServiceConcurrency"][0]), {"adapter", "provider", "model", "limit", "active"})
+        self.assertEqual(set(first["modelServiceConcurrency"][0]), {"harness", "provider", "model", "limit", "active"})
         full = self.board_.call("buddy_list", {"limit": 200})
         self.assertEqual(
-            {(row["adapter"], row["provider"], row["model"]) for row in full["modelServiceConcurrency"]},
+            {(row["harness"], row["provider"], row["model"]) for row in full["modelServiceConcurrency"]},
             {MODEL_SERVICE_A, MODEL_SERVICE_B},
         )
 
@@ -101,7 +101,7 @@ class PublicationInterfaceTests(ModelServiceConcurrencyTestCase):
         def concurrent_save(evaluation, params):
             page = original(evaluation, params)
             self.publish_limits(self.board_, {
-                "adapter": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 5,
+                "harness": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 5,
             }, command="save-between-page-and-response")
             return page
 
@@ -147,7 +147,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
 
     def test_the_authenticated_console_writer_sets_and_updates_limits(self):
         result = self.publish_limits(
-            self.board_, {"adapter": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 5}
+            self.board_, {"harness": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 5}
         )
         self.assertTrue(result["published"])
         self.assertEqual(result["counts"]["modelServiceConcurrency"], 1)
@@ -157,7 +157,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
         # A later save updates only the named model service; unrelated settings persist.
         self.publish_limits(
             self.board_,
-            {"adapter": MODEL_SERVICE_B[0], "provider": MODEL_SERVICE_B[1], "model": MODEL_SERVICE_B[2], "limit": 1},
+            {"harness": MODEL_SERVICE_B[0], "provider": MODEL_SERVICE_B[1], "model": MODEL_SERVICE_B[2], "limit": 1},
             command="limits-2",
         )
         snapshot = self.board_.call("console_snapshot", {})
@@ -167,9 +167,9 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
     def test_derived_and_unknown_fields_are_rejected(self):
         board = self.board_
         for patch in (
-            {"adapter": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 2, "active": 0},
-            {"adapter": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "effort": "off", "limit": 2},
-            {"adapter": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "limit": 2},
+            {"harness": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 2, "active": 0},
+            {"harness": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "effort": "off", "limit": 2},
+            {"harness": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "limit": 2},
         ):
             with self.assertRaises(BoardError) as caught:
                 self.publish_limits(board, patch)
@@ -185,7 +185,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
             with self.assertRaises(BoardError):
                 self.publish_limits(
                     board,
-                    {"adapter": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": limit},
+                    {"harness": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": limit},
                 )
 
     def test_repeated_model_services_in_one_patch_are_refused(self):
@@ -193,21 +193,21 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
         with self.assertRaises(BoardError) as caught:
             self.publish_limits(
                 board,
-                {"adapter": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 3},
-                {"adapter": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 4},
+                {"harness": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 3},
+                {"harness": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 4},
             )
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
     def test_unknown_model_service_is_rejected_but_retained_unavailable_model_service_is_editable(self):
         with self.assertRaises(BoardError) as caught:
             self.publish_limits(self.board_, {
-                "adapter": "zcode", "provider": "misspelled-provider", "model": "unknown", "limit": 3,
+                "harness": "zcode", "provider": "misspelled-provider", "model": "unknown", "limit": 3,
             })
         self.assertEqual(caught.exception.code, "NOT_FOUND")
         with self.board_.store.db.write() as connection:
             connection.execute("UPDATE buddies SET available=0 WHERE model=?", (MODEL_SERVICE_B[2],))
         self.publish_limits(self.board_, {
-            "adapter": MODEL_SERVICE_B[0], "provider": MODEL_SERVICE_B[1], "model": MODEL_SERVICE_B[2], "limit": 3,
+            "harness": MODEL_SERVICE_B[0], "provider": MODEL_SERVICE_B[1], "model": MODEL_SERVICE_B[2], "limit": 3,
         })
         page = self.board_.call("buddy_list", {"includeUnavailable": True})
         self.assertEqual(self.model_service_row(page, MODEL_SERVICE_B)["limit"], 3)
@@ -220,7 +220,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
 
 
 
-            "modelServiceConcurrency": [{"adapter": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 4}],
+            "modelServiceConcurrency": [{"harness": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 4}],
         }
         first = board.console_call("user_policy_publish", payload)
         self.assertFalse(first["duplicate"])
@@ -233,7 +233,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
 
     def test_a_setting_survives_discovery_marking_the_model_unavailable(self):
         board = self.board_
-        self.publish_limits(board, {"adapter": MODEL_SERVICE_B[0], "provider": MODEL_SERVICE_B[1], "model": MODEL_SERVICE_B[2], "limit": 7})
+        self.publish_limits(board, {"harness": MODEL_SERVICE_B[0], "provider": MODEL_SERVICE_B[1], "model": MODEL_SERVICE_B[2], "limit": 7})
         with board.store.db.write() as connection:
             connection.execute(
                 "UPDATE buddies SET available=0 WHERE model=?", (MODEL_SERVICE_B[2],)
@@ -241,7 +241,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
         # The unavailable model service is no longer represented in the response, but the
         # stored setting remains and applies again when the model service returns.
         snapshot = board.call("console_snapshot", {})
-        self.assertNotIn(MODEL_SERVICE_B, {(row["adapter"], row["provider"], row["model"]) for row in snapshot["modelServiceConcurrency"]})
+        self.assertNotIn(MODEL_SERVICE_B, {(row["harness"], row["provider"], row["model"]) for row in snapshot["modelServiceConcurrency"]})
         with board.store.db.read() as connection:
             row = connection.execute(
                 "SELECT concurrency_limit FROM model_service_concurrency WHERE model=?", (MODEL_SERVICE_B[2],)
@@ -262,7 +262,7 @@ class SaveAppliesAtClaimTests(ModelServiceConcurrencyTestCase):
     def test_lowering_never_kills_live_work_and_holds_new_claims(self):
         board = self.board_
         self.publish_limits(
-            board, {"adapter": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 1}
+            board, {"harness": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 1}
         )
         # The live attempts are untouched: no cancel, no state change.
         for index in range(2):
@@ -276,7 +276,7 @@ class SaveAppliesAtClaimTests(ModelServiceConcurrencyTestCase):
     def test_a_confirmed_completion_releases_the_lowered_model_service_slot(self):
         board = self.board_
         self.publish_limits(
-            board, {"adapter": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 1}
+            board, {"harness": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 1}
         )
         # Occupancy must drop *below* the lowered limit: both live attempts end
         # with confirmed shutdown before a new claim is admitted.
@@ -289,7 +289,7 @@ class SaveAppliesAtClaimTests(ModelServiceConcurrencyTestCase):
     def test_raising_applies_at_the_next_claim_without_a_restart(self):
         board = self.board_
         self.publish_limits(
-            board, {"adapter": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 3}
+            board, {"harness": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 3}
         )
         self.register(board, "w-raise")
         claim = self.claim_governed(board, "w-raise", "raise-1")

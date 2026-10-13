@@ -80,8 +80,8 @@ class BillingQuotaTests(BoardTestCase):
             self.assertEqual(for_provider(db, "dsh", "deepseek-official")["kind"], "metered")
         native = deepcopy(FIXTURE_CATALOG)
         provider = native["providers"][0]
-        provider.update(adapter="zcode", provider="zhipu", accessType="zhipu-coding-plan-api-key")
-        native["discoveries"] = [{"adapter": "zcode", "status": "complete"}]
+        provider.update(harness="zcode", provider="zhipu", accessType="zhipu-coding-plan-api-key")
+        native["discoveries"] = [{"harness": "zcode", "status": "complete"}]
         self.catalog_fixture(native)
         board.call("model_catalog_refresh", {"requestId": "zcode-billing"})
         with board.store.db.read() as db:
@@ -107,10 +107,10 @@ class BillingQuotaTests(BoardTestCase):
         health = HarnessHealth(board)
         health.initialize()
         with board.db.write() as db:
-            db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'",
+            db.execute("UPDATE harness_health SET record_json=? WHERE harness='codex'",
                        (json.dumps({"reviewVerification": {"verified": True}}),))
         record = {"status": "ready", "command": ["mock-codex"], "fingerprint": {"id": 1}}
-        with patch("hey_my_buddy.blackboard.service.harness_health._snapshot", return_value={"adapter": "codex", "managerRecords": [], "candidates": []}), \
+        with patch("hey_my_buddy.blackboard.service.harness_health._snapshot", return_value={"harness": "codex", "managerRecords": [], "candidates": []}), \
              patch("hey_my_buddy.blackboard.service.harness_health._discover", return_value=record), \
              patch("hey_my_buddy.buddy.harnesses.codex.account_probe.read", return_value=({**codex_account({"type": "chatgpt", "planType": "pro"}, stamp()), "provider": "openai"}, None, None)) as probe:
             health.refresh("codex", force=True)
@@ -126,7 +126,7 @@ class BillingQuotaTests(BoardTestCase):
         self.enterContext(patch("hey_my_buddy.blackboard.evaluation.native_observations.utc_now", self.quota_clock))
         board = self.board(clock=self.quota_clock)
         self.seed(board, decision_buddy=None)
-        config = {"adapter": "dsh", "provider": "deepseek-official"}
+        config = {"harness": "dsh", "provider": "deepseek-official"}
         reset = "2026-09-29T11:00:00Z"
         with board.store.db.read() as db:
             baseline = DecisionCoordinator._select_candidates(db, [], coding_only=True)
@@ -175,22 +175,22 @@ class BillingQuotaTests(BoardTestCase):
         board.call("model_catalog_refresh", {"requestId": "billing-balance-catalog"})
         self._quota(board, balanceZero=True)
         with board.store.db.read() as db:
-            self.assertEqual(exhausted(db, {"adapter": "dsh", "provider": "deepseek-official"})["code"], "HARNESS_BALANCE_ZERO")
+            self.assertEqual(exhausted(db, {"harness": "dsh", "provider": "deepseek-official"})["code"], "HARNESS_BALANCE_ZERO")
         with board.store.db.write() as db:
             observed_at = stamp()
-            db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'",
+            db.execute("UPDATE harness_health SET record_json=? WHERE harness='codex'",
                        (json.dumps({"billingByProvider": {"openai": codex_account({"type": "chatgpt", "planType": "pro"}, stamp())}}),))
             record_quota(db, "codex", {"source": "codex/app-server-rate-limits", "observedAt": observed_at,
                                       "provider": "openai", "balanceZero": True, "windows": []}, now=observed_at)
         with board.store.db.read() as db:
-            self.assertEqual(exhausted(db, {"adapter": "codex", "provider": "openai"})['code'], 'HARNESS_BALANCE_ZERO')
+            self.assertEqual(exhausted(db, {"harness": "codex", "provider": "openai"})['code'], 'HARNESS_BALANCE_ZERO')
         with board.store.db.write() as db:
             observed_at = stamp()
             record_quota(db, "codex", {"source": "codex/app-server-rate-limits", "observedAt": observed_at,
                                       "provider": "openai", "balanceZero": True,
                                       "ordinaryUsageAllowed": False, "windows": []}, now=observed_at)
         with board.store.db.read() as db:
-            self.assertEqual(exhausted(db, {"adapter": "codex", "provider": "openai"})["code"], "HARNESS_BALANCE_ZERO")
+            self.assertEqual(exhausted(db, {"harness": "codex", "provider": "openai"})["code"], "HARNESS_BALANCE_ZERO")
 
     def test_pin_cannot_force_exhausted_candidate_but_host_explicit_choice_survives(self):
         board = self.board()
@@ -201,14 +201,14 @@ class BillingQuotaTests(BoardTestCase):
         result = board.call("workflow_submit", {"requestId": "explicit-exhausted", "hostId": "host",
             "task": "Finish the bounded change", "cwd": str(self._git_workdir()),
             "executionWorkspace": {"kind": "existing", "access": "write"},
-            "adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"})
+            "harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"})
         self.assertEqual(result["buddy"]["model"], "deepseek-flash")
         self.assertEqual(result["quotaWarnings"][0]["code"], "HARNESS_QUOTA_EXHAUSTED")
 
     def test_exhaustion_outlives_display_freshness_and_unknown_cannot_clear_it(self):
         from hey_my_buddy.blackboard.routing.quota_routing import record
         board = self.board()
-        config = {'adapter': 'dsh', 'provider': 'deepseek-official', 'model': 'deepseek-flash'}
+        config = {'harness': 'dsh', 'provider': 'deepseek-official', 'model': 'deepseek-flash'}
         with board.store.db.write() as db:
             record(db, 'dsh', {'provider': config['provider'], 'source': 'native-fixture', 'observedAt': stamp(-7200), 'reachedType': 'usage_limit_reached'})
             record(db, 'dsh', {'provider': config['provider'], 'source': 'native-fixture', 'observedAt': stamp(-3600), 'windows': []})
@@ -219,7 +219,7 @@ class BillingQuotaTests(BoardTestCase):
     def test_reset_and_provider_or_limit_scope_are_independent(self):
         from hey_my_buddy.blackboard.routing.quota_routing import record
         board = self.board()
-        config = {'adapter': 'codex', 'provider': 'openai', 'model': 'limited-model'}
+        config = {'harness': 'codex', 'provider': 'openai', 'model': 'limited-model'}
         with board.store.db.write() as db:
             record(db, 'codex', {'provider': 'openai', 'source': 'native-fixture', 'observedAt': stamp(-60),
                 'reachedType': 'usage_limit_reached', 'scope': {'limitId': 'limited-model'}, 'resetsAt': stamp(60)})
@@ -231,7 +231,7 @@ class BillingQuotaTests(BoardTestCase):
     def test_account_reset_query_can_restore_a_previous_native_failure(self):
         from hey_my_buddy.blackboard.routing.quota_routing import record
         board = self.board()
-        config = {'adapter': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol'}
+        config = {'harness': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol'}
         with board.store.db.write() as db:
             record(db, 'codex', {'provider': 'openai', 'source': 'native-fixture', 'observedAt': stamp(-60), 'reachedType': 'usage_limit_reached'})
             record(db, 'codex', {'provider': 'openai', 'source': 'native-fixture', 'observedAt': stamp(-1),
@@ -243,7 +243,7 @@ class BillingQuotaTests(BoardTestCase):
         from hey_my_buddy.buddy.harnesses.codex.protocol import quota_candidate_from_response
         from hey_my_buddy.protocol.usage import normalize_quota
         board = self.board()
-        config = {'adapter': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol'}
+        config = {'harness': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol'}
         with board.store.db.write() as db:
             record(db, 'codex', {'provider': 'openai', 'source': 'native-fixture', 'observedAt': stamp(-60), 'reachedType': 'usage_limit_reached'})
             record(db, 'codex', {'provider': 'openai', 'source': 'native-fixture', 'observedAt': stamp(-60),

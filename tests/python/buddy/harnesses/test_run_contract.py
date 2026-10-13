@@ -71,7 +71,7 @@ def full_result() -> rc.RunResult:
                            correction_count=0),
         completion_evidence=rc.CompletionEvidence( stream_end=True),
         tool_evidence=rc.FrozenJson({"version": 1,
-                                     "binding": {"adapter": "zcode", "taskId": "task-fixture",
+                                     "binding": {"harness": "zcode", "taskId": "task-fixture",
                                                  "attemptId": "attempt-fixture", "generation": 1},
                                      "nativeIdentity": [{"sessionId": "s1"}], "streamComplete": True,
                                      "events": [], "toolCalls": 0, "unsettledToolCalls": 0, "truncated": False}),
@@ -187,18 +187,18 @@ class CodecRoundtripTests(unittest.TestCase):
         permission = worker_permission("codex", "full")
         request = edited(full_request(Path("/private/tmp")), harness="codex",
                          tool_scope="full", worker_permission=permission)
-        require_permission({"adapter": "codex"}, "full")
+        require_permission({"harness": "codex"}, "full")
         with mock.patch.object(codex, "_run", return_value=object()) as native:
             codex.run(request, observer=lambda _event: None, services=None, cancelled=lambda: False)
         self.assertEqual(native.call_args.args[2], "worker")
-        require_permission({"adapter": "claude"}, "full")
+        require_permission({"harness": "claude"}, "full")
 
     def test_undeclared_full_worker_permission_is_refused(self):
         from hey_my_buddy.buddy.harnesses.registry import _WORKER_PERMISSIONS, require_permission, worker_permission
         with mock.patch.dict(_WORKER_PERMISSIONS, {"claude": {
                 level: declaration for level, declaration in _WORKER_PERMISSIONS["claude"].items()
                 if level != "full"}}):
-            for check in (lambda: require_permission({"adapter": "claude"}, "full"),
+            for check in (lambda: require_permission({"harness": "claude"}, "full"),
                           lambda: worker_permission("claude", "full")):
                 with self.subTest(check=check), self.assertRaises(BoardError) as caught:
                     check()
@@ -403,7 +403,7 @@ class CodecRoundtripTests(unittest.TestCase):
         # (128 events at the spec's own field bounds), which the old strict
         # read could carry.
         package = {"version": 1,
-                   "binding": {"adapter": "codex", "taskId": "task-fixture",
+                   "binding": {"harness": "codex", "taskId": "task-fixture",
                                "attemptId": "attempt-fixture", "generation": 1},
                    "nativeIdentity": [{"sessionId": "s" * 128}], "streamComplete": True,
                    "events": [], "toolCalls": 64, "unsettledToolCalls": 0, "truncated": False}

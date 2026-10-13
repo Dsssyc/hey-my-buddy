@@ -397,7 +397,7 @@ class GovernedCliTests(PrivateStateTestCase, WorkflowTestCase):
                 "requestId": request_id,
                 "hostId": "host-1",
                 "task": "do the thing",
-                "adapter": "dsh",
+                "harness": "dsh",
                 "provider": "deepseek-official",
                 "model": "deepseek-flash",
                 "effort": "off",

@@ -12,13 +12,13 @@ const flashOff = "dsh:deepseek-official:deepseek-flash:off";
 const flashHigh = "dsh:deepseek-official:deepseek-flash:high";
 const retiredMax = "dsh:deepseek-official:retired-model:max";
 const retiredLow = "dsh:deepseek-official:retired-model:low";
-const retiredModelService = { adapter: "dsh", provider: "deepseek-official", model: "retired-model" };
+const retiredModelService = { harness: "dsh", provider: "deepseek-official", model: "retired-model" };
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 const RETIRED = "dsh / deepseek-official / retired-model";
 
 function catalog(): Buddy[] {
   const base = {
-    adapter: "dsh", provider: "deepseek-official", capabilities: ["execution:dsh", "decision"],
+    harness: "dsh", provider: "deepseek-official", capabilities: ["execution:dsh", "decision"],
     contextWindow: null, source: "catalog:fixture", description: "",
   };
   return [
@@ -375,7 +375,7 @@ describe("stale settings and unrelated saves", () => {
     expect(f.published[0].configuration).toBeUndefined();
     expect(f.published[0].preferenceChanges).toBeUndefined();
     expect(f.published[0].modelServiceNoteChanges).toEqual([
-      { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "只改这条意见" },
+      { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "只改这条意见" },
     ]);
   });
 
@@ -393,7 +393,7 @@ describe("stale settings and unrelated saves", () => {
     await screen.findByText("设置已保存");
     expect(f.published[0]).not.toHaveProperty("preferenceChanges");
     expect(f.published[0].modelServiceNoteChanges).toEqual([
-      { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "，补充说明" },
+      { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "，补充说明" },
     ]);
   });
 });

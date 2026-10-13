@@ -20,8 +20,8 @@ class FakeDB:
         yield self
 
     def execute(self, _query, args=()):
-        adapter = args[0] if args else 'codex'
-        return mock.Mock(fetchall=lambda: [row for row in self.rows if row['adapter'] == adapter])
+        harness = args[0] if args else 'codex'
+        return mock.Mock(fetchall=lambda: [row for row in self.rows if row['harness'] == harness])
 
 
 class FakeStore:
@@ -32,12 +32,12 @@ class FakeStore:
 
 def dsh_grouped_row(session, *, stopped=True):
     """A receipt shape only the removed grouped feature could produce."""
-    result = {'nativeSession': {'adapter': 'dsh', 'sessionId': session, 'captured': True,
+    result = {'nativeSession': {'harness': 'dsh', 'sessionId': session, 'captured': True,
                                 'sessionIdConflict': False, 'ambiguous': False},
               'workspace': {'bound': True, 'id': 'group-1', 'sessionId': session,
                             'path': '/fixture/work', 'created': False},
               'workspaceManifest': {'path': '/fixture/work'}}
-    return {'adapter': 'dsh', 'task_id': f'task-{session}', 'attempt_id': f'attempt-{session}',
+    return {'harness': 'dsh', 'task_id': f'task-{session}', 'attempt_id': f'attempt-{session}',
             'cwd': '/source/project', 'execution_state': 'finished' if stopped else 'uncertain',
             'shutdown_confirmed': int(stopped),
             'result_json': json.dumps({'result': result, 'shutdownConfirmed': stopped})}
@@ -56,36 +56,36 @@ class WorkerSessionTests(unittest.TestCase):
         rows = [dsh_grouped_row('legacy-grouped')]
         store = FakeStore(self.state, rows)
         with self.assertRaises(BoardError) as raised:
-            worker_sessions.handle(store, {'adapter': 'dsh'})
+            worker_sessions.handle(store, {'harness': 'dsh'})
         self.assertEqual(raised.exception.code, 'UNSUPPORTED')
         for action in ('plan', 'apply'):
             with self.assertRaises(BoardError) as raised:
                 worker_sessions.handle(store, {'action': action})
             self.assertEqual(raised.exception.code, 'INVALID_ARGUMENT')
         with self.assertRaises(BoardError) as raised:
-            worker_sessions.handle(store, {'adapter': 'dsh', 'planDigest': '0' * 64, 'selectionDigest': '0' * 64})
+            worker_sessions.handle(store, {'harness': 'dsh', 'planDigest': '0' * 64, 'selectionDigest': '0' * 64})
         self.assertEqual(raised.exception.code, 'INVALID_ARGUMENT')
         with self.assertRaises(BoardError) as raised:
-            worker_sessions.handle(store, {'adapter': 'codex', 'action': 'apply'})
+            worker_sessions.handle(store, {'harness': 'codex', 'action': 'apply'})
         self.assertEqual(raised.exception.code, 'INVALID_ARGUMENT')
 
     def test_codex_list_uses_board_only_and_never_guesses_other_sessions(self):
-        row = {'adapter': 'codex', 'task_id': 'goal-1', 'attempt_id': 'attempt-1',
+        row = {'harness': 'codex', 'task_id': 'goal-1', 'attempt_id': 'attempt-1',
                'cwd': '/fixture/work', 'execution_state': 'finished', 'shutdown_confirmed': 1,
                'result_json': json.dumps({'result': {
-                   'nativeSession': {'adapter': 'codex', 'sessionId': 'thread-1', 'captured': True,
+                   'nativeSession': {'harness': 'codex', 'sessionId': 'thread-1', 'captured': True,
                                      'storageOwner': 'buddy-goal', 'resumeMode': 'initial',
                                      'nativeAppVisibility': 'unknown'},
                    'nativeCheckpoint': {'version': 1, 'sessionId': 'thread-1', 'taskId': 'goal-1',
                                         'attemptId': 'attempt-1'}},
                    'shutdownConfirmed': True})}
-        result = worker_sessions.handle(FakeStore(self.state, [row]), {'adapter': 'codex'})
+        result = worker_sessions.handle(FakeStore(self.state, [row]), {'harness': 'codex'})
         self.assertEqual([r['sessionId'] for r in result['sessions']], ['thread-1'])
         self.assertEqual(result['sessions'][0]['attemptIds'], ['attempt-1'])
         self.assertFalse(result['nativeAccess'])
         self.assertEqual(result['count'], 1)
         default = worker_sessions.handle(FakeStore(self.state, [row]), {})
-        self.assertEqual(default['adapter'], 'codex')
+        self.assertEqual(default['harness'], 'codex')
 
     def test_codex_list_accepts_actual_stopped_adapter_fixture(self):
         from buddy.harnesses.codex.test_codex import CodexAdapterTests
@@ -99,10 +99,10 @@ class WorkerSessionTests(unittest.TestCase):
                 outcome = fixture.execute(fixture.context())
             self.assertTrue(outcome.shutdown_confirmed)
             receipt = {'result': outcome.result, 'shutdownConfirmed': True}
-            row = {'adapter': 'codex', 'task_id': 'goal-1', 'attempt_id': 'attempt-1',
+            row = {'harness': 'codex', 'task_id': 'goal-1', 'attempt_id': 'attempt-1',
                    'cwd': str(fixture.cwd), 'execution_state': 'finished', 'shutdown_confirmed': 1,
                    'result_json': json.dumps(receipt)}
-            result = worker_sessions.handle(FakeStore(self.state, [row]), {'adapter': 'codex'})
+            result = worker_sessions.handle(FakeStore(self.state, [row]), {'harness': 'codex'})
             self.assertEqual(result['count'], 1)
             self.assertEqual(outcome.result['nativeSession']['storageScope'], 'harness-user-store')
             self.assertEqual(result['sessions'][0]['storageOwner'], 'harness-user-store')
@@ -112,19 +112,19 @@ class WorkerSessionTests(unittest.TestCase):
             legacy['result'].pop('nativeCheckpoint')
             legacy['result'].pop('nativeSession')
             legacy_row = {**row, 'result_json': json.dumps(legacy)}
-            historical = worker_sessions.handle(FakeStore(self.state, [legacy_row]), {'adapter': 'codex'})
+            historical = worker_sessions.handle(FakeStore(self.state, [legacy_row]), {'harness': 'codex'})
             self.assertEqual(historical['count'], 1)
             self.assertEqual(historical['sessions'][0]['storageOwner'], 'harness-user-store')
             legacy['result']['turn']['taskId'] = 'unrelated-goal'
             legacy_row['result_json'] = json.dumps(legacy)
-            self.assertEqual(worker_sessions.handle(FakeStore(self.state, [legacy_row]), {'adapter': 'codex'})['count'], 0)
+            self.assertEqual(worker_sessions.handle(FakeStore(self.state, [legacy_row]), {'harness': 'codex'})['count'], 0)
             resumed = dict(row)
             resumed['attempt_id'] = 'attempt-2'
             continued = json.loads(row['result_json'])
             continued['result']['nativeCheckpoint']['attemptId'] = 'attempt-2'
             continued['result']['nativeSession']['resumeMode'] = 'native-session'
             resumed['result_json'] = json.dumps(continued)
-            deduped = worker_sessions.handle(FakeStore(self.state, [row, resumed]), {'adapter': 'codex'})
+            deduped = worker_sessions.handle(FakeStore(self.state, [row, resumed]), {'harness': 'codex'})
             self.assertEqual(deduped['count'], 1)
             self.assertEqual(deduped['sessions'][0]['attemptIds'], ['attempt-1', 'attempt-2'])
         finally:

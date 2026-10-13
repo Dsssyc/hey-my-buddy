@@ -217,15 +217,15 @@ class ProjectionUnitTests(unittest.TestCase):
     def test_routing_brief_keeps_the_frozen_basis_and_constraints(self):
         routing = {
             "status": "completed", "source": "single-candidate", "reason": "唯一合法候选，未调用 Router",
-            "decisionId": "dec-1", "constraints": {"adapter": "dsh"},
+            "decisionId": "dec-1", "constraints": {"harness": "dsh"},
             "requiredCapabilities": ["execution:dsh"],
             "routingBasis": {"candidateCount": 1, "excludedCount": 1, "excludedBuddies": [
-                {"buddyId": "dsh:p:m:off", "adapter": "dsh", "provider": "p", "model": "m",
+                {"buddyId": "dsh:p:m:off", "harness": "dsh", "provider": "p", "model": "m",
                  "effort": "off", "reason": "user excluded"}]},
         }
         brief = cli_views.governed_brief({"governed": True, "runId": "r", "revision": 1,
                                           "state": "executing", "status": "queued", "routing": routing})
-        self.assertEqual(brief["routing"]["constraints"], {"adapter": "dsh"})
+        self.assertEqual(brief["routing"]["constraints"], {"harness": "dsh"})
         self.assertEqual(brief["routing"]["requiredCapabilities"], ["execution:dsh"])
         self.assertEqual(brief["routing"]["routingBasis"], routing["routingBasis"])
         # A route recorded before the frozen basis stays unchanged and compact.

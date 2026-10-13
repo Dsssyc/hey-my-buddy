@@ -20,7 +20,7 @@ _TYPES = {"object": dict, "array": list, "string": str, "null": type(None)}
 
 @dataclass(frozen=True)
 class _NoToolEvidence:
-    adapter: str
+    harness: str
     task_id: str
     attempt_id: str
     generation: int
@@ -145,7 +145,7 @@ def collect(handle: ProcessHandle) -> AdapterOutcome:
                           "nativeStatus": payload.get("status"), "nativeCode": payload.get("code")}
             if isinstance(binding, _NoToolEvidence):
                 diagnostic.update(privateRoot=str(binding.private_root), evidenceRoot=str(binding.evidence_root),
-                                  identity={"adapter": binding.adapter, "taskId": binding.task_id,
+                                  identity={"harness": binding.harness, "taskId": binding.task_id,
                                             "attemptId": binding.attempt_id, "generation": binding.generation,
                                             "directory": str(binding.directory)})
             if isinstance(error, BoardError):

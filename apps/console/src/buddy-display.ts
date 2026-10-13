@@ -10,25 +10,25 @@ const HARNESS_NAMES: Record<string, string> = {
   zcode: "ZCode",
 };
 
-export function harnessName(adapter: string): string {
-  return HARNESS_NAMES[adapter.trim().toLowerCase()] ?? adapter;
+export function harnessName(harness: string): string {
+  return HARNESS_NAMES[harness.trim().toLowerCase()] ?? harness;
 }
 
 /**
  * Case-insensitive search text for one model service entry (docs/design/buddy-settings.md):
  * the model's display name, its recorded label/model and effort, the provider,
- * and both the adapter id and its harness display name, so "claude code" finds
+ * and both the harness id and its harness display name, so "claude code" finds
  * the `claude` harness exactly like "claude" does.
  */
 export function modelServiceSearchText(buddy: Buddy): string {
   return [
     buddyName(buddy), buddy.label, buddy.model, buddy.effort,
-    buddy.provider, buddy.adapter, harnessName(buddy.adapter), effortText(buddy.effort),
+    buddy.provider, buddy.harness, harnessName(buddy.harness), effortText(buddy.effort),
   ].join(" ").toLowerCase();
 }
 
 export type HarnessGroup = {
-  adapter: string;
+  harness: string;
   name: string;
   modelServices: ModelServiceGroup[];
   /** No buddy of this harness is available in the directory right now. */
@@ -41,15 +41,15 @@ export type HarnessGroup = {
 export function harnessGroups(modelServices: ModelServiceGroup[], all: Buddy[]): HarnessGroup[] {
   const groups = new Map<string, HarnessGroup>();
   for (const modelService of modelServices) {
-    let group = groups.get(modelService.adapter);
+    let group = groups.get(modelService.harness);
     if (!group) {
-      const members = all.filter((buddy) => buddy.adapter === modelService.adapter);
+      const members = all.filter((buddy) => buddy.harness === modelService.harness);
       const unavailable = !members.some((buddy) => buddy.available);
       const reasons = unavailable
         ? [...new Set(members.map((buddy) => buddy.unavailableReason?.trim() ?? "").filter(Boolean))]
         : [];
-      group = { adapter: modelService.adapter, name: harnessName(modelService.adapter), modelServices: [], unavailable, reasons };
-      groups.set(modelService.adapter, group);
+      group = { harness: modelService.harness, name: harnessName(modelService.harness), modelServices: [], unavailable, reasons };
+      groups.set(modelService.harness, group);
     }
     group.modelServices.push(modelService);
   }

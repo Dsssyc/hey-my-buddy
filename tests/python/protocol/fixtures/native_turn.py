@@ -34,7 +34,7 @@ def dsh_provenance(session_id: str, *, receipt_id: str = FIXTURE_RECEIPT_ID) -> 
     differs from its previous one exactly like a rebuilt native session.
     """
     return {
-        "version": 1, "adapter": "dsh", "tool": FINISH_TOOL, "turnEnd": "completed",
+        "version": 1, "harness": "dsh", "tool": FINISH_TOOL, "turnEnd": "completed",
         "stopReason": "end_turn", "rootSessionMatched": True, "receiptVerified": True,
         "sessionClose": "acknowledged",
         "nativeSessionId": session_id, "toolCallId": "fixture-finish-1", "receiptId": receipt_id,
@@ -49,7 +49,7 @@ def zcode_provenance(identity: dict, session_id: str) -> dict:
     the native input binding is derived exactly the way the validator does.
     """
     return {
-        "adapter": "zcode", "tool": FINISH_TOOL, "turnEnd": "completed",
+        "harness": "zcode", "tool": FINISH_TOOL, "turnEnd": "completed",
         "rootSessionMatched": True, "receiptVerified": True, "toolResultSuccess": True,
         "toolResultTruncated": False, "turnResultType": "success", "settlement": "session-closed",
         "nativeSessionId": session_id,
@@ -77,17 +77,17 @@ def session_id_for(turn: dict, *, fallback: str = "sess-fixture") -> str:
     return f"sess-{turn_id[:8]}" if isinstance(turn_id, str) and turn_id else fallback
 
 
-def provenance_for(adapter: str, turn: dict, session_id: str) -> dict:
-    """The current synthetic finish-tool provenance of one adapter's turn."""
+def provenance_for(harness: str, turn: dict, session_id: str) -> dict:
+    """The current synthetic finish-tool provenance of one harness turn."""
     turn_input = turn.get("input") if isinstance(turn, dict) else None
     turn_input = turn_input if isinstance(turn_input, dict) else {}
-    if adapter == "zcode":
+    if harness == "zcode":
         identity = {key: turn_input.get(key) for key in ("taskId", "attemptId", "generation", "turnId")}
         return zcode_provenance(identity, session_id)
     return dsh_provenance(session_id)
 
 
-def governed_record(*, adapter: str, task_id: str, attempt_id: str, generation: int,
+def governed_record(*, harness: str, task_id: str, attempt_id: str, generation: int,
                     turn_id: str, resume_mode: str, previous_session_id, input_sha256: str,
                     outcome: dict, session_id: str | None = None,
                     prompt_sha256: str = "a" * 64) -> dict:
@@ -102,7 +102,7 @@ def governed_record(*, adapter: str, task_id: str, attempt_id: str, generation: 
         "turnId": turn_id, "resumeMode": resume_mode, "previousSessionId": previous_session_id,
         "sessionId": session, "promptSha256": prompt_sha256, "inputSha256": input_sha256,
         "outcome": outcome,
-        "provenance": provenance_for(adapter, turn, session),
+        "provenance": provenance_for(harness, turn, session),
     }
 
 
@@ -112,7 +112,8 @@ def claim_record(claim: dict, *, outcome: dict, session_id: str | None = None,
     attempt, turn = claim["attempt"], claim["turn"]
     turn_input = turn.get("input") or {}
     return governed_record(
-        adapter=attempt["adapter"],
+        harness=(attempt["adapter"] if attempt["adapter"] in ("command", "external")
+                 else claim["task"]["spec"]["harness"]),
         task_id=attempt["taskId"], attempt_id=attempt["attemptId"],
         generation=attempt["generation"], turn_id=turn["turnId"],
         resume_mode=turn["resumeMode"],

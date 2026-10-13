@@ -27,9 +27,9 @@ from buddy.harnesses.test_run_contract import full_request
 
 
 def _catalog(name: str, account_status: str) -> dict:
-    return {"source": name + "-native", "adapter": name, "harnessVersion": "fixture",
+    return {"source": name + "-native", "harness": name, "harnessVersion": "fixture",
             "providers": [], "warnings": [],
-            "discoveries": [{"adapter": name, "status": "complete",
+            "discoveries": [{"harness": name, "status": "complete",
                              "accountStatus": account_status}]}
 
 
@@ -47,16 +47,16 @@ class DiscoveryReceiptTests(unittest.TestCase):
         receipt = _catalog("codex", "unknown")
         result = self._discover({"status": "ok", "catalog": receipt})
         self.assertEqual(result["discoveries"],
-                         [{"adapter": "codex", "status": "complete", "accountStatus": "unknown"}])
+                         [{"harness": "codex", "status": "complete", "accountStatus": "unknown"}])
 
     def test_a_refused_discovery_keeps_the_harness_s_own_reason(self):
         with self.assertRaises(BoardError) as caught:
             self._discover({"status": "error",
                             "error": "Codex requires an existing ChatGPT account-plan login"},
                            exit_code=1)
-        self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+        self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
-        self.assertEqual(caught.exception.details.get("adapter"), "codex")
+        self.assertEqual(caught.exception.details.get("harness"), "codex")
         self.assertEqual(caught.exception.message,
                          "Codex requires an existing ChatGPT account-plan login")
 
@@ -64,7 +64,7 @@ class DiscoveryReceiptTests(unittest.TestCase):
         with self.assertRaises(BoardError) as caught:
             self._discover({"status": "ok", "catalog": _catalog("codex", "confirmed")},
                            stopped=False)
-        self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+        self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
 
     def test_a_failed_control_write_proves_no_controller_created(self):
@@ -171,7 +171,7 @@ class CodexModelCheckProjectionTests(unittest.TestCase):
     def _result(self, request: rc.RunRequest, *, with_ref: bool, status: str = "error") -> rc.RunResult:
         refs = []
         if with_ref:
-            check = {"adapter": "codex", "selectedModelListed": False,
+            check = {"harness": "codex", "selectedModelListed": False,
                      "selected": {"provider": "openai", "model": "gpt-6.1-sol", "effort": "high"}}
             path = ensure_private_dir(self.base / "inv") / "model-check.json"
             private_json(path, check)

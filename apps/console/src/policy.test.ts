@@ -24,7 +24,7 @@ import type { Buddy, Snapshot } from "./types";
 const worker: Buddy = {
   buddyId: "dsh:deepseek-official:deepseek-flash:off",
   label: "flash · off",
-  adapter: "dsh",
+  harness: "dsh",
   provider: "deepseek-official",
   model: "deepseek-flash",
   effort: "off",
@@ -50,7 +50,7 @@ const coder: Buddy = {
   buddyId: "dsh:deepseek-official:no-decision:high",
   capabilities: ["execution:dsh"],
 };
-const otherHarness: Buddy = { ...worker, buddyId: "zcode:bigmodel-api:glm:high", adapter: "zcode" };
+const otherHarness: Buddy = { ...worker, buddyId: "zcode:bigmodel-api:glm:high", harness: "zcode" };
 
 function snapshot(buddies: Buddy[] = [worker], extra: Partial<Snapshot> = {}): Snapshot {
   return {
@@ -125,7 +125,7 @@ describe("execution capability admission", () => {
   const codex: Buddy = {
     ...worker,
     buddyId: "codex:openai:gpt-5:high",
-    adapter: "codex",
+    harness: "codex",
     provider: "openai",
     model: "gpt-5",
     effort: "high",
@@ -184,7 +184,7 @@ describe("blocking new changes", () => {
     const patch = publication(baseline, draft, "c");
     expect(patch.buddySettings).toEqual([{ buddyId: retired.buddyId, enabled: false }]);
     expect(patch.modelServiceNoteChanges).toEqual([
-      { adapter: "dsh", provider: "deepseek-official", model: "retired-model", text: "保留经验" },
+      { harness: "dsh", provider: "deepseek-official", model: "retired-model", text: "保留经验" },
     ]);
   });
 
@@ -265,7 +265,7 @@ describe("stale settings needing attention", () => {
     const patch = publication(baseline, withNote, "c");
     expect(patch).not.toHaveProperty("configuration");
     expect(patch.modelServiceNoteChanges).toEqual([
-      { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "只改备注" },
+      { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "只改备注" },
     ]);
   });
 
@@ -323,7 +323,7 @@ describe("model concurrency limits", () => {
     for (const limit of [0, 33, 2.5]) {
       const invalid = {
         ...baseline,
-        modelServiceConcurrency: [{ adapter: worker.adapter, provider: worker.provider, model: worker.model, limit }],
+        modelServiceConcurrency: [{ harness: worker.harness, provider: worker.provider, model: worker.model, limit }],
       };
       const issues = blockingIssues(baseline, invalid);
       expect(issues).toHaveLength(1);
@@ -337,7 +337,7 @@ describe("model concurrency limits", () => {
     expect(blockingIssues(retiredBase, raised)).toEqual([]);
     const patch = publication(retiredBase, raised, "c");
     expect(patch.modelServiceConcurrency).toEqual([
-      { adapter: retired.adapter, provider: retired.provider, model: retired.model, limit: 32 },
+      { harness: retired.harness, provider: retired.provider, model: retired.model, limit: 32 },
     ]);
   });
 });

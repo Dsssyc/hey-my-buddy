@@ -40,7 +40,7 @@ class StoreConcurrencyTestCase(EvaluationFixtures):
                 "hostId": "store-host",
                 "task": "concurrency fixture",
                 "cwd": str(self.workdir(request_id)),
-                "adapter": model_service[0],
+                "harness": model_service[0],
                 "provider": model_service[1],
                 "model": model_service[2],
                 "effort": effort,
@@ -83,10 +83,10 @@ class CurrentSchemaTests(BoardTestCase):
             }
         self.assertEqual(
             columns,
-            {"adapter", "provider", "model", "concurrency_limit", "created_at", "updated_at"},
+            {"harness", "provider", "model", "concurrency_limit", "created_at", "updated_at"},
         )
         self.assertEqual(model_services, 0)
-        self.assertTrue({"model_adapter", "model_provider", "model_model"} <= attempt_columns)
+        self.assertTrue({"model_harness", "model_provider", "model_model"} <= attempt_columns)
 
     def test_an_older_schema_marker_is_refused_without_any_migration(self):
         directory = self.directory / "archive"
@@ -117,7 +117,7 @@ class FrozenModelServiceTests(StoreConcurrencyTestCase):
         attempt = claim["claim"]["attempt"]
         with board.store.db.read() as connection:
             row = connection.execute(
-                "SELECT model_adapter, model_provider, model_model FROM attempts WHERE attempt_id=?",
+                "SELECT model_harness, model_provider, model_model FROM attempts WHERE attempt_id=?",
                 (attempt["attemptId"],),
             ).fetchone()
             self.assertIsNone(connection.execute(
@@ -210,11 +210,11 @@ class ModelServiceQuotaTests(StoreConcurrencyTestCase):
         self.assertEqual(blocked["reason"], "model-capacity")
         with board.store.db.read() as connection:
             row = connection.execute(
-                "SELECT execution_state, model_adapter, model_provider, model_model FROM attempts WHERE attempt_id=?",
+                "SELECT execution_state, model_harness, model_provider, model_model FROM attempts WHERE attempt_id=?",
                 (second["claim"]["attempt"]["attemptId"],),
             ).fetchone()
         self.assertEqual(row["execution_state"], "uncertain")
-        self.assertEqual((row["model_adapter"], row["model_provider"], row["model_model"]), MODEL_SERVICE_A)
+        self.assertEqual((row["model_harness"], row["model_provider"], row["model_model"]), MODEL_SERVICE_A)
         # A confirmed completion frees the slot for the next claim.
         self.finish(board, "w1", first, shutdown=True)
         self.register(board, "w4")
@@ -234,7 +234,7 @@ class ModelServiceQuotaTests(StoreConcurrencyTestCase):
         capacity = board.store.capacity_report()
         self.assertEqual(capacity["totalLimit"], 8)
         self.assertEqual(capacity["totalActive"], 3)
-        rows = {(row["adapter"], row["provider"], row["model"]): row for row in capacity["models"]}
+        rows = {(row["harness"], row["provider"], row["model"]): row for row in capacity["models"]}
         self.assertEqual(rows[MODEL_SERVICE_A]["limit"], 2)
         self.assertEqual(rows[MODEL_SERVICE_A]["active"], 2)
         self.assertEqual(rows[MODEL_SERVICE_B]["limit"], 2)
@@ -251,10 +251,10 @@ class IdentityImmutabilityTests(StoreConcurrencyTestCase):
         # The stored model service survives completion and stays exactly what was frozen.
         with board.store.db.read() as connection:
             row = connection.execute(
-                "SELECT model_adapter, model_provider, model_model, execution_state FROM attempts WHERE attempt_id=?",
+                "SELECT model_harness, model_provider, model_model, execution_state FROM attempts WHERE attempt_id=?",
                 (attempt_id,),
             ).fetchone()
-        self.assertEqual((row["model_adapter"], row["model_provider"], row["model_model"]), MODEL_SERVICE_A)
+        self.assertEqual((row["model_harness"], row["model_provider"], row["model_model"]), MODEL_SERVICE_A)
         self.assertEqual(row["execution_state"], "finished")
 
 

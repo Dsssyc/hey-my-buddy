@@ -1,7 +1,7 @@
 """Bounded, harness-neutral model discovery and legal buddy validation.
 
-Adapters own native discovery. This module validates public metadata, preserves
-adapter/provider/model identity, and proposes disabled buddies. Discovery never
+Harnesses own native discovery. This module validates public metadata, preserves
+harness/provider/model identity, and proposes disabled buddies. Discovery never
 calls a model or publishes an evaluation card.
 """
 from __future__ import annotations
@@ -24,7 +24,7 @@ MAX_PROVIDERS = 32
 MAX_TEXT = 2000
 MAX_CATALOG_BYTES = 2 * 1024 * 1024
 CATALOG_FILE_ENV = "BUDDY_MODEL_CATALOG_FILE"
-BUDDY_FIELDS = ("adapter", "provider", "model", "effort")
+BUDDY_FIELDS = ("harness", "provider", "model", "effort")
 
 #: ADR-027 rule 1: the account-status fact every harness reports per discovery.
 #: The blackboard, not the harness, decides whether a reading is trusted; a
@@ -52,7 +52,7 @@ RETIRED_EFFORT_REASON = "not present in the latest complete native discovery"
 CATALOG_FACT_REASONS = (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON)
 
 #: ADR-027 rule 3: how an operator refreshes harness catalogs and their readings.
-CATALOG_REMEDY = "Run buddy adapters with refresh:true"
+CATALOG_REMEDY = "Run buddy harnesses with refresh:true"
 
 #: The one reason every catalog-caused refusal carries. The user's independent
 #: enabled gate keeps its own separate reason.
@@ -79,26 +79,26 @@ def register_catalog_reread(directory: Path | str, hook: Callable[[str], None] |
         _catalog_reread[str(directory)] = hook
 
 
-def coordinate_catalog_reread(directory: Path | str, adapter: str, *, reader: Callable[[], None],
+def coordinate_catalog_reread(directory: Path | str, harness: str, *, reader: Callable[[], None],
                               wait: bool, timeout: float | None = None) -> str:
     """Claim or join one bounded harness read shared by validation and health."""
     from ..store.db import Database
     from ..service.harness_health import SCAN_SECONDS, _later
     if timeout is None:
         timeout = CATALOG_REREAD_JOIN_SECONDS
-    key = (str(directory), adapter)
+    key = (str(directory), harness)
     with _catalog_reread_gate:
         with Database(directory).write() as db:
             flight = _catalog_reread_flights.get(key)
             joined = flight is not None
             if flight is None:
-                row = db.execute('SELECT scan_after FROM harness_health WHERE adapter=?', (adapter,)).fetchone()
+                row = db.execute('SELECT scan_after FROM harness_health WHERE harness=?', (harness,)).fetchone()
                 window = _parse_time(row['scan_after']) if row else None
                 if window is not None and datetime.now(timezone.utc) < window:
                     return 'window'
-                db.execute('INSERT INTO harness_health(adapter,scan_after) VALUES(?,?) '
-                           'ON CONFLICT(adapter) DO UPDATE SET scan_after=excluded.scan_after',
-                           (adapter, _later(SCAN_SECONDS)))
+                db.execute('INSERT INTO harness_health(harness,scan_after) VALUES(?,?) '
+                           'ON CONFLICT(harness) DO UPDATE SET scan_after=excluded.scan_after',
+                           (harness, _later(SCAN_SECONDS)))
                 flight = _CatalogRereadFlight()
                 _catalog_reread_flights[key] = flight
     if joined:
@@ -128,42 +128,42 @@ def _model_service_key(provider: str, model: str) -> str:
     return provider + "\x1f" + model
 
 
-def _pending_map(db, adapter: str) -> dict:
+def _pending_map(db, harness: str) -> dict:
     return {_model_service_key(row["provider"], row["model"]):
             {"since": row["since"], "efforts": json.loads(row["efforts_json"])}
-            for row in db.execute("SELECT provider,model,since,efforts_json FROM catalog_pending WHERE adapter=?",
-                                  (adapter,))}
+            for row in db.execute("SELECT provider,model,since,efforts_json FROM catalog_pending WHERE harness=?",
+                                  (harness,))}
 
 
-def _write_pending_map(db, adapter: str, pending: dict) -> None:
+def _write_pending_map(db, harness: str, pending: dict) -> None:
     from ...json_codec import canonical_json
 
-    db.execute("DELETE FROM catalog_pending WHERE adapter=?", (adapter,))
-    db.executemany("INSERT INTO catalog_pending(adapter,provider,model,since,efforts_json) VALUES(?,?,?,?,?)",
-                   [(adapter, *key.split("\x1f"), value["since"], canonical_json(value["efforts"]))
+    db.execute("DELETE FROM catalog_pending WHERE harness=?", (harness,))
+    db.executemany("INSERT INTO catalog_pending(harness,provider,model,since,efforts_json) VALUES(?,?,?,?,?)",
+                   [(harness, *key.split("\x1f"), value["since"], canonical_json(value["efforts"]))
                     for key, value in pending.items()])
 
 
 def pending_model_services(db) -> dict[tuple[str, str, str], str]:
     """Pending model services and their first absence, scoped to the harness."""
-    return {(row["adapter"], row["provider"], row["model"]): row["since"]
-            for row in db.execute("SELECT adapter,provider,model,since FROM catalog_pending")}
+    return {(row["harness"], row["provider"], row["model"]): row["since"]
+            for row in db.execute("SELECT harness,provider,model,since FROM catalog_pending")}
 
 
-def pending_model_efforts(db, adapter: str, provider: str, model: str) -> list[str] | None:
+def pending_model_efforts(db, harness: str, provider: str, model: str) -> list[str] | None:
     """The legal efforts frozen at first absence, or None when not pending."""
-    value = _pending_map(db, adapter).get(_model_service_key(provider, model))
+    value = _pending_map(db, harness).get(_model_service_key(provider, model))
     return value["efforts"] if value is not None else None
 
 
-def catalog_read_at(db, adapter: str) -> str | None:
+def catalog_read_at(db, harness: str) -> str | None:
     """When an actual trusted catalog reading was applied."""
-    row = db.execute("SELECT read_at FROM catalog_current WHERE adapter=?", (adapter,)).fetchone()
+    row = db.execute("SELECT read_at FROM catalog_current WHERE harness=?", (harness,)).fetchone()
     return row['read_at'] if row is not None else None
 
 
-def identities_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, str, str]]:
-    """Legal adapter/provider/model/effort identities a retained catalog lists.
+def identities_from_payload(payload_json: Any, harness: str) -> set[tuple[str, str, str]]:
+    """Legal harness/provider/model/effort identities a retained catalog lists.
 
     A model the retained reading itself declared unavailable contributes none
     of its efforts: that unavailability is a native fact, not a health artifact
@@ -177,7 +177,7 @@ def identities_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, s
     except (ValueError, BoardError):
         return identities
     for entry in view.payload["providers"]:
-        if entry["adapter"] != adapter:
+        if entry["harness"] != harness:
             continue
         for model in entry["models"]:
             if model["available"]:
@@ -185,37 +185,37 @@ def identities_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, s
     return identities
 
 
-def model_services_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, str]]:
+def model_services_from_payload(payload_json: Any, harness: str) -> set[tuple[str, str]]:
     """Model services a retained confirmed catalog still lists as available."""
-    return {(provider, model) for provider, model, _effort in identities_from_payload(payload_json, adapter)}
+    return {(provider, model) for provider, model, _effort in identities_from_payload(payload_json, harness)}
 
 
-def restore_retained_availability(db, adapter: str) -> int:
+def restore_retained_availability(db, harness: str) -> int:
     """Restore the model availability of the retained catalog after health noise.
 
     ADR-027 separates health availability from adopted catalog facts, at the
     effort level: the 0s a harness health failure left on ``buddies``
     are never evidence that a native buddy disappeared. A row returns
     only when the retained confirmed catalog still lists its exact
-    adapter/provider/model/effort identity, or when it is one of the last legal
+    harness/provider/model/effort identity, or when it is one of the last legal
     efforts recorded for a model service still awaiting disappearance confirmation. A
     confirmed absence, a retired effort and a native unavailable declaration are
     catalog facts and are never restored here.
     """
     row = db.execute(
         "SELECT d.payload_json FROM catalog_current c"
-        " LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.adapter=?",
-        (adapter,)).fetchone()
-    identities = identities_from_payload(row[0] if row is not None else None, adapter)
+        " LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.harness=?",
+        (harness,)).fetchone()
+    identities = identities_from_payload(row[0] if row is not None else None, harness)
     pending_efforts = {}
-    for key in _pending_map(db, adapter):
+    for key in _pending_map(db, harness):
         provider, _, model = key.partition("\x1f")
-        pending_efforts[(provider, model)] = pending_model_efforts(db, adapter, provider, model) or []
+        pending_efforts[(provider, model)] = pending_model_efforts(db, harness, provider, model) or []
     restored = 0
     for buddy in db.execute(
             "SELECT buddy_id, provider, model, effort, available, unavailable_reason"
-            " FROM buddies WHERE adapter=?",
-            (adapter,)).fetchall():
+            " FROM buddies WHERE harness=?",
+            (harness,)).fetchall():
         if buddy["available"] or buddy["unavailable_reason"] in CATALOG_FACT_REASONS:
             continue
         model_service = (buddy["provider"], buddy["model"])
@@ -228,16 +228,16 @@ def restore_retained_availability(db, adapter: str) -> int:
     return restored
 
 
-def catalog_account_status(db, adapter: str) -> str:
+def catalog_account_status(db, harness: str) -> str:
     """The account-status fact of the last trusted reading; unknown without one."""
-    row = db.execute("SELECT account_status FROM catalog_current WHERE adapter=?", (adapter,)).fetchone()
+    row = db.execute("SELECT account_status FROM catalog_current WHERE harness=?", (harness,)).fetchone()
     return row['account_status'] if row is not None else "unknown"
 
 
-def note_confirmed_read(db, adapter: str, *, now: str, account_status: str) -> None:
+def note_confirmed_read(db, harness: str, *, now: str, account_status: str) -> None:
     """Persist the fact that a trusted reading was applied for this harness."""
-    db.execute("UPDATE catalog_current SET read_at=?,account_status=? WHERE adapter=?",
-               (now, account_status, adapter))
+    db.execute("UPDATE catalog_current SET read_at=?,account_status=? WHERE harness=?",
+               (now, account_status, harness))
 
 
 def _text(value: Any, limit: int = MAX_TEXT) -> str:
@@ -269,15 +269,15 @@ def canonical_payload(value: Any) -> dict:
     for entry in raw_providers:
         if not isinstance(entry, dict):
             raise BoardError("CATALOG_INVALID", "Each provider must be an object")
-        adapter = _identity(entry.get("adapter"), "adapter", 32)
+        harness = _identity(entry.get("harness"), "harness", 32)
         provider = _identity(entry.get("provider"), "provider")
-        if (adapter, provider) in seen_providers:
-            raise BoardError("CATALOG_INVALID", f"Repeated catalog provider {adapter}/{provider}")
-        seen_providers.add((adapter, provider))
+        if (harness, provider) in seen_providers:
+            raise BoardError("CATALOG_INVALID", f"Repeated catalog provider {harness}/{provider}")
+        seen_providers.add((harness, provider))
         provider_efforts = _strings(entry.get("efforts"))
         raw_models = entry.get("models")
         if not isinstance(raw_models, list):
-            raise BoardError("CATALOG_INVALID", f"{adapter}/{provider} models must be a list")
+            raise BoardError("CATALOG_INVALID", f"{harness}/{provider} models must be a list")
         model_count += len(raw_models)
         if model_count > MAX_MODELS:
             raise BoardError("CATALOG_INVALID", f"A catalog may contain at most {MAX_MODELS} models")
@@ -287,11 +287,11 @@ def canonical_payload(value: Any) -> dict:
                 raise BoardError("CATALOG_INVALID", "Each model must be an object")
             model_id = _identity(model.get("id"), "model.id")
             if model_id in seen_models:
-                raise BoardError("CATALOG_INVALID", f"Repeated model {adapter}/{provider}/{model_id}")
+                raise BoardError("CATALOG_INVALID", f"Repeated model {harness}/{provider}/{model_id}")
             seen_models.add(model_id)
             efforts = _strings(model.get("efforts")) if "efforts" in model else provider_efforts
             if not efforts:
-                raise BoardError("CATALOG_INVALID", f"No legal efforts declared for {adapter}/{provider}/{model_id}")
+                raise BoardError("CATALOG_INVALID", f"No legal efforts declared for {harness}/{provider}/{model_id}")
             context = model.get("contextWindow")
             if isinstance(context, bool) or not isinstance(context, int) or context <= 0:
                 context = None
@@ -307,33 +307,33 @@ def canonical_payload(value: Any) -> dict:
                 "unavailableReason": None if available else _text(model.get("unavailableReason")) or "native route is unavailable",
             })
         providers.append({
-            "adapter": adapter, "provider": provider,
+            "harness": harness, "provider": provider,
             "displayName": _text(entry.get("displayName"), 200) or provider,
             "packageName": _text(entry.get("packageName"), 200),
             "packageVersion": _text(entry.get("packageVersion"), 64),
-            **({"accessType": entry["accessType"]} if adapter == "zcode" and
+            **({"accessType": entry["accessType"]} if harness == "zcode" and
                entry.get("accessType") in ("api-key", "zhipu-coding-plan-api-key") else {}),
             "efforts": list(dict.fromkeys(effort for model in models for effort in model["efforts"])),
             "models": models,
         })
-    raw_discoveries = value.get("discoveries", [{"adapter": name, "status": "complete"} for name in sorted({p["adapter"] for p in providers})])
+    raw_discoveries = value.get("discoveries", [{"harness": name, "status": "complete"} for name in sorted({p["harness"] for p in providers})])
     if not isinstance(raw_discoveries, list) or len(raw_discoveries) > MAX_PROVIDERS:
         raise BoardError("CATALOG_INVALID", "discoveries must be bounded per-harness observations")
     discoveries, seen = [], set()
     for result in raw_discoveries:
         if not isinstance(result, dict) or result.get("status") not in ("complete", "unknown"):
             raise BoardError("CATALOG_INVALID", "discovery status must be complete or unknown")
-        name = _identity(result.get("adapter"), "discovery.adapter", 32)
+        name = _identity(result.get("harness"), "discovery.harness", 32)
         if name in seen:
             raise BoardError("CATALOG_INVALID", "Repeated harness observation")
         seen.add(name)
         # The native reading keeps its own status; the account-status fact is
         # normalized, never invented: a missing or malformed fact stays unknown.
         account_status = result.get("accountStatus")
-        discoveries.append({"adapter": name, "status": result["status"],
+        discoveries.append({"harness": name, "status": result["status"],
                             "accountStatus": account_status if account_status in ACCOUNT_STATUSES else "unknown",
                             "reason": _text(result.get("reason")) or None})
-    if any(p["adapter"] not in seen for p in providers):
+    if any(p["harness"] not in seen for p in providers):
         raise BoardError("CATALOG_INVALID", "Every provider must have a harness observation")
     return {
         "source": source,
@@ -367,10 +367,10 @@ def _override() -> dict | None:
     # a harness's confirmed discovery fact would. An explicitly declared legal
     # fact (even unknown) keeps its declared meaning.
     observations = document.get("discoveries") if isinstance(document, dict) else None
-    declared = {item.get("adapter"): item.get("accountStatus") for item in observations
+    declared = {item.get("harness"): item.get("accountStatus") for item in observations
                 if isinstance(item, dict)} if isinstance(observations, list) else {}
-    payload["discoveries"] = [{**entry, "accountStatus": declared[entry["adapter"]]
-                              if declared.get(entry["adapter"]) in ACCOUNT_STATUSES else "confirmed"}
+    payload["discoveries"] = [{**entry, "accountStatus": declared[entry["harness"]]
+                              if declared.get(entry["harness"]) in ACCOUNT_STATUSES else "confirmed"}
                              for entry in payload["discoveries"]]
     payload["source"] = f"file:{path}"
     return payload
@@ -393,7 +393,7 @@ def discover(*, directory: Path, harnesses=None) -> dict:
         if not instance.model_discovery:
             continue
         from ...buddy.harnesses.runtime_selection import selected, bound
-        selected_health = (next((item for item in harnesses if item['adapter'] == name), None)
+        selected_health = (next((item for item in harnesses if item['harness'] == name), None)
                            if harnesses is not None else selected(name))
         try:
             environment = dict(os.environ)
@@ -401,21 +401,21 @@ def discover(*, directory: Path, harnesses=None) -> dict:
                 usable, reason = instance.discovery_available()
                 if not usable:
                     warnings.append(f"{name}: {reason or 'harness unavailable'}")
-                    discoveries.append({"adapter": name, "status": "unknown", "accountStatus": "unknown",
+                    discoveries.append({"harness": name, "status": "unknown", "accountStatus": "unknown",
                                         "reason": reason or "harness unavailable"})
                     continue
                 payload = instance.discover_models()
             payload = canonical_payload(payload)
-            if any(entry["adapter"] != name for entry in payload["providers"]):
-                raise BoardError("CATALOG_INVALID", "A harness advertised another adapter identity")
+            if any(entry["harness"] != name for entry in payload["providers"]):
+                raise BoardError("CATALOG_INVALID", "A harness advertised another harness identity")
         except BoardError as error:
             warnings.append(f"{name}: {error.code}")
-            discoveries.append({"adapter": name, "status": "unknown", "accountStatus": "unknown", "reason": error.code})
+            discoveries.append({"harness": name, "status": "unknown", "accountStatus": "unknown", "reason": error.code})
             continue
         providers.extend(payload["providers"])
         # Preserve this native session's reading status, reason and account fact.
-        native_fact = next((item for item in payload["discoveries"] if item["adapter"] == name), None)
-        discoveries.append({"adapter": name, "status": native_fact["status"] if native_fact else "complete",
+        native_fact = next((item for item in payload["discoveries"] if item["harness"] == name), None)
+        discoveries.append({"harness": name, "status": native_fact["status"] if native_fact else "complete",
                             "accountStatus": (native_fact or {}).get("accountStatus", "unknown"),
                             **({"reason": native_fact["reason"]} if native_fact and native_fact.get("reason") is not None else {})})
         warnings.extend(payload["warnings"])
@@ -449,12 +449,12 @@ def validate_buddy(buddy: dict, *, directory: Path) -> dict:
     a legally published catalog is never shadowed by the stale first rejection.
     """
     if not isinstance(buddy, dict) or set(buddy) != set(BUDDY_FIELDS):
-        raise BoardError("INVALID_ARGUMENT", "buddy requires exactly adapter, provider, model and effort")
+        raise BoardError("INVALID_ARGUMENT", "buddy requires exactly harness, provider, model and effort")
     selected = {key: _identity(buddy[key], key) for key in BUDDY_FIELDS}
     from ...buddy.harnesses.registry import adapter
-    instance = adapter(selected["adapter"])
+    instance = adapter(selected["harness"])
     if not instance.model_discovery:
-        raise BoardError("UNSUPPORTED_ADAPTER", "This adapter does not declare a model execution catalog")
+        raise BoardError("UNSUPPORTED_HARNESS", "This harness does not declare a model execution catalog")
     payload = _override()
     if payload is not None:
         return _check_recorded(selected, CatalogView.from_payload(payload), pending_efforts=None)
@@ -465,12 +465,12 @@ def validate_buddy(buddy: dict, *, directory: Path) -> dict:
     def judge():
         """One judgment over the currently recorded catalog state."""
         with Database(directory).read() as db:
-            health = read_health(db, selected["adapter"])
+            health = read_health(db, selected["harness"])
             recorded = catalog_store.current(db)
-            read_at = catalog_read_at(db, selected["adapter"])
-            pending_efforts = pending_model_efforts(db, selected["adapter"], selected["provider"], selected["model"])
+            read_at = catalog_read_at(db, selected["harness"])
+            pending_efforts = pending_model_efforts(db, selected["harness"], selected["provider"], selected["model"])
         if not health["available"]:
-            raise BoardError("ADAPTER_UNAVAILABLE", health.get("remedy") or CATALOG_REMEDY, harness=health)
+            raise BoardError("HARNESS_UNAVAILABLE", health.get("remedy") or CATALOG_REMEDY, harness=health)
         if recorded is None:
             raise BoardError("CATALOG_UNAVAILABLE",
                              f"No native model catalog is recorded; {CATALOG_REMEDY}",
@@ -495,11 +495,11 @@ def validate_buddy(buddy: dict, *, directory: Path) -> dict:
 
     def run_reread() -> None:
         try:
-            hook(selected['adapter'])
+            hook(selected['harness'])
         except (BoardError, OSError, ValueError, sqlite3.Error):
             pass  # A failed bounded re-read leaves the rejection to speak for itself.
 
-    coordinate_catalog_reread(directory, selected["adapter"], reader=run_reread, wait=True)
+    coordinate_catalog_reread(directory, selected["harness"], reader=run_reread, wait=True)
     # Every outcome re-judges on the facts as they are now recorded. The open
     # window and the bounded join timeout suppress only a second native read:
     # a catalog another caller legally published after this caller's first
@@ -519,7 +519,7 @@ def validate_buddy(buddy: dict, *, directory: Path) -> dict:
 
 
 def _check_recorded(selected: dict, view: "CatalogView", *, pending_efforts: list[str] | None) -> dict:
-    model = view.lookup(selected["adapter"], selected["provider"], selected["model"])
+    model = view.lookup(selected["harness"], selected["provider"], selected["model"])
     if model is None:
         if pending_efforts:
             if selected["effort"] not in pending_efforts:
@@ -559,14 +559,14 @@ class CatalogView:
     def source(self) -> str:
         return self.payload["source"]
 
-    def lookup(self, adapter: str, provider: str, model: str) -> dict | None:
+    def lookup(self, harness: str, provider: str, model: str) -> dict | None:
         for entry in self.payload["providers"]:
-            if (entry["adapter"], entry["provider"]) == (adapter, provider):
+            if (entry["harness"], entry["provider"]) == (harness, provider):
                 return next((item for item in entry["models"] if item["id"] == model), None)
         return None
 
-    def efforts_for(self, adapter: str, provider: str, model: str) -> list[str]:
-        entry = self.lookup(adapter, provider, model)
+    def efforts_for(self, harness: str, provider: str, model: str) -> list[str]:
+        entry = self.lookup(harness, provider, model)
         return list(entry["efforts"]) if entry else []
 
     def metadata(self) -> dict:
@@ -578,22 +578,22 @@ class CatalogView:
         registry = adapters()
         proposals = []
         for entry in self.payload["providers"]:
-            native = registry.get(entry['adapter'])
+            native = registry.get(entry['harness'])
             review_eligible = native is not None and native.local_read_only_check()['eligible']
             for model in entry["models"]:
                 for effort in model["efforts"]:
-                    identity = ":".join((entry["adapter"], entry["provider"], model["id"], effort))
+                    identity = ":".join((entry["harness"], entry["provider"], model["id"], effort))
                     safe_identity = re.sub(r"[^A-Za-z0-9._:-]", "-", identity)
                     buddy_id = identity if safe_identity == identity and len(identity) <= 128 else safe_identity[:95] + ":" + hashlib.sha256(identity.encode()).hexdigest()[:32]
-                    capabilities = ([f"execution:{entry['adapter']}", f"effort:{effort}"]
+                    capabilities = ([f"execution:{entry['harness']}", f"effort:{effort}"]
                                     + [f"input:{item}" for item in model["inputModalities"]][:30])
                     if native is not None:
                         if review_eligible:
                             capabilities.append("decision")
-                        capabilities.extend(permission_capabilities(entry["adapter"]))
+                        capabilities.extend(permission_capabilities(entry["harness"]))
                     proposals.append({
                         "buddyId": buddy_id, "label": f"{model['name']} · {effort}"[:200],
-                        "adapter": entry["adapter"], "provider": entry["provider"], "model": model["id"], "effort": effort,
+                        "harness": entry["harness"], "provider": entry["provider"], "model": model["id"], "effort": effort,
                         "available": model["available"], "unavailableReason": model["unavailableReason"], "enabled": False,
                         "capabilities": capabilities,
                         "contextWindow": model["contextWindow"],

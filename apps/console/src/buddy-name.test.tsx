@@ -21,7 +21,7 @@ const proMaxId = "dsh:deepseek-official:deepseek-v4-pro:max";
 const flashOff: Buddy = {
   buddyId: flashOffId,
   label: "DeepSeek-V41-Flash · off",
-  adapter: "dsh",
+  harness: "dsh",
   provider: "deepseek-official",
   model: "deepseek-flash",
   effort: "off",
@@ -177,7 +177,7 @@ describe("read-only routing panel (0.15.1 U4)", () => {
       waitReason: "routing",
       continuationCount: 0,
       buddy: {
-        adapter: "dsh",
+        harness: "dsh",
         provider: "deepseek-official",
         model: "deepseek-flash",
         effort: "off",

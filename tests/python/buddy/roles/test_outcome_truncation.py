@@ -81,7 +81,7 @@ class OutcomeTruncationTests(unittest.TestCase):
             with self.subTest(harness=harness):
                 value = outcome(decisions=["d" * 4097] + ["decision"] * 35 + ["d" * 4097],
                                 remaining=["r" * 4097] * 2 + ["remaining"] * 32)
-                facts = {"adapter": harness, "eventSeq": 2, **self.facts}
+                facts = {"harness": harness, "eventSeq": 2, **self.facts}
                 if harness == "codex":
                     facts.update(finalMessageCompleted=True, nativeTurnStarted=True, nativeTurnCompleted=True,
                                  nativeThreadId="native-session", finalItemId="final-item")

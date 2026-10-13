@@ -36,7 +36,7 @@ from hey_my_buddy.protocol.contracts import HarnessRunLive
 from support import enable_fixture_buddy
 
 
-BUDDY = dict(adapter="dsh", provider="deepseek-official",
+BUDDY = dict(harness="dsh", provider="deepseek-official",
                      model="deepseek-flash", effort="off")
 SELF = Path(__file__).resolve()
 
@@ -301,11 +301,11 @@ def service(root):
         service.automatic_discovery = False
         enable_fixture_buddy(daemon.store, BUDDY)
         # Discovery is synthetic; all service, task, lease and live RPCs are real.
-        record = {"adapter": "dsh", "available": True, "status": "ready", "revision": 0,
+        record = {"harness": "dsh", "available": True, "status": "ready", "revision": 0,
                   "command": [sys.executable], "version": "model-free-fixture"}
         with daemon.store.db.write() as db:
-            db.execute("INSERT INTO harness_health(adapter,status,record_json) VALUES('dsh','ready',?) "
-                       "ON CONFLICT(adapter) DO UPDATE SET status='ready',record_json=excluded.record_json",
+            db.execute("INSERT INTO harness_health(harness,status,record_json) VALUES('dsh','ready',?) "
+                       "ON CONFLICT(harness) DO UPDATE SET status='ready',record_json=excluded.record_json",
                        (canonical_json(record),))
         service.harnesses.refresh = lambda name, **kwargs: service.harnesses.get(name)
         return service

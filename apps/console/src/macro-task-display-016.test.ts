@@ -36,11 +36,11 @@ describe("0.16 status vocabulary (0.2)", () => {
 
 describe("0.16 friendly buddy names (0.3)", () => {
   const config = (model: string, effort: string | null = "high") => ({
-    adapter: "claude", provider: "anthropic", model, effort,
+    harness: "claude", provider: "anthropic", model, effort,
   });
 
   it("prefers a matching snapshot buddy name, then known ids, then the raw id", () => {
-    const buddies = [{ adapter: "claude", provider: "anthropic", model: "claude-opus-5-5", label: "Claude Opus 5.5 · high", effort: "high" }];
+    const buddies = [{ harness: "claude", provider: "anthropic", model: "claude-opus-5-5", label: "Claude Opus 5.5 · high", effort: "high" }];
     expect(buddyLabel(config("claude-opus-5-5"), buddies)).toBe("Claude Opus 5.5 · high");
     expect(buddyLabel(config("claude-sonnet-5"))).toBe("Claude Sonnet 5 · high");
     expect(buddyLabel(config("glm-5.3", "max"))).toBe("GLM-5.3 · max");
@@ -54,7 +54,7 @@ describe("0.16 friendly buddy names (0.3)", () => {
     expect(buddyNamer(null)(config("glm-5.3", "off")).text).toBe("GLM-5.3 · off");
   });
 
-  it("keeps the raw adapter/provider/model/effort identity for tooltips", () => {
+  it("keeps the raw harness/provider/model/effort identity for tooltips", () => {
     expect(buddyNamer(null)(config("claude-opus-5-5")).title).toBe("claude / anthropic / claude-opus-5-5 / high");
   });
 });
@@ -99,7 +99,7 @@ describe("0.16 span-facts locator (T4)", () => {
     runId: "r1", parentRunId: null, rootRunId: "r1", title: "修复标题错位", titleSource: "title", taskSummary: null,
     summary: null, createdAt: "2026-09-26T01:00:00Z", state: "delivered", status: "completed", category: "review",
     shutdownConfirmed: true, depth: 0, kind: "goal",
-    buddy: { adapter: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" },
+    buddy: { harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" },
     acceptedAt: null, acceptanceVerdict: null,
   };
   const span = (overrides: Partial<TimelineSpan> = {}): TimelineSpan => ({

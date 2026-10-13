@@ -18,7 +18,7 @@ const initial = (): Snapshot => ({
     {
       buddyId: "flash-off",
       label: "Flash 决策",
-      adapter: "dsh",
+      harness: "dsh",
       provider: "deepseek-official",
       model: "deepseek-flash",
       effort: "off",
@@ -36,7 +36,7 @@ const initial = (): Snapshot => ({
 
   decisions: [],
 
-  modelServiceConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 0 }],
+  modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 0 }],
   tasks: { pendingCount: 0 },
   capabilities: { selection: false },
 });

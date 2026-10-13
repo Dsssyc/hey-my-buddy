@@ -16,7 +16,7 @@ export function selectionSourceText(source: string | null | undefined): string |
 }
 
 function excludedBuddyText(entry: ExcludedBuddy): string {
-  const buddy = [entry.adapter, entry.provider, entry.model, effortText(entry.effort)].filter(Boolean).join(" / ");
+  const buddy = [entry.harness, entry.provider, entry.model, effortText(entry.effort)].filter(Boolean).join(" / ");
   return entry.reason ? `${buddy}（${entry.reason}）` : buddy;
 }
 

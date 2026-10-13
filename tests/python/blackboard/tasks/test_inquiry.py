@@ -254,7 +254,7 @@ class TestInquiry(BoardTestCase):
         super().setUp()
         self.catalog_fixture()
 
-    def _submit(self, client, cwd, *, request_id, adapter="dsh", provider="deepseek-official",
+    def _submit(self, client, cwd, *, request_id, harness="dsh", provider="deepseek-official",
                 model="deepseek-flash", effort="off"):
         environment = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
         for arguments in (("init", "-q"), ("-c", "user.name=Buddy Test", "-c", "user.email=buddy@example.invalid",
@@ -262,7 +262,7 @@ class TestInquiry(BoardTestCase):
             completed = subprocess.run(["git", *arguments], cwd=cwd, env=environment, capture_output=True, text=True)
             self.assertEqual(completed.returncode, 0, completed.stderr)
         submitted = client.workflow_submit(
-            requestId=request_id, hostId="inquiry-test-host", task="do", cwd=str(cwd), adapter=adapter,
+            requestId=request_id, hostId="inquiry-test-host", task="do", cwd=str(cwd), harness=harness,
             provider=provider, model=model, effort=effort,
             executionWorkspace={"kind": "existing", "access": "read"},
         )
@@ -756,7 +756,7 @@ def zcode_catalog() -> dict:
 
     payload = copy.deepcopy(FIXTURE_CATALOG)
     source = payload["providers"][0]
-    payload["providers"] = [{**source, "adapter": "zcode", "provider": "fixture-zcode",
+    payload["providers"] = [{**source, "harness": "zcode", "provider": "fixture-zcode",
                              "models": [{**source["models"][0], "id": "fixture-glm", "efforts": ["low", "high"]}]}]
     return payload
 
@@ -768,14 +768,14 @@ class ZcodeLiveChannelTests(BoardTestCase):
         super().setUp()
         self.catalog_fixture(zcode_catalog())
 
-    def _submit(self, client, cwd, *, request_id, adapter="zcode"):
+    def _submit(self, client, cwd, *, request_id, harness="zcode"):
         environment = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
         for arguments in (("init", "-q"), ("-c", "user.name=Buddy Test", "-c", "user.email=buddy@example.invalid",
                                            "commit", "--allow-empty", "-qm", "zcode live fixture")):
             completed = subprocess.run(["git", *arguments], cwd=cwd, env=environment, capture_output=True, text=True)
             self.assertEqual(completed.returncode, 0, completed.stderr)
         submitted = client.workflow_submit(
-            requestId=request_id, hostId="zcode-live-test-host", task="do", cwd=str(cwd), adapter=adapter,
+            requestId=request_id, hostId="zcode-live-test-host", task="do", cwd=str(cwd), harness=harness,
             provider="fixture-zcode", model="fixture-glm", effort="low",
             executionWorkspace={"kind": "existing", "access": "read"},
         )

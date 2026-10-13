@@ -32,13 +32,13 @@ class RouterListHealthTestCase(BoardTestCase):
         self.sequence = 0
 
     # -- fixtures ------------------------------------------------------------
-    def add_buddy(self, buddy_id, *, adapter="dsh", provider="fixture", available=1, enabled=1):
+    def add_buddy(self, buddy_id, *, harness="dsh", provider="fixture", available=1, enabled=1):
         with self.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,?,?,?)",
-                       (buddy_id, buddy_id, adapter, provider, buddy_id, "max", available, enabled,
-                        canonical_json(permission_capabilities(adapter))))
+                       (buddy_id, buddy_id, harness, provider, buddy_id, "max", available, enabled,
+                        canonical_json(permission_capabilities(harness))))
 
     def set_settings(self, *, ids, interval=600, mode="fast"):
         with self.db.write() as db:
@@ -307,7 +307,7 @@ class CurrentRoleTests(RouterListHealthTestCase):
 
     def test_ineligible_items_carry_their_resolution_code(self):
         self.add_buddy(A, enabled=0)
-        self.add_buddy(B, adapter="claude")
+        self.add_buddy(B, harness="claude")
         self.add_buddy(C)
         self.set_settings(ids=[A, B, C], mode="fast")
         summary = self.state()
@@ -323,7 +323,7 @@ class CurrentRoleTests(RouterListHealthTestCase):
         summary = self.state()
         self.assertEqual([item["index"] for item in summary["routers"]], [0, 1])
         self.assertEqual(self.entry(summary, A)["identity"],
-                         {"adapter": "dsh", "provider": "fixture", "model": A, "effort": "max"})
+                         {"harness": "dsh", "provider": "fixture", "model": A, "effort": "max"})
 
 
 class AttributionTests(RouterListHealthTestCase):

@@ -501,7 +501,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         with mock.patch.dict(os.environ, self.environment, clear=True):
             result = self.description.discover_models()
         self.assertEqual(result["providers"][0]["models"][0]["efforts"], ["low", "high"])
-        self.assertEqual(result["providers"][0]["adapter"], "zcode")
+        self.assertEqual(result["providers"][0]["harness"], "zcode")
         self.assertEqual(result["providers"][0]["packageVersion"], "fixture-0.16.9")
         self.assertEqual(result["providers"][0]["models"][0]["contextWindow"], 200000)
         self.assertEqual(result["providers"][0]["models"][0]["inputModalities"], ["text"])

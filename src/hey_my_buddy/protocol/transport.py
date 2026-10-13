@@ -41,7 +41,7 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     "ping": ("control", "ping"),
     "health": ("control", "health"),
     "capabilities": ("control", "capabilities"),
-    "adapters": ("control", "capabilities"),
+    "harnesses": ("control", "capabilities"),
     "harness-set": ("control", "harness_set"),
     "quota-redetect": ("control", "quota_redetect"),
     "runtime": ("control", "runtime_info"),

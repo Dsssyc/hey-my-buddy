@@ -16,10 +16,10 @@ import { modelServiceKey } from "../console-data";
  * user. Geometry is checked in a real browser.
  */
 
-const sonnet = { adapter: "claude", provider: "anthropic", model: "claude-sonnet-5" };
-const sol = { adapter: "codex", provider: "openai", model: "gpt-6-sol" };
-const flash = { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
-const glm = { adapter: "zcode", provider: "zhipu", model: "glm-5" };
+const sonnet = { harness: "claude", provider: "anthropic", model: "claude-sonnet-5" };
+const sol = { harness: "codex", provider: "openai", model: "gpt-6-sol" };
+const flash = { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
+const glm = { harness: "zcode", provider: "zhipu", model: "glm-5" };
 
 const mediumId = "claude:anthropic:claude-sonnet-5:medium";
 const highId = "claude:anthropic:claude-sonnet-5:high";
@@ -32,7 +32,7 @@ const SOL = "codex / openai / gpt-6-sol";
 const GLM = "zcode / zhipu / glm-5";
 const modelsRegion = () => screen.queryByRole("region", { name: "目录" });
 
-function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "adapter" | "provider" | "model" | "effort">): Buddy {
+function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "harness" | "provider" | "model" | "effort">): Buddy {
   return {
     available: true, enabled: false, capabilities: [], contextWindow: null,
     description: "", source: "catalog:fixture", ...entry,
@@ -58,14 +58,14 @@ function buddies(): Buddy[] {
 /** Codex lacks local review eligibility; DSH carries a near-limit quota window. */
 function harnesses(): HarnessHealth[] {
   return [
-    { adapter: "claude", status: "ready", available: true, revision: 2, manualPath: null,
+    { harness: "claude", status: "ready", available: true, revision: 2, manualPath: null,
       executable: "/usr/local/bin/claude", version: "2.0.1", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [] },
-    { adapter: "codex", status: "ready", available: true, revision: 2, manualPath: null,
+    { harness: "codex", status: "ready", available: true, revision: 2, manualPath: null,
       executable: "/opt/bin/codex", version: "0.159.0", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [],
       readOnlyStructured: { implemented: true, eligible: false, systemSandbox: true, sameAttemptContinuation: false, reasonCode: "READ_ONLY_RESOURCE_UNAVAILABLE", reason: "本地只读运行资源不可用" } },
-    { adapter: "dsh", status: "ready", available: true, revision: 3, manualPath: null,
+    { harness: "dsh", status: "ready", available: true, revision: 3, manualPath: null,
       executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [],
       quota: { observedAt: "2026-09-29T09:00:00.000Z", source: "dsh-native", provider: "deepseek-official",
@@ -73,7 +73,7 @@ function harnesses(): HarnessHealth[] {
           { name: "5h", usedPercent: 93, resetsAt: "2026-09-29T13:00:00.000Z" },
           { name: "weekly", usedPercent: 41, resetsAt: null },
         ] } },
-    { adapter: "zcode", status: "missing", available: false, revision: 1, manualPath: null,
+    { harness: "zcode", status: "missing", available: false, revision: 1, manualPath: null,
       reasonCode: "HARNESS_NOT_FOUND", remedy: "安装 ZCode CLI，或填写可执行文件的绝对路径。",
       checkedAt: CHECKED_AT, candidates: [] },
   ];

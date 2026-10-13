@@ -6,8 +6,8 @@ import json
 from ...protocol.harness_names import HARNESS_NAMES
 
 
-def view(connection, adapter):
-    row = connection.execute('SELECT status,record_json,checked_at FROM harness_health WHERE adapter=?', (adapter,)).fetchone()
+def view(connection, harness):
+    row = connection.execute('SELECT status,record_json,checked_at FROM harness_health WHERE harness=?', (harness,)).fetchone()
     record = json.loads(row['record_json']) if row else {}
     if row and row['status'] == 'login-required':
         status, reason, guidance = 'logged-out', 'ACCOUNT_LOGIN_REQUIRED', 'Sign in using the harness native account flow.'
@@ -18,7 +18,7 @@ def view(connection, adapter):
     billing = record.get('billingByProvider')
     kinds = {fact.get('kind') for fact in billing.values() if isinstance(fact, dict)} if isinstance(billing, dict) else set()
     account_type = next(iter(kinds)) if len(kinds) == 1 and kinds <= {'subscription', 'metered'} else None
-    return {'adapter': adapter, 'status': status, 'accountType': account_type,
+    return {'harness': harness, 'status': status, 'accountType': account_type,
             'checkedAt': row['checked_at'] if row else None, 'reasonCode': reason, 'guidance': guidance}
 
 
@@ -28,4 +28,4 @@ class Accounts:
 
     def all(self):
         with self.board.db.read() as connection:
-            return [view(connection, adapter) for adapter in HARNESS_NAMES]
+            return [view(connection, harness) for harness in HARNESS_NAMES]

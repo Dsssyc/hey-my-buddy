@@ -338,12 +338,12 @@ class BoardService(_BaseResource):
 
     def capabilities(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            schemas.reject_unknown(params, {"includeUnavailable", "refresh", "adapter"}, "capabilities")
+            schemas.reject_unknown(params, {"includeUnavailable", "refresh", "harness"}, "capabilities")
             from ...buddy.harnesses.registry import local_capabilities
             from .harness_health import HARNESSES
             from ...buddy.harnesses.runtime_selection import bound
             if schemas.optional_bool(params, 'refresh', False):
-                for name in [params['adapter']] if params.get('adapter') else HARNESSES:
+                for name in [params['harness']] if params.get('harness') else HARNESSES:
                     self.harnesses.refresh(name, force=True)
             elif self.automatic_discovery and not (self.store.directory / 'upgrade.json').exists():
                 self.harnesses.kick()
@@ -352,7 +352,7 @@ class BoardService(_BaseResource):
                 report, capabilities = capability_report(), local_capabilities()
             for record in records:
                 if self.automatic_discovery or record['revision']:
-                    report[record['adapter']].update(available=record['available'], reason=record.get('reasonCode'), harness=record)
+                    report[record['harness']].update(available=record['available'], reason=record.get('reasonCode'), harness=record)
 
             return {
                 "adapters": report,
@@ -364,7 +364,7 @@ class BoardService(_BaseResource):
                 else None,
                 "limitations": {
                     "steer": "an active attempt cannot be re-scoped; submit authorized continuation input after its turn ends",
-                    "resume": "governed continuation creates a new owned attempt; native session support is declared per adapter",
+                    "resume": "governed continuation creates a new owned attempt; native session support is declared per harness",
                     "nativeAppWakeup": "not provided: notifications are post-commit hints for clients",
                     "postgres": "not provided: SQLite is the deliberate local database",
                     "remoteTenancy": "not provided: same-user local service only",
@@ -497,8 +497,8 @@ class BoardService(_BaseResource):
             with bound([record], environment=self.harnesses.environment()):
                 payload = adapter(name).discover_models()
             native_fact = next((item for item in payload.get('discoveries', [])
-                                if isinstance(item, dict) and item.get('adapter') == name), None)
-            payload['discoveries'] = [{'adapter': name, 'status': native_fact['status'] if native_fact else 'complete',
+                                if isinstance(item, dict) and item.get('harness') == name), None)
+            payload['discoveries'] = [{'harness': name, 'status': native_fact['status'] if native_fact else 'complete',
                                        'accountStatus': (native_fact or {}).get('accountStatus', 'unknown'),
                                        **({'reason': native_fact['reason']} if native_fact and native_fact.get('reason') is not None else {})}]
             catalog_store.record(self.evaluation, payload, observation['observationId'], health_generation=(name, record['revision']))
@@ -512,8 +512,8 @@ class BoardService(_BaseResource):
 
     def harness_set(self, request_json: str) -> str:
         def handler(params):
-            schemas.reject_unknown(params, {'adapter', 'path'}, 'harness.set')
-            name = schemas.required_string(params, 'adapter', max_length=32)
+            schemas.reject_unknown(params, {'harness', 'path'}, 'harness.set')
+            name = schemas.required_string(params, 'harness', max_length=32)
             if 'path' not in params:
                 raise BoardError('INVALID_ARGUMENT', 'path is required; use null to restore automatic detection')
             return {'harness': self.harnesses.set_path(name, params['path'])}
@@ -540,7 +540,7 @@ class BoardService(_BaseResource):
                 attempt, _worker = self.store._verify_attempt_actor(db, params)
                 if attempt['execution_state'] == 'finished' or attempt['cancel_requested_at']:
                     raise BoardError('ATTEMPT_FINISHED', 'This attempt cannot start a harness')
-                name = attempt['model_adapter'] or attempt['adapter']
+                name = attempt['model_harness'] or attempt['adapter']
                 if name not in ('dsh', 'zcode', 'codex', 'claude'):
                     return {'harness': None}
                 request = {key: params.get(key) for key in ('attemptId', 'generation', 'retry', 'failedOnly', 'healthRevision')}
@@ -576,15 +576,15 @@ class BoardService(_BaseResource):
         from ...protocol.usage import identifier
 
         def handler(params):
-            schemas.reject_unknown(params, {'adapter', 'provider', 'requestId'}, 'quota.redetect')
+            schemas.reject_unknown(params, {'harness', 'provider', 'requestId'}, 'quota.redetect')
             request_id = schemas.required_string(params, 'requestId', max_length=128)
-            name = schemas.required_string(params, 'adapter', max_length=32)
+            name = schemas.required_string(params, 'harness', max_length=32)
             from .harness_health import _name
             _name(name)
             provider = identifier(schemas.required_string(params, 'provider', max_length=128))
             if provider is None:
                 raise BoardError('INVALID_ARGUMENT', 'provider must be one identifier, not free text')
-            request = {'adapter': name, 'provider': provider}
+            request = {'harness': name, 'provider': provider}
             command_id = 'quota-redetect:' + request_id
             with self.store.db.write() as db:
                 previous = self.store._receipt(db, command_id, 'quota.redetect', request, 'quota-control')
@@ -605,7 +605,7 @@ class BoardService(_BaseResource):
         specs.extend(params[key] for key in ('buddy', 'spec') if isinstance(params.get(key), dict))
         if isinstance(params.get('helpers'), list):
             specs.extend(helper.get('spec', helper) for helper in params['helpers'] if isinstance(helper, dict))
-        names = {spec.get('adapter') for spec in specs if isinstance(spec, dict) and isinstance(spec.get('adapter'), str)}
+        names = {spec.get('harness') for spec in specs if isinstance(spec, dict) and isinstance(spec.get('harness'), str)}
         for name in sorted(names):
             if explicit and name in ('dsh', 'zcode', 'codex', 'claude') and not self.harnesses.get(name)['available']:
                 self.harnesses.refresh(name, force=True)
@@ -640,7 +640,7 @@ class BoardService(_BaseResource):
                 with self.store.db.read() as db:
                     cached = catalog_store.current(db)
                 discovered = cached.payload if cached else {'source': 'harness-health', 'providers': [], 'discoveries': [
-                    {'adapter': row['adapter'], 'status': 'unknown', 'reason': row.get('reasonCode')} for row in self.harnesses.all()]}
+                    {'harness': row['harness'], 'status': 'unknown', 'reason': row.get('reasonCode')} for row in self.harnesses.all()]}
             else:
                 from ...buddy.harnesses.runtime_selection import bound
                 with bound(observation['harnesses']):
@@ -876,7 +876,7 @@ class BoardService(_BaseResource):
                 with self.store.db.read() as db:
                     names = {row[0] for row in db.execute("SELECT DISTINCT adapter FROM tasks WHERE state='queued' AND queue_reason IN ('awaiting-worker','capacity','awaiting-buddy-validation')")}
                     if 'decision' in names:
-                        row = db.execute('SELECT p.adapter FROM evaluation_state e JOIN buddies p ON p.buddy_id=e.decision_buddy_id WHERE e.id=1').fetchone()
+                        row = db.execute('SELECT p.harness FROM evaluation_state e JOIN buddies p ON p.buddy_id=e.decision_buddy_id WHERE e.id=1').fetchone()
                         if row:
                             names.add(row[0])
                 for name in sorted(names & {'dsh', 'zcode', 'codex', 'claude'}):

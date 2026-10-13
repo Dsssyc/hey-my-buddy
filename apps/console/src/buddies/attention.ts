@@ -12,7 +12,7 @@ export type BuddyAttention = {
 
 export function buddyAttention(data: ConsoleView, snapshot: Snapshot): BuddyAttention {
   const configuration = snapshot.configuration === null ? null : data.configuration;
-  const quota = snapshotHarnesses(snapshot).filter(row => quotaView(row.quota)?.alert).map(row => row.adapter);
+  const quota = snapshotHarnesses(snapshot).filter(row => quotaView(row.quota)?.alert).map(row => row.harness);
   if (!configuration) return { roles: "upgrade", quota };
   // The health projection names the current Router; the head of the list stands in only when no health facts exist.
   const health = snapshot.routingHealth;

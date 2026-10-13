@@ -33,7 +33,7 @@ const nameCell = (name: string) => modelRow(model(name));
  */
 function catalog(): Buddy[] {
   const base = {
-    adapter: "dsh", provider: "deepseek-official", capabilities: ["execution:dsh", "decision"],
+    harness: "dsh", provider: "deepseek-official", capabilities: ["execution:dsh", "decision"],
     contextWindow: null, source: "catalog:fixture", description: "",
   };
   return [

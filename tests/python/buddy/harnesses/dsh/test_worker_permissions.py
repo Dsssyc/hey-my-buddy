@@ -18,7 +18,7 @@ class WorkerPermissionTests(NativeRunCase):
         for level, mode in (("read", "read-only"), ("write", "workspace-write"),
                             ("full", "danger-full-access")):
             with self.subTest(level=level):
-                require_permission({"adapter": "dsh"}, level)
+                require_permission({"harness": "dsh"}, level)
                 request, bound, mount = self.worker_request(level=level, inquiry=True)
                 self.governed_agent_args(mount)
                 with mock.patch.dict(os.environ, {"DSH_PERMISSION_MODE": "inherited-mode"}):

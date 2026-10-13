@@ -30,7 +30,7 @@ export function HarnessHeader({ block, health, state, accountOpen, onToggleAccou
   const observed = health?.quota ? t("harness.quota.observation", { time: harnessTime(health.quota.observedAt) ?? t("harness.unrecorded"), source: health.quota.source }) : "";
   const note = [said, observed].filter(Boolean).join(" · ");
   const content = <>
-    <HarnessLogo adapter={block.adapter} />
+    <HarnessLogo harness={block.harness} />
     <b className="text-base font-semibold">{block.name}</b>
     <span className="text-xs text-ink2">{block.providers.join(" / ")}</span>
     {state && !blocked && <span className="text-xs text-ink3">{harnessStateText(state, t)}</span>}
@@ -57,7 +57,7 @@ export function HarnessHeader({ block, health, state, accountOpen, onToggleAccou
     </CollapsibleTrigger>
     {health
       ? <Hint text={note || undefined}>
-        <button id={`account-summary-${block.adapter}`} type="button" data-slot="account-summary" aria-label={t("harness.summaryLabel", { name: block.name })}
+        <button id={`account-summary-${block.harness}`} type="button" data-slot="account-summary" aria-label={t("harness.summaryLabel", { name: block.name })}
           aria-expanded={accountOpen} onClick={onToggleAccount}
           className={cn(row, "outline-none transition-colors duration-150 hover:bg-sunk focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none")}>
           {content}

@@ -711,7 +711,7 @@ class SettlementGuardTests(NativeRunCase):
         result = self.execute(self.request(timeout=20))
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "quota-rejected")
-        self.assertIn("ADAPTER_UNAVAILABLE", result.end.message)
+        self.assertIn("HARNESS_UNAVAILABLE", result.end.message)
         failure = result.native_failure.value
         self.assertEqual(failure["nativeCode"], "five_hour")
         self.assertEqual(failure["code"], "quota-exceeded")
@@ -887,7 +887,7 @@ class DiscoveryTests(NativeRunCase):
                                 native_root=self.base / "third-party-native", timeout_seconds=25,
                                 cancelled=lambda: False)
         view = CatalogView.from_payload(catalog)
-        selected = {"adapter": "claude", **BUDDY, "provider": "bedrock"}
+        selected = {"harness": "claude", **BUDDY, "provider": "bedrock"}
         self.assertEqual(_check_recorded(selected, view, pending_efforts=None), selected)
         buddies = view.proposed_buddies()
         self.assertTrue(buddies)
@@ -1007,7 +1007,7 @@ class RoleSurfaceTests(NativeRunCase):
             with mock.patch.object(native_run, "cli_command", side_effect=ClaudeUnavailable("CLI missing")):
                 with self.assertRaises(BoardError) as caught:
                     native_run.check_preparation({"provider": "anthropic"}, dict(os.environ))
-        self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+        self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
         self.assertFalse(self.state_path.exists(), "no native child may start from a preparation check")
         native_run.check_preparation({"provider": "anthropic"}, dict(os.environ))
 
@@ -1026,7 +1026,7 @@ class RoleSurfaceTests(NativeRunCase):
 
     def test_session_facts_report_disabled_persistence(self):
         facts = native_run.session_facts(self.base / "native", "session-x")
-        self.assertEqual(facts["adapter"], "claude")
+        self.assertEqual(facts["harness"], "claude")
         self.assertEqual((facts["sessionId"], facts["captured"]), ("session-x", True))
         self.assertEqual(facts["storageScope"], "none")
         self.assertEqual(facts["nativeAppVisibility"], "none")

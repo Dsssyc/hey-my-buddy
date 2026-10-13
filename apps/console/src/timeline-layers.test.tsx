@@ -79,7 +79,7 @@ function timeline(): MacroTaskTimelineData {
   const spans: TimelineSpan[] = [
     span({ spanId: "s-exec", runId: "r1", kind: "execution", state: "finished", startAt: "2026-09-26T01:14:00Z",
       endAt: "2026-09-26T01:15:00Z", attemptId: "att-1", turnIndex: 1, resultStatus: "failed", error: "测试命令超时",
-      shutdownConfirmed: true, buddy: { adapter: "codex", provider: "openai", model: "gpt-5-codex", effort: "max" } }),
+      shutdownConfirmed: true, buddy: { harness: "codex", provider: "openai", model: "gpt-5-codex", effort: "max" } }),
     span({ spanId: "s-wait", runId: "r1", kind: "host", state: "open", startAt: "2026-09-26T01:15:00Z",
       endAt: null, requestId: "req-wait", summary: "等待 Host 决定" }),
   ];

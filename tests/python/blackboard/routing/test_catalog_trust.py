@@ -5,8 +5,8 @@ from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
 
 
 def reading(models=('alpha',)):
-    return {'source': 'fixture-native', 'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}],
-            'providers': [{'adapter': 'dsh', 'provider': 'fixture',
+    return {'source': 'fixture-native', 'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}],
+            'providers': [{'harness': 'dsh', 'provider': 'fixture',
                            'models': [{'id': model, 'efforts': ['max'], 'available': True} for model in models]}]}
 
 
@@ -18,7 +18,7 @@ class CatalogTrustRoutingTests(BoardTestCase):
         self.evaluation = self.board.evaluation
         self.evaluation.record_catalog(reading())
         with self.board.store.db.write() as db:
-            db.execute("UPDATE buddies SET enabled=1 WHERE adapter='dsh'")
+            db.execute("UPDATE buddies SET enabled=1 WHERE harness='dsh'")
 
     def candidates(self):
         with self.board.store.db.read() as db:
@@ -38,7 +38,7 @@ class CatalogTrustRoutingTests(BoardTestCase):
     def test_unknown_reading_keeps_the_candidate_and_its_bounds(self):
         self.evaluation.record_catalog(reading(models=()))
         self.evaluation.record_catalog({**reading(models=()), 'discoveries': [
-            {'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'unknown'}]})
+            {'harness': 'dsh', 'status': 'complete', 'accountStatus': 'unknown'}]})
         self.assertEqual(self.candidates(), ['dsh:fixture:alpha:max'])
 
     def test_user_pin_on_a_pending_buddy_still_resolves(self):

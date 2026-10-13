@@ -500,7 +500,7 @@ class RoutingSpanTests(WorkflowTestCase):
 
     def test_frozen_selection_and_top_level_facts_come_from_exact_decision_task(self):
         board, task_id = self.recorded_task()
-        selected = {'adapter': 'codex', 'provider': 'openai', 'model': 'historic-model', 'effort': 'high'}
+        selected = {'harness': 'codex', 'provider': 'openai', 'model': 'historic-model', 'effort': 'high'}
         output = {'status': 'ok', 'decision': {'buddyId': 'frozen-buddy', 'reason': 'frozen reason',
                   'evidence': [], 'policyCheck': {'ignored': True}},
                   'policyCheck': {'taskPreference': {'ruleIndex': 2, 'outcome': 'matched'}, 'userPreference': 'alternative'},

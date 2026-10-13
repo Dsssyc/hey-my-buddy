@@ -20,7 +20,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "mock_codex.py"
 SOURCE = Path(__file__).resolve().parents[5] / "src"
 SCHEMA = {"type": "object", "additionalProperties": False, "required": ["buddyId"],
           "properties": {"buddyId": {"type": "string", "enum": ["legal"]}}}
-BINDING = {"adapter": "codex", "taskId": "task-1", "attemptId": "attempt-1", "generation": 3}
+BINDING = {"harness": "codex", "taskId": "task-1", "attemptId": "attempt-1", "generation": 3}
 ROOT = {"sessionId": "thread-1", "turnId": "turn-1"}
 
 
@@ -329,10 +329,10 @@ class CodexToolEventProjectionTests(unittest.TestCase):
             budget=RunBudget(timeout_seconds=8))
         frame = json.loads(encode_run_request(request))
         decoded = decode_run_request(json.dumps(frame))
-        projector = CodexToolEventProjector({"adapter": "codex", "taskId": decoded.identity.task_id,
+        projector = CodexToolEventProjector({"harness": "codex", "taskId": decoded.identity.task_id,
                                               "attemptId": decoded.identity.attempt_id,
                                               "generation": decoded.identity.generation})
-        self.assertEqual(projector.finish(False)["binding"], {"adapter": "codex", "taskId": "t",
+        self.assertEqual(projector.finish(False)["binding"], {"harness": "codex", "taskId": "t",
                                                               "attemptId": "a", "generation": 0})
         mutations = {"missing task": lambda identity: identity.pop("taskId"),
                      "missing attempt": lambda identity: identity.pop("attemptId"),
@@ -350,7 +350,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         # The projector itself still refuses an incomplete binding, so a
         # caller that bypasses the frame validation cannot invent one.
         with self.assertRaises(BoardError):
-            CodexToolEventProjector({"adapter": "codex", "taskId": "t"})
+            CodexToolEventProjector({"harness": "codex", "taskId": "t"})
 
 
 class UnreadableCodexToolEvidenceTests(unittest.TestCase):
@@ -439,7 +439,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         outcome, context = self.run_review("readonly-evidence", index=1)
         self.assertEqual(outcome.status, "ok", outcome.result)
         evidence = outcome.result["toolEvidence"]
-        self.assertEqual(evidence["binding"], {"adapter": "codex", "taskId": context.task_id,
+        self.assertEqual(evidence["binding"], {"harness": "codex", "taskId": context.task_id,
                                                "attemptId": context.attempt_id, "generation": context.generation})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": "thread-1", "turnId": "native-turn-1"}])
         self.assertTrue(evidence["streamComplete"])
@@ -511,7 +511,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         self.assertEqual(outcome.result["code"], "invalid-buddy")
         self.assertIs(outcome.result["modelStarted"], False)
         evidence = outcome.result["toolEvidence"]
-        self.assertEqual(evidence["binding"], {"adapter": "codex", "taskId": context.task_id,
+        self.assertEqual(evidence["binding"], {"harness": "codex", "taskId": context.task_id,
                                                "attemptId": context.attempt_id, "generation": context.generation})
         self.assertEqual(evidence["nativeIdentity"], [])
         self.assertFalse(evidence["streamComplete"])

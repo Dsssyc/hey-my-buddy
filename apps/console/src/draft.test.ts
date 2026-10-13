@@ -23,7 +23,7 @@ import type { Draft, ModelServiceNote, Buddy, Snapshot } from "./types";
 const flash = {
   buddyId: "flash-off",
   label: "Flash",
-  adapter: "dsh",
+  harness: "dsh",
   provider: "deepseek-official",
   model: "deepseek-flash",
   effort: "off",
@@ -34,7 +34,7 @@ const flash = {
   description: "",
   source: "catalog",
 } satisfies Buddy;
-const flashModelService = { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
+const flashModelService = { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
 /** A buddy that is still enabled but no longer listed by the catalog. */
 const retired = {
   ...flash,
@@ -43,7 +43,7 @@ const retired = {
   available: false,
   unavailableReason: "provider paused",
 } satisfies Buddy;
-const retiredModelService = { adapter: "dsh", provider: "deepseek-official", model: "retired-model" };
+const retiredModelService = { harness: "dsh", provider: "deepseek-official", model: "retired-model" };
 const note = (modelService: typeof flashModelService, text: string): ModelServiceNote =>
   ({ ...modelService, text, updatedAt: null });
 const snapshot = {
@@ -55,7 +55,7 @@ const snapshot = {
   },
 
   modelServiceConcurrency: [
-    { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 },
+    { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 },
   ],
 } as unknown as Snapshot;
 
@@ -293,7 +293,7 @@ describe("model modelService concurrency", () => {
   const flashLimit = (draft: Draft): number | null =>
     draft.modelServiceConcurrency.find((entry) => entry.model === "deepseek-flash")?.limit ?? null;
   const entry = (limit: number) => ({
-    adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit, active: 0,
+    harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit, active: 0,
   });
   const basedAt = () => makeDraft(snapshot);
   const tableAt = (limit: number) =>
@@ -305,11 +305,11 @@ describe("model modelService concurrency", () => {
     expect(modelServiceConcurrencyChanges(baseline, baseline)).toEqual([]);
     const draft = setConcurrencyLimit(baseline, flash, 6);
     expect(modelServiceConcurrencyChanges(baseline, draft)).toEqual([
-      { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
+      { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
     ]);
     const patch = publication(baseline, draft, "c");
     expect(patch.modelServiceConcurrency).toEqual([
-      { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
+      { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
     ]);
     const wire = JSON.stringify(patch);
     // Occupancy is observation and the buddy identity never rides along.

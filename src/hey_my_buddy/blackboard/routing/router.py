@@ -162,16 +162,16 @@ def buddy_problem(connection, buddy_id: str | None, routing_mode: str) -> tuple[
     if not row["available"]:
         detail = row["unavailable_reason"] or "目录未声明可用"
         return unavailable("router-unavailable", f"buddy {buddy_id} 在已发布目录中不可用（{detail}）")
-    health = read_health(connection, row["adapter"])
+    health = read_health(connection, row["harness"])
     if not health["available"]:
         detail = health.get("reason") or health.get("remedy") or health.get("status")
-        return unavailable("router-unavailable", f"harness {row['adapter']} 不可用（{health.get('reasonCode')}: {detail}）")
+        return unavailable("router-unavailable", f"harness {row['harness']} 不可用（{health.get('reasonCode')}: {detail}）")
     from ..evaluation.native_observations import exhausted
     if exhausted(connection, dict(row)) is not None:
         return unavailable("router-quota-exhausted", f"buddy {buddy_id} 有仍然生效的原生额度耗尽记录")
     try:
         with bound([health]):
-            native = adapter(row["adapter"])
+            native = adapter(row["harness"])
             if routing_mode == "fast":
                 eligible = getattr(native, "no_tool_structured", False)
                 detail = "harness 未实现无工具结构化入口"
@@ -183,7 +183,7 @@ def buddy_problem(connection, buddy_id: str | None, routing_mode: str) -> tuple[
         eligible, detail = False, f"{error.code}: {error.message}"
     if not eligible:
         code = "router-no-tool-unsupported" if routing_mode == "fast" else "router-review-unsupported"
-        return unavailable(code, f"harness {row['adapter']} 不满足 {routing_mode} 模式资格（{detail}）")
+        return unavailable(code, f"harness {row['harness']} 不满足 {routing_mode} 模式资格（{detail}）")
     return dict(row), None, None
 
 
@@ -251,7 +251,7 @@ def _snapshot_facts(connection, settings: dict) -> dict:
     """The frozen facts of one settings snapshot: ordered IDs, identities, mode, budget."""
     identities = []
     for buddy_id in settings["routerBuddyIds"]:
-        row = connection.execute("SELECT adapter,provider,model,effort FROM buddies WHERE buddy_id=?",
+        row = connection.execute("SELECT harness,provider,model,effort FROM buddies WHERE buddy_id=?",
                                  (buddy_id,)).fetchone()
         identities.append(_identity(row))
     return {
@@ -280,7 +280,7 @@ def _frozen_facts(frozen: object) -> dict:
             or not isinstance(identities, list) or len(identities) != len(ids)):
         raise BoardError("INVALID_ARGUMENT", "frozen routerBuddyIds and routerIdentities must be aligned lists")
     if any(value is not None and (not isinstance(value, dict)
-           or set(value) != {"adapter", "provider", "model", "effort"}
+           or set(value) != {"harness", "provider", "model", "effort"}
            or any(not isinstance(item, str) or not item for item in value.values()))
            for value in identities):
         raise BoardError("INVALID_ARGUMENT", "frozen routerIdentities must contain complete buddy identities or null")

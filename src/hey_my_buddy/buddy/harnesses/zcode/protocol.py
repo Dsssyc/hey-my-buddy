@@ -1088,7 +1088,7 @@ class RootTurnEvidence:
                 and 0 < self.completed_ordinal < self.settled_ordinal < self.close_ordinal):
             raise NativeError("invalid-provenance", "the native root result lacks ordered tool, turn and session settlement evidence")
         return {
-            "adapter": "zcode", "tool": "buddy_finish_turn", "turnEnd": "completed", "rootSessionMatched": True,
+            "harness": "zcode", "tool": "buddy_finish_turn", "turnEnd": "completed", "rootSessionMatched": True,
             "inputId": self.input_id, "nativeSessionId": self.session_id, "nativeTurnId": self.turn_id,
             "toolCallId": self.call_id, "receiptId": self.receipt["receiptId"], "receiptVerified": True,
             "turnStartSeq": self.start_seq, "toolCallSeq": self.call_seq, "toolResultSeq": self.result_seq, "turnEndSeq": self.end_seq,

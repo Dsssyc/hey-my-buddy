@@ -15,14 +15,14 @@ import {
  * while it reads unavailable buddies or when a read or a discovery fails.
  */
 
-const sonnet = { adapter: "claude", provider: "anthropic", model: "claude-sonnet-5" };
-const sol = { adapter: "codex", provider: "openai", model: "gpt-6-sol" };
+const sonnet = { harness: "claude", provider: "anthropic", model: "claude-sonnet-5" };
+const sol = { harness: "codex", provider: "openai", model: "gpt-6-sol" };
 const SONNET = "claude / anthropic / claude-sonnet-5";
 const SOL = "codex / openai / gpt-6-sol";
 
 function buddy(modelService: typeof sonnet, effort: string, extra: Partial<Buddy> = {}): Buddy {
   return {
-    buddyId: `${modelService.adapter}:${modelService.provider}:${modelService.model}:${effort}`, label: `${modelService.model} · ${effort}`, ...modelService, effort,
+    buddyId: `${modelService.harness}:${modelService.provider}:${modelService.model}:${effort}`, label: `${modelService.model} · ${effort}`, ...modelService, effort,
     available: true, enabled: false, capabilities: [], contextWindow: null, description: "", source: "catalog:fixture", ...extra,
   };
 }
@@ -37,8 +37,8 @@ function snapshot(extra: Partial<Snapshot> = {}): Snapshot & { harnesses: Harnes
  modelServiceConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
     tasks: { pendingCount: 0 }, capabilities: {},
     harnesses: [
-      { adapter: "claude", status: "ready", available: true, revision: 1, manualPath: null },
-      { adapter: "codex", status: "ready", available: true, revision: 1, manualPath: null },
+      { harness: "claude", status: "ready", available: true, revision: 1, manualPath: null },
+      { harness: "codex", status: "ready", available: true, revision: 1, manualPath: null },
     ],
     ...extra,
   };
@@ -109,7 +109,7 @@ describe("an empty catalogue", () => {
 describe("the harness sections", () => {
   it("keeps an unavailable harness, its state and account when filters hide every model", async () => {
     const state = snapshot();
-    state.buddies = state.buddies.map(entry => entry.adapter === "claude"
+    state.buddies = state.buddies.map(entry => entry.harness === "claude"
       ? { ...entry, available: false, unavailableReason: "HARNESS_UNHEALTHY" } : entry);
     state.harnesses[0] = { ...state.harnesses[0], status: "login-required", available: false };
     const f = fixture(state, { buddy_list: () => page(state.buddies.filter(entry => !entry.available), state) });
@@ -225,7 +225,7 @@ describe("a session that cannot write", () => {
 });
 
 describe("what the view says about its own reads", () => {
-  const retired = buddy({ adapter: "claude", provider: "anthropic", model: "claude-old" }, "high", { available: false, unavailableReason: "provider paused" });
+  const retired = buddy({ harness: "claude", provider: "anthropic", model: "claude-old" }, "high", { available: false, unavailableReason: "provider paused" });
 
   it("says that it is reading unavailable buddies, and shows them when the read ends", async () => {
     const state = snapshot({ unavailableBuddyCount: 1 });
@@ -267,7 +267,7 @@ describe("what the view says about its own reads", () => {
 
   it("says where the list of unavailable buddies was cut", async () => {
     const state = snapshot({ unavailableBuddyCount: 700 });
-    const many = Array.from({ length: 600 }, (_, index) => buddy({ adapter: "claude", provider: "anthropic", model: "claude-old" }, `e${index}`,
+    const many = Array.from({ length: 600 }, (_, index) => buddy({ harness: "claude", provider: "anthropic", model: "claude-old" }, `e${index}`,
       { available: false, unavailableReason: "provider paused" }));
     const f = fixture(state, { buddy_list: () => ({ ...page(many, state), nextCursor: "more" }) });
     const user = userEvent.setup();

@@ -511,11 +511,11 @@ class FastSeamTests(NativeRunCase):
         prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         with _mock.patch("hey_my_buddy.buddy.harnesses.zcode.native_run._spawn_app_server",
-                         side_effect=_NativeError("adapter-unavailable", "no native start")):
+                         side_effect=_NativeError("harness-unavailable", "no native start")):
             result = run(self.fast_request(prompt), observer=correction.observer,
                          services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "adapter-unavailable")
+        self.assertEqual(result.end.reason_code, "harness-unavailable")
         # Nothing is claimed that the run never reached: no session opened, no
         # effective policy, no buddy check, no completion, no model,
         # and no native exit code — the holding side's own never-spawned fact.
@@ -1681,7 +1681,7 @@ class DiscoveryStopTests(NativeRunCase):
         self.assertIs(caught.exception, error)
         self.assertIsNone(self.fd_close_child)
         self.assertEqual(api.events, ["create", ("close", 77)])
-        self.assertEqual(caught.exception.__context__.code, "adapter-unavailable")
+        self.assertEqual(caught.exception.__context__.code, "harness-unavailable")
 
     def test_fd_close_failure_after_windows_ownership_failure_keeps_unknown_stop(self):
         process = self.fd_close_windows_process()
@@ -1805,7 +1805,7 @@ class DiscoveryStopTests(NativeRunCase):
         with self.assertRaises(native_run.NativeError) as caught:
             self.discover_with_windows_boundary(api)
         self.assertEqual(api.events, ["create", ("close", 77)])
-        self.assertEqual(caught.exception.code, "adapter-unavailable")
+        self.assertEqual(caught.exception.code, "harness-unavailable")
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
 
     def test_windows_job_creation_failure_proves_no_child_created(self):
@@ -1814,7 +1814,7 @@ class DiscoveryStopTests(NativeRunCase):
             with self.assertRaises(native_run.NativeError) as caught:
                 self.discover_with_windows_boundary(api)
         self.assertEqual(api.events, [])
-        self.assertEqual(caught.exception.code, "adapter-unavailable")
+        self.assertEqual(caught.exception.code, "harness-unavailable")
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
 
     def test_windows_ownership_failure_keeps_observed_cleanup(self):
@@ -1880,7 +1880,7 @@ class DiscoveryStopTests(NativeRunCase):
         with self.assertRaises(BoardError) as caught:
             run_execution.discover_models('zcode')
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
-        self.assertEqual(caught.exception.code, 'ADAPTER_UNAVAILABLE')
+        self.assertEqual(caught.exception.code, 'HARNESS_UNAVAILABLE')
 
     def test_unknown_stop_failure_never_uses_pre_spawn_evidence(self):
         stop = native_run._stop_native

@@ -53,7 +53,7 @@ class NativeFactsTests(unittest.TestCase):
                 connection = mock.Mock()
                 connection.call.return_value = {"data": [], "nextCursor": cursor}
                 catalog, listed = native_run._catalog(connection, "version", "openai")
-                self.assertEqual(catalog["discoveries"][0], {"adapter": "codex", "status": "unknown",
+                self.assertEqual(catalog["discoveries"][0], {"harness": "codex", "status": "unknown",
                                                            "reason": "model-cursor-shape-unreadable"})
                 self.assertEqual(listed, set())
                 connection.call.assert_called_once()

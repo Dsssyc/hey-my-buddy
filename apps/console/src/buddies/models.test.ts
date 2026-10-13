@@ -12,9 +12,9 @@ import { harnessBlocks, harnessStateText, listedModels, modelIdentity, reasonTex
 
 const t = i18n.getFixedT(null, "buddies");
 
-function buddy(adapter: string, provider: string, model: string, effort: string, extra: Partial<Buddy> = {}): Buddy {
+function buddy(harness: string, provider: string, model: string, effort: string, extra: Partial<Buddy> = {}): Buddy {
   return {
-    buddyId: `${adapter}:${provider}:${model}:${effort}`, label: `${model.toUpperCase()} · ${effort}`, adapter, provider, model, effort,
+    buddyId: `${harness}:${provider}:${model}:${effort}`, label: `${model.toUpperCase()} · ${effort}`, harness, provider, model, effort,
     available: true, enabled: false, capabilities: [], contextWindow: null, description: "", source: "catalog:fixture", ...extra,
   };
 }
@@ -36,15 +36,15 @@ function snapshot(list: Buddy[] = buddies()): Snapshot {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "s", canWrite: true, reason: null },
 
     configuration: null, buddies: list, preferences: [],  modelServiceNotes: [], decisions: [],
-    modelServiceConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "flash", limit: 3, active: 1 }],
+    modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "flash", limit: 3, active: 1 }],
     tasks: { pendingCount: 0 }, capabilities: {},
   };
 }
 
 const harnesses: HarnessHealth[] = [
-  { adapter: "dsh", status: "ready", available: true, revision: 1, manualPath: null },
-  { adapter: "codex", status: "ready", available: true, revision: 1, manualPath: null },
-  { adapter: "claude", status: "login-required", available: false, revision: 1, manualPath: null },
+  { harness: "dsh", status: "ready", available: true, revision: 1, manualPath: null },
+  { harness: "codex", status: "ready", available: true, revision: 1, manualPath: null },
+  { harness: "claude", status: "login-required", available: false, revision: 1, manualPath: null },
 ];
 
 function blocks(options: { recorded?: Snapshot; data?: ConsoleView; folded?: Record<string, boolean>; fresh?: string[]; health?: HarnessHealth[] } = {}) {
@@ -71,7 +71,7 @@ describe("which models are listed", () => {
     expect(names({ enabledOnly: true, showUnavailable: true })).toEqual(["claude / anthropic / opus", "dsh / deepseek-official / flash"]);
   });
 
-  it("searches the label, the model, the provider, the adapter and the harness's name without regard to case", () => {
+  it("searches the label, the model, the provider, the harness and the harness's name without regard to case", () => {
     expect(names({ query: "  SOL " })).toEqual(["codex / openai / sol"]);
     expect(names({ query: "second-prov" })).toEqual(["dsh / second-provider / pro"]);
     expect(names({ query: "claude code", showUnavailable: true })).toEqual(["claude / anthropic / opus"]);
@@ -82,31 +82,31 @@ describe("which models are listed", () => {
 describe("the table's blocks", () => {
   it("puts the harnesses that can work first and writes the state of the one that cannot", () => {
     const all = blocks();
-    expect(all.map(block => [block.adapter, block.state])).toEqual([["codex", null], ["dsh", null], ["claude", "login-required"]]);
+    expect(all.map(block => [block.harness, block.state])).toEqual([["codex", null], ["dsh", null], ["claude", "login-required"]]);
     expect(all.map(block => block.name)).toEqual(["Codex", "DSH", "Claude Code"]);
   });
 
   it("starts a harness folded when none of its buddies is enabled, and when it cannot work at all", () => {
-    const folded = Object.fromEntries(blocks().map(block => [block.adapter, block.folded]));
+    const folded = Object.fromEntries(blocks().map(block => [block.harness, block.folded]));
     // Codex has nothing enabled; Claude Code has an enabled buddy but is not logged in.
     expect(folded).toEqual({ codex: true, dsh: false, claude: true });
     // What the user folded or unfolded by hand wins over both defaults.
-    const chosen = Object.fromEntries(blocks({ folded: { codex: false, dsh: true, claude: false } }).map(block => [block.adapter, block.folded]));
+    const chosen = Object.fromEntries(blocks({ folded: { codex: false, dsh: true, claude: false } }).map(block => [block.harness, block.folded]));
     expect(chosen).toEqual({ codex: false, dsh: true, claude: false });
   });
 
   it("counts a harness's models, providers and enabled buddies for its folded row", () => {
-    const dsh = blocks().find(block => block.adapter === "dsh")!;
+    const dsh = blocks().find(block => block.harness === "dsh")!;
     expect([dsh.models.length, dsh.providers, dsh.enabled, dsh.total]).toEqual([2, ["deepseek-official", "second-provider"], 1, 3]);
-    const claude = blocks().find(block => block.adapter === "claude")!;
+    const claude = blocks().find(block => block.harness === "claude")!;
     expect([claude.models.length, claude.providers, claude.enabled, claude.total]).toEqual([1, ["anthropic"], 1, 2]);
   });
 
   it("falls back to plain unavailability for a harness without a health record, and keeps an unknown state as recorded", () => {
-    const without = blocks({ health: [] }).find(block => block.adapter === "claude")!;
+    const without = blocks({ health: [] }).find(block => block.harness === "claude")!;
     expect(without.state).toBe("unavailable");
-    const future = blocks({ health: [{ adapter: "claude", status: "quarantined" as HarnessHealth["status"], available: false, revision: 1, manualPath: null }] })
-      .find(block => block.adapter === "claude")!;
+    const future = blocks({ health: [{ harness: "claude", status: "quarantined" as HarnessHealth["status"], available: false, revision: 1, manualPath: null }] })
+      .find(block => block.harness === "claude")!;
     expect(future.state).toBe("quarantined");
     expect(harnessStateText("quarantined", t)).toBe("quarantined");
     expect(harnessStateText("login-required", t)).toBe("未登录");
@@ -115,8 +115,8 @@ describe("the table's blocks", () => {
 
   it("reads the limit from the draft and the occupancy from what is published, unknown when unreported", () => {
     const recorded = snapshot();
-    const data = { ...historyView(recorded, null), modelServiceConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "flash", limit: 7 }] };
-    const dsh = blocks({ recorded, data }).find(block => block.adapter === "dsh")!;
+    const data = { ...historyView(recorded, null), modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "flash", limit: 7 }] };
+    const dsh = blocks({ recorded, data }).find(block => block.harness === "dsh")!;
     const flash = dsh.models.find(model => model.modelService.buddies[0].model === "flash")!;
     expect([flash.limit, flash.occupancy]).toEqual([7, 1]);
     // A model the board has not reported keeps the default limit and an unknown occupancy, never 0.

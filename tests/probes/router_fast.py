@@ -24,7 +24,7 @@ from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
-    result.add_argument('--adapter', choices=('dsh', 'zcode'), required=True)
+    result.add_argument('--harness', choices=('dsh', 'zcode'), required=True)
     result.add_argument('--provider', required=True)
     result.add_argument('--model', required=True)
     result.add_argument('--effort', required=True)
@@ -36,10 +36,10 @@ def parser():
 def packet(args):
     buddies = [{**buddy, 'buddyId': ':'.join(buddy.values()), 'enabled': True, 'available': True}
                 for buddy in (
-                    {'adapter': 'dsh', 'provider': 'deepseek-official', 'model': 'deepseek-flash', 'effort': 'off'},
-                    {'adapter': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol', 'effort': 'high'})]
+                    {'harness': 'dsh', 'provider': 'deepseek-official', 'model': 'deepseek-flash', 'effort': 'off'},
+                    {'harness': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol', 'effort': 'high'})]
     return {
-        'buddy': {key: getattr(args, key) for key in ('adapter', 'provider', 'model', 'effort')},
+        'buddy': {key: getattr(args, key) for key in ('harness', 'provider', 'model', 'effort')},
         'task': '极小任务：将 README 中一句中文句末的英文句点改成中文句号。只选择执行配置，不执行修改。',
         'routingMode': 'fast', 'requestedRoutingMode': 'fast', 'fallback': None,
         'captureEvidence': True,

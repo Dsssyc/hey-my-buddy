@@ -159,7 +159,7 @@ class DescriptionSeamTests(DshRoleCase):
             self.assertEqual(description.available(), (False, "log in to dsh"))
             with self.assertRaises(Exception) as caught:
                 seam.check_preparation({}, {})
-            self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+            self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
         detected = {"status": "ready", "available": True, "command": ["/installed/dsh"]}
         with mock.patch.object(runtime_selection, "selected", return_value=None), \
                 mock.patch.object(discovery, "discover", return_value=detected):
@@ -172,7 +172,7 @@ class DescriptionSeamTests(DshRoleCase):
             self.assertEqual(description.available(), (False, "install dsh"))
             with self.assertRaises(Exception) as caught:
                 seam.check_preparation({}, {})
-            self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+            self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
 
 
 class WorkerRegisteredRunTests(DshRoleCase):
@@ -208,7 +208,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         turn = outcome.result["turn"]
         self.assertEqual(turn["outcome"], result.value.parsed.value)
         provenance = turn["provenance"]
-        self.assertEqual(provenance["adapter"], "dsh")
+        self.assertEqual(provenance["harness"], "dsh")
         self.assertEqual(provenance["nativeSessionId"], turn["sessionId"])
         self.assertTrue(provenance["receiptVerified"])
         self.assertEqual(result.native_identity.session_id, turn["sessionId"])
@@ -371,11 +371,11 @@ class DiscoverySeamTests(DshRoleCase):
     def test_discovery_routes_through_the_seam_without_a_prompt(self):
         from hey_my_buddy.buddy.harnesses.runtime_selection import bound, environment_for
         self.point_record("--prompt-mode", "final")
-        record = {"adapter": "dsh", **json.loads(self.record.read_text())["dsh"]}
+        record = {"harness": "dsh", **json.loads(self.record.read_text())["dsh"]}
         with mock.patch.dict(os.environ, self.environment):
             with bound([record], environment={**self.environment}):
                 catalog = adapter("dsh").discover_models()
-        self.assertEqual(catalog["adapter"], "dsh")
+        self.assertEqual(catalog["harness"], "dsh")
         self.assertEqual(catalog["source"], "dsh-acp-session-config")
         provider = next(entry for entry in catalog["providers"] if entry["provider"] == "fake")
         self.assertIn("m1", [model["id"] for model in provider["models"]])

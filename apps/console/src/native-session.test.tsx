@@ -6,11 +6,11 @@ import type { Task } from "./types";
 afterEach(cleanup);
 
 /** The frozen receipt envelope: task -> selectedAttempt -> result -> result. */
-function taskWith(result: Record<string, unknown>, adapter = "dsh"): Task {
+function taskWith(result: Record<string, unknown>, harness = "dsh"): Task {
   return {
     runId: "run", task: "目标", status: "completed", owner: "host", cwd: "/repo", revision: 1,
     createdAt: "2026-09-25", acceptedAt: null, acceptanceVerdict: null,
-    selectedAttempt: { attemptId: "attempt-a", adapter, result: { status: "ok", result, shutdownConfirmed: true } },
+    selectedAttempt: { attemptId: "attempt-a", adapter: harness, result: { status: "ok", result, shutdownConfirmed: true } },
   } as Task;
 }
 
@@ -23,13 +23,13 @@ describe("native session evidence from the attempt receipt", () => {
   it("reads the ZCode private-session facts from the recorded envelope", () => {
     const evidence = nativeSessionEvidence(taskWith({
       nativeSession: {
-        adapter: "zcode", sessionId: "sess-z", captured: true, storageScope: "task-private",
+        harness: "zcode", sessionId: "sess-z", captured: true, storageScope: "task-private",
         storageOwner: "buddy-attempt", nativeAppVisibility: "not-listed-in-native-app",
         resumeMode: "native-session", bindingPresent: true, resumable: true, note: "私有原生根",
       },
     }, "zcode"));
     expect(evidence).toMatchObject({
-      adapter: "zcode", sessionId: "sess-z", storageScope: "task-private", resumeMode: "native-session",
+      harness: "zcode", sessionId: "sess-z", storageScope: "task-private", resumeMode: "native-session",
       bindingPresent: true, resumable: true, note: "私有原生根",
     });
   });
@@ -37,19 +37,19 @@ describe("native session evidence from the attempt receipt", () => {
   it("reads the Codex native-session facts from the same envelope", () => {
     const evidence = nativeSessionEvidence(taskWith({
       nativeSession: {
-        adapter: "codex", sessionId: "thread-9", captured: true, storageScope: "harness-user-store",
+        harness: "codex", sessionId: "thread-9", captured: true, storageScope: "harness-user-store",
         storageOwner: "harness-user-store", nativeAppVisibility: "unknown", resumeMode: "native-session",
         resumable: true, note: "Codex owns the native thread in its configured home",
       },
     }, "codex"));
     expect(evidence).toMatchObject({
-      adapter: "codex", sessionId: "thread-9", storageScope: "harness-user-store", storageOwner: "harness-user-store",
+      harness: "codex", sessionId: "thread-9", storageScope: "harness-user-store", storageOwner: "harness-user-store",
       appVisibility: "unknown", resumeMode: "native-session", resumable: true,
     });
   });
 
   it("does not treat retired top-level Codex storage fields as native session evidence", () => {
-    // Every adapter now records its facts in `nativeSession`; the old
+    // Every harness now records its facts in `nativeSession`; the old
     // `nativeSessionStorage`/`nativeAppVisible` shape is not part of the
     // current single contract and stays unknown.
     expect(nativeSessionEvidence(taskWith(
@@ -70,7 +70,7 @@ describe("native session evidence from the attempt receipt", () => {
   it("renders the ZCode private storage and visibility without an invented open link", () => {
     render(<NativeSessionView task={taskWith({
       nativeSession: {
-        adapter: "zcode", sessionId: "sess-z", storageScope: "task-private", storageOwner: "buddy-attempt",
+        harness: "zcode", sessionId: "sess-z", storageScope: "task-private", storageOwner: "buddy-attempt",
         nativeAppVisibility: "not-listed-in-native-app", resumeMode: "native-session", bindingPresent: true,
         resumable: true, note: "私有原生根",
       },
@@ -91,7 +91,7 @@ describe("native session evidence from the attempt receipt", () => {
   it("renders the Codex native session as harness-owned with unverified visibility", () => {
     render(<NativeSessionView task={taskWith({
       nativeSession: {
-        adapter: "codex", sessionId: "thread-9", captured: true, storageScope: "harness-user-store",
+        harness: "codex", sessionId: "thread-9", captured: true, storageScope: "harness-user-store",
         storageOwner: "harness-user-store", nativeAppVisibility: "unknown", resumeMode: "native-session",
         resumable: true, note: "Codex owns the native thread in its configured home",
       },

@@ -169,8 +169,8 @@ class DshResumeSelectionTests(WorkflowTestCase):
             result["harnessAttempts"] = [{"harness": {"version": "0.1.5-rc.1"}}]
             db.execute("UPDATE attempts SET result_json=? WHERE attempt_id=?",
                        (json.dumps(result), attempt_id))
-            db.execute("INSERT INTO harness_health(adapter, record_json) VALUES('dsh', ?)"
-                       " ON CONFLICT(adapter) DO UPDATE SET record_json=excluded.record_json",
+            db.execute("INSERT INTO harness_health(harness, record_json) VALUES('dsh', ?)"
+                       " ON CONFLICT(harness) DO UPDATE SET record_json=excluded.record_json",
                        (canonical_json({"version": "0.2.0"}),))
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.continue_run(board, view, command_id="continue-after-upgrade", access="read")

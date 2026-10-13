@@ -15,10 +15,10 @@ from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 
 
 class SharedTurnIOTests(ZcodeFixtureCase):
-    def record(self, context, *, adapter="dsh", session_id="dsh-session"):
+    def record(self, context, *, harness="dsh", session_id="dsh-session"):
         identity = {key: context.turn_input[key]
                     for key in ("taskId", "attemptId", "generation", "turnId")}
-        provenance = (native_turn.zcode_provenance(identity, session_id) if adapter == "zcode"
+        provenance = (native_turn.zcode_provenance(identity, session_id) if harness == "zcode"
                       else native_turn.dsh_provenance(session_id))
         return {**{k: v for k, v in context.turn_input.items() if k not in ("context", "executionWorkspace")},
                 "inputSha256": turn_io.input_hash(context.turn_input), "sessionId": session_id,
@@ -27,7 +27,7 @@ class SharedTurnIOTests(ZcodeFixtureCase):
 
     def test_canonical_input_and_scoped_credential_are_distinct_private_files(self):
         context = self.context()
-        context.spec["adapter"] = "zcode"
+        context.spec.update(adapter="zcode", harness="zcode")
         context.agent_credential = "private-agent-token"
         turn_io.prepare_turn(context)
         self.assertEqual(hashlib.sha256(context.turn_input_file().read_bytes()).hexdigest(), turn_io.input_hash(context.turn_input))
@@ -41,7 +41,7 @@ class SharedTurnIOTests(ZcodeFixtureCase):
 
     def test_adapter_specific_provenance_does_not_bypass_common_identity_or_stop(self):
         context = self.context()
-        context.spec["adapter"] = "dsh"
+        context.spec.update(adapter="dsh", harness="dsh")
         turn_io.prepare_turn(context)
         record = self.record(context)
         context.turn_output_file().write_text(json.dumps(record))
@@ -66,13 +66,13 @@ class SharedTurnIOTests(ZcodeFixtureCase):
             self.assertIn(expected, turn_io.read_turn(context, True, 0, DshAdapter.validate_turn_provenance)[1] or "")
 
         zcode_context = self.context(index=2)
-        zcode_context.spec["adapter"] = "zcode"
+        zcode_context.spec.update(adapter="zcode", harness="zcode")
         turn_io.prepare_turn(zcode_context)
         zcode_context.turn_output_file().write_text(json.dumps(self.record(zcode_context)))
         self.assertIn("ZCode", turn_io.read_turn(zcode_context, True, 0)[1])
         # The same common identity rules import the current zcode provenance.
         zcode_context.turn_output_file().write_text(
-            json.dumps(self.record(zcode_context, adapter="zcode", session_id="zcode-session")))
+            json.dumps(self.record(zcode_context, harness="zcode", session_id="zcode-session")))
         self.assertIsNone(turn_io.read_turn(zcode_context, True, 0)[1])
 
     def test_immutable_receipts_cannot_overwrite_previous_evidence(self):

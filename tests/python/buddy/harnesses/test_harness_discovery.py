@@ -564,12 +564,12 @@ class ProbeStopEvidenceTests(unittest.TestCase):
 
     def test_login_text_cannot_hide_unverified_shutdown(self):
         candidate = {'path': '/fixture/cli', 'source': 'manual', 'fingerprint': {}, 'exists': True}
-        for adapter, output in (('codex', b'Not logged in'), ('claude', b'{"loggedIn":false}')):
-            with self.subTest(adapter=adapter), \
+        for harness, output in (('codex', b'Not logged in'), ('claude', b'{"loggedIn":false}')):
+            with self.subTest(harness=harness), \
                  patch.object(discovery, '_script_uses_node', return_value=False), \
                  patch.object(discovery, '_launch_command', return_value=['/fixture/cli']), \
                  patch.object(discovery, 'probe', side_effect=[(None, b'fixture 1.0'), ('shutdown-unverified', output)]):
-                result = discovery._candidate_handshake(adapter, candidate, {}, time.monotonic() + 1)
+                result = discovery._candidate_handshake(harness, candidate, {}, time.monotonic() + 1)
             self.assertEqual(result['reasonCode'], 'shutdown-unverified')
 
     def test_adjacent_node_unverified_stop_cannot_fall_through(self):

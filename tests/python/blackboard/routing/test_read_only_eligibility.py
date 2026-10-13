@@ -22,7 +22,7 @@ class LocalEligibilityTests(unittest.TestCase):
              patch('subprocess.Popen', side_effect=AssertionError('native process')), \
              patch('subprocess.run', side_effect=AssertionError('native process')):
             for item in (CodexAdapter(), ClaudeAdapter()):
-                with self.subTest(adapter=item.name):
+                with self.subTest(harness=item.name):
                     result = item.local_read_only_check()
                     self.assertTrue(result['eligible'])
                     self.assertTrue(result['systemSandbox'])
@@ -32,7 +32,7 @@ class LocalEligibilityTests(unittest.TestCase):
         with patch('subprocess.Popen', side_effect=AssertionError('native process')), \
              patch('subprocess.run', side_effect=AssertionError('native process')):
             for item in (Adapter(), DshAdapter(), ZcodeAdapter()):
-                with self.subTest(adapter=item.name):
+                with self.subTest(harness=item.name):
                     result = item.local_read_only_check()
                     self.assertFalse(result['eligible'])
                     self.assertFalse(result['systemSandbox'])
@@ -73,8 +73,8 @@ class HealthEligibilityTests(BoardTestCase):
         with board.store.db.read() as db, patch('subprocess.Popen', side_effect=AssertionError('native process')), \
              patch('subprocess.run', side_effect=AssertionError('native process')):
             before = db.total_changes
-            for adapter in ('dsh', 'zcode'):
-                result = read_health(db, adapter)
+            for harness in ('dsh', 'zcode'):
+                result = read_health(db, harness)
                 capability = result['readOnlyStructured']
                 self.assertFalse(capability['eligible'])
                 self.assertFalse(capability['systemSandbox'])
@@ -84,16 +84,16 @@ class HealthEligibilityTests(BoardTestCase):
     def test_health_reads_ignore_old_certificates_and_do_not_write_state(self):
         board = self.board()
         with board.store.db.write() as db:
-            db.execute("INSERT INTO harness_health(adapter,revision,status,record_json) VALUES('codex',1,'ready',?) "
-                       "ON CONFLICT(adapter) DO UPDATE SET revision=excluded.revision,status=excluded.status,record_json=excluded.record_json",
+            db.execute("INSERT INTO harness_health(harness,revision,status,record_json) VALUES('codex',1,'ready',?) "
+                       "ON CONFLICT(harness) DO UPDATE SET revision=excluded.revision,status=excluded.status,record_json=excluded.record_json",
                        (json.dumps({'version': 'new-version', 'reviewVerification': {'verified': False}}),))
         with patch('hey_my_buddy.buddy.harnesses.base.sys.platform', 'darwin'), board.store.db.read() as db:
-            before = db.execute('SELECT record_json FROM harness_health WHERE adapter=?', ('codex',)).fetchone()[0]
+            before = db.execute('SELECT record_json FROM harness_health WHERE harness=?', ('codex',)).fetchone()[0]
             result = read_health(db, 'codex')
             self.assertTrue(result['readOnlyStructured']['eligible'])
             self.assertTrue(result['systemSandbox'])
             self.assertNotIn('reviewVerification', result)
-            self.assertEqual(db.execute('SELECT record_json FROM harness_health WHERE adapter=?', ('codex',)).fetchone()[0], before)
+            self.assertEqual(db.execute('SELECT record_json FROM harness_health WHERE harness=?', ('codex',)).fetchone()[0], before)
 
 
 if __name__ == '__main__':

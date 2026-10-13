@@ -16,13 +16,13 @@ function catalog(): Buddy[] {
   return entries.map(({ model, effort, enabled }) => ({
     buddyId: `dsh:deepseek-official:${model}:${effort}`,
     label: `${model} · ${effort}`,
-    adapter: "dsh", provider: "deepseek-official", model, effort,
+    harness: "dsh", provider: "deepseek-official", model, effort,
     available: true, enabled, capabilities: ["execution:dsh", "decision"], contextWindow: 1000000,
     source: "catalog:fixture", description: "",
   }));
 }
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
-const flashModelService = { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
+const flashModelService = { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 const flashNote = (text: string): ModelServiceNote => ({ ...flashModelService, text, updatedAt: null });
 /** A buddy that only a completed program discovery can add. */
@@ -42,8 +42,8 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
     preferences: [], decisions: [],
 
     modelServiceConcurrency: [
-      { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 },
-      { adapter: "dsh", provider: "deepseek-official", model: "deepseek-v4-pro", limit: 5, active: 3 },
+      { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 },
+      { harness: "dsh", provider: "deepseek-official", model: "deepseek-v4-pro", limit: 5, active: 3 },
     ],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
@@ -74,7 +74,7 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
       // A discovery can coincide with another settings publication.
       state = { ...state,
         ...(options.discoveryNote ? { modelServiceNotes: [flashNote(options.discoveryNote)] } : {}),
-        buddies: [...state.buddies, { buddyId: discovered, label: "deepseek-v5 · medium", adapter: "dsh",
+        buddies: [...state.buddies, { buddyId: discovered, label: "deepseek-v5 · medium", harness: "dsh",
           provider: "deepseek-official", model: "deepseek-v5", effort: "medium", available: true, enabled: false,
           capabilities: [], contextWindow: null, source: "catalog:refresh", description: "" }] };
       return { discovered: true };

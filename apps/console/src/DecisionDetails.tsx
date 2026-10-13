@@ -10,7 +10,7 @@ import { Badge, formatDate } from "./ui";
 import { recordedRoutingMode, routingBasisSummary } from "./routing-display";
 
 export function buddyText(value: DecisionModel | null | undefined): string {
-  return value ? [value.adapter, value.provider, value.model, effortText(value.effort ?? value.reasoningEffort)].filter(Boolean).join(" / ") || "未记录" : "未记录";
+  return value ? [value.harness, value.provider, value.model, effortText(value.effort ?? value.reasoningEffort)].filter(Boolean).join(" / ") || "未记录" : "未记录";
 }
 
 /** This view reads one persisted decision; viewing it never submits a new recommendation. */
@@ -44,7 +44,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
   const buddies = table?.buddies || [];
   const named = (id: string) => {
     const buddy = buddies.find(p => p.buddyId === id);
-    return buddy ? `${buddy.adapter} · ${buddyTitle(buddy)}` : id;
+    return buddy ? `${buddy.harness} · ${buddyTitle(buddy)}` : id;
   };
   const constraints = audit.constraints ?? audit.requested?.constraints ?? {};
   const requiredCapabilities = audit.requiredCapabilities ?? audit.requested?.requiredCapabilities ?? [];

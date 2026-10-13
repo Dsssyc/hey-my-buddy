@@ -439,7 +439,7 @@ class GovernedBoundaryTests(unittest.TestCase):
         params = [json.loads(command[2]) for command in commands]
         self.assertEqual({item["targetRunId"] for item in params}, {"authorized-child"})
         self.assertTrue(params[0]["reroute"])
-        self.assertEqual(set(params[1]["buddy"]), {"adapter", "provider", "model", "effort"})
+        self.assertEqual(set(params[1]["buddy"]), {"harness", "provider", "model", "effort"})
 
     """A structured yield is a Host decision boundary, never a fake completion."""
 

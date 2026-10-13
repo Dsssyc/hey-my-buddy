@@ -615,7 +615,7 @@ class Worker:
         name = spec['adapter']
         review = name == 'decision' and (claim.get('decisionInput') or {}).get('routingMode', 'review') == 'review'
         if name == 'decision':
-            name = (claim.get('decisionInput') or {}).get('buddy', {}).get('adapter')
+            name = (claim.get('decisionInput') or {}).get('buddy', {}).get('harness')
         if name not in HARNESSES:
             return self._execute_selected(claim, task, spec, attempt, directory, holder)
         history = []
@@ -634,7 +634,7 @@ class Worker:
                 if review:
                     return self._review_unavailable(claim, directory, history, 'router-unavailable')
                 return self.receipt(claim, {'status': 'failed', 'result': {'harness': record, 'harnessAttempts': history},
-                    'error': 'HARNESS_UNAVAILABLE: ' + str((record or {}).get('remedy') or 'Run buddy adapters with refresh:true'),
+                    'error': 'HARNESS_UNAVAILABLE: ' + str((record or {}).get('remedy') or 'Run buddy harnesses with refresh:true'),
                     'exitCode': None, 'signal': None, 'shutdownConfirmed': True, 'artifacts': [],
                     'terminationReason': TERMINATION_HARNESS_ERROR}, directory)
             selection = directory / 'harness-selection.json'
@@ -717,7 +717,7 @@ class Worker:
             )
         if preparation.error is not None:
             error = preparation.error
-            if holder.get('harnessHistory') and error.code == 'ADAPTER_UNAVAILABLE':
+            if holder.get('harnessHistory') and error.code == 'HARNESS_UNAVAILABLE':
                 # The captured BoardError itself: the guarded harness retry above
                 # matches on this code, so the original object and code must reach it.
                 raise error
@@ -809,7 +809,7 @@ class Worker:
         if (holder.get('harnessHistory') and not timed_out
                 and not handle.cancel_requested and outcome.shutdown_confirmed and outcome.status == 'failed'
                 and isinstance(outcome.result, dict) and outcome.result.get('modelStarted') is False
-                and outcome.result.get('code') in {'adapter-unavailable', 'invalid-native-result', 'invalid-protocol', 'transport-error', 'native-rpc-error', 'protocol-error', 'native-exit', 'connection-closed'}):
+                and outcome.result.get('code') in {'harness-unavailable', 'invalid-native-result', 'invalid-protocol', 'transport-error', 'native-rpc-error', 'protocol-error', 'native-exit', 'connection-closed'}):
             fsync_json(directory / 'harness-prestart-failure.json', {'code': outcome.result['code'], 'shutdownConfirmed': True})
             holder['started'] = False
             holder['confirmed_stopped'] = True
@@ -840,7 +840,7 @@ class Worker:
         from ...private_dirs import cleanup_attempt_credentials
         private_adapter = spec["adapter"]
         if private_adapter == "decision":
-            private_adapter = ((claim.get("decisionInput") or {}).get("buddy") or {}).get("adapter")
+            private_adapter = ((claim.get("decisionInput") or {}).get("buddy") or {}).get("harness")
         if private_adapter in {"dsh", "zcode", "codex", "claude", "command"}:
             try:
                 cleanup_attempt_credentials(self.state_dir, private_adapter, task["taskId"], attempt["attemptId"])

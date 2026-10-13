@@ -41,7 +41,7 @@ SUMMARIES: dict[str, str] = {
     "ping": "Authenticated process liveness; no storage or runtime scan.",
     "health": "Service, runtime, capacity and integrity report; read it before relying on routing.",
     "capabilities": "Adapter report with availability, capabilities, named operations and the honest limitations map.",
-    "adapters": "Adapter report; the same operation as capabilities.",
+    "harnesses": "Adapter report; the same operation as capabilities.",
     "harness-set": "Choose the harness executable or restore automatic detection.",
     "quota-redetect": "Open the one-shot routing retry window of a provider's no-reset quota exhaustion; no model or balance query.",
     "accounts": "Read cached native login status and billing type without a native refresh.",
@@ -131,7 +131,7 @@ MISSING_SUMMARY = "(no one-sentence summary yet; add one to cli_help.SUMMARIES)"
 METHOD_NOTES: dict[str, tuple[str, ...]] = {
     "stop": ("the CLI name fixes action to 'stop'; restart and status are separate CLI names",),
     "restart": ("the CLI name fixes action to 'restart'; stop and status are separate CLI names",),
-    "adapters": ("the same C-Two operation as capabilities",),
+    "harnesses": ("the same C-Two operation as capabilities",),
     "upgrade": ("runs the same installer as install with the upgrade coordinator",),
     "quota-redetect": ("reuse requestId after a lost reply, even if the chance was consumed; changed inputs conflict; no model/balance query or recovery claim",),
     "accept": ("keyed by run and artifact: the same payload replays its recorded response and any changed payload conflicts",),
@@ -773,6 +773,20 @@ class _Extractor:
                 name = child.targets[0].id
                 if name in tracked:
                     continue
+                value = child.value
+                if isinstance(value, ast.DictComp) and len(value.generators) == 1:
+                    projection = value.generators[0]
+                    target, source = projection.target, projection.iter
+                    if (isinstance(target, ast.Tuple) and len(target.elts) == 2
+                            and all(isinstance(item, ast.Name) for item in target.elts)
+                            and isinstance(value.key, ast.Name) and value.key.id == target.elts[0].id
+                            and isinstance(value.value, ast.Name) and value.value.id == target.elts[1].id
+                            and isinstance(source, ast.Call) and isinstance(source.func, ast.Attribute)
+                            and source.func.attr == "items" and isinstance(source.func.value, ast.Name)
+                            and source.func.value.id == params_var):
+                        # A restricted request copy keeps the remaining fields' bounds.
+                        tracked[name] = _TrackedValue(owner)
+                        continue
                 fields = self._fields_read(child.value, params_var, tracked, owner)
                 if fields:
                     tracked[name] = _TrackedValue(fields[0][0], None, tuple(field for field, _scalar in fields[1:]), all(scalar for _field, scalar in fields))

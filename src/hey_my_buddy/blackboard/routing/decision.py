@@ -155,7 +155,7 @@ class DecisionCoordinator:
         if dispatch is None:
             return None
         identity = dispatch["buddy"]
-        return (identity["adapter"], identity["provider"], identity["model"])
+        return (identity["harness"], identity["provider"], identity["model"])
 
     # -- request-time policy -------------------------------------------------
     def _decision_buddy(self, connection: sqlite3.Connection) -> tuple[dict | None, str | None]:
@@ -174,7 +174,7 @@ class DecisionCoordinator:
         """
         clauses = [
             "p.enabled=1", "p.available=1",
-            "EXISTS(SELECT 1 FROM harness_health h WHERE h.adapter=p.adapter AND h.status='ready')",
+            "EXISTS(SELECT 1 FROM harness_health h WHERE h.harness=p.harness AND h.status='ready')",
         ]
         values: list[Any] = []
         for capability in sorted(set(required_capabilities or [])):
@@ -182,8 +182,8 @@ class DecisionCoordinator:
             values.append(capability)
         if coding_only:
             clauses.extend(["p.provider IS NOT NULL AND p.provider!=''", "p.model IS NOT NULL AND p.model!=''", "p.effort IS NOT NULL AND p.effort!=''"])
-            clauses.append("p.adapter IN (" + ",".join("?" for _ in schemas.CODING_ADAPTERS) + ")")
-            values.extend(schemas.CODING_ADAPTERS)
+            clauses.append("p.harness IN (" + ",".join("?" for _ in schemas.CODING_HARNESSES) + ")")
+            values.extend(schemas.CODING_HARNESSES)
         for key, value in (constraints or {}).items():
             if key not in schemas.BUDDY_FIELDS:
                 raise BoardError("INVALID_ARGUMENT", "Unknown buddy constraint")
@@ -231,9 +231,9 @@ class DecisionCoordinator:
             "SELECT p.* FROM buddies p LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id "
             "WHERE " + " AND ".join(clauses) + " ORDER BY p.rowid LIMIT ?", values):
             from ..service.harness_health import read_health
-            if row['adapter'] not in health_available:
-                health_available[row['adapter']] = read_health(connection, row['adapter'])['available']
-            if not health_available[row['adapter']]:
+            if row['harness'] not in health_available:
+                health_available[row['harness']] = read_health(connection, row['harness'])['available']
+            if not health_available[row['harness']]:
                 continue
             if exhausted(connection, row, now=now) is None:
                 selected.append(row)
@@ -263,7 +263,7 @@ class DecisionCoordinator:
                     " WHERE " + " AND ".join(clauses))
         total = int(connection.execute("SELECT COUNT(*) AS count" + from_sql, values).fetchone()["count"])
         rows = connection.execute(
-            "SELECT p.buddy_id, p.adapter, p.provider, p.model, p.effort,"
+            "SELECT p.buddy_id, p.harness, p.provider, p.model, p.effort,"
             " f.reason AS preference_reason" + from_sql +
             " ORDER BY p.rowid LIMIT ?",
             [*values, MAX_FROZEN_EXCLUSIONS],
@@ -271,7 +271,7 @@ class DecisionCoordinator:
         entries = [
             {
                 "buddyId": row["buddy_id"],
-                "adapter": row["adapter"],
+                "harness": row["harness"],
                 "provider": row["provider"],
                 "model": row["model"],
                 "effort": row["effort"],
@@ -301,7 +301,7 @@ class DecisionCoordinator:
         entry = {
             "buddyId": row["buddy_id"],
             "label": row["label"],
-            "adapter": row["adapter"],
+            "harness": row["harness"],
             "provider": row["provider"],
             "model": row["model"],
             "effort": row["effort"],
@@ -515,7 +515,7 @@ class DecisionCoordinator:
                     for item in connection.execute(
                         "SELECT p.* FROM buddies p LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id WHERE "
                         + " AND ".join(clauses) + " ORDER BY p.rowid", values):
-                        if not read_health(connection, item["adapter"])["available"]:
+                        if not read_health(connection, item["harness"])["available"]:
                             continue
                         if exhausted(connection, item, now=now) is not None:
                             if claim(connection, item, decision_id=decision_id, consume=False, now=now) is None:
@@ -930,7 +930,7 @@ class DecisionCoordinator:
         # its frozen model identity, so the frozen model-input document
         # itself stays byte-identical from admission to publication.
         from ..service.harness_health import read_health
-        tool_policy = {"systemSandbox": bool(read_health(connection, dispatch["buddy"]["adapter"])["systemSandbox"])}
+        tool_policy = {"systemSandbox": bool(read_health(connection, dispatch["buddy"]["harness"])["systemSandbox"])}
         self._mark_running(
             connection, row, attempt_id=attempt_id, generation=generation,
             document=document, now=now,
@@ -1272,7 +1272,7 @@ class DecisionCoordinator:
         ``zeroToolVerified`` never substitutes for the event stream. This
         wrapper binds a receipt's ``toolEvidence`` to the frozen attempt before
         the pure judge runs: the binding must equal the frozen
-        adapter/task/attempt/generation, every root identity the receipt reports
+        harness/task/attempt/generation, every root identity the receipt reports
         must be one the evidence trusts, and the claim-frozen
         ``toolPolicy.systemSandbox`` boolean — never a receipt claim — selects
         the review category matrix. The document carries that boolean because
@@ -1289,7 +1289,7 @@ class DecisionCoordinator:
         if not reported:
             return {"code": unverified, "reason": "The receipt reports no native root identity"}
         expected_binding = {
-            "adapter": (document.get("buddy") or {}).get("adapter"),
+            "harness": (document.get("buddy") or {}).get("harness"),
             "taskId": row["decision_task_id"],
             "attemptId": row["decision_attempt_id"],
             "generation": row["decision_generation"],
@@ -1383,7 +1383,7 @@ class DecisionCoordinator:
             required_capabilities=request.get("requiredCapabilities") or [],
             constraints=request.get("constraints"), coding_only=True)
         clauses = [clause for clause in clauses if clause !=
-                   "EXISTS(SELECT 1 FROM harness_health h WHERE h.adapter=p.adapter AND h.status='ready')"]
+                   "EXISTS(SELECT 1 FROM harness_health h WHERE h.harness=p.harness AND h.status='ready')"]
         clauses.extend(["p.buddy_id=?", "COALESCE(f.mode,'')!='exclude'",
                         "(NOT EXISTS(SELECT 1 FROM evaluation_preferences WHERE mode='pin') OR f.mode='pin')"])
         candidate = connection.execute(

@@ -19,18 +19,18 @@ def cli_command(environment: dict | None = None) -> list[str]:
         try:
             return command_for("zcode", env)
         except BoardError as error:
-            raise NativeError("adapter-unavailable", error.message) from None
+            raise NativeError("harness-unavailable", error.message) from None
     value = env.get("BUDDY_ZCODE_CLI") or shutil.which("zcode", path=env.get("PATH")) or str(DEFAULT_CLI)
     path = Path(value).expanduser().resolve()
     if not path.is_file():
-        raise NativeError("adapter-unavailable", "ZCode CLI is missing; configure BUDDY_ZCODE_CLI")
+        raise NativeError("harness-unavailable", "ZCode CLI is missing; configure BUDDY_ZCODE_CLI")
     if path.suffix in (".js", ".cjs", ".mjs"):
         node = env.get("BUDDY_NODE") or shutil.which("node", path=env.get("PATH"))
         if not node:
-            raise NativeError("adapter-unavailable", "Node.js is required for the installed ZCode bundle")
+            raise NativeError("harness-unavailable", "Node.js is required for the installed ZCode bundle")
         return [node, str(path)]
     if not os.access(path, os.X_OK):
-        raise NativeError("adapter-unavailable", "the configured ZCode CLI is not executable")
+        raise NativeError("harness-unavailable", "the configured ZCode CLI is not executable")
     return [str(path)]
 
 
@@ -41,7 +41,7 @@ def provider_paths(environment: dict, command: list[str]) -> tuple[Path, Path]:
     candidates = [cli.parent.parent / "config/provider/zcode-builtin.json", cli.parent / "provider/zcode-builtin.json"]
     builtin = next((p for p in candidates if p.is_file()), None)
     if builtin is None:
-        raise NativeError("adapter-unavailable", "ZCode's installed built-in provider configuration file is missing")
+        raise NativeError("harness-unavailable", "ZCode's installed built-in provider configuration file is missing")
     personal = Path(env.get("ZCODE_DATA_BASE_DIR") or Path.home()) / ".zcode/v2/provider_config.json"
     return builtin, personal
 

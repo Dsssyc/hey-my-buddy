@@ -45,7 +45,7 @@ export type MacroTaskPage = {
   changed: boolean;
 };
 export type TimelineBuddy = {
-  adapter: string | null; provider: string | null; model: string | null; effort: string | null;
+  harness: string | null; provider: string | null; model: string | null; effort: string | null;
 };
 export type TimelineRow = {
   runId: string; parentRunId: string | null; rootRunId: string;

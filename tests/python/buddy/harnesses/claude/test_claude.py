@@ -101,7 +101,7 @@ class ClaudeAvailabilityTests(ClaudeFixtureCase):
         def probe():
             entered.set()
             self.assertTrue(release.wait(3))
-            raise BoardError("ADAPTER_UNAVAILABLE", "fixture unauthenticated")
+            raise BoardError("HARNESS_UNAVAILABLE", "fixture unauthenticated")
 
         with mock.patch.dict(os.environ, self.environment, clear=True), \
                 mock.patch.object(claude_module, "_probe_native_metadata", side_effect=probe) as discover, \
@@ -369,7 +369,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertEqual(outcome.result["code"], "quota-rejected")
         self.assertEqual(outcome.error, QUOTA_REJECTED_ERROR)
-        self.assertIn("ADAPTER_UNAVAILABLE", outcome.error)
+        self.assertIn("HARNESS_UNAVAILABLE", outcome.error)
         self.assertEqual(outcome.result["quotaFailure"],
                          {"rateLimitType": "five_hour", "resetsAt": "2026-09-26T12:00:00Z"})
         self.assertEqual(set(outcome.result["quotaFailure"]), {"rateLimitType", "resetsAt"})
@@ -416,7 +416,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(provider["provider"], "anthropic")
         # The subscription account has no tokenSource; facts come from this initialize.
         self.assertEqual(catalog["discoveries"],
-                         [{"adapter": "claude", "status": "complete", "accountStatus": "confirmed"}])
+                         [{"harness": "claude", "status": "complete", "accountStatus": "confirmed"}])
         self.assertEqual([model["id"] for model in provider["models"]],
                          ["claude-opus-5-5[1m]", "claude-fable-5-1", "claude-sonnet-5",
                           "claude-haiku-4-5-20251001"])
@@ -439,7 +439,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                 with mock.patch.dict("os.environ", environment, clear=False):
                     catalog = self.adapter.discover_models()
                 self.assertEqual(catalog["discoveries"],
-                                 [{"adapter": "claude", "status": "complete", "accountStatus": "unknown"}])
+                                 [{"harness": "claude", "status": "complete", "accountStatus": "unknown"}])
                 self.assertEqual([model["id"] for model in catalog["providers"][0]["models"]],
                                  ["claude-opus-5-5[1m]", "claude-fable-5-1", "claude-sonnet-5",
                                   "claude-haiku-4-5-20251001"])
@@ -619,7 +619,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         # The unified receipt: a quiet tool-free stream still binds the frozen
         # attempt identity to a complete zero-tool evidence package.
         evidence = result.result["toolEvidence"]
-        self.assertEqual(evidence["binding"], {"adapter": "claude", "taskId": "goal-1",
+        self.assertEqual(evidence["binding"], {"harness": "claude", "taskId": "goal-1",
                                                "attemptId": context.attempt_id, "generation": 1})
         self.assertEqual(evidence["nativeIdentity"],
                          [{"sessionId": result.result["nativeIdentity"]["sessionId"]}])
