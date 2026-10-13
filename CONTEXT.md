@@ -83,8 +83,8 @@ The connector through which one harness takes part in the blackboard in one role
 One concrete language model, whoever provides it. Providers, communities and users may call the same model by different names.
 
 **模型服务 / model service**:
-One model as one harness reaches it through one provider, for example `dsh / deepseek-official / deepseek-flash`. Each of its reasoning efforts is a different buddy.
-_Avoid_: family, 模型家族 (a model family is commonly a series of several models); model (for one harness and provider's service of it)
+One provider's service of one model. The blackboard knows a provider only by the name a harness gives it, so it identifies a model service by harness, provider and model, for example `dsh / deepseek-official / deepseek-flash`; a buddy is a model service used through that harness at one reasoning effort.
+_Avoid_: family, 模型家族 (a model family is commonly a series of several models); model (for one provider's service of it)
 
 **提供方 / provider**:
 Whoever serves models to a harness: a model's own vendor or another party. In a buddy's identity it is the name the harness gives that source.
