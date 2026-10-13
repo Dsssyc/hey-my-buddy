@@ -102,6 +102,8 @@
 
 **Codex 的协议里有一批条目类型，一旦出现在 Router 的调用里，答案就会被丢掉。** 2026-10-12 读了 Codex 0.162.1 自带的协议定义（`codex app-server generate-json-schema`），并用它列出的每一种类型在整合后的源码上各模拟了一次：线程条目 19 种里，运行模块把 3 种当作对话、7 种当作工具，其余 9 种（`hookPrompt`、`functionCallOutput`、`plan`、`subAgentActivity`、`imageView`、`sleep`、`enteredReviewMode`、`exitedReviewMode`、`contextCompaction`）按“不认得的类型算作一次工具调用”处理，快速与审阅两种调用都会以 `router-tools-forbidden` 丢掉答案；原始响应条目 18 种里有 9 种（`additional_tools`、`agent_message`、`tool_search_call`、`tool_search_output`、`compaction`、`configuration_update`、`compaction_trigger`、`context_compaction`、`other`）会让工具证据不完整，答案同样不算数。没有在真实的回合里见到：同一天那次真实的快速调用里只有认得的条目，证据完整。这与批次 4 改掉的问题是同一类（harness 多出一种事件就让调用失败），只是在工具证据这一层，保守的方向是对的：不认得的可能真是工具。建议按协议定义把这些类型分清哪些是对话、哪些带着工具调用，并在配了 hook 的真实回合里量一次 `hookPrompt` 会不会出现。
 
+**工作区模块发出的 Git 调用太多。** 2026-10-13 量到：一个微任务从准备检出到回收，产品要起一百八十来个 Git 进程（准备约 80 个，封存约 43 个，验收时的比对约 21 个，回收二三十个；按[削减 Git 调用的方案](workspace-git-calls-plan.md)的表折算，不是单次实测）。7 个最重的测试文件的 36,332 次调用里，测试自己建仓库用的只占 4%，其余都是产品发出的；多的原因是同一个事实在每一层都重新问：仓库位置一次四条 `rev-parse`、一个微任务的一生里要问七次，每次现场观察都做两遍，每次捕获分别构造三棵树，对象格式每次都查。那份方案在“不改变任何行为”的前提下只能省 12.5% 到 14.6%，开发者于同日定下先不照它做，并认为这个数量说明设计本身有问题。下一步是一份按操作边界重排校验的设计（“完整检查提速”宏任务里的一个只出方案的微任务），连同哪些测试可以归并一起看；做不做由开发者看过设计再定。已经定下的一处：仓库自己的目录路径里带换行不再支持（[调研记录](../research/2026-10-13-line-breaks-in-repository-paths.md)），随这个模块下一次改动做。
+
 ## 委派与 Worker
 
 **`get` 的回合视图看不出结果的摘要数组被截断过。** 2026-10-12 起（ADR-030 批次 4，已随 0.31.0 安装），Codex 与 Claude Code 的回合交回的 `remaining` 或 `decisions` 超过上限时不再让整个回合失败，而是截到上限并在回合记录里写下 `outcomeTruncated`。这一项在 `result` 的完整输出里读得到；`get` 的回合视图读的是服务另存的结果与来源两列，没有它。要让两处都看得到，得把它存下来，那是存储形式的改动，等同一块有别的存储改动时一起做。在那之前，Host 写任务与打回时仍然不要要求把长清单写进结果里。
