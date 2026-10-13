@@ -108,7 +108,7 @@ ROUTING_HISTORY_FIELDS = frozenset({"limit", "before"})
 DEFAULT_ROUTING_HISTORY_LIMIT = 20
 MAX_ROUTING_HISTORY_LIMIT = 100
 
-RUN_STATES = ("executing", "awaiting-host", "waiting-helpers", "delivered", "accepted", "cancelled", "failed")
+RUN_STATES = ("executing", "awaiting-host", "waiting-helpers", "delivered", "accepted", "concluded", "cancelled", "failed")
 
 #: Request-scoped authority resolved by the service for one operation call.
 _SCOPE = threading.local()
@@ -271,6 +271,7 @@ class WorkflowCoordinator:
             "sessionId": row["session_id"],
             "state": row["state"],
             "disposition": row["disposition"],
+            "outcomeTruncated": json.loads(row["outcome_truncated_json"]) if row["outcome_truncated_json"] else None,
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
             # This turn's own frozen buddy, never the current run's.
@@ -580,9 +581,7 @@ class WorkflowCoordinator:
         task_row = task_row or connection.execute(
             "SELECT * FROM tasks WHERE task_id=?", (run_row["run_id"],)
         ).fetchone()
-        # One read serves both the reported conclusion and the wait reason: a
-        # delivered goal closed by its Host is not still awaiting acknowledgement.
-        host_conclusion = host_conclusions.current(connection, run_row, task_row)
+        host_conclusion = host_conclusions.current(connection, run_row)
         turns = connection.execute(
             "SELECT t.*,a.token_usage_json FROM workflow_turns t LEFT JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=? ORDER BY t.turn_index DESC LIMIT ?",
             (run_row["run_id"], MAX_ACTIVE_TURNS_VIEW),
@@ -660,11 +659,11 @@ class WorkflowCoordinator:
             "hostId": run_row["host_id"],
             "ownerGeneration": run_row["owner_generation"],
             "state": state,
-            "cancellation": self._cancellation(connection, run_row),
+            "cancellation": self._cancellation(connection, run_row, host_conclusion),
             "status": task_row["state"],
             "queueReason": task_row["queue_reason"],
             "awaitingHost": state == "awaiting-host",
-            "waitReason": self._wait_reason(state, task_row, active_request, host_conclusion),
+            "waitReason": self._wait_reason(state, task_row, active_request),
             "goal": self._goal_view(goal, run_row["goal_fingerprint"]),
             "revision": run_row["revision"],
             "continuationCount": run_row["continuation_count"],
@@ -713,8 +712,8 @@ class WorkflowCoordinator:
         return view
 
     @staticmethod
-    def _cancellation(connection, run_row):
-        if run_row["state"] != "cancelled":
+    def _cancellation(connection, run_row, conclusion):
+        if run_row["state"] != "cancelled" and (conclusion is None or conclusion["execution_status"] != "cancelled"):
             return None
         from .cancellation import for_run
         return for_run(connection, run_row["run_id"])
@@ -758,6 +757,8 @@ class WorkflowCoordinator:
             "acceptedAt": decorated["acceptedAt"],
             "acceptanceVerdict": decorated["acceptanceVerdict"],
             "acceptanceNote": decorated["acceptanceNote"],
+            "reviewRejectedAt": decorated["reviewRejectedAt"],
+            "reviewRejectionNote": decorated["reviewRejectionNote"],
             "artifactCount": decorated["artifactCount"],
             "inquiries": decorated["inquiries"],
             "activity": decorated["activity"],
@@ -778,7 +779,7 @@ class WorkflowCoordinator:
         return summary
 
     @staticmethod
-    def _wait_reason(state: str, task_row, active_request, host_conclusion) -> str:
+    def _wait_reason(state: str, task_row, active_request) -> str:
         if state == "awaiting-host":
             if active_request is not None and active_request.get("routing") is True:
                 return "model routing needs Host buddy; no new coding turn was started"
@@ -789,9 +790,9 @@ class WorkflowCoordinator:
             return "the current turn concluded and the Host decides the next turn"
         if state == "waiting-helpers":
             return "authorized helpers are still running"
+        if state == "concluded":
+            return "the goal work was concluded by its Host without acceptance"
         if state == "delivered":
-            if host_conclusion is not None:
-                return "the goal work was concluded by its Host without acceptance"
             return "the goal work is delivered and awaits final acknowledgement"
         if state == "accepted":
             return "the final artifact was acknowledged"
@@ -2271,7 +2272,7 @@ class WorkflowCoordinator:
 
     def _open_boundary(self, connection, run_row):
         """Keep the selected open request stable, then choose a deterministic next."""
-        if run_row["state"] in ("cancelled", "accepted"):
+        if run_row["state"] in ("cancelled", "accepted", "concluded"):
             return None
         return connection.execute(
             "SELECT * FROM workflow_requests WHERE run_id=? AND state='open'"
@@ -2281,7 +2282,7 @@ class WorkflowCoordinator:
 
     def _sync_boundary(self, connection, run_id, now, *, default_state=None):
         run = self._run_row(connection, run_id)
-        if run["state"] in ("cancelled", "accepted") or self._terminal_ancestor(connection, run_id) is not None:
+        if run["state"] in ("cancelled", "accepted", "concluded") or self._terminal_ancestor(connection, run_id) is not None:
             return None
         boundary = self._open_boundary(connection, run)
         if boundary is None and default_state is None:
@@ -2315,7 +2316,7 @@ class WorkflowCoordinator:
             if child is None:
                 return
             parent = self._run_row(connection, child["parent_run_id"])
-            if parent["state"] in ("cancelled", "accepted") or self._terminal_ancestor(connection, parent["run_id"]) is not None:
+            if parent["state"] in ("cancelled", "accepted", "concluded") or self._terminal_ancestor(connection, parent["run_id"]) is not None:
                 return
             payload = json.loads(source["payload_json"])
             payload["origin"] = payload.get("origin") or {"runId": source["run_id"], "requestId": source["request_id"]}
@@ -2338,7 +2339,7 @@ class WorkflowCoordinator:
         while request["request_id"] not in seen:
             seen.add(request["request_id"])
             self._assert_lineage_open(connection, run["run_id"])
-            if request["state"] != "open" or run["state"] in ("cancelled", "accepted"):
+            if request["state"] != "open" or run["state"] in ("cancelled", "accepted", "concluded"):
                 raise BoardError("CONFLICT", "The proxied Host boundary is no longer open")
             chain.append((run, request))
             child_id = request["child_task_id"]
@@ -2767,8 +2768,8 @@ class WorkflowCoordinator:
             run_id = run_row["run_id"]
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             self._assert_lineage_open(connection, run_id)
-            if run_row["state"] == "accepted":
-                raise BoardError("CONFLICT", "An accepted goal cannot be continued")
+            if run_row["state"] in ("accepted", "concluded"):
+                raise BoardError("CONFLICT", "A finished goal cannot be continued")
             cleanup = connection.execute("SELECT state FROM workspace_cleanup_plans WHERE run_id=? AND state IN ('applying','applied') LIMIT 1", (run_id,)).fetchone()
             if cleanup is not None:
                 raise BoardError("CONFLICT", "This goal's checkout is being cleaned or has been removed")
@@ -2814,22 +2815,6 @@ class WorkflowCoordinator:
             )
             for request in open_requests:
                 self._close_proxy_ancestors(connection, self._request_row(connection, run_id, request["request_id"]), now)
-            if run_row["state"] == "delivered" and run_row["final_artifact_id"]:
-                # Ending a delivered outcome without acceptance records the negative
-                # review and the Host's opinion next to the immutable artifact; the
-                # artifact itself and every earlier review stay in history.
-                rejection_note = reason or _head(input_text, 512)
-                connection.execute(
-                    "UPDATE tasks SET accepted_at=?, acceptance_note=?, acceptance_verdict='rejected',"
-                    " updated_at=? WHERE task_id=?",
-                    (now, rejection_note, now, run_id),
-                )
-                self.board._append_event(
-                    connection, "workflow.review_rejected", task_id=run_id,
-                    attempt_id=run_row["final_attempt_id"], revision=run_row["revision"] + 1,
-                    payload={"artifactId": run_row["final_artifact_id"], "verdict": "rejected",
-                             "actor": actor, "reason": reason, "opinion": _head(input_text, 512)},
-                )
             continuation_id = str(uuid.uuid4())
             connection.execute(
                 "INSERT INTO workflow_continuations(continuation_id, run_id, command_id, authorized_by,"
@@ -2857,6 +2842,22 @@ class WorkflowCoordinator:
                 now=now,
                 continuation_id=continuation_id,
             )
+            if run_row["state"] == "delivered" and run_row["final_artifact_id"]:
+                # Ending a delivered outcome without acceptance records the negative
+                # review and the Host's opinion next to the immutable artifact; the
+                # artifact itself and every earlier review stay in history.
+                rejection_note = reason or _head(input_text, 512)
+                connection.execute(
+                    "UPDATE tasks SET review_rejected_at=?, review_rejection_note=?,"
+                    " updated_at=? WHERE task_id=?",
+                    (now, rejection_note, now, run_id),
+                )
+                self.board._append_event(
+                    connection, "workflow.review_rejected", task_id=run_id,
+                    attempt_id=run_row["final_attempt_id"], revision=run_row["revision"] + 1,
+                    payload={"artifactId": run_row["final_artifact_id"], "verdict": "rejected",
+                             "actor": actor, "reason": reason, "opinion": _head(input_text, 512)},
+                )
             if access_selection is not None:
                 updated_workspace = {**current_workspace, "access": next_access}
                 updated_workspace.pop("accessReason", None)
@@ -3032,24 +3033,16 @@ class WorkflowCoordinator:
         if continuation is not None and continuation["authorized_by"] == "manual":
             self._reclaim_manual_workspace(connection, task, run_row, now)
         blocker = self.board._admission_blocker(connection, spec, exclude_task=task["task_id"])
-        if task["accepted_at"]:
-            # The review belonged to the attempt that was reviewed; a continuation
-            # archives it exactly like an explicit retry, so a later turn can be
-            # accepted as a new final artifact.
+        if task["review_rejected_at"]:
             self.board._append_event(
-                connection,
-                "task.review_archived",
-                task_id=task["task_id"],
+                connection, "task.review_archived", task_id=task["task_id"],
                 attempt_id=attempt["attempt_id"] if attempt else None,
                 revision=task["revision"] + 1,
-                payload={
-                    "acceptedAt": task["accepted_at"],
-                    "verdict": task["acceptance_verdict"],
-                    "note": task["acceptance_note"],
-                },
+                payload={"reviewRejectedAt": task["review_rejected_at"], "verdict": "rejected",
+                         "note": task["review_rejection_note"]},
             )
             connection.execute(
-                "UPDATE tasks SET accepted_at=NULL, acceptance_note=NULL, acceptance_verdict=NULL WHERE task_id=?",
+                "UPDATE tasks SET review_rejected_at=NULL, review_rejection_note=NULL WHERE task_id=?",
                 (task["task_id"],),
             )
         if task["state"] == "completed":
@@ -3241,8 +3234,8 @@ class WorkflowCoordinator:
                 receipt = self.board._receipt(connection, command_id, "workflow.cancel", request_key)
                 if receipt is not None:
                     return {**receipt, "duplicate": True}
-            if run_row["state"] == "accepted":
-                raise BoardError("CONFLICT", "This run is already acknowledged; cancellation cannot undo acceptance")
+            if run_row["state"] in ("accepted", "concluded"):
+                raise BoardError("CONFLICT", "This run is already closed; cancellation cannot undo it")
             response = self._cancel_in_transaction(connection, run_row, task, reason, actor, now)
             if command_id:
                 self.board._store_receipt(
@@ -3282,17 +3275,20 @@ class WorkflowCoordinator:
                 raise BoardError("INVALID_ARGUMENT", "macroTaskId must identify a macro task or standalone root")
             if not roots:
                 raise BoardError("NOT_FOUND", "Unknown work macro task")
-            results, accepted = [], []
+            results, accepted, concluded = [], [], []
             for root in roots:
                 if root["state"] == "accepted":
                     accepted.append(root["run_id"])
+                    continue
+                if root["state"] == "concluded":
+                    concluded.append(root["run_id"])
                     continue
                 task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (root["run_id"],)).fetchone()
                 results.append(self._cancel_in_transaction(
                     connection, root, task, reason, f"console:{console_authority['sessionId']}", now,
                 ))
             response = {"macroTaskId": identifier, "runIds": [r["runId"] for r in results],
-                        "acceptedRunIds": accepted, "results": results, "duplicate": False}
+                        "acceptedRunIds": accepted, "concludedRunIds": concluded, "results": results, "duplicate": False}
             self.board._store_receipt(connection, command_id, "macro_task.stop", request, response)
             head = self.board._head_of(connection)
         self.board._notify(head)
@@ -3339,8 +3335,8 @@ class WorkflowCoordinator:
                 run_row = self._run_row(connection, root_id)
                 if run_row["state"] == "cancelled":
                     continue
-                if run_row["state"] == "accepted":
-                    raise BoardError("CONFLICT", "Accepted Goal still owns active work during service stop", runId=root_id)
+                if run_row["state"] in ("accepted", "concluded"):
+                    raise BoardError("CONFLICT", "Closed Goal still owns active work during service stop", runId=root_id)
                 task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (root_id,)).fetchone()
                 self._cancel_in_transaction(connection, run_row, task, reason, "service-stop", now)
                 cancelled_roots.add(root_id)
@@ -3498,7 +3494,7 @@ class WorkflowCoordinator:
             "WITH RECURSIVE ancestors(run_id) AS (SELECT parent_run_id FROM workflow_children WHERE child_task_id=?"
             " UNION SELECT c.parent_run_id FROM workflow_children c JOIN ancestors a ON c.child_task_id=a.run_id)"
             " SELECT r.run_id, r.state FROM workflow_runs r JOIN ancestors a ON r.run_id=a.run_id"
-            " WHERE r.state IN ('cancelled','accepted') LIMIT 1", (run_id,),
+            " WHERE r.state IN ('cancelled','accepted','concluded') LIMIT 1", (run_id,),
         ).fetchone()
 
     def _assert_lineage_open(self, connection, run_id: str) -> None:
@@ -3510,7 +3506,7 @@ class WorkflowCoordinator:
     def _cancel_owned_run(self, connection, task, now: str, *, explicit: bool = False) -> bool:
         run_id = task["task_id"]
         run_row = self._run_row(connection, run_id)
-        cancel_goal = explicit or run_row["state"] not in ("delivered", "accepted", "failed")
+        cancel_goal = explicit or run_row["state"] not in ("delivered", "accepted", "concluded", "failed")
         connection.execute(
             "UPDATE workflow_requests SET state='cancelled', updated_at=? WHERE run_id=? AND state='open'", (now, run_id),
         )
@@ -3533,7 +3529,7 @@ class WorkflowCoordinator:
                 "UPDATE workflow_runs SET active_request_id=NULL, updated_at=?, revision=revision+1 WHERE run_id=?", (now, run_id),
             )
         stopped = self._stop_proven(connection, task)
-        if task["state"] not in ("completed", "failed", "cancelled"):
+        if task["state"] not in ("completed", "concluded", "failed", "cancelled"):
             self.board._transition_task(connection, task, "cancelled" if stopped else "cancelling")
             connection.execute("UPDATE tasks SET queue_reason=NULL, updated_at=? WHERE task_id=?", (now, run_id))
         if not stopped:
@@ -3551,10 +3547,11 @@ class WorkflowCoordinator:
         if attempt["shutdown_confirmed"] and turn is not None and self._validate_turn(turn, turn_row, attempt) is None:
             disposition = turn["outcome"]["disposition"]
             connection.execute(
-                "UPDATE workflow_turns SET state='concluded', disposition=?, outcome_json=?, provenance_json=?,"
+                "UPDATE workflow_turns SET state='concluded', disposition=?, outcome_json=?, outcome_truncated_json=?, provenance_json=?,"
                 " session_id=?, prompt_sha256=?, input_sha256=?, turn_result_path=?, sealed_artifacts_json=?,"
                 " updated_at=? WHERE turn_id=?",
-                (disposition, canonical_json(turn["outcome"]), canonical_json(turn.get("provenance")),
+                (disposition, canonical_json(turn["outcome"]), canonical_json(turn["outcomeTruncated"]) if "outcomeTruncated" in turn else None,
+                 canonical_json(turn.get("provenance")),
                  turn.get("sessionId"), turn.get("promptSha256"), turn.get("inputSha256"),
                  self.result_payload(payload).get("turnResultPath"), canonical_json(self._sealed_artifacts(payload)),
                  now, turn_row["turn_id"]),
@@ -3881,6 +3878,8 @@ class WorkflowCoordinator:
         run_id = run_row["run_id"]
         # Acceptance is bound to the current delivered goal, never to a Host
         # decision boundary, an active helper, or an older attempt's output.
+        if run_row["state"] == "concluded":
+            raise BoardError("CONFLICT", "This goal already has a recorded conclusion; it is closed without acceptance", runId=run_id)
         host_completion = run_row["state"] == "awaiting-host"
         if run_row["state"] not in ("delivered", "accepted") and not host_completion:
             raise BoardError(
@@ -3890,9 +3889,6 @@ class WorkflowCoordinator:
                 runId=run_id,
                 state=run_row["state"],
             )
-        if host_conclusions.current(connection, run_row, task) is not None:
-            raise BoardError("CONFLICT", "This goal already has a recorded conclusion; it is closed without acceptance",
-                             runId=run_id)
         if host_completion:
             self._lineage_stop_evidence(connection, run_row, "Host completion")
             if self._open_conflict(connection, run_id) is not None:
@@ -3996,14 +3992,12 @@ class WorkflowCoordinator:
                     "The current final attempt has no concluded completed turn to accept",
                     attemptId=attempt["attempt_id"],
                 )
-        if task["accepted_at"] and task["acceptance_verdict"] == "rejected":
-            # The rejection this acceptance supersedes stays in history as the older
-            # attempt's own archived review.
+        if task["review_rejected_at"]:
             self.board._append_event(connection, "task.review_archived", task_id=run_id,
                 attempt_id=attempt["attempt_id"],
-                payload={"acceptedAt": task["accepted_at"], "verdict": task["acceptance_verdict"],
-                         "note": task["acceptance_note"], "artifactId": run_row["final_artifact_id"]})
-        elif task["accepted_at"]:
+                payload={"reviewRejectedAt": task["review_rejected_at"], "verdict": "rejected",
+                         "note": task["review_rejection_note"], "artifactId": run_row["final_artifact_id"]})
+        if task["accepted_at"]:
             if (
                 task["acceptance_note"] != note
                 or run_row["final_artifact_id"] != artifact["artifact_id"]
@@ -4078,7 +4072,8 @@ class WorkflowCoordinator:
                                  integrationId=existing["integration_id"])
             integration = existing
         updated = connection.execute(
-            "UPDATE tasks SET accepted_at=?, acceptance_note=?, acceptance_verdict='accepted', updated_at=?,"
+            "UPDATE tasks SET accepted_at=?, acceptance_note=?, acceptance_verdict='accepted',"
+            " review_rejected_at=NULL, review_rejection_note=NULL, updated_at=?,"
             " revision=revision+1 WHERE task_id=?",
             (now, note, now, run_id),
         )
@@ -4211,9 +4206,7 @@ class WorkflowCoordinator:
         owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
         target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         note, _ = schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)
-        # One conclusion per reviewed execution: the derived key binds the current
-        # attempt, so the same note replays that execution's conclusion while a
-        # later execution of the same goal records its own.
+        # The receipt binds the reviewed execution and note; a closed goal only replays it.
         seal_work = None
         duplicate = None
         with self.db.read() as connection:
@@ -4286,6 +4279,8 @@ class WorkflowCoordinator:
     def _conclude_precheck(self, connection, run_row, task) -> dict:
         """Everything that must hold before one goal may be concluded."""
         run_id = run_row["run_id"]
+        if run_row["state"] in ("accepted", "concluded"):
+            raise BoardError("CONFLICT", "A finished goal cannot receive another conclusion", runId=run_id)
         if run_row["state"] not in ("failed", "cancelled", "delivered"):
             raise BoardError(
                 "NOT_READY",
@@ -4295,8 +4290,6 @@ class WorkflowCoordinator:
                 state=run_row["state"],
             )
         task = task or connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-        if task["accepted_at"]:
-            raise BoardError("CONFLICT", "An accepted goal is closed by its acceptance, not a conclusion", runId=run_id)
         self._require_routing_stopped(connection, run_id)
         self._lineage_stop_evidence(connection, run_row, "A Host conclusion")
         conflict = self._open_conflict(connection, run_id)
@@ -4338,17 +4331,6 @@ class WorkflowCoordinator:
         """Insert the conclusion row, the Host partial artifact and the events atomically."""
         run_id = run_row["run_id"]
         task = self._conclude_precheck(connection, run_row, task)
-        existing = connection.execute(
-            "SELECT * FROM workflow_host_conclusions WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
-            (run_id,),
-        ).fetchone()
-        if existing is not None and host_conclusions.current(connection, run_row, task) is not None:
-            raise BoardError(
-                "CONFLICT",
-                "This goal already has a recorded conclusion with a different note; a reviewed outcome is not "
-                "relabelled",
-                conclusionId=existing["conclusion_id"],
-            )
         attempt_id = task["selected_attempt_id"]
         turn = connection.execute(
             "SELECT * FROM workflow_turns WHERE run_id=? AND attempt_id=? ORDER BY turn_index DESC LIMIT 1",
@@ -4367,7 +4349,7 @@ class WorkflowCoordinator:
             "execution_status,note,evidence_json,artifact_id,integration_id,actor,command_id,created_at)"
             " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (identifier, run_id, attempt_id, run_row["revision"] + 1, run_row["owner_generation"], run_row["state"],
-             note, canonical_json({"references": [], "artifactSetSha256": host_conclusions.artifact_digest(connection, run_id)}),
+             note, canonical_json({"references": []}),
              partial_artifact_id, None, actor, command_id, now),
         )
         if sealed_record is not None:
@@ -4382,6 +4364,9 @@ class WorkflowCoordinator:
             payload={"conclusionId": identifier, "executionStatus": run_row["state"], "actor": actor,
                      "partialArtifactId": partial_artifact_id},
         )
+        self.board._transition_task(connection, task, "concluded")
+        connection.execute("UPDATE tasks SET queue_reason=NULL WHERE task_id=?", (run_id,))
+        connection.execute("UPDATE workflow_runs SET state='concluded' WHERE run_id=?", (run_id,))
         run_row = self._bump_run(connection, run_row, now)
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
         view = self.compact(connection, run_row, task)
@@ -4543,7 +4528,7 @@ class WorkflowCoordinator:
                 expectedScopeVersion=expected_scope,
                 currentScopeVersion=scope["scopeVersion"],
             )
-        if run_row["state"] in ("accepted", "cancelled"):
+        if run_row["state"] in ("accepted", "concluded", "cancelled"):
             raise BoardError("CONFLICT", "A finished goal cannot be reauthorized; submit a new goal instead",
                              state=run_row["state"])
         pending = int(connection.execute(
@@ -5076,8 +5061,8 @@ class WorkflowCoordinator:
                          allocation: dict | None = None) -> tuple[list[str], dict, dict]:
         """Everything that must hold before one disposable checkout may be removed."""
         reasons = []
-        conclusion = host_conclusions.current(connection, run_row, task)
-        if conclusion is None and (run_row["state"] != "accepted" or not task["accepted_at"] or task["acceptance_verdict"] != "accepted"):
+        conclusion = host_conclusions.current(connection, run_row)
+        if run_row["state"] not in ("accepted", "concluded"):
             reasons.append("not-accepted")
         final_artifact = None
         if run_row["final_artifact_id"]:
@@ -5464,7 +5449,7 @@ class WorkflowCoordinator:
         resume = plan["state"] == "applying"
         reasons, _evidence, _retention = self._cleanup_reasons(connection, run_row, task, manifest, allocation=allocation)
         planned = json.loads(plan["evidence_json"])
-        if planned.get("ownerGeneration", run_row["owner_generation"]) != run_row["owner_generation"] or planned.get("hostConclusion") != _evidence.get("hostConclusion"):
+        if planned.get("ownerGeneration", run_row["owner_generation"]) != run_row["owner_generation"] or planned["acceptance"]["state"] != run_row["state"]:
             reasons.append("review-changed")
         if reasons:
             raise BoardError("NOT_READY", "This checkout is not eligible for cleanup", reasons=reasons)
@@ -5502,7 +5487,7 @@ class WorkflowCoordinator:
         # Share the existing run read; the indexed subquery returns at most one
         # own outcome. json_type distinguishes text from serialized objects/arrays.
         run_row = connection.execute(
-            "SELECT r.state,r.owner_generation,r.host_id,r.revision,r.continuation_count,r.active_request_id,r.title,r.macro_task_id,"
+            "SELECT r.run_id,r.state,r.owner_generation,r.host_id,r.revision,r.continuation_count,r.active_request_id,r.title,r.macro_task_id,"
             " (SELECT CASE WHEN json_type(t.outcome_json,'$.summary')='text'"
             " THEN json_extract(t.outcome_json,'$.summary') END FROM workflow_turns t"
             " WHERE t.run_id=r.run_id AND t.state='concluded' AND t.outcome_json IS NOT NULL"
@@ -5522,6 +5507,7 @@ class WorkflowCoordinator:
             "continuationCount": run_row["continuation_count"],
             "activeRequestId": run_row["active_request_id"],
             "resultSummary": summary or None,
+            "hostConclusion": host_conclusions.view(host_conclusions.current(connection, run_row)),
         }
         if (current_scope() or {}).get("kind") != AGENT_KIND:
             extension.update(title=run_row["title"], macroTaskId=run_row["macro_task_id"])
@@ -5585,6 +5571,8 @@ class WorkflowCoordinator:
             return "awaiting-helpers"
         if run_row["state"] == "delivered":
             return "awaiting-acknowledgement"
+        if run_row["state"] == "concluded":
+            return "workflow-concluded"
         if run_row["state"] == "accepted":
             return "workflow-accepted"
         if run_row["state"] == "cancelled":
@@ -6429,10 +6417,10 @@ class WorkflowCoordinator:
             connection.execute("UPDATE workflow_turns SET sealed_artifacts_json=? WHERE turn_id=?", (canonical_json(self._sealed_artifacts(payload)), turn_row["turn_id"]))
             self.board._append_event(connection, "workflow.partial_output_preserved", task_id=run_row["run_id"], attempt_id=attempt["attempt_id"], payload={"partial": True, "verified": False, "final": False})
         ancestor = self._terminal_ancestor(connection, run_row["run_id"])
-        if ancestor is not None and run_row["state"] not in ("accepted", "cancelled"):
+        if ancestor is not None and run_row["state"] not in ("accepted", "concluded", "cancelled"):
             self._cancel_owned_run(connection, task, now)
             run_row = self._run_row(connection, run_row["run_id"])
-        if run_row["state"] in ("accepted", "cancelled") or ancestor is not None:
+        if run_row["state"] in ("accepted", "concluded", "cancelled") or ancestor is not None:
             late = self._late_cancelled_turn(connection, run_row, turn_row, attempt, payload, now)
             if isinstance(late, dict):
                 late.setdefault("sharedStash", self._shared_refs_summary(shared_refs))
@@ -6497,12 +6485,13 @@ class WorkflowCoordinator:
         outcome = turn["outcome"]
         disposition = outcome["disposition"]
         connection.execute(
-            "UPDATE workflow_turns SET state='concluded', disposition=?, outcome_json=?, provenance_json=?,"
+            "UPDATE workflow_turns SET state='concluded', disposition=?, outcome_json=?, outcome_truncated_json=?, provenance_json=?,"
             " session_id=?, prompt_sha256=?, input_sha256=?, turn_result_path=?, sealed_artifacts_json=?,"
             " updated_at=? WHERE turn_id=?",
             (
                 disposition,
                 canonical_json(outcome),
+                canonical_json(turn["outcomeTruncated"]) if "outcomeTruncated" in turn else None,
                 canonical_json(turn.get("provenance")),
                 turn.get("sessionId"),
                 turn.get("promptSha256"),
@@ -6577,6 +6566,8 @@ class WorkflowCoordinator:
             return "the turn disposition is not completed, assistance or attention"
         if not isinstance(outcome.get("summary"), str) or not outcome["summary"].strip():
             return "the turn outcome has no summary"
+        if "outcomeTruncated" in turn and not isinstance(turn["outcomeTruncated"], dict):
+            return "the turn outcomeTruncated must be an object"
         if disposition in ("assistance", "attention"):
             request = outcome.get("request")
             if not isinstance(request, dict):
@@ -6955,7 +6946,7 @@ class WorkflowCoordinator:
         """Fan a settled helper back into its parent run."""
         run_row = self._run_optional(connection, task["task_id"])
         fenced = run_row is not None and (
-            run_row["state"] in ("accepted", "cancelled") or self._terminal_ancestor(connection, task["task_id"]) is not None
+            run_row["state"] in ("accepted", "concluded", "cancelled") or self._terminal_ancestor(connection, task["task_id"]) is not None
         )
         child = connection.execute(
             "SELECT * FROM workflow_children WHERE child_task_id=?", (task["task_id"],)
@@ -7001,7 +6992,7 @@ class WorkflowCoordinator:
             revision=task["revision"] + 1,
             payload={"parentRunId": parent["run_id"], "state": state, "disposition": disposition},
         )
-        if parent["state"] in ("accepted", "cancelled") or self._terminal_ancestor(connection, parent["run_id"]) is not None:
+        if parent["state"] in ("accepted", "concluded", "cancelled") or self._terminal_ancestor(connection, parent["run_id"]) is not None:
             return
         if state == "attention":
             source = connection.execute(
@@ -7099,7 +7090,7 @@ class WorkflowCoordinator:
                 seen.add(parent_id)
                 parent = self._run_row(connection, parent_id)
                 parent_task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (parent_id,)).fetchone()
-                closed = parent["state"] in ("accepted", "cancelled") or self._terminal_ancestor(connection, parent_id) is not None
+                closed = parent["state"] in ("accepted", "concluded", "cancelled") or self._terminal_ancestor(connection, parent_id) is not None
                 if closed:
                     if not self._stop_proven(connection, parent_task):
                         break

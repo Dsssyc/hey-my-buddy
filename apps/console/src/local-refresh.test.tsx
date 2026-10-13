@@ -13,7 +13,7 @@ const snapshot = { csrfToken: "csrf" } as Snapshot;
 const task = (runId = "command-1", extra: Partial<Task> = {}): Task => ({
   runId, task: `原始任务 ${runId}`, status: "completed", owner: "host", cwd: "~/project",
   revision: 1, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-09T00:00:00Z",
-  acceptedAt: null, acceptanceVerdict: null,
+  acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
   selectedAttempt: { result: { result: { stdout: `结果 ${runId}` } } }, ...extra,
 });
 function deferred<T>() {

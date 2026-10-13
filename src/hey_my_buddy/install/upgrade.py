@@ -21,7 +21,7 @@ from ..blackboard.store import backup
 from .. import private_dirs
 from . import runtime
 from ..protocol import schemas
-from ..blackboard.store.db import PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, utc_now
+from ..blackboard.store.db import PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, utc_now, canonical_json, sha256_text
 from ..errors import BoardError
 from ..protocol.transport import get_state_dir
 
@@ -293,6 +293,29 @@ def archive_read(state: Path):
             yield connection
 
 
+def _archive_base_concluded(connection, run) -> bool:
+    """Recognize the released board's conclusion before archiving its history."""
+    row = connection.execute(
+        "SELECT * FROM workflow_host_conclusions WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
+        (run["run_id"],),
+    ).fetchone()
+    if row is None or row["execution_status"] != run["state"]:
+        return False
+    task = connection.execute("SELECT selected_attempt_id FROM tasks WHERE task_id=?", (run["run_id"],)).fetchone()
+    if row["attempt_id"] != task["selected_attempt_id"]:
+        return False
+    if connection.execute(
+        "SELECT 1 FROM events WHERE task_id=? AND kind='workflow.continued' AND revision>? LIMIT 1",
+        (run["run_id"], row["run_revision"]),
+    ).fetchone():
+        return False
+    artifacts = [tuple(item) for item in connection.execute(
+        "SELECT artifact_id,manifest_sha256 FROM workflow_artifacts WHERE run_id=? ORDER BY artifact_id",
+        (run["run_id"],),
+    )]
+    return json.loads(row["evidence_json"])["artifactSetSha256"] == sha256_text(canonical_json(artifacts))
+
+
 def require_archive_readiness(state: Path) -> None:
     """The destructive pending upgrade has stricter admission than an idle cutover."""
     with archive_read(state) as connection:
@@ -301,12 +324,10 @@ def require_archive_readiness(state: Path) -> None:
             raise BoardError('UNSUPPORTED_SCHEMA', 'Upgrade accepts schema 18 or 19 only')
         if int(schema[0]) == SCHEMA_VERSION:
             return
-        from ..blackboard.tasks import host_conclusions
         connection.row_factory = sqlite3.Row
         active = [(row['run_id'], row['state']) for row in connection.execute(
             "SELECT * FROM workflow_runs WHERE state IN ('executing','awaiting-host','waiting-helpers','delivered')")
-            if row['state'] != 'delivered' or host_conclusions.current(connection, row,
-                connection.execute('SELECT * FROM tasks WHERE task_id=?', (row['run_id'],)).fetchone()) is None]
+            if row['state'] != 'delivered' or not _archive_base_concluded(connection, row)]
         active += [row for row in connection.execute(
             "SELECT task_id,state FROM tasks WHERE state IN ('queued','running','cancelling','reconciliation-needed')")
                    if row[0] not in {item[0] for item in active}]

@@ -136,17 +136,17 @@ class HostCompletionTests(WorkflowTestCase):
         concluded = board.call("workflow_conclude", {
             "runId": delivered["runId"], "note": "Delivered without acceptance; the goal is closed",
             **self.control(delivered)})
-        self.assertEqual(concluded["state"], "delivered")
+        self.assertEqual(concluded["state"], "concluded")
         self.assertFalse(concluded["awaitingHost"])
         self.assertIsNotNone(concluded["hostConclusion"])
         self.assertEqual(concluded["waitReason"], "the goal work was concluded by its Host without acceptance")
-        # A later read keeps the same honest reason; the state stays delivered.
+        # A later read keeps the terminal state and the same conclusion.
         current = board.call("workflow_get", {"runId": delivered["runId"]})
         self.assertEqual(current["hostConclusion"], concluded["hostConclusion"])
         self.assertFalse(current["awaitingHost"])
         self.assertEqual(current["waitReason"], "the goal work was concluded by its Host without acceptance")
 
-    def test_takeover_preserves_a_conclusion_until_the_new_host_continues(self):
+    def test_takeover_preserves_a_terminal_conclusion(self):
         board = self.board()
         submitted = self.submit(board)
         self.register(board)
@@ -162,7 +162,7 @@ class HostCompletionTests(WorkflowTestCase):
         self.controls[taken["runId"]] = taken["control"]
         current = board.call("workflow_get", {"runId": taken["runId"]})
         self.assertEqual(current["ownerGeneration"], concluded["ownerGeneration"] + 1)
-        self.assertEqual(current["state"], "delivered")
+        self.assertEqual(current["state"], "concluded")
         self.assertFalse(current["awaitingHost"])
         self.assertEqual(current["hostConclusion"], concluded["hostConclusion"])
         self.assertEqual(current["waitReason"], "the goal work was concluded by its Host without acceptance")
@@ -183,12 +183,9 @@ class HostCompletionTests(WorkflowTestCase):
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0], 1)
             self.assertIsNone(db.execute("SELECT accepted_at FROM tasks").fetchone()[0])
-        continued = self.continue_run(board, current)
-        self.assertEqual(continued["state"], "executing")
-        self.assertIsNone(continued["hostConclusion"])
-        self.assertIsNone(board.call("workflow_get", {"runId": current["runId"]})["hostConclusion"])
-        with board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0], 1)
+        with self.assertRaises(BoardError) as raised:
+            self.continue_run(board, current)
+        self.assertEqual(raised.exception.code, "CONFLICT")
 
     def test_takeover_fences_a_late_conclusion_from_the_old_host(self):
         board = self.board()
@@ -277,7 +274,7 @@ class HostCompletionTests(WorkflowTestCase):
         current = board.call("workflow_get", {"runId": submitted["runId"]})
         params = {"runId": current["runId"], "note": "Partial work retained; unfinished", **self.control(current)}
         concluded = board.call("workflow_conclude", params)
-        self.assertEqual((concluded["state"], concluded["status"]), ("failed", "failed"))
+        self.assertEqual((concluded["state"], concluded["status"]), ("concluded", "concluded"))
         self.assertIsNotNone(concluded["hostConclusion"])
         self.assertEqual(concluded["verdict"], "concluded")
         self.assertTrue(board.call("workflow_conclude", params)["duplicate"])
@@ -286,24 +283,63 @@ class HostCompletionTests(WorkflowTestCase):
         self.assertEqual(raised.exception.code, "CONFLICT")
         with board.store.db.read() as db:
             self.assertIsNone(db.execute("SELECT accepted_at FROM tasks").fetchone()[0])
-        continued = self.continue_run(board, concluded)
-        self.assertIsNone(continued["hostConclusion"])
-        with board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0], 1)
-        # A later execution of the same goal fails again: the same note records a
-        # new conclusion for the new attempt instead of replaying the old one.
-        second = self.claim(board, claim_request_id="c2")
-        self.finish_turn(board, second, runner_status="failed", exit_code=1, seal=False, session_id="sess-2")
-        params_again = {"runId": concluded["runId"], "note": "Partial work retained; unfinished",
-                        **self.control(board.call("workflow_get", {"runId": concluded["runId"]}))}
-        reconcluded = board.call("workflow_conclude", params_again)
-        self.assertEqual(reconcluded["state"], "failed")
-        self.assertFalse(reconcluded["duplicate"])
-        self.assertNotEqual(reconcluded["conclusion"]["conclusionId"],
-                            concluded["conclusion"]["conclusionId"])
-        with board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0], 2)
-        self.assertTrue(board.call("workflow_conclude", params_again)["duplicate"])
+        self.assertEqual(concluded["hostConclusion"]["executionStatus"], "failed")
+        with self.assertRaises(BoardError) as raised:
+            self.continue_run(board, concluded)
+        self.assertEqual(raised.exception.code, "CONFLICT")
+
+    def test_conclusion_closes_each_execution_result_and_review_counts(self):
+        for source in ("delivered", "failed", "cancelled"):
+            with self.subTest(source=source):
+                board = self.board()
+                submitted = self.submit(board, kind="worktree", request_id="close-" + source,
+                                        macroTask={"title": "Close " + source})
+                self.register(board)
+                if source == "cancelled":
+                    current = board.call("workflow_cancel", {"runId": submitted["runId"], **self.control(submitted)})
+                else:
+                    self.finish_turn(board, self.claim(board, claim_request_id="claim-" + source), runner_status="failed" if source == "failed" else "ok",
+                                     exit_code=1 if source == "failed" else 0, seal=source != "failed")
+                    current = board.call("workflow_get", {"runId": submitted["runId"]})
+                params = {"runId": current["runId"], "note": "Closed without acceptance", **self.control(current)}
+                concluded = board.call("workflow_conclude", params)
+                self.assertEqual((concluded["state"], concluded["status"]), ("concluded", "concluded"))
+                self.assertEqual(concluded["hostConclusion"]["executionStatus"], source)
+                if source == "cancelled":
+                    self.assertEqual(concluded["cancellation"], current["cancellation"])
+                    task = board.call("task_get", {"runId": current["runId"]})["task"]
+                    self.assertEqual(task["cancellation"], current["cancellation"])
+                self.assertTrue(board.call("workflow_conclude", params)["duplicate"])
+                with self.assertRaises(BoardError):
+                    self.continue_run(board, concluded)
+                with self.assertRaises(BoardError):
+                    board.call("workflow_accept", {"runId": current["runId"], "artifactId": current["finalArtifactId"] or "missing",
+                        "note": "Too late", "notRequired": "No target", **self.control(concluded)})
+                with self.assertRaises(BoardError):
+                    board.call("workflow_conclude", {**params, "note": "Different"})
+                self.assertEqual(board.call("task_list", {"filter": "review"})["tasks"], [])
+                summary = next(item for item in board.call("macro_task_list", {})["macroTasks"]
+                               if item["macroTaskId"] == submitted["macroTaskId"])
+                self.assertEqual(summary["counts"]["review"], 0)
+
+    def test_rejected_then_failed_goal_can_be_concluded(self):
+        board = self.board()
+        submitted = self.submit(board)
+        self.register(board)
+        self.finish_turn(board, self.claim(board))
+        delivered = board.call("workflow_get", {"runId": submitted["runId"]})
+        continued = self.continue_run(board, delivered, input="Address review", reason="Needs work")
+        self.assertIsNotNone(continued["task"]["reviewRejectedAt"])
+        self.assertEqual(continued["task"]["reviewRejectionNote"], "Needs work")
+        for key in ("acceptedAt", "acceptanceNote", "acceptanceVerdict"):
+            self.assertIsNone(continued["task"][key])
+        self.finish_turn(board, self.claim(board, claim_request_id="failed-after-review"),
+                         runner_status="failed", exit_code=1, seal=False, session_id="failed-2")
+        current = board.call("workflow_get", {"runId": submitted["runId"]})
+        concluded = board.call("workflow_conclude", {"runId": submitted["runId"],
+            "note": "Execution failed after review", **self.control(current)})
+        self.assertEqual(concluded["state"], "concluded")
+        self.assertEqual(concluded["hostConclusion"]["executionStatus"], "failed")
 
     def test_conclusion_refuses_an_execution_changed_during_partial_sealing(self):
         board = self.board()
@@ -384,7 +420,7 @@ class HostConclusionCleanupTests(LifecycleTestCase):
             "note": "Cancelled before any model work; pinned input retained",
             **self.control(cancelled),
         })
-        self.assertEqual(concluded["state"], "cancelled")
+        self.assertEqual(concluded["state"], "concluded")
         self.assertIsNotNone(concluded["hostConclusion"])
         # No execution attempt ever ran on this checkout, so the conclusion seals
         # no partial output and still reclaims the prepared worktree.

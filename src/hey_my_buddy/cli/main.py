@@ -149,11 +149,11 @@ examples:
   buddy conclude '{"runId":"<runId>","note":"failed after the schema change; partial work retained","controlFile":"..."}'   buddy reclaim '{"runId":"<runId>","controlFile":"..."}'
       conclude ends a failed, cancelled or delivered-but-unaccepted goal: unsealed
       managed changes are sealed as an independent Host partial output, the
-      conclusion is recorded and the checkout reclaimed. reclaim retries the
+      goal enters terminal concluded and the checkout is reclaimed. reclaim retries the
       removal after a blocked reclaim or a keepCheckout acceptance. All three take
       targetRunId for an owned helper and no command number: the same request
       replays, a changed payload conflicts. controlFile injects the control triple;
-      no implicit latest-generation lookup.
+      no implicit latest-generation lookup. accepted and concluded goals cannot continue.
   buddy workspace-resolve '{"runId":"<runId>","commandId":"cmd-6","expectedRevision":4,"conflictId":"...","action":"restore","paths":["file"],"observedFingerprint":"...","controlFile":"..."}'
   buddy accept '{"runId":"<runId>","artifactId":"...","note":"inspected the diff and ran the checks","target":{"path":"/abs/target","ref":"main"},"controlFile":"..."}'
   buddy accept '{"runId":"<runId>","artifactId":"...","note":"no repository target needed","notRequired":"the artifact needs no repository target","controlFile":"..."}'

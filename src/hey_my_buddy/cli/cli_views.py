@@ -111,7 +111,7 @@ def _nonzero(mapping: Any) -> dict:
 
 # -- governed goal views -----------------------------------------------------
 
-_TURN_BRIEF = ("turnId", "turnIndex", "state", "disposition", "resumeMode")
+_TURN_BRIEF = ("turnId", "turnIndex", "state", "disposition", "resumeMode", "outcomeTruncated")
 #: The routing basis keeps the frozen submission facts (hard constraints and the
 #: user exclusions that narrowed the candidate set) beside the choice itself, so
 #: a Host sees why a route had few candidates without a table read.
@@ -404,6 +404,8 @@ _TASK_BRIEF = (
     "cancelRequestedAt",
     "acceptedAt",
     "acceptanceVerdict",
+    "reviewRejectedAt",
+    "reviewRejectionNote",
     "artifactCount",
     "workflowState",
     "awaitingHost",

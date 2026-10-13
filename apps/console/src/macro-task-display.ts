@@ -198,7 +198,7 @@ const STATE_LABELS: Record<string, string> = {
   queued: "排队中", running: "执行中", cancelling: "正在取消", completed: "执行完成",
   cancelled: "已取消", failed: "执行失败", "reconciliation-needed": "等待核对",
   executing: "执行中", "awaiting-host": "等待 Host", "waiting-helpers": "协助执行中",
-  delivered: "等待验收", accepted: "已验收",
+  delivered: "等待验收", accepted: "已验收", concluded: "已结束",
 };
 
 export function rowStateInfo(row: TimelineRow): { label: string; tone: "green" | "amber" | "red" | "neutral"; glyph: string; glyphClass: string } {
@@ -554,8 +554,9 @@ export function rowLabelItem(row: TimelineRow): TimelineItem {
  * wait must never be invented.
  */
 export function acceptanceWaitMs(row: TimelineRow, spans: readonly TimelineSpan[]): number | null {
-  if (!row.acceptedAt) return null;
-  const atMs = toMs(row.acceptedAt);
+  const settledAt = row.acceptedAt ?? row.reviewRejectedAt;
+  if (!settledAt) return null;
+  const atMs = toMs(settledAt);
   if (atMs === null) return null;
   const executions = spans
     .filter(span => span.kind === "execution")
@@ -575,22 +576,23 @@ export function acceptanceWaitMs(row: TimelineRow, spans: readonly TimelineSpan[
 export function acceptanceWaitText(row: TimelineRow, spans: readonly TimelineSpan[]): string | null {
   const wait = acceptanceWaitMs(row, spans);
   if (wait === null) return null;
-  return row.acceptanceVerdict === "rejected"
+  return !row.acceptedAt && row.reviewRejectedAt
     ? `等待验收结论 ${durationText(wait) ?? ""}`.trim()
     : `等待验收 ${durationText(wait) ?? ""}`.trim();
 }
 
 export function settleItem(row: TimelineRow): TimelineItem | null {
-  if (!row.acceptedAt) return null;
-  const rejected = row.acceptanceVerdict === "rejected";
-  const at = toMs(row.acceptedAt);
+  const settledAt = row.acceptedAt ?? row.reviewRejectedAt;
+  if (!settledAt) return null;
+  const rejected = !row.acceptedAt && !!row.reviewRejectedAt;
+  const at = toMs(settledAt);
   return {
     key: `settle:${row.runId}`,
     runId: row.runId,
     section: "artifacts",
     head: rejected ? "验收问题" : "已验收",
-    parts: [rejected ? "验收问题" : "已验收", row.title, dayClock(row.acceptedAt)],
-    locator: `${rejected ? "验收问题" : "已验收"} · ${clockTime(row.acceptedAt)}`,
+    parts: [rejected ? "验收问题" : "已验收", row.title, dayClock(settledAt)],
+    locator: `${rejected ? "验收问题" : "已验收"} · ${clockTime(settledAt)}`,
     atMs: at,
   };
 }

@@ -170,8 +170,10 @@ class TestExecutionRecords(BoardTestCase):
                     json.dumps({"runId": task["runId"], "note": "reviewed the cancelled run", "verdict": "rejected"}),
                 )
                 self.assertEqual(code, 0, acknowledged)
-                self.assertEqual(acknowledged["acceptanceVerdict"], "rejected")
-                self.assertIsNotNone(acknowledged["acceptedAt"])
+                self.assertIsNone(acknowledged.get("acceptanceVerdict"))
+                self.assertIsNone(acknowledged.get("acceptedAt"))
+                self.assertIsNotNone(acknowledged["reviewRejectedAt"])
+                self.assertEqual(acknowledged["reviewRejectionNote"], "reviewed the cancelled run")
 
 
 if __name__ == "__main__":

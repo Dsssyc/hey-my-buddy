@@ -9,7 +9,7 @@ afterEach(cleanup);
 function taskWith(result: Record<string, unknown>, harness = "dsh"): Task {
   return {
     runId: "run", task: "目标", status: "completed", owner: "host", cwd: "/repo", revision: 1,
-    createdAt: "2026-09-25", acceptedAt: null, acceptanceVerdict: null,
+    createdAt: "2026-09-25", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     selectedAttempt: { attemptId: "attempt-a", adapter: harness, result: { status: "ok", result, shutdownConfirmed: true } },
   } as Task;
 }

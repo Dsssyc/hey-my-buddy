@@ -18,7 +18,7 @@ afterEach(cleanup);
 function task(): Task {
   return {
     runId: "parent", task: "完成状态内核", status: "failed", owner: "host-a", cwd: "/repo",
-    revision: 4, createdAt: "2026-09-22", acceptedAt: null, acceptanceVerdict: null,
+    revision: 4, createdAt: "2026-09-22", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     spec: { workspace: false }, shutdownConfirmed: true,
     workflow: { state: "failed", awaitingHost: false, hostId: "host-a", ownerGeneration: 2, revision: 7 },
   };

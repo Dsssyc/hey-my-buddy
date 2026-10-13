@@ -3,8 +3,8 @@ import type { MacroTaskStopResult } from "./macro-task-types";
 
 /**
  * Strict parse of an `macro_task_stop` reply: the returned macroTaskId must
- * match the request; runIds and acceptedRunIds are each duplicate-free and
- * disjoint (an accepted root is never also cancelled); results name each run
+ * match the request; runIds, acceptedRunIds and concludedRunIds are each
+ * duplicate-free and disjoint; results name each run
  * of the cancellation scope exactly once and nothing else. A malformed reply
  * is an unknown outcome (thrown as INVALID_RESPONSE), never treated as a
  * confirmed stop.
@@ -19,8 +19,10 @@ export function errorOfStopReply(expectedMacroTaskId: string, value: unknown): M
     && reply.macroTaskId === expectedMacroTaskId
     && identifiers(reply.runIds) && unique(reply.runIds)
     && identifiers(reply.acceptedRunIds) && unique(reply.acceptedRunIds)
+    && identifiers(reply.concludedRunIds) && unique(reply.concludedRunIds)
     // Cancelled and retained scopes never overlap.
-    && reply.runIds!.every(runId => !reply.acceptedRunIds!.includes(runId))
+    && reply.runIds!.every(runId => !reply.acceptedRunIds!.includes(runId) && !reply.concludedRunIds!.includes(runId))
+    && reply.acceptedRunIds!.every(runId => !reply.concludedRunIds!.includes(runId))
     && Array.isArray(reply.results) && (() => {
       if (!reply.results!.every(result =>
         !!result && typeof result === "object" && identifier((result as { runId?: unknown }).runId))) return false;
@@ -37,6 +39,7 @@ export function errorOfStopReply(expectedMacroTaskId: string, value: unknown): M
     macroTaskId: reply.macroTaskId!,
     runIds: [...reply.runIds!],
     acceptedRunIds: [...reply.acceptedRunIds!],
+    concludedRunIds: [...reply.concludedRunIds!],
     results: reply.results!.map(result => ({ runId: result.runId, result: typeof result.result === "string" ? result.result : "" })),
   };
 }

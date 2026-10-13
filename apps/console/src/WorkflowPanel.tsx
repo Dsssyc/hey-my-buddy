@@ -135,7 +135,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
               <dt>输入提交</dt><dd className="mono wrap">{value.workspace?.inputCommit || "未记录"}</dd>
               <dt>等待原因</dt><dd className="wrap">{value.waitReason}</dd>
               <dt>执行停止</dt><dd>{value.shutdown?.selfConfirmed ? "本任务已确认停止" : "本任务尚未确认停止"}{value.shutdown && !value.shutdown.descendantsConfirmed ? `；目标范围内共 ${value.shutdown.unconfirmedCount} 项执行尚未核实` : ""}</dd>
-              <dt>验收记录</dt><dd>{value.task.acceptanceVerdict === "accepted" ? "已验收" : value.task.acceptanceVerdict === "rejected" ? "验收问题" : "未验收"}</dd>
+              <dt>验收记录</dt><dd>{value.task.acceptanceVerdict === "accepted" ? "已验收" : value.task.reviewRejectedAt ? "验收问题" : "未验收"}</dd>
             </dl>
 
             <InlineText key={`${task.runId}:${value.currentTurn?.turnId}`} recordId={`${task.runId}:${value.currentTurn?.turnId}`}

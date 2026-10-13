@@ -74,7 +74,7 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         board = self.board()
         run = self.submit(board, kind='worktree')
         self.register(board)
-        self.claim(board)
+        claim = self.claim(board)
         _, browser = self.open_console(board)
         status, _, raw = browser.command('macro_task_stop', {'macroTaskId': 'run:' + run['runId'], 'commandId': 'standalone-stop'}, csrf=browser.bootstrap()['csrfToken'])
         self.assertEqual(status, 200, raw)
@@ -82,6 +82,60 @@ class MacroTaskStopTests(WorkflowTestCase, ConsoleTestCase):
         self.assertEqual(task['status'], 'cancelling')
         timeline = board.call('macro_task_timeline', {'macroTaskId': 'run:' + run['runId']})
         self.assertFalse(timeline['rows'][0]['shutdownConfirmed'])
+        self.finish_turn(board, claim, runner_status='cancelled', seal=False)
+        stopped = board.call('workflow_get', {'runId': run['runId']})
+        self.assertEqual(stopped['state'], 'cancelled')
+        self.assertIsNone(stopped['hostConclusion'])
+        closed = board.call('workflow_conclude', {'runId': run['runId'],
+            'note': 'Host ends the stopped micro task', **self.control(stopped)})
+        self.assertEqual(closed['state'], 'concluded')
+
+    def test_concluded_roots_are_skipped_and_reported_separately(self):
+        board = self.board()
+        closed = self.submit(board, kind='worktree', macroTask={'title': 'Group'})
+        cancelled = board.call('workflow_cancel', {'runId': closed['runId'], **self.control(closed)})
+        closed = board.call('workflow_conclude', {'runId': closed['runId'],
+            'note': 'Already closed by Host', **self.control(cancelled)})
+        pending = self.submit(board, kind='worktree', request_id='pending', macroTaskId=closed['macroTaskId'])
+        _, browser = self.open_console(board)
+        params = {'macroTaskId': closed['macroTaskId'], 'commandId': 'stop-around-concluded'}
+        status, _, raw = browser.command('macro_task_stop', params, csrf=browser.bootstrap()['csrfToken'])
+        self.assertEqual(status, 200, raw)
+        result = json.loads(raw)['result']
+        self.assertEqual(set(result), {'macroTaskId', 'runIds', 'acceptedRunIds', 'concludedRunIds', 'results', 'duplicate'})
+        self.assertEqual(result['runIds'], [pending['runId']])
+        self.assertEqual(result['acceptedRunIds'], [])
+        self.assertEqual(result['concludedRunIds'], [closed['runId']])
+        current = board.call('workflow_get', {'runId': closed['runId']})
+        self.assertEqual(current['revision'], closed['revision'])
+        self.assertEqual(current['hostConclusion'], closed['hostConclusion'])
+        self.assertEqual(board.call('workflow_get', {'runId': pending['runId']})['state'], 'cancelled')
+        status, _, raw = browser.command('macro_task_stop', params, csrf=browser.bootstrap()['csrfToken'])
+        self.assertEqual(status, 200, raw)
+        self.assertTrue(json.loads(raw)['result']['duplicate'])
+        self.assertEqual(json.loads(raw)['result']['concludedRunIds'], [closed['runId']])
+
+    def test_stop_cancels_delivered_and_failed_roots_without_a_conclusion(self):
+        board = self.board()
+        self.register(board)
+        for source in ('delivered', 'failed'):
+            with self.subTest(source=source):
+                run = self.submit(board, kind='worktree', request_id='stop-' + source)
+                self.finish_turn(board, self.claim(board, claim_request_id='claim-' + source),
+                    runner_status='failed' if source == 'failed' else 'ok',
+                    exit_code=1 if source == 'failed' else 0, seal=source != 'failed')
+                before = board.call('workflow_get', {'runId': run['runId']})
+                self.assertEqual(before['state'], source)
+                _, browser = self.open_console(board)
+                status, _, raw = browser.command('macro_task_stop',
+                    {'macroTaskId': 'run:' + run['runId'], 'commandId': 'stop-' + source},
+                    csrf=browser.bootstrap()['csrfToken'])
+                self.assertEqual(status, 200, raw)
+                current = board.call('workflow_get', {'runId': run['runId']})
+                self.assertEqual(current['state'], 'cancelled')
+                self.assertIsNone(current['hostConclusion'])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_host_conclusions').fetchone()[0], 0)
 
     def test_helpers_are_cancelled_and_accepted_roots_are_retained(self):
         board = self.board()

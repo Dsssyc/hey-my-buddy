@@ -201,7 +201,7 @@ export const statusLabels: Record<string, string> = {
   "waiting-helpers": "协助执行中",
   executing: "执行中",
   delivered: "等待验收",
-  accepted: "已验收",
+  accepted: "已验收", concluded: "已结束",
   yielded: "回合已结束",
 };
 export function Status({ status }: { status: string }) {

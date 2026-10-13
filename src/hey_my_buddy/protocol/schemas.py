@@ -95,7 +95,7 @@ SUBMIT_FIELDS = frozenset(
     }
 )
 
-TERMINAL_TASK_STATES = frozenset({"completed", "failed", "cancelled"})
+TERMINAL_TASK_STATES = frozenset({"completed", "concluded", "failed", "cancelled"})
 
 #: Every field ``workflow_submit`` accepts in addition to the ordinary spec, and
 #: every field one explicit helper specification accepts. The nested ``spec``

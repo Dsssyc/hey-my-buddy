@@ -63,7 +63,7 @@ describe("0.16 Host event sentences and cluster glyphs (P1.7)", () => {
   const row = (title: string): TimelineRow => ({
     runId: "r1", parentRunId: null, rootRunId: "r1", title, titleSource: "title", taskSummary: null, summary: null,
     createdAt: "2026-09-26T01:00:00Z", state: "delivered", status: "completed", category: "review",
-    shutdownConfirmed: true, depth: 0, kind: "goal", buddy: null, acceptedAt: null, acceptanceVerdict: null,
+    shutdownConfirmed: true, depth: 0, kind: "goal", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
   });
   const event = (kind: string, at = "2026-09-26T05:20:00Z", extra: Partial<TimelineEvent> = {}): TimelineEvent => ({
     seq: 1, runId: "r1", kind, at, label: "", summary: "", actor: null,
@@ -100,7 +100,7 @@ describe("0.16 span-facts locator (T4)", () => {
     summary: null, createdAt: "2026-09-26T01:00:00Z", state: "delivered", status: "completed", category: "review",
     shutdownConfirmed: true, depth: 0, kind: "goal",
     buddy: { harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" },
-    acceptedAt: null, acceptanceVerdict: null,
+    acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
   };
   const span = (overrides: Partial<TimelineSpan> = {}): TimelineSpan => ({
     spanId: "s1", runId: "r1", kind: "execution", startAt: "2026-09-26T05:29:00Z", endAt: "2026-09-26T05:34:00Z",
@@ -124,7 +124,7 @@ describe("0.16 acceptance wait (P1.8)", () => {
     runId: "r1", parentRunId: null, rootRunId: "r1", title: "修复标题错位", titleSource: "title", taskSummary: null,
     summary: null, createdAt: "2026-09-26T01:00:00Z", state: "accepted", status: "completed", category: "ended",
     shutdownConfirmed: true, depth: 0, kind: "goal", buddy: null,
-    acceptedAt: "2026-09-26T07:25:00Z", acceptanceVerdict: "accepted",
+    acceptedAt: "2026-09-26T07:25:00Z", acceptanceVerdict: "accepted", reviewRejectedAt: null, reviewRejectionNote: null,
   };
   const execution = (startAt: string, endAt: string | null, overrides: Partial<TimelineSpan> = {}): TimelineSpan => ({
     spanId: "e", runId: "r1", kind: "execution", startAt, endAt, state: "finished",
@@ -161,7 +161,7 @@ describe("0.16 acceptance wait (P1.8)", () => {
   });
 
   it("words a rejected verdict as a pending conclusion", () => {
-    expect(acceptanceWaitText({ ...row, acceptanceVerdict: "rejected" }, [execution("2026-09-26T05:20:00Z", "2026-09-26T05:25:00Z")]))
+    expect(acceptanceWaitText({ ...row, acceptedAt: null, reviewRejectedAt: "2026-09-26T07:25:00Z" }, [execution("2026-09-26T05:20:00Z", "2026-09-26T05:25:00Z")]))
       .toContain("等待验收结论");
   });
 });
