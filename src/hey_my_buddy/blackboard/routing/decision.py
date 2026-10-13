@@ -3,8 +3,7 @@
 The blackboard owns publication, reader leases and atomic terminal events. The
 Worker runtime owns native handles, budgets, input verification and stop receipts.
 Router answers choose a legal configuration or abstain; preference judgments are
-recorded, never used as an additional veto. Historical maintenance records remain
-readable but cannot start model work.
+recorded, never used as an additional veto.
 """
 from __future__ import annotations
 
@@ -25,8 +24,7 @@ from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
 
 DECISION_ADAPTER = "decision"
-#: ``maintain`` stays a readable historical kind; it is never created any more.
-DECISION_KINDS = ("select", "maintain")
+DECISION_KINDS = ("select",)
 #: Durable decision states. ``needs-host`` is the honest abstention/out-of-policy
 #: outcome; ``stale`` is a fenced result that may not become a current recommendation.
 DECISION_STATUSES = ("queued", "running", "completed", "needs-host", "failed", "cancelled", "stale")
@@ -41,19 +39,18 @@ MAX_LIST_LIMIT = 100
 #: The shared row projection for one decision. The paginated list reader adds
 #: ``decision_requests.rowid`` as its stable keyset; nothing here persists anything.
 _ROW_COLUMNS = (
-    "d.decision_id, d.status, d.task, d.profile_id, d.table_revision, d.reason, d.evidence_ids_json,"
+    "d.decision_id, d.status, d.task, d.profile_id, d.table_revision, d.reason,"
     " d.created_at, d.error, r.request_id, r.kind, r.input_fingerprint, r.configuration_revision,"
     " r.task_id AS decision_task_id, r.attempt_id AS decision_attempt_id,"
-    " r.generation AS decision_generation, r.reader_id, r.writer_id, r.writer_generation,"
-    " r.expected_revision, r.published_revision, r.selected_json, r.input_json, r.input_sha256, r.output_json, r.proposal_json,"
-    " r.considered_evidence, r.pending_after, r.auto_publish, r.requested_json,"
+    " r.generation AS decision_generation, r.reader_id,"
+    " r.expected_revision, r.selected_json, r.input_json, r.input_sha256, r.output_json,"
+    " r.requested_json,"
     " r.created_at AS request_created_at, r.updated_at AS request_updated_at"
 )
 _ROW_FROM = " FROM decision_requests r JOIN evaluation_decisions d ON d.decision_id = r.decision_id"
 
 MAX_DECISION_TASK_BYTES = 8192
 MAX_DECISION_REASON = 2000
-MAX_DECISION_EVIDENCE_IDS = 32
 ANSWER_VALIDATION_CODES = frozenset({
     "answer-empty", "answer-not-json", "answer-invalid-json", "answer-shape",
     "answer-unexpected-field",
@@ -62,9 +59,7 @@ ANSWER_VALIDATION_CODES = frozenset({
 #: the hard ceiling for one bounded selection request, never a silent truncation
 #: point: a complete current table above them becomes an explicit needs-host outcome.
 MAX_DECISION_PROFILES = 200
-MAX_DECISION_CARDS = 512
 MAX_DECISION_PREFERENCES = 256
-MAX_DECISION_EVIDENCE = 512
 MAX_DECISION_ANNOTATIONS = 200
 MAX_DECISION_INPUT_BYTES = 128 * 1024
 MIN_TIMEOUT_SECONDS = 5
@@ -349,96 +344,29 @@ class DecisionCoordinator:
             entry["unavailableReason"] = row["unavailable_reason"]
         return entry
 
-    def _card_input(self, row: sqlite3.Row) -> dict:
-        return {
-            "profileId": row["profile_id"],
-            "revision": int(row["revision"]),
-            "summary": row["summary"],
-            "origin": row["origin"],
-            "strengths": json.loads(row["strengths_json"]),
-            "limitations": json.loads(row["limitations_json"]),
-            "risks": json.loads(row["risks_json"]),
-            "evidenceIds": json.loads(row["evidence_ids_json"]),
-            "sampleCount": int(row["sample_count"]),
-            "updatedAt": row["updated_at"],
-        }
-
-    @staticmethod
-    def _evidence_input(row: sqlite3.Row) -> dict:
-        identity = json.loads(row["identity_json"]) if row["identity_json"] else {}
-        return {
-            "evidenceId": row["evidence_id"],
-            "profileId": row["profile_id"],
-            "kind": row["kind"],
-            "summary": row["summary"],
-            "project": row["project"],
-            "conditions": json.loads(row["conditions_json"]),
-            "source": row["source"],
-            "runId": row["run_id"],
-            "createdAt": row["created_at"],
-            "verified": bool(row["verified"]),
-            "counted": bool(row["counted"]),
-            "attemptId": identity.get("attemptId"),
-            "identityBasis": (identity.get("basis") or {}).get("source"),
-        }
-
     def _table_input(
         self,
         connection: sqlite3.Connection,
         *,
         profiles: list[sqlite3.Row],
-        evidence_rows: list[sqlite3.Row],
         include_preferences: bool,
     ) -> dict:
         """The complete bounded table slice for one request — never a silent truncation.
 
-        Every legal candidate, its complete card, every preference and every
-        referenced evidence row is included. When that complete slice exceeds the
+        Every legal candidate, preference and model note is included. When that complete slice exceeds the
         helper's request bounds, :meth:`_assemble_input` reports an explicit
         oversized outcome instead of picking rows by insertion order.
         """
         profile_ids = [row["profile_id"] for row in profiles]
-        markers = ",".join("?" for _ in profile_ids) or "''"
-        cards = [
-            self._card_input(row)
-            for row in connection.execute(
-                f"SELECT * FROM evaluation_cards WHERE profile_id IN ({markers}) ORDER BY rowid", profile_ids
-            )
-        ]
         preferences: list[dict] = []
         if include_preferences:
             preferences = user_policy.effective_preferences(connection, profile_ids)
-        seen: set[str] = set()
-        evidence: list[dict] = []
-        for row in evidence_rows:
-            if row["evidence_id"] in seen:
-                continue
-            seen.add(row["evidence_id"])
-            evidence.append(self._evidence_input(row))
         return {
             "profiles": [self._profile_input(row) for row in profiles],
-            "cards": cards,
             "preferences": preferences,
-            "evidence": evidence,
             # User notes are kept per model family; the family key is on every profile.
             "annotations": user_policy.family_annotations(connection, profile_ids),
         }
-
-    def _referenced_evidence(self, connection: sqlite3.Connection, cards: list[dict]) -> list[sqlite3.Row]:
-        """Every evidence row referenced by these cards, in reference order."""
-        ids: list[str] = []
-        for card in cards:
-            for evidence_id in card["evidenceIds"]:
-                if evidence_id not in ids:
-                    ids.append(evidence_id)
-        if not ids:
-            return []
-        markers = ",".join("?" for _ in ids)
-        rows = connection.execute(
-            f"SELECT * FROM evaluation_evidence WHERE evidence_id IN ({markers})", ids
-        ).fetchall()
-        order = {evidence_id: index for index, evidence_id in enumerate(ids)}
-        return sorted(rows, key=lambda row: order.get(row["evidence_id"], len(ids)))
 
     def _assemble_input(self, connection: sqlite3.Connection, *, kind: str, request_id: str, revision: int, profile_row: sqlite3.Row | None, table: dict, task_text: str | None, preserve_oversized: bool = False) -> tuple[dict | None, str | None]:
         """Build the exact bounded document the model sees, or report why it cannot.
@@ -459,16 +387,14 @@ class DecisionCoordinator:
         document.update(table)
         for name, limit in (
             ("profiles", MAX_DECISION_PROFILES),
-            ("cards", MAX_DECISION_CARDS),
             ("preferences", MAX_DECISION_PREFERENCES),
-            ("evidence", MAX_DECISION_EVIDENCE),
             ("annotations", MAX_DECISION_ANNOTATIONS),
         ):
             if len(table[name]) > limit:
                 return document if preserve_oversized else None, (
                     f"the complete bounded table slice carries {len(table[name])} {name}, above the helper's "
                     f"{limit}-entry request bound; nothing was truncated and nothing was sent to a model. Curate "
-                    "the published table or the maintenance batch first."
+                    "the published candidates or preferences first."
                 )
         encoded = canonical_json(document)
         if len(encoded.encode("utf-8")) > MAX_DECISION_INPUT_BYTES:
@@ -479,18 +405,11 @@ class DecisionCoordinator:
             )
         return document, None
 
-    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, revision: int, profile_row: sqlite3.Row | None, task_text: str, candidates: list[sqlite3.Row], hard_constraints: dict | None = None, routing_mode: str | None = "review", preserve_oversized: bool = False) -> tuple[dict | None, str | None]:
+    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, revision: int, profile_row: sqlite3.Row | None, task_text: str, candidates: list[sqlite3.Row], hard_constraints: dict | None = None, preserve_oversized: bool = False) -> tuple[dict | None, str | None]:
         if len(candidates) > MAX_DECISION_PROFILES and not preserve_oversized:
             return None, "The legal candidate set exceeds the bounded decision profile limit; narrow the task constraints"
-        candidate_ids = {candidate["profile_id"] for candidate in candidates}
-        markers = ",".join("?" for _ in candidate_ids) or "NULL"
-        cards = [
-            self._card_input(row)
-            for row in connection.execute(f"SELECT * FROM evaluation_cards WHERE profile_id IN ({markers}) ORDER BY rowid", tuple(candidate_ids))
-        ]
-        evidence = self._referenced_evidence(connection, cards) if routing_mode != "fast" else []
         table = self._table_input(
-            connection, profiles=candidates, evidence_rows=evidence, include_preferences=True
+            connection, profiles=candidates, include_preferences=True
         )
         # The program-computed preference truth for this request. It is request-local
         # (it depends on this candidate slice and the user's published prefer entries),
@@ -548,33 +467,6 @@ class DecisionCoordinator:
                 {"readerId": row["reader_id"], "kind": "selection", "expired": False},
                 revision=int(self._state(connection)["table_revision"]),
             )
-            self.evaluation._promote(connection, now)
-
-    def _release_writer(self, connection: sqlite3.Connection, row: sqlite3.Row, now: str, *, state: str = "aborted") -> None:
-        """Release a historical maintenance decision's writer grant, if one is open.
-
-        New decisions never take writer authority, but a ``kind='maintain'`` row
-        created by an earlier build may still reference a grant; closing it here is
-        what keeps a historical record from blocking the gate forever.
-        """
-        if not row["writer_id"]:
-            return
-        writer = connection.execute(
-            "SELECT * FROM evaluation_writers WHERE writer_id=?", (row["writer_id"],)
-        ).fetchone()
-        if writer is None or writer["state"] in ("published", "aborted", "expired"):
-            return
-        connection.execute(
-            "UPDATE evaluation_writers SET state=?, released_at=? WHERE writer_id=?", (state, now, row["writer_id"])
-        )
-        self._append_event(
-            connection,
-            "evaluation.writer_aborted" if state == "aborted" else "evaluation.writer_expired",
-            row["decision_id"],
-            {"writerId": row["writer_id"], "generation": int(writer["generation"]), "kind": writer["kind"]},
-            revision=int(self._state(connection)["table_revision"]),
-        )
-        self.evaluation._promote(connection, now)
 
     # -- request operations --------------------------------------------------
     def request_select(self, params: dict) -> dict:
@@ -659,7 +551,7 @@ class DecisionCoordinator:
                 request.update(facts)
                 status, reason = "needs-host", NEEDS_HOST_NO_CANDIDATE
             else:
-                # Admission freezes the complete common packet — candidates, cards,
+                # Admission freezes the complete common packet — candidates,
                 # preferences, program facts, every Router identity
                 # and the input manifest — before the
                 # resolution selects an item, so even a fully unavailable list
@@ -705,7 +597,7 @@ class DecisionCoordinator:
                 base_input, problem = self._select_input(
                     connection, request_id=request_id, revision=expected_revision, profile_row=None,
                     task_text=task_text, candidates=candidates,
-                    hard_constraints=request.get("constraints") or {}, routing_mode=facts["routingMode"],
+                    hard_constraints=request.get("constraints") or {},
                     preserve_oversized=True)
                 base_input.update(facts)
                 base_input["routingBasis"] = request["routingBasis"]
@@ -715,8 +607,6 @@ class DecisionCoordinator:
                 # admission facts but is never eligible for a model dispatch.
                 if facts["routingMode"] != "fast":
                     base_input["executionWorkspace"] = request.get("executionWorkspace")
-                else:
-                    base_input.pop("evidence", None)
                 if facts["routingMode"] is not None:
                     base_input["outputSchema"] = router.answer_schema(
                         [item["profileId"] for item in base_input["profiles"]], facts["routingMode"])
@@ -736,7 +626,7 @@ class DecisionCoordinator:
             task_id = None
             connection.execute(
                 "INSERT INTO evaluation_decisions(decision_id, status, task, profile_id, table_revision, reason,"
-                " evidence_ids_json, created_at, error) VALUES(?,?,?,?,?,?,?,?,?)",
+                " created_at, error) VALUES(?,?,?,?,?,?,?,?)",
                 (
                     decision_id,
                     status,
@@ -744,15 +634,14 @@ class DecisionCoordinator:
                     None,
                     expected_revision,
                     reason,
-                    canonical_json([]),
                     now,
                     error,
                 ),
             )
             connection.execute(
                 "INSERT INTO decision_requests(decision_id, request_id, kind, input_fingerprint,"
-                " configuration_revision, task_id, expected_revision, requested_json, auto_publish, created_at,"
-                " updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                " configuration_revision, task_id, expected_revision, requested_json, created_at,"
+                " updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (
                     decision_id,
                     request_id,
@@ -762,7 +651,6 @@ class DecisionCoordinator:
                     None,
                     expected_revision,
                     canonical_json(request),
-                    0,
                     now,
                     now,
                 ),
@@ -1063,7 +951,7 @@ class DecisionCoordinator:
         snapshot. Changed circumstances close the old queued task at an honest
         boundary without switching Router; an eligibility loss of the current item
         before any model call records its real preflight no-answer and queues the
-        next item's dispatch; writer-gate, retry-in-progress and unconfirmed-stop
+        next item's dispatch; retry-in-progress and unconfirmed-stop
         observations only queue. Nothing here starts a process or fabricates an
         attempt, and capacity is never bypassed with a spare task.
         """
@@ -1092,11 +980,6 @@ class DecisionCoordinator:
                          error=problem["code"], output={"status": "error", "code": problem["code"]})
             self._cancel_queued_task(connection, task, now, problem["reason"])
             return "decision-closed"
-        waiting = connection.execute(
-            "SELECT COUNT(*) AS count FROM evaluation_writers WHERE state IN ('waiting','active')"
-        ).fetchone()
-        if int(waiting["count"]):
-            return "evaluation-writer-pending"
         from .router_history import router_state
         state = router_state(connection, profile_id=dispatch["profileId"],
                              interval_seconds=facts["routerRetryIntervalSeconds"], now=now)
@@ -1145,7 +1028,7 @@ class DecisionCoordinator:
 
         Returns ``(blocker, input_document)``. A blocker keeps the task queued and
         consumes no execution slot; the queue reason is visible on the task view. On
-        success the decision is ``running``, its reader or writer is bound to this
+        success the decision is ``running``, its reader is bound to this
         attempt, and the exact model input is persisted for audit.
         """
         descriptor = decision_spec(spec) or {}
@@ -1157,28 +1040,6 @@ class DecisionCoordinator:
             return "decision-closed", None
         request = json.loads(row["requested_json"])
         timeout = int(request.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS)
-        if row["kind"] != "select":
-            # Historical maintenance decisions are never executed by the blackboard.
-            # A stray row from an earlier build settles honestly instead of calling a
-            # model, and its retained proposal stays readable through selection_get.
-            self._finish(
-                connection,
-                row,
-                status="needs-host",
-                reason=(
-                    "this is a historical maintenance decision; the blackboard no longer executes maintenance "
-                    "model calls. Prepare bounded facts with evaluation_prepare and publish cards through the "
-                    "ordinary writer gate instead."
-                ),
-                now=now,
-            )
-            self._cancel_queued_task(connection, task, now, "maintenance decisions are not executed by the blackboard")
-            return "decision-closed", None
-        waiting = connection.execute(
-            "SELECT COUNT(*) AS count FROM evaluation_writers WHERE state IN ('waiting','active')"
-        ).fetchone()
-        if int(waiting["count"]):
-            return "evaluation-writer-pending", None
         if row["decision_task_id"] != task["task_id"]:
             # A late claim of a superseded dispatch never runs; the pre-claim step
             # has already closed its queued shell.
@@ -1226,11 +1087,11 @@ class DecisionCoordinator:
             connection, task_id=task["task_id"], attempt_id=attempt_id, generation=generation, now=now)
         return None, document
 
-    def _mark_running(self, connection: sqlite3.Connection, row: sqlite3.Row, *, attempt_id: str, generation: int, reader_id: str | None, expected_revision: int, document: dict, now: str, considered: int = 0, remaining: int | None = None) -> None:
+    def _mark_running(self, connection: sqlite3.Connection, row: sqlite3.Row, *, attempt_id: str, generation: int, reader_id: str | None, expected_revision: int, document: dict, now: str) -> None:
         digest = sha256_text(canonical_json(document))
         connection.execute(
             "UPDATE decision_requests SET configuration_revision=?, attempt_id=?, generation=?, reader_id=?, expected_revision=?,"
-            " input_json=?, input_sha256=?, considered_evidence=?, pending_after=?, updated_at=?"
+            " input_json=?, input_sha256=?, updated_at=?"
             " WHERE decision_id=?",
             (
                 int(row["configuration_revision"]),
@@ -1240,8 +1101,6 @@ class DecisionCoordinator:
                 expected_revision,
                 canonical_json(document),
                 digest,
-                considered,
-                remaining,
                 now,
                 row["decision_id"],
             ),
@@ -1331,7 +1190,7 @@ class DecisionCoordinator:
         """Fence a decision whose attempt became uncertain (restart or lease expiry).
 
         The result of a process this service no longer supervises may never become a
-        current recommendation; it is recorded as ``stale`` and the reader or writer
+        current recommendation; it is recorded as ``stale`` and the reader
         it held is released so the gate can move on.
         """
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
@@ -1430,11 +1289,6 @@ class DecisionCoordinator:
             # Never overwrite the current request's output, input or health.
             return {**summary, "late": True}
         output = result if isinstance(result, dict) else None
-        if row["kind"] != "select":
-            self._finish(connection, row, status="needs-host", output=output, now=now,
-                         reason="a historical maintenance result is retained as read-only history")
-            return {**summary, "status": "needs-host"}
-
         snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
         dispatch = router_sequence.dispatch(connection, task["task_id"])
         checked = {"answer_valid": False, "abstained": False, "changed": False,
@@ -1522,7 +1376,7 @@ class DecisionCoordinator:
         elif outcome in ("answered", "abstained"):
             self._finish(connection, row, status="completed" if outcome == "answered" else "needs-host", now=now,
                          reason=checked["reason"], output=checked["output"], profile_id=checked["profile_id"],
-                         selected=checked["selected"], evidence_ids=checked["evidence"])
+                         selected=checked["selected"])
             # _finish owns the final atomic quota claim. Do not record success if
             # another decision already consumed that retry at this last gate.
             if outcome == "abstained" or self._status(connection, row["decision_id"]) == "completed":
@@ -1538,7 +1392,7 @@ class DecisionCoordinator:
                          output={**(output or {}), "code": code}, now=now, reason=reason, error=code)
         current = self._row(connection, row["decision_id"])
         return {**summary, "status": current["status"], "outcome": outcome, "profileId": current["profile_id"],
-                "reason": current["reason"], "publishedRevision": current["published_revision"]}
+                "reason": current["reason"]}
 
 
     @staticmethod
@@ -1709,7 +1563,7 @@ class DecisionCoordinator:
             "SELECT status FROM evaluation_decisions WHERE decision_id=?", (decision_id,)
         ).fetchone()["status"]
 
-    def _finish(self, connection: sqlite3.Connection, row: sqlite3.Row, *, status: str, now: str, reason: str | None = None, error: str | None = None, profile_id: str | None = None, evidence_ids: list[str] | None = None, output: dict | None = None, proposal: dict | None = None, published_revision: int | None = None, selected: dict | None = None) -> None:
+    def _finish(self, connection: sqlite3.Connection, row: sqlite3.Row, *, status: str, now: str, reason: str | None = None, error: str | None = None, profile_id: str | None = None, output: dict | None = None, selected: dict | None = None) -> None:
         """One atomic terminal transition for a decision and its audit material."""
         current = self._row(connection, row["decision_id"])
         if (current is None or (current["decision_task_id"] is not None and current["status"] in TERMINAL_DECISION_STATUSES)
@@ -1729,35 +1583,27 @@ class DecisionCoordinator:
         if status not in DECISION_STATUSES:
             raise BoardError("INTERNAL_ERROR", f"Unknown decision status {status!r}")
         connection.execute(
-            "UPDATE evaluation_decisions SET status=?, reason=?, profile_id=?, evidence_ids_json=?, error=?"
+            "UPDATE evaluation_decisions SET status=?, reason=?, profile_id=?, error=?"
             " WHERE decision_id=?",
             (
                 status,
                 (reason or "")[:MAX_DECISION_REASON],
                 profile_id,
-                canonical_json(evidence_ids or []),
                 error,
                 row["decision_id"],
             ),
         )
         connection.execute(
             "UPDATE decision_requests SET output_json=COALESCE(?, output_json),"
-            " proposal_json=COALESCE(?, proposal_json), selected_json=COALESCE(?, selected_json),"
-            " pending_after=?, published_revision=?, updated_at=? WHERE decision_id=?",
+            " selected_json=COALESCE(?, selected_json), updated_at=? WHERE decision_id=?",
             (
                 canonical_json(output) if output is not None else None,
-                canonical_json(proposal) if proposal is not None else None,
                 canonical_json(selected) if selected is not None else None,
-                self.evaluation._pending_evidence(connection),
-                published_revision,
                 now,
                 row["decision_id"],
             ),
         )
         self._release_reader(connection, row, now)
-        # A terminal decision never keeps a writer grant it cannot use: a waiting
-        # selector is promoted instead of queueing behind a finished decision.
-        self._release_writer(connection, row, now)
         event = {
             "completed": "decision.completed",
             "needs-host": "decision.needs_host",
@@ -1826,7 +1672,6 @@ class DecisionCoordinator:
             now=now,
             reason=SOLE_CANDIDATE_REASON,
             profile_id=profile_id,
-            evidence_ids=[],
             selected=selected,
             output={
                 "programSelection": {
@@ -2035,7 +1880,7 @@ class DecisionCoordinator:
     def list_decisions(self, params: dict) -> dict:
         """One bounded newest-first page of decision history.
 
-        This is a read: it admits no evaluation reader/writer lease, calls no model
+        This is a read: it admits no evaluation reader lease, calls no model
         and persists nothing. The ``kind`` filter is applied in SQL *before* the
         limit and the cursor is ``decision_requests.rowid``, the immutable insertion
         order, so a newer decision never pushes an older one out of reach and a page
@@ -2046,7 +1891,7 @@ class DecisionCoordinator:
         schemas.reject_unknown(params, LIST_FIELDS, "selection.list")
         kind = schemas.optional_string(params, "kind")
         if kind is not None and kind not in DECISION_KINDS:
-            raise BoardError("INVALID_ARGUMENT", "kind must be 'select' or 'maintain'", field="kind")
+            raise BoardError("INVALID_ARGUMENT", "kind must be 'select'", field="kind")
         limit = schemas.optional_int(params, "limit", DEFAULT_LIST_LIMIT, 1, MAX_LIST_LIMIT)
         before = schemas.optional_positive_int(params, "before")
         filter_sql = "r.kind=?" if kind is not None else None
@@ -2098,9 +1943,10 @@ class DecisionCoordinator:
         actor = (router_sequence.dispatch(connection, row["decision_task_id"])
                  if connection is not None and row["decision_task_id"] else None)
         selected = json.loads(row["selected_json"]) if row["selected_json"] else None
-        references = json.loads(row["evidence_ids_json"])
-        evidence = references if isinstance(references, list) and all(
-            isinstance(item, dict) and set(item) == {"kind", "ref"} for item in references) else None
+        answer = (output or {}).get("decision")
+        evidence = (answer["evidence"] if row["status"] in ("completed", "needs-host")
+                    and isinstance(output, dict) and output.get("status") == "ok" and "code" not in output
+                    and isinstance(answer, dict) and isinstance(answer.get("evidence"), list) else [])
         view: dict[str, Any] = {
             "decisionId": row["decision_id"],
             "requestId": row["request_id"],
@@ -2120,10 +1966,6 @@ class DecisionCoordinator:
             },
             "tableRevision": int(row["table_revision"]),
             "expectedRevision": int(row["expected_revision"]),
-            "publishedRevision": (
-                int(row["published_revision"]) if row["published_revision"] is not None else None
-            ),
-            "noOp": bool(row["status"] == "completed" and row["published_revision"] is None and row["kind"] == "maintain"),
             "reason": row["reason"],
             "evidence": evidence,
             "policyCheck": (output or {}).get("policyCheck"),
@@ -2156,13 +1998,7 @@ class DecisionCoordinator:
                 view["routingBoundary"] = boundary
         if "taskReference" in request:
             view["taskReference"] = request["taskReference"]
-        view["pendingEvidenceRemaining"] = (
-            int(row["pending_after"])
-            if row["pending_after"] is not None
-            else (self.evaluation._pending_evidence(connection) if connection is not None else None)
-        )
         if include_audit:
-            proposal = json.loads(row["proposal_json"]) if row["proposal_json"] else None
             input_document = json.loads(row["input_json"]) if row["input_json"] else None
             view.update(
                 {
@@ -2170,17 +2006,11 @@ class DecisionCoordinator:
                     "generation": row["decision_generation"],
                     "configurationRevision": int(row["configuration_revision"]),
                     "readerId": row["reader_id"],
-                    "writerId": row["writer_id"],
-                    "writerGeneration": row["writer_generation"],
                     "requested": request,
-                    "autoPublish": bool(row["auto_publish"]),
                     # The exact bounded fields sent to the model, retained for audit.
-                    # It carries the published table snapshot and bounded evidence
-                    # summaries only: no credentials and no raw project logs.
                     "input": input_document,
                     "inputSha256": row["input_sha256"],
                     "output": output,
-                    "proposal": proposal,
                     # The decision call's own configuration, kept separate from the
                     # selected worker configuration above.
                     "requestedProfile": actor["profile"] if actor else None,
@@ -2189,7 +2019,6 @@ class DecisionCoordinator:
                     "usage": (output or {}).get("usage"),
                     "elapsedSeconds": (output or {}).get("elapsedSeconds"),
                     "helperShutdownConfirmed": (output or {}).get("shutdownConfirmed"),
-                    "consideredEvidence": int(row["considered_evidence"]),
                 }
             )
         return view

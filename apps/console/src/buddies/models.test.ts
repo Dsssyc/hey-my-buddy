@@ -34,9 +34,9 @@ function profiles(): Profile[] {
 function snapshot(list: Profile[] = profiles()): Snapshot {
   return {
     csrfToken: "csrf", consoleSession: { id: "s", canWrite: true, reason: null }, tableRevision: 1,
-    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+
     configuration: null, profiles: list, preferences: [], familyPreferences: [], preferenceOverrides: [],
-    cards: [], familyAnnotations: [], evidence: [], decisions: [], sampleCounts: {},
+ familyAnnotations: [], decisions: [],
     modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "flash", limit: 3, active: 1 }],
     tasks: { pendingCount: 0 }, capabilities: {},
   };

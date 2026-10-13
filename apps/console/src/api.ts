@@ -17,8 +17,6 @@ const messages: Record<string, string> = {
   REVISION_CONFLICT: "记录已更新；请刷新核对后重试。",
   CONFLICT: "记录冲突；请刷新核对后重试。",
   FORBIDDEN: "无操作权限；请重新打开控制台。",
-  WRITER_EXPIRED: "编辑权限已过期；请重新取得权限，草稿已保留。",
-  WRITER_NOT_ACTIVE: "编辑权限已失效；请重新取得权限，草稿已保留。",
   STALE_GENERATION: "操作资格已失效；请刷新核对负责人。",
   SHUTDOWN_UNCONFIRMED: "停止未确认；请稍后核对再重试。",
   STORAGE_INCOMPLETE: "清理未完成；请重试同一请求。",
@@ -29,9 +27,8 @@ const messages: Record<string, string> = {
 
 /**
  * The one identity-loss refusal the board still issues: an HTTP 401
- * `CONSOLE_SESSION_EXPIRED`. A callback receiving it must not retry, renew or
- * release anything: only the bounded lease expires by itself, and a fresh
- * `buddy console` login is the explicit way to restore authority.
+ * `CONSOLE_SESSION_EXPIRED`. A callback receiving it must not automatically
+ * retry a write; a fresh `buddy console` login restores authority.
  */
 export const SESSION_EXPIRED_CODE = "CONSOLE_SESSION_EXPIRED";
 
@@ -612,9 +609,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         !data ||
         !Number.isInteger(data.tableRevision) ||
         !validConfigurationState(data) ||
-        !data.gate ||
         !Array.isArray(data.profiles) ||
-        !Array.isArray(data.cards) ||
         !Array.isArray(data.preferences) ||
         !Array.isArray(data.familyPreferences) ||
         !Array.isArray(data.preferenceOverrides) ||

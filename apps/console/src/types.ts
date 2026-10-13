@@ -166,43 +166,14 @@ export type Preference = {
 export type FamilyPreference = ModelFamily & { mode: PreferenceMode; reason: string };
 /** One effort's override of its family default; `none` means explicitly no preference. */
 export type PreferenceOverride = { profileId: string; mode: OverrideMode; reason: string };
-/**
- * Automatic, evidence-linked assessment. Published only by a maintenance
- * Harness through `assessment_publish`; the human console never writes it.
- * `origin` is the recorded authorship: "maintenance" or "unattributed"; an
- * absent value is unknown history and must not be presented as automatic.
- */
-export type Card = {
-  profileId: string;
-  revision: number;
-  summary: string;
-  strengths: string[];
-  limitations: string[];
-  risks: string[];
-  evidenceIds: string[];
-  updatedAt: string | null;
-  origin?: string;
-};
-/** The family's human note, stored apart from the automatic cards and evidence. */
+/** The family's human note. */
 export type FamilyAnnotation = ModelFamily & {
   text: string;
   revision: number;
   updatedAt: string | null;
 };
-export type Evidence = {
-  evidenceId: string;
-  profileId: string;
-  kind: string;
-  summary: string;
-  project: string | null;
-  conditions: string[];
-  source: string;
-  runId: string | null;
-  createdAt: string;
-};
 export type Decision = {
   decisionId: string;
-  kind?: "select" | "maintain";
   runId?: string | null;
   requestId?: string;
   status: string;
@@ -210,7 +181,7 @@ export type Decision = {
   profileId: string | null;
   tableRevision: number;
   reason: string;
-  evidence?: { kind: "card" | "annotation" | "preference" | "file"; ref: string }[] | null;
+  evidence?: { kind: "annotation" | "preference" | "file"; ref: string }[] | null;
   createdAt: string;
   error?: string | null;
   updatedAt?: string;
@@ -324,17 +295,6 @@ export type Shutdown = {
   unconfirmedRunIds: string[];
   unconfirmedCount: number;
   truncated: boolean;
-};
-export type Gate = {
-  phase: "open" | "draining" | "writing";
-  readers: number;
-  waitingWriters: number;
-  writer: null | {
-    writerId: string;
-    kind: string;
-    generation: number;
-    expiresAt: string;
-  };
 };
 /**
  * Identity of one model family: the exact adapter, provider and model tuple.
@@ -454,7 +414,6 @@ export type Snapshot = {
   consoleSession: ConsoleSession;
   consoleAccess?: ConsoleAccess;
   tableRevision: number;
-  gate: Gate;
   configuration: Configuration | null;
   configurationError?: { code: string; message: string; revision: number } | null;
   profiles: Profile[];
@@ -464,8 +423,7 @@ export type Snapshot = {
   familyPreferences: FamilyPreference[];
   /** Per-effort overrides of the family default; `mode` may be `none`. */
   preferenceOverrides: PreferenceOverride[];
-  cards: Card[];
-  /** Family notes, kept apart from the automatic evidence-linked cards. */
+  /** Family notes. */
   familyAnnotations: FamilyAnnotation[];
   /**
    * Every unavailable configuration in the table, including one the snapshot
@@ -474,12 +432,9 @@ export type Snapshot = {
    * `model_profiles`; they are never silently dropped from the count.
    */
   unavailableProfileCount?: number;
-  evidence: Evidence[];
   decisions: Decision[];
   /** Read-only bounded selection health; absent data is unknown, not success. */
   routingHealth?: RoutingHealth;
-  /** Recorded verification samples per profile; independent of published card prose. */
-  sampleCounts: Record<string, number>;
   /**
    * One concurrent-task entry per model family represented in the response,
    * including defaults for families without an explicit override. `active` is
@@ -493,19 +448,6 @@ export type Snapshot = {
    */
   tasks: { pendingCount: number };
   capabilities: Record<string, boolean>;
-};
-export type WriterGrant = {
-  writerId: string;
-  generation: number;
-  writerToken: string;
-  /** Gate phase while the intent waits or holds the table. */
-  phase: string;
-  /** Writer state from the board: "waiting", "active", "published", "aborted" or "expired". */
-  state?: string;
-  expiresAt: string;
-  tableRevision: number;
-  queuePosition?: number;
-  waitingWriters?: number;
 };
 /** Local draft of the fields a human may publish through `user_policy_publish`. */
 export type Draft = Pick<
@@ -526,14 +468,12 @@ export type ConsoleView = Omit<Snapshot, "modelConcurrency"> & {
 /** One page of retained profile identities, including unavailable history. */
 export type ProfilePage = {
   profiles: Profile[];
-  cards: Card[];
   /** Effective preferences of the listed profiles. */
   preferences: Preference[];
   /** Overrides and family rows for the listed profiles; absent reads as none. */
   preferenceOverrides?: PreferenceOverride[];
   familyPreferences?: FamilyPreference[];
   familyAnnotations?: FamilyAnnotation[];
-  sampleCounts: Record<string, number>;
   /** Concurrent-task entries for the families this page represents. */
   modelConcurrency: ModelConcurrencyEntry[];
   tableRevision: number;

@@ -43,11 +43,6 @@ def git(path, *arguments: str) -> str:
 
 
 class LifecycleTestCase(RealWorkspaceTestCase):
-    legacy = identity_fixtures.WorkspaceIdentityFixture.legacy
-    snapshot = identity_fixtures.WorkspaceIdentityFixture.snapshot
-    migrate = identity_fixtures.WorkspaceIdentityFixture.migrate
-    all_rows = identity_fixtures.WorkspaceIdentityFixture.all_rows
-    historical = identity_fixtures.WorkspaceIdentityFixture.historical
     fixed_files = identity_fixtures.WorkspaceIdentityFixture.fixed_files
 
     @classmethod
@@ -1686,16 +1681,14 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertNotIn("attached-branch", inspection["reasons"])
         self.assertIsNone(inspection["attachedBranch"])
 
-    def test_restart_native_seams_continue_seal_integrate_and_reclaim_old_allocation(self):
+    def test_restart_native_seams_continue_seal_integrate_and_reclaim_allocation(self):
         board = self.board()
         self.register(board)
-        with self.legacy():
-            submitted, claimed, original, checkout, first_seal, parked, _artifact = self.run_worktree(
-                board, request_id="restart-chain", output="base\n", disposition="assistance")
-        old_files, history = self.fixed_files(), self.historical(board)
-        self.migrate(board)
-        self.assertEqual(self.historical(board), history)
-        self.assertEqual(self.fixed_files(), old_files)
+        submitted, claimed, original, checkout, first_seal, parked, _artifact = self.run_worktree(
+            board, request_id="restart-chain", output="base\n", disposition="assistance")
+        initial_files = self.fixed_files()
+        board = self.board()
+        self.assertEqual(self.fixed_files(), initial_files)
         attempt = claimed["claim"]["attempt"]
         context = ExecutionContext(
             task_id=submitted["runId"], attempt_id=attempt["attemptId"], generation=attempt["generation"],
@@ -1703,8 +1696,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             directory=self.directory / "native-seam", runtime={},
             environment={"BUDDY_STATE_DIR": str(self.directory)}, turn=claimed["claim"]["turn"],
         )
-        # These actual role functions have no coordinator alias context. They
-        # must independently resolve the private board's proven mapping.
+        # These role functions verify the retained input without a coordinator context.
         turn_io.verify_workspace(context)
         self.assertEqual(context.effective_workspace, original)
         replay_seal, error = turn_io.seal_workspace(context)
@@ -1715,7 +1707,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         frozen, digest = router_input.prepare(original, router_directory)
         self.assertEqual((frozen / "tracked.txt").read_text(), "base\n")
         self.assertTrue(router_input.verify(original, frozen, digest)["unchanged"])
-        self.assertEqual(self.fixed_files(), old_files)
+        self.assertEqual(self.fixed_files(), initial_files)
         run_id = submitted["runId"]
         continued = board.call("workflow_continue", {
             "runId": run_id, "commandId": "restart-chain-continue", "expectedRevision": parked["revision"],
@@ -1728,7 +1720,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         actual = workspace_module.inspect(str(checkout))
         self.assertEqual(current["path"], original["path"])
         self.assertEqual(current["checkoutId"], actual["checkoutId"])
-        self.assertNotEqual(current["checkoutId"], original["checkoutId"])
+        self.assertEqual(current["checkoutId"], original["checkoutId"])
         self.assertEqual(current["baseCommit"], first_seal["commit"])
         (checkout / "tracked.txt").write_text("output after reboot\n")
         sealed = workspace_module.seal(self.directory, current, run_id, resumed["claim"]["attempt"]["attemptId"])
@@ -1744,7 +1736,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(removed["path"], original["checkoutRoot"])
         self.assertFalse(checkout.exists())
         self.assertTrue(self.reclaim(board, self.view(board, run_id))["alreadyRemoved"])
-        for path, raw in old_files.items():
+        for path, raw in initial_files.items():
             self.assertEqual((self.directory / path).read_bytes(), raw, path)
         with board.store.db.read() as connection:
             saved = connection.execute("SELECT input_json,input_sha256 FROM workflow_turns WHERE attempt_id=?",
@@ -1752,40 +1744,38 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(json.loads(saved["input_json"]), claimed["claim"]["turn"]["input"])
         self.assertEqual(saved["input_sha256"], claimed["claim"]["turn"]["inputSha256"])
 
-    def test_restart_preserves_accepted_target_and_old_cleanup_plan_before_apply(self):
+    def test_restart_preserves_accepted_target_and_cleanup_plan_before_apply(self):
         board = self.board()
         self.register(board)
-        with self.legacy():
-            submitted, _claim, original, checkout, legacy_seal, delivered, artifact = self.run_worktree(
-                board, request_id="restart-accepted")
-            target = self.target_with_artifact(artifact, name="restart-target")
-            # A retained target input supplies independent directory/inode and
-            # fixed-reference proof for optional target identity fields.
-            target_run = self.submit(board, request_id="restart-target-input", cwd=target["path"], access="read")
-            target_identity = workspace_module.inspect(str(target["path"]))
-            target.update({key: target_identity[key] for key in ("repositoryId", "checkoutId")})
-            accepted = self.accept(board, delivered, artifact, target=target, keepCheckout=True)
-            planned = board.store.workflow.cleanup_plan({
-                "runId": submitted["runId"], "commandId": "restart-old-plan",
-                "expectedRevision": accepted["revision"], **self.control(accepted),
-            })
+        submitted, _claim, original, checkout, seal, delivered, artifact = self.run_worktree(
+            board, request_id="restart-accepted")
+        target = self.target_with_artifact(artifact, name="restart-target")
+        # A retained target input supplies independent directory/inode and
+        # fixed-reference proof for optional target identity fields.
+        target_run = self.submit(board, request_id="restart-target-input", cwd=target["path"], access="read")
+        target_identity = workspace_module.inspect(str(target["path"]))
+        target.update({key: target_identity[key] for key in ("repositoryId", "checkoutId")})
+        accepted = self.accept(board, delivered, artifact, target=target, keepCheckout=True)
+        planned = board.store.workflow.cleanup_plan({
+            "runId": submitted["runId"], "commandId": "restart-plan",
+            "expectedRevision": accepted["revision"], **self.control(accepted),
+        })
         self.assertEqual(planned["plan"]["state"], "planned")
-        history, files = self.historical(board), self.fixed_files()
-        self.migrate(board)
-        self.assertEqual(self.historical(board), history)
+        files = self.fixed_files()
+        board = self.board()
         self.assertEqual(self.fixed_files(), files)
-        self.assertNotEqual(workspace_module.inspect(str(target["path"]))["checkoutId"], target["checkoutId"])
+        self.assertEqual(workspace_module.inspect(str(target["path"]))["checkoutId"], target["checkoutId"])
         target_check = workspace_module.integration_verify(
-            legacy_seal, original_input=original, final_input=original,
+            seal, original_input=original, final_input=original,
             path=str(target["path"]), ref="HEAD", strategy="patch", before_commit=target["before"],
             repository_id=target["repositoryId"], checkout_id=target["checkoutId"],
         )
         self.assertTrue(target_check["verified"])
-        # A receipt-bound replay retains the user's original optional identities.
+        # A receipt-bound replay retains the user's optional target identities.
         repeated = self.accept(board, self.view(board, submitted["runId"]), artifact, target=target, keepCheckout=True)
         self.assertEqual(repeated["state"], "accepted")
         removed = board.store.workflow.cleanup_apply({
-            "runId": submitted["runId"], "planId": planned["plan"]["planId"], "commandId": "restart-apply-old-plan",
+            "runId": submitted["runId"], "planId": planned["plan"]["planId"], "commandId": "restart-apply-plan",
             "expectedRevision": planned["targetRevision"], "confirmPath": planned["plan"]["path"],
             **self.control(accepted),
         })
@@ -1799,11 +1789,10 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         for path, raw in files.items():
             self.assertEqual((self.directory / path).read_bytes(), raw, path)
 
-    def test_restart_alias_cannot_remove_a_copied_worktree_git_directory(self):
-        with self.legacy():
-            board, submitted, original, checkout, _artifact, _view = self.accepted_worktree(
-                request_id="restart-replaced-allocation")
-        self.migrate(board)
+    def test_restart_cannot_remove_a_copied_worktree_git_directory(self):
+        board, submitted, original, checkout, _artifact, _view = self.accepted_worktree(
+            request_id="restart-replaced-allocation")
+        board = self.board()
         actual = workspace_module.inspect(str(checkout))
         git_directory = Path(actual["gitDir"])
         retained = self.directory / "retained-allocation-git-directory"
@@ -1822,20 +1811,18 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(retained.exists())
         self.assertNotEqual((self.view(board, submitted["runId"])["cleanup"] or {}).get("state"), "applied")
 
-    def test_restart_scope_restore_keeps_the_legacy_failure_and_continues_helper(self):
-        with self.legacy():
-            flow = self.helper_scope_failure(request_id="restart-restore")
+    def test_restart_scope_restore_keeps_the_failure_and_continues_helper(self):
+        flow = self.helper_scope_failure(request_id="restart-restore")
         board, root_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
-        history, files = self.historical(board), self.fixed_files()
-        self.migrate(board)
-        self.assertEqual(self.historical(board), history)
+        files = self.fixed_files()
+        board = self.board()
         self.assertEqual(self.fixed_files(), files)
         root = self.view(board, root_id)
         resolved = board.store.workflow.workspace_resolve({
             "runId": root_id, "targetRunId": helper_id, "commandId": "restart-restore-resolution",
             "expectedRevision": root["revision"], "conflictId": flow["conflict"]["conflictId"], "action": "restore",
             "paths": ["tracked.txt"], "observedFingerprint": flow["conflict"]["observedFingerprint"],
-            "reason": "restore the old authorized helper input", **self.control(root),
+            "reason": "restore the authorized helper input", **self.control(root),
         })
         self.assertEqual(resolved["resolutionState"], "restored")
         self.assertEqual((flow["helperCheckout"] / "tracked.txt").read_text(), "base\n")
@@ -1853,13 +1840,11 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         for path, raw in files.items():
             self.assertEqual((self.directory / path).read_bytes(), raw, path)
 
-    def test_restart_abandon_returns_legacy_input_and_preserves_the_failed_site(self):
-        with self.legacy():
-            flow = self.helper_scope_failure(request_id="restart-abandon")
+    def test_restart_abandon_returns_input_and_preserves_the_failed_site(self):
+        flow = self.helper_scope_failure(request_id="restart-abandon")
         board, root_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
-        history, files = self.historical(board), self.fixed_files()
-        self.migrate(board)
-        self.assertEqual(self.historical(board), history)
+        files = self.fixed_files()
+        board = self.board()
         self.assertEqual(self.fixed_files(), files)
         root = self.view(board, root_id)
         abandoned = board.store.workflow.workspace_resolve({

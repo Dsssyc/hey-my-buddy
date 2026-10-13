@@ -102,10 +102,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
 
     def configure(self, board, **settings):
         revision = board.call("console_snapshot", {})["tableRevision"]
-        grant = board.console_call("evaluation_write_begin", {
-            "requestId": f"config-{revision}", "kind": "human", "expectedRevision": revision})
         return board.console_call("user_policy_publish", {
-            **{key: grant[key] for key in ("writerId", "generation", "writerToken")},
             "commandId": f"publish-{revision}", "expectedRevision": revision, "configuration": settings})
 
     def request_route(self, board, request_id, worker="router"):

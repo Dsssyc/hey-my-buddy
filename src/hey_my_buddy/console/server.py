@@ -130,20 +130,14 @@ def parse_objective_query(query: str, allowed: frozenset[str]) -> dict:
 #: The only operations a browser may invoke. Everything else — including any raw SQL
 #: or an unwrapped store call — is not reachable through this surface.
 #:
-#: Evaluation maintenance is Harness-owned: the console may read the publication log
-#: (``evaluation_history``) but never ``evaluation_prepare``, never a maintenance or
-#: selection model call, and no direct evidence entry. The ordinary writer gate
-#: permits authenticated user policy patches; assessment cards stay Harness-owned.
+#: The browser can publish authenticated user settings and inspect selection
+#: decisions, but cannot invoke Router model calls.
 CONSOLE_OPERATIONS = (
     "accounts",
     "capabilities",
     "harness_set",
     "quota_redetect",
-    "evaluation_write_begin",
-    "evaluation_write_renew",
     "user_policy_publish",
-    "evaluation_write_abort",
-    "evaluation_history",
     "selection_get",
     "selection_list",
     "model_catalog_refresh",

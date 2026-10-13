@@ -10,7 +10,6 @@ from ...errors import BoardError
 PATCH_FIELDS = frozenset({'profileSettings', 'preferenceChanges', 'familyPreferenceChanges', 'familyAnnotationChanges',
                           'configuration', 'modelConcurrency'})
 FAMILY_FIELDS = ('adapter', 'provider', 'model')
-GRANT_FIELDS = ('writerId', 'generation', 'writerToken', 'expectedRevision')
 
 #: The per-family limit a user may set, and the fields one patch entry accepts.
 #: ``active`` and every other derived field are rejected: occupancy is observation,
@@ -41,14 +40,11 @@ def _model_concurrency_changes(params: dict) -> list[dict]:
     return values
 
 
-def require_writer_kind(kind: str) -> None:
-    # Authentication has already established this context. No caller-provided role
-    # or consoleAuthority flag can create a console session here.
+def require_console() -> None:
     from ..tasks.workflow import current_scope, CONSOLE_KIND, SERVICE_KIND
     scope = current_scope() or {'kind': SERVICE_KIND}
-    required = CONSOLE_KIND if kind == 'human' else SERVICE_KIND
-    if scope.get('kind') != required:
-        raise BoardError('FORBIDDEN', 'User policy requires the authenticated console; assessments require a maintenance Host')
+    if scope.get('kind') != CONSOLE_KIND:
+        raise BoardError('FORBIDDEN', 'User policy requires the authenticated console')
 
 
 def _family_changes(params: dict, field: str, fields: set[str]) -> list[dict]:
@@ -136,9 +132,8 @@ def _changes(params: dict, field: str, fields: set[str]) -> list[dict]:
     return values
 
 
-def publish(evaluation, connection, *, revision: int, writer, now: str, params: dict) -> dict:
+def publish(evaluation, connection, *, revision: int, now: str, params: dict) -> dict:
     """Apply only requested human fields in the caller's publication transaction."""
-    require_writer_kind('human')
     from ..service.harness_health import read_health
     provided = set(params) & PATCH_FIELDS
     if not provided:
@@ -280,7 +275,7 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
         'modelConcurrency': len(model_limits),
         'provided': sorted(provided),
     }
-    connection.execute('INSERT INTO evaluation_revisions(revision,kind,writer_id,actor,counts_json,created_at) VALUES(?,?,?,?,?,?)', (revision, 'human', writer['writer_id'], writer['writer_id'], canonical_json(counts), now))
+    connection.execute('INSERT INTO evaluation_revisions(revision,kind,actor,counts_json,created_at) VALUES(?,?,?,?,?)', (revision, 'human', None, canonical_json(counts), now))
     connection.execute('UPDATE evaluation_state SET table_revision=?,updated_at=? WHERE id=1', (revision, now))
     # ``enabledFamilies`` is an internal caller value, never a published response
     # field: the facts refresh runs after the publication transaction commits and is

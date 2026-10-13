@@ -285,21 +285,6 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         self.assertEqual(self.router_events("router.no_answer"), [])
 
 
-    def test_writer_gate_only_queues(self):
-        result = self.request()
-        with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO evaluation_writers(writer_id,request_id,kind,state,generation,"
-                       " expected_revision,token_verifier,requested_at)"
-                       " VALUES('gw-1','grant-1','human','waiting',1,0,'verifier',?)", (T0,))
-        blocked = self.claim("gate")
-        self.assertIsNone(blocked["claim"])
-        self.assertEqual(blocked["reason"], "evaluation-writer-pending")
-        self.assertEqual(self.decision_row(result["decisionId"])["status"], "queued")
-        self.assertEqual([row["state"] for row in self.tasks()], ["queued"])
-        with self.board_.store.db.read() as db:
-            reason = db.execute("SELECT queue_reason FROM tasks WHERE task_id=?", (result["runId"],)).fetchone()[0]
-        self.assertEqual(reason, "evaluation-writer-pending")
-        self.assertEqual(self.router_events("router.no_answer", "router.claimed"), [])
 
     def test_family_capacity_only_queues_without_a_bypass_task(self):
         result = self.request()

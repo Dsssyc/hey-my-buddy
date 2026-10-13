@@ -31,17 +31,15 @@ class ModelConcurrencyTestCase(StoreConcurrencyTestCase):
     def seed_decision_profile(self, board) -> None:
         board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
         revision = board.call("console_snapshot", {})["tableRevision"]
-        grant = board.console_call(
-            "evaluation_write_begin", {"requestId": "seed-policy", "expectedRevision": revision, "kind": "human"}
-        )
+        expected_revision = revision
         board.console_call(
             "user_policy_publish",
             {
                 "commandId": "seed-policy-1",
-                "writerId": grant["writerId"],
-                "generation": grant["generation"],
-                "writerToken": grant["writerToken"],
-                "expectedRevision": grant["tableRevision"],
+
+
+
+                "expectedRevision": expected_revision,
                 # A second enabled candidate keeps every selection request on the
                 # Router path; a sole candidate would be selected by the program
                 # directly and never reach the family quota check under test.
@@ -53,18 +51,15 @@ class ModelConcurrencyTestCase(StoreConcurrencyTestCase):
 
     def publish_limits(self, board, *patches: dict, command: str = "limits", writer_request: str | None = None) -> dict:
         revision = board.call("console_snapshot", {})["tableRevision"]
-        grant = board.console_call(
-            "evaluation_write_begin",
-            {"requestId": writer_request or f"policy-{command}", "expectedRevision": revision, "kind": "human"},
-        )
+        expected_revision = revision
         return board.console_call(
             "user_policy_publish",
             {
                 "commandId": command,
-                "writerId": grant["writerId"],
-                "generation": grant["generation"],
-                "writerToken": grant["writerToken"],
-                "expectedRevision": grant["tableRevision"],
+
+
+
+                "expectedRevision": expected_revision,
                 "modelConcurrency": list(patches),
             },
         )
@@ -226,40 +221,17 @@ class PolicyPatchTests(ModelConcurrencyTestCase):
         page = self.board_.call("model_profiles", {"includeUnavailable": True})
         self.assertEqual(self.family_row(page, FAMILY_B)["limit"], 3)
 
-    def test_maintenance_publications_cannot_touch_model_concurrency(self):
-        board = self.board_
-        revision = board.call("console_snapshot", {})["tableRevision"]
-        grant = board.call(
-            "evaluation_write_begin", {"requestId": "maint-1", "expectedRevision": revision, "kind": "maintenance"}
-        )
-        with self.assertRaises(BoardError) as caught:
-            board.call(
-                "assessment_publish",
-                {
-                    "commandId": "maint-1",
-                    "writerId": grant["writerId"],
-                    "generation": grant["generation"],
-                    "writerToken": grant["writerToken"],
-                    "expectedRevision": grant["tableRevision"],
-                    "modelConcurrency": [
-                        {"adapter": FAMILY_A[0], "provider": FAMILY_A[1], "model": FAMILY_A[2], "limit": 9}
-                    ],
-                },
-            )
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
     def test_a_save_is_idempotent_under_its_command_receipt(self):
         board = self.board_
         revision = board.call("console_snapshot", {})["tableRevision"]
-        grant = board.console_call(
-            "evaluation_write_begin", {"requestId": "policy-idem", "expectedRevision": revision, "kind": "human"}
-        )
+        expected_revision = revision
         payload = {
             "commandId": "idem-1",
-            "writerId": grant["writerId"],
-            "generation": grant["generation"],
-            "writerToken": grant["writerToken"],
-            "expectedRevision": grant["tableRevision"],
+
+
+
+            "expectedRevision": expected_revision,
             "modelConcurrency": [{"adapter": FAMILY_A[0], "provider": FAMILY_A[1], "model": FAMILY_A[2], "limit": 4}],
         }
         first = board.console_call("user_policy_publish", payload)

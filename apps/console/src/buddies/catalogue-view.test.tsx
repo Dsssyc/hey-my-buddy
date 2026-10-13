@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { ApiError, type ConsoleApi } from "../api";
-import type { HarnessHealth, Profile, Snapshot, WriterGrant } from "../types";
+import type { HarnessHealth, Profile, Snapshot } from "../types";
 import {
   defaultPreference, effortCell, foldHandle, levelPreference, levelSwitch, listed, modelButton, modelRow, catalogue, note, pane, search, selectModel,
 } from "./page.testing";
@@ -30,12 +30,12 @@ function profile(family: typeof sonnet, effort: string, extra: Partial<Profile> 
 function snapshot(extra: Partial<Snapshot> = {}): Snapshot & { harnesses: HarnessHealth[] } {
   return {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 4,
-    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+
     configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     profiles: [profile(sonnet, "medium", { enabled: true }), profile(sonnet, "high"), profile(sol, "medium"), profile(sol, "low")],
-    preferences: [], familyPreferences: [], preferenceOverrides: [], cards: [], familyAnnotations: [], evidence: [], decisions: [],
-    sampleCounts: {}, modelConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
-    tasks: { pendingCount: 0 }, capabilities: { evaluationWriteGate: true },
+    preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], decisions: [],
+ modelConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
+    tasks: { pendingCount: 0 }, capabilities: {},
     harnesses: [
       { adapter: "claude", status: "ready", available: true, revision: 1, manualPath: null },
       { adapter: "codex", status: "ready", available: true, revision: 1, manualPath: null },
@@ -48,11 +48,10 @@ type Reply = (params: Record<string, any>) => unknown;
 
 function fixture(state: Snapshot = snapshot(), replies: Record<string, Reply> = {}) {
   const published: Record<string, any>[] = [];
-  const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing", state: "active",
-    tableRevision: state.tableRevision, expiresAt: new Date(Date.now() + 120_000).toISOString() };
+
   const command = vi.fn(async (operation: string, params: Record<string, any>) => {
     if (replies[operation]) return replies[operation](params);
-    if (operation === "evaluation_write_begin") return grant;
+
     if (operation === "user_policy_publish") { published.push(params); return { published: true, tableRevision: state.tableRevision + 1 }; }
     throw new Error(`Unexpected command: ${operation}`);
   });
@@ -71,8 +70,8 @@ function open(f: ReturnType<typeof fixture>) {
 
 /** One page of retained rows, as `model_profiles` returns it. */
 function page(profiles: Profile[], state: Snapshot) {
-  return { profiles, cards: [], preferences: [], preferenceOverrides: [], familyPreferences: [], familyAnnotations: [],
-    sampleCounts: {}, modelConcurrency: [], tableRevision: state.tableRevision, nextCursor: null };
+  return { profiles, preferences: [], preferenceOverrides: [], familyPreferences: [], familyAnnotations: [],
+ modelConcurrency: [], tableRevision: state.tableRevision, nextCursor: null };
 }
 
 afterEach(() => {

@@ -30,7 +30,7 @@ afterEach(() => {
   window.location.hash = "";
 });
 
-const IDENTITY = new Set(["commandId", "writerId", "generation", "writerToken", "expectedRevision"]);
+const IDENTITY = new Set(["commandId", "expectedRevision"]);
 /** What a publication carries besides who publishes and against which revision. */
 const patchOf = (params: Record<string, any>) => Object.fromEntries(Object.entries(params).filter(([key]) => !IDENTITY.has(key)));
 const interval = 45;
@@ -657,7 +657,6 @@ describe("the settings of the role", () => {
     expect(intervalInput()).toHaveProperty("value", value);
     await user.click(saveButton());
     expect(f.published).toHaveLength(0);
-    expect(f.operations).not.toContain("evaluation_write_begin");
     await user.clear(intervalInput());
     await user.type(intervalInput(), "7");
     expect(intervalInput().getAttribute("aria-invalid")).toBeNull();

@@ -150,12 +150,11 @@ def _answer(document, options, mode):
     """The stand-in's answer choice plus its honest schema fact."""
     profiles = document["profiles"]
     chosen = options.get("profile_id") or profiles[0]["profileId"]
-    evidence = [{"kind": "card", "ref": card["profileId"]}
-                for card in document.get("cards", []) if card["profileId"] == chosen][:2]
+    evidence = []
     if options.get("evidence") == "none":
         evidence = []
     elif options.get("evidence") == "foreign":
-        evidence = [{"kind": "card", "ref": "card-not-supplied"}]
+        evidence = [{"kind": "annotation", "ref": "model-note-not-supplied"}]
     if mode in ("abstain", "abstain_with_evidence"):
         chosen = None
         evidence = [{"kind": "file", "ref": "input.txt"}] if mode == "abstain_with_evidence" else []
@@ -168,7 +167,7 @@ def _answer(document, options, mode):
     if mode == "answer_extra":
         answer["policyCheck"] = {"hardConstraints": {"adapter": "invented"}}
     elif mode == "answer_bad_evidence":
-        answer["evidence"] = ["card-id"]
+        answer["evidence"] = ["invalid-reference"]
     elif mode == "answer_escape":
         answer["evidence"] = [{"kind": "file", "ref": "../secret"}]
     valid = mode in ("select_first", "abstain", "abstain_with_evidence", "json_answer", "input_changed")

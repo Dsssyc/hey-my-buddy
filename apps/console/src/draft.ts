@@ -1,5 +1,4 @@
 import type {
-  Card,
   Draft,
   FamilyAnnotation,
   FamilyPreference,
@@ -13,7 +12,6 @@ import type {
   Profile,
   Configuration,
   Snapshot,
-  WriterGrant,
 } from "./types";
 import { concurrencyLimit, familyKey } from "./console-data";
 
@@ -31,8 +29,6 @@ export type HistoryEntries = {
   preferenceOverrides?: PreferenceOverride[];
   familyPreferences?: FamilyPreference[];
   familyAnnotations?: FamilyAnnotation[];
-  cards?: Card[];
-  sampleCounts?: Record<string, number>;
   modelConcurrency?: ModelConcurrencyEntry[];
 };
 
@@ -185,18 +181,15 @@ export function withHistory<T extends UserRows>(
 }
 
 /** Full console view: human draft (or snapshot) plus retained history rows. */
-export function historyView<T extends UserRows
-  & { cards: Card[]; preferences: Preference[]; sampleCounts?: Record<string, number> }>(
+export function historyView<T extends UserRows & { preferences: Preference[] }>(
   source: T,
   entries: HistoryEntries | null | undefined,
 ): T {
-  // A page from another revision is stale cache, not evidence about this table.
+  // A page from another revision is stale cache for this table.
   if (!entries || entries.tableRevision !== source.tableRevision) return source;
   const base = withHistory(source, entries);
-  // Snapshot cards and counts are authoritative for the identities they cover.
-  const counts = { ...(entries.sampleCounts ?? {}), ...(source.sampleCounts ?? {}) };
   // Retained family entries keep their recorded occupancy for the read-only view.
-  return { ...base, cards: addMissing(source.cards, entries.cards ?? []), sampleCounts: counts,
+  return { ...base,
     preferences: addMissing(source.preferences, entries.preferences),
     modelConcurrency: addMissingFamilies(source.modelConcurrency ?? [], entries.modelConcurrency) };
 }
@@ -299,9 +292,6 @@ export type FamilyAnnotationChangePatch = ModelFamily & { text: string };
 
 export type UserPolicyPublication = {
   commandId: string;
-  writerId: string;
-  generation: number;
-  writerToken: string;
   expectedRevision: number;
   profileSettings?: ProfileSettingPatch[];
   familyPreferenceChanges?: FamilyPreferenceChangePatch[];
@@ -431,7 +421,6 @@ export function configurationChanged(baseline: Draft, draft: Draft): boolean {
 export function publication(
   baseline: Draft,
   draft: Draft,
-  grant: WriterGrant,
   commandId: string,
 ): UserPolicyPublication {
   const settings = profileSettings(baseline, draft);
@@ -441,9 +430,6 @@ export function publication(
   const concurrency = modelConcurrencyChanges(baseline, draft);
   return {
     commandId,
-    writerId: grant.writerId,
-    generation: grant.generation,
-    writerToken: grant.writerToken,
     expectedRevision: draft.tableRevision,
     ...(settings.length ? { profileSettings: settings } : {}),
     ...(families.length ? { familyPreferenceChanges: families } : {}),
@@ -575,8 +561,7 @@ function merge<T>(old: T, wanted: T, fresh: T, same: (a: T, b: T) => boolean = O
 }
 
 /**
- * Adopts freshly published program facts (a completed directory discovery or a
- * maintenance publication) without discarding the user's unsubmitted edits.
+ * Adopts freshly published program facts without discarding the user's unsubmitted edits.
  *
  * Every human-owned field is checked three ways against the old baseline, the
  * draft and the refreshed table. The draft value is replayed only when the

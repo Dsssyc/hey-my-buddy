@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
-import type { ModelConcurrencyEntry, Profile, Snapshot, WriterGrant } from "./types";
+import type { ModelConcurrencyEntry, Profile, Snapshot } from "./types";
 import { conflictNotice, listed, modelRow, pane, selectModel } from "./buddies/page.testing";
 
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
@@ -41,18 +41,16 @@ function fixture(options: { discoveryLimit?: number } = {}) {
   const profiles = catalog();
   let state: Snapshot = {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
-    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+
     configuration: { revision: 1, routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
-    cards: profiles.map(p => ({ profileId: p.profileId, revision: 2, summary: `评价 ${p.model}`,
-      strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null })),
-    familyAnnotations: [], preferences: [], familyPreferences: [], preferenceOverrides: [], evidence: [], decisions: [], sampleCounts: {},
+
+    familyAnnotations: [], preferences: [], familyPreferences: [], preferenceOverrides: [], decisions: [],
     modelConcurrency: [flashEntry, retiredEntry],
     tasks: { pendingCount: 0 },
-    capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
+    capabilities: { selection: true },
   };
-  const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing",
-    state: "active", tableRevision: 2, expiresAt: new Date(Date.now() + 120000).toISOString() };
+
   const applyLimits = (patches: LimitPatch[]) => state.modelConcurrency.map((entry) => {
     const patch = patches.find((candidate) => candidate.adapter === entry.adapter
       && candidate.provider === entry.provider && candidate.model === entry.model);
@@ -67,16 +65,13 @@ function fixture(options: { discoveryLimit?: number } = {}) {
       const limits = (params.modelConcurrency ?? []) as LimitPatch[];
       state = { ...state, modelConcurrency: limits.length ? applyLimits(limits) : state.modelConcurrency,
         tableRevision: state.tableRevision + 1,
-        gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null } };
+ };
       return { published: true, tableRevision: state.tableRevision };
     }
-    if (operation === "evaluation_write_begin") {
-      state = { ...state, gate: { phase: "writing", readers: 0, waitingWriters: 0, writer: { ...grant, kind: "human" } } };
-      return grant;
-    }
-    if (operation === "evaluation_write_abort") return { aborted: true };
+
+
     if (operation === "model_profiles") {
-      return { profiles, cards: state.cards, familyAnnotations: [], preferences: [], preferenceOverrides: [], familyPreferences: [], sampleCounts: {},
+      return { profiles, familyAnnotations: [], preferences: [], preferenceOverrides: [], familyPreferences: [],
         modelConcurrency: structuredClone(state.modelConcurrency),
         tableRevision: state.tableRevision, nextCursor: null };
     }
@@ -203,7 +198,6 @@ describe("a model's concurrency", () => {
     expect(input).toHaveProperty("value", "33");
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect(f.published).toHaveLength(0);
-    expect(f.operations).not.toContain("evaluation_write_begin");
     await user.clear(input);
     await user.type(input, "4");
     await user.click(screen.getByRole("button", { name: "保存" }));
@@ -254,7 +248,6 @@ describe("a model's concurrency", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect((await screen.findAllByText(/设置已更新/)).length).toBeGreaterThan(0);
     expect(f.published).toHaveLength(0);
-    expect(f.operations).not.toContain("evaluation_write_begin");
     // Deliberate reload adopts the other writer's published limit.
     await user.click(within(banner).getByRole("button", { name: "重新加载最新版本" }));
     await screen.findByText("已加载 V3；请核对后保存。");

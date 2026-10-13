@@ -163,7 +163,7 @@ class FailoverTests(RouterDispatchTestCase):
             self.assertEqual(db.execute("SELECT adapter,queue_reason FROM tasks WHERE task_id='run-1'").fetchone()[0], "unresolved")
         second = self.next_claim(request)
         output = self.answer(second, profile_id=C)
-        output["decision"]["evidence"] = [{"kind": "card", "ref": "unknown-advisory-card"}]
+        output["decision"]["evidence"] = [{"kind": "annotation", "ref": "unknown-model-note"}]
         output["policyCheck"] = {"modelEcho": "ignored"}
         done = self.report(second, output)
         self.assertEqual(done["decision"]["status"], "completed")
@@ -448,17 +448,6 @@ class FailoverTests(RouterDispatchTestCase):
             record = quota_routing.routing_facts(db, "dsh", now=T0)[0]
             self.assertEqual(record["retry"]["consumedBy"], "other-decision")
 
-    def test_next_item_writer_gate_keeps_one_queued_dispatch(self):
-        request, first = self.start(three=True)
-        self.assert_switch(request, first, self.failure(first))
-        with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO evaluation_writers(writer_id,request_id,kind,state,generation,"
-                       "expected_revision,token_verifier,requested_at) VALUES('gate','gate','human','waiting',1,0,'verifier',?)", (T0,))
-        response = self.claim("writer", task_id=self.current_task(request["decisionId"]))
-        self.assertIsNone(response["claim"])
-        self.assertEqual(response["reason"], "evaluation-writer-pending")
-        self.assertEqual(len(self.tasks()), 2)
-        self.assertEqual(len(self.outcomes()), 1)
 
     def busy_attempt(self, db, number, *, provider="busy", model="busy", profile_id=None):
         task_id, attempt_id = f"busy-{number}", f"busy-attempt-{number}"

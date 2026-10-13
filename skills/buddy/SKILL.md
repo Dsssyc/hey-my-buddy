@@ -35,6 +35,5 @@ Worker sessions stay private; `worker-sessions` lists them ([details](../../docs
 
 Preferences, enablement, capacity and Router settings are user-owned: change them only in the console, never in this skill. Routing and execution share capacity and family limits; native permissions need Host attention.
 
-Model-card updates only on user request: `evaluation-prepare`, then a short maintenance grant ([maintenance](../../docs/reference/evaluation-maintenance.md)). Only an explicit user background request authorizes a Harness scheduler; never create, mute or remove one to save quota.
 
 `quota-redetect` opens one retry; reuse its `requestId` after an unknown reply ([harnesses](../../docs/reference/harnesses.md)).

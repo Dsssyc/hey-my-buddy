@@ -73,16 +73,7 @@ CONTROL_OPERATIONS = (
     "inquiry_observe",
     "artifact_list",
     "events_read",
-    "evaluation_write_begin",
-    "evaluation_write_renew",
     "user_policy_publish",
-    "assessment_publish",
-    "evaluation_write_abort",
-    "evaluation_reader_begin",
-    "evaluation_reader_release",
-    "evaluation_evidence_record",
-    "evaluation_prepare",
-    "evaluation_history",
     "selection_request",
     "selection_get",
     "selection_list",
@@ -381,14 +372,6 @@ class BoardService(_BaseResource):
                         "not provided: with no configured decision profile or no legal candidate the decision is "
                         "needs-host; the service never guesses a profile and never selects a selector"
                     ),
-                    "maintenanceScope": (
-                        "harness-owned: the blackboard executes no maintenance model call and has no "
-                        "autoMaintain setting. An external Harness collects bounded facts with "
-                        "evaluation_prepare (no model call, no lease), synthesizes card text under the buddy "
-                        "skill, and publishes a short card-only patch with evaluation_write_begin(kind="
-                        "\"maintenance\") plus assessment_publish; profiles, preferences, configuration, "
-                        "authority and code-owned counters are never changed by a model"
-                    ),
                     "decisionModelIdentity": (
                         "the Router records its requested and resolved configuration; the served "
                         "identity is unknown and is never invented"
@@ -400,7 +383,7 @@ class BoardService(_BaseResource):
                     "agentScope": (
                         "enforced in the supported API: an attempt-scoped credential may observe its own run and "
                         "record suggestions only; it cannot submit tasks, create helpers, approve, take over, "
-                        "cancel, write evaluations or address another run. This is capability enforcement, not OS "
+                        "cancel, change shared settings or address another run. This is capability enforcement, not OS "
                         "isolation against a same-user process that steals the credential file"
                     ),
                     "hostAuthority": (
@@ -500,37 +483,8 @@ class BoardService(_BaseResource):
 
         return self._guard("console.snapshot", request_json, handler)
 
-    def evaluation_write_begin(self, request_json: str) -> str:
-        return self._guard("evaluation.write.begin", request_json, self.evaluation.write_begin)
-
-    def evaluation_write_renew(self, request_json: str) -> str:
-        return self._guard("evaluation.write.renew", request_json, self.evaluation.write_renew)
-
     def user_policy_publish(self, request_json: str) -> str:
         return self._guard("user.policy.publish", request_json, self.evaluation.user_policy_publish)
-
-    def assessment_publish(self, request_json: str) -> str:
-        return self._guard("assessment.publish", request_json, self.evaluation.assessment_publish)
-
-    def evaluation_write_abort(self, request_json: str) -> str:
-        return self._guard("evaluation.write.abort", request_json, self.evaluation.write_abort)
-
-    def evaluation_reader_begin(self, request_json: str) -> str:
-        return self._guard("evaluation.reader.begin", request_json, self.evaluation.reader_begin)
-
-    def evaluation_reader_release(self, request_json: str) -> str:
-        return self._guard("evaluation.reader.release", request_json, self.evaluation.reader_release)
-
-    def evaluation_evidence_record(self, request_json: str) -> str:
-        return self._guard("evaluation.evidence.record", request_json, self.evaluation.evidence_record)
-
-    def evaluation_prepare(self, request_json: str) -> str:
-        # The Harness-owned maintenance read: bounded, deterministic fact collection
-        # with no model call, no writer lease and no publication.
-        return self._guard("evaluation.prepare", request_json, self.evaluation.prepare)
-
-    def evaluation_history(self, request_json: str) -> str:
-        return self._guard("evaluation.history", request_json, self.evaluation.history)
 
     def _refresh_harness_catalog(self, name, record, catalog_scan_claimed=False):
         from ..catalog import catalog_store

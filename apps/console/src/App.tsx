@@ -63,20 +63,19 @@ export function App({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
 /**
  * The save bar exists only while the page holds a draft: changes that are not
  * saved, or a save whose result is not settled. It offers to discard and to
- * save, and to stop waiting while another save is ahead. A button that cannot
+ * save. A button that cannot
  * act now still takes the click, so that the editor can say why.
  */
 function SaveBar({ editor, mutationsAvailable, describedBy }: {
   editor: Editor; mutationsAvailable: boolean; describedBy?: string;
 }) {
   const { t } = useTranslation("shell");
-  const label = editor.busy ? (editor.waiting ? t("draft.waiting") : t("draft.saving"))
+  const label = editor.busy ? t("draft.saving")
     : editor.confirming ? t("draft.retry") : t("draft.save");
   return <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-2 border-t bg-card px-3 py-2.5 sm:px-6" role="region" aria-label={t("draft.label")}>
     <span className="mr-auto flex items-center gap-2 text-hand" role="status"><StateMark kind="hand" />{editor.dirty
       ? t("draft.unsaved", { n: editor.changeCount })
       : t("draft.unresolved")}</span>
-    {editor.waiting && <Button variant="outline" onClick={editor.cancelSave}>{t("draft.cancelWait")}</Button>}
     <Button variant="outline" aria-disabled={editor.busy || editor.confirming || undefined}
       onClick={() => void editor.discard()}>{t("draft.discard")}</Button>
     <Button aria-disabled={!mutationsAvailable || editor.busy || undefined}
@@ -107,14 +106,10 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   const authority = useState(() => createAuthorityLatch())[0];
   const sessionWritable = authority.writable(snapshot);
   const writesAvailable = !connectionError && sessionWritable;
-  const mutationsAvailable = writesAvailable && snapshot.capabilities.evaluationWriteGate !== false;
+  const mutationsAvailable = writesAvailable;
   const unavailableReason = connectionError
     ? t("draft.unavailable.connection")
-    : !sessionWritable
-      ? t("draft.unavailable.login")
-      : snapshot.capabilities.evaluationWriteGate === false
-        ? t("draft.unavailable.gate")
-        : "";
+    : !sessionWritable ? t("draft.unavailable.login") : "";
   const editor = useEditor(api, snapshot, refresh, mutationsAvailable, unavailableReason, authority);
   function select(key: Tab) {
     setTab(key);
@@ -128,8 +123,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   // The server's board-wide count of micro tasks awaiting their Host —
   // computed over every run, never inferred from a page of recent rows.
   const pending = snapshot.tasks.pendingCount;
-  const saveRefusal = editor.saveBlockedReason
-    || (editor.waiting ? t("draft.waitingRefusal") : "");
+  const saveRefusal = editor.saveBlockedReason;
   const conflictVersions = editor.conflict ? `V${editor.conflict.basedOn} → V${editor.conflict.latest}` : undefined;
   // Draft banners belong to the Buddy settings page; the records page shows none.
   const draftTab = tab === "buddies";
@@ -164,7 +158,6 @@ function Connected({ api, snapshot, refresh, connectionError }: {
         })}
       </nav>
       <div className="ml-auto flex min-w-0 items-center gap-3 text-xs text-bar-ink2">
-        {snapshot.gate.phase !== "open" && <span className="shrink-0 rounded-sm border border-bar-hand px-1.5 leading-[18px] text-bar-hand">{snapshot.gate.phase === "draining" ? t("gate.draining") : t("gate.exclusive")}</span>}
         {/* The bar shows the time alone; what it is the time of is said on hover and to a screen reader. */}
         <p className={connectionError ? "truncate text-bar-fail" : "truncate"}>
           {connectionError && <span className="max-sm:hidden">{t("connection.lost")} · </span>}

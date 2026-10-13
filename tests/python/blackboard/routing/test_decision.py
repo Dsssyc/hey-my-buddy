@@ -17,7 +17,7 @@ from pathlib import Path
 
 from support import BoardTestCase, FakeClock, wait_for
 from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
-from blackboard.evaluation.test_evaluation import EvaluationTestCase as EvaluationFixtures
+
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing import router
@@ -60,9 +60,6 @@ THIRD_PROFILE = {
 }
 
 class DecisionTestCase(BoardTestCase):
-    model_claim = EvaluationFixtures.model_claim
-    review_modelled_task = EvaluationFixtures.review_modelled_task
-    modelled_task = EvaluationFixtures.modelled_task
 
     def setUp(self) -> None:
         super().setUp()
@@ -82,108 +79,32 @@ class DecisionTestCase(BoardTestCase):
         profiles=(PROFILE, SECOND_PROFILE),
         decision_profile: str | None = PROFILE_ID,
         preferences=None,
-        cards=None,
     ) -> dict:
         board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
         revision = board.call("console_snapshot", {})["tableRevision"]
-        grant = board.console_call(
-            "evaluation_write_begin", {"requestId": "seed", "expectedRevision": revision, "kind": "human"}
-        )
         result = board.console_call(
             "user_policy_publish",
             {
                 "commandId": "seed-1",
-                "writerId": grant["writerId"],
-                "generation": grant["generation"],
-                "writerToken": grant["writerToken"],
-                "expectedRevision": grant["tableRevision"],
+                "expectedRevision": revision,
                 "profileSettings": [{"profileId": item["profileId"], "enabled": True} for item in profiles],
                 "preferenceChanges": preferences or [],
                 "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [decision_profile] if decision_profile else []},
             },
         )
-        if cards:
-            self.publish_cards(board, request_id="seed-cards", command_id="seed-cards", cards=cards)
         return result
 
-    def card_with_pending_evidence(self, board) -> tuple[str, str]:
-        """One published card plus one newer pending evidence row for maintenance."""
-        first = self.evidence(board, "task-1", summary="card sample")
-        self.publish_cards(
-            board,
-            request_id="card-1",
-            command_id="card-1",
-            cards=[
-                {
-                    "profileId": PROFILE_ID,
-                    "summary": "before maintenance",
-                    "strengths": ["fast"],
-                    "limitations": ["small"],
-                    "risks": ["still open: fixture risk"],
-                    "evidenceIds": [first],
-                }
-            ],
-        )
-        second = self.evidence(board, "task-2", summary="new pending sample")
-        return first, second
 
-    def publish_cards(self, board, *, request_id: str, command_id: str, cards: list[dict]) -> dict:
-        revision = board.call("console_snapshot", {})["tableRevision"]
-        grant = board.call(
-            "evaluation_write_begin",
-            {"requestId": request_id, "expectedRevision": revision, "kind": "maintenance"},
-        )
-        return board.call(
-            "assessment_publish",
-            {
-                "commandId": command_id,
-                "writerId": grant["writerId"],
-                "generation": grant["generation"],
-                "writerToken": grant["writerToken"],
-                "expectedRevision": revision,
-                "cards": cards,
-            },
-        )
 
     def publish_user_patch(self, board, *, request_id: str, command_id: str, **changes) -> dict:
         revision = board.call("console_snapshot", {})["tableRevision"]
-        grant = board.console_call("evaluation_write_begin", {"requestId": request_id, "expectedRevision": revision, "kind": "human"})
         return board.console_call("user_policy_publish", {
-            "commandId": command_id, "writerId": grant["writerId"],
-            "generation": grant["generation"], "writerToken": grant["writerToken"],
+            "commandId": command_id,
             "expectedRevision": revision, **changes,
         })
 
-    def record(
-        self,
-        board,
-        request_id: str = "task-1",
-        *,
-        model: str | None = None,
-        effort: str | None = None,
-        accept: bool = True,
-    ) -> str:
-        """A governed model artifact reviewed through the current Host path."""
-        identity = {**PROFILE, "model": model or PROFILE["model"], "effort": effort or PROFILE["effort"]}
-        return self.modelled_task(board, request_id, profile=identity, verdict="accepted" if accept else None)
 
 
-    def evidence(
-        self,
-        board,
-        request_id: str,
-        *,
-        summary: str = "accepted sample",
-        profile: str = PROFILE_ID,
-        model: str | None = None,
-        effort: str | None = None,
-    ) -> str:
-        run_id = self.record(board, request_id, model=model, effort=effort)
-        recorded = board.call(
-            "evaluation_evidence_record",
-            {"profileId": profile, "kind": "task-success", "summary": summary, "source": "cli", "runId": run_id},
-        )
-        return recorded["evidence"]["evidenceId"]
 
     def run_worker(self, board, worker_id: str = "w-decision", iterations: int = 1) -> Worker:
         client = board.client()
@@ -198,6 +119,12 @@ class DecisionTestCase(BoardTestCase):
 
     def decision(self, board, decision_id: str, *, audit: bool = True) -> dict:
         return board.call("selection_get", {"decisionId": decision_id, "includeAudit": audit})["decision"]
+
+    def open_readers(self, board) -> int:
+        with board.store.db.read() as connection:
+            return connection.execute(
+                "SELECT COUNT(*) FROM evaluation_readers WHERE released_at IS NULL"
+            ).fetchone()[0]
 
     def assert_code(self, code: str, callable_, *args, **kwargs) -> BoardError:
         with self.assertRaises(BoardError) as caught:
@@ -263,41 +190,15 @@ class SelectionRequestTests(DecisionTestCase):
             "UNSUPPORTED", board.call, "task_acknowledge", {"runId": request["runId"], "note": "looks good"}
         )
 
-    def test_real_worker_publishes_a_bounded_input_and_records_evidence_references(self):
+    def test_real_worker_publishes_a_bounded_input(self):
         board = self.board()
         self.seed(board)
-        run_id = self.record(board, "task-1")
-        first_evidence = board.call(
-            "evaluation_evidence_record",
-            {
-                "profileId": PROFILE_ID,
-                "kind": "task-success",
-                "summary": "card sample",
-                "source": "cli",
-                "runId": run_id,
-            },
-        )["evidence"]["evidenceId"]
-        self.publish_cards(
-            board,
-            request_id="card-1",
-            command_id="card-1",
-            cards=[
-                {
-                    "profileId": PROFILE_ID,
-                    "summary": "solid",
-                    "strengths": ["fast"],
-                    "limitations": [],
-                    "risks": ["fixture risk"],
-                    "evidenceIds": [first_evidence],
-                }
-            ],
-        )
         request = self.request(board)
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed")
         self.assertEqual(decision["profileId"], PROFILE_ID)
-        self.assertEqual(decision["evidence"], [{"kind": "card", "ref": PROFILE_ID}])
+        self.assertEqual(decision["evidence"], [])
         document = decision["input"]
         self.assertEqual(document["operation"], "select")
         self.assertEqual(document["requestId"], "pick-1")
@@ -306,12 +207,9 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(
             [profile["profileId"] for profile in document["profiles"]], [PROFILE_ID, SECOND_PROFILE_ID]
         )
-        self.assertEqual(document["cards"][0]["risks"], ["fixture risk"])
-        self.assertEqual(document["cards"][0]["origin"], "maintenance")
-        self.assertEqual(document["evidence"][0]["evidenceId"], first_evidence)
-        self.assertEqual(document["evidence"][0]["project"], None)
-        # The persisted audit input carries the bounded table and evidence summaries
-        # only: no credential, no raw project log, no service token.
+        self.assertNotIn("cards", document)
+        self.assertNotIn("evidence", document)
+        # The persisted audit input carries only the bounded table and task facts.
         rendered = json.dumps(document)
         self.assertNotIn("token", rendered.lower())
         self.assertNotIn(str(self.directory), rendered)
@@ -467,7 +365,7 @@ class SelectionRequestTests(DecisionTestCase):
             connection.execute("UPDATE harness_health SET status='missing'")
         capabilities = board.call("console_snapshot", {})["capabilities"]
         self.assertFalse(capabilities["selection"])
-        self.assertFalse(capabilities["maintenance"])
+        self.assertNotIn("maintenance", capabilities)
         self.assertFalse(capabilities["decisionAdapter"])
         request = self.request(board)
         self.assertEqual(request["status"], "needs-host")
@@ -478,9 +376,8 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(decision["routingBasis"]["candidateCount"], 0)
         self.assertIsNone(decision["routerProblem"])
         self.assertIn("legal candidate", decision["reason"])
-        # Maintenance is not a blackboard model call at all any more, so an absent
-        # helper cannot report it as an adapter-unavailable maintenance failure.
-        self.assertFalse(capabilities["maintenance"])
+        # The removed Host maintenance capability is absent even during an outage.
+        self.assertNotIn("maintenance", capabilities)
         self.assertEqual(board.call("task_list", {"limit": 10})["runs"], [])
 
     def test_capabilities_report_real_availability(self):
@@ -488,7 +385,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.seed(board)
         capabilities = board.call("console_snapshot", {})["capabilities"]
         self.assertTrue(capabilities["selection"])
-        self.assertFalse(capabilities["maintenance"])
+        self.assertNotIn("maintenance", capabilities)
         self.assertTrue(capabilities["decisionAdapter"])
         report = board.call("capabilities", {})
         self.assertIn("decision", report["adapters"])
@@ -507,166 +404,26 @@ class SelectionRequestTests(DecisionTestCase):
 
 
 class DecisionGateTests(DecisionTestCase):
-    def test_writer_gate_keeps_request_frozen_until_claim(self):
+    def test_table_change_before_claim_keeps_request_frozen(self):
         board = self.board()
         self.seed(board)
         revision = board.call("console_snapshot", {})["tableRevision"]
-        grant = board.call(
-            "evaluation_write_begin", {"requestId": "w-active", "expectedRevision": revision, "kind": "maintenance"}
-        )
         request = self.request(board)
+        self.publish_user_patch(board, request_id="before-claim", command_id="before-claim",
+                                preferenceChanges=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "new preference"}])
         self.run_worker(board)
-        task = board.call("task_get", {"runId": request["runId"]})["task"]
-        self.assertEqual(task["status"], "queued")
-        self.assertEqual(task["queueReason"], "evaluation-writer-pending")
-        self.assertEqual(self.decision(board, request["decisionId"])["status"], "queued")
-        self.assertEqual(board.call("console_snapshot", {})["gate"]["phase"], "writing")
-
-        board.call(
-            "assessment_publish",
-            {
-                "commandId": "w-active",
-                "writerId": grant["writerId"],
-                "generation": grant["generation"],
-                "writerToken": grant["writerToken"],
-                "expectedRevision": revision,
-                "cards": [
-                    {
-                        "profileId": SECOND_PROFILE_ID,
-                        "summary": "published while the selection waited",
-                        "strengths": [],
-                        "limitations": [],
-                        "risks": [],
-                        "evidenceIds": [],
-                    }
-                ],
-            },
-        )
-        self.run_worker(board, worker_id="w-after")
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "needs-host")
         self.assertEqual(decision["output"]["code"], "router-table-changed")
         self.assertIsNone(decision["attemptId"])
         self.assertEqual(decision["expectedRevision"], revision)
         self.assertEqual(decision["input"]["tableRevision"], revision)
-        self.assertEqual([card["profileId"] for card in decision["input"]["cards"]], [])
 
-    def test_one_slot_maintenance_patch_runs_before_the_queued_selector_without_deadlock(self):
-        """The external Harness patch is an ordinary writer intent, not a model job."""
-        board = self.board(max_concurrent=1)
-        self.seed(board)
-        first, second = self.card_with_pending_evidence(board)
-        selection = self.request(board)
-        revision = board.call("console_snapshot", {})["tableRevision"]
-        grant = board.call(
-            "evaluation_write_begin",
-            {"requestId": "tidy-1", "expectedRevision": revision, "kind": "maintenance"},
-        )
-        self.assertEqual(grant["phase"], "writing")
-        worker = self.run_worker(board, worker_id="w-slot")
-        # The queued selector cannot claim while the maintenance writer holds the gate.
-        self.assertEqual(self.decision(board, selection["decisionId"])["status"], "queued")
-        published = board.call(
-            "assessment_publish",
-            {
-                "commandId": "tidy-1",
-                "writerId": grant["writerId"],
-                "generation": grant["generation"],
-                "writerToken": grant["writerToken"],
-                "expectedRevision": revision,
-                "cards": [
-                    {
-                        "profileId": PROFILE_ID,
-                        "summary": "card synthesized by the external Harness",
-                        "strengths": ["fast"],
-                        "limitations": ["small"],
-                        "risks": ["still open: fixture risk"],
-                        "evidenceIds": [first, second],
-                    }
-                ],
-            },
-        )
-        self.assertEqual(published["revision"], revision + 1)
-        worker.run_once()
-        selected = self.decision(board, selection["decisionId"])
-        self.assertEqual(selected["status"], "needs-host")
-        self.assertEqual(selected["output"]["code"], "router-table-changed")
-        self.assertIsNone(selected["attemptId"])
-        self.assertEqual(selected["expectedRevision"], revision)
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 0)
 
-    def test_admitted_reader_drains_before_the_writer_and_the_released_reader_fails_honestly(self):
-        board = self.board(max_concurrent=2)
-        self.seed(board)
-        first, second = self.card_with_pending_evidence(board)
-        selection = self.request(board)
-        client = board.client()
-        client.register_worker("w-reader", adapter="dsh", capabilities=["dsh", "decision"])
-        reader_claim = client.claim(
-            "w-reader", "claim-reader", "n" * 32, task_id=selection["runId"]
-        )["claim"]
-        self.assertIsNotNone(reader_claim)
-        self.assertEqual(self.decision(board, selection["decisionId"])["status"], "running")
-        self.assertEqual(board.call("console_snapshot", {})["gate"]["readers"], 1)
-
-        revision = board.call("console_snapshot", {})["tableRevision"]
-        grant = board.call(
-            "evaluation_write_begin",
-            {"requestId": "tidy-1", "expectedRevision": revision, "kind": "maintenance"},
-        )
-        self.assertEqual(grant["state"], "waiting")
-        self.assertEqual(board.call("console_snapshot", {})["gate"]["waitingWriters"], 1)
-        # A queued selector is refused admission while the writer waits; it is not
-        # silently admitted against a revision the writer is about to move.
-        self.assert_code("TABLE_BUSY", board.call, "evaluation_reader_begin", {"kind": "selection"})
-
-        # The admitted reader gives the attempt back without ever spawning a helper.
-        client.release(
-            "w-reader",
-            reader_claim["attempt"]["attemptId"],
-            reader_claim["attempt"]["generation"],
-            "n" * 32,
-            "the reader never spawned a helper",
-            evidence={"spawnIntentWritten": False},
-        )
-        released_decision = self.decision(board, selection["decisionId"])
-        self.assertEqual(released_decision["status"], "needs-host")
-        self.assertEqual(released_decision["output"]["code"], "router-unavailable")
-        with board.store.db.read() as connection:
-            released = connection.execute("SELECT execution_state,shutdown_confirmed FROM attempts WHERE attempt_id=?",
-                                          (reader_claim["attempt"]["attemptId"],)).fetchone()
-        self.assertEqual(tuple(released), ("finished", 1))
-        self.assertEqual(board.call("console_snapshot", {})["gate"]["readers"], 0)
-        self.assertEqual(board.call("console_snapshot", {})["gate"]["phase"], "writing")
-        # The writer is granted once the reader settled, and its card-only patch commits.
-        published = board.call(
-            "assessment_publish",
-            {
-                "commandId": "tidy-1",
-                "writerId": grant["writerId"],
-                "generation": grant["generation"],
-                "writerToken": grant["writerToken"],
-                "expectedRevision": revision,
-                "cards": [
-                    {
-                        "profileId": PROFILE_ID,
-                        "summary": "patched after the reader drained",
-                        "strengths": ["fast"],
-                        "limitations": ["small"],
-                        "risks": ["still open: fixture risk"],
-                        "evidenceIds": [first, second],
-                    }
-                ],
-            },
-        )
-        self.assertEqual(published["revision"], revision + 1)
-        self.assertEqual(board.call("console_snapshot", {})["gate"]["phase"], "open")
 
     def test_queued_selection_cancel_is_durable_and_never_runs(self):
         board = self.board()
         self.seed(board)
-        revision = board.call("console_snapshot", {})["tableRevision"]
-        board.call("evaluation_write_begin", {"requestId": "w-hold", "expectedRevision": revision, "kind": "maintenance"})
         request = self.request(board)
         board.call("task_cancel", {"runId": request["runId"], "reason": "user cancelled the pending selection"})
         self.assertEqual(self.decision(board, request["decisionId"])["status"], "cancelled")
@@ -739,13 +496,6 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(health["failureCount"], 0)
         self.assertEqual(health["abstentionCount"], 0)
 
-    def test_unknown_card_reference_is_recorded_before_adoption(self):
-        board = self.board()
-        self.seed(board)
-        decision = self.outcome(board, "foreign_evidence")
-        self.assertEqual(decision["status"], "completed")
-        self.assertEqual(decision["evidence"], [{"kind": "card", "ref": "card-not-supplied"}])
-        self.assertEqual(decision["output"]["decision"]["evidence"], decision["evidence"])
 
     def test_task_routing_preferences_are_rejected_with_the_three_expressions(self):
         # The retired scenario recorded a positive task-preference outcome; the
@@ -779,7 +529,7 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertNotIn("policyCheck", decision["output"]["decision"])
         self.assertEqual(decision["policyCheck"], check)
 
-    def test_alternative_without_cards_or_annotations_completes_and_is_audited(self):
+    def test_alternative_without_model_notes_completes_and_is_audited(self):
         board = self.board()
         self.seed(board, preferences=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "prefer flash"}])
         self.use_helper(profile_id=SECOND_PROFILE_ID, evidence="none")
@@ -792,7 +542,6 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(decision["output"]["policyCheck"]["userPreference"], "alternative")
         self.assertNotIn("taskPreference", decision["output"]["policyCheck"])
         self.assertEqual(decision["evidence"], [])
-        self.assertEqual(decision["input"]["cards"], [])
         self.assertEqual(decision["input"]["annotations"], [])
 
     def test_answer_shape_json_and_path_boundaries_keep_one_attempt_each(self):
@@ -806,13 +555,14 @@ class DecisionFailureTests(DecisionTestCase):
                 decision = self.outcome(board, mode, request_id=mode)
                 self.assertEqual(decision["status"], "needs-host")
                 self.assertEqual(decision["output"]["code"], code)
+                self.assertEqual(decision["evidence"], [])
                 task = board.call("task_get", {"runId": decision["runId"]})["task"]
                 self.assertEqual(task["status"], "failed")
                 self.assertTrue(task["shutdownConfirmed"])
                 with board.store.db.read() as connection:
                     self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts WHERE task_id=?",
                                                         (decision["runId"],)).fetchone()[0], 1)
-        self.assertEqual(board.call("console_snapshot", {})["gate"]["readers"], 0)
+        self.assertEqual(self.open_readers(board), 0)
 
     def test_json_string_answer_is_parsed_by_the_generic_collector(self):
         board = self.board()
@@ -921,7 +671,7 @@ class DecisionFailureTests(DecisionTestCase):
         task = board.call("task_get", {"runId": request["runId"]})["task"]
         self.assertFalse(task["shutdownConfirmed"])
         self.assertEqual(task["attemptState"], "uncertain")
-        self.assertEqual(board.call("console_snapshot", {})["gate"]["readers"], 0)
+        self.assertEqual(self.open_readers(board), 0)
 
     def test_worker_deadline_is_bounded_without_inventing_native_stop_evidence(self):
         board = self.board()
@@ -934,7 +684,7 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(self.decision(board, request["decisionId"])["status"], "failed")
         task = board.call("task_get", {"runId": request["runId"]})["task"]
         self.assertFalse(task["shutdownConfirmed"])
-        self.assertEqual(board.call("console_snapshot", {})["gate"]["readers"], 0)
+        self.assertEqual(self.open_readers(board), 0)
 
     def test_restart_fences_a_running_decision_and_a_late_result_never_publishes(self):
         board = self.board()
@@ -944,7 +694,7 @@ class DecisionFailureTests(DecisionTestCase):
         client.register_worker("w-restart", adapter="dsh", capabilities=["dsh", "decision"])
         claim = client.claim("w-restart", "claim-restart", "n" * 32, task_id=first["runId"])["claim"]
         self.assertIsNotNone(claim)
-        self.assertEqual(board.call("console_snapshot", {})["gate"]["readers"], 1)
+        self.assertEqual(self.open_readers(board), 1)
 
         # A fresh store over the same state directory is exactly what a daemon restart
         # does: in-flight attempts become uncertain and the decision is fenced.
@@ -952,7 +702,7 @@ class DecisionFailureTests(DecisionTestCase):
         decision = self.decision(restarted, first["decisionId"])
         self.assertEqual(decision["status"], "stale")
         self.assertIn("restarted", decision["reason"])
-        self.assertEqual(restarted.call("console_snapshot", {})["gate"]["readers"], 0)
+        self.assertEqual(self.open_readers(restarted), 0)
 
         envelope = {
             **claim_tool_receipt(claim),
@@ -1080,8 +830,6 @@ class DecisionSurfaceTests(DecisionTestCase):
                 "decisionModel",
                 "tableRevision",
                 "expectedRevision",
-                "publishedRevision",
-                "noOp",
                 "reason",
                 "evidence",
                 "policyCheck",
@@ -1097,7 +845,6 @@ class DecisionSurfaceTests(DecisionTestCase):
                 "inputVerification",
                 "createdAt",
                 "updatedAt",
-                "pendingEvidenceRemaining",
             },
         )
         self.assertEqual(compact["selectedProfile"]["profileId"], SECOND_PROFILE_ID)
@@ -1137,120 +884,9 @@ class DecisionSurfaceTests(DecisionTestCase):
         self.assert_code("INVALID_ARGUMENT", board.call, "selection_request", {"requestId": "r", "task": "x", "extra": 1})
 
 
-class DecisionGrowthTests(DecisionTestCase):
-    def seed_history(self, board, count: int) -> None:
-        board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
-        self.seed(board)
-        for index in range(count):
-            board.call(
-                "evaluation_evidence_record",
-                {
-                    "profileId": PROFILE_ID,
-                    "kind": "observation",
-                    "summary": f"observation {index}",
-                    "source": "cli",
-                    "project": "fixture",
-                },
-            )
-
-    def test_hot_path_reads_fixed_size_counters_and_never_scans_the_ledger(self):
-        board = self.board()
-        self.seed_history(board, 150)
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 150)
-        statements: list[str] = []
-        original = board.store.db._configure
-
-        def configure(connection: sqlite3.Connection) -> None:
-            original(connection)
-            connection.set_trace_callback(statements.append)
-
-        board.store.db._configure = configure
-        try:
-            snapshot = board.call("console_snapshot", {})
-        finally:
-            board.store.db._configure = original
-        self.assertEqual(snapshot["pendingEvidence"], 150)
-        self.assertFalse([sql for sql in statements if "evaluation_samples" in sql])
-        evidence_statements = [sql for sql in statements if "evaluation_evidence" in sql]
-        self.assertTrue(evidence_statements)
-        for sql in evidence_statements:
-            self.assertIn("LIMIT", sql.upper(), sql)
-            self.assertNotIn("json_each", sql)
-        for sql in evidence_statements:
-            with board.store.db.read() as connection:
-                plan = [row["detail"] for row in connection.execute(f"EXPLAIN QUERY PLAN {sql}")]
-            # The newest-evidence page walks a bounded index range; it is never an
-            # unindexed table scan and never a temporary sort of the archive.
-            self.assertNotIn("SCAN evaluation_evidence", plan)
-            self.assertFalse([detail for detail in plan if "TEMP B-TREE" in detail], plan)
-            self.assertTrue(
-                [detail for detail in plan if "evaluation_evidence" in detail and "USING" in detail], plan
-            )
-        # The counters themselves are single primary-key lookups, not recounts.
-        for call in (
-            lambda connection: board.evaluation._pending_evidence(connection),
-            lambda connection: board.evaluation._sample_count(connection, PROFILE_ID),
-        ):
-            statements.clear()
-            board.store.db._configure = configure
-            try:
-                with board.store.db.read() as connection:
-                    call(connection)
-            finally:
-                board.store.db._configure = original
-            aggregate = [sql for sql in statements if "evaluation_aggregates" in sql]
-            self.assertEqual(len(aggregate), 1, statements)
-            self.assertNotIn("COUNT", aggregate[0].upper())
-            self.assertFalse([sql for sql in statements if "evaluation_samples" in sql])
-
-    def test_counters_never_drift_from_the_ledgers(self):
-        board = self.board()
-        self.seed_history(board, 20)
-        evidence_id = self.evidence(board, "task-1")
-        self.publish_cards(
-            board,
-            request_id="card-1",
-            command_id="card-1",
-            cards=[
-                {
-                    "profileId": PROFILE_ID,
-                    "summary": "consumes one reference",
-                    "strengths": [],
-                    "limitations": [],
-                    "risks": [],
-                    "evidenceIds": [evidence_id],
-                }
-            ],
-        )
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 20)
-        # Maintenance retirement keeps the earlier evidence incorporated in card history.
-        self.publish_cards(
-            board,
-            request_id="card-2",
-            command_id="card-2",
-            cards=[
-                {
-                    "profileId": PROFILE_ID,
-                    "summary": "released the reference",
-                    "strengths": [],
-                    "limitations": [],
-                    "risks": [],
-                    "evidenceIds": [],
-                }
-            ],
-        )
-        self.assertEqual(board.call("console_snapshot", {})["pendingEvidence"], 20)
-        with board.store.db.read() as connection:
-            self.assertIsNotNone(connection.execute("SELECT 1 FROM evaluation_evidence WHERE evidence_id=?", (evidence_id,)).fetchone())
-            history = connection.execute("SELECT evidence_ids_json FROM evaluation_card_history WHERE profile_id=? ORDER BY table_revision", (PROFILE_ID,)).fetchall()
-            self.assertTrue(any(evidence_id in json.loads(row["evidence_ids_json"]) for row in history))
-            ledger = connection.execute("SELECT COUNT(*) AS count FROM evaluation_evidence_pending").fetchone()["count"]
-            self.assertEqual(board.evaluation._pending_evidence(connection), int(ledger))
-            samples = connection.execute("SELECT COUNT(*) AS count FROM evaluation_samples").fetchone()["count"]
-            self.assertEqual(board.evaluation._sample_count(connection, PROFILE_ID), int(samples))
 
 class DecisionWorkerProcessTests(DecisionTestCase):
-    def test_independent_worker_records_native_logs_and_card_publication_stays_external(self):
+    def test_independent_worker_records_native_logs(self):
         board = self.board()
         self.seed(board)
         request = self.request(board, request_id="worker-pick")
@@ -1276,13 +912,7 @@ class DecisionWorkerProcessTests(DecisionTestCase):
         self.input_verify.assert_called_once_with(manifest, frozen_root, expected_digest)
         # A verified, stopped Router leaves only digests behind, not a repository copy.
         self.assertFalse(Path(frozen_root).exists())
-        self.publish_cards(board, request_id="worker-card", command_id="worker-card", cards=[{
-            "profileId": PROFILE_ID, "summary": "patched by the external Harness",
-            "strengths": [], "limitations": [], "risks": ["open fixture risk"], "evidenceIds": [],
-        }])
         snapshot = board.call("console_snapshot", {})
-        self.assertEqual(snapshot["cards"][0]["summary"], "patched by the external Harness")
-        self.assertFalse(snapshot["capabilities"]["maintenance"])
         self.assertEqual([item["kind"] for item in snapshot["decisions"]], ["select"])
         self.assertEqual(self.readonly_start.call_count, 1)
 

@@ -23,6 +23,9 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 import hey_my_buddy.cli.main as cli
 import hey_my_buddy.protocol.transport as transport
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.service.service import BoardService, CONTROL_OPERATIONS
+from hey_my_buddy.protocol.client import BoardClient
+from hey_my_buddy.protocol.contracts import BuddyControl
 
 #: Every CLI method that was removed by ADR-007, plus the ADR-008 removal of the
 #: internal maintenance call and the ADR-021 retirement of the paid review
@@ -45,6 +48,15 @@ RETIRED_METHODS = (
     "workspace-cleanup-apply",
     "evaluation-maintain",
     "evaluation-write-publish",
+    "evaluation-write-begin",
+    "evaluation-write-renew",
+    "evaluation-write-abort",
+    "evaluation-reader-begin",
+    "evaluation-reader-release",
+    "evaluation-evidence-record",
+    "evaluation-prepare",
+    "evaluation-history",
+    "assessment-publish",
     "harness-verify",
 )
 
@@ -102,6 +114,22 @@ class MethodSurfaceTests(unittest.TestCase):
                     cli.main([method, "{}"])
                 self.assertEqual(caught.exception.code, 2)
 
+    def test_retired_evaluation_operations_are_absent_from_every_public_surface(self):
+        for method in (
+            "evaluation_write_begin", "evaluation_write_renew", "evaluation_write_abort",
+            "evaluation_reader_begin", "evaluation_reader_release", "evaluation_evidence_record",
+            "evaluation_prepare", "evaluation_history", "assessment_publish",
+        ):
+            with self.subTest(method=method):
+                self.assertNotIn(method, CONTROL_OPERATIONS)
+                self.assertFalse(hasattr(BoardService, method))
+                self.assertFalse(hasattr(BuddyControl, method))
+                self.assertFalse(hasattr(BoardClient, method))
+        self.assertFalse(hasattr(BoardClient, "evaluation_write_publish"))
+        self.assertIn("user_policy_publish", CONTROL_OPERATIONS)
+        self.assertTrue(hasattr(BoardService, "user_policy_publish"))
+        self.assertTrue(hasattr(BuddyControl, "user_policy_publish"))
+
     def test_control_methods_are_the_current_governed_mutations(self):
         self.assertEqual(cli.CONTROL_METHODS, frozenset({"decide", "continue", "takeover", "cancel", "accept", "conclude", "reclaim", "scope-amend", "workspace-resolve"}))
 
@@ -116,9 +144,9 @@ class MethodSurfaceTests(unittest.TestCase):
         # it still maps onto exactly one named C-Two lifecycle operation.
         self.assertNotIn("console", cli.LOCAL_METHODS)
 
-    def test_worker_evaluation_and_selection_operations_stay_distinct(self):
-        # The governed goal lifecycle never absorbs the separate worker, evaluation
-        # or selection surfaces; they keep their names and their own operations.
+    def test_worker_configuration_and_selection_operations_stay_distinct(self):
+        # The governed goal lifecycle never absorbs the separate worker,
+        # configuration or selection surfaces.
         for method, operation in (
             ("workers", "worker_list"),
             ("worker-register", "worker_register"),
@@ -128,19 +156,13 @@ class MethodSurfaceTests(unittest.TestCase):
             ("worker-progress", "worker_progress"),
             ("worker-result", "worker_result"),
             ("worker-release", "worker_release"),
-            ("evaluation-write-begin", "evaluation_write_begin"),
             ("scope-amend", "workflow_scope_amend"),
             ("workspace-resolve", "workflow_workspace_resolve"),
             ("accept", "workflow_accept"),
             ("conclude", "workflow_conclude"),
             ("reclaim", "workflow_reclaim"),
             ("user-policy-publish", "user_policy_publish"),
-            ("assessment-publish", "assessment_publish"),
             ("model-profiles", "model_profiles"),
-            ("evaluation-reader-begin", "evaluation_reader_begin"),
-            ("evaluation-evidence-record", "evaluation_evidence_record"),
-            ("evaluation-prepare", "evaluation_prepare"),
-            ("evaluation-history", "evaluation_history"),
             ("selection-request", "selection_request"),
             ("selection-get", "selection_get"),
         ):

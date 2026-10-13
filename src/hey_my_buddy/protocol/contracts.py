@@ -148,37 +148,10 @@ class BuddyControl:
     def events_read(self, request_json: str) -> str:
         ...
 
-    # -- evaluation table ---------------------------------------------------
-    def evaluation_write_begin(self, request_json: str) -> str:
-        ...
-
-    def evaluation_write_renew(self, request_json: str) -> str:
-        ...
-
+    # -- user policy --------------------------------------------------------
     def user_policy_publish(self, request_json: str) -> str:
         """Publish authenticated user field patches."""
         raise NotImplementedError
-
-    def assessment_publish(self, request_json: str) -> str:
-        ...
-
-    def evaluation_write_abort(self, request_json: str) -> str:
-        ...
-
-    def evaluation_reader_begin(self, request_json: str) -> str:
-        ...
-
-    def evaluation_reader_release(self, request_json: str) -> str:
-        ...
-
-    def evaluation_evidence_record(self, request_json: str) -> str:
-        ...
-
-    def evaluation_prepare(self, request_json: str) -> str:
-        ...
-
-    def evaluation_history(self, request_json: str) -> str:
-        ...
 
     # -- bounded decisions --------------------------------------------------
     def selection_request(self, request_json: str) -> str:

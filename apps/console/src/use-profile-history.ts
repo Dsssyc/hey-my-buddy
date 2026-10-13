@@ -31,13 +31,11 @@ export function parseProfilePage(value: unknown): ProfilePage {
   const optionalList = (value: unknown) => value === undefined || Array.isArray(value);
   const valid = !!page
     && Array.isArray(page.profiles)
-    && Array.isArray(page.cards)
     && Array.isArray(page.preferences)
     && optionalList(page.preferenceOverrides)
     && optionalList(page.familyPreferences)
     && optionalList(page.familyAnnotations)
     && Array.isArray(page.modelConcurrency)
-    && !!page.sampleCounts && typeof page.sampleCounts === "object"
     && Number.isInteger(page.tableRevision)
     && (page.nextCursor === null || typeof page.nextCursor === "string");
   if (!valid) throw new Error("配置历史响应不完整，请检查服务版本。");
@@ -88,13 +86,11 @@ export function mergePage(previous: ProfilePage | null, next: ProfilePage): Prof
   if (previous.tableRevision !== next.tableRevision) return previous;
   return {
     profiles: addMissing(previous.profiles, next.profiles),
-    cards: addMissing(previous.cards, next.cards),
     preferences: addMissing(previous.preferences, next.preferences),
     preferenceOverrides: addMissing(previous.preferenceOverrides ?? [], next.preferenceOverrides ?? []),
     familyPreferences: addMissingFamilies(previous.familyPreferences ?? [], next.familyPreferences ?? []),
     familyAnnotations: addMissingFamilies(previous.familyAnnotations ?? [], next.familyAnnotations ?? []),
     modelConcurrency: addMissingFamilies(previous.modelConcurrency, next.modelConcurrency),
-    sampleCounts: { ...next.sampleCounts, ...previous.sampleCounts },
     tableRevision: next.tableRevision,
     nextCursor: next.nextCursor,
   };

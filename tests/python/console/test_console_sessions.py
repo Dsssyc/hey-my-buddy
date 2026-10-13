@@ -1,4 +1,4 @@
-"""Real HTTP coverage for one-time entry and single-writer browser sessions."""
+"""Real HTTP coverage for one-time entry and authenticated browser sessions."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
@@ -81,25 +81,12 @@ class ConsoleSessionTests(ConsoleTestCase):
         board = self.board()
         _, first = self.open_console(board)
         _, second = self.open_console(board)
-        for i, browser in enumerate((first, second)):
-            snapshot = browser.bootstrap()
-            self.assertTrue(snapshot['consoleSession']['canWrite'])
-            status, _, raw = browser.command('evaluation_write_begin',
-                {'requestId': f'grant-{i}', 'expectedRevision': snapshot['tableRevision'], 'kind': 'human'}, csrf=snapshot['csrfToken'])
-            self.assertEqual(status, 200, raw)
-            grant = json.loads(raw)['result']
-            status, _, raw = browser.command('evaluation_write_abort',
-                {**{k: grant[k] for k in ('writerId','generation','writerToken')}, 'commandId': f'abort-{i}'}, csrf=snapshot['csrfToken'])
-            self.assertEqual(status, 200, raw)
+        for browser in (first, second):
+            self.assertTrue(browser.bootstrap()['consoleSession']['canWrite'])
         snapshot = first.bootstrap()
-        status, _, raw = first.command('evaluation_write_begin',
-            {'requestId':'stale', 'expectedRevision': snapshot['tableRevision'] + 1, 'kind':'human'}, csrf=snapshot['csrfToken'])
-        self.assertEqual(status, 200, raw)
-        grant = json.loads(raw)['result']
         status, _, raw = first.command('user_policy_publish', {
-            **{k: grant[k] for k in ('writerId','generation','writerToken')},
-            'commandId':'stale-publish', 'expectedRevision':snapshot['tableRevision'] + 1,
-            'profileSettings':[]}, csrf=snapshot['csrfToken'])
+            'commandId': 'stale-publish', 'expectedRevision': snapshot['tableRevision'] + 1,
+            'profileSettings': []}, csrf=snapshot['csrfToken'])
         self.assertEqual(json.loads(raw)['error']['code'], 'REVISION_CONFLICT')
 
     def test_sessions_persist_hashed_and_restart_reauthenticates_cookie(self):
@@ -120,7 +107,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         self.assertEqual(snapshot['consoleSession']['id'], restored['consoleSession']['id'])
         self.assertTrue(restored['consoleSession']['canWrite'])
         self.assertNotEqual(snapshot['csrfToken'], restored['csrfToken'])
-        self.assertEqual(browser.command('evaluation_history', {}, csrf=restored['csrfToken'])[0], 200)
+        self.assertEqual(browser.command('selection_list', {}, csrf=restored['csrfToken'])[0], 200)
 
     def test_fixed_port_collision_is_explicit_and_nonloopback_is_refused(self):
         from hey_my_buddy.console.server import Console

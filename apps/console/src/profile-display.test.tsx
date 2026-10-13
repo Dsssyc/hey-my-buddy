@@ -46,7 +46,7 @@ function catalogSnapshot(): Snapshot {
     csrfToken: "fixture-csrf",
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     tableRevision: 2,
-    gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
+
     configuration: {
       revision: 1,
       routerProfileIds: [proMaxId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
@@ -55,14 +55,14 @@ function catalogSnapshot(): Snapshot {
     preferences: [],
     familyPreferences: [],
     preferenceOverrides: [],
-    cards: [],
+
     familyAnnotations: [],
-    evidence: [],
+
     decisions: [],
-    sampleCounts: { [flashOffId]: 6 },
+
     modelConcurrency: [],
     tasks: { pendingCount: 0 },
-    capabilities: { selection: false, maintenance: false, evaluationWriteGate: true },
+    capabilities: { selection: false },
   };
 }
 

@@ -32,7 +32,7 @@ describe("L4 ordered Router list configuration", () => {
 describe("snapshot upgrade boundary and routing health", () => {
   const configuration = { revision: 4, routerProfileIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "standard" };
   const snapshot = { csrfToken: "csrf", consoleSession: { id: "session", canWrite: true, reason: null },
-    tableRevision: 1, configuration, configurationError: null, gate: { phase: "open" }, profiles: [], cards: [],
+    tableRevision: 1, configuration, configurationError: null, profiles: [],
     preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], modelConcurrency: [],
     tasks: { pendingCount: 0 } };
   const error = { code: "router-settings-upgrade-required", message: "Router 设置需升级", revision: 4 };
@@ -242,22 +242,22 @@ describe("local read verification evidence", () => {
     await expect(abortedApi.task("run/a", controller.signal)).rejects.toBe(cancelled);
   });
 
-  it("attaches the command HTTP Date to configuration history without extending the result shape", async () => {
+  it("attaches the command HTTP Date to routing records without extending the result shape", async () => {
     const result = { entries: [{ id: "entry", updatedAt: "2001-01-01T00:00:00Z" }], nextCursor: "older" };
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({ ok: true, result }, later));
     const api = createApi("", fetcher);
-    const data = await api.command("evaluation_history", { limit: 50 }, "csrf");
+    const data = await api.command("selection_list", { limit: 50 }, "csrf");
     expect(data).toEqual(result);
     expect(api.readVerifiedAt(data)).toBe(Date.parse(later));
     expect(api.readVerifiedAt({ ...result })).toBeNull();
-    expect(fetcher.mock.calls[0][1]?.body).toBe(JSON.stringify({ operation: "evaluation_history", params: { limit: 50 } }));
+    expect(fetcher.mock.calls[0][1]?.body).toBe(JSON.stringify({ operation: "selection_list", params: { limit: 50 } }));
   });
 });
 
 describe("conditional reads (ETag / If-None-Match / 304)", () => {
   const snapshot = { csrfToken: "csrf", consoleSession: { id: "session", canWrite: true, reason: null },
     tableRevision: 1, configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "brief" },
-    configurationError: null, gate: { phase: "open" }, profiles: [], cards: [], preferences: [], familyPreferences: [],
+    configurationError: null, profiles: [], preferences: [], familyPreferences: [],
     preferenceOverrides: [], familyAnnotations: [], modelConcurrency: [], tasks: { pendingCount: 3 } };
   function jsonResponse(value: unknown, etag?: string) {
     const headers: Record<string, string> = { "Content-Type": "application/json" };

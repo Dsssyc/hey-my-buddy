@@ -77,8 +77,6 @@ export default {
   pane: {
     preference: "偏好",
     reasonFollow: "跟随模型时使用模型的偏好理由",
-    counted: "计入评价",
-    countedHint: "Host 验收或打回过、并且记为证据的执行次数；取消的、没有结论的与环境故障不算",
     enable: "启用 {{effort}}",
     override: "{{effort}} 的偏好",
     follow: "跟随模型",

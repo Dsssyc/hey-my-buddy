@@ -210,20 +210,20 @@ class CatalogObservationTests(BoardTestCase):
         self.assertEqual({key: current['familyAnnotations'][0][key] for key in ('adapter', 'provider', 'model')},
                          {'adapter': 'dsh', 'provider': 'fixture', 'model': 'alpha'})
         with self.e.db.read() as db:
-            self.assertIsNotNone(self.e._catalog(db).lookup('dsh', 'fixture', 'alpha'))
+            self.assertIsNotNone(catalog_store.current(db).lookup('dsh', 'fixture', 'alpha'))
 
     def test_partial_failure_preserves_last_known_without_affecting_other_harness(self):
         self.record(catalog())
         self.record(catalog(adapter='zcode', models=('beta',)))
         self.record(catalog(models=(), status='unknown'))
         with self.e.db.read() as db:
-            view = self.e._catalog(db)
+            view = catalog_store.current(db)
             self.assertIsNotNone(view.lookup('dsh', 'fixture', 'alpha'))
             self.assertIsNotNone(view.lookup('zcode', 'fixture', 'beta'))
             self.assertEqual(db.execute("SELECT status FROM catalog_current WHERE adapter='dsh'").fetchone()[0], 'unknown')
         self.record(catalog(models=()))
         with self.e.db.read() as db:
-            view = self.e._catalog(db)
+            view = catalog_store.current(db)
             self.assertIsNone(view.lookup('dsh', 'fixture', 'alpha'))
             self.assertIsNotNone(view.lookup('zcode', 'fixture', 'beta'))
 
@@ -234,8 +234,8 @@ class CatalogObservationTests(BoardTestCase):
         result = self.record(catalog(models=('old',)), slow)
         self.assertEqual(result['staleAdapters'], ['dsh'])
         with self.e.db.read() as db:
-            self.assertIsNotNone(self.e._catalog(db).lookup('dsh', 'fixture', 'new'))
-            self.assertIsNone(self.e._catalog(db).lookup('dsh', 'fixture', 'old'))
+            self.assertIsNotNone(catalog_store.current(db).lookup('dsh', 'fixture', 'new'))
+            self.assertIsNone(catalog_store.current(db).lookup('dsh', 'fixture', 'old'))
 
     def test_retired_configuration_history_is_paginated_and_new_profiles_disabled(self):
         self.record(catalog(models=('a', 'b', 'c')))

@@ -67,47 +67,13 @@ class RoutingHistoryTestCase(WorkflowTestCase):
     def history(self, board, run_id, **params):
         return board.call("workflow_get", {"runId": run_id, "routingHistory": params})["routingHistory"]
 
-    def maintain(self, board, request_id: str) -> dict:
-        """One historical ``kind='maintain'`` decision, seeded as read-only history.
-
-        The blackboard no longer executes maintenance requests and there is no
-        ``request_maintain``/``evaluation_maintain`` endpoint to call. The browsing
-        tests therefore establish the historical record directly, exactly like the
-        archived rows a real 0.6 deployment would carry: the row exists, is returned
-        by the compact readers, and can never start work or a model call.
-        """
-        from hey_my_buddy.blackboard.store.db import utc_now
-
-        decision_id = f"dec-{request_id}"
-        now = utc_now()
-        with board.store.db.write() as connection:
-            connection.execute(
-                "INSERT INTO evaluation_decisions(decision_id, status, task, profile_id, table_revision,"
-                " reason, evidence_ids_json, created_at) VALUES(?,?,?,?,?,?,?,?)",
-                (
-                    decision_id,
-                    "needs-host",
-                    f"historical maintenance {request_id}",
-                    None,
-                    0,
-                    "historical maintenance is read-only; an external Harness owns maintenance now",
-                    "[]",
-                    now,
-                ),
-            )
-            connection.execute(
-                "INSERT INTO decision_requests(decision_id, request_id, kind, input_fingerprint,"
-                " configuration_revision, expected_revision, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)",
-                (decision_id, request_id, "maintain", "historical-maintenance", 0, 0, now, now),
-            )
-        return {"decisionId": decision_id}
 
     def select_decision(self, board, request_id):
         return board.call("selection_request", {"requestId": request_id, "task": f"select for {request_id}"})
 
     def state_fingerprint(self, board) -> dict:
         tables = (
-            "tasks", "attempts", "events", "commands", "evaluation_readers", "evaluation_writers",
+            "tasks", "attempts", "events", "commands", "evaluation_readers",
             "evaluation_decisions", "decision_requests", "evaluation_revisions", "workflow_runs",
             "workflow_routes", "workflow_turns", "workflow_requests",
         )
@@ -306,58 +272,20 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
 
 
 class DecisionBrowseTests(RoutingHistoryTestCase):
-    def test_selection_list_filters_kind_before_the_limit_over_mixed_rows(self):
-        board = self.board()
-        self.seed(board)
-        self.select_decision(board, "pick-1")
-        tidy_one = self.maintain(board, "tidy-1")["decisionId"]
-        self.select_decision(board, "pick-2")
-        tidy_two = self.maintain(board, "tidy-2")["decisionId"]
-        pick_mid = self.select_decision(board, "pick-mid")["decisionId"]
-        tidy_three = self.maintain(board, "tidy-3")["decisionId"]
-        newest_select = self.select_decision(board, "pick-newest")["decisionId"]
-
-        page = board.call("selection_list", {"kind": "maintain", "limit": 2})
-        self.assertEqual(page["total"], 3)
-        self.assertEqual([item["decisionId"] for item in page["decisions"]], [tidy_three, tidy_two])
-        self.assertIsInstance(page["nextCursor"], int)
-        older = board.call("selection_list", {"kind": "maintain", "limit": 2, "before": page["nextCursor"]})
-        self.assertEqual([item["decisionId"] for item in older["decisions"]], [tidy_one])
-        self.assertIsNone(older["nextCursor"])
-        self.assertEqual(older["total"], 3)
-
-        # Every kind is returned newest first when no filter is given.
-        everything = board.call("selection_list", {"limit": 3})
-        self.assertEqual(
-            [item["decisionId"] for item in everything["decisions"]],
-            [newest_select, tidy_three, pick_mid],
-        )
-        self.assertEqual(everything["total"], 7)
-        # No-run maintenance decisions are returned exactly like selection decisions.
-        self.assertIsNone(next(item for item in page["decisions"] if item["decisionId"] == tidy_three)["runId"])
-
-        # Records are the compact view only: the audit payload is never included.
-        reference = board.call("selection_get", {"decisionId": tidy_three})["decision"]
-        listed = next(item for item in page["decisions"] if item["decisionId"] == tidy_three)
-        self.assertEqual(set(listed), set(reference))
-        for item in page["decisions"]:
-            self.assertFalse(
-                {"input", "output", "proposal", "requested", "readerId", "writerId", "inputSha256"} & set(item)
-            )
 
     def test_selection_list_pagination_is_stable_when_newer_decisions_arrive(self):
         board = self.board()
         self.seed(board)
-        decisions = [self.maintain(board, f"tidy-{index}")["decisionId"] for index in range(1, 6)]
-        first = board.call("selection_list", {"kind": "maintain", "limit": 2})
+        decisions = [self.select_decision(board, f"tidy-{index}")["decisionId"] for index in range(1, 6)]
+        first = board.call("selection_list", {"kind": "select", "limit": 2})
         self.assertEqual([item["decisionId"] for item in first["decisions"]], [decisions[4], decisions[3]])
         self.assertEqual(first["total"], 5)
         cursor = first["nextCursor"]
 
-        # Newer maintenance rows arrive between page reads; the cursor never shifts.
-        newer = [self.maintain(board, f"tidy-new-{index}")["decisionId"] for index in range(1, 3)]
-        second = board.call("selection_list", {"kind": "maintain", "limit": 2, "before": cursor})
-        third = board.call("selection_list", {"kind": "maintain", "limit": 2, "before": second["nextCursor"]})
+        # Newer selection rows arrive between page reads; the cursor never shifts.
+        newer = [self.select_decision(board, f"tidy-new-{index}")["decisionId"] for index in range(1, 3)]
+        second = board.call("selection_list", {"kind": "select", "limit": 2, "before": cursor})
+        third = board.call("selection_list", {"kind": "select", "limit": 2, "before": second["nextCursor"]})
         self.assertEqual([item["decisionId"] for item in second["decisions"]], [decisions[2], decisions[1]])
         self.assertEqual([item["decisionId"] for item in third["decisions"]], [decisions[0]])
         self.assertIsNone(third["nextCursor"])
@@ -368,18 +296,18 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
         self.assertEqual(collected, list(reversed(decisions)))
         self.assertFalse(set(newer) & set(collected))
 
-        fresh = board.call("selection_list", {"kind": "maintain", "limit": 2})
+        fresh = board.call("selection_list", {"kind": "select", "limit": 2})
         self.assertEqual([item["decisionId"] for item in fresh["decisions"]], [newer[1], newer[0]])
         self.assertEqual(fresh["total"], 7)
         # A full final page is not misreported as having another page.
-        exact = board.call("selection_list", {"kind": "maintain", "limit": 7})
+        exact = board.call("selection_list", {"kind": "select", "limit": 7})
         self.assertEqual(len(exact["decisions"]), 7)
         self.assertIsNone(exact["nextCursor"])
 
     def test_selection_list_rejects_invalid_kinds_limits_and_cursors(self):
         board = self.board()
         self.seed(board)
-        self.maintain(board, "tidy-invalid")
+        self.select_decision(board, "tidy-invalid")
         for params in (
             {"kind": "audit"},
             {"kind": 5},
@@ -397,7 +325,7 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
             with self.subTest(params=params):
                 self.assert_code("INVALID_ARGUMENT", board.call, "selection_list", params)
         # A cursor below every row is an honest empty page, not an error.
-        page = board.call("selection_list", {"kind": "maintain", "before": 1})
+        page = board.call("selection_list", {"kind": "select", "before": 1})
         self.assertEqual(page["decisions"], [])
         self.assertIsNone(page["nextCursor"])
         self.assertEqual(page["total"], 1)
@@ -405,7 +333,7 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
     def test_bounded_reads_take_no_lease_call_no_model_and_write_nothing(self):
         board = self.board()
         self.seed(board)
-        self.maintain(board, "tidy-read-only")
+        self.select_decision(board, "tidy-read-only")
         submitted = self.routed(board, request_id="route-read-only")
         before = self.state_fingerprint(board)
         head = board.store.head()
@@ -413,7 +341,7 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
             "hey_my_buddy.buddy.runtime.worker.Worker.run_once"
         ) as worker_run:
             self.history(board, submitted["runId"], limit=5)
-            board.call("selection_list", {"kind": "maintain", "limit": 5})
+            board.call("selection_list", {"kind": "select", "limit": 5})
             board.call("selection_list", {})
             board.call("workflow_get", {"runId": submitted["runId"], "routingHistory": {"before": 1}})
             self.assertEqual(self.state_fingerprint(board), before)
@@ -421,7 +349,7 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
             adapter_start.assert_not_called()
             worker_run.assert_not_called()
         # A read admits no evaluation reader and starts no attempt; the seed's own
-        # published writer row and command receipt are simply unchanged.
+        # publication receipt is simply unchanged.
         self.assertEqual(before["evaluation_readers"], 0)
         self.assertEqual(before["attempts"], 0)
         self.assertEqual(before["workflow_routes"], 1)

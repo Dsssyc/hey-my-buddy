@@ -5,10 +5,9 @@ import { App } from "./App";
 import { ApiError, createApi, errorText, isSessionExpiredRefusal } from "./api";
 import type { ConsoleApi } from "./api";
 import { createAuthorityLatch, sessionCanWrite } from "./console-session";
-import { QUEUE_POLL_MS } from "./use-editor";
 import { FILTER_DEBOUNCE_MS } from "./use-profile-history";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
-import type { ConsoleSession, Profile, Snapshot, Task, TaskQuery, WriterGrant } from "./types";
+import type { ConsoleSession, Profile, Snapshot, Task, TaskQuery } from "./types";
 import { listed, note, selectModel } from "./buddies/page.testing";
 import type { Workflow } from "./workflow-types";
 
@@ -63,34 +62,27 @@ const session = (): ConsoleSession => ({ id: "session-writer", canWrite: true, r
 
 type IdentityOutcome = "expired";
 type PublishOutcome = "ok" | "network" | IdentityOutcome;
-type Script = {
-  begin?: "active" | "queued" | IdentityOutcome;
-  renew?: "active" | "queued" | IdentityOutcome;
-  publish?: PublishOutcome | PublishOutcome[];
-};
+type Script = { publish?: PublishOutcome | PublishOutcome[] };
 
 function fixture(options: {
   script?: Script; records?: Task[]; workflows?: Map<string, Workflow>; failAfter?: number;
-  failWith?: unknown; queuedForever?: boolean;
+  failWith?: unknown;
 } = {}) {
   const profiles = catalog();
   let state: Snapshot = {
     csrfToken: "csrf", consoleSession: session(), tableRevision: 2,
-    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+
     configuration: { revision: 1, routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
     unavailableProfileCount: 1,
-    cards: profiles.map(p => ({ profileId: p.profileId, revision: 2, summary: `原评价 ${p.model} ${p.effort}`,
-      strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null })),
+
     familyAnnotations: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "原人工意见", revision: 1, updatedAt: null }],
-    preferences: [], familyPreferences: [], preferenceOverrides: [], evidence: [], decisions: [], sampleCounts: { [flashOff]: 4 },
+    preferences: [], familyPreferences: [], preferenceOverrides: [], decisions: [],
     modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }],
     tasks: { pendingCount: 0 },
-    capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
+    capabilities: { selection: true },
   };
   const workflows = options.workflows ?? new Map<string, Workflow>();
-  const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing",
-    state: "active", tableRevision: 2, expiresAt: new Date(Date.now() + 120000).toISOString() };
   const operations: string[] = [];
   const published: Record<string, unknown>[] = [];
   let snapshots = 0;
@@ -102,18 +94,6 @@ function fixture(options: {
     : options.script?.publish as PublishOutcome | undefined;
   const command = vi.fn(async (operation: string, params: Record<string, unknown>) => {
     operations.push(operation);
-    const scripted = options.script ?? {};
-    if (operation === "evaluation_write_begin") {
-      if (scripted.begin === "expired") throw new ApiError("CONSOLE_SESSION_EXPIRED", "login expired");
-      if (scripted.begin === "queued") return { ...grant, state: "waiting", phase: "draining", queuePosition: 2 };
-      return grant;
-    }
-    if (operation === "evaluation_write_renew") {
-      if (scripted.renew === "expired") throw new ApiError("CONSOLE_SESSION_EXPIRED", "login expired");
-      if (options.queuedForever || scripted.renew === "queued")
-        return { ...grant, state: "waiting", phase: "draining", queuePosition: 2 };
-      return { ...grant, state: "active", phase: "writing" };
-    }
     if (operation === "user_policy_publish") {
       published.push(params);
       const outcome = nextPublish();
@@ -121,15 +101,14 @@ function fixture(options: {
       if (outcome === "expired") throw new ApiError("CONSOLE_SESSION_EXPIRED", "login expired");
       return { published: true, tableRevision: 3 };
     }
-    if (operation === "evaluation_write_abort") return { aborted: true };
     if (operation === "workflow_get") {
       const value = workflows.get(String(params.runId));
       if (!value) throw new Error(`Unknown run: ${String(params.runId)}`);
       return structuredClone(value);
     }
     if (operation === "model_profiles") {
-      return { profiles: [], cards: [], familyAnnotations: [], preferences: [], preferenceOverrides: [], familyPreferences: [], modelConcurrency: [],
-        sampleCounts: {}, tableRevision: state.tableRevision, nextCursor: null };
+      return { profiles: [], familyAnnotations: [], preferences: [], preferenceOverrides: [], familyPreferences: [], modelConcurrency: [],
+ tableRevision: state.tableRevision, nextCursor: null };
     }
     if (operation === "selection_get") {
       return { decision: { decisionId: String(params.decisionId), kind: "select", status: "completed",
@@ -201,8 +180,8 @@ function envelope(consoleSession: unknown, include = true) {
     tableRevision: 2,
     configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "fast", routingBudget: "standard" },
-    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    profiles: [], cards: [], familyAnnotations: [], preferences: [], familyPreferences: [], preferenceOverrides: [], modelConcurrency: [], tasks: { pendingCount: 0 },
+
+    profiles: [], familyAnnotations: [], preferences: [], familyPreferences: [], preferenceOverrides: [], modelConcurrency: [], tasks: { pendingCount: 0 },
     csrfToken: "csrf",
     ...(include ? { consoleSession } : {}),
   };
@@ -395,7 +374,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     // The lost publish reply is staged for a deliberate retry with the same id.
     expect(await screen.findByText(/保存结果未知/)).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "重试同一保存" }).length).toBeGreaterThan(0);
-    expect(f.operations).toEqual(["evaluation_write_begin", "user_policy_publish"]);
+    expect(f.operations).toEqual(["user_policy_publish"]);
     const commandId = f.published[0].commandId;
 
     // The next poll reports the invalid login. The staged payload must not be
@@ -464,12 +443,12 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(screen.queryByText(/保存结果未知/)).toBeNull();
     expect(screen.getByRole("button", { name: "保存" })).toBeTruthy();
     await new Promise(resolve => setTimeout(resolve, 900));
-    expect(f.operations).toEqual(["evaluation_write_begin", "user_policy_publish"]);
+    expect(f.operations).toEqual(["user_policy_publish"]);
     expect(f.published).toHaveLength(1);
   });
 
   it("preserves the draft when an in-flight save is refused with the 401 login-expired code", async () => {
-    const f = fixture({ script: { begin: "expired" } });
+    const f = fixture({ script: { publish: "expired" } });
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
@@ -481,68 +460,11 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(note()).toHaveProperty("value", "原人工意见被拒绝的保存");
     // A definite refusal is not retried: no begin replay, no renew, no abort.
     await new Promise(resolve => setTimeout(resolve, 900));
-    expect(f.operations).toEqual(["evaluation_write_begin"]);
-    expect(f.published).toHaveLength(0);
+    expect(f.operations).toEqual(["user_policy_publish"]);
+    expect(f.published).toHaveLength(1);
   });
 
-  it("stops renewing a queued intent refused with the 401 login-expired code and releases nothing", async () => {
-    const f = fixture({ script: { begin: "queued", renew: "expired" } });
-    const user = userEvent.setup();
-    window.location.hash = "#buddies";
-    render(<App suppliedApi={f.api} />);
-    await listed(2, 3);
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "排队后被接管");
-    await user.click(screen.getByRole("button", { name: "保存" }));
-    expect((await screen.findAllByText(saveRefusal, {}, { timeout: 4000 })).length).toBeGreaterThan(0);
-    expect(note()).toHaveProperty("value", "原人工意见排队后被接管");
-    // The refused wait ends: exactly one renew, no release, no second renew loop.
-    await new Promise(resolve => setTimeout(resolve, 1200));
-    expect(f.operations.filter(operation => operation === "evaluation_write_renew")).toHaveLength(1);
-    expect(f.operations).not.toContain("evaluation_write_abort");
-    expect(f.published).toHaveLength(0);
-    expect(screen.queryByRole("button", { name: "取消等待" })).toBeNull();
-  });
-
-  it("stops a queued wait on a polled invalid snapshot without sending another renew", async () => {
-    const f = fixture({ script: { begin: "queued", renew: "expired" }, queuedForever: true });
-    const user = userEvent.setup();
-    window.location.hash = "#buddies";
-    render(<App suppliedApi={f.api} />);
-    await listed(2, 3);
-    await selectModel(user, FLASH, "DSH");
-    await user.type(note(), "排队后只读");
-    vi.useFakeTimers();
-    try {
-      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "保存" })); });
-      for (let i = 0; i < 50 && !screen.queryByRole("button", { name: "取消等待" }); i++) {
-        await act(async () => { await Promise.resolve(); });
-      }
-      expect(screen.getByRole("button", { name: "取消等待" })).toBeTruthy();
-      // The queue poll's renew is answered with the 401 login-expired refusal.
-      f.expireSession();
-      await readSnapshotOnForeground(f.api.snapshot);
-      for (let i = 0; i < 50 && screen.queryByRole("button", { name: "取消等待" }); i++) {
-        await act(async () => { await Promise.resolve(); });
-      }
-      await act(async () => { await vi.advanceTimersByTimeAsync(QUEUE_POLL_MS * 2); });
-      for (let i = 0; i < 50 && screen.queryByRole("button", { name: "取消等待" }); i++) {
-        await act(async () => { await Promise.resolve(); });
-      }
-      // The queue poll's renew is refused with the 401: the wait stops there,
-      // nothing is released or retried, and the draft stays. No takeover copy.
-      expect(f.operations.filter(operation => operation === "evaluation_write_renew")).toHaveLength(1);
-      expect(f.operations).not.toContain("evaluation_write_abort");
-      expect(f.operations).not.toContain("user_policy_publish");
-      expect(screen.queryByRole("button", { name: "取消等待" })).toBeNull();
-      expect(screen.queryByText(bannerNotice)).toBeNull();
-      expect(note()).toHaveProperty("value", "原人工意见排队后只读");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps task details read-only for every record kind, whichever session renders them (U4)", async () => {
+      it("keeps task details read-only for every record kind, whichever session renders them (U4)", async () => {
     const plain = goal("plain-task", "普通待执行任务", { workflow: undefined });
     const failed = retryable("failed-task", "可重试任务");
     const awaiting = goal("governed-task", "待协助目标", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
@@ -605,7 +527,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(writer.operations.every(operation => operation === "workflow_get")).toBe(true);
   });
 
-  it("keeps browsing, task details, routing and evaluation history readable for any logged-in session", async () => {
+  it("keeps browsing, task details and routing records readable for any logged-in session", async () => {
     const awaiting = goal("browse-task", "可浏览任务", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
     const workflows = new Map<string, Workflow>([["browse-task", workflow(awaiting, {
       executionConfiguration: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" },

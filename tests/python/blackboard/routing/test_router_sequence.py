@@ -37,9 +37,7 @@ BASE_INPUT = {
     "tableRevision": 7,
     "task": "fix the parser",
     "profiles": [{"profileId": "dsh:fixture:alpha:max"}, {"profileId": "dsh:fixture:bravo:max"}],
-    "cards": [],
     "preferences": [],
-    "evidence": [],
     "annotations": [],
     "policyFacts": {},
     "outputSchema": {"type": "object"},
@@ -77,7 +75,7 @@ class RouterSequenceTestCase(BoardTestCase):
         with self.board_.store.db.write() as db:
             db.execute(
                 "INSERT INTO evaluation_decisions(decision_id,status,task,table_revision,reason,"
-                "evidence_ids_json,created_at) VALUES('dec-1','queued','task',0,'','[]',?)", (T0,))
+                "created_at) VALUES('dec-1','queued','task',0,'',?)", (T0,))
             db.execute(
                 "INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,"
                 "expected_revision,requested_json,created_at,updated_at)"

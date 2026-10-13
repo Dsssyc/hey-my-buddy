@@ -76,8 +76,6 @@ export default {
   pane: {
     preference: "Preference",
     reasonFollow: "Following the model uses its preference reason",
-    counted: "Counted in evaluation",
-    countedHint: "Executions a Host accepted or rejected that were recorded as evidence; cancelled, unreviewed and infrastructure failures do not count",
     enable: "Enable {{effort}}",
     override: "Preference of {{effort}}",
     follow: "Follow model",

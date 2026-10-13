@@ -1347,10 +1347,6 @@ class BoardStore:
                 )
                 task = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task["task_id"],)).fetchone()
                 response = {"task": self._decorate(connection, task), "duplicate": False}
-            # The verdict can arrive after reports about this attempt were recorded:
-            # re-derive their verification now, so an accepted attempt counts as one
-            # sample and an unreviewed one still does not.
-            self.evaluation.refresh_task_evidence(connection, task, self.now())
             if command_id:
                 self._store_receipt(
                     connection, command_id, "task.acknowledge", request, response, task_id=task["task_id"]
@@ -1685,7 +1681,7 @@ class BoardStore:
                             )
                             continue
                 # A decision task is admitted *here*, inside the same transaction that
-                # claims it: the selection reader or the maintenance writer grant is
+                # claims it: the selection reader is
                 # bound to this attempt and the exact bounded model input is persisted
                 # before any process exists. A blocked decision stays queued, holds no
                 # execution slot and is skipped for the next candidate.

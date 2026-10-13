@@ -208,14 +208,14 @@ class RoutingHealthTests(BoardTestCase):
         self.assertEqual(health["lastSuccessAt"], success_at)
         self.assertEqual(health["lastSuccessDecisionId"], success_id)
 
-    def test_reads_are_diagnostic_and_maintenance_is_outside_selection_health(self):
-        self.settle("failed", code="timeout", kind="maintain")
+    def test_reads_are_diagnostic_and_do_not_write(self):
+        self.settle("failed", code="timeout")
         with self.db.read() as connection:
             before = list(connection.iterdump())
         empty = self.coordinator.health_summary()
         self.assertFalse(empty["available"])
         self.assertEqual(empty["reasonCode"], "router-not-configured")
-        self.assertEqual(empty["sampleCount"], 0)
+        self.assertEqual(empty["sampleCount"], 1)
         self.assertIsNone(empty["lastSuccessAt"])
         self.assertEqual(self.coordinator.health_summary(), empty)
         with self.db.read() as connection:

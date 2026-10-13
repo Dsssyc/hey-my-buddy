@@ -107,7 +107,13 @@ class CatalogTrustTests(BoardTestCase):
         self.assertEqual(self.events(), before_events)
 
     def test_failed_pending_insert_rolls_back_the_whole_catalog_publication(self):
-        from blackboard.store.test_migrations import rows
+        def rows(db):
+            names = [row[0] for row in db.execute(
+                "SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name"
+            )]
+            return {name: [tuple(row) for row in db.execute(f'SELECT * FROM "{name}" ORDER BY rowid')]
+                    for name in names}
+
         self.record(reading())
         observation = catalog_store.begin(self.evaluation)['observationId']
         with self.board.store.db.write() as db:
@@ -144,7 +150,7 @@ class CatalogTrustTests(BoardTestCase):
         self.assertEqual([p['profile_id'] for p in profiles], ['dsh:fixture:alpha:max'])
         self.assertTrue(profiles[0]['available'])
         with self.board.store.db.read() as db:
-            view = self.evaluation._catalog(db)
+            view = catalog_store.current(db)
             self.assertIsNotNone(view.lookup('dsh', 'fixture', 'alpha'))
             self.assertIsNone(view.lookup('dsh', 'fixture', 'beta'))
         self.assertEqual(self.events(), [])

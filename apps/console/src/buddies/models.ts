@@ -158,4 +158,3 @@ export function reasonTexts(reasons: string[], t: TFunction<"buddies">, harnessS
 export function modelIdentity(family: { adapter: string; provider: string; profiles: Profile[] }): string {
   return `${family.adapter} / ${family.provider} / ${family.profiles[0].model}`;
 }
-

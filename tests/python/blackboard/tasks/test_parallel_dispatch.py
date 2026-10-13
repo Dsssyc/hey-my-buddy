@@ -126,15 +126,13 @@ class CapacityTestCase(BoardTestCase):
     def seed_evaluation(self, board, *, model_limit: int | None = None) -> dict:
         """Enable two candidates so capacity tests exercise actual Router work."""
         refreshed = board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
-        grant = board.console_call(
-            "evaluation_write_begin", {"requestId": "seed", "expectedRevision": refreshed["tableRevision"], "kind": "human"}
-        )
+        expected_revision = refreshed["tableRevision"]
         params = {
             "commandId": "seed-1",
-            "writerId": grant["writerId"],
-            "generation": grant["generation"],
-            "writerToken": grant["writerToken"],
-            "expectedRevision": grant["tableRevision"],
+
+
+
+            "expectedRevision": expected_revision,
             "profileSettings": [{"profileId": PROFILE_ID, "enabled": True},
                                 {"profileId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True}],
             "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [PROFILE_ID]},
@@ -977,15 +975,11 @@ class DaemonPoolTests(CapacityTestCase):
             opened = client.call("console", {"action": "open"})
             browser = Browser(opened["url"])
             csrf = browser.bootstrap()["csrfToken"]
-            status, _headers, body = browser.command("evaluation_write_begin", {
-                "requestId": "pool-seed", "expectedRevision": refreshed["tableRevision"], "kind": "human",
-            }, csrf=csrf)
-            self.assertEqual(status, 200, body)
-            grant = json.loads(body)["result"]
+            expected_revision = refreshed["tableRevision"]
             status, _headers, body = browser.command("user_policy_publish", {
-                "commandId": "pool-seed-1", "writerId": grant["writerId"],
-                "generation": grant["generation"], "writerToken": grant["writerToken"],
-                "expectedRevision": grant["tableRevision"],
+                "commandId": "pool-seed-1",
+
+                "expectedRevision": expected_revision,
                 # Keep this a real Router attempt competing for the free pool
                 # slot; a sole legal candidate is now resolved synchronously.
                 "profileSettings": [{"profileId": PROFILE_ID, "enabled": True},

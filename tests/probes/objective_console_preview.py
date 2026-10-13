@@ -12,10 +12,10 @@ Safety boundary:
   to host ``127.0.0.1`` without a port, so emitting one here could clobber a
   real private console on another port; the fixed synthetic session and CSRF
   strings exist only inside the JSON snapshot.
-* All mutation POSTs are refused. ``POST /api/command`` serves the same five
+* All mutation POSTs are refused. ``POST /api/command`` serves four
   read-only operations the real console allows (``workflow_get``,
-  ``selection_get``, ``selection_list``, ``model_profiles``,
-  ``evaluation_history``) with fixed-shape fixture payloads, and answers a
+  ``selection_get``, ``selection_list``, ``model_profiles``)
+  with fixed-shape fixture payloads, and answers a
   check of the harnesses (``capabilities``) with the same synthetic rows
   without probing anything. Operations the
   0.15.1 browser allowlist removed (decide/continue/acknowledge/takeover/
@@ -134,9 +134,6 @@ CATALOG = (
 LOGGED_OUT_HARNESS = "claude"
 PENDING_MODEL = ("zcode", "zai", "glm-5")
 NEW_MODEL = ("codex", "openai", "gpt-5-mini")
-SAMPLE_COUNTS = {"dsh:deepseek-official:deepseek-flash:off": 41, "dsh:deepseek-official:deepseek-flash:max": 12,
-                 "codex:openai:gpt-5-codex:high": 7}
-
 #: The one 503 message both the server's error scenario and the emitted
 #: ``error/`` fixtures use, so the frontend test asserts the same string.
 ERROR_SCENARIO_MESSAGE = "synthetic preview: simulated read failure (--scenario error)"
@@ -183,11 +180,10 @@ MARKER_SUMMARY = {"dispatch": "synthetic dispatch · preview fixture",
                   "cancel": "cancelled · synthetic Host cancellation",
                   "takeover": "takeover · synthetic host handover"}
 
-#: The 0.15.1 browser command allowlist: five reads plus settings operations
+#: The preview's browser command allowlist: four reads plus settings operations
 #: and objective_stop (console.md). Everything else is METHOD_NOT_FOUND.
 ALLOWED_OPERATIONS = (
-    "evaluation_history", "selection_get", "selection_list", "model_profiles", "workflow_get",
-    "evaluation_write_begin", "evaluation_write_renew", "user_policy_publish", "evaluation_write_abort",
+    "selection_get", "selection_list", "model_profiles", "workflow_get", "user_policy_publish",
     "model_catalog_refresh", "objective_stop", "capabilities",
 )
 #: Operations the 0.15.1 read-only repair removed from the browser surface.
@@ -200,8 +196,7 @@ REMOVED_OPERATIONS = (
 #: The exact read-only operation set of the real console (console_sessions.py).
 #: A 403 CONSOLE_READ_ONLY would latch the browser session as read-only, so every
 #: one of them must be answered instead of refused.
-READ_OPERATIONS = ("workflow_get", "selection_get", "selection_list", "model_profiles",
-                   "evaluation_history")
+READ_OPERATIONS = ("workflow_get", "selection_get", "selection_list", "model_profiles")
 
 STATUS_BY_CODE = {"INVALID_ARGUMENT": 400, "METHOD_NOT_FOUND": 404, "NOT_FOUND": 404, "FORBIDDEN": 403,
                   "CONSOLE_READ_ONLY": 403, "UNSUPPORTED": 501, "SERVICE_UNAVAILABLE": 503,
@@ -1305,10 +1300,6 @@ def concurrency_rows() -> list[dict]:
             for adapter, provider, model, _efforts, _enabled in CATALOG]
 
 
-def sample_counts() -> dict:
-    return {view["profileId"]: SAMPLE_COUNTS.get(view["profileId"], 0) for view in profile_views()}
-
-
 def harness_account(adapter: str, status: str, *, account_type: str | None = None,
                     reason: str | None = None, guidance: str | None = None) -> dict:
     """The native login facts displayed by the console."""
@@ -1431,7 +1422,6 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
         "consoleSession": {"id": SYNTHETIC_SESSION_ID, "canWrite": writable,
                            "reason": None if writable else "superseded"},
         "tableRevision": 7,
-        "gate": {"phase": "open", "readers": 0, "waitingWriters": 0, "writer": None},
         "configuration": {"revision": 1, "routerProfileIds": [entry["profileId"] for entry in routers],
                           "routerRetryIntervalSeconds": 600,
                           "defaultRoutingMode": "fast", "routingBudget": "standard",
@@ -1442,7 +1432,7 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
         "modelConcurrency": concurrency_rows(),
         "harnesses": harness_rows(),
         "unavailableProfileCount": sum(1 for profile in profiles if not profile["available"]),
-        **policy_views(), "cards": [], "evidence": [], "decisions": [],
+        **policy_views(), "decisions": [],
         "routingHealth": {"windowSize": 20, "sampleCount": 4, "failureCount": 1,
                           "consecutiveFailures": 0, "abstentionCount": 1, "cancelledCount": 1, "staleCount": 0,
                           "budgetExhaustedCount": 0, "boundsRejectedCount": 1, "inputChangedCount": 0,
@@ -1451,11 +1441,9 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
                           "routers": routers,
                           "recentFailures": [{"decisionId": ROUTING_A2["decisionId"], "runId": "preview-run-a2",
                                               "at": instant(8, 36), "code": "routing-bounds-rejected"}]},
-        "pendingEvidence": 0, "sampleCounts": sample_counts(),
         "tasks": {"pendingCount": pending_root_count()},
-        "capabilities": {"selection": True, "maintenance": False, "maintenanceMode": "harness-owned",
+        "capabilities": {"selection": True,
                          "decisionAdapter": True, "decisionAdapterReason": "synthetic preview only",
-                         "evaluationWriteGate": True, "readerAdmission": True, "evidenceRecord": True,
                          "modelCatalogDiscovery": False, "taskControl": False,
                          "consoleAssets": assets_ready, "previewSynthetic": True},
     }
@@ -1469,12 +1457,11 @@ def decision_view(router: dict) -> dict:
             "profileId": None, "selectedProfile": routing["selectedProfile"],
             "decisionModel": {"requested": None, "resolved": None, "observed": None},
             "tableRevision": routing["tableRevision"] or 7, "expectedRevision": 7,
-            "publishedRevision": None, "noOp": False, "reason": routing["reason"], "evidenceIds": [],
+            "reason": routing["reason"], "evidence": [],
             "routingMode": routing["routingMode"], "requestedRoutingMode": routing["requestedRoutingMode"],
             "fallback": routing["fallback"], "policyCheck": routing["policyCheck"],
             "budget": routing["budget"], "usage": routing["usage"],
-            "createdAt": router["createdAt"], "updatedAt": router["updatedAt"],
-            "pendingEvidenceRemaining": 0}
+            "createdAt": router["createdAt"], "updatedAt": router["updatedAt"]}
 
 
 def selection_get(params: dict) -> dict:
@@ -1493,9 +1480,8 @@ def selection_get(params: dict) -> dict:
         routing = router["routing"]
         view.update({"attemptId": None, "generation": 1,
                      "configurationRevision": routing["configurationRevision"], "readerId": None,
-                     "writerId": None, "writerGeneration": None, "autoPublish": False,
                      "requested": {"constraints": routing["constraints"]}, "input": None,
-                     "inputSha256": None, "output": None, "proposal": None,
+                     "inputSha256": None, "output": None,
                      "requestedProfile": routing["selectedProfile"]})
     return {"decision": view}
 
@@ -1588,11 +1574,8 @@ def command_result(scenario: str, operation: str, params: Any) -> dict:
         result = {"harnesses": rows}
     elif operation == "model_profiles":
         profiles = profile_views()
-        result = {"profiles": profiles, "cards": [], **policy_views(),
-                  "sampleCounts": sample_counts(),
+        result = {"profiles": profiles, **policy_views(),
                   "modelConcurrency": concurrency_rows(), "tableRevision": 7, "nextCursor": None}
-    else:
-        result = {"revisions": [], "nextCursor": None, "total": 0}
     if scenario == "error":
         # Validate first, then simulate the read failure: a missing or unknown
         # identifier still answers 400/404 instead of being masked by the 503.
@@ -1615,7 +1598,7 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
         f"GET  {base}/api/backup-preflight",
         f"GET  {base}/api/runtime-version",
         f"POST {base}/api/command  workflow_get · selection_get · selection_list · "
-        f"model_profiles · evaluation_history   (removed ops: 404; writes incl. objective_stop: 403)",
+        f"model_profiles   (removed ops: 404; writes incl. objective_stop: 403)",
     )
 
 

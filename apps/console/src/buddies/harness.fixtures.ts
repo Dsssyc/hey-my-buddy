@@ -53,14 +53,14 @@ export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
     csrfToken: "csrf",
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     tableRevision: 4,
-    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+
     configuration: { revision: 1, routerProfileIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     profiles: [profile],
-    preferences: [], familyPreferences: [], preferenceOverrides: [], cards: [], familyAnnotations: [], evidence: [], decisions: [],
-    sampleCounts: {},
+    preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], decisions: [],
+
     modelConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
     tasks: { pendingCount: 0 },
-    capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
+    capabilities: { selection: true },
     harnesses: rows,
   };
 }

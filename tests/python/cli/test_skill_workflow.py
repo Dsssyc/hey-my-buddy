@@ -86,7 +86,6 @@ class SkillWorkflowTests(unittest.TestCase):
             ("operations.md", "backup"),
             ("console.md", "console"),
             ("workflow.md", "routing"),
-            ("evaluation-maintenance.md", "assessment"),
             ("harnesses.md", "unavailable"),
         ):
             with self.subTest(reference=relative, marker=marker):

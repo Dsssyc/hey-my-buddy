@@ -105,8 +105,8 @@ class CurrentRouterTestCase(BoardTestCase):
         with self.board_.store.db.write() as db:
             db.execute(
                 "INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,table_revision,reason,"
-                "evidence_ids_json,created_at) VALUES(?,?,?,?,?,?,?,?)",
-                (decision, "failed", "task", profile_id, 0, "", "[]", at))
+                "created_at) VALUES(?,?,?,?,?,?,?)",
+                (decision, "failed", "task", profile_id, 0, "", at))
             db.execute(
                 "INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,attempt_id,"
                 "generation,expected_revision,requested_json,output_json,created_at,updated_at)"
@@ -535,7 +535,7 @@ class HistoryProjectionTests(CurrentRouterTestCase):
             db.execute("INSERT INTO events(task_id,attempt_id,revision,kind,payload_json,created_at)"
                        " VALUES(NULL,NULL,NULL,'router.answered','{\"unrelated\": true}',?)", (T0,))
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,table_revision,"
-                       "reason,evidence_ids_json,created_at) VALUES('dec-bad','failed','t',NULL,0,'','[]',?)", (T0,))
+                       "reason,created_at) VALUES('dec-bad','failed','t',NULL,0,'',?)", (T0,))
             db.execute("INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,"
                        "expected_revision,requested_json,output_json,created_at,updated_at)"
                        " VALUES('dec-bad','route-bad','select','digest',0,'{broken','{}',?,?)", (T0, T0))

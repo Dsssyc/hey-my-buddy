@@ -83,7 +83,7 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
             self.assertEqual(receipt["result"]["turn"]["provenance"]["adapter"], "claude")
             self.assertEqual((self.repo / "tracked.txt").read_text(), "base\n")
 
-    def test_quota_failure_is_persisted_as_harness_error_without_a_capability_sample(self):
+    def test_quota_failure_is_persisted_as_harness_error_without_retry(self):
         self.case = "quota-rejected"
         with self.daemon(env=self.env()):
             view, receipt = self.execute_fixture()
@@ -96,17 +96,6 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
             self.assertNotIn("workspaceSeal", result)
             self.assertEqual(view["counts"]["turns"], 1, "No automatic retry is allowed")
             self.assertEqual(set(result["quotaFailure"]), {"rateLimitType", "resetsAt"})
-            # Exercise the actual shared evaluator with the persisted failure,
-            # not a model's prose or a fabricated quota marker.
-            from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore
-            from hey_my_buddy.blackboard.store.store import BoardStore
-            evaluator = EvaluationStore(BoardStore(self.directory))
-            counted, basis = evaluator._sample_basis({
-                "taskState": view["task"]["state"], "shutdownConfirmed": meta["shutdownConfirmed"],
-                "resultStatus": meta["status"], "error": meta["error"]},
-                CONFIGURATION, source="host-rejection")
-            self.assertFalse(counted)
-            self.assertEqual(basis["excluded"], "infrastructure")
 
 
 class ClaudeCatalogRuleTests(unittest.TestCase):

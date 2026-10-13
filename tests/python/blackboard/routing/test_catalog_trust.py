@@ -44,16 +44,11 @@ class CatalogTrustRoutingTests(BoardTestCase):
     def test_user_pin_on_a_pending_profile_still_resolves(self):
         self.evaluation.record_catalog(reading(models=()))
         revision = self.board.call("console_snapshot", {})["tableRevision"]
-        grant = self.board.console_call(
-            "evaluation_write_begin", {"requestId": "pin", "expectedRevision": revision, "kind": "human"})
         pinned = self.board.console_call(
             "user_policy_publish",
             {
                 "commandId": "pin-1",
-                "writerId": grant["writerId"],
-                "generation": grant["generation"],
-                "writerToken": grant["writerToken"],
-                "expectedRevision": grant["tableRevision"],
+                "expectedRevision": revision,
                 "preferenceChanges": [{"profileId": "dsh:fixture:alpha:max", "mode": "pin", "reason": "still my model"}],
             },
         )

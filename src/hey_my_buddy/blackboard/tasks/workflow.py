@@ -4227,9 +4227,6 @@ class WorkflowCoordinator:
         run_row = self._run_row(connection, run_id)
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
         view = self.compact(connection, run_row, task)
-        # An accepted attempt counts as one reviewed sample, exactly like the
-        # infrastructure acknowledgement path; the verdict is never inherited implicitly.
-        self.board.evaluation.refresh_task_evidence(connection, task, now)
         response = {**view, "verdict": "accepted", "duplicate": False,
                     "targetRunId": run_id, "targetRevision": run_row["revision"],
                     "integrationId": integration["integration_id"]}

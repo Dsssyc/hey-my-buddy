@@ -13,7 +13,6 @@ import type {
   PreferenceOverride,
   Profile,
   Snapshot,
-  WriterGrant,
 } from "./types";
 
 /**
@@ -105,7 +104,7 @@ function snapshot(options: Options = {}): HarnessSnapshot {
     csrfToken: "csrf",
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     tableRevision: 4,
-    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+
     configuration: options.configurationUnavailable ? null : { revision: 1,
       routerProfileIds: options.routerProfileId === undefined ? [mediumId] : options.routerProfileId === null ? [] : [options.routerProfileId],
       routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard" },
@@ -114,18 +113,18 @@ function snapshot(options: Options = {}): HarnessSnapshot {
     preferences: [],
     familyPreferences: options.familyPreferences ?? [],
     preferenceOverrides: options.preferenceOverrides ?? [],
-    cards: [],
+
     familyAnnotations: [],
-    evidence: [],
+
     decisions: [],
-    sampleCounts: {},
+
     modelConcurrency: [
       { ...sonnet, limit: 2, active: 0 },
       { ...sol, limit: 2, active: 0 },
       { ...glm, limit: 2, active: 0 },
     ],
     tasks: { pendingCount: 0 },
-    capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
+    capabilities: { selection: true },
   };
   return { ...base, preferences: effective(base), harnesses: harnesses() };
 }
@@ -134,7 +133,7 @@ function applyPublication(state: HarnessSnapshot, params: Record<string, any>): 
   const next: HarnessSnapshot = {
     ...state,
     tableRevision: state.tableRevision + 1,
-    gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
+
     familyPreferences: [...state.familyPreferences],
     preferenceOverrides: [...state.preferenceOverrides],
     familyAnnotations: [...state.familyAnnotations],
@@ -167,22 +166,18 @@ function fixture(options: Options = {}) {
   let state = snapshot(options);
   const operations: string[] = [];
   const published: Record<string, any>[] = [];
-  const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing",
-    state: "active", tableRevision: 4, expiresAt: new Date(Date.now() + 120_000).toISOString() };
+
   const command = vi.fn(async (operation: string, params: Record<string, any>, _csrfToken?: string) => {
     operations.push(operation);
     if (operation === "model_profiles") {
       // Only a checked 显示不可用 asks for this page; it mirrors the board's
       // bounded contract and just returns the current rows.
-      return { profiles: state.profiles, cards: state.cards, familyAnnotations: state.familyAnnotations,
+      return { profiles: state.profiles, familyAnnotations: state.familyAnnotations,
         preferences: state.preferences, preferenceOverrides: state.preferenceOverrides,
-        familyPreferences: state.familyPreferences, sampleCounts: state.sampleCounts,
+        familyPreferences: state.familyPreferences,
         modelConcurrency: state.modelConcurrency, tableRevision: state.tableRevision, nextCursor: null };
     }
-    if (operation === "evaluation_write_begin") {
-      state = { ...state, gate: { phase: "writing", readers: 0, waitingWriters: 0, writer: { ...grant, kind: "human" } } };
-      return grant;
-    }
+
     if (operation === "user_policy_publish") {
       published.push(params);
       state = applyPublication(state, params);

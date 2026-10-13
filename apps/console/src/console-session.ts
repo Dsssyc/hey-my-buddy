@@ -36,9 +36,7 @@ export function createAuthorityLatch() {
 }
 export type AuthorityLatch = ReturnType<typeof createAuthorityLatch>;
 
-/* ---- 0.16 multi-window copy: no writer handoff and no read-only degradation;
-   every authenticated window may edit, and publication leases still queue
-   concurrent saves and reject stale revisions ---- */
+/* Every authenticated window may edit; a stale publication is refused. */
 
 /**
  * Copy for an expired or invalid login (cookie). The cookie applies to the

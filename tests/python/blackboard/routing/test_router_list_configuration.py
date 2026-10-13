@@ -46,25 +46,13 @@ class RouterListConfigurationTests(BoardTestCase):
         return self.board_.call(operation, {**params, "consoleAuthority": self.session})
 
     def publish(self, configuration=None, *, command=None, **changes):
-        """One authenticated console publication.
-
-        A rejected publication leaves its writer grant active, so the same writer is
-        reused until a publication succeeds; each attempt carries its own command id
-        and the current table revision.
-        """
+        """One authenticated console publication at the current table revision."""
         self.counter += 1
         revision = self.board_.call("console_snapshot", {})["tableRevision"]
-        if getattr(self, "_writer", None) is None:
-            self._writer = self.user("evaluation_write_begin", {"requestId": f"grant-{self.counter}",
-                                                                "expectedRevision": revision, "kind": "human"})
-        payload = {key: self._writer[key] for key in ("writerId", "generation", "writerToken")}
-        payload |= {"expectedRevision": revision,
-                    "commandId": command or f"publish-{self.counter}"}
+        payload = {"expectedRevision": revision, "commandId": command or f"publish-{self.counter}"}
         if configuration is not None:
             payload["configuration"] = configuration
         result = self.user("user_policy_publish", {**payload, **changes})
-        if result.get("published"):
-            self._writer = None
         return result
 
     def test_fresh_private_board_initializes_version_three_defaults(self):
