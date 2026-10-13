@@ -46,7 +46,7 @@
 | 7 | 改名：模型一族 | `family` 一族的表、字段与前端的名字 | 无 |
 | 8 | 改名：微任务一族与终态 | 指微任务的 `goal`、名词的 `delegation` 与 `governed`；终态 `concluded`，失败或取消之后被结束的也归到它，`list` 的待验收筛选、宏任务的待验收计数与控制台的那一处判断随之只看状态 | 已交付而被 Host 结束的微任务的终态；`get` 看不出摘要被截断 |
 | 9 | `meta` 里有结构的记录搬进表 | Router 的设置成为表；按 harness 的目录读取时间、账户状态与下次扫描时间成为目录当前行的属性；其余按 L18 的清点逐项搬，或在已经没有读者时删掉 | 升级之后不在目录里的 buddy 的不可用原因 |
-| 10 | 名字：skill、命令与环境变量 | skill 的目录、启动器与安装位置叫 `hey-my-buddy`，升级时移走旧的；命令在帮助与提示里的名字；全部 `BUDDY_` 变量改为 `HMB_` | 无 |
+| 10 | 名字：产品的名字与环境变量 | skill 的目录、启动器与安装位置叫 `hey-my-buddy`，升级时移走旧的；命令在帮助与提示里的名字；其余以 `buddy` 指产品的名字；全部 `BUDDY_` 变量改为 `HMB_` | 无 |
 | 11 | 两侧互相引用清零 | 前面删改之后还剩的跨两侧的引用，搬到 `protocol/` 或根包 | 两侧互相引用的登记表 |
 | 12（Host） | 文档与 skill | L16：SKILL.md、Host 指南、参考文档、两份 README 与 `AGENTS.md` 按新名字改写 | 文档里的两处旧说法 |
 
@@ -63,15 +63,15 @@
 | `profile`、`configuration` | 一个 buddy | buddy | `profileId` 成为 `buddyId`；`evaluation_profiles` 表成为 `buddies`；`model-profiles` 成为 `buddy-list`；`routerProfileIds` 成为 `routerBuddyIds`；`executionConfiguration` 与继续时的 `configuration` 成为 `buddy`；`configurationLocked` 成为 `buddyLocked`；事件 `workflow.configuration_selected` 一类成为 `workflow.buddy_selected` |
 | `adapter` | buddy 的第一段，一个 harness | harness | 提交与继续时的 `adapter` 成为 `harness`；buddy、模型、目录、健康与额度各表的 `adapter` 列成为 `harness`；`adapters` 命令成为 `harnesses`；`ADAPTER_UNAVAILABLE` 成为 `HARNESS_UNAVAILABLE` |
 | `family` | 一个模型 | model | `family_annotations`、`family_preferences` 表成为 `model_notes`、`model_preferences`；`familyAnnotations`、`familyPreferences` 成为 `modelNotes`、`modelPreferences` |
-| `goal`、名词的 `delegation`、`governed` | 微任务 | micro task | 任务种类 `goal` 成为 `micro-task`；`runId` 等标识字段的名字不变 |
+| `goal`、名词的 `delegation`、`governed` | 微任务 | micro task | `goal` 对象成为 `microTask`，任务种类 `goal` 成为 `micro-task`；视图里布尔的 `governed` 删掉，由任务种类表达；`delegation` 这个对象（种类、项目、来源与当前的 Host、上级与根）的新名字待用户定；`runId` 等标识字段的名字不变 |
 | `BUDDY_` | 环境变量的前缀 | `HMB_` | 全部变量，例如 `HMB_STATE_DIR` |
-| `buddy`（skill 与命令的名字） | 产品 | `hey-my-buddy` | `skills/hey-my-buddy`、`scripts/hey-my-buddy` |
+| `buddy`（指产品的地方） | 产品 | `hey-my-buddy` | `skills/hey-my-buddy`、`scripts/hey-my-buddy`；C-Two 的资源名、控制台的会话 cookie 与 CSRF 请求头、Git 引用的命名空间、会话归属的取值与标识的前缀同样改；给 Worker 用的三个工具成为 `hey_my_buddy_finish_turn`、`hey_my_buddy_checkpoint`、`hey_my_buddy_answer_inquiry` |
 
 模型这一级的记录用三个字段 `harness`、`provider`、`model` 标识，不另起一个叫 `model` 的对象，免得它里面又有一个 `model`。
 
 `adapter` 有两个意思，只改一个（用户于 2026-10-13 定：buddy 的第一段就是 harness，术语表与通行的说法都是这样）。指一个 harness 的改称 `harness`。指连接件的不动：术语表里适配器 / adapter 是一个 harness 以某个角色接入黑板的连接件，命令任务与外部 Worker 也各有一个连接件而它们不是 harness；所以任务、执行与 Worker 运行时上记“由哪个连接件执行”的那一列，以及 `execution-submit` 这条只给命令任务与外部 Worker 用的路上的 `adapter` 参数，仍叫 `adapter`。微任务对 Host 显示的是它的 buddy，不显示连接件。两个意思的划分是整合 Host 的建议，逐个名字的归属由名字清单列出。
 
-不改的：别的意思的 `configuration`（Router 的设置、用户的 harness 配置）；别人的词（Windows 的 `USERPROFILE`、Codex 的 `activePermissionProfile`、React 的 `Profiler`、样式里的 `font-family`）；术语表里的模型画像 / model profile；中性的工程用词 `workflow`、`run`、`task`、`attempt` 与包里的 `buddy/` 目录。
+不改的：别的意思的 `configuration`（Router 的设置、用户的 harness 配置）；别人的词（Windows 的 `USERPROFILE`、Codex 的 `activePermissionProfile`、React 的 `Profiler`、样式里的 `font-family`）；术语表里的模型画像 / model profile；指一个参与者的 buddy；中性的工程用词 `workflow`、`run`、`task`、`attempt` 与包里的 `buddy/` 目录。
 
 ## 验收
 
