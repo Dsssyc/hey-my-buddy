@@ -83,6 +83,10 @@ The connector through which one harness takes part in the blackboard in one role
 The fourth part of a buddy's identity: how much reasoning the harness asks of the model. Each harness names and grades its efforts in its own way, so two harnesses' values are not comparable even when they share a name.
 _Avoid_: 档位, 思考档位 (档位 names a permission level), effort level, thinking level
 
+**模型 / model**:
+One model as one harness provides it through one provider, for example `dsh / deepseek-official / deepseek-flash`. Each of its reasoning efforts is a different buddy.
+_Avoid_: family, 模型家族 (a model family is commonly a series of several models)
+
 **模型目录 / model catalog**:
 The blackboard's record of the models and reasoning efforts a harness reported it can provide, and so of which buddies exist in that harness. It is a reading taken at one moment, not a fact about the harness: a buddy whose model is missing from a later reading is pending, still usable, until a further reading confirms the absence.
 _Avoid_: model list (for the blackboard's record; the model list is what the harness itself returns)
@@ -119,7 +123,7 @@ The fixed artifact the blackboard makes of a checkout's content when a turn ends
 _Avoid_: 第 N 封 (say 第 N 回合的封存), 快照
 
 **权限档位 / permission level**:
-How far a Worker buddy may go in one turn, chosen by the Host when it delegates and changeable between turns: 只读 / read-only (read and search; no file may be modified), 写检出 / checkout-write (edit and run commands; files may be modified only inside the micro task's checkout) or 放开 / full access (no limit on where files are modified). A level says where files may be modified and nothing about the network. A harness carries a level out either 强制 / enforced, when its sandbox or tool limits stop a write outside the level, or 约定 / by convention, when it is only asked to stay inside and the blackboard checks afterwards what it can.
+How far a buddy may go in one run, in five levels from narrow to wide: 不用工具 / no tools (it only answers), 只联网 / web only (it may search the web and fetch pages and cannot touch local files), 只读 / read-only (read and search; no file may be modified), 写检出 / checkout-write (edit and run commands; files may be modified only inside the micro task's checkout) and 放开 / full access (no limit on where files are modified). The first two say which tools exist; the last three say where files may be modified and nothing about the network. A Worker buddy's level is one of the last three, chosen by the Host when it delegates and changeable between turns; a Router buddy's level follows from what it is doing. A harness carries a level out either 强制 / enforced, when its sandbox or tool limits stop what the level excludes, or 约定 / by convention, when it is only asked to stay inside and the blackboard checks afterwards what it can.
 _Avoid_: 权限清单, sandbox mode (a level is not a list of grants, and a sandbox mode is only how one harness carries a level out)
 
 **换档 / level change**:
