@@ -80,8 +80,15 @@ A native agent product in which a buddy runs, such as DSH, ZCode, Codex or Claud
 The connector through which one harness takes part in the blackboard in one role.
 
 **模型 / model**:
-One model as one harness provides it through one provider, for example `dsh / deepseek-official / deepseek-flash`. Each of its reasoning efforts is a different buddy.
-_Avoid_: family, 模型家族 (a model family is commonly a series of several models)
+One concrete language model, whoever provides it. Providers, communities and users may call the same model by different names.
+
+**模型服务 / model service**:
+One model as one harness reaches it through one provider, for example `dsh / deepseek-official / deepseek-flash`. Each of its reasoning efforts is a different buddy.
+_Avoid_: family, 模型家族 (a model family is commonly a series of several models); model (for one harness and provider's service of it)
+
+**提供方 / provider**:
+Whoever serves models to a harness: a model's own vendor or another party. In a buddy's identity it is the name the harness gives that source.
+_Avoid_: 供应方, 服务商
 
 **模型目录 / model catalog**:
 The blackboard's record of the models and reasoning efforts a harness reported it can provide, and so of which buddies exist in that harness. It is a reading taken at one moment, not a fact about the harness: a buddy whose model is missing from a later reading is pending, still usable, until a further reading confirms the absence.

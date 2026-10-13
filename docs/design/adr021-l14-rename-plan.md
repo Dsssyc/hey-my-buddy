@@ -7,7 +7,7 @@
 - 挪升级基点并进这一步，作为它的开头；基点是装着的 0.34.1（`4b7f4946`，schema 18）。
 - 这一次升级清空工作历史，只带走设置，旧看板归档（ADR-021 第 15 条 2026-10-13 的补充）。
 - 评价表与设置的版本号作为闸门的用法、读者与写者的租约、“作废”这个状态、Host 维护评价的那组操作与评价卡片，在改名之前先删；Router 的答案发布时只检查选中的 buddy 此刻仍是合法候选。微任务自己的 `revision` 与 `expectedRevision` 保留。
-- 名字：`family` 一族改称模型 / model；环境变量的前缀改为 `HMB_`；被 Host 结束的微任务的终态是 `concluded`；skill、包与命令统一叫 `hey-my-buddy`。
+- 名字：`family` 一族改称模型服务 / model service（模型 / model 指具体的大语言模型，不论由谁提供；用户 2026-10-13 稍后改定）；环境变量的前缀改为 `HMB_`；被 Host 结束的微任务的终态是 `concluded`；skill、包与命令统一叫 `hey-my-buddy`。
 - 这一步做完才安装，一次升级。中途的树不装到日常看板上：从第一个微任务合入起，任何一次安装都会清空工作历史。
 
 ## 做完时的样子
@@ -43,7 +43,7 @@
 | 5 | 改名：宏任务一族 | `objective` 一族的表、列、字段、命令、事件与前端的名字 | 无 |
 | 6 | 改名：buddy 一族 | 指 buddy 的 `profile` 与 `configuration`，连同事件名与排队原因 | `suggestedProfileId` 的两种形态留给第 3 步 |
 | 6′ | 改名：harness | 指 buddy 的第一段、指一个 harness 的 `adapter` 改称 `harness`：提交与继续的参数、回应里 buddy 的各段、按 buddy、模型或 harness 记的表的列、错误码与 `adapters` 命令；指连接件的 `adapter` 不动（见“名字的规则”） | 无 |
-| 7 | 改名：模型一族 | `family` 一族的表、字段与前端的名字 | 无 |
+| 7 | 改名：模型服务一族 | `family` 一族的表、字段与前端的名字改称模型服务（`modelService`、`model_service`）；按它记的并发上限 `model_concurrency` 与 `modelConcurrency` 同样改名 | 无 |
 | 8 | 改名：微任务一族与终态 | 指微任务的 `goal`、名词的 `delegation` 与 `governed`；终态 `concluded`，失败或取消之后被结束的也归到它，`list` 的待验收筛选、宏任务的待验收计数与控制台的那一处判断随之只看状态 | 已交付而被 Host 结束的微任务的终态；`get` 看不出摘要被截断；被打回过的微任务失败之后写不了结论 |
 | 9 | `meta` 里有结构的记录搬进表 | Router 的设置成为表；按 harness 的目录读取时间、账户状态与下次扫描时间成为目录当前行的属性；其余按 L18 的清点逐项搬，或在已经没有读者时删掉 | 升级之后不在目录里的 buddy 的不可用原因 |
 | 10 | 名字：产品的名字与环境变量 | skill 的目录、启动器与安装位置叫 `hey-my-buddy`，升级时移走旧的；命令在帮助与提示里的名字；其余以 `buddy` 指产品的名字；全部 `BUDDY_` 变量改为 `HMB_` | 无 |
