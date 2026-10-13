@@ -289,10 +289,6 @@ Windows process ownership uses a suspended child assigned to a private Job Objec
 
 In PowerShell, invoke `buddy.ps1` directly for JSON commands. It preserves argument boundaries using `ProcessStartInfo.ArgumentList` where available and explicit native quoting on legacy Windows PowerShell; `buddy.cmd` is the Command Prompt bridge. The quoting paths have a PowerShell-on-macOS round-trip smoke, with Windows shell behavior still awaiting native acceptance.
 
-## Routing configuration upgrade
-
-ADR-018 adds only `meta` values: `router_fast_profile_id`, `router_review_profile_id`, `router_default_mode` and `router_configuration_version`; `router_budget_preset` remains the review budget key. After backup and under the upgrade locks, the old `evaluation_state.decision_profile_id` is mapped to its eligible slot (verified review first, otherwise fast), the other slot stays empty and a saved `quick` becomes `brief`. This operation is idempotent, checks unrelated meta values and retained table fingerprints, and participates in the existing rollback. Fresh boards start with two empty slots and default `fast`. Startup does not migrate an existing board.
-
 ## Routing diagnostics and quota recovery (0.25.0)
 
 Paid review-check evidence is retired with its executor. Ordinary Router results retain their native policy/tool stream, usage, frozen-input verification and actual stop evidence under the existing private attempt lifecycle; no review certificate is read or issued. Old certificate data is left for explicit upgrade cleanup.

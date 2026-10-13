@@ -16,7 +16,7 @@ Latest activity is a derived event-sequence projection, updated in the same tran
 
 ## Read APIs
 
-`objective-list` maps to `objective_list`; `objective-timeline` maps to `objective_timeline`. Both are read-only Host/user operations with no model call, reader lease or publication. Authenticated console sessions, use GET /api/objectives and GET /api/objectives/<objectiveId>/timeline. The current console cookie/origin rules remain unchanged.
+`objective-list` maps to `objective_list`; `objective-timeline` maps to `objective_timeline`. Both are read-only Host/user operations with no model call or publication. Authenticated console sessions, use GET /api/objectives and GET /api/objectives/<objectiveId>/timeline. The current console cookie/origin rules remain unchanged.
 
 List parameters are limit (default 50, maximum 100), before (opaque keyset cursor), projectId, hostId, query (at most 200 characters) and filter (all, active, host, review). Filters match member delegations before paging; summaries retain overall counts and a matching count. The default order is latest activity sequence descending, then objective identifier. The response contains objectives, total, nextCursor, cursor (current event head) and changed. A cursor binds its filters; an activity update may move a record above an older page boundary, so changed tells the client to offer a refresh instead of silently claiming a fixed historical snapshot or reordering a reader's selection.
 
