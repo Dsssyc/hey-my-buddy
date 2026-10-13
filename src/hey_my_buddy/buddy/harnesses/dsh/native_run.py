@@ -99,11 +99,11 @@ from .session_records import (
     session_record_facts,
 )
 
-#: The public child-environment key of DSH's read-only permission preset and its
-#: only value this harness sets (F-D2: the preset's sandbox rejects writes and
-#: reports upgrade requests to the client's reject-only callback).
+#: Worker permission levels select DSH's native preset on every process launch.
 PERMISSION_MODE_ENV = "DSH_PERMISSION_MODE"
 READ_ONLY_MODE = "read-only"
+WORKER_PERMISSION_MODES = {"read": READ_ONLY_MODE, "write": "workspace-write",
+                           "full": "danger-full-access"}
 #: The mode-control tool row the none-scope probe disables together with the
 #: tool rows, so no plan-mode tool survives either.
 PLAN_MODE_ROW = "plan-mode"
@@ -184,6 +184,13 @@ def tool_scope_launch(scope: str) -> tuple[list[dict], dict[str, str]]:
     rows = [{"id": name, "disabled": True}
             for name in (*NONE_SCOPE_DISABLED_ROWS, PLAN_MODE_ROW)]
     return rows, {}
+
+
+def _launch_policy(request: RunRequest) -> tuple[list[dict], dict[str, str]]:
+    """Worker presets are independent of the Router's tool-scope configuration."""
+    if request.worker_permission is not None:
+        return [], {PERMISSION_MODE_ENV: WORKER_PERMISSION_MODES[request.worker_permission.level]}
+    return tool_scope_launch(request.tool_scope)
 
 
 # -- the role-facing service binding ---------------------------------------------
@@ -508,14 +515,17 @@ def validate_turn_provenance(record: dict) -> str | None:
 
 
 def native_evidence(result: RunResult) -> dict:
-    """The none-scope launch configuration and stream end, without any policy guess."""
+    """The launch configuration and stream end, without any policy guess."""
     policy = result.effective_policy.tools
     requested = policy.requested.value if policy is not None and policy.requested is not None else None
     settings = requested if isinstance(requested, dict) else {}
     completion = result.completion_evidence
-    return {"eventCount": result.native_event_count,
-            "disabledRows": settings.get("disabledRows"),
-            "streamEof": completion.stream_end if completion is not None else None}
+    facts = {"eventCount": result.native_event_count,
+             "disabledRows": settings.get("disabledRows"),
+             "streamEof": completion.stream_end if completion is not None else None}
+    if "permissionMode" in settings:
+        facts["nativePolicy"] = settings
+    return facts
 
 
 def _check_service_descriptions(request: RunRequest, mount: SessionServiceMount) -> None:
@@ -560,6 +570,7 @@ class _RunState:
     checked: dict | None = None
     native_facts: dict = dataclasses.field(default_factory=dict)
     scope_rows: list | None = None
+    permission_mode: str | None = None
     interrupt_requested: bool = False
     interrupt_basis: str | None = None
     signalled: bool = False
@@ -858,9 +869,10 @@ class _AttentionPolicy:
         self._state = state
         self._inquiry_bridge = inquiry_bridge
 
-    def decide(self, params):
-        outcome, basis = self._policy.decide(params)
-        record = {"ts": utc_now(), "outcome": outcome.get("outcome"), "basis": basis[:400]}
+    def decide(self, params, *, operation: str):
+        outcome, basis = self._policy.decide(params, operation=operation)
+        record = {"ts": utc_now(), "outcome": outcome.get("outcome"), "basis": basis[:400],
+                  "operation": operation}
         if self._inquiry_bridge is not None:
             self._inquiry_bridge.note_attention(record)
             return outcome, basis
@@ -919,12 +931,13 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     """Run one native DSH execution: the single native path of this harness."""
     if request.harness != "dsh":
         raise BoardError("INVALID_ARGUMENT", "this run module drives dsh", harness=request.harness)
-    if request.tool_scope == "full" or (request.worker_permission is not None
-                                        and request.worker_permission.level == "full"):
-        raise BoardError("INVALID_ARGUMENT", "dsh full access is not implemented", toolScope=request.tool_scope)
     if services is not None and not isinstance(services, SessionServices):
         raise BoardError("INVALID_ARGUMENT", "dsh accepts its own narrow session service binding")
-    governed = services is not None
+    governed = request.worker_permission is not None
+    if governed != (services is not None):
+        raise BoardError("INVALID_ARGUMENT", "dsh Worker permission and session services must be supplied together")
+    if not governed and request.tool_scope == "full":
+        raise BoardError("INVALID_ARGUMENT", "dsh full tool scope requires a Worker permission level")
     if not governed and request.session_services:
         raise BoardError("INVALID_ARGUMENT",
                          "the request describes session services but this run mounts none")
@@ -1034,8 +1047,9 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                 raise NativeError("native-resume-unavailable",
                                   "the previous native session does not match this goal, "
                                   "checkout and configuration")
-        scope_rows, extra_env = tool_scope_launch(request.tool_scope)
+        scope_rows, extra_env = _launch_policy(request)
         state.scope_rows = scope_rows
+        state.permission_mode = extra_env.get(PERMISSION_MODE_ENV)
         if request.tool_scope == "none" and not NONE_SCOPE_DISABLED_ROWS:
             state.native_facts["toolScope"] = {"status": "unknown",
                                                "reason": "scope-configuration-unconfirmed",
@@ -1686,15 +1700,15 @@ def _value_and_completion(evidence: RootTurnEvidence | None,
 
 def _effective_policy(request: RunRequest, state: _RunState) -> EffectivePolicy:
     """The scope's own launch configuration, reported as the fact it is."""
+    if state.permission_mode is not None and (request.worker_permission is not None or state.session_opened):
+        return EffectivePolicy(
+            tools=PolicyFact(requested=_json_package({"permissionMode": state.permission_mode})))
     if not state.session_opened:
         return EffectivePolicy()
     if request.tool_scope == "none":
         requested = {"disabledRows": [row["id"] for row in state.scope_rows]}
         return EffectivePolicy(
             tools=PolicyFact(requested=_json_package(requested)))
-    if request.tool_scope == "read":
-        return EffectivePolicy(
-            tools=PolicyFact(requested=_json_package({"permissionMode": READ_ONLY_MODE})))
     return EffectivePolicy(tools=PolicyFact())
 
 

@@ -141,7 +141,7 @@ _WORKER_PERMISSIONS = {
     "codex": {"read": ("read", "enforced"), "write": ("write", "enforced"),
               "full": ("full", "enforced")},
     "claude": {"read": ("read", "enforced"), "write": ("write", "enforced"), "full": ("full", "enforced")},
-    "dsh": {"read": ("write", "convention"), "write": ("write", "enforced")},
+    "dsh": {"read": ("read", "enforced"), "write": ("write", "enforced"), "full": ("full", "enforced")},
     "zcode": {"read": ("write", "convention"), "write": ("write", "convention")},
 }
 

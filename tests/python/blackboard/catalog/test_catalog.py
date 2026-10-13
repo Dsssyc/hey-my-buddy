@@ -146,7 +146,7 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(permissions, {
             "claude": {"permission:read", "permission:write"},
             "codex": {"permission:read", "permission:write", "permission:full"},
-            "dsh": {"permission:read", "permission:write"},
+            "dsh": {"permission:read", "permission:write", "permission:full"},
             "zcode": {"permission:read", "permission:write"},
         })
 
@@ -158,6 +158,7 @@ class CatalogTests(unittest.TestCase):
         require_permission({"adapter": "zcode"}, "read")
         require_permission({"adapter": "codex"}, "write")
         require_permission({"adapter": "codex"}, "full")
+        require_permission({"adapter": "dsh"}, "full")
         require_permission({"adapter": "external"}, "read")
         require_permission({"adapter": "command"}, "write")
         for adapter, access in (("claude", "full"), ("external", "full")):
