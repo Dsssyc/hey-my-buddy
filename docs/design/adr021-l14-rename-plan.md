@@ -44,7 +44,8 @@
 | 6 | 改名：buddy 一族 | 指 buddy 的 `profile` 与 `configuration`，连同事件名与排队原因 | `suggestedProfileId` 的两种形态留给第 3 步 |
 | 6′ | 改名：harness | 指 buddy 的第一段、指一个 harness 的 `adapter` 改称 `harness`：提交与继续的参数、回应里 buddy 的各段、按 buddy、模型或 harness 记的表的列、错误码与 `adapters` 命令；指连接件的 `adapter` 不动（见“名字的规则”） | 无 |
 | 7 | 改名：模型服务一族 | `family` 一族的表、字段与前端的名字改称模型服务（`modelService`、`model_service`）；按它记的并发上限 `model_concurrency` 与 `modelConcurrency` 同样改名 | 无 |
-| 8 | 改名：微任务一族与终态 | 指微任务的 `goal`、名词的 `delegation` 与 `governed`；终态 `concluded`，失败或取消之后被结束的也归到它，`list` 的待验收筛选、宏任务的待验收计数与控制台的那一处判断随之只看状态 | 已交付而被 Host 结束的微任务的终态；`get` 看不出摘要被截断；被打回过的微任务失败之后写不了结论 |
+| 8 | 微任务的终态与三处顺带 | 行为改动，不改名。终态 `concluded`：`conclude` 把微任务的状态改成它，失败或取消之后被结束的也归到它；它与 `accepted` 一样是终态，之后不能再继续、验收或另写结论，于是不再判断“结论是否当前”；`list` 的待验收筛选、宏任务的待验收计数与控制台的那一处判断只看状态 | `get` 看不出摘要被截断；被打回过的微任务失败之后写不了结论（打回与验收分开记） |
+| 8′ | 改名：微任务一族 | 指微任务的 `goal`、名词的 `delegation` 与 `governed` | 无 |
 | 9 | `meta` 里有结构的记录搬进表 | Router 的设置成为表；按 harness 的目录读取时间、账户状态与下次扫描时间成为目录当前行的属性；其余按 L18 的清点逐项搬，或在已经没有读者时删掉 | 升级之后不在目录里的 buddy 的不可用原因 |
 | 9′ | 删掉模型服务一层的偏好 | 开发者 2026-10-13 定：偏好是对 buddy 的偏好。删掉 `family_preferences` 表、把两层合成一层的视图与“来源”、只为盖过上一层而存在的取值 `none`、接口与控制台里那一层；日常看板上这一层是 0 条，buddy 一层 5 条 | `harness_set` 与 `console_access_set` 去掉 `expectedRevision`（设置后写的生效）；上一行留下的两个永远为空的字段（任务关系里的 `project_identity_reason`、冲突里的 `identityReason`）与同值的 `recorded_project_id` 一并删掉 |
 | 10 | 名字：产品的名字与环境变量 | skill 的目录、启动器与安装位置叫 `hey-my-buddy`，升级时移走旧的；命令在帮助与提示里的名字；其余以 `buddy` 指产品的名字；全部 `BUDDY_` 变量改为 `HMB_` | 无 |
@@ -52,6 +53,8 @@
 | 12（Host） | 文档与 skill | L16：SKILL.md、Host 指南、参考文档、两份 README 与 `AGENTS.md` 按新名字改写 | 文档里的两处旧说法 |
 
 第 5 到 8 行每一行都连同控制台前端的源码按同一张清单改，并重建打包的前端资产；前端只改名，不改样子。
+
+第 8 行原来把终态与改名放在一个微任务里，整合 Host 于 2026-10-13 拆成两个：行为改动先做，免得淹在两千处改名里没法逐处核对。“终态”的意思是写了结论之后不能再继续这个微任务，要接着做就另交一个；这是整合 Host 对开发者那句话的读法，已告诉开发者。
 
 ## 名字的规则
 
