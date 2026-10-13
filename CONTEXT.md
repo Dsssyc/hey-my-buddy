@@ -122,6 +122,10 @@ _Avoid_: 第 N 封 (say 第 N 回合的封存), 快照
 How far a Worker buddy may go in one turn, chosen by the Host when it delegates and changeable between turns: 只读 / read-only (read and search; no file may be modified), 写检出 / checkout-write (edit and run commands; files may be modified only inside the micro task's checkout) or 放开 / full access (no limit on where files are modified). A level says where files may be modified and nothing about the network. A harness carries a level out either 强制 / enforced, when its sandbox or tool limits stop a write outside the level, or 约定 / by convention, when it is only asked to stay inside and the blackboard checks afterwards what it can.
 _Avoid_: 权限清单, sandbox mode (a level is not a list of grants, and a sandbox mode is only how one harness carries a level out)
 
+**换档 / level change**:
+Short for changing a micro task's permission level between turns: the Host continues the micro task with another level, and the next turn runs at that level.
+_Avoid_: 切换模式, mode switch (a native mode is only how one harness carries a level out)
+
 **未知事件 / unknown event**:
 A native event or reply shape that a harness's run module does not recognize. It is a fact, never a failure: it is counted by type and returned with the run's result for the Host to see.
 _Avoid_: 没读懂的事件, protocol error (an unknown event is not an error)
