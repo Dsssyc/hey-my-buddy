@@ -447,7 +447,9 @@ class HelpExtractionRegressionTests(unittest.TestCase):
     Each assertion below names the exact fact the first attempt omitted (an input
     bound, a configuration object's required strings, the task byte cap, a field-name
     loop, or the two-part cwd rule). A silently skipped field would fail here rather
-    than reappear as an "accepted; bound is validated inline" placeholder.
+    than reappear as an "accepted; bound is validated inline" placeholder. The
+    requiredness assertions keep the opposite error out too: a field the operation
+    only validates when it is supplied is never listed as required.
     """
 
     def parameter(self, method: str, path: str):
@@ -508,6 +510,46 @@ class HelpExtractionRegressionTests(unittest.TestCase):
         plan = self.parameter("storage-apply", "planId")
         self.assertTrue(plan.expression, "a complex condition must not be dropped")
         self.assertTrue(plan.source, "the expression names the validator it came from")
+
+    def test_a_field_the_operation_only_validates_when_supplied_is_optional(self):
+        """A ``params.get`` read guarded by ``is not None`` is optional in help.
+
+        The reader follows the function that consumes the read; whether absence is
+        rejected is that function's decision, so the guard never becomes "required".
+        """
+        for method, path in (
+            ("takeover", "expectedRevision"),
+            ("await", "requestId"),
+            ("worker-result", "result"),
+        ):
+            with self.subTest(method=method, path=path):
+                self.assertFalse(self.parameter(method, path).required)
+                rendered = cli_help.render_method(cli_help.method_help(method))
+                line = next(
+                    line for line in rendered.splitlines()
+                    if re.match(rf"\s*{re.escape(path.split('.')[-1])}\s", line)
+                )
+                self.assertNotIn("required", line)
+
+    def test_takeover_reports_that_expected_revision_is_compared_when_given(self):
+        line = next(
+            line for line in cli_help.render_method(cli_help.method_help("takeover")).splitlines()
+            if line.lstrip().startswith("expectedRevision ")
+        )
+        self.assertNotIn("required", line)
+        self.assertIn("≥ 0", line)
+        self.assertIn("rejected when", line)
+        self.assertIn("revision", line)
+
+    def test_required_fields_stay_required(self):
+        for method, path in (
+            ("takeover", "expectedOwnerGeneration"),
+            ("takeover", "newHostId"),
+            ("scope-amend", "expectedScopeVersion"),
+            ("worker-result", "workerId"),
+        ):
+            with self.subTest(method=method, path=path):
+                self.assertTrue(self.parameter(method, path).required)
 
     def test_no_method_falls_back_to_the_retired_placeholder(self):
         for method in (*PUBLIC_METHODS, "help"):

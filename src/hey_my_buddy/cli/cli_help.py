@@ -701,10 +701,6 @@ class _Extractor:
         arguments = [argument.arg for argument in node.args.args]
         params_var = arguments[position] if position is not None and 0 <= position < len(arguments) else None
         facts.locations.append(self.index.location(module, node))
-        if required and owner:
-            # The caller passed ``params.get("owner")`` without a default into a
-            # validator whose first checks reject it, so the field is not optional.
-            facts.required_paths.add(owner)
         previous = self._container
         previous_derived = self._derived
         previous_trusted = self._trusted
@@ -712,6 +708,11 @@ class _Extractor:
         self._container = container
         self._bindings = dict(bindings or {})
         tracked, local_sets, no_default = self._tracked_objects(node, module, params_var, owner, facts)
+        if required and owner and params_var is not None:
+            # The caller read ``params.get("owner")`` without a default and passed it
+            # here, so absence arrives as ``None``; whether that is rejected is the
+            # callee's decision, made by its own checks and ``None`` guards below.
+            no_default.add(params_var)
         self._derived = self._derived_variables(node, params_var) if self._trusted else set()
         try:
             self._walk_body(node.body, module, node, params_var, owner, conditional, facts, tracked, local_sets, no_default, visited)
