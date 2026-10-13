@@ -151,21 +151,21 @@ class ScheduledModulesTests(unittest.TestCase):
 class ResolveJobsTests(unittest.TestCase):
     def test_the_flag_wins_over_the_environment_over_the_default(self):
         with patch.dict(os.environ, {"BUDDY_CHECKS_JOBS": "5"}):
-            self.assertEqual(checks.resolve_jobs([]), 5)
-            self.assertEqual(checks.resolve_jobs(["--jobs", "2"]), 2)
-            self.assertEqual(checks.resolve_jobs(["--jobs=1"]), 1)
+            self.assertEqual(checks.resolve_jobs(None), 5)
+            self.assertEqual(checks.resolve_jobs("2"), 2)
+            self.assertEqual(checks.resolve_jobs("1"), 1)
         environment = {key: value for key, value in os.environ.items() if key != "BUDDY_CHECKS_JOBS"}
         with patch.dict(os.environ, environment, clear=True):
-            self.assertEqual(checks.resolve_jobs([]), checks.default_jobs())
+            self.assertEqual(checks.resolve_jobs(None), checks.default_jobs())
         self.assertGreaterEqual(checks.default_jobs(), 1)
         self.assertLessEqual(checks.default_jobs(), checks.MAX_DEFAULT_JOBS)
 
     def test_an_unusable_value_is_refused(self):
-        for arguments in (["--jobs"], ["--jobs", "0"], ["--jobs", "-1"], ["--jobs", "many"], ["--job", "2"], ["2"]):
-            with self.subTest(arguments=arguments), self.assertRaises(SystemExit):
-                checks.resolve_jobs(arguments)
-        with patch.dict(os.environ, {"BUDDY_CHECKS_JOBS": "none"}), self.assertRaises(SystemExit):
-            checks.resolve_jobs([])
+        for value in ("0", "-1", "many"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                checks.resolve_jobs(value)
+        with patch.dict(os.environ, {"BUDDY_CHECKS_JOBS": "none"}), self.assertRaises(ValueError):
+            checks.resolve_jobs(None)
 
 
 class RunnerTestCase(unittest.TestCase):
@@ -198,10 +198,9 @@ class RunnerTestCase(unittest.TestCase):
         output = io.StringIO()
         with (
             patch.dict(os.environ, self.environment()),
-            patch.object(checks, "python_test_modules", return_value=list(names)),
             contextlib.redirect_stdout(output),
         ):
-            failure = checks.run_suites_parallel(REPOSITORY, self.private_root, jobs)
+            failure = checks.run_suites_parallel(REPOSITORY, self.private_root, jobs, names)
         return failure, output.getvalue()
 
 
@@ -361,12 +360,9 @@ class LeftoverProcessTests(RunnerTestCase):
             """
             import sys
             from pathlib import Path
-            from unittest.mock import patch
-
             from hey_my_buddy.cli import checks
 
-            with patch.object(checks, "python_test_modules", return_value=sys.argv[3:]):
-                checks.run_suites_parallel(Path(sys.argv[1]), Path(sys.argv[2]), 2)
+            checks.run_suites_parallel(Path(sys.argv[1]), Path(sys.argv[2]), 2, sys.argv[3:])
             """
         ))
         environment = {**os.environ, **self.environment()}
