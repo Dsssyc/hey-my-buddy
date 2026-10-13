@@ -21,6 +21,11 @@ from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
 from buddy.harnesses.zcode.test_zcode_tool_evidence import FakeAppServerTests, SCHEMA
 from buddy.harnesses.test_run_contract import full_request
 
+#: One wiring run that is not the subject of a deadline test still needs a
+#: budget the machine's load cannot decide; the deadline subjects keep their
+#: own short values in the zcode suite.
+WIRING_TIMEOUT = 30
+
 
 class RegisteredDescriptionTests(unittest.TestCase):
     def test_the_description_has_no_legacy_execution_entries(self):
@@ -117,7 +122,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
         context = ExecutionContext("task", "attempt", 1,
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low"},
             self.root / "attempt", {}, self.environment)
-        request = NoToolStructuredRequest(str(self.cwd), "Choose", SCHEMA, 3)
+        request = NoToolStructuredRequest(str(self.cwd), "Choose", SCHEMA, WIRING_TIMEOUT)
         preparation = FastPreparation("zcode",  request, context, self.cwd)
         self.assertIs(preparation.run_module, run_seam("zcode"))
         with mock.patch.dict(RUN_SEAMS, {"zcode": object()}), \
@@ -130,13 +135,13 @@ class FastRegisteredRunTests(FakeAppServerTests):
     def invoke(self, case="ok", *, capture_evidence=False):
         context = ExecutionContext("task", "attempt", 1,
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low",
-             "cwd": str(self.cwd), "timeoutSeconds": 3}, self.root / "attempt", {},
+             "cwd": str(self.cwd), "timeoutSeconds": WIRING_TIMEOUT}, self.root / "attempt", {},
             {**self.environment, "BUDDY_ZCODE_TEST_CASE": case})
-        request = NoToolStructuredRequest(str(self.cwd), "Choose a profile", SCHEMA, 3,
+        request = NoToolStructuredRequest(str(self.cwd), "Choose a profile", SCHEMA, WIRING_TIMEOUT,
                                           capture_evidence=capture_evidence)
         handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(11))
+        self.assertIsNotNone(handle.wait(WIRING_TIMEOUT + 10))
         return context, handle, structured_call.collect(handle)
 
     def test_fast_consumes_public_frames_and_corrects_on_the_registered_process(self):
@@ -195,7 +200,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
                 mock.patch.object(module, "prepare_services", side_effect=AssertionError("session service")):
             raw, code = run_controller.execute({"operation": "discover", "harness": "zcode",
                 "cwd": str(root), "privateRoot": str(root), "nativeRoot": str(root / "native"),
-                "timeoutSeconds": 3}, threading.Event(), state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                "timeoutSeconds": WIRING_TIMEOUT}, threading.Event(), state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         result = json.loads(raw)
         self.assertEqual(code, 0)
         self.assertFalse(result["modelStarted"])
@@ -206,6 +211,10 @@ class FastRegisteredRunTests(FakeAppServerTests):
 
 
 class WorkerRegisteredRunTests(ZcodeFixtureCase):
+    def context(self, case="ok", *, timeout=WIRING_TIMEOUT, **kwargs):
+        """These runs check worker wiring; the deadline subjects live in the zcode suite."""
+        return super().context(case, timeout=timeout, **kwargs)
+
     def assert_failed_attention_facts(self, outcome, original, *, shutdown):
         self.assertEqual(outcome.status, "failed")
         self.assertIs(outcome.shutdown_confirmed, shutdown)
@@ -247,7 +256,7 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         context.environment["BUDDY_ZCODE_CLI"] = str(fixture)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(20))
+        self.assertIsNotNone(handle.wait(context.timeout_seconds + 10))
         result = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes())
         self.assertIsNotNone(result.usage)
         self.assertIsNotNone(result.last_assistant_message)
