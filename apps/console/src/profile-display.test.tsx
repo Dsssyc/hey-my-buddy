@@ -43,13 +43,10 @@ const proMax: Profile = {
 
 function catalogSnapshot(): Snapshot {
   return {
-    csrfToken: "fixture-csrf",
+    csrfToken: "fixture-csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
-    tableRevision: 2,
 
-    configuration: {
-      revision: 1,
-      routerProfileIds: [proMaxId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
+    configuration: { routerProfileIds: [proMaxId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
     },
     profiles: [flashOff, proMax],
     preferences: [],

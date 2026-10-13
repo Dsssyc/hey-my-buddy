@@ -9,13 +9,10 @@ import { listed, note, pane, selectModel } from "./buddies/page.testing";
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 
 const initial = (): Snapshot => ({
-  csrfToken: "fixture-csrf",
+  csrfToken: "fixture-csrf", eventCursor: 0,
   consoleSession: { id: "fixture-session", canWrite: true, reason: null },
-  tableRevision: 2,
 
-  configuration: {
-    revision: 1,
-    routerProfileIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
+  configuration: { routerProfileIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
   },
   profiles: [
     {

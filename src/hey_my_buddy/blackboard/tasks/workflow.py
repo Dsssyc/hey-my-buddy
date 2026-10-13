@@ -1351,7 +1351,6 @@ class WorkflowCoordinator:
             "status": status, "decisionId": decision["decision_id"], "taskId": decision["decision_task_id"],
             "attemptId": decision["decision_attempt_id"], "generation": decision["decision_generation"],
             "selectedProfile": json.loads(decision["selected_json"]) if decision["selected_json"] else None,
-            "tableRevision": decision["table_revision"], "configurationRevision": decision["configuration_revision"],
             "reason": link["reason"] or decision["reason"],
             "constraints": requested.get("constraints", schemas.configuration_constraints(goal)),
             "requiredCapabilities": requested.get("requiredCapabilities", []),
@@ -1441,8 +1440,7 @@ class WorkflowCoordinator:
                                    (configuration["adapter"], run["run_id"]))
                 self.board._append_event(connection, "workflow.routing_resolved", task_id=run["run_id"],
                                          payload={"decisionId": decision_id, "configuration": configuration,
-                                                  "profileId": decision["profile_id"], "tableRevision": decision["table_revision"],
-                                                  "configurationRevision": decision["configuration_revision"],
+                                                  "profileId": decision["profile_id"],
                                                   "source": selection_source(json.loads(decision["requested_json"]))})
                 return
         self._routing_attention(connection, run, now,
@@ -1464,7 +1462,7 @@ class WorkflowCoordinator:
             current = self.board.decisions._view(connection, decision, include_audit=False)
             payload.update({key: current[key] for key in (
                 "routerProfileIds", "routerIdentities", "routingMode", "routingBudget", "budget",
-                "routerRetryIntervalSeconds", "configurationRevision",
+                "routerRetryIntervalSeconds",
                 "routerProfileId", "routerProfile", "routerIndex", "decisionModel", "routerProblem",
             ) if key in current})
             boundary = self._routing_boundary(connection, decision, run, post_transition=True, now=now)
@@ -1910,8 +1908,8 @@ class WorkflowCoordinator:
         )
         query = (
             "SELECT r.rowid AS route_rowid, r.decision_id, r.owner_generation, r.state, r.reason,"
-            " r.created_at, d.status AS decision_status, d.table_revision, d.reason AS decision_reason,"
-            " q.task_id AS decision_task_id, q.configuration_revision, q.selected_json, q.requested_json"
+            " r.created_at, d.status AS decision_status, d.reason AS decision_reason,"
+            " q.task_id AS decision_task_id, q.selected_json, q.requested_json"
             " FROM workflow_routes r"
             " JOIN evaluation_decisions d ON d.decision_id=r.decision_id"
             " JOIN decision_requests q ON q.decision_id=r.decision_id"
@@ -1942,8 +1940,6 @@ class WorkflowCoordinator:
                     "taskId": row["decision_task_id"],
                     "selectedProfile": json.loads(row["selected_json"]) if row["selected_json"] else None,
                     "source": selection_source(requested),
-                    "tableRevision": int(row["table_revision"]),
-                    "configurationRevision": int(row["configuration_revision"]),
                     "reason": row["reason"] or row["decision_reason"],
                     "createdAt": row["created_at"],
                     "ownerGeneration": int(row["owner_generation"]),

@@ -15,7 +15,6 @@ import {
   profileSettings,
   publication,
   rebaseDraft,
-  retainedAdditions,
   setConcurrencyLimit,
   setFamilyAnnotation,
   setFamilyPreference,
@@ -51,19 +50,16 @@ const retired = {
   unavailableReason: "provider paused",
 } satisfies Profile;
 const retiredFamily = { adapter: "dsh", provider: "deepseek-official", model: "retired-model" };
-const note = (family: typeof flashFamily, text: string, revision = 1): FamilyAnnotation =>
-  ({ ...family, text, revision, updatedAt: null });
+const note = (family: typeof flashFamily, text: string): FamilyAnnotation =>
+  ({ ...family, text, updatedAt: null });
 const snapshot = {
-  tableRevision: 3,
   profiles: [flash],
 
   preferences: [],
   familyPreferences: [],
   preferenceOverrides: [],
   familyAnnotations: [],
-  configuration: {
-    revision: 2,
-    routerProfileIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
+  configuration: { routerProfileIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
   },
 
   modelConcurrency: [
@@ -72,11 +68,10 @@ const snapshot = {
 } as unknown as Snapshot;
 
 describe("editing a published snapshot", () => {
-  it("keeps the server snapshot and publication version unchanged while editing", () => {
+  it("keeps the server snapshot unchanged while editing", () => {
     const draft = makeDraft(snapshot);
     draft.profiles[0].enabled = false;
     expect(snapshot.profiles[0].enabled).toBe(true);
-    expect(publication(makeDraft(snapshot), draft, "c").expectedRevision).toBe(3);
   });
 
   it("publishes only the dirty user patches, never a table, a card or an effective preference", () => {
@@ -91,7 +86,6 @@ describe("editing a published snapshot", () => {
     const patch = publication(baseline, draft, "c");
     expect(patch).toEqual({
       commandId: "c",
-      expectedRevision: 3,
       profileSettings: [{ profileId: "flash-off", enabled: false }],
       familyPreferenceChanges: [{ ...flashFamily, mode: "prefer", reason: "速度快" }],
       preferenceChanges: [{ profileId: "flash-off", mode: "exclude", reason: "太贵" }],
@@ -114,7 +108,6 @@ describe("editing a published snapshot", () => {
     const patch = publication(baseline, makeDraft(snapshot), "c");
     expect(Object.keys(patch).sort()).toEqual([
       "commandId",
-      "expectedRevision",
     ]);
   });
 
@@ -156,7 +149,7 @@ describe("editing a published snapshot", () => {
       ...snapshot,
       profiles: [flash, retired],
       preferenceOverrides: [{ profileId: "retired", mode: "pin", reason: "以前固定" }],
-      configuration: { revision: 3, routerProfileIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+      configuration: { routerProfileIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     } as Snapshot);
     const draft = { ...baseline };
     expect(publication(baseline, draft, "c")).not.toHaveProperty("preferenceChanges");
@@ -240,14 +233,11 @@ describe("editing a published snapshot", () => {
     } satisfies Profile;
     const refreshed = {
       ...snapshot,
-      tableRevision: 4,
       // The program renamed the existing profile and added a new configuration.
       profiles: [{ ...flash, label: "目录新名称", available: false }, discovered],
     } as unknown as Snapshot;
     const adopted = rebaseDraft(draft, baseline, refreshed);
     expect(adopted.conflicts).toEqual([]);
-    expect(adopted.baseline.tableRevision).toBe(4);
-    expect(adopted.draft.tableRevision).toBe(4);
     expect(adopted.draft.profiles.find((p) => p.profileId === "flash-off")!.label).toBe("目录新名称");
     expect(adopted.draft.profiles.find((p) => p.profileId === "flash-max")).toBeTruthy();
     // Program availability is adopted; the user's enablement and note are replayed.
@@ -255,7 +245,6 @@ describe("editing a published snapshot", () => {
     expect(adopted.draft.profiles.find((p) => p.profileId === "flash-off")!.enabled).toBe(false);
     expect(familyAnnotationText(adopted.draft, flash)).toBe("保留的备注");
     const patch = publication(adopted.baseline, adopted.draft, "c");
-    expect(patch.expectedRevision).toBe(4);
     expect(patch.familyAnnotationChanges).toEqual([{ ...flashFamily, text: "保留的备注" }]);
     expect(patch.familyPreferenceChanges).toEqual([{ ...flashFamily, mode: "prefer", reason: "更快" }]);
     expect(patch.preferenceChanges).toEqual([{ profileId: "flash-off", mode: "none", reason: "" }]);
@@ -286,231 +275,74 @@ describe("effective preferences", () => {
   });
 });
 
-describe("field-level three-way rebase", () => {
-  /** A bounded snapshot that omits every unavailable identity. */
-  const bounded = { ...snapshot, profiles: [flash] } as unknown as Snapshot;
-  const retiredEnabled = { ...retired, enabled: true } satisfies Profile;
-  const retained = (revision: number, entries: Partial<HistoryEntries> = {}): HistoryEntries => ({
-    tableRevision: revision,
-    ...entries,
-  });
-
-  it("refuses to overlay a draft onto another writer's newer note", () => {
-    const baseline = {
-      ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot),
-      familyAnnotations: [note(flashFamily, "A")],
-    };
+describe("replaying a draft on refreshed content", () => {
+  it("keeps the local note when another writer changed the same field", () => {
+    const baseline = { ...makeDraft(snapshot), familyAnnotations: [note(flashFamily, "A")] };
     const draft = setFamilyAnnotation(baseline, flash, "B");
-    // Another writer published C (v2); a program discovery then published v3.
-    const discovered = {
-      ...bounded,
-      tableRevision: 3,
-      familyAnnotations: [note(flashFamily, "C", 2)],
-    } as Snapshot;
-    const adopted = rebaseDraft(draft, baseline, discovered);
-    expect(adopted.conflicts).toHaveLength(1);
-    expect(adopted.conflicts[0]).toMatchObject({
-      kind: "changed",
-      field: "familyAnnotation",
-      profileId: "dsh/deepseek-official/deepseek-flash",
-    });
-    // The original draft and expectedRevision stay; B is never saved under v3.
-    expect(adopted.draft).toEqual(draft);
-    expect(adopted.baseline).toEqual(baseline);
-    expect(familyAnnotationText(adopted.draft, flash)).toBe("B");
-    expect(familyAnnotationText(adopted.baseline, flash)).toBe("A");
-    expect(publication(adopted.baseline, adopted.draft, "c").expectedRevision).toBe(1);
-  });
-
-  it("merges a note only when the refreshed value still equals the old baseline or the intent", () => {
-    const baseline = {
-      ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot),
-      familyAnnotations: [note(flashFamily, "A")],
-    };
-    const draft = setFamilyAnnotation(baseline, flash, "B");
-    const unchanged = rebaseDraft(draft, baseline, { ...bounded, tableRevision: 3, familyAnnotations: [note(flashFamily, "A", 2)] } as Snapshot);
-    expect(unchanged.conflicts).toEqual([]);
-    expect(familyAnnotationText(unchanged.draft, flash)).toBe("B");
-    expect(unchanged.draft.tableRevision).toBe(3);
-    const already = rebaseDraft(draft, baseline, { ...bounded, tableRevision: 3, familyAnnotations: [note(flashFamily, "B", 2)] } as Snapshot);
-    expect(already.conflicts).toEqual([]);
-    expect(familyAnnotationText(already.draft, flash)).toBe("B");
-  });
-
-  it("keeps an enabled-intent edit unresolved while its profile has no fresh row", () => {
-    const baseline = {
-      ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot),
-      profiles: [flash, retiredEnabled],
-    };
-    const draft = {
-      ...baseline,
-      profiles: baseline.profiles.map((p) =>
-        p.profileId === "retired" ? { ...p, enabled: false } : p,
-      ),
-    };
-    const discovered = { ...bounded, tableRevision: 3 } as Snapshot;
-    const adopted = rebaseDraft(draft, baseline, discovered);
-    expect(adopted.conflicts).toHaveLength(1);
-    expect(adopted.conflicts[0]).toMatchObject({
-      kind: "unread",
-      field: "enabled",
-      profileId: "retired",
-    });
-    expect(adopted.draft).toEqual(draft);
-    expect(adopted.draft.tableRevision).toBe(1);
-
-    // A cached page from the old revision must not mint a baseline at the new revision.
-    const withStale = rebaseDraft(draft, baseline, discovered, retained(1, { profiles: [retiredEnabled] }));
-    expect(withStale.conflicts[0].kind).toBe("unread");
-    expect(withStale.draft.tableRevision).toBe(1);
-    expect(withStale.baseline.tableRevision).toBe(1);
-
-    // A fresh retained page at the discovered revision resolves and applies the edit.
-    const resolved = rebaseDraft(draft, baseline, discovered, retained(3, { profiles: [retiredEnabled] }));
-    expect(resolved.conflicts).toEqual([]);
-    expect(resolved.draft.tableRevision).toBe(3);
-    expect(resolved.draft.profiles.find((p) => p.profileId === "retired")!.enabled).toBe(false);
-    expect(resolved.draft.profiles.some((p) => p.profileId === "flash-off")).toBe(true);
-  });
-
-  it("keeps a family-level edit unread until a profile of that family is readable", () => {
-    const baseline = {
-      ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot),
-      profiles: [flash, retiredEnabled],
-      familyAnnotations: [note(retiredFamily, "A")],
-    };
-    const draft = setFamilyAnnotation(setFamilyPreference(baseline, retired, "exclude"), retired, "B");
-    const discovered = { ...bounded, tableRevision: 3 } as Snapshot;
-    const unread = rebaseDraft(draft, baseline, discovered);
-    expect(unread.conflicts.map((c) => [c.kind, c.field])).toEqual([
-      ["unread", "familyPreference"],
-      ["unread", "familyAnnotation"],
-    ]);
-    // The fresh page carries another writer's note: a real conflict now.
-    const changed = rebaseDraft(draft, baseline, discovered, retained(3, {
-      profiles: [retiredEnabled],
-      familyAnnotations: [note(retiredFamily, "C", 2)],
-    }));
-    expect(changed.conflicts).toEqual([expect.objectContaining({ kind: "changed", field: "familyAnnotation" })]);
-    expect(familyAnnotationText(changed.draft, retired)).toBe("B");
-    expect(changed.draft.tableRevision).toBe(1);
-  });
-
-  it("merges a changed family mode without overwriting another writer's reason", () => {
-    const baseline = {
-      ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot),
-      familyPreferences: [{ ...flashFamily, mode: "prefer" as const, reason: "old" }],
-    };
-    const draft = setFamilyPreference(baseline, flash, "pin", "old");
-    const discovered = {
-      ...bounded,
-      tableRevision: 3,
-      familyPreferences: [{ ...flashFamily, mode: "pin" as const, reason: "他人理由" }],
-    } as Snapshot;
-    const adopted = rebaseDraft(draft, baseline, discovered);
+    const refreshed = { ...snapshot, familyAnnotations: [note(flashFamily, "C")] };
+    const adopted = rebaseDraft(draft, baseline, refreshed);
     expect(adopted.conflicts).toEqual([]);
-    expect(adopted.draft.familyPreferences).toEqual([{ ...flashFamily, mode: "pin", reason: "他人理由" }]);
+    expect(familyAnnotationText(adopted.baseline, flash)).toBe("C");
+    expect(familyAnnotationText(adopted.draft, flash)).toBe("B");
+    expect(publication(adopted.baseline, adopted.draft, "save").familyAnnotationChanges).toEqual([
+      { ...flashFamily, text: "B" },
+    ]);
   });
 
-  it("treats an override another writer removed as a conflict, not a resurrection", () => {
-    const baseline = {
-      ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot),
-      preferenceOverrides: [{ profileId: "flash-off", mode: "prefer" as const, reason: "old" }],
-    };
-    const draft = setPreferenceOverride(baseline, "flash-off", "prefer", "mine");
-    const adopted = rebaseDraft(draft, baseline, { ...bounded, tableRevision: 3 } as Snapshot);
-    expect(adopted.conflicts[0]).toMatchObject({ kind: "changed", field: "preference" });
-    expect(adopted.draft.tableRevision).toBe(1);
+  it("waits for a current retained page before replaying an omitted identity", () => {
+    const baseline = { ...makeDraft(snapshot), profiles: [flash, { ...retired, enabled: true }] };
+    const draft = { ...baseline, profiles: baseline.profiles.map(row => row.profileId === "retired"
+      ? { ...row, enabled: false } : row) };
+    const refreshed = { ...snapshot, profiles: [flash] };
+    const unread = rebaseDraft(draft, baseline, refreshed);
+    expect(unread.conflicts).toMatchObject([{ kind: "unread", field: "enabled", profileId: "retired" }]);
+    const ready = rebaseDraft(draft, baseline, refreshed, { profiles: [{ ...retired, enabled: true }] });
+    expect(ready.conflicts).toEqual([]);
+    expect(ready.draft.profiles.find(row => row.profileId === "retired")?.enabled).toBe(false);
   });
 
-  it("keeps a changed Router when the fresh table still holds the old value", () => {
-    const baseline = {
-      ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot),
-      profiles: [flash, retiredEnabled],
-      configuration: { revision: 1, routerProfileIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard" as const },
-    };
-    const draft = {
-      ...baseline,
-      configuration: { ...baseline.configuration!, routerProfileIds: ["retired"], routerRetryIntervalSeconds: 600},
-    };
-    const discovered = { ...bounded, tableRevision: 3 } as Snapshot;
-    const clean = rebaseDraft(draft, baseline, discovered);
-    expect(clean.conflicts).toEqual([]);
-    expect(clean.draft.configuration!.routerProfileIds).toEqual(["retired"]);
-    // Another writer changed the Router first: the old revision is retained.
-    const conflicted = rebaseDraft(draft, baseline, {
-      ...discovered,
-      configuration: { revision: 2, routerProfileIds: ["gone:model:off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    } as Snapshot);
-    expect(conflicted.conflicts[0]).toMatchObject({ kind: "changed", field: "configuration" });
-    expect(conflicted.draft.configuration!.routerProfileIds).toEqual(["retired"]);
-    expect(conflicted.draft.tableRevision).toBe(1);
-  });
-
-  it("bounds retained rows to the revision they were read at", () => {
-    const current = makeDraft({ ...bounded, tableRevision: 3 } as Snapshot);
-    const entries = retained(2, {
-      profiles: [retiredEnabled],
-      familyAnnotations: [note(retiredFamily, "旧备注")],
+  it("replays family and effort preferences over concurrent changes", () => {
+    const baseline = { ...makeDraft(snapshot),
+      familyPreferences: [{ ...flashFamily, mode: "prefer" as const, reason: "A" }],
+      preferenceOverrides: [{ profileId: flash.profileId, mode: "pin" as const, reason: "A" }] };
+    const draft = setPreferenceOverride(setFamilyPreference(baseline, flash, "exclude", "B"), flash.profileId, "none");
+    const refreshed = { ...snapshot,
+      familyPreferences: [{ ...flashFamily, mode: "pin" as const, reason: "C" }],
+      preferenceOverrides: [{ profileId: flash.profileId, mode: "exclude" as const, reason: "C" }] };
+    const adopted = rebaseDraft(draft, baseline, refreshed);
+    expect(adopted.conflicts).toEqual([]);
+    expect(publication(adopted.baseline, adopted.draft, "save")).toMatchObject({
+      familyPreferenceChanges: [{ ...flashFamily, mode: "exclude", reason: "B" }],
+      preferenceChanges: [{ profileId: flash.profileId, mode: "none", reason: "" }],
     });
-    const merged = withHistory(current, entries);
-    expect(merged.profiles.map((p) => p.profileId)).toEqual(["flash-off"]);
-    expect(merged.familyAnnotations).toEqual([]);
-    const view = historyView({ ...snapshot, tableRevision: 3 } as Snapshot, entries);
-    expect(view.profiles.some((p) => p.profileId === "retired")).toBe(false);
-    const matched = withHistory(current, retained(3, { profiles: [retiredEnabled], familyAnnotations: [note(retiredFamily, "旧备注")] }));
-    expect(matched.profiles.some((p) => p.profileId === "retired")).toBe(true);
-    expect(familyAnnotationText(matched, retired)).toBe("旧备注");
   });
 });
 
-describe("retained additions never resurrect a removal", () => {
-  const revision = 3;
-  const current = makeDraft({ ...snapshot, tableRevision: revision } as Snapshot);
-  const pinned = {
-    ...current,
-    preferenceOverrides: [{ profileId: "flash-off", mode: "pin" as const, reason: "旧理由" }],
-    familyPreferences: [{ ...flashFamily, mode: "exclude" as const, reason: "" }],
-  };
-
+describe("retained history with local removals", () => {
   it("keeps a removed override and family default removed when the published rows come back", () => {
-    const draft = { ...pinned, preferenceOverrides: [], familyPreferences: [] };
-    const page: HistoryEntries = {
-      tableRevision: revision,
-      preferenceOverrides: [{ profileId: "flash-off", mode: "pin", reason: "旧理由" }],
-      familyPreferences: [{ ...flashFamily, mode: "exclude", reason: "" }],
-    };
-    // A plain merge would erase the removal, so the adoption path filters first.
-    expect(withHistory(draft, page).preferenceOverrides).toHaveLength(1);
-    const adopted = withHistory(draft, retainedAdditions(draft, pinned, page));
-    expect(adopted.preferenceOverrides).toHaveLength(0);
-    expect(adopted.familyPreferences).toHaveLength(0);
-    // The changes stay publishable as real removals.
-    expect(preferenceChanges(pinned, adopted)).toEqual([{ profileId: "flash-off", mode: null, reason: "" }]);
-    expect(familyPreferenceChanges(pinned, adopted)).toEqual([{ ...flashFamily, mode: null, reason: "" }]);
+    const baseline = { ...makeDraft(snapshot),
+      preferenceOverrides: [{ profileId: flash.profileId, mode: "pin" as const, reason: "old" }],
+      familyPreferences: [{ ...flashFamily, mode: "exclude" as const, reason: "old" }] };
+    const draft = { ...baseline, preferenceOverrides: [], familyPreferences: [] };
+    const refreshed = { ...snapshot, preferenceOverrides: baseline.preferenceOverrides,
+      familyPreferences: baseline.familyPreferences };
+    const adopted = rebaseDraft(draft, baseline, refreshed);
+    expect(adopted.conflicts).toEqual([]);
+    expect(adopted.draft.preferenceOverrides).toEqual([]);
+    expect(adopted.draft.familyPreferences).toEqual([]);
+    expect(publication(adopted.baseline, adopted.draft, "save")).toMatchObject({
+      preferenceChanges: [{ profileId: flash.profileId, mode: null, reason: "" }],
+      familyPreferenceChanges: [{ ...flashFamily, mode: null, reason: "" }],
+    });
   });
 
   it("still fills identities neither the draft nor the baseline knows", () => {
-    const draft = { ...current, preferenceOverrides: [] };
-    const page: HistoryEntries = {
-      tableRevision: revision,
-      preferenceOverrides: [{ profileId: "new-profile", mode: "prefer", reason: "初评" }],
-      familyAnnotations: [note(retiredFamily, "历史备注")],
-    };
-    const additions = retainedAdditions(draft, current, page)!;
-    expect(withHistory(draft, additions).preferenceOverrides).toEqual([
-      { profileId: "new-profile", mode: "prefer", reason: "初评" },
-    ]);
-    expect(familyAnnotationText(withHistory(draft, additions), retired)).toBe("历史备注");
-  });
-
-  it("ignores a page from another revision entirely", () => {
-    const draft = { ...pinned, preferenceOverrides: [] };
-    const page: HistoryEntries = {
-      tableRevision: revision - 1,
-      preferenceOverrides: [{ profileId: "flash-off", mode: "pin", reason: "旧理由" }],
-    };
-    expect(retainedAdditions(draft, pinned, page)).toBeNull();
+    const baseline = makeDraft(snapshot);
+    const page: HistoryEntries = { profiles: [retired], familyAnnotations: [note(retiredFamily, "history")] };
+    const adopted = rebaseDraft(baseline, baseline, snapshot, page);
+    expect(adopted.conflicts).toEqual([]);
+    expect(adopted.draft.profiles.some(row => row.profileId === retired.profileId)).toBe(true);
+    expect(familyAnnotationText(adopted.draft, retired)).toBe("history");
   });
 });
 
@@ -520,9 +352,9 @@ describe("model family concurrency", () => {
   const entry = (limit: number) => ({
     adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit, active: 0,
   });
-  const basedAt = (revision: number) => makeDraft({ ...snapshot, tableRevision: revision } as unknown as Snapshot);
-  const tableAt = (revision: number, limit: number) =>
-    ({ ...snapshot, tableRevision: revision, modelConcurrency: [entry(limit)] }) as unknown as Snapshot;
+  const basedAt = () => makeDraft(snapshot);
+  const tableAt = (limit: number) =>
+    ({ ...snapshot, modelConcurrency: [entry(limit)] }) as Snapshot;
 
   it("publishes only changed family limits and never the occupancy", () => {
     const baseline = makeDraft(snapshot);
@@ -557,11 +389,10 @@ describe("model family concurrency", () => {
   });
 
   it("treats refreshed occupancy as observation, not a user change", () => {
-    const baseline = basedAt(1);
-    const draft = basedAt(1);
+    const baseline = basedAt();
+    const draft = basedAt();
     const refreshed = {
       ...snapshot,
-      tableRevision: 3,
       modelConcurrency: [{ ...entry(2), active: 9 }],
     } as unknown as Snapshot;
     const adopted = rebaseDraft(draft, baseline, refreshed);
@@ -573,55 +404,37 @@ describe("model family concurrency", () => {
   });
 
   it("retains invalid local limits during a rebase instead of discarding the input", () => {
-    const baseline = basedAt(1);
+    const baseline = basedAt();
     for (const limit of [33, NaN]) {
       const draft = setConcurrencyLimit(baseline, flash, limit);
-      const rebased = rebaseDraft(draft, baseline, tableAt(3, 2));
+      const rebased = rebaseDraft(draft, baseline, tableAt(2));
       expect(rebased.conflicts.some(conflict => conflict.field === "modelConcurrency")).toBe(true);
       expect(Object.is(flashLimit(rebased.draft), limit)).toBe(true);
     }
   });
 
-  it("rebases a changed limit three ways against the refreshed table", () => {
-    const baseline = basedAt(1);
+  it("replays a changed limit over the latest recorded limit", () => {
+    const baseline = basedAt();
     const draft = setConcurrencyLimit(baseline, flash, 6);
-    const clean = rebaseDraft(draft, baseline, tableAt(3, 2));
-    expect(clean.conflicts).toEqual([]);
-    expect(flashLimit(clean.draft)).toBe(6);
-    expect(flashLimit(clean.baseline)).toBe(2);
-    expect(clean.draft.tableRevision).toBe(3);
-    const applied = rebaseDraft(draft, baseline, tableAt(3, 6));
-    expect(applied.conflicts).toEqual([]);
-    expect(flashLimit(applied.draft)).toBe(6);
-    const conflicted = rebaseDraft(draft, baseline, tableAt(3, 4));
-    expect(conflicted.conflicts).toEqual([expect.objectContaining({
-      kind: "changed",
-      field: "modelConcurrency",
-      profileId: "dsh/deepseek-official/deepseek-flash",
-    })]);
-    expect(conflicted.draft).toEqual(draft);
-    expect(conflicted.draft.tableRevision).toBe(1);
+    const adopted = rebaseDraft(draft, baseline, tableAt(4));
+    expect(adopted.conflicts).toEqual([]);
+    expect(flashLimit(adopted.baseline)).toBe(4);
+    expect(flashLimit(adopted.draft)).toBe(6);
+    expect(publication(adopted.baseline, adopted.draft, "save").modelConcurrency).toEqual([
+      { ...flashFamily, limit: 6 },
+    ]);
   });
 
-  it("keeps an edited family unresolved until a fresh retained page supplies it", () => {
-    const baseline = basedAt(1);
+  it("waits for a retained family row omitted by a bounded snapshot", () => {
+    const baseline = basedAt();
     const draft = setConcurrencyLimit(baseline, flash, 6);
-    const discovered = {
-      ...snapshot, tableRevision: 3, profiles: [], modelConcurrency: [],
-    } as unknown as Snapshot;
-    const unresolved = rebaseDraft(draft, baseline, discovered);
-    expect(unresolved.conflicts[0]).toMatchObject({ kind: "unread", field: "modelConcurrency" });
-    expect(unresolved.draft.tableRevision).toBe(1);
-    const stale = rebaseDraft(draft, baseline, discovered, { tableRevision: 1, modelConcurrency: [entry(2)] });
-    expect(stale.conflicts[0].kind).toBe("unread");
-    expect(stale.draft.tableRevision).toBe(1);
-    const resolved = rebaseDraft(draft, baseline, discovered, { tableRevision: 3, modelConcurrency: [entry(2)] });
-    expect(resolved.conflicts).toEqual([]);
-    expect(resolved.draft.tableRevision).toBe(3);
-    expect(flashLimit(resolved.draft)).toBe(6);
-    expect(publication(resolved.baseline, resolved.draft, "c").modelConcurrency).toEqual([
-      { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
+    const refreshed = { ...snapshot, profiles: [], modelConcurrency: [] };
+    expect(rebaseDraft(draft, baseline, refreshed).conflicts).toMatchObject([
+      { kind: "unread", field: "modelConcurrency" },
     ]);
+    const ready = rebaseDraft(draft, baseline, refreshed, { profiles: [flash], modelConcurrency: [entry(2)] });
+    expect(ready.conflicts).toEqual([]);
+    expect(flashLimit(ready.draft)).toBe(6);
   });
 });
 
@@ -685,7 +498,7 @@ describe("independent Router and budget fields", () => {
     expect(changeCount(baseline, draft) - changeCount(baseline, baseline)).toBe(3);
   });
   it("keeps an unchanged standard budget and publishes budget alone with a stale Router", () => {
-    const baseline = makeDraft({ ...snapshot, profiles: [], configuration: { revision: 2, routerProfileIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"} } as Snapshot);
+    const baseline = makeDraft({ ...snapshot, profiles: [], configuration: { routerProfileIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"} } as Snapshot);
     const equivalent = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "standard" as const } };
     expect(draftDiffers(baseline, equivalent)).toBe(false);
     const draft = { ...equivalent, configuration: { ...equivalent.configuration!, routingBudget: "brief" as const } };
@@ -695,37 +508,26 @@ describe("independent Router and budget fields", () => {
     expect(blockingIssues(baseline, draft)).toEqual([]);
   });
 
-  it("rebases Router and budget independently and preserves the original draft on budget conflict", () => {
+  it("replays Router and budget fields independently over fresh settings", () => {
     const baseline = makeDraft(snapshot);
     const draft = { ...baseline, configuration: { ...baseline.configuration!, routingBudget: "brief" as const } };
-    const fresh = { ...snapshot, tableRevision: 4, configuration: { revision: 3, routerProfileIds: ["new-model"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard" as const } };
-    const merged = rebaseDraft(draft, baseline, fresh);
-    expect(merged.conflicts).toEqual([]);
-    expect(merged.draft.configuration).toMatchObject({ routerProfileIds: ["new-model"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "brief" });
-    expect(publication(merged.baseline, merged.draft, "budget")).toMatchObject({ expectedRevision: 4, configuration: { routingBudget: "brief" } });
-    const conflicted = rebaseDraft(draft, baseline, { ...fresh, configuration: { ...fresh.configuration!, routingBudget: "deep" } });
-    expect(conflicted.conflicts[0].field).toBe("routingBudget");
-    expect(conflicted.draft).toBe(draft);
-    expect(conflicted.baseline).toBe(baseline);
-    expect(conflicted.draft.tableRevision).toBe(3);
-    const modelDraft = { ...baseline, configuration: { ...baseline.configuration!, routerProfileIds: ["another-model"], routerRetryIntervalSeconds: 600} };
-    const modelMerge = rebaseDraft(modelDraft, baseline, { ...snapshot, tableRevision: 4, configuration: { ...snapshot.configuration!, routingBudget: "deep" } });
-    expect(modelMerge.conflicts).toEqual([]);
-    expect(modelMerge.draft.configuration!.routingBudget).toBe("deep");
-    expect(publication(modelMerge.baseline, modelMerge.draft, "model").configuration).toEqual({ routerProfileIds: ["another-model"] });
+    const fresh = { ...snapshot, configuration: { ...snapshot.configuration!, routerProfileIds: ["new-model"], routingBudget: "deep" as const } };
+    const adopted = rebaseDraft(draft, baseline, fresh);
+    expect(adopted.conflicts).toEqual([]);
+    expect(adopted.draft.configuration).toMatchObject({ routerProfileIds: ["new-model"], routingBudget: "brief" });
+    expect(publication(adopted.baseline, adopted.draft, "save").configuration).toEqual({ routingBudget: "brief" });
   });
 });
 
-
 describe("unavailable Router settings in the editor", () => {
   const unavailable = { ...snapshot, configuration: null,
-    configurationError: { code: "router-settings-upgrade-required", message: "Router 设置需升级", revision: 4 } } as Snapshot;
+    configurationError: { code: "router-settings-upgrade-required", message: "Router 设置需升级",} } as Snapshot;
   it("publishes unrelated changes while leaving upgrade-only settings null", () => {
     const baseline = makeDraft(unavailable);
     const draft = setFamilyAnnotation(baseline, flash, "仍可保存备注");
     expect(blockingIssues(baseline, draft)).toEqual([]);
     expect(publication(baseline, draft, "note")).not.toHaveProperty("configuration");
-    const merged = rebaseDraft(draft, baseline, { ...unavailable, tableRevision: 4 });
+    const merged = rebaseDraft(draft, baseline, { ...unavailable,});
     expect(merged.conflicts).toEqual([]);
     expect(merged.draft.configuration).toBeNull();
     expect(familyAnnotationText(merged.draft, flash)).toBe("仍可保存备注");
@@ -741,7 +543,7 @@ describe("unavailable Router settings in the editor", () => {
     const baseline = makeDraft(snapshot);
     const draft = { ...baseline, configuration: { ...baseline.configuration!, routerProfileIds: ["chosen"], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "fast" as const, routingBudget: "deep" as const } };
-    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ ok: true, result: { tableRevision: 4 } })));
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ ok: true, result: {} })));
     const patch = publication(baseline, draft, "single-router");
     await createApi("", fetcher as typeof fetch).command("user_policy_publish", patch, "csrf");
     const body = JSON.parse(fetcher.mock.calls[0][1]!.body as string);

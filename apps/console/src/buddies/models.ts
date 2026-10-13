@@ -103,7 +103,7 @@ export function harnessBlocks({ listed, data, recorded, harnesses, folded, fresh
         reasons: reasonsOf(family.profiles),
         pending: pending.pending,
         pendingSince: pending.since,
-        fresh: fresh.has(family.key) || family.profiles.some(profile => profile.newlyDiscovered),
+        fresh: fresh.has(family.key),
         limit,
         occupancy: Number.isInteger(active) ? active! : null,
       };

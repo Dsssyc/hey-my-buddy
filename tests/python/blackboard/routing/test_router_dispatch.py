@@ -4,8 +4,8 @@ Every test runs the production store, decision coordinator and claim transaction
 over a private board; no model is called and no process starts. Admission freezes
 the complete actor-free packet — even with no usable Router — and each item gets
 its own immutable internal task. Pre-claim preparation advances a model-前
-unavailable item after recording its real preflight no-answer, refuses to borrow a
-changed configuration, queue behind writer gates, retries and capacity, and a
+unavailable item after recording its real preflight no-answer, queues behind
+retries and capacity, and a
 claim freezes the actual family, tool policy and Router binding onto the
 attempt inside one transaction. Old dispatch documents, hashes and receipts are
 never rewritten by a later dispatch of the same request.
@@ -42,8 +42,8 @@ class RouterDispatchTestCase(BoardTestCase):
     def add_profile(self, profile_id, *, model=None, available=1, enabled=1):
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
-                       "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES(?,?,?,?,?,?,?,?,?,0,0)",
+                       "available,enabled,capabilities_json)"
+                       " VALUES(?,?,?,?,?,?,?,?,?)",
                        (profile_id, profile_id, "dsh", "fixture", model or profile_id, "max", available, enabled,
                         canonical_json(permission_capabilities("dsh"))))
 
@@ -59,8 +59,6 @@ class RouterDispatchTestCase(BoardTestCase):
             if interval is not None:
                 merged["routerRetryIntervalSeconds"] = interval
             router._write_settings(db, merged)
-            revision = int(db.execute("SELECT configuration_revision FROM evaluation_state WHERE id=1").fetchone()[0])
-            db.execute("UPDATE evaluation_state SET configuration_revision=? WHERE id=1", (revision + 1,))
 
     def request(self, *, request_id="pick-1", task="fix the parser"):
         return self.board_.call("selection_request", {"requestId": request_id, "task": task})
@@ -257,31 +255,25 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         self.assertEqual(again, second_task)
         self.assertEqual(len(self.tasks(state="queued")), 1)
 
-    def test_changed_settings_never_borrow_a_new_configuration(self):
+    def test_changed_settings_keep_the_frozen_router_dispatch(self):
         result = self.request()
+        frozen = self.dispatch_of(result["runId"])
         self.set_settings(ids=[B, A])
-        blocked = self.claim("drift")
-        self.assertIsNone(blocked["claim"])
-        self.assertEqual(blocked["reason"], "decision-closed")
-        decision = self.decision_row(result["decisionId"])
-        self.assertEqual(decision["status"], "stale")
-        self.assertEqual(decision["error"], "router-configuration-changed")
-        # No second item was dispatched and nothing was recorded against a Router.
+        claimed = self.claim("settings-edited")
+        self.assertIsNotNone(claimed["claim"])
+        self.assertEqual(claimed["claim"]["decisionInput"], frozen["document"])
         self.assertEqual(len(self.tasks()), 1)
-        self.assertEqual([row["state"] for row in self.tasks()], ["cancelled"])
         self.assertEqual(self.router_events("router.no_answer"), [])
 
-    def test_router_identity_drift_is_a_change_not_an_ordinary_switch(self):
+    def test_router_identity_edit_keeps_the_frozen_dispatch(self):
         result = self.request()
+        frozen = self.dispatch_of(result["runId"])
         with self.board_.store.db.write() as db:
             db.execute("UPDATE evaluation_profiles SET model='replaced' WHERE profile_id=?", (A,))
-        blocked = self.claim("drift")
-        self.assertIsNone(blocked["claim"])
-        decision = self.decision_row(result["decisionId"])
-        self.assertEqual(decision["status"], "needs-host")
-        self.assertEqual(decision["error"], "router-profile-changed")
+        claimed = self.claim("identity-edited")
+        self.assertIsNotNone(claimed["claim"])
+        self.assertEqual(claimed["claim"]["decisionInput"], frozen["document"])
         self.assertEqual(len(self.tasks()), 1)
-        self.assertEqual([row["state"] for row in self.tasks()], ["cancelled"])
         self.assertEqual(self.router_events("router.no_answer"), [])
 
 
@@ -512,58 +504,25 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
                 {'id': model, 'efforts': ['max'], 'description': 'changed' if changed else ''}
                 for model in ('alpha', 'bravo')]}]})
 
-    def frozen_problem(self, result):
-        with self.board_.store.db.read() as db:
-            return self.board_.store.decisions._frozen_circumstances_problem(
-                db, self.board_.store.decisions._row(db, result['decisionId']),
-                router_sequence.request_snapshot(db, result['decisionId']),
-                router_sequence.dispatch(db, result['runId']))
-
-    def test_noop_catalog_read_passes_frozen_dispatch_and_claim_checks(self):
+    def test_noop_catalog_read_preserves_frozen_dispatch(self):
         self.catalog_read()
         frozen = self.request()
+        original = self.dispatch_of(frozen['runId'])
         self.clock.advance(21601)
-        reread = self.catalog_read()
-        self.assertEqual(reread['tableRevision'], self.snapshot_of(frozen['decisionId'])['baseInput']['tableRevision'])
-        self.assertIsNone(self.frozen_problem(frozen))
+        self.catalog_read()
         committed = self.claim('catalog-noop')
         self.assertIsNotNone(committed['claim'])
-        self.assertEqual(committed['claim']['decisionInput']['tableRevision'], reread['tableRevision'])
+        self.assertEqual(committed['claim']['decisionInput'], original['document'])
 
-    def test_changed_catalog_read_stops_both_checks_with_the_same_reroute_reason(self):
+    def test_changed_catalog_description_does_not_stop_frozen_dispatch(self):
         self.catalog_read()
         frozen = self.request()
+        original = self.dispatch_of(frozen['runId'])
         self.catalog_read(changed=True)
-        problem = self.frozen_problem(frozen)
-        reason = '评价表在请求冻结之后已变化；请由 Host 显式 reroute'
-        self.assertEqual(problem['code'], 'router-table-changed')
-        self.assertEqual(problem['reason'], reason)
-        blocked = self.claim('catalog-changed')
-        self.assertIsNone(blocked['claim'])
-        decision = self.decision_row(frozen['decisionId'])
-        self.assertEqual(decision['error'], 'router-table-changed')
-        self.assertEqual(decision['reason'], reason)
-        from hey_my_buddy.blackboard.routing.router_boundary_data import routing_boundary
-        with self.board_.store.db.read() as db:
-            row = self.board_.store.decisions._row(db, frozen['decisionId'])
-            boundary = routing_boundary(db, row, now=self.clock.value)
-        self.assertEqual(boundary['reason'], reason)
+        committed = self.claim('catalog-changed')
+        self.assertIsNotNone(committed['claim'])
+        self.assertEqual(committed['claim']['decisionInput'], original['document'])
         self.assertEqual(self.router_events('router.no_answer'), [])
-
-    def test_claim_time_revision_check_has_the_same_reason_without_preclaim_preparation(self):
-        self.catalog_read()
-        frozen = self.request()
-        self.catalog_read(changed=True)
-        # Exercise claim's own fence independently of pre-claim preparation.
-        with self.board_.store.db.write() as db:
-            task = db.execute('SELECT * FROM tasks WHERE task_id=?', (frozen['runId'],)).fetchone()
-            outcome = self.board_.store.decisions.claim(
-                db, task=task, spec=json.loads(task['spec_json']),
-                attempt_id='not-started', generation=1, now=self.clock.value)
-        self.assertEqual(outcome, ('decision-closed', None))
-        decision = self.decision_row(frozen['decisionId'])
-        self.assertEqual(decision['error'], 'router-table-changed')
-        self.assertEqual(decision['reason'], '评价表在请求冻结之后已变化；请由 Host 显式 reroute')
 
     def test_actor_graft_is_included_in_admission_byte_ceiling(self):
         first = self.request(request_id="pick-1")
@@ -593,15 +552,13 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
         self.assertEqual(len(self.tasks()), 1)
         self.assertEqual([event[1]["profileId"] for event in self.router_events("router.no_answer")], [A])
 
-    def test_table_drift_precedes_preflight_failure_and_does_not_poison_skip_history(self):
+    def test_unhealthy_router_records_preflight_failure_without_an_attempt(self):
         first = self.request()
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_state SET table_revision=table_revision+1 WHERE id=1")
             db.execute("UPDATE harness_health SET status='unhealthy' WHERE adapter='dsh'")
         response = self.claim("changed")
         self.assertIsNone(response["claim"])
-        self.assertEqual(self.decision_row(first["decisionId"])["error"], "router-table-changed")
-        self.assertEqual(self.router_events("router.no_answer"), [])
+        self.assertEqual(self.decision_row(first["decisionId"])["status"], "needs-host")
         self.assertEqual(len(self.tasks()), 1)
         self.assertEqual(self.attempts(), [])
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ...protocol import schemas
@@ -13,34 +12,16 @@ from ...errors import BoardError
 MAX_DECISION_PAGE = 50
 
 
-def _timestamp(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
-def parse_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-
 class EvaluationStore:
     """Settings and selection state composed with the authoritative BoardStore."""
 
-    def __init__(self, board, *, clock=None, reader_lease_seconds: int = 300):
+    def __init__(self, board, *, clock=None):
         self.board = board
         self.db = board.db
         self._clock = clock or board.now
-        self.reader_lease_seconds = max(5, min(int(reader_lease_seconds), 3600))
 
     def _now(self) -> str:
         return self._clock()
-
-    def _plus(self, seconds: int, now: str | None = None) -> str:
-        return _timestamp(parse_timestamp(now or self._now()) + timedelta(seconds=seconds))
-
-    def _state(self, connection: sqlite3.Connection) -> sqlite3.Row:
-        row = connection.execute("SELECT * FROM evaluation_state WHERE id=1").fetchone()
-        if row is None:  # pragma: no cover - initialize always seeds the singleton
-            raise BoardError("INTERNAL_ERROR", "The evaluation state row is missing; reinitialize the board")
-        return row
 
     @staticmethod
     def _validate_configuration(entry: Any) -> dict:
@@ -52,8 +33,6 @@ class EvaluationStore:
         """One coherent view of profiles, policy, configuration and selection history."""
         with self.board.db.read() as connection:
             now = self._now()
-            state = self._state(connection)
-            table_revision = int(state["table_revision"])
             from ..routing import router
             configuration_error = None
             try:
@@ -61,8 +40,7 @@ class EvaluationStore:
                 routing_budget = router.configured_budget(connection)
             except BoardError as error:
                 settings, routing_budget = None, None
-                configuration_error = {"code": error.code, "message": str(error),
-                                       "revision": int(state["configuration_revision"])}
+                configuration_error = {"code": error.code, "message": str(error)}
             configured_ids = (settings or {}).get("routerProfileIds") or []
             configured_marks = ",".join("?" for _ in configured_ids) or "NULL"
             from ..catalog.catalog import pending_families
@@ -107,10 +85,10 @@ class EvaluationStore:
                 for profile in profiles
             }
             model_concurrency = self.board.model_capacity_rows(connection, families)
+            event_cursor = self.board._head_of(connection)
         return {
-            "tableRevision": table_revision,
+            "eventCursor": event_cursor,
             "configuration": ({
-                "revision": int(state["configuration_revision"]),
                 **settings,
                 "routingBudgetLimits": routing_budget,
             } if settings is not None else None),
@@ -182,8 +160,6 @@ class EvaluationStore:
         }
         if row["unavailable_reason"]:
             view["unavailableReason"] = row["unavailable_reason"]
-        if not row['enabled'] and row['created_revision'] == row['updated_revision']:
-            view['newlyDiscovered'] = True
         if "catalog_state" in row.keys():
             view["catalogState"] = row["catalog_state"] or "unknown"
             view["catalogReason"] = row["catalog_reason"]
@@ -210,7 +186,6 @@ class EvaluationStore:
             "status": row["status"],
             "task": row["task"],
             "profileId": row["profile_id"],
-            "tableRevision": int(row["table_revision"]),
             "reason": row["reason"],
             "createdAt": row["created_at"],
         }
@@ -225,27 +200,20 @@ class EvaluationStore:
         return view
 
     def user_policy_publish(self, params: dict) -> dict:
-        """Apply an authenticated settings patch against one published revision."""
+        """Apply an authenticated settings patch, retaining command receipts."""
         user_policy.require_console()
-        schemas.reject_unknown(params, {"commandId", "expectedRevision", *user_policy.PATCH_FIELDS}, "user_policy.publish")
+        schemas.reject_unknown(params, {"commandId", *user_policy.PATCH_FIELDS}, "user_policy.publish")
         command_id = schemas.required_string(params, "commandId", max_length=128)
-        expected = schemas.require_expected_revision(params)
         request = {key: value for key, value in params.items() if key != "commandId"}
         with self.db.write() as connection:
             receipt = self.board._receipt(connection, command_id, "user_policy.publish", request)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
-            revision = int(self._state(connection)["table_revision"])
-            if expected != revision:
-                raise BoardError("REVISION_CONFLICT", "The table changed; re-read the current revision and publish again",
-                                 expectedRevision=expected, currentRevision=revision)
             now = self._now()
-            published = user_policy.publish(self, connection, revision=revision + 1, now=now, params=params)
-            self.board._append_event(connection, "evaluation.published", revision=published["revision"],
+            published = user_policy.publish(self, connection, now=now, params=params)
+            self.board._append_event(connection, "evaluation.published",
                                      payload={"kind": "human", "counts": published["counts"]})
-            response = {"published": True, "revision": published["revision"], "tableRevision": published["revision"],
-                        "configurationRevision": published["configurationRevision"], "counts": published["counts"],
-                        "duplicate": False}
+            response = {"published": True, "counts": published["counts"], "duplicate": False}
             self.board._store_receipt(connection, command_id, "user_policy.publish", request, response)
             head = self.board._head_of(connection)
         self.board._notify(head)

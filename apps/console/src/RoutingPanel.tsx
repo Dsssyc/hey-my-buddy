@@ -23,7 +23,6 @@ export function RoutingPanel({ value }: { value: Workflow }) {
     </p> : <p className="muted">尚未确定执行配置。</p>}
     {value.routing && <dl className="facts">
       <dt>路由状态</dt><dd>{value.routing.status}</dd>
-      {value.routing.tableRevision != null && <><dt>评价表版本</dt><dd>V{value.routing.tableRevision}</dd></>}
       {value.routing.decisionId && <><dt>决策 ID</dt><dd className="mono wrap">{value.routing.decisionId}</dd></>}
     </dl>}
     {needsHost && <p className="small muted" role="status">

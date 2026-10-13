@@ -2165,15 +2165,6 @@ class BoardStore:
                     " WHERE worker_id=?",
                     (now, attempt["attempt_id"], attempt["worker_id"]),
                 )
-            # Keep this decision's fenced reader/writer lease alive for the length of
-            # one bounded model call; renewal never resurrects a terminal decision.
-            # An uncertain attempt was already fenced by the restart, so it waits for
-            # its own reconciliation before it may hold the table again.
-            renew_task = connection.execute(
-                "SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)
-            ).fetchone()
-            if not uncertain:
-                self.decisions.renew(connection, task=renew_task, now=now)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
             attempt_row = connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (attempt["attempt_id"],)).fetchone()
             response = {

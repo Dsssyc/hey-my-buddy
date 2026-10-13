@@ -31,9 +31,7 @@ export default {
       connection: "The connection is lost; retry the connection. The draft is kept.",
       login: "The login has expired; run buddy console to log in again. The draft is kept.",
     },
-    conflict: "The settings have changed; check the draft.",
-    reload: "Load the latest version",
-    discardChanges: "Discard changes",
+    reload: "Reread settings",
   },
   startup: {
     connecting: "Connecting to the local blackboard",

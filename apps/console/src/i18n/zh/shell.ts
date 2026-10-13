@@ -31,9 +31,7 @@ export default {
       connection: "连接中断；请重试连接，草稿已保留。",
       login: "登录已失效；请运行 buddy console 重新登录，草稿已保留。",
     },
-    conflict: "设置已更新；请核对草稿。",
-    reload: "重新加载最新版本",
-    discardChanges: "放弃修改",
+    reload: "重新读取设置",
   },
   startup: {
     connecting: "正在连接本地黑板",

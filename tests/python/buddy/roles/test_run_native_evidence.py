@@ -105,7 +105,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
 
     def router_collect(self, payload, mode="fast"):
         collection = SimpleNamespace(payload=payload, stop_confirmed=True)
-        context = SimpleNamespace(decision_input={"tableRevision": 1, "profile": {}, "budget": {},
+        context = SimpleNamespace(decision_input={"profile": {}, "budget": {},
                                                  "routingMode": mode, "profiles": [{"profileId": "chosen"}]})
         handle = SimpleNamespace(router_started=time.monotonic(), role_run_control={"operation": mode},
                                  process=SimpleNamespace(returncode=0))

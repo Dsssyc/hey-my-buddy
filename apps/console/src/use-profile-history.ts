@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import { familyKey } from "./console-data";
-import type { ModelFamily, ProfilePage } from "./types";
+import type { ModelFamily, ProfilePage, Snapshot } from "./types";
 
 /** One bounded page of retained identities, including unavailable history. */
 export const PROFILE_PAGE_SIZE = 100;
@@ -36,7 +36,6 @@ export function parseProfilePage(value: unknown): ProfilePage {
     && optionalList(page.familyPreferences)
     && optionalList(page.familyAnnotations)
     && Array.isArray(page.modelConcurrency)
-    && Number.isInteger(page.tableRevision)
     && (page.nextCursor === null || typeof page.nextCursor === "string");
   if (!valid) throw new Error("配置历史响应不完整，请检查服务版本。");
   return page;
@@ -77,13 +76,10 @@ function addMissingFamilies<T extends ModelFamily>(current: T[], extra: T[]): T[
 }
 
 /**
- * Appends one page of the same revision. A page read at another `tableRevision`
- * is never merged in or relabelled: pages from different revisions do not
- * describe the same table, so the already-loaded revision is kept.
+ * Appends one page within the current source content generation.
  */
 export function mergePage(previous: ProfilePage | null, next: ProfilePage): ProfilePage {
   if (!previous) return next;
-  if (previous.tableRevision !== next.tableRevision) return previous;
   return {
     profiles: addMissing(previous.profiles, next.profiles),
     preferences: addMissing(previous.preferences, next.preferences),
@@ -91,7 +87,6 @@ export function mergePage(previous: ProfilePage | null, next: ProfilePage): Prof
     familyPreferences: addMissingFamilies(previous.familyPreferences ?? [], next.familyPreferences ?? []),
     familyAnnotations: addMissingFamilies(previous.familyAnnotations ?? [], next.familyAnnotations ?? []),
     modelConcurrency: addMissingFamilies(previous.modelConcurrency, next.modelConcurrency),
-    tableRevision: next.tableRevision,
     nextCursor: next.nextCursor,
   };
 }
@@ -107,14 +102,28 @@ export type ProfileHistoryFilters = {
   autoOpen?: boolean;
 };
 
-/** Stored page plus the revision and filter generation it was read for. */
-type StoredPage = { revision: number; key: string; page: ProfilePage | null };
+/** Snapshot content that can change the retained model history. */
+export function historySourceKey(snapshot: Snapshot): string {
+  return JSON.stringify({
+    eventCursor: snapshot.eventCursor,
+    profiles: snapshot.profiles.map(({ profileId, available, enabled }) => [profileId, available, enabled]),
+    preferences: snapshot.preferences,
+    preferenceOverrides: snapshot.preferenceOverrides,
+    familyPreferences: snapshot.familyPreferences,
+    familyAnnotations: snapshot.familyAnnotations,
+    modelConcurrency: snapshot.modelConcurrency.map(({ adapter, provider, model, limit }) => [adapter, provider, model, limit]),
+    configuration: snapshot.configuration,
+    unavailableProfileCount: snapshot.unavailableProfileCount,
+  });
+}
+
+type StoredPage = { sourceKey: string; key: string; page: ProfilePage | null };
 
 /**
  * Pages the retained profile history through `model_profiles` with
  * `includeUnavailable: true`. Reading it never writes and never calls a model.
  *
- * The stored page is only exposed while its `tableRevision` and filter match the
+ * The stored page is only exposed while its source content and filter match the
  * live ones, so a render that happens before the reload effect, or a queued
  * reply from an older generation, can never seed a new editor baseline. A filter
  * change drops the cursor and asks the server for a fresh first page; the view
@@ -123,14 +132,14 @@ type StoredPage = { revision: number; key: string; page: ProfilePage | null };
 export function useProfileHistory(
   api: ConsoleApi,
   csrfToken: string,
-  tableRevision: number,
+  sourceKey: string,
   filters: ProfileHistoryFilters,
 ) {
   const query = boundProfileQuery(filters.query);
   const adapter = filters.adapter.trim();
   const filterKey = `${query}\u0000${adapter}`;
   const [stored, setStored] = useState<StoredPage>({
-    revision: tableRevision,
+    sourceKey,
     key: filterKey,
     page: null,
   });
@@ -143,8 +152,8 @@ export function useProfileHistory(
   const sequence = useRef(0);
   /** Filter generation whose first page was already requested; no retry loop. */
   const requestedKey = useRef<string | null>(null);
-  const params = useRef({ query, adapter, revision: tableRevision, key: filterKey });
-  params.current = { query, adapter, revision: tableRevision, key: filterKey };
+  const params = useRef({ query, adapter, sourceKey, key: filterKey });
+  params.current = { query, adapter, sourceKey, key: filterKey };
   useEffect(() => {
     alive.current = true;
     return () => { alive.current = false; };
@@ -152,7 +161,7 @@ export function useProfileHistory(
 
   const fetchPage = useCallback(async (after: string | undefined, replace: boolean) => {
     const request = ++sequence.current;
-    const { query: search, adapter: harness, revision, key } = params.current;
+    const { query: search, adapter: harness, sourceKey: source, key } = params.current;
     setLoading(true);
     setError("");
     try {
@@ -165,15 +174,13 @@ export function useProfileHistory(
       }, csrf.current);
       const next = parseProfilePage(value);
       if (!alive.current || request !== sequence.current) return;
-      // A reply for another revision or another filter describes another table
-      // generation; it is discarded instead of being relabelled.
-      if (next.tableRevision !== revision || key !== params.current.key
-        || revision !== params.current.revision) return;
+      // A reply from an older snapshot or filter cannot seed the current view.
+      if (key !== params.current.key || source !== params.current.sourceKey) return;
       setStored((previous) => {
-        const same = previous.revision === revision && previous.key === key;
+        const same = previous.sourceKey === source && previous.key === key;
         return same && previous.page && !replace
           ? { ...previous, page: mergePage(previous.page, next) }
-          : { revision, key, page: next };
+          : { sourceKey: source, key, page: next };
       });
     } catch (failure) {
       if (alive.current && request === sequence.current) setError(errorText(failure));
@@ -182,30 +189,30 @@ export function useProfileHistory(
     }
   }, [api]);
 
-  // One bounded first-page request per revision/filter generation while the
+  // One bounded first-page request per content/filter generation while the
   // retained view is wanted (and visible). A settled generation is not retried.
   useEffect(() => {
     if (!(wanted || filters.autoOpen) || !filters.enabled) return;
-    const key = `${tableRevision}\u0000${filterKey}`;
+    const key = `${sourceKey}\u0000${filterKey}`;
     if (requestedKey.current === key) return;
     const timer = setTimeout(() => {
       requestedKey.current = key;
       void fetchPage(undefined, true);
     }, FILTER_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [wanted, filters.autoOpen, filters.enabled, tableRevision, filterKey, fetchPage]);
+  }, [wanted, filters.autoOpen, filters.enabled, sourceKey, filterKey, fetchPage]);
 
-  const page = stored.revision === tableRevision && stored.key === filterKey ? stored.page : null;
+  const page = stored.sourceKey === sourceKey && stored.key === filterKey ? stored.page : null;
   const loaded = page?.profiles.length ?? 0;
   const open = useCallback(() => {
-    const key = `${tableRevision}\u0000${filterKey}`;
-    if (!stored.page || stored.revision !== tableRevision || stored.key !== filterKey) {
+    const key = `${sourceKey}\u0000${filterKey}`;
+    if (!stored.page || stored.sourceKey !== sourceKey || stored.key !== filterKey) {
       requestedKey.current = null;
     } else {
       requestedKey.current = key;
     }
     setWanted(true);
-  }, [tableRevision, filterKey, stored]);
+  }, [sourceKey, filterKey, stored]);
   const reload = useCallback(() => {
     requestedKey.current = null;
     void fetchPage(undefined, true);

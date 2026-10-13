@@ -46,7 +46,7 @@ def packet(args):
         'profiles': profiles, 'preferences': [], 'annotations': [],
         'policyFacts': selection_policy.policy_facts(profiles=profiles,
                                                     prefer_profile_ids=[], hard_constraints={}),
-        'requestId': 'native-fast-check', 'tableRevision': 0,
+        'requestId': 'native-fast-check',
         'budget': dict(router.FAST_BUDGET),
         'outputSchema': router.answer_schema([p['profileId'] for p in profiles], 'fast'),
     }

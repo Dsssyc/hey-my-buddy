@@ -83,7 +83,7 @@ class CurrentSchemaTests(BoardTestCase):
             }
         self.assertEqual(
             columns,
-            {"adapter", "provider", "model", "concurrency_limit", "updated_revision", "created_at", "updated_at"},
+            {"adapter", "provider", "model", "concurrency_limit", "created_at", "updated_at"},
         )
         self.assertEqual(families, 0)
         self.assertTrue({"model_adapter", "model_provider", "model_model"} <= attempt_columns)

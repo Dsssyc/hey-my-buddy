@@ -5,7 +5,7 @@ import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import type { FamilyAnnotation, Preference, Profile, ProfilePage, Snapshot } from "./types";
 import {
-  chip, choosePreference, conflictNotice, effortCell, level, levelPreference, levelSwitch, listed, modelButton, modelRow, note, pane, queryModel, search, selectModel,
+  chip, choosePreference, effortCell, level, levelPreference, levelSwitch, listed, modelButton, modelRow, note, pane, queryModel, search, selectModel,
 } from "./buddies/page.testing";
 
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
@@ -39,7 +39,7 @@ function catalog(): Profile[] {
 function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSize?: number } = {}) {
   const profiles = catalog();
   const decisionId = options.staleDecision ? retiredMax : flashOff;
-  const familyAnnotations: FamilyAnnotation[] = [{ ...retiredFamily, text: "用户保留的历史意见", revision: 2, updatedAt: null }];
+  const familyAnnotations: FamilyAnnotation[] = [{ ...retiredFamily, text: "用户保留的历史意见", updatedAt: null }];
   const preferenceOverrides = options.stalePin
     ? [{ profileId: retiredMax, mode: "pin" as const, reason: "以前固定" }]
     : [];
@@ -47,8 +47,6 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
     ? [{ profileId: retiredMax, mode: "pin" as const, reason: "以前固定", source: "override" as const }]
     : [];
 
-  // The retained page is bound to the published revision it was read at.
-  let revision = 2;
   const pages = (params: Record<string, any>): ProfilePage => {
     const includeUnavailable = params.includeUnavailable === true;
     const visible = includeUnavailable ? profiles : profiles.filter(p => p.available || p.profileId === decisionId);
@@ -66,15 +64,14 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
       familyPreferences: [],
 
       modelConcurrency: [],
-      tableRevision: revision,
       nextCursor: ordered.length > slice.length ? slice[slice.length - 1].profileId : null,
     };
   };
   const live = profiles.filter(p => p.available || p.profileId === decisionId);
   let state: Snapshot = {
-    csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: revision,
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { revision: 1, routerProfileIds: [decisionId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { routerProfileIds: [decisionId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: live,
     // `unavailableProfileCount` counts every unavailable row in the table,
     // including a listed one such as the retained decision profile; the console
@@ -104,17 +101,14 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
 
     if (operation === "user_policy_publish") {
       published.push(params);
-      state = { ...state, tableRevision: state.tableRevision + 1,
+      state = { ...state,
  };
-      revision = state.tableRevision;
-      return { tableRevision: state.tableRevision };
+      return {};
     }
     if (operation === "model_catalog_refresh") {
       // A completed program discovery publishes directory facts and a new
       // revision; the bounded snapshot still omits retained identities.
-      revision += 1;
-      state = { ...state, tableRevision: revision };
-      return { tableRevision: revision };
+      return { discovered: true };
     }
 
     throw new Error(`Unexpected command: ${operation}`);
@@ -273,11 +267,10 @@ describe("unavailable buddies", () => {
     await user.click(levelSwitch("max"));
     await user.type(note(), "，仍可用于历史对照");
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(f.operations.slice(0, 2)).toEqual(["model_profiles", "user_policy_publish"]);
     expect(f.published[0]).toEqual({
       commandId: expect.any(String),
-      expectedRevision: 2,
       profileSettings: [{ profileId: retiredMax, enabled: false }],
       familyAnnotationChanges: [{ ...retiredFamily, text: "用户保留的历史意见，仍可用于历史对照" }],
     });
@@ -308,14 +301,14 @@ describe("unavailable buddies", () => {
     await user.click(pin);
     expect(pin.getAttribute("aria-checked")).toBe("false");
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(f.published[0].preferenceChanges).toEqual([
       { profileId: retiredMax, mode: "pin", reason: "仍然适用" },
     ]);
     expect(f.published[0]).not.toHaveProperty("profileSettings");
   });
 
-  it("keeps a retained disable unresolved until the fresh history is re-read", async () => {
+  it("keeps a retained disable through discovery and publishes it", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
@@ -324,25 +317,10 @@ describe("unavailable buddies", () => {
     await user.click(levelSwitch("max"));
     await user.click(screen.getByRole("button", { name: "发现模型" }));
     await screen.findByText("没有新的 buddy");
-    // The retired row is absent from the bounded V3 snapshot: the edit stays
-    // unresolved instead of being dropped or rebased from the V2 cache.
-    const banner = conflictNotice()!;
-    expect(banner).toBeTruthy();
-    expect(banner.textContent).toContain("尚待读取最新版本");
     expect(levelSwitch("max").getAttribute("aria-checked")).toBe("false");
-    // No save of the disable under V3 while the conflict is unresolved.
     await user.click(screen.getByRole("button", { name: "保存" }));
-    expect((await screen.findAllByText(/设置已更新/)).length).toBeGreaterThan(0);
-    expect(f.published).toHaveLength(0);
-    // The revision-bound history reload supplies the fresh V3 row; the pending
-    // rebase resolves on its own and the same edit publishes at V3.
-    await waitFor(() => expect(conflictNotice()).toBeUndefined());
-    await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本");
-    expect(f.published[0]).toMatchObject({
-      expectedRevision: 3,
-      profileSettings: [{ profileId: retiredMax, enabled: false }],
-    });
+    await screen.findByText("设置已保存");
+    expect(f.published[0].profileSettings).toEqual([{ profileId: retiredMax, enabled: false }]);
   });
 
   it("does not resurrect a preference the user removed when a page is re-read", async () => {
@@ -359,7 +337,7 @@ describe("unavailable buddies", () => {
       { includeUnavailable: true, limit: 100, query: "retired" }, "csrf"));
     await waitFor(() => expect(f.operations.filter(op => op === "model_profiles").length).toBeGreaterThan(1));
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(f.published[0].preferenceChanges).toEqual([
       { profileId: retiredMax, mode: null, reason: "" },
     ]);
@@ -399,7 +377,7 @@ describe("stale settings and unrelated saves", () => {
     await selectModel(user, FLASH, "DSH");
     await user.type(note(), "只改这条意见");
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     // The stale selector stays untouched and does not block the unrelated patch.
     expect(f.published[0].configuration).toBeUndefined();
     expect(f.published[0].preferenceChanges).toBeUndefined();
@@ -419,7 +397,7 @@ describe("stale settings and unrelated saves", () => {
     await selectModel(user, FLASH, "DSH");
     await user.type(note(), "，补充说明");
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(f.published[0]).not.toHaveProperty("preferenceChanges");
     expect(f.published[0].familyAnnotationChanges).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "，补充说明" },
@@ -456,7 +434,7 @@ describe("the two filters as browser habits", () => {
     const f = fixture();
     const state = f.snapshot();
     state.unavailableProfileCount = 0;
-    f.command.mockImplementation(async () => ({ profiles: state.profiles, preferences: [], modelConcurrency: [], tableRevision: state.tableRevision, nextCursor: null }));
+    f.command.mockImplementation(async () => ({ profiles: state.profiles, preferences: [], modelConcurrency: [], nextCursor: null }));
     window.location.hash = "#buddies";
     const view = render(<App suppliedApi={f.api} />);
     await listed(1, 2);

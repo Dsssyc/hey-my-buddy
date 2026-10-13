@@ -128,7 +128,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                 if name == 'meta':
                     query = "SELECT key,value FROM meta WHERE key NOT IN ('capability_secret','created_at')"
                 elif name == 'evaluation_state':
-                    query = 'SELECT id,table_revision,configuration_revision,decision_profile_id FROM evaluation_state'
+                    query = 'SELECT id,decision_profile_id FROM evaluation_state'
                 else:
                     query = f'SELECT * FROM "{name}"'
                 self.assertEqual(sorted([tuple(row) for row in upgraded.execute(query)], key=repr),

@@ -28,13 +28,11 @@ FACTS = {
     "routingMode": "fast",
     "routingBudget": "standard",
     "routerRetryIntervalSeconds": 600,
-    "configurationRevision": 3,
     "budget": {"timeoutSeconds": 60},
 }
 BASE_INPUT = {
     "operation": "select",
     "requestId": "pick-1",
-    "tableRevision": 7,
     "task": "fix the parser",
     "profiles": [{"profileId": "dsh:fixture:alpha:max"}, {"profileId": "dsh:fixture:bravo:max"}],
     "preferences": [],
@@ -74,12 +72,12 @@ class RouterSequenceTestCase(BoardTestCase):
         self.board_ = self.board()
         with self.board_.store.db.write() as db:
             db.execute(
-                "INSERT INTO evaluation_decisions(decision_id,status,task,table_revision,reason,"
-                "created_at) VALUES('dec-1','queued','task',0,'',?)", (T0,))
+                "INSERT INTO evaluation_decisions(decision_id,status,task,reason,"
+                "created_at) VALUES('dec-1','queued','task','',?)", (T0,))
             db.execute(
                 "INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,"
-                "expected_revision,requested_json,created_at,updated_at)"
-                " VALUES('dec-1','pick-1','select','digest',0,'{}',?,?)", (T0, T0))
+                "requested_json,created_at,updated_at)"
+                " VALUES('dec-1','pick-1','select','digest','{}',?,?)", (T0, T0))
             for task_id in ("task-alpha", "task-bravo"):
                 db.execute(
                     "INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
@@ -376,14 +374,24 @@ class RelationalBindingTests(RouterSequenceTestCase):
         self.assertIsNone(self.stored("router_requests", "decision_id", "dec-1"))
         self.assertIsNone(self.stored("router_dispatches", "task_id", "task-alpha"))
 
-    def test_one_request_position_cannot_dispatch_to_two_tasks(self):
+    def test_one_request_position_keeps_independent_immutable_dispatches(self):
         with self.board_.store.db.write() as db:
             self.reserve(db)
-        with self.assertRaises(sqlite3.IntegrityError):
+            second = router_sequence.reserve_dispatch(db, decision_id="dec-1", task_id="task-bravo", router_index=0,
+                                                      profile=BRAVO, document=bravo_document(), now=T0)
+        with self.board_.store.db.read() as db:
+            first = router_sequence.dispatch(db, "task-alpha")
+            self.assertEqual(router_sequence.dispatch(db, "task-bravo"), second)
+            self.assertEqual(first["document"], alpha_document())
+            self.assertEqual(second["document"], bravo_document())
+            self.assertNotEqual(first["inputSha256"], second["inputSha256"])
+        with self.assertRaises(BoardError) as caught:
             with self.board_.store.db.write() as db:
-                router_sequence.reserve_dispatch(db, decision_id="dec-1", task_id="task-bravo", router_index=0,
+                router_sequence.reserve_dispatch(db, decision_id="dec-1", task_id="task-alpha", router_index=0,
                                                  profile=BRAVO, document=bravo_document(), now=T0)
-        self.assertIsNone(self.stored("router_dispatches", "task_id", "task-bravo"))
+        self.assertEqual(caught.exception.code, "CONFLICT")
+        with self.board_.store.db.read() as db:
+            self.assertEqual(router_sequence.dispatch(db, "task-alpha"), first)
 
     def test_deferred_claim_accepts_only_the_exact_attempt_task_and_generation_at_commit(self):
         with self.board_.store.db.write() as db:

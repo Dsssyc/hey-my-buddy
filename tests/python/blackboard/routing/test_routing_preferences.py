@@ -263,7 +263,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
     def annotations(board):
         catalog = board.call("model_catalog_refresh", {"requestId": "annotations-catalog"})
         board.console_call("user_policy_publish", {
-            "commandId": "annotations-publish", "expectedRevision": catalog["tableRevision"],
+            "commandId": "annotations-publish",
             "familyAnnotationChanges": [{**family_key(PROFILE), "text": "Human preference for this workflow"}],
         })
 
@@ -346,7 +346,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
             "workerId": "router", "attemptId": owned["claim"]["attempt"]["attemptId"],
             "generation": owned["claim"]["attempt"]["generation"], "nonce": NONCE,
             "status": "ok", "shutdownConfirmed": True,
-            "result": {**claim_tool_receipt(owned["claim"]), "status": "ok", "operation": "select", "tableRevision": document["tableRevision"],
+            "result": {**claim_tool_receipt(owned["claim"]), "status": "ok", "operation": "select",
                        "usage": {"elapsedMs": 100, "toolCalls": 0},
                        "zeroToolVerified": True,
                        "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
@@ -383,7 +383,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
             "workerId": "router", "attemptId": owned["claim"]["attempt"]["attemptId"],
             "generation": owned["claim"]["attempt"]["generation"], "nonce": NONCE,
             "status": "ok", "shutdownConfirmed": True,
-            "result": {**claim_tool_receipt(owned["claim"]), "status": "ok", "operation": "select", "tableRevision": document["tableRevision"],
+            "result": {**claim_tool_receipt(owned["claim"]), "status": "ok", "operation": "select",
                        "usage": {"elapsedMs": 100, "toolCalls": 0},
                        "zeroToolVerified": True,
                        "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},

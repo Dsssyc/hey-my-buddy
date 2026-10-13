@@ -53,7 +53,7 @@ export function profiles(): Profile[] {
 export function health(extra: Partial<RoutingHealth> = {}): RoutingHealth {
   return {
     windowSize: 20, sampleCount: 5, failureCount: 0, consecutiveFailures: 0,
-    abstentionCount: 0, cancelledCount: 0, staleCount: 0,
+    abstentionCount: 0, cancelledCount: 0,
     lastSuccessAt: "2026-09-27T07:00:00.000Z", lastSuccessDecisionId: null, recentFailures: [],
     ...extra,
   };
@@ -72,11 +72,11 @@ const harnesses: HarnessHealth[] = ["claude", "codex", "dsh", "zcode"].map(adapt
 
 export function snapshot({ routers = [], configuration = {}, routingHealth, canWrite = true, extra = {} }: RolesOptions = {}): Snapshot & { harnesses: HarnessHealth[] } {
   return {
-    csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite, reason: null }, tableRevision: 4,
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite, reason: null },
 
     configuration: configuration === null ? null
-      : { revision: 1, routerProfileIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", ...configuration },
-    configurationError: configuration === null ? { code: "router-settings-upgrade-required", message: "请先升级设置", revision: 1 } : null,
+      : { routerProfileIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", ...configuration },
+    configurationError: configuration === null ? { code: "router-settings-upgrade-required", message: "请先升级设置",} : null,
     profiles: profiles(),
     preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [],
  decisions: [],
@@ -102,9 +102,9 @@ export function fixture(state: Snapshot = snapshot(), replies: Record<string, Re
 
     if (operation === "user_policy_publish") {
       published.push(params);
-      state = { ...state, tableRevision: state.tableRevision + 1,
+      state = { ...state,
         configuration: state.configuration && { ...state.configuration, ...(params.configuration ?? {}) } };
-      return { published: true, tableRevision: state.tableRevision };
+      return { published: true,};
     }
     throw new Error(`Unexpected command: ${operation}`);
   });

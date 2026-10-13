@@ -1,3 +1,4 @@
+import uuid
 """Human settings patches and upgrade-required reads on private boards."""
 from unittest.mock import patch
 from hey_my_buddy.errors import BoardError
@@ -14,9 +15,8 @@ class SingleRouterConfigurationTests(BoardTestCase):
         self.board_.call('model_catalog_refresh', {'requestId': 'configuration-catalog'})
 
     def configure(self, settings, *, enable=False):
-        revision = self.board_.call('console_snapshot', {})['tableRevision']
         params = {}
-        params.update(commandId=f'publish-{revision}', expectedRevision=revision, configuration=settings)
+        params.update(commandId=f"publish-{uuid.uuid4()}", configuration=settings)
         if enable:
             params['profileSettings'] = [{'profileId': PROFILE, 'enabled': True}]
         return self.board_.console_call('user_policy_publish', params)
@@ -66,18 +66,6 @@ class SingleRouterConfigurationTests(BoardTestCase):
         self.configure({'routerProfileIds': [], 'defaultRoutingMode': 'review'})
         self.assertEqual(self.settings()['routerProfileIds'], [])
         self.assertEqual(self.settings()['defaultRoutingMode'], 'review')
-
-    def test_old_settings_are_reported_without_conversion_or_write(self):
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE meta SET value='1' WHERE key='router_configuration_version'")
-            db.execute("INSERT INTO meta(key,value) VALUES('router_fast_profile_id',?)", (PROFILE,))
-        with self.board_.store.db.read() as db:
-            before = list(map(tuple, db.execute("SELECT key,value FROM meta WHERE key LIKE 'router_%' ORDER BY key")))
-        snapshot = self.board_.call('console_snapshot', {})
-        self.assertIsNone(snapshot['configuration'])
-        self.assertEqual(snapshot['configurationError']['code'], 'router-settings-upgrade-required')
-        with self.board_.store.db.read() as db:
-            self.assertEqual(list(map(tuple, db.execute("SELECT key,value FROM meta WHERE key LIKE 'router_%' ORDER BY key"))), before)
 
     def test_old_slot_patch_is_refused_atomically(self):
         before = self.settings()

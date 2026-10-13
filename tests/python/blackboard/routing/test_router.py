@@ -106,7 +106,7 @@ class RouterPublicationTests(WorkflowTestCase):
         board.call('worker_register', {'workerId': 'router', 'adapter': 'decision', 'capabilities': ['decision']})
         claim = self.claim(board, 'router', run_id=request['runId'])['claim']
         result = {**claim_tool_receipt(claim), 'status': 'error' if code else 'ok', 'operation': 'select',
-                  'tableRevision': claim['decisionInput']['tableRevision'],
+
                   'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
                   'usage': {'elapsedMs': 100, 'toolCalls': 0},
                   'inputVerification': {'unchanged': True, 'manifestSha256': None, 'snapshotSha256': 'fixture-digest'},
@@ -165,7 +165,7 @@ class RouterPublicationTests(WorkflowTestCase):
         self.seed(board)
         snapshot = board.call('console_snapshot', {})
         board.console_call('user_policy_publish', {
-            'commandId': 'budget-change', 'expectedRevision': snapshot['tableRevision'],
+            'commandId': 'budget-change',
             'configuration': {'routingBudget': 'deep'}})
         configured = board.call('console_snapshot', {})['configuration']
         self.assertEqual(configured['routingBudget'], 'deep')

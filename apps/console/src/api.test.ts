@@ -3,7 +3,7 @@ import { createApi, parseRoutingHealth, readVerificationText, validRoutingConfig
 import { objectiveTimelineFixture, OBSERVED_AT } from "./objective-fixtures";
 
 describe("L4 ordered Router list configuration", () => {
-  const current = { revision: 4, routerProfileIds: [], routerRetryIntervalSeconds: 600,
+  const current = { routerProfileIds: [], routerRetryIntervalSeconds: 600,
     defaultRoutingMode: "fast", routingBudget: "brief" };
   it("accepts the list settings and rejects retired slots, selectors or intervals", () => {
     expect(validRoutingConfiguration(current)).toBe(true);
@@ -30,14 +30,13 @@ describe("L4 ordered Router list configuration", () => {
 });
 
 describe("snapshot upgrade boundary and routing health", () => {
-  const configuration = { revision: 4, routerProfileIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "standard" };
-  const snapshot = { csrfToken: "csrf", consoleSession: { id: "session", canWrite: true, reason: null },
-    tableRevision: 1, configuration, configurationError: null, profiles: [],
+  const configuration = { routerProfileIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "standard" };
+  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session", canWrite: true, reason: null }, configuration, configurationError: null, profiles: [],
     preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], modelConcurrency: [],
     tasks: { pendingCount: 0 } };
-  const error = { code: "router-settings-upgrade-required", message: "Router 设置需升级", revision: 4 };
+  const error = { code: "router-settings-upgrade-required", message: "Router 设置需升级" };
   const health = { available: false, reasonCode: "router-consecutive-failures", windowSize: 20, sampleCount: 3,
-    failureCount: 3, consecutiveFailures: 3, abstentionCount: 0, cancelledCount: 0, staleCount: 0,
+    failureCount: 3, consecutiveFailures: 3, abstentionCount: 0, cancelledCount: 0,
     lastSuccessAt: null, lastSuccessDecisionId: null,
     recentFailures: [{ decisionId: "timeout", runId: "run", at: "2026-10-02T00:00:00Z", code: "router-timeout" }] };
   function apiFor(body: unknown) {
@@ -46,7 +45,7 @@ describe("snapshot upgrade boundary and routing health", () => {
   it("accepts the explicit unavailable upgrade state without inventing settings", async () => {
     await expect(apiFor({ ...snapshot, configuration: null, configurationError: error }).snapshot())
       .resolves.toMatchObject({ configuration: null, configurationError: error });
-    for (const broken of [null, { ...error, revision: "4" }, { ...error, message: "" }, { ...error, code: "unknown" }]) {
+    for (const broken of [null, { ...error, message: "" }, { ...error, code: "unknown" }]) {
       await expect(apiFor({ ...snapshot, configuration: null, configurationError: broken }).snapshot())
         .rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
@@ -255,8 +254,7 @@ describe("local read verification evidence", () => {
 });
 
 describe("conditional reads (ETag / If-None-Match / 304)", () => {
-  const snapshot = { csrfToken: "csrf", consoleSession: { id: "session", canWrite: true, reason: null },
-    tableRevision: 1, configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "brief" },
+  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session", canWrite: true, reason: null }, configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "brief" },
     configurationError: null, profiles: [], preferences: [], familyPreferences: [],
     preferenceOverrides: [], familyAnnotations: [], modelConcurrency: [], tasks: { pendingCount: 3 } };
   function jsonResponse(value: unknown, etag?: string) {
@@ -278,11 +276,11 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
       () => new Response(null, { status: 304, headers: { ETag: '"etag-1"' } }),
     ]);
     const api = createApi("/private/", fetcher);
-    await expect(api.snapshot()).resolves.toMatchObject({ tableRevision: 1 });
+    await expect(api.snapshot()).resolves.toMatchObject({});
     expect((fetcher.mock.calls[0][1]?.headers as Record<string, string> | undefined)?.["If-None-Match"]).toBeUndefined();
     // The second read revalidates; the empty 304 body must never reach the
     // JSON parser and the existing data must survive intact.
-    await expect(api.snapshot()).resolves.toMatchObject({ tableRevision: 1, tasks: { pendingCount: 3 } });
+    await expect(api.snapshot()).resolves.toMatchObject({ tasks: { pendingCount: 3 } });
     expect(fetcher.mock.calls[1][1]?.headers).toMatchObject({ "If-None-Match": '"etag-1"' });
   });
 
@@ -358,12 +356,12 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     const slowReply = new Promise<Response>(resolve => { releaseSlow = resolve; });
     const fetcher = vi.fn<typeof fetch>()
       .mockImplementationOnce(() => slowReply)
-      .mockImplementationOnce(async () => jsonResponse({ ...snapshot, tableRevision: 2 }, '"fast-new"'))
+      .mockImplementationOnce(async () => jsonResponse({ ...snapshot,}, '"fast-new"'))
       .mockImplementationOnce(async () => jsonResponse(snapshot, '"check"'));
     const api = createApi("/private/", fetcher);
     const slow = api.snapshot();
     const fast = api.snapshot();
-    await expect(fast).resolves.toMatchObject({ tableRevision: 2 });
+    await expect(fast).resolves.toMatchObject({});
     releaseSlow!(jsonResponse(snapshot, '"slow-old"'));
     await expect(slow).resolves.toBeTruthy();
     // The next read must revalidate with the fast reply's validator: the

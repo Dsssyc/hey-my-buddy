@@ -20,7 +20,6 @@ BUDGETS = {
 DEFAULT_PRESET = "standard"
 MODES = ("fast", "review")
 FAST_BUDGET = {"timeoutSeconds": 60}
-CONFIGURATION_VERSION = "3"
 CONFIG_KEYS = {
     "routerProfileIds": "router_profile_ids",
     "routerRetryIntervalSeconds": "router_retry_interval_seconds",
@@ -122,7 +121,7 @@ def render_prompt(document: dict) -> str:
     keys = ("profiles", "preferences", "annotations")
     table = {key: document.get(key, []) for key in keys}
     variable = {key: document.get(key) for key in
-                ("tableRevision", "policyFacts", "task", "requestId", "budget")}
+                ("policyFacts", "task", "requestId", "budget")}
     return (FAST_INSTRUCTIONS if fast else INSTRUCTIONS) + "\n\n" + canonical_json(table) + "\n\n" + canonical_json(variable)
 
 
@@ -191,7 +190,7 @@ def profile_problem(connection, profile_id: str | None, routing_mode: str) -> tu
 
 
 def _write_settings(connection, settings: dict) -> None:
-    """Store validated settings under the version-3 meta keys; omitted keys keep theirs."""
+    """Store validated settings; omitted keys keep theirs."""
     for name, key in CONFIG_KEYS.items():
         if name not in settings:
             continue
@@ -202,15 +201,9 @@ def _write_settings(connection, settings: dict) -> None:
 
 
 def configuration(connection) -> dict:
-    """Read current version-3 settings only.
-
-    Schema 15 must pass the explicit 15-to-16 upgrade before this reader is
-    reached. Reads and publications never reinterpret older settings.
-    """
+    """Read the current Router settings."""
     from .router_settings import RouterSettings, validate_router_settings_patch
     values = {row[0]: row[1] for row in connection.execute("SELECT key,value FROM meta WHERE key LIKE 'router_%'")}
-    if values.get("router_configuration_version") != CONFIGURATION_VERSION:
-        raise BoardError("router-settings-upgrade-required", "Router settings require an explicit upgrade")
     defaults = RouterSettings().as_dict()
     entry: dict = {}
     if values.get("router_profile_ids"):
@@ -231,14 +224,10 @@ def configuration(connection) -> dict:
 
 
 def initialize_configuration(connection) -> dict:
-    """Initialize a fresh board's version-3 defaults; never reinterpret an existing version."""
+    """Initialize a fresh board's Router defaults."""
     from .router_settings import RouterSettings
-    marker = connection.execute("SELECT value FROM meta WHERE key='router_configuration_version'").fetchone()
-    if marker:
-        return configuration(connection)
     settings = RouterSettings().as_dict()
     _write_settings(connection, settings)
-    connection.execute("INSERT INTO meta(key,value) VALUES('router_configuration_version',?)", (CONFIGURATION_VERSION,))
     return settings
 
 
@@ -248,8 +237,8 @@ class RouterResolution:
 
     ``profile`` is a copy of the current published row; ``profileId``/``routerIndex``
     are its public projections. ``facts`` freezes the ordered IDs with their complete
-    identity snapshot plus the global mode, budget, retry interval and configuration
-    revision. ``inspections`` walks the candidates examined in order and ends with the
+    identity snapshot plus the global mode, budget and retry interval.
+    ``inspections`` walks the candidates examined in order and ends with the
     selected one when a Router was found; each entry carries eligibility, the skip
     reason with ``retryAt``, and the live ``retryInProgress`` fact. ``problem`` names
     why no Router was resolved; a frozen continuation never re-selects mode or
@@ -270,7 +259,7 @@ def _expanded_budget(mode: str | None, preset: str | None) -> dict | None:
     return dict(FAST_BUDGET) if mode == "fast" else budget(preset or DEFAULT_PRESET)
 
 
-def _snapshot_facts(connection, settings: dict, *, revision: int) -> dict:
+def _snapshot_facts(connection, settings: dict) -> dict:
     """The frozen facts of one settings snapshot: ordered IDs, identities, mode, budget."""
     identities = []
     for profile_id in settings["routerProfileIds"]:
@@ -283,7 +272,6 @@ def _snapshot_facts(connection, settings: dict, *, revision: int) -> dict:
         "routingMode": settings["defaultRoutingMode"],
         "routingBudget": settings["routingBudget"],
         "routerRetryIntervalSeconds": settings["routerRetryIntervalSeconds"],
-        "configurationRevision": revision,
         "budget": _expanded_budget(settings["defaultRoutingMode"], settings["routingBudget"]),
     }
 
@@ -294,7 +282,7 @@ def _frozen_facts(frozen: object) -> dict:
     if not isinstance(frozen, dict):
         raise BoardError("INVALID_ARGUMENT", "frozen must be a Router facts snapshot")
     required = ("routerProfileIds", "routerIdentities", "routingMode", "routingBudget",
-                "routerRetryIntervalSeconds", "configurationRevision")
+                "routerRetryIntervalSeconds")
     missing = [key for key in required if key not in frozen]
     if missing:
         raise BoardError("INVALID_ARGUMENT", f"frozen snapshot is missing {missing[0]}")
@@ -303,14 +291,17 @@ def _frozen_facts(frozen: object) -> dict:
     if (not isinstance(ids, list) or any(not isinstance(value, str) for value in ids)
             or not isinstance(identities, list) or len(identities) != len(ids)):
         raise BoardError("INVALID_ARGUMENT", "frozen routerProfileIds and routerIdentities must be aligned lists")
+    if any(value is not None and (not isinstance(value, dict)
+           or set(value) != {"adapter", "provider", "model", "effort"}
+           or any(not isinstance(item, str) or not item for item in value.values()))
+           for value in identities):
+        raise BoardError("INVALID_ARGUMENT", "frozen routerIdentities must contain complete buddy identities or null")
     mode, preset = frozen["routingMode"], frozen["routingBudget"]
     if mode not in MODES or preset not in PRESETS:
         raise BoardError("INVALID_ARGUMENT", "frozen routing mode or budget preset is invalid")
-    interval, revision = frozen["routerRetryIntervalSeconds"], frozen["configurationRevision"]
+    interval = frozen["routerRetryIntervalSeconds"]
     if isinstance(interval, bool) or not isinstance(interval, int) or interval < 1:
         raise BoardError("INVALID_ARGUMENT", "frozen routerRetryIntervalSeconds is invalid")
-    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
-        raise BoardError("INVALID_ARGUMENT", "frozen configurationRevision is invalid")
     # A standalone request may freeze its own deadline. Continuing the list
     # preserves it instead of silently reverting to the global preset.
     limits = _expanded_budget(mode, preset)
@@ -325,11 +316,10 @@ def _frozen_facts(frozen: object) -> dict:
         limits = dict(supplied)
     return {
         "routerProfileIds": list(ids),
-        "routerIdentities": [dict(value) if isinstance(value, dict) else None for value in identities],
+        "routerIdentities": [dict(value) if value is not None else None for value in identities],
         "routingMode": mode,
         "routingBudget": preset,
         "routerRetryIntervalSeconds": interval,
-        "configurationRevision": revision,
         "budget": limits,
     }
 
@@ -346,10 +336,9 @@ def current_router(connection, *, frozen: dict | None = None, after_index: int =
     keeping their own current selection.
 
     ``frozen`` continues one request inside its own snapshot: the frozen list,
-    identities, mode, budget, interval and revision are used unchanged and later
-    changes to the shared settings are neither read nor adopted; a published buddy
-    whose complete identity no longer matches the frozen value is refused per
-    candidate. ``now`` defaults to the board clock; eligibility reuses cached harness
+    identities, mode, budget and interval are used unchanged and later
+    changes to the shared settings are neither read nor adopted. ``now`` defaults
+    to the board clock; eligibility reuses cached harness
     health, the local mode mechanism and native quota records, and never ranks by
     Worker preference.
     """
@@ -359,35 +348,29 @@ def current_router(connection, *, frozen: dict | None = None, after_index: int =
     if frozen is not None:
         # A frozen continuation lives only inside its own snapshot: it never
         # re-reads the shared settings, never re-selects the mode and never adopts
-        # later changes. Later settings drift is a changed boundary that the
-        # claim/publication layers judge; a published buddy whose complete identity
-        # no longer matches the frozen value is refused here per candidate.
+        # later changes.
         facts = _frozen_facts(frozen)
     else:
-        revision = int(connection.execute(
-            "SELECT configuration_revision FROM evaluation_state WHERE id=1").fetchone()[0])
         facts = {"routerProfileIds": [], "routerIdentities": [], "routingMode": None, "routingBudget": None,
-                 "routerRetryIntervalSeconds": None, "configurationRevision": revision, "budget": None}
+                 "routerRetryIntervalSeconds": None, "budget": None}
         try:
             settings = configuration(connection)
         except BoardError as error:
             return RouterResolution(None, None, None, facts, (),
                                     {"code": error.code, "reason": f"Router 不可用：{error.message}"})
-        facts = _snapshot_facts(connection, settings, revision=revision)
+        facts = _snapshot_facts(connection, settings)
     interval = facts["routerRetryIntervalSeconds"]
     mode = facts["routingMode"]
     ids = facts["routerProfileIds"]
     inspections: list[dict] = []
     for index in range(after_index + 1, len(ids)):
         profile_id = ids[index]
-        row = connection.execute("SELECT * FROM evaluation_profiles WHERE profile_id=?", (profile_id,)).fetchone()
         identity = facts["routerIdentities"][index]
-        if frozen is not None and _identity(row) != identity:
-            return RouterResolution(
-                None, None, None, facts, tuple(inspections),
-                {"code": "router-profile-changed",
-                 "reason": f"Router 不可用：buddy {profile_id} 的完整身份与请求冻结值不一致",
-                 "routerIndex": index, "profileId": profile_id})
+        if frozen is not None and identity is None:
+            inspections.append({"index": index, "profileId": profile_id, "identity": None,
+                                "eligible": False, "code": "router-unavailable",
+                                "reason": "Router buddy 在请求冻结时尚未发布", "selected": False})
+            continue
         state = router_state(connection, profile_id=profile_id, interval_seconds=interval, now=now)
         if state["inSkipWindow"]:
             inspections.append({"index": index, "profileId": profile_id, "identity": identity,
@@ -405,6 +388,8 @@ def current_router(connection, *, frozen: dict | None = None, after_index: int =
                                 "consecutiveNoAnswers": state["consecutiveNoAnswers"],
                                 "retryInProgress": state["retryInProgress"], "selected": False})
             continue
+        if frozen is not None:
+            profile = {**profile, **identity}
         inspections.append({"index": index, "profileId": profile_id, "identity": identity,
                             "eligible": True, "code": None, "reason": None,
                             "skipUntil": state["skipUntil"], "retryAt": state["retryAt"],
@@ -430,10 +415,6 @@ def routing_facts(request: dict, *, actor: dict | None = None) -> dict:
     if actor is not None:
         facts.update(routerProfileId=actor["profileId"], routerProfile=actor["profile"],
                      routerIndex=actor["routerIndex"])
-    # Historical JSON has no revision field; callers already have the immutable
-    # request column and must not overwrite that evidence with a guessed value.
-    if "configurationRevision" in request:
-        facts["configurationRevision"] = request["configurationRevision"]
     return facts
 
 

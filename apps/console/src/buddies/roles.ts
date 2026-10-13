@@ -11,7 +11,7 @@ export type HealthWarning = { kind: "unavailable"; code: string | null } | { kin
 
 /**
  * The warning the recorded routing window gives, or none. Absent data is
- * unknown, never success; abstentions, cancellations and stale results are not
+ * unknown, never success; abstentions and cancellations are not
  * failures.
  */
 export function healthSummary(health: RoutingHealth | undefined): { warning: HealthWarning | null } {
@@ -135,7 +135,7 @@ export function routerNote(source: Pick<Draft, "configuration" | "profiles">, he
 }
 
 /** The counts of the window that are written out as names with a number; a count of nothing is left out. */
-export const RECORD_COUNTS = ["consecutiveFailures", "abstention", "cancelled", "stale", "budgetExhausted", "boundsRejected", "inputChanged"] as const;
+export const RECORD_COUNTS = ["consecutiveFailures", "abstention", "cancelled", "budgetExhausted", "boundsRejected", "inputChanged"] as const;
 export type RecordCount = (typeof RECORD_COUNTS)[number];
 
 export function recordCounts(health: RoutingHealth): { name: RecordCount; n: number }[] {
@@ -143,7 +143,6 @@ export function recordCounts(health: RoutingHealth): { name: RecordCount; n: num
     consecutiveFailures: health.consecutiveFailures,
     abstention: health.abstentionCount,
     cancelled: health.cancelledCount,
-    stale: health.staleCount,
     budgetExhausted: health.budgetExhaustedCount,
     boundsRejected: health.boundsRejectedCount,
     inputChanged: health.inputChangedCount,

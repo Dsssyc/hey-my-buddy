@@ -11,9 +11,9 @@ import type { ObjectiveStopResult, ObjectiveTimeline } from "./objective-types";
 
 function snapshotFixture(): Snapshot {
   return {
-    csrfToken: "csrf", consoleSession: { id: "session-a", canWrite: true, reason: null }, tableRevision: 2,
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session-a", canWrite: true, reason: null },
 
-    configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: [], preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], decisions: [],
  modelConcurrency: [], tasks: { pendingCount: 0 },
     capabilities: {},
@@ -79,8 +79,7 @@ function harness(options: StopOptions = {}) {
       return workflowFixture(task);
     }
     if (operation === "selection_get") return { decision: {
-      decisionId: params.decisionId, status: "completed", kind: "select", task: "路由合成数据", profileId: null,
-      tableRevision: 1, reason: "第一轮的路由依据", evidence: [], createdAt: "2026-09-26T01:21:00Z",
+      decisionId: params.decisionId, status: "completed", kind: "select", task: "路由合成数据", profileId: null, reason: "第一轮的路由依据", evidence: [], createdAt: "2026-09-26T01:21:00Z",
     } };
     if (operation === "objective_stop") {
       stopAttempts += 1;

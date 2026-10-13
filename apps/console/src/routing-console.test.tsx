@@ -18,9 +18,9 @@ const selector = { provider: "deepseek-official", model: "deepseek-flash", effor
 
 function snapshot(): Snapshot {
   return {
-    csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 99,
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { revision: 9, routerProfileIds: [worker.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { routerProfileIds: [worker.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: [{ ...worker, label: "现在已改名的模型 · max" }],
     preferences: [{ profileId: worker.profileId, mode: "exclude", reason: "当前已改为排除" }],
     familyPreferences: [], preferenceOverrides: [],
@@ -33,13 +33,13 @@ function snapshot(): Snapshot {
 function decision(id: string, overrides: Partial<Decision> = {}) {
   return {
     decisionId: id, kind: "select" as const, status: "completed", task: `原始任务 ${id}`,
-    profileId: worker.profileId, selectedProfile: { ...worker }, tableRevision: 3,
-    configurationRevision: 2, reason: `${id} 的持久选择依据`, evidence: [{ kind: "card" as const, ref: "evidence-at-selection" }],
+    profileId: worker.profileId, selectedProfile: { ...worker },
+    reason: `${id} 的持久选择依据`, evidence: [{ kind: "card" as const, ref: "evidence-at-selection" }],
     createdAt: "2026-09-24T08:00:00Z", runId: `calculation-${id}`,
     decisionModel: { requested: { provider: selector.provider, model: selector.model, reasoningEffort: "off" }, resolved: null, observed: null },
     requested: { constraints: { adapter: "dsh" } },
     input: {
-      operation: "select", tableRevision: overrides.tableRevision ?? 3, profile: selector, profiles: [{ ...worker }],
+      operation: "select", profile: selector, profiles: [{ ...worker }],
  preferences: [{ profileId: worker.profileId, mode: "prefer", reason: "当时偏好有边界的测试工作" }],
 
     },
@@ -61,7 +61,7 @@ function workflow(record = task()): Workflow {
     governed: true, runId: record.runId, hostId: "source", ownerGeneration: 1, revision: 4,
     state: "executing", awaitingHost: false, waitReason: "", continuationCount: 0,
     executionConfiguration: { ...worker },
-    routing: { status: "completed", decisionId: "decision-current", tableRevision: 3, configurationRevision: 2,
+    routing: { status: "completed", decisionId: "decision-current",
       reason: "已记录当前配置的选择依据" },
     workspace: { path: "/repo", kind: "worktree", access: "write", inputCommit: "input", manifestSha256: "manifest" },
     currentTurn: { turnId: "turn-current", turnIndex: 2, attemptId: "attempt-current", resumeMode: "native-session" },
@@ -324,7 +324,6 @@ describe("delegation routing rationale", () => {
     expect(within(detail).getByText("decision-current 的持久选择依据")).toBeTruthy();
     expect(within(detail).getByText(/当时偏好有边界的测试工作/, { selector: "li" })).toBeTruthy();
     expect(within(detail).getByText(/历史工作模型/, { selector: "strong" })).toBeTruthy();
-    expect(within(detail).getByText("V3")).toBeTruthy();
     expect(within(detail).getByText("deepseek-official / deepseek-flash / off")).toBeTruthy();
     expect(within(detail).queryByText(/现在已改名的模型|当前已改为排除/)).toBeNull();
     expect(command).toHaveBeenCalledWith("selection_get", { decisionId: "decision-current", includeAudit: true }, "csrf");
@@ -360,8 +359,7 @@ describe("delegation routing rationale", () => {
   it("paginates the delegation's own routes and inspects the exact older decision", async () => {
     const value = workflow();
     const recent: RoutingHistory["entries"] = Array.from({ length: 20 }, (_, index) => ({
-      decisionId: `route-${index}`, status: "completed", taskId: `calculation-${index}`, selectedProfile: { ...worker },
-      tableRevision: 2, configurationRevision: 2, reason: `近期理由 ${index}`, ownerGeneration: 1,
+      decisionId: `route-${index}`, status: "completed", taskId: `calculation-${index}`, selectedProfile: { ...worker }, reason: `近期理由 ${index}`, ownerGeneration: 1,
       current: false, createdAt: "2026-09-24T08:00:00Z",
     }));
     const older = { ...recent[0], decisionId: "older-route", selectedProfile: { ...worker, model: "historical-model" } };

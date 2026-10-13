@@ -44,16 +44,16 @@ class PermissionCandidateTests(BoardTestCase):
         with board.store.db.write() as connection:
             connection.execute(
                 'INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,'
-                'available,enabled,capabilities_json,created_revision,updated_revision)'
-                ' VALUES(?,?,?,?,?,?,1,1,?,0,0)',
+                'available,enabled,capabilities_json)'
+                ' VALUES(?,?,?,?,?,?,1,1,?)',
                 (codex_id, codex_id, 'codex', 'fixture', 'full', 'high',
                  canonical_json(permission_capabilities('codex'))),
             )
             connection.execute("UPDATE harness_health SET status='ready' WHERE adapter='codex'")
             connection.execute(
                 'INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,'
-                'available,enabled,capabilities_json,created_revision,updated_revision)'
-                ' VALUES(?,?,?,?,?,?,1,1,?,0,0)',
+                'available,enabled,capabilities_json)'
+                ' VALUES(?,?,?,?,?,?,1,1,?)',
                 (zcode_id, zcode_id, 'zcode', 'fixture', 'full', 'high',
                  canonical_json(permission_capabilities('zcode'))),
             )

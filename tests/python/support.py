@@ -296,7 +296,6 @@ class InProcessBoard:
         self.store.evaluation = EvaluationStore(
             self.store,
             clock=clock,
-            reader_lease_seconds=options.get("reader_lease_seconds", 300),
         )
         self.store.decisions = DecisionCoordinator(self.store, self.store.evaluation)
         self.store.initialize()
@@ -560,5 +559,5 @@ def enable_fixture_configuration(store, configuration):
     if not all(configuration.get(key) for key in keys):
         return
     with store.db.write() as db:
-        db.execute("INSERT OR IGNORE INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,enabled,available,created_revision,updated_revision) VALUES(?,?,?,?,?,?,1,1,0,0) ON CONFLICT(profile_id) DO UPDATE SET enabled=1,available=1",
+        db.execute("INSERT OR IGNORE INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,enabled,available) VALUES(?,?,?,?,?,?,1,1) ON CONFLICT(profile_id) DO UPDATE SET enabled=1,available=1",
                    (":".join(configuration[key] for key in keys), "Private enabled fixture", *(configuration[key] for key in keys)))

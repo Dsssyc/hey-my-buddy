@@ -4,7 +4,7 @@ Every test drives the real store, the real resource validation and the real
 transactions through the in-process board harness. No adapter process is started
 here: needs-host routing boundaries, one synthetic selector receipt and never-run
 decisions are established directly, so both reads are exercised without a paid or
-mocked model call. The reads must never admit an evaluation lease, call a model or
+mocked model call. The reads must never call a model or
 write state.
 """
 from __future__ import annotations
@@ -56,7 +56,7 @@ class RoutingHistoryTestCase(WorkflowTestCase):
             "workerId": "router", "attemptId": owned["attempt"]["attemptId"],
             "generation": owned["attempt"]["generation"], "nonce": NONCE,
             "status": status, "shutdownConfirmed": shutdown,
-            "result": {**claim_tool_receipt(owned), "status": "ok", "operation": "select", "tableRevision": owned["decisionInput"]["tableRevision"],
+            "result": {**claim_tool_receipt(owned), "status": "ok", "operation": "select",
                        "usage": {"elapsedMs": 100, "toolCalls": 0},
                        "zeroToolVerified": True,
                        "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
@@ -73,8 +73,8 @@ class RoutingHistoryTestCase(WorkflowTestCase):
 
     def state_fingerprint(self, board) -> dict:
         tables = (
-            "tasks", "attempts", "events", "commands", "evaluation_readers",
-            "evaluation_decisions", "decision_requests", "evaluation_revisions", "workflow_runs",
+            "tasks", "attempts", "events", "commands",
+            "evaluation_decisions", "decision_requests", "workflow_runs",
             "workflow_routes", "workflow_turns", "workflow_requests",
         )
         with board.store.db.read() as connection:
@@ -228,9 +228,6 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.assertEqual(entry["taskId"], selector_task_id)
         self.assertEqual(entry["selectedProfile"]["profileId"], PROFILE_ID)
         self.assertEqual(entry["selectedProfile"]["model"], PROFILE["model"])
-        initial_revision = board.call("console_snapshot", {})["tableRevision"]
-        self.assertEqual(entry["tableRevision"], initial_revision)
-        self.assertEqual(entry["configurationRevision"], 1)
 
         # The user changes eligible profiles; the historical route retains its selection.
         self.publish_user_patch(
@@ -239,7 +236,6 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
             configuration={"routerProfileIds": [SECOND_PROFILE_ID]},
         )
         snapshot = board.call("console_snapshot", {})
-        self.assertEqual(snapshot["tableRevision"], initial_revision + 1)
         self.assertEqual(snapshot["configuration"]["routerProfileIds"], [SECOND_PROFILE_ID])
         frozen_config = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(frozen_config["executionConfiguration"]["model"], PROFILE["model"])
@@ -252,18 +248,13 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.assertEqual(history["total"], 2)
         newest, frozen = history["entries"]
         self.assertEqual(newest["status"], "queued")
-        self.assertEqual(newest["tableRevision"], initial_revision + 1)
-        self.assertEqual(newest["configurationRevision"], 2)
         self.assertIsNone(newest["selectedProfile"])
         self.assertTrue(newest["current"])
-        # The historical page is frozen: still the originally selected profile and
-        # its own table/configuration revisions, not the newly published model.
+        # The historical page retains the originally selected profile.
         self.assertFalse(frozen["current"])
         self.assertEqual(frozen["decisionId"], entry["decisionId"])
         self.assertEqual(frozen["status"], "completed")
         self.assertEqual(frozen["selectedProfile"]["model"], PROFILE["model"])
-        self.assertEqual(frozen["tableRevision"], initial_revision)
-        self.assertEqual(frozen["configurationRevision"], 1)
         # A reroute in flight is honest: no execution configuration is claimed until
         # the new decision resolves, and the compact routing view says so.
         view = board.call("workflow_get", {"runId": submitted["runId"]})
@@ -348,9 +339,8 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
             self.assertEqual(board.store.head(), head)
             adapter_start.assert_not_called()
             worker_run.assert_not_called()
-        # A read admits no evaluation reader and starts no attempt; the seed's own
+        # A read starts no attempt; the seed's own
         # publication receipt is simply unchanged.
-        self.assertEqual(before["evaluation_readers"], 0)
         self.assertEqual(before["attempts"], 0)
         self.assertEqual(before["workflow_routes"], 1)
 

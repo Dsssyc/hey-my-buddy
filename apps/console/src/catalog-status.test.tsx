@@ -61,9 +61,9 @@ function fixture() {
   const profiles = catalog();
   const live = profiles.filter(p => p.available);
   const state: Snapshot = {
-    csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { revision: 1, routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600,
+    configuration: { routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review" as const, routingBudget: "standard" },
     profiles: live,
     unavailableProfileCount: profiles.filter(p => !p.available).length,
@@ -86,14 +86,14 @@ function fixture() {
         .filter(p => p.profileId > after).slice(0, limit);
       const page: ProfilePage = {
         profiles: slice, preferences: [], preferenceOverrides: [], familyPreferences: [],
-        familyAnnotations: [], modelConcurrency: [], tableRevision: 2,
+        familyAnnotations: [], modelConcurrency: [],
         nextCursor: null,
       };
       return page;
     }
 
 
-    if (operation === "user_policy_publish") return { tableRevision: 3 };
+    if (operation === "user_policy_publish") return {};
     throw new Error(`Unexpected command: ${operation}`);
   });
   const api = {

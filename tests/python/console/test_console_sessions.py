@@ -77,7 +77,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         return board.call('task_submit', {'requestId': 'console-session-task', 'task': 'still pending',
             'cwd': str(self.workdir()), 'adapter': 'command', 'argv': ['/bin/echo', 'ok']})['task']['runId']
 
-    def test_independent_sessions_keep_authority_and_stale_revision_is_refused(self):
+    def test_independent_sessions_can_publish_without_revision_fences(self):
         board = self.board()
         _, first = self.open_console(board)
         _, second = self.open_console(board)
@@ -85,9 +85,12 @@ class ConsoleSessionTests(ConsoleTestCase):
             self.assertTrue(browser.bootstrap()['consoleSession']['canWrite'])
         snapshot = first.bootstrap()
         status, _, raw = first.command('user_policy_publish', {
-            'commandId': 'stale-publish', 'expectedRevision': snapshot['tableRevision'] + 1,
-            'profileSettings': []}, csrf=snapshot['csrfToken'])
-        self.assertEqual(json.loads(raw)['error']['code'], 'REVISION_CONFLICT')
+            'commandId': 'first-publish', 'profileSettings': []}, csrf=snapshot['csrfToken'])
+        self.assertEqual(status, 200, raw)
+        other = second.bootstrap()
+        status, _, raw = second.command('user_policy_publish', {
+            'commandId': 'second-publish', 'profileSettings': []}, csrf=other['csrfToken'])
+        self.assertEqual(status, 200, raw)
 
     def test_sessions_persist_hashed_and_restart_reauthenticates_cookie(self):
         import os

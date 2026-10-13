@@ -368,7 +368,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     Path(env["BUDDY_STATE_DIR"]) / "attempts/task/attempt", {}, env,
                     decision_input={"profile": {"adapter": name, **spec},
                         "profiles": [{"profileId": "legal"}], "routingMode": "fast",
-                        "tableRevision": 1, "task": "Select", "outputSchema": router.answer_schema(["legal"]),
+                        "task": "Select", "outputSchema": router.answer_schema(["legal"]),
                         "budget": {"timeoutSeconds": 60}})
                 handle = DecisionAdapter().start(context)
                 self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.1) if h.group_alive() else None)

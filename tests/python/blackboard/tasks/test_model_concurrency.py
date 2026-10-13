@@ -30,8 +30,6 @@ class ModelConcurrencyTestCase(StoreConcurrencyTestCase):
 
     def seed_decision_profile(self, board) -> None:
         board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
-        revision = board.call("console_snapshot", {})["tableRevision"]
-        expected_revision = revision
         board.console_call(
             "user_policy_publish",
             {
@@ -39,7 +37,6 @@ class ModelConcurrencyTestCase(StoreConcurrencyTestCase):
 
 
 
-                "expectedRevision": expected_revision,
                 # A second enabled candidate keeps every selection request on the
                 # Router path; a sole candidate would be selected by the program
                 # directly and never reach the family quota check under test.
@@ -50,8 +47,6 @@ class ModelConcurrencyTestCase(StoreConcurrencyTestCase):
         )
 
     def publish_limits(self, board, *patches: dict, command: str = "limits", writer_request: str | None = None) -> dict:
-        revision = board.call("console_snapshot", {})["tableRevision"]
-        expected_revision = revision
         return board.console_call(
             "user_policy_publish",
             {
@@ -59,7 +54,6 @@ class ModelConcurrencyTestCase(StoreConcurrencyTestCase):
 
 
 
-                "expectedRevision": expected_revision,
                 "modelConcurrency": list(patches),
             },
         )
@@ -100,10 +94,9 @@ class PublicationInterfaceTests(ModelConcurrencyTestCase):
             {FAMILY_A, FAMILY_B},
         )
 
-    def test_profile_page_and_limit_are_from_the_same_published_revision(self):
+    def test_profile_page_is_a_consistent_snapshot_during_a_concurrent_save(self):
         from hey_my_buddy.blackboard.catalog import catalog_store
         original = catalog_store.profiles
-        old_revision = self.board_.call("console_snapshot", {})["tableRevision"]
 
         def concurrent_save(evaluation, params):
             page = original(evaluation, params)
@@ -114,11 +107,9 @@ class PublicationInterfaceTests(ModelConcurrencyTestCase):
 
         with mock.patch.object(catalog_store, "profiles", side_effect=concurrent_save):
             page = self.board_.call("model_profiles", {"limit": 200})
-        self.assertEqual(page["tableRevision"], old_revision)
         self.assertEqual(self.family_row(page, FAMILY_A)["limit"], 2)
         fresh = self.board_.call("console_snapshot", {})
         self.assertEqual(self.family_row(fresh, FAMILY_A)["limit"], 5)
-        self.assertGreater(fresh["tableRevision"], old_revision)
 
     def test_active_counts_unresolved_attempts_of_the_family(self):
         board = self.board_
@@ -224,14 +215,11 @@ class PolicyPatchTests(ModelConcurrencyTestCase):
 
     def test_a_save_is_idempotent_under_its_command_receipt(self):
         board = self.board_
-        revision = board.call("console_snapshot", {})["tableRevision"]
-        expected_revision = revision
         payload = {
             "commandId": "idem-1",
 
 
 
-            "expectedRevision": expected_revision,
             "modelConcurrency": [{"adapter": FAMILY_A[0], "provider": FAMILY_A[1], "model": FAMILY_A[2], "limit": 4}],
         }
         first = board.console_call("user_policy_publish", payload)
@@ -332,7 +320,7 @@ class RoutingQuotaTests(ModelConcurrencyTestCase):
         )
         return response["decisionId"]
 
-    def test_the_selector_family_quota_precedes_the_claim_and_reader_grant(self):
+    def test_the_selector_family_quota_precedes_the_claim(self):
         board = self.board_
         # The fixed decision profile consumes FAMILY_A; two live attempts fill it.
         for index in range(2):
@@ -344,17 +332,15 @@ class RoutingQuotaTests(ModelConcurrencyTestCase):
         blocked = client.claim("w-dec", "claim-route-1", "n" * 32)
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "model-capacity")
-        # Nothing was claimed, no reader was admitted and no attempt exists.
+        # Nothing was claimed and no attempt exists.
         with board.store.db.read() as connection:
             decision = connection.execute(
                 "SELECT status FROM evaluation_decisions WHERE decision_id=?", (decision_id,)
             ).fetchone()
-            readers = connection.execute("SELECT COUNT(*) AS count FROM evaluation_readers").fetchone()["count"]
             request_row = connection.execute(
                 "SELECT attempt_id FROM decision_requests WHERE decision_id=?", (decision_id,)
             ).fetchone()
         self.assertEqual(decision["status"], "queued")
-        self.assertEqual(readers, 0)
         self.assertIsNone(request_row["attempt_id"])
 
     def test_a_freed_family_slot_lets_the_routing_task_claim_and_freeze_the_selector(self):
@@ -373,11 +359,9 @@ class RoutingQuotaTests(ModelConcurrencyTestCase):
             {"adapter": FAMILY_A[0], "provider": FAMILY_A[1], "model": FAMILY_A[2]},
         )
         with board.store.db.read() as connection:
-            readers = connection.execute("SELECT COUNT(*) AS count FROM evaluation_readers").fetchone()["count"]
             request_row = connection.execute(
                 "SELECT attempt_id FROM decision_requests WHERE decision_id=?", (decision_id,)
             ).fetchone()
-        self.assertEqual(readers, 1)
         self.assertEqual(request_row["attempt_id"], claimed["attempt"]["attemptId"])
         # The claimed routing attempt now itself holds a family slot: a second
         # governed FAMILY_A task is blocked behind it.

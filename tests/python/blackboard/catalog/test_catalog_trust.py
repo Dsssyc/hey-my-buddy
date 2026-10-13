@@ -65,7 +65,7 @@ class CatalogTrustTests(BoardTestCase):
             self.assertEqual([tuple(profile) for profile in profiles], [tuple(profile) for profile in before[3]])
             self.assertEqual(pending, {})
             self.assertEqual(self.events(), [])
-            self.assertEqual(result['tableRevision'], confirmed['tableRevision'])
+            self.assertNotIn('tableRevision', result)
 
     def test_pending_owned_table_persists_the_first_absence_and_efforts_without_meta(self):
         self.record(reading(efforts=('high', 'max')))

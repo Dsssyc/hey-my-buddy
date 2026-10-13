@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_task_idx ON events(task_id, seq);
 CREATE INDEX IF NOT EXISTS events_decision_status_idx ON events(kind, seq DESC)
-    WHERE kind IN ('decision.completed','decision.failed','decision.needs_host','decision.cancelled','decision.stale');
+    WHERE kind IN ('decision.completed','decision.failed','decision.needs_host','decision.cancelled');
 -- Router outcome facts are read per buddy in list order (ADR-021 第 2 条): this
 -- partial expression index serves router_history's per-profile reads as an
 -- index-only range. json_valid guards the expression so a malformed payload can
@@ -270,7 +270,7 @@ CREATE TABLE IF NOT EXISTS attempt_activity (
 CREATE INDEX IF NOT EXISTS attempt_activity_task_idx ON attempt_activity(task_id, updated_at);
 """
 
-#: Published settings, selection readers and discovery/decision history.
+#: Published settings and discovery/decision history.
 EVALUATION_TABLES = (
     """
 CREATE TABLE IF NOT EXISTS catalog_observations (
@@ -295,7 +295,6 @@ CREATE TABLE IF NOT EXISTS family_annotations (
     provider   TEXT NOT NULL,
     model      TEXT NOT NULL,
     text       TEXT NOT NULL,
-    revision   INTEGER NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (adapter, provider, model)
 );
@@ -303,20 +302,9 @@ CREATE TABLE IF NOT EXISTS family_annotations (
     """
 CREATE TABLE IF NOT EXISTS evaluation_state (
     id                      INTEGER PRIMARY KEY CHECK (id = 1),
-    table_revision          INTEGER NOT NULL DEFAULT 0,
-    configuration_revision  INTEGER NOT NULL DEFAULT 0,
     decision_profile_id     TEXT,
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL
-);
-""",
-    """
-CREATE TABLE IF NOT EXISTS evaluation_revisions (
-    revision     INTEGER PRIMARY KEY,
-    kind         TEXT NOT NULL,
-    actor        TEXT,
-    counts_json  TEXT NOT NULL DEFAULT '{}',
-    created_at   TEXT NOT NULL
 );
 """,
     """
@@ -333,9 +321,7 @@ CREATE TABLE IF NOT EXISTS evaluation_profiles (
     context_window      INTEGER,
     description         TEXT NOT NULL DEFAULT '',
     source              TEXT NOT NULL DEFAULT '',
-    unavailable_reason  TEXT,
-    created_revision    INTEGER NOT NULL,
-    updated_revision    INTEGER NOT NULL
+    unavailable_reason  TEXT
 );
 """,
     """
@@ -346,8 +332,7 @@ CREATE INDEX IF NOT EXISTS evaluation_profiles_adapter_idx ON evaluation_profile
 CREATE TABLE IF NOT EXISTS evaluation_preferences (
     profile_id        TEXT PRIMARY KEY REFERENCES evaluation_profiles(profile_id) ON DELETE RESTRICT,
     mode              TEXT NOT NULL CHECK (mode IN ('prefer','pin','exclude','none')),
-    reason            TEXT NOT NULL DEFAULT '',
-    updated_revision  INTEGER NOT NULL
+    reason            TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS evaluation_preferences_mode_idx ON evaluation_preferences(mode, profile_id);
 """,
@@ -357,7 +342,6 @@ CREATE TABLE IF NOT EXISTS evaluation_decisions (
     status            TEXT NOT NULL,
     task              TEXT NOT NULL,
     profile_id        TEXT,
-    table_revision    INTEGER NOT NULL,
     reason            TEXT NOT NULL DEFAULT '',
     created_at        TEXT NOT NULL,
     error             TEXT
@@ -374,35 +358,19 @@ CREATE TABLE IF NOT EXISTS evaluation_catalog (
     created_at        TEXT NOT NULL
 );
 """,
-    """
-CREATE TABLE IF NOT EXISTS evaluation_readers (
-    reader_id     TEXT PRIMARY KEY,
-    kind          TEXT NOT NULL,
-    admitted_at   TEXT NOT NULL,
-    expires_at    TEXT NOT NULL,
-    released_at   TEXT,
-    expired       INTEGER NOT NULL DEFAULT 0
-);
-""",
-    """
-CREATE INDEX IF NOT EXISTS evaluation_readers_open_idx ON evaluation_readers(released_at, expires_at);
-""",
     # Extended decision state. ``evaluation_decisions`` stays the bounded public
     # history row the console reads; this table carries the audit material (the
-    # exact persisted model input, the helper envelope, the selected configuration and
-    # the lease/fence identities) that must not sit on every console refresh.
+    # exact persisted model input, the helper envelope and the selected configuration)
+    # that must not sit on every console refresh.
     """
 CREATE TABLE IF NOT EXISTS decision_requests (
     decision_id            TEXT PRIMARY KEY REFERENCES evaluation_decisions(decision_id) ON DELETE RESTRICT,
     request_id             TEXT NOT NULL UNIQUE,
     kind                   TEXT NOT NULL CHECK (kind IN ('select')),
     input_fingerprint      TEXT NOT NULL,
-    configuration_revision INTEGER NOT NULL DEFAULT 0,
     task_id                TEXT,
     attempt_id             TEXT,
     generation             INTEGER,
-    reader_id              TEXT,
-    expected_revision      INTEGER NOT NULL DEFAULT 0,
     selected_json          TEXT,
     input_json             TEXT,
     input_sha256           TEXT,
@@ -432,7 +400,6 @@ CREATE TABLE IF NOT EXISTS model_concurrency (
     provider          TEXT NOT NULL,
     model             TEXT NOT NULL,
     concurrency_limit INTEGER NOT NULL DEFAULT 2 CHECK (concurrency_limit BETWEEN 1 AND 32),
-    updated_revision  INTEGER NOT NULL,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
     PRIMARY KEY (adapter, provider, model)
@@ -447,7 +414,6 @@ CREATE TABLE IF NOT EXISTS family_preferences (
     model             TEXT NOT NULL,
     mode              TEXT NOT NULL CHECK (mode IN ('prefer','pin','exclude')),
     reason            TEXT NOT NULL DEFAULT '',
-    updated_revision  INTEGER NOT NULL,
     PRIMARY KEY (adapter, provider, model)
 );
 """,
@@ -983,8 +949,7 @@ CREATE TABLE IF NOT EXISTS router_dispatches (
     effort       TEXT NOT NULL,
     document_json TEXT NOT NULL,
     input_sha256 TEXT NOT NULL,
-    created_at   TEXT NOT NULL,
-    UNIQUE (decision_id, router_index)
+    created_at   TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS attempts_router_binding_unique ON attempts(attempt_id, task_id, generation);
 CREATE TABLE IF NOT EXISTS router_claims (

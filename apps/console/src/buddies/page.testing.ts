@@ -25,8 +25,6 @@ export const levelSwitch = (effort: string) => within(pane()).getByRole("switch"
 export const levelPreference = (effort: string) => within(pane()).getByRole("radiogroup", { name: `${effort} 的偏好` });
 export const defaultPreference = (name: string) => within(within(pane()).getByRole("radiogroup", { name: "默认偏好" })).getByRole("radio", { name });
 export const note = () => within(pane()).getByRole("textbox", { name: "备注" });
-export const conflictNotice = () => screen.queryAllByRole("alert")
-  .find(node => within(node).queryByRole("button", { name: "重新加载最新版本" }));
 
 export async function selectModel(user: User, identity: string, harness: string) {
   if (!queryModel(identity)) await user.click(foldHandle(harness));

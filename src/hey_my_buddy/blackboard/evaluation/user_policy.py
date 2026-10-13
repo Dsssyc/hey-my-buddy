@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 
 from ...protocol import schemas
-from ..store.db import canonical_json
 from ...errors import BoardError
 
 PATCH_FIELDS = frozenset({'profileSettings', 'preferenceChanges', 'familyPreferenceChanges', 'familyAnnotationChanges',
@@ -109,7 +108,7 @@ def effective_preferences(connection, profile_ids: list[str]) -> list[dict]:
 def family_annotations(connection, profile_ids: list[str]) -> list[dict]:
     marks = ','.join('?' for _ in profile_ids) or 'NULL'
     return [{'adapter': row['adapter'], 'provider': row['provider'], 'model': row['model'], 'text': row['text'],
-             'revision': int(row['revision']), 'updatedAt': row['updated_at']}
+             'updatedAt': row['updated_at']}
             for row in connection.execute(
                 'SELECT * FROM family_annotations f WHERE EXISTS(SELECT 1 FROM evaluation_profiles p'
                 ' WHERE p.adapter=f.adapter AND p.provider=f.provider AND p.model=f.model'
@@ -132,7 +131,7 @@ def _changes(params: dict, field: str, fields: set[str]) -> list[dict]:
     return values
 
 
-def publish(evaluation, connection, *, revision: int, now: str, params: dict) -> dict:
+def publish(evaluation, connection, *, now: str, params: dict) -> dict:
     """Apply only requested human fields in the caller's publication transaction."""
     from ..service.harness_health import read_health
     provided = set(params) & PATCH_FIELDS
@@ -168,7 +167,7 @@ def publish(evaluation, connection, *, revision: int, now: str, params: dict) ->
         if entry['enabled'] and not profile['available']:
             raise BoardError('CONFIGURATION_UNAVAILABLE', 'This configuration is not currently available', profileId=entry['profileId'])
         profile['enabled'] = int(entry['enabled'])
-        connection.execute('UPDATE evaluation_profiles SET enabled=?, updated_revision=? WHERE profile_id=?', (profile['enabled'], revision, entry['profileId']))
+        connection.execute('UPDATE evaluation_profiles SET enabled=? WHERE profile_id=?', (profile['enabled'], entry['profileId']))
     # Compare the whole publication's before/after state. Moving the enabled
     # effort within one model must not make a transient disable trigger a fetch.
     for family in sorted(touched_families):
@@ -195,7 +194,7 @@ def publish(evaluation, connection, *, revision: int, now: str, params: dict) ->
         if mode is None:
             connection.execute('DELETE FROM family_preferences WHERE adapter=? AND provider=? AND model=?', family)
         else:
-            connection.execute('INSERT INTO family_preferences(adapter,provider,model,mode,reason,updated_revision) VALUES(?,?,?,?,?,?) ON CONFLICT(adapter,provider,model) DO UPDATE SET mode=excluded.mode,reason=excluded.reason,updated_revision=excluded.updated_revision', (*family, mode, reason, revision))
+            connection.execute('INSERT INTO family_preferences(adapter,provider,model,mode,reason) VALUES(?,?,?,?,?) ON CONFLICT(adapter,provider,model) DO UPDATE SET mode=excluded.mode,reason=excluded.reason', (*family, mode, reason))
     for entry in preferences:
         if 'mode' not in entry or entry['mode'] not in (None, 'pin', 'prefer', 'exclude', 'none'):
             raise BoardError('INVALID_ARGUMENT', 'mode must be pin, prefer, exclude, none or null')
@@ -206,7 +205,7 @@ def publish(evaluation, connection, *, revision: int, now: str, params: dict) ->
         if mode is None:
             connection.execute('DELETE FROM evaluation_preferences WHERE profile_id=?', (profile_id,))
         else:
-            connection.execute('INSERT INTO evaluation_preferences(profile_id,mode,reason,updated_revision) VALUES(?,?,?,?) ON CONFLICT(profile_id) DO UPDATE SET mode=excluded.mode,reason=excluded.reason,updated_revision=excluded.updated_revision', (profile_id, mode, reason, revision))
+            connection.execute('INSERT INTO evaluation_preferences(profile_id,mode,reason) VALUES(?,?,?) ON CONFLICT(profile_id) DO UPDATE SET mode=excluded.mode,reason=excluded.reason', (profile_id, mode, reason))
     for entry in annotations:
         text = entry.get('text')
         if not isinstance(text, str) or len(text) > 4000:
@@ -214,8 +213,7 @@ def publish(evaluation, connection, *, revision: int, now: str, params: dict) ->
         if not text:
             connection.execute('DELETE FROM family_annotations WHERE adapter=? AND provider=? AND model=?', _family(entry))
         else:
-            connection.execute('INSERT INTO family_annotations(adapter,provider,model,text,revision,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(adapter,provider,model) DO UPDATE SET text=excluded.text,revision=excluded.revision,updated_at=excluded.updated_at', (*_family(entry), text, revision, now))
-    configuration_revision = int(evaluation._state(connection)['configuration_revision'])
+            connection.execute('INSERT INTO family_annotations(adapter,provider,model,text,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(adapter,provider,model) DO UPDATE SET text=excluded.text,updated_at=excluded.updated_at', (*_family(entry), text, now))
     for entry in model_limits:
         if connection.execute(
             'SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? LIMIT 1',
@@ -227,16 +225,15 @@ def publish(evaluation, connection, *, revision: int, now: str, params: dict) ->
         # returns. Only the named families are touched; unrelated settings and
         # fields keep their stored values.
         connection.execute(
-            'INSERT INTO model_concurrency(adapter,provider,model,concurrency_limit,updated_revision,created_at,updated_at)'
-            ' VALUES(?,?,?,?,?,?,?)'
+            'INSERT INTO model_concurrency(adapter,provider,model,concurrency_limit,created_at,updated_at)'
+            ' VALUES(?,?,?,?,?,?)'
             ' ON CONFLICT(adapter,provider,model) DO UPDATE SET concurrency_limit=excluded.concurrency_limit,'
-            ' updated_revision=excluded.updated_revision, updated_at=excluded.updated_at',
+            ' updated_at=excluded.updated_at',
             (
                 entry['adapter'],
                 entry['provider'],
                 entry['model'],
                 entry['limit'],
-                revision,
                 now,
                 now,
             ),
@@ -264,9 +261,7 @@ def publish(evaluation, connection, *, revision: int, now: str, params: dict) ->
         router._write_settings(connection, configuration)
         if 'routingBudget' in configuration:
             evaluation.board._append_event(connection, 'evaluation.routing_budget_changed',
-                                           payload={'preset': configuration['routingBudget'], 'revision': revision})
-        configuration_revision += 1
-        connection.execute('UPDATE evaluation_state SET configuration_revision=? WHERE id=1', (configuration_revision,))
+                                           payload={'preset': configuration['routingBudget']})
     counts = {
         'profileSettings': len(settings),
         'preferenceChanges': len(preferences),
@@ -275,10 +270,9 @@ def publish(evaluation, connection, *, revision: int, now: str, params: dict) ->
         'modelConcurrency': len(model_limits),
         'provided': sorted(provided),
     }
-    connection.execute('INSERT INTO evaluation_revisions(revision,kind,actor,counts_json,created_at) VALUES(?,?,?,?,?)', (revision, 'human', None, canonical_json(counts), now))
-    connection.execute('UPDATE evaluation_state SET table_revision=?,updated_at=? WHERE id=1', (revision, now))
+    connection.execute('UPDATE evaluation_state SET updated_at=? WHERE id=1', (now,))
     # ``enabledFamilies`` is an internal caller value, never a published response
     # field: the facts refresh runs after the publication transaction commits and is
     # not part of the idempotent receipt.
-    return {'revision': revision, 'configurationRevision': configuration_revision, 'counts': counts,
+    return {'counts': counts,
             'enabledFamilies': enabled_families}

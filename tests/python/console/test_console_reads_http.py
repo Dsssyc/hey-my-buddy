@@ -99,10 +99,11 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
             connection.execute("INSERT INTO meta(key,value) VALUES('console-read-test','1')"
                                " ON CONFLICT(key) DO UPDATE SET value=excluded.value")
         etag = recomputed("raw SQL")
-        # A raw SQL change that does reach the content: the table revision.
+        # A raw SQL change that reaches the visible Router setting.
         with board.store.db.write() as connection:
-            connection.execute("UPDATE evaluation_state SET table_revision=table_revision+1 WHERE id=1")
-        etag = changed("table revision")
+            connection.execute("INSERT INTO meta(key,value) VALUES('router_retry_interval_seconds','601')"
+                               " ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        etag = changed("Router setting")
         # A harness health observation revision.
         with board.store.db.write() as connection:
             connection.execute("UPDATE harness_health SET revision=revision+1, record_json='{}' WHERE adapter='dsh'")
@@ -339,14 +340,14 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         After a same-schema database replacement the reconnected marker may
         re-read the data_version other routes' entries were cached under; the
         connection epoch must invalidate them all. The snapshot visibly
-        changes (tableRevision), while the tasks route re-enters its
+        changes (Router retry interval), while the tasks route re-enters its
         projection even though its content is byte-identical — an honest
         recompute-304, never a stale cache hit.
         """
         board = self.board()
         browser = self.open(board)
         _status, console_headers, console_body = browser.get("/api/console")
-        self.assertEqual(json.loads(console_body)["tableRevision"], 0)
+        self.assertEqual(json.loads(console_body)["configuration"]["routerRetryIntervalSeconds"], 600)
         _status, tasks_headers, _body = browser.get("/api/tasks?limit=5")
         import sqlite3
         from contextlib import closing
@@ -354,14 +355,15 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         replacement = board.store.directory / "replacement.sqlite3"
         with closing(sqlite3.connect(board.store.db.path)) as source, closing(sqlite3.connect(replacement)) as target:
             source.backup(target)
-            target.execute("UPDATE evaluation_state SET table_revision=97 WHERE id=1")
+            target.execute("INSERT INTO meta(key,value) VALUES('router_retry_interval_seconds','997')"
+                           " ON CONFLICT(key) DO UPDATE SET value=excluded.value")
             target.commit()
         os.replace(replacement, board.store.db.path)
         status, _headers, body = browser.get(
             "/api/console", headers={"If-None-Match": console_headers["etag"]}
         )
         self.assertEqual(status, 200, body[:300])
-        self.assertEqual(json.loads(body)["tableRevision"], 97)
+        self.assertEqual(json.loads(body)["configuration"]["routerRetryIntervalSeconds"], 997)
         self.assertNotEqual(_headers["etag"], console_headers["etag"])
         projections = board.console.read_cache.calls["tasks"]["projections"]
         status, _headers, replay = browser.get(

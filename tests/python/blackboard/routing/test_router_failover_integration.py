@@ -50,7 +50,7 @@ class FailoverTests(RouterDispatchTestCase):
     def answer(self, claim, *, profile_id=B, tools=0, **receipt_options):
         doc = claim["decisionInput"]
         return {**claim_tool_receipt(claim, tools, **receipt_options), "status": "ok", "operation": "select",
-                "tableRevision": doc["tableRevision"], "usage": {"elapsedMs": 100, "toolCalls": tools, "bytesRead": None},
+                "usage": {"elapsedMs": 100, "toolCalls": tools, "bytesRead": None},
                 "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                 "inputVerification": {"unchanged": True, "snapshotSha256": "private-fixture-copy",
                                       "manifestSha256": (doc.get("executionWorkspace") or {}).get("manifestSha256")},
@@ -188,25 +188,6 @@ class FailoverTests(RouterDispatchTestCase):
         with self.board_.store.db.read() as db:
             self.assertEqual(router_history.router_state(db, profile_id=B, interval_seconds=600, now=T0)["consecutiveNoAnswers"], 0)
 
-    def test_frozen_inside_candidate_lost_availability_is_changed(self):
-        request, first = self.start()
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET available=0 WHERE profile_id=?", (B,))
-        self.assert_boundary(request, first, self.answer(first))
-
-    def test_frozen_inside_candidate_loses_required_capability(self):
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET capabilities_json=?",
-                       (canonical_json(["coding", *permission_capabilities("dsh")]),))
-        request = self.board_.call("selection_request", {"requestId": "capability", "task": "choose",
-                                                         "requiredCapabilities": ["coding"]})
-        first = self.claim("first", task_id=request["runId"])["claim"]
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET capabilities_json=? WHERE profile_id=?",
-                       (canonical_json(permission_capabilities("dsh")), B))
-        self.assert_boundary(request, first, self.answer(first))
-        self.assertEqual(self.decision_row(request["decisionId"])["error"], "router-out-of-bounds")
-
     def test_cached_router_health_loss_does_not_veto_valid_other_candidate(self):
         request, first = self.start()
         with self.board_.store.db.write() as db:
@@ -261,6 +242,21 @@ class FailoverTests(RouterDispatchTestCase):
             self.assertFalse(replay["recorded"])
         self.assertEqual(len(self.tasks()), 2)
         self.assertEqual(len(self.outcomes()), 1)
+
+    def test_preflight_outcomes_on_the_selection_retry_have_distinct_receipts(self):
+        with self.board_.store.db.write() as db:
+            arguments = dict(profile_id=A, plane="work", request_id="selection-retry-fixture",
+                             task_id=None, attempt_id=None, outcome="no_answer", code="router-unavailable",
+                             phase="preflight", now=T0)
+            original = router_history.record_outcome(db, **arguments, facts={"routerIndex": 0})
+            retry = router_history.record_outcome(
+                db, **arguments, facts={"routerIndex": 0, "selectionRetry": True})
+            repeated = router_history.record_outcome(
+                db, **arguments, facts={"routerIndex": 0, "selectionRetry": True})
+        self.assertTrue(original["recorded"])
+        self.assertTrue(retry["recorded"])
+        self.assertFalse(repeated["recorded"])
+        self.assertNotEqual(original["seq"], retry["seq"])
 
     def test_late_old_task_attempt_generation_and_nonce_do_not_mutate_current(self):
         request, first = self.start()
@@ -365,7 +361,7 @@ class FailoverTests(RouterDispatchTestCase):
         self.assertTrue(self.report(first, output)["duplicate"])
         self.assertEqual(len(self.tasks()), 1)
 
-    def test_publish_select_is_dto_only_and_active_reader_is_normal(self):
+    def test_publish_select_is_dto_only(self):
         request, first = self.start()
         with self.board_.store.db.write() as db:
             row = self.board_.store.decisions._row(db, request["decisionId"])
@@ -541,7 +537,6 @@ install_no_answer_case("incomplete", lambda self, claim, o: self.answer(claim, s
 install_no_answer_case("forbidden_fast", lambda self, claim, o: self.answer(claim, tools=1), "router-tools-forbidden")
 install_no_answer_case("forbidden_review", lambda self, claim, o: self.answer(claim, tools=1, tool_name="write"), "router-tools-forbidden", review=True)
 install_no_answer_case("wrong_operation", lambda self, claim, o: {**o, "operation": "maintain"}, "answer-shape")
-install_no_answer_case("wrong_revision", lambda self, claim, o: {**o, "tableRevision": 999}, "answer-shape")
 install_no_answer_case("outer_failed_native_stopped", lambda self, claim, o: o, "router-no-answer", outer="failed")
 
 
@@ -579,13 +574,20 @@ def execute_change(sql, params=()):
     return mutate
 
 
-for name, kwargs in (("list", {"ids": [B, A]}), ("mode", {"mode": "review"}), ("preset", {"budget": "brief"}), ("interval", {"interval": 30})):
-    install_change_case(name, lambda self, request, claim, output, kwargs=kwargs: self.set_settings(**kwargs))
-install_change_case("revision", execute_change("UPDATE evaluation_state SET configuration_revision=configuration_revision+1 WHERE id=1"))
-install_change_case("table", execute_change("UPDATE evaluation_state SET table_revision=table_revision+1 WHERE id=1"))
-install_change_case("reader_release", execute_change("UPDATE evaluation_readers SET released_at=?", (T0,)))
-install_change_case("reader_lease", execute_change("UPDATE evaluation_readers SET expires_at=?", (T0,)))
-install_change_case("identity", execute_change("UPDATE evaluation_profiles SET model='replacement' WHERE profile_id=?", (A,)))
+def install_unfenced_edit_case(name, mutate):
+    def test(self):
+        request, first = self.start()
+        mutate(self, request, first, self.failure(first))
+        self.assert_switch(request, first, self.failure(first), status="failed", code="timeout")
+    setattr(FailoverTests, "test_no_answer_after_" + name + "_edit", test)
+
+
+for name, kwargs in (("list", {"ids": [B, A]}), ("mode", {"mode": "review"}),
+                     ("preset", {"budget": "brief"}), ("interval", {"interval": 30})):
+    install_unfenced_edit_case(name, lambda self, request, claim, output, kwargs=kwargs: self.set_settings(**kwargs))
+install_unfenced_edit_case("identity", execute_change("UPDATE evaluation_profiles SET model='replacement' WHERE profile_id=?", (A,)))
+
+
 install_change_case("owner", execute_change("UPDATE workflow_runs SET owner_generation=2"), governed=True)
 install_change_case("route", execute_change("UPDATE workflow_routes SET state='fenced'"), governed=True)
 install_change_case("parent_cancel", execute_change("UPDATE workflow_runs SET state='cancelled'"), governed=True, outcome="cancelled")
@@ -594,37 +596,6 @@ install_change_case("attempt_cancel_race", execute_change("UPDATE attempts SET c
 install_change_case("copy", lambda self, request, claim, output: output["inputVerification"].update(unchanged=False), review=True)
 install_change_case("manifest", lambda self, request, claim, output: output["inputVerification"].update(manifestSha256="changed"), review=True)
 
-
-def install_candidate_change(name, mutate):
-    def test(self):
-        request, first = self.start()
-        mutate(self)
-        response = self.assert_boundary(request, first, self.answer(first))
-        self.assertEqual(self.decision_row(request["decisionId"])["error"], "router-out-of-bounds")
-    setattr(FailoverTests, "test_inside_candidate_changed_" + name, test)
-
-
-def candidate_sql(sql, params=()):
-    def mutate(self):
-        with self.board_.store.db.write() as db:
-            db.execute(sql, params)
-    return mutate
-
-
-install_candidate_change("disabled", candidate_sql("UPDATE evaluation_profiles SET enabled=0 WHERE profile_id=?", (B,)))
-install_candidate_change("exclude", candidate_sql("INSERT INTO evaluation_preferences VALUES(?,'exclude','fixture boundary',0)", (B,)))
-install_candidate_change("pin", candidate_sql("INSERT INTO evaluation_preferences VALUES(?,'pin','fixture boundary',0)", (A,)))
-install_candidate_change("identity", candidate_sql("UPDATE evaluation_profiles SET effort='low' WHERE profile_id=?", (B,)))
-
-
-def quota_closed(self):
-    from hey_my_buddy.blackboard.routing import quota_routing
-    with self.board_.store.db.write() as db:
-        quota_routing.record(db, "dsh", {"provider": "fixture", "scope": {"limitId": "bravo"},
-                            "balanceZero": True, "observedAt": T0, "source": "native"}, now=T0)
-
-
-install_candidate_change("quota", quota_closed)
 
 for layer in ("controller", "native"):
     for value in (False, None):

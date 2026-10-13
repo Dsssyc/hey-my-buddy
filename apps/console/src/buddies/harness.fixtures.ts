@@ -50,11 +50,10 @@ export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
   const profile: Profile = { profileId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium", available: true,
     enabled: true, capabilities: ["execution:claude", "decision"], contextWindow: 200_000, description: "", source: "catalog:fixture" };
   return {
-    csrfToken: "csrf",
+    csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
-    tableRevision: 4,
 
-    configuration: { revision: 1, routerProfileIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
+    configuration: { routerProfileIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     profiles: [profile],
     preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], decisions: [],
 

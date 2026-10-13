@@ -70,13 +70,13 @@ function fixture(options: {
 } = {}) {
   const profiles = catalog();
   let state: Snapshot = {
-    csrfToken: "csrf", consoleSession: session(), tableRevision: 2,
+    csrfToken: "csrf", eventCursor: 0, consoleSession: session(),
 
-    configuration: { revision: 1, routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
     unavailableProfileCount: 1,
 
-    familyAnnotations: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "原人工意见", revision: 1, updatedAt: null }],
+    familyAnnotations: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "原人工意见", updatedAt: null }],
     preferences: [], familyPreferences: [], preferenceOverrides: [], decisions: [],
     modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }],
     tasks: { pendingCount: 0 },
@@ -99,7 +99,7 @@ function fixture(options: {
       const outcome = nextPublish();
       if (outcome === "network") throw new ApiError("NETWORK", "lost publish reply");
       if (outcome === "expired") throw new ApiError("CONSOLE_SESSION_EXPIRED", "login expired");
-      return { published: true, tableRevision: 3 };
+      return { published: true,};
     }
     if (operation === "workflow_get") {
       const value = workflows.get(String(params.runId));
@@ -107,12 +107,11 @@ function fixture(options: {
       return structuredClone(value);
     }
     if (operation === "model_profiles") {
-      return { profiles: [], familyAnnotations: [], preferences: [], preferenceOverrides: [], familyPreferences: [], modelConcurrency: [],
- tableRevision: state.tableRevision, nextCursor: null };
+      return { profiles: [], familyAnnotations: [], preferences: [], preferenceOverrides: [], familyPreferences: [], modelConcurrency: [], nextCursor: null };
     }
     if (operation === "selection_get") {
       return { decision: { decisionId: String(params.decisionId), kind: "select", status: "completed",
-        task: "路由计算", profileId: flashOff, tableRevision: 1, reason: "记录的选择依据",
+        task: "路由计算", profileId: flashOff, reason: "记录的选择依据",
         evidence: [], createdAt: "2026-09-25T10:00:00Z" } };
     }
     throw new ApiError("FORBIDDEN", "board refused a mutation");
@@ -177,12 +176,11 @@ afterEach(() => {
 /** Builds one authenticated-snapshot envelope; `null` leaves the field out. */
 function envelope(consoleSession: unknown, include = true) {
   return {
-    tableRevision: 2,
-    configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600,
+    configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "fast", routingBudget: "standard" },
 
     profiles: [], familyAnnotations: [], preferences: [], familyPreferences: [], preferenceOverrides: [], modelConcurrency: [], tasks: { pendingCount: 0 },
-    csrfToken: "csrf",
+    csrfToken: "csrf", eventCursor: 0,
     ...(include ? { consoleSession } : {}),
   };
 }

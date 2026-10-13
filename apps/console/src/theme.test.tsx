@@ -10,9 +10,9 @@ import type { RuntimeVersionInfo, Snapshot } from "./types";
 
 function snapshot(): Snapshot {
   return {
-    csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: [], preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], decisions: [],
  modelConcurrency: [], tasks: { pendingCount: 0 },
     capabilities: {},

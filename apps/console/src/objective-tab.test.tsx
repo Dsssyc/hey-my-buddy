@@ -9,9 +9,9 @@ import { clockTime } from "./objective-display";
 
 function snapshotFixture(): Snapshot {
   return {
-    csrfToken: "csrf", consoleSession: { id: "session-a", canWrite: true, reason: null }, tableRevision: 2,
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session-a", canWrite: true, reason: null },
 
-    configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: [], preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], decisions: [],
  modelConcurrency: [], tasks: { pendingCount: 0 },
     capabilities: {},
