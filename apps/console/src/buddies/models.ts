@@ -9,7 +9,7 @@ import type { ConsoleView, HarnessHealth, PreferenceMode, Profile, Snapshot } fr
 export type BuddyChip = {
   profile: Profile;
   effort: string;
-  /** The preference in effect: the buddy's own, otherwise its model's default. */
+  /** This buddy's preference. */
   preference: PreferenceMode | null;
   /** The draft differs from what is published: the switch or the buddy's own preference. */
   unsaved: boolean;
@@ -88,14 +88,13 @@ export function harnessBlocks({ listed, data, recorded, harnesses, folded, fresh
         family,
         chips: family.profiles.map(profile => {
           const published = recorded.profiles.find(entry => entry.profileId === profile.profileId);
-          const own = (source: { preferenceOverrides: ConsoleView["preferenceOverrides"] }) =>
-            source.preferenceOverrides.find(entry => entry.profileId === profile.profileId);
+          const own = (source: { preferences: ConsoleView["preferences"] }) =>
+            source.preferences.find(entry => entry.profileId === profile.profileId);
           return {
             profile,
             effort: effortText(profile.effort),
             preference: data.preferences.find(entry => entry.profileId === profile.profileId)?.mode ?? null,
-            unsaved: data.preferences.find(entry => entry.profileId === profile.profileId)?.mode !== recorded.preferences.find(entry => entry.profileId === profile.profileId)?.mode
-              || (!!published && published.enabled !== profile.enabled)
+            unsaved: (!!published && published.enabled !== profile.enabled)
               || own(data)?.mode !== own(recorded)?.mode || (own(data)?.reason ?? "") !== (own(recorded)?.reason ?? ""),
           };
         }),

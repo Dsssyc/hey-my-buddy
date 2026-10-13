@@ -45,7 +45,7 @@ function fixture(options: { discoveryLimit?: number } = {}) {
     configuration: { routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
 
-    familyAnnotations: [], preferences: [], familyPreferences: [], preferenceOverrides: [], decisions: [],
+    familyAnnotations: [], preferences: [], decisions: [],
     modelConcurrency: [flashEntry, retiredEntry],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
@@ -70,8 +70,7 @@ function fixture(options: { discoveryLimit?: number } = {}) {
 
 
     if (operation === "model_profiles") {
-      return { profiles, familyAnnotations: [], preferences: [], preferenceOverrides: [], familyPreferences: [],
-        modelConcurrency: structuredClone(state.modelConcurrency), nextCursor: null };
+      return { profiles, familyAnnotations: [], preferences: [],         modelConcurrency: structuredClone(state.modelConcurrency), nextCursor: null };
     }
     if (operation === "model_catalog_refresh") {
       // The program publishes directory facts itself. A discovery can also

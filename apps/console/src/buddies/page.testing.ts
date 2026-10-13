@@ -23,7 +23,6 @@ export const level = (effort: string) => within(pane()).getByRole("group", { nam
 export const effortCell = (effort: string) => within(pane()).getByRole("button", { name: effort });
 export const levelSwitch = (effort: string) => within(pane()).getByRole("switch", { name: `启用 ${effort}` });
 export const levelPreference = (effort: string) => within(pane()).getByRole("radiogroup", { name: `${effort} 的偏好` });
-export const defaultPreference = (name: string) => within(within(pane()).getByRole("radiogroup", { name: "默认偏好" })).getByRole("radio", { name });
 export const note = () => within(pane()).getByRole("textbox", { name: "备注" });
 
 export async function selectModel(user: User, identity: string, harness: string) {

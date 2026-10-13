@@ -26,7 +26,7 @@ try {
       if (['console_access_set', 'console_session_revoke'].includes(body.operation)) {
         commands.push(body);
         if (body.operation === 'console_access_set') {
-          assert.equal(body.params.expectedRevision, access.revision);
+          assert.deepEqual(Object.keys(body.params), ['requireLogin']);
           access = { requireLogin: body.params.requireLogin, revision: access.revision + 1,
             sessions: body.params.requireLogin ? [self, other] : [] };
         } else access = { ...access, sessions: access.sessions.filter(s => s.id !== body.params.sessionId) };

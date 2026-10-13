@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ApiError, errorText, snapshotHarnesses } from "../api";
+import { errorText, snapshotHarnesses } from "../api";
 import type { ConsoleApi } from "../api";
 import { harnessName } from "../buddy-display";
 import type { HarnessHealth, Snapshot } from "../types";
@@ -13,7 +13,7 @@ type Action =
   | { kind: "set"; adapter: string; path: string | null }
   | { kind: "retry"; adapter: string; provider: string };
 
-/** Explicit directory operations, preserving revision fencing and recorded replies. */
+/** Explicit directory operations, preserving recorded replies. */
 export function useHarnessActions({ snapshot, api, refresh, mutationsAvailable, sessionWritable }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>;
   mutationsAvailable: boolean; sessionWritable: boolean;
@@ -30,7 +30,6 @@ export function useHarnessActions({ snapshot, api, refresh, mutationsAvailable, 
 
   const rows = recorded.map(row => replies[row.adapter] ?? row);
   const refusal = !sessionWritable ? t("loginExpired") : !mutationsAvailable ? t("harness.refused") : "";
-  const expectedRevision = (adapter: string) => rows.find(row => row.adapter === adapter)?.revision ?? 0;
   /** The reload is the point of the action: the snapshot stays the recorded truth. */
   async function reloadSnapshot() {
     const next = await refresh();
@@ -50,7 +49,7 @@ export function useHarnessActions({ snapshot, api, refresh, mutationsAvailable, 
           ? t("harness.done.checked", { name: harnessName(action.adapter), status: statusText(checked.find(row => row.adapter === action.adapter)?.status ?? "unknown", t) })
           : t("harness.done.checkedAll", { ready: checked.filter(row => row.status === "ready").length, n: checked.length }));
       } else if (action.kind === "set") {
-        const updated = await api.harnessSet(action.adapter, action.path, expectedRevision(action.adapter), snapshot.csrfToken);
+        const updated = await api.harnessSet(action.adapter, action.path, snapshot.csrfToken);
         setReplies(previous => ({ ...previous, [updated.adapter]: updated }));
         const status = { name: harnessName(updated.adapter), status: statusText(updated.status, t) };
         setNote(action.path ? t("harness.done.saved", { path: harnessPath(updated) ?? action.path, ...status }) : t("harness.done.restored", status));
@@ -62,11 +61,6 @@ export function useHarnessActions({ snapshot, api, refresh, mutationsAvailable, 
     } catch (failure) {
       setError(errorText(failure));
       setRetry(action);
-      // A revision conflict means the recorded facts changed: reread them so a
-      // retry fences against the new revision instead of replaying a stale one.
-      if (failure instanceof ApiError && ["REVISION_CONFLICT", "CONFLICT", "STALE_GENERATION"].includes(failure.code)) {
-        await reloadSnapshot();
-      }
     } finally {
       setBusy(false);
     }

@@ -4,11 +4,8 @@ import {
   changeCount,
   configurationChanged,
   draftDiffers,
-  effectivePreferences,
   familyAnnotationChanges,
   familyAnnotationText,
-  familyPreferenceChanges,
-  historyView,
   makeDraft,
   modelConcurrencyChanges,
   preferenceChanges,
@@ -17,9 +14,7 @@ import {
   rebaseDraft,
   setConcurrencyLimit,
   setFamilyAnnotation,
-  setFamilyPreference,
-  setPreferenceOverride,
-  withHistory,
+  setPreference,
 } from "./draft";
 import { blockingIssues } from "./policy";
 import type { HistoryEntries } from "./draft";
@@ -39,7 +34,6 @@ const flash = {
   description: "",
   source: "catalog",
 } satisfies Profile;
-const flashHigh = { ...flash, profileId: "flash-high", effort: "high" } satisfies Profile;
 const flashFamily = { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
 /** A configuration that is still enabled but no longer listed by the catalog. */
 const retired = {
@@ -56,9 +50,7 @@ const snapshot = {
   profiles: [flash],
 
   preferences: [],
-  familyPreferences: [],
-  preferenceOverrides: [],
-  familyAnnotations: [],
+      familyAnnotations: [],
   configuration: { routerProfileIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
   },
 
@@ -77,8 +69,7 @@ describe("editing a published snapshot", () => {
   it("publishes only the dirty user patches, never a table, a card or an effective preference", () => {
     const baseline = makeDraft(snapshot);
     let draft = setFamilyAnnotation(baseline, flash, "我的使用备注");
-    draft = setFamilyPreference(draft, flash, "prefer", "速度快");
-    draft = setPreferenceOverride(draft, "flash-off", "exclude", "太贵");
+    draft = setPreference(draft, "flash-off", "exclude", "太贵");
     draft = {
       ...draft,
       profiles: draft.profiles.map((p) => ({ ...p, enabled: false })),
@@ -87,7 +78,6 @@ describe("editing a published snapshot", () => {
     expect(patch).toEqual({
       commandId: "c",
       profileSettings: [{ profileId: "flash-off", enabled: false }],
-      familyPreferenceChanges: [{ ...flashFamily, mode: "prefer", reason: "速度快" }],
       preferenceChanges: [{ profileId: "flash-off", mode: "exclude", reason: "太贵" }],
       familyAnnotationChanges: [{ ...flashFamily, text: "我的使用备注" }],
     });
@@ -111,44 +101,33 @@ describe("editing a published snapshot", () => {
     ]);
   });
 
-  it("sends a clear for an emptied note, a null family mode and a null override", () => {
+  it("sends a clear for an emptied note, a cleared preference", () => {
     const baseline = {
       ...makeDraft(snapshot),
       familyAnnotations: [note(flashFamily, "旧备注")],
-      familyPreferences: [{ ...flashFamily, mode: "prefer" as const, reason: "更快" }],
-      preferenceOverrides: [{ profileId: "flash-off", mode: "exclude" as const, reason: "贵" }],
+      preferences: [{ profileId: "flash-off", mode: "exclude" as const, reason: "贵" }],
     };
     let draft = setFamilyAnnotation(baseline, flash, "");
-    draft = setFamilyPreference(draft, flash, "");
-    draft = setPreferenceOverride(draft, "flash-off", "");
+    draft = setPreference(draft, "flash-off", "");
     const patch = publication(baseline, draft, "c");
     expect(patch.familyAnnotationChanges).toEqual([{ ...flashFamily, text: "" }]);
-    expect(patch.familyPreferenceChanges).toEqual([{ ...flashFamily, mode: null, reason: "" }]);
     expect(patch.preferenceChanges).toEqual([{ profileId: "flash-off", mode: null, reason: "" }]);
     expect(familyAnnotationChanges(baseline, draft)).toEqual([{ ...flashFamily, text: "" }]);
-    expect(familyPreferenceChanges(baseline, draft)).toEqual([{ ...flashFamily, mode: null, reason: "" }]);
     expect(preferenceChanges(baseline, draft)).toEqual([{ profileId: "flash-off", mode: null, reason: "" }]);
   });
 
-  it("publishes an explicit none override distinctly from following the family", () => {
-    const baseline = {
-      ...makeDraft({ ...snapshot, profiles: [flash, flashHigh] } as Snapshot),
-      familyPreferences: [{ ...flashFamily, mode: "prefer" as const, reason: "" }],
-    };
-    const none = setPreferenceOverride(baseline, "flash-high", "none", "最高档太贵");
-    expect(preferenceChanges(baseline, none)).toEqual([
-      { profileId: "flash-high", mode: "none", reason: "最高档太贵" },
-    ]);
-    expect(publication(baseline, none, "c")).not.toHaveProperty("familyPreferenceChanges");
-    // Back to "跟随家族" deletes the override: nothing left to publish.
-    expect(preferenceChanges(baseline, setPreferenceOverride(none, "flash-high", ""))).toEqual([]);
+  it("keeps 不设 as an absent preference after clearing a buddy", () => {
+    const baseline = makeDraft({ ...snapshot, preferences: [{ profileId: flash.profileId, mode: "prefer", reason: "常用" }] } as Snapshot);
+    const cleared = setPreference(baseline, flash.profileId, "");
+    expect(cleared.preferences).toEqual([]);
+    expect(preferenceChanges(baseline, cleared)).toEqual([{ profileId: flash.profileId, mode: null, reason: "" }]);
   });
 
   it("keeps a stale pin and a stale Router out of every patch", () => {
     const baseline = makeDraft({
       ...snapshot,
       profiles: [flash, retired],
-      preferenceOverrides: [{ profileId: "retired", mode: "pin", reason: "以前固定" }],
+      preferences: [{ profileId: "retired", mode: "pin", reason: "以前固定" }],
       configuration: { routerProfileIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     } as Snapshot);
     const draft = { ...baseline };
@@ -162,15 +141,11 @@ describe("editing a published snapshot", () => {
     expect(patch).not.toHaveProperty("profileSettings");
   });
 
-  it("allows several pins: a new pin never clears another family's or effort's pin", () => {
-    const draft = {
-      ...makeDraft(snapshot),
-      preferenceOverrides: [{ profileId: "a", mode: "pin" as const, reason: "" }],
-    };
-    const updated = setFamilyPreference(draft, flash, "pin");
-    expect(updated.preferenceOverrides).toEqual(draft.preferenceOverrides);
-    expect(familyPreferenceChanges(draft, updated)).toEqual([{ ...flashFamily, mode: "pin", reason: "" }]);
-    expect(preferenceChanges(draft, updated)).toEqual([]);
+  it("allows several buddy pins independently", () => {
+    const draft = { ...makeDraft(snapshot), preferences: [{ profileId: "a", mode: "pin" as const, reason: "" }] };
+    const updated = setPreference(draft, flash.profileId, "pin");
+    expect(updated.preferences).toHaveLength(2);
+    expect(preferenceChanges(draft, updated)).toEqual([{ profileId: flash.profileId, mode: "pin", reason: "" }]);
   });
 
   it("detects human edits independently of array order and program facts", () => {
@@ -184,7 +159,7 @@ describe("editing a published snapshot", () => {
     // A program-side rename or availability change is not a user change.
     expect(draftDiffers(baseline, reordered)).toBe(false);
     expect(changeCount(baseline, reordered)).toBe(0);
-    const preferred = setFamilyPreference(baseline, flash, "prefer", "更快");
+    const preferred = setPreference(baseline, flash.profileId, "prefer", "更快");
     expect(draftDiffers(baseline, preferred)).toBe(true);
     expect(changeCount(baseline, preferred)).toBe(1);
     const noted = setFamilyAnnotation(preferred, flash, "备注");
@@ -208,19 +183,18 @@ describe("editing a published snapshot", () => {
     // A reordered copy of the same overrides is not a change.
     const overridden = {
       ...baseline,
-      preferenceOverrides: [
+      preferences: [
         { profileId: "a", mode: "prefer" as const, reason: "1" },
-        { profileId: "b", mode: "none" as const, reason: "2" },
+        { profileId: "b", mode: "exclude" as const, reason: "2" },
       ],
     };
-    expect(draftDiffers(overridden, { ...overridden, preferenceOverrides: [...overridden.preferenceOverrides].reverse() })).toBe(false);
+    expect(draftDiffers(overridden, { ...overridden, preferences: [...overridden.preferences].reverse() })).toBe(false);
   });
 
   it("rebases the draft onto refreshed directory facts without losing user patches", () => {
     const baseline = makeDraft(snapshot);
     let draft = setFamilyAnnotation(baseline, flash, "保留的备注");
-    draft = setFamilyPreference(draft, flash, "prefer", "更快");
-    draft = setPreferenceOverride(draft, "flash-off", "none");
+    draft = setPreference(draft, "flash-off", "prefer", "更快");
     draft = {
       ...draft,
       profiles: draft.profiles.map((p) => ({ ...p, enabled: false })),
@@ -246,31 +220,10 @@ describe("editing a published snapshot", () => {
     expect(familyAnnotationText(adopted.draft, flash)).toBe("保留的备注");
     const patch = publication(adopted.baseline, adopted.draft, "c");
     expect(patch.familyAnnotationChanges).toEqual([{ ...flashFamily, text: "保留的备注" }]);
-    expect(patch.familyPreferenceChanges).toEqual([{ ...flashFamily, mode: "prefer", reason: "更快" }]);
-    expect(patch.preferenceChanges).toEqual([{ profileId: "flash-off", mode: "none", reason: "" }]);
+    expect(patch.preferenceChanges).toEqual([{ profileId: "flash-off", mode: "prefer", reason: "更快" }]);
     expect(patch.profileSettings).toEqual([{ profileId: "flash-off", enabled: false }]);
     expect(profileSettings(baseline, draft)).toEqual([
       { profileId: "flash-off", enabled: false },
-    ]);
-  });
-});
-
-describe("effective preferences", () => {
-  it("mirrors the view: an override wins, none hides the family default, others follow the family", () => {
-    const flashMax = { ...flash, profileId: "flash-max", effort: "max" };
-    const rows = effectivePreferences({
-      profiles: [flash, flashHigh, flashMax, retired],
-      familyPreferences: [{ ...flashFamily, mode: "prefer", reason: "家族默认" }],
-      preferenceOverrides: [
-        { profileId: "flash-high", mode: "exclude", reason: "太贵" },
-        { profileId: "flash-max", mode: "none", reason: "" },
-        { profileId: "retired", mode: "pin", reason: "旧" },
-      ],
-    });
-    expect(rows).toEqual([
-      { profileId: "flash-off", mode: "prefer", reason: "家族默认", source: "family" },
-      { profileId: "flash-high", mode: "exclude", reason: "太贵", source: "override" },
-      { profileId: "retired", mode: "pin", reason: "旧", source: "override" },
     ]);
   });
 });
@@ -301,39 +254,29 @@ describe("replaying a draft on refreshed content", () => {
     expect(ready.draft.profiles.find(row => row.profileId === "retired")?.enabled).toBe(false);
   });
 
-  it("replays family and effort preferences over concurrent changes", () => {
-    const baseline = { ...makeDraft(snapshot),
-      familyPreferences: [{ ...flashFamily, mode: "prefer" as const, reason: "A" }],
-      preferenceOverrides: [{ profileId: flash.profileId, mode: "pin" as const, reason: "A" }] };
-    const draft = setPreferenceOverride(setFamilyPreference(baseline, flash, "exclude", "B"), flash.profileId, "none");
-    const refreshed = { ...snapshot,
-      familyPreferences: [{ ...flashFamily, mode: "pin" as const, reason: "C" }],
-      preferenceOverrides: [{ profileId: flash.profileId, mode: "exclude" as const, reason: "C" }] };
+  it("replays a buddy preference over a concurrent change", () => {
+    const baseline = { ...makeDraft(snapshot), preferences: [{ profileId: flash.profileId, mode: "prefer" as const, reason: "A" }] };
+    const draft = setPreference(baseline, flash.profileId, "exclude", "B");
+    const refreshed = { ...snapshot, preferences: [{ profileId: flash.profileId, mode: "pin" as const, reason: "C" }] };
     const adopted = rebaseDraft(draft, baseline, refreshed);
     expect(adopted.conflicts).toEqual([]);
-    expect(publication(adopted.baseline, adopted.draft, "save")).toMatchObject({
-      familyPreferenceChanges: [{ ...flashFamily, mode: "exclude", reason: "B" }],
-      preferenceChanges: [{ profileId: flash.profileId, mode: "none", reason: "" }],
-    });
+    expect(publication(adopted.baseline, adopted.draft, "save").preferenceChanges).toEqual([
+      { profileId: flash.profileId, mode: "exclude", reason: "B" },
+    ]);
   });
 });
 
 describe("retained history with local removals", () => {
-  it("keeps a removed override and family default removed when the published rows come back", () => {
-    const baseline = { ...makeDraft(snapshot),
-      preferenceOverrides: [{ profileId: flash.profileId, mode: "pin" as const, reason: "old" }],
-      familyPreferences: [{ ...flashFamily, mode: "exclude" as const, reason: "old" }] };
-    const draft = { ...baseline, preferenceOverrides: [], familyPreferences: [] };
-    const refreshed = { ...snapshot, preferenceOverrides: baseline.preferenceOverrides,
-      familyPreferences: baseline.familyPreferences };
+  it("keeps a local preference removal when the published row returns", () => {
+    const baseline = { ...makeDraft(snapshot), preferences: [{ profileId: flash.profileId, mode: "pin" as const, reason: "old" }] };
+    const draft = { ...baseline, preferences: [] };
+    const refreshed = { ...snapshot, preferences: baseline.preferences };
     const adopted = rebaseDraft(draft, baseline, refreshed);
     expect(adopted.conflicts).toEqual([]);
-    expect(adopted.draft.preferenceOverrides).toEqual([]);
-    expect(adopted.draft.familyPreferences).toEqual([]);
-    expect(publication(adopted.baseline, adopted.draft, "save")).toMatchObject({
-      preferenceChanges: [{ profileId: flash.profileId, mode: null, reason: "" }],
-      familyPreferenceChanges: [{ ...flashFamily, mode: null, reason: "" }],
-    });
+    expect(adopted.draft.preferences).toEqual([]);
+    expect(publication(adopted.baseline, adopted.draft, "save").preferenceChanges).toEqual([
+      { profileId: flash.profileId, mode: null, reason: "" },
+    ]);
   });
 
   it("still fills identities neither the draft nor the baseline knows", () => {

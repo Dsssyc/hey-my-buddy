@@ -36,8 +36,8 @@ MEMBER_COLUMNS = (
     "created_at", "accepted_at", "revision", "updated_at", "governed_run_id",
     "run_state", "child_parent_run_id", "delegated_parent_run_id", "decision_id",
     "route_run_id", "root_run_id", "root_host_id", "root_owner_generation",
-    "source_host_id", "current_host_id", "project_path", "recorded_project_id",
-    "project_id", "project_repository_path", "project_identity_reason", "review_ready",
+    "source_host_id", "current_host_id", "project_path", "project_id",
+    "project_repository_path", "review_ready",
 )
 
 

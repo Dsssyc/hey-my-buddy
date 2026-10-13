@@ -8,7 +8,7 @@ import { formatShortDateTime } from "../i18n/format";
 import type { Snapshot } from "../types";
 import type { Editor } from "../use-editor";
 import { RolesView } from "./RolesView";
-import { defaultPreference, modelButton, selectModel } from "./page.testing";
+import { levelPreference, modelButton, selectModel } from "./page.testing";
 import {
   FLASH, FLASH_ID, GLM, GLM_ID, HIGH, HIGH_ID, MEDIUM, MEDIUM_ID, PENDING, PENDING_ID, SOL, SOL_ID,
   addButton, addDialog, addRouter, budgetOption, choice, choices, fixture, health, intervalInput, line, listed, modeOption, moveDown, moveUp,
@@ -516,13 +516,13 @@ describe("what leaves the roles view out of use", () => {
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("region", { name: "目录" });
     await selectModel(user, "claude / anthropic / claude-sonnet-5", "Claude Code");
-    await user.click(defaultPreference("优先"));
+    await user.click(within(levelPreference("medium")).getByRole("radio", { name: "优先" }));
     await user.click(saveButton());
     await screen.findByText("设置已保存");
     expect(f.published).toHaveLength(1);
     expect(f.published[0]).not.toHaveProperty("configuration");
-    expect(f.published[0].familyPreferenceChanges).toEqual([
-      { adapter: "claude", provider: "anthropic", model: "claude-sonnet-5", mode: "prefer", reason: "" },
+    expect(f.published[0].preferenceChanges).toEqual([
+      { profileId: MEDIUM_ID, mode: "prefer", reason: "" },
     ]);
   });
 

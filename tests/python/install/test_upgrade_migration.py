@@ -17,7 +17,6 @@ from hey_my_buddy.install import upgrade
 SETTING_COLUMNS = {
     "evaluation_profiles": ("profile_id", "enabled"),
     "evaluation_preferences": ("profile_id", "mode", "reason"),
-    "family_preferences": ("adapter", "provider", "model", "mode", "reason"),
     "family_annotations": ("adapter", "provider", "model", "text"),
     "model_concurrency": ("adapter", "provider", "model", "concurrency_limit"),
 }
@@ -42,7 +41,9 @@ class UpgradeMigrationTests(BoardTestCase):
 
     def test_verified_schema_18_stock_becomes_new_schema_with_only_settings(self):
         original_settings = {table: rows(self.state, table, columns)
-                             for table, columns in SETTING_COLUMNS.items()}
+                             for table, columns in SETTING_COLUMNS.items() if table != "evaluation_preferences"}
+        original_settings["evaluation_preferences"] = rows(
+            self.state, "effective_preferences", SETTING_COLUMNS["evaluation_preferences"])
         original_router = dict(rows(self.state, "meta", ("key", "value")))
         expected_router = {
             "routerProfileIds": json.loads(original_router["router_profile_ids"]),

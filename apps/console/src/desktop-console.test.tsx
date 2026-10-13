@@ -6,7 +6,7 @@ import type { ConsoleApi } from "./api";
 import { formatDateTime } from "./i18n/format";
 import type { Profile, Snapshot, Task, TaskQuery } from "./types";
 import type { Workflow } from "./workflow-types";
-import { catalogue, effortCell, level, levelSwitch, listed, modelButton, note, pane, selectModel } from "./buddies/page.testing";
+import { catalogue, effortCell, levelSwitch, listed, modelButton, note, pane, selectModel } from "./buddies/page.testing";
 
 const dsh = (model: string) => `dsh / deepseek-official / ${model}`;
 const GLM = "zcode / bigmodel-api / GLM-5.3";
@@ -52,7 +52,7 @@ function fixture(records: Task[] = []) {
 
     configuration: { routerProfileIds: [profiles[0].profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
-    preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], decisions: [],
+    preferences: [], familyAnnotations: [], decisions: [],
     modelConcurrency: [],
     tasks: { pendingCount },
     capabilities: { selection: false } };
@@ -83,7 +83,7 @@ describe("desktop console", () => {
   it("removes the header refresh and displays the actual snapshot verification time", async () => {
     const f = fixture();
     f.api.readVerifiedAt = () => Date.parse("2026-01-02T03:04:05Z");
-    const { container } = render(<App suppliedApi={f.api} />);
+    render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "还没有工作目标" });
     expect(screen.queryByRole("button", { name: "刷新工作台" })).toBeNull();
     // A read from an earlier day is written with its date; the top bar holds the only copy.
@@ -132,12 +132,12 @@ describe("desktop console", () => {
   it("uses the exact top navigation and presents the 22 native buddies as six rows of models", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    const { container } = render(<App suppliedApi={f.api} />);
+    render(<App suppliedApi={f.api} />);
     const navigation = await screen.findByRole("navigation", { name: "主要导航" });
     // A mark on a tab adds words for a screen reader after its name; the name itself is the first text.
     expect(within(navigation).getAllByRole("link").map(link => link.firstChild?.textContent)).toEqual(["任务", "Buddy", "设置"]);
     expect(navigation.closest("header")).not.toBeNull();
-    expect(container.querySelector(".sidebar")).toBeNull();
+    expect(document.querySelector(".sidebar")).toBeNull();
     expect(screen.getAllByRole("navigation")).toHaveLength(1);
     await user.click(within(navigation).getByRole("link", { name: /^Buddy/ }));
     await listed(4, 22);

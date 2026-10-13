@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiError, type ConsoleApi } from "./api";
 import type { FamilyAnnotation, Profile, Snapshot } from "./types";
-import { chip, defaultPreference, effortCell, level, levelSwitch, listed, modelRow, pane, selectModel } from "./buddies/page.testing";
+import { chip, effortCell, level, levelSwitch, listed, modelRow, pane, selectModel } from "./buddies/page.testing";
 
 /** One family with an enabled and a disabled effort, plus a second enabled family. */
 function catalog(): Profile[] {
@@ -39,7 +39,7 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
     profiles,
 
     familyAnnotations: [flashNote("原备注")],
-    preferences: [], familyPreferences: [], preferenceOverrides: [], decisions: [],
+    preferences: [], decisions: [],
 
     modelConcurrency: [
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 },
@@ -170,7 +170,7 @@ describe("direct editing and the save bar", () => {
     await user.type(note(), "，补充");
     await user.click(effortCell("high"));
     await user.click(levelSwitch("high"));
-    await user.click(defaultPreference("优先"));
+    await user.click(within(level("high")).getByRole("radio", { name: "优先" }));
     expect(within(saveBar()!).getByText("3 项未保存")).toBeTruthy();
     // The records page shows neither the save bar nor any draft state.
     await user.click(screen.getByRole("link", { name: "任务" }));

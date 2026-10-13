@@ -220,7 +220,7 @@ class DecisionCoordinator:
         clauses, values = DecisionCoordinator._candidate_bounds(
             required_capabilities=required_capabilities, constraints=constraints, coding_only=coding_only)
         clauses.append("COALESCE(f.mode,'')!='exclude'")
-        clauses.append("(NOT EXISTS(SELECT 1 FROM effective_preferences WHERE mode='pin') OR f.mode='pin')")
+        clauses.append("(NOT EXISTS(SELECT 1 FROM evaluation_preferences WHERE mode='pin') OR f.mode='pin')")
         values.append(MAX_DECISION_PROFILES + 1)
         from ..evaluation.native_observations import exhausted
         from .quota_routing import claim
@@ -228,7 +228,7 @@ class DecisionCoordinator:
         retried: list[str] = []
         health_available = {}
         for row in connection.execute(
-            "SELECT p.* FROM evaluation_profiles p LEFT JOIN effective_preferences f ON f.profile_id=p.profile_id "
+            "SELECT p.* FROM evaluation_profiles p LEFT JOIN evaluation_preferences f ON f.profile_id=p.profile_id "
             "WHERE " + " AND ".join(clauses) + " ORDER BY p.rowid LIMIT ?", values):
             from ..service.harness_health import read_health
             if row['adapter'] not in health_available:
@@ -259,12 +259,12 @@ class DecisionCoordinator:
             required_capabilities=required_capabilities, constraints=constraints)
         clauses.append("COALESCE(f.mode,'')='exclude'")
         from_sql = (" FROM evaluation_profiles p"
-                    " LEFT JOIN effective_preferences f ON f.profile_id=p.profile_id"
+                    " LEFT JOIN evaluation_preferences f ON f.profile_id=p.profile_id"
                     " WHERE " + " AND ".join(clauses))
         total = int(connection.execute("SELECT COUNT(*) AS count" + from_sql, values).fetchone()["count"])
         rows = connection.execute(
             "SELECT p.profile_id, p.adapter, p.provider, p.model, p.effort,"
-            " f.reason AS preference_reason, f.source AS preference_source" + from_sql +
+            " f.reason AS preference_reason" + from_sql +
             " ORDER BY p.rowid LIMIT ?",
             [*values, MAX_FROZEN_EXCLUSIONS],
         ).fetchall()
@@ -276,7 +276,6 @@ class DecisionCoordinator:
                 "model": row["model"],
                 "effort": row["effort"],
                 "reason": row["preference_reason"],
-                "source": row["preference_source"],
             }
             for row in rows
         ]
@@ -333,7 +332,7 @@ class DecisionCoordinator:
         profile_ids = [row["profile_id"] for row in profiles]
         preferences: list[dict] = []
         if include_preferences:
-            preferences = user_policy.effective_preferences(connection, profile_ids)
+            preferences = user_policy.preferences(connection, profile_ids)
         return {
             "profiles": [self._profile_input(row) for row in profiles],
             "preferences": preferences,
@@ -508,13 +507,13 @@ class DecisionCoordinator:
                         required_capabilities=request.get("requiredCapabilities", []),
                         constraints=request.get("constraints"), coding_only=True)
                     clauses.extend(["COALESCE(f.mode,'')!='exclude'",
-                                    "(NOT EXISTS(SELECT 1 FROM effective_preferences WHERE mode='pin') OR f.mode='pin')"])
+                                    "(NOT EXISTS(SELECT 1 FROM evaluation_preferences WHERE mode='pin') OR f.mode='pin')"])
                     from ..evaluation.native_observations import exhausted
                     from .quota_routing import claim
                     from ..service.harness_health import read_health
                     complete_candidates, complete_retries = [], []
                     for item in connection.execute(
-                        "SELECT p.* FROM evaluation_profiles p LEFT JOIN effective_preferences f ON f.profile_id=p.profile_id WHERE "
+                        "SELECT p.* FROM evaluation_profiles p LEFT JOIN evaluation_preferences f ON f.profile_id=p.profile_id WHERE "
                         + " AND ".join(clauses) + " ORDER BY p.rowid", values):
                         if not read_health(connection, item["adapter"])["available"]:
                             continue
@@ -1386,9 +1385,9 @@ class DecisionCoordinator:
         clauses = [clause for clause in clauses if clause !=
                    "EXISTS(SELECT 1 FROM harness_health h WHERE h.adapter=p.adapter AND h.status='ready')"]
         clauses.extend(["p.profile_id=?", "COALESCE(f.mode,'')!='exclude'",
-                        "(NOT EXISTS(SELECT 1 FROM effective_preferences WHERE mode='pin') OR f.mode='pin')"])
+                        "(NOT EXISTS(SELECT 1 FROM evaluation_preferences WHERE mode='pin') OR f.mode='pin')"])
         candidate = connection.execute(
-            "SELECT p.* FROM evaluation_profiles p LEFT JOIN effective_preferences f ON f.profile_id=p.profile_id WHERE "
+            "SELECT p.* FROM evaluation_profiles p LEFT JOIN evaluation_preferences f ON f.profile_id=p.profile_id WHERE "
             + " AND ".join(clauses), [*values, profile_id]).fetchone()
         selected = next(dict(item) for item in profiles if item["profileId"] == profile_id)
         from ..evaluation.native_observations import exhausted
@@ -1397,7 +1396,7 @@ class DecisionCoordinator:
                 or (exhausted(connection, candidate, now=now) is not None
                     and claim(connection, candidate, decision_id=row["decision_id"], consume=False, now=now) is None)):
             current = connection.execute("SELECT p.*,f.mode AS preference_mode FROM evaluation_profiles p"
-                                         " LEFT JOIN effective_preferences f ON f.profile_id=p.profile_id WHERE p.profile_id=?",
+                                         " LEFT JOIN evaluation_preferences f ON f.profile_id=p.profile_id WHERE p.profile_id=?",
                                          (profile_id,)).fetchone()
             problem = ("removed from the candidate table" if current is None else
                        "disabled" if not current["enabled"] else
@@ -1518,7 +1517,7 @@ class DecisionCoordinator:
         """
         profile_id = candidate["profile_id"]
         profiles = [self._profile_input(candidate)]
-        preferences = user_policy.effective_preferences(connection, [profile_id])
+        preferences = user_policy.preferences(connection, [profile_id])
         facts = selection_policy.policy_facts(
             profiles=profiles,
             prefer_profile_ids=[entry["profileId"] for entry in preferences if entry["mode"] == "prefer"],

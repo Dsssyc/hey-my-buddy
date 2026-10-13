@@ -1,12 +1,10 @@
 """User-owned field patches; never a source of model or catalog facts."""
 from __future__ import annotations
 
-import json
-
 from ...protocol import schemas
 from ...errors import BoardError
 
-PATCH_FIELDS = frozenset({'profileSettings', 'preferenceChanges', 'familyPreferenceChanges', 'familyAnnotationChanges',
+PATCH_FIELDS = frozenset({'profileSettings', 'preferenceChanges', 'familyAnnotationChanges',
                           'configuration', 'modelConcurrency'})
 FAMILY_FIELDS = ('adapter', 'provider', 'model')
 
@@ -75,33 +73,17 @@ def _reason(entry: dict) -> str:
 
 
 def policy_view(connection, profile_ids: list[str]) -> dict:
-    """User policy for these profiles and their families, as the console reads it.
-
-    ``preferences`` is the effective policy from the ``effective_preferences`` view;
-    ``familyPreferences`` and ``preferenceOverrides`` are what the user stored.
-    """
-    marks = ','.join('?' for _ in profile_ids) or 'NULL'
-    in_families = (f'EXISTS(SELECT 1 FROM evaluation_profiles p WHERE p.adapter=f.adapter AND p.provider=f.provider'
-                   f' AND p.model=f.model AND p.profile_id IN ({marks}))')
+    """User-owned buddy preferences and model annotations for the console."""
     return {
-        'familyPreferences': [
-            {'adapter': row['adapter'], 'provider': row['provider'], 'model': row['model'],
-             'mode': row['mode'], 'reason': row['reason']}
-            for row in connection.execute(f'SELECT * FROM family_preferences f WHERE {in_families}'
-                                          ' ORDER BY f.adapter, f.provider, f.model', profile_ids)],
-        'preferenceOverrides': [
-            {'profileId': row['profile_id'], 'mode': row['mode'], 'reason': row['reason']}
-            for row in connection.execute(f'SELECT * FROM evaluation_preferences WHERE profile_id IN ({marks})'
-                                          ' ORDER BY profile_id', profile_ids)],
-        'preferences': effective_preferences(connection, profile_ids),
+        'preferences': preferences(connection, profile_ids),
         'familyAnnotations': family_annotations(connection, profile_ids),
     }
 
 
-def effective_preferences(connection, profile_ids: list[str]) -> list[dict]:
+def preferences(connection, profile_ids: list[str]) -> list[dict]:
     marks = ','.join('?' for _ in profile_ids) or 'NULL'
-    return [{'profileId': row['profile_id'], 'mode': row['mode'], 'reason': row['reason'], 'source': row['source']}
-            for row in connection.execute(f'SELECT * FROM effective_preferences WHERE profile_id IN ({marks})'
+    return [{'profileId': row['profile_id'], 'mode': row['mode'], 'reason': row['reason']}
+            for row in connection.execute(f'SELECT * FROM evaluation_preferences WHERE profile_id IN ({marks})'
                                           ' ORDER BY profile_id', profile_ids)]
 
 
@@ -139,7 +121,6 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
         raise BoardError('INVALID_ARGUMENT', 'A user publication must contain a field patch')
     settings = _changes(params, 'profileSettings', {'profileId', 'enabled'})
     preferences = _changes(params, 'preferenceChanges', {'profileId', 'mode', 'reason'})
-    family_preferences = _family_changes(params, 'familyPreferenceChanges', {*FAMILY_FIELDS, 'mode', 'reason'})
     annotations = _family_changes(params, 'familyAnnotationChanges', {*FAMILY_FIELDS, 'text'})
     model_limits = _model_concurrency_changes(params)
     enabled_families: list[tuple[str, str, str]] = []
@@ -176,28 +157,14 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
             family,
         ).fetchone() is not None:
             enabled_families.append(family)
-    families = {}
-    for entry in family_preferences + annotations:
+    for entry in annotations:
         family = _family(entry)
-        if family not in families:
-            members = connection.execute("SELECT (p.available AND h.status='ready') AS available,p.enabled FROM evaluation_profiles p LEFT JOIN harness_health h ON h.adapter=p.adapter WHERE p.adapter=? AND p.provider=? AND p.model=?", family).fetchall()
-            if not members:
-                raise BoardError('NOT_FOUND', 'Unknown model family')
-            families[family] = members
-    for entry in family_preferences:
+        if connection.execute('SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? LIMIT 1',
+                              family).fetchone() is None:
+            raise BoardError('NOT_FOUND', 'Unknown model family')
+    for entry in preferences:
         if 'mode' not in entry or entry['mode'] not in (None, 'pin', 'prefer', 'exclude'):
             raise BoardError('INVALID_ARGUMENT', 'mode must be pin, prefer, exclude or null')
-        family, mode, reason = _family(entry), entry['mode'], _reason(entry)
-        previous = connection.execute('SELECT mode FROM family_preferences WHERE adapter=? AND provider=? AND model=?', family).fetchone()
-        if mode == 'pin' and (previous is None or previous['mode'] != 'pin') and not any(row['available'] and row['enabled'] for row in families[family]):
-            raise BoardError('CONFIGURATION_UNAVAILABLE', 'A new pin requires an available enabled configuration', family=list(family))
-        if mode is None:
-            connection.execute('DELETE FROM family_preferences WHERE adapter=? AND provider=? AND model=?', family)
-        else:
-            connection.execute('INSERT INTO family_preferences(adapter,provider,model,mode,reason) VALUES(?,?,?,?,?) ON CONFLICT(adapter,provider,model) DO UPDATE SET mode=excluded.mode,reason=excluded.reason', (*family, mode, reason))
-    for entry in preferences:
-        if 'mode' not in entry or entry['mode'] not in (None, 'pin', 'prefer', 'exclude', 'none'):
-            raise BoardError('INVALID_ARGUMENT', 'mode must be pin, prefer, exclude, none or null')
         profile_id, mode, reason = entry['profileId'], entry['mode'], _reason(entry)
         previous = connection.execute('SELECT mode FROM evaluation_preferences WHERE profile_id=?', (profile_id,)).fetchone()
         if mode == 'pin' and (previous is None or previous['mode'] != 'pin') and not (profiles[profile_id]['available'] and profiles[profile_id]['enabled']):
@@ -265,7 +232,6 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
     counts = {
         'profileSettings': len(settings),
         'preferenceChanges': len(preferences),
-        'familyPreferenceChanges': len(family_preferences),
         'familyAnnotationChanges': len(annotations),
         'modelConcurrency': len(model_limits),
         'provided': sorted(provided),

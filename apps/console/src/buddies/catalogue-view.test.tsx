@@ -5,12 +5,12 @@ import { App } from "../App";
 import { ApiError, type ConsoleApi } from "../api";
 import type { HarnessHealth, Profile, Snapshot } from "../types";
 import {
-  defaultPreference, effortCell, foldHandle, levelPreference, levelSwitch, listed, modelButton, modelRow, catalogue, note, pane, search, selectModel,
+  effortCell, foldHandle, level, levelPreference, levelSwitch, listed, modelButton, modelRow, catalogue, note, pane, search, selectModel,
 } from "./page.testing";
 
 /**
  * The parts of the models view that the other files do not reach: its empty
- * states, which row the side column follows, the model's default preference,
+ * states, which row the side column follows, a buddy's own preference,
  * what a session without write access leaves usable, and what the view says
  * while it reads unavailable buddies or when a read or a discovery fails.
  */
@@ -33,7 +33,7 @@ function snapshot(extra: Partial<Snapshot> = {}): Snapshot & { harnesses: Harnes
 
     configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     profiles: [profile(sonnet, "medium", { enabled: true }), profile(sonnet, "high"), profile(sol, "medium"), profile(sol, "low")],
-    preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], decisions: [],
+    preferences: [], familyAnnotations: [], decisions: [],
  modelConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
     tasks: { pendingCount: 0 }, capabilities: {},
     harnesses: [
@@ -69,8 +69,8 @@ function open(f: ReturnType<typeof fixture>) {
 }
 
 /** One page of retained rows, as `model_profiles` returns it. */
-function page(profiles: Profile[], state: Snapshot) {
-  return { profiles, preferences: [], preferenceOverrides: [], familyPreferences: [], familyAnnotations: [],
+function page(profiles: Profile[], _state: Snapshot) {
+  return { profiles, preferences: [], familyAnnotations: [],
  modelConcurrency: [], nextCursor: null };
 }
 
@@ -179,53 +179,26 @@ describe("the selected model", () => {
   });
 });
 
-describe("a model's default preference", () => {
-  it("offers pinning only to a model with a buddy that is available and on, and says so on the choice", async () => {
+describe("a buddy's own preference", () => {
+  it("keeps the model row free of preference controls and retains a buddy control", async () => {
     const f = fixture();
     const user = userEvent.setup();
     open(f);
     await listed(1, 4);
     await selectModel(user, SOL, "Codex");
+    expect(within(pane()).queryByRole("radiogroup", { name: "默认偏好" })).toBeNull();
     await user.click(effortCell("medium"));
-    expect(defaultPreference("不设").getAttribute("aria-checked")).toBe("true");
-    // Each choice explains itself to a pointer, to the keyboard and to a screen reader.
-    expect(defaultPreference("优先").getAttribute("aria-description")).toBe("路由时先考虑");
-    expect(defaultPreference("排除").getAttribute("aria-description")).toBe("不参与路由");
-    const pin = defaultPreference("固定");
+    expect(within(levelPreference("medium")).getByRole("radio", { name: "不设" })).toBeTruthy();
+    const pin = within(levelPreference("medium")).getByRole("radio", { name: "固定" });
     expect(pin.getAttribute("aria-disabled")).toBe("true");
-    expect(pin.getAttribute("aria-description")).toBe("这个模型没有可用并且已启用的 buddy，不能固定");
-    await user.click(pin);
-    expect(defaultPreference("不设").getAttribute("aria-checked")).toBe("true");
-    expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
-    // Turning a buddy on makes the model pinnable.
     await user.click(levelSwitch("medium"));
-    expect(defaultPreference("固定").hasAttribute("aria-disabled")).toBe(false);
-    expect(defaultPreference("固定").getAttribute("aria-description")).toBe("路由时只在固定的 buddy 里选");
-    await user.click(defaultPreference("固定"));
-    expect(defaultPreference("固定").getAttribute("aria-checked")).toBe("true");
-  });
-
-  it("takes a reason once a default is set and publishes both as one patch of the model", async () => {
-    const f = fixture();
-    const user = userEvent.setup();
-    open(f);
-    await listed(1, 4);
-    await selectModel(user, SOL, "Codex");
-    await user.click(effortCell("medium"));
-    expect(within(pane()).queryByRole("textbox", { name: "默认偏好的理由" })).toBeNull();
-    await user.click(defaultPreference("优先"));
-    await user.type(within(pane()).getByRole("textbox", { name: "默认偏好的理由" }), "机械改动");
-    // The default shows on every buddy that follows it, and the field is marked until saved.
-    expect(defaultPreference("优先").getAttribute("aria-checked")).toBe("true");
-    expect(within(pane()).getAllByRole("img", { name: "未保存" }).length).toBeGreaterThan(0);
-    expect(within(levelPreference("medium")).getByRole("radio", { name: "跟随模型" }).getAttribute("aria-checked")).toBe("true");
+    expect(pin.hasAttribute("aria-disabled")).toBe(false);
+    await user.click(within(levelPreference("medium")).getByRole("radio", { name: "优先" }));
+    await user.type(within(level("medium")).getByRole("textbox", { name: "medium 的偏好理由" }), "机械改动");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
-    expect(f.published[0].familyPreferenceChanges).toEqual([{ ...sol, mode: "prefer", reason: "机械改动" }]);
-    expect(f.published[0]).not.toHaveProperty("preferenceChanges");
-    // Back to 不设 removes the reason field with the default.
-    await user.click(defaultPreference("不设"));
-    expect(within(pane()).queryByRole("textbox", { name: "默认偏好的理由" })).toBeNull();
+    expect(f.published[0].preferenceChanges).toEqual([{ profileId: "codex:openai:gpt-6-sol:medium", mode: "prefer", reason: "机械改动" }]);
+    expect(f.published[0]).not.toHaveProperty("familyPreferenceChanges");
   });
 });
 
@@ -394,7 +367,7 @@ describe("inherited preference changes", () => {
     open(f);
     await listed(1, 4);
     await selectModel(user, SONNET, "Claude Code");
-    await user.click(defaultPreference("优先"));
+    await user.click(within(levelPreference("medium")).getByRole("radio", { name: "优先" }));
     expect(effortCell("medium").textContent).toContain("优先");
     expect(within(effortCell("medium")).getByRole("img", { name: "未保存" })).toBeTruthy();
     await user.click(modelButton(SONNET));

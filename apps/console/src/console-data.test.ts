@@ -8,7 +8,7 @@ import {
   taskHost,
   taskProject,
 } from "./console-data";
-import type { Preference, Profile, Snapshot, Task } from "./types";
+import type { Preference, Profile, Task } from "./types";
 
 const profile = (profileId: string, adapter: string, provider: string, effort: string): Profile => ({
   profileId, adapter, provider, model: "shared-model", effort, label: "Shared model", available: true,
@@ -54,6 +54,16 @@ describe("console grouping and recorded attribution", () => {
     const allRetired = modelFamilies([retiredEnabled, { ...availableDisabled, available: false }])[0];
     expect(preferredVariant(allRetired, [{ profileId: "available", mode: "prefer", reason: "历史" } as Preference]).profileId)
       .toBe("retired");
+  });
+
+  it("selects the preferred buddy from effort order without changing that order", () => {
+    const family = modelFamilies([
+      profile("high", "codex", "openai", "high"),
+      profile("low", "codex", "openai", "low"),
+    ])[0];
+    expect(family.profiles.map(row => row.profileId)).toEqual(["low", "high"]);
+    expect(preferredVariant(family, [{ profileId: "high", mode: "prefer", reason: "coding" }]).profileId).toBe("high");
+    expect(preferredVariant(family, []).profileId).toBe("low");
   });
 
   it("uses backend source metadata and never guesses a project or Host from execution cwd or owner", () => {

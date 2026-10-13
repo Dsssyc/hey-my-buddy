@@ -40,11 +40,8 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
   const profiles = catalog();
   const decisionId = options.staleDecision ? retiredMax : flashOff;
   const familyAnnotations: FamilyAnnotation[] = [{ ...retiredFamily, text: "用户保留的历史意见", updatedAt: null }];
-  const preferenceOverrides = options.stalePin
-    ? [{ profileId: retiredMax, mode: "pin" as const, reason: "以前固定" }]
-    : [];
   const preferences: Preference[] = options.stalePin
-    ? [{ profileId: retiredMax, mode: "pin" as const, reason: "以前固定", source: "override" as const }]
+    ? [{ profileId: retiredMax, mode: "pin" as const, reason: "以前固定" }]
     : [];
 
   const pages = (params: Record<string, any>): ProfilePage => {
@@ -60,8 +57,6 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
 
       familyAnnotations: ids.has(retiredMax) || ids.has(retiredLow) ? familyAnnotations : [],
       preferences: preferences.filter(p => ids.has(p.profileId)),
-      preferenceOverrides: preferenceOverrides.filter(p => ids.has(p.profileId)),
-      familyPreferences: [],
 
       modelConcurrency: [],
       nextCursor: ordered.length > slice.length ? slice[slice.length - 1].profileId : null,
@@ -80,9 +75,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
 
     familyAnnotations: live.some(p => p.profileId === retiredMax || p.profileId === retiredLow) ? familyAnnotations : [],
     preferences: preferences.filter(p => live.some(x => x.profileId === p.profileId)),
-    preferenceOverrides: preferenceOverrides.filter(p => live.some(x => x.profileId === p.profileId)),
-    familyPreferences: [],
- decisions: [],
+     decisions: [],
 
     modelConcurrency: [],
     tasks: { pendingCount: 0 },
@@ -286,7 +279,7 @@ describe("unavailable buddies", () => {
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await openRetired(user);
-    await screen.findByText(/固定选择指向.*请启用或改回/);
+    await screen.findByText(/固定选择指向.*请启用或改为/);
     // The existing pin stays a reachable value on its own level; only its reason changes.
     expect(within(levelPreference("max")).getByRole("radio", { name: "固定" }).getAttribute("aria-checked")).toBe("true");
     const reason = within(level("max")).getByRole("textbox", { name: "max 的偏好理由" });
@@ -329,7 +322,7 @@ describe("unavailable buddies", () => {
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await openRetired(user);
-    await choosePreference(user, "max", "跟随模型");
+    await choosePreference(user, "max", "不设");
     // A same-revision retained page still contains the published pin. Reading it
     // (here a search-filter reload) must not silently re-add the removed row.
     await user.type(search(), "retired");
@@ -392,7 +385,7 @@ describe("stale settings and unrelated saves", () => {
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await openRetired(user);
-    await screen.findByText(/固定选择指向.*请启用或改回/);
+    await screen.findByText(/固定选择指向.*请启用或改为/);
     expect(chip(RETIRED, "max").textContent).toBe("max固定");
     await selectModel(user, FLASH, "DSH");
     await user.type(note(), "，补充说明");

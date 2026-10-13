@@ -78,7 +78,7 @@ export function snapshot({ routers = [], configuration = {}, routingHealth, canW
       : { routerProfileIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", ...configuration },
     configurationError: configuration === null ? { code: "router-settings-upgrade-required", message: "请先升级设置",} : null,
     profiles: profiles(),
-    preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [],
+    preferences: [], familyAnnotations: [],
  decisions: [],
     modelConcurrency: [],
     tasks: { pendingCount: 0 },

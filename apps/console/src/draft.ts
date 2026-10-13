@@ -1,14 +1,11 @@
 import type {
   Draft,
   FamilyAnnotation,
-  FamilyPreference,
   ModelConcurrencyEntry,
   ModelConcurrencySetting,
   ModelFamily,
-  OverrideMode,
   Preference,
   PreferenceMode,
-  PreferenceOverride,
   Profile,
   Configuration,
   Snapshot,
@@ -18,10 +15,7 @@ import { concurrencyLimit, familyKey } from "./console-data";
 /** Retained identity rows the current snapshot no longer lists. */
 export type HistoryEntries = {
   profiles?: Profile[];
-  /** Effective preferences of the retained rows (read-only). */
   preferences?: Preference[];
-  preferenceOverrides?: PreferenceOverride[];
-  familyPreferences?: FamilyPreference[];
   familyAnnotations?: FamilyAnnotation[];
   modelConcurrency?: ModelConcurrencyEntry[];
 };
@@ -32,8 +26,7 @@ const familyOf = (row: ModelFamily): ModelFamily =>
 export function makeDraft(snapshot: Snapshot): Draft {
   return structuredClone({
     profiles: snapshot.profiles,
-    familyPreferences: snapshot.familyPreferences ?? [],
-    preferenceOverrides: snapshot.preferenceOverrides ?? [],
+    preferences: snapshot.preferences,
     familyAnnotations: snapshot.familyAnnotations ?? [],
     configuration: snapshot.configuration,
     // The draft carries the user limit settings only; occupancy is observation
@@ -74,59 +67,11 @@ export function familyAnnotationText(
   return source.familyAnnotations.find((a) => familyKey(a) === key)?.text ?? "";
 }
 
-/** Family default preference; an empty mode clears the default. */
-export function setFamilyPreference(
-  draft: Draft,
-  family: ModelFamily,
-  mode: PreferenceMode | "",
-  reason = "",
-): Draft {
-  const key = familyKey(family);
-  const familyPreferences = draft.familyPreferences.filter((p) => familyKey(p) !== key);
-  if (mode) familyPreferences.push({ ...familyOf(family), mode, reason });
-  return { ...draft, familyPreferences };
-}
-
-/**
- * One effort's override. An empty mode deletes the override so the effort
- * follows its family default again; `none` is an explicit "no preference".
- */
-export function setPreferenceOverride(
-  draft: Draft,
-  profileId: string,
-  mode: OverrideMode | "",
-  reason = "",
-): Draft {
-  const preferenceOverrides = draft.preferenceOverrides.filter((p) => p.profileId !== profileId);
-  if (mode) preferenceOverrides.push({ profileId, mode, reason });
-  return { ...draft, preferenceOverrides };
-}
-
-/**
- * Effective preferences, mirroring the schema 13 `effective_preferences` view:
- * an override wins (a `none` override yields no row), otherwise the family
- * default applies. Only the listed profiles get a row.
- */
-export function effectivePreferences(source: {
-  profiles: Profile[];
-  familyPreferences: FamilyPreference[];
-  preferenceOverrides: PreferenceOverride[];
-}): Preference[] {
-  const overrides = new Map(source.preferenceOverrides.map((p) => [p.profileId, p]));
-  const families = new Map(source.familyPreferences.map((p) => [familyKey(p), p]));
-  const rows: Preference[] = [];
-  for (const profile of source.profiles) {
-    const override = overrides.get(profile.profileId);
-    if (override) {
-      if (override.mode !== "none") {
-        rows.push({ profileId: profile.profileId, mode: override.mode, reason: override.reason, source: "override" });
-      }
-      continue;
-    }
-    const family = families.get(familyKey(profile));
-    if (family) rows.push({ profileId: profile.profileId, mode: family.mode, reason: family.reason, source: "family" });
-  }
-  return rows;
+/** An empty mode clears this buddy's preference. */
+export function setPreference(draft: Draft, profileId: string, mode: PreferenceMode | "", reason = ""): Draft {
+  const preferences = draft.preferences.filter(p => p.profileId !== profileId);
+  if (mode) preferences.push({ profileId, mode, reason });
+  return { ...draft, preferences };
 }
 
 function addMissing<T extends { profileId: string }>(current: T[], extra: T[] | undefined): T[] {
@@ -146,7 +91,7 @@ function addMissingFamilies<T extends ModelFamily>(
   return added.length ? [...current, ...added] : current;
 }
 
-type UserRows = Pick<Draft, "profiles" | "familyPreferences" | "preferenceOverrides" | "familyAnnotations">
+type UserRows = Pick<Draft, "profiles" | "preferences" | "familyAnnotations">
   & { modelConcurrency?: ModelConcurrencySetting[] };
 
 /**
@@ -166,15 +111,14 @@ export function withHistory<T extends UserRows>(
   return {
     ...source,
     profiles: addMissing(source.profiles, entries.profiles),
-    preferenceOverrides: addMissing(source.preferenceOverrides, entries.preferenceOverrides),
-    familyPreferences: addMissingFamilies(source.familyPreferences, entries.familyPreferences),
+    preferences: addMissing(source.preferences, entries.preferences),
     familyAnnotations: addMissingFamilies(source.familyAnnotations, entries.familyAnnotations),
     modelConcurrency: addMissingFamilies(source.modelConcurrency ?? [], retainedSettings),
   };
 }
 
 /** Full console view: human draft (or snapshot) plus retained history rows. */
-export function historyView<T extends UserRows & { preferences: Preference[] }>(
+export function historyView<T extends UserRows>(
   source: T,
   entries: HistoryEntries | null | undefined,
 ): T {
@@ -182,7 +126,6 @@ export function historyView<T extends UserRows & { preferences: Preference[] }>(
   const base = withHistory(source, entries);
   // Retained family entries keep their recorded occupancy for the read-only view.
   return { ...base,
-    preferences: addMissing(source.preferences, entries.preferences),
     modelConcurrency: addMissingFamilies(source.modelConcurrency ?? [], entries.modelConcurrency) };
 }
 
@@ -224,24 +167,14 @@ export function modelConcurrencyChanges(
 
 /** The only fields a human may publish; program-owned profile/catalog fields stay out. */
 export type ProfileSettingPatch = { profileId: string; enabled: boolean };
-/** Family default patch; `mode: null` clears the default. */
-export type FamilyPreferenceChangePatch = ModelFamily & {
-  mode: PreferenceMode | null;
-  reason: string;
-};
-/** Effort override patch; `mode: null` deletes the override (follow the family). */
-export type PreferenceChangePatch = {
-  profileId: string;
-  mode: OverrideMode | null;
-  reason: string;
-};
+/** One buddy's preference; `mode: null` clears it. */
+export type PreferenceChangePatch = { profileId: string; mode: PreferenceMode | null; reason: string };
 /** Family note patch; `text: ""` clears the note. */
 export type FamilyAnnotationChangePatch = ModelFamily & { text: string };
 
 export type UserPolicyPublication = {
   commandId: string;
   profileSettings?: ProfileSettingPatch[];
-  familyPreferenceChanges?: FamilyPreferenceChangePatch[];
   preferenceChanges?: PreferenceChangePatch[];
   familyAnnotationChanges?: FamilyAnnotationChangePatch[];
   configuration?: Partial<Pick<Configuration,
@@ -252,7 +185,7 @@ export type UserPolicyPublication = {
 
 type UserEditable = Pick<
   Draft,
-  "profiles" | "familyPreferences" | "preferenceOverrides" | "familyAnnotations" | "configuration" | "modelConcurrency"
+  "profiles" | "preferences" | "familyAnnotations" | "configuration" | "modelConcurrency"
 >;
 
 const byProfileId = (a: { profileId: string }, b: { profileId: string }) =>
@@ -272,51 +205,16 @@ export function profileSettings(
     .sort(byProfileId);
 }
 
-/**
- * Family default patches. A removed default is `mode: null`; a changed reason
- * rides along with its mode, and a trailing empty reason is a deliberate clear.
- */
-export function familyPreferenceChanges(
-  baseline: Draft,
-  draft: Draft,
-): FamilyPreferenceChangePatch[] {
-  const before = new Map(baseline.familyPreferences.map((p) => [familyKey(p), p]));
-  const after = new Map(draft.familyPreferences.map((p) => [familyKey(p), p]));
-  const changed: FamilyPreferenceChangePatch[] = [];
-  for (const key of new Set([...before.keys(), ...after.keys()])) {
-    const previous = before.get(key);
-    const next = after.get(key);
-    if (previous?.mode === next?.mode && (previous?.reason ?? "") === (next?.reason ?? "")) continue;
-    const family = familyOf((next ?? previous)!);
-    changed.push(next
-      ? { ...family, mode: next.mode, reason: next.reason }
-      : { ...family, mode: null, reason: "" });
-  }
-  return changed.sort(byFamily);
-}
-
-/**
- * Effort override patches. A deleted override is `mode: null` (the effort
- * follows its family again); `none` is an explicit no-preference override.
- */
-export function preferenceChanges(
-  baseline: Draft,
-  draft: Draft,
-): PreferenceChangePatch[] {
-  const before = new Map(baseline.preferenceOverrides.map((p) => [p.profileId, p]));
-  const after = new Map(draft.preferenceOverrides.map((p) => [p.profileId, p]));
+/** Changes to each buddy's preference. */
+export function preferenceChanges(baseline: Draft, draft: Draft): PreferenceChangePatch[] {
+  const before = new Map(baseline.preferences.map(p => [p.profileId, p]));
+  const after = new Map(draft.preferences.map(p => [p.profileId, p]));
   const changed: PreferenceChangePatch[] = [];
   for (const profileId of new Set([...before.keys(), ...after.keys()])) {
     const previous = before.get(profileId);
     const next = after.get(profileId);
-    if (previous?.mode === next?.mode && (previous?.reason ?? "") === (next?.reason ?? "")) {
-      continue;
-    }
-    changed.push(
-      next
-        ? { profileId, mode: next.mode, reason: next.reason }
-        : { profileId, mode: null, reason: "" },
-    );
+    if (previous?.mode === next?.mode && (previous?.reason ?? "") === (next?.reason ?? "")) continue;
+    changed.push(next ? { profileId, mode: next.mode, reason: next.reason } : { profileId, mode: null, reason: "" });
   }
   return changed.sort(byProfileId);
 }
@@ -371,15 +269,13 @@ export function publication(
   commandId: string,
 ): UserPolicyPublication {
   const settings = profileSettings(baseline, draft);
-  const families = familyPreferenceChanges(baseline, draft);
-  const overrides = preferenceChanges(baseline, draft);
+  const preferences = preferenceChanges(baseline, draft);
   const notes = familyAnnotationChanges(baseline, draft);
   const concurrency = modelConcurrencyChanges(baseline, draft);
   return {
     commandId,
     ...(settings.length ? { profileSettings: settings } : {}),
-    ...(families.length ? { familyPreferenceChanges: families } : {}),
-    ...(overrides.length ? { preferenceChanges: overrides } : {}),
+    ...(preferences.length ? { preferenceChanges: preferences } : {}),
     ...(notes.length ? { familyAnnotationChanges: notes } : {}),
     ...(concurrency.length ? { modelConcurrency: concurrency } : {}),
     ...(configurationChanged(baseline, draft)
@@ -407,12 +303,7 @@ function fingerprint(draft: UserEditable): string {
     profiles: [...draft.profiles]
       .map(({ profileId, enabled }) => ({ profileId, enabled }))
       .sort(byProfileId),
-    familyPreferences: [...draft.familyPreferences]
-      .map((p) => ({ key: familyKey(p), mode: p.mode, reason: p.reason }))
-      .sort((a, b) => a.key.localeCompare(b.key)),
-    preferenceOverrides: [...draft.preferenceOverrides]
-      .map(({ profileId, mode, reason }) => ({ profileId, mode, reason }))
-      .sort(byProfileId),
+    preferences: [...draft.preferences].map(({ profileId, mode, reason }) => ({ profileId, mode, reason })).sort(byProfileId),
     familyAnnotations: draft.familyAnnotations
       .filter((a) => a.text)
       .map((a) => ({ key: familyKey(a), text: a.text }))
@@ -445,7 +336,6 @@ export function changeCount(baseline: Draft, draft: Draft): number {
     (entry) => !Object.is(limits.get(familyKey(entry)), entry.limit),
   ).length;
   return profileSettings(baseline, draft).length
-    + familyPreferenceChanges(baseline, draft).length
     + preferenceChanges(baseline, draft).length
     + familyAnnotationChanges(baseline, draft).length
     + concurrency
@@ -462,7 +352,7 @@ export function changeCount(baseline: Draft, draft: Draft): number {
 export type RebaseConflictKind = "changed" | "unread";
 export type RebaseConflict = {
   kind: RebaseConflictKind;
-  field: "enabled" | "familyPreference" | "preference" | "familyAnnotation" | "configuration" | "defaultRoutingMode" | "routingBudget" | "routerRetryIntervalSeconds" | "modelConcurrency";
+  field: "enabled" | "preference" | "familyAnnotation" | "configuration" | "defaultRoutingMode" | "routingBudget" | "routerRetryIntervalSeconds" | "modelConcurrency";
   /** The profile id, or the `adapter/provider/model` of a family-level field. */
   profileId: string;
   message: string;
@@ -476,7 +366,6 @@ export type RebaseOutcome = {
 
 const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
   enabled: "启用状态",
-  familyPreference: "家族偏好",
   preference: "推理强度偏好",
   familyAnnotation: "家族备注",
   configuration: "Router 列表",
@@ -493,7 +382,7 @@ function conflictSubject(field: RebaseConflict["field"], profileId: string): str
   if (field === "defaultRoutingMode") return "默认路由模式";
   if (field === "routingBudget") return "路由预算";
   if (field === "routerRetryIntervalSeconds") return "重试间隔";
-  if (field === "familyPreference" || field === "familyAnnotation" || field === "modelConcurrency") {
+  if (field === "familyAnnotation" || field === "modelConcurrency") {
     return `模型家族 ${profileId} 的${FIELD_NAMES[field]}`;
   }
   return `配置 ${profileId} 的${FIELD_NAMES[field]}`;
@@ -553,41 +442,22 @@ export function rebaseDraft(
     enabledOverrides.set(setting.profileId, setting.enabled);
   }
 
-  // Family defaults: mode and reason are separate fields, so another writer's
-  // reason survives a mode change of ours.
-  const familyMerges = new Map<string, FamilyPreference>();
-  const familyRemovals = new Set<string>();
-  for (const change of familyPreferenceChanges(baseline, draft)) {
-    const key = familyKey(change);
-    if (!freshFamilies.has(key)) {
-      fail("unread", "familyPreference", familyText(change));
-      continue;
-    }
-    const oldRow = baseline.familyPreferences.find((p) => familyKey(p) === key);
-    const draftRow = draft.familyPreferences.find((p) => familyKey(p) === key);
-    const freshRow = nextBaseline.familyPreferences.find((p) => familyKey(p) === key);
-    const mode = merge(oldRow?.mode, draftRow?.mode, freshRow?.mode);
-    const reason = merge(oldRow?.reason ?? "", draftRow?.reason ?? "", freshRow?.reason ?? "");
-    if (mode.value === undefined) familyRemovals.add(key);
-    else familyMerges.set(key, { ...familyOf(change), mode: mode.value, reason: reason.value });
-  }
-
-  // Effort overrides, merged the same way per profile.
-  const overrideMerges = new Map<string, PreferenceOverride>();
-  const overrideRemovals = new Set<string>();
+  // Buddy preferences: mode and reason are merged per profile.
+  const preferenceMerges = new Map<string, Preference>();
+  const preferenceRemovals = new Set<string>();
   for (const change of preferenceChanges(baseline, draft)) {
     const profileId = change.profileId;
     if (!freshProfiles.has(profileId)) {
       fail("unread", "preference", profileId);
       continue;
     }
-    const oldRow = baseline.preferenceOverrides.find((p) => p.profileId === profileId);
-    const draftRow = draft.preferenceOverrides.find((p) => p.profileId === profileId);
-    const freshRow = nextBaseline.preferenceOverrides.find((p) => p.profileId === profileId);
+    const oldRow = baseline.preferences.find(p => p.profileId === profileId);
+    const draftRow = draft.preferences.find(p => p.profileId === profileId);
+    const freshRow = nextBaseline.preferences.find(p => p.profileId === profileId);
     const mode = merge(oldRow?.mode, draftRow?.mode, freshRow?.mode);
     const reason = merge(oldRow?.reason ?? "", draftRow?.reason ?? "", freshRow?.reason ?? "");
-    if (mode.value === undefined) overrideRemovals.add(profileId);
-    else overrideMerges.set(profileId, { profileId, mode: mode.value, reason: reason.value });
+    if (mode.value === undefined) preferenceRemovals.add(profileId);
+    else preferenceMerges.set(profileId, { profileId, mode: mode.value, reason: reason.value });
   }
 
   // Family notes: replay the local text over the refreshed value.
@@ -636,14 +506,8 @@ export function rebaseDraft(
 
   if (conflicts.length) return { draft, baseline, conflicts };
 
-  const familyPreferences = nextBaseline.familyPreferences.filter(
-    (p) => !familyMerges.has(familyKey(p)) && !familyRemovals.has(familyKey(p)),
-  );
-  for (const preference of familyMerges.values()) familyPreferences.push(preference);
-  const preferenceOverrides = nextBaseline.preferenceOverrides.filter(
-    (p) => !overrideMerges.has(p.profileId) && !overrideRemovals.has(p.profileId),
-  );
-  for (const override of overrideMerges.values()) preferenceOverrides.push(override);
+  const preferences = nextBaseline.preferences.filter(p => !preferenceMerges.has(p.profileId) && !preferenceRemovals.has(p.profileId));
+  for (const preference of preferenceMerges.values()) preferences.push(preference);
   const familyAnnotations = nextBaseline.familyAnnotations.filter(
     (annotation) => !mergedNotes.has(familyKey(annotation)),
   );
@@ -660,8 +524,7 @@ export function rebaseDraft(
           ? { ...profile, enabled: enabledOverrides.get(profile.profileId)! }
           : profile,
       ),
-      familyPreferences,
-      preferenceOverrides,
+      preferences,
       familyAnnotations,
       configuration: mergedRouting,
       modelConcurrency: nextBaseline.modelConcurrency.map((entry) =>

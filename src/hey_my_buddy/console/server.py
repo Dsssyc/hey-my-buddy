@@ -418,21 +418,19 @@ class Console:
             self._authenticate(session)
             if not isinstance(params, dict):
                 raise BoardError("INVALID_ARGUMENT", "params must be an object")
-            allowed = {"requireLogin", "expectedRevision"} if operation == "console_access_set" else {"sessionId"} if operation == "console_session_revoke" else set()
+            allowed = {"requireLogin"} if operation == "console_access_set" else {"sessionId"} if operation == "console_session_revoke" else set()
             if operation not in ACCESS_OPERATIONS or set(params) != allowed:
                 raise BoardError("INVALID_ARGUMENT", "Invalid console access fields")
             sessions = self._sessions
             if operation == "console_access_set":
-                required, revision = params["requireLogin"], params["expectedRevision"]
-                if type(required) is not bool or type(revision) is not int or revision < 0:
-                    raise BoardError("INVALID_ARGUMENT", "requireLogin must be boolean and expectedRevision a nonnegative integer")
-                if revision != self.access_revision:
-                    raise BoardError("REVISION_CONFLICT", "Console access settings changed; refresh before saving")
+                required = params["requireLogin"]
+                if type(required) is not bool:
+                    raise BoardError("INVALID_ARGUMENT", "requireLogin must be boolean")
                 if required == self.require_login:
                     return self.access_view(session), session
                 from ..install.launcher import write_private
                 previous = dict(sessions.sessions)
-                settings = {**self._settings, "port": self.port, "requireLogin": required, "revision": revision + 1}
+                settings = {**self._settings, "port": self.port, "requireLogin": required, "revision": self.access_revision + 1}
                 try:
                     revoked = sessions.revoke()
                     replacement = sessions.create() if required else self._new_local_session()
@@ -447,7 +445,7 @@ class Console:
                     self.service.revoke_console_authority(self._local_session.cookie)
                 sessions.entries.clear()
                 self._settings = settings
-                self.require_login, self.access_revision = required, revision + 1
+                self.require_login, self.access_revision = required, settings["revision"]
                 self._local_session = None if required else replacement
                 self.service.register_console_authority(replacement.cookie, replacement.id)
                 return self.access_view(replacement), replacement

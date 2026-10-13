@@ -1257,33 +1257,18 @@ def profile_views() -> list[dict]:
 
 
 def policy_views() -> dict:
-    """Synthetic user policy: one model default, two per-buddy overrides and one note.
-
-    The effective preferences follow from the two lists as the board's own view
-    does: a buddy's override wins, otherwise its model's default applies.
-    """
+    """Synthetic user policy: three buddy preferences and one model note."""
     def family(cfg: dict) -> dict:
         return {key: cfg[key] for key in ("adapter", "provider", "model")}
 
     def profile_id(cfg: dict) -> str:
         return f"{cfg['adapter']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}"
 
-    defaults = [{**family(CFG_FLASH), "mode": "prefer", "reason": "synthetic preview family default"}]
-    overrides = [{"profileId": profile_id(CFG_CLAUDE), "mode": "exclude", "reason": "synthetic preview override"},
-                 {"profileId": profile_id(CFG_CODEX), "mode": "pin", "reason": ""}]
-    effective = []
-    for view in profile_views():
-        override = next((entry for entry in overrides if entry["profileId"] == view["profileId"]), None)
-        default = next((entry for entry in defaults if family(entry) == family(view)), None)
-        if override:
-            effective.append({**override, "source": "override"})
-        elif default:
-            effective.append({"profileId": view["profileId"], "mode": default["mode"], "reason": default["reason"],
-                              "source": "family"})
+    preferences = [{"profileId": profile_id(CFG_FLASH), "mode": "prefer", "reason": "synthetic preview choice"},
+                   {"profileId": profile_id(CFG_CLAUDE), "mode": "exclude", "reason": "synthetic preview exclusion"},
+                   {"profileId": profile_id(CFG_CODEX), "mode": "pin", "reason": ""}]
     return {
-        "familyPreferences": defaults,
-        "preferenceOverrides": overrides,
-        "preferences": sorted(effective, key=lambda entry: entry["profileId"]),
+        "preferences": sorted(preferences, key=lambda entry: entry["profileId"]),
         "familyAnnotations": [{**family(CFG_CODEX), "text": "synthetic preview family note",
                                "updatedAt": "2026-09-26T00:00:00Z"}],
     }
@@ -2484,7 +2469,7 @@ def smoke(assets: Path, scenario: str) -> int:
         status, task, _headers = call("GET", "/api/tasks/preview-run-a1")
         check("GET /api/tasks/<id>", status == 200 and task.get("runId") == "preview-run-a1",
               f"status={status}")
-        status, standalone, _headers = call(
+        status, _, _headers = call(
             "GET", f"/api/objectives/{urllib.parse.quote(STANDALONE_GROUP, safe='')}/timeline")
         expected = 503 if scenario == "error" else 200
         check("encoded standalone timeline", status == expected, f"status={status}")
@@ -2504,7 +2489,7 @@ def smoke(assets: Path, scenario: str) -> int:
             "params": {"objectiveId": OBJ_A, "commandId": "synthetic-stop-command-1"}})
         check("objective_stop is allowed-but-refused by the preview", status == 403
               and stop["error"]["code"] == "CONSOLE_READ_ONLY", f"status={status}")
-        status, bad_stop, _headers = call("POST", "/api/command", payload={
+        status, _, _headers = call("POST", "/api/command", payload={
             "operation": "objective_stop", "params": {"objectiveId": "obj-not-a-real-group",
                                                      "commandId": "synthetic-stop-command-2"}})
         check("objective_stop validates its identifiers first", status in (400, 403), f"status={status}")

@@ -1,8 +1,6 @@
 import type { Draft, Profile } from "./types";
 import {
   routerFieldChanged,
-  effectivePreferences,
-  familyPreferenceChanges,
   preferenceChanges,
   profileSettings,
 } from "./draft";
@@ -115,7 +113,7 @@ function pinRefusal(profile: Profile | undefined): string | null {
 
 /**
  * Changes that cannot be published at all. Only a *new* enable, a mode that
- * *transitions into* pin (a family default or an effort override) or a changed
+ * *transitions into* pin or a changed
  * Router needs a currently legal model; changing the reason of an existing pin,
  * a disable and every other edit stay independent of current availability. A
  * family's concurrency limit is equally independent of availability — it only
@@ -123,8 +121,8 @@ function pinRefusal(profile: Profile | undefined): string | null {
  */
 export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
   const profiles = new Map(draft.profiles.map((p) => [p.profileId, p]));
-  const baselineOverrideModes = new Map(
-    baseline.preferenceOverrides.map((p) => [p.profileId, p.mode]),
+  const baselinePreferenceModes = new Map(
+    baseline.preferences.map((p) => [p.profileId, p.mode]),
   );
   const issues: PolicyIssue[] = [];
   for (const entry of draft.modelConcurrency) {
@@ -149,32 +147,11 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       });
     }
   }
-  const effective = effectivePreferences(draft);
-  const baselineFamilyModes = new Map(baseline.familyPreferences.map((p) => [familyKey(p), p.mode]));
-  for (const change of familyPreferenceChanges(baseline, draft)) {
-    if (change.mode !== "pin") continue;
-    const key = familyKey(change);
-    if (baselineFamilyModes.get(key) === "pin") continue;
-    // A new family pin needs at least one effort that is pinned through it and
-    // can actually be selected: available and enabled.
-    const members = draft.profiles.filter((profile) => familyKey(profile) === key);
-    const legal = members.some((profile) => !pinRefusal(profile)
-      && effective.some((p) => p.profileId === profile.profileId && p.mode === "pin"));
-    if (!legal) {
-      const subject = members[0] ? profileName(members[0]) : `${change.adapter}/${change.provider}/${change.model}`;
-      issues.push({
-        profileId: members[0]?.profileId ?? key,
-        family: key,
-        label: subject,
-        message: `${subject} 没有可用推理强度；请先启用推理强度再固定。`,
-      });
-    }
-  }
   for (const change of preferenceChanges(baseline, draft)) {
     if (change.mode !== "pin") continue;
     // The board requires current legality only when the mode transitions into
     // pin; a reason-only edit of an existing pin stays a legal patch.
-    if (baselineOverrideModes.get(change.profileId) === "pin") continue;
+    if (baselinePreferenceModes.get(change.profileId) === "pin") continue;
     const profile = profiles.get(change.profileId);
     const refusal = pinRefusal(profile);
     if (refusal) {
@@ -225,43 +202,26 @@ export function decisionAttention(source: Pick<Draft, "configuration" | "profile
 /**
  * Settings that stay stale after this draft is published. They are shown as
  * needing attention and never block an unrelated patch: a saved disable, a
- * preference change or a note still commits while these remain. An override
- * pin is checked per effort; a family pin only needs attention when none of
- * the efforts it pins can be selected.
+ * preference change or a note still commits while these remain. A pin is checked per buddy.
  */
 export function attentionIssues(
-  source: Pick<Draft, "configuration" | "profiles" | "familyPreferences" | "preferenceOverrides">,
+  source: Pick<Draft, "configuration" | "profiles" | "preferences">,
 ): PolicyIssue[] {
   const profiles = new Map(source.profiles.map((p) => [p.profileId, p]));
   const issues: PolicyIssue[] = [];
   const attention = routerAttention(source);
   if (attention) issues.push(attention);
-  const effective = effectivePreferences(source);
-  for (const override of source.preferenceOverrides) {
-    if (override.mode !== "pin") continue;
-    const profile = profiles.get(override.profileId);
+  for (const preference of source.preferences) {
+    if (preference.mode !== "pin") continue;
+    const profile = profiles.get(preference.profileId);
     const refusal = pinRefusal(profile);
     if (refusal) {
       issues.push({
-        profileId: override.profileId,
-        label: labelOf(profile, override.profileId),
-        message: `固定选择指向 ${labelOf(profile, override.profileId)}：${refusal}；请启用或改回“跟随家族”。`,
+        profileId: preference.profileId,
+        label: labelOf(profile, preference.profileId),
+        message: `固定选择指向 ${labelOf(profile, preference.profileId)}：${refusal}；请启用或改为“不设”。`,
       });
     }
-  }
-  for (const family of source.familyPreferences) {
-    if (family.mode !== "pin") continue;
-    const key = familyKey(family);
-    const pinned = source.profiles.filter((profile) => familyKey(profile) === key
-      && effective.some((p) => p.profileId === profile.profileId && p.mode === "pin" && p.source === "family"));
-    if (!pinned.length || pinned.some((profile) => !pinRefusal(profile))) continue;
-    const subject = profileName(pinned[0]);
-    issues.push({
-      profileId: pinned[0].profileId,
-      family: key,
-      label: subject,
-      message: `家族 ${subject} 的固定推理强度不可用；请启用推理强度或更改家族偏好。`,
-    });
   }
   return issues;
 }

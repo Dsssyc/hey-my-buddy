@@ -32,7 +32,7 @@ describe("L4 ordered Router list configuration", () => {
 describe("snapshot upgrade boundary and routing health", () => {
   const configuration = { routerProfileIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "standard" };
   const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session", canWrite: true, reason: null }, configuration, configurationError: null, profiles: [],
-    preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], modelConcurrency: [],
+    preferences: [], familyAnnotations: [], modelConcurrency: [],
     tasks: { pendingCount: 0 } };
   const error = { code: "router-settings-upgrade-required", message: "Router 设置需升级" };
   const health = { available: false, reasonCode: "router-consecutive-failures", windowSize: 20, sampleCount: 3,
@@ -255,8 +255,7 @@ describe("local read verification evidence", () => {
 
 describe("conditional reads (ETag / If-None-Match / 304)", () => {
   const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session", canWrite: true, reason: null }, configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "brief" },
-    configurationError: null, profiles: [], preferences: [], familyPreferences: [],
-    preferenceOverrides: [], familyAnnotations: [], modelConcurrency: [], tasks: { pendingCount: 3 } };
+    configurationError: null, profiles: [], preferences: [], familyAnnotations: [], modelConcurrency: [], tasks: { pendingCount: 3 } };
   function jsonResponse(value: unknown, etag?: string) {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (etag) headers.ETag = etag;

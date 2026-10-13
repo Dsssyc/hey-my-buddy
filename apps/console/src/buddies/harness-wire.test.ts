@@ -50,18 +50,18 @@ describe("the harness wire contract", () => {
       .rejects.toHaveProperty("code", "INVALID_RESPONSE");
   });
 
-  it("saves a path or null with the expected revision and refuses a mismatched reply", async () => {
+  it("saves a path or null without a revision and refuses a mismatched reply", async () => {
     const saved = commandApi({ harness: codexRow });
-    await expect(saved.api.harnessSet("codex", "/opt/bin/codex", 3, "csrf")).resolves.toEqual(codexRow);
+    await expect(saved.api.harnessSet("codex", "/opt/bin/codex", "csrf")).resolves.toEqual(codexRow);
     expect(body(saved.fetcher)).toEqual({
-      operation: "harness_set", params: { adapter: "codex", path: "/opt/bin/codex", expectedRevision: 3 },
+      operation: "harness_set", params: { adapter: "codex", path: "/opt/bin/codex" },
     });
     const cleared = commandApi({ harness: codexRow });
-    await cleared.api.harnessSet("codex", null, 4, "csrf");
-    expect(body(cleared.fetcher).params).toEqual({ adapter: "codex", path: null, expectedRevision: 4 });
-    await expect(commandApi({ harness: { ...codexRow, adapter: "claude" } }).api.harnessSet("codex", "/opt/bin/codex", 4, "csrf"))
+    await cleared.api.harnessSet("codex", null, "csrf");
+    expect(body(cleared.fetcher).params).toEqual({ adapter: "codex", path: null });
+    await expect(commandApi({ harness: { ...codexRow, adapter: "claude" } }).api.harnessSet("codex", "/opt/bin/codex", "csrf"))
       .rejects.toHaveProperty("code", "INVALID_RESPONSE");
-    await expect(commandApi({}).api.harnessSet("codex", "/opt/bin/codex", 4, "csrf"))
+    await expect(commandApi({}).api.harnessSet("codex", "/opt/bin/codex", "csrf"))
       .rejects.toHaveProperty("code", "INVALID_RESPONSE");
   });
 
@@ -75,7 +75,7 @@ describe("the harness wire contract", () => {
     expect(parsed).not.toHaveProperty("reviewVerification");
     expect(parsed).not.toHaveProperty("verified");
     await expect(commandApi({ harnesses: [raw] }).api.harnessRefresh("csrf", "codex")).resolves.toEqual([parsed]);
-    await expect(commandApi({ harness: raw }).api.harnessSet("codex", null, 4, "csrf")).resolves.toEqual(parsed);
+    await expect(commandApi({ harness: raw }).api.harnessSet("codex", null, "csrf")).resolves.toEqual(parsed);
   });
 
   it("keeps discovery health but treats malformed local qualification as unknown", () => {

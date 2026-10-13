@@ -35,8 +35,7 @@ function snapshot(list: Profile[] = profiles()): Snapshot {
   return {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "s", canWrite: true, reason: null },
 
-    configuration: null, profiles: list, preferences: [], familyPreferences: [], preferenceOverrides: [],
- familyAnnotations: [], decisions: [],
+    configuration: null, profiles: list, preferences: [],  familyAnnotations: [], decisions: [],
     modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "flash", limit: 3, active: 1 }],
     tasks: { pendingCount: 0 }, capabilities: {},
   };
@@ -131,8 +130,7 @@ describe("the table's blocks", () => {
     const data: ConsoleView = {
       ...view,
       profiles: view.profiles.map(entry => entry.profileId === "dsh:deepseek-official:flash:max" ? { ...entry, enabled: true } : entry),
-      preferenceOverrides: [{ profileId: "codex:openai:sol:high", mode: "exclude", reason: "" }],
-      preferences: [{ profileId: "codex:openai:sol:high", mode: "exclude", reason: "", source: "override" }],
+      preferences: [{ profileId: "codex:openai:sol:high", mode: "exclude", reason: "" }],
     };
     const chips = blocks({ recorded, data }).flatMap(block => block.models).flatMap(model => model.chips);
     expect(chips.filter(chip => chip.unsaved).map(chip => chip.profile.profileId))

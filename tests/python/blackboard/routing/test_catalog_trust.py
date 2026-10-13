@@ -52,5 +52,5 @@ class CatalogTrustRoutingTests(BoardTestCase):
         )
         self.assertEqual(pinned["counts"]["preferenceChanges"], 1)
         with self.board.store.db.read() as db:
-            row = db.execute("SELECT mode FROM effective_preferences WHERE profile_id='dsh:fixture:alpha:max'").fetchone()
+            row = db.execute("SELECT mode FROM evaluation_preferences WHERE profile_id='dsh:fixture:alpha:max'").fetchone()
         self.assertEqual(row["mode"], "pin")

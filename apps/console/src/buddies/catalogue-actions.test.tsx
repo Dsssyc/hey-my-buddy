@@ -1,11 +1,10 @@
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CatalogView } from "./CatalogView";
 import { useEditor } from "../use-editor";
 import { LOGIN_EXPIRED_ACTION_REFUSAL } from "../console-session";
-import { App } from "../App";
 import { CHECKED_AT, fixture, harness, harnesses, openHarness, snapshot } from "./harness.fixtures";
 import {
   fieldValue, harnessButton, harnessPane, harnessSection, paneBlock, selectHarness, toolbarAlert,
@@ -17,8 +16,7 @@ import {
  * source, last check, or its attempted locations and remedy, its account and its
  * quota. Checking is an explicit click that goes through the existing
  * `capabilities` operation with `refresh: true` and never calls a model; saving
- * a path goes through `harness_set` with the recorded revision, so a concurrent
- * change is a reported conflict rather than an overwrite.
+ * a path goes through `harness_set`.
  */
 
 const clock = (iso: string) => {
@@ -284,7 +282,7 @@ describe("the path dialog", () => {
     expect(f.calls[0].params.path).toBe("C:\\tools\\zcode.exe");
   });
 
-  it("saves an absolute path with the recorded revision, closes, and applies the returned row", async () => {
+  it("saves an absolute path without a revision, closes, and applies the returned row", async () => {
     const user = userEvent.setup();
     const f = fixture();
     await openHarness(f);
@@ -294,7 +292,7 @@ describe("the path dialog", () => {
     await screen.findByText("已保存路径 /opt/tools/zcode；ZCode 已找到");
     expect(f.calls).toEqual([{
       operation: "harness_set",
-      params: { adapter: "zcode", path: "/opt/tools/zcode", expectedRevision: 1 },
+      params: { adapter: "zcode", path: "/opt/tools/zcode" },
     }]);
     expect(screen.queryByRole("dialog")).toBeNull();
     await waitFor(() => expect(fieldValue(paneBlock("位置"), "路径").textContent).toBe("/opt/tools/zcode"));
@@ -311,7 +309,7 @@ describe("the path dialog", () => {
     await screen.findByText("已恢复自动检测；Claude Code 未找到");
     expect(f.calls).toEqual([{
       operation: "harness_set",
-      params: { adapter: "claude", path: null, expectedRevision: 5 },
+      params: { adapter: "claude", path: null },
     }]);
     // Automatic detection still fails here; the row says so, not a stale path.
     await waitFor(() => expect(within(paneBlock("位置", "Claude Code")).getByText("未找到")).toBeTruthy());
@@ -329,19 +327,19 @@ describe("the path dialog", () => {
     expect(f.command).not.toHaveBeenCalled();
   });
 
-  it("reports a revision conflict, rereads the record and retries against the new revision", async () => {
+  it("reports a failed save and retries the same path", async () => {
     const user = userEvent.setup();
-    const f = fixture({ conflictOnce: true });
+    const f = fixture({ failFirstSet: true });
     await openHarness(f);
     const dialog = await openPath(user, "ZCode");
     await user.type(within(dialog).getByRole("textbox", { name: "可执行文件路径" }), "/opt/tools/zcode");
     await user.click(within(dialog).getByRole("button", { name: "保存并检测" }));
-    await screen.findByText("记录已更新；请刷新核对后重试。");
+    await screen.findByText("无法连接本地黑板。已有任务仍由后台管理。");
     await user.click(screen.getByRole("button", { name: "重试" }));
     await screen.findByText("已保存路径 /opt/tools/zcode；ZCode 已找到");
     expect(f.calls).toEqual([
-      { operation: "harness_set", params: { adapter: "zcode", path: "/opt/tools/zcode", expectedRevision: 1 } },
-      { operation: "harness_set", params: { adapter: "zcode", path: "/opt/tools/zcode", expectedRevision: 4 } },
+      { operation: "harness_set", params: { adapter: "zcode", path: "/opt/tools/zcode" } },
+      { operation: "harness_set", params: { adapter: "zcode", path: "/opt/tools/zcode" } },
     ]);
   });
 });

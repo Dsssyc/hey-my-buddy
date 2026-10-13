@@ -32,9 +32,7 @@ const initial = (): Snapshot => ({
   ],
 
   preferences: [],
-  familyPreferences: [],
-  preferenceOverrides: [],
-  familyAnnotations: [],
+      familyAnnotations: [],
 
   decisions: [],
 

@@ -20,7 +20,7 @@ from unittest import mock
 import blackboard.tasks.test_workspace_lifecycle as lifecycle_tests
 from blackboard.tasks.test_workflow_real import CONFIGURATION, RealWorkspaceTestCase
 
-from hey_my_buddy.cli import main as cli, cli_views, blocking
+from hey_my_buddy.cli import main as cli, cli_views
 from hey_my_buddy.protocol import transport
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace as workspace_module
 
@@ -221,7 +221,7 @@ class ProjectionUnitTests(unittest.TestCase):
             "requiredCapabilities": ["execution:dsh"],
             "routingBasis": {"candidateCount": 1, "excludedCount": 1, "excludedProfiles": [
                 {"profileId": "dsh:p:m:off", "adapter": "dsh", "provider": "p", "model": "m",
-                 "effort": "off", "reason": "user excluded", "source": "override"}]},
+                 "effort": "off", "reason": "user excluded"}]},
         }
         brief = cli_views.governed_brief({"governed": True, "runId": "r", "revision": 1,
                                           "state": "executing", "status": "queued", "routing": routing})

@@ -483,9 +483,9 @@ class ModelFactsTestCase(EvaluationTestCase):
         self.write_fixture()
         self.seed(board)
         calls = self.count_refresh_calls()
-        # Preference and note patches without an enablement never touch the source.
-        self.publish(board, familyPreferenceChanges=[{"adapter": "dsh", "provider": "deepseek-official",
-                                                      "model": "deepseek-flash", "mode": "prefer", "reason": ""}])
+        # A buddy preference patch without an enablement never touches the source.
+        self.publish(board, preferenceChanges=[{"profileId": FLASH_PROFILE_ID,
+                                                "mode": "prefer", "reason": ""}])
         self.assertEqual(calls, [])
 
     def test_resaving_an_enabled_effort_does_not_trigger(self):

@@ -105,8 +105,6 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(snapshot["configuration"]["routerProfileIds"], [])
         self.assertEqual(snapshot["configuration"]["routingBudget"], "standard")
         self.assertEqual(snapshot["profiles"], [])
-        self.assertEqual(snapshot["familyPreferences"], [])
-        self.assertEqual(snapshot["preferenceOverrides"], [])
         self.assertEqual(snapshot["preferences"], [])
         self.assertEqual(snapshot["familyAnnotations"], [])
         self.assertEqual(snapshot["decisions"], [])
@@ -242,65 +240,42 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertNotIn(board.service.token, raw)
         self.assertNotIn("token_verifier", raw)
 
-    def test_family_preference_covers_every_effort_and_a_none_override_wins(self):
+    def test_buddy_preferences_are_saved_per_profile_and_can_be_cleared(self):
         board = self.board()
         self.seed_catalog(board)
-        published = self.publish(
-            board, request_id="w1", command_id="c1",
-            familyPreferenceChanges=[{**family_key(PROFILE), "mode": "prefer", "reason": "cheap for the family"}],
-        )
-        self.assertEqual(published["counts"]["familyPreferenceChanges"], 1)
+        other_effort = next(item for item in self.snapshot(board)["profiles"]
+                            if item["model"] == PROFILE["model"] and item["profileId"] != PROFILE_ID)
+        published = self.publish(board, request_id="w1", command_id="c1",
+                                 preferenceChanges=[{"profileId": PROFILE_ID, "mode": "prefer",
+                                                     "reason": "cheap and fast"}])
+        self.assertEqual(published["counts"]["preferenceChanges"], 1)
         snapshot = self.snapshot(board)
-        self.assertEqual(
-            snapshot["familyPreferences"],
-            [{**family_key(PROFILE), "mode": "prefer", "reason": "cheap for the family"}],
-        )
-        self.assertEqual(snapshot["preferenceOverrides"], [])
-        efforts = [item for item in snapshot["profiles"] if item["model"] == PROFILE["model"]]
-        self.assertGreater(len(efforts), 1, "the family has several effort profiles")
-        self.assertEqual(
-            {entry["profileId"] for entry in snapshot["preferences"]},
-            {item["profileId"] for item in efforts},
-        )
-        self.assertTrue(all(
-            (entry["mode"], entry["reason"], entry["source"]) == ("prefer", "cheap for the family", "family")
-            for entry in snapshot["preferences"]
-        ))
-        # One effort opts out explicitly; only that effort leaves the effective view.
+        self.assertEqual(snapshot["preferences"],
+                         [{"profileId": PROFILE_ID, "mode": "prefer", "reason": "cheap and fast"}])
+        self.assertNotIn(other_effort["profileId"],
+                         {entry["profileId"] for entry in snapshot["preferences"]})
         self.publish(board, request_id="w2", command_id="c2",
-                     preferenceChanges=[{"profileId": PROFILE_ID, "mode": "none", "reason": "this effort is not preferred"}])
-        snapshot = self.snapshot(board)
-        self.assertNotIn(PROFILE_ID, {entry["profileId"] for entry in snapshot["preferences"]})
-        self.assertEqual(snapshot["preferenceOverrides"],
-                         [{"profileId": PROFILE_ID, "mode": "none", "reason": "this effort is not preferred"}])
-        self.assertTrue(all(entry["source"] == "family" for entry in snapshot["preferences"]))
-        # Deleting the override restores the family default for that effort.
+                     preferenceChanges=[{"profileId": other_effort["profileId"], "mode": "prefer",
+                                         "reason": "higher effort"},
+                                        {"profileId": PROFILE_ID, "mode": "exclude", "reason": "too costly"}])
+        other_preference = {"profileId": other_effort["profileId"], "mode": "prefer",
+                            "reason": "higher effort"}
+        self.assertEqual(self.snapshot(board)["preferences"],
+                         sorted([other_preference,
+                                 {"profileId": PROFILE_ID, "mode": "exclude", "reason": "too costly"}],
+                                key=lambda entry: entry["profileId"]))
         self.publish(board, request_id="w3", command_id="c3",
                      preferenceChanges=[{"profileId": PROFILE_ID, "mode": None}])
-        snapshot = self.snapshot(board)
-        restored = next(entry for entry in snapshot["preferences"] if entry["profileId"] == PROFILE_ID)
-        self.assertEqual((restored["mode"], restored["reason"], restored["source"]),
-                         ("prefer", "cheap for the family", "family"))
-        self.assertEqual(snapshot["preferenceOverrides"], [])
+        self.assertEqual(self.snapshot(board)["preferences"], [other_preference])
 
-    def test_family_preference_null_clears_and_bad_families_are_refused(self):
+    def test_retired_preference_shapes_are_rejected_without_changes(self):
         board = self.board()
         self.seed_catalog(board)
-        self.publish(board, request_id="w1", command_id="c1",
-                     familyPreferenceChanges=[{**family_key(PROFILE), "mode": "prefer"}])
-        self.assertEqual(len(self.snapshot(board)["familyPreferences"]), 1)
-        self.publish(board, request_id="w2", command_id="c2",
-                     familyPreferenceChanges=[{**family_key(PROFILE), "mode": None}])
-        snapshot = self.snapshot(board)
-        self.assertEqual(snapshot["familyPreferences"], [])
-        self.assertEqual(snapshot["preferences"], [])
-        self.refused_publish(board, "NOT_FOUND", request_id="w3", command_id="c3",
-                             familyPreferenceChanges=[{**family_key(PROFILE), "model": "no-such-model",
-                                                       "mode": "prefer"}])
-        self.refused_publish(board, "INVALID_ARGUMENT", request_id="w4", command_id="c4",
-                             familyPreferenceChanges=[{**family_key(PROFILE), "mode": "prefer"},
-                                                      {**family_key(PROFILE), "mode": "pin"}])
-        self.assertEqual(self.snapshot(board)["familyPreferences"], [])
+        self.refused_publish(board, "INVALID_ARGUMENT", request_id="w1", command_id="c1",
+                             familyPreferenceChanges=[{**family_key(PROFILE), "mode": "prefer"}])
+        self.refused_publish(board, "INVALID_ARGUMENT", request_id="w2", command_id="c2",
+                             preferenceChanges=[{"profileId": PROFILE_ID, "mode": "none"}])
+        self.assertEqual(self.snapshot(board)["preferences"], [])
 
     def test_family_annotations_write_update_and_clear(self):
         board = self.board()
@@ -369,7 +344,7 @@ class ConsoleCoreTests(BoardTestCase):
         core = board.evaluation.console_core()
         for key in ("configuration", "configurationError", "profiles",
                     "modelConcurrency", "unavailableProfileCount", "preferences", "familyAnnotations",
-                    "familyPreferences", "preferenceOverrides", "decisions"):
+                    "decisions"):
             self.assertIn(key, core)
         snapshot = board.evaluation.snapshot({})
         for key in core:

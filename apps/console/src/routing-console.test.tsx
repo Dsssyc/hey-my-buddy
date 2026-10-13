@@ -23,8 +23,7 @@ function snapshot(): Snapshot {
     configuration: { routerProfileIds: [worker.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: [{ ...worker, label: "现在已改名的模型 · max" }],
     preferences: [{ profileId: worker.profileId, mode: "exclude", reason: "当前已改为排除" }],
-    familyPreferences: [], preferenceOverrides: [],
- familyAnnotations: [], decisions: [],
+    familyAnnotations: [], decisions: [],
     modelConcurrency: [],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
@@ -87,7 +86,7 @@ afterEach(() => { cleanup(); window.location.hash = ""; });
 describe("sole candidate routing basis", () => {
   const routingBasis = { candidateCount: 1, excludedCount: 1, excludedProfiles: [
     { ...worker, profileId: "dsh:deepseek-official:deepseek-flash:off", effort: "off",
-      reason: "提交时排除低推理强度", source: "override" },
+      reason: "提交时排除低推理强度" },
   ] };
   it("shows frozen bounds, exclusions and program policy without inventing a Router call", async () => {
     const audit = { ...decision("sole"), input: null, runId: null,
@@ -126,7 +125,7 @@ describe("sole candidate routing basis", () => {
 
 describe("zero candidate routing source", () => {
   const emptyBasis = { candidateCount: 0, excludedCount: 1, excludedProfiles: [
-    { ...worker, effort: "high", reason: "用户排除了最后一个候选", source: "override" },
+    { ...worker, effort: "high", reason: "用户排除了最后一个候选" },
   ] };
   it("shows the short no-candidate boundary source without claiming a model chose", async () => {
     const value = workflow();

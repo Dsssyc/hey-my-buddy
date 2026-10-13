@@ -3,14 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import {
-  catalogue, chip, choosePreference, defaultPreference, effortCell, foldHandle, level, levelPreference, listed, modelButton, modelRow, pane,
+  catalogue, chip, choosePreference, effortCell, foldHandle, level, levelPreference, listed, modelButton, modelRow, pane,
   queryFoldHandle, queryModel, search, selectModel,
 } from "./buddies/page.testing";
 import type { ConsoleApi, HarnessHealth } from "./api";
 import type {
-  FamilyPreference,
   Preference,
-  PreferenceOverride,
   Profile,
   Snapshot,
 } from "./types";
@@ -18,7 +16,7 @@ import type {
 /**
  * The models table of the Buddy page: the two filters and the search, the
  * harnesses that fold, each buddy drawn as a chip, a level's own preference
- * (including an explicit 不设 and a return to 跟随模型), the preference written
+ * (including 不设), the preference written
  * in words instead of colour, and the settings page that carries none of this.
  */
 
@@ -60,25 +58,7 @@ function profiles(): Profile[] {
   ];
 }
 
-/** The schema 13 `effective_preferences` view, mirrored independently of draft.ts. */
-function effective(state: Snapshot): Preference[] {
-  const overrides = new Map(state.preferenceOverrides.map(entry => [entry.profileId, entry]));
-  const families = new Map(state.familyPreferences.map(entry => [JSON.stringify([entry.adapter, entry.provider, entry.model]), entry]));
-  return state.profiles.flatMap((entry): Preference[] => {
-    const override = overrides.get(entry.profileId);
-    if (override) {
-      return override.mode === "none"
-        ? []
-        : [{ profileId: entry.profileId, mode: override.mode, reason: override.reason, source: "override" as const }];
-    }
-    const family = families.get(JSON.stringify([entry.adapter, entry.provider, entry.model]));
-    return family
-      ? [{ profileId: entry.profileId, mode: family.mode, reason: family.reason, source: "family" as const }]
-      : [];
-  });
-}
-
-type Options = { configurationUnavailable?: boolean; routerProfileId?: string | null; familyPreferences?: FamilyPreference[]; preferenceOverrides?: PreferenceOverride[] };
+type Options = { configurationUnavailable?: boolean; routerProfileId?: string | null; preferences?: Preference[] };
 
 /**
  * The snapshot's harness health (ADR-017 §15): the Claude harness used by the
@@ -108,9 +88,7 @@ function snapshot(options: Options = {}): HarnessSnapshot {
       routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard" },
     configurationError: options.configurationUnavailable ? { code: "ROUTER_SETTINGS_UPGRADE_REQUIRED", message: "请先升级设置",} : null,
     profiles: profiles(),
-    preferences: [],
-    familyPreferences: options.familyPreferences ?? [],
-    preferenceOverrides: options.preferenceOverrides ?? [],
+    preferences: options.preferences ?? [],
 
     familyAnnotations: [],
 
@@ -124,15 +102,14 @@ function snapshot(options: Options = {}): HarnessSnapshot {
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
   };
-  return { ...base, preferences: effective(base), harnesses: harnesses() };
+  return { ...base, harnesses: harnesses() };
 }
 
 function applyPublication(state: HarnessSnapshot, params: Record<string, any>): HarnessSnapshot {
   const next: HarnessSnapshot = {
     ...state,
 
-    familyPreferences: [...state.familyPreferences],
-    preferenceOverrides: [...state.preferenceOverrides],
+    preferences: [...state.preferences],
     familyAnnotations: [...state.familyAnnotations],
     configuration: state.configuration ? { ...state.configuration, ...(params.configuration ?? {}) } : null,
   };
@@ -140,23 +117,17 @@ function applyPublication(state: HarnessSnapshot, params: Record<string, any>): 
     next.profiles = next.profiles.map(entry => entry.profileId === setting.profileId ? { ...entry, enabled: setting.enabled } : entry);
   }
   const key = (entry: { adapter: string; provider: string; model: string }) => JSON.stringify([entry.adapter, entry.provider, entry.model]);
-  for (const change of params.familyPreferenceChanges ?? []) {
-    next.familyPreferences = next.familyPreferences.filter(entry => key(entry) !== key(change));
-    if (change.mode !== null) {
-      next.familyPreferences.push({ adapter: change.adapter, provider: change.provider, model: change.model, mode: change.mode, reason: change.reason });
-    }
-  }
   for (const change of params.preferenceChanges ?? []) {
-    next.preferenceOverrides = next.preferenceOverrides.filter(entry => entry.profileId !== change.profileId);
+    next.preferences = next.preferences.filter(entry => entry.profileId !== change.profileId);
     if (change.mode !== null) {
-      next.preferenceOverrides.push({ profileId: change.profileId, mode: change.mode, reason: change.reason });
+      next.preferences.push({ profileId: change.profileId, mode: change.mode, reason: change.reason });
     }
   }
   for (const change of params.familyAnnotationChanges ?? []) {
     next.familyAnnotations = next.familyAnnotations.filter(entry => key(entry) !== key(change));
     next.familyAnnotations.push({ ...change, updatedAt: null });
   }
-  return { ...next, preferences: effective(next) };
+  return next;
 }
 
 function fixture(options: Options = {}) {
@@ -170,8 +141,7 @@ function fixture(options: Options = {}) {
       // Only a checked 显示不可用 asks for this page; it mirrors the board's
       // bounded contract and just returns the current rows.
       return { profiles: state.profiles, familyAnnotations: state.familyAnnotations,
-        preferences: state.preferences, preferenceOverrides: state.preferenceOverrides,
-        familyPreferences: state.familyPreferences,
+        preferences: state.preferences,
         modelConcurrency: state.modelConcurrency, nextCursor: null };
     }
 
@@ -350,65 +320,24 @@ describe("the harness directory", () => {
 });
 
 describe("a level's own preference", () => {
-  const defaultReason = "用于日常工作的稳定配置";
-
-  it("shows the model's default, sets an explicit 不设 on one level and publishes mode none", async () => {
-    const f = fixture({ familyPreferences: [{ ...sonnet, mode: "prefer", reason: defaultReason }] });
+  it("clears one buddy's preference with 不设 and sends mode null", async () => {
+    const f = fixture({ preferences: [{ profileId: mediumId, mode: "prefer", reason: "常用" }] });
     const user = userEvent.setup();
     await openBuddy(f.api);
     await selectModel(user, SONNET, "Claude Code");
-    // The default is written on every chip that follows it, in words.
+    expect(within(pane()).queryByRole("radiogroup", { name: "默认偏好" })).toBeNull();
     expect(chip(SONNET, "medium").textContent).toBe("medium优先");
-    expect(within(modelRow(SONNET)).queryByText("high")).toBeNull();
-    // The side column holds the default with its reason; the level follows the model.
-    expect(defaultPreference("优先").getAttribute("aria-checked")).toBe("true");
-    expect(within(pane()).getByRole("textbox", { name: "默认偏好的理由" })).toHaveProperty("value", defaultReason);
-    expect(within(levelPreference("medium")).getByRole("radio", { name: "跟随模型" }).getAttribute("aria-checked")).toBe("true");
-    expect(within(level("medium")).getByRole("textbox")).toHaveProperty("readOnly", true);
-
+    expect(within(levelPreference("medium")).getByRole("radio", { name: "优先" }).getAttribute("aria-checked")).toBe("true");
     await choosePreference(user, "medium", "不设");
-
-    expect(within(levelPreference("medium")).getByRole("radio", { name: "不设" }).getAttribute("aria-checked")).toBe("true");
     expect(chip(SONNET, "medium").textContent).toBe("medium");
-    expect(within(effortCell("medium")).getByRole("img", { name: "未保存" })).toBeTruthy();
-    expect(within(level("medium")).getByRole("img", { name: "未保存" })).toBeTruthy();
-    expect(within(modelRow(SONNET)).queryByText("high")).toBeNull();
-    expect(within(screen.getByRole("region", { name: "未保存的修改" })).getByText("1 项未保存")).toBeTruthy();
-    await user.click(saveButton());
-    await screen.findByText("设置已保存");
-    expect(f.published.at(-1)!.preferenceChanges).toEqual([{ profileId: mediumId, mode: "none", reason: "" }]);
-    expect(f.published.at(-1)).not.toHaveProperty("annotationChanges");
-    expect(f.published.at(-1)).not.toHaveProperty("familyPreferenceChanges");
-  });
-
-  it("returns a level to 跟随模型 and publishes mode null", async () => {
-    const f = fixture({
-      familyPreferences: [{ ...sonnet, mode: "prefer", reason: defaultReason }],
-      preferenceOverrides: [{ profileId: mediumId, mode: "exclude", reason: "成本过高" }],
-    });
-    const user = userEvent.setup();
-    await openBuddy(f.api);
-    await selectModel(user, SONNET, "Claude Code");
-    // The level shows its own preference with its reason; the other still follows the model.
-    expect(chip(SONNET, "medium").textContent).toBe("medium排除");
-    expect(within(modelRow(SONNET)).queryByText("high")).toBeNull();
-    expect(within(levelPreference("medium")).getByRole("radio", { name: "排除" }).getAttribute("aria-checked")).toBe("true");
-    expect(within(level("medium")).getByRole("textbox", { name: "medium 的偏好理由" })).toHaveProperty("value", "成本过高");
-    await user.click(effortCell("high"));
-    expect(within(levelPreference("high")).getByRole("radio", { name: "跟随模型" }).getAttribute("aria-checked")).toBe("true");
-
-    await choosePreference(user, "medium", "跟随模型");
-
-    expect(chip(SONNET, "medium").textContent).toContain("优先");
-    expect(within(level("medium")).getByRole("textbox")).toHaveProperty("readOnly", true);
     await user.click(saveButton());
     await screen.findByText("设置已保存");
     expect(f.published.at(-1)!.preferenceChanges).toEqual([{ profileId: mediumId, mode: null, reason: "" }]);
-    expect(f.published.at(-1)).not.toHaveProperty("annotationChanges");
+    expect(f.published.at(-1)).not.toHaveProperty("familyPreferenceChanges");
   });
 
   it("writes enabled preferences as words and gives them the same styling", async () => {
-    const f = fixture({ preferenceOverrides: [
+    const f = fixture({ preferences: [
       { profileId: highId, mode: "prefer", reason: "" },
       { profileId: solMediumId, mode: "pin", reason: "" },
       { profileId: solLowId, mode: "exclude", reason: "" },
