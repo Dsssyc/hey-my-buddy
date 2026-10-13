@@ -36,7 +36,6 @@ import hashlib
 import json
 import os
 import queue
-import re
 import subprocess
 import time
 import tomllib
@@ -73,7 +72,6 @@ from ..run_contract import (
     InterruptEvidence,
     LastAssistantMessagePackage,
     MAX_SCHEMA_BYTES,
-    MAX_UNKNOWN_EVENT_TYPES,
     MAX_VALUE_BYTES,
     NativeEvidence,
     NativeFailurePackage,
@@ -92,6 +90,8 @@ from ..run_contract import (
     StopLayer,
     ToolEvidencePackage,
     UsagePackage,
+    fold_unknown_events,
+    unknown_event_name,
 )
 from .config import (
     CodexUnavailable,
@@ -128,10 +128,6 @@ _REFUSAL_MESSAGE = ("This Buddy Worker cannot approve interactive requests; "
 _REFUSED_REQUEST_KEYS = ("threadId", "turnId", "itemId", "command", "cwd", "reason")
 _INIT_CLIENT = {"clientInfo": {"name": "hey_my_buddy", "title": "Hey My Buddy", "version": "0.9.0"}}
 _BOUND_NOTIFICATIONS = 128
-#: The one residual bucket when a run sees more distinct unclassified native
-#: event types than the public result carries. The parenthesised name cannot
-#: pass the label sanitizer below, so no real method can ever collide with it.
-_UNLISTED_UNKNOWN_TYPES = "(unlisted-native-events)"
 
 
 def _mode(request: RunRequest) -> str:
@@ -168,22 +164,10 @@ class _RunFacts:
         self.dirty = False
 
     def note_unknown(self, label: object) -> None:
-        self._note_count(self.unknown_counts, label)
+        fold_unknown_events(self.unknown_counts, unknown_event_name(label))
 
     def note_thread_notification(self, label: object) -> None:
-        self._note_count(self.thread_notifications, label)
-
-    @staticmethod
-    def _note_count(counts: dict[str, int], label: object) -> None:
-        name = label if isinstance(label, str) and re.fullmatch(r"[A-Za-z0-9/._-]{1,64}", label) else "unknown"
-        if name not in counts and len(counts) >= MAX_UNKNOWN_EVENT_TYPES - 1:
-            # The public result carries at most MAX_UNKNOWN_EVENT_TYPES distinct
-            # types; the reserved residual name holds one of those slots, so
-            # beyond MAX-1 real types further distinct types merge into it and
-            # the total stays exact, with no occurrence silently dropped. The
-            # observer's live mapping reads the same bounded dict.
-            name = _UNLISTED_UNKNOWN_TYPES
-        counts[name] = counts.get(name, 0) + 1
+        fold_unknown_events(self.thread_notifications, unknown_event_name(label))
 
     def note_marker(self) -> None:
         self.markers += 1

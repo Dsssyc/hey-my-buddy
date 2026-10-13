@@ -19,6 +19,8 @@ these facts.
 """
 from __future__ import annotations
 
+import re
+
 from functools import partial
 from typing import Annotated, Any, Callable, Literal, Mapping, Optional, Protocol, runtime_checkable
 
@@ -94,6 +96,11 @@ MAX_SCHEMA_BYTES = 65536
 #: controller-read range; a value within it is never refused or dropped here.
 MAX_VALUE_BYTES = 512 * 1024
 MAX_UNKNOWN_EVENT_TYPES = 64
+#: The one residual kind every harness folds further distinct unknown-event
+#: kinds into once the distinct-kind cap above is reached. The parenthesised
+#: name cannot pass :func:`unknown_event_name`'s charset, so no retained kind
+#: of a real native label can ever collide with it.
+UNLISTED_NATIVE_EVENTS = "(unlisted-native-events)"
 MAX_UNCONFIRMED_ITEMS = 16
 MAX_UNCONFIRMED_NAME_CHARS = 64
 MAX_EVIDENCE_REFS = 32
@@ -111,6 +118,30 @@ def _nonblank(value: str) -> str:
     if not value.strip():
         raise fail("the value must contain non-whitespace text")
     return value
+
+
+def unknown_event_name(label: object) -> str:
+    """One observed native label's retained unknown-event kind name.
+
+    A bounded label charset, or ``unknown`` for anything else — including the
+    residual name below, which no native label can reproduce.
+    """
+    return label if isinstance(label, str) and re.fullmatch(r"[A-Za-z0-9/._-]{1,64}", label) else "unknown"
+
+
+def fold_unknown_events(counts: dict[str, int], name: str, occurrences: int = 1) -> None:
+    """Fold occurrences of one unknown-event kind into a bounded kind-count map.
+
+    The public result carries at most ``MAX_UNKNOWN_EVENT_TYPES`` distinct
+    kinds; the reserved residual name holds one of those slots, so beyond
+    ``MAX - 1`` real kinds further distinct kinds merge into it and the total
+    stays exact, with no occurrence silently dropped. ``name`` arrives already
+    retained: from :func:`unknown_event_name` for a fresh native label, or a
+    kind an earlier fold already counted.
+    """
+    if name not in counts and len(counts) >= MAX_UNKNOWN_EVENT_TYPES - 1:
+        name = UNLISTED_NATIVE_EVENTS
+    counts[name] = counts.get(name, 0) + occurrences
 
 
 class RunConfiguration(InternalModel):
@@ -666,8 +697,10 @@ __all__ = [
     "CompletionEvidence", "ContinuationFacts", "EffectivePolicy", "EvidenceRef",
     "InterruptEvidence", "NativeIdentity", "NativeEvidence", "UnknownEvents", "PrivateStatePaths",
     "MAX_UNKNOWN_EVENT_TYPES", "MAX_UNCONFIRMED_ITEMS", "MAX_UNCONFIRMED_NAME_CHARS",
+    "UNLISTED_NATIVE_EVENTS",
     "ResumeCheckpoint", "RunBudget", "RunConfiguration", "RunContinuation", "RunEnd", "RunFeedback", "RunIdentity",
     "WorkerPermission", "RunRequest", "RunResult", "RunValue", "SessionService", "StopEvidence",
     "StopLayer", "canonical_json",
     "decode_run_request", "decode_run_result", "encode_run_request", "encode_run_result",
+    "fold_unknown_events", "unknown_event_name",
 ]

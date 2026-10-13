@@ -59,7 +59,6 @@ from ..native_support import (
 from ..run_contract import (
     ActivityPackage,
     MAX_SCHEMA_BYTES,
-    MAX_UNKNOWN_EVENT_TYPES,
     CheckedConfiguration,
     CheckedValue,
     CompletionEvidence,
@@ -85,6 +84,8 @@ from ..run_contract import (
     RunValue,
     StopEvidence,
     StopLayer,
+    fold_unknown_events,
+    unknown_event_name,
 )
 from .config import cli_command, load_runtime_preferences, provider_access_types, provider_paths
 from ..inquiry_bridge import InquiryBridge
@@ -159,11 +160,11 @@ def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, 
     choices = _model_settings(snapshot).get("available")
     rows = choices if isinstance(choices, list) else []
     catalog_known = isinstance(choices, list) and all(_readable_ref(x) for x in rows)
-    target = next((x for x in rows if _readable_ref(x)
-                   and x["ref"] == {"providerId": provider, "modelId": model}), None)
-    if catalog_known and target is None:
+    row = next((x for x in rows if _readable_ref(x)
+                and x["ref"] == {"providerId": provider, "modelId": model}), None)
+    if catalog_known and row is None:
         raise NativeError("configuration-unavailable", "the requested ZCode provider/model is not in the native available catalog")
-    reasoning = target.get("reasoning") if target is not None else None
+    reasoning = row.get("reasoning") if row is not None else None
     levels = reasoning.get("levels") if isinstance(reasoning, dict) else None
     efforts_known = isinstance(levels, list) and all(isinstance(x, dict) and isinstance(x.get("value"), str) for x in levels)
     efforts = [x["value"] for x in levels] if efforts_known else []
@@ -171,8 +172,8 @@ def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, 
         raise NativeError("invalid-configuration", "the requested reasoning effort is not supported by this native model")
     if not catalog_known or not efforts_known:
         note_unknown("configuration-catalog-unrecognized")
-    target = {"providerId": provider, "modelId": model, "options": {"reasoningLevel": effort}}
-    snapshot = connection.call("session/setModel", {"sessionId": session_id, "model": target, "persistAsWorkspaceLastUsed": False})
+    selection = {"providerId": provider, "modelId": model, "options": {"reasoningLevel": effort}}
+    snapshot = connection.call("session/setModel", {"sessionId": session_id, "model": selection, "persistAsWorkspaceLastUsed": False})
     snapshot = connection.call("session/setThoughtLevel", {"sessionId": session_id, "thoughtLevel": effort, "persistAsWorkspaceLastUsed": False})
     actual = selected(snapshot)
     expected = {"provider": provider, "model": model, "effort": effort}
@@ -445,12 +446,6 @@ def validate_turn_provenance(record: dict) -> str | None:
     return "the ZCode native resume identity is invalid"
 
 
-#: Beyond the shared contract's type cap, further distinct unknown kinds fold
-#: into this one residual name; the parentheses keep it outside the allowed
-#: label charset, so no native label can ever collide with the bucket.
-_UNLISTED_UNKNOWN_TYPES = "(unlisted-native-events)"
-
-
 class _RunFacts:
     """The cumulative, normalized facts of one run, as the observer sees them."""
 
@@ -460,13 +455,7 @@ class _RunFacts:
         self.denied: list[dict] = []
 
     def note_unknown(self, label: object) -> None:
-        name = label if isinstance(label, str) and re.fullmatch(r"[A-Za-z0-9/._-]{1,64}", label) else "unknown"
-        if name not in self.unknown_counts and len(self.unknown_counts) >= MAX_UNKNOWN_EVENT_TYPES - 1:
-            # The shared contract bounds the distinct kinds. The surplus folds
-            # into one bucket so an over-wide classification can never cost the
-            # run its total, its stop facts or its result.
-            name = _UNLISTED_UNKNOWN_TYPES
-        self.unknown_counts[name] = self.unknown_counts.get(name, 0) + 1
+        fold_unknown_events(self.unknown_counts, unknown_event_name(label))
 
     def mapping(self, *, tool_calls: int, settled: bool, raw_answer: str | None) -> dict:
         return {

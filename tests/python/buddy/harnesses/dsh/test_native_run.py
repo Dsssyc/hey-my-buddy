@@ -596,8 +596,9 @@ class FastSeamTests(NativeRunCase):
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(seen[-1]["unknownEvents"]["total"], 65)
-        self.assertLessEqual(len(seen[-1]["unknownEvents"]["countsByType"]),
-                             run_contract.MAX_UNKNOWN_EVENT_TYPES)
+        counts = seen[-1]["unknownEvents"]["countsByType"]
+        self.assertLessEqual(len(counts), run_contract.MAX_UNKNOWN_EVENT_TYPES)
+        self.assertEqual(counts[run_contract.UNLISTED_NATIVE_EVENTS], 2)
         # The final result carries the same bounded total as the observer.
         self.assertEqual(result.native_evidence.unknown_events.total, 65)
         self.assertLessEqual(len(result.native_evidence.unknown_events.counts_by_type),
