@@ -16,7 +16,7 @@ Read [ADR-029](docs/decisions/029-console-frontend-foundation.md) before changin
 
 The shared `buddy` skill is the only distribution ([ADR-015](docs/decisions/015-shared-agent-skill-distribution.md)). The source carries no compatibility facades for retired plugin paths, CLI aliases, legacy Node records, fingerprints or socket guards, or historical schema conversions.
 
-While the version is 0.x the source keeps neither defensive redundancy nor compatibility. Validation happens once at a boundary: outside input, another process, content from a model or the web, and anything that deletes or overwrites. Inside the boundary code trusts its invariants and fails loudly, without fallbacks, repeated checks or swallowed exceptions. A defect is fixed at its cause, amending the task's scope when the cause lies outside it, never patched at the call site. Replaced code, tests and documents are deleted in the same change.
+While the version is 0.x the source keeps neither defensive redundancy nor compatibility. Validation happens once at a boundary: outside input, another process, content from a model or the web, and anything that deletes or overwrites. Inside the boundary code trusts its invariants and fails loudly, without fallbacks, repeated checks or swallowed exceptions. A defect is fixed at its cause, amending the task's scope when the cause lies outside it, never patched at the call site. Replaced code, tests and documents are deleted in the same change. While the version is 0.x, the middle number moves only when the Host-facing contract or a stored form changes; any other change that gets installed moves the last number, and a change of documents or tests alone moves none.
 
 ## Layout
 
