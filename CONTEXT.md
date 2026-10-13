@@ -125,6 +125,14 @@ One Worker buddy execution ending in a result, assistance request or attention b
 The fixed artifact the blackboard makes of a checkout's content when a turn ends; acceptance judges it, never the Worker's own report.
 _Avoid_: 第 N 封 (say 第 N 回合的封存), 快照
 
+**预期时长 / expected duration**:
+When the Host expects a micro task or a command execution to be done: half an hour unless it says otherwise. Reaching it stops nothing; it is the moment the Host is reminded to look, and the reminder repeats each time the same span passes again.
+_Avoid_: timeout, deadline, time limit (for delegated work)
+
+**有序收尾 / wrap-up**:
+Stopping a running micro task through the blackboard so that its Worker says what is done and what is not and delivers before it stops; a forced stop follows when the grace period ends, and the partial output is sealed either way.
+_Avoid_: graceful shutdown; cancel (for the summary itself)
+
 **权限档位 / permission level**:
 How far a buddy may go in one run, in five levels from narrow to wide: 不用工具 / no tools (it only answers), 只联网 / web only (it may search the web and fetch pages and cannot touch local files), 只读 / read-only (read and search; no file may be modified), 写检出 / checkout-write (edit and run commands; files may be modified only inside the micro task's checkout) and 放开 / full access (no limit on where files are modified). The first two say which tools exist; the last three say where files may be modified and nothing about the network. A Worker buddy's level is one of the last three, chosen by the Host when it delegates and changeable between turns; a Router buddy's level follows from what it is doing. A harness carries a level out either 强制 / enforced, when its sandbox or tool limits stop what the level excludes, or 约定 / by convention, when it is only asked to stay inside and the blackboard checks afterwards what it can.
 _Avoid_: 权限清单, sandbox mode (a level is not a list of grants, and a sandbox mode is only how one harness carries a level out)
