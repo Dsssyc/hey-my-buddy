@@ -42,6 +42,7 @@
 | 4 | 删版本号的闸门与租约 | 删掉评价表与设置的版本号作为闸门的用法、读者与写者的租约、`stale`，以及因为“表变了”“设置变了”“读者未结束”“写者未结束”而停下的路；改成答案发布时检查选中的 buddy 仍是合法候选，不是就重新路由一次，再不是就停到 Host 的边界；设置的修改后写的生效。读清每个微任务上“配置验证的版本号”那一对，把能不能换成认领时校验写进说明，由 Host 定 | ZCode 运行模块里没有使用的 `import re` |
 | 5 | 改名：宏任务一族 | `objective` 一族的表、列、字段、命令、事件与前端的名字 | 无 |
 | 6 | 改名：buddy 一族 | 指 buddy 的 `profile` 与 `configuration`，连同事件名与排队原因 | `suggestedProfileId` 的两种形态留给第 3 步 |
+| 6′ | 改名：harness | 指 buddy 的第一段、指一个 harness 的 `adapter` 改称 `harness`：提交与继续的参数、回应里 buddy 的各段、按 buddy、模型或 harness 记的表的列、错误码与 `adapters` 命令；指连接件的 `adapter` 不动（见“名字的规则”） | 无 |
 | 7 | 改名：模型一族 | `family` 一族的表、字段与前端的名字 | 无 |
 | 8 | 改名：微任务一族与终态 | 指微任务的 `goal`、名词的 `delegation` 与 `governed`；终态 `concluded`，失败或取消之后被结束的也归到它，`list` 的待验收筛选、宏任务的待验收计数与控制台的那一处判断随之只看状态 | 已交付而被 Host 结束的微任务的终态；`get` 看不出摘要被截断 |
 | 9 | `meta` 里有结构的记录搬进表 | Router 的设置成为表；按 harness 的目录读取时间、账户状态与下次扫描时间成为目录当前行的属性；其余按 L18 的清点逐项搬，或在已经没有读者时删掉 | 升级之后不在目录里的 buddy 的不可用原因 |
@@ -60,12 +61,15 @@
 | `objective` | 宏任务 | macro task | `objectives` 表成为 `macro_tasks`；`objectiveId`、`objectiveOf` 成为 `macroTaskId`、`macroTaskOf`；`objective-list`、`objective-timeline`、`objective-stop` 成为 `macro-task-list`、`macro-task-timeline`、`macro-task-stop`；标识的前缀由 `obj-` 改为 `macro-` |
 | `objective` | 交给 Worker 的任务文字 | task | 回合输入里的 `objective`、`objectiveTruncated` 成为 `task`、`taskTruncated` |
 | `profile`、`configuration` | 一个 buddy | buddy | `profileId` 成为 `buddyId`；`evaluation_profiles` 表成为 `buddies`；`model-profiles` 成为 `buddy-list`；`routerProfileIds` 成为 `routerBuddyIds`；`executionConfiguration` 与继续时的 `configuration` 成为 `buddy`；`configurationLocked` 成为 `buddyLocked`；事件 `workflow.configuration_selected` 一类成为 `workflow.buddy_selected` |
+| `adapter` | buddy 的第一段，一个 harness | harness | 提交与继续时的 `adapter` 成为 `harness`；buddy、模型、目录、健康与额度各表的 `adapter` 列成为 `harness`；`adapters` 命令成为 `harnesses`；`ADAPTER_UNAVAILABLE` 成为 `HARNESS_UNAVAILABLE` |
 | `family` | 一个模型 | model | `family_annotations`、`family_preferences` 表成为 `model_notes`、`model_preferences`；`familyAnnotations`、`familyPreferences` 成为 `modelNotes`、`modelPreferences` |
 | `goal`、名词的 `delegation`、`governed` | 微任务 | micro task | 任务种类 `goal` 成为 `micro-task`；`runId` 等标识字段的名字不变 |
 | `BUDDY_` | 环境变量的前缀 | `HMB_` | 全部变量，例如 `HMB_STATE_DIR` |
 | `buddy`（skill 与命令的名字） | 产品 | `hey-my-buddy` | `skills/hey-my-buddy`、`scripts/hey-my-buddy` |
 
-模型这一级的记录仍用三个字段 `adapter`、`provider`、`model` 标识，不另起一个叫 `model` 的对象，免得它里面又有一个 `model`。
+模型这一级的记录用三个字段 `harness`、`provider`、`model` 标识，不另起一个叫 `model` 的对象，免得它里面又有一个 `model`。
+
+`adapter` 有两个意思，只改一个（用户于 2026-10-13 定：buddy 的第一段就是 harness，术语表与通行的说法都是这样）。指一个 harness 的改称 `harness`。指连接件的不动：术语表里适配器 / adapter 是一个 harness 以某个角色接入黑板的连接件，命令任务与外部 Worker 也各有一个连接件而它们不是 harness；所以任务、执行与 Worker 运行时上记“由哪个连接件执行”的那一列，以及 `execution-submit` 这条只给命令任务与外部 Worker 用的路上的 `adapter` 参数，仍叫 `adapter`。微任务对 Host 显示的是它的 buddy，不显示连接件。两个意思的划分是整合 Host 的建议，逐个名字的归属由名字清单列出。
 
 不改的：别的意思的 `configuration`（Router 的设置、用户的 harness 配置）；别人的词（Windows 的 `USERPROFILE`、Codex 的 `activePermissionProfile`、React 的 `Profiler`、样式里的 `font-family`）；术语表里的模型画像 / model profile；中性的工程用词 `workflow`、`run`、`task`、`attempt` 与包里的 `buddy/` 目录。
 
@@ -79,7 +83,6 @@
 
 ## 没有纳入的
 
-- 接口里 buddy 的第一段叫 `adapter`，术语表里叫 harness；`adapter` 还用来指命令任务与外部 Worker 这两种不是 harness 的东西。把它们分开是接口的重新设计，不是改名，留待用户定。
 - `workflow_runs` 一类表名里的 `workflow`、`run` 不改，理由见上。
 - 权限档位并成各角色共用的一套（[ADR-023](../decisions/023-harness-integration-principles.md)）与 Router 的几个面，是下一步。
 - 维护面的统计从这次升级之后的微任务算起；需要时从归档里另写一次性的换算把结果事实带回来。
