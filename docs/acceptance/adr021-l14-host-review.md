@@ -168,6 +168,28 @@ Host 的核对，都在合入之后的树上（与最后合入整合分支的树
 - 路由又为机械的改名选了最高的推理强度：输入约 713 万 token（其中 690 万是缓存命中），输出 4.3 万，26 分钟。
 - 真实进程下走完整个升级这一条这一行没有重做，整个改名做完之后的最终演练会再走一遍。
 
+## 第 6 行：改名，buddy 一族（2026-10-13）
+
+微任务「改名：buddy 一族」由 Host 指定 codex / openai / gpt-6.1-sol / high：`profile` 与 `configuration` 各有几个意思，要逐个判断哪些指一个 buddy。交付 `570b6893`，合并为 `b9bb9170`，没有调整。
+
+- 改名是否机械，由 Host 用脚本核对：271 个文件里 228 个只有名字变了；其余的差异逐处读过，是局部变量与类型的改名（`config` 成为 `buddy`，前端的类型成为 `BuddyIdentity`）、升级时读旧表名与旧列名的两张对照表、两个撞名的测试夹具改名、Worker 结果契约的四个固定哈希（契约里的 `suggestedProfileId` 成为 `suggestedBuddyId`）。
+- 不该改的名字逐个数过，改名前后的出现次数相同：`USERPROFILE`、`Profiler`、`activePermissionProfile`、`rpcProfile`、`-NoProfile`、`readonly-configuration-mismatch`、`configuration_update`、`scope-configuration-unconfirmed`，以及 Router 的设置对象 `configuration`。源码里剩下的 `profile` 都是别人的词。
+- 完整检查在合并后的树上用默认的 4 个进程跑：234 个文件里 231 个通过，9 分 52 秒。失败的是 `blackboard.store.test_blackboard`、`cli.test_checks_parallel` 与 `console.test_console_sessions`，各一项与时序有关，三个文件单独重跑全部通过（87 项）。机器上没有别的微任务，但当时负载在 22 到 32 之间，占用来自系统进程（通知中心、文件事件与索引服务）。
+- 前端全量 1,088 项通过，浏览器检查 96 项通过。
+- 在日常看板最近一次备份的副本上重演归档升级：四个前提各自拒绝，归档之后改动历史文件被拒绝；升级 174 秒完成。这一行第一次改了带走的表的列名，Host 用自己写的对照（`buddies` 对 `evaluation_profiles`，`buddy_id` 对 `profile_id`）逐行比较：133 个 buddy、5 条偏好、12 条备注、10 条并发上限与 4 条 harness 记录全部相等，Router 的设置相等、列表长度 2，新看板的结构与全新建的一致。
+- 空的主目录里把候选装成私有服务，在真实的控制台上给一个没有启用的 buddy 设了“排除”并写了理由，保存；只读打开那块私有看板，这一条在 `evaluation_preferences` 的 `buddy_id` 之下，没有带旧词的表、索引与列。没有启用任何 buddy；服务已停，目录已删。
+- 两处故障注入都有测试拦住：带设置时把基点的两列读反；把基点的 Router 列表丢掉。
+- 测试函数改名前后都是 3,829 个，其中 60 个改了名。
+
+照实写的几处：
+
+- 有两处改过了头，记为下一行的顺带项：两句给 Host 的报错文字里出现了“model buddy”这个不存在的说法；预览探针里指 Router 设置错误的字段 `configurationError` 被改成了 `buddyError`。
+- 它顺带修了一处早已存在的测试缺陷：`test_workflow_real.py` 拼错了源码的路径，起的子进程用的是解释器环境里的那份源码，不是被测的这一份；改名让两份源码的结果格式不同，才暴露出来。Host 顺着查了别的测试，另有一处拼路径多了一层目录，记为下一行的顺带项。
+- 带设置的两张对照表按位置一一对应，写错位置不会报错，只靠测试守着；两处故障注入都只有 `install.test_upgrade_migration` 发现，`test_upgrade_fixture` 没有发现。
+- 上一行记下的两处顺带项这一行做掉了：调度的那条测试断言了认领到的是哪一个任务；控制台服务里那句过时的注释删掉了。
+- 消耗：输入约 1,461 万 token（其中 1,430 万是缓存命中），输出 5.2 万，38 分钟。
+- 真实进程下走完整个升级这一条这一行没有重做，整个改名做完之后的最终演练会再走一遍。
+
 ## 记录的用词：开发者与用户（2026-10-13）
 
 开发者于 2026-10-13 指出记录里的“用户”有两个意思，会把等他做的决定读成等使用者的反馈；定下两个词，旧记录一起改。定义由 Host 写进 `CONTEXT.md` 与 `AGENTS.md`，旧记录交给两个经路由的微任务逐句判断。
