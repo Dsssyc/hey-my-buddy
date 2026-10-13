@@ -63,7 +63,7 @@
 | `profile`、`configuration` | 一个 buddy | buddy | `profileId` 成为 `buddyId`；`evaluation_profiles` 表成为 `buddies`；`model-profiles` 成为 `buddy-list`；`routerProfileIds` 成为 `routerBuddyIds`；`executionConfiguration` 与继续时的 `configuration` 成为 `buddy`；`configurationLocked` 成为 `buddyLocked`；事件 `workflow.configuration_selected` 一类成为 `workflow.buddy_selected` |
 | `adapter` | buddy 的第一段，一个 harness | harness | 提交与继续时的 `adapter` 成为 `harness`；buddy、模型、目录、健康与额度各表的 `adapter` 列成为 `harness`；`adapters` 命令成为 `harnesses`；`ADAPTER_UNAVAILABLE` 成为 `HARNESS_UNAVAILABLE` |
 | `family` | 一个模型 | model | `family_annotations`、`family_preferences` 表成为 `model_notes`、`model_preferences`；`familyAnnotations`、`familyPreferences` 成为 `modelNotes`、`modelPreferences` |
-| `goal`、名词的 `delegation`、`governed` | 微任务 | micro task | `goal` 对象成为 `microTask`，任务种类 `goal` 成为 `micro-task`；视图里布尔的 `governed` 删掉，由任务种类表达；`delegation` 这个对象（种类、项目、来源与当前的 Host、上级与根）的新名字待用户定；`runId` 等标识字段的名字不变 |
+| `goal`、名词的 `delegation`、`governed` | 微任务 | micro task | `goal` 对象成为 `microTask`，任务种类 `goal` 成为 `micro-task`；视图里布尔的 `governed` 删掉，由任务种类表达；`delegation` 这个对象（种类、项目、来源与当前的 Host、上级与根）成为 `lineage`（用户 2026-10-13 定）；`runId` 等标识字段的名字不变 |
 | `BUDDY_` | 环境变量的前缀 | `HMB_` | 全部变量，例如 `HMB_STATE_DIR` |
 | `buddy`（指产品的地方） | 产品 | `hey-my-buddy` | `skills/hey-my-buddy`、`scripts/hey-my-buddy`；C-Two 的资源名、控制台的会话 cookie 与 CSRF 请求头、Git 引用的命名空间、会话归属的取值与标识的前缀同样改；给 Worker 用的三个工具成为 `hey_my_buddy_finish_turn`、`hey_my_buddy_checkpoint`、`hey_my_buddy_answer_inquiry` |
 
