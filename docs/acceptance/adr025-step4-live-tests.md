@@ -13,7 +13,7 @@
 
 - 观察协议见证（`test_observation_uses_the_real_bridge_protocol`）：经注册通道观察 live（sessionId、deliveryMode cooperative-checkpoint、activity 正向发布 toolName），补 version/token 帧断言。
 - 原生工具参数不发布（`test_observation_does_not_publish_native_tool_arguments`）：保护不变，形态从旧白名单过滤改为严格 live 模型整体拒绝——夹带 `argumentPreview` 的 activity 项使整次观察被拒（`observation-unavailable`），私有串不出现在任何结果。
-- 问询关联与错误 token（`test_a_question_is_correlated_and_a_wrong_token_is_refused`）：ask 的 inquiryId 关联与 `unauthorized` 精确拒绝保留；`delivered`→`queued` 为用户已接受的合作检查点送达差异（送达与答案事实改由 journal 承载），另补"未授权 ask 是可重试拒绝、消息留 queued"。
+- 问询关联与错误 token（`test_a_question_is_correlated_and_a_wrong_token_is_refused`）：ask 的 inquiryId 关联与 `unauthorized` 精确拒绝保留；`delivered`→`queued` 为开发者已接受的合作检查点送达差异（送达与答案事实改由 journal 承载），另补"未授权 ask 是可重试拒绝、消息留 queued"。
 - journal 形状导入（`test_the_real_bridge_journal_shape_is_imported_with_reply_tool_evidence`）：答案文本、`tool:buddy_checkpoint`/`tool:buddy_answer_inquiry` 证据、`bridge-journal` 来源与幂等重导入断言保留；旧 `messageId` 投递关联随 Node 通道退役——共享 delivery 记录是 journal 传输证据，其键不在消息库有界投递键白名单（与 zcode live 测试的既有口径一致，本轮以运行证据确认）。
 - 无文本 answered 降级、journal 幂等（含撕裂行忽略）、`journal-unavailable` 终态拒绝（错误码精确、消息 unavailable、run 保持 running）、外来 journal 拒绝（`journalRejected` 含 another、答案永不导入）：断言意图不变，仅记录改绑定形状。
 - `agent-gone` 终态码见证原样保留：共享桥自身以 not-ready 加 journal 终结表达回合结束，共享传输词汇仍保留 agent-gone，此测试钉住黑板对该终态码的处理，由替身恰好如此拒绝。
@@ -22,7 +22,7 @@
 ## 缺口与差异报告
 
 - 未发现实际行为不等价的公共缺口。三处 Host 所有源文件的陈旧表述仅报告不改（公共文件归 Host）：`src/hey_my_buddy/buddy/harnesses/live.py` 的 `EXISTING_CAPABILITIES` 注释仍写"DSH keeps its current Node realtime delivery until step four moves it to ACP"（其字典值已正确为 cooperative-checkpoint）；`src/hey_my_buddy/blackboard/tasks/inquiry.py` 模块 docstring 仍写"the Node dsh plugin hosts one inside the upstream process"；同文件 `_apply_bridge_answer` 内注释仍称"the dsh bridge reports agent-gone/agent-not-running this way"（共享桥不再如此，但该处理对保留的传输词汇仍正确）。
-- 行为差异仅一项且属用户已接受范围：问询只在合作检查点送达，ask 即时回报 queued。错误 token、跨 task/外来 journal、身份每成分、队列/字节界、答案来源、重放/撤回（zcode 侧既有见证）、只观察能力与精确拒绝原因的原保护未弱化。
+- 行为差异仅一项且属开发者已接受范围：问询只在合作检查点送达，ask 即时回报 queued。错误 token、跨 task/外来 journal、身份每成分、队列/字节界、答案来源、重放/撤回（zcode 侧既有见证）、只观察能力与精确拒绝原因的原保护未弱化。
 
 ## 验证证据
 

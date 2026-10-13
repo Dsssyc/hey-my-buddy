@@ -47,7 +47,7 @@ A 的第 4、5 回合分别在 GLM-5.3/max 和 GLM-5.3-Flash/max 上收到供应
 
 B 的套餐缺项、原生拒绝文字丢失、空推理强度、公开 worker 收据缺席事实和长中文错误越过字节界均返回原 run 修正。四个原始 Host 边界与长 Unicode 错误用例已转绿。完整检查发现的 ZCode 旧断言也返回 B，最终只补精确 equality 的 `accountStatus:not-applicable`。该回合 Worker 在自身环境报告 46 项中 19 failures/4 errors，目标断言通过后以 attention 交 Host，未扩大修改范围；Host 在隔离环境复跑 46 项全绿后直接验收该固定 turn，保留 Worker 原检查结果。早期 Worker 报告的 DSH/ZCode 失败也未直接认定为基线缺陷；Host 独立检查相关 10 项全部通过，环境差异的各个因子未逐项隔离。
 
-B 用 `codex / openai / gpt-6-luna / low` 继续时收到 `CONFIGURATION_UNAVAILABLE`。Host 先按用户规则执行 `buddy adapters '{"refresh":true,"adapter":"codex"}'`，再用已启用的 `gpt-6.1-sol / high` 在原 B run continue。该日常刷新与下面的专项真实发现分开记录；未改日常模型启用开关、登录、密钥或运行时版本。C 的目录状态误用整体健康 availability 被原 run 修正，Host 原始复现与定向组件合计 18 项通过。
+B 用 `codex / openai / gpt-6-luna / low` 继续时收到 `CONFIGURATION_UNAVAILABLE`。Host 先按开发者规则执行 `buddy adapters '{"refresh":true,"adapter":"codex"}'`，再用已启用的 `gpt-6.1-sol / high` 在原 B run continue。该日常刷新与下面的专项真实发现分开记录；未改日常模型启用开关、登录、密钥或运行时版本。C 的目录状态误用整体健康 availability 被原 run 修正，Host 原始复现与定向组件合计 18 项通过。
 
 ## 测试编号与检查结果
 
@@ -78,7 +78,7 @@ Host 验收后仅回收三条登记路径：A 的 `ws-46c8c752810e3897106ed1c6a4
 
 ## Claude Code Host 退回后的返修计划
 
-Claude Code Host 对 `277eadd81606152f3ec4c774f5b08d54d108d6a6` 的验收未通过：公开摘要携带三个本机主目录路径，continue 的启用检查挡住目录重读，DSH 发现说明不符实际启动方式，而且最终代码缺少退出 0 的完整检查。Host 已将三处路径改成 `~` 并改写末提交为 `c8336e6a61d7bde7d1072adfdd24b40104541d79`；仓库卫生的 5 项检查退出 0，分支可达历史的该文件无本机主目录路径，尚未推送。原 A、B run 均已 accepted 且已回收；原 A 的 continue 实际返回 `CONFLICT: An accepted goal cannot be continued`。用户因此明确授权创建关联原 A、B run 的返修微任务，首次仍走路由，沿用原 hostId 与宏任务。
+Claude Code Host 对 `277eadd81606152f3ec4c774f5b08d54d108d6a6` 的验收未通过：公开摘要携带三个本机主目录路径，continue 的启用检查挡住目录重读，DSH 发现说明不符实际启动方式，而且最终代码缺少退出 0 的完整检查。Host 已将三处路径改成 `~` 并改写末提交为 `c8336e6a61d7bde7d1072adfdd24b40104541d79`；仓库卫生的 5 项检查退出 0，分支可达历史的该文件无本机主目录路径，尚未推送。原 A、B run 均已 accepted 且已回收；原 A 的 continue 实际返回 `CONFLICT: An accepted goal cannot be continued`。开发者因此明确授权创建关联原 A、B run 的返修微任务，首次仍走路由，沿用原 hostId 与宏任务。
 
 返修 A 修改 `blackboard/tasks/workflow.py` 的明确配置续跑入口与受影响的任务测试：原生目录先校验，缺失或不可用先有限重读，之后独立判断用户启用状态；拒绝携带目录读取时间与刷新办法，并区分未启用和目录不可用。待确认与账户读取事实仍存既有 meta，schema 保持 15。返修 B 只改 DSH 的发现说明，写明本次私有 DSH_HOME 启动已安装 DSH、设置与凭据按路径绑定原主目录；不做真实发现或模型验证。Worker 不删除、不运行完整检查，只跑受影响测试。
 

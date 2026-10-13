@@ -1,6 +1,6 @@
 # Model effort display correction
 
-Verified on 2026-09-24 against the 0.6 contract. The user reported `DeepSeek-V41-Flash · off · off` in the decision-profile selector. Catalog labels already carried the native effort suffix, and the UI appended it again. The same duplication affected other efforts and profile selectors.
+Verified on 2026-09-24 against the 0.6 contract. The developer reported `DeepSeek-V41-Flash · off · off` in the decision-profile selector. Catalog labels already carried the native effort suffix, and the UI appended it again. The same duplication affected other efforts and profile selectors.
 
 DSH Flash/max completed governed run `999a0a84-a1e9-40f3-aa81-c7e6ddccb7f1` in an isolated worktree based on `e0fb9435a8893661401c3eca80accd869d5f2ddd`. Sealed output `137e9bf7044bffc45cd5c2391731280df2d3f569` changed eight files under `apps/console/src`; artifact `99804e0f-cf0c-482b-99f8-77eb09933fcd` has diff SHA-256 `f1972f158d1d2bb68f7c790b92f4fe22a0531fd97429707a011c120d7e7a6bce`. The Host checked that the integrated source matched the sealed output exactly and acknowledged the artifact after verification. The task reported confirmed self and descendant shutdown.
 

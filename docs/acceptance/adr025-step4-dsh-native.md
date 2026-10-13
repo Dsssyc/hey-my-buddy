@@ -5,7 +5,7 @@
 ## 更正与偏差（对初稿记录的修正）
 
 - 初稿"边界与方法"曾声称"全程零已安装 DSH 启动"，该结论不成立，现予更正：初稿后文自己承认旧入口桩测试在不带 `BUDDY_DEV_SOURCE=1` 时回退真实安装版 dsh；Host 独立核对到本任务 `m/repro2/attempt/runner.stdout.log` 中旧入口适配器一次运行的 `dshBin` 为安装版（`~/.local/bin/dsh`）、退出码 1、stderr 为 `MISSING_CREDENTIAL`（无凭据退出，未发生任何模型调用），且 `m/repro_adapter.py` 把该次 DSH_HOME 绑定在任务私有 `m/repro2/home`。
-- 按现存记录能确认的只有上述至少一次安装版 dsh 预检启动及其凭据缺失结果；此类启动的准确总次数无法从留存的测试日志重建，如实记为未知，不补写、不追查用户日常数据。初稿的"零模型调用"结论维持不变。
+- 按现存记录能确认的只有上述至少一次安装版 dsh 预检启动及其凭据缺失结果；此类启动的准确总次数无法从留存的测试日志重建，如实记为未知，不补写、不追查开发者日常数据。初稿的"零模型调用"结论维持不变。
 
 ## 边界与方法
 
@@ -18,7 +18,7 @@
 - 准备与接缝校验：harness 名、服务绑定类型、会话服务描述与挂载一致性、输出 schema 与完成工具契约一致性、native resume 未接线即拒绝，全部在任何进程存在之前判定（`_check_service_descriptions`、`run` 前置分支）。
 - 启动与初始化：`tool_scope_launch` 把工具范围翻译为公开启动配置——write 即默认 workspace-write 预设，read 即 `DSH_PERMISSION_MODE=read-only` 子进程键，none 即已核对 15 个工具行加 `plan-mode` 行的 `--patch`。每次启动的统一 patch 顺序：源 home 的 `settings`/`credentials` 指路行（仅当文件存在）、私有会话记录根钉住行（`session-persistence-jsonl` 指向本运行私有 `DSH_HOME/sessions`，防源 settings 覆盖外移）、工具范围行、两项始终关闭行最后。任何启动（含本片全部测试的假程序）都经已验收的 `dsh/acp/launch.py` 私有包装：强制本运行私有 `DSH_HOME`，环境为 `native_environment` 白名单加显式校验的私有目录，`HOME` 默认继承、探针与测试可显式指定私有值；`--version/--help` 形态的调用同样必须走该包装。
 - 工具行清单（初稿缺口一关闭）：`NONE_SCOPE_DISABLED_ROWS` 现为 15 项（含平台互斥的 bash/pwsh），来源是 Host 在私有 HOME/DSH_HOME 的免模型 `dump-config` 组合面读取（2026-10-06，原文留存于 Host 任务 `m/dsh-tool-inventory2/dump-config.stdout`，只读引用）：16 个 `tool-` 行中 `tool-result-pruner` 是上下文剪枝不属工具提供行，其余 15 行为工具行；历史"14 行"数字被本次组合面读取取代；`commands` 不能禁；清单外新工具行仍如实报告为保留事实，绝不当作已限制，不对厂商包作静态证明。
-- 两项新批准行为差异（第四、五项，用户 2026-10-06 明确同意并要求登记）：hey-my-buddy 自己启动的所有 DSH 运行——Worker、快速调用与无输入发现一律——经本运行的私有 patch 关闭 `session-title-llm` 与 `session-telemetry-otel`；初稿只在 run 主体应用、发现漏掉，本轮已统一到 `_launch_agent`；用户自己交互使用的 DSH 不受影响，未改任何用户配置。
+- 两项新批准行为差异（第四、五项，开发者 2026-10-06 明确同意并要求登记）：hey-my-buddy 自己启动的所有 DSH 运行——Worker、快速调用与无输入发现一律——经本运行的私有 patch 关闭 `session-title-llm` 与 `session-telemetry-otel`；初稿只在 run 主体应用、发现漏掉，本轮已统一到 `_launch_agent`；用户自己交互使用的 DSH 不受影响，未改任何用户配置。
 - 来源绑定（Host 问询 `adr025-4b1-native-config-source` 的落实）：来源 home 取父环境 `DSH_HOME`，缺省 `~/.dsh`（旧入口与 catalog 同款约定；launcher 已透传该变量）；`settings.yaml`/`.credentials.yaml` 存在时经公共 patch 行指路（旧快速 runner 的生产行形状），模块只取路径、绝不读内容——测试把凭据文件 chmod 至本用户不可读后运行仍成功；私有 home 物化 Host 探针验证过的 acp profile manifest（base+acp-app bundles、startup patchReload、空 patch 层；本机安装 home 无 `profiles/acp` 可复制，bundle 由 dsh 安装自行解析）。
 - 会话与配置：`session/new` 恒带 `mcpServers`（空或本运行挂载），`session/set_config_option` 以声明值字符串选择模型与推理强度，checked 事实只来自响应自身的选项组回读（`declared-option-membership` + `set_config_option-readback`），requested 与 checked 严格分列，会话内无模型身份回报，不伪造 observed。
 - 事件循环：单一 `_prompt_and_observe` 承载 prompt 线程、更新队列、取消/截止检查、逐帧折叠与角色反馈；每帧先投影工具事实与未知事件分类，governed 轮再进根回合证据；观察者的 stop 通过发送 `session/cancel` 执行，截止耗尽同样请求中断并有界放弃后交由组停止收尾。工具事实经共享固定表按原生名归类（DSH 恒报 `other`，未知名一律 other），新工具行如实保留为事实。

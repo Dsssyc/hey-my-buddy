@@ -2,7 +2,7 @@
 
 ## Claude Code Host 打回与返修计划（2026-10-10）
 
-初交 `b093dd73` 未通过，以下返修按用户本次完整要求为准；此前成功、失败、初交数字与各轮固定材料都保留。已通过的范围、Python 3230→3400（新增170无删除）、前端844项及4产物字节一致、八项私有预览和8处前端变异不重做；后端40处中的33处已守住，7处缺口随本轮逐项核对。用户把产品简洁作为取舍原则，界面只减默认展示，不增加设置、开关或提示。原Host `codex-adr027`、原宏任务 `obj-1ba05143-a5d7-496b-9b03-5d16681b2b33`、分支与Host工作树沿用，不推送。原已accepted微任务不能continue，按既有授权创建关联返修；每份本轮产物的代码/测试/行为缺陷回本轮原run继续，默认仍省略全部四字段/configuration。
+初交 `b093dd73` 未通过，以下返修按开发者本次完整要求为准；此前成功、失败、初交数字与各轮固定材料都保留。已通过的范围、Python 3230→3400（新增170无删除）、前端844项及4产物字节一致、八项私有预览和8处前端变异不重做；后端40处中的33处已守住，7处缺口随本轮逐项核对。开发者把产品简洁作为取舍原则，界面只减默认展示，不增加设置、开关或提示。原Host `codex-adr027`、原宏任务 `obj-1ba05143-a5d7-496b-9b03-5d16681b2b33`、分支与Host工作树沿用，不推送。原已accepted微任务不能continue，按既有授权创建关联返修；每份本轮产物的代码/测试/行为缺陷回本轮原run继续，默认仍省略全部四字段/configuration。
 
 | 微任务 / 唯一写入范围 | 做法与现成机制 | 验证编号 |
 | --- | --- | --- |
@@ -15,9 +15,9 @@
 
 R-A、R-B、R-D首先并行，范围互斥；R-C在空位开始；R-E等待R-B整合（生命周期读取身份夹具），同文件只一个写入者；R-F脚本/smoke开发可在其A/B/C生产与fixture接口最终固定后独立开始，Host全规模测量只在全部整合和最新core之后执行。每个微任务先建ignored材料目录、只受影响测试、不完整检查/构建、Worker不删除任何东西，不stash或分支/标签操作、不commit。清继承BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT后设私有state/runtime/source；报告与夹具位置~或占位符。生产变化、测试编号增减、断言保留、正常/目标移除结果与材料哈希由Host独立核对，不用Worker摘要作验收。Host在验收后按精确checkout路径回收，原材料提前固定。
 
-原版用时基线来自本Host真实完整日志ffd5b2bb/default4（全套842.853秒），逐文件原数保存host-review-repair-20261010/before-test-file-times.json；用户验收时的177/98.5/90.9/425.6秒另作外部测量来源，机器负载差异不抹平。最终用同一默认runner的日志逐文件对照，不能把Worker材料保留型runner的省收尾时长冒充完整检查提速。只在全部整合且合入届时最新socu/buddy-core后，重新构建并提交assets、独立全新构建字节核对，先Python默认完整检查、后前端全量，顺序各跑一次；疑似负载失败保留并在空闲后单文件复跑再判断。若core已合入C-Two0.7.4，最终检查使用其新依赖，只同步本任务私有开发环境，不安装升级日常运行时。最终记录/卫生再核对后停下等Claude Code Host，期间不开始其他工作、不操作socu/c-two-073或其工作树。
+原版用时基线来自本Host真实完整日志ffd5b2bb/default4（全套842.853秒），逐文件原数保存host-review-repair-20261010/before-test-file-times.json；开发者验收时的177/98.5/90.9/425.6秒另作外部测量来源，机器负载差异不抹平。最终用同一默认runner的日志逐文件对照，不能把Worker材料保留型runner的省收尾时长冒充完整检查提速。只在全部整合且合入届时最新socu/buddy-core后，重新构建并提交assets、独立全新构建字节核对，先Python默认完整检查、后前端全量，顺序各跑一次；疑似负载失败保留并在空闲后单文件复跑再判断。若core已合入C-Two0.7.4，最终检查使用其新依赖，只同步本任务私有开发环境，不安装升级日常运行时。最终记录/卫生再核对后停下等Claude Code Host，期间不开始其他工作、不操作socu/c-two-073或其工作树。
 
-用户报告日常仍C-Two0.6.0、2026-10-10 11:26授权restart后的状态沿用；服务/Worker故障阻断委派就停止报告，不能自行重启/替换/安装、改限额或凭据。保留原schema15私有迁移授权，但本轮不对日常数据库写迁移或复制其数据。范围内界面取舍以用户简洁要求为准。
+开发者报告日常仍C-Two0.6.0、2026-10-10 11:26授权restart后的状态沿用；服务/Worker故障阻断委派就停止报告，不能自行重启/替换/安装、改限额或凭据。保留原schema15私有迁移授权，但本轮不对日常数据库写迁移或复制其数据。范围内界面取舍以开发者简洁要求为准。
 
 R-D 固定产物：最终 artifact `2e1aed35-2556-47df-a5d6-e370c6fefd11`、源码 `9a8ae43b`，5 个文件。Host 私有根独立运行 runtime-version/use-console/App/console-session/edit-mode 共 79 项、tsc 与预览构建，均退出 0；六处独立固定归档的目标移除先干净通过，再各触发行为断言退出 1。Worker 首次证据未显式设置 state/runtime，且依赖路径绑本机布局，Host 在原 run `93accf26` 无配置字段 continue 退回，保留旧材料；新 turn `5d270b91` 显式创建互异私有根、参数化依赖，重跑 25 项、tsc 和六处行为移除全部符合预期，产品源码逐字节未变。版本默认两项/详情默认收起已在私有真浏览器核对，真正隐藏首读/恢复核对待完成；当前整合不等于微任务验收，发行产物与最终全量仍待 Host。固定证据保留在 ignored `tmp/console-ui-and-board-host/review-hr-ui/host-review-round2/` 与 `host-review-round3/`。
 
@@ -27,9 +27,9 @@ R-A 固定产物：artifact `e8dfed17-203b-4824-85fd-747bec917cec`、源码 `1a5
 
 R-B 第一份固定产物：artifact `6025e06b-4a46-44fb-b067-d295c550f9b2`、源码 `74059ff2`，5 个授权文件；Host 私有根独立 57 项退出 0（125.614 秒），十组目标移除均 AssertionError、无 error、退出 1。精确计划的九个触发器/额外写入用例全部守住；Python 两处别名锚点哈希、写事务锚点再查、split-read、checkout-root 原因、空计划无 writer、写锁前快照绑定、旧指纹格式的 generated/wide 列均有目标失败。identity-collision 保留：成功锚点要求同一规范路径/inode 重建旧哈希与新哈希，同一旧 SHA256 指向两个新值需要哈希碰撞；新增 split-read 用例守住此前潜在的双次 stat 窗口，不虚构可达案例。checkout-root-changed 由真实检出与已校验旧清单的差异准确断言，移除后还有下游 fixed-evidence-unverified 拒绝。空计划只使用读事务，仍绑定备份事实；有写入复用既有 database_snapshot 指纹、SQLite BINARY 排序/FILE 临时存储，保留默认备份字节格式、workers/sequence 精确防护与所有计划外表/列不变。全规模 RSS/耗时待 R-F，当前整合不等于微任务验收。
 
-R-B 的 E 计时没有冒充改善：Worker 原 39 项 106.834→120.568 秒，全部日志保留；Host 无配置字段在原 run continue（hr-identity-continue-fixture-cost-e-r1），要求拆准备/正文/正常收尾真实成本，只优化可复用准备，并按用户允许的边界说明无法减少的真实 Git/身份操作。R-C 原 Codex 回合没有实现返修，57 项 47 通过/10 loopback bind PermissionError，checker 的 ps/lsof 收尾也受沙箱限制、进程退出 1；原始材料保留，未当验收。Host 在同一 run continue（hr-cache-continue-implement-with-host-http-r1）完成可运行的 C1/C2/准备盘点，真实 HTTP/正常私有收尾由 Host 对固定产物核对，不升级或替换 Worker。
+R-B 的 E 计时没有冒充改善：Worker 原 39 项 106.834→120.568 秒，全部日志保留；Host 无配置字段在原 run continue（hr-identity-continue-fixture-cost-e-r1），要求拆准备/正文/正常收尾真实成本，只优化可复用准备，并按开发者允许的边界说明无法减少的真实 Git/身份操作。R-C 原 Codex 回合没有实现返修，57 项 47 通过/10 loopback bind PermissionError，checker 的 ps/lsof 收尾也受沙箱限制、进程退出 1；原始材料保留，未当验收。Host 在同一 run continue（hr-cache-continue-implement-with-host-http-r1）完成可运行的 C1/C2/准备盘点，真实 HTTP/正常私有收尾由 Host 对固定产物核对，不升级或替换 Worker。
 
-R-D 真浏览器：用户协助打开 Chrome 私有页后，Host 以新的唯一私有端口隔离其他标签；原生后台标签菜单重载，约 578 秒仅一次 snapshot 200、无周期请求，切回后恢复 304/3 秒节奏。输入工具到真实可见性事件的延迟不归为服务端耗时；“立即一次”由 fake clock 的明确计数/时间边界与目标失败守住。版本明暗×1280/760 像素四组均默认每份软件版本/安装时间两项、原生 details 收起、无横溢出；Enter/Space 独立展开收起不增加 API 读取。安装份用现有 VersionInfoTests READY 元数据配方的私有夹具、从未执行其标记解释器；初始 pointer 缺 owner-private mode 如实显示未记录，随后复用 launcher.write_active_runtime 正确写私有指针，不是安装。忽略图片和 DOM/请求证据在 `tmp/console-ui-and-board-host/host-review-repair-20261010/screenshots/` 与 `rd-visibility-single/`，初始工具焦点/错误矩阵保留但不充当宽窄/隐藏通过证据。
+R-D 真浏览器：开发者协助打开 Chrome 私有页后，Host 以新的唯一私有端口隔离其他标签；原生后台标签菜单重载，约 578 秒仅一次 snapshot 200、无周期请求，切回后恢复 304/3 秒节奏。输入工具到真实可见性事件的延迟不归为服务端耗时；“立即一次”由 fake clock 的明确计数/时间边界与目标失败守住。版本明暗×1280/760 像素四组均默认每份软件版本/安装时间两项、原生 details 收起、无横溢出；Enter/Space 独立展开收起不增加 API 读取。安装份用现有 VersionInfoTests READY 元数据配方的私有夹具、从未执行其标记解释器；初始 pointer 缺 owner-private mode 如实显示未记录，随后复用 launcher.write_active_runtime 正确写私有指针，不是安装。忽略图片和 DOM/请求证据在 `tmp/console-ui-and-board-host/host-review-repair-20261010/screenshots/` 与 `rd-visibility-single/`，初始工具焦点/错误矩阵保留但不充当宽窄/隐藏通过证据。
 
 R-E 顺序起点已具备：R-B 的身份夹具接口 `74059ff2` 已由 Host 核对、整合为 `778fa48f`，该接口只对 identity/migration 类 opt in、其他派生类仍原初态。R-E 以此固定输入启动，只写其六个测试文件；R-B 同 run 的准备成本补充与这六个文件互斥。若 R-B 后续改变共享夹具接口，Host 先核对差异，并在原 R-E run 继续受影响修正，最终整合后再做交叉验证。R-B provisional integration-record 初次遇 revision race，重读 11 后标准重试返回 verified `int-cb19f582-57b7-49d1-9ce9-52482ba3c65f`；未重启进程。
 
@@ -61,7 +61,7 @@ R-E补交最终 artifact `a4ba4f8c-4498-4603-bc91-cceacdccd95d`、五测试源�
 
 R-F固定 artifact `8a8a8469-5977-473d-9583-2a391f318330`（tracked差异0）、ignored脚本 SHA-256 `90a4d8d24b56af07a46152526e43b93ab5f2a8644fb5f30f62cd7b6814719f0e`，全部脚本/旧失败/最终smoke提前复制到 `review-hr-scale/host-review-round2/hr-scale/rf-packet-20261010/` 并核SHA。Host独立smoke十个phase正常退出0，随后读取并合入当时最新core `1a9decd9`（already up to date），在干净 `bbf6f9d6` 上独立完整量测，十个测量PID均不同；全程未提交/改源码，不拿准备的峰值污染no-op。全配方60宏/360受管/40普通/4000证据/100×1.9MB结果、seed613，加既有events/commands历史事实，总340000行（23引用表338821行），DB385769472字节、JSON324166226字节、最大单字段1900000字节，目标378MB偏差约2.06%。两版同seed/物理repo/checkout/inode，经现成SQLite backup原址恢复，五组前后产品指纹完全相同；真实孤立checkout精确删除、首次两个aliases与一个objective/reservation确实写入、固定JSON/patch与其余历史/worker/sequence不变、no-op最终SQL写语句0/BEGIN IMMEDIATE0。标准只读lock/ps观测无残留，所有私有规模材料保留。
 
-全规模API秒/峰值MiB（包含新进程导入基线、只在API返回采样）：无candidate规划2.593/625.23→1.134/85.56（引用扫描0）；有candidate规划5.797/627.48→5.852/95.14（一个streaming扫描，每条历史JSON只解析一次）；实际应用11.647/633.67→11.028/101.33；首次迁移18.094/2264.80→12.572/343.66；no-op迁移23.442/2381.42→8.172/295.23（无writer）。真正持有孤立回收writer锁5.277→3.875秒，最终其中权威引用重查3.668秒，Git证明先在锁外、移除仍在围栏内。无法做到与看板大小无关：任意23表/任意状态/坏JSON都可能引用，不能缩成current状态或漏过未知事实；时间O保留字节，Python不实体化整库，单条JSON/候选索引/证明cache与SQLite sorter仍有成本。有candidate规划未证实wall提速，不把不同窗口的机器负载或用户日常副本44.9/79.4秒直接比较；原版与新版在同一合成配方上实测才入表。原始完整packet `tmp/hr-scale/host-full-bbf6-20261010/`，可提交脱敏表/行分布、围栏、源码/脚本绑定与峰值见 `console-ui-and-board-fixes-host-review-measurements.json`。最终全套之前仍会再核最新core、构建发行产物；未执行最终Python/前端完整检查。
+全规模API秒/峰值MiB（包含新进程导入基线、只在API返回采样）：无candidate规划2.593/625.23→1.134/85.56（引用扫描0）；有candidate规划5.797/627.48→5.852/95.14（一个streaming扫描，每条历史JSON只解析一次）；实际应用11.647/633.67→11.028/101.33；首次迁移18.094/2264.80→12.572/343.66；no-op迁移23.442/2381.42→8.172/295.23（无writer）。真正持有孤立回收writer锁5.277→3.875秒，最终其中权威引用重查3.668秒，Git证明先在锁外、移除仍在围栏内。无法做到与看板大小无关：任意23表/任意状态/坏JSON都可能引用，不能缩成current状态或漏过未知事实；时间O保留字节，Python不实体化整库，单条JSON/候选索引/证明cache与SQLite sorter仍有成本。有candidate规划未证实wall提速，不把不同窗口的机器负载或开发者日常副本44.9/79.4秒直接比较；原版与新版在同一合成配方上实测才入表。原始完整packet `tmp/hr-scale/host-full-bbf6-20261010/`，可提交脱敏表/行分布、围栏、源码/脚本绑定与峰值见 `console-ui-and-board-fixes-host-review-measurements.json`。最终全套之前仍会再核最新core、构建发行产物；未执行最终Python/前端完整检查。
 
 返修最终检查第1轮保留失败：`41ac6c9e29a9b9f35a0bd0f53eb8a6f29429693c` 已含当时最新core `1a9decd9`，发行4文件全新归档构建退出0、与提交和真实浏览器9a8产物逐字节一致。随后 `uv run --frozen python -m hey_my_buddy.cli.checks` 默认4workers，212文件、845.184秒、退出1；唯一失败文件blackboard.routing.test_router原19项中5个ERROR，原因RouterInputTests借用WorkspaceTests.setUp却没有共享类模板，不是负载归因。完整stdout/command/逐文件时间固定 `host-review-repair-20261010/python-first-rework-failed-41ac6c9e/`，未启动前端全量、未覆盖原b093证据。原R-E run继续修（hr-speed-continue-borrowed-fixture-template-r1，四字段/configuration全省略），只test_workspace.py，Router文件只读，保留5原断言、另补借用回归及移除fallback反例；不把借用者改成必须新增类级模板。标准最终检查之后单Router复跑仍同5ERROR（无源码修改），证明是真实夹具契约缺陷；该次load45.19，未当空闲性能证据或给错误归因负载。Gate超过10分钟的事实保留，最终全绿之后再列逐文件前后/固有正文成本，不能抹掉第一次失败。
 
@@ -75,7 +75,7 @@ Python相对b093：3400→3421、新增21、删除0，模块212不变；分别st
 
 构建 `npm --prefix apps/console run build` 在f1a969fa退出0，提交发行产物为 `41ac6c9e`；从该提交全新Git归档重新构建退出0，4文件逐字节等于已提交产物和真实Chrome使用的9a8构建。9f5d之后前端源码/4产物无变化，绑定 `final-fresh-build-proof.json` 与 `assets-final-source-binding-9f5d.json`。CSS/图标内容相同，JS内容与index.html按正常Vite发行过程更新；不安装开发依赖，不提交截图。
 
-独立目标移除本轮32组，各固定源版本/具体目标/受影响编号/正常与失败日志及hash可在 `host-independent-mutation-register.json` 核对；含首次copy survivor之后原run修正、新raw request保护、caller契约和借用fallback的继续返修，不把导入/工具/ps错误计作目标失败。用户点名的旧七处逐项落地：目录/request绑定、Python别名两锚点哈希、writer内再查、checkout-root具体原因、真实cache-hit副本和独立attempt事实都有移除失败；identity-collision因同一真实目录/path/inode重建映射，除真实SHA碰撞外不可达，保留并说明，split-read窗口另有失败回归。旧40/33与原8前端变异是上一轮事实，保留但不与本轮组数相加。
+独立目标移除本轮32组，各固定源版本/具体目标/受影响编号/正常与失败日志及hash可在 `host-independent-mutation-register.json` 核对；含首次copy survivor之后原run修正、新raw request保护、caller契约和借用fallback的继续返修，不把导入/工具/ps错误计作目标失败。开发者点名的旧七处逐项落地：目录/request绑定、Python别名两锚点哈希、writer内再查、checkout-root具体原因、真实cache-hit副本和独立attempt事实都有移除失败；identity-collision因同一真实目录/path/inode重建映射，除真实SHA碰撞外不可达，保留并说明，split-read窗口另有失败回归。旧40/33与原8前端变异是上一轮事实，保留但不与本轮组数相加。
 
 ### 本批受影响文件的用时
 
@@ -137,13 +137,13 @@ Python 编号以最新 core 的 202 文件 / 3230 项为基线，本批为 212 �
 
 2026-10-08，Codex Host `codex-adr027`。从最新 `socu/buddy-core@613faa4089c02ef1d5ef9b1d0743920de6f4a7cc` 建立 `socu/console-ui-and-board-fixes`，工作树 `~/.codex/worktrees/console-ui-and-board-fixes/hey-my-buddy`，不推送。来源为待办中 B1–B5 与控制台 U1–U11，原控制台读取批次的 Host 验收已读。第一部分先完成并由本 Host 验收，再开始界面实现；新宏任务的实际 ID 与微任务 ID 在首次提交成功后填写，Host ID 沿用。
 
-日常服务与 Worker 属于所有会话，不重启、不停止、不替换，也不安装升级或改登录凭据。只经路由委派，四个 buddy 字段全部省略；每个微任务的 Worker 只运行影响范围内的测试，禁止完整检查、删除材料、stash 与创建/切换分支，改动留在工作区供服务封存；先建 ignored 专用目录并报告精确路径。所有测试清除继承 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT，再设置明确的私有状态/运行时/源路径。日常委派受故障阻断时停下报告给用户，不自行恢复进程。范围内缺陷退回原 run，继续同样不指定，换 buddy 用 reroute；仅不可重试供应方限流的许可例外使用原 run 完整配置并登记。
+日常服务与 Worker 属于所有会话，不重启、不停止、不替换，也不安装升级或改登录凭据。只经路由委派，四个 buddy 字段全部省略；每个微任务的 Worker 只运行影响范围内的测试，禁止完整检查、删除材料、stash 与创建/切换分支，改动留在工作区供服务封存；先建 ignored 专用目录并报告精确路径。所有测试清除继承 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT，再设置明确的私有状态/运行时/源路径。日常委派受故障阻断时停下报告给开发者，不自行恢复进程。范围内缺陷退回原 run，继续同样不指定，换 buddy 用 reroute；仅不可重试供应方限流的许可例外使用原 run 完整配置并登记。
 
 ## 黑板方案与身份比对清单
 
 | 项 | 做法与复用机制 | 验证编号 |
 | --- | --- | --- |
-| B1 | 仓库公共 Git 目录与检出私有 Git 目录以规范路径＋inode 建立稳定身份，移除设备号，保留替换目录的防护。旧值是不可逆摘要，不能仅修改 `_identity` 后直接与旧数据库值比较；旧身份处理作为独立的升级数据迁移方案，先停下说明并取得用户决定。复用既有 upgrade、事务、meta 和固定 Git 产物，不提升 schema。 | B01–B04 |
+| B1 | 仓库公共 Git 目录与检出私有 Git 目录以规范路径＋inode 建立稳定身份，移除设备号，保留替换目录的防护。旧值是不可逆摘要，不能仅修改 `_identity` 后直接与旧数据库值比较；旧身份处理作为独立的升级数据迁移方案，先停下说明并取得开发者决定。复用既有 upgrade、事务、meta 和固定 Git 产物，不提升 schema。 | B01–B04 |
 | B2 | 在 submit 的检出准备之后、事务拒绝或后续入场失败时，仅撤销本次新分配的受管检出；复用分配清单、Git worktree 锁与精确路径回收。存储规划发现目录有、数据库无绑定的孤立检出，证明没有活动/引用/未封存内容后列为候选，apply 重新核对。日常现有孤立项仅作为已知现象，不手工删除。 | B05–B07 |
 | B3 | 按宏任务分别缓存汇总与查询投影。变动驱动覆盖根/协助树的 task、workflow、attempt、验收、路由与展示元数据；只重算受影响的宏任务，不能仅依赖“数据库未提交”。事件用于定位影响对象，实际汇总用到但未保证有事件的 SQL 字段也列入标记；范围/排序/过滤变化重组列表。复用当前缓存、有界查询和 SQLite；不做新的通知协议。 | B08–B10 |
 | B4 | Git 失败统一带实际 argv 与有界 stderr/stdout，覆盖 `_git` 与流式批量 Git 路径；保持错误码和原始异常链，敏感值及位置按现有脱敏规则处理。不追查旧日常故障原因。 | B11 |
@@ -151,7 +151,7 @@ Python 编号以最新 core 的 202 文件 / 3230 项为基线，本批为 212 �
 
 B1 对比点逐项：`workspace.inspect`（公共/私有 Git 目录）；`prepare/_snapshot/_materialize`（来源与分配身份）；`verify/_validate_manifest`（原清单与当前检出）；`begin_turn` 与 stash 采集认领（仓库绑定）；`seal` 与部分/放弃产物（原仓库/检出）；`resolve`（冲突恢复对象）；`_artifact_binding/verify_sealed_output`（固定输入/输出原仓库）；`integration_verify`（目标仓库与检出）；`_allocation_provenance/cleanup_inspect/cleanup_remove`（分配、锁、封存、回收）；`workflow._reserve/_release` 与预约冲突（checkout_id 的独占索引）；`workspace_reservations`；`workflow_integrations` 的目标身份；`workspace_cleanup_plans`；`objectives.attach_objective`（旧宏任务 project_id 与新微任务来源）；宏任务列表/时间轴及 delegation 的 project 归属、projectId 筛选；replay、continue、dispatch 准备与 startup recovery 的已存清单。微任务交付须用源码搜索补齐每处调用及间接对比，不能只改最初报错的宏任务入口。
 
-B1 需要用户决定的数据方案：升级时按已记录路径与现有 Git 分配/固定引用证明重新建立稳定锚点；可变的宏任务归属和预约索引使用稳定键，旧固定清单、inputSha256、manifestSha256、输出摘要和已接受记录原文保持。在 schema 15 的现有 meta 中登记有来源的旧→新身份映射，身份比对通过映射核对当前路径/inode，并防止旧预约与新预约重复占用。缺路径、证据不足或碰撞的项目不猜测、不删除，保留旧值并在读取中带未完成原因。只在私有夹具演练和实现升级入口，本任务不对日常看板执行迁移或安装。此方案会改变数据库里的身份索引/映射数据，属于用户要求先停下说明的“迁移数据”；用户于 2026-10-09 明确“我确认授权”，批准实现该方案并在私有夹具验证；本批不在日常看板执行迁移或安装。
+B1 需要开发者决定的数据方案：升级时按已记录路径与现有 Git 分配/固定引用证明重新建立稳定锚点；可变的宏任务归属和预约索引使用稳定键，旧固定清单、inputSha256、manifestSha256、输出摘要和已接受记录原文保持。在 schema 15 的现有 meta 中登记有来源的旧→新身份映射，身份比对通过映射核对当前路径/inode，并防止旧预约与新预约重复占用。缺路径、证据不足或碰撞的项目不猜测、不删除，保留旧值并在读取中带未完成原因。只在私有夹具演练和实现升级入口，本任务不对日常看板执行迁移或安装。此方案会改变数据库里的身份索引/映射数据，属于开发者要求先停下说明的“迁移数据”；开发者于 2026-10-09 明确“我确认授权”，批准实现该方案并在私有夹具验证；本批不在日常看板执行迁移或安装。
 
 ## 界面方案与写入分组
 
@@ -189,7 +189,7 @@ U01–U11 各有受影响回归与目标行为移除失败证据；布局层级�
 
 V01：全部固定产物独立全路径/哈希、实际受影响检查、隔离变异先干净通过后目标失败，保留原始失败与退回事实；测试编号以实际枚举变化登记。V02：最终源码从标准 Vite/tsc 重建并提交资产，核对字节。V03：最终代码干净提交上各一次 Python 完整检查 `uv run --frozen python -m hey_my_buddy.cli.checks`（默认并行）和完整前端 `npm --prefix apps/console test`，分别记录真实项数、提交号、退出码；只有失败或代码再变才再运行，记录变化仅跑仓库卫生。原始日志/夹具/屏幕图统一放 ignored `tmp/console-ui-and-board-host/`。完成后验收 microtask 并按确切路径正常回收，保留 Host 工作树供 Claude Code Host 验收，停止其他工作。
 
-2026-10-09 恢复执行：原计划提交 c4cabf70 与原起点 613faa40 保留。为落实日常服务不启动/恢复的规则，Host 使用已安装 CLI 的原验证、权限处理与命令映射，但在本次客户端进程内把自动启动入口替换为现成 `transport._attach_read_only`（与公开 BoardClient.autostart=False 同样的附着机制），所有 health/submit/await/继续/验收调用只能附着既有服务；辅助代码在 ignored 目录，不更改安装包或日常服务。客户端拒绝 install/upgrade/restart/stop/worker-start/worker-stop 等命令。此为用户的进程约束优先于 skill 默认启动行为，不是变更产品 CLI。日常服务 PID 4965 已通过只读进程表观察为运行中，版本证书以实际 health 回复为准。
+2026-10-09 恢复执行：原计划提交 c4cabf70 与原起点 613faa40 保留。为落实日常服务不启动/恢复的规则，Host 使用已安装 CLI 的原验证、权限处理与命令映射，但在本次客户端进程内把自动启动入口替换为现成 `transport._attach_read_only`（与公开 BoardClient.autostart=False 同样的附着机制），所有 health/submit/await/继续/验收调用只能附着既有服务；辅助代码在 ignored 目录，不更改安装包或日常服务。客户端拒绝 install/upgrade/restart/stop/worker-start/worker-stop 等命令。此为开发者的进程约束优先于 skill 默认启动行为，不是变更产品 CLI。日常服务 PID 4965 已通过只读进程表观察为运行中，版本证书以实际 health 回复为准。
 
 首批明确范围：BG-ID 允许 workspace.py、workflow.py、objectives.py、delegation.py 的身份消费者，install/upgrade.py 的已授权升级入口，必要的新 tasks/workspace_identity.py 与 store/workspace_identity_migration.py，以及对应身份/预约/升级测试；schema 与数据库 DDL 不改。固定清单/产物原文不得重写。BG-GATE 只允许新增 tests/python/console/test_console_gate_deadlines.py，与 BG-ID 不共写。微任务都禁止自行 git commit，改动留给黑板封存。日常 health 证书为 0.27.0、schema 15、PID 4965、7 个已有 Worker，未启动/已停止列表为空；这是日常版本事实，私有源码验证仍使用本批代码。
 
@@ -199,7 +199,7 @@ BG-GATE（B12/B5）独立核对：固定封存提交 be553cf5082d1cedb9a2140e0bd
 
 BG-GATE 回收事实：验收后日常服务按既有 accepted sweep 自动执行精确 checkout 计划 cln-33a2ae72-33db-489c-bdbe-ccf40b910f51，状态 applied；Host 首次请求与 sweep 发生 revision race（REVISION_CONFLICT），重新读 revision 8 后复得已应用计划，没有据此重启服务。精确路径 `~/.local/share/hey-my-buddy/state/workspaces/ws-7a6457c672ac2721861402d9130fa371/checkout` 已不存在，任务材料已提前复制、outputs/补丁与固定引用保留。
 
-BG-ID 第一回合退回事实：原路由 zcode/zai-api/GLM-5.3/max 在 2026-10-09 返回供应方不可重试 rate_limited，429、代码 1310，原生 root 未完成，停止证据 self/descendants 均 confirmed；部分输出 d979963a3554286a19497d6a4ada3c014e1a2d52 未验证、未整合、无 finalArtifactId。Host 保留原始 get/result 与任务目录，依据用户的限流例外用原 run 的 continue（command bg-id-continue-rate-limit-1310-r1），完整配置 codex/openai/gpt-6.1-sol/max 与限流 reason 均登记；该配置经当次目录读取为 enabled、available、quotaExhausted=false，不改用户设置。原 run 返回 revision 5、executing/queued，配置续接不是验收。首次原消息已排队；续接阶段部分代码盘点消息因当前 Codex 问询能力 unavailable 没有投递，不把它计为 Worker 已处理。最终固定产物仍需逐项独立核对；任何代码/测试/行为缺陷在同一 run 退回。日常服务与 Worker 未停止/替换，未升级或迁移日常状态。
+BG-ID 第一回合退回事实：原路由 zcode/zai-api/GLM-5.3/max 在 2026-10-09 返回供应方不可重试 rate_limited，429、代码 1310，原生 root 未完成，停止证据 self/descendants 均 confirmed；部分输出 d979963a3554286a19497d6a4ada3c014e1a2d52 未验证、未整合、无 finalArtifactId。Host 保留原始 get/result 与任务目录，依据开发者的限流例外用原 run 的 continue（command bg-id-continue-rate-limit-1310-r1），完整配置 codex/openai/gpt-6.1-sol/max 与限流 reason 均登记；该配置经当次目录读取为 enabled、available、quotaExhausted=false，不改用户设置。原 run 返回 revision 5、executing/queued，配置续接不是验收。首次原消息已排队；续接阶段部分代码盘点消息因当前 Codex 问询能力 unavailable 没有投递，不把它计为 Worker 已处理。最终固定产物仍需逐项独立核对；任何代码/测试/行为缺陷在同一 run 退回。日常服务与 Worker 未停止/替换，未升级或迁移日常状态。
 
 BG-ID 第二回合返回 attention（request req-558da8d9-d112-44ba-bac8-72a33b8c2b13）：未新增源码修改，保留的 7 份源码与 d979963a 相同，私有诊断 6 项中 2 通过、4 未通过（3 个断言失败、1 个错误），不是验收通过。原冻结范围遗漏 routing/router_boundary_data.py 的 `_continuation_context` 身份消费者，该函数自行读取旧清单/预约，无法只在 workflow 调用入口改副本。Host 在 B1 已授权的比对范围内用原 run scope-amend（bg-id-scope-router-identity-r1）将此精确文件加入，限身份比较/预约查询及复用 helper，scopeVersion 1→2；不修改 Router 决策或实时通道。随后原 run continue（bg-id-continue-scope-router-r1）完全省略配置四字段及 configuration/reroute，返回 revision 10、executing/queued，保留已选 Codex 配置。复制了本回合 report/调用清单/诊断日志到 ignored `tmp/console-ui-and-board-host/review-bg-id/round2-attention/`；本回合没有验收/整合。最终仍核对不同设备号、多个旧身份归属、物理替换防护、旧检出继续/封存/回收、完整升级保留/原子回滚及行为变异。
 
@@ -259,9 +259,9 @@ U5 改前真实浏览器准备：私有合成 UI-before-02/03 使用原已验收
 
 真实改前已保存：1440×800、900×900、810×900、760×740，明/暗主题和时间轴/执行详情/模型列表与档位浮层/设置页面；截图均 ignored `tmp/console-ui-and-board-host/screenshots/U05-before-*.jpg`（工具实际返回JPEG），详细盒模型/层级/命中与关闭JSON同目录。全局已是border-box；时间片 transform translateY(-11px) 建层叠上下文，routing z1与标记局部z1不能越过后片段；失败结束标记中心 elementsFromPoint 先命中 Host wait，点击✕实际选择等待片段而非执行片段。短执行片段内边距0 6px使实际宽12px、短wait加1.5px边框实际15px，虽min-width4px；运行中/选中/焦点有22px高、outline偏移2px。徽标/档位分段/标题/执行详情目前未确认另一个背景越边缺陷，记录正常尺寸，不把推测算作问题。
 
-U3 改前：所测宽窄统计浮层矩形尚在当前面板内，未复现裁切；Esc、点击页面标题和Tab把焦点移到委派按钮后三种情况下details.open均仍true，已确认关闭缺陷。U5 的125%原生缩放尚未验证：内置浏览器仅提供viewport，快捷键后DPR/视口仍1/原值；Chrome私有页ERR_BLOCKED_BY_CLIENT；Codex原生应用访问被工具安全规则拒绝，不绕过。已向用户询问手动可用浏览器核对或登记工具限制，其他界面核对继续。
+U3 改前：所测宽窄统计浮层矩形尚在当前面板内，未复现裁切；Esc、点击页面标题和Tab把焦点移到委派按钮后三种情况下details.open均仍true，已确认关闭缺陷。U5 的125%原生缩放尚未验证：内置浏览器仅提供viewport，快捷键后DPR/视口仍1/原值；Chrome私有页ERR_BLOCKED_BY_CLIENT；Codex原生应用访问被工具安全规则拒绝，不绕过。已向开发者询问手动可用浏览器核对或登记工具限制，其他界面核对继续。
 
-U5 缩放限制已解决：用户手动在默认 Chrome 打开03私有页并调至125%，Host通过现有用户tab绑定；原生Chrome工具栏显示Zoom:125%，DOM DPR2.5、1209×644，真实截图U05-before-Chrome-125.jpg及命中JSON表明失败标记仍被wait遮挡。随后用原生Chrome应用输入切至100%，工具栏Zoom:100%、DPR2、1512×805，保存U05-before-Chrome-100-running.jpg。此前tab层快捷键无效保留事实，原生应用输入可用；没有改变浏览器安全/网络设置。125%不再列为未验证。
+U5 缩放限制已解决：开发者手动在默认 Chrome 打开03私有页并调至125%，Host通过现有开发者tab绑定；原生Chrome工具栏显示Zoom:125%，DOM DPR2.5、1209×644，真实截图U05-before-Chrome-125.jpg及命中JSON表明失败标记仍被wait遮挡。随后用原生Chrome应用输入切至100%，工具栏Zoom:100%、DPR2、1512×805，保存U05-before-Chrome-100-running.jpg。此前tab层快捷键无效保留事实，原生应用输入可用；没有改变浏览器安全/网络设置。125%不再列为未验证。
 
 BG-CLEAN（B05–B07/B11）第三回合返修固定8379b1490f4886a9a918eda22343104b987ba901，artifact7f5672fe-d759-44b7-a2c0-f895a1958bd9，累计patch sha2560474dd2b4ad36605a74c344f25609222bea5b56a79be650b5734f6f24a8c2d2a，8允许路径；相对退回版本只改4文件，workspace.py/workflow.py原防护不再改变。固定Git blob逐字节核对8改动文件，并核对Worker manifest的10份源码/测试哈希；完整core材料已先保留 round3-repaired/core-material，依赖缓存/venv排除，链接保留，未删旧材料。
 
@@ -279,27 +279,27 @@ B2/B4 已整合 43f9996f451fc42749a6240a23f5f1301f8d09d5，integration int-f37c4
 
 全部黑板微任务通过后开始 UI-FRAME（U02/U05）run c8f16418-db44-4ee1-a5e8-532d7d80b071，固定输入 43f9996f；首次四个配置字段与configuration全部省略，范围8个前端路径，不写Python/时间算法/其他UI项/分发资产。源码与依赖reuse、真实改前发现和语义命中验收写进packet。提交CLI未结束时Host曾过早解析空response，得到JSONDecodeError、无状态更改；等待同一CLI完成后才登记run/control、executing/queued与专用monitor，不重复submit。全程附着原服务，不启动恢复。
 
-UI-FRAME 首回合路由 zcode/zai-api/GLM-5.3-Flash/max，以供应方不可重试 rate_limited 429/1310（stream）失败，self/descendants confirmed、finalArtifactId 空。Host 独立 get/result 核对原错误，原材料在 ignored review-ui-frame/round1-limited；monitor 首次只返回概述，原生 envelope 的缺失不作产物验证依据。按用户例外在同一 run continue（ui-frame-continue-rate-limit-1310-r2），完整 codex/openai/gpt-6.1-sol/high；当次目录 enabled/available、quotaExhausted=false，家族 active1/limit3，原因登记，revision5 executing/queued，未改设置。第一次把 reason 错放 configuration 内层被 INVALID_ARGUMENT 拒绝，无配置变更；原请求保留，纠正为顶层 reason 后成功。更换专用等待 monitor，原 run/范围保持，不新建任务或安装运行时。
+UI-FRAME 首回合路由 zcode/zai-api/GLM-5.3-Flash/max，以供应方不可重试 rate_limited 429/1310（stream）失败，self/descendants confirmed、finalArtifactId 空。Host 独立 get/result 核对原错误，原材料在 ignored review-ui-frame/round1-limited；monitor 首次只返回概述，原生 envelope 的缺失不作产物验证依据。按开发者例外在同一 run continue（ui-frame-continue-rate-limit-1310-r2），完整 codex/openai/gpt-6.1-sol/high；当次目录 enabled/available、quotaExhausted=false，家族 active1/limit3，原因登记，revision5 executing/queued，未改设置。第一次把 reason 错放 configuration 内层被 INVALID_ARGUMENT 拒绝，无配置变更；原请求保留，纠正为顶层 reason 后成功。更换专用等待 monitor，原 run/范围保持，不新建任务或安装运行时。
 
 停止边界（2026-10-09）：UI-FRAME 原 run c8f16418-db44-4ee1-a5e8-532d7d80b071 的限流恢复回合在发送任何模型输入前失败，结果 code=HARNESS_PREMODEL_FAILED，selectedAttempt.error 为 worker failure: BoardError(The native protocol failed before any model input was sent)，attempt edcf3358-b4f1-40c7-a334-b68a2787edf9；get revision8、failed、finalArtifactId空、self/descendants shutdown confirmed，result revision6。黑板get/result读取正常；仅确认此Worker回合的原生协议失败，不声称服务全局故障或猜测原因。原始get/result/恢复参数保留 ignored review-ui-frame/round2-premodel-failed。没有UI固定产物，所有UI源码/分发资产相对613faa40仍无差异。
 
-按用户的日常共享进程规则，发生Worker故障导致委派无法继续时停止推进并由用户决定；Host没有重启/停止服务或Worker，没有替换Worker、安装升级运行时、动登录/凭据，也未擅自再次continue/reroute或把失败验收。B1–B5代码已各自整合并独立验收；U1–U11实现尚未完成，准备/改前浏览器证据保留。Python完整检查、完整前端测试与最终控制台构建尚未执行，不能作为完成提交。此为执行中断记录，不是整个批次的完成或Claude Code Host验收申请。下一步需用户决定处理原生协议故障，或授权在原run按reroute换配置继续；本记录只改文档，补齐后单独运行仓库卫生测试。
+按开发者的日常共享进程规则，发生Worker故障导致委派无法继续时停止推进并由开发者决定；Host没有重启/停止服务或Worker，没有替换Worker、安装升级运行时、动登录/凭据，也未擅自再次continue/reroute或把失败验收。B1–B5代码已各自整合并独立验收；U1–U11实现尚未完成，准备/改前浏览器证据保留。Python完整检查、完整前端测试与最终控制台构建尚未执行，不能作为完成提交。此为执行中断记录，不是整个批次的完成或Claude Code Host验收申请。下一步需开发者决定处理原生协议故障，或授权在原run按reroute换配置继续；本记录只改文档，补齐后单独运行仓库卫生测试。
 
-2026-10-09 用户明确“授权你接着做”，Host 在原 UI-FRAME run 使用 continue/reroute:true（ui-frame-reroute-user-authorized-r1），配置四字段与configuration全省略，保留原goal、范围与失败收据；revision8→9、executing/queued、executionConfiguration空表示正在路由，不记为已选配置或交付。没有操作日常服务/Worker进程、安装或登录。原停止记录保持，新增专用monitor等待同一run；本次授权仅恢复原批次，最终完整检查仍待全部UI/资产整合。
+2026-10-09 开发者明确“授权你接着做”，Host 在原 UI-FRAME run 使用 continue/reroute:true（ui-frame-reroute-user-authorized-r1），配置四字段与configuration全省略，保留原goal、范围与失败收据；revision8→9、executing/queued、executionConfiguration空表示正在路由，不记为已选配置或交付。没有操作日常服务/Worker进程、安装或登录。原停止记录保持，新增专用monitor等待同一run；本次授权仅恢复原批次，最终完整检查仍待全部UI/资产整合。
 
-UI-FRAME 用户授权后的 reroute 仍选 zcode/zai-api/GLM-5.3-Flash/max，原 run 再次以不可重试 429/1310（stream）失败，self/descendants confirmed、get revision13、finalArtifactId空；材料保留 review-ui-frame/round3-rerouted-failed。当次目录的Claude均未启用，Host没有改用户设置；按限流例外用完整 dsh/deepseek-official/deepseek-flash/max 在同一run继续（ui-frame-continue-second-rate-limit-dsh-r1），目录 enabled/available、quotaExhausted=false、家族active0/limit10，顶层reason登记，revision14 executing/queued。随后用户明确“可以用codex”，Host记为后续续接可用配置，已提交DSH回合先等待固定边界；未并行启动同一任务或中断日常进程。DSH仅是本回合执行harness，DSH/harness/roles/protocol文件仍不在写入范围。
+UI-FRAME 开发者授权后的 reroute 仍选 zcode/zai-api/GLM-5.3-Flash/max，原 run 再次以不可重试 429/1310（stream）失败，self/descendants confirmed、get revision13、finalArtifactId空；材料保留 review-ui-frame/round3-rerouted-failed。当次目录的Claude均未启用，Host没有改用户设置；按限流例外用完整 dsh/deepseek-official/deepseek-flash/max 在同一run继续（ui-frame-continue-second-rate-limit-dsh-r1），目录 enabled/available、quotaExhausted=false、家族active0/limit10，顶层reason登记，revision14 executing/queued。随后开发者明确“可以用codex”，Host记为后续续接可用配置，已提交DSH回合先等待固定边界；未并行启动同一任务或中断日常进程。DSH仅是本回合执行harness，DSH/harness/roles/protocol文件仍不在写入范围。
 
 界面微任务划分细化：UI-FRAME 原run返修期间，新增独立 UI-PREF 承接原UI-SHELL中U1/U4/U6，精确范围为依据/回合摘要、模型查看偏好、Settings/Api/types与必要只读版本route/helper及测试；不写Timeline/Overview/Popover/styles/ui/tokens/App/Objectives/Tasks/SplitView，不与FRAME或后续TIME共写。原UI-SHELL缩为UI-NAV（U8/U9），等TIME与PREF验收后顺序修改列表/顶栏刷新和必要共用Api。沿用原宏任务，每个首次仍路由、四字段全省略；版本单次读取、现成localStorage/Runtime事实， schema不变。此为原范围内按文件边界的并行划分，不新增产品项。
 
 UI-FRAME DSH输出因越界修改Host步骤记录而封存失败。完整观察源码/越界文件/材料已保留review-ui-frame/round4-scope-failed；Host用workspace-resolve restore（ui-frame-restore-outside-scope-record-r1，conflict wsc-ab045d89-caf6-4c3e-8ba4-d13897971eeb）登记并精确恢复该文档，得到允许范围3文件固定829582e1e3a5daa1366786cd2a1fb211ad21a1ba、artifact9d55963d-1fdc-43db-addb-c758e636d531。95项/7文件Host测试退出0，私有Vite预览构建退出0，未写分发资产；真实Chrome1512×805/DPR2仍失败：marker中心第一项wait，点击✕选择wait，failureSelected=false，父transform仍translateY。截图/JSON为screenshots/U02-rejected-frame-*，不能计改后验收。Source3blob匹配已核对，原声明字符串测试不足。
 
-Host原run acknowledge/rejected（ui-frame-reject-layer-context-and-scope-r1，revision19）后，按用户后补“可以用codex”的具体配置授权用完整codex/openai/gpt-6.1-sol/high在原run继续（ui-frame-continue-codex-user-authorized-repair-r1，revision20），目录enabled/available、quotaExhausted=false、家族active0/limit3，顶层reason登记；这是用户后补允许Codex的例外，不能把它说成一般退回都可指定配置。要求修正父层叠上下文与真实点击、补能失败的回归、承认越界且不再写文档；范围仍8前端路径，原失败与未验收事实保留，未安装/操作日常进程或登录。
+Host原run acknowledge/rejected（ui-frame-reject-layer-context-and-scope-r1，revision19）后，按开发者后补“可以用codex”的具体配置授权用完整codex/openai/gpt-6.1-sol/high在原run继续（ui-frame-continue-codex-user-authorized-repair-r1，revision20），目录enabled/available、quotaExhausted=false、家族active0/limit3，顶层reason登记；这是开发者后补允许Codex的例外，不能把它说成一般退回都可指定配置。要求修正父层叠上下文与真实点击、补能失败的回归、承认越界且不再写文档；范围仍8前端路径，原失败与未验收事实保留，未安装/操作日常进程或登录。
 
 UI-PREF（U01/U04/U06）run ffa427f6-dcd2-4346-bd9a-54b5010549af 已以60b55780固定输入路由提交，23精确路径，首次adapter/provider/model/effort/configuration全部省略；原宏任务/hostId保持。版本只读路由与Api/types由它独占，UI-FRAME八路径与它不共写；专用monitor等待固定边界。后续TIME/NAV只在相关前序验收后修改共享文件，完整检查仍未运行。
 
 固定FRAME真实浏览器预览的导航更正：Chrome自动goto57155被ERR_BLOCKED_BY_CLIENT拒绝；遵照工具的原生替代操作，在自有私有页窗口地址栏导航。第一次typeText丢失冒号、URL不正确，随后用AX setValue写精确URL成功加载，没有改变扩展/安全/网络设置，也没有绕过证书警告。私有预览PID70853、源829582e1、Popen/model0；旧改前03保持用于对照，均独立私有根。此次预览只证明退回版本的失败，不计最终图或最终构建产物。
 
-UI-PREF 首次路由zcode/zai-api/GLM-5.3-Flash/max再次不可重试429/1310失败，停止confirmed、get revision4、finalArtifactId空，材料review-ui-pref/round1-failed保留。按用户限流例外及后补Codex授权，在此原run完整codex/openai/gpt-6.1-sol/high continue（ui-pref-continue-rate-limit-1310-r1），当次目录enabled/available、quotaExhausted=false、家族active1/limit3，reason登记，revision5 executing/queued，新专用monitor。首提仍四字段全省略；未改设置、运行时或共享进程。浏览器验收清单browser-qa-checklist.json已在ignored目录按U01–U11与8个主题/窗口/原生缩放组合列必测状态，pending不算验证；最终素材只在ignored目录。
+UI-PREF 首次路由zcode/zai-api/GLM-5.3-Flash/max再次不可重试429/1310失败，停止confirmed、get revision4、finalArtifactId空，材料review-ui-pref/round1-failed保留。按开发者限流例外及后补Codex授权，在此原run完整codex/openai/gpt-6.1-sol/high continue（ui-pref-continue-rate-limit-1310-r1），当次目录enabled/available、quotaExhausted=false、家族active1/limit3，reason登记，revision5 executing/queued，新专用monitor。首提仍四字段全省略；未改设置、运行时或共享进程。浏览器验收清单browser-qa-checklist.json已在ignored目录按U01–U11与8个主题/窗口/原生缩放组合列必测状态，pending不算验证；最终素材只在ignored目录。
 
 UI-FRAME 返修固定 afae627315e63714b81be0687956709b7074001f、output df192593-cda2-4515-947b-7cd5e2e3794c、累积补丁 6ab07940b1d6a09cc1c15a8311e54e2c6427863eeecfe6b442dd9572a84b7449，仅四个允许前端路径。Host独立从封存Git对象取样核对全部四文件字节；受影响测试先五文件75项、再余下hook一文件10项，均退出0（合计85项/6文件，不写成单次85）；8份物理源码副本各12项clean退出0，去掉父上下文/层级/交互或文字透传/等待padding保护后均目标断言失败退出1，errors0、主源码哈希不变。原始证据review-ui-frame/host-affected-*与host-mutants-repaired/，没有完整测试或分发构建。
 
@@ -319,9 +319,9 @@ U01真实浏览器验证同一p替换360字截断/784字依据全文、收起364
 
 U06真实HTTP/浏览器展示本次源码服务软件0.29.0、契约0.29.0、schema15、来源提交/安装时间未记录；另从私有权威活动指针与有效旧READY投影安装6.8.2、契约6.8.0、schema14、private-installed-ready-commit、2026-09-30T01:02:03Z。旧项目仅合成读取夹具、从不执行；未安装运行时或迁移日常数据。缺失选择显示未记录并保留运行事实，私有读取失败返回500及“无法读取版本：The runtime version could not be read”；无更新/安装按钮。最初隐藏设置版本GET0，首次可见GET1，随后页内主题/窗口/快照与重显不增加该读取（之后显式重载才增加），完整原始HTTP时间/状态在私有任务根。登录/foreign Origin、损坏/不可读指针与不预检/不周期扫描由17项真实handler/HTTP及45变异守住。
 
-PREF明暗×宽窄矩阵的有效图片在ignored screenshots/U01-after-IAB-{light,dark}-{wide,compact}-complete.jpg、U04-after-IAB-*-restored.jpg、U06-after-IAB-{light,dark}-{wide,compact}.jpg，实际视口1190×661与744×611、DPR约1.21均记录，不冒称100%或原生125%；U06-installed-facts-context、U04-storage-*-defaults、U01-summary-complete与same-text-record-reset补充状态图/JSON。Chrome前期有事实截图但页面自动化连接随后中断，新页异常/原生灰色截图不计通过；按用户已允许使用Codex，用内置真实浏览器完成矩阵。部分初次标作expanded的图片只是异步读取中，排除，-complete已等待实际按钮与单段断言后保存；不把命名当状态证据。最终分发源码/产物仍统一整合后核对，不把私有预览当发行构建。对外变化：依据/摘要开合按钮“展开/收起”、两个浏览器本地筛选习惯、只读版本区/GET及失败提示；不增加定时读取。
+PREF明暗×宽窄矩阵的有效图片在ignored screenshots/U01-after-IAB-{light,dark}-{wide,compact}-complete.jpg、U04-after-IAB-*-restored.jpg、U06-after-IAB-{light,dark}-{wide,compact}.jpg，实际视口1190×661与744×611、DPR约1.21均记录，不冒称100%或原生125%；U06-installed-facts-context、U04-storage-*-defaults、U01-summary-complete与same-text-record-reset补充状态图/JSON。Chrome前期有事实截图但页面自动化连接随后中断，新页异常/原生灰色截图不计通过；按开发者已允许使用Codex，用内置真实浏览器完成矩阵。部分初次标作expanded的图片只是异步读取中，排除，-complete已等待实际按钮与单段断言后保存；不把命名当状态证据。最终分发源码/产物仍统一整合后核对，不把私有预览当发行构建。对外变化：依据/摘要开合按钮“展开/收起”、两个浏览器本地筛选习惯、只读版本区/GET及失败提示；不增加定时读取。
 
-UI-TIME首次路由不可重试429/1310、无产物、shutdown confirmed；原材料review-ui-time/round1-limited，fresh model-profiles确认Codex high enabled/available、quotaExhausted=false后原run完整codex/openai/gpt-6.1-sol/high continue（ui-time-continue-rate-limit-1310-r1，revision4→5），按用户限流例外/后补Codex授权，未改设置或进程。首交付f65a7898、19允许路径、Worker受影响184/12文件和25变异；tsc1的旧路由测试漏列scope，不计代码已通过。Host固定所有源码/材料后按现有scope-amend（ui-time-amend-affected-routing-test-r1）追加scopeVersion2，只加routing-timeline.test.tsx；原turn授权保持。原run继续修过期入参（ui-time-continue-affected-routing-test-r1，四字段/configuration全省略，revision9→10），拒绝为消错添加废弃兼容层或减弱断言。最终TIME与UI-NAV仍待Host独立验收。
+UI-TIME首次路由不可重试429/1310、无产物、shutdown confirmed；原材料review-ui-time/round1-limited，fresh model-profiles确认Codex high enabled/available、quotaExhausted=false后原run完整codex/openai/gpt-6.1-sol/high continue（ui-time-continue-rate-limit-1310-r1，revision4→5），按开发者限流例外/后补Codex授权，未改设置或进程。首交付f65a7898、19允许路径、Worker受影响184/12文件和25变异；tsc1的旧路由测试漏列scope，不计代码已通过。Host固定所有源码/材料后按现有scope-amend（ui-time-amend-affected-routing-test-r1）追加scopeVersion2，只加routing-timeline.test.tsx；原turn授权保持。原run继续修过期入参（ui-time-continue-affected-routing-test-r1，四字段/configuration全省略，revision9→10），拒绝为消错添加废弃兼容层或减弱断言。最终TIME与UI-NAV仍待Host独立验收。
 
 UI-PREF整合8b38999e，integration int-42c40386-a3cf-4bfb-b3a4-e351c14ae6e0 verified（22matching、0differing/missing），原run accepted。accepted sweep exactpath回收cln-b529a4c5-3bcf-4df5-af46-9acc79b839f7 applied，`~/.local/share/hey-my-buddy/state/workspaces/ws-ff8651d2607d33a566dc1265fe6a91bb/checkout`已不存在；两回合完整材料提前保留review-ui-pref/round1-fixed与round2-repaired。
 
@@ -341,7 +341,7 @@ UI-TIME integration int-5c448492-f912-4b9a-86cb-b8d144dc9bea verified20，整合
 
 TIME受管检出accepted sweep exactpath回收cln-57f5f64c-f361-4c60-941a-482a209ccb13 applied；`~/.local/share/hey-my-buddy/state/workspaces/ws-10b7ec46fa88af0f0e760ffc3781c361/checkout`已不存在，源/四回合材料在此前固定副本，未由Worker删除。UI-NAV run da651c9c-d26d-432f-85f7-10c861161b83已收到，首次路由configuration=null、未指定任何四字段，微任务输入96fd6054。
 
-UI-NAV首次路由zcode/zai-api/GLM-5.3-Flash/max；供应方stream阶段不可重试429/1310，resultMeta.exitCode1、shutdownConfirmed=true、无封存输出。原get/result固定review-ui-nav/round1-limited，fresh model-profiles确认Codex high enabled/available且quotaExhausted=false；原run完整codex/openai/gpt-6.1-sol/high continue（ui-nav-continue-rate-limit-1310-r1，revision4→5），按用户限流例外。第一次Host准备脚本编码错误未写请求，随后错误的顶层adapter参数被INVALID_ARGUMENT拒绝、没有状态变更；纠正为现有configuration完整四字段/input/reason结构后提交，不能把拒绝误记为回合。未刷新凭据、安装或重启日常进程；首交付仍需Host验收。
+UI-NAV首次路由zcode/zai-api/GLM-5.3-Flash/max；供应方stream阶段不可重试429/1310，resultMeta.exitCode1、shutdownConfirmed=true、无封存输出。原get/result固定review-ui-nav/round1-limited，fresh model-profiles确认Codex high enabled/available且quotaExhausted=false；原run完整codex/openai/gpt-6.1-sol/high continue（ui-nav-continue-rate-limit-1310-r1，revision4→5），按开发者限流例外。第一次Host准备脚本编码错误未写请求，随后错误的顶层adapter参数被INVALID_ARGUMENT拒绝、没有状态变更；纠正为现有configuration完整四字段/input/reason结构后提交，不能把拒绝误记为回合。未刷新凭据、安装或重启日常进程；首交付仍需Host验收。
 
 UI-NAV首交付固定03e65b865284e7c567479e5966b89516bb2318e0、artifact7d63d0f5-6484-4948-9028-a5d518f5c46a，累积28路径、patch与Git blobs校验后全部相符，完整Worker材料round2-fixed/ui-nav-u08-u09-7728保留。Host18文件239项/tsc/私有预览退出0；另外两份直接受影响的旧测试在固定源码上13failed/41passed（54项）、1unhandled TypeError（过时runtimeVersion mock），不能把局部通过当最终前端通过。Host冻结助手被旧Python的tarfile filter参数阻塞，第一次测试未启动（路径尚未提取），随后使用既有项目Python完整提取并核对，未计入测试结论。
 
@@ -371,9 +371,9 @@ Python完整第一次结束：acaa51802a5c85988c5d930cebbf5d7ce25e4fba，uv run 
 
 关联前端测试返修整合3d5684dc、integration int-92e1659b-9b6d-4e40-b9c9-938b560f1fb9 verified4，run091248a0 accepted（28项/tsc与支持撤销核对已由Host完成）。B1关联返修cc908ad0在完整Codex continue后未启动模型回合：日常黑板准备检出报WORKSPACE_GIT_ERROR、[Errno 24] Too many open files，revision6/state awaiting-host，attention prep-8040bbd8-a7f8-4d01-86b8-b4a7e8155475，无输出产物。get固定review-bg-final-identity/preparation-blocked/get.json；Host冻结助手找不到output因而StopIteration，未产生虚假固定产物。
 
-按用户明确规定“日常的服务或Worker出了故障、委派无法继续时，停下来把现象告诉用户，由用户决定怎么处理”，在上述已确认共享服务准备故障处停止；未重启/停止/替换日常服务/Worker，也未更改文件句柄限制、运行时或登录凭据。当前分支3d5684dc、不推送、Host工作树保留；B1稳定失败修正尚未取得产物，两套完整检查第一次均退出1，前端4份夹具修正的局部28项通过但最终整轮尚未重跑。不得将本批标作完成或已提交Claude验收；待用户处理共享服务后再继续原B1 run及最终顺序完整检查、最终记录与卫生测试。
+按开发者明确规定“日常的服务或Worker出了故障、委派无法继续时，停下来把现象告诉开发者，由开发者决定怎么处理”，在上述已确认共享服务准备故障处停止；未重启/停止/替换日常服务/Worker，也未更改文件句柄限制、运行时或登录凭据。当前分支3d5684dc、不推送、Host工作树保留；B1稳定失败修正尚未取得产物，两套完整检查第一次均退出1，前端4份夹具修正的局部28项通过但最终整轮尚未重跑。不得将本批标作完成或已提交Claude验收；待开发者处理共享服务后再继续原B1 run及最终顺序完整检查、最终记录与卫生测试。
 
-2026-10-10恢复：用户报告11:26（Asia/Singapore）授权restart日常服务，未取消工作、Worker保留，描述符220→23；用户说明当前日常C-Two仍0.6.0，空闲60秒连接池未关闭连接会重新累积，重现时Host仍必须停止报告，不自行维护。Host只用既有attach-only CLI读取原B1 run，然后continue bg-final-identity-continue-after-user-service-recovery-r1（revision6→7），configuration与四字段全省略、原Codex high及6路径范围沿用，不新建B1任务、不更改日常环境。
+2026-10-10恢复：开发者报告11:26（Asia/Singapore）授权restart日常服务，未取消工作、Worker保留，描述符220→23；开发者说明当前日常C-Two仍0.6.0，空闲60秒连接池未关闭连接会重新累积，重现时Host仍必须停止报告，不自行维护。Host只用既有attach-only CLI读取原B1 run，然后continue bg-final-identity-continue-after-user-service-recovery-r1（revision6→7），configuration与四字段全省略、原Codex high及6路径范围沿用，不新建B1任务、不更改日常环境。
 
 收尾计划按新授权调整：B1关联返修固定产物/独立检查/目标移除失败后整合，合入最新socu/buddy-core（读取时81a4cfb9，包含DSH原生续接）；共同源码仅workflow.py的不同区域，保留两边行为并跑受影响检查。合入后从最终源码重新核对控制台产物、更新测试编号，在同一最终代码提交顺序运行默认并行的Python完整检查与npm前端全量，保存此前失败日志；若再有疑似负载失败，等空闲后单文件复跑再判断。socu/c-two-073与工作树不操作，日常运行时/服务/Worker不安装升级或重启。两套最终退出0和最后卫生测试仍待执行，未宣称完成。
 
@@ -423,7 +423,7 @@ Host私有ffd5b2bb副本负向排查：模块求值前预置models.showUnavailab
 
 R-B在委派前收窄补充范围：备份database_snapshot目前仍对单张表收集/排序序列化行；如有写入的峰值因此仍过高，允许在该现有指纹函数内复用SQLite/标准库实现有界处理及对应backup测试，必须保持当前fingerprint格式、BLOB/Unicode/排序、备份校验/事件头/排除workers默认语义不变。无schema/新持久表/新测试框架，不能用另一套指纹绕过原快照绑定；完整备份/触发器回归列为受影响检查。R-A及其他微任务不写该文件。
 
-本轮首交：R-A run91f46843-5004-4906-a440-11f6299d5697、R-B run778ae456-460b-46d9-99d5-b3d150b75711、R-D run93accf26-54b0-4357-962d-60dcf6fe8980，基于c6280fb0提交，三次均省略所有四字段/configuration、明确原已accepted关联run和原宏任务；健康读取contract0.27/status ok，仍以attach-only既有CLI访问共享日常服务，不触发冷启动。三次首次路由分别GLM-5.3 max、GLM-5.3 max、GLM-5.3-Flash max，均供应方stream不可重试429/1310，原停止证据self/descendants confirmed、无输出；原始get/result与packet固定host-review-repair-20261010/hr_*-round1-limited。各自fresh enabled/available/quota未耗尽后按用户限流例外在原run完整codex/openai/gpt-6.1-sol/high continue（hr-*-continue-rate-limit-1310-r1，revision4→5），范围/规则保持。原模型错误与Monitor compact摘要不当测试/产物验收，等待新固定交付。
+本轮首交：R-A run91f46843-5004-4906-a440-11f6299d5697、R-B run778ae456-460b-46d9-99d5-b3d150b75711、R-D run93accf26-54b0-4357-962d-60dcf6fe8980，基于c6280fb0提交，三次均省略所有四字段/configuration、明确原已accepted关联run和原宏任务；健康读取contract0.27/status ok，仍以attach-only既有CLI访问共享日常服务，不触发冷启动。三次首次路由分别GLM-5.3 max、GLM-5.3 max、GLM-5.3-Flash max，均供应方stream不可重试429/1310，原停止证据self/descendants confirmed、无输出；原始get/result与packet固定host-review-repair-20261010/hr_*-round1-limited。各自fresh enabled/available/quota未耗尽后按开发者限流例外在原run完整codex/openai/gpt-6.1-sol/high continue（hr-*-continue-rate-limit-1310-r1，revision4→5），范围/规则保持。原模型错误与Monitor compact摘要不当测试/产物验收，等待新固定交付。
 
 ## 验收合入后的界面小返修计划（2026-10-10）
 
@@ -440,15 +440,15 @@ PA07：私有合成看板的三个宏任务，适应窗口与放大两级，逐�
 
 PA-T aeb6fcd0-ce4c-4769-be7a-e0e3068366f4 与 PA-L 38fd3783-03bf-488f-9d84-92b870912c5d 的首次提交均省略四字段，经默认路由选 ZCode GLM-5.3-Flash/max；两份首次回合均被供应方不可重试限流 429/1310 拒绝，无产物、停机已确认。保留初次 get/result/await，于同一 run 使用 codex/openai/gpt-6.1-sol/high 完整配置 continue；续接前配置已启用、可用且 quotaExhausted=false。证据位于 tmp/console-ui-and-board-host/post-acceptance-ui-20261010/，本轮未变更共享偏好或日常运行时。
 
-### 用户补充：侧栏不保留空白槽
+### 开发者补充：侧栏不保留空白槽
 
-用户在本轮私有预览截图指出项目横条和条目比侧栏背景窄，要求去掉空隙。实际测得 list-scroll offsetWidth=328、clientWidth=313、scrollHeight=clientHeight=548，虽不需要滚动，scrollbar-gutter:stable 仍预留 15 CSS px。新增 PA-S 关联原 UI-FRAME，唯一写入 apps/console/src/styles.css 与 ui-box-model.test.tsx，取消列表的强制滚动条预留，复用标准 scrollbar-gutter:auto 与现有 overflow 行为；其他页面的槽不改，不加元素、设置、补偿宽度或隐藏滚动条。PA12：列表无需滚动时项目横条和条目右边缘与背景齐平；PA13：内容需要滚动时仍能滚动、无横向溢出。只跑受影响测试，由 Host 在真实浏览器保存前后尺寸与截图；补充源改动之后重新运行最终前端全量、重构建并逐字节核对，再运行指定 Python 范围和卫生，前一份 905 项通过及 316 项 Python 通过仍保留为中间验证。
+开发者在本轮私有预览截图指出项目横条和条目比侧栏背景窄，要求去掉空隙。实际测得 list-scroll offsetWidth=328、clientWidth=313、scrollHeight=clientHeight=548，虽不需要滚动，scrollbar-gutter:stable 仍预留 15 CSS px。新增 PA-S 关联原 UI-FRAME，唯一写入 apps/console/src/styles.css 与 ui-box-model.test.tsx，取消列表的强制滚动条预留，复用标准 scrollbar-gutter:auto 与现有 overflow 行为；其他页面的槽不改，不加元素、设置、补偿宽度或隐藏滚动条。PA12：列表无需滚动时项目横条和条目右边缘与背景齐平；PA13：内容需要滚动时仍能滚动、无横向溢出。只跑受影响测试，由 Host 在真实浏览器保存前后尺寸与截图；补充源改动之后重新运行最终前端全量、重构建并逐字节核对，再运行指定 Python 范围和卫生，前一份 905 项通过及 316 项 Python 通过仍保留为中间验证。
 
 PA-S d05cc5df-3021-46a0-aa95-622f53c82091 首次同样默认路由到 ZCode，供应方不可重试 429/1310、无产物且停机已确认；保留 first-failure get/result/await，确认完整 Codex 配置启用可用后在原 run continue（codex/openai/gpt-6.1-sol/high），没有改共享配置或日常运行时。
 
 ### 小返修的固定产物与最终验证
 
-本轮最终代码与发行产物为 `2bca5fe5fbd461c298e7eb1e1020ac2ea6478490`。在 `1f7e8b60` 上实施两处验收后发现的缺陷，并按用户测试期间的补充要求修正侧栏空槽；没有后端代码变化，没有推送或安装。下面记录的是 Host 亲自固定并复核的结果，旧验收记录、失败尝试及原 tmp/ 材料均保留。
+本轮最终代码与发行产物为 `2bca5fe5fbd461c298e7eb1e1020ac2ea6478490`。在 `1f7e8b60` 上实施两处验收后发现的缺陷，并按开发者测试期间的补充要求修正侧栏空槽；没有后端代码变化，没有推送或安装。下面记录的是 Host 亲自固定并复核的结果，旧验收记录、失败尝试及原 tmp/ 材料均保留。
 
 | 微任务 | 固定源码 / 产物 | 整合提交 | Host 验证 |
 | --- | --- | --- | --- |
@@ -485,7 +485,7 @@ PA12：最终已提交的脚本与 CSS 资源名在页面中核对，sidebar-aft
 
 ### 验收前追加返修：时间片真实宽度与标签间距（2026-10-10）
 
-用户尚未交 Claude Code Host 验收，继续指出合成委派 0 的失败执行与后续等待片段挤在一起，以及文字紧贴边框。修前真实浏览器在最大时间轴刻度测得：不足几秒的执行被 0.3% 的整幅画布最小宽度拉成约 45 像素；结束标记随人工宽度偏移，普通标签的左右 padding 均为 0。上次文字之间的范围核对没有验证结束标记位置与标签内距，原有通过记录保留，并补足这两项事实。
+开发者尚未交 Claude Code Host 验收，继续指出合成委派 0 的失败执行与后续等待片段挤在一起，以及文字紧贴边框。修前真实浏览器在最大时间轴刻度测得：不足几秒的执行被 0.3% 的整幅画布最小宽度拉成约 45 像素；结束标记随人工宽度偏移，普通标签的左右 padding 均为 0。上次文字之间的范围核对没有验证结束标记位置与标签内距，原有通过记录保留，并补足这两项事实。
 
 开始前已合入最新 socu/buddy-core @ 40d82d93，合并提交 b88b01c4；这一段 core 只有文档变化。继续使用原宏任务与 hostId codex-adr027，新增关联 PA-T、PA-S 与 UI-FRAME 的返修微任务 PB-G，不继续已验收并回收的 run。PB-G 唯一写入范围为 apps/console/src/ObjectiveTimeline.tsx、styles.css、timeline-layers.test.tsx 与 ui-box-model.test.tsx；首次四个配置字段全部省略，经黑板路由。Worker 只跑受影响测试，不删文件或目录，不用 stash，不创建或切换分支及标签；材料在开始时创建的 ignored tmp/ 任务目录里，报告确切路径，记录位置用 ~ 或占位符。
 
@@ -499,7 +499,7 @@ PA12：最终已提交的脚本与 CSS 资源名在页面中核对，sidebar-aft
 | PB-04 | 固定封存产物、校验 patch 与 Git blob，Host 独立跑受影响前端测试及失败注入；范围缺陷回原 run continue。 |
 | PB-05 | 私有合成看板三个宏任务，在适应窗口、放大两级与最大刻度核对文字之间、文字与标记以及边框内距；保存修前后截图与 DOM 几何，不提交图片。 |
 | PB-06 | 最终源码前端全量、发行构建、全新构建四个产物逐字节一致；顺序运行 tests/python/console、tests/python/install 与仓库卫生测试，不跑 Python 完整检查。 |
-| PB-07 | 记录本次用户指出的缺陷、源提交、测试编号变化、实际验证与未验证部分；记录更改后重跑仓库卫生；验收后按确切路径回收 Worker 检出，保留 Host tmp/。 |
+| PB-07 | 记录本次开发者指出的缺陷、源提交、测试编号变化、实际验证与未验证部分；记录更改后重跑仓库卫生；验收后按确切路径回收 Worker 检出，保留 Host tmp/。 |
 
 本次原始证据目录为 ~/.codex/worktrees/console-ui-and-board-fixes/hey-my-buddy/tmp/console-ui-and-board-host/timeline-geometry-spacing-20261010/。对外可见变化为短时间片与结束标记准确对应时间，标签留出内部空白并在过窄时省略文字；最终事实在交付节记录。
 
@@ -508,11 +508,11 @@ PB-G 第一次交付在 Host attention 边界封存四路径产物：另一个�
 
 ### PB-G 最终产物与验证
 
-返修 run 为 17e1167b-9221-4e47-b8ae-1998b46181ad。首次提交 adapter/provider/model/effort 全省略，路由选到 ZCode / zai-api / GLM-5.3-Flash / max；供应方返回不可重试 429/1310，无产物且根与后代停止已确认。按用户已授权的例外，在同一 run 用 codex/openai/gpt-6.1-sol/high 完整配置 continue；其后范围内更正的 continue 不包含 configuration 或四字段。没有另起模型调用，没有更改日常配置。限流原 get/result/await 已另存 r1-quota-*.json，不会被后续查询覆盖。
+返修 run 为 17e1167b-9221-4e47-b8ae-1998b46181ad。首次提交 adapter/provider/model/effort 全省略，路由选到 ZCode / zai-api / GLM-5.3-Flash / max；供应方返回不可重试 429/1310，无产物且根与后代停止已确认。按开发者已授权的例外，在同一 run 用 codex/openai/gpt-6.1-sol/high 完整配置 continue；其后范围内更正的 continue 不包含 configuration 或四字段。没有另起模型调用，没有更改日常配置。限流原 get/result/await 已另存 r1-quota-*.json，不会被后续查询覆盖。
 
 第一份封存产物为 eb3c8534-848c-4d27-a676-5add9b417d80 @ 10d302a8，四路径；Host 固定 cumulative patch、SHA-256 与源 blob，独立五文件测试为 136/137、exit 1，唯一失败为未获写权限的 routing-timeline.test.tsx:97 旧 0.3% 断言。追加该一个测试的 scope-amend 后，在原 run continue；第二轮起初误假设该 fixture 无折叠空闲区间，Worker 的 initial-fold-assumption.log 如实保留，随后复用 createTimelineLayout/scaleTimeline 改正测试。最终产物为 6555d60c-e531-4e2b-bc6a-4d1ddaffdab7 @ 6402bef9，五路径；先前四路径逐字节保留。Host 在固定最终产物独立跑相同五文件：137/137、exit 0，6.068 秒。await 的顶层 runner revision 与 workflow revision 不同，监控摘要曾返回前轮失败/attention 信息；Host 使用 get 的当前 workflow 边界与完整 await 文件作判断，R2 最终为 delivered、workflow revision 13，没有按过期摘要继续或验收。
 
-用户确认 core 在 12eb4fcd 停止变动。从上次 1f7e8b60 到该提交只有文档变化，已合入；最终 core 合并为 505f1b1a，生产五路径整合为 51ebacaf，发行构建为 681ca05d1cfdbbe8b3d1267fd17d819c0ebe65bf。Host 将最终五路径与固定产物及 681ca05d 的 Git blob 逐字节核对，integrated-source-proof.json 记录散列。没有将 core 文档合并误报为本 Host 手工修改文档，DSH/C-Two 并行分支与检出未操作。
+开发者确认 core 在 12eb4fcd 停止变动。从上次 1f7e8b60 到该提交只有文档变化，已合入；最终 core 合并为 505f1b1a，生产五路径整合为 51ebacaf，发行构建为 681ca05d1cfdbbe8b3d1267fd17d819c0ebe65bf。Host 将最终五路径与固定产物及 681ca05d 的 Git blob 逐字节核对，integrated-source-proof.json 记录散列。没有将 core 文档合并误报为本 Host 手工修改文档，DSH/C-Two 并行分支与检出未操作。
 
 实现以真实刻度的起止差值给出时间片宽度，零时长为零，CSS 的普通 4px / 失败 routing 14px 最小识别形状保留；移除 0.3% 画布最小宽度。failed、cancelled 的结束标记与 unknown 的 solid/问号均使用真实记录时刻的像素偏移。普通、solid、tail 标签统一左右 8px 内距及 border-box，父时间片仍无 padding/border；扣除内距后的可用宽度决定文字档位。unknown 尾部另保留原 10px 标记间隔，五个 10px 汉字需要 50px 内容宽度，因此尾部需至少 76px，取代 4% 画布阈值。过窄片段省略文字，title/aria 保留；尾部与后续片段重叠时继续省略“结束未确认”，问号、虚线与完整事实保留。没有新增界面元素、层或设置。
 
@@ -561,9 +561,9 @@ PB-G 第一次交付在 Host attention 边界封存四路径产物：另一个�
 
 ### 验收前追加返修：开头标记与图形留白（PC-EDGE，2026-10-10）
 
-用户继续指出最大放大时图形拥挤，开头的验收标记嵌入标题栏。当前 Chrome 与私有预览都加载 index-BN-2tpII.js / index-HkfuQGek.css，确为上轮产物；未归咎旧缓存。最新私有预览中短执行文本为空，但失败圆标约 5.6px 被 sticky 标题栏遮住，路由叉号、结束圆标、选中装饰与后续等待标签仍挨近。此前 14 组“文字相交为零”只证明文字范围，未证明图形间的留白及左侧 sticky 遮挡；通过与失败记录均保留，不把上一轮结论扩张为完整绘制验收。
+开发者继续指出最大放大时图形拥挤，开头的验收标记嵌入标题栏。当前 Chrome 与私有预览都加载 index-BN-2tpII.js / index-HkfuQGek.css，确为上轮产物；未归咎旧缓存。最新私有预览中短执行文本为空，但失败圆标约 5.6px 被 sticky 标题栏遮住，路由叉号、结束圆标、选中装饰与后续等待标签仍挨近。此前 14 组“文字相交为零”只证明文字范围，未证明图形间的留白及左侧 sticky 遮挡；通过与失败记录均保留，不把上一轮结论扩张为完整绘制验收。
 
-core 仍为用户已确认停止变动的 12eb4fcd，已在本分支祖先中，不再重复合入。沿用 hostId codex-adr027 与原宏任务；上轮 PB-G 已 accepted 且检出回收，新增关联 run 17e1167b-9221-4e47-b8ae-1998b46181ad 的 PC-EDGE 返修微任务，首次四配置字段全省略，经路由。只改 apps/console 与产物，以及本 Host 的验收记录。
+core 仍为开发者已确认停止变动的 12eb4fcd，已在本分支祖先中，不再重复合入。沿用 hostId codex-adr027 与原宏任务；上轮 PB-G 已 accepted 且检出回收，新增关联 run 17e1167b-9221-4e47-b8ae-1998b46181ad 的 PC-EDGE 返修微任务，首次四配置字段全省略，经路由。只改 apps/console 与产物，以及本 Host 的验收记录。
 
 实现复用已有 scaleTimeline / fitPixelsPerMinute 和末端留白机制，在现有时间轨道开头留 16px，不伪造时间或延长片段；默认刻度调用不变，工作目标时间轴显式使用前留白。统一坐标覆盖片段、验收/事件标记、空闲块、刻度、读数线与缩放锚点。普通标签左 16px / 右 8px；带结束圆标的标签右 16px，按实际剩余内容宽度决定是否显示文字，过窄只省略文字。保留片段父盒无 padding/border、真实时长与固定像素最小形状。沿用已有三个内部图层，把选择/悬停装饰放在符号和文字之下，使其不遮盖圆标或路由叉号；不新增元素、图层、设置或新的碰撞系统。
 
@@ -587,7 +587,7 @@ PC-03 同时把 routing-cross 沿用其它装饰的 pointer-events:none，使透
 PC-EDGE R1 已固定产物 f23236dc / 86258179-47d7-4e02-ba82-414b4a4d404f，Host 七文件 182 项通过。私有 edge 短路由场景起点五个符号均无标题遮挡且左/中/右命中为 true；宽路由场景 failed 圆标却为 true/false/false，后两点 top 为 routing-cross，故在原 run 上 continue 返修，四配置字段及 configuration 全省略。先前 inquiry 缺 inquiryId 被 INVALID_ARGUMENT 拒绝；补齐后虽 queued，但 installed Codex 的 live bridge 不可用，并未送达，未把 queued 当成已处理；明确缺陷与修法以本次 continue 输入为准。宽路由失败截图与 geometry、初版夹具及日志全保留。最终夹具锚点在启动时固定，避免周期读取让合成起点随 observedAt 移动，且清除模板复制时与成功状态不符的旧 error 文本；这些只是 ignored 夹具更正，不修改产品状态或时间事实。
 
 
-PC-EDGE 首次路由 run 6a116761-6123-4cfe-a8a6-33ebdca048c0 到 zcode/zai-api/GLM-5.3/max；供应方不可重试 429/1310，无封存产物，根及后代 shutdown confirmed。初次 get/result/await 固定在本轮证据根 r1-quota-*，按既有用户例外在同一 run 完整配置 codex/openai/gpt-6.1-sol/high continue（pc_edge-quota-recovery-r1，workflow revision 4→5）。原范围、原宏任务与控制权保留；没有安装、修改凭据或更换日常 Worker。R1 的范围内点击缺陷随后继续在原 run 返修（revision 8→9），configuration 及四配置字段全部省略，未重路由。
+PC-EDGE 首次路由 run 6a116761-6123-4cfe-a8a6-33ebdca048c0 到 zcode/zai-api/GLM-5.3/max；供应方不可重试 429/1310，无封存产物，根及后代 shutdown confirmed。初次 get/result/await 固定在本轮证据根 r1-quota-*，按既有开发者例外在同一 run 完整配置 codex/openai/gpt-6.1-sol/high continue（pc_edge-quota-recovery-r1，workflow revision 4→5）。原范围、原宏任务与控制权保留；没有安装、修改凭据或更换日常 Worker。R1 的范围内点击缺陷随后继续在原 run 返修（revision 8→9），configuration 及四配置字段全部省略，未重路由。
 
 R2 固定 output artifact 777d7127-f08e-403f-b315-eaa3a2d4f2b1 / commit d0b0fb5c544ba324f4e5db7733e0cbfd77600c96，十文件累计 patch SHA-256 为 15f2dc0af15b5b52b70b96c9aa7c7193394c827ce6cebc526d3ed3d1e4c348ec。相对 R1 仅 styles.css 与 timeline-layers.test.tsx 变化，另八个路径逐字节相同；R2 只给已有 routing-cross 设置 pointer-events:none 并加五状态的命中保护测试。Host 固定文件校验、Git blob 比对、累计 patch git apply --check 都通过，十个整合路径与 R2 blob 相同。源码整合 3991847d，发行产物提交 2f3f9285ded8c421f897cd840c19eb6cc39c7690；固定证明为 review-pc-edge/r2/fixed-source-proof.json 与本轮 integrated-source-proof.json。Worker 临时材料 pc-edge-a659272f、pc-edge-pointer-24308f06 两个精确目录均已复制到 review-pc-edge/r2/，原 R1 也保留。
 
@@ -613,7 +613,7 @@ edge-glyphs-wide-route 采用 R1 失败的 99px 路由及 1px 执行区间，最
 | 全新 git archive 2f3f9285 的 apps/console 与 docs/assets，npm --prefix apps/console run build | 初始发行输出不存在，exit 0，0.979 秒；四个资产与最终提交 Git blob 逐字节一致，fresh-build-byte-equality.json 保存字节与 SHA-256。 |
 | 私有 runner 选择 tests/python/console、tests/python/install、cli.test_repository_hygiene、cli.test_skill_workflow | 27 文件、328 项、skip 0，默认 4 并行，exit 0，135.457 秒；private teardown 无失败，完整模块清单与汇总在 python-targets-summary.json。 |
 
-所有门槛复用已存在 Node 24.21.0、console 依赖与本分支 .venv；清除继承 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT，使用私有状态和运行时根。Python 运行期间机器 load averages 约 25/30/32，所选测试仍全部通过；没有负载疑似失败、单文件重跑或额外完整检查。没有停止、重启、替换日常服务/Worker，没有安装或升级日常运行时，没有操作登录与凭据；除本次委派外没有模型调用。core 12eb4fcd 仍为本分支祖先，用户已说明只改文档且停止变动，不重复整合。
+所有门槛复用已存在 Node 24.21.0、console 依赖与本分支 .venv；清除继承 BUDDY_*、ANTHROPIC_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT，使用私有状态和运行时根。Python 运行期间机器 load averages 约 25/30/32，所选测试仍全部通过；没有负载疑似失败、单文件重跑或额外完整检查。没有停止、重启、替换日常服务/Worker，没有安装或升级日常运行时，没有操作登录与凭据；除本次委派外没有模型调用。core 12eb4fcd 仍为本分支祖先，开发者已说明只改文档且停止变动，不重复整合。
 
 
 Host integration int-879fe6c8-9742-4692-a5c3-3b1153a086f2 绑定最终 artifact、2f3f9285 目标与十个 Worker 路径；Host 自己构建而变化的五个资产路径（旧/新 hash 文件和 index.html）由 hostPaths 单独登记，未伪归 Worker。acknowledge accepted 从 revision 13→14，attention 已结清；随后 cleanup-plan 因 revision 变化被拒，重读为 revision 15/planned/eligible。一次 apply 缺 confirmPath 被 INVALID_ARGUMENT 拒绝；补齐确切路径后再遇 REVISION_CONFLICT，重新 get 为 revision 16、plan cln-2d913b22-7eae-4bdc-b9af-94c08edea9ff/applied，确切 ~/.local/share/hey-my-buddy/state/workspaces/ws-3ddc7d0e0afa70631b5b31d31ffffe57/checkout 已不存在。未重复删除或断言清理施行主体；R1 的 ws-84c18f5531a91df950b53f46de8019ba/checkout 也已不存在。manifest/input/output 与所有 Host 复制证据仍保留。宽路由的 Enter 打开另补 final-wide-route-keyboard-loaded.txt / jpg，实际“路由依据”详情已读取完成；真实取值不混同模拟点击回调。

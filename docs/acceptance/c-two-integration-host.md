@@ -10,7 +10,7 @@ Host executed eight independent single-point mutants against the final composed 
 
 The first failed two-case run and its two failures/two errors remain recorded. Host stopped the one still-running service created by that failed test through its own private service_control endpoint; inspect changed present to absent. No discovered PID was signaled and no default namespace was cleaned. The diagnostic suppression of credential cleanup was confined to a private copy. Host command mistakes (a nonexistent test_worker module and an initial missing fixture import) were retained and corrected; they were not treated as mutation red results.
 
-Four paid harness scripts remain prepared only. Each real execution and any rerun requires fresh user approval. Whole-step acceptance and the final default-parallel complete check remain pending at this integration point.
+Four paid harness scripts remain prepared only. Each real execution and any rerun requires fresh developer approval. Whole-step acceptance and the final default-parallel complete check remain pending at this integration point.
 
 The final actual loader inventory contains 3,270 unique tests in 203 modules, with zero loading errors. All prior 3,268 IDs remain identical as a set; only the two CTwoIntegrationTests cases are added. No test is renamed or deleted. Inventory and delta are retained in `<Host-checkout>/tmp/c073-host/integration-final-ids.json` and `integration-id-delta.json`. Repository hygiene passed all five cases.
 

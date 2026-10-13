@@ -2,7 +2,7 @@
 
 2026-10-11 当前关口：Host退回后的3-A/3-B/3-C已串行修复并整合，最终代码 `256023c56eeebc1f57da2889980c165166eb380d` 在指定core `12eb4fcd` 上的完整检查退出0，默认4并行，3,519项（跳过1）、216/216文件，用时645.517秒。所有范围内缺陷原run continue，正式scope版本、原706.360秒七文件失败、额外ZCode取消失败与单文件复跑、目标故障注入、编号差异和精确回收均见 [公开状态返修及最终记录](c-two-public-state-plan.md) 与 [3-C交付](c-two-state-boundaries.md)。3-C微任务已内部签收，受管检出及其精确任务根已回收，实施检出保留。下列2026-10-10关口是历史结果；本轮尚待Claude Code Host整批验收。既有Codex/Claude Code/DSH各一次授权真实冒烟保留原提交绑定；ZCode真实回合因额度仍未验证。不推送、不安装或升级日常运行时，验收前不开始下一条线。
 
-2026-10-10 最新关口：补充夹具修复已固定审查、整合并内部验收，最终代码 `e0ce3d2be333b1655397920d59a8014162730849` 的完整检查退出 0，默认并行数，3,474 项（跳过 1）、213 个文件，用时 690.917 秒。指定 core `1f7e8b60` 及随后纯文档更新都已合入；实际 core 绑定为 `40d82d937caa03a058b484ff0f660657cd595945`。三次完整失败、Host 临时根过长的可复现诊断及短根最终通过均见 `c-two-repair-host.md`；历史各关口原样保留。用户分别单次批准的 Codex、Claude Code、DSH 真实 Worker 冒烟已通过（各一个回合、32.542 / 27.764 / 9.616 秒，各自两层停止与三个端点 absent）；ZCode 因额度不足由用户要求暂不调用模型，记为真实回合未验证。提交记录后停止等 Claude Code Host 整步验收，不推送、不安装或升级日常运行时。
+2026-10-10 最新关口：补充夹具修复已固定审查、整合并内部验收，最终代码 `e0ce3d2be333b1655397920d59a8014162730849` 的完整检查退出 0，默认并行数，3,474 项（跳过 1）、213 个文件，用时 690.917 秒。指定 core `1f7e8b60` 及随后纯文档更新都已合入；实际 core 绑定为 `40d82d937caa03a058b484ff0f660657cd595945`。三次完整失败、Host 临时根过长的可复现诊断及短根最终通过均见 `c-two-repair-host.md`；历史各关口原样保留。开发者分别单次批准的 Codex、Claude Code、DSH 真实 Worker 冒烟已通过（各一个回合、32.542 / 27.764 / 9.616 秒，各自两层停止与三个端点 absent）；ZCode 因额度不足由开发者要求暂不调用模型，记为真实回合未验证。提交记录后停止等 Claude Code Host 整步验收，不推送、不安装或升级日常运行时。
 
 起点是 `socu/buddy-core` 的 `0fffda8f`，实施分支为 `socu/c-two-073`，检出为 `~/.codex/worktrees/c-two-073/hey-my-buddy`。Host 沿用 `codex-adr025`，本批另建宏任务；不推送，不安装或升级日常运行时。已读 DSH 原生续接、ADR-025 第五步的 Host 验收记录、待办中的 C-Two 0.7.3 实测、ADR-025 第 13 条、ADR-007 和当前架构。
 
@@ -22,7 +22,7 @@ Unix 端点目录选择为 `<state>/ipc`，在第一次本地注册或连接之�
 
 ## 微任务与顺序
 
-每个微任务首次提交都省略 `adapter/provider/model/effort` 四个字段，经路由选择 buddy。产物缺陷拒绝后在原 run 上 `continue`，不指定配置；确需更换 buddy 用 `reroute`。只有供应方不可重试限流可按用户许可在原 run 上用完整配置继续，并登记旧 buddy、新 buddy 和路由决定编号。
+每个微任务首次提交都省略 `adapter/provider/model/effort` 四个字段，经路由选择 buddy。产物缺陷拒绝后在原 run 上 `continue`，不指定配置；确需更换 buddy 用 `reroute`。只有供应方不可重试限流可按开发者许可在原 run 上用完整配置继续，并登记旧 buddy、新 buddy 和路由决定编号。
 
 | 微任务 | 输入与唯一可写范围 | 做法与交付 | 聚焦验证 |
 | --- | --- | --- | --- |
@@ -50,7 +50,7 @@ Unix 端点目录选择为 `<state>/ipc`，在第一次本地注册或连接之�
 | V-09 | 自建对端暂停时，首次连接与已连接各一例按连接期限抛出pre_dispatch；去掉连接期限目标测试失败，仅暂停自建进程。业务调用期限按时抛出、映射旧超时码、同一连接随后可用；不新增每调用等待线程，去掉期限时测试失败 |
 | V-10 | 已派发但超时的调用最终完成；排队请求过时不交给 owner/native loop，去掉本项目时间窗判断时测试失败 |
 | V-11 | 无模型整链：真实服务→持有 Worker→模拟控制器，端点均在同一私有状态域，正常关闭与强行杀掉后无自身端点残留 |
-| V-12 | 四个 harness 冒烟脚本就绪；用户另行批准后各最短一回合，记录次数、实际 CLI、交付/活动/两层停止与端点；失败重跑重新询问 |
+| V-12 | 四个 harness 冒烟脚本就绪；开发者另行批准后各最短一回合，记录次数、实际 CLI、交付/活动/两层停止与端点；失败重跑重新询问 |
 | V-13 | 所有产物整合并合入最新 core 后，默认并行数完整检查一次，记录代码提交、项数、退出码和用时；文档后补只重跑卫生测试 |
 
 测试编号从起点收集到本检出的忽略 `tmp/`，之后用集合差异登记新增、改名和删除，未变的以集合比较证明。Host 从固定输出提交建临时副本，独立运行聚焦测试并逐一移除目标防护确认断言失败；不会在共享检出上做变异，不改写原始失败记录。负载引起的检查运行器/取消测试偶发失败先如实记下，空闲后单文件复跑再判断，不因耗时或偶发失败改测试。
@@ -59,13 +59,13 @@ Unix 端点目录选择为 `<state>/ipc`，在第一次本地注册或连接之�
 
 每份任务说明写明：只运行受影响测试；Worker 不删除任何文件或目录，开始时创建并记下短的任务专用系统临时目录，`TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向其中，一次性材料全部留在里面，交付报告确切路径，由 Host 验收后按这一个路径回收；检查运行器自己创建并收尾的根不在此列。受管检出与用户仓库共用 stash、分支和标签，不使用 `git stash`，不新建、切换、移动或删除分支与标签，改动留在工作区由黑板封存；对比基线用临时副本。记录/夹具用 `~` 或占位符。
 
-测试使用私有状态与运行时根，清除继承的 `BUDDY_*`、`ANTHROPIC_*`、`VIRTUAL_ENV` 和 `UV_PROJECT_ENVIRONMENT`；C-Two 探针也明确设置私有根，不使用默认公共命名空间。所有模型调用限于路由微任务；真实 harness 冒烟先备好脚本并向用户说明四次调用用途，批准之前不运行，探针出错的重跑也重新批准。不设置空的 `CLAUDE_CONFIG_DIR` 或 `CODEX_HOME`，不登录/登出、不改密钥、不读凭据文件内容。日常服务或 Worker 故障导致无法继续委派时立即停止报告，不尝试重启或替换。
+测试使用私有状态与运行时根，清除继承的 `BUDDY_*`、`ANTHROPIC_*`、`VIRTUAL_ENV` 和 `UV_PROJECT_ENVIRONMENT`；C-Two 探针也明确设置私有根，不使用默认公共命名空间。所有模型调用限于路由微任务；真实 harness 冒烟先备好脚本并向开发者说明四次调用用途，批准之前不运行，探针出错的重跑也重新批准。不设置空的 `CLAUDE_CONFIG_DIR` 或 `CODEX_HOME`，不登录/登出、不改密钥、不读凭据文件内容。日常服务或 Worker 故障导致无法继续委派时立即停止报告，不尝试重启或替换。
 
 交付审查绑定实际 artifactId、输出提交与累积补丁哈希；在黑板登记整合及验收后走 cleanup-plan/apply 回收确切受管检出。整合登记保留拒绝、continue、限流换手、Host 自行更正记录的事实。最后提交本记录、真实检查结果和外部可见变化，保留实施检出供 Claude Code Host 验收；验收前不开始其他工作。
 
 ## 整合登记
 
-宏任务 `obj-e2bf6c47-a17b-42ba-9b75-a32581e43716`，0-A run `66028e52-f2f4-4ab8-8930-6c6a4d8bcff0`。首次提交省略四项配置；一次提交前校验拒绝是新记录尚未创建、includeUntracked 未选中实际文件，创建页头后沿用原 requestId 提交成功。初次路由决定 `dec-885d02c5-53c7-4087-958c-83e3882d4f72` 选择 ZCode / zai-api / GLM-5.3-Flash / max，供应方 429、1310、retryable=false 失败，两层停止确认；按用户许可在原 run continue 改用 Codex / openai / gpt-6-luna / high，不改全局路由配置。首次请求 low 被 CONFIGURATION_UNAVAILABLE 拒绝、没有新回合；只读核对 model-profiles 后使用启用的 high。
+宏任务 `obj-e2bf6c47-a17b-42ba-9b75-a32581e43716`，0-A run `66028e52-f2f4-4ab8-8930-6c6a4d8bcff0`。首次提交省略四项配置；一次提交前校验拒绝是新记录尚未创建、includeUntracked 未选中实际文件，创建页头后沿用原 requestId 提交成功。初次路由决定 `dec-885d02c5-53c7-4087-958c-83e3882d4f72` 选择 ZCode / zai-api / GLM-5.3-Flash / max，供应方 429、1310、retryable=false 失败，两层停止确认；按开发者许可在原 run continue 改用 Codex / openai / gpt-6-luna / high，不改全局路由配置。首次请求 low 被 CONFIGURATION_UNAVAILABLE 拒绝、没有新回合；只读核对 model-profiles 后使用启用的 high。
 
 Host 在本批私有环境装发布的 c-two 0.7.3，用 57 字符且含空格的 0700 端点目录完成独立探针：4 KiB 与 8 MiB 往返成功；100 ms 期限分别在 105.243/105.219 ms 抛出 CallDeadlineExceeded（dispatch_uncertain），同一连接再调用成功，超时调用仍在对端完成。活端点回收返回 busy；正常关闭后 inspect=absent、reap=already-absent；仅杀掉自己的模拟进程组后 reap=reaped、inspect=absent。两次调用之后 outgoing SHM used_bytes=0、peak_bytes=8,392,704，不能解释成 RSS。目录只余 .gate/.gate.marker 协调文件，无端点文件。另核对完整 shutdown 后可在新会话显式配置另一个私有根，故进程中活跃域不能切换与测试停机后重新初始化应分开。原始探针与首次 semver 输入错误留在本检出 tmp/c073-host，未启动模型、未碰默认公共域。项目整链与全部行为验证仍待完成。
 
@@ -73,9 +73,9 @@ Host 在本批私有环境装发布的 c-two 0.7.3，用 57 字符且含空格�
 
 0-A 已在黑板绑定 int-13de4434-33f0-4067-9fa1-5ea9b0d07b47 后 accepted；cleanup-plan/apply 成功回收原受管检出。Host 保存 Worker 日志后，整体删除它报告的确切任务根 `<0A_TASK_TMP>`，未删其他对象。
 
-1-A 基线 `861f298e`，run `a242d4a2-07d5-4b6a-ab20-7eec024a2d10`；首次路由省略四项配置，决定 `dec-5c74bf7b-49f2-461a-b7b6-ae72457ca669` 选择 ZCode / zai-api / GLM-5.3-Flash / max，同样返回供应方不可重试 429/1310，未交付代码，两层停止确认。按用户授权，原 run continue 改为 Codex / openai / gpt-6.1-sol / high，未改路由与用户配置。
+1-A 基线 `861f298e`，run `a242d4a2-07d5-4b6a-ab20-7eec024a2d10`；首次路由省略四项配置，决定 `dec-5c74bf7b-49f2-461a-b7b6-ae72457ca669` 选择 ZCode / zai-api / GLM-5.3-Flash / max，同样返回供应方不可重试 429/1310，未交付代码，两层停止确认。按开发者授权，原 run continue 改为 Codex / openai / gpt-6.1-sol / high，未改路由与用户配置。
 
-V-09 的连接阶段前提核对未通过，1-C 暂停等待用户选择。Host 用发布0.7.3、独立私有 <HOST_TASK_TMP>/connect-deadline/ipc 启动模拟服务，拿到就绪后只对自己持有的服务进程组 SIGSTOP；独立客户端设置该私有根，记录 before-connect 后调用 cc.connect，3 秒仍未返回，尚未执行100ms with_call_options。外层只终止这个探针自己创建的客户端组；随后 SIGCONT 自己的服务并通过 stdin 正常关闭，探针整体退出0，未调用模型、未触及日常服务与默认域。原始 stdout/stderr 和脚本留在 tmp/c073-host/connect-deadline.*。公开 cc.connect 签名仅 crm_class/name/address，ClientIPCOverrides 没有连接期限字段；现有等待线程同时覆盖连接及调用，故不能把仅业务调用期限描述为完整等价替换。不自行保留部分保护或引入其他实现，已向用户说明并询问；1-A 独立 run 继续收尾。
+V-09 的连接阶段前提核对未通过，1-C 暂停等待开发者选择。Host 用发布0.7.3、独立私有 <HOST_TASK_TMP>/connect-deadline/ipc 启动模拟服务，拿到就绪后只对自己持有的服务进程组 SIGSTOP；独立客户端设置该私有根，记录 before-connect 后调用 cc.connect，3 秒仍未返回，尚未执行100ms with_call_options。外层只终止这个探针自己创建的客户端组；随后 SIGCONT 自己的服务并通过 stdin 正常关闭，探针整体退出0，未调用模型、未触及日常服务与默认域。原始 stdout/stderr 和脚本留在 tmp/c073-host/connect-deadline.*。公开 cc.connect 签名仅 crm_class/name/address，ClientIPCOverrides 没有连接期限字段；现有等待线程同时覆盖连接及调用，故不能把仅业务调用期限描述为完整等价替换。不自行保留部分保护或引入其他实现，已向开发者说明并询问；1-A 独立 run 继续收尾。
 
 1-A 第一份固定输出 `73d326d0`（artifact `261370ab-5755-4655-ac4a-6364ec26e5fc`，SHA256 `f2d15856bac7f0739f20c2448bd0f02bc034fd897134ba8519e97c0149b64120`）未验收。14 个改动路径均在范围内；Worker 如实报告联网/IPC/ps 沙箱限制，锁仍0.6.0。Host 在固定源码的私有副本生成验证用锁（仅 c-two 0.6→0.7.3）并完成 uv sync --frozen，参考锁作为联网解析材料交给原 Worker，实施分支未代改其锁或代码。Host 实测库支持 state0500/ipc0700 完成注册/调用，而交付把state也强制0700、将旧只读成功测试改成拒绝，属于范围内行为回归。尝试登记 rejected 被当前0.27服务以 NOT_READY 拒绝（attention边界不能直接reject）；已用原run continue 明确打回，要求保留state既有owner-private语义、端点仍0700、恢复成功用例、交付锁和确切任务根。continue省略四项配置，无新run；独立的1-A返修继续，1-C仍暂停。
 
@@ -93,19 +93,19 @@ Host从最终固定输出重新建立三份变异副本：去掉私有根setter�
 
 1-A 原补丁整合为 `7064e32b`；黑板整合 int-77bd89c5-540f-4487-8cc5-8ab991997484 已 verified，原run accepted。cleanup-plan/apply 成功回收登记的受管检出；Host保留交付日志后整体删除结构化summary报告的确切 <1A_TURN4_TASK_TMP>，只按报告路径回收，不按相同前缀推断别的目录。实施检出自己的 uv sync --frozen 已切到 c-two0.7.3；此环境及上述私有wheel环境都不是日常运行时。Host任务根的探针、固定副本、原始失败与检查证据仍保留以供后续核对。
 
-当前状态：0-A 与1-A已内部验收；1-B、1-C、1-D未开始。1-C因连接阶段期限前提未通过暂停，用户选择尚未返回。未做整批完整检查、四harness冒烟，也未准备或执行付费冒烟；恢复后继续剩余微任务、合入最新core，再在最终代码上按默认并行数跑一次完整检查，四个最短真实CLI回合须另行批准。日常服务/Worker、配置和登录未改。实施分支不推送，保留供恢复与Claude Code Host后续验收。
+当前状态：0-A 与1-A已内部验收；1-B、1-C、1-D未开始。1-C因连接阶段期限前提未通过暂停，开发者选择尚未返回。未做整批完整检查、四harness冒烟，也未准备或执行付费冒烟；恢复后继续剩余微任务、合入最新core，再在最终代码上按默认并行数跑一次完整检查，四个最短真实CLI回合须另行批准。日常服务/Worker、配置和登录未改。实施分支不推送，保留供恢复与Claude Code Host后续验收。
 
-## 2026-10-10 用户决定与恢复
+## 2026-10-10 开发者决定与恢复
 
 目标由0.7.3改为已发布0.7.4，分支与已提交记录文件名保留。1-A2作为小微任务先于1-B，更新依赖/锁并重新取得版本绑定证据。当前计划段落已更新；此前0.7.3实测、失败、验收与暂停记载均是历史，不改写成0.7.4通过。1-C恢复，所有实时连接带连接期限、业务调用带调用期限，整个等待线程删除；两种期限同码，通过transport_phase区分。连接空闲60秒后泄漏由Claude Code Host用私有验收探针核对，本批测试集不加长等待用例。
 
-日常0.6.0服务的FD接近上限。遇到Too many open files立即停止报告，不重启或替换日常服务/Worker，也不以私有服务替代委派。四个harness的真实回合及其重跑仍须用户逐次批准，旧批准不覆盖本批；其他原约束保持。
+日常0.6.0服务的FD接近上限。遇到Too many open files立即停止报告，不重启或替换日常服务/Worker，也不以私有服务替代委派。四个harness的真实回合及其重跑仍须开发者逐次批准，旧批准不覆盖本批；其他原约束保持。
 
 1-A2 基线111f885c，run9afaad94-0410-4bfc-826b-cba26a5a0b81，仍归原宏任务；首次提交省略四项配置。Host专用0.7.4环境复核connect公开参数、暂停自建对端：fresh与already-connected连接的150ms预算分别152.3/152.4ms抛CallDeadlineExceeded，transport_phase=pre_dispatch；对端恢复后可用。timeout0为0.1ms的pre_dispatch，负数/正负无穷/NaN/字符串均拒绝；100ms业务调用约101.8ms为dispatch_uncertain，同一连接再调用成功，原超时调用仍在对端完成。不带期限的独立客户端在一秒外层观察窗仍停在before-connect，仅终止自己创建的探针客户端，随后恢复并正常关闭自己创建的服务，inspect=absent。无模型、无默认公共域、无日常进程操作，原始证据tmp/c073-host/connect-timeout-probe.*。
 
 Host公开表面比较0.7.3与0.7.4：__all__、异常类名字、ClientIPCOverrides/ServerIPCOverrides键及类型、所用公开函数签名均一致，唯一签名差为connect新增timeout；只核公开能力，不对vendor静态证明。0.7.4第二份私有探针重取4KiB/8MiB往返、调用期限、池计数和端点维护：两次8MiB约11.392/11.808ms，调用期限101.128/105.616ms、dispatch_uncertain，同连接随后可用，远端仍完成；outgoing SHM used=0、peak=8,392,704；alive reap=busy，正常exit0后already-absent/inspect absent，杀自己的模拟组exit-9后reaped/inspect absent；目录只余.gate/.gate.marker，无端点。脚本复制时输出文件名最初沿用了旧probe名，Host把新结果另存public-probe.result.json，并从未改的旧stdout恢复旧0.7.3结果JSON，随后修正新脚本输出名；两版历史数据均保留，不混写为本次结果。
 
-1-A2 首次决定dec-83d0edbf-3bf8-43aa-8725-b031c8e233cd选择ZCode/zai-api/GLM-5.3-Flash/max，供应方不可重试429/1310失败，两层停止确认；原run continue改为Codex/openai/gpt-6.1-sol/high（已完成1-A同类配置与锁），按用户许可登记，未改用户路由/模型配置。尚无文件描述符耗尽错误；如遇到即停。
+1-A2 首次决定dec-83d0edbf-3bf8-43aa-8725-b031c8e233cd选择ZCode/zai-api/GLM-5.3-Flash/max，供应方不可重试429/1310失败，两层停止确认；原run continue改为Codex/openai/gpt-6.1-sol/high（已完成1-A同类配置与锁），按开发者许可登记，未改用户路由/模型配置。尚无文件描述符耗尽错误；如遇到即停。
 
 1-A2 第二回合停在依赖准备的Host assistance边界：原沙箱DNS与缺依赖失败保留，未声称升级完成。Host在固定输出5a8459d6的独立副本从公开PyPI执行uv lock --upgrade-package c-two，退出0，只更新c-two0.7.3→0.7.4；用导出的哈希锁下载当前平台依赖及构建依赖，两次退出0，共16个wheel和参考锁，命令与SHA256在原任务根host-materials/provenance.json。材料交原run continue自行核对写入，Host未代改实施分支uv.lock；本回合不指定配置四字段。真实无模型0.7.4探针证据继续保留，尚未复核最终固定产物或开展1-B/1-C。
 
@@ -117,7 +117,7 @@ Host核对工具的两处失败已纠正：第三变异首次误定位support.py
 
 1-A2补丁整合fdff0c2a，integration int-81363d55-478d-4dff-ae38-41607dcda753 已 verified，原run accepted/completed；cleanup-plan/apply 已 applied。Host在保留最新原补丁、两回合顶层验证日志和固定副本后整体删除结构化交付登记的两个确切任务根 <1A2_FIRST_TASK_TMP>/<1A2_SECOND_TASK_TMP>，没有按前缀查找或删除其他对象；公共依赖材料另拷到Host自建根供后续微任务使用，增补editables的公开下载退出0、哈希已登记。实施检出uv sync --frozen退出0，现为0.7.4，只更新实施环境；记录补充后仓库卫生5项退出0。
 
-1-B从9a9a66c3路由提交，run6f1205d5-c82d-45ea-87d3-241c627d0cc2，四项配置全部省略。决定dec-4a97c9c4-1d3c-4446-9f67-74628c5f84de选ZCode/zai-api/GLM-5.3-Flash/max，供应方不可重试429/1310失败，两层停止确认；按用户许可在原run continue改用已完成同类1-A2的Codex/openai/gpt-6.1-sol/high，未改变全局配置。Host首份continue错误地把四字段写在顶层，INVALID_ARGUMENT拒绝且无状态改动，随后按现有CLI契约改用configuration对象成功；原错误保留，未另开run。微任务仍在实施，未验收。
+1-B从9a9a66c3路由提交，run6f1205d5-c82d-45ea-87d3-241c627d0cc2，四项配置全部省略。决定dec-4a97c9c4-1d3c-4446-9f67-74628c5f84de选ZCode/zai-api/GLM-5.3-Flash/max，供应方不可重试429/1310失败，两层停止确认；按开发者许可在原run continue改用已完成同类1-A2的Codex/openai/gpt-6.1-sol/high，未改变全局配置。Host首份continue错误地把四字段写在顶层，INVALID_ARGUMENT拒绝且无状态改动，随后按现有CLI契约改用configuration对象成功；原错误保留，未另开run。微任务仍在实施，未验收。
 
 1-B继续期间，Host把最新socu/buddy-core的1a9decd9合入，合并提交8013f9cc58b5d78f8bc7fe63e5acf4ab7673a90d，仅docs/design/backlog.md变化，没有手动改Host维护文档；本项目端点仍按计划0700，未把Host的其他权限实测写成自主证据。1-C任务另明确V-10必须核对连接消耗部分预算之后的排队截止时间，复用现有本机时间窗，防止连接后服务端重新获得整窗；涉及公开schema或范围外接口则停止交付缺口。B的固定基线与写入范围保持。监测包装器未取得继续回合结果后，Host按指南前台持有原run唯一await，不另开run。
 
@@ -162,7 +162,7 @@ Host编号核对工具首次用完整loader发现范围外黑板旧socket_path�
 
 1-B整合53b0130a，integration int-7920ec42-6a5a-47a6-9c66-41bf67e4ab73已verified，原run accepted/completed；cleanup-plan/apply applied。Host保留两回合的顶层交付日志、原补丁和最终固定副本后，按结构化交付登记的两个确切根 <1B_FIRST_TASK_TMP>/<1B_REPAIR_TASK_TMP> 整体回收，未扫描前缀或公共命名空间。Host显示清理进度的小脚本因非清理响应中的cleanup为None而报AttributeError，显示失败未改变状态，随后从对应记录正确读回accepted/applied，未重复回收操作。
 
-1-C固定基线ebf8dfb6，run3fa17c8b-0820-481b-8151-c3f476030cc9首次提交省略四字段；决定dec-df9f6bd8-e8a8-4a39-9415-1f9e2e85c1e6选ZCode/zai-api/GLM-5.3-Flash/max，供应方不可重试429/1310失败，两层停止确认。用户许可原run continue采用已完成本批同类1-A2与1-B的Codex/openai/gpt-6.1-sol/high，未动全局配置。1-C仍实施，范围5文件（含受影响protocol.test_inquiry_transport），无完整检查、付费harness冒烟或日常服务/Worker变动。
+1-C固定基线ebf8dfb6，run3fa17c8b-0820-481b-8151-c3f476030cc9首次提交省略四字段；决定dec-df9f6bd8-e8a8-4a39-9415-1f9e2e85c1e6选ZCode/zai-api/GLM-5.3-Flash/max，供应方不可重试429/1310失败，两层停止确认。开发者许可原run continue采用已完成本批同类1-A2与1-B的Codex/openai/gpt-6.1-sol/high，未动全局配置。1-C仍实施，范围5文件（含受影响protocol.test_inquiry_transport），无完整检查、付费harness冒烟或日常服务/Worker变动。
 
 1-C第一份固定a0c87c85只新增边界记录，未实施源码；它指出with_call_options不能接受原本仅cc.connect桩的EndpointConnection，以及4份通过旧_connect_and_call替换/覆盖的夹具。Host核对是本次既有SDK/删除旧入口的必要测试适配，通过scope-amend（scopeVersion2）把五个受影响测试纳入，原生产范围仍仅c_two_live.py，无公开CLI/schema/角色/registry扩张；同run continue不指定配置四字段。两个DSH测试消费者只验证，没发现独立编辑需求。范围外代码不由Worker改，原缺口记录保留；没有把未实施V09/V10当作通过。
 
@@ -201,7 +201,7 @@ Host七份独立最终源码变异取得目标assert失败exit1：移除connect�
 
 1-C补丁整合6d072f37，integration int-ee84b6fb-d68d-4191-953c-cde71213aa18 verified，原run accepted/completed；cleanup-plan/apply applied。Host保留范围缺口、实施回合的顶层脚本/manifest/所有runs原始日志、最终原补丁与固定副本后，按结构化交付唯一根 <1C_TASK_TMP> 整体回收，未按前缀扫描或清扫默认公共域。未运行60秒连接空闲泄漏探针，该项留给Claude Code Host验收。
 
-1-D基线dcc11031，run8a6200bc-324e-4d64-b232-b4794eb1d198首次省略四字段，经决定dec-d9c89127-f9b9-4750-a119-bb10ae0805a0选ZCode/zai-api/GLM-5.3-Flash/max；供应方不可重试429/1310，两层停止确认后用户许可原run continue改用完成本批同类工作的Codex/openai/gpt-6.1-sol/high。范围仍三个新测试/fixture/记录，模型冒烟只准备，不执行。所有原清理/私有根/共享refs/日常服务约束保持，源分支不推送。
+1-D基线dcc11031，run8a6200bc-324e-4d64-b232-b4794eb1d198首次省略四字段，经决定dec-d9c89127-f9b9-4750-a119-bb10ae0805a0选ZCode/zai-api/GLM-5.3-Flash/max；供应方不可重试429/1310，两层停止确认后开发者许可原run continue改用完成本批同类工作的Codex/openai/gpt-6.1-sol/high。范围仍三个新测试/fixture/记录，模型冒烟只准备，不执行。所有原清理/私有根/共享refs/日常服务约束保持，源分支不推送。
 
 ## 1-D 整合核对与公共接线修正
 
@@ -221,7 +221,7 @@ Host 的公共接线聚焦按每文件独立解释器运行：worker_runtime4、
 
 1-D 已以 int-b93d8ac7-0349-4438-a810-1e3ae62c7689 verified 登记并 accepted/completed。首次 acknowledge 误用 status 参数，被0.27 CLI以INVALID_ARGUMENT拒绝，没有形成签收；改用既有verdict参数的新commandId后成功。黑板已自动回收受管检出，后续cleanup-plan回读state=applied/result.removed=true，不重复删除。保留两回合顶层交付日志、固定副本与六份冒烟材料后，Host只整体删除两个结构化交付报告的确切 <1D_FIRST_TASK_TMP>/<1D_FINAL_TASK_TMP>；无通配符，无其他会话对象。
 
-四个最短回合的入口与共享脚本已经固定SHA复制至Host自建 <HOST_TASK_TMP>/native-smoke-bundle，逐个静态prepare退出0；prepare未发现CLI、未启动模型。候选配置复用现有已验证选择：ZCode/zai-api/GLM-5.3-Flash/max，Codex/openai/gpt-6.1-sol/low，Claude/anthropic/claude-haiku-4-5-20251001/default，DSH/deepseek-official/deepseek-v4-flash/off。各回合独立私有根，execute必须绑定用户的逐次批准，当前0个真实回合、没有批准文件。脚本不覆写CODEX_HOME或CLAUDE_CONFIG_DIR；登录/额度若阻碍，只如实记录，重跑另请批准。
+四个最短回合的入口与共享脚本已经固定SHA复制至Host自建 <HOST_TASK_TMP>/native-smoke-bundle，逐个静态prepare退出0；prepare未发现CLI、未启动模型。候选配置复用现有已验证选择：ZCode/zai-api/GLM-5.3-Flash/max，Codex/openai/gpt-6.1-sol/low，Claude/anthropic/claude-haiku-4-5-20251001/default，DSH/deepseek-official/deepseek-v4-flash/off。各回合独立私有根，execute必须绑定开发者的逐次批准，当前0个真实回合、没有批准文件。脚本不覆写CODEX_HOME或CLAUDE_CONFIG_DIR；登录/额度若阻碍，只如实记录，重跑另请批准。
 
 ## 完整初跑与范围核对
 
@@ -233,15 +233,15 @@ Host自己的顺序修正引入了凭据清理失败后的第二次机会丢失�
 
 余下失败涉及原唯一写入范围之外的大批夹具和调用方。本计划要求“明显超出计划则停止说明”；本次先登记可审查的补充范围，暂停扩大实施：RPC私有state传递及Mock/stub接口适配；其余原生角色/工具/用量夹具的0700状态域初始化；同一测试进程同时使用多个不同state的并发场景隔离；安装版ZCode离线app-server关闭与Host原生回合停止的独立定位；console测试catalog显式环境与host-preview开发依赖前提。每一份修改仍需独立固定交付/聚焦/去掉目标行为红灯，默认经路由，公共文件由Host整合。未证明的controller失败不能统称为状态根或机器负载，不能弱化shutdown与工具/用量断言。
 
-用户答复“先交 Claude Code Host 复核失败记录”。固定的 26 模块失败清单、原始证据摘要、后续聚焦范围与未定位项已整理在 [c-two-failure-review.md](c-two-failure-review.md)；补充实施继续暂停，等待用户转达复核意见。本次只整理记录，未提交新的修复微任务、未重跑完整检查、未运行付费冒烟。
+开发者答复“先交 Claude Code Host 复核失败记录”。固定的 26 模块失败清单、原始证据摘要、后续聚焦范围与未定位项已整理在 [c-two-failure-review.md](c-two-failure-review.md)；补充实施继续暂停，等待开发者转达复核意见。本次只整理记录，未提交新的修复微任务、未重跑完整检查、未运行付费冒烟。
 
 ## Claude Code Host 复核后的补充实施
 
-Host 在 `3cca4505` 归档副本、0.7.4 环境、私有检查根和空临时 HOME 中单独重跑 25 个模块（未跑 `test_host_workflow_worker`），22 个稳定复现。以下是用户转达的 Host 证据，尚不是本轮 Host 自行重跑所得：七份测试缺 `state_dir` 或 Mock/桩不接受参数；十余份原生角色的 0755 状态目录被本项目新增权限要求拒绝；问询对端与 console 夹具的隔离被破坏。先前未定位项目据此有了具体原因，不再用机器负载解释这些失败。ZCode、Claude 取消文件及安装版 ZCode 单独通过，初跑仍保留；`test_blackboard` 整文件 57 项由 Host 单独通过。
+Host 在 `3cca4505` 归档副本、0.7.4 环境、私有检查根和空临时 HOME 中单独重跑 25 个模块（未跑 `test_host_workflow_worker`），22 个稳定复现。以下是开发者转达的 Host 证据，尚不是本轮 Host 自行重跑所得：七份测试缺 `state_dir` 或 Mock/桩不接受参数；十余份原生角色的 0755 状态目录被本项目新增权限要求拒绝；问询对端与 console 夹具的隔离被破坏。先前未定位项目据此有了具体原因，不再用机器负载解释这些失败。ZCode、Claude 取消文件及安装版 ZCode 单独通过，初跑仍保留；`test_blackboard` 整文件 57 项由 Host 单独通过。
 
 偏离登记：`9b73fe42` 的 `worker.py` 清理顺序修正是 Host 在整合中自己引入回归后的代码修复，超出一句话记录更正；Claude Code Host 已接受。原两处点变异及首次失败保留。隔离越界登记：初跑的 `test_inquiry_owner` 在日常 `~/.local/share/hey-my-buddy/state/ipc` 创建了 `.gate` 与 `.gate.marker`；console 子进程丢失模型目录夹具，实际执行本机 Claude 与 Codex，Host 空 HOME 复现出现 `.claude.json`、`.claude/backups` 与 `.codex/tmp/arg0`。这些是此前未声明的测试行为；日常 `ipc` 不回收、不改动，修复只验证新自建私有材料。
 
-当前规则按用户决定收紧归属并放宽误加的父目录权限：内部角色、Worker 运行时及测试对端显式取得状态根，缺失则失败，不能解析默认状态目录；只有面向 Host 的 CLI 可以解析默认状态目录。状态目录本批不新增权限要求。`<state>/ipc` 仍以 0700 创建，已有端点目录的所有权与写入权限交给 C-Two 校验，其拒绝映射为现有 BoardError；项目保留链接与 `..` 防护。库接受 0755 父目录及符合规则的端点目录，不把“必须 0700”写成库的要求。
+当前规则按开发者决定收紧归属并放宽误加的父目录权限：内部角色、Worker 运行时及测试对端显式取得状态根，缺失则失败，不能解析默认状态目录；只有面向 Host 的 CLI 可以解析默认状态目录。状态目录本批不新增权限要求。`<state>/ipc` 仍以 0700 创建，已有端点目录的所有权与写入权限交给 C-Two 校验，其拒绝映射为现有 BoardError；项目保留链接与 `..` 防护。库接受 0755 父目录及符合规则的端点目录，不把“必须 0700”写成库的要求。
 
 | 微任务 | 唯一可写范围 | 顺序与验收 |
 | --- | --- | --- |
@@ -254,13 +254,13 @@ R-01：缺状态根并清除相关环境时，真实内部入口失败，空私�
 
 微任务都由路由首次选择，不填四项配置；各自隔离检出，公共值、角色与注册表仍归 Host。Worker 不删除任何对象，不使用 stash，不新建、切换、移动或删除分支/标签，不提交，改动由黑板封存；短任务根在开始时记录，TMPDIR 与 BUDDY_CHECKS_TMPDIR 指入其中，材料与变异副本在根内，交付后 Host 按确切路径回收。只跑受影响测试，固定交付后 Host 独立检查与目标行为变异；范围内缺陷回原 run continue，小的记录更正由 Host 登记。日常服务失败或 Too many open files 即停止报告，不重启替换。
 
-Host 在本检出执行 `npm --prefix apps/console ci` 准备 AGENTS 要求的开发依赖，不改前端源码与锁。2-A/2-B 收齐整合后才开始 2-C/2-D；最终合入最新 core、核对全部编号变化、保留原失败后，避开其他会话重测试高峰，以默认并行数重跑一次完整检查。疑似负载失败保留初次结果，空闲后单文件重跑再判断；四个付费冒烟仍须用户逐次批准，未批准不运行。
+Host 在本检出执行 `npm --prefix apps/console ci` 准备 AGENTS 要求的开发依赖，不改前端源码与锁。2-A/2-B 收齐整合后才开始 2-C/2-D；最终合入最新 core、核对全部编号变化、保留原失败后，避开其他会话重测试高峰，以默认并行数重跑一次完整检查。疑似负载失败保留初次结果，空闲后单文件重跑再判断；四个付费冒烟仍须开发者逐次批准，未批准不运行。
 
 本轮基线 `b2741294`：2-A run `ad73f506-d3f9-49f5-85fc-7b72fcbb643c` 首次决定 `dec-09af40e4-65c8-4585-ac03-c0cbf561cf9f` 选 ZCode/zai-api/GLM-5.3/max；2-B run `7bba6511-75fe-4aa3-b042-2fd5df372bc3` 首次决定 `dec-8e478dff-b249-458e-9116-dcac7f2d6264` 选 ZCode/zai-api/GLM-5.3-Flash/max。两者供应方均不可重试 429/1310 限流，两层停止确认；按已有授权各自在原 run 上用 Codex/openai/gpt-6.1-sol/high continue，该配置已完成本批同类实现与核对。原路由、原失败、原根与请求保留，没有改用户路由设置。
 
 Host 已执行开发依赖准备，退出 0、4.590 秒，`apps/console` 源码与锁未变；npm 输出已有 audit 警告，只保留原日志，不另做升级。原始材料 `tmp/c073-host/console-dev-ci.{json,log}`。Host 在新自建根亲自核对发布版 0.7.4：0755 状态父目录下，0700 与 0755 端点目录真实注册均成功，0770 端点目录在原生初始化/注册时被 `CoreError` 拒绝；仅 `set_local_endpoint` 配置成功不证明实际域初始化通过。所有探针根均属本任务，未使用默认公共域，材料 `sdk-directory-rule-native.{json,log}`。此次观察的机器负载约 31～37，最终完整检查等待重测试低峰，已确认的产品与隔离失败不归因于负载。
 
-用户授权补充微任务 2-E：仅修改 `tests/python/console/test_console.py` 中新增 R-05 测试及必要局部 helper、新增 `docs/acceptance/c-two-r05-guard.md`，基线 `27b91e0d`。旧 2-B 已签收，黑板实际拒绝原 run 的 continue；新任务是用户明确批准的例外，不取消旧 run 或改写旧产物。CLI/HTTP 错误也必须核对记录拒绝诱饵，原 HTTP 500 本身不再计为有效目标变异。2-E 与 2-C 的 support、2-D 的检查点夹具范围互不重叠，其余约束沿用本计划。
+开发者授权补充微任务 2-E：仅修改 `tests/python/console/test_console.py` 中新增 R-05 测试及必要局部 helper、新增 `docs/acceptance/c-two-r05-guard.md`，基线 `27b91e0d`。旧 2-B 已签收，黑板实际拒绝原 run 的 continue；新任务是开发者明确批准的例外，不取消旧 run 或改写旧产物。CLI/HTTP 错误也必须核对记录拒绝诱饵，原 HTTP 500 本身不再计为有效目标变异。2-E 与 2-C 的 support、2-D 的检查点夹具范围互不重叠，其余约束沿用本计划。
 
 | 微任务 / run | 首次路由决定 | 不可重试限流后的同 run 配置 |
 | --- | --- | --- |
@@ -268,8 +268,8 @@ Host 已执行开发依赖准备，退出 0、4.590 秒，`apps/console` 源码�
 | 2-D / `a4e106fd-82f7-44ca-8312-9b3a11bd320d` | `dec-3c1f508b-71c1-469d-b2f6-91a83d1ead8a`；ZCode/zai-api/GLM-5.3-Flash/max | Codex/openai/gpt-6.1-sol/high |
 | 2-E / `22e5e432-44c3-439c-b885-2b3f7f23c470` | `dec-783275aa-5531-40d1-a1ba-2fc4240aeb19`；ZCode/zai-api/GLM-5.3-Flash/max | Codex/openai/gpt-6.1-sol/high |
 
-三项首次提交均省略全部四项配置。供应方均返回不可重试 429/1310，失败回合两层停止确认后，按用户已有许可在各自原 run 上 continue，使用已完成本批同类工作的完整配置；没有改变用户路由设置。原失败与请求材料分别保留在 `<实施检出>/tmp/c073-host/repair-rpc*`、`repair-checkpoint*`、`repair-r05*` 的精确材料清单中；此处星号只说明文件名前缀，未用于清理。
+三项首次提交均省略全部四项配置。供应方均返回不可重试 429/1310，失败回合两层停止确认后，按开发者已有许可在各自原 run 上 continue，使用已完成本批同类工作的完整配置；没有改变用户路由设置。原失败与请求材料分别保留在 `<实施检出>/tmp/c073-host/repair-rpc*`、`repair-checkpoint*`、`repair-r05*` 的精确材料清单中；此处星号只说明文件名前缀，未用于清理。
 
 公共夹具整合归属补充：2-D 提示并由 Host 实测确认，`tests/python/buddy/harnesses/zcode/test_zcode.py` 的共享 `live_channel` 需要显式传 fixture 自身状态根，不能借用检查进程的另一个根。Host 统一修改这处共享调用并补根归属断言，记录原失败、修正后的通过与去掉传递时的目标红灯；不把该文件加入并发 Worker 的写入范围。2-D 范围内的 canonical 根缺陷仍退回原 run。最终完整检查依然只在所有返修整合并合入最新 core 后运行，既有失败日志保留。
 
-用户随后指定最终 core 为 `1f7e8b60577cc0b8883aa5dca9e9a1bc392f6ad0`，Host 已核对本地 `socu/buddy-core` 与此提交一致。它包含已由 Claude Code Host 验收的控制台与黑板修复；本线会在最终完整检查之前合入实施分支并绑定合并后的实际提交，不使用此前 `1a9decd9` 的基线替代。本线没有改前端源码，不重复已验收的前端套件。
+开发者随后指定最终 core 为 `1f7e8b60577cc0b8883aa5dca9e9a1bc392f6ad0`，Host 已核对本地 `socu/buddy-core` 与此提交一致。它包含已由 Claude Code Host 验收的控制台与黑板修复；本线会在最终完整检查之前合入实施分支并绑定合并后的实际提交，不使用此前 `1a9decd9` 的基线替代。本线没有改前端源码，不重复已验收的前端套件。

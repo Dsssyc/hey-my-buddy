@@ -2,7 +2,7 @@
 
 ## Status
 
-Source and staged-package verification completed on 2026-09-25; the final full-check source is 3b0bc91. Following the user's explicit installation request, the daily blackboard switched to contract 0.9.0/schema 11 at 09:05:50 UTC (17:05:50 Asia/Shanghai). The retained-data copy, installed plugin, stable runtime and authenticated console passed the post-installation checks below.
+Source and staged-package verification completed on 2026-09-25; the final full-check source is 3b0bc91. Following the developer's explicit installation request, the daily blackboard switched to contract 0.9.0/schema 11 at 09:05:50 UTC (17:05:50 Asia/Shanghai). The retained-data copy, installed plugin, stable runtime and authenticated console passed the post-installation checks below.
 
 ## Verified corrections
 
@@ -21,7 +21,7 @@ The candidate integration verifier was also applied read-only to the three retai
 | Shared model concurrency backend | 2308c8d6-a5e0-4304-84ff-0cf419c37572 | routed to zcode / zai-api / GLM-5.3 / max |
 | Shared model concurrency console | 0e076bb9-e3e9-48fd-b963-3a8e706522fb | routed to zcode / zai-api / GLM-5.3-Flash / max |
 
-The experiments use explicit user-authorized configurations. The implementation jobs carry task-local soft preferences and preserve shared user preferences and annotations. Each goal uses an independent managed worktree and timeoutSeconds 0. Native probe subprocesses have their own bounded test limits. Artifact inspection, integrated tests, integration records, acknowledgement and checkout cleanup remain required before accepting these goals.
+The experiments use explicit developer-authorized configurations. The implementation jobs carry task-local soft preferences and preserve shared user preferences and annotations. Each goal uses an independent managed worktree and timeoutSeconds 0. Native probe subprocesses have their own bounded test limits. Artifact inspection, integrated tests, integration records, acknowledgement and checkout cleanup remain required before accepting these goals.
 
 The P3, concurrency backend, concurrency console and current-documentation jobs have completed Host verification and acknowledgement; their managed checkouts were removed through workspace-cleanup-plan/apply. The retained integration records are int-abb96994-0970-410f-90db-abbfe0ec4b1b, int-97f559cc-f250-45b1-9908-1e91339e7cbf, int-0f5bb993-ec0a-458e-af49-0028e2a45cda and int-0e3bcd8f-4acc-466d-b2a5-900bf48d2c13 respectively. Immutable patches, manifests and fixed refs remain. P3 summaries and the successful native CLI stdout were copied into the integration checkout's ignored tmp/zcode-probes/p3/ directory before removal.
 
@@ -43,7 +43,7 @@ The final uv run --frozen python -m buddy.checks completed on source 3b0bc91: 89
 
 The separate staged plugin passed both plugin and skill validators. A fresh private installation cold-started a stable contract-0.9.0/schema-11 runtime with content ID cc23655e2be17db1917fa4335b158ee3 and no source leaks. Served asset hashes matched the packaged files. An authenticated console publication changed a fixture model's concurrent-task limit to 4, immediately observable under the same service ID. Explicit zero-duration command tasks completed normally and cancelled with the real user-cancel reason. After the staged source directory was renamed, the stable launcher and served assets still worked. The private service and its supervisors then stopped with their locks released. No model was called. The first smoke fixture omitted legal efforts and was correctly refused with CATALOG_INVALID; after correcting that fixture, the complete smoke check passed.
 
-The final checkpoint goal was accepted under integration int-42bbfc1a-4d67-4ca7-b52c-676dcb79cdea after full-delta verification and its original physical checkout was removed through the governed cleanup API, despite its three continuations. Its failed third-attempt receipt, all successful artifacts, fixed refs, patches and native probe evidence remain retained. All six Buddy goals used for this repair are accepted and their managed checkouts reclaimed; the two additional isolated implementation/test checkouts were also removed after integration and verification. The CodeBuddy branch and the original user's dirty checkout were not changed.
+The final checkpoint goal was accepted under integration int-42bbfc1a-4d67-4ca7-b52c-676dcb79cdea after full-delta verification and its original physical checkout was removed through the governed cleanup API, despite its three continuations. Its failed third-attempt receipt, all successful artifacts, fixed refs, patches and native probe evidence remain retained. All six Buddy goals used for this repair are accepted and their managed checkouts reclaimed; the two additional isolated implementation/test checkouts were also removed after integration and verification. The CodeBuddy branch and the original developer's dirty checkout were not changed.
 
 The source and package checks established readiness before installation. The subsequent daily cutover below used a separately verified retained-data copy after actual execution had stopped; no other project's work was cancelled and no shared user preference was changed.
 
@@ -63,4 +63,4 @@ One-off installation and verification scripts, installation-0.9.0.json and post-
 
 ## Retained handoff
 
-The verified changes are integrated into socu/buddy-core. Before removing the temporary integration checkout, its ignored evidence and package were copied to tmp/runtime-refinement-0.9.0-20260925/ in the buddy-core checkout. That retained directory contains the full check logs, candidate-0.9.0-verification.json, zcode-probes/ evidence, the private verification script and release-0.9.0/hey-my-buddy/ package. The user's existing uncommitted addition to production-repairs-0.8.0.md remains separate and unchanged.
+The verified changes are integrated into socu/buddy-core. Before removing the temporary integration checkout, its ignored evidence and package were copied to tmp/runtime-refinement-0.9.0-20260925/ in the buddy-core checkout. That retained directory contains the full check logs, candidate-0.9.0-verification.json, zcode-probes/ evidence, the private verification script and release-0.9.0/hey-my-buddy/ package. The developer's existing uncommitted addition to production-repairs-0.8.0.md remains separate and unchanged.

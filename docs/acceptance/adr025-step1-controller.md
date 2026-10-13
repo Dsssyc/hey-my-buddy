@@ -1,6 +1,6 @@
 # ADR-025 第一步 1-B：共用启动与收集（微任务交付记录，continue 修正）
 
-2026-10-04，微任务 1-B 的执行记录，覆盖三轮：第一轮交付（固定 artifact `503a7bdd` / 输出 `544b93c`）经本 Host 零进程探针比对被拒并按 `continue` 在同一 run 内修正；第二轮修正交付（固定 artifact `9388e3e4` / 输出 `7529a298`）经 Host 只读探针指出剩余一处 DSH 异常边界与记录错误后，用户转达影响核对并授权恢复原 run 继续，本文为第三轮修正后的完整交付记录，交付固定累积 artifact 等待 Host 复核。最初输入基线 `da8c25dc344e654e76869aa35755fedcf73f6c80`（1-A 固定交付 `8a84b02` 已整合）；第二轮继续基线为 `544b93c`，第三轮继续基线为未验收的 `7529a2983056aaee506272cc2f4543c8be7dfc54`（Host 主分支新增的 ACP 文件与本微任务无重叠，本微任务未改 `harnesses/dsh/acp/`）。Host 探针材料（`~/.codex/worktrees/adr025-run-module/hey-my-buddy/tmp/adr025-host/controller-first-review-xa0glmu7/` 的 probe.py、baseline.json、candidate.json 与 created-paths.jsonl）本微任务只读未动，未重复执行该探针本体；本文的探针复验脚本只写本检出 `tmp/1b-controller/`。本文不宣告第一步完成，1-C 不在本微任务范围内。
+2026-10-04，微任务 1-B 的执行记录，覆盖三轮：第一轮交付（固定 artifact `503a7bdd` / 输出 `544b93c`）经本 Host 零进程探针比对被拒并按 `continue` 在同一 run 内修正；第二轮修正交付（固定 artifact `9388e3e4` / 输出 `7529a298`）经 Host 只读探针指出剩余一处 DSH 异常边界与记录错误后，开发者转达影响核对并授权恢复原 run 继续，本文为第三轮修正后的完整交付记录，交付固定累积 artifact 等待 Host 复核。最初输入基线 `da8c25dc344e654e76869aa35755fedcf73f6c80`（1-A 固定交付 `8a84b02` 已整合）；第二轮继续基线为 `544b93c`，第三轮继续基线为未验收的 `7529a2983056aaee506272cc2f4543c8be7dfc54`（Host 主分支新增的 ACP 文件与本微任务无重叠，本微任务未改 `harnesses/dsh/acp/`）。Host 探针材料（`~/.codex/worktrees/adr025-run-module/hey-my-buddy/tmp/adr025-host/controller-first-review-xa0glmu7/` 的 probe.py、baseline.json、candidate.json 与 created-paths.jsonl）本微任务只读未动，未重复执行该探针本体；本文的探针复验脚本只写本检出 `tmp/1b-controller/`。本文不宣告第一步完成，1-C 不在本微任务范围内。
 
 ## 交付物与写范围
 
@@ -41,11 +41,11 @@ Host 只读探针（`~/.codex/worktrees/adr025-run-module/hey-my-buddy/tmp/adr02
 
 本轮聚焦运行按新边界只跑受影响模块：18 个模块（test_controller、四个 DSH 模块、三个 Worker 套件、两个 no-tool 套件、invariants、account_bindings 与四个 router 侧模块）一次全部通过、退出码 0。测试编号由加载器收集（未变化集合只收集不执行）：第一、二轮的 40 个旧模块 682 个编号删除 0、变化 0；`test_controller` 33→35（新增上述两个 DSH 边界测试）。未重跑 682 基线执行、未跑全部 41 模块、没有完整检查/Console/打包/真实 harness 或模型启动（本微任务三次执行自身计 3 次，与上述分开）。
 
-本轮登记：任务临时根为 Host 本次原子创建并登记的 `/private/tmp/a25b-8sebf31t`（子目录 d/h/m/t），每条验证/诊断命令都显式设置 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向其 `t/`；本轮创建的对象全部在该根内——`m/affected_run.py`、`m/affected_run.txt`、`m/` 下 18 个模块日志、`m/inventory.py`、`m/continue3_ids.txt`、`m/continue3_inventory.log`、`m/dsh_fd_probe_check.py`、`m/probe-gdpzggm7/`（复验结果）、`d/` 下各模块的 state/runtime/home/dsh-home 根；代码与本文只写原 writeScope。按用户更新的清理规则，Worker 未删除任何对象（未执行 rm/unlink/rmdir/rmtree、未用通配、未按名字/日期/无进程推断归属）；该任务根由 Host 验收后按这一个确切路径整体删除。用户另澄清"私有 DSH 主目录"只指 `DSH_HOME`，不要求运行时一律替换用户 `HOME`（第二轮运行器按模块设 `HOME` 是自加的保守做法，非要求）。第二轮产物与检出 `tmp/1b-controller/` 历史材料原样保留，未复用未删除。
+本轮登记：任务临时根为 Host 本次原子创建并登记的 `/private/tmp/a25b-8sebf31t`（子目录 d/h/m/t），每条验证/诊断命令都显式设置 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向其 `t/`；本轮创建的对象全部在该根内——`m/affected_run.py`、`m/affected_run.txt`、`m/` 下 18 个模块日志、`m/inventory.py`、`m/continue3_ids.txt`、`m/continue3_inventory.log`、`m/dsh_fd_probe_check.py`、`m/probe-gdpzggm7/`（复验结果）、`d/` 下各模块的 state/runtime/home/dsh-home 根；代码与本文只写原 writeScope。按开发者更新的清理规则，Worker 未删除任何对象（未执行 rm/unlink/rmdir/rmtree、未用通配、未按名字/日期/无进程推断归属）；该任务根由 Host 验收后按这一个确切路径整体删除。开发者另澄清"私有 DSH 主目录"只指 `DSH_HOME`，不要求运行时一律替换用户 `HOME`（第二轮运行器按模块设 `HOME` 是自加的保守做法，非要求）。第二轮产物与检出 `tmp/1b-controller/` 历史材料原样保留，未复用未删除。
 
-## 用户转达的影响核对与恢复授权（原样追加）
+## 开发者转达的影响核对与恢复授权（原样追加）
 
-用户已转达 Claude Code Host 影响核对并授权恢复原 1-B run：用户临时目录中 `buddy-1b-*` 均已不在；其他会话 430 个 `buddy-*` 条目仍在，此前记过数量的 12 类与前日一致；没有证据碰到其他会话或日常数据。删除对象不恢复、不再追查。此结论作为用户转达的独立核对追加于本记录；第一、二轮的越界披露、撤回与暂停历史原样保留，不重写旧证据为更强证明。新用户清理指示替代旧清理规则（本条与前节即按新规则执行）。
+开发者已转达 Claude Code Host 影响核对并授权恢复原 1-B run：用户临时目录中 `buddy-1b-*` 均已不在；其他会话 430 个 `buddy-*` 条目仍在，此前记过数量的 12 类与前日一致；没有证据碰到其他会话或日常数据。删除对象不恢复、不再追查。此结论作为开发者转达的独立核对追加于本记录；第一、二轮的越界披露、撤回与暂停历史原样保留，不重写旧证据为更强证明。新开发者清理指示替代旧清理规则（本条与前节即按新规则执行）。
 
 ## 撤回与更正
 

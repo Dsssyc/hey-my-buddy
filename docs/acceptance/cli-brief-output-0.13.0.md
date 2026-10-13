@@ -2,7 +2,7 @@
 
 ## Scope and boundary
 
-On 2026-09-26 the user asked a Claude Code Host session to continue the Codex thread `01a0c252-f073-7e13-9a5f-033260938176` after that thread ran out of Codex quota, and to fix the Host-side token overhead found in its analysis first. The user also chose background waiting for Claude Code Hosts and asked that the Codex waiting behavior stay unchanged. This change is added to the uninstalled 0.13.0 source candidate: the named C-Two contract, RPC responses and schema 11 are unchanged, and only the CLI printout, the skill and the owning references change. The daily board remains the installed 0.12.0 runtime.
+On 2026-09-26 the developer asked a Claude Code Host session to continue the Codex thread `01a0c252-f073-7e13-9a5f-033260938176` after that thread ran out of Codex quota, and to fix the Host-side token overhead found in its analysis first. The developer also chose background waiting for Claude Code Hosts and asked that the Codex waiting behavior stay unchanged. This change is added to the uninstalled 0.13.0 source candidate: the named C-Two contract, RPC responses and schema 11 are unchanged, and only the CLI printout, the skill and the owning references change. The daily board remains the installed 0.12.0 runtime.
 
 ## Evidence for the change
 

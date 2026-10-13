@@ -4,7 +4,7 @@
 
 路由沿用 Host 给出的同 run 恢复：`dec-50783657-382b-46b8-8977-c900b7b3753e` 原 ZCode/zai-api/GLM-5.3-Flash/max，实际 provider 429/1310、rate_limited、retryable=false，Host 输入登记旧回合两层停止、无产物；恢复配置 Codex/openai/gpt-6.1-sol/high，configuration revision 2。本回合未重试 ZCode、未改偏好、未创建 Buddy goal/task/worker；仅有内部 Codex 只读调用审计，未把它称作独立验收。
 
-已读 AGENTS、最新用户补充 3-C、architecture、ADR-007 单一当前契约与 ADR-025 决策 12/13。Python 服务仍拥有数据库权威状态；Worker/controller 仍拥有原进程句柄与停止证据；本批只整理传值与入口选择，不做跨侧清理、schema/CLI 契约变更、harness 行为或 3-B 目录 owner 规则重做。
+已读 AGENTS、最新开发者补充 3-C、architecture、ADR-007 单一当前契约与 ADR-025 决策 12/13。Python 服务仍拥有数据库权威状态；Worker/controller 仍拥有原进程句柄与停止证据；本批只整理传值与入口选择，不做跨侧清理、schema/CLI 契约变更、harness 行为或 3-B 目录 owner 规则重做。
 
 ## 架构边界与仍可选的入口
 
@@ -323,7 +323,7 @@ R2 的 54 个改动 Python 文件中 50 个 hash 未变；四个改变是 consol
 
 Host 输入只说明已开始在 f862 固定副本做 C-Two 71 和 runtimeLive 35 的真实 SDK 补核，尚未提供结果，本记录不声称它们通过。它们的生产/fixture/test 文件与最新源完全未变，Host 可按 hash 复用其结果；若有新缺陷，原 run 在正式 scope 内继续，不由 Host 代写代码。最新只读公共流程的真实默认 BoardClient/晚选环境/0500、原受限 service_environment 两个 preflight 及 workspace_api 的真实目标仍需 Host 核定。host-replay-r3.py 核对 55 个源码 hash 后只执行这些补核选择，每个 driver 与 suite 都保留直接 wait；此助手由 Worker 静态交付，未运行。其选测不重复正在由 Host 核定的未变 C-Two/runtimeLive 文件。R1 path_state 12/public_state 26 实际通过与 C-Two 70/runtimeLive 34 失败、首份本地/沙箱失败、R2 两处误 bind 全部保持原历史。
 
-沿用结构化报告的同一精确任务根，未新建 root、未新装依赖、未派新 helper/Worker、未手工删除任何材料、未用 stash/refs/commit。没有已知未 wait 的本轮 suite 句柄；旧 accidental daemon 缺数字 wait/两层证据仍未知，Host 的当前 0 观察不能追补历史。根外 `<OUTSIDE_AUDIT_FILE>` 首次普通 > 可能截断旧文件，实际覆盖与写前归属未知，原样保留且本轮没有再访问/修改/删除，不纳入 owned 清理。scope 外空行误写/恢复披露保留。当前停止在用户约定的 Host 审查条件，范围内无已知待接线使用方或新增共享缺口；真实边界与最终签收仍待 Host，不是整批验收。
+沿用结构化报告的同一精确任务根，未新建 root、未新装依赖、未派新 helper/Worker、未手工删除任何材料、未用 stash/refs/commit。没有已知未 wait 的本轮 suite 句柄；旧 accidental daemon 缺数字 wait/两层证据仍未知，Host 的当前 0 观察不能追补历史。根外 `<OUTSIDE_AUDIT_FILE>` 首次普通 > 可能截断旧文件，实际覆盖与写前归属未知，原样保留且本轮没有再访问/修改/删除，不纳入 owned 清理。scope 外空行误写/恢复披露保留。当前停止在开发者约定的 Host 审查条件，范围内无已知待接线使用方或新增共享缺口；真实边界与最终签收仍待 Host，不是整批验收。
 
 ## 同 run R4：全检退回后的六个 fixture 来源返修
 

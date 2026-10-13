@@ -12,7 +12,7 @@
 
 合成控制台预览由 Codex 内置浏览器验证：1440×900、768×800、390×800、320×720；跳过/拒绝数量与路径原因可展开，页面与提醒均无横向溢出，浏览器 warning/error 列表为空。独立 Playwright CLI 的 Chromium 缓存缺失，使用内置浏览器完成同一 DOM 验证；未安装浏览器或日常服务。预览标签与服务已关闭。
 
-用户随后明确授权通过已运行的 0.23.0 buddy 委派。其 RPC 仅用于本批任务的注册、等待、读取成果与验收；实现测试始终使用独立私有 state/runtime。没有扫描或整理日常看板旧数据，没有安装升级服务或改变用户配置。B 批第二阶段继续暂停。
+开发者随后明确授权通过已运行的 0.23.0 buddy 委派。其 RPC 仅用于本批任务的注册、等待、读取成果与验收；实现测试始终使用独立私有 state/runtime。没有扫描或整理日常看板旧数据，没有安装升级服务或改变用户配置。B 批第二阶段继续暂停。
 
 两项修复的正式封存补丁已由 Host 从固定 input/output Git 对象重建并验证哈希：备份/恢复/storage/upgrade 为 `243974989c3527caa9b21794dd02895ee36592f2cddc2761724e068ad4e9f37e`（输入 `b1dc7e1d05acb051799158c5ac86748226c0ac34`，输出 `82bb5ebda6bebf01ab0e4f50094eed221c7a67c7`）；Adapter/Worker 为 `81d4f12582decad70d2c8899d964cc6a787f4d86b52dfe1fbb10b931dddf2c1b`（输入 `57f956974a3598c4955e6bc58cd9da20c9268f3f`，输出 `ee8d65e647b3927f9132a9b056f0d9bc3dea1f5a`）。两者应用前均通过 `git apply --check`，且黑板的 native/controller 与后代停止证据为 confirmed；模型交回 attention 不代替该证据。
 
@@ -52,4 +52,4 @@ shared skill 补充本地预检与 includeUntracked 输入规则，同时保留�
 
 ZCode / GLM-5.3 max 在固定输入 `04e60a38f1d18addc8edcda1d48afc39b878073e` 上完成最终只读复核，未发现新的可具体复现阻塞，空补丁和真实停止由黑板记录。复核逐项对照五项修复及安全反证、command stop 与原生双层 stop、每次 start 清除旧 proof、JSON 发布边界。两条观察级备注已保留：Windows 原生日常旧布局的路径分隔符比较可能 fail-closed；command.prepare 的 task.txt 仍沿用既有写入。当前受管新 attempt 路径未见可复现阻塞，本批不扩大修复范围。
 
-本批源码实现仅针对 ADR-019 第 11 条，契约 0.24.0，schema 15，无 db/migrations 源码变化。ADR 状态与 backlog 已同步；B2 继续等待本批合入。Windows 真机、源候选在真实 harness 上的专门目录/权限检查、日常看板的实际整理和安装切换均未验证或执行。通过日常 buddy 的新增委派、成果读取和验收属于用户后续明确授权；这不构成对日常旧数据的扫描、整理或服务升级。
+本批源码实现仅针对 ADR-019 第 11 条，契约 0.24.0，schema 15，无 db/migrations 源码变化。ADR 状态与 backlog 已同步；B2 继续等待本批合入。Windows 真机、源候选在真实 harness 上的专门目录/权限检查、日常看板的实际整理和安装切换均未验证或执行。通过日常 buddy 的新增委派、成果读取和验收属于开发者后续明确授权；这不构成对日常旧数据的扫描、整理或服务升级。

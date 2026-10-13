@@ -119,7 +119,7 @@
 
 # ADR-025 F-D2:DSH ACP 已授权真实运行核对
 
-本节是 [执行计划](../design/adr025-execution-plan.md) 第 6 节 F-D2 微任务的验收材料:在基线 `108a540` 的隔离 worktree 中,用真实模型运行回答六问需要实际运行的部分。真实运行与同目的必要重跑按用户 2026-10-03 的明确授权执行,未做计划外付费运行。F-D1 一节的全部文字(含边界违反与九次账)是历史事实,原样保留于上方;本节不重复、不改写。
+本节是 [执行计划](../design/adr025-execution-plan.md) 第 6 节 F-D2 微任务的验收材料:在基线 `108a540` 的隔离 worktree 中,用真实模型运行回答六问需要实际运行的部分。真实运行与同目的必要重跑按开发者 2026-10-03 的明确授权执行,未做计划外付费运行。F-D1 一节的全部文字(含边界违反与九次账)是历史事实,原样保留于上方;本节不重复、不改写。
 
 ## 方法、材料与边界
 
@@ -127,7 +127,7 @@
 - Host 指定的 F-D1 只读输入目录(`~/.local/share/hey-my-buddy/...` 下 ws-84127... 工作区的 `checkout/tmp/adr025-dsh/`)现已不存在;Host 已读黑板 cleanup 记录,确认 F-D1 与 F-C1 的原 worktree 由 applied cleanup 移除(F-D1 在 06:29:34 UTC),归因已由 Host 提供,本记录不再推断。一次性 `tmp/` 材料无法复用,本微任务按 F-D1 **已提交记录**中载明的契约(argv、包装验证规则、`session/set_config_option` 线格式、`session/request_permission` 应答格式、私有 home 布局、声明值集合)重新实现探针,未读取任何凭据或日常会话。本微任务全部原始材料保留至 Host 自行备份,Host 验收前不做任何清理。
 - 边界证明:探测前后对日常 `~/.dsh` 全树做 path+type+size+mtime 只读快照并 diff,**29,717 项,零新增、零删除、零变化**(`logs/dsh-home-before.json`/`dsh-home-after.json`);日常 `settings.yaml` 与 `.credentials.yaml` 仅 `is_file`/`stat`,内容未打开、未复制、未打印;真实认证只经 DSH 自己读取——patch 用与旧 `dsh_runner.py` 相同的公开插件行 `{"id": "settings"/"credentials", "config": {"path": <日常路径>, "watch": false}}` 引用,`--dump-config` 已核实两行生效;登录未改。
 - 成本控制:私有 patch 禁用 `session-title-llm` 与 `session-telemetry-otel`,`--dump-config` 核实两行均 `disabled: true`;实际会话记录中 `session/title` 的 `source.kind = "fallback"`(本地截断,非模型调用),遥测 exporter 未启用。版本与启动器与 F-D1 一致:`dsh --version` 0.1.5-rc.1(私有 home 下经包装执行),initialize 回报 agentInfo `deepseek-harness-acp` 0.0.1、protocolVersion 1、sessionCapabilities close/list/resume、authMethods 空。
-- 会话/存储/临时 profile 全在私有 `homes/main`(会话记录、投影检查点、具体化的 acp profile、`.anonymous-user-id` 均在其下);`read_session_record.py` 用系统 zstd CLI 只解压**本次运行产生的**私有会话记录(见"六问"),未读取用户历史会话。第 2 回合补核新增材料(同样只在 `<worktree>/tmp/adr025-dsh-real/`):`patch-readonly-probe.json`(工具行/沙箱行的组合面核实 patch)、`homes/sdk`(sdk profile 的私有 home)、`logs/readonly-dump-stdout.txt`、`logs/sdk-help-stdout.txt`、`logs/sdk-dump-config-stdout.txt`、`logs/dsh-home-after-turn2.json`(第 2 回合后的日常目录快照,与首轮 after 快照 diff 仍为零)。第 3 回合新增:`fake_agent.py` 与 `dry_run_check.py`(合成 transport 干跑及断言)、`patch-none-scope.json`/`patch-none-scope-r2.json`/`patch-read-scope.json`、`prompt-none.txt`/`prompt-read.txt`、`runA-workspace/`、`runB-workspace/`、`runB-sibling/`(均在探测根内;runB 两目录为 workspace 与 workspace 外 sibling)、`homes/none`/`homes/read`/`homes/dryrun`(私有 home)、`logs/dryrun*` 与 `logs/fake-agent-*`(干跑证据)、`logs/none-scope*`/`logs/read-scope*`/`logs/none-dump*`/`logs/ro-env-dump*`(各次真实运行的帧/摘要/stop 摘要)、`logs/launch-wrapper-fault-check-turn3.json`(修改后包装的重新自检)、`logs/dsh-home-before-turn3.json`/`dsh-home-after-turn3.json`(前后快照,diff 为零)。第 4 回合新增:`patch-none-scope-r3.json`(加 plan-mode 禁用)、`prompt-none.txt` 复用、`logs/none-dump-r3*`、`logs/none-r3-bootcheck-summary.json`(免模型 boot check)、`logs/none-scope-r3-summary.json` 与 `logs/stub-none-scope-r3.log`(真实 prompt 与交付回执)、`logs/dryrun-noprompt-*`(新标志干跑)、`logs/dsh-home-after-turn4.json`(与本回合前快照 diff 为零)。
+- 会话/存储/临时 profile 全在私有 `homes/main`(会话记录、投影检查点、具体化的 acp profile、`.anonymous-user-id` 均在其下);`read_session_record.py` 用系统 zstd CLI 只解压**本次运行产生的**私有会话记录(见"六问"),未读取开发者历史会话。第 2 回合补核新增材料(同样只在 `<worktree>/tmp/adr025-dsh-real/`):`patch-readonly-probe.json`(工具行/沙箱行的组合面核实 patch)、`homes/sdk`(sdk profile 的私有 home)、`logs/readonly-dump-stdout.txt`、`logs/sdk-help-stdout.txt`、`logs/sdk-dump-config-stdout.txt`、`logs/dsh-home-after-turn2.json`(第 2 回合后的日常目录快照,与首轮 after 快照 diff 仍为零)。第 3 回合新增:`fake_agent.py` 与 `dry_run_check.py`(合成 transport 干跑及断言)、`patch-none-scope.json`/`patch-none-scope-r2.json`/`patch-read-scope.json`、`prompt-none.txt`/`prompt-read.txt`、`runA-workspace/`、`runB-workspace/`、`runB-sibling/`(均在探测根内;runB 两目录为 workspace 与 workspace 外 sibling)、`homes/none`/`homes/read`/`homes/dryrun`(私有 home)、`logs/dryrun*` 与 `logs/fake-agent-*`(干跑证据)、`logs/none-scope*`/`logs/read-scope*`/`logs/none-dump*`/`logs/ro-env-dump*`(各次真实运行的帧/摘要/stop 摘要)、`logs/launch-wrapper-fault-check-turn3.json`(修改后包装的重新自检)、`logs/dsh-home-before-turn3.json`/`dsh-home-after-turn3.json`(前后快照,diff 为零)。第 4 回合新增:`patch-none-scope-r3.json`(加 plan-mode 禁用)、`prompt-none.txt` 复用、`logs/none-dump-r3*`、`logs/none-r3-bootcheck-summary.json`(免模型 boot check)、`logs/none-scope-r3-summary.json` 与 `logs/stub-none-scope-r3.log`(真实 prompt 与交付回执)、`logs/dryrun-noprompt-*`(新标志干跑)、`logs/dsh-home-after-turn4.json`(与本回合前快照 diff 为零)。
 
 ## 原生启动与真实 prompt 账目
 
@@ -202,7 +202,7 @@
 - **可复核停止证据的留存范围(第 3 回合修正口径,区分执行时观察与留存证据)**:尝试 1、2、3 各有留存摘要(`logs/main-attempt{1,2,3}-defect-summary.json`)记录 exitCode 与组状态;尝试 5 即最终运行,证据在留(`logs/main-summary.json`、`logs/main-frames.jsonl`);尝试 6/7/8/9(第 3 回合)各有独立留存的 `logs/none-scope-summary.json`、`none-scope-r2-summary.json`、`read-scope-summary.json`、`read-scope-r2-summary.json`(含真实 pid/pgid、exitCode、EOF 排空与 killpg 组观察)。**CLI 各次(版本/dump)的 exit 0 与组消失是执行时的外壳观察,当时的留存物不构成可复核证据**——`launches.jsonl` 旧行只记 spawn 前 argv/envKeys/home(pid 为 None),stdout 文件也不含退出/组状态;第 3 回合起 oneshot 为每次 CLI 写独立 stop 摘要(`logs/none-dump-stop.json`、`none-dump-r2-stop.json`、`ro-env-dump-stop.json`,含真实 pid/pgid/exitCode/EOF/组状态),旧行不回填。**尝试 4 仍是缺口**:其探针摘要与帧在重跑前未另存而被覆盖,留存的原生会话记录 `05db67e2` 不含退出码/进程组字段;Host 曾在覆盖前读到该摘要为 exit 0/组消失,但该原始日志已不在交付中——此缺口如实保留,不补写。
 - 已核对的故障证据:包装 4 非法 home 拒绝 + 合法对照(假可执行文件;第 1 回合 `logs/launch-wrapper-fault-check.json`,包装修改后第 3 回合以 `launch-wrapper-fault-check-turn3.json` 重新自检通过);尝试 1–3 的协议层负例(-32602 无效参数、-32601 未知方法)原生侧行为正确;尝试 6 的原生 boot 失败(stderr 与 exit 1 留证)与尝试 8 的 -32602 留证;干跑的超时升级路径(SIGTERM 后组消失,`logs/dryrun-timeout-summary.json`)。保守口径(不可观察按仍活着处理)仍是运行模块的实现责任,不在本次核对范围。
 
-## 行为差异逐项(三项已获准差异的核对状态 + 送 Host/用户决定的影响清单)
+## 行为差异逐项(三项已获准差异的核对状态 + 送 Host/开发者决定的影响清单)
 
 已获准三项的核对状态:
 
@@ -248,7 +248,7 @@
 
 ## 第 2 回合修正(2026-10-03,Host 复核固定交付后 continue)
 
-1. **总体结论收窄**:删除"六问全部取得 actual 证据、无 ACP 失败项、无需 SDK 退路、第四步可实现性成立"式的总结;第 1 问拆为 (i) native workspace-write 行为(observed)/(ii) client deny 未测(unknown)/(iii) none/read 无 ACP 会话级选择、启动面机制存在但未验证三项,工具范围影响列为送 Host/用户决定的清单,不再由本报告豁免。
+1. **总体结论收窄**:删除"六问全部取得 actual 证据、无 ACP 失败项、无需 SDK 退路、第四步可实现性成立"式的总结;第 1 问拆为 (i) native workspace-write 行为(observed)/(ii) client deny 未测(unknown)/(iii) none/read 无 ACP 会话级选择、启动面机制存在但未验证三项,工具范围影响列为送 Host/开发者决定的清单,不再由本报告豁免。
 2. **SDK 退路补核(免模型)**:新增 `--profile sdk --help` 与 `--dump-config`(均私有 home)+ 随装 dsh-sdk-app/dsh-sdk-protocol/dsh-base README 的公开面核对:SDK 方法面仅 initialize/session/prompt/shutdown + 4 通知,权限回调明文为 dead capability、无 cancel/close,控制面与 acp 同源,退路不成立。
 3. **启动面机制补核(免模型)**:一次 `--patch` 后的 `--dump-config` 核实 14 个 tool 行 + `commands` 的 `disabled: true` 与 `sandbox-policy.mode: read-only` 被组合面接受;同时记录 session configOptions 仅 model/effort、modes null、plan-mode 自述工具目录跨模式不变等公开面事实。本回合新增 3 次 dsh CLI(账目第 9–11 行),零模型调用,日常 `~/.dsh` 快照 diff 仍为零。
 4. **证据表述精确化**:MCP 挂载按"声明 3 次/实际握手 1 次/实际工具发现 1 次/实际模型 tools/call 3 次"分账;真实 prompt 总数 2 与最终 turn 的 10 个模型步分开;尝试 4 的停止证据登记为缺口(原始摘要被覆盖,留存会话记录不含退出码/进程组事实,Host 覆盖前读到的 exit 0/组消失不在交付内,不补写);F-D1 只读目录仅记"现不存在、无法复用、按记录重新实现",不作清理归因;quota 收窄为"本次未观察到";实时输入收窄为"已枚举面与实测内未发现"。既有两次 prompt 的原始材料与本回合私有会话记录全部留存,未覆盖任何旧摘要/帧。

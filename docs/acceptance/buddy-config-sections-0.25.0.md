@@ -1,6 +1,6 @@
 # Buddy 配置分区导航（0.25.0）
 
-状态：源码验证通过，等待 Host 合并与用户决定安装。
+状态：源码验证通过，等待 Host 合并与开发者决定安装。
 
 2026-09-30，以 `socu/buddy-core` 的 `58f1cdd250ab9bf8d90ba3b70f680975f050552d` 为基线，在独立分支 `socu/buddy-config-sections` 与 worktree 实现“① 配置页结构”。版本与契约升为 `0.25.0`，schema 仍为 15。修改范围为控制台、相关文档及测试，另同步项目版本、锁文件与契约版本断言，并隔离阻塞全量验证的 ZCode 测试夹具身份。
 
@@ -42,4 +42,4 @@ Host 审查固定产物 `fd6fb964-f149-4147-887c-def7ddf8b03d`，以输入 `763f
 
 建议 Host 将本分支整体合入 `socu/buddy-core`，然后统一②③的版本及重建资产。Harness 列表从 `BuddyConfig.tsx` 提取到 `HarnessStatus.tsx`；后续账户／额度入口接在该组件的行与预留位置。②可能新增的 Router、额度恢复与审阅入口须接到当前分区导航及相应目标；Host 按最终数据与操作合并 `BuddyStatusBar.tsx` 的状态入口。生成的 `console_assets` 由最终合并源重建，避免手工拼接构建文件。
 
-测试与预览使用私有 `BUDDY_STATE_DIR`、`BUDDY_RUNTIME_ROOT`，全量检查另外创建并验证自己的私有根目录；本次没有打开日常控制台、直接读写日常状态文件、安装产品或修改用户配置。日常服务仅用于按授权承接本次 Buddy 委派。未创建 Claude Worker。本记录是源码与合成预览验收；合并与安装等待用户决定。
+测试与预览使用私有 `BUDDY_STATE_DIR`、`BUDDY_RUNTIME_ROOT`，全量检查另外创建并验证自己的私有根目录；本次没有打开日常控制台、直接读写日常状态文件、安装产品或修改用户配置。日常服务仅用于按授权承接本次 Buddy 委派。未创建 Claude Worker。本记录是源码与合成预览验收；合并与安装等待开发者决定。

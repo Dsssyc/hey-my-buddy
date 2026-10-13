@@ -13,7 +13,7 @@
 
 ## 一次经授权的 Codex 原生重跑
 
-用户明确批准一次 Codex 0.159.0、`openai / gpt-6.1-sol / high` 的私有检查，预算 300 秒／24 次工具调用／512 KiB，最多一次格式纠正。Host 使用源代码的真实服务准入、attempt 领取、ReviewCheckAdapter、原生控制器与结果回执，通过进程内私有看板执行；没有使用日常看板，也没有为日常服务发布证书。私有根为 `tmp/routing-validation/native-codex-01590-01/`。
+开发者明确批准一次 Codex 0.159.0、`openai / gpt-6.1-sol / high` 的私有检查，预算 300 秒／24 次工具调用／512 KiB，最多一次格式纠正。Host 使用源代码的真实服务准入、attempt 领取、ReviewCheckAdapter、原生控制器与结果回执，通过进程内私有看板执行；没有使用日常看板，也没有为日常服务发布证书。私有根为 `tmp/routing-validation/native-codex-01590-01/`。
 
 run 为 `c41ba317-de42-480b-8eef-df5ef88b4de9`，attempt 为 `7468d53e-ecee-4c65-9d11-da1f7716bba9`。控制器耗时 80,661 ms，原生耗时 80,358 ms，工具调用 5 次，输入／sentinel 均未改变，原生与控制器停止均确认，检查进程 stderr 为空。原始现场判定仍有 nativePolicy、forbiddenTools、boundaryDenials、internalRead 四项失败，但白名单诊断已保留，SHA-256 为 `dc281cd25ac4dd11332caf11931c18ee1987960cdfaf455aa72a3139c672fce1`。
 
@@ -23,13 +23,13 @@ run 为 `c41ba317-de42-480b-8eef-df5ef88b4de9`，attempt 为 `7468d53e-ecee-4c65
 
 ## 委派与 Host 审查
 
-经用户单独授权，Buddy 使用默认路由并通过 routingPreferences 表达 ZCode 偏好，选择 ZCode / GLM-5.3 / max 实现额度部分。run `19d7a4c2-b63f-4de0-987f-71f5f6068918` 到达执行时限，以 cancelled 和已确认停止交付部分产物。Host 从共享 Git 对象导出固定 `8a258340dbbb1b4823c2da30d474c8d698515a21` 的补丁，并与 RPC 返回的 SHA-256 `a01b1ec146fe56606f7342203d5cb0b957be768e44d774c1e004bd79c39d9fb8` 核对；没有直接读取日常状态目录内的工作区或日志。
+经开发者单独授权，Buddy 使用默认路由并通过 routingPreferences 表达 ZCode 偏好，选择 ZCode / GLM-5.3 / max 实现额度部分。run `19d7a4c2-b63f-4de0-987f-71f5f6068918` 到达执行时限，以 cancelled 和已确认停止交付部分产物。Host 从共享 Git 对象导出固定 `8a258340dbbb1b4823c2da30d474c8d698515a21` 的补丁，并与 RPC 返回的 SHA-256 `a01b1ec146fe56606f7342203d5cb0b957be768e44d774c1e004bd79c39d9fb8` 核对；没有直接读取日常状态目录内的工作区或日志。
 
 Host 审查并修正了候选扫描提前消费、重新检测缺少真正的请求幂等与事件回执、旧观测没有恢复入口、时间比较及前端测试类型／查询问题。独立并发测试确认两个选择事务仅消费一次；未选候选、Router 不可决与幂等重放保持机会，前端保留未知回复的非秘密请求身份。该部分产物只作为 Host 完成工作的输入，不作为 Worker 已完成或已验收的证明。
 
 ## 自动验证
 
-所有测试使用显式私有 BUDDY_STATE_DIR 与 BUDDY_RUNTIME_ROOT，子进程清除继承的运行时、Worker 与凭据环境；没有测试连接日常看板。前端使用现有 Codex 工作区依赖中的 Node 24.19.0，符合仓库 engines；没有更换用户全局 Node。`npm --prefix apps/console ci` 在此环境成功，无 engine 警告。
+所有测试使用显式私有 BUDDY_STATE_DIR 与 BUDDY_RUNTIME_ROOT，子进程清除继承的运行时、Worker 与凭据环境；没有测试连接日常看板。前端使用现有 Codex 工作区依赖中的 Node 24.19.0，符合仓库 engines；没有更换开发者全局 Node。`npm --prefix apps/console ci` 在此环境成功，无 engine 警告。
 
 审阅与目录相关的 85 项聚焦测试、补充配置失败／独立模块／契约检查的 26 项，以及集成后的额度、路由和工作流 95 项测试均通过。前端额度恢复 8 项测试通过，TypeScript 与 Vite 构建通过。最终 `uv run --frozen python -m buddy.checks` 退出 0：1,753 项 Python 测试（1,272.814 秒）、161 项 DSH Node 测试（14 组）全部通过，私有根回收确认成功；完整前端 52 个文件的 609 项测试、TypeScript 检查与 Vite 构建均通过。共享 skill 最初超过 4 KiB 导致单一预算测试失败；入口说明压缩到 4,086 字节、10 项 skill 检查通过后，上述完整检查重新执行并通过。合成预览使用真实构建资产，HTTP 明示 synthetic-fixture-data；Codex 内置浏览器在 1280 宽和 390×844 窄屏中均无横向溢出，额度详情只增加一处重新检测控件。模拟服务拒绝命令时错误可见、没有恢复成功提示，浏览器 warn/error 日志为空。该核对只读取／操作合成页面，没有连接日常控制台或调用原生模型；临时标签与预览端口已关闭，尺寸覆盖已重置。
 

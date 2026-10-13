@@ -1,6 +1,6 @@
 # Daily installation — 0.8.0
 
-The user authorized installation on 2026-09-25. The daily service now runs contract 0.8.0, schema 10 and stable runtime `2447dced7df411518fde84f302c98f2f`. The installed plugin is `~/.codex/plugins/cache/personal/hey-my-buddy/0.8.0`; its launcher is `bin/buddy`. The current Codex installer selected the portable manifest version `0.8.0` for the cache directory; the compatibility manifest also records `0.8.0+codex.20260925021920`. Existing tasks must resolve the current installed launcher instead of retaining a removed 0.7 cache path. The [source acceptance record](production-repairs-0.8.0.md) remains the earlier candidate verification record.
+The developer authorized installation on 2026-09-25. The daily service now runs contract 0.8.0, schema 10 and stable runtime `2447dced7df411518fde84f302c98f2f`. The installed plugin is `~/.codex/plugins/cache/personal/hey-my-buddy/0.8.0`; its launcher is `bin/buddy`. The current Codex installer selected the portable manifest version `0.8.0` for the cache directory; the compatibility manifest also records `0.8.0+codex.20260925021920`. Existing tasks must resolve the current installed launcher instead of retaining a removed 0.7 cache path. The [source acceptance record](production-repairs-0.8.0.md) remains the earlier candidate verification record.
 
 ## Cutover and retained state
 
@@ -14,7 +14,7 @@ Installed verification confirmed stable package/resource paths, no source leaks,
 
 ## Actual unrestricted routed task
 
-The installed service processed one small text-file task with no adapter/provider/model/effort constraint and no task-local routing preference. The decision read shared table revision 7 and selected `zcode:zai-api:GLM-5.3-Flash:max`, explicitly citing the user's preference for Flash on simple, bounded work. The actual ZCode task completed; the Host verified the sole changed file's exact committed bytes `buddy-0.8-installed\n`, integrated the immutable output into the disposable fixture target, recorded integration, accepted the final artifact and removed only its managed checkout. Output patches and fixed commits remain readable. This verifies one current decision and native execution, not an assurance that all future tasks will choose the same model or that the remote served identity was independently attested.
+The installed service processed one small text-file task with no adapter/provider/model/effort constraint and no task-local routing preference. The decision read shared table revision 7 and selected `zcode:zai-api:GLM-5.3-Flash:max`, explicitly citing the developer's preference for Flash on simple, bounded work. The actual ZCode task completed; the Host verified the sole changed file's exact committed bytes `buddy-0.8-installed\n`, integrated the immutable output into the disposable fixture target, recorded integration, accepted the final artifact and removed only its managed checkout. Output patches and fixed commits remain readable. This verifies one current decision and native execution, not an assurance that all future tasks will choose the same model or that the remote served identity was independently attested.
 
 | Binding | Identity |
 | --- | --- |

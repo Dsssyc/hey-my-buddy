@@ -1,6 +1,6 @@
 # ADR-025 第零步：Claude Code Host 三项反馈修正
 
-本次基线为暂不验收的 `32760edf00e46dec0f38141e678715ee4c8f338f`，仅处理用户列出的三项缺陷。用户已独立确认原 2,316 条编号加 4 条新增、279 个 Python 文件的路径迁移、嵌套失败上报、旧完整检查与 Console、wheel 命名空间和跨边界导入登记；这些结论不重写。本次没有开始第一步、DSH ACP 客户端或 C-Two 后端，完成后停止等待这三项的复核。
+本次基线为暂不验收的 `32760edf00e46dec0f38141e678715ee4c8f338f`，仅处理开发者列出的三项缺陷。开发者已独立确认原 2,316 条编号加 4 条新增、279 个 Python 文件的路径迁移、嵌套失败上报、旧完整检查与 Console、wheel 命名空间和跨边界导入登记；这些结论不重写。本次没有开始第一步、DSH ACP 客户端或 C-Two 后端，完成后停止等待这三项的复核。
 
 ## 三项结果
 
@@ -28,7 +28,7 @@ Host 自行处理的公共文件整合为 `19214b21869d9386ac30fc4095adfc2de56ae
 
 相对 `32760ed` 新增编号恰为 `blackboard.tasks.test_storage.ProcessInventoryServiceTests.test_real_inventory_recognizes_both_generations_by_their_matched_module` 和 `cli.test_checks_parallel.ScheduledModulesTests.test_scheduling_covers_every_test_file_on_disk`；删除、改名为零。资源覆盖用例编号不变，原 4 条 `TargetEntryModuleTests` 保留，模块改名 TSV 字节不变。微任务的真实 loader 前后编号清单和固定测试文件 diff 支持这些变化；完整检查实际总数由 2,320 增至 2,322，测试模块仍为 158。没有重复重列或改写已核对通过的历史全量编号表。
 
-Host 已逐项审阅三个固定代码 diff、原始变异失败与恢复日志、进程识别重采的旧实现失败日志、修复后 52 例聚焦日志和 bootstrap 校验。Console 源码与资产未变，用户已确认的 659 例结果沿用，没有重跑 Console 或额外构建。此次三项验证和 Host 完整检查均未调用原生 harness/模型（不含路由与执行 buddy），没有新增真实冒烟。
+Host 已逐项审阅三个固定代码 diff、原始变异失败与恢复日志、进程识别重采的旧实现失败日志、修复后 52 例聚焦日志和 bootstrap 校验。Console 源码与资产未变，开发者已确认的 659 例结果沿用，没有重跑 Console 或额外构建。此次三项验证和 Host 完整检查均未调用原生 harness/模型（不含路由与执行 buddy），没有新增真实冒烟。
 
 ## 材料与偏差登记
 
@@ -38,4 +38,4 @@ Host 已逐项审阅三个固定代码 diff、原始变异失败与恢复日志�
 
 `AGENTS.md`、`docs/README.md` 和生产 `_covered` 均与 `32760ed` 字节相同；目录表和 Layout 留给 Claude Code Host 验收合入时重写。旧布局 `ENTRY_MODULES` 仍保留，未来删除由 Claude Code Host 记入待办。ADR、SKILL、Host 指南和此前验收记录未修改；不安装升级日常运行时，不改用户配置、凭据或日常数据，不读取凭据文件内容。
 
-本次三项修正与记录提交后停止，等待用户复核；第零步尚未获 Claude Code Host 整体验收。
+本次三项修正与记录提交后停止，等待开发者复核；第零步尚未获 Claude Code Host 整体验收。

@@ -1,16 +1,16 @@
 # ADR-025 第零步整体验收记录（0-D）
 
-本记录是 ADR-025 第零步（只搬动、目录重构）的整步收尾交付：在固定基线 `dfb8159ac4ad3be6dec56bd9508b6a154f84224c`（输入树 `9646e68e5cc0c49788546c85b20f1d61ce6590c9`）上重列全部测试编号、按 TSV 验证模块改名双射、登记跨边界 import、核对冻结文件表与受保护文件、重跑最终完整检查与构建，并汇总各微任务固定结果；本微任务未改任何源码、测试、既有记录或 ADR，新增 tracked 文件仅本记录与 [adr025-step-0-cross-imports.tsv](adr025-step-0-cross-imports.tsv)，[模块改名表](adr025-step-0-module-map.tsv) 经逐项与再生产物核对后保持原样未动。本记录当前版本是同一 run（`dc5dfbbf-d961-4b13-b98b-8dabf3643ab8`）的更正交付：Host 拒绝了首次固定交付（artifact `0439ced0-bc64-4fb1-ae81-943712f83b8c`，output `7691e348d54a438d626ffbaa7892c765fef6a60e`）并授权 continue，更正仅限记录文字（清理计数与归属、临时文件位置偏离的登记、调用与代码树证明的口径、本微任务登记行），全部核对与检查结果沿用已通过证据，该更正回合没有重跑任何测试、构建、服务启动，也没有删除任何对象；拒绝/continue 登记与最终 artifact 由 Host 随后登记。第零步尚未整体验收，须由 Claude Code Host 经用户转达后验收；第一步与独立 ACP 客户端均未开始。
+本记录是 ADR-025 第零步（只搬动、目录重构）的整步收尾交付：在固定基线 `dfb8159ac4ad3be6dec56bd9508b6a154f84224c`（输入树 `9646e68e5cc0c49788546c85b20f1d61ce6590c9`）上重列全部测试编号、按 TSV 验证模块改名双射、登记跨边界 import、核对冻结文件表与受保护文件、重跑最终完整检查与构建，并汇总各微任务固定结果；本微任务未改任何源码、测试、既有记录或 ADR，新增 tracked 文件仅本记录与 [adr025-step-0-cross-imports.tsv](adr025-step-0-cross-imports.tsv)，[模块改名表](adr025-step-0-module-map.tsv) 经逐项与再生产物核对后保持原样未动。本记录当前版本是同一 run（`dc5dfbbf-d961-4b13-b98b-8dabf3643ab8`）的更正交付：Host 拒绝了首次固定交付（artifact `0439ced0-bc64-4fb1-ae81-943712f83b8c`，output `7691e348d54a438d626ffbaa7892c765fef6a60e`）并授权 continue，更正仅限记录文字（清理计数与归属、临时文件位置偏离的登记、调用与代码树证明的口径、本微任务登记行），全部核对与检查结果沿用已通过证据，该更正回合没有重跑任何测试、构建、服务启动，也没有删除任何对象；拒绝/continue 登记与最终 artifact 由 Host 随后登记。第零步尚未整体验收，须由 Claude Code Host 经开发者转达后验收；第一步与独立 ACP 客户端均未开始。
 
 ## 基线、微任务固定结果与整合
 
-宏任务分支 `socu/adr025-run-module` 从 `2bdb497` 建立；上游 ADR 与 Host 验收基线已更新到用户指定 `fcf2947` 的最新原文；证据分支为 `socu/adr025-feasibility`。各微任务的固定交付、审查拒绝与 continue 轨迹均以 [Host 整合登记](adr025-host-integration.md) 为权威汇总：
+宏任务分支 `socu/adr025-run-module` 从 `2bdb497` 建立；上游 ADR 与 Host 验收基线已更新到开发者指定 `fcf2947` 的最新原文；证据分支为 `socu/adr025-feasibility`。各微任务的固定交付、审查拒绝与 continue 轨迹均以 [Host 整合登记](adr025-host-integration.md) 为权威汇总：
 
 | 微任务 | run / 固定 artifact | 记录提交 | 整合 | 结果与主要 continue 问题 |
 | --- | --- | --- | --- | --- |
 | 0-A 基线与编号 | `cdc575a5-9b86-4989-a871-58ea6a33f5a7` / `8e5c3e77-84f4-42e3-b9d4-74690c413e60` | `b22fc63` | `int-70d0b40b` | 已验收；旧布局完整检查 exit 0，Python 2,316（skip 1）、Node 110、Vitest 659、tsc 0；记录字节与 seal 一致 |
-| 0-B1 源码搬动 | `37e8b8db-b4c5-40eb-b685-f170ea64f90e` 最终 / `268d5c0a-38a7-402f-98b6-ababe757fa2e`（中断轮 partial `f8e9500f` 仅作未完成材料） | `2fadf95` | `int-b3e4f146` | 已验收；前提失败（包初始化循环、`THEME_STORAGE_KEY`/钥匙串服务名损坏）经用户批准两行修订（`45c39ad`、`4e430e5`）后同一 run continue 修复；固定审查再拒一次并 continue 修复旧目标运行时三处硬编码入口（`ENTRY_MODULES` 定位），新增 4 条 `TargetEntryModuleTests`（编号例外，非旧测试删除），真实旧布局一次性私有复现证明修复 |
-| 0-B2 测试搬动 | `633a8b0d-5689-4fcb-aae9-04272c43378f` 最终 / `0bf83c69-8c00-4389-8387-70df3b4c4bb5`（attention `abb0f48b`、审计 `838ea3c5`/`abef96ad` 未验收） | `9dc4b95` | `int-63e89157` | 已验收；越界清理事件按用户裁定保留原登记与撤回、删除对象不恢复不追查；恢复回合按新清理规则仅追加 `harnesses/dsh/tests/native-usage.test.mjs` 入 scope 并修一行 fixture URL；`WORKSPACE_BASE_MISMATCH` 后经 `9bf26e8` 文档延后与 revert 完成恢复 |
+| 0-B1 源码搬动 | `37e8b8db-b4c5-40eb-b685-f170ea64f90e` 最终 / `268d5c0a-38a7-402f-98b6-ababe757fa2e`（中断轮 partial `f8e9500f` 仅作未完成材料） | `2fadf95` | `int-b3e4f146` | 已验收；前提失败（包初始化循环、`THEME_STORAGE_KEY`/钥匙串服务名损坏）经开发者批准两行修订（`45c39ad`、`4e430e5`）后同一 run continue 修复；固定审查再拒一次并 continue 修复旧目标运行时三处硬编码入口（`ENTRY_MODULES` 定位），新增 4 条 `TargetEntryModuleTests`（编号例外，非旧测试删除），真实旧布局一次性私有复现证明修复 |
+| 0-B2 测试搬动 | `633a8b0d-5689-4fcb-aae9-04272c43378f` 最终 / `0bf83c69-8c00-4389-8387-70df3b4c4bb5`（attention `abb0f48b`、审计 `838ea3c5`/`abef96ad` 未验收） | `9dc4b95` | `int-63e89157` | 已验收；越界清理事件按开发者裁定保留原登记与撤回、删除对象不恢复不追查；恢复回合按新清理规则仅追加 `harnesses/dsh/tests/native-usage.test.mjs` 入 scope 并修一行 fixture URL；`WORKSPACE_BASE_MISMATCH` 后经 `9bf26e8` 文档延后与 revert 完成恢复 |
 | 0-C 私有安装升级 | `73dc5a3a-946b-4c0d-bf88-9638b5264408` / `1828a4e4-e258-4fbe-934d-c34502b88773` | `a093a05` | `int-26ec13fe` | 已接受；真实旧布局安装升级与故障自动回滚链、旧回执逐字节相等、四项合成 command 微任务完成、六个 install 测试模块 90 例 0 skip；原生 harness/model 调用 0 |
 | 0-D 编号对照与完整交付 | run `dc5dfbbf-d961-4b13-b98b-8dabf3643ab8`；首次固定 artifact `0439ced0-bc64-4fb1-ae81-943712f83b8c`（output `7691e348…`）被 Host 拒绝并 continue，最终 artifact 由 Host 随后登记 | — | 由 Host 随后登记 | 更正回合只修记录（见导语）；0-D 自身的检查/收集/冒烟原生 harness/model 调用 0 |
 
@@ -38,9 +38,9 @@ Console 代码树自 0-B1 重建资产后零变化：`git diff 2b08c945..HEAD` �
 
 冻结文件表 [adr025-step0-file-map.tsv](../design/adr025-step0-file-map.tsv) 与当前树逐行核对（`<repo>/tmp/adr025-step0/0d/verify-file-map.py`）：635 行、`old_path` 与 `step0_path` 均无重复；`git-mv` 292 行 = 源码/打包资产 114 + 测试侧 178（156 个测试模块 + 13 个 fixture `.py` + 9 个非 Python fixture），全部旧路径已不在树、新路径 tracked 且在盘；`keep` 162、`keep-step0` 23（`harnesses/dsh/` 原位）、`path-only` 19、`path-review` 11、`preserve` 128，全部原位文件 tracked 且在盘；`tests/python/support.py`、`mock_workspace.py`、`test_locking.py`、`test_private_directories.py` 四个共用/根包测试文件按表原位。
 
-相对旧布局基线 `2bdb497` 的受保护文件状态：128 个 `preserve` 行全部字节相等，唯一例外是 ADR-025 本身——当前内容与用户指定 `fcf294773818c909c4fca6c9c869a1fdb5cbd86c` 的上游原文逐字节相等（用户批准的上游更新，非本步违规，本宏任务未自行改 ADR）。`harnesses/dsh/` 23 个文件全部原位，其中 3 个相对基线有机械修订且仅为路径引用：`plugins/activity.mjs` 与 `scripts/lib/yaml.mjs` 的注释/`-m` 模块串指到新模块名，`tests/native-usage.test.mjs` 除同类注释外仅含 0-B2 经用户授权追加 scope 后的一行 fixture URL 修复。`SKILL.md`、Host 指南、历史设计、四份旧清单与既有 acceptance 记录均在其 `preserve`/原基线字节不变；`AGENTS.md`、两个 README 与 `docs/README.md` 的差异只有路径、命令与 Host 整合的文档索引句。
+相对旧布局基线 `2bdb497` 的受保护文件状态：128 个 `preserve` 行全部字节相等，唯一例外是 ADR-025 本身——当前内容与开发者指定 `fcf294773818c909c4fca6c9c869a1fdb5cbd86c` 的上游原文逐字节相等（开发者批准的上游更新，非本步违规，本宏任务未自行改 ADR）。`harnesses/dsh/` 23 个文件全部原位，其中 3 个相对基线有机械修订且仅为路径引用：`plugins/activity.mjs` 与 `scripts/lib/yaml.mjs` 的注释/`-m` 模块串指到新模块名，`tests/native-usage.test.mjs` 除同类注释外仅含 0-B2 经开发者授权追加 scope 后的一行 fixture URL 修复。`SKILL.md`、Host 指南、历史设计、四份旧清单与既有 acceptance 记录均在其 `preserve`/原基线字节不变；`AGENTS.md`、两个 README 与 `docs/README.md` 的差异只有路径、命令与 Host 整合的文档索引句。
 
-文件表之外的 tracked 新增路径逐项说明：46 份 0 字节空 `__init__.py`（19 份源码侧由 0-B1、27 份测试侧由 0-B2 按计划补齐）+ 9 份 acceptance 记录/表（三项可行性核对、Host 整合登记、0-A/0-B1/0-B2/0-C 四份微任务记录、本模块改名表）+ 1 份用户批准的 [两行修订提案](../design/adr025-step0-import-cycle.md)；本记录再新增跨边界 TSV 与本记录两个路径。打包约束实测：本步构建的 wheel ZIP namelist 共 310 个成员，顶层只有 `hey_my_buddy` 与 `hey_my_buddy-0.28.0.dist-info`，无顶层 `buddy/`（以 ZIP 清单判定，不用 `import buddy`）；`tests/python/buddy` 只作为检查运行时测试 PYTHONPATH 上的测试包存在，不构成产品命名空间或兼容层；`src/buddy` 在树与磁盘上均为零。
+文件表之外的 tracked 新增路径逐项说明：46 份 0 字节空 `__init__.py`（19 份源码侧由 0-B1、27 份测试侧由 0-B2 按计划补齐）+ 9 份 acceptance 记录/表（三项可行性核对、Host 整合登记、0-A/0-B1/0-B2/0-C 四份微任务记录、本模块改名表）+ 1 份开发者批准的 [两行修订提案](../design/adr025-step0-import-cycle.md)；本记录再新增跨边界 TSV 与本记录两个路径。打包约束实测：本步构建的 wheel ZIP namelist 共 310 个成员，顶层只有 `hey_my_buddy` 与 `hey_my_buddy-0.28.0.dist-info`，无顶层 `buddy/`（以 ZIP 清单判定，不用 `import buddy`）；`tests/python/buddy` 只作为检查运行时测试 PYTHONPATH 上的测试包存在，不构成产品命名空间或兼容层；`src/buddy` 在树与磁盘上均为零。
 
 ## 故障防护证据（引用既有实际日志，未新增厂商静态证明）
 
@@ -66,4 +66,4 @@ Console 代码树自 0-B1 重建资产后零变化：`git diff 2b08c945..HEAD` �
 
 ## 边界
 
-本记录全部数字来自固定基线 `dfb8159` 上的本机实际执行（macOS arm64，Node `~/.nvm/versions/node/v24.21.0`，CPython 3.13.3）；Linux 与 Windows 未验证。第零步到此收尾，等待 Claude Code Host 经用户转达验收；第一步、DSH ACP 客户端与 C-Two 后端均未开始。
+本记录全部数字来自固定基线 `dfb8159` 上的本机实际执行（macOS arm64，Node `~/.nvm/versions/node/v24.21.0`，CPython 3.13.3）；Linux 与 Windows 未验证。第零步到此收尾，等待 Claude Code Host 经开发者转达验收；第一步、DSH ACP 客户端与 C-Two 后端均未开始。

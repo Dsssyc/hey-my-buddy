@@ -11,7 +11,7 @@
 
 ## 边界与方法
 
-- 全程零模型调用、零安装版 DSH 启动：原生行为全部由本 harness 的假 ACP 程序覆盖；真实冒烟（只读命令写文件、Worker 用量不倒退、实际生效工具集）按任务书由 Host 在接线后执行。配置与凭据仅指路径不读内容；用户日常 DSH 不受影响。
+- 全程零模型调用、零安装版 DSH 启动：原生行为全部由本 harness 的假 ACP 程序覆盖；真实冒烟（只读命令写文件、Worker 用量不倒退、实际生效工具集）按任务书由 Host 在接线后执行。配置与凭据仅指路径不读内容；开发者日常 DSH 不受影响。
 - 任务根 `/private/tmp/a254b2-5vbuva5_/`；所有命令 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指其 `t/`，本轮材料在新目录 `m/final-comb/`；未覆盖任何旧实验（前轮 `m/build2/comb`、`m/fault-m1..m4`、`m/ids/` 原样保留），未回收此前实验或任务根；新组合镜像为复现范围内源码删除，使用 rsync --delete 移除了旧 catalog.py 与 runner.py（两棵源码树经 Host 对比确认）。
 - 正式验证副本 `m/final-comb/`：`base-patched` = Host 基线 `525d4cb` archive 加仅 DSH 激活两处；`comb` = `base-patched` 加本任务 scope 覆盖（`rsync --delete`，副本内 `dsh/runner.py`、`dsh/catalog.py` 确认不存在，scope 树与检出逐字节相等）。1d28a16 版 Host 补丁上下文已不匹配 525d4cb（Host 期间自行激活了 codex/claude 同一 seam），按"仅 DSH 激活两处"在副本内应用等价编辑——registry 导入+注册各一行；原基线 525d4cb 的 `live.py` 仍是 realtime，验证组合实际改为 cooperative-checkpoint（Host 逐字核对）；原说明把组合状态误记成基线状态（留存说明 `m/final-comb/applied-activation.txt`，Host 原补丁文件未动）。
 - 解释器用 Host 实施检出 `~/.codex/worktrees/adr025-run-module/hey-my-buddy/.venv/bin/python`，不解析符号链接；作者检出内快跑用任务 `m/iter/registered_unittest.py`（进程内镜像两处激活），正式证据一律以真实补丁副本为准。

@@ -2,7 +2,7 @@
 
 ## 范围与修订说明
 
-本记录覆盖用户对 ADR-025 第零步暂不验收所授权三处修正中的第 1 项:修复 `storage.process_inventory` 对新旧两代 daemon/supervisor 的识别与 kind 判定。基线固定为 `32760edf00e46dec0f38141e678715ee4c8f338f`,属同一宏任务的后续修正,不取消旧记录。
+本记录覆盖开发者对 ADR-025 第零步暂不验收所授权三处修正中的第 1 项:修复 `storage.process_inventory` 对新旧两代 daemon/supervisor 的识别与 kind 判定。基线固定为 `32760edf00e46dec0f38141e678715ee4c8f338f`,属同一宏任务的后续修正,不取消旧记录。
 
 授权可写路径共五处:`src/hey_my_buddy/blackboard/tasks/storage.py`、`src/hey_my_buddy/install/launcher.py`、新增 `src/hey_my_buddy/install/entrypoints.py`、`tests/python/blackboard/tasks/test_storage.py` 与本记录;最终改动恰好为其中四处代码/测试文件加本文件,无其它路径。
 

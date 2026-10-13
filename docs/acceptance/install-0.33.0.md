@@ -1,6 +1,6 @@
 # 安装 0.33.0 的记录
 
-2026-10-13，整合 Host。用户为这一次安装明确授权。装的是整合分支的 `38f89b96`，版本 0.33.0；存储的 schema 不变，仍是 18，没有迁移。带上的是 Claude Code 写检出一档的 Bash 放行规则（[验收记录](worker-permission-levels-host-review.md)的最后一节）与检查命令的改动（[验收记录](check-runner-focused-host-review.md)，只是开发用的工具，不影响装好的服务）。日常环境此前是 [0.32.0](install-0.32.0.md)。
+2026-10-13，整合 Host。开发者为这一次安装明确授权。装的是整合分支的 `38f89b96`，版本 0.33.0；存储的 schema 不变，仍是 18，没有迁移。带上的是 Claude Code 写检出一档的 Bash 放行规则（[验收记录](worker-permission-levels-host-review.md)的最后一节）与检查命令的改动（[验收记录](check-runner-focused-host-review.md)，只是开发用的工具，不影响装好的服务）。日常环境此前是 [0.32.0](install-0.32.0.md)。
 
 ## 安装之前
 

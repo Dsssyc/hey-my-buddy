@@ -2,7 +2,7 @@
 
 ## Boundary
 
-The source candidate is contract 0.19.0/schema 14, based on `socu/buddy-core` at `dcd482a`, on `socu/local-harness-discovery`. The user approved schema 14 separately, then authorized subsequent Codex probes after individually approving probes 1 and 2. The actual daily installation remains [0.18.0/schema 13](installed-0.18.0.md). The daily active installation was not upgraded, its board was not migrated and its settings were not changed. An installer-test isolation incident affected runtime directories and was remediated as recorded below; no branch was merged or package published. Normal Buddy delegations used the existing daily board under the user's authorization; tests used private state/runtime roots.
+The source candidate is contract 0.19.0/schema 14, based on `socu/buddy-core` at `dcd482a`, on `socu/local-harness-discovery`. The developer approved schema 14 separately, then authorized subsequent Codex probes after individually approving probes 1 and 2. The actual daily installation remains [0.18.0/schema 13](installed-0.18.0.md). The daily active installation was not upgraded, its board was not migrated and its settings were not changed. An installer-test isolation incident affected runtime directories and was remediated as recorded below; no branch was merged or package published. Normal Buddy delegations used the existing daily board under the developer's authorization; tests used private state/runtime roots.
 
 ## Implementation
 
@@ -10,7 +10,7 @@ Shared discovery reads manual paths, version-manager defaults, known installatio
 
 The daily launcher follows `active-runtime.json` through a retained interpreter hint and executes stable Python without uv. Cold start proves state writes and local communication first. Host entry strips residual service identity and provider endpoints while preserving development settings and Worker authority. Installation checks idle state before changes, fences and rechecks admission, materializes a stable runtime, and coordinates skill/launcher/runtime/service switching with verified backup and recovery. Same intact generation preserves the service; a matching marker does not hide damaged content. Windows backup publication has a journaled recovery path with fixed sibling names; process-interruption behavior is tested on POSIX, while native Windows and power-loss durability remain unverified.
 
-The wheel/sdist carry the skill, platform launchers, references, Python assets, DSH scripts and built console. `hey-my-buddy install` is the installation-only package entry; no global `buddy` command is installed. Bootstrap scripts pin private uv 0.12.19 and verify its official SHA-256 manifest. Tag CI builds distributions and checksums as workflow artifacts, without publishing. Package-name availability and the PyPI/release-channel decision remain with the user.
+The wheel/sdist carry the skill, platform launchers, references, Python assets, DSH scripts and built console. `hey-my-buddy install` is the installation-only package entry; no global `buddy` command is installed. Bootstrap scripts pin private uv 0.12.19 and verify its official SHA-256 manifest. Tag CI builds distributions and checksums as workflow artifacts, without publishing. Package-name availability and the PyPI/release-channel decision remain with the developer.
 
 Workspace cleanup now converges when another legitimate cleanup has already removed the exact checkout, while preserving errors for existing paths and dangling links. The historical-schema fixture closes its SQLite connection while retaining transaction commit semantics.
 
@@ -34,7 +34,7 @@ Earlier attempts remain recorded, without turning failures into passes:
 
 Free `command/exec` diagnostics additionally tested temporary, private CODEX_HOME and repository canaries, plus a reachable loopback network control. These sent no model turn. Every paid attempt used Codex, never Claude. The source sets Codex `read_only_structured_verified` only for a healthy recorded macOS Codex 0.157.0; Linux/Windows and all other harnesses remain unverified. Request/served model identity are distinct: no independent remote served-model attestation is claimed. Budgets count observable native requests (code-mode and canonical command granularity may differ), keep unavailable read-byte counts null and provide no dollar hard limit.
 
-After an authorized installation, select the enabled `codex / openai / gpt-6-sol / high` Router profile and `standard` budget in Buddy 配置. The Host has not changed the user's Router configuration. The current daily DSH Router remains unsuitable for verified read-only routing.
+After an authorized installation, select the enabled `codex / openai / gpt-6-sol / high` Router profile and `standard` budget in Buddy 配置. The Host has not changed the developer's Router configuration. The current daily DSH Router remains unsuitable for verified read-only routing.
 
 ## Verification
 
@@ -48,7 +48,7 @@ A separate private upgrade at `/private/tmp/b017-upgrade-y04kabe4` built and ins
 
 ## Remaining boundaries
 
-Daily installation/migration, merge and any package publication require separate user authorization. Windows hardware, Linux native Router permissions, power-loss durability on Windows, and PyPI package-name/channel availability are unverified. The release CI is written but has not run on a published tag. `quick` did not fit the verified model's latency; `standard` is the evidence-backed recommendation, without a monetary guarantee.
+Daily installation/migration, merge and any package publication require separate developer authorization. Windows hardware, Linux native Router permissions, power-loss durability on Windows, and PyPI package-name/channel availability are unverified. The release CI is written but has not run on a published tag. `quick` did not fit the verified model's latency; `standard` is the evidence-backed recommendation, without a monetary guarantee.
 
 The final independent review found a Windows process-handle portability defect and an overly broad macOS Router certificate. The certificate is now bound to the recorded native version; the Windows process/pipe fix passed 114 focused tests and the workspace fix passed 46 tests after Host integration. Its suggested automatic-before-manual precedence was rejected because ADR-017 explicitly orders manual candidates first; a saved override remains until the user restores automatic detection. The first review turn failed the installed controller's structured-outcome gate, so its raw native final was inspected and a bounded formatting recovery requested without hiding the failed attempt.
 
@@ -68,7 +68,7 @@ On frozen source commit `2759017` (including the certificate publication fix `74
 
 The local wheel and sdist built successfully with `uv build --out-dir tmp/adr017/dist-final`, with `SHA256SUMS` beside them. They contain the POSIX/PowerShell/CMD launchers, console assets, DSH assets and Windows support modules. The wheel built through the sdist reports `sourceCommit:null`; its source is bound by this build record and checksums rather than an invented embedded Git identity. Wheel SHA-256 is `4bccd4e03c8510c354c86625b34c970b2f47cc9e2695d9f1c0abaa010374137f`; sdist SHA-256 is `57b353f37d041f48fac22806a358adef7288a9751d4aba00f33b7ac8b799d45e`. No artifact was published.
 
-The bounded discovery, console, repair, launcher, distribution, documentation and Windows tasks were integrated and accepted through Buddy with fixed artifact bindings and Host adjustment notes. Both read-only reviews were accepted as reports. Managed delegation checkouts have applied cleanup records; fixed outputs/patches/receipts remain. The source worktree and branch are retained for user review and an authorized merge/install.
+The bounded discovery, console, repair, launcher, distribution, documentation and Windows tasks were integrated and accepted through Buddy with fixed artifact bindings and Host adjustment notes. Both read-only reviews were accepted as reports. Managed delegation checkouts have applied cleanup records; fixed outputs/patches/receipts remain. The source worktree and branch are retained for developer review and an authorized merge/install.
 
 | Stage | Main commits |
 | --- | --- |

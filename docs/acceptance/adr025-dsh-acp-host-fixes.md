@@ -16,7 +16,7 @@
 
 `support.py` 重写：每测试一个普通 `TemporaryDirectory`，位于 `BUDDY_CHECKS_TMPDIR` 指向的检查运行器私有根（直接运行聚焦测试时由本回合任务根 `t/` 提供；回退 `/tmp` 与其他套件的既有写法一致），teardown 正常清理。常驻 run 容器、`manifest.jsonl`/`deletions.jsonl` 台账与 `preserve` 过度保留机制全部移除；检出 `tmp/adr025-dsh-acp-tests` 不再被本测试创建、扫描或清理，历史遗留一律不触碰。
 
-未确认停止直接让测试失败，路径分三种：`shutdown` 抛出时对 owned handle 保守 terminate 一次（所有权不丢）后重新抛出原异常；`shutdown` 正常返回但 `shutdownConfirmed` 为假时同样保守 terminate 后重新观察，组确认 gone 则正常通过；仅当最终观察仍未确认 gone 时才以 `AssertionError` 携带最终观察证据失败。任何路径都不写常驻账本。close/cancel/EOF 不等于 group gone 与 owned handle 保守停止证据的本体断言全部不变。fixture 只清理自己在 `BUDDY_CHECKS_TMPDIR` 中新建的测试对象——这是用户授权的"Worker 不删除"测试例外；fake agent 与测试资料只写在每测试容器内。
+未确认停止直接让测试失败，路径分三种：`shutdown` 抛出时对 owned handle 保守 terminate 一次（所有权不丢）后重新抛出原异常；`shutdown` 正常返回但 `shutdownConfirmed` 为假时同样保守 terminate 后重新观察，组确认 gone 则正常通过；仅当最终观察仍未确认 gone 时才以 `AssertionError` 携带最终观察证据失败。任何路径都不写常驻账本。close/cancel/EOF 不等于 group gone 与 owned handle 保守停止证据的本体断言全部不变。fixture 只清理自己在 `BUDDY_CHECKS_TMPDIR` 中新建的测试对象——这是开发者授权的"Worker 不删除"测试例外；fake agent 与测试资料只写在每测试容器内。
 
 ## 验证
 
@@ -56,4 +56,4 @@ Host 复核固定 artifact `998213a3`（累积输出 `fcf133f2`，其生产与�
 
 ## 状态
 
-初始整改回合的两处修改、第一次 continue 的两处范围整改与第二次 continue 的回合命名口径修正均已完成并提交，停下等用户转达 Host 复核。ACP 公共接线继续等待第一步外部验收；本记录不宣称第四步或 ADR-025 完成。
+初始整改回合的两处修改、第一次 continue 的两处范围整改与第二次 continue 的回合命名口径修正均已完成并提交，停下等开发者转达 Host 复核。ACP 公共接线继续等待第一步外部验收；本记录不宣称第四步或 ADR-025 完成。
