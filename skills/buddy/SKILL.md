@@ -33,7 +33,7 @@ Before install, run `backup-preflight '{}'`; resolve refusals ([operations](../.
 
 Worker sessions stay private; `worker-sessions` lists them ([details](../../docs/reference/operations.md)).
 
-Preferences, enablement, capacity and Router settings are user-owned: change them only in the console, never in this skill. Routing and execution share capacity and family limits; native permissions need Host attention.
+Preferences, enablement, capacity and Router settings are user-owned: change them only in the console, never in this skill. Routing and execution share capacity and model service limits; native permissions need Host attention.
 
 
 `quota-redetect` opens one retry; reuse its `requestId` after an unknown reply ([harnesses](../../docs/reference/harnesses.md)).
