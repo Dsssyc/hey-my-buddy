@@ -51,6 +51,11 @@ The legal candidates a Router may choose from: the published, enabled and availa
 
 **用户 / user**:
 The person on whose behalf buddies work: the source of their authority, the owner of shared settings and the holder of the global view. User authority is not a buddy role.
+_Avoid_: 用户 or user for the developer of this project
+
+**开发者 / developer**:
+The person who builds this project and sets its direction with the integrating Host. Records say the developer whenever they mean that one person: who decided, asked for, reported or authorized something, and whose machine, board or accounts a record describes. A user is anyone who uses the product.
+_Avoid_: 用户, user (for the developer)
 
 ### Routing knowledge
 
