@@ -90,6 +90,32 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual((self.home / "auth.json").read_text(), '{"test":"fake-auth-only"}')
         self.assertEqual(json.loads((self.home / "models_cache.json").read_text())["models"][0]["multi_agent_version"], "v2")
 
+    def test_protocol_variants_preserve_non_tool_answers_and_conservative_tool_evidence(self):
+        from buddy.harnesses.codex.fixtures.protocol_items import PROTOCOL_ITEMS, FUTURE_ITEMS
+        from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
+        for name, carrier, _fields, calls, phases, complete in PROTOCOL_ITEMS + FUTURE_ITEMS:
+            with self.subTest(name=name):
+                outcome, _control, _directory = self.run_case("protocol-" + name)
+                evidence = outcome.result["toolEvidence"]
+                self.assertEqual(evidence["toolCalls"], calls)
+                # Fast calls interrupt on the first tool marker. A typed result
+                # has no end fact yet when its display's started frame arrives.
+                fast_phases = (() if name == "functionCallOutput" else phases[:1]) if carrier == "typed" else phases
+                self.assertEqual(tuple(event["phase"] for event in evidence["events"]), fast_phases)
+                self.assertEqual(judge_tool_evidence(evidence, "fast", False),
+                                 "router-tool-evidence-unverified" if not complete or name == "functionCallOutput"
+                                 else "router-tools-forbidden" if phases else None)
+                if phases and complete:
+                    self.assertEqual(outcome.status, "failed", outcome.result)
+                    self.assertEqual(outcome.result["code"], "no-tool-violation")
+                    self.assertFalse(evidence["streamComplete"])
+                    self.assertFalse(outcome.result["zeroToolVerified"])
+                elif not phases:
+                    self.assertEqual(outcome.status, "ok", outcome.result)
+                    self.assertEqual(json.loads(outcome.result["rawAnswer"]), {"profileId": "legal"})
+                    self.assertTrue(evidence["streamComplete"])
+                    self.assertTrue(outcome.result["zeroToolVerified"])
+
     def test_adapter_entrypoint_and_collector(self):
         directory = self.root / "adapter"
         environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}

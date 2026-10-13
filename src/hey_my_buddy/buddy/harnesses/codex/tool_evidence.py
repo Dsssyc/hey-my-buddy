@@ -18,23 +18,60 @@ from ...roles.turn_io import canonical_json
 
 ADAPTER = "codex"
 
-#: Typed thread items that are one native tool call: ``item/started`` is the
-#: call's start and ``item/completed`` its end. Conversation items are not tool
-#: events, and any other item type is kept as a fact the fixed table classifies
-#: as ``other``.
-TYPED_TOOL_ITEMS = frozenset({
-    "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall",
-    "webSearch", "imageGeneration", "collabAgentToolCall",
-})
-NON_TOOL_ITEMS = frozenset({"agentMessage", "reasoning", "userMessage"})
-#: Raw response items that carry a tool request or its result.
-RAW_TOOL_STARTS = frozenset({
-    "function_call", "custom_tool_call", "local_shell_call", "web_search_call",
-    "image_generation_call", "mcp_tool_call",
-})
-RAW_TOOL_OUTPUTS = frozenset({
-    "function_call_output", "custom_tool_call_output", "local_shell_call_output",
-})
+#: Codex 0.162.1's generated ThreadItem and ResponseItem definitions. Both the
+#: projector and the run's marker classifier use these tables. Tool definitions
+#: are not invocations; none of the concrete variants contains nested calls.
+#: The opaque ResponseItem fallback cannot rule out a hidden call and therefore
+#: follows the same incomplete-evidence path as a future, unlisted variant.
+THREAD_ITEM_KINDS = {
+    "userMessage": "conversation",  # UserInput content.
+    "agentMessage": "conversation",  # Agent text and delivery metadata.
+    "reasoning": "conversation",  # Reasoning content and summaries.
+    "hookPrompt": "conversation",  # HookPromptFragment contains hookRunId and prompt text.
+    "functionCallOutput": "output",  # Named FunctionCallOutputBody is a tool result, not a request.
+    "plan": "conversation",  # Proposed plan text; the completed text is authoritative.
+    "subAgentActivity": "conversation",  # Agent identity and started/interacted/interrupted/completed status.
+    "commandExecution": "call",  # Command and its execution status.
+    "fileChange": "call",  # File updates and patch status.
+    "mcpToolCall": "call",  # MCP server, tool, arguments and result.
+    "dynamicToolCall": "call",  # Dynamic tool, arguments and result.
+    "collabAgentToolCall": "call",  # Collaboration operation and receiving agents.
+    "webSearch": "call",  # Search query and action.
+    "imageView": "call",  # Viewing the image at the supplied path.
+    "sleep": "call",  # Display item emitted by the interruptible clock.sleep tool.
+    "imageGeneration": "call",  # Image generation status and result.
+    "enteredReviewMode": "conversation",  # Review-mode entry with review text.
+    "exitedReviewMode": "conversation",  # Review-mode exit with review text.
+    "contextCompaction": "conversation",  # Context compaction marker with only an id.
+}
+RAW_ITEM_KINDS = {
+    "message": "conversation",  # Role and message content.
+    "reasoning": "conversation",  # Reasoning summaries and content.
+    "additional_tools": "conversation",  # Additional tool definitions, with no invocation or call id.
+    "agent_message": "conversation",  # Agent-to-agent text/encrypted content and author/recipient identities.
+    "function_call": "call",  # Named function request and arguments.
+    "custom_tool_call": "call",  # Named custom tool request and input.
+    "local_shell_call": "call",  # Shell execution action.
+    "web_search_call": "call",  # Web search action.
+    "image_generation_call": "call",  # Image generation request.
+    "mcp_tool_call": "call",  # Existing native MCP call carrier.
+    "tool_search_call": "call",  # Tool discovery request with arguments, execution and call identity.
+    "function_call_output": "output",  # Function result correlated by call id.
+    "custom_tool_call_output": "output",  # Custom tool result correlated by call id.
+    "local_shell_call_output": "output",  # Existing native shell result carrier.
+    "tool_search_output": "output",  # Tool discovery result with status, tools and call identity.
+    "compaction": "conversation",  # Encrypted context compaction content.
+    "configuration_update": "conversation",  # Durable backend input control carrying reasoning settings.
+    "compaction_trigger": "conversation",  # Context compaction trigger marker.
+    "context_compaction": "conversation",  # Context compaction marker and optional encrypted content.
+    "other": "opaque",  # Catch-all with no payload definition; possible tool content stays unverified.
+}
+NON_TOOL_ITEMS = frozenset(kind for kind, disposition in THREAD_ITEM_KINDS.items() if disposition == "conversation")
+TYPED_TOOL_ITEMS = frozenset(kind for kind, disposition in THREAD_ITEM_KINDS.items() if disposition == "call")
+TYPED_TOOL_OUTPUTS = frozenset(kind for kind, disposition in THREAD_ITEM_KINDS.items() if disposition == "output")
+RAW_NON_TOOL_ITEMS = frozenset(kind for kind, disposition in RAW_ITEM_KINDS.items() if disposition == "conversation")
+RAW_TOOL_STARTS = frozenset(kind for kind, disposition in RAW_ITEM_KINDS.items() if disposition == "call")
+RAW_TOOL_OUTPUTS = frozenset(kind for kind, disposition in RAW_ITEM_KINDS.items() if disposition == "output")
 #: Raw call shapes that name their operation in the item's ``name`` field; for
 #: the others the raw item type is itself the native operation type.
 NAMED_RAW_CALLS = frozenset({"function_call", "custom_tool_call"})
@@ -99,6 +136,14 @@ class CodexToolEventProjector:
             return
         if kind in NON_TOOL_ITEMS:
             return
+        if kind in TYPED_TOOL_OUTPUTS:
+            # A rendered output starts no call. Its completed item is only an
+            # end fact, joined to a request by the native id, never by its text.
+            if method == "item/completed":
+                self._output(params, item, kind)
+            elif method == "item/updated":
+                self._incomplete(params, tool_name=kind, phase=None)
+            return
         if method == "item/updated":
             # A progress frame carries neither a start nor an end; the stream
             # stays incomplete, so the call cannot pass as either.
@@ -113,7 +158,7 @@ class CodexToolEventProjector:
         if not isinstance(raw_type, str):
             self._incomplete(params, tool_name=None, phase=None)
             return
-        if raw_type in NON_TOOL_ITEMS or raw_type == "message":
+        if raw_type in RAW_NON_TOOL_ITEMS:
             return
         if raw_type in RAW_TOOL_STARTS:
             name = item.get("name") if raw_type in NAMED_RAW_CALLS else None
@@ -126,18 +171,20 @@ class CodexToolEventProjector:
                           call_id=item.get("call_id") or item.get("id"),
                           native_type="mcpToolCall" if item.get("namespace") not in (None, "functions") else None)
         elif raw_type in RAW_TOOL_OUTPUTS:
-            call_id = item.get("call_id") or item.get("id")
-            identity = self._identity(params)
-            correlated = None
-            if identity and isinstance(call_id, str) and call_id:
-                correlated = self._started.get((canonical_json(identity), call_id))
-            # The end fact repeats the correlated start's operation; without a
-            # proven association only the frame's own type is reported.
-            self._observe(params, phase="end", tool_name=correlated[0] if correlated else raw_type,
-                          native_type=correlated[1] if correlated else None, call_id=call_id)
+            self._output(params, item, raw_type)
         else:
             # An unrecognized raw item shape has no provable phase.
             self._incomplete(params, tool_name=None, phase=None)
+
+    def _output(self, params, item: dict, kind: str) -> None:
+        call_id = item.get("call_id") or item.get("id")
+        identity = self._identity(params)
+        correlated = None
+        if identity and isinstance(call_id, str) and call_id:
+            correlated = self._started.get((canonical_json(identity), call_id))
+        # Without a proven association only the output's own type is reported.
+        self._observe(params, phase="end", tool_name=correlated[0] if correlated else kind,
+                      native_type=correlated[1] if correlated else None, call_id=call_id)
 
     def _observe(self, params, *, phase: str, tool_name, call_id, native_type=None) -> None:
         identity = self._identity(params)
@@ -186,5 +233,6 @@ class CodexToolEventProjector:
 
 __all__ = [
     "ADAPTER", "CodexToolEventProjector", "NAMED_RAW_CALLS", "NON_TOOL_ITEMS",
-    "RAW_TOOL_OUTPUTS", "RAW_TOOL_STARTS", "TYPED_TOOL_ITEMS",
+    "RAW_ITEM_KINDS", "RAW_NON_TOOL_ITEMS", "RAW_TOOL_OUTPUTS", "RAW_TOOL_STARTS",
+    "THREAD_ITEM_KINDS", "TYPED_TOOL_ITEMS", "TYPED_TOOL_OUTPUTS",
 ]

@@ -112,9 +112,11 @@ from .protocol import (
 )
 from .tool_evidence import (
     NON_TOOL_ITEMS,
+    RAW_NON_TOOL_ITEMS,
     RAW_TOOL_OUTPUTS,
     RAW_TOOL_STARTS,
     TYPED_TOOL_ITEMS,
+    TYPED_TOOL_OUTPUTS,
     CodexToolEventProjector,
 )
 
@@ -256,7 +258,7 @@ class _Classifier:
             # decides, the fact is retained either way.
             self.facts.note_unknown(method)
             return True
-        if kind in NON_TOOL_ITEMS or kind in ("message", "reasoning"):
+        if kind in RAW_NON_TOOL_ITEMS:
             return False
         if kind in RAW_TOOL_STARTS or kind in RAW_TOOL_OUTPUTS:
             self.facts.note_marker()
@@ -271,7 +273,7 @@ class _Classifier:
             return True
         if kind in NON_TOOL_ITEMS:
             return False
-        if kind in TYPED_TOOL_ITEMS:
+        if kind in TYPED_TOOL_ITEMS or kind in TYPED_TOOL_OUTPUTS:
             self.facts.note_marker()
             return True
         self.facts.note_unknown(kind)
