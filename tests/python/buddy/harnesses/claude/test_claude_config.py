@@ -19,6 +19,7 @@ from hey_my_buddy.buddy.harnesses.claude.config import (
     native_environment,
     provider_from_account,
     sandbox_settings,
+    worker_sandbox_settings,
 )
 from hey_my_buddy.buddy.roles.turn_io import canonical_json
 
@@ -96,6 +97,30 @@ class ClaudeConfigTests(unittest.TestCase):
         self.assertEqual(len(PACKAGE_REGISTRY_DOMAINS), 7)
         for domain in ("registry.npmjs.org", "pypi.org", "files.pythonhosted.org", "static.crates.io"):
             self.assertIn(domain, PACKAGE_REGISTRY_DOMAINS)
+
+    def test_worker_settings_allow_bash_only_for_checkout_write(self):
+        self.assertEqual(worker_sandbox_settings("write"), {
+            "permissions": {"allow": ["Bash"]},
+            "sandbox": {
+                "enabled": True, "failIfUnavailable": True, "autoAllowBashIfSandboxed": True,
+                "allowUnsandboxedCommands": False, "excludedCommands": [],
+                "network": {"strictAllowlist": False, "allowedDomains": ["*"],
+                            "allowLocalBinding": True},
+            },
+        })
+        self.assertEqual(worker_sandbox_settings("read"), sandbox_settings())
+        self.assertNotIn("permissions", worker_sandbox_settings("read"))
+        self.assertEqual(worker_sandbox_settings("full"), {"sandbox": {"enabled": False}})
+
+    def test_router_settings_preserve_each_native_setting(self):
+        for domains in (None, ()):
+            with self.subTest(domains=domains):
+                self.assertEqual(sandbox_settings(domains), {"sandbox": {
+                    "enabled": True, "failIfUnavailable": True, "autoAllowBashIfSandboxed": True,
+                    "allowUnsandboxedCommands": False, "excludedCommands": [],
+                    "network": {"strictAllowlist": True,
+                                "allowedDomains": list(PACKAGE_REGISTRY_DOMAINS) if domains is None else []},
+                }})
 
     def test_execution_args_keep_permissions_and_user_configuration(self):
         ending = {"type": "object", "additionalProperties": False}

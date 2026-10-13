@@ -754,6 +754,8 @@ def _effective_policy(preparation: _Preparation) -> EffectivePolicy:
                  "disallowedTools": disallowed_value.split(",") if disallowed_value else [],
                  "sandboxNetworkAllowedDomains": list(preparation.settings["sandbox"].get("network", {}).get("allowedDomains", [])),
                  "sandbox": preparation.settings["sandbox"]}
+    if "permissions" in preparation.settings:
+        requested["permissions"] = preparation.settings["permissions"]
     return EffectivePolicy(
         tools=PolicyFact(requested=requested))
 

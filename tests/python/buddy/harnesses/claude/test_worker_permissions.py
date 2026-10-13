@@ -44,15 +44,20 @@ class WorkerPermissionTests(NativeRunCase):
                 self.assertEqual(policy["sandbox"], settings["sandbox"])
                 if level == "read":
                     self.assertEqual(settings, sandbox_settings())
+                    self.assertNotIn("permissions", settings)
+                    self.assertNotIn("permissions", policy)
                     self.assertEqual(flag_value(argv, "--disallowedTools"), ",".join(DENIED_WRITE_TOOLS))
                 elif level == "write":
-                    self.assertEqual(settings, {"sandbox": {
+                    self.assertEqual(settings, {"permissions": {"allow": ["Bash"]}, "sandbox": {
                         "enabled": True, "failIfUnavailable": True, "autoAllowBashIfSandboxed": True,
                         "allowUnsandboxedCommands": False, "excludedCommands": [],
                         "network": {"allowedDomains": ["*"], "strictAllowlist": False,
                                     "allowLocalBinding": True}}})
+                    self.assertEqual(policy["permissions"], settings["permissions"])
                 else:
                     self.assertEqual(settings, {"sandbox": {"enabled": False}})
+                    self.assertNotIn("permissions", settings)
+                    self.assertNotIn("permissions", policy)
                 self.assertEqual(self.observations(result)["permissionMode"], mode)
                 self.assertEqual(result.native_evidence.unconfirmed, ())
 
