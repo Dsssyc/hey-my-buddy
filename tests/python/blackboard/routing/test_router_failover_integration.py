@@ -9,8 +9,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
-from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
+from hey_my_buddy.blackboard.routing import router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
@@ -123,7 +122,7 @@ class FailoverTests(RouterDispatchTestCase):
         second = self.next_claim(request)
         self.assertEqual(second["decisionInput"]["routerProfileId"], B)
         self.assertEqual(second["attempt"]["modelFamily"], {"adapter": "dsh", "provider": "fixture", "model": "bravo"})
-        self.assertEqual(self.meta("attempt-tool-policy:" + second["attempt"]["attemptId"]), {"systemSandbox": False})
+        self.assertEqual(self.tool_policy(second["attempt"]["attemptId"]), {"systemSandbox": False})
         result = self.report(second, self.failure(second, "provider-error"), status="failed")
         self.assertEqual(result["decision"]["status"], "needs-host")
         self.assertEqual(len(self.tasks()), 2)

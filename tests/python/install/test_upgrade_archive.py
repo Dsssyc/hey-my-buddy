@@ -30,9 +30,10 @@ class ArchiveCutoverTests(BoardTestCase):
                          "serviceId": "private-old", "pid": 123, "contractVersion": "fixture-contract"}
         (self.state / "control.json").write_text(json.dumps(self.endpoint))
         self.started_runtimes = []
+        self.detached_runtimes = []
 
     def cutover(self, previous, target, *, fail_archive=False, corrupt_archive=False,
-                fail_target=False, mutate_after_archive=None):
+                fail_target=False, mutate_after_archive=None, source_commit="fixture-commit"):
         target.mkdir(parents=True, exist_ok=True)
         endpoint = {"runtimeIdentity": "runtime:" + previous.name,
                     "serviceId": "private-old", "pid": 123, "contractVersion": "fixture-contract"}
@@ -52,10 +53,10 @@ class ArchiveCutoverTests(BoardTestCase):
             for name, options in (
                 ("get_state_dir", {"return_value": self.state}),
                 ("runtime.is_ready", {"return_value": True}),
-                ("runtime.read_ready", {"return_value": {"sourceCommit": "fixture-commit"}}),
+                ("runtime.read_ready", {"return_value": {"sourceCommit": source_commit}}),
                 ("runtime.materialize", {"return_value": {"runtimeDir": str(target)}}),
                 ("probe", {"return_value": health}),
-                ("detach", {}),
+                ("detach", {"side_effect": lambda _state, path: self.detached_runtimes.append(path)}),
                 ("start", {"side_effect": start}),
                 ("command", {"return_value": {"leaks": []}}),
             ):
@@ -92,6 +93,17 @@ class ArchiveCutoverTests(BoardTestCase):
 
                 stack.enter_context(mock.patch.object(upgrade, "archive_history_paths", side_effect=mutate))
             return upgrade.upgrade({})
+
+    def test_missing_previous_commit_refuses_before_old_service_stops(self):
+        target = self.runtime_root / ("b" * 32)
+        with self.assertRaises(BoardError) as caught:
+            self.cutover(self.previous, target, source_commit=None)
+        self.assertEqual(caught.exception.code, "UPGRADE_ARCHIVE_IDENTITY_UNAVAILABLE")
+        self.assertEqual(self.detached_runtimes, [])
+        self.assertEqual(self.started_runtimes, [])
+        self.assertEqual(self.board_path.read_bytes(), self.original_board)
+        self.assertEqual(json.loads((self.state / "control.json").read_text()), self.endpoint)
+        self.assertFalse((self.state / "upgrade.json").exists())
 
     def test_archive_failure_keeps_the_old_board_and_starts_old_runtime(self):
         target = self.runtime_root / ("b" * 32)

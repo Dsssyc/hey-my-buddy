@@ -13,15 +13,16 @@ from ...errors import BoardError
 def begin(evaluation, request_id=None, *, harnesses=None):
     request_id = request_id or 'catalog-' + str(uuid.uuid4())
     with evaluation.db.write() as db:
-        db.execute('INSERT OR IGNORE INTO catalog_observations(request_id,created_at) VALUES(?,?)', (request_id, evaluation._now()))
         row = db.execute('SELECT * FROM catalog_observations WHERE request_id=?', (request_id,)).fetchone()
-        from ...protocol.harness_names import HARNESS_NAMES
-        from ..service.harness_health import read_health
-        records = harnesses if harnesses is not None else [read_health(db, name) for name in HARNESS_NAMES]
-        db.execute('INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)', ('catalog-harnesses:' + str(row['observation_id']), canonical_json(records)))
-        frozen = db.execute('SELECT value FROM meta WHERE key=?', ('catalog-harnesses:' + str(row['observation_id']),)).fetchone()
+        if row is None:
+            from ...protocol.harness_names import HARNESS_NAMES
+            from ..service.harness_health import read_health
+            records = harnesses if harnesses is not None else [read_health(db, name) for name in HARNESS_NAMES]
+            db.execute('INSERT INTO catalog_observations(request_id,created_at,harnesses_json) VALUES(?,?,?)',
+                       (request_id, evaluation._now(), canonical_json(records)))
+            row = db.execute('SELECT * FROM catalog_observations WHERE request_id=?', (request_id,)).fetchone()
         return {'observationId': row['observation_id'], 'response': json.loads(row['response_json']) if row['response_json'] else None,
-                'harnesses': json.loads(frozen[0])}
+                'harnesses': json.loads(row['harnesses_json'])}
 
 
 def current(db):
@@ -142,7 +143,15 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                              if rows and all(not row['available'] for row in rows)
                              and any(row['unavailable_reason'] == CONFIRMED_ABSENCE_REASON for row in rows)}
             for family, rows in family_rows.items():
-                if family in families or (_family_key(*family) not in pending and family not in retained):
+                if family in families:
+                    continue
+                if _family_key(*family) not in pending and family not in retained:
+                    # An archived board can retain a user's configured buddy
+                    # without retaining any catalog history. Its first trusted
+                    # reading grounds the absence directly in catalog evidence.
+                    db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
+                               ' WHERE adapter=? AND provider=? AND model=?',
+                               (CONFIRMED_ABSENCE_REASON, name, *family))
                     continue
                 # ADR-027 rule 2: disappearance is a model-identity question. An
                 # effort that vanished while its model remains is a metadata

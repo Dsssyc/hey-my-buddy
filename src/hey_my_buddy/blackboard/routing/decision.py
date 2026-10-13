@@ -931,12 +931,7 @@ class DecisionCoordinator:
         # its frozen model identity, so the frozen model-input document
         # itself stays byte-identical from admission to publication.
         from ..service.harness_health import read_health
-        connection.execute(
-            "INSERT INTO meta(key,value) VALUES(?,?)"
-            " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            ("attempt-tool-policy:" + attempt_id,
-             canonical_json({"systemSandbox": bool(read_health(connection, dispatch["profile"]["adapter"])["systemSandbox"])})),
-        )
+        tool_policy = {"systemSandbox": bool(read_health(connection, dispatch["profile"]["adapter"])["systemSandbox"])}
         self._mark_running(
             connection, row, attempt_id=attempt_id, generation=generation,
             document=document, now=now,
@@ -944,7 +939,8 @@ class DecisionCoordinator:
         # The attempt's Router binding and its ``router.claimed`` fact commit in
         # this same claim transaction: one atomic dispatch-to-attempt binding.
         router_sequence.record_claim(
-            connection, task_id=task["task_id"], attempt_id=attempt_id, generation=generation, now=now)
+            connection, task_id=task["task_id"], attempt_id=attempt_id, generation=generation, now=now,
+            tool_policy=tool_policy)
         return None, document
 
     def _mark_running(self, connection: sqlite3.Connection, row: sqlite3.Row, *, attempt_id: str, generation: int, document: dict, now: str) -> None:
@@ -1158,7 +1154,7 @@ class DecisionCoordinator:
                 outcome = "rerouted"
             else:
                 self._finish(connection, row, status="needs-host", now=now, error=checked["code"],
-                             reason="重新路由后选中的 buddy 仍不合法：" + checked["reason"],
+                             reason="The selected buddy remains invalid after rerouting: " + checked["reason"],
                              output=checked["output"])
         elif outcome == "no-answer":
             record("no_answer")
@@ -1230,7 +1226,7 @@ class DecisionCoordinator:
                                            candidate=candidates[0], request=request, now=now)
             else:
                 self._finish(connection, row, status="needs-host", now=now, error="router-out-of-bounds",
-                             reason=reason + "; 重新路由时没有合法候选", output={"code": "router-out-of-bounds"})
+                             reason=reason + "; no legal candidate remains after rerouting", output={"code": "router-out-of-bounds"})
             return
         resolution = router.current_router(connection, now=now)
         request.update(resolution.facts)
@@ -1259,7 +1255,7 @@ class DecisionCoordinator:
         if oversized or resolution.profile is None:
             problem = resolution.problem or {"code": "router-input-too-large", "reason": oversized}
             self._finish(connection, self._row(connection, row["decision_id"]), status="needs-host", now=now,
-                         error=problem["code"], reason=reason + "; 重新路由无法继续：" + problem["reason"],
+                         error=problem["code"], reason=reason + "; rerouting cannot continue: " + problem["reason"],
                          output={"code": problem["code"]})
             return
         self._record_preflight_walk(connection, row["request_id"], resolution.inspections, now=now, selection_retry=True)
@@ -1267,9 +1263,9 @@ class DecisionCoordinator:
 
     @staticmethod
     def _attempt_tool_policy(connection: sqlite3.Connection, attempt_id: str) -> dict | None:
-        """The toolPolicy this attempt froze at claim, or ``None`` for older attempts."""
-        row = connection.execute("SELECT value FROM meta WHERE key=?", ("attempt-tool-policy:" + attempt_id,)).fetchone()
-        return json.loads(row[0]) if row else None
+        """The toolPolicy this attempt froze at claim, or ``None`` before a claim."""
+        row = connection.execute("SELECT tool_policy_json FROM router_claims WHERE attempt_id=?", (attempt_id,)).fetchone()
+        return json.loads(row[0]) if row is not None and row[0] is not None else None
 
     def _tool_evidence_problem(self, row: sqlite3.Row, document: dict, output: dict) -> dict | None:
         """The blackboard wrapper over the unified tool-evidence judgment.
@@ -1403,13 +1399,13 @@ class DecisionCoordinator:
             current = connection.execute("SELECT p.*,f.mode AS preference_mode FROM evaluation_profiles p"
                                          " LEFT JOIN effective_preferences f ON f.profile_id=p.profile_id WHERE p.profile_id=?",
                                          (profile_id,)).fetchone()
-            problem = ("已从候选表移除" if current is None else
-                       "已停用" if not current["enabled"] else
-                       "已不可用" if not current["available"] else
-                       "已被用户排除" if current["preference_mode"] == "exclude" else
-                       "不满足任务要求的能力" if not set(request.get("requiredCapabilities") or []) <= set(json.loads(current["capabilities_json"])) else
-                       "不满足当前固定偏好、任务约束或额度边界")
-            return refuse("router-out-of-bounds", f"选中的 buddy {profile_id} {problem}", changed=True)
+            problem = ("removed from the candidate table" if current is None else
+                       "disabled" if not current["enabled"] else
+                       "unavailable" if not current["available"] else
+                       "excluded by the user" if current["preference_mode"] == "exclude" else
+                       "missing a required task capability" if not set(request.get("requiredCapabilities") or []) <= set(json.loads(current["capabilities_json"])) else
+                       "outside current pins, task constraints, or quota limits")
+            return refuse("router-out-of-bounds", f"Selected buddy {profile_id} is {problem}", changed=True)
         expected_facts = selection_policy.policy_facts(
             profiles=profiles, prefer_profile_ids=[item["profileId"] for item in document.get("preferences", []) if item.get("mode") == "prefer"],
             hard_constraints=request.get("constraints") or {})

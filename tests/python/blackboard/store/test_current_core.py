@@ -1,8 +1,10 @@
 """Only the current schema and named RPC surface are accepted; archives stay intact."""
+import ast
 import contextlib
 import importlib.util
 import io
 import os
+import re
 from pathlib import Path
 import sqlite3
 import stat
@@ -50,6 +52,27 @@ class CurrentCoreTests(BoardTestCase):
         self.assertEqual(first["task"]["taskId"], replay["task"]["taskId"])
         self.assertNotIn("legacy", replay["task"])
         self.assertEqual(replay["task"]["fingerprintVersion"], schemas.FINGERPRINT_VERSION_CURRENT)
+
+    def test_meta_writers_are_only_the_three_board_singletons(self):
+        source = Path(__file__).resolve().parents[4] / "src" / "hey_my_buddy"
+        writes = []
+        for path in source.rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    if re.search(r"\b(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|UPDATE|DELETE\s+FROM)\s+meta\b",
+                                 node.value, re.IGNORECASE):
+                        writes.append((path.relative_to(source).as_posix(), node.value))
+        self.assertEqual(sorted(writes), sorted([
+            ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES('schema_version', ?)"),
+            ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES('created_at', ?)"),
+            ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES(?, ?)"),
+        ]))
+        board = self.board()
+        with board.store.db.read() as connection:
+            self.assertEqual({row[0] for row in connection.execute("SELECT key FROM meta")},
+                             {"schema_version", "created_at", "capability_secret"})
+        self.assertFalse(hasattr(Database, "meta"))
+        self.assertFalse(hasattr(Database, "set_meta"))
 
     def test_unsupported_schema_is_rejected_without_rewriting_archive(self):
         # The immediately previous schema is included: only ``upgrade`` migrates it,

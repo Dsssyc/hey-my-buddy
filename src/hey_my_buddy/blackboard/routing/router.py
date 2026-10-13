@@ -20,11 +20,10 @@ BUDGETS = {
 DEFAULT_PRESET = "standard"
 MODES = ("fast", "review")
 FAST_BUDGET = {"timeoutSeconds": 60}
-CONFIG_KEYS = {
-    "routerProfileIds": "router_profile_ids",
-    "routerRetryIntervalSeconds": "router_retry_interval_seconds",
-    "defaultRoutingMode": "router_default_mode",
-    "routingBudget": "router_budget_preset",
+CONFIG_COLUMNS = {
+    "routerRetryIntervalSeconds": "retry_interval_seconds",
+    "defaultRoutingMode": "default_mode",
+    "routingBudget": "budget_preset",
 }
 
 INSTRUCTIONS = """Router protocol version 12.
@@ -126,9 +125,8 @@ def render_prompt(document: dict) -> str:
 
 
 def configured_budget(connection) -> dict:
-    row = connection.execute("SELECT value FROM meta WHERE key='router_budget_preset'").fetchone()
-    preset = row["value"] if row else DEFAULT_PRESET
-    return budget(preset)
+    row = connection.execute("SELECT budget_preset FROM router_settings WHERE id=1").fetchone()
+    return budget(row["budget_preset"])
 
 
 def _identity(row) -> dict | None:
@@ -191,43 +189,33 @@ def profile_problem(connection, profile_id: str | None, routing_mode: str) -> tu
 
 def _write_settings(connection, settings: dict) -> None:
     """Store validated settings; omitted keys keep theirs."""
-    for name, key in CONFIG_KEYS.items():
-        if name not in settings:
-            continue
-        value = settings[name]
-        stored = canonical_json(value) if name == "routerProfileIds" else str(value)
-        connection.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                           (key, stored))
+    columns = [column for name, column in CONFIG_COLUMNS.items() if name in settings]
+    if columns:
+        connection.execute("UPDATE router_settings SET " + ",".join(column + "=?" for column in columns) + " WHERE id=1",
+                           [settings[name] for name in CONFIG_COLUMNS if name in settings])
+    if "routerProfileIds" in settings:
+        connection.execute("DELETE FROM router_profiles")
+        connection.executemany("INSERT INTO router_profiles(position,profile_id) VALUES(?,?)",
+                               enumerate(settings["routerProfileIds"]))
 
 
 def configuration(connection) -> dict:
     """Read the current Router settings."""
-    from .router_settings import RouterSettings, validate_router_settings_patch
-    values = {row[0]: row[1] for row in connection.execute("SELECT key,value FROM meta WHERE key LIKE 'router_%'")}
-    defaults = RouterSettings().as_dict()
-    entry: dict = {}
-    if values.get("router_profile_ids"):
-        try:
-            entry["routerProfileIds"] = json.loads(values["router_profile_ids"])
-        except ValueError:
-            raise BoardError("INVALID_ARGUMENT", "Stored router_profile_ids is not valid JSON") from None
-    if values.get("router_retry_interval_seconds"):
-        try:
-            entry["routerRetryIntervalSeconds"] = int(values["router_retry_interval_seconds"])
-        except ValueError:
-            raise BoardError("INVALID_ARGUMENT", "Stored router_retry_interval_seconds is not an integer") from None
-    for name, key in (("defaultRoutingMode", "router_default_mode"), ("routingBudget", "router_budget_preset")):
-        if values.get(key):
-            entry[name] = values[key]
-    result = validate_router_settings_patch({**defaults, **entry})
-    return {name: result[name] for name in defaults}
+    row = connection.execute("SELECT default_mode,budget_preset,retry_interval_seconds FROM router_settings WHERE id=1").fetchone()
+    return {
+        "routerProfileIds": [row[0] for row in connection.execute("SELECT profile_id FROM router_profiles ORDER BY position")],
+        "routerRetryIntervalSeconds": row["retry_interval_seconds"],
+        "defaultRoutingMode": row["default_mode"],
+        "routingBudget": row["budget_preset"],
+    }
 
 
 def initialize_configuration(connection) -> dict:
     """Initialize a fresh board's Router defaults."""
     from .router_settings import RouterSettings
     settings = RouterSettings().as_dict()
-    _write_settings(connection, settings)
+    connection.execute("INSERT INTO router_settings(id,default_mode,budget_preset,retry_interval_seconds) VALUES(1,?,?,?)",
+                       (settings["defaultRoutingMode"], settings["routingBudget"], settings["routerRetryIntervalSeconds"]))
     return settings
 
 

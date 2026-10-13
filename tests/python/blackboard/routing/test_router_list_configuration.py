@@ -7,11 +7,10 @@ mode eligibility stay resolver concerns.
 import json
 from copy import deepcopy
 import unittest
-from unittest import mock
 
 from support import BoardTestCase
 from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
-from hey_my_buddy.blackboard.routing import router, router_settings
+from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 
@@ -35,9 +34,13 @@ class RouterListConfigurationTests(BoardTestCase):
                            (profile_id, profile_id, "dsh", "fixture", profile_id, "max",
                             canonical_json(permission_capabilities("dsh"))))
 
-    def meta(self):
+    def stored(self):
         with self.board_.store.db.read() as db:
-            return {row[0]: row[1] for row in db.execute("SELECT key,value FROM meta")}
+            return {
+                "settings": tuple(db.execute("SELECT default_mode,budget_preset,retry_interval_seconds FROM router_settings WHERE id=1").fetchone()),
+                "profiles": [tuple(row) for row in db.execute("SELECT position,profile_id FROM router_profiles ORDER BY position")],
+                "meta": {row[0]: row[1] for row in db.execute("SELECT key,value FROM meta")},
+            }
 
     def user(self, operation, params):
         return self.board_.call(operation, {**params, "consoleAuthority": self.session})
@@ -60,13 +63,10 @@ class RouterListConfigurationTests(BoardTestCase):
                                     "bytesRead": 524288},
         })
         self.assertIsNone(snapshot["configurationError"])
-        meta = self.meta()
-        self.assertNotIn("router_configuration_version", meta)
-        self.assertEqual(meta["router_profile_ids"], "[]")
-        self.assertEqual(meta["router_retry_interval_seconds"], "600")
-        self.assertEqual(meta["router_default_mode"], "fast")
-        self.assertEqual(meta["router_budget_preset"], "standard")
-        self.assertNotIn("router_profile_id", meta)
+        stored = self.stored()
+        self.assertEqual(stored["settings"], ("fast", "standard", 600))
+        self.assertEqual(stored["profiles"], [])
+        self.assertEqual(set(stored["meta"]), {"schema_version", "created_at", "capability_secret"})
 
     def test_publish_writes_list_settings_and_projection(self):
         result = self.publish({"routerProfileIds": [A, B], "routerRetryIntervalSeconds": 30,
@@ -78,11 +78,9 @@ class RouterListConfigurationTests(BoardTestCase):
         self.assertEqual(snapshot["configuration"]["defaultRoutingMode"], "review")
         self.assertEqual(snapshot["configuration"]["routingBudget"], "deep")
         self.assertNotIn("revision", snapshot["configuration"])
-        meta = self.meta()
-        self.assertEqual(json.loads(meta["router_profile_ids"]), [A, B])
-        self.assertEqual(meta["router_retry_interval_seconds"], "30")
-        self.assertEqual(meta["router_default_mode"], "review")
-        self.assertEqual(meta["router_budget_preset"], "deep")
+        stored = self.stored()
+        self.assertEqual(stored["profiles"], [(0, A), (1, B)])
+        self.assertEqual(stored["settings"], ("review", "deep", 30))
         with self.board_.store.db.read() as db:
             events = db.execute("SELECT kind,payload_json FROM events WHERE kind='evaluation.routing_budget_changed'").fetchall()
         self.assertEqual(len(events), 1)
@@ -110,6 +108,20 @@ class RouterListConfigurationTests(BoardTestCase):
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         # The rejected patches changed nothing.
         self.assertEqual(self.board_.call("console_snapshot", {})["configuration"]["routerProfileIds"], [])
+
+    def test_reorder_add_remove_and_scalar_settings_survive_real_save_and_read(self):
+        self.publish({"routerProfileIds": [A]})
+        self.publish({"routerProfileIds": [A, B]})
+        self.assertEqual(self.board_.call("console_snapshot", {})["configuration"]["routerProfileIds"], [A, B])
+        self.publish({"routerProfileIds": [B, A], "defaultRoutingMode": "review",
+                      "routerRetryIntervalSeconds": 47})
+        self.assertEqual(self.stored()["profiles"], [(0, B), (1, A)])
+        self.publish({"routerProfileIds": [B]})
+        with self.board_.store.db.read() as db:
+            self.assertEqual(router.configuration(db), {
+                "routerProfileIds": [B], "defaultRoutingMode": "review",
+                "routingBudget": "standard", "routerRetryIntervalSeconds": 47})
+        self.assertEqual(self.board_.call("console_snapshot", {})["configuration"]["routerProfileIds"], [B])
 
     def test_list_items_need_published_complete_identity_and_nothing_more(self):
         with self.assertRaises(BoardError) as caught:
@@ -161,13 +173,13 @@ class RouterListConfigurationTests(BoardTestCase):
 
     def test_configuration_reads_are_side_effect_free(self):
         self.publish({"routerProfileIds": [A, B]})
-        before = self.meta()
+        before = self.stored()
         for _ in range(3):
             with self.board_.store.db.read() as db:
                 router.configuration(db)
                 router.current_router(db, now="2026-01-01T01:00:00.000Z")
             self.board_.call("console_snapshot", {})
-        self.assertEqual(self.meta(), before)
+        self.assertEqual(self.stored(), before)
 
     def test_patch_input_dicts_are_never_mutated(self):
         entry = {"routerProfileIds": [A], "routerRetryIntervalSeconds": 30}

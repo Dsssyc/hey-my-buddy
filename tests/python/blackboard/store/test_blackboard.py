@@ -1435,7 +1435,9 @@ class TestPackaging(BoardTestCase):
         self.addCleanup(lambda: self.cli("stop", "{}", env=environment, timeout=60))
         # The production cold-start path: no daemon pre-started by the test.
         code, health = self.cli("health", env=environment, timeout=600)
-        self.assertEqual(code, 0, health)
+        install_log = self.directory / "runtime-install.log"
+        self.assertEqual(code, 0, {"health": health,
+                                  "installLog": install_log.read_text()[-8000:] if install_log.exists() else None})
         self.assertTrue(health["runtimeStable"], health)
         self.assertTrue(str(health["runtimeIdentity"]).startswith("runtime:"))
         runtime_dir = runtime.find_ready(destination=runtime_root)

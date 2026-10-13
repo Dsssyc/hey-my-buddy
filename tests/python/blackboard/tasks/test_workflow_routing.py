@@ -72,7 +72,8 @@ class TestWorkflowRouting(WorkflowTestCase):
         submitted = self.submit(board)
         self.assertEqual(submitted["routing"]["status"], "explicit")
         self.assertEqual(submitted["executionConfiguration"], CONFIGURATION)
-        self.assertEqual(board.store.db.meta("schema_version"), str(SCHEMA_VERSION))
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM decision_requests").fetchone()[0], 0)
         for adapter in (None, "dsh", "zcode"):

@@ -1,5 +1,4 @@
 """Authenticated policy changes cannot be forged by a Host."""
-import json
 
 from support import BoardTestCase
 from hey_my_buddy.errors import BoardError
@@ -17,7 +16,7 @@ class UserPolicyTests(BoardTestCase):
         with self.board_.store.db.write() as db:
             for profile_id, available in [('live', 1), ('retired', 0)]:
                 db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,?,?,?)", (profile_id, profile_id, 'dsh', 'fixture', profile_id, 'max', available, 1, '["decision"]'))
-            db.execute("UPDATE meta SET value=? WHERE key='router_profile_ids'", (json.dumps(['retired']),))
+            db.execute("INSERT INTO router_profiles(position,profile_id) VALUES(0,'retired')")
             db.execute("INSERT INTO evaluation_preferences VALUES('retired','pin','user intent')")
 
     def user(self, operation, params):

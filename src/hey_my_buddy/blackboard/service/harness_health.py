@@ -178,32 +178,21 @@ class HarnessHealth:
             if (self.board.directory / 'upgrade.json').exists():
                 return old
             now = utc_now()
-            if not force and not preflight and (old.get('scanAfter') or '') > now:
-                # ADR-027 rule 4: even a throttled scan owes one bounded catalog
-                # re-read once the shelf life passed. The catalog scan marker,
-                # not the health probe schedule, bounds its cadence. The record
-                # after the callback is authoritative: a re-read whose native
-                # call invalidated the harness must not be answered with the
-                # stale pre-reread ready record.
-                if self._stale_catalog(name, now):
-                    current = self.get(name)
-                    if current['available']:
-                        self._shared_stale_catalog_read(name, current)
-                        return self.get(name)
-                return old
+            if not force and not preflight:
+                if (old.get('scanAfter') or '') > now:
+                    return old
+                if old['status'] != 'ready' and (old.get('expiresAt') or '') > now:
+                    return old
+            stale_catalog_due = self._stale_catalog(name, now) if not force and not preflight else False
             environment = self.environment()
             snapshot = _snapshot(name, old['manualPath'], environment)
             from ...buddy.harnesses.discovery import location_fingerprint
             signature = location_fingerprint(snapshot)
             unchanged = old.get('locationFingerprint') == signature
             if not force and unchanged and (old.get('expiresAt') or '') > now:
-                with self.board.db.write() as db:
-                    db.execute('UPDATE harness_health SET scan_after=? WHERE adapter=? AND revision=?', (_later(SCAN_SECONDS), name, old['revision']))
                 if name == "codex":
                     self._codex_account_read(old)
-                # ADR-027 rule 4: an unchanged health state still owes a catalog
-                # re-read once the last confirmed reading passed its shelf life.
-                if self._stale_catalog(name, now):
+                if stale_catalog_due:
                     current = self.get(name)
                     if current['available']:
                         self._shared_stale_catalog_read(name, current)
@@ -240,8 +229,8 @@ class HarnessHealth:
                     return read_health(db, name)
                 if read_health(db, name)['revision'] != generation:
                     return read_health(db, name)
-                db.execute('UPDATE harness_health SET status=?,record_json=?,checked_at=?,expires_at=?,scan_after=? WHERE adapter=? AND revision=?',
-                           (status, canonical_json(record), now, _later(READY_SECONDS if status == 'ready' else SCAN_SECONDS), _later(SCAN_SECONDS), name, generation))
+                db.execute('UPDATE harness_health SET status=?,record_json=?,checked_at=?,expires_at=? WHERE adapter=? AND revision=?',
+                           (status, canonical_json(record), now, _later(READY_SECONDS if status == 'ready' else SCAN_SECONDS), name, generation))
                 if status != 'ready':
                     # Same boundary as invalidate: health grounds the rows it
                     # marks, never the ones a catalog fact already grounded.
@@ -275,17 +264,12 @@ class HarnessHealth:
                     self.catalog_refresh(name, current, catalog_scan_claimed=catalog_scan_claimed)
                     if not catalog_scan_claimed:
                         self._note_catalog_scan(name)
-                elif self._stale_catalog(name, now):
+                elif stale_catalog_due:
                     self._shared_stale_catalog_read(name, current)
             return self.get(name)
 
     def _stale_catalog(self, name, now):
-        """True when this harness owes one bounded stale-catalog re-read now.
-
-        ADR-027 rule 4: the catalog is past its shelf life and no earlier re-read
-        inside the current scan window already happened; the marker keeps the
-        re-read on the bounded scan cadence instead of a native process per call.
-        """
+        """True when this harness owes one bounded stale-catalog re-read now."""
         return (not self._closed and self.catalog_refresh is not None
                 and self._catalog_scan_due(name, now) and self._catalog_expired(name, now))
 
@@ -309,16 +293,15 @@ class HarnessHealth:
     def _catalog_scan_due(self, name, now):
         from ..evaluation.native_observations import _time
         with self.board.db.read() as db:
-            row = db.execute('SELECT value FROM meta WHERE key=?', ('catalog-scan-after:' + name,)).fetchone()
+            row = db.execute('SELECT scan_after FROM harness_health WHERE adapter=?', (name,)).fetchone()
         if row is None:
             return True
-        moment, due = _time(now), _time(row[0])
+        moment, due = _time(now), _time(row['scan_after'])
         return due is None or moment is None or moment >= due
 
     def _note_catalog_scan(self, name):
         with self.board.db.write() as db:
-            db.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                       ('catalog-scan-after:' + name, _later(SCAN_SECONDS)))
+            db.execute('UPDATE harness_health SET scan_after=? WHERE adapter=?', (_later(SCAN_SECONDS), name))
 
     def _catalog_expired(self, name, now):
         """ADR-027 rule 4: a catalog past its shelf life needs a confirmed re-read.

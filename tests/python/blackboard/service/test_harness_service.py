@@ -4,7 +4,6 @@ from unittest.mock import Mock, patch
 
 from hey_my_buddy.blackboard.service.service import BoardService
 from hey_my_buddy.blackboard.store.store import BoardStore
-from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 
@@ -57,8 +56,8 @@ class HarnessServiceTests(BoardTestCase):
         from datetime import datetime, timedelta, timezone
         until = (datetime.now(timezone.utc) + timedelta(seconds=180)).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
         with self.board.db.write() as db:
-            db.execute("INSERT INTO meta(key,value) VALUES('catalog-scan-after:codex',?)"
-                       " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (until,))
+            db.execute("INSERT INTO harness_health(adapter,scan_after) VALUES('codex',?)"
+                       " ON CONFLICT(adapter) DO UPDATE SET scan_after=excluded.scan_after", (until,))
         ready = {'adapter': 'codex', 'status': 'ready', 'version': '1.2.3', 'command': ['/native/codex'], 'executable': '/native/codex'}
         with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'adapter': 'codex', 'managerRecords': [], 'candidates': []}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=ready) as native:
             result = self.call('capabilities', refresh=True, adapter='codex')
@@ -66,7 +65,7 @@ class HarnessServiceTests(BoardTestCase):
         self.assertTrue(result['adapters']['codex']['available'])
         native.assert_called_once()
         with self.board.db.read() as db:
-            window = db.execute("SELECT value FROM meta WHERE key='catalog-scan-after:codex'").fetchone()[0]
+            window = db.execute("SELECT scan_after FROM harness_health WHERE adapter='codex'").fetchone()[0]
         self.assertGreaterEqual(window, until, 'The forced refresh owns the next window, and was never blocked by one')
 
 

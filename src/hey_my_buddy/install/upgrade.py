@@ -21,7 +21,6 @@ from ..blackboard.store import backup
 from .. import private_dirs
 from . import runtime
 from ..protocol import schemas
-from ..protocol.contracts import CONTRACT_VERSION
 from ..blackboard.store.db import PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, utc_now
 from ..errors import BoardError
 from ..protocol.transport import get_state_dir
@@ -537,7 +536,6 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
             return recover(state, root)
     if not (state / 'control.json').exists():
         raise BoardError('UPGRADE_NOT_RUNNING', 'Start the installed service before upgrading')
-    root = Path(os.environ.get('BUDDY_RUNTIME_ROOT') or runtime.DEFAULT_RUNTIME_ROOT).resolve()
     endpoint = json.loads((state / 'control.json').read_text())
     identity = endpoint.get('runtimeIdentity', '')
     if not isinstance(identity, str) or not identity.startswith('runtime:'):
@@ -554,6 +552,12 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
     before = idle_snapshot(state)
     before['runtimeSettings'] = runtime_settings
     backup_readiness(state)
+    previous_source_commit = None
+    if before['schema'] == PREVIOUS_SCHEMA_VERSION:
+        previous_source_commit = runtime.read_ready(previous).get('sourceCommit')
+        if not previous_source_commit:
+            raise BoardError('UPGRADE_ARCHIVE_IDENTITY_UNAVAILABLE',
+                             'Archive requires the previous runtime source commit')
     # Dependency installation cannot disturb the old daemon; materialize before
     # taking the short ownership fence and preserve both generations on failure.
     materialized = runtime.materialize(root=skill_source / 'package') if skill_source is not None else runtime.materialize()
@@ -620,7 +624,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 backup_readiness(state)
                 journal['before'] = before
                 if backed_up is None:
-                    backed_up = backup.create(BoardStore(state), runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=endpoint['contractVersion'], offline=True)
+                    backed_up = backup.create(BoardStore(state), runtime_identity={'identity': identity}, plugin_commit=previous_source_commit if before['schema'] == PREVIOUS_SCHEMA_VERSION else runtime.read_ready(previous).get('sourceCommit'), contract_version=endpoint['contractVersion'], offline=True)
                 stored = backup.verify(Path(backed_up['path']))
                 if stored.get('databaseSnapshot') is not None:
                     before = {**stored['databaseSnapshot'], 'schema': stored.get('schema'), 'runtimeSettings':runtime_settings}

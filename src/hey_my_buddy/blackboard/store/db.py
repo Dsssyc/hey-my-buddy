@@ -278,7 +278,8 @@ CREATE TABLE IF NOT EXISTS catalog_observations (
     request_id TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL,
     completed_at TEXT,
-    response_json TEXT
+    response_json TEXT,
+    harnesses_json TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS catalog_current (
     adapter TEXT PRIMARY KEY,
@@ -286,7 +287,9 @@ CREATE TABLE IF NOT EXISTS catalog_current (
     discovery_id TEXT,
     status TEXT NOT NULL,
     reason TEXT,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    read_at TEXT,
+    account_status TEXT NOT NULL DEFAULT 'unknown'
 );
 """,
     """
@@ -933,6 +936,16 @@ CREATE TABLE IF NOT EXISTS workflow_host_conclusions (
 """
 HOST_CONCLUSION_INDEX = "CREATE INDEX IF NOT EXISTS workflow_host_conclusions_run_idx ON workflow_host_conclusions(run_id, run_revision)"
 ROUTER_SCHEMA = """
+CREATE TABLE IF NOT EXISTS router_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    default_mode TEXT NOT NULL CHECK (default_mode IN ('fast','review')),
+    budget_preset TEXT NOT NULL CHECK (budget_preset IN ('brief','standard','deep')),
+    retry_interval_seconds INTEGER NOT NULL CHECK (retry_interval_seconds >= 1)
+);
+CREATE TABLE IF NOT EXISTS router_profiles (
+    position INTEGER PRIMARY KEY CHECK (position >= 0),
+    profile_id TEXT NOT NULL UNIQUE
+);
 CREATE TABLE IF NOT EXISTS router_requests (
     decision_id      TEXT NOT NULL PRIMARY KEY REFERENCES decision_requests(decision_id) ON DELETE RESTRICT,
     snapshot_json    TEXT NOT NULL,
@@ -956,6 +969,7 @@ CREATE TABLE IF NOT EXISTS router_claims (
     attempt_id TEXT NOT NULL PRIMARY KEY,
     task_id    TEXT NOT NULL REFERENCES router_dispatches(task_id) ON DELETE RESTRICT,
     generation INTEGER NOT NULL CHECK (generation >= 1),
+    tool_policy_json TEXT NOT NULL,
     FOREIGN KEY (attempt_id, task_id, generation) REFERENCES attempts(attempt_id, task_id, generation) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
     UNIQUE (task_id, generation)
 );
@@ -1184,15 +1198,3 @@ class Database:
         # A caller that cannot present the nonce is checked against the stored
         # verifier for the same attempt, never against another attempt's value.
         return False
-
-    def meta(self, key: str) -> str | None:
-        with self.read() as connection:
-            row = connection.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
-        return row["value"] if row else None
-
-    def set_meta(self, key: str, value: str) -> None:
-        with self.write() as connection:
-            connection.execute(
-                "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (key, value),
-            )

@@ -34,7 +34,6 @@ import sqlite3
 from typing import Any, Sequence
 
 from ...errors import BoardError
-from . import workspace_identity
 
 #: Task kinds derived from durable relations, never from a label.
 DELEGATION_KINDS = ("goal", "helper", "decision", "execution")
@@ -239,16 +238,9 @@ LEFT JOIN workflow_runs root_run ON root_run.run_id = COALESCE(rt.root_run_id, r
 """
 
 #: The relation wrapped as a table expression: ``SELECT * FROM (task_history) AS resolved``.
-#:
-#: ``project_id`` is the recorded attribution resolved to its current stable form
-#: through the board's registered old→new identity mapping, so a macro task
-#: recorded before the restart-stable identity and a new micro task of the same
-#: repository group, list and filter together instead of splitting across the
-#: two digests; an unmapped value stays exactly as recorded. The raw digest
-#: stays available as ``recorded_project_id``.
 TASK_HISTORY_SQL = f"""SELECT resolved.*,
-       {workspace_identity.canonical_sql('resolved.recorded_project_id')} AS project_id,
-       {workspace_identity.identity_reason_sql('resolved.recorded_project_id')} AS project_identity_reason
+       resolved.recorded_project_id AS project_id,
+       NULL AS project_identity_reason
   FROM ({RELATION_SQL}) AS resolved"""
 
 
@@ -357,12 +349,7 @@ def history_where(
         # tasks (no governed run) are excluded.
         clauses.append("governed_run_id IS NOT NULL AND child_parent_run_id IS NULL")
     if project_id:
-        # The derived column is already canonical (``TASK_HISTORY_SQL``); the
-        # requested value may still be a recorded old digest, so it resolves
-        # through the same mapping inside the query itself.
-        clauses.append(
-            "project_id = (SELECT " + workspace_identity.canonical_sql("requested.project_id")
-            + " FROM (SELECT ? AS project_id) AS requested)")
+        clauses.append("project_id = ?")
         values.append(project_id)
     if host_id:
         clauses.append("(source_host_id = ? OR current_host_id = ?)")

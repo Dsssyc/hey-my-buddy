@@ -8,9 +8,14 @@ import sqlite3
 import tempfile
 import unittest
 
-from blackboard.store.upgrade_fixture import FIXTURE, load_fixture
+from blackboard.store.upgrade_fixture import load_fixture
+from blackboard.catalog.test_catalog_trust import reading
+from hey_my_buddy.blackboard.catalog.catalog import CONFIRMED_ABSENCE_REASON
+from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore
+from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store import migrations
 from hey_my_buddy.blackboard.store.db import Database
+from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.install.upgrade import idle_snapshot, migrate_board
@@ -101,6 +106,36 @@ class UpgradeFixtureTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_fixture(first['state'])
 
+    def test_upgraded_buddies_absent_from_first_confirmed_catalog_have_catalog_reason(self):
+        fixture, old = self.restored()
+        # The portable base keeps configured identities but does not carry the
+        # daily board's stale account diagnosis. Reproduce it in this private
+        # restored stock; the committed fixture remains unchanged.
+        old.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='ACCOUNT_STATUS_UNKNOWN'")
+        old.commit()
+        absent = [tuple(row) for row in old.execute('SELECT profile_id,adapter FROM evaluation_profiles')]
+        self.assertTrue(absent)
+        before = idle_snapshot(fixture['state'])
+        old.close()
+        migrate_board(fixture['state'], before)
+        board = BoardStore(fixture['state'])
+        board.initialize()
+        evaluation = EvaluationStore(board)
+        with board.db.read() as connection:
+            for profile_id, _adapter in absent:
+                self.assertIsNone(connection.execute(
+                    'SELECT unavailable_reason FROM evaluation_profiles WHERE profile_id=?',
+                    (profile_id,)).fetchone()[0])
+        for adapter in sorted({adapter for _profile_id, adapter in absent}):
+            evaluation.record_catalog(reading(adapter=adapter, models=()))
+        with board.db.read() as connection:
+            for profile_id, _adapter in absent:
+                self.assertEqual(tuple(connection.execute(
+                    'SELECT available,unavailable_reason FROM evaluation_profiles WHERE profile_id=?',
+                    (profile_id,)).fetchone()), (0, CONFIRMED_ABSENCE_REASON))
+            self.assertEqual({row[0] for row in connection.execute('SELECT key FROM meta')},
+                             {'schema_version', 'created_at', 'capability_secret'})
+
     def test_upgrade_matches_a_fresh_board_with_only_the_retained_settings(self):
         fixture, old = self.restored()
         settings = migrations.read_settings(old)
@@ -120,7 +155,9 @@ class UpgradeFixtureTests(unittest.TestCase):
             upgraded.row_factory = sqlite3.Row
             self.assertNotEqual(upgraded.execute("SELECT value FROM meta WHERE key='capability_secret'").fetchone()[0],
                                 original_secret)
-            self.assertEqual(migrations.read_settings(upgraded), migrations.read_settings(baseline))
+            self.assertEqual(router.configuration(upgraded), settings["router"])
+            self.assertEqual(upgraded.execute("SELECT COUNT(*) FROM harness_health WHERE scan_after IS NOT NULL").fetchone()[0], 0)
+            self.assertEqual(router.configuration(upgraded), router.configuration(baseline))
             names = {row[0] for row in upgraded.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             self.assertEqual(names, {row[0] for row in baseline.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")})
