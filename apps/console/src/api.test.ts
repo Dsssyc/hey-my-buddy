@@ -3,24 +3,24 @@ import { createApi, parseRoutingHealth, readVerificationText, validRoutingConfig
 import { macroTaskTimelineFixture, OBSERVED_AT } from "./macro-task-fixtures";
 
 describe("L4 ordered Router list configuration", () => {
-  const current = { routerProfileIds: [], routerRetryIntervalSeconds: 600,
+  const current = { routerBuddyIds: [], routerRetryIntervalSeconds: 600,
     defaultRoutingMode: "fast", routingBudget: "brief" };
   it("accepts the list settings and rejects retired slots, selectors or intervals", () => {
     expect(validRoutingConfiguration(current)).toBe(true);
-    expect(validRoutingConfiguration({ ...current, defaultRoutingMode: "review", routerProfileIds: ["review", "fast"] })).toBe(true);
+    expect(validRoutingConfiguration({ ...current, defaultRoutingMode: "review", routerBuddyIds: ["review", "fast"] })).toBe(true);
     // An empty list is an explicit clear; duplicates are a board refusal.
-    expect(validRoutingConfiguration({ ...current, routerProfileIds: [] })).toBe(true);
-    expect(validRoutingConfiguration({ ...current, routerProfileIds: ["a", "a"] })).toBe(false);
-    for (const retired of [{ decisionProfileId: "old" }, { routerProfileId: "old" },
-      { fastRouterProfileId: "old" }, { reviewRouterProfileId: "old" },
-      { fastRouterProfileId: null, reviewRouterProfileId: null }]) {
+    expect(validRoutingConfiguration({ ...current, routerBuddyIds: [] })).toBe(true);
+    expect(validRoutingConfiguration({ ...current, routerBuddyIds: ["a", "a"] })).toBe(false);
+    for (const retired of [{ decisionBuddyId: "old" }, { routerBuddyId: "old" },
+      { fastRouterBuddyId: "old" }, { reviewRouterBuddyId: "old" },
+      { fastRouterBuddyId: null, reviewRouterBuddyId: null }]) {
       expect(validRoutingConfiguration({ ...current, ...retired })).toBe(false);
     }
     expect(validRoutingConfiguration({ ...current, routingBudget: "quick" })).toBe(false);
     expect(validRoutingConfiguration({ ...current, defaultRoutingMode: "other" })).toBe(false);
-    expect(validRoutingConfiguration({ ...current, routerProfileIds: undefined })).toBe(false);
-    expect(validRoutingConfiguration({ ...current, routerProfileIds: [""] })).toBe(false);
-    expect(validRoutingConfiguration({ ...current, routerProfileIds: "a" })).toBe(false);
+    expect(validRoutingConfiguration({ ...current, routerBuddyIds: undefined })).toBe(false);
+    expect(validRoutingConfiguration({ ...current, routerBuddyIds: [""] })).toBe(false);
+    expect(validRoutingConfiguration({ ...current, routerBuddyIds: "a" })).toBe(false);
     for (const interval of [0, -1, 1.5, NaN, 2147483648, "600", true, null]) {
       expect(validRoutingConfiguration({ ...current, routerRetryIntervalSeconds: interval })).toBe(false);
     }
@@ -30,8 +30,8 @@ describe("L4 ordered Router list configuration", () => {
 });
 
 describe("snapshot upgrade boundary and routing health", () => {
-  const configuration = { routerProfileIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "standard" };
-  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session", canWrite: true, reason: null }, configuration, configurationError: null, profiles: [],
+  const configuration = { routerBuddyIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "standard" };
+  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session", canWrite: true, reason: null }, configuration, configurationError: null, buddies: [],
     preferences: [], modelServiceNotes: [], modelServiceConcurrency: [],
     tasks: { pendingCount: 0 } };
   const error = { code: "router-settings-upgrade-required", message: "Router 设置需升级" };
@@ -65,9 +65,9 @@ describe("snapshot upgrade boundary and routing health", () => {
     expect(second.consoleSession).toEqual(snapshot.consoleSession);
   });
   it("refuses legacy single and dual slots at the live snapshot parser", async () => {
-    await expect(apiFor({ ...snapshot, configuration: { ...configuration, routerProfileId: "head" } }).snapshot())
+    await expect(apiFor({ ...snapshot, configuration: { ...configuration, routerBuddyId: "head" } }).snapshot())
       .rejects.toHaveProperty("code", "INVALID_RESPONSE");
-    await expect(apiFor({ ...snapshot, configuration: { ...configuration, fastRouterProfileId: "fast", reviewRouterProfileId: "review" } }).snapshot())
+    await expect(apiFor({ ...snapshot, configuration: { ...configuration, fastRouterBuddyId: "fast", reviewRouterBuddyId: "review" } }).snapshot())
       .rejects.toHaveProperty("code", "INVALID_RESPONSE");
   });
   it("preserves service availability and timeout failures without calculating a threshold", async () => {
@@ -80,25 +80,25 @@ describe("snapshot upgrade boundary and routing health", () => {
   });
   it("parses per-buddy health entries and drops only malformed health", async () => {
     const routers = [{
-      profileId: "head", index: 0, identity: { adapter: "dsh", provider: "p", model: "m", effort: "max" },
+      buddyId: "head", index: 0, identity: { adapter: "dsh", provider: "p", model: "m", effort: "max" },
       eligible: true, code: null, inSkipWindow: false, skipUntil: null, retryAt: null, retryInProgress: false,
       answeredCount: 2, noAnswerCount: 4, lastAnsweredAt: "2026-10-02T00:00:00Z", lastNoAnswerAt: "2026-10-02T01:00:00Z",
       consecutiveNoAnswers: 4, windowSize: 20, windowEntries: 6, windowAnsweredCount: 2, windowFailureCount: 4,
       windowBudgetExhaustedCount: 4, windowBoundsRejectedCount: 0, windowAttemptCount: 4,
       lastError: { code: "timeout", at: "2026-10-02T01:00:00Z", phase: "runtime" },
-    }, { profileId: "tail", index: 1, identity: null, eligible: false, code: "router-skip-window" }];
+    }, { buddyId: "tail", index: 1, identity: null, eligible: false, code: "router-skip-window" }];
     const listHealth = { ...health, available: false, reasonCode: "router-skip-window",
-      currentRouterProfileId: "tail", routers, unattributedCount: 1,
+      currentRouterBuddyId: "tail", routers, unattributedCount: 1,
       unattributed: [{ decisionId: "dec-u", at: "2026-10-02T02:00:00Z", outcome: "unknown", code: null }] };
     await expect(apiFor({ ...snapshot, routingHealth: listHealth }).snapshot()).resolves.toMatchObject({ routingHealth: listHealth });
     // A malformed entry or an unknown-nature outcome stays unknown rather than
     // being read as success or failure: the whole health object is dropped.
     for (const broken of [
-      { ...listHealth, routers: [{ ...routers[0], profileId: "" }] },
+      { ...listHealth, routers: [{ ...routers[0], buddyId: "" }] },
       { ...listHealth, routers: [{ ...routers[0], index: -1 }] },
       { ...listHealth, routers: [{ ...routers[0], eligible: "yes" }] },
       { ...listHealth, routers: "head" },
-      { ...listHealth, currentRouterProfileId: 3 },
+      { ...listHealth, currentRouterBuddyId: 3 },
       { ...listHealth, unattributed: [{ decisionId: 4, at: "", outcome: "", code: null }] },
     ]) {
       expect(parseRoutingHealth(broken)).toBeUndefined();
@@ -254,8 +254,8 @@ describe("local read verification evidence", () => {
 });
 
 describe("conditional reads (ETag / If-None-Match / 304)", () => {
-  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session", canWrite: true, reason: null }, configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "brief" },
-    configurationError: null, profiles: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], tasks: { pendingCount: 3 } };
+  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session", canWrite: true, reason: null }, configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "brief" },
+    configurationError: null, buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], tasks: { pendingCount: 3 } };
   function jsonResponse(value: unknown, etag?: string) {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (etag) headers.ETag = etag;

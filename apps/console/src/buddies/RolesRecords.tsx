@@ -60,8 +60,8 @@ export function RolesRecords({ health }: { health: RoutingHealth | undefined }) 
           <th className={head}>{t("roles.records.routers.lastAnswered")}</th>
           <th className={head}>{t("roles.records.routers.lastError")}</th>
         </tr></thead>
-        <tbody>{health.routers.map(entry => <tr key={entry.profileId}>
-          <td className={`${cell} font-mono text-xs`}>{entry.identity ? buddyQuad(entry.identity) : entry.profileId}</td>
+        <tbody>{health.routers.map(entry => <tr key={entry.buddyId}>
+          <td className={`${cell} font-mono text-xs`}>{entry.identity ? buddyQuad(entry.identity) : entry.buddyId}</td>
           <td className={`${cell} tabular-nums`}>{count(entry.answeredCount)}</td>
           <td className={`${cell} tabular-nums`}>{count(entry.noAnswerCount)}</td>
           <td className={`${cell} tabular-nums`}>{count(entry.consecutiveNoAnswers)}</td>

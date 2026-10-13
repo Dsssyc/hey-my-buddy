@@ -2,7 +2,7 @@
 
 One machine-wide ceiling plus per-model-service limits, persistent user settings through
 the authenticated console publication path, the frozen attempt identity, the
-snapshot/model_profiles/health observation shapes and the routing quota check that
+snapshot/buddy_list/health observation shapes and the routing quota check that
 happens before a selection reader is ever admitted.
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from hey_my_buddy.errors import BoardError
 
 MODEL_SERVICE_A = ("dsh", "deepseek-official", "deepseek-flash")
 MODEL_SERVICE_B = ("dsh", "deepseek-official", "deepseek-v4-pro")
-DECISION_PROFILE = "dsh:deepseek-official:deepseek-flash:off"
+DECISION_BUDDY = "dsh:deepseek-official:deepseek-flash:off"
 
 
 class ModelServiceConcurrencyTestCase(StoreConcurrencyTestCase):
@@ -28,7 +28,7 @@ class ModelServiceConcurrencyTestCase(StoreConcurrencyTestCase):
         from protocol.fixtures import mock_readonly
         mock_readonly.install(self)
 
-    def seed_decision_profile(self, board) -> None:
+    def seed_decision_buddy(self, board) -> None:
         board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
         board.console_call(
             "user_policy_publish",
@@ -40,9 +40,9 @@ class ModelServiceConcurrencyTestCase(StoreConcurrencyTestCase):
                 # A second enabled candidate keeps every selection request on the
                 # Router path; a sole candidate would be selected by the program
                 # directly and never reach the model service quota check under test.
-                "profileSettings": [{"profileId": DECISION_PROFILE, "enabled": True},
-                                    {"profileId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True}],
-                "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [DECISION_PROFILE]},
+                "buddySettings": [{"buddyId": DECISION_BUDDY, "enabled": True},
+                                    {"buddyId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True}],
+                "configuration": {"defaultRoutingMode": "review", "routerBuddyIds": [DECISION_BUDDY]},
             },
         )
 
@@ -84,19 +84,19 @@ class PublicationInterfaceTests(ModelServiceConcurrencyTestCase):
             self.assertEqual(row["limit"], 2)
             self.assertEqual(row["active"], 0)
 
-    def test_model_profiles_pages_carry_the_same_model_service_rows(self):
-        first = self.board_.call("model_profiles", {"limit": 1})
+    def test_model_buddies_pages_carry_the_same_model_service_rows(self):
+        first = self.board_.call("buddy_list", {"limit": 1})
         self.assertEqual(len(first["modelServiceConcurrency"]), 1)
         self.assertEqual(set(first["modelServiceConcurrency"][0]), {"adapter", "provider", "model", "limit", "active"})
-        full = self.board_.call("model_profiles", {"limit": 200})
+        full = self.board_.call("buddy_list", {"limit": 200})
         self.assertEqual(
             {(row["adapter"], row["provider"], row["model"]) for row in full["modelServiceConcurrency"]},
             {MODEL_SERVICE_A, MODEL_SERVICE_B},
         )
 
-    def test_profile_page_is_a_consistent_snapshot_during_a_concurrent_save(self):
+    def test_buddy_page_is_a_consistent_snapshot_during_a_concurrent_save(self):
         from hey_my_buddy.blackboard.catalog import catalog_store
-        original = catalog_store.profiles
+        original = catalog_store.buddies
 
         def concurrent_save(evaluation, params):
             page = original(evaluation, params)
@@ -105,8 +105,8 @@ class PublicationInterfaceTests(ModelServiceConcurrencyTestCase):
             }, command="save-between-page-and-response")
             return page
 
-        with mock.patch.object(catalog_store, "profiles", side_effect=concurrent_save):
-            page = self.board_.call("model_profiles", {"limit": 200})
+        with mock.patch.object(catalog_store, "buddies", side_effect=concurrent_save):
+            page = self.board_.call("buddy_list", {"limit": 200})
         self.assertEqual(self.model_service_row(page, MODEL_SERVICE_A)["limit"], 2)
         fresh = self.board_.call("console_snapshot", {})
         self.assertEqual(self.model_service_row(fresh, MODEL_SERVICE_A)["limit"], 5)
@@ -120,8 +120,8 @@ class PublicationInterfaceTests(ModelServiceConcurrencyTestCase):
         snapshot = board.call("console_snapshot", {})
         self.assertEqual(self.model_service_row(snapshot, MODEL_SERVICE_A)["active"], 1)
         self.assertEqual(self.model_service_row(snapshot, MODEL_SERVICE_B)["active"], 1)
-        profiles = board.call("model_profiles", {"limit": 200})
-        self.assertEqual(self.model_service_row(profiles, MODEL_SERVICE_A)["active"], 1)
+        buddies = board.call("buddy_list", {"limit": 200})
+        self.assertEqual(self.model_service_row(buddies, MODEL_SERVICE_A)["active"], 1)
 
     def test_health_capacity_reports_the_total_ceiling_and_model_service_rows(self):
         board = self.board_
@@ -205,11 +205,11 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
             })
         self.assertEqual(caught.exception.code, "NOT_FOUND")
         with self.board_.store.db.write() as connection:
-            connection.execute("UPDATE evaluation_profiles SET available=0 WHERE model=?", (MODEL_SERVICE_B[2],))
+            connection.execute("UPDATE buddies SET available=0 WHERE model=?", (MODEL_SERVICE_B[2],))
         self.publish_limits(self.board_, {
             "adapter": MODEL_SERVICE_B[0], "provider": MODEL_SERVICE_B[1], "model": MODEL_SERVICE_B[2], "limit": 3,
         })
-        page = self.board_.call("model_profiles", {"includeUnavailable": True})
+        page = self.board_.call("buddy_list", {"includeUnavailable": True})
         self.assertEqual(self.model_service_row(page, MODEL_SERVICE_B)["limit"], 3)
 
 
@@ -236,7 +236,7 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
         self.publish_limits(board, {"adapter": MODEL_SERVICE_B[0], "provider": MODEL_SERVICE_B[1], "model": MODEL_SERVICE_B[2], "limit": 7})
         with board.store.db.write() as connection:
             connection.execute(
-                "UPDATE evaluation_profiles SET available=0 WHERE model=?", (MODEL_SERVICE_B[2],)
+                "UPDATE buddies SET available=0 WHERE model=?", (MODEL_SERVICE_B[2],)
             )
         # The unavailable model service is no longer represented in the response, but the
         # stored setting remains and applies again when the model service returns.
@@ -311,18 +311,18 @@ class RoutingQuotaTests(ModelServiceConcurrencyTestCase):
         super().setUp()
         self.use_decision_helper()
         self.board_ = self.board(max_concurrent=8)
-        self.seed_decision_profile(self.board_)
+        self.seed_decision_buddy(self.board_)
 
     def request_selection(self, board, request_id: str) -> str:
         response = board.call(
             "selection_request",
-            {"requestId": request_id, "task": "pick a coding profile"},
+            {"requestId": request_id, "task": "pick a coding buddy"},
         )
         return response["decisionId"]
 
     def test_the_selector_model_service_quota_precedes_the_claim(self):
         board = self.board_
-        # The fixed decision profile consumes MODEL_SERVICE_A; two live attempts fill it.
+        # The fixed decision buddy consumes MODEL_SERVICE_A; two live attempts fill it.
         for index in range(2):
             self.register(board, f"w-fill{index}")
             self.assertIsNotNone(self.claim_governed(board, f"w-fill{index}", f"fill-{index}")["claim"])

@@ -13,7 +13,7 @@ import uuid
 import unittest
 from unittest.mock import patch
 
-from blackboard.routing.test_decision import DecisionTestCase, PROFILE_ID
+from blackboard.routing.test_decision import DecisionTestCase, BUDDY_ID
 
 from hey_my_buddy.protocol import tool_evidence
 from support import InProcessBoard
@@ -67,7 +67,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
                 view = self.decision(board, requested['decisionId'])
                 self.assertEqual(view['status'], 'needs-host' if expected else 'completed')
                 self.assertEqual(view.get('error'), expected)
-                self.assertEqual(view['selectedProfile'] is None, expected is not None)
+                self.assertEqual(view['selectedBuddy'] is None, expected is not None)
                 with board.store.db.read() as connection:
                     self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 1)
                 board.close()
@@ -93,7 +93,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
                 view = self.decision(board, requested['decisionId'])
                 self.assertEqual(view['status'], 'needs-host')
                 self.assertEqual(view['error'], 'router-tool-evidence-unverified')
-                self.assertIsNone(view['selectedProfile'])
+                self.assertIsNone(view['selectedBuddy'])
                 board.close()
                 self._stack.remove(board)
 
@@ -295,7 +295,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         self.enterContext(patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.no_tool_structured", True, create=True))
-        self.configure(board, routerProfileIds=[PROFILE_ID], defaultRoutingMode="fast")
+        self.configure(board, routerBuddyIds=[BUDDY_ID], defaultRoutingMode="fast")
         result, claim = self.request_route(board, "fast-zero")
         self.assertEqual(claim["decisionInput"]["routingMode"], "fast")
         empty = self.package_for(claim, result, [])

@@ -38,7 +38,7 @@ MAX_RESOURCES = 32
 MAX_CAPABILITIES = 32
 
 CODING_ADAPTERS = ("dsh", "zcode", "codex", "claude")
-CONFIGURATION_FIELDS = ("adapter", "provider", "model", "effort")
+BUDDY_FIELDS = ("adapter", "provider", "model", "effort")
 ADAPTERS = (*CODING_ADAPTERS, "command", "external")
 INQUIRY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -53,9 +53,9 @@ MAX_WORKFLOW_ARTIFACTS = 32
 MAX_CONTROL_TOKEN = 256
 
 #: ADR-021 decision 5: the three ways a Host may express the Worker choice.
-PARTIAL_CONFIGURATION_HINT = (
+PARTIAL_BUDDY_HINT = (
     "supply the complete adapter/provider/model/effort quadruple to delegate directly, "
-    "or omit every configuration field and leave the choice to the Router, writing the "
+    "or omit every buddy field and leave the choice to the Router, writing the "
     "task's needs into the task description"
 )
 
@@ -101,7 +101,7 @@ TERMINAL_TASK_STATES = frozenset({"completed", "failed", "cancelled"})
 #: every field one explicit helper specification accepts. The nested ``spec``
 #: spelling and ``inheritRoutingPreferences`` are retired duplicate writings
 #: (ADR-021 decisions 5 and 17).
-WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"hostId", "executionWorkspace", "submissionToken", "title", "macroTask", "macroTaskId", "macroTaskOf", "configurationLocked"}
+WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"hostId", "executionWorkspace", "submissionToken", "title", "macroTask", "macroTaskId", "macroTaskOf", "buddyLocked"}
 WORKFLOW_HELPER_FIELDS = SUBMIT_FIELDS | {"executionWorkspace", "integrator", "role"}
 #: The retired duplicate and routing spellings ADR-021 decisions 5 and 17 remove;
 #: naming one is an explicit rejection, never a silent ignore.
@@ -468,7 +468,7 @@ def _spec_fields(params: dict) -> dict:
     return spec_params
 
 
-def workflow_request_fingerprint(spec: dict, execution_workspace: dict, host_id: str, *, presentation: dict | None = None, configuration_locked: bool = False) -> str:
+def workflow_request_fingerprint(spec: dict, execution_workspace: dict, host_id: str, *, presentation: dict | None = None, buddy_locked: bool = False) -> str:
     """The governed idempotency identity: goal, execution workspace and Host.
 
     The task fingerprint stays the ordinary spec fingerprint; this one additionally
@@ -476,8 +476,8 @@ def workflow_request_fingerprint(spec: dict, execution_workspace: dict, host_id:
     requestId can never silently reuse a different prepared snapshot.
     """
     request = {"spec": spec, "executionWorkspace": execution_workspace, "hostId": host_id}
-    if configuration_locked:
-        request["configurationLocked"] = True
+    if buddy_locked:
+        request["buddyLocked"] = True
     if presentation:
         request["presentation"] = presentation
     return sha256_text("workflow-v1:" + canonical_json(request))
@@ -537,7 +537,7 @@ def _reject_retired_spec_keys(params: dict) -> None:
         if key in params:
             raise BoardError(
                 "INVALID_ARGUMENT",
-                f"{key} is retired Host routing input; " + PARTIAL_CONFIGURATION_HINT,
+                f"{key} is retired Host routing input; " + PARTIAL_BUDDY_HINT,
                 field=key,
             )
 
@@ -567,7 +567,7 @@ def normalize_workflow_submit(params: dict) -> dict:
         "executionWorkspace": workspace_intent,
         "owner": spec_params.get("owner"),
         "presentation": normalize_presentation(params),
-        "configurationLocked": optional_bool(params, "configurationLocked", False),
+        "buddyLocked": optional_bool(params, "buddyLocked", False),
     }
 
 
@@ -583,7 +583,7 @@ def normalize_workflow_spec(params: dict) -> dict:
     provider/model/effort and pass their own adapter field through unchanged.
     """
     _reject_retired_spec_keys(params)
-    supplied = [key for key in CONFIGURATION_FIELDS if params.get(key) is not None]
+    supplied = [key for key in BUDDY_FIELDS if params.get(key) is not None]
     adapter = params.get("adapter")
     if adapter in ("command", "external"):
         # Minimal special case: this infrastructure names no buddy, so naming
@@ -592,15 +592,15 @@ def normalize_workflow_spec(params: dict) -> dict:
         if inapplicable:
             raise BoardError(
                 "INVALID_ARGUMENT",
-                f"the {adapter} adapter names no buddy; {inapplicable[0]} does not apply to it; " + PARTIAL_CONFIGURATION_HINT,
+                f"the {adapter} adapter names no buddy; {inapplicable[0]} does not apply to it; " + PARTIAL_BUDDY_HINT,
                 field=inapplicable[0],
             )
-    elif supplied and len(supplied) != len(CONFIGURATION_FIELDS):
-        missing = [key for key in CONFIGURATION_FIELDS if key not in supplied]
+    elif supplied and len(supplied) != len(BUDDY_FIELDS):
+        missing = [key for key in BUDDY_FIELDS if key not in supplied]
         raise BoardError(
             "INVALID_ARGUMENT",
-            "configuration fields are all-or-nothing: a coding buddy is the complete "
-            f"adapter/provider/model/effort quadruple (missing {', '.join(missing)}); " + PARTIAL_CONFIGURATION_HINT,
+            "buddy fields are all-or-nothing: a coding buddy is the complete "
+            f"adapter/provider/model/effort quadruple (missing {', '.join(missing)}); " + PARTIAL_BUDDY_HINT,
             field=missing[0],
         )
     spec = normalize_spec(params)
@@ -609,16 +609,16 @@ def normalize_workflow_spec(params: dict) -> dict:
     return spec
 
 
-def configuration_constraints(spec: dict) -> dict:
-    return {key: spec[key] for key in CONFIGURATION_FIELDS if key in spec}
+def buddy_constraints(spec: dict) -> dict:
+    return {key: spec[key] for key in BUDDY_FIELDS if key in spec}
 
 
-def normalize_configuration(value: Any) -> dict:
-    value = require_object(value, "configuration")
-    reject_unknown(value, set(CONFIGURATION_FIELDS), "configuration")
-    result = {key: required_string(value, key, max_length=256) for key in CONFIGURATION_FIELDS}
+def normalize_buddy(value: Any) -> dict:
+    value = require_object(value, "buddy")
+    reject_unknown(value, set(BUDDY_FIELDS), "buddy")
+    result = {key: required_string(value, key, max_length=256) for key in BUDDY_FIELDS}
     if result["adapter"] not in CODING_ADAPTERS:
-        raise BoardError("INVALID_ARGUMENT", "configuration requires a coding adapter: dsh, zcode or codex")
+        raise BoardError("INVALID_ARGUMENT", "buddy requires a coding adapter: dsh, zcode or codex")
     return result
 
 

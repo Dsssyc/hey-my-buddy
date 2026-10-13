@@ -1,13 +1,13 @@
-import type { Decision, Profile, Preference, RoutingBudget } from "./types";
-import type { ExecutionConfiguration, RoutingBasis } from "./workflow-types";
+import type { Decision, Buddy, Preference, RoutingBudget } from "./types";
+import type { BuddyIdentity, RoutingBasis } from "./workflow-types";
 
-export type DecisionModel = Partial<ExecutionConfiguration> & { reasoningEffort?: string };
+export type DecisionModel = Partial<BuddyIdentity> & { reasoningEffort?: string };
 export type DecisionAudit = Decision & {
-  selectedProfile?: Partial<ExecutionConfiguration> | null;
+  selectedBuddy?: Partial<BuddyIdentity> | null;
   /** False marks the program's direct selection of the sole legal candidate; null predates that path. */
   routerCalled?: boolean | null;
   routingBasis?: RoutingBasis | null;
-  constraints?: Partial<ExecutionConfiguration>;
+  constraints?: Partial<BuddyIdentity>;
   requiredCapabilities?: string[];
   policyCheck?: {
     userPreference?: string | null;
@@ -19,10 +19,10 @@ export type DecisionAudit = Decision & {
   stopEvidence?: unknown;
   inputVerification?: unknown;
   decisionModel?: { requested: DecisionModel | null; resolved: DecisionModel | null; observed: unknown };
-  requested?: { constraints?: Partial<ExecutionConfiguration>; requiredCapabilities?: string[] };
+  requested?: { constraints?: Partial<BuddyIdentity>; requiredCapabilities?: string[] };
   input?: {
-    profile?: Partial<ExecutionConfiguration>;
-    profiles: Profile[];
+    buddy?: Partial<BuddyIdentity>;
+    buddies: Buddy[];
     preferences: Preference[];
     [key: string]: unknown;
   } | null;

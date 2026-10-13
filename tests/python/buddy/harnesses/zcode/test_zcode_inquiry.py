@@ -961,21 +961,21 @@ class FinishToolTests(unittest.TestCase):
                                 foreign, "mcp__buddy_x__buddy_finish_turn",
                                 ("buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn"))
 
-    def test_an_explicit_null_suggested_profile_is_the_accepted_no_suggestion(self):
+    def test_an_explicit_null_suggested_buddy_is_the_accepted_no_suggestion(self):
         # The incident's finish arguments are now valid: an explicit null
-        # suggestedProfileId means no suggestion and mints a success receipt,
+        # suggestedBuddyId means no suggestion and mints a success receipt,
         # while a non-string value is refused with a signed envelope whose
         # detail names the correction.
         with_null = self.outcome("attention")
-        with_null["request"]["suggestedProfileId"] = None
+        with_null["request"]["suggestedBuddyId"] = None
         accepted = self.call("buddy_finish_turn", with_null)
         self.assertFalse(accepted.get("isError"), accepted)
         receipt = verify_receipt(accepted["content"][0]["text"], self.config, turn_io.validate_outcome)
-        self.assertIsNone(receipt["outcome"]["request"]["suggestedProfileId"])
+        self.assertIsNone(receipt["outcome"]["request"]["suggestedBuddyId"])
         for invalid in (5, True, {}, []):
             with self.subTest(invalid=invalid):
                 bad = self.outcome("attention")
-                bad["request"]["suggestedProfileId"] = invalid
+                bad["request"]["suggestedBuddyId"] = invalid
                 envelope = self.refusal(self.call("buddy_finish_turn", bad), "buddy_finish_turn")
                 self.assertEqual(envelope["reason"], "invalid-arguments")
                 self.assertIn("references are invalid", envelope["detail"])
@@ -1213,7 +1213,7 @@ class NativeCatalogEmptyTests(ZcodeFixtureCase):
         with mock.patch.dict(os.environ, {**self.environment, "BUDDY_ZCODE_TEST_CASE": "catalog-empty"}, clear=True):
             result = self.description.discover_models()
         # A successful native snapshot with no usable provider is a complete
-        # observation, so the service can retire missing profiles instead of
+        # observation, so the service can retire missing buddies instead of
         # preserving them as unknown forever.
         self.assertEqual(result["providers"], [])
         self.assertEqual(result["discoveries"], [{"adapter": "zcode", "status": "complete", "accountStatus": "not-applicable"}])

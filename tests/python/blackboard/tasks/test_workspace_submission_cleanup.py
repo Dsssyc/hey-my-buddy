@@ -37,7 +37,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.repo = self.repository('source')
 
     def rejected(self, board, request='rejected', **options):
-        return board.store.workflow.submit({**workflow_tests.CONFIGURATION,
+        return board.store.workflow.submit({**workflow_tests.BUDDY,
             'requestId': request, 'hostId': 'host-1', 'task': 'do the thing', 'cwd': str(self.repo),
             'executionWorkspace': {'kind': 'worktree', 'access': 'write'}, **options})
 
@@ -367,7 +367,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.finish_turn(board, self.claim(board), disposition='assistance')
         view = board.call('workflow_get', {'runId': parent['runId']})
         original_prepare = workspace._prepare_locked
-        original_configuration = board.store.workflow._validated_configuration
+        original_buddy = board.store.workflow._validated_buddy
         captures = {}
         def capture_first(directory, workspace_id, request_id, intent):
             manifest = original_prepare(directory, workspace_id, request_id, intent)
@@ -382,10 +382,10 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 self.assertTrue(candidate['eligible'], candidate['reasons'])
                 captures['cleanup'] = board.call('storage_apply', {'planId': planned['planId'],
                     'commandId': 'helper-admission-cleanup', 'confirm': True})
-            return original_configuration(spec)
+            return original_buddy(spec)
         with patch.object(storage, 'process_inventory', return_value=([], [], True)), \
                 patch.object(workspace, '_prepare_locked', side_effect=capture_first), \
-                patch.object(board.store.workflow, '_validated_configuration', side_effect=cleanup_while_preparing_next):
+                patch.object(board.store.workflow, '_validated_buddy', side_effect=cleanup_while_preparing_next):
             approved = self.decide(board, view, view['activeRequest']['requestId'], autoContinue=False,
                 helpers=[{'requestId': 'first-cleanup-helper', 'task': 'first helper', 'cwd': str(self.repo),
                           'executionWorkspace': {'kind': 'worktree', 'writeScope': ['.']}},

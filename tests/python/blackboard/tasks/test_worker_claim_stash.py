@@ -19,7 +19,7 @@ from support import BoardTestCase
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 
 NONCE = "n" * 16
-CONFIGURATION = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
+BUDDY = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
 
 
 def observed(entries):
@@ -39,15 +39,15 @@ class ClaimStashTestCase(BoardTestCase):
         workflow_module._workspace_module = self.workspace
         self.addCleanup(self._restore_workspace)
         self.catalog_validation = self.enterContext(mock.patch(
-            "hey_my_buddy.blackboard.catalog.catalog.validate_configuration", create=True,
-            side_effect=lambda configuration, **_: dict(configuration)))
+            "hey_my_buddy.blackboard.catalog.catalog.validate_buddy", create=True,
+            side_effect=lambda buddy, **_: dict(buddy)))
 
     def _restore_workspace(self) -> None:
         workflow_module._workspace_module = self._previous_workspace
 
     def submit(self, board, *, request_id, cwd, **extra):
         return board.call("workflow_submit", {
-            **CONFIGURATION, "requestId": request_id, "hostId": "host-1", "task": "claim stash task",
+            **BUDDY, "requestId": request_id, "hostId": "host-1", "task": "claim stash task",
             "cwd": str(cwd), "submissionToken": "t" * 32,
             "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["."]},
             **extra,

@@ -20,7 +20,7 @@ MAX_ENTRIES = 16
 MAX_SESSIONS = 64
 READ_OPERATIONS = frozenset({
     "accounts",
-    "selection_get", "selection_list", "model_profiles", "workflow_get",
+    "selection_get", "selection_list", "buddy_list", "workflow_get",
 })
 
 @dataclass

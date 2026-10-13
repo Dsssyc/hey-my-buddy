@@ -31,27 +31,27 @@ class RouterDispatchTestCase(BoardTestCase):
         super().setUp()
         self.clock = FakeClock(T0)
         self.board_ = self.board(clock=self.clock)
-        self.add_profile(A, model="alpha")
-        self.add_profile(B, model="bravo")
+        self.add_buddy(A, model="alpha")
+        self.add_buddy(B, model="bravo")
         self.set_settings(ids=[A, B])
         client = self.board_.client()
         client.register_worker("w-route", adapter="decision", capabilities=["decision"])
         self.client = client
 
     # -- fixtures ------------------------------------------------------------
-    def add_profile(self, profile_id, *, model=None, available=1, enabled=1):
+    def add_buddy(self, buddy_id, *, model=None, available=1, enabled=1):
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,?,?,?)",
-                       (profile_id, profile_id, "dsh", "fixture", model or profile_id, "max", available, enabled,
+                       (buddy_id, buddy_id, "dsh", "fixture", model or buddy_id, "max", available, enabled,
                         canonical_json(permission_capabilities("dsh"))))
 
     def set_settings(self, *, ids=None, mode=None, budget=None, interval=None):
         with self.board_.store.db.write() as db:
             merged = {**router.configuration(db)}
             if ids is not None:
-                merged["routerProfileIds"] = list(ids)
+                merged["routerBuddyIds"] = list(ids)
             if mode is not None:
                 merged["defaultRoutingMode"] = mode
             if budget is not None:
@@ -130,33 +130,33 @@ class AdmissionTests(RouterDispatchTestCase):
         self.assertIsNotNone(snapshot)
         base = snapshot["baseInput"]
         # The Host keeps the full frozen packet, never only a reason.
-        self.assertEqual([item["profileId"] for item in base["profiles"]], [A, B])
+        self.assertEqual([item["buddyId"] for item in base["buddies"]], [A, B])
         self.assertIn("policyFacts", base)
         self.assertIn("outputSchema", base)
-        self.assertNotIn("profile", base)
-        self.assertNotIn("routerProfileId", base)
-        self.assertEqual(snapshot["facts"]["routerProfileIds"], [])
+        self.assertNotIn("buddy", base)
+        self.assertNotIn("routerBuddyId", base)
+        self.assertEqual(snapshot["facts"]["routerBuddyIds"], [])
         self.assertEqual(self.tasks(), [])
         # An all-unavailable list freezes the same complete packet: the Router
-        # buddies are separate disabled profiles, so the candidate set survives.
-        self.add_profile("dsh:fixture:router-one:max", model="router-one", enabled=0)
-        self.add_profile("dsh:fixture:router-two:max", model="router-two", enabled=0)
+        # buddies are separate disabled buddies, so the candidate set survives.
+        self.add_buddy("dsh:fixture:router-one:max", model="router-one", enabled=0)
+        self.add_buddy("dsh:fixture:router-two:max", model="router-two", enabled=0)
         self.set_settings(ids=["dsh:fixture:router-one:max", "dsh:fixture:router-two:max"])
         unavailable = self.request(request_id="pick-2")
         self.assertEqual(unavailable["status"], "needs-host")
         second = self.snapshot_of(unavailable["decisionId"])
-        self.assertEqual([item["profileId"] for item in second["baseInput"]["profiles"]], [A, B])
+        self.assertEqual([item["buddyId"] for item in second["baseInput"]["buddies"]], [A, B])
         self.assertEqual([entry["code"] for entry in second["inspections"]],
                          ["router-unavailable", "router-unavailable"])
         self.assertEqual(self.tasks(), [])
 
     def test_sole_candidate_takes_the_direct_path_without_a_router_task(self):
         with self.board_.store.db.write() as db:
-            db.execute("DELETE FROM evaluation_profiles WHERE profile_id=?", (B,))
+            db.execute("DELETE FROM buddies WHERE buddy_id=?", (B,))
         result = self.request()
         self.assertEqual(result["status"], "completed")
         decision = self.decision_row(result["decisionId"])
-        self.assertEqual(decision["profileId"], A)
+        self.assertEqual(decision["buddyId"], A)
         self.assertFalse(decision["routerCalled"])
         self.assertIsNone(self.snapshot_of(result["decisionId"]))
         self.assertEqual(self.tasks(), [])
@@ -166,16 +166,16 @@ class AdmissionTests(RouterDispatchTestCase):
     def test_admission_records_real_preflight_failures_but_never_skip_windows(self):
         # A's earlier no-answer (another request) opens its skip window; B is fine.
         # A third candidate keeps the Router path alive even when A drops out.
-        self.add_profile(C, model="charlie")
+        self.add_buddy(C, model="charlie")
         with self.board_.store.db.write() as db:
-            router_history.record_outcome(db, profile_id=A, plane="work", request_id="route-earlier",
+            router_history.record_outcome(db, buddy_id=A, plane="work", request_id="route-earlier",
                                           task_id=None, attempt_id=None, outcome="no_answer",
                                           code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
         skipped = self.request(request_id="pick-skip")
         self.assertEqual(skipped["status"], "queued")
         snapshot = self.snapshot_of(skipped["decisionId"])
         self.assertEqual(snapshot["inspections"][0]["code"], "router-skip-window")
-        self.assertEqual(self.dispatch_of(skipped["runId"])["profileId"], B)
+        self.assertEqual(self.dispatch_of(skipped["runId"])["buddyId"], B)
         events = self.router_events("router.no_answer")
         # The skip-window observation added no fact for A and extended nothing.
         self.assertEqual([payload["requestId"] for _, payload in events], ["route-earlier"])
@@ -183,14 +183,14 @@ class AdmissionTests(RouterDispatchTestCase):
         # real preflight no-answer.
         self.clock.advance(601)
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET enabled=0 WHERE profile_id=?", (A,))
+            db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id=?", (A,))
         ineligible = self.request(request_id="pick-disabled")
         self.assertEqual(ineligible["status"], "queued")
-        self.assertEqual(self.dispatch_of(ineligible["runId"])["profileId"], B)
+        self.assertEqual(self.dispatch_of(ineligible["runId"])["buddyId"], B)
         events = self.router_events("router.no_answer")
         recorded = [payload for _, payload in events if payload["requestId"] == "pick-disabled"]
         self.assertEqual(recorded, [{"plane": "work", "requestId": "pick-disabled", "routerIndex": 0,
-                                     "profileId": A, "phase": "preflight", "taskId": None, "attemptId": None,
+                                     "buddyId": A, "phase": "preflight", "taskId": None, "attemptId": None,
                                      "outcome": "no_answer", "code": "router-unavailable"}])
         # Replaying the same request adds no second fact.
         self.request(request_id="pick-disabled")
@@ -200,7 +200,7 @@ class AdmissionTests(RouterDispatchTestCase):
         result = self.request()
         self.set_settings(ids=[B, A], interval=30)
         snapshot = self.snapshot_of(result["decisionId"])
-        self.assertEqual(snapshot["facts"]["routerProfileIds"], [A, B])
+        self.assertEqual(snapshot["facts"]["routerBuddyIds"], [A, B])
         self.assertEqual(snapshot["facts"]["routerRetryIntervalSeconds"], 600)
 
 
@@ -209,7 +209,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         result = self.request()
         first_task = result["runId"]
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET enabled=0 WHERE profile_id=?", (A,))
+            db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id=?", (A,))
         advanced = self.claim("adv")
         self.assertIsNone(advanced["claim"])
         self.assertEqual(advanced["reason"], "decision-dispatch-advanced")
@@ -219,19 +219,19 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         events = self.router_events("router.no_answer")
         self.assertEqual([payload["requestId"] for _, payload in events], ["pick-1"])
         self.assertEqual(events[0][1]["phase"], "preflight")
-        self.assertEqual(events[0][1]["profileId"], A)
+        self.assertEqual(events[0][1]["buddyId"], A)
         # The next item has its own internal task and immutable dispatch.
         queued = self.tasks(state="queued")
         self.assertEqual(len(queued), 1)
         second_task = queued[0]["task_id"]
         second = self.dispatch_of(second_task)
-        self.assertEqual(second["profileId"], B)
+        self.assertEqual(second["buddyId"], B)
         self.assertEqual(second["routerIndex"], 1)
         first = self.dispatch_of(first_task)
-        self.assertEqual(first["profileId"], A)
+        self.assertEqual(first["buddyId"], A)
         self.assertNotEqual(first["inputSha256"], second["inputSha256"])
         # Only the actor graft differs between the two dispatch documents.
-        actor_keys = ("profile", "routerProfileId", "routerProfile", "routerIndex")
+        actor_keys = ("buddy", "routerBuddyId", "routerBuddy", "routerIndex")
 
         def without_actor(document):
             return {key: value for key, value in document.items() if key not in actor_keys}
@@ -269,7 +269,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         result = self.request()
         frozen = self.dispatch_of(result["runId"])
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET model='replaced' WHERE profile_id=?", (A,))
+            db.execute("UPDATE buddies SET model='replaced' WHERE buddy_id=?", (A,))
         claimed = self.claim("identity-edited")
         self.assertIsNotNone(claimed["claim"])
         self.assertEqual(claimed["claim"]["decisionInput"], frozen["document"])
@@ -307,7 +307,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         # The dispatched item owes an answer and one retry execution is active
         # elsewhere: this request queues without switching or recording anything.
         with self.board_.store.db.write() as db:
-            router_history.record_outcome(db, profile_id=A, plane="work", request_id="route-elsewhere",
+            router_history.record_outcome(db, buddy_id=A, plane="work", request_id="route-elsewhere",
                                           task_id=None, attempt_id=None, outcome="no_answer",
                                           code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
             db.execute(
@@ -321,7 +321,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
                 " VALUES('att-retry','retry-1',1,'nonce','claim-r','executing','dsh','dsh','fixture','alpha',?,?,?)",
                 (T0, T0, T0))
             self.board_.store._append_event(db, "router.claimed", task_id="retry-1", attempt_id="att-retry",
-                                            payload={"profileId": A, "plane": "work", "requestId": "route-elsewhere",
+                                            payload={"buddyId": A, "plane": "work", "requestId": "route-elsewhere",
                                                      "routerIndex": 0, "taskId": "retry-1", "attemptId": "att-retry",
                                                      "generation": 1})
         blocked = self.claim("retry")
@@ -344,7 +344,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         result = self.request()
         first_task = result["runId"]
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET enabled=0 WHERE profile_id=?", (A,))
+            db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id=?", (A,))
         self.claim("adv")
         second_task = self.tasks(state="queued")[0]["task_id"]
         # A stray re-queued shell of the superseded dispatch is refused and closed.
@@ -359,7 +359,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         # The current dispatch is untouched and still claimable.
         committed = self.claim("current", task_id=second_task)
         self.assertIsNotNone(committed["claim"])
-        self.assertEqual(committed["claim"]["decisionInput"]["routerProfileId"], B)
+        self.assertEqual(committed["claim"]["decisionInput"]["routerBuddyId"], B)
 
 
 class ClaimTests(RouterDispatchTestCase):
@@ -369,9 +369,9 @@ class ClaimTests(RouterDispatchTestCase):
         self.assertIsNotNone(committed["claim"])
         attempt = committed["claim"]["attempt"]
         document = committed["claim"]["decisionInput"]
-        self.assertEqual(document["routerProfileId"], A)
+        self.assertEqual(document["routerBuddyId"], A)
         self.assertEqual(document["routerIndex"], 0)
-        self.assertEqual(document["profile"], {"adapter": "dsh", "provider": "fixture",
+        self.assertEqual(document["buddy"], {"adapter": "dsh", "provider": "fixture",
                                                "model": "alpha", "effort": "max"})
         # The claim froze the tool policy for this attempt.
         self.assertEqual(self.tool_policy(attempt["attemptId"]), {"systemSandbox": False})
@@ -379,9 +379,9 @@ class ClaimTests(RouterDispatchTestCase):
             binding = router_sequence.claim(db, attempt["attemptId"])
         self.assertEqual(binding, {"taskId": result["runId"], "attemptId": attempt["attemptId"],
                                    "generation": attempt["generation"], "decisionId": result["decisionId"],
-                                   "routerIndex": 0, "profileId": A})
+                                   "routerIndex": 0, "buddyId": A})
         claimed = [payload for kind, payload in self.router_events("router.claimed")]
-        self.assertEqual(claimed, [{"profileId": A, "plane": "work", "requestId": "pick-1",
+        self.assertEqual(claimed, [{"buddyId": A, "plane": "work", "requestId": "pick-1",
                                     "routerIndex": 0, "taskId": result["runId"],
                                     "attemptId": attempt["attemptId"], "generation": attempt["generation"]}])
         # The decision is running and its current input is the dispatch document.
@@ -394,7 +394,7 @@ class ClaimTests(RouterDispatchTestCase):
     def test_selector_model_service_reads_the_current_dispatch(self):
         result = self.request()
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET enabled=0 WHERE profile_id=?", (A,))
+            db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id=?", (A,))
             decision_row = self.board_.store.decisions._row(db, result["decisionId"])
             resolution = router.current_router(db, frozen=self.snapshot_of(result["decisionId"])["facts"],
                                                after_index=0, now=self.clock.value)
@@ -453,7 +453,7 @@ class WorkflowWiringTests(RouterDispatchTestCase):
         # An advance re-points the internal task and records it on the pending
         # route only; the parent business task still waits for routing.
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET enabled=0 WHERE profile_id=?", (A,))
+            db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id=?", (A,))
         advanced = self.claim("wf", task_id=first_task)
         self.assertIsNone(advanced["claim"])
         self.assertEqual(advanced["reason"], "decision-dispatch-advanced")
@@ -468,7 +468,7 @@ class WorkflowWiringTests(RouterDispatchTestCase):
         self.assertEqual(reason, "awaiting-model-selection")
         committed = self.claim("wf2", task_id=current)
         self.assertIsNotNone(committed["claim"])
-        self.assertEqual(committed["claim"]["decisionInput"]["routerProfileId"], B)
+        self.assertEqual(committed["claim"]["decisionInput"]["routerBuddyId"], B)
 
     def test_resolved_and_fenced_routes_are_not_touched_by_a_dispatch(self):
         response = self.route_goal()
@@ -478,7 +478,7 @@ class WorkflowWiringTests(RouterDispatchTestCase):
             db.execute("UPDATE workflow_routes SET state='fenced',updated_at=? WHERE decision_id=?",
                        (T0, decision_id))
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET enabled=0 WHERE profile_id=?", (A,))
+            db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id=?", (A,))
             row = self.board_.store.decisions._row(db, decision_id)
             resolution = router.current_router(db, frozen=self.snapshot_of(decision_id)["facts"],
                                                after_index=0, now=self.clock.value)
@@ -533,12 +533,12 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
 
     def test_next_actor_byte_ceiling_keeps_the_original_task_and_input(self):
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET model=? WHERE profile_id=?", ("b" * 40, B))
+            db.execute("UPDATE buddies SET model=? WHERE buddy_id=?", ("b" * 40, B))
         first = self.request()
         original = self.dispatch_of(first["runId"])
         bound = len(canonical_json(original["document"]).encode("utf-8"))
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET enabled=0 WHERE profile_id=?", (A,))
+            db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id=?", (A,))
         with patch("hey_my_buddy.blackboard.routing.decision.MAX_DECISION_INPUT_BYTES", bound):
             response = self.claim("oversize")
         self.assertIsNone(response["claim"])
@@ -546,7 +546,7 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
         self.assertEqual(self.decision_row(first["decisionId"])["error"], "router-input-too-large")
         self.assertEqual(self.dispatch_of(first["runId"]), original)
         self.assertEqual(len(self.tasks()), 1)
-        self.assertEqual([event[1]["profileId"] for event in self.router_events("router.no_answer")], [A])
+        self.assertEqual([event[1]["buddyId"] for event in self.router_events("router.no_answer")], [A])
 
     def test_unhealthy_router_records_preflight_failure_without_an_attempt(self):
         first = self.request()

@@ -615,7 +615,7 @@ class Worker:
         name = spec['adapter']
         review = name == 'decision' and (claim.get('decisionInput') or {}).get('routingMode', 'review') == 'review'
         if name == 'decision':
-            name = (claim.get('decisionInput') or {}).get('profile', {}).get('adapter')
+            name = (claim.get('decisionInput') or {}).get('buddy', {}).get('adapter')
         if name not in HARNESSES:
             return self._execute_selected(claim, task, spec, attempt, directory, holder)
         history = []
@@ -840,7 +840,7 @@ class Worker:
         from ...private_dirs import cleanup_attempt_credentials
         private_adapter = spec["adapter"]
         if private_adapter == "decision":
-            private_adapter = ((claim.get("decisionInput") or {}).get("profile") or {}).get("adapter")
+            private_adapter = ((claim.get("decisionInput") or {}).get("buddy") or {}).get("adapter")
         if private_adapter in {"dsh", "zcode", "codex", "claude", "command"}:
             try:
                 cleanup_attempt_credentials(self.state_dir, private_adapter, task["taskId"], attempt["attemptId"])

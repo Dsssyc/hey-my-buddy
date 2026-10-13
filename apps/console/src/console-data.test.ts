@@ -8,10 +8,10 @@ import {
   taskHost,
   taskProject,
 } from "./console-data";
-import type { Preference, Profile, Task } from "./types";
+import type { Preference, Buddy, Task } from "./types";
 
-const profile = (profileId: string, adapter: string, provider: string, effort: string): Profile => ({
-  profileId, adapter, provider, model: "shared-model", effort, label: "Shared model", available: true,
+const buddy = (buddyId: string, adapter: string, provider: string, effort: string): Buddy => ({
+  buddyId, adapter, provider, model: "shared-model", effort, label: "Shared model", available: true,
   enabled: true, capabilities: [], contextWindow: null, source: "fixture", description: "",
 });
 
@@ -19,51 +19,51 @@ describe("console grouping and recorded attribution", () => {
   it("orders extended thinking levels by intensity in model service labels and variant tabs", () => {
     for (const adapter of ["claude", "codex"]) {
       const levels = ["ultra", "max", "high", "medium", "xhigh", "low"];
-      const profiles = levels.map(effort => profile(`${adapter}-${effort}`, adapter, "provider", effort));
-      expect(modelServices(profiles)[0].profiles.map(item => item.effort))
+      const buddies = levels.map(effort => buddy(`${adapter}-${effort}`, adapter, "provider", effort));
+      expect(modelServices(buddies)[0].buddies.map(item => item.effort))
         .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
-      expect(profiles.map(item => item.effort)).toEqual(levels);
+      expect(buddies.map(item => item.effort)).toEqual(levels);
     }
   });
 
   it("keeps default and non-thinking modes ahead of ranked efforts and retains unknown native levels", () => {
     const levels = ["future", "ultra", "minimal", "off", "default", "none"];
-    expect(modelServices(levels.map(effort => profile(effort, "codex", "provider", effort)))[0]
-      .profiles.map(item => item.effort)).toEqual(["default", "none", "off", "minimal", "ultra", "future"]);
+    expect(modelServices(levels.map(effort => buddy(effort, "codex", "provider", effort)))[0]
+      .buddies.map(item => item.effort)).toEqual(["default", "none", "off", "minimal", "ultra", "future"]);
   });
 
   it("groups efforts while keeping the same model name from different harnesses and providers separate", () => {
-    const groupedServices = modelServices([profile("dsh-low", "dsh", "provider-a", "low"),
-      profile("dsh-high", "dsh", "provider-a", "high"), profile("other-provider", "dsh", "provider-b", "high"),
-      profile("other-harness", "zcode", "provider-a", "high")]);
+    const groupedServices = modelServices([buddy("dsh-low", "dsh", "provider-a", "low"),
+      buddy("dsh-high", "dsh", "provider-a", "high"), buddy("other-provider", "dsh", "provider-b", "high"),
+      buddy("other-harness", "zcode", "provider-a", "high")]);
     expect(groupedServices).toHaveLength(3);
-    expect(groupedServices.map(f => f.profiles.map(p => p.profileId).sort()).sort()).toEqual([
+    expect(groupedServices.map(f => f.buddies.map(p => p.buddyId).sort()).sort()).toEqual([
       ["dsh-high", "dsh-low"], ["other-harness"], ["other-provider"],
     ].sort());
   });
 
   it("prefers an available variant when the model service also holds a retired one", () => {
-    const retiredEnabled = { ...profile("retired", "dsh", "provider-a", "max"), available: false, enabled: true };
-    const availableDisabled = { ...profile("available", "dsh", "provider-a", "low"), enabled: false };
+    const retiredEnabled = { ...buddy("retired", "dsh", "provider-a", "max"), available: false, enabled: true };
+    const availableDisabled = { ...buddy("available", "dsh", "provider-a", "low"), enabled: false };
     const modelService = modelServices([retiredEnabled, availableDisabled])[0];
     // Inspecting the model service never lands on a retired variant while one is listed.
-    expect(preferredVariant(modelService, []).profileId).toBe("available");
-    expect(preferredVariant(modelService, [{ profileId: "retired", mode: "prefer", reason: "历史" } as Preference]).profileId)
+    expect(preferredVariant(modelService, []).buddyId).toBe("available");
+    expect(preferredVariant(modelService, [{ buddyId: "retired", mode: "prefer", reason: "历史" } as Preference]).buddyId)
       .toBe("available");
     // When every variant is retired, an enabled variant still wins over a disabled one.
     const allRetired = modelServices([retiredEnabled, { ...availableDisabled, available: false }])[0];
-    expect(preferredVariant(allRetired, [{ profileId: "available", mode: "prefer", reason: "历史" } as Preference]).profileId)
+    expect(preferredVariant(allRetired, [{ buddyId: "available", mode: "prefer", reason: "历史" } as Preference]).buddyId)
       .toBe("retired");
   });
 
   it("selects the preferred buddy from effort order without changing that order", () => {
     const modelService = modelServices([
-      profile("high", "codex", "openai", "high"),
-      profile("low", "codex", "openai", "low"),
+      buddy("high", "codex", "openai", "high"),
+      buddy("low", "codex", "openai", "low"),
     ])[0];
-    expect(modelService.profiles.map(row => row.profileId)).toEqual(["low", "high"]);
-    expect(preferredVariant(modelService, [{ profileId: "high", mode: "prefer", reason: "coding" }]).profileId).toBe("high");
-    expect(preferredVariant(modelService, []).profileId).toBe("low");
+    expect(modelService.buddies.map(row => row.buddyId)).toEqual(["low", "high"]);
+    expect(preferredVariant(modelService, [{ buddyId: "high", mode: "prefer", reason: "coding" }]).buddyId).toBe("high");
+    expect(preferredVariant(modelService, []).buddyId).toBe("low");
   });
 
   it("uses backend source metadata and never guesses a project or Host from execution cwd or owner", () => {
@@ -71,7 +71,7 @@ describe("console grouping and recorded attribution", () => {
     expect(taskProject(task)).toMatchObject({ id: "unknown", label: "未记录项目", path: null });
     expect(taskHost(task)).toBe("未记录委派方");
     task.delegation = { kind: "helper", sourceHostId: "codex-original", currentHostId: "codex-new",
-      parentRunId: "parent", rootRunId: "root", project: { id: "repo-id", path: "/source/project", label: "Project" }, configuration: null };
+      parentRunId: "parent", rootRunId: "root", project: { id: "repo-id", path: "/source/project", label: "Project" }, buddy: null };
     expect(taskProject(task)).toEqual(task.delegation.project);
     expect(taskHost(task)).toBe("codex-original");
   });

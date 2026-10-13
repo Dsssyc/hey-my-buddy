@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
-import type { ModelServiceConcurrencyEntry, Profile, Snapshot } from "./types";
+import type { ModelServiceConcurrencyEntry, Buddy, Snapshot } from "./types";
 import { listed, modelRow, pane, selectModel } from "./buddies/page.testing";
 
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
@@ -13,17 +13,17 @@ const retiredMax = "dsh:deepseek-official:retired-model:max";
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 const RETIRED = "dsh / deepseek-official / retired-model";
 
-function catalog(): Profile[] {
+function catalog(): Buddy[] {
   const base = {
     adapter: "dsh", provider: "deepseek-official", capabilities: ["execution:dsh", "decision"],
     contextWindow: null, source: "catalog:fixture", description: "",
   };
   return [
-    { ...base, profileId: flashOff, model: "deepseek-flash", effort: "off", label: "deepseek-flash · off",
+    { ...base, buddyId: flashOff, model: "deepseek-flash", effort: "off", label: "deepseek-flash · off",
       available: true, enabled: true },
-    { ...base, profileId: flashHigh, model: "deepseek-flash", effort: "high", label: "deepseek-flash · high",
+    { ...base, buddyId: flashHigh, model: "deepseek-flash", effort: "high", label: "deepseek-flash · high",
       available: true, enabled: false },
-    { ...base, profileId: retiredMax, model: "retired-model", effort: "max", label: "retired-model · max",
+    { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", label: "retired-model · max",
       available: false, enabled: true, unavailableReason: "provider paused" },
   ];
 }
@@ -38,12 +38,12 @@ const retiredEntry: ModelServiceConcurrencyEntry = {
 type LimitPatch = { adapter: string; provider: string; model: string; limit: number };
 
 function fixture(options: { discoveryLimit?: number } = {}) {
-  const profiles = catalog();
+  const buddies = catalog();
   let state: Snapshot = {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    profiles,
+    configuration: { routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    buddies,
 
     modelServiceNotes: [], preferences: [], decisions: [],
     modelServiceConcurrency: [flashEntry, retiredEntry],
@@ -69,8 +69,8 @@ function fixture(options: { discoveryLimit?: number } = {}) {
     }
 
 
-    if (operation === "model_profiles") {
-      return { profiles, modelServiceNotes: [], preferences: [],         modelServiceConcurrency: structuredClone(state.modelServiceConcurrency), nextCursor: null };
+    if (operation === "buddy_list") {
+      return { buddies, modelServiceNotes: [], preferences: [],         modelServiceConcurrency: structuredClone(state.modelServiceConcurrency), nextCursor: null };
     }
     if (operation === "model_catalog_refresh") {
       // The program publishes directory facts itself. A discovery can also
@@ -158,7 +158,7 @@ describe("a model's concurrency", () => {
     ]);
     const wire = JSON.stringify(f.published[0]);
     expect(wire).not.toContain("active");
-    expect(wire).not.toContain("profileId");
+    expect(wire).not.toContain("buddyId");
     // The raise is visible immediately and the occupancy stays observation.
     expect(concurrencyInput()).toHaveProperty("value", "6");
     expect(within(pane()).getByText("占用 1")).toBeTruthy();

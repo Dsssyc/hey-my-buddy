@@ -54,7 +54,7 @@ from ..base import ProcessHandle
 from ..native_support import (
     CancelFlag,
     ObserverInterrupt,
-    configuration_spec,
+    buddy_spec,
     execution_deadline,
     halt_owned_group as _halt_owned_group,
     identity_or_none,
@@ -63,7 +63,7 @@ from ..native_support import (
 )
 from ..run_contract import (
     ActivityPackage,
-    CheckedConfiguration,
+    CheckedBuddy,
     CheckedValue,
     CompletionEvidence,
     ContinuationFacts,
@@ -78,8 +78,8 @@ from ..run_contract import (
     NativeErrorRecord,
     OptionalFrozenJsonAt,
     PolicyFact,
-    ResultConfiguration,
-    RunConfiguration,
+    ResultBuddy,
+    RunBuddy,
     RunEnd,
     RunFeedback,
     RunIdentity,
@@ -582,7 +582,7 @@ def _initialize(connection: Connection, prep: _Preparation, mode: str, spec: dic
     listed = next((model for model in catalog["providers"][0]["models"]
                    if model["id"] == spec.get("model")), None)
     if listed is None or spec.get("effort") not in listed["efforts"]:
-        raise CodexProtocolError("invalid-configuration",
+        raise CodexProtocolError("invalid-buddy",
                                  "the selected Codex model and effort are not in the current native catalog")
     return True
 
@@ -634,20 +634,20 @@ def _check_thread_receipt(response: dict, cwd: str, *, mode: str, previous: str 
 
 
 def _configure_worker(connection: Connection, request: RunRequest, prep: _Preparation, state: _RunState) -> str:
-    """Worker configuration: continuation checks, then one start or resume."""
+    """Worker buddy selection: continuation checks, then one start or resume."""
     mode, previous = _continuation_of(request)
-    requested = configuration_spec(request)
+    requested = buddy_spec(request)
     sandbox, _policy = _worker_sandbox(request)
     state.requested = requested
     if mode == "native-session":
         binding = _read_binding(prep.native_root, previous)
         expected = {"taskId": request.identity.task_id, "threadId": previous,
-                    "cwd": request.cwd, "configuration": requested}
+                    "cwd": request.cwd, "buddy": requested}
         if set(binding) != set(expected) | {"lastTurnId", "lastAttemptId", "lastInputSha256"} \
                 or {key: binding.get(key) for key in expected} != expected \
                 or not isinstance(binding.get("lastTurnId"), str):
             raise CodexProtocolError("native-resume-unavailable",
-                                     "the Codex thread binding differs from this goal, checkout or configuration")
+                                     "the Codex thread binding differs from this goal, checkout or buddy")
         checkpoint = request.continuation.checkpoint
         if checkpoint is not None and any(
                 binding.get(key) != getattr(checkpoint, field) for key, field in (
@@ -679,7 +679,7 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
     thread_id = _check_thread_receipt(response, request.cwd, mode=mode, previous=previous)
     provider = response.get("modelProvider")
     if isinstance(provider, str) and provider != requested["provider"]:
-        raise CodexProtocolError("configuration-mismatch", "Codex acknowledged a different Worker provider")
+        raise CodexProtocolError("buddy-mismatch", "Codex acknowledged a different Worker provider")
     state.native_provider = _bounded(provider, 128)
     state.thread_opened = True
     state.thread_id = thread_id
@@ -705,7 +705,7 @@ def _config_overrides(config: dict) -> dict[str, str]:
 def _configure_review(connection: Connection, request: RunRequest,
                       state: _RunState) -> str:
     """Review configuration: native readback facts and thread ownership."""
-    cwd, spec = request.cwd, configuration_spec(request)
+    cwd, spec = request.cwd, buddy_spec(request)
     expected = tomllib.loads(read_only_config(cwd))
     response = connection.call("thread/start", {
         "cwd": cwd, "model": spec["model"], "modelProvider": spec["provider"],
@@ -776,7 +776,7 @@ def _configure_review(connection: Connection, request: RunRequest,
 
 def _configure_fast(connection: Connection, request: RunRequest, state: _RunState) -> str:
     """Fast configuration: native permission parameters, preserving user settings."""
-    cwd, spec = request.cwd, configuration_spec(request)
+    cwd, spec = request.cwd, buddy_spec(request)
     response = connection.call("thread/start", {
         "cwd": cwd, "model": spec["model"], "modelProvider": spec["provider"],
         "approvalPolicy": "never", "sandbox": "read-only", "serviceName": "hey-my-buddy",
@@ -795,9 +795,9 @@ def _configure_fast(connection: Connection, request: RunRequest, state: _RunStat
     state.policy_checks["selectedModel"] = {"status": "confirmed" if state.native_model == spec["model"] else "unknown"}
     state.policy_checks["threadReceipt"] = {"status": "confirmed" if response.get("approvalPolicy") == "never" else "unknown"}
     if isinstance(response.get("model"), str) and response["model"] != spec["model"]:
-        raise CodexProtocolError("configuration-mismatch", "Codex acknowledged a different no-tool model")
+        raise CodexProtocolError("buddy-mismatch", "Codex acknowledged a different no-tool model")
     if isinstance(response.get("modelProvider"), str) and response["modelProvider"] != spec["provider"]:
-        raise CodexProtocolError("configuration-mismatch", "Codex acknowledged a different no-tool provider")
+        raise CodexProtocolError("buddy-mismatch", "Codex acknowledged a different no-tool provider")
     if not isinstance(thread_id, str) or not thread_id:
         raise CodexProtocolError("wrong-native-thread", "Codex returned no no-tool thread identity")
     if not isinstance(thread.get("cwd"), str) or Path(thread["cwd"]).resolve() != Path(cwd).resolve():
@@ -956,8 +956,8 @@ def _capture_frame(capture: dict, message: dict) -> None:
 def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
                 input_text: str, mode: str, state: _RunState) -> dict:
     """The one turn admission site: send this round's input and schema."""
-    params: dict = {"threadId": thread_id, "cwd": request.cwd, "model": request.configuration.model,
-                    "effort": request.configuration.effort, "approvalPolicy": "never",
+    params: dict = {"threadId": thread_id, "cwd": request.cwd, "model": request.buddy.model,
+                    "effort": request.buddy.effort, "approvalPolicy": "never",
                     "input": [{"type": "text", "text": input_text}],
                     "outputSchema": request.output_schema.value}
     if mode == "worker":
@@ -1050,7 +1050,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         spawn = _spawn_app_server(prep, cancel, owned_spawn)
         connection = spawn.connection
         _wire(connection, chain, facts, observer, request, state, mode)
-        state.selected_model_listed = _initialize(connection, prep, mode, configuration_spec(request), state)
+        state.selected_model_listed = _initialize(connection, prep, mode, buddy_spec(request), state)
         if mode == "worker":
             thread_id = _configure_worker(connection, request, prep, state)
             _worker_turn(connection, chain, request, state, thread_id, observer, activity)
@@ -1412,7 +1412,7 @@ def _save_binding(request: RunRequest, prep: _Preparation,
             or not state.shutdown or state.exit_code != 0:
         return
     binding = {"taskId": checkpoint["taskId"], "threadId": state.thread_id, "cwd": request.cwd,
-               "configuration": state.requested, "lastTurnId": state.turn_id,
+               "buddy": state.requested, "lastTurnId": state.turn_id,
                "lastAttemptId": checkpoint["attemptId"], "lastInputSha256": checkpoint["inputSha256"]}
     _write_binding(prep.native_root, state.thread_id, binding)
     checkpoint["bindingSaved"] = True
@@ -1496,26 +1496,26 @@ def _capture_native_error(state: _RunState, message: dict, thread_id: str, turn_
             state.native_error["nativeTurnId"] = turn_id
 
 
-def _checked_configuration(request: RunRequest, state: _RunState, mode: str) -> ResultConfiguration:
-    checked = CheckedConfiguration()
+def _checked_buddy(request: RunRequest, state: _RunState, mode: str) -> ResultBuddy:
+    checked = CheckedBuddy()
     if state.configured:
-        catalog_model = CheckedValue(value=request.configuration.model)
-        catalog_effort = CheckedValue(value=request.configuration.effort)
+        catalog_model = CheckedValue(value=request.buddy.model)
+        catalog_effort = CheckedValue(value=request.buddy.effort)
         if mode == "worker":
-            checked = CheckedConfiguration(
+            checked = CheckedBuddy(
                 provider=CheckedValue(value=state.native_provider) if isinstance(state.native_provider, str) else None,
                 model=catalog_model if state.selected_model_listed is True else None,
                 effort=catalog_effort if state.selected_model_listed is True else None)
         else:
-            checked = CheckedConfiguration(
+            checked = CheckedBuddy(
                 provider=CheckedValue(value=state.native_provider) if isinstance(state.native_provider, str) else None,
                 model=CheckedValue(value=state.native_model) if state.native_model else None,
                 effort=catalog_effort if state.selected_model_listed is True
-                and state.native_model == request.configuration.model else None)
-    return ResultConfiguration(
-        requested=RunConfiguration(provider=request.configuration.provider,
-                                   model=request.configuration.model,
-                                   effort=request.configuration.effort),
+                and state.native_model == request.buddy.model else None)
+    return ResultBuddy(
+        requested=RunBuddy(provider=request.buddy.provider,
+                                   model=request.buddy.model,
+                                   effort=request.buddy.effort),
         checked=checked)
 
 
@@ -1589,9 +1589,9 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
         # never a refusal verdict and never a substitute for the native answer.
         retain("model-check", invocation_root / "model-check.json",
                {"adapter": "codex", "selectedModelListed": False,
-                "selected": {"provider": request.configuration.provider,
-                             "model": request.configuration.model,
-                             "effort": request.configuration.effort}})
+                "selected": {"provider": request.buddy.provider,
+                             "model": request.buddy.model,
+                             "effort": request.buddy.effort}})
     if state.native_turn_facts is not None:
         retain("native-turn-facts", invocation_root / "native-turn-facts.json", state.native_turn_facts)
     if state.review_config is not None:
@@ -1664,7 +1664,7 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
         harness_version=state.version,
         native_event_count=state.event_count or None,
         model_started=True if state.model_started else None,
-        configuration=_checked_configuration(request, state, mode),
+        buddy=_checked_buddy(request, state, mode),
         native_identity=native_identity,
         native_evidence=NativeEvidence(
             unknown_events={"countsByType": facts.unknown_counts, "total": sum(facts.unknown_counts.values())}
@@ -1845,7 +1845,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
         "storageOwner": "harness-user-store",
         "nativeAppVisibility": "listed-in-native-app",
         "note": ("Codex stores ordinary threads in the user's native directory. Native continuation "
-                 "rechecks task, checkout, configuration and the last completed turn binding; "
+                 "rechecks task, checkout, buddy and the last completed turn binding; "
                  "application visibility still needs installed-run verification."),
     }
 

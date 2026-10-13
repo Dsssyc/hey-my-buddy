@@ -100,7 +100,7 @@ class HarnessServiceTests(BoardTestCase):
                     result = self.call('capabilities', refresh=True, adapter='codex')
                     self.assertNotIn('error', result)
                     with self.board.db.read() as db:
-                        row = db.execute("SELECT capabilities_json FROM evaluation_profiles WHERE profile_id='codex:openai:gpt-6-sol:high'").fetchone()
+                        row = db.execute("SELECT capabilities_json FROM buddies WHERE buddy_id='codex:openai:gpt-6-sol:high'").fetchone()
                     self.assertIsNotNone(row)
                     self.assertIn('decision', json.loads(row[0]))
 
@@ -108,7 +108,7 @@ class HarnessServiceTests(BoardTestCase):
         with patch.object(self.board.workflow, 'continue_run', return_value={}), \
              patch.object(self.board.workflow, 'decide', return_value={}), \
              patch.object(self.service.harnesses, 'refresh') as refresh:
-            self.call('workflow_continue', configuration={'adapter': 'codex'})
+            self.call('workflow_continue', buddy={'adapter': 'codex'})
             self.call('workflow_decide', helpers=[{'spec': {'adapter': 'dsh'}}])
         self.assertEqual([call.args[0] for call in refresh.call_args_list], ['codex', 'dsh'])
 

@@ -10,9 +10,9 @@ from hey_my_buddy.blackboard.routing.decision import MAX_DECISION_TASK_BYTES
 from hey_my_buddy.errors import BoardError
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from hey_my_buddy.buddy.runtime.worker import Worker
-from blackboard.routing.test_decision import (DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE,
-                             SECOND_PROFILE_ID, THIRD_PROFILE, THIRD_PROFILE_ID)
-from blackboard.tasks.test_workflow import CONFIGURATION, NONCE, WorkflowTestCase
+from blackboard.routing.test_decision import (DecisionTestCase, CATALOG_BUDDY, BUDDY_ID, SECOND_BUDDY,
+                             SECOND_BUDDY_ID, THIRD_BUDDY, THIRD_BUDDY_ID)
+from blackboard.tasks.test_workflow import BUDDY, NONCE, WorkflowTestCase
 
 
 class TestWorkflowRouting(WorkflowTestCase):
@@ -42,7 +42,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
         return self.claim(board, "router", run_id=view["routing"]["taskId"], claim_request_id=claim_id)
 
-    def select(self, board, claim, *, profile_id=PROFILE_ID, shutdown=True, status="ok"):
+    def select(self, board, claim, *, buddy_id=BUDDY_ID, shutdown=True, status="ok"):
         owned = claim["claim"]
         return board.call("worker_result", {
             "workerId": "router", "attemptId": owned["attempt"]["attemptId"],
@@ -52,7 +52,7 @@ class TestWorkflowRouting(WorkflowTestCase):
                        "stopEvidence": {"shutdownConfirmed": shutdown, "native": {"shutdownConfirmed": shutdown}},
                        "usage": {"elapsedMs": 100, "toolCalls": 0},
                        "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": owned["decisionInput"]["executionWorkspace"]["manifestSha256"]},
-                       "decision": self.valid_decision(owned["decisionInput"], profile_id)},
+                       "decision": self.valid_decision(owned["decisionInput"], buddy_id)},
         })
 
     def test_macro_task_description_never_enters_selector_or_worker(self):
@@ -71,7 +71,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         board = self.board()
         submitted = self.submit(board)
         self.assertEqual(submitted["routing"]["status"], "explicit")
-        self.assertEqual(submitted["executionConfiguration"], CONFIGURATION)
+        self.assertEqual(submitted["buddy"], BUDDY)
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
         with board.store.db.read() as connection:
@@ -85,27 +85,27 @@ class TestWorkflowRouting(WorkflowTestCase):
                 self.assertEqual(raised.exception.code, "GOVERNED_REQUIRED")
         self.register(board)
         claim = self.claim(board)
-        self.assertEqual({key: claim["claim"]["task"]["spec"][key] for key in CONFIGURATION}, CONFIGURATION)
+        self.assertEqual({key: claim["claim"]["task"]["spec"][key] for key in BUDDY}, BUDDY)
         self.assertEqual(self.catalog_validation.call_count, 1)
 
     def test_settings_edit_does_not_stop_a_queued_router_selection(self):
         board = self.board()
-        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
+        self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY))
         submitted = self.routed(board, requiredCapabilities=["effort:high"])
         decision_id = submitted["routing"]["decisionId"]
         board.console_call("user_policy_publish", {
             "commandId": "change-router-list",
-            "configuration": {"routerProfileIds": [SECOND_PROFILE_ID]},
+            "configuration": {"routerBuddyIds": [SECOND_BUDDY_ID]},
         })
         claimed = self.router_claim(board, submitted, claim_id="after-settings-change")
         self.assertIsNotNone(claimed["claim"])
-        self.assertEqual(claimed["claim"]["decisionInput"]["profile"]["model"], PROFILE["model"])
-        self.select(board, claimed, profile_id=SECOND_PROFILE_ID)
+        self.assertEqual(claimed["claim"]["decisionInput"]["buddy"]["model"], CATALOG_BUDDY["model"])
+        self.select(board, claimed, buddy_id=SECOND_BUDDY_ID)
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["routing"]["decisionId"], decision_id)
         self.assertEqual(view["routing"]["status"], "completed")
 
-    def test_omitted_configuration_has_one_durable_decision_and_immutable_request(self):
+    def test_omitted_buddy_has_one_durable_decision_and_immutable_request(self):
         board = self.board()
         self.seed(board)
         submitted = self.routed(board)
@@ -113,7 +113,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertTrue(duplicate["duplicate"])
         self.assertEqual(duplicate["control"], submitted["control"])
         self.assertEqual(duplicate["routing"]["decisionId"], submitted["routing"]["decisionId"])
-        self.assertIsNone(submitted["executionConfiguration"])
+        self.assertIsNone(submitted["buddy"])
         self.assertEqual(submitted["counts"]["turns"], 0)
         self.register(board)
         self.assertEqual(self.claim(board, run_id=submitted["runId"])["reason"], "awaiting-model-selection")
@@ -121,7 +121,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertNotIn("turn", claim["claim"])
         self.select(board, claim)
         selected = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
-        self.assertEqual(selected["executionConfiguration"], CONFIGURATION)
+        self.assertEqual(selected["buddy"], BUDDY)
         self.assertEqual(selected["requestFingerprint"], submitted["requestFingerprint"])
         self.assertEqual(selected["goal"]["fingerprint"], submitted["goal"]["fingerprint"])
         with board.store.db.read() as connection:
@@ -129,29 +129,29 @@ class TestWorkflowRouting(WorkflowTestCase):
             self.assertNotIn("adapter", json.loads(task["spec_json"]))
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 1)
         claimed = self.claim(board, run_id=submitted["runId"], claim_request_id="execute")
-        self.assertEqual(claimed["claim"]["task"]["spec"]["model"], CONFIGURATION["model"])
-        self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["executionConfiguration"], CONFIGURATION)
+        self.assertEqual(claimed["claim"]["task"]["spec"]["model"], BUDDY["model"])
+        self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["buddy"], BUDDY)
         self.assertTrue(self.routed(board)["duplicate"])
 
     def test_partial_constraints_are_rejected_and_capabilities_filter_instead(self):
         board = self.board()
-        # Two effort-high profiles keep the Router path; the required capability is
-        # still a hard filter, and a third enabled profile would also be filtered out.
-        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
+        # Two effort-high buddies keep the Router path; the required capability is
+        # still a hard filter, and a third enabled buddy would also be filtered out.
+        self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY))
         with self.assertRaises(BoardError) as raised:
             self.routed(board, effort="high")
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         self.assertIn("all-or-nothing", raised.exception.message)
         submitted = self.routed(board, requiredCapabilities=["effort:high"])
         claim = self.router_claim(board, submitted)
-        self.assertEqual(sorted(profile["profileId"] for profile in claim["claim"]["decisionInput"]["profiles"]),
-                         sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
-        self.select(board, claim, profile_id=PROFILE_ID)
+        self.assertEqual(sorted(buddy["buddyId"] for buddy in claim["claim"]["decisionInput"]["buddies"]),
+                         sorted([SECOND_BUDDY_ID, THIRD_BUDDY_ID]))
+        self.select(board, claim, buddy_id=BUDDY_ID)
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertTrue(view["awaitingHost"])
         self.assertEqual(view["routing"]["status"], "needs-host")
         self.assertEqual(view["counts"]["turns"], 0)
-        self.assertIsNone(view["executionConfiguration"])
+        self.assertIsNone(view["buddy"])
 
     def test_no_selector_or_candidates_is_recoverable_without_fake_turn(self):
         board = self.board()
@@ -163,13 +163,13 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(submitted["counts"]["turns"], 0)
         with self.assertRaises(BoardError) as raised:
             self.continue_run(board, submitted)
-        self.assertEqual(raised.exception.code, "CONFIGURATION_REQUIRED")
-        recovered = self.continue_run(board, submitted, configuration=CONFIGURATION, reason="Host selected an installed configuration after routing had no selector")
-        self.assertEqual(recovered["executionConfiguration"], CONFIGURATION)
+        self.assertEqual(raised.exception.code, "BUDDY_REQUIRED")
+        recovered = self.continue_run(board, submitted, buddy=BUDDY, reason="Host selected an installed buddy after routing had no selector")
+        self.assertEqual(recovered["buddy"], BUDDY)
         self.assertFalse(recovered["awaitingHost"])
-        self.assertTrue(self.continue_run(board, submitted, configuration=CONFIGURATION, reason="Host selected an installed configuration after routing had no selector")["duplicate"])
+        self.assertTrue(self.continue_run(board, submitted, buddy=BUDDY, reason="Host selected an installed buddy after routing had no selector")["duplicate"])
 
-    def test_reroute_after_configuration_fix_is_durable_and_idempotent(self):
+    def test_reroute_after_buddy_fix_is_durable_and_idempotent(self):
         board = self.board()
         submitted = self.routed(board)
         self.seed(board)
@@ -215,7 +215,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertTrue(owned["cancelRequested"])
         self.select(board, claim)
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.assertIsNone(view["executionConfiguration"])
+        self.assertIsNone(view["buddy"])
         self.assertEqual(view["state"], "cancelled")
         self.assertEqual(view["shutdown"]["unconfirmedCount"], 0)
 
@@ -229,30 +229,30 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.controls[taken["runId"]] = taken["control"]
         self.assertTrue(taken["awaitingHost"])
         with self.assertRaises(BoardError) as raised:
-            self.continue_run(board, taken, configuration=CONFIGURATION, reason="New Host selected an installed configuration after takeover")
+            self.continue_run(board, taken, buddy=BUDDY, reason="New Host selected an installed buddy after takeover")
         self.assertEqual(raised.exception.code, "SHUTDOWN_UNCONFIRMED")
         self.select(board, claim)
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.assertIsNone(view["executionConfiguration"])
-        recovered = self.continue_run(board, view, configuration=CONFIGURATION, reason="New Host selected an installed configuration after shutdown confirmation")
-        self.assertEqual(recovered["executionConfiguration"], CONFIGURATION)
+        self.assertIsNone(view["buddy"])
+        recovered = self.continue_run(board, view, buddy=BUDDY, reason="New Host selected an installed buddy after shutdown confirmation")
+        self.assertEqual(recovered["buddy"], BUDDY)
 
-    def test_host_configuration_cannot_break_locked_constraints(self):
+    def test_host_buddy_cannot_break_locked_constraints(self):
         # The retired scenario locked a partial `effort` constraint; a partial tuple
         # is rejected input now, so the lock's surviving meaning is checked with the
         # complete quadruple it can still be supplied with.
         board = self.board()
-        supplied = {**CONFIGURATION, "effort": "high"}
-        submitted = self.submit(board, configurationLocked=True, **supplied)
+        supplied = {**BUDDY, "effort": "high"}
+        submitted = self.submit(board, buddyLocked=True, **supplied)
         self.assertEqual(submitted["routing"]["status"], "explicit")
         self.register(board)
         self.finish_turn(board, self.claim(board), disposition="assistance")
         awaiting = board.call("workflow_get", {"runId": submitted["runId"]})
         with self.assertRaises(BoardError) as raised:
-            self.continue_run(board, awaiting, configuration=CONFIGURATION, reason="Host attempted to override the locked buddy")
-        self.assertEqual(raised.exception.code, "CONFIGURATION_CONFLICT")
-        recovered = self.continue_run(board, awaiting, configuration=supplied, reason="Host re-selected the locked buddy")
-        self.assertEqual(recovered["executionConfiguration"], supplied)
+            self.continue_run(board, awaiting, buddy=BUDDY, reason="Host attempted to override the locked buddy")
+        self.assertEqual(raised.exception.code, "BUDDY_CONFLICT")
+        recovered = self.continue_run(board, awaiting, buddy=supplied, reason="Host re-selected the locked buddy")
+        self.assertEqual(recovered["buddy"], supplied)
 
     def test_routing_attention_refuses_assistance_before_workspace_or_catalog_work(self):
         board = self.board()
@@ -260,11 +260,11 @@ class TestWorkflowRouting(WorkflowTestCase):
         prepared = len(self.workspace.prepare_calls)
         with self.assertRaises(BoardError) as raised:
             self.decide(board, submitted, submitted["activeRequest"]["requestId"], helpers=[{
-                "requestId": "wrong-operation-helper", "task": "cannot resolve configuration",
+                "requestId": "wrong-operation-helper", "task": "cannot resolve buddy",
                 "cwd": str(self.workdir("wrong-operation-helper")),
                 "executionWorkspace": {"kind": "worktree", "access": "write"},
             }])
-        self.assertEqual(raised.exception.code, "CONFIGURATION_REQUIRED")
+        self.assertEqual(raised.exception.code, "BUDDY_REQUIRED")
         self.assertEqual(len(self.workspace.prepare_calls), prepared)
         self.assertEqual(self.catalog_validation.call_count, 0)
 
@@ -282,7 +282,7 @@ class TestWorkflowRouting(WorkflowTestCase):
 
     def test_helper_routes_with_hard_filters_and_parent_owns_its_stop(self):
         board = self.board()
-        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
+        self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY))
         parent = self.submit(board)
         self.register(board)
         self.finish_turn(board, self.claim(board), disposition="assistance")
@@ -290,14 +290,14 @@ class TestWorkflowRouting(WorkflowTestCase):
         helper_id = approved["children"][0]["taskId"]
         helper = board.call("workflow_get", {"runId": helper_id})
         routing = self.router_claim(board, helper)
-        self.assertEqual(sorted(profile["profileId"] for profile in routing["claim"]["decisionInput"]["profiles"]),
-                         sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
+        self.assertEqual(sorted(buddy["buddyId"] for buddy in routing["claim"]["decisionInput"]["buddies"]),
+                         sorted([SECOND_BUDDY_ID, THIRD_BUDDY_ID]))
         cancelled = board.call("workflow_cancel", {"runId": parent["runId"], **self.control(parent)})
         self.assertIn(helper["routing"]["taskId"], cancelled["shutdown"]["unconfirmedRunIds"])
-        self.select(board, routing, profile_id=SECOND_PROFILE_ID)
+        self.select(board, routing, buddy_id=SECOND_BUDDY_ID)
         closed = board.call("workflow_get", {"runId": helper_id})
         self.assertEqual(closed["state"], "cancelled")
-        self.assertIsNone(closed["executionConfiguration"])
+        self.assertIsNone(closed["buddy"])
 
     def test_helper_routing_attention_can_be_resolved_by_root_owner(self):
         board = self.board()
@@ -311,8 +311,8 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(request["origin"]["runId"], helper_id)
         with self.assertRaises(BoardError) as raised:
             self.decide(board, view, request["requestId"], command_id="wrong-command")
-        self.assertEqual(raised.exception.code, "CONFIGURATION_REQUIRED")
-        continued = self.continue_run(board, view, targetRunId=helper_id, configuration={**CONFIGURATION, "effort": "high"}, reason="Root Host resolved the helper's high effort routing request")
+        self.assertEqual(raised.exception.code, "BUDDY_REQUIRED")
+        continued = self.continue_run(board, view, targetRunId=helper_id, buddy={**BUDDY, "effort": "high"}, reason="Root Host resolved the helper's high effort routing request")
         self.assertEqual(continued["runId"], parent["runId"])
         self.assertEqual(continued["targetRunId"], helper_id)
         self.assertEqual(continued["counts"]["openRequests"], 0)
@@ -328,7 +328,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         unrelated = self.routed(board, request_id="unrelated", executionWorkspace={"kind": "worktree", "access": "write"})
         fresh = board.call("workflow_get", {"runId": parent["runId"]})
         with self.assertRaises(BoardError) as raised:
-            self.continue_run(board, fresh, command_id="foreign", targetRunId=unrelated["runId"], configuration=CONFIGURATION, reason="Host attempted to configure an unrelated goal")
+            self.continue_run(board, fresh, command_id="foreign", targetRunId=unrelated["runId"], buddy=BUDDY, reason="Host attempted to configure an unrelated goal")
         self.assertEqual(raised.exception.code, "UNAUTHORIZED")
 
     def test_installed_validation_race_with_takeover_cannot_start_old_snapshot(self):
@@ -338,21 +338,21 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.select(board, self.router_claim(board, view))
         self.register(board)
 
-        def takeover(configuration, **_):
+        def takeover(buddy, **_):
             board.call("workflow_takeover", {"runId": view["runId"], "commandId": "during-validation",
                        "expectedOwnerGeneration": 1, "newHostId": "host-2", **self.control(view)})
-            return dict(configuration)
+            return dict(buddy)
 
         self.catalog_validation.side_effect = takeover
         claim = self.claim(board)
         self.assertIsNone(claim["claim"])
-        self.assertEqual(claim["reason"], "awaiting-configuration-validation")
+        self.assertEqual(claim["reason"], "awaiting-buddy-validation")
         self.assertEqual(board.call("workflow_get", {"runId": view["runId"]})["counts"]["turns"], 0)
 
-    def test_native_resume_requires_same_configuration_and_exact_previous_session(self):
+    def test_native_resume_requires_same_buddy_and_exact_previous_session(self):
         board = self.board()
         submitted = self.routed(board)
-        configured = self.continue_run(board, submitted, configuration={**CONFIGURATION, "adapter": "zcode"}, reason="Host selected ZCode for native session continuity")
+        configured = self.continue_run(board, submitted, buddy={**BUDDY, "adapter": "zcode"}, reason="Host selected ZCode for native session continuity")
         board.call("worker_register", {"workerId": "w1", "adapter": "zcode", "capabilities": ["zcode", "dsh"]})
         first = self.claim(board)
         self.finish_turn(board, first, disposition="attention", session_id="native-123")
@@ -363,7 +363,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(resumed["claim"]["turn"]["input"]["previousSessionId"], "native-123")
         self.finish_turn(board, resumed, disposition="attention", session_id="native-123")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.continue_run(board, view, command_id="change-config", configuration=CONFIGURATION, reason="Host changed adapter after the prior turn")
+        self.continue_run(board, view, command_id="change-config", buddy=BUDDY, reason="Host changed adapter after the prior turn")
         changed = self.claim(board, claim_request_id="new-harness")
         self.assertEqual(changed["claim"]["turn"]["resumeMode"], "reconstructed-new-session")
 
@@ -389,7 +389,7 @@ class TestWorkflowRouting(WorkflowTestCase):
     def test_native_session_reconstructs_after_a_recorded_harness_version_change(self):
         board = self.board()
         submitted = self.routed(board)
-        self.continue_run(board, submitted, configuration={**CONFIGURATION, 'adapter': 'zcode'}, reason='Host native-session test')
+        self.continue_run(board, submitted, buddy={**BUDDY, 'adapter': 'zcode'}, reason='Host native-session test')
         board.call('worker_register', {'workerId': 'w1', 'adapter': 'zcode', 'capabilities': ['zcode']})
         first = self.claim(board)
         self.finish_turn(board, first, disposition='attention', session_id='old-native')
@@ -415,7 +415,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertFalse(result["workflow"]["accepted"])
         self.assertIn("native turn evidence is incomplete", result["attempt"]["error"])
 
-    def test_configuration_validation_is_once_per_revision_even_while_capacity_is_full(self):
+    def test_buddy_validation_is_once_per_revision_even_while_capacity_is_full(self):
         board = self.board(max_concurrent=1)
         self.seed(board)
         submitted = self.routed(board)
@@ -436,20 +436,20 @@ class TestWorkflowRouting(WorkflowTestCase):
         first = self.claim(board, run_id=submitted["runId"], claim_request_id="first-coding-turn")
         self.finish_turn(board, first, disposition="attention")
         current = board.call("workflow_get", {"runId": submitted["runId"]})
-        continued = self.continue_run(board, current, command_id="same-configuration")
-        self.assertEqual(continued["executionConfigurationRevision"], 1)
+        continued = self.continue_run(board, current, command_id="same-buddy")
+        self.assertEqual(continued["buddyRevision"], 1)
         second = self.claim(board, claim_request_id="second-coding-turn")
         self.assertEqual(self.catalog_validation.call_count, 1)
         self.finish_turn(board, second, disposition="attention")
         current = board.call("workflow_get", {"runId": submitted["runId"]})
-        changed = self.continue_run(board, current, command_id="new-configuration", configuration={**CONFIGURATION, "effort": "high"}, reason="Host chose higher effort after capacity released")
-        self.assertEqual(changed["executionConfigurationRevision"], 2)
+        changed = self.continue_run(board, current, command_id="new-buddy", buddy={**BUDDY, "effort": "high"}, reason="Host chose higher effort after capacity released")
+        self.assertEqual(changed["buddyRevision"], 2)
         third = self.claim(board, claim_request_id="third-coding-turn")
-        self.assertEqual(third["claim"]["turn"]["input"]["context"]["executionConfiguration"]["effort"], "high")
+        self.assertEqual(third["claim"]["turn"]["input"]["context"]["buddy"]["effort"], "high")
         self.assertEqual(self.catalog_validation.call_count, 2)
 
     def test_real_decision_worker_selects_once_and_persists_owned_shutdown_evidence(self):
-        DecisionTestCase.use_helper(self, profile_id=SECOND_PROFILE_ID)
+        DecisionTestCase.use_helper(self, buddy_id=SECOND_BUDDY_ID)
         held = []
         start = self.readonly_start.side_effect
 
@@ -460,22 +460,22 @@ class TestWorkflowRouting(WorkflowTestCase):
 
         self.readonly_start.side_effect = remember_handle
         board = self.board(max_concurrent=1)
-        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
+        self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY))
         submitted = self.routed(board, requiredCapabilities=["effort:high"])
         worker = Worker("routing-worker", self.directory, client=board.client(), adapters=("decision",))
         worker.register()
         self.assertEqual(worker.run_once(), "ran")
         selected = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(selected["routing"]["status"], "completed")
-        self.assertEqual(selected["executionConfiguration"], {key: SECOND_PROFILE[key] for key in CONFIGURATION})
+        self.assertEqual(selected["buddy"], {key: SECOND_BUDDY[key] for key in BUDDY})
         self.assertEqual(selected["counts"]["turns"], 0)
         decision_task = board.call("task_get", {"runId": selected["routing"]["taskId"]})["task"]
         self.assertTrue(decision_task["shutdownConfirmed"])
         decision_id = selected["routing"]["decisionId"]
         audit = board.call("selection_get", {"decisionId": decision_id, "includeAudit": True})["decision"]
-        self.assertEqual(sorted(profile["profileId"] for profile in audit["input"]["profiles"]),
-                         sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
-        self.assertEqual(audit["requestedProfile"]["model"], PROFILE["model"])
+        self.assertEqual(sorted(buddy["buddyId"] for buddy in audit["input"]["buddies"]),
+                         sorted([SECOND_BUDDY_ID, THIRD_BUDDY_ID]))
+        self.assertEqual(audit["requestedBuddy"]["model"], CATALOG_BUDDY["model"])
         self.assertEqual(len(held), 1)
         control = held[0].role_run_control
         self.assertEqual(control["attemptId"], selected["routing"]["attemptId"])
@@ -489,9 +489,9 @@ class TestWorkflowRouting(WorkflowTestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
         board.call("worker_register", {"workerId": "w1", "capabilities": ["dsh", "command", "effort:high"]})
         claimed = self.claim(board, run_id=submitted["runId"], claim_request_id="authorized-coding-turn")
-        self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["executionConfiguration"], selected["executionConfiguration"])
+        self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["buddy"], selected["buddy"])
 
-    def test_oversized_goal_stops_before_selection_and_recovers_with_explicit_configuration(self):
+    def test_oversized_goal_stops_before_selection_and_recovers_with_explicit_buddy(self):
         DecisionTestCase.use_helper(self)
         board = self.board()
         self.seed(board)
@@ -526,7 +526,7 @@ class TestWorkflowRouting(WorkflowTestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 0)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 1)
-        continued = self.continue_run(board, submitted, configuration=CONFIGURATION, reason="Host chose an installed configuration for the oversized goal")
+        continued = self.continue_run(board, submitted, buddy=BUDDY, reason="Host chose an installed buddy for the oversized goal")
         self.assertEqual(continued["requestFingerprint"], submitted["requestFingerprint"])
         self.assertEqual(continued["goal"]["fingerprint"], submitted["goal"]["fingerprint"])
         audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})["audit"]

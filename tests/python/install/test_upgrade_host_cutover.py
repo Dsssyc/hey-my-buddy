@@ -21,7 +21,7 @@ import time
 import venv
 from unittest import mock
 
-from blackboard.tasks.test_workflow_real import CONFIGURATION, RealWorkspaceTestCase
+from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 from protocol.fixtures import native_turn
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import sha256_text
@@ -159,7 +159,7 @@ class HostCutoverTests(RealWorkspaceTestCase):
         })
 
     def submit_params(self, request_id):
-        return {**CONFIGURATION, "requestId": request_id, "submissionToken": "t" * 32, "hostId": "host-1",
+        return {**BUDDY, "requestId": request_id, "submissionToken": "t" * 32, "hostId": "host-1",
                 "task": "private upgrade goal", "cwd": str(self.repo),
                 "executionWorkspace": {"kind": "worktree", "access": "write"}}
 

@@ -112,7 +112,7 @@ class ModeProbe(InstalledZcodeTests):
         request, services = MockNativeCase.worker_request(self, turn_input, timeout=timeout, continuation=continuation)
         permission = worker_permission("zcode", "write")
         request = request.model_copy(update={
-            "configuration": request.configuration.model_copy(update={"model": "GLM-5.3-Flash"}),
+            "buddy": request.buddy.model_copy(update={"model": "GLM-5.3-Flash"}),
             "worker_permission": permission})
         finish = next(name for name in request.session_services[0].tool_names if name.endswith("__buddy_finish_turn"))
         self.call_prefix = "call_probe_" + request.identity.invocation_id[:12]

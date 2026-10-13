@@ -137,7 +137,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low",
              "cwd": str(self.cwd), "timeoutSeconds": WIRING_TIMEOUT}, self.root / "attempt", {},
             {**self.environment, "BUDDY_ZCODE_TEST_CASE": case})
-        request = NoToolStructuredRequest(str(self.cwd), "Choose a profile", SCHEMA, WIRING_TIMEOUT,
+        request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA, WIRING_TIMEOUT,
                                           capture_evidence=capture_evidence)
         handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)

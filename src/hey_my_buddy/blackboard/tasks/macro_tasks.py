@@ -553,16 +553,16 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "shutdownConfirmed": attempts == confirmed and not unproven,
         "depth": depth,
         "kind": metadata["kind"],
-        "configuration": _full_configuration(metadata["configuration"]),
+        "buddy": _full_buddy(metadata["buddy"]),
         "acceptedAt": row["accepted_at"],
         "acceptanceVerdict": row["acceptance_verdict"],
     }
 
 
-def _full_configuration(value: dict | None) -> dict | None:
+def _full_buddy(value: dict | None) -> dict | None:
     if not isinstance(value, dict) or not value:
         return None
-    return {key: value.get(key) or None for key in delegation.CONFIGURATION_FIELDS}
+    return {key: value.get(key) or None for key in delegation.BUDDY_FIELDS}
 
 
 def _reversed(start: Any, end: Any) -> bool:
@@ -571,7 +571,7 @@ def _reversed(start: Any, end: Any) -> bool:
 
 def _span(kind: str, span_id: str, run_id: str, start: Any, end: Any, state: str, *,
           attempt_id: str | None = None, turn_id: str | None = None, turn_index: int | None = None,
-          request_id: str | None = None, configuration: dict | None = None,
+          request_id: str | None = None, buddy: dict | None = None,
           shutdown_confirmed: bool | None = None, uncertain: bool = False, **extra) -> dict:
     """One recorded interval. Missing or reversed timing is reported, never repaired."""
     span = {
@@ -585,7 +585,7 @@ def _span(kind: str, span_id: str, run_id: str, start: Any, end: Any, state: str
         "turnId": turn_id,
         "turnIndex": turn_index,
         "requestId": request_id,
-        "configuration": _full_configuration(configuration),
+        "buddy": _full_buddy(buddy),
         "shutdownConfirmed": shutdown_confirmed,
         "uncertain": uncertain,
         "clockSkew": _reversed(start, end),
@@ -611,15 +611,15 @@ def _attempt_state(attempt) -> tuple[str, bool, bool]:
     return attempt["execution_state"], confirmed, uncertain
 
 
-def _turn_configuration(input_json: Any) -> dict | None:
+def _turn_buddy(input_json: Any) -> dict | None:
     try:
         payload = json.loads(input_json) if isinstance(input_json, str) else None
     except ValueError:
         return None
-    configuration = payload.get("executionConfiguration") if isinstance(payload, dict) else None
-    if not isinstance(configuration, dict):
+    buddy = payload.get("buddy") if isinstance(payload, dict) else None
+    if not isinstance(buddy, dict):
         return None
-    return {key: configuration.get(key) for key in delegation.CONFIGURATION_FIELDS if configuration.get(key)}
+    return {key: buddy.get(key) for key in delegation.BUDDY_FIELDS if buddy.get(key)}
 
 
 def _run_spans(connection, row) -> list[dict]:
@@ -648,7 +648,7 @@ def _run_spans(connection, row) -> list[dict]:
             spans.append(_span("queue", f"queue:{attempt['attempt_id']}", run_id, queue_start, claimed, "claimed",
                                attempt_id=attempt["attempt_id"]))
         state, confirmed, uncertain = _attempt_state(attempt)
-        configuration = _turn_configuration(attempt["input_json"]) or (
+        buddy = _turn_buddy(attempt["input_json"]) or (
             {"adapter": attempt["model_adapter"], "provider": attempt["model_provider"], "model": attempt["model_model"]}
             if attempt["model_adapter"] else {"adapter": attempt["adapter"]}
         )
@@ -656,7 +656,7 @@ def _run_spans(connection, row) -> list[dict]:
             "execution", f"execution:{attempt['attempt_id']}", run_id,
             attempt["started_at"] or attempt["created_at"], attempt["finished_at"] if state == "finished" else None,
             state, attempt_id=attempt["attempt_id"], turn_id=attempt["turn_id"], turn_index=attempt["turn_index"],
-            configuration=configuration, shutdown_confirmed=confirmed, uncertain=uncertain,
+            buddy=buddy, shutdown_confirmed=confirmed, uncertain=uncertain,
             generation=attempt["generation"], disposition=attempt["disposition"],
             resultStatus=attempt["result_status"],
             tokenUsage=json.loads(attempt["token_usage_json"]) if attempt["token_usage_json"] else None,
@@ -702,7 +702,7 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
     # Resolve the immutable decision from its own calculation task, never from
     # the owner's current workflow route (which may have been retried).
     record = connection.execute(
-        "SELECT d.decision_id, d.status, d.profile_id, d.reason, r.selected_json, r.output_json, r.requested_json"
+        "SELECT d.decision_id, d.status, d.buddy_id, d.reason, r.selected_json, r.output_json, r.requested_json"
         " FROM decision_requests r JOIN evaluation_decisions d USING(decision_id)"
         " WHERE r.task_id=?", (decision_task_id,)
     ).fetchone()
@@ -711,17 +711,17 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
     usage = output.get("usage") if isinstance(output.get("usage"), dict) else {}
     routing = {
         **router.routing_facts(json.loads(record["requested_json"]) if record else {}),
-        "selectedProfile": json.loads(record["selected_json"]) if record and record["selected_json"] else None,
+        "selectedBuddy": json.loads(record["selected_json"]) if record and record["selected_json"] else None,
         "reason": (record["reason"] or None) if record else None,
         "policyCheck": output.get("policyCheck"),
         "budget": output.get("budget"),
         "usage": {key: usage.get(key) for key in ("elapsedMs", "toolCalls", "bytesRead")},
     }
     abstention = False
-    if record and record["status"] == "needs-host" and output.get("status") == "ok" and record["profile_id"] is None:
+    if record and record["status"] == "needs-host" and output.get("status") == "ok" and record["buddy_id"] is None:
         try:
             answer = router.validate_answer(output.get("decision"), [])
-            abstention = answer["profileId"] is None
+            abstention = answer["buddyId"] is None
         except BoardError:
             pass
     spans = []
@@ -736,7 +736,7 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
         if isinstance(attempt_output, dict) and 'routingMode' in attempt_output:
             span_routing = {**routing, **router.routing_facts(attempt_output)}
             if attempt_output.get('code') == 'router-review-unavailable':
-                span_routing.update(selectedProfile=None, reason=attempt_output.get('reason'),
+                span_routing.update(selectedBuddy=None, reason=attempt_output.get('reason'),
                                     policyCheck=None, budget=attempt_output.get('budget'), usage=None)
         spans.append(_span(
             "routing", f"routing:{attempt['attempt_id']}", owner_run_id,

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import type { RoutingHistory, Workflow } from "./workflow-types";
-import { configurationText, DecisionDetails } from "./DecisionDetails";
+import { buddyText, DecisionDetails } from "./DecisionDetails";
 import { decisionStatus } from "./decision-types";
 import { formatDate } from "./ui";
 import { recordedRoutingMode, routingBasisSummary, selectionSourceText } from "./routing-display";
@@ -53,8 +53,8 @@ export function RoutingDetails({ value, api, csrfToken, active, initialDecisionI
   return <>
     {initialDecisionId === null && <p className="small muted" role="status">决策 ID 未记录；可查看当前配置或路由历史。</p>}
     <section aria-label="当前执行配置"><h3>当前执行配置</h3>
-      <p className="read-text">{value.executionConfiguration ? configurationText(value.executionConfiguration) : "尚未确定执行配置。"}</p>
-      <dl className="facts"><dt>配置版本</dt><dd>{value.executionConfigurationRevision == null ? "未记录" : `V${value.executionConfigurationRevision}`}</dd>
+      <p className="read-text">{value.buddy ? buddyText(value.buddy) : "尚未确定执行配置。"}</p>
+      <dl className="facts"><dt>配置版本</dt><dd>{value.buddyRevision == null ? "未记录" : `V${value.buddyRevision}`}</dd>
         <dt>路由状态</dt><dd>{value.routing ? decisionStatus[value.routing.status] || value.routing.status : "未记录"}</dd>
         {sourceText && <><dt>选择方式</dt><dd>{sourceText}</dd></>}
         {value.routing && (value.routing.status !== "explicit" || value.routing.routingMode) && <><dt>实际模式</dt><dd>{value.routing.source === "single-candidate" || value.routing.source === "no-candidate" ? "未调用 Router" : recordedRoutingMode(value.routing.routingMode)}</dd></>}</dl>
@@ -62,7 +62,7 @@ export function RoutingDetails({ value, api, csrfToken, active, initialDecisionI
         ? "Host 指定" : value.routing?.reason || value.activeRequest?.summary || "路由决策未记录"}</p>}
       {currentId && value.routing?.reason && ["needs-host", "fenced", "failed"].includes(value.routing.status) &&
         <p className="error-message" role="status">本次路由未能用于执行：{value.routing.reason}</p>}
-      {!!Object.keys(value.routing?.constraints || {}).length && <p className="small muted wrap">提交时硬约束：{configurationText(value.routing?.constraints)}</p>}
+      {!!Object.keys(value.routing?.constraints || {}).length && <p className="small muted wrap">提交时硬约束：{buddyText(value.routing?.constraints)}</p>}
       {!!value.routing?.requiredCapabilities?.length && <p className="small muted wrap">所需能力：{value.routing.requiredCapabilities.join("、")}</p>}
       {basisLine && <p className="small muted wrap">路由依据：{basisLine}（冻结记录，不随当前配置变化）</p>}
     </section>
@@ -79,7 +79,7 @@ export function RoutingDetails({ value, api, csrfToken, active, initialDecisionI
       {!busy && page?.entries.length === 0 && <p className="muted">没有智能路由历史。</p>}
       <ul className="history-list" aria-busy={busy}>{page?.entries.map(d => <li key={d.decisionId}>
         <button className="history-choice" aria-pressed={d.decisionId === chosenId} disabled={busy} onClick={() => inspect(d.decisionId)}>
-          <span>{formatDate(d.createdAt)} · {recordedRoutingMode(d.routingMode)} · {d.selectedProfile ? configurationText(d.selectedProfile) : "未选定配置"}</span>
+          <span>{formatDate(d.createdAt)} · {recordedRoutingMode(d.routingMode)} · {d.selectedBuddy ? buddyText(d.selectedBuddy) : "未选定配置"}</span>
           <span>{decisionStatus[d.status] || d.status}{d.current ? " · 当前" : ""}</span>
         </button></li>)}</ul>
       <div className="actions history-pagination">
@@ -94,8 +94,8 @@ export function RoutingDetails({ value, api, csrfToken, active, initialDecisionI
     </details>
     {!!value.turns?.length && <details className="detail-section"><summary>执行回合与配置对应</summary>
       <ul className="route-turns">{value.turns.map(turn => <li key={turn.turnId}>
-        <strong>第 {turn.turnIndex} 回合</strong><p className="small wrap">{configurationText(turn.executionConfiguration)}</p>
-        {turn.routing ? <p className="small">执行配置 V{turn.routing.executionConfigurationRevision} · {turn.routing.decisionId
+        <strong>第 {turn.turnIndex} 回合</strong><p className="small wrap">{buddyText(turn.buddy)}</p>
+        {turn.routing ? <p className="small">执行配置 V{turn.routing.buddyRevision} · {turn.routing.decisionId
           ? <button className="routing-link" onClick={() => inspect(turn.routing!.decisionId)}>查看此回合的决定</button>
           : "Host 指定"}</p> : <p className="small muted">回合路由未记录</p>}
         <details><summary>回合标识</summary><p className="mono wrap">{turn.turnId} · {turn.attemptId}</p></details>

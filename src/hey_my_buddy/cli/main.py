@@ -106,7 +106,7 @@ METHODS = [
     "selection-get",
     "selection-list",
     "model-catalog-refresh",
-    "model-profiles",
+    "buddy-list",
     "restart",
     "stop",
 ]
@@ -128,7 +128,7 @@ examples:
       the top-level cwd and the submitting Host.
       Routing: a complete explicit adapter/provider/model/effort quadruple is validated
       and delegated directly without a Router call; a partial quadruple is rejected —
-      omit every configuration field and let the Router choose, writing the task's
+      omit every buddy field and let the Router choose, writing the task's
       needs into the task description, or supply the complete quadruple.
       The first response (and a replay that still presents the private submission
       capability) returns the Host control capability; the CLI saves it to a 0600 file
@@ -204,14 +204,14 @@ examples:
       Read the bounded evaluation snapshot, or explicitly discover the installed
       harness model catalog. Neither runs a model; discovery never exposes credentials.
 
-  buddy model-profiles '{"includeUnavailable":true,"limit":100,"query":"GLM","adapter":"zcode"}'
-      Search retained configuration identities before pagination; query has at most
+  buddy buddy-list '{"includeUnavailable":true,"limit":100,"query":"GLM","adapter":"zcode"}'
+      Search retained buddy identities before pagination; query has at most
       200 characters and 8 whitespace-separated terms. Read nextCursor for more.
 
   buddy selection-request '{"requestId":"pick-1","task":"make the failing parser test pass","requiredCapabilities":["effort:high"]}'
   buddy selection-get '{"decisionId":"dec-..."}'
       One durable, bounded selection decision. The default read is a compact Host
-      summary carrying selectedProfile (the frozen execution identity to delegate
+      summary carrying selectedBuddy (the frozen execution identity to delegate
       with); add "includeAudit":true for the persisted model input, envelope and
       proposal. A recommendation is recorded history, never an execution permit;
       a queued decision stays cancellable through `execution-cancel` on its runId.
@@ -731,7 +731,7 @@ def _render_output(method: str, response, mode: str):
         # cli_views uses a strict key list. Preserve the frozen list alongside
         # its actual current dispatch identity, including explicit absent actors.
         fields = (
-            "routerProfileIds", "routerIdentities", "routerProfileId", "routerProfile", "routerIndex",
+            "routerBuddyIds", "routerIdentities", "routerBuddyId", "routerBuddy", "routerIndex",
             "budget", "routingBudget", "routerRetryIntervalSeconds", "decisionModel", "routingBoundary",
         )
         rendered = {**rendered, "routing": {**projected, **{key: routing[key] for key in fields if key in routing}}}
@@ -753,7 +753,7 @@ def _render_output(method: str, response, mode: str):
             if isinstance(rendered.get("request"), dict):
                 rendered["request"] = {**rendered["request"], "routingBoundary": boundary}
             # Print the program's complete tuples and blocked metadata instead
-            # of placeholder configurations supplied by the older wait view.
+            # of placeholder buddies supplied by the older wait view.
             commands = boundary.get("commands") or {}
             next_commands = []
             continuation = commands.get("continue") or {}

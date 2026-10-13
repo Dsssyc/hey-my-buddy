@@ -95,9 +95,9 @@ class CatalogTests(unittest.TestCase):
                                                          "accountStatus": "not-applicable", "reason": None}])
             self.assertEqual(probe.call_count, 2, "Explicit discovery must bypass the old auth failure")
             self.assertTrue(instance.available()[0])
-            profiles = catalog.CatalogView.from_payload(refreshed).proposed_profiles()
-            self.assertEqual(len(profiles), 1)
-            self.assertFalse(profiles[0]["enabled"], "Discovery cannot grant execution permission")
+            buddies = catalog.CatalogView.from_payload(refreshed).proposed_buddies()
+            self.assertEqual(len(buddies), 1)
+            self.assertFalse(buddies[0]["enabled"], "Discovery cannot grant execution permission")
 
     def payload(self):
         payload = copy.deepcopy(FIXTURE_CATALOG)
@@ -117,16 +117,16 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(view.efforts_for("dsh", "deepseek-official", "deepseek-flash"), ["off", "low", "high", "max"])
         self.assertEqual(view.efforts_for("zcode", "deepseek-official", "deepseek-flash"), ["low", "high"])
         self.assertIsNone(view.lookup("command", "deepseek-official", "deepseek-flash"))
-        proposals = view.proposed_profiles()
+        proposals = view.proposed_buddies()
         zcode = [item for item in proposals if item["adapter"] == "zcode"]
         self.assertEqual({item["effort"] for item in zcode if item["model"] == "deepseek-flash"}, {"low", "high"})
-        self.assertTrue(all(item["profileId"].startswith("zcode:") for item in zcode))
+        self.assertTrue(all(item["buddyId"].startswith("zcode:") for item in zcode))
         self.assertTrue(all(not item["enabled"] for item in proposals))
         self.assertFalse(next(item for item in zcode if item["model"] == "basic")["available"])
 
     def test_unknown_native_settings_never_enter_public_catalog_or_proposals(self):
         view = catalog.CatalogView.from_payload(self.payload())
-        public = json.dumps([view.metadata(), view.proposed_profiles()])
+        public = json.dumps([view.metadata(), view.proposed_buddies()])
         for forbidden in ("apiKey", "requestHeaders", "Authorization", "private-provider-secret", "private-model-secret"):
             self.assertNotIn(forbidden, public)
 
@@ -135,14 +135,14 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(view.efforts_for("zcode", "deepseek-official", "basic"), ["off"])
         self.assertNotIn("max", view.efforts_for("zcode", "deepseek-official", "deepseek-flash"))
 
-    def test_profile_permissions_follow_worker_adapter_declarations(self):
+    def test_buddy_permissions_follow_worker_adapter_declarations(self):
         payload = {"source": "permission-fixture", "providers": [
             {"adapter": name, "provider": "fixture", "models": [{"id": "model", "efforts": ["off"]}]}
             for name in ("claude", "codex", "dsh", "zcode")
         ]}
-        profiles = catalog.CatalogView.from_payload(payload).proposed_profiles()
-        permissions = {profile["adapter"]: {cap for cap in profile["capabilities"]
-                                            if cap.startswith("permission:")} for profile in profiles}
+        buddies = catalog.CatalogView.from_payload(payload).proposed_buddies()
+        permissions = {buddy["adapter"]: {cap for cap in buddy["capabilities"]
+                                            if cap.startswith("permission:")} for buddy in buddies}
         self.assertEqual(permissions, {
             "claude": {"permission:read", "permission:write", "permission:full"},
             "codex": {"permission:read", "permission:write", "permission:full"},
@@ -152,8 +152,8 @@ class CatalogTests(unittest.TestCase):
         with patch.dict(_WORKER_PERMISSIONS, {"claude": {
                 level: declaration for level, declaration in _WORKER_PERMISSIONS["claude"].items()
                 if level != "full"}}):
-            restricted = catalog.CatalogView.from_payload(payload).proposed_profiles()
-        claude = next(profile for profile in restricted if profile["adapter"] == "claude")
+            restricted = catalog.CatalogView.from_payload(payload).proposed_buddies()
+        claude = next(buddy for buddy in restricted if buddy["adapter"] == "claude")
         self.assertNotIn("permission:full", claude["capabilities"])
 
     def test_explicit_permission_gate_uses_adapter_declaration(self):
@@ -181,7 +181,7 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")
         self.assertEqual(caught.exception.details["requiredCapability"], "permission:full")
 
-    def test_native_ids_with_context_suffixes_keep_legal_distinct_profile_ids(self):
+    def test_native_ids_with_context_suffixes_keep_legal_distinct_buddy_ids(self):
         payload = {"source": "claude-native-fixture", "providers": [{
             "adapter": "claude", "provider": "anthropic", "models": [
                 {"id": "claude-opus-5-5[1m]", "efforts": ["high"]},
@@ -189,16 +189,16 @@ class CatalogTests(unittest.TestCase):
                 {"id": "claude-haiku-4-5-20251001", "efforts": ["default"]},
             ],
         }]}
-        profiles = catalog.CatalogView.from_payload(payload).proposed_profiles()
-        self.assertEqual([p["model"] for p in profiles], [m["id"] for m in payload["providers"][0]["models"]])
-        self.assertEqual(len({p["profileId"] for p in profiles}), 3)
-        for profile in profiles:
+        buddies = catalog.CatalogView.from_payload(payload).proposed_buddies()
+        self.assertEqual([p["model"] for p in buddies], [m["id"] for m in payload["providers"][0]["models"]])
+        self.assertEqual(len({p["buddyId"] for p in buddies}), 3)
+        for buddy in buddies:
             # These IDs must survive card/preference/evidence publication, whose
             # identifier contract is deliberately narrower than native model IDs.
-            schemas.required_string(profile, "profileId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN)
-        self.assertEqual(profiles, catalog.CatalogView.from_payload(payload).proposed_profiles())
-        self.assertEqual(profiles[2]["effort"], "default")
-        self.assertEqual(profiles[2]["profileId"], "claude:anthropic:claude-haiku-4-5-20251001:default")
+            schemas.required_string(buddy, "buddyId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN)
+        self.assertEqual(buddies, catalog.CatalogView.from_payload(payload).proposed_buddies())
+        self.assertEqual(buddies[2]["effort"], "default")
+        self.assertEqual(buddies[2]["buddyId"], "claude:anthropic:claude-haiku-4-5-20251001:default")
 
     def test_duplicate_harness_provider_is_rejected_instead_of_shadowed(self):
         payload = self.payload()
@@ -227,10 +227,10 @@ class CatalogTests(unittest.TestCase):
             file.write_text(json.dumps(self.payload()))
             with patch.dict(os.environ, {catalog.CATALOG_FILE_ENV: str(file)}), patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=Harness()):
                 identity = dict(adapter="zcode", provider="deepseek-official", model="deepseek-flash", effort="high")
-                self.assertEqual(catalog.validate_configuration(identity, directory=directory), identity)
+                self.assertEqual(catalog.validate_buddy(identity, directory=directory), identity)
                 for replacement in ({"effort": "max"}, {"provider": "missing"}, {"model": "basic", "effort": "off"}):
                     with self.subTest(replacement=replacement), self.assertRaises(BoardError):
-                        catalog.validate_configuration({**identity, **replacement}, directory=directory)
+                        catalog.validate_buddy({**identity, **replacement}, directory=directory)
                 with self.assertRaises(BoardError):
-                    catalog.validate_configuration({"model": "deepseek-flash"}, directory=directory)
+                    catalog.validate_buddy({"model": "deepseek-flash"}, directory=directory)
             self.assertEqual(sorted(item.name for item in directory.iterdir()), ["catalog.json"])

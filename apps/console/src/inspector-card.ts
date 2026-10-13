@@ -12,9 +12,9 @@ import type { MacroTaskTimeline, TimelineEvent, TimelineRow, TimelineSpan } from
 import type { SpanOutcome, TimelineItem } from "./macro-task-display";
 import { recordedRoutingMode } from "./routing-display";
 import {
-  clockTime, configurationLabel, configurationRawLabel, displayTitle, durationText, outcomeLabel,
+  clockTime, buddyLabel, buddyRawLabel, displayTitle, durationText, outcomeLabel,
   rowLabelItem, rowStateInfo, settleItem, spanHead, spanOutcome, toMs,
-  acceptanceWaitText, titleLineTooltip, type FriendlyProfile,
+  acceptanceWaitText, titleLineTooltip, type FriendlyBuddy,
 } from "./macro-task-display";
 import { latestExecutionResult, relatedEventsForRun, relatedEventsForSpan, runRollup, hasScopeLimitations, type RunRollup } from "./macro-task-metrics";
 
@@ -100,7 +100,7 @@ function spanResultValue(span: TimelineSpan, outcome: SpanOutcome): CardField {
   return { label: "结果", value: outcomeLabel(span, outcome) };
 }
 
-function rollupFields(rollup: RunRollup, profiles?: readonly FriendlyProfile[] | null): CardField[] {
+function rollupFields(rollup: RunRollup, buddies?: readonly FriendlyBuddy[] | null): CardField[] {
   const { row } = rollup;
   const scopeLimited = hasScopeLimitations(rollup.limitations);
   const state = rowStateInfo(row);
@@ -114,7 +114,7 @@ function rollupFields(rollup: RunRollup, profiles?: readonly FriendlyProfile[] |
     value: rounds ? `共 ${rounds} 轮` : scopeLimited ? "已记录范围内没有执行片段" : "没有已记录的执行片段",
     tone: rounds ? undefined : "muted",
   });
-  fields.push({ label: "配置", value: configurationLabel(row.configuration, profiles), title: configurationRawLabel(row.configuration) });
+  fields.push({ label: "配置", value: buddyLabel(row.buddy, buddies), title: buddyRawLabel(row.buddy) });
   const starts = rollup.executions.map(span => toMs(span.startAt)).filter((value): value is number => value !== null);
   const ends = rollup.executions.map(span => toMs(span.endAt)).filter((value): value is number => value !== null);
   const pending = rollup.pending.map(span => toMs(span.startAt)).filter((value): value is number => value !== null);
@@ -142,7 +142,7 @@ export function buildInspectorCard(
   selection: InspectorSelection,
   timeline: MacroTaskTimeline,
   itemsByKey: ReadonlyMap<string, TimelineItem>,
-  profiles?: readonly FriendlyProfile[] | null,
+  buddies?: readonly FriendlyBuddy[] | null,
 ): InspectorCard | null {
   const rowsById = new Map(timeline.rows.map(row => [row.runId, row]));
   const spansById = new Map(timeline.spans.map(span => [span.spanId, span]));
@@ -160,7 +160,7 @@ export function buildInspectorCard(
     return {
       key: `run:${selection.runId}`,
       head: "整项委派",
-      fields: rollupFields(rollup, profiles),
+      fields: rollupFields(rollup, buddies),
       openItem: itemsByKey.get(rowLabelItem(row).key) ?? rowLabelItem(row),
       relatedEvents: relatedEventsForRun(selection.runId, timeline.events)
         .map(event => ({ item: itemsByKey.get(`event:${event.seq}`) ?? null, event }))
@@ -197,7 +197,7 @@ export function buildInspectorCard(
         value != null && Number.isFinite(value) && value >= 0 ? `${value} ${unit}` : UNRECORDED;
       fields.push({ label: "类型", value: "路由" }, delegationField(row));
       fields.push({ label: "实际模式", value: recordedRoutingMode(routing?.routingMode) });
-      fields.push({ label: "已选配置", value: routing?.selectedProfile ? configurationLabel(routing.selectedProfile, profiles) : UNRECORDED });
+      fields.push({ label: "已选配置", value: routing?.selectedBuddy ? buddyLabel(routing.selectedBuddy, buddies) : UNRECORDED });
       fields.push({ label: "理由", value: reason });
       fields.push({ label: "偏好结果", value: routing?.policyCheck
         ? `用户：${preference(userPreference)}${deviated ? `；偏离理由：${reason}` : ""}`
@@ -214,8 +214,8 @@ export function buildInspectorCard(
       });
       fields.push({
         label: "配置",
-        value: configurationLabel(span.configuration, profiles),
-        title: configurationRawLabel(span.configuration),
+        value: buddyLabel(span.buddy, buddies),
+        title: buddyRawLabel(span.buddy),
       });
       fields.push(spanTimingValue(span, observedAtMs), spanResultValue(span, outcome));
     }
@@ -284,7 +284,7 @@ export function buildInspectorCard(
   return {
     key: selection.key,
     head: "整项委派",
-    fields: rollupFields(rollup, profiles),
+    fields: rollupFields(rollup, buddies),
     openItem: itemsByKey.get(rowLabelItem(row).key) ?? item,
     relatedEvents: relatedEventsForRun(runId, timeline.events)
       .map(event => ({ item: itemsByKey.get(`event:${event.seq}`) ?? null, event }))

@@ -38,7 +38,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
 
     def test_shared_native_facts_have_one_location_in_all_three_results(self):
         evidence = rc.NativeEvidence(unknown_events={"countsByType": {"future": 2}, "total": 2},
-                                     unconfirmed=["tool-scope", "configuration-readback"])
+                                     unconfirmed=["tool-scope", "buddy-readback"])
         expected = evidence.to_payload()
         for harness in ("codex", "claude", "zcode", "dsh"):
             for payload in self.project(self.result(harness, evidence=evidence)):
@@ -105,8 +105,8 @@ class NativeEvidenceRoleTests(unittest.TestCase):
 
     def router_collect(self, payload, mode="fast"):
         collection = SimpleNamespace(payload=payload, stop_confirmed=True)
-        context = SimpleNamespace(decision_input={"profile": {}, "budget": {},
-                                                 "routingMode": mode, "profiles": [{"profileId": "chosen"}]})
+        context = SimpleNamespace(decision_input={"buddy": {}, "budget": {},
+                                                 "routingMode": mode, "buddies": [{"buddyId": "chosen"}]})
         handle = SimpleNamespace(router_started=time.monotonic(), role_run_control={"operation": mode},
                                  process=SimpleNamespace(returncode=0))
         with mock.patch.object(structured_call, "collect_controller", return_value=collection), \
@@ -134,10 +134,10 @@ class NativeEvidenceRoleTests(unittest.TestCase):
         self.assertIsNone(correction.stop_reason)
         evidence = rc.NativeEvidence(unknown_events=facts["unknownEvents"])
         payload = self.project(self.result(evidence=evidence))[0]
-        payload["rawAnswer"] = {"profileId": "chosen", "reason": "fits", "evidence": []}
+        payload["rawAnswer"] = {"buddyId": "chosen", "reason": "fits", "evidence": []}
         outcome = self.router_collect(payload)
         self.assertEqual(outcome.status, "ok")
-        self.assertEqual(outcome.result["decision"]["profileId"], "chosen")
+        self.assertEqual(outcome.result["decision"]["buddyId"], "chosen")
         self.assertEqual(outcome.result["nativeEvidence"]["unknownEvents"], facts["unknownEvents"])
 
     def test_unknown_events_use_the_ordinary_format_correction_rule(self):

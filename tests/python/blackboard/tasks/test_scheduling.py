@@ -26,7 +26,7 @@ class ModelServiceTests(unittest.TestCase):
         model_services = {scheduling.model_service({**base, "effort": effort}) for effort in ("off", "low", "high", "max")}
         self.assertEqual(model_services, {("dsh", "deepseek-official", "deepseek-flash")})
 
-    def test_partial_configurations_and_model_less_work_have_no_model_service(self):
+    def test_partial_buddies_and_model_less_work_have_no_model_service(self):
         for spec in (
             {"adapter": "command", "cwd": "/tmp", "argv": ["/bin/true"]},
             {"adapter": "external", "cwd": "/tmp"},

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import type { ConsoleApi, HarnessHealth } from "../api";
-import type { Profile, Snapshot } from "../types";
+import type { Buddy, Snapshot } from "../types";
 import { effortCell, level, listed, modelButton, note, pane, queryModel, search, selectModel } from "./page.testing";
 import { modelServiceKey } from "../console-data";
 
@@ -32,7 +32,7 @@ const SOL = "codex / openai / gpt-6-sol";
 const GLM = "zcode / zhipu / glm-5";
 const modelsRegion = () => screen.queryByRole("region", { name: "目录" });
 
-function profile(entry: Partial<Profile> & Pick<Profile, "profileId" | "label" | "adapter" | "provider" | "model" | "effort">): Profile {
+function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "adapter" | "provider" | "model" | "effort">): Buddy {
   return {
     available: true, enabled: false, capabilities: [], contextWindow: null,
     description: "", source: "catalog:fixture", ...entry,
@@ -40,17 +40,17 @@ function profile(entry: Partial<Profile> & Pick<Profile, "profileId" | "label" |
 }
 
 /** One enabled model service per harness plus an offline model service hidden by default. */
-function profiles(): Profile[] {
+function buddies(): Buddy[] {
   return [
-    profile({ profileId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
+    buddy({ buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
       enabled: true, capabilities: ["execution:claude", "routing:fast", "decision"], contextWindow: 200_000 }),
-    profile({ profileId: highId, label: "Claude Sonnet 5 · high", ...sonnet, effort: "high",
+    buddy({ buddyId: highId, label: "Claude Sonnet 5 · high", ...sonnet, effort: "high",
       capabilities: ["execution:claude", "decision"], contextWindow: 200_000 }),
-    profile({ profileId: solMediumId, label: "GPT-6 Sol · medium", ...sol, effort: "medium",
+    buddy({ buddyId: solMediumId, label: "GPT-6 Sol · medium", ...sol, effort: "medium",
       enabled: true, capabilities: ["execution:codex"] }),
-    profile({ profileId: flashMaxId, label: "DeepSeek Flash · max", ...flash, effort: "max",
+    buddy({ buddyId: flashMaxId, label: "DeepSeek Flash · max", ...flash, effort: "max",
       enabled: true, capabilities: ["execution:dsh", "routing:fast"] }),
-    profile({ profileId: glmId, label: "GLM-5 · default", ...glm, effort: "default", available: false,
+    buddy({ buddyId: glmId, label: "GLM-5 · default", ...glm, effort: "default", available: false,
       unavailableReason: "本机未检测到 zcode CLI" }),
   ];
 }
@@ -81,14 +81,14 @@ function harnesses(): HarnessHealth[] {
 
 type SnapshotWithHarnesses = Snapshot & { harnesses: HarnessHealth[] };
 
-function snapshot(routerProfileId: string | null = solMediumId): SnapshotWithHarnesses {
+function snapshot(routerBuddyId: string | null = solMediumId): SnapshotWithHarnesses {
   const base: Snapshot = {
     csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { routerProfileIds: routerProfileId ? [routerProfileId] : [], routerRetryIntervalSeconds: 600,
+    configuration: { routerBuddyIds: routerBuddyId ? [routerBuddyId] : [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review" as const, routingBudget: "standard" },
-    profiles: profiles(),
+    buddies: buddies(),
     preferences: [], modelServiceNotes: [],
     decisions: [],
     modelServiceConcurrency: [
@@ -101,13 +101,13 @@ function snapshot(routerProfileId: string | null = solMediumId): SnapshotWithHar
   return { ...base, harnesses: harnesses() };
 }
 
-function fixture(routerProfileId: string | null = solMediumId, extra: Partial<Snapshot> = {}) {
-  let state = { ...snapshot(routerProfileId), ...extra };
+function fixture(routerBuddyId: string | null = solMediumId, extra: Partial<Snapshot> = {}) {
+  let state = { ...snapshot(routerBuddyId), ...extra };
   const command = vi.fn(async (operation: string, _params: Record<string, any>, _csrfToken?: string) => {
-    if (operation === "model_profiles") {
+    if (operation === "buddy_list") {
       // Only the checked 显示不可用 asks for this page; the fixture keeps
       // every recorded row on one bounded page.
-      return { profiles: state.profiles, modelServiceNotes: state.modelServiceNotes,
+      return { buddies: state.buddies, modelServiceNotes: state.modelServiceNotes,
         preferences: state.preferences,
         modelServiceConcurrency: state.modelServiceConcurrency, nextCursor: null };
     }
@@ -206,7 +206,7 @@ describe("marks for what waits", () => {
 
   it("keeps the mark while the service reports no current Router, even when the head of the list could work", async () => {
     const f = fixture(mediumId, { routingHealth: {
-      available: false, currentRouterProfileId: null, reasonCode: "router-unavailable",
+      available: false, currentRouterBuddyId: null, reasonCode: "router-unavailable",
       windowSize: 20, sampleCount: 2, failureCount: 2, consecutiveFailures: 2,
       abstentionCount: 0, cancelledCount: 0,
       lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],
@@ -225,7 +225,7 @@ describe("marks for what waits", () => {
 });
 
 describe("deep links", () => {
-  it("opens and focuses the encoded profile from #buddies/catalog/buddy/<profileId>", async () => {
+  it("opens and focuses the encoded buddy from #buddies/catalog/buddy/<buddyId>", async () => {
     const f = fixture();
     renderBuddy(`#buddies/catalog/buddy/${encodeURIComponent(mediumId)}`, f);
     await listed(3, 4);
@@ -240,7 +240,7 @@ describe("deep links", () => {
   it("opens a whole model from #buddies/catalog/model/<key> on its first enabled effort, and a click on a row writes that address", async () => {
     const user = userEvent.setup();
     const f = fixture();
-    const address = (index: number) => `#buddies/catalog/model/${encodeURIComponent(modelServiceKey(profiles()[index]))}`;
+    const address = (index: number) => `#buddies/catalog/model/${encodeURIComponent(modelServiceKey(buddies()[index]))}`;
     renderBuddy(address(0), f);
     await listed(3, 4);
     await waitFor(() => pane(SONNET));

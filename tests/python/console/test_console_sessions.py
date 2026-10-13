@@ -85,11 +85,11 @@ class ConsoleSessionTests(ConsoleTestCase):
             self.assertTrue(browser.bootstrap()['consoleSession']['canWrite'])
         snapshot = first.bootstrap()
         status, _, raw = first.command('user_policy_publish', {
-            'commandId': 'first-publish', 'profileSettings': []}, csrf=snapshot['csrfToken'])
+            'commandId': 'first-publish', 'buddySettings': []}, csrf=snapshot['csrfToken'])
         self.assertEqual(status, 200, raw)
         other = second.bootstrap()
         status, _, raw = second.command('user_policy_publish', {
-            'commandId': 'second-publish', 'profileSettings': []}, csrf=other['csrfToken'])
+            'commandId': 'second-publish', 'buddySettings': []}, csrf=other['csrfToken'])
         self.assertEqual(status, 200, raw)
 
     def test_sessions_persist_hashed_and_restart_reauthenticates_cookie(self):

@@ -328,10 +328,10 @@ def refusal_turn():
     tool = "mcp__" + mcp[0]["name"] + "__buddy_finish_turn"
     if case == "refusal-argument":
         # The confirmed incident: an invalid finish argument (a non-string
-        # suggestedProfileId) is refused by the MCP with a signed envelope that
+        # suggestedBuddyId) is refused by the MCP with a signed envelope that
         # the native wrapper reports as a successful result. A child relay and a
         # foreign root deliver validly signed refusals first and must be ignored;
-        # the root then corrects itself — an explicit null suggestedProfileId is
+        # the root then corrects itself — an explicit null suggestedBuddyId is
         # the accepted "no suggestion" spelling — and completes the turn.
         _, envelope = mcp_call("buddy_finish_turn", {"disposition": "bogus"})
         child_relay = {"source": "subagent", "childSessionId": "sess-child", "childToolCallId": "child-fin"}
@@ -344,10 +344,10 @@ def refusal_turn():
         event("tool.updated", {"kind": "result", "toolCallId": "foreign-fin",
                                "result": {"success": True, "truncated": False, "content": envelope}}, root="sess-wrong")
         bad = outcome_for("attention")
-        bad["request"]["suggestedProfileId"] = 5
+        bad["request"]["suggestedBuddyId"] = 5
         native_tool_call("buddy_finish_turn", bad, call_id="call-finish-bad", error_as_result=True)
         corrected = outcome_for("attention")
-        corrected["request"]["suggestedProfileId"] = None
+        corrected["request"]["suggestedBuddyId"] = None
         native_tool_call("buddy_finish_turn", corrected, call_id="call-finish-final")
         settle_turn()
         return
@@ -356,10 +356,10 @@ def refusal_turn():
         # the signed envelope must still recover the turn for a corrected
         # same-turn retry.
         bad = outcome_for("attention")
-        bad["request"]["suggestedProfileId"] = 5
+        bad["request"]["suggestedBuddyId"] = 5
         native_tool_call("buddy_finish_turn", bad, call_id="call-finish-bad", error_as_result="failed")
         corrected = outcome_for("attention")
-        corrected["request"]["suggestedProfileId"] = None
+        corrected["request"]["suggestedBuddyId"] = None
         native_tool_call("buddy_finish_turn", corrected, call_id="call-finish-final")
         settle_turn()
         return

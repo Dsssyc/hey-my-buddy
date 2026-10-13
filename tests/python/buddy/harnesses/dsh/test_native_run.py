@@ -32,7 +32,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     MAX_SCHEMA_BYTES,
     PrivateStatePaths,
     RunBudget,
-    RunConfiguration,
+    RunBuddy,
     RunIdentity,
     RunRequest,
     SessionService,
@@ -108,7 +108,7 @@ class NativeRunCase(unittest.TestCase):
             identity=RunIdentity(task_id="task", attempt_id=f"attempt-{uuid.uuid4().hex[:8]}",
                                  generation=1, invocation_id=uuid.uuid4().hex),
             harness="dsh",
-            configuration=RunConfiguration(provider="fake", model="m1", effort="high"),
+            buddy=RunBuddy(provider="fake", model="m1", effort="high"),
             cwd=str(self.base / "cwd"),
             private_state=PrivateStatePaths(
                 invocation_root=str(self.base / f"invocation-{uuid.uuid4().hex[:8]}"),
@@ -154,7 +154,7 @@ class NativeRunCase(unittest.TestCase):
                                  generation=1, invocation_id=uuid.uuid4().hex,
                                  turn_id=identity["turnId"], input_sha256=input_hash(turn_input)),
             harness="dsh",
-            configuration=RunConfiguration(provider="fake", model="m1", effort="high"),
+            buddy=RunBuddy(provider="fake", model="m1", effort="high"),
             cwd=str(self.base / "cwd"),
             private_state=PrivateStatePaths(invocation_root=str(invocation),
                                             native_root=str(native_root or self.root)),
@@ -337,7 +337,7 @@ class FastSeamTests(NativeRunCase):
     def test_one_format_correction_runs_a_second_session_on_the_same_process(self):
         self.extra_agent_args = ["--prompt-mode", "final",
                                  "--final-answer", "not json", "--final-answer", '{"choice":"a"}']
-        prompt = no_tool_prompt("Choose a profile", SCHEMA)
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         result = run(self.fast_request(prompt), observer=correction.observer,
                      services=None, cancelled=lambda: False)
@@ -760,7 +760,7 @@ class MountTests(NativeRunCase):
     @staticmethod
     def variant_of(request: RunRequest, **overrides) -> RunRequest:
         fields = {name: getattr(request, name) for name in
-                  ("identity", "harness", "configuration", "cwd", "private_state", "input_text",
+                  ("identity", "harness", "buddy", "cwd", "private_state", "input_text",
                    "tool_scope", "worker_permission", "output_schema", "budget", "session_services")}
         fields.update(overrides)
         return RunRequest(**fields)
@@ -800,7 +800,7 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(provenance["toolCallId"], "call_finish_1")
         self.assertEqual(provenance["stopReason"], "end_turn")
         self.assertEqual(provenance["nativeSessionId"], result.native_identity.session_id)
-        checked = result.configuration.checked
+        checked = result.buddy.checked
         self.assertEqual(checked.model.value, "m1")
         self.assertEqual(checked.effort.value, "high")
 
@@ -1034,7 +1034,7 @@ class ContinuationTests(NativeRunCase):
                          {"taskId": request.identity.task_id,
                           "sessionId": result.native_identity.session_id,
                           "cwd": request.cwd,
-                          "configuration": {"provider": "fake", "model": "m1", "effort": "high"}})
+                          "buddy": {"provider": "fake", "model": "m1", "effort": "high"}})
         self.assertTrue(native_run.session_facts(self.root,
                                                  result.native_identity.session_id)["bindingPresent"])
         reference = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")

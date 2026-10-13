@@ -33,7 +33,7 @@ class RoutingHealthTests(BoardTestCase):
         if output is None:
             output = {"operation": kind, "status": "ok" if status == "completed" else "error"}
             if status == "completed":
-                output["decision"] = {"profileId": "worker-fixture", "reason": "fixture choice", "evidence": []}
+                output["decision"] = {"buddyId": "worker-fixture", "reason": "fixture choice", "evidence": []}
         if code is not None:
             output = {**output, "code": code}
         receipt_status = "cancelled" if status == "cancelled" else "ok" if output.get("status") == "ok" else "failed"
@@ -66,7 +66,7 @@ class RoutingHealthTests(BoardTestCase):
                  1 if invoked else None, now, now))
             self.coordinator._finish(connection, self.coordinator._row(connection, decision_id),
                                      status=status, now=now, output=output, error=error,
-                                     profile_id="worker-fixture" if status == "completed" else None)
+                                     buddy_id="worker-fixture" if status == "completed" else None)
             self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
         return decision_id, now
 
@@ -78,7 +78,7 @@ class RoutingHealthTests(BoardTestCase):
             decision_id, now = self.timeout()
             with self.subTest(count=count):
                 health = self.coordinator.health_summary()
-                self.assertIsNone(health["currentRouterProfileId"])
+                self.assertIsNone(health["currentRouterBuddyId"])
                 self.assertEqual(health["budgetExhaustedCount"], count)
                 self.assertEqual(health["failureCount"], count)
                 self.assertEqual(health["consecutiveFailures"], count)
@@ -93,7 +93,7 @@ class RoutingHealthTests(BoardTestCase):
             self.timeout()
             self.settle("cancelled", code="router-budget-exhausted")
         self.settle("completed", invoked=False, output={
-            "programSelection": {"code": "single-candidate", "profileId": "worker-fixture", "candidateCount": 1}})
+            "programSelection": {"code": "single-candidate", "buddyId": "worker-fixture", "candidateCount": 1}})
         health = self.coordinator.health_summary()
         self.assertFalse(health["available"])
         self.assertEqual(health["reasonCode"], "router-not-configured")
@@ -132,7 +132,7 @@ class RoutingHealthTests(BoardTestCase):
             self.settle(code="router-out-of-bounds")
             self.settle(code="router-input-changed")
             self.settle(output={"status": "ok", "operation": "select", "decision": {
-                "profileId": None, "reason": "insufficient evidence", "evidence": []}})
+                "buddyId": None, "reason": "insufficient evidence", "evidence": []}})
         health = self.coordinator.health_summary()
         self.assertFalse(health["available"])
         self.assertEqual(health["consecutiveFailures"], 3)
@@ -150,9 +150,9 @@ class RoutingHealthTests(BoardTestCase):
         self.assertEqual(health["failureCount"], 3)
         self.assertEqual(health["reasonCode"], "router-not-configured")
 
-    def test_rejected_null_profile_cannot_hide_a_failed_answer_in_the_overview(self):
+    def test_rejected_null_buddy_cannot_hide_a_failed_answer_in_the_overview(self):
         self.settle(output={"status": "ok", "operation": "select", "code": "router-tools-forbidden",
-                            "decision": {"profileId": None, "reason": "cannot choose", "evidence": []}})
+                            "decision": {"buddyId": None, "reason": "cannot choose", "evidence": []}})
         health = self.coordinator.health_summary()
         self.assertEqual(health["failureCount"], 1)
         self.assertEqual(health["abstentionCount"], 0)
@@ -183,7 +183,7 @@ class RoutingHealthTests(BoardTestCase):
         failure_id, _ = self.timeout()
         with self.db.write() as connection:
             connection.execute("UPDATE decision_requests SET output_json=? WHERE decision_id=?",
-                               (canonical_json({"status": "ok", "decision": {"profileId": "worker-fixture"}}), failure_id))
+                               (canonical_json({"status": "ok", "decision": {"buddyId": "worker-fixture"}}), failure_id))
             connection.execute("UPDATE decision_requests SET output_json=?,updated_at=? WHERE decision_id=?",
                                (canonical_json({"status": "error", "code": "timeout"}), self.clock.advance(1), success_id))
         health = self.coordinator.health_summary()

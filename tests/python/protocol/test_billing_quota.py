@@ -15,7 +15,7 @@ from hey_my_buddy.blackboard.service.harness_health import HarnessHealth
 from hey_my_buddy.blackboard.evaluation.native_observations import exhausted, record_quota, warnings
 from hey_my_buddy.blackboard.routing import router
 from support import BoardTestCase, FakeClock
-from blackboard.routing.test_decision import DecisionTestCase, PROFILE_ID, SECOND_PROFILE_ID
+from blackboard.routing.test_decision import DecisionTestCase, BUDDY_ID, SECOND_BUDDY_ID
 
 
 def stamp(offset=0):
@@ -125,12 +125,12 @@ class BillingQuotaTests(BoardTestCase):
         self.enterContext(patch("hey_my_buddy.blackboard.routing.quota_routing.utc_now", self.quota_clock))
         self.enterContext(patch("hey_my_buddy.blackboard.evaluation.native_observations.utc_now", self.quota_clock))
         board = self.board(clock=self.quota_clock)
-        self.seed(board, decision_profile=None)
+        self.seed(board, decision_buddy=None)
         config = {"adapter": "dsh", "provider": "deepseek-official"}
         reset = "2026-09-29T11:00:00Z"
         with board.store.db.read() as db:
             baseline = DecisionCoordinator._select_candidates(db, [], coding_only=True)
-            self.assertEqual({row["profile_id"] for row in baseline}, {PROFILE_ID, SECOND_PROFILE_ID})
+            self.assertEqual({row["buddy_id"] for row in baseline}, {BUDDY_ID, SECOND_BUDDY_ID})
         self._quota(board, windows=[{"name": "hour", "usedPercent": 90, "resetsAt": reset}])
         with board.store.db.read() as db:
             self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
@@ -158,7 +158,7 @@ class BillingQuotaTests(BoardTestCase):
         self._quota(board, reachedType="usage_limit_reached")
         with board.store.db.read() as db:
             self.assertEqual(DecisionCoordinator._select_candidates(db, [], coding_only=True), [])
-            self.assertEqual(router.profile_problem(db, PROFILE_ID, "fast")[1], "router-quota-exhausted")
+            self.assertEqual(router.buddy_problem(db, BUDDY_ID, "fast")[1], "router-quota-exhausted")
             self.assertIsNone(exhausted(db, {**config, "provider": "other"}))
             self.assertEqual(warnings(db, config)[0]["code"], "HARNESS_QUOTA_EXHAUSTED")
         self.quota_clock.advance(1)
@@ -194,7 +194,7 @@ class BillingQuotaTests(BoardTestCase):
 
     def test_pin_cannot_force_exhausted_candidate_but_host_explicit_choice_survives(self):
         board = self.board()
-        self.seed(board, decision_profile=None, preferences=[{"profileId": PROFILE_ID, "mode": "pin"}])
+        self.seed(board, decision_buddy=None, preferences=[{"buddyId": BUDDY_ID, "mode": "pin"}])
         self._quota(board, reachedType="usage_limit_reached")
         with board.store.db.read() as db:
             self.assertEqual(DecisionCoordinator._select_candidates(db, [], coding_only=True), [])
@@ -202,7 +202,7 @@ class BillingQuotaTests(BoardTestCase):
             "task": "Finish the bounded change", "cwd": str(self._git_workdir()),
             "executionWorkspace": {"kind": "existing", "access": "write"},
             "adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"})
-        self.assertEqual(result["executionConfiguration"]["model"], "deepseek-flash")
+        self.assertEqual(result["buddy"]["model"], "deepseek-flash")
         self.assertEqual(result["quotaWarnings"][0]["code"], "HARNESS_QUOTA_EXHAUSTED")
 
     def test_exhaustion_outlives_display_freshness_and_unknown_cannot_clear_it(self):

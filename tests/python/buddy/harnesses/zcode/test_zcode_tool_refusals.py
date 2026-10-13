@@ -1,6 +1,6 @@
 """ZCode tool-refusal recovery and precise safe finish-error attribution.
 
-The confirmed incident: an invalid finish argument (``suggestedProfileId: null``
+The confirmed incident: an invalid finish argument (``suggestedBuddyId: null``
 under the old validator) made the private MCP answer ``isError`` with plain
 validation text, the native wrapper surfaced that response as a tool result
 marked ``success: true``, and the controller then tried to parse the error text
@@ -25,11 +25,11 @@ from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
 class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
     """End-to-end wrapper-success refusal flows against the real controller."""
 
-    def test_invalid_argument_refusal_recovers_and_null_profile_means_no_suggestion(self):
+    def test_invalid_argument_refusal_recovers_and_null_buddy_means_no_suggestion(self):
         # The incident choreography: an invalid finish argument is refused with
         # a signed envelope the native wrapper reports as success: true; a child
         # relay and a foreign root deliver validly signed refusals first and are
-        # ignored; the root corrects itself — an explicit null suggestedProfileId
+        # ignored; the root corrects itself — an explicit null suggestedBuddyId
         # is the accepted no-suggestion spelling — and the turn settles ok with
         # full provenance on the corrected call only.
         context = self.context("refusal-argument", timeout=40)
@@ -41,7 +41,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         self.assertTrue(outcome.shutdown_confirmed)
         turn = outcome.result["turn"]
         request = turn["outcome"]["request"]
-        self.assertIsNone(request["suggestedProfileId"], "an explicit null must pass through as no suggestion")
+        self.assertIsNone(request["suggestedBuddyId"], "an explicit null must pass through as no suggestion")
         self.assertEqual(turn["provenance"]["toolCallId"], "call-finish-final")
         self.assertEqual(turn["provenance"]["toolResultSuccess"], True)
         self.assertEqual(turn["provenance"]["settlement"], "session-closed")
@@ -135,7 +135,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         turn = outcome.result["turn"]
-        self.assertIsNone(turn["outcome"]["request"]["suggestedProfileId"])
+        self.assertIsNone(turn["outcome"]["request"]["suggestedBuddyId"])
         self.assertEqual(turn["provenance"]["toolCallId"], "call-finish-final")
         self.assertEqual(turn["provenance"]["settlement"], "session-closed")
 

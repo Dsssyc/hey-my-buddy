@@ -267,7 +267,7 @@ describe("per-delegation rollups", () => {
       timeline.spans[0]!,
       ...timeline.spans.filter(span => span.runId === "r2" && span.spanId === "s-r2-e1"),
       { ...timeline.spans[6]!, spanId: "s-r2-e2", runId: "r2", kind: "execution", startAt: null, endAt: null,
-        state: "finished", turnIndex: 2, attemptId: "att-r2b", configuration: null, shutdownConfirmed: true },
+        state: "finished", turnIndex: 2, attemptId: "att-r2b", buddy: null, shutdownConfirmed: true },
     ] });
     const latest = latestExecutionResult(newer)!;
     expect(latest.span.turnIndex).toBe(2);
@@ -282,7 +282,7 @@ describe("per-delegation rollups", () => {
     const unordered = runRollup(r1, { ...timeline, spans: [
       timeline.spans[1]!,
       { ...timeline.spans[1]!, spanId: "s-r1-e9", runId: "r1", kind: "execution", startAt: null, endAt: null,
-        state: "finished", turnIndex: null, attemptId: "att-r1b", configuration: null, shutdownConfirmed: true },
+        state: "finished", turnIndex: null, attemptId: "att-r1b", buddy: null, shutdownConfirmed: true },
     ] });
     expect(latestExecutionResult(unordered)?.label).toBe("未记录");
   });

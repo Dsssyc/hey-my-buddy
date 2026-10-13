@@ -10,7 +10,7 @@ function data(count = 2): Pick<MacroTaskTimeline, "spans" | "events" | "observed
     spans: Array.from({ length: count }, (_, i): TimelineSpan => ({
       spanId: `span-${i}`, runId: "run", kind: "execution", startAt: at(i * 130), endAt: at(i * 130 + 10),
       state: "finished", attemptId: `attempt-${i}`, turnId: null, turnIndex: i + 1, requestId: null,
-      configuration: null, shutdownConfirmed: true, uncertain: false, clockSkew: false,
+      buddy: null, shutdownConfirmed: true, uncertain: false, clockSkew: false,
     })),
     events: [], observedAt: at(10000), scopeComplete: true,
   };

@@ -13,7 +13,7 @@ def classify_outcome(*, stage: str, code: str | None, answer_valid: bool,
     """Return answered/abstained/no-answer/changed/cancelled/stop-unconfirmed.
 
     A valid abstention finishes this Router's selection. An invalid answer that
-    contains a null profile is still no-answer. Cancellation and a changed
+    contains a null buddy is still no-answer. Cancellation and a changed
     request never authorize another Router; unconfirmed stop prevents accepting
     even an otherwise valid answer. Model-before-start preflight failures use
     the same policy with the caller's proven never-started stop fact.

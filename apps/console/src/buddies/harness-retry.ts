@@ -4,12 +4,12 @@ import { ApiError } from "../api";
 
 /**
  * The minimal quota recovery entry (ADR-019 second stage). One persisted
- * exhaustion record without a recorded reset would exclude its configuration
- * from automatic routing forever, because an excluded configuration is never
+ * exhaustion record without a recorded reset would exclude its buddy
+ * from automatic routing forever, because an excluded buddy is never
  * routed again and so never produces a newer observation. The one-shot retry
  * window fixes that: one hour after the blocking observation (or after a
  * consumed retry, or immediately after an explicit request) one normal routing
- * decision may admit the configuration again.
+ * decision may admit the buddy again.
  *
  * Allowing the retry is honest by construction: it only opens that window. It
  * queries no balance, calls no model and never claims the quota recovered —

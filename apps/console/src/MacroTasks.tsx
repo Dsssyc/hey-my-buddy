@@ -392,7 +392,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     openedRunId={detail?.runId ?? null}
     selection={selection}
     headerActions={stopControl}
-    profiles={snapshot.profiles}
+    buddies={snapshot.buddies}
     onSelectItem={selectItem}
     onOpenItem={openItem}
     onSelectRun={selectRun}

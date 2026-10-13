@@ -74,7 +74,7 @@ class NativeResumeCase(NativeRunCase):
 
 
 class ResumeTurnTests(NativeResumeCase):
-    """V-R2 and V-R4: the resumed turn itself, its launch and its configuration."""
+    """V-R2 and V-R4: the resumed turn itself, its launch and its buddy."""
 
     def assert_same_permission(self, level, mode):
         _, _, _, first = self.first_turn(level=level)
@@ -215,7 +215,7 @@ class ResumeTurnTests(NativeResumeCase):
         self.assertFalse((self.root / "dsh-home").exists())
         # The model and effort were selected and read back on the resumed
         # session through the public configuration options.
-        checked = result2.configuration.checked
+        checked = result2.buddy.checked
         self.assertEqual(checked.model.value, "m1")
         self.assertEqual(checked.effort.value, "high")
 
@@ -241,7 +241,7 @@ class ResumeFailureTests(NativeResumeCase):
                          "the spawn never happened; gone is the honest fact")
         self.assertIsNone(result.continuation)
 
-    def test_a_binding_for_another_goal_or_configuration_is_refused(self):
+    def test_a_binding_for_another_goal_or_buddy_is_refused(self):
         # A binding that names this session but a foreign goal: existence
         # alone is not eligibility.
         request, bound, mount = self.worker_request(
@@ -251,7 +251,7 @@ class ResumeFailureTests(NativeResumeCase):
         binding = self.root / (hashlib.sha256(b"foreign-goal-session").hexdigest() + ".json")
         binding.write_text(json.dumps({"taskId": "another-task", "sessionId": "foreign-goal-session",
                                        "cwd": request.cwd,
-                                       "configuration": {"provider": "fake", "model": "m1",
+                                       "buddy": {"provider": "fake", "model": "m1",
                                                          "effort": "high"}}))
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
@@ -268,7 +268,7 @@ class ResumeFailureTests(NativeResumeCase):
         binding = self.root / (hashlib.sha256(b"ghost-session").hexdigest() + ".json")
         binding.write_text(json.dumps({"taskId": request.identity.task_id,
                                        "sessionId": "ghost-session", "cwd": request.cwd,
-                                       "configuration": {"provider": "fake", "model": "m1",
+                                       "buddy": {"provider": "fake", "model": "m1",
                                                          "effort": "high"}}))
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)

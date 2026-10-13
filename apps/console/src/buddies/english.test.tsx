@@ -5,7 +5,7 @@ import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { App } from "../App";
 import type { HarnessHealth } from "../api";
-import type { Profile } from "../types";
+import type { Buddy } from "../types";
 import { fixture, health, snapshot } from "./roles.testing";
 
 /**
@@ -61,11 +61,11 @@ const harnesses = [
     candidates: [{ path: "/opt/homebrew/bin/zcode", source: "Homebrew", status: "missing", reasonCode: "not_found" }] },
 ] as unknown as HarnessHealth[];
 
-function buddy(adapter: string, provider: string, model: string, effort: string, extra: Partial<Profile> = {}): Profile {
-  return { profileId: `${adapter}:${provider}:${model}:${effort}`, label: `${model} · ${effort}`, adapter, provider, model, effort,
+function buddy(adapter: string, provider: string, model: string, effort: string, extra: Partial<Buddy> = {}): Buddy {
+  return { buddyId: `${adapter}:${provider}:${model}:${effort}`, label: `${model} · ${effort}`, adapter, provider, model, effort,
     available: true, enabled: false, capabilities: [`execution:${adapter}`, "routing:fast", "decision"], contextWindow: null, description: "", source: "catalog:fixture", ...extra };
 }
-const profiles = [
+const buddies = [
   buddy("dsh", "deepseek-official", "deepseek-flash", "off", { enabled: true }),
   buddy("dsh", "deepseek-official", "deepseek-flash", "max"),
   buddy("codex", "openai", "gpt-6-sol", "medium", { enabled: true }),
@@ -76,10 +76,10 @@ const profiles = [
 
 function world(canWrite = true) {
   return fixture(snapshot({
-    routers: [profiles[0].profileId], canWrite,
+    routers: [buddies[0].buddyId], canWrite,
     routingHealth: health({ consecutiveFailures: 2, failureCount: 3, abstentionCount: 1, boundsRejectedCount: 1,
       recentFailures: [{ decisionId: "decision-1", runId: "run-1", at: AT, code: "routing-bounds-rejected" }] }),
-    extra: { profiles, modelServiceConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }], harnesses, unavailableProfileCount: 3 },
+    extra: { buddies, modelServiceConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }], harnesses, unavailableBuddyCount: 3 },
   }));
 }
 
@@ -173,7 +173,7 @@ describe("the roles in English", () => {
   });
 
   it("says in English why the first Router is refused", async () => {
-    const f = fixture(snapshot({ routers: [profiles[3].profileId], extra: { profiles, harnesses } }));
+    const f = fixture(snapshot({ routers: [buddies[3].buddyId], extra: { buddies, harnesses } }));
     window.location.hash = "#buddies/roles";
     render(createElement(App, { suppliedApi: f.api }));
     const roles = await screen.findByRole("region", { name: "Roles" });

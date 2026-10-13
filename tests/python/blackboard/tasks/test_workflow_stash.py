@@ -23,7 +23,7 @@ from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.errors import BoardError
 
 NONCE = "n" * 16
-CONFIGURATION = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
+BUDDY = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
 
 
 def observed(entries):
@@ -43,8 +43,8 @@ class WorkflowStashTestCase(BoardTestCase):
         workflow_module._workspace_module = self.workspace
         self.addCleanup(self._restore_workspace)
         self.catalog_validation = self.enterContext(mock.patch(
-            "hey_my_buddy.blackboard.catalog.catalog.validate_configuration", create=True,
-            side_effect=lambda configuration, **_: dict(configuration)))
+            "hey_my_buddy.blackboard.catalog.catalog.validate_buddy", create=True,
+            side_effect=lambda buddy, **_: dict(buddy)))
 
     def _restore_workspace(self) -> None:
         workflow_module._workspace_module = self._previous_workspace
@@ -62,7 +62,7 @@ class WorkflowStashTestCase(BoardTestCase):
 
     def submit_and_claim(self, board, *, request_id="req-1"):
         submitted = board.call("workflow_submit", {
-            **CONFIGURATION, "requestId": request_id, "hostId": "host-1", "task": "stash facts task",
+            **BUDDY, "requestId": request_id, "hostId": "host-1", "task": "stash facts task",
             "cwd": str(self.workdir()), "submissionToken": "t" * 32,
             "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["."]},
         })
@@ -147,7 +147,7 @@ class StartFactFreezingTests(WorkflowStashTestCase):
         repository = self.repo_key()
         self.workspace.stash_inventories[repository] = observed([entry("a" * 40, "queued-time entry")])
         submitted = board.call("workflow_submit", {
-            **CONFIGURATION, "requestId": "req-1", "hostId": "host-1", "task": "queued change task",
+            **BUDDY, "requestId": "req-1", "hostId": "host-1", "task": "queued change task",
             "cwd": str(self.workdir()), "submissionToken": "t" * 32,
             "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["."]},
         })

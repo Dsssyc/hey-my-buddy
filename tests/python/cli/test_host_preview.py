@@ -154,8 +154,8 @@ class PreviewFixtureTest(unittest.TestCase):
         })
         normal = outcomes["normal/console.json"]["facts"]
         configuration = normal["configuration"]
-        self.assertNotIn("decisionProfileId", configuration)
-        for key in ("routerProfileIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget"):
+        self.assertNotIn("decisionBuddyId", configuration)
+        for key in ("routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget"):
             self.assertIn(key, configuration)
         # The slim snapshot carries the server's board-wide pending count; the
         # full execution records stay on the paginated tasks read.
@@ -198,9 +198,9 @@ class PreviewFixtureTest(unittest.TestCase):
         workflows = {path: outcome["facts"] for path, outcome in outcomes.items()
                      if outcome["kind"] == "workflow-get" and outcome["accepted"]}
         self.assertTrue(workflows)
-        locked = {facts["configurationLocked"] for facts in workflows.values()}
-        self.assertIn(True, locked, "one goal must record the user-locked configuration")
-        self.assertIn(False, locked, "one goal must record a Host-supplied configuration")
+        locked = {facts["buddyLocked"] for facts in workflows.values()}
+        self.assertIn(True, locked, "one goal must record the user-locked buddy")
+        self.assertIn(False, locked, "one goal must record a Host-supplied buddy")
         for facts in workflows.values():
             self.assertIn("hostConclusion", facts)
 

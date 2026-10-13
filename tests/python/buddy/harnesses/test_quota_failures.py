@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from hey_my_buddy.buddy.harnesses.run_contract import (
-    FEEDBACK_CONTINUE, PrivateStatePaths, RunBudget, RunConfiguration, RunIdentity, RunRequest,
+    FEEDBACK_CONTINUE, PrivateStatePaths, RunBudget, RunBuddy, RunIdentity, RunRequest,
 )
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     NativeError, decode_native_failure, quota_failure,
@@ -87,7 +87,7 @@ class NativeQuotaFailureTests(unittest.TestCase):
     def request(self, harness):
         return RunRequest(identity=RunIdentity(task_id="task", attempt_id="attempt", generation=1,
                                                invocation_id="invocation"),
-                          harness=harness, configuration=RunConfiguration(provider="fixture-api", model="fixture-model", effort="low"),
+                          harness=harness, buddy=RunBuddy(provider="fixture-api", model="fixture-model", effort="low"),
                           cwd=str(self.root), input_text="fixture", tool_scope="none",
                           output_schema={"type": "object"}, budget=RunBudget(timeout_seconds=5),
                           private_state=PrivateStatePaths(invocation_root=str(self.root / "run"),

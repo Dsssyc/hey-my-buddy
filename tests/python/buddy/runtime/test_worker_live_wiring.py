@@ -387,7 +387,7 @@ class WorkerEndpointClosureTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "posix", "native local endpoint maintenance is POSIX")
     def test_controller_end_through_execute_reaps_only_the_owned_endpoint(self):
         from hey_my_buddy.buddy.harnesses.run_contract import (
-            FrozenJson, PrivateStatePaths, RunBudget, RunConfiguration, RunIdentity, RunRequest,
+            FrozenJson, PrivateStatePaths, RunBudget, RunBuddy, RunIdentity, RunRequest,
             encode_run_request,
         )
         from hey_my_buddy.protocol.client import new_nonce
@@ -409,7 +409,7 @@ class WorkerEndpointClosureTests(unittest.TestCase):
         request_file = directory / "role-run-request.json"
         request = RunRequest(
             identity=identity, harness="zcode",
-            configuration=RunConfiguration(provider="fixture-zcode", model="fixture-glm",
+            buddy=RunBuddy(provider="fixture-zcode", model="fixture-glm",
                                             effort="low"),
             cwd=str(self.work),
             private_state=PrivateStatePaths(invocation_root=str(directory),

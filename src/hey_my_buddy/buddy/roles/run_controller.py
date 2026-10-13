@@ -26,7 +26,7 @@ from ..harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
 from ...json_codec import canonical_json, decode_strict_json
 from ..harnesses.registry import adapter, run_seam
 from ..harnesses.run_contract import (
-    EvidenceRef, ResultConfiguration, RunEnd, RunResult, StopEvidence, StopLayer,
+    EvidenceRef, ResultBuddy, RunEnd, RunResult, StopEvidence, StopLayer,
     decode_run_request, encode_run_request, encode_run_result,
 )
 from . import run_execution
@@ -93,7 +93,7 @@ def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple
     else:
         result = RunResult(identity=request.identity, harness=request.harness,
             end=RunEnd(status="error", reason_code=input_error.code, message=input_error.message),
-            configuration=ResultConfiguration(requested=request.configuration), model_started=False,
+            buddy=ResultBuddy(requested=request.buddy), model_started=False,
             stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
     if control["operation"] == "worker" and request.worker_permission is not None:
         # This is the harness mapping selected for the call, not an observation

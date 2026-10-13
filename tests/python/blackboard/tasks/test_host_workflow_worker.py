@@ -3,7 +3,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from blackboard.tasks.test_workflow_worker import GovernedWorkerTestCase, CONFIGURATION
+from blackboard.tasks.test_workflow_worker import GovernedWorkerTestCase, BUDDY
 
 
 class HostQuotaRecoveryTests(GovernedWorkerTestCase):
@@ -14,10 +14,10 @@ class HostQuotaRecoveryTests(GovernedWorkerTestCase):
     def setUp(self):
         super().setUp()
         from hey_my_buddy.blackboard.store.store import BoardStore
-        from support import enable_fixture_configuration
+        from support import enable_fixture_buddy
         store = BoardStore(self.directory)
         store.initialize()
-        enable_fixture_configuration(store, {**CONFIGURATION, "effort": "high"})
+        enable_fixture_buddy(store, {**BUDDY, "effort": "high"})
 
     def call(self, method, params):
         code, reply = self.cli(method, json.dumps({**params, "output": "full"}), env=self.env())
@@ -25,8 +25,8 @@ class HostQuotaRecoveryTests(GovernedWorkerTestCase):
         return reply
 
     def quota_failure(self, *, locked=False):
-        submitted = self.call("submit", {**CONFIGURATION, "requestId": "quota-recovery", "hostId": "host-1",
-            "task": "Implement the fixture change", "cwd": str(self.repo), "configurationLocked": locked,
+        submitted = self.call("submit", {**BUDDY, "requestId": "quota-recovery", "hostId": "host-1",
+            "task": "Implement the fixture change", "cwd": str(self.repo), "buddyLocked": locked,
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]}})
         # A terminal failed goal is an await outcome, not a CLI transport error.
         _code, stopped = self.cli("await", json.dumps({"runId": submitted["runId"], "waitSeconds": 90}), env=self.env(), timeout=110)
@@ -52,13 +52,13 @@ class HostQuotaRecoveryTests(GovernedWorkerTestCase):
         self.assertIsNotNone(current["currentTurn"]["tokenUsage"])
         return submitted, current, partial
 
-    def test_quota_failure_seals_then_continues_a_new_configuration_in_the_same_checkout(self):
+    def test_quota_failure_seals_then_continues_a_new_buddy_in_the_same_checkout(self):
         with self.daemon(env=self.env()):
             submitted, failed, partial = self.quota_failure()
             path = failed["workspace"]["path"]
             continued = self.call("continue", {"runId": failed["runId"], "commandId": "change-after-quota",
                 "expectedRevision": failed["revision"], "controlFile": submitted["controlFile"],
-                "configuration": {**CONFIGURATION, "effort": "high"}, "reason": "Use another enabled configuration after quota failure",
+                "buddy": {**BUDDY, "effort": "high"}, "reason": "Use another enabled buddy after quota failure",
                 "input": "Finish and verify the preserved changes."})
             self.assertEqual(continued["workspace"]["path"], path)
             self.call("await", {"runId": failed["runId"], "waitSeconds": 90})
@@ -84,15 +84,15 @@ class HostQuotaRecoveryTests(GovernedWorkerTestCase):
             self.assertEqual((target / "tracked.txt").read_text(), "partial work preserved after quota failure\n")
             self.assertTrue((target / "mock-output.txt").is_file())
 
-    def test_quota_failure_cannot_override_a_user_locked_configuration(self):
+    def test_quota_failure_cannot_override_a_user_locked_buddy(self):
         with self.daemon(env=self.env()):
             submitted, failed, _partial = self.quota_failure(locked=True)
             code, refused = self.cli("continue", json.dumps({"runId": failed["runId"], "commandId": "refused-override",
                 "expectedRevision": failed["revision"], "controlFile": submitted["controlFile"],
-                "configuration": {**CONFIGURATION, "effort": "high"}, "reason": "Attempt a locked replacement",
+                "buddy": {**BUDDY, "effort": "high"}, "reason": "Attempt a locked replacement",
                 "input": "Finish."}), env=self.env())
             self.assertEqual(code, 1)
-            self.assertEqual(refused["error"]["code"], "CONFIGURATION_CONFLICT")
+            self.assertEqual(refused["error"]["code"], "BUDDY_CONFLICT")
             self.assertEqual(self.call("get", {"runId": failed["runId"]})["counts"]["turns"], 1)
 
     def test_failed_goal_conclusion_reclaims_checkout_but_retains_partial_artifacts(self):
@@ -166,7 +166,7 @@ class CrossHarnessQuotaRecoveryTests(HostQuotaRecoveryTests):
             self.assertIsNotNone(failed["currentTurn"]["tokenUsage"])
             continued = self.call("continue", {"runId": submitted["runId"], "commandId": "change-harness",
                 "expectedRevision": failed["revision"], "controlFile": submitted["controlFile"],
-                "configuration": {**CONFIGURATION, "effort": "high"}, "reason": "Recover with an enabled different harness",
+                "buddy": {**BUDDY, "effort": "high"}, "reason": "Recover with an enabled different harness",
                 "input": "Finish the retained work within the same authorized checkout."})
             self.assertEqual(continued["workspace"]["path"], failed["workspace"]["path"])
             self.call("await", {"runId": submitted["runId"], "waitSeconds": 90})

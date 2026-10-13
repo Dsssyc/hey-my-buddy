@@ -106,10 +106,10 @@ def outcome(case):
     if case == "assistance":
         disposition = "assistance"
         request = {"summary": "Need helper", "attempted": "Inspected source", "neededWork": "Check dependency",
-                   "expectedArtifacts": [], "acceptance": "Dependency verified", "suggestedProfileId": None}
+                   "expectedArtifacts": [], "acceptance": "Dependency verified", "suggestedBuddyId": None}
     if case == "completed-request":
         request = {"summary": "Contradictory request", "attempted": "Finished", "neededWork": "None",
-                   "expectedArtifacts": [], "acceptance": "Already complete", "suggestedProfileId": None}
+                   "expectedArtifacts": [], "acceptance": "Already complete", "suggestedBuddyId": None}
     summary = "fixture work completed"
     if case == "long-summary-citation":
         summary = "调研结论。" * 600 + "\n<oai-mem-citation>reference</oai-mem-citation>"
@@ -309,7 +309,7 @@ def main():
                           "item": protocol_item}})
             if case in ("schema-failure", "long-schema-failure"):
                 turn = {"id": turn_id, "status": "failed", "items": [], "error": {
-                    "message": "Invalid schema: required is missing suggestedProfileId" if case == "schema-failure" else "原生格式错误𝄞" * 2000,
+                    "message": "Invalid schema: required is missing suggestedBuddyId" if case == "schema-failure" else "原生格式错误𝄞" * 2000,
                     "codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 400}},
                     "additionalDetails": "invalid_request_error / invalid_json_schema",
                     "unrelated": "do not retain this field"}}
@@ -407,8 +407,8 @@ def main():
                     raise RuntimeError("the controller unexpectedly approved the native request")
             item = {"type": "agentMessage", "id": "final-1", "phase": "final_answer",
                     "text": json.dumps({"outcome": outcome(case)}) if case != "invalid-json" else "not json"}
-            if "profileId" in params.get("outputSchema", {}).get("properties", {}):
-                item["text"] = json.dumps({"profileId": "foreign" if case == "readonly-outside" else "legal", "reason": "Read-only fixture", "evidence": []})
+            if "buddyId" in params.get("outputSchema", {}).get("properties", {}):
+                item["text"] = json.dumps({"buddyId": "foreign" if case == "readonly-outside" else "legal", "reason": "Read-only fixture", "evidence": []})
                 if case in ("readonly-repair", "readonly-repair-evidence") and not state['threads'][thread_id]['turns']:
                     item["text"] = "not-json"
             if case != "no-final":

@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 
 from hey_my_buddy.console.server import Console
 from hey_my_buddy.console.console_sessions import ENTRY_SECONDS
-from console.test_console import Browser, ConsoleTestCase, PROFILE_ID, http_call
+from console.test_console import Browser, ConsoleTestCase, BUDDY_ID, http_call
 
 
 class ConsoleAccessTests(ConsoleTestCase):
@@ -138,11 +138,11 @@ class ConsoleAccessTests(ConsoleTestCase):
             csrf = before[index]["csrfToken"]
             status, _, body = browser.command("user_policy_publish", {
                 "commandId": f"window-publish-{index}",
-                "profileSettings": [{"profileId": PROFILE_ID, "enabled": index == 0}],
+                "buddySettings": [{"buddyId": BUDDY_ID, "enabled": index == 0}],
             }, csrf=csrf)
             self.assertEqual(status, 200, body)
         current = first.bootstrap()
-        self.assertFalse(next(p for p in current["profiles"] if p["profileId"] == PROFILE_ID)["enabled"])
+        self.assertFalse(next(p for p in current["buddies"] if p["buddyId"] == BUDDY_ID)["enabled"])
 
     def test_access_setting_write_failure_preserves_authority_and_revision(self):
         board = self.board()

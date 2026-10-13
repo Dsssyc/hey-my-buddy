@@ -208,16 +208,16 @@ CREATE INDEX IF NOT EXISTS events_task_idx ON events(task_id, seq);
 CREATE INDEX IF NOT EXISTS events_decision_status_idx ON events(kind, seq DESC)
     WHERE kind IN ('decision.completed','decision.failed','decision.needs_host','decision.cancelled');
 -- Router outcome facts are read per buddy in list order (ADR-021 第 2 条): this
--- partial expression index serves router_history's per-profile reads as an
+-- partial expression index serves router_history's per-buddy reads as an
 -- index-only range. json_valid guards the expression so a malformed payload can
 -- never fail a write or a read, and the kinds are code-owned literals for the same
 -- reason as events_review_seq_idx: bind parameters would leave SQLite unable to
 -- prove the partial predicate.
 CREATE INDEX IF NOT EXISTS events_router_outcome_idx
-    ON events(json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END, '$.profileId'), seq)
+    ON events(json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END, '$.buddyId'), seq)
     WHERE kind IN ('router.answered','router.no_answer');
 CREATE INDEX IF NOT EXISTS events_router_claimed_idx
-    ON events(json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END, '$.profileId'), seq)
+    ON events(json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END, '$.buddyId'), seq)
     WHERE kind='router.claimed';
 
 CREATE TABLE IF NOT EXISTS commands (
@@ -305,14 +305,14 @@ CREATE TABLE IF NOT EXISTS model_service_notes (
     """
 CREATE TABLE IF NOT EXISTS evaluation_state (
     id                      INTEGER PRIMARY KEY CHECK (id = 1),
-    decision_profile_id     TEXT,
+    decision_buddy_id     TEXT,
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL
 );
 """,
     """
-CREATE TABLE IF NOT EXISTS evaluation_profiles (
-    profile_id          TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS buddies (
+    buddy_id          TEXT PRIMARY KEY,
     label               TEXT NOT NULL,
     adapter             TEXT NOT NULL,
     provider            TEXT NOT NULL,
@@ -328,23 +328,23 @@ CREATE TABLE IF NOT EXISTS evaluation_profiles (
 );
 """,
     """
-CREATE INDEX IF NOT EXISTS evaluation_profiles_current_idx ON evaluation_profiles(available, profile_id);
-CREATE INDEX IF NOT EXISTS evaluation_profiles_adapter_idx ON evaluation_profiles(adapter, profile_id);
+CREATE INDEX IF NOT EXISTS buddies_current_idx ON buddies(available, buddy_id);
+CREATE INDEX IF NOT EXISTS buddies_harness_idx ON buddies(adapter, buddy_id);
 """,
     """
 CREATE TABLE IF NOT EXISTS evaluation_preferences (
-    profile_id        TEXT PRIMARY KEY REFERENCES evaluation_profiles(profile_id) ON DELETE RESTRICT,
+    buddy_id        TEXT PRIMARY KEY REFERENCES buddies(buddy_id) ON DELETE RESTRICT,
     mode              TEXT NOT NULL CHECK (mode IN ('prefer','pin','exclude')),
     reason            TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS evaluation_preferences_mode_idx ON evaluation_preferences(mode, profile_id);
+CREATE INDEX IF NOT EXISTS evaluation_preferences_mode_idx ON evaluation_preferences(mode, buddy_id);
 """,
     """
 CREATE TABLE IF NOT EXISTS evaluation_decisions (
     decision_id       TEXT PRIMARY KEY,
     status            TEXT NOT NULL,
     task              TEXT NOT NULL,
-    profile_id        TEXT,
+    buddy_id        TEXT,
     reason            TEXT NOT NULL DEFAULT '',
     created_at        TEXT NOT NULL,
     error             TEXT
@@ -363,7 +363,7 @@ CREATE TABLE IF NOT EXISTS evaluation_catalog (
 """,
     # Extended decision state. ``evaluation_decisions`` stays the bounded public
     # history row the console reads; this table carries the audit material (the
-    # exact persisted model input, the helper envelope and the selected configuration)
+    # exact persisted model input, the helper envelope and the selected buddy)
     # that must not sit on every console refresh.
     """
 CREATE TABLE IF NOT EXISTS decision_requests (
@@ -393,7 +393,7 @@ CREATE INDEX IF NOT EXISTS evaluation_decisions_created_idx
 """,
     # User-owned per-model-service concurrent-attempt limits (ADR-011). A model service is the
     # exact adapter/provider/model tuple; effort variants share one row. The row
-    # is independent of ``evaluation_profiles`` availability on purpose: a setting
+    # is independent of ``buddies`` availability on purpose: a setting
     # survives discovery marking a model unavailable, and a model service without a row
     # uses the code-owned default. Only the authenticated console writer patch in
     # ``user_policy.py`` ever writes here.
@@ -501,9 +501,9 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     goal_json               TEXT NOT NULL,
     goal_fingerprint        TEXT NOT NULL,
     request_fingerprint     TEXT NOT NULL,
-    execution_configuration_json TEXT,
-    execution_configuration_revision INTEGER NOT NULL DEFAULT 0,
-    validated_configuration_revision INTEGER,
+    buddy_json TEXT,
+    buddy_revision INTEGER NOT NULL DEFAULT 0,
+    validated_buddy_revision INTEGER,
     current_routing_id      TEXT,
     submission_verifier     TEXT,
     execution_workspace_json TEXT NOT NULL,
@@ -521,7 +521,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     revision                INTEGER NOT NULL DEFAULT 1,
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL,
-    configuration_locked    INTEGER NOT NULL DEFAULT 0 CHECK (configuration_locked IN (0,1))
+    buddy_locked    INTEGER NOT NULL DEFAULT 0 CHECK (buddy_locked IN (0,1))
 );
 """,
     """
@@ -917,9 +917,9 @@ CREATE TABLE IF NOT EXISTS router_settings (
     budget_preset TEXT NOT NULL CHECK (budget_preset IN ('brief','standard','deep')),
     retry_interval_seconds INTEGER NOT NULL CHECK (retry_interval_seconds >= 1)
 );
-CREATE TABLE IF NOT EXISTS router_profiles (
+CREATE TABLE IF NOT EXISTS router_buddies (
     position INTEGER PRIMARY KEY CHECK (position >= 0),
-    profile_id TEXT NOT NULL UNIQUE
+    buddy_id TEXT NOT NULL UNIQUE
 );
 CREATE TABLE IF NOT EXISTS router_requests (
     decision_id      TEXT NOT NULL PRIMARY KEY REFERENCES decision_requests(decision_id) ON DELETE RESTRICT,
@@ -930,7 +930,7 @@ CREATE TABLE IF NOT EXISTS router_dispatches (
     task_id      TEXT NOT NULL PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
     decision_id  TEXT NOT NULL REFERENCES router_requests(decision_id) ON DELETE RESTRICT,
     router_index INTEGER NOT NULL CHECK (router_index >= 0),
-    profile_id   TEXT NOT NULL,
+    buddy_id   TEXT NOT NULL,
     adapter      TEXT NOT NULL,
     provider     TEXT NOT NULL,
     model        TEXT NOT NULL,
@@ -954,7 +954,7 @@ CREATE TABLE IF NOT EXISTS router_outcomes (
     plane        TEXT NOT NULL CHECK (plane IN ('work','maintenance','portrait')),
     request_id   TEXT NOT NULL,
     router_index INTEGER NOT NULL CHECK (router_index >= 0),
-    profile_id   TEXT NOT NULL,
+    buddy_id   TEXT NOT NULL,
     phase        TEXT NOT NULL,
     task_id      TEXT REFERENCES tasks(task_id) ON DELETE RESTRICT,
     attempt_id   TEXT,
@@ -965,7 +965,7 @@ CREATE TABLE IF NOT EXISTS router_outcomes (
     CHECK (attempt_id IS NULL OR task_id IS NOT NULL),
     FOREIGN KEY (attempt_id, task_id) REFERENCES attempts(attempt_id, task_id) ON DELETE RESTRICT
 );
-CREATE INDEX IF NOT EXISTS router_outcomes_profile_idx ON router_outcomes(profile_id, event_seq);
+CREATE INDEX IF NOT EXISTS router_outcomes_buddy_idx ON router_outcomes(buddy_id, event_seq);
 CREATE INDEX IF NOT EXISTS router_outcomes_task_idx ON router_outcomes(task_id, event_seq);
 CREATE INDEX IF NOT EXISTS router_outcomes_attempt_idx ON router_outcomes(attempt_id);
 """

@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { expect, vi } from "vitest";
 import { App } from "../App";
 import type { ConsoleApi, HarnessHealth } from "../api";
-import type { Configuration, Profile, RoutingHealth, Snapshot } from "../types";
+import type { Configuration, Buddy, RoutingHealth, Snapshot } from "../types";
 
 /**
  * How the tests build the roles view's world and find things in it. They read
@@ -26,9 +26,9 @@ export const SOL = "codex / openai / gpt-6-sol / medium";
 export const GLM = "zcode / zhipu / glm-5 / default";
 export const PENDING = "claude / anthropic / claude-haiku-4 / low";
 
-function profile(profileId: string, capabilities: string[], extra: Partial<Profile> = {}): Profile {
-  const [adapter, provider, model, effort] = profileId.split(":");
-  return { profileId, label: `${model} · ${effort}`, adapter, provider, model, effort, available: true, enabled: true,
+function buddy(buddyId: string, capabilities: string[], extra: Partial<Buddy> = {}): Buddy {
+  const [adapter, provider, model, effort] = buddyId.split(":");
+  return { buddyId, label: `${model} · ${effort}`, adapter, provider, model, effort, available: true, enabled: true,
     capabilities, contextWindow: null, description: "", source: "catalog:fixture", ...extra };
 }
 
@@ -37,15 +37,15 @@ function profile(profileId: string, capabilities: string[], extra: Partial<Profi
  * of them off), one that can only route fast, one whose harness cannot route
  * at all, one that is gone and one whose model is waiting to be confirmed.
  */
-export function profiles(): Profile[] {
+export function buddies(): Buddy[] {
   const routes = ["execution:claude", "routing:fast", "decision"];
   return [
-    profile(MEDIUM_ID, routes),
-    profile(HIGH_ID, routes, { enabled: false }),
-    profile(FLASH_ID, ["execution:dsh", "routing:fast"]),
-    profile(SOL_ID, ["execution:codex"]),
-    profile(GLM_ID, ["execution:zcode", "decision"], { available: false, unavailableReason: "本机未检测到 zcode CLI" }),
-    profile(PENDING_ID, routes, { catalogStatus: "pending", pendingSince: "2026-09-29T08:00:00.000Z" }),
+    buddy(MEDIUM_ID, routes),
+    buddy(HIGH_ID, routes, { enabled: false }),
+    buddy(FLASH_ID, ["execution:dsh", "routing:fast"]),
+    buddy(SOL_ID, ["execution:codex"]),
+    buddy(GLM_ID, ["execution:zcode", "decision"], { available: false, unavailableReason: "本机未检测到 zcode CLI" }),
+    buddy(PENDING_ID, routes, { catalogStatus: "pending", pendingSince: "2026-09-29T08:00:00.000Z" }),
   ];
 }
 
@@ -75,9 +75,9 @@ export function snapshot({ routers = [], configuration = {}, routingHealth, canW
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite, reason: null },
 
     configuration: configuration === null ? null
-      : { routerProfileIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", ...configuration },
+      : { routerBuddyIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", ...configuration },
     configurationError: configuration === null ? { code: "router-settings-upgrade-required", message: "请先升级设置",} : null,
-    profiles: profiles(),
+    buddies: buddies(),
     preferences: [], modelServiceNotes: [],
  decisions: [],
     modelServiceConcurrency: [],

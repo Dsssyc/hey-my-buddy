@@ -14,9 +14,9 @@ class UserPolicyTests(BoardTestCase):
         self.session = 'registered-user-session'
         self.board_.service.register_console_authority(self.session)
         with self.board_.store.db.write() as db:
-            for profile_id, available in [('live', 1), ('retired', 0)]:
-                db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,?,?,?)", (profile_id, profile_id, 'dsh', 'fixture', profile_id, 'max', available, 1, '["decision"]'))
-            db.execute("INSERT INTO router_profiles(position,profile_id) VALUES(0,'retired')")
+            for buddy_id, available in [('live', 1), ('retired', 0)]:
+                db.execute("INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,?,?,?)", (buddy_id, buddy_id, 'dsh', 'fixture', buddy_id, 'max', available, 1, '["decision"]'))
+            db.execute("INSERT INTO router_buddies(position,buddy_id) VALUES(0,'retired')")
             db.execute("INSERT INTO evaluation_preferences VALUES('retired','pin','user intent')")
 
     def user(self, operation, params):
@@ -42,28 +42,28 @@ class UserPolicyTests(BoardTestCase):
 
     def test_retired_pin_and_selector_do_not_block_disable_or_other_edits(self):
         grant = self.publication_params()
-        payload = self.payload(grant, profileSettings=[{'profileId': 'retired', 'enabled': False}], modelServiceNoteChanges=[{**LIVE_MODEL_SERVICE, 'text': 'prefer local evidence'}])
+        payload = self.payload(grant, buddySettings=[{'buddyId': 'retired', 'enabled': False}], modelServiceNoteChanges=[{**LIVE_MODEL_SERVICE, 'text': 'prefer local evidence'}])
         self.user('user_policy_publish', payload)
         self.assertTrue(self.user('user_policy_publish', payload)['duplicate'])
         snapshot = self.board_.call('console_snapshot', {})
         self.assertEqual(snapshot['modelServiceNotes'][0]['text'], 'prefer local evidence')
-        self.assertEqual(snapshot['configuration']['routerProfileIds'], ['retired'])
+        self.assertEqual(snapshot['configuration']['routerBuddyIds'], ['retired'])
         self.assertEqual(snapshot['preferences'][0]['mode'], 'pin')
-        self.assertFalse(next(p for p in snapshot['profiles'] if p['profileId'] == 'retired')['enabled'])
+        self.assertFalse(next(p for p in snapshot['buddies'] if p['buddyId'] == 'retired')['enabled'])
 
     def test_reason_only_change_does_not_reenable_an_unavailable_pin(self):
         grant = self.publication_params()
-        self.user('user_policy_publish', self.payload(grant, preferenceChanges=[{'profileId': 'retired', 'mode': 'pin', 'reason': 'Keep this intent while its provider is offline'}]))
+        self.user('user_policy_publish', self.payload(grant, preferenceChanges=[{'buddyId': 'retired', 'mode': 'pin', 'reason': 'Keep this intent while its provider is offline'}]))
         snapshot = self.board_.call('console_snapshot', {})
         self.assertEqual(snapshot['preferences'][0]['reason'], 'Keep this intent while its provider is offline')
-        self.assertFalse(next(p for p in snapshot['profiles'] if p['profileId'] == 'retired')['available'])
+        self.assertFalse(next(p for p in snapshot['buddies'] if p['buddyId'] == 'retired')['available'])
 
 
     def test_invalid_patch_is_atomic_and_cannot_change_program_fields(self):
         grant = self.publication_params()
         for changes in [
-            {'profileSettings': [{'profileId': 'live', 'enabled': False}, {'profileId': 'retired', 'enabled': True}]},
-            {'profileSettings': [{'profileId': 'retired', 'enabled': False, 'available': True}]},
+            {'buddySettings': [{'buddyId': 'live', 'enabled': False}, {'buddyId': 'retired', 'enabled': True}]},
+            {'buddySettings': [{'buddyId': 'retired', 'enabled': False, 'available': True}]},
             {'modelServiceNoteChanges': [{**LIVE_MODEL_SERVICE, 'text': 'x'}, {**LIVE_MODEL_SERVICE, 'text': 'y'}]},
         ]:
             with self.assertRaises(BoardError):
@@ -71,7 +71,7 @@ class UserPolicyTests(BoardTestCase):
         snapshot = self.board_.call('console_snapshot', {})
         self.assertNotIn('tableRevision', snapshot)
         self.assertEqual(snapshot['modelServiceNotes'], [])
-        self.assertTrue(next(p for p in snapshot['profiles'] if p['profileId'] == 'live')['enabled'])
+        self.assertTrue(next(p for p in snapshot['buddies'] if p['buddyId'] == 'live')['enabled'])
 
 
     def test_model_service_concurrency_is_a_console_only_human_patch(self):

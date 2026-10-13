@@ -5,11 +5,11 @@ import { errorText } from "./api";
 import type { DecisionAudit, DecisionModel } from "./decision-types";
 import type { Preference } from "./types";
 import { decisionStatus } from "./decision-types";
-import { effortText, profileTitle } from "./profile-display";
+import { effortText, buddyTitle } from "./buddy-name";
 import { Badge, formatDate } from "./ui";
 import { recordedRoutingMode, routingBasisSummary } from "./routing-display";
 
-export function configurationText(value: DecisionModel | null | undefined): string {
+export function buddyText(value: DecisionModel | null | undefined): string {
   return value ? [value.adapter, value.provider, value.model, effortText(value.effort ?? value.reasoningEffort)].filter(Boolean).join(" / ") || "未记录" : "未记录";
 }
 
@@ -41,10 +41,10 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
     <button className="button small-button" onClick={() => setRetry(n => n + 1)}>重试读取</button></div>;
   if (!audit || busy) return <p role="status" className="muted">正在读取决策记录…</p>;
   const table = audit.input;
-  const profiles = table?.profiles || [];
+  const buddies = table?.buddies || [];
   const named = (id: string) => {
-    const profile = profiles.find(p => p.profileId === id);
-    return profile ? `${profile.adapter} · ${profileTitle(profile)}` : id;
+    const buddy = buddies.find(p => p.buddyId === id);
+    return buddy ? `${buddy.adapter} · ${buddyTitle(buddy)}` : id;
   };
   const constraints = audit.constraints ?? audit.requested?.constraints ?? {};
   const requiredCapabilities = audit.requiredCapabilities ?? audit.requested?.requiredCapabilities ?? [];
@@ -56,21 +56,21 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
     ? (audit.output as { programSelection?: { preferences?: Preference[] } } | null)?.programSelection?.preferences
     : undefined;
   const preferences = table?.preferences ?? programPreferences ?? [];
-  const selectedPreference = preferences.find(p => p.profileId === audit.profileId);
+  const selectedPreference = preferences.find(p => p.buddyId === audit.buddyId);
   const otherPreferences = preferences.filter(p => p !== selectedPreference);
-  const preferenceItem = (p: Preference) => <li key={p.profileId}>
-    <strong>{named(p.profileId)}</strong> · {{ prefer: "优先考虑", pin: "固定选择", exclude: "排除" }[p.mode]}{p.reason ? `：${p.reason}` : ""}
+  const preferenceItem = (p: Preference) => <li key={p.buddyId}>
+    <strong>{named(p.buddyId)}</strong> · {{ prefer: "优先考虑", pin: "固定选择", exclude: "排除" }[p.mode]}{p.reason ? `：${p.reason}` : ""}
   </li>;
-  const model = audit.decisionModel?.resolved || audit.decisionModel?.requested || audit.input?.profile;
+  const model = audit.decisionModel?.resolved || audit.decisionModel?.requested || audit.input?.buddy;
   const reason = audit.reason || audit.error || "未记录";
   const recorded = (value: unknown) => value == null ? "未记录" : typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
   const outcomeText = (value: string | null | undefined) => value == null ? "未记录" : ({ matched: "符合", alternative: "选择其他配置", absent: "无偏好", none: "无偏好", fallback: "采用回退候选", "not-applicable": "不适用" }[value] ?? value);
-  const output = audit.output as { status?: string; decision?: { profileId?: string | null; reason?: string; evidence?: unknown } } | null;
-  const abstention = audit.status === "needs-host" && audit.profileId == null
-    && output?.status === "ok" && output.decision?.profileId === null
+  const output = audit.output as { status?: string; decision?: { buddyId?: string | null; reason?: string; evidence?: unknown } } | null;
+  const abstention = audit.status === "needs-host" && audit.buddyId == null
+    && output?.status === "ok" && output.decision?.buddyId === null
     && typeof output.decision.reason === "string" && !!output.decision.reason.trim()
     && Array.isArray(output.decision.evidence)
-    && Object.keys(output.decision).sort().join(",") === "evidence,profileId,reason";
+    && Object.keys(output.decision).sort().join(",") === "buddyId,evidence,reason";
   const evidence = Array.isArray(audit.evidence) && audit.evidence.every(entry =>
     entry != null && typeof entry === "object" && typeof entry.kind === "string" && typeof entry.ref === "string")
     ? audit.evidence : null;
@@ -81,8 +81,8 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
     <InlineText key={audit.decisionId} recordId={audit.decisionId} text={reason} className="read-text decision-reason" />
     {audit.error && audit.error !== audit.reason && <p className="error-message">{audit.error}</p>}
     <dl className="facts">
-      <dt>选中配置</dt><dd>{configurationText(audit.selectedProfile)}</dd>
-      <dt>路由模型</dt><dd>{configurationText(model)}</dd>
+      <dt>选中配置</dt><dd>{buddyText(audit.selectedBuddy)}</dd>
+      <dt>路由模型</dt><dd>{buddyText(model)}</dd>
       <dt>实际模式</dt><dd>{noRouterCall ? "未调用 Router" : recordedRoutingMode(audit.routingMode)}</dd>
       <dt>记录时间</dt><dd>{formatDate(audit.createdAt)}</dd>
     </dl>
@@ -102,7 +102,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
           <dt>输入核验</dt><dd><pre className="result-text">{recorded(audit.inputVerification)}</pre></dd></dl>
       </details>
       <h3>当时的约束与偏好</h3>
-      <p className="small muted">{Object.keys(constraints).length ? `硬约束：${configurationText(constraints)}` : "未记录指定配置的硬约束。"}</p>
+      <p className="small muted">{Object.keys(constraints).length ? `硬约束：${buddyText(constraints)}` : "未记录指定配置的硬约束。"}</p>
       {!!requiredCapabilities.length && <p className="small wrap">所需能力：{requiredCapabilities.join("、")}</p>}
       {audit.routerCalled === false &&
         <p className="small muted">本次由程序直接选定：唯一合法候选，未调用 Router。</p>}
@@ -113,8 +113,8 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
           <ul className="reason-list">{otherPreferences.map(preferenceItem)}</ul></details>}
       </> : <p className="small muted">候选快照无用户偏好</p> : <p className="small muted">输入快照未记录</p>}
     </>
-    {table && <details className="detail-section"><summary>候选与偏好（{profiles.length} 个配置）</summary>
-      <pre className="result-text">{JSON.stringify({ profiles, preferences: table.preferences }, null, 2)}</pre></details>}
+    {table && <details className="detail-section"><summary>候选与偏好（{buddies.length} 个配置）</summary>
+      <pre className="result-text">{JSON.stringify({ buddies, preferences: table.preferences }, null, 2)}</pre></details>}
     <details className="detail-section"><summary>记录标识与原始快照</summary>
       <dl className="facts"><dt>决策 ID</dt><dd>{audit.decisionId}</dd><dt>计算任务</dt><dd>{audit.runId || "未启动计算任务"}</dd>
         <dt>输入 SHA-256</dt><dd>{audit.inputSha256 || "未记录"}</dd></dl>

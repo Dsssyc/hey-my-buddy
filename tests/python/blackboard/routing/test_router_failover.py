@@ -30,7 +30,7 @@ class RouterFailoverTests(unittest.TestCase):
     def test_valid_selection_and_valid_abstention_finish_without_switching(self):
         self.assertEqual(self.classify(answer_valid=True), "answered")
         self.assertEqual(self.classify(answer_valid=True, abstained=True), "abstained")
-        # A null profile in a rejected answer never restores the Router's health.
+        # A null buddy in a rejected answer never restores the Router's health.
         self.assertEqual(self.classify(abstained=True, code="router-tools-forbidden"), "no-answer")
         self.assertEqual(self.classify(abstained=True, code="answer-shape"), "no-answer")
 

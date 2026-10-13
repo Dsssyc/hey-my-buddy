@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
-import type { ModelServiceNote, Preference, Profile, ProfilePage, Snapshot } from "./types";
+import type { ModelServiceNote, Preference, Buddy, BuddyPage, Snapshot } from "./types";
 import {
   chip, choosePreference, effortCell, level, levelPreference, levelSwitch, listed, modelButton, modelRow, note, pane, queryModel, search, selectModel,
 } from "./buddies/page.testing";
@@ -16,65 +16,65 @@ const retiredModelService = { adapter: "dsh", provider: "deepseek-official", mod
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 const RETIRED = "dsh / deepseek-official / retired-model";
 
-function catalog(): Profile[] {
+function catalog(): Buddy[] {
   const base = {
     adapter: "dsh", provider: "deepseek-official", capabilities: ["execution:dsh", "decision"],
     contextWindow: null, source: "catalog:fixture", description: "",
   };
   return [
-    { ...base, profileId: flashOff, model: "deepseek-flash", effort: "off", label: "deepseek-flash · off", available: true, enabled: true },
-    { ...base, profileId: flashHigh, model: "deepseek-flash", effort: "high", label: "deepseek-flash · high", available: true, enabled: false },
-    { ...base, profileId: retiredMax, model: "retired-model", effort: "max", label: "retired-model · max",
+    { ...base, buddyId: flashOff, model: "deepseek-flash", effort: "off", label: "deepseek-flash · off", available: true, enabled: true },
+    { ...base, buddyId: flashHigh, model: "deepseek-flash", effort: "high", label: "deepseek-flash · high", available: true, enabled: false },
+    { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", label: "retired-model · max",
       available: false, enabled: true, unavailableReason: "provider paused" },
-    { ...base, profileId: retiredLow, model: "retired-model", effort: "low", label: "retired-model · low",
+    { ...base, buddyId: retiredLow, model: "retired-model", effort: "low", label: "retired-model · low",
       available: false, enabled: false, unavailableReason: "provider paused" },
   ];
 }
 
 /**
- * Mirrors the recorded snapshot: available configurations plus the current
- * decision profile. Retired identities are only reachable through the paged
- * `model_profiles` history, exactly like the board exposes them.
+ * Mirrors the recorded snapshot: available buddies plus the current
+ * decision buddy. Retired identities are only reachable through the paged
+ * `buddy_list` history, exactly like the board exposes them.
  */
 function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSize?: number } = {}) {
-  const profiles = catalog();
+  const buddies = catalog();
   const decisionId = options.staleDecision ? retiredMax : flashOff;
   const modelServiceNotes: ModelServiceNote[] = [{ ...retiredModelService, text: "用户保留的历史意见", updatedAt: null }];
   const preferences: Preference[] = options.stalePin
-    ? [{ profileId: retiredMax, mode: "pin" as const, reason: "以前固定" }]
+    ? [{ buddyId: retiredMax, mode: "pin" as const, reason: "以前固定" }]
     : [];
 
-  const pages = (params: Record<string, any>): ProfilePage => {
+  const pages = (params: Record<string, any>): BuddyPage => {
     const includeUnavailable = params.includeUnavailable === true;
-    const visible = includeUnavailable ? profiles : profiles.filter(p => p.available || p.profileId === decisionId);
+    const visible = includeUnavailable ? buddies : buddies.filter(p => p.available || p.buddyId === decisionId);
     const limit = typeof params.limit === "number" ? params.limit : 100;
     const after = typeof params.after === "string" ? params.after : "";
-    const ordered = [...visible].sort((a, b) => a.profileId.localeCompare(b.profileId)).filter(p => p.profileId > after);
+    const ordered = [...visible].sort((a, b) => a.buddyId.localeCompare(b.buddyId)).filter(p => p.buddyId > after);
     const slice = ordered.slice(0, limit);
-    const ids = new Set(slice.map(p => p.profileId));
+    const ids = new Set(slice.map(p => p.buddyId));
     return {
-      profiles: slice,
+      buddies: slice,
 
       modelServiceNotes: ids.has(retiredMax) || ids.has(retiredLow) ? modelServiceNotes : [],
-      preferences: preferences.filter(p => ids.has(p.profileId)),
+      preferences: preferences.filter(p => ids.has(p.buddyId)),
 
       modelServiceConcurrency: [],
-      nextCursor: ordered.length > slice.length ? slice[slice.length - 1].profileId : null,
+      nextCursor: ordered.length > slice.length ? slice[slice.length - 1].buddyId : null,
     };
   };
-  const live = profiles.filter(p => p.available || p.profileId === decisionId);
+  const live = buddies.filter(p => p.available || p.buddyId === decisionId);
   let state: Snapshot = {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { routerProfileIds: [decisionId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    profiles: live,
-    // `unavailableProfileCount` counts every unavailable row in the table,
-    // including a listed one such as the retained decision profile; the console
+    configuration: { routerBuddyIds: [decisionId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    buddies: live,
+    // `unavailableBuddyCount` counts every unavailable row in the table,
+    // including a listed one such as the retained decision buddy; the console
     // subtracts what it has loaded and pages the rest.
-    unavailableProfileCount: profiles.filter(p => !p.available).length,
+    unavailableBuddyCount: buddies.filter(p => !p.available).length,
 
-    modelServiceNotes: live.some(p => p.profileId === retiredMax || p.profileId === retiredLow) ? modelServiceNotes : [],
-    preferences: preferences.filter(p => live.some(x => x.profileId === p.profileId)),
+    modelServiceNotes: live.some(p => p.buddyId === retiredMax || p.buddyId === retiredLow) ? modelServiceNotes : [],
+    preferences: preferences.filter(p => live.some(x => x.buddyId === p.buddyId)),
      decisions: [],
 
     modelServiceConcurrency: [],
@@ -86,7 +86,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
   const published: Record<string, any>[] = [];
   const command = vi.fn(async (operation: string, params: Record<string, any>) => {
     operations.push(operation);
-    if (operation === "model_profiles") {
+    if (operation === "buddy_list") {
       const page = pages({ ...params, limit: options.pageSize ?? params.limit });
       if (options.pageSize) page.nextCursor = page.nextCursor;
       return page;
@@ -147,11 +147,11 @@ describe("unavailable buddies", () => {
     // hides their model; nothing is fetched until the user asks for them.
     expect(screen.getByRole("checkbox", { name: "显示不可用 2" })).toBeTruthy();
     expect(queryModel(RETIRED)).toBeNull();
-    expect(f.operations).not.toContain("model_profiles");
+    expect(f.operations).not.toContain("buddy_list");
 
     await user.click(showUnavailable());
     await listed(2, 4);
-    expect(f.command).toHaveBeenCalledWith("model_profiles",
+    expect(f.command).toHaveBeenCalledWith("buddy_list",
       { includeUnavailable: true, limit: 100 }, "csrf");
     // The retired model joins its harness's rows. Its harness works, so the
     // row says itself that it cannot, with the recorded reason as explanation.
@@ -180,8 +180,8 @@ describe("unavailable buddies", () => {
     await listed(2, 4);
     // The snapshot's own row is shown first; the bounded second page then joins
     // it without any manual "load more" control.
-    await waitFor(() => expect(f.operations.filter(op => op === "model_profiles")).toHaveLength(2));
-    expect(f.command).toHaveBeenCalledWith("model_profiles",
+    await waitFor(() => expect(f.operations.filter(op => op === "buddy_list")).toHaveLength(2));
+    expect(f.command).toHaveBeenCalledWith("buddy_list",
       { includeUnavailable: true, limit: 100, after: expect.any(String) }, "csrf");
     await user.click(modelButton(RETIRED));
     expect(levelSwitch("max")).toBeTruthy();
@@ -200,10 +200,10 @@ describe("unavailable buddies", () => {
     // chain of bounded reads stops there.
     await listed(2, 4);
     expect(modelButton(RETIRED)).toBeTruthy();
-    await waitFor(() => expect(f.operations.filter(op => op === "model_profiles")).toHaveLength(2));
-    expect(f.command).toHaveBeenCalledWith("model_profiles",
+    await waitFor(() => expect(f.operations.filter(op => op === "buddy_list")).toHaveLength(2));
+    expect(f.command).toHaveBeenCalledWith("buddy_list",
       { includeUnavailable: true, limit: 100, after: expect.any(String) }, "csrf");
-    expect(f.operations.filter(op => op === "model_profiles")).toHaveLength(2);
+    expect(f.operations.filter(op => op === "buddy_list")).toHaveLength(2);
   });
 
   it("combines 只看已启用 with 显示不可用", async () => {
@@ -261,10 +261,10 @@ describe("unavailable buddies", () => {
     await user.type(note(), "，仍可用于历史对照");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
-    expect(f.operations.slice(0, 2)).toEqual(["model_profiles", "user_policy_publish"]);
+    expect(f.operations.slice(0, 2)).toEqual(["buddy_list", "user_policy_publish"]);
     expect(f.published[0]).toEqual({
       commandId: expect.any(String),
-      profileSettings: [{ profileId: retiredMax, enabled: false }],
+      buddySettings: [{ buddyId: retiredMax, enabled: false }],
       modelServiceNoteChanges: [{ ...retiredModelService, text: "用户保留的历史意见，仍可用于历史对照" }],
     });
     const wire = JSON.stringify(f.published[0]);
@@ -296,9 +296,9 @@ describe("unavailable buddies", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
     expect(f.published[0].preferenceChanges).toEqual([
-      { profileId: retiredMax, mode: "pin", reason: "仍然适用" },
+      { buddyId: retiredMax, mode: "pin", reason: "仍然适用" },
     ]);
-    expect(f.published[0]).not.toHaveProperty("profileSettings");
+    expect(f.published[0]).not.toHaveProperty("buddySettings");
   });
 
   it("keeps a retained disable through discovery and publishes it", async () => {
@@ -313,7 +313,7 @@ describe("unavailable buddies", () => {
     expect(levelSwitch("max").getAttribute("aria-checked")).toBe("false");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
-    expect(f.published[0].profileSettings).toEqual([{ profileId: retiredMax, enabled: false }]);
+    expect(f.published[0].buddySettings).toEqual([{ buddyId: retiredMax, enabled: false }]);
   });
 
   it("does not resurrect a preference the user removed when a page is re-read", async () => {
@@ -326,13 +326,13 @@ describe("unavailable buddies", () => {
     // A same-revision retained page still contains the published pin. Reading it
     // (here a search-filter reload) must not silently re-add the removed row.
     await user.type(search(), "retired");
-    await waitFor(() => expect(f.command).toHaveBeenCalledWith("model_profiles",
+    await waitFor(() => expect(f.command).toHaveBeenCalledWith("buddy_list",
       { includeUnavailable: true, limit: 100, query: "retired" }, "csrf"));
-    await waitFor(() => expect(f.operations.filter(op => op === "model_profiles").length).toBeGreaterThan(1));
+    await waitFor(() => expect(f.operations.filter(op => op === "buddy_list").length).toBeGreaterThan(1));
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
     expect(f.published[0].preferenceChanges).toEqual([
-      { profileId: retiredMax, mode: null, reason: "" },
+      { buddyId: retiredMax, mode: null, reason: "" },
     ]);
   });
 
@@ -344,12 +344,12 @@ describe("unavailable buddies", () => {
     await listed(1, 2);
     await user.click(screen.getByRole("checkbox", { name: "显示不可用 2" }));
     await listed(2, 4);
-    expect(f.command).toHaveBeenCalledWith("model_profiles",
+    expect(f.command).toHaveBeenCalledWith("buddy_list",
       { includeUnavailable: true, limit: 100 }, "csrf");
     // A search is a bounded server query, so matching rows past the display
     // budget are reachable instead of a local-only filter.
     await user.type(search(), "retired");
-    await waitFor(() => expect(f.command).toHaveBeenCalledWith("model_profiles",
+    await waitFor(() => expect(f.command).toHaveBeenCalledWith("buddy_list",
       { includeUnavailable: true, limit: 100, query: "retired" }, "csrf"));
   });
 });
@@ -408,7 +408,7 @@ describe("the two filters as browser habits", () => {
     await user.click(enabledOnly());
     await user.click(showUnavailable());
     await listed(2, 4);
-    expect(f.command).toHaveBeenCalledWith("model_profiles", { includeUnavailable: true, limit: 100 }, "csrf");
+    expect(f.command).toHaveBeenCalledWith("buddy_list", { includeUnavailable: true, limit: 100 }, "csrf");
     view.unmount();
     const reloaded = fixture();
     view = render(<App suppliedApi={reloaded.api} />);
@@ -419,15 +419,15 @@ describe("the two filters as browser habits", () => {
     await user.click(showUnavailable());
     view.rerender(<App suppliedApi={reloaded.api} />);
     await new Promise(resolve => setTimeout(resolve, 450));
-    expect(reloaded.operations).toEqual(["model_profiles"]);
+    expect(reloaded.operations).toEqual(["buddy_list"]);
   });
 
   it("keeps the stored unavailable habit when the filter is hidden and still reads once", async () => {
     window.localStorage.setItem("hey-my-buddy.console.view.models.showUnavailable", "true");
     const f = fixture();
     const state = f.snapshot();
-    state.unavailableProfileCount = 0;
-    f.command.mockImplementation(async () => ({ profiles: state.profiles, preferences: [], modelServiceConcurrency: [], nextCursor: null }));
+    state.unavailableBuddyCount = 0;
+    f.command.mockImplementation(async () => ({ buddies: state.buddies, preferences: [], modelServiceConcurrency: [], nextCursor: null }));
     window.location.hash = "#buddies";
     const view = render(<App suppliedApi={f.api} />);
     await listed(1, 2);
@@ -436,7 +436,7 @@ describe("the two filters as browser habits", () => {
     expect(window.localStorage.getItem("hey-my-buddy.console.view.models.showUnavailable")).toBe("true");
     view.rerender(<App suppliedApi={f.api} />);
     await new Promise(resolve => setTimeout(resolve, 450));
-    expect(f.command).toHaveBeenCalledExactlyOnceWith("model_profiles", { includeUnavailable: true, limit: 100 }, "csrf");
+    expect(f.command).toHaveBeenCalledExactlyOnceWith("buddy_list", { includeUnavailable: true, limit: 100 }, "csrf");
   });
 
   it("uses unchecked defaults with broken storage and still lets the view change", async () => {
@@ -458,23 +458,23 @@ describe("the two filters as browser habits", () => {
 describe("an address that names a buddy keeps the filters set by hand", () => {
   const enabledKey = "hey-my-buddy.console.view.models.enabledOnly";
   const unavailableKey = "hey-my-buddy.console.view.models.showUnavailable";
-  function jump(profileId: string) {
+  function jump(buddyId: string) {
     act(() => {
-      window.location.hash = `#buddies/catalog/buddy/${encodeURIComponent(profileId)}`;
+      window.location.hash = `#buddies/catalog/buddy/${encodeURIComponent(buddyId)}`;
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
   }
 
   it("reveals a disabled target without overwriting the manually checked enabled-only filter", async () => {
     const f = fixture();
-    for (const profile of f.snapshot().profiles) profile.enabled = false;
+    for (const buddy of f.snapshot().buddies) buddy.enabled = false;
     const user = userEvent.setup();
     window.location.hash = "#buddies/catalog";
     let view = render(<App suppliedApi={f.api} />);
     await listed(0, 2);
     await user.click(enabledOnly());
     await user.click(showUnavailable());
-    await waitFor(() => expect(f.command).toHaveBeenCalledWith("model_profiles", { includeUnavailable: true, limit: 100 }, "csrf"));
+    await waitFor(() => expect(f.command).toHaveBeenCalledWith("buddy_list", { includeUnavailable: true, limit: 100 }, "csrf"));
     await user.click(showUnavailable());
     expect(localStorage.getItem(enabledKey)).toBe("true");
     expect(localStorage.getItem(unavailableKey)).toBe("false");

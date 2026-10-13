@@ -3,11 +3,11 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } fr
 import type { MacroTaskSummary, MacroTaskTimeline as MacroTaskTimelineData, TimelineEvent, TimelineRow, TimelineSpan } from "./macro-task-types";
 import { createTimelineLayout } from "./macro-task-timeline-layout";
 import { fitPixelsPerMinute, MAX_PIXELS_PER_MINUTE, scaleTimeline, TIMELINE_IDLE_PX } from "./macro-task-timeline-scale";
-import type { SpanOutcome, TimelineItem, FriendlyProfile } from "./macro-task-display";
+import type { SpanOutcome, TimelineItem, FriendlyBuddy } from "./macro-task-display";
 import {
-  buildChronology, clockTime, configurationNamer, displayTitle, durationShort, eventClusterGlyph,
+  buildChronology, clockTime, buddyNamer, displayTitle, durationShort, eventClusterGlyph,
   eventClusterLabel, eventSentence, outcomeLabel, paletteIndex, rowStateInfo, spanFacts, rowLabelItem, settleItem,
-  eventItem, toMs, configurationPalette, acceptanceWaitMs, acceptanceWaitText, titleLineTooltip,
+  eventItem, toMs, buddyPalette, acceptanceWaitMs, acceptanceWaitText, titleLineTooltip,
 } from "./macro-task-display";
 import { MacroTaskChronology } from "./MacroTaskChronology";
 import { DelegationStrip, MacroTaskOverview } from "./MacroTaskOverview";
@@ -88,8 +88,8 @@ export type MacroTaskTimelineProps = {
   selection: InspectorSelection | null;
   /** MacroTask-level actions rendered in the overview header (停止目标, U4). */
   headerActions?: ReactNode;
-  /** Snapshot profiles for friendly configuration names (0.16 0.3). */
-  profiles?: readonly FriendlyProfile[] | null;
+  /** Snapshot buddies for friendly buddy names (0.16 0.3). */
+  buddies?: readonly FriendlyBuddy[] | null;
   onSelectItem: (item: TimelineItem) => void;
   onOpenItem: (item: TimelineItem) => void;
   onSelectRun: (runId: string) => void;
@@ -352,7 +352,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
   }, [timeline]);
   const rowsById = useMemo(() => new Map((timeline?.rows ?? []).map(row => [row.runId, row])), [timeline]);
 
-  // Colour slots persist per macroTask across refreshes: a configuration seen
+  // Colour slots persist per macroTask across refreshes: a buddy seen
   // once keeps its slot even when later data shuffles first appearances.
   const paletteCache = useRef(new Map<string, Map<string, number>>());
   const palette = useMemo(() => {
@@ -362,20 +362,20 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
       slots = new Map<string, number>();
       paletteCache.current.set(canvasKey, slots);
     }
-    return configurationPalette(spansByRun, slots, props.profiles);
-  }, [spansByRun, canvasKey, props.profiles]);
-  const namer = useMemo(() => configurationNamer(props.profiles), [props.profiles]);
+    return buddyPalette(spansByRun, slots, props.buddies);
+  }, [spansByRun, canvasKey, props.buddies]);
+  const namer = useMemo(() => buddyNamer(props.buddies), [props.buddies]);
 
   const factsBySpan = useMemo(() => {
     const map = new Map<string, SpanFacts>();
     if (!timeline) return map;
     for (const row of timeline.rows) {
       for (const span of spansByRun.get(row.runId) ?? []) {
-        map.set(span.spanId, spanFacts(span, row, observedAtMs, props.profiles));
+        map.set(span.spanId, spanFacts(span, row, observedAtMs, props.buddies));
       }
     }
     return map;
-  }, [timeline, spansByRun, observedAtMs, props.profiles]);
+  }, [timeline, spansByRun, observedAtMs, props.buddies]);
 
   const itemsByKey = useMemo(() => {
     const map = new Map<string, TimelineItem>();
@@ -401,7 +401,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
   // last recorded card with its missing-record warning.
   const cardCache = useRef<{ key: string; card: InspectorCard } | null>(null);
   const cardKey = selection ? selection.type === "run" ? `run:${selection.runId}` : selection.key : "";
-  const currentCard = timeline && selection ? buildInspectorCard(selection, timeline, itemsByKey, props.profiles) : null;
+  const currentCard = timeline && selection ? buildInspectorCard(selection, timeline, itemsByKey, props.buddies) : null;
   if (currentCard) cardCache.current = { key: cardKey, card: currentCard };
   const selectedCard = currentCard ?? (cardCache.current?.key === cardKey ? cardCache.current.card : null);
 
@@ -736,7 +736,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
     const reversed = facts.endMs !== null && facts.endMs < facts.startMs!;
     if (reversed) return null;
     const left = scaled.position(facts.startMs)!;
-    const style = paletteIndex(palette, span.configuration);
+    const style = paletteIndex(palette, span.buddy);
     const right = facts.endMs !== null ? scaled.position(facts.endMs) : null;
     const width = right !== null ? Math.max(right - left, 0) : 0;
     const widthPxSpan = width / 100 * widthPx;
@@ -782,7 +782,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
     }
     // The bar label uses the friendly name (0.16 0.3); the raw identity stays
     // in the aria label and tooltip.
-    const shortModel = namer(span.configuration).text;
+    const shortModel = namer(span.buddy).text;
     const label = textPx >= 150
       ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}${facts.outcome !== "finished" ? " · " + outcomeLabel(span, facts.outcome) : ""}`
       : textPx >= 72 ? `第${span.turnIndex ?? "?"}轮` : textPx >= 30 ? String(span.turnIndex ?? "·") : "";
@@ -950,7 +950,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
                       <span className="lbl-name">{title.text}</span>
                       {runOpened && <span className="opened-mark">详情</span>}
                     </span>
-                    <span className="lbl-sub" title={namer(row.configuration).title}>{state.label} · {row.kind === "helper" ? "协助任务 · " : ""}{namer(row.configuration).text}</span>
+                    <span className="lbl-sub" title={namer(row.buddy).title}>{state.label} · {row.kind === "helper" ? "协助任务 · " : ""}{namer(row.buddy).text}</span>
                     {unplaced > 0 && <span className="trunc-chip" title="片段时间缺失或异常，未定位">⚠ {unplaced} 段时间缺失</span>}
                   </button>
                   <div className="tl-track">
@@ -1055,7 +1055,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
       </div>
       {!drawerActuallyCollapsed && <div className="inspector-dock-body">
         <TimelineInspector selection={selection} cachedCard={selectedCard}
-          timeline={timeline} itemsByKey={itemsByKey} profiles={props.profiles}
+          timeline={timeline} itemsByKey={itemsByKey} buddies={props.buddies}
           truncatedEvents={!!timeline?.truncated.events}
           onOpen={props.onOpenItem} onSelectItem={props.onSelectItem} onSelectRun={props.onSelectRun}
           onUnpin={props.onClearSelection} />

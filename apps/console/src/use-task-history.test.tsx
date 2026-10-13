@@ -127,7 +127,7 @@ describe("delegation history", () => {
   it("keeps the filter choices from its own reads while a scope change reloads the rows", async () => {
     const f = harness();
     await startRead();
-    await act(async () => f.requests[0].resolve(page([{ ...task("kept"), cwd: "/p", delegation: { kind: "goal", sourceHostId: "host-a", currentHostId: "host-a", parentRunId: null, rootRunId: "kept", project: { id: "project-a", label: "A", path: "/a" }, configuration: null } }], "next")));
+    await act(async () => f.requests[0].resolve(page([{ ...task("kept"), cwd: "/p", delegation: { kind: "goal", sourceHostId: "host-a", currentHostId: "host-a", parentRunId: null, rootRunId: "kept", project: { id: "project-a", label: "A", path: "/a" }, buddy: null } }], "next")));
     expect(f.result.current.known.map(t => t.runId)).toEqual(["kept"]);
     // A scope change clears the displayed rows; the choices memory survives.
     f.rerender({ query: { ...query, filter: "host" }, active: true });
@@ -414,7 +414,7 @@ describe("delegation history", () => {
     const newcomer = { ...task("new-project"), cwd: "/new-project",
       delegation: { kind: "goal" as const, sourceHostId: "new-host", currentHostId: "new-host",
         parentRunId: null, rootRunId: "new-project",
-        project: { id: "project-new", label: "New", path: "/new-project" }, configuration: null } };
+        project: { id: "project-new", label: "New", path: "/new-project" }, buddy: null } };
     // A complete poll page: the whole loaded window is covered in one read.
     await act(async () => f.requests[1].resolve(page([newcomer])));
     // The bounded memory must keep the new read's project and host for the

@@ -68,7 +68,7 @@ from ..native_support import (
 )
 from ...runtime.windows_process import owned_popen
 from ..run_contract import (
-    CheckedConfiguration,
+    CheckedBuddy,
     CheckedValue,
     CompletionEvidence,
     ContinuationFacts,
@@ -77,8 +77,8 @@ from ..run_contract import (
     InterruptEvidence,
     NativeEvidence,
     PolicyFact,
-    ResultConfiguration,
-    RunConfiguration,
+    ResultBuddy,
+    RunBuddy,
     RunEnd,
     RunFeedback,
     RunRequest,
@@ -233,7 +233,7 @@ class _RunState:
     """The run's own end facts, recorded per stage as it actually happened.
 
     ``catalog_checked``, ``terminal_ok`` and ``drained`` carry what the run
-    really reached: a result never claims a checked configuration before the
+    really reached: a result never claims a checked buddy before the
     catalog check confirmed it, never claims a settled turn before the
     terminal criteria passed, and never claims a complete stream without the
     observed end of the native output.
@@ -295,8 +295,8 @@ def _prepare(request: RunRequest) -> _Preparation:
     settings = (worker_sandbox_settings(request.worker_permission.level)
                 if request.worker_permission is not None else sandbox_settings(request.network_allowed_domains))
     private_json(native_root / _SETTINGS_FILE, settings)
-    args = execution_args(session_id=session_id, model=request.configuration.model,
-                          effort=request.configuration.effort,
+    args = execution_args(session_id=session_id, model=request.buddy.model,
+                          effort=request.buddy.effort,
                           settings_path=str(native_root / _SETTINGS_FILE),
                           read_only=read_only, output_schema=request.output_schema.value,
                           additional_denied_tools=request.additional_denied_tools,
@@ -381,10 +381,10 @@ def _check_catalog(request: RunRequest, catalog: dict) -> bool:
     """Unknown catalogs prove nothing; readable catalogs gate native capability."""
     if catalog["discoveries"][0]["status"] == "unknown":
         return False
-    configuration = request.configuration
-    if not any(model["id"] == configuration.model and configuration.effort in model["efforts"]
+    buddy = request.buddy
+    if not any(model["id"] == buddy.model and buddy.effort in model["efforts"]
                for model in catalog["providers"][0]["models"]):
-        raise ClaudeProtocolError("invalid-configuration",
+        raise ClaudeProtocolError("invalid-buddy",
                                   "the selected Claude model and effort are not in the current native catalog")
     return True
 
@@ -667,7 +667,7 @@ def _native_observations(collector: _TurnCollector, native_result: dict | None,
     """The observed session model, model set, costs and quota windows, as facts.
 
     Each value keeps its native source; none is ever filled from a requested
-    configuration, and an unobserved one stays null. ``quota_failure`` carries
+    buddy, and an unobserved one stays null. ``quota_failure`` carries
     the frozen facts of one native quota rejection only: the legacy bounded
     receipt shape travels in this package for the role's projection, and an
     unrejected run writes nothing. The interrupt pair appears only when an
@@ -684,7 +684,7 @@ def _native_observations(collector: _TurnCollector, native_result: dict | None,
     if state.catalog is not None:
         observations["catalogStatus"] = state.catalog["discoveries"][0]["status"]
         observations["catalogWarnings"] = state.catalog["warnings"][:16]
-        observations["configurationStatus"] = "confirmed" if state.catalog_checked else "unknown"
+        observations["buddyStatus"] = "confirmed" if state.catalog_checked else "unknown"
     if state.quota_failure is not None:
         observations["quotaFailure"] = _quota_failure(
             {"rateLimitType": state.quota_failure.get("nativeCode"), "resetsAt": state.quota_failure.get("resetsAt")})
@@ -765,7 +765,7 @@ def _representable_value(structured) -> RunValue | None:
 
     The raw text's and the parsed form's bounds are the run contract's own; a
     delivery that exceeds them is dropped alone. The completion evidence, the
-    stop facts, the checked configuration and every usage package keep their
+    stop facts, the checked buddy and every usage package keep their
     places, and the run's end status stays what the native interaction
     actually reported — an unrepresentable value is never allowed to erase
     the confirmed facts around it.
@@ -825,16 +825,16 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
         # never back-inferred from the process-group stop. A verified built-in delivery call stays excluded from
         # tool facts; an unverified call remains counted there.
         completion = CompletionEvidence(stream_end=stream_ended)
-    checked = CheckedConfiguration()
+    checked = CheckedBuddy()
     if state.catalog_checked:
         # Initialize reports the provider as used and confirms model and effort
         # membership; the provider is never copied from the request. No
         # applied-effort readback exists in the native result, so none is
         # claimed for it.
-        checked = CheckedConfiguration(
+        checked = CheckedBuddy(
             provider=CheckedValue(value=state.provider),
-            model=CheckedValue(value=request.configuration.model),
-            effort=CheckedValue(value=request.configuration.effort))
+            model=CheckedValue(value=request.buddy.model),
+            effort=CheckedValue(value=request.buddy.effort))
     effective = _effective_policy(preparation) if preparation is not None else EffectivePolicy()
     continuation = None
     if session_confirmed and session_id is not None:
@@ -890,10 +890,10 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
             native_event_count=evidence.event_seq if evidence is not None and evidence.event_seq else None,
             native_evidence=native_evidence,
             model_started=True if user_sent else None,
-            configuration=ResultConfiguration(
-                requested=RunConfiguration(provider=request.configuration.provider,
-                                           model=request.configuration.model,
-                                           effort=request.configuration.effort),
+            buddy=ResultBuddy(
+                requested=RunBuddy(provider=request.buddy.provider,
+                                   model=request.buddy.model,
+                                   effort=request.buddy.effort),
                 checked=checked),
             native_identity=native_identity,
             value=value if packages else None,
@@ -917,7 +917,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
         # A fact that cannot be represented in the common result is the run's
         # own failure, never an unhandled escape. The fallback keeps every
         # already-observed stage fact — identity, model start, the confirmed
-        # configuration, the stop evidence, the retained references — and drops
+        # buddy, the stop evidence, the retained references — and drops
         # only the packages whose own shape failed, so nothing observed becomes
         # unknown again.
         state.status = "error"

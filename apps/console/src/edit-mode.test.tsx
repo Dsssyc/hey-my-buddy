@@ -3,18 +3,18 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiError, type ConsoleApi } from "./api";
-import type { ModelServiceNote, Profile, Snapshot } from "./types";
+import type { ModelServiceNote, Buddy, Snapshot } from "./types";
 import { chip, effortCell, level, levelSwitch, listed, modelRow, pane, selectModel } from "./buddies/page.testing";
 
 /** One model service with an enabled and a disabled effort, plus a second enabled model service. */
-function catalog(): Profile[] {
+function catalog(): Buddy[] {
   const entries = [
     { model: "deepseek-flash", effort: "off", enabled: true },
     { model: "deepseek-flash", effort: "high", enabled: false },
     { model: "deepseek-v4-pro", effort: "max", enabled: true },
   ];
   return entries.map(({ model, effort, enabled }) => ({
-    profileId: `dsh:deepseek-official:${model}:${effort}`,
+    buddyId: `dsh:deepseek-official:${model}:${effort}`,
     label: `${model} · ${effort}`,
     adapter: "dsh", provider: "deepseek-official", model, effort,
     available: true, enabled, capabilities: ["execution:dsh", "decision"], contextWindow: 1000000,
@@ -25,18 +25,18 @@ const flashOff = "dsh:deepseek-official:deepseek-flash:off";
 const flashModelService = { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 const flashNote = (text: string): ModelServiceNote => ({ ...flashModelService, text, updatedAt: null });
-/** A configuration that only a completed program discovery can add. */
+/** A buddy that only a completed program discovery can add. */
 const discovered = "dsh:deepseek-official:deepseek-v5:medium";
 
 type Script = { publish?: ("network" | "forbidden")[] };
 
 function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) {
-  const profiles = catalog();
+  const buddies = catalog();
   let state: Snapshot = {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    profiles,
+    configuration: { routerBuddyIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    buddies,
 
     modelServiceNotes: [flashNote("原备注")],
     preferences: [], decisions: [],
@@ -62,10 +62,10 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
         modelServiceNotes: params.modelServiceNoteChanges
           ? params.modelServiceNoteChanges.map((change: { text: string }) => flashNote(change.text))
           : state.modelServiceNotes,
-        profiles: params.profileSettings
-          ? state.profiles.map(profile => ({ ...profile, enabled: params.profileSettings.find(
-              (change: { profileId: string; enabled: boolean }) => change.profileId === profile.profileId)?.enabled ?? profile.enabled }))
-          : state.profiles,
+        buddies: params.buddySettings
+          ? state.buddies.map(buddy => ({ ...buddy, enabled: params.buddySettings.find(
+              (change: { buddyId: string; enabled: boolean }) => change.buddyId === buddy.buddyId)?.enabled ?? buddy.enabled }))
+          : state.buddies,
       };
       return { published: true };
     }
@@ -74,7 +74,7 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
       // A discovery can coincide with another settings publication.
       state = { ...state,
         ...(options.discoveryNote ? { modelServiceNotes: [flashNote(options.discoveryNote)] } : {}),
-        profiles: [...state.profiles, { profileId: discovered, label: "deepseek-v5 · medium", adapter: "dsh",
+        buddies: [...state.buddies, { buddyId: discovered, label: "deepseek-v5 · medium", adapter: "dsh",
           provider: "deepseek-official", model: "deepseek-v5", effort: "medium", available: true, enabled: false,
           capabilities: [], contextWindow: null, source: "catalog:refresh", description: "" }] };
       return { discovered: true };
@@ -142,10 +142,10 @@ describe("direct editing and the save bar", () => {
     await waitFor(() => expect(f.operations).toEqual(["user_policy_publish"]));
     expect(f.published[0]).toMatchObject({ commandId: expect.any(String) });
     expect(f.published[0]).not.toHaveProperty("expectedRevision");
-    // Only the changed model service note is published: no profiles table and no card.
+    // Only the changed model service note is published: no buddies table and no card.
     expect(f.published[0].modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "本地草稿，未发布" }]);
     expect(f.published[0]).not.toHaveProperty("annotationChanges");
-    expect(f.published[0]).not.toHaveProperty("profiles");
+    expect(f.published[0]).not.toHaveProperty("buddies");
     expect(f.published[0]).not.toHaveProperty("cards");
     await screen.findByText(PUBLISHED);
     expect(saveBar()).toBeNull();
@@ -293,7 +293,7 @@ describe("direct editing and the save bar", () => {
     await screen.findByText(PUBLISHED);
     expect(f.published[0]).not.toHaveProperty("expectedRevision");
     expect(f.published[0].modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "原备注，保留的备注" }]);
-    expect(f.published[0]).not.toHaveProperty("profiles");
+    expect(f.published[0]).not.toHaveProperty("buddies");
   });
 
   it("toggles a level from its switch and marks it unsaved until publication", async () => {
@@ -315,8 +315,8 @@ describe("direct editing and the save bar", () => {
     expect(within(level("off")).queryByRole("img", { name: "未保存" })).toBeNull();
     expect(within(effortCell("off")).queryByRole("img", { name: "未保存" })).toBeNull();
     // A disable publishes one enablement patch and nothing program-owned.
-    expect(f.published.at(-1)!.profileSettings).toEqual([{ profileId: flashOff, enabled: false }]);
-    expect(f.published.at(-1)).not.toHaveProperty("profiles");
+    expect(f.published.at(-1)!.buddySettings).toEqual([{ buddyId: flashOff, enabled: false }]);
+    expect(f.published.at(-1)).not.toHaveProperty("buddies");
     expect(f.published.at(-1)).not.toHaveProperty("cards");
   });
 

@@ -38,8 +38,8 @@ from ...errors import BoardError
 #: Task kinds derived from durable relations, never from a label.
 DELEGATION_KINDS = ("goal", "helper", "decision", "execution")
 
-#: The four fields of a complete resolved execution configuration.
-CONFIGURATION_FIELDS = ("adapter", "provider", "model", "effort")
+#: The four fields of a complete resolved buddy.
+BUDDY_FIELDS = ("adapter", "provider", "model", "effort")
 
 #: Server-side task history filters. ``all`` adds no predicate.
 HISTORY_FILTERS = ("all", "active", "host", "review")
@@ -59,7 +59,7 @@ _TIMESTAMP_PATTERN = re.compile(r"^[0-9A-Za-z:.+-]{1,64}$")
 
 #: Columns matched by ``query``. The original project path and both Host
 #: attributions are part of the contract; the execution adapter/model is the
-#: resolved execution configuration with the task's effective adapter as fallback.
+#: resolved buddy with the task's effective adapter as fallback.
 QUERY_COLUMNS = (
     "task_id",
     "task",
@@ -170,7 +170,7 @@ SELECT
     t.*,
     r.run_id AS governed_run_id,
     r.state AS run_state,
-    r.execution_configuration_json AS run_configuration_json,
+    r.buddy_json AS run_buddy_json,
     c.parent_run_id AS child_parent_run_id,
     COALESCE(c.parent_run_id, wr.run_id) AS delegated_parent_run_id,
     dr.decision_id AS decision_id,
@@ -206,8 +206,8 @@ SELECT
         json_extract(root_run.workspace_manifest_json, '$.snapshot.repositoryPath')
     ) AS project_repository_path,
     COALESCE(json_extract(r.goal_json, '$.task'), json_extract(t.spec_json, '$.task')) AS task,
-    COALESCE(json_extract(r.execution_configuration_json, '$.adapter'), t.adapter) AS effective_adapter,
-    COALESCE(json_extract(r.execution_configuration_json, '$.model'), json_extract(t.spec_json, '$.model'))
+    COALESCE(json_extract(r.buddy_json, '$.adapter'), t.adapter) AS effective_adapter,
+    COALESCE(json_extract(r.buddy_json, '$.model'), json_extract(t.spec_json, '$.model'))
         AS effective_model,
     EXISTS(
         SELECT 1 FROM attempts attempt
@@ -241,8 +241,8 @@ LEFT JOIN workflow_runs root_run ON root_run.run_id = COALESCE(rt.root_run_id, r
 TASK_HISTORY_SQL = f"SELECT * FROM ({RELATION_SQL}) AS resolved"
 
 
-def _complete_configuration(value: Any) -> dict | None:
-    """The four-field execution configuration, or ``None`` when it is not complete."""
+def _complete_buddy(value: Any) -> dict | None:
+    """The four-field buddy, or ``None`` when it is not complete."""
     if isinstance(value, str):
         try:
             value = json.loads(value)
@@ -250,10 +250,10 @@ def _complete_configuration(value: Any) -> dict | None:
             return None
     if not isinstance(value, dict):
         return None
-    configuration = {field: value.get(field) for field in CONFIGURATION_FIELDS}
-    if any(not isinstance(item, str) or not item for item in configuration.values()):
+    buddy = {field: value.get(field) for field in BUDDY_FIELDS}
+    if any(not isinstance(item, str) or not item for item in buddy.values()):
         return None
-    return configuration
+    return buddy
 
 
 def project_label(path: str | None, repository_path: str | None, fallback: str) -> str:
@@ -283,7 +283,7 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
     current_host = row["current_host_id"] if isinstance(row["current_host_id"], str) and row["current_host_id"] else None
     parent_run = row["delegated_parent_run_id"] if isinstance(row["delegated_parent_run_id"], str) else None
     root_run = row["root_run_id"] if isinstance(row["root_run_id"], str) else None
-    configuration = _complete_configuration(row["run_configuration_json"] if governed else row["spec_json"])
+    buddy = _complete_buddy(row["run_buddy_json"] if governed else row["spec_json"])
     result = {
         "kind": kind,
         "sourceHostId": source_host if root_run else None,
@@ -296,7 +296,7 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
             "label": project_label(path, row["project_repository_path"],
                                    "内部决策" if kind == "decision" and root_run is None else "未记录项目"),
         },
-        "configuration": configuration,
+        "buddy": buddy,
     }
     return result
 

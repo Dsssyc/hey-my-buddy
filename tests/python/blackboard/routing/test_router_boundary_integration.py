@@ -18,7 +18,7 @@ from blackboard.routing.test_router_dispatch import RouterDispatchTestCase, A, B
 import blackboard.routing.test_router_failover_integration as failover
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
-TRIAL_FIELDS = {"profileId", "identity", "index", "phase", "outcome", "code", "reason",
+TRIAL_FIELDS = {"buddyId", "identity", "index", "phase", "outcome", "code", "reason",
                 "taskId", "attemptId", "shutdownConfirmed", "consecutiveNoAnswers", "retryAt", "usage"}
 BOUNDARY_FIELDS = {"kind", "code", "reason", "routerTrials", "candidates", "facts", "retryAt", "commands", "userAction"}
 
@@ -58,9 +58,9 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         return request, first, second
 
     def assert_packet(self, boundary, ids=(A, B), *, require_schema=True):
-        self.assertEqual([item["profileId"] for item in boundary["candidates"]], list(ids))
+        self.assertEqual([item["buddyId"] for item in boundary["candidates"]], list(ids))
         facts = boundary["facts"]
-        self.assertEqual([item["profileId"] for item in facts["profiles"]], list(ids))
+        self.assertEqual([item["buddyId"] for item in facts["buddies"]], list(ids))
         self.assertIn("policyFacts", facts)
         if require_schema:
             self.assertIn("outputSchema", facts)
@@ -77,7 +77,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertEqual(result["retryAt"], "2026-01-01T00:10:00.000Z")
         for index, claim in enumerate((first, second)):
             trial = result["routerTrials"][index]
-            self.assertEqual(trial["profileId"], (A, B)[index])
+            self.assertEqual(trial["buddyId"], (A, B)[index])
             self.assertEqual(trial["index"], index)
             self.assertEqual(trial["identity"]["model"], ("alpha", "bravo")[index])
             self.assertEqual(trial["taskId"], claim["task"]["taskId"])
@@ -94,7 +94,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         request, first = self.start(three=True)
         self.report(first, self.failure(first), status="failed")
         second = self.next_claim(request)
-        answer = self.answer(second, profile_id=None)
+        answer = self.answer(second, buddy_id=None)
         answer["decision"]["reason"] = "No justified choice within the frozen candidates"
         self.report(second, answer)
         boundary = self.boundary(request["decisionId"])
@@ -108,7 +108,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
 
     def test_invalid_null_is_no_answer_and_never_model_reason_abstention(self):
         request, first = self.start()
-        answer = self.answer(first, profile_id=None)
+        answer = self.answer(first, buddy_id=None)
         answer["decision"]["reason"] = "Router unavailable: model wording is not program classification"
         answer["usage"]["toolCalls"] = None
         self.report(first, answer)
@@ -123,7 +123,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         request, first = self.start()
         with patch.object(self.board_.store.decisions, "_publish_select", side_effect=BoardError(
                 "FIXTURE_REJECTED", "Private program publication was refused")):
-            self.report(first, self.answer(first, profile_id=None))
+            self.report(first, self.answer(first, buddy_id=None))
         boundary = self.boundary(request["decisionId"])
         self.assertEqual(boundary["kind"], "router-unavailable")
         self.assertNotEqual(boundary["routerTrials"][0]["outcome"], "answered")
@@ -143,8 +143,8 @@ class BoundaryReadingTests(RouterDispatchTestCase):
 
     def test_recorded_quota_reset_is_a_known_retry_time_without_a_new_fuse(self):
         from hey_my_buddy.blackboard.routing.quota_routing import record
-        self.add_profile(C, model="charlie")
-        self.add_profile("dsh:fixture:delta:max", model="delta")
+        self.add_buddy(C, model="charlie")
+        self.add_buddy("dsh:fixture:delta:max", model="delta")
         with self.board_.store.db.write() as db:
             for model, minute in (("alpha", 20), ("bravo", 25)):
                 record(db, "dsh", {"provider": "fixture", "scope": {"limitId": model},
@@ -187,7 +187,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         private = self.request(request_id="private-extra")
         snapshot = self.snapshot_of(private["decisionId"])
         snapshot.pop("frozenAt")
-        packet = {"profiles": [], "privateHostFact": "retained, never sent"}
+        packet = {"buddies": [], "privateHostFact": "retained, never sent"}
         with self.board_.store.db.write() as db:
             # Recreate only this second public parent's snapshot; no dispatch
             # references it. Keep the first request's frozen evidence untouched.
@@ -206,7 +206,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.report(first, self.failure(first), status="failed")
         self.assertIsNone(self.boundary(request["decisionId"]))
         self.assertEqual(self.decision_row(request["decisionId"])["status"], "queued")
-        self.assertEqual(self.snapshot_of(request["decisionId"])["facts"]["routerProfileIds"], [A, B])
+        self.assertEqual(self.snapshot_of(request["decisionId"])["facts"]["routerBuddyIds"], [A, B])
 
     def test_current_view_has_actor_b_even_queued_and_original_request_stays_actor_free(self):
         request, first = self.start()
@@ -214,29 +214,29 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.report(first, self.failure(first), status="failed")
         current = self.decision_row(request["decisionId"])
         self.assertEqual(current["status"], "queued")
-        self.assertEqual(current["routerProfileId"], B)
-        self.assertEqual(current["routerProfile"]["model"], "bravo")
+        self.assertEqual(current["routerBuddyId"], B)
+        self.assertEqual(current["routerBuddy"]["model"], "bravo")
         self.assertEqual(current["routerIndex"], 1)
         self.assertEqual(current["decisionModel"]["requested"]["model"], "bravo")
-        self.assertEqual(current["routerProfileIds"], [A, B])
+        self.assertEqual(current["routerBuddyIds"], [A, B])
         with self.board_.store.db.read() as db:
             row = self.board_.store.decisions._row(db, request["decisionId"])
             requested = json.loads(row["requested_json"])
-        self.assertNotIn("routerProfileId", requested)
-        self.assertNotIn("routerProfile", requested)
+        self.assertNotIn("routerBuddyId", requested)
+        self.assertNotIn("routerBuddy", requested)
         self.assertEqual(self.snapshot_of(request["decisionId"]), original)
 
     def test_no_dispatch_does_not_invent_first_configured_actor(self):
         self.set_settings(ids=[A, B])
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET enabled=0")
+            db.execute("UPDATE buddies SET enabled=0")
         # Separate legal candidates preserve a real routing admission.
-        self.add_profile(C, model="charlie")
-        self.add_profile("dsh:fixture:delta:max", model="delta")
+        self.add_buddy(C, model="charlie")
+        self.add_buddy("dsh:fixture:delta:max", model="delta")
         request = self.request()
         current = self.decision_row(request["decisionId"])
-        self.assertIsNone(current["routerProfileId"])
-        self.assertIsNone(current["routerProfile"])
+        self.assertIsNone(current["routerBuddyId"])
+        self.assertIsNone(current["routerBuddy"])
         self.assertIsNone(current["routerIndex"])
         self.assertIsNone(current["decisionModel"]["requested"])
         boundary = self.boundary(request["decisionId"])
@@ -263,9 +263,9 @@ class BoundaryReadingTests(RouterDispatchTestCase):
 
     def test_model_byte_and_entry_caps_preserve_untruncated_host_packet(self):
         delta = "dsh:fixture:delta:max"
-        self.add_profile(C, model="charlie")
-        self.add_profile(delta, model="delta")
-        for ordinal, ceiling in enumerate(("MAX_DECISION_INPUT_BYTES", "MAX_DECISION_PROFILES")):
+        self.add_buddy(C, model="charlie")
+        self.add_buddy(delta, model="delta")
+        for ordinal, ceiling in enumerate(("MAX_DECISION_INPUT_BYTES", "MAX_DECISION_BUDDIES")):
             with self.subTest(ceiling=ceiling), patch("hey_my_buddy.blackboard.routing.decision." + ceiling, 1):
                 request = self.request(request_id="oversize-" + str(ordinal))
             boundary = self.boundary(request["decisionId"])
@@ -275,7 +275,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
             self.assertEqual(self.tasks(), [])
             self.assertEqual(self.attempts(), [])
 
-    def test_later_profiles_and_preferences_cannot_replace_frozen_facts(self):
+    def test_later_buddies_and_preferences_cannot_replace_frozen_facts(self):
         self.set_settings(ids=[])
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO model_service_notes VALUES('dsh','fixture','alpha','private note',?)", (T0,))
@@ -283,7 +283,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         request = self.request()
         frozen = self.boundary(request["decisionId"])
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET model='later-model'")
+            db.execute("UPDATE buddies SET model='later-model'")
             db.execute("UPDATE evaluation_preferences SET reason='later preference'")
             db.execute("DELETE FROM model_service_notes")
         current = self.boundary(request["decisionId"])
@@ -292,9 +292,9 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertNotIn("later-model", canonical_json(current["facts"]))
 
     def test_skip_is_not_an_execution_or_new_failure_and_retry_time_does_not_roll(self):
-        self.add_profile(C, model="charlie")
+        self.add_buddy(C, model="charlie")
         with self.board_.store.db.write() as db:
-            router_history.record_outcome(db, profile_id=A, plane="work", request_id="earlier", task_id=None,
+            router_history.record_outcome(db, buddy_id=A, plane="work", request_id="earlier", task_id=None,
                 attempt_id=None, outcome="no_answer", code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
         request = self.request()
         second = self.claim("second", task_id=request["runId"])["claim"]
@@ -314,11 +314,11 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertEqual(len(self.router_events("router.no_answer")), 2)
 
     def test_all_skipped_uses_original_consecutive_counts_and_earliest_retry(self):
-        for ordinal, profile_id in enumerate((A, A, A, B, B)):
+        for ordinal, buddy_id in enumerate((A, A, A, B, B)):
             if ordinal == 3:
                 self.clock.advance(10)
             with self.board_.store.db.write() as db:
-                router_history.record_outcome(db, profile_id=profile_id, plane="work", request_id="earlier-" + str(ordinal),
+                router_history.record_outcome(db, buddy_id=buddy_id, plane="work", request_id="earlier-" + str(ordinal),
                     task_id=None, attempt_id=None, outcome="no_answer", code="timeout", phase="runtime",
                     facts={"routerIndex": 0}, now=self.clock.value)
         request = self.request()
@@ -332,9 +332,9 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertEqual(self.attempts(), [])
 
     def test_real_preflight_no_answer_is_distinct_from_skipped_and_has_no_fake_attempt(self):
-        self.add_profile(C, model="charlie")
+        self.add_buddy(C, model="charlie")
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET enabled=0 WHERE profile_id=?", (A,))
+            db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id=?", (A,))
         request = self.request()
         second = self.claim("second", task_id=request["runId"])["claim"]
         self.report(second, self.failure(second), status="failed")
@@ -376,12 +376,12 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.report(first, self.answer(first))
         self.assertIsNone(self.boundary(request["decisionId"]))
         with self.board_.store.db.write() as db:
-            db.execute("DELETE FROM evaluation_profiles WHERE profile_id=?", (B,))
+            db.execute("DELETE FROM buddies WHERE buddy_id=?", (B,))
         sole = self.request(request_id="sole")
         self.assertIsNone(self.boundary(sole["decisionId"]))
         self.assertFalse(self.decision_row(sole["decisionId"])["routerCalled"])
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET enabled=0")
+            db.execute("UPDATE buddies SET enabled=0")
         no_candidate = self.request(request_id="none-legal")
         self.assertIsNone(self.boundary(no_candidate["decisionId"]))
         self.assertIsNone(self.snapshot_of(no_candidate["decisionId"]))
@@ -433,12 +433,12 @@ class GovernedBoundaryTests(WorkflowTestCase):
         self.clock = FakeClock(T0)
         self.board_ = self.board(clock=self.clock)
         with self.board_.store.db.write() as db:
-            for profile_id, model in ((A, "alpha"), (B, "bravo")):
-                db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
+            for buddy_id, model in ((A, "alpha"), (B, "bravo")):
+                db.execute("INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,"
                            "available,enabled,capabilities_json) "
                            "VALUES(?,?,'dsh','fixture',?,'max',1,1,?)",
-                           (profile_id, profile_id, model, canonical_json(permission_capabilities("dsh"))))
-            router._write_settings(db, {**router.configuration(db), "routerProfileIds": []})
+                           (buddy_id, buddy_id, model, canonical_json(permission_capabilities("dsh"))))
+            router._write_settings(db, {**router.configuration(db), "routerBuddyIds": []})
 
     def routed(self, request_id="goal-1", *, access="write", kind="existing"):
         response = self.board_.call("workflow_submit", {"requestId": request_id, "hostId": "host-1",
@@ -459,7 +459,7 @@ class GovernedBoundaryTests(WorkflowTestCase):
         self.assertEqual(view["activeRequest"]["routingBoundary"], boundary)
         choices = boundary["commands"]["continue"]["choices"]
         self.assertFalse(boundary["commands"]["continue"]["blocked"])
-        self.assertEqual([item["profileId"] for item in choices], [A, B])
+        self.assertEqual([item["buddyId"] for item in choices], [A, B])
         for choice in choices:
             params = choice["params"]
             self.assertEqual(params["runId"], view["runId"])
@@ -469,16 +469,16 @@ class GovernedBoundaryTests(WorkflowTestCase):
             self.assertLessEqual(len(params["commandId"]), 128)
         chosen = choices[1]["params"]
         continued = self.board_.call("workflow_continue", self.template_params(view, chosen))
-        self.assertEqual(continued["executionConfiguration"], chosen["configuration"])
+        self.assertEqual(continued["buddy"], chosen["buddy"])
         self.assertEqual(continued["runId"], view["runId"])
         self.assertFalse(continued["awaitingHost"])
         self.assertTrue(self.board_.call("workflow_continue", self.template_params(view, chosen))["duplicate"])
 
-    def test_configuration_required_error_explains_same_boundary_commands(self):
+    def test_buddy_required_error_explains_same_boundary_commands(self):
         view = self.routed()
         with self.assertRaises(BoardError) as raised:
             self.continue_run(self.board_, view)
-        self.assertEqual(raised.exception.code, "CONFIGURATION_REQUIRED")
+        self.assertEqual(raised.exception.code, "BUDDY_REQUIRED")
         self.assertEqual(raised.exception.details["routingBoundary"], view["routing"]["routingBoundary"])
 
     def test_get_rebuilds_stable_templates_when_owner_revision_changes(self):
@@ -498,14 +498,14 @@ class GovernedBoundaryTests(WorkflowTestCase):
         view = self.routed()
         original = view["routing"]["routingBoundary"]
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET model='changed-model' WHERE profile_id=?", (B,))
+            db.execute("UPDATE buddies SET model='changed-model' WHERE buddy_id=?", (B,))
         latest = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]
         self.assertEqual(latest["candidates"], original["candidates"])
         self.assertEqual(latest["facts"], original["facts"])
-        choice = next(item for item in latest["commands"]["continue"]["choices"] if item["profileId"] == B)
+        choice = next(item for item in latest["commands"]["continue"]["choices"] if item["buddyId"] == B)
         self.assertTrue(choice["blocked"])
         self.assertTrue(choice["reason"])
-        self.assertEqual(choice["params"]["configuration"]["model"], "bravo")
+        self.assertEqual(choice["params"]["buddy"]["model"], "bravo")
 
     def test_cleanup_guard_blocks_templates_and_existing_continue_operation(self):
         view = self.routed()
@@ -544,16 +544,16 @@ class GovernedBoundaryTests(WorkflowTestCase):
             row = db.execute("SELECT goal_json FROM workflow_runs WHERE run_id=?", (view["runId"],)).fetchone()
             goal = json.loads(row[0])
             goal.update({"adapter": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"})
-            db.execute("UPDATE workflow_runs SET goal_json=?,configuration_locked=1 WHERE run_id=?",
+            db.execute("UPDATE workflow_runs SET goal_json=?,buddy_locked=1 WHERE run_id=?",
                        (canonical_json(goal), view["runId"]))
         latest = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]
         self.assertEqual(latest["candidates"], original["candidates"])
-        other = next(item for item in latest["commands"]["continue"]["choices"] if item["profileId"] == B)
+        other = next(item for item in latest["commands"]["continue"]["choices"] if item["buddyId"] == B)
         self.assertTrue(other["blocked"])
         self.assertTrue(other["reason"])
         with self.assertRaises(BoardError) as raised:
             self.board_.call("workflow_continue", self.template_params(view, other["params"]))
-        self.assertEqual(raised.exception.code, "CONFIGURATION_CONFLICT")
+        self.assertEqual(raised.exception.code, "BUDDY_CONFLICT")
 
     def test_nested_boundary_uses_root_control_and_current_owner_revision(self):
         root, leaf = self.routed("root", kind="worktree"), self.routed("leaf", kind="worktree")
@@ -580,7 +580,7 @@ class GovernedBoundaryTests(WorkflowTestCase):
         continued = self.board_.call("workflow_continue", params)
         self.assertEqual(continued["runId"], root["runId"])
         continued_leaf = self.board_.call("workflow_get", {"runId": leaf["runId"]})
-        self.assertEqual(continued_leaf["executionConfiguration"], chosen["configuration"])
+        self.assertEqual(continued_leaf["buddy"], chosen["buddy"])
         self.assertFalse(continued_leaf["awaitingHost"])
 
     def test_terminal_ancestor_blocks_leaf_templates_and_continue_cannot_bypass_it(self):
@@ -606,23 +606,23 @@ class GovernedBoundaryTests(WorkflowTestCase):
         rendered = cli._render_output("get", view, cli_views.OUTPUT_BRIEF)
         self.assertEqual(rendered["routing"]["routingBoundary"], boundary)
         await_response = {"workflow": {"routingBoundary": boundary}, "request": {"routing": True},
-                          "nextCommands": [{"method": "continue", "params": {"configuration": "old-placeholder"}}]}
+                          "nextCommands": [{"method": "continue", "params": {"buddy": "old-placeholder"}}]}
         awaited = cli._render_output("await", await_response, cli_views.OUTPUT_BRIEF)
         self.assertEqual(awaited["routingBoundary"], boundary)
         self.assertEqual(awaited["request"]["routingBoundary"], boundary)
-        self.assertTrue(all(isinstance(item["params"]["configuration"], dict)
-                            for item in awaited["nextCommands"] if "configuration" in item.get("params", {})))
+        self.assertTrue(all(isinstance(item["params"]["buddy"], dict)
+                            for item in awaited["nextCommands"] if "buddy" in item.get("params", {})))
 
 
     def test_governed_valid_abstention_payload_has_program_nature_before_answered_notification(self):
         with self.board_.store.db.write() as db:
-            router._write_settings(db, {**router.configuration(db), "routerProfileIds": [A, B]})
+            router._write_settings(db, {**router.configuration(db), "routerBuddyIds": [A, B]})
         view = self.routed()
         self.board_.call("worker_register", {"workerId": "w-route", "adapter": "decision", "capabilities": ["decision"]})
         nonce = NONCE + "abstain"
         claim = self.board_.call("worker_claim", {"workerId": "w-route", "claimRequestId": "router-abstain",
             "nonce": nonce, "runId": view["routing"]["taskId"]})["claim"]
-        answer = self.answer(claim, profile_id=None)
+        answer = self.answer(claim, buddy_id=None)
         reason = "The frozen packet does not justify choosing a buddy"
         answer["decision"]["reason"] = reason
         self.board_.call("worker_result", {"workerId": "w-route", "attemptId": claim["attempt"]["attemptId"],
@@ -643,7 +643,7 @@ class GovernedBoundaryTests(WorkflowTestCase):
 
     def test_explicit_reroute_after_known_retry_time_continues_same_goal_without_model(self):
         with self.board_.store.db.write() as db:
-            router._write_settings(db, {**router.configuration(db), "routerProfileIds": [A, B]})
+            router._write_settings(db, {**router.configuration(db), "routerBuddyIds": [A, B]})
         view = self.routed()
         self.board_.call("worker_register", {"workerId": "w-route", "adapter": "decision", "capabilities": ["decision"]})
         for ordinal in (0, 1):
@@ -670,7 +670,7 @@ class GovernedBoundaryTests(WorkflowTestCase):
         self.assertEqual(reroute["notBefore"], self.clock.value)
         continued = self.board_.call("workflow_continue", self.template_params(view, reroute["params"]))
         self.assertEqual(continued["runId"], view["runId"])
-        self.assertIsNone(continued["executionConfiguration"])
+        self.assertIsNone(continued["buddy"])
         self.board_.store.workflow.prepare_continuation_workspace({"runId": view["runId"]})
         refreshed = self.board_.call("workflow_get", {"runId": view["runId"]})
         self.assertEqual(refreshed["routing"]["status"], "queued")

@@ -162,7 +162,7 @@ class MethodSurfaceTests(unittest.TestCase):
             ("conclude", "workflow_conclude"),
             ("reclaim", "workflow_reclaim"),
             ("user-policy-publish", "user_policy_publish"),
-            ("model-profiles", "model_profiles"),
+            ("buddy-list", "buddy_list"),
             ("selection-request", "selection_request"),
             ("selection-get", "selection_get"),
         ):
@@ -266,20 +266,20 @@ class PrivateStateTestCase(BoardTestCase):
         )
 
 
-class ModelProfilesCliTests(PrivateStateTestCase):
-    def test_model_profiles_uses_the_named_schema_and_cursor(self):
+class ModelBuddiesCliTests(PrivateStateTestCase):
+    def test_model_buddies_uses_the_named_schema_and_cursor(self):
         self.catalog_fixture()
         board = self.board()
         self.use_board_transport(board)
-        board.call("model_catalog_refresh", {"requestId": "cli-profiles-catalog"})
-        code, first = self.run_cli("model-profiles", json.dumps({"limit": 1, "includeUnavailable": True}))
+        board.call("model_catalog_refresh", {"requestId": "cli-buddies-catalog"})
+        code, first = self.run_cli("buddy-list", json.dumps({"limit": 1, "includeUnavailable": True}))
         self.assertEqual(code, 0, first)
-        self.assertEqual(len(first["profiles"]), 1)
+        self.assertEqual(len(first["buddies"]), 1)
         self.assertIsNotNone(first["nextCursor"])
-        code, second = self.run_cli("model-profiles", json.dumps({"limit": 1, "after": first["nextCursor"], "includeUnavailable": True}))
+        code, second = self.run_cli("buddy-list", json.dumps({"limit": 1, "after": first["nextCursor"], "includeUnavailable": True}))
         self.assertEqual(code, 0, second)
-        self.assertNotEqual(first["profiles"][0]["profileId"], second["profiles"][0]["profileId"])
-        code, invalid = self.run_cli("model-profiles", json.dumps({"limit": 0}))
+        self.assertNotEqual(first["buddies"][0]["buddyId"], second["buddies"][0]["buddyId"])
+        code, invalid = self.run_cli("buddy-list", json.dumps({"limit": 0}))
         self.assertNotEqual(code, 0)
         self.assertEqual(invalid["error"]["code"], "INVALID_ARGUMENT")
 

@@ -45,7 +45,7 @@ def edited(request: rc.RunRequest, **changes: object) -> rc.RunRequest:
 def full_request(tmp: Path) -> rc.RunRequest:
     return rc.RunRequest(
         identity=identity(), harness="zcode",
-        configuration=rc.RunConfiguration(provider="fixture-provider", model="fixture-model", effort="off"),
+        buddy=rc.RunBuddy(provider="fixture-provider", model="fixture-model", effort="off"),
         cwd=str(tmp / "checkout"), private_state=rc.PrivateStatePaths(invocation_root=str(tmp / "inv"),
                                                                       native_root=str(tmp / "native")),
         input_text="one bounded role-assembled input", tool_scope="read",
@@ -62,9 +62,9 @@ def full_result() -> rc.RunResult:
         end=rc.RunEnd(status="ok", native_exit_code=0),
         harness_version="0.42.0", model_started=True,
 
-        configuration=rc.ResultConfiguration(
-            requested=rc.RunConfiguration(provider="fixture-provider", model="fixture-model", effort="off"),
-            checked=rc.CheckedConfiguration(model=rc.CheckedValue(value="fixture-model"))),
+        buddy=rc.ResultBuddy(
+            requested=rc.RunBuddy(provider="fixture-provider", model="fixture-model", effort="off"),
+            checked=rc.CheckedBuddy(model=rc.CheckedValue(value="fixture-model"))),
         native_identity=rc.NativeIdentity(session_id="s1"),
 
         value=rc.RunValue(schema_status="valid",  parsed=rc.FrozenJson({"a": 1}),
@@ -96,12 +96,12 @@ def full_result() -> rc.RunResult:
 
 
 class NativeEvidenceContractTests(unittest.TestCase):
-    def test_blank_configuration_and_previous_session_are_refused_at_the_boundary(self):
+    def test_blank_buddy_and_previous_session_are_refused_at_the_boundary(self):
         request = full_request(Path("/private/tmp")).to_payload()
         for blank in (" ", "\t\n", "\u3000"):
             for field in ("provider", "model", "effort"):
                 with self.subTest(field=field, blank=blank):
-                    fields = {**request, "configuration": {**request["configuration"], field: blank}}
+                    fields = {**request, "buddy": {**request["buddy"], field: blank}}
                     with self.assertRaises(BoardError):
                         rc.decode_run_request(fields)
             for mode in ("native-session", "reconstructed-new-session"):
@@ -109,13 +109,13 @@ class NativeEvidenceContractTests(unittest.TestCase):
                     with self.assertRaises(BoardError):
                         rc.decode_run_request({**request, "continuation": {
                             "mode": mode, "previousSessionId": blank}})
-        configured = rc.RunConfiguration(provider=" provider ", model="model", effort="off")
+        configured = rc.RunBuddy(provider=" provider ", model="model", effort="off")
         self.assertEqual(configured.provider, " provider ")
         self.assertIsNone(rc.RunContinuation(mode="reconstructed-new-session").previous_session_id)
 
     def test_unknown_end_and_bounded_native_evidence_roundtrip_losslessly(self):
         evidence = rc.NativeEvidence(unknown_events={"countsByType": {"future-event": 2}, "total": 2},
-                                     unconfirmed=["configuration-readback", "tool-scope"])
+                                     unconfirmed=["buddy-readback", "tool-scope"])
         result = full_result().model_copy(update={
             "end": rc.RunEnd(status="unknown", reason_code="native-end-unread"),
             "native_evidence": evidence})
@@ -123,7 +123,7 @@ class NativeEvidenceContractTests(unittest.TestCase):
         self.assertEqual(decoded, result)
         self.assertEqual(decoded.native_evidence.to_payload(), {
             "unknownEvents": {"countsByType": {"future-event": 2}, "total": 2},
-            "unconfirmed": ["configuration-readback", "tool-scope"]})
+            "unconfirmed": ["buddy-readback", "tool-scope"]})
         self.assertEqual(decoded.native_evidence.unknown_events.counts_by_type, (("future-event", 2),))
 
     def test_native_evidence_refuses_bad_shapes_counts_and_unconfirmed_names(self):
@@ -281,7 +281,7 @@ class CodecRoundtripTests(unittest.TestCase):
     def test_unknown_stays_unknown_in_a_minimal_result(self):
         result = rc.RunResult(identity=identity(), harness="codex", end=rc.RunEnd(status="cancelled"))
         self.assertIsNone(result.model_started)
-        self.assertIsNone(result.configuration.requested)
+        self.assertIsNone(result.buddy.requested)
         self.assertIsNone(result.usage)
         self.assertIsNone(result.native_identity)
         self.assertEqual(result.stop_evidence.native.group_state, "unknown")
@@ -300,15 +300,15 @@ class CodecRoundtripTests(unittest.TestCase):
         # wire field of this format.
         request = full_request(self.root)
         result = rc.RunResult(identity=identity(), harness="zcode", end=rc.RunEnd(status="ok"),
-                              configuration=rc.ResultConfiguration(requested=request.configuration))
-        self.assertNotIn("observed", result.configuration.to_payload())
-        self.assertEqual(result.configuration.checked, rc.CheckedConfiguration())
+                              buddy=rc.ResultBuddy(requested=request.buddy))
+        self.assertNotIn("observed", result.buddy.to_payload())
+        self.assertEqual(result.buddy.checked, rc.CheckedBuddy())
         decoded = rc.decode_run_result(result.to_payload())
-        self.assertEqual(decoded.configuration.requested, request.configuration)
-        self.assertEqual(decoded.configuration.checked, rc.CheckedConfiguration())
+        self.assertEqual(decoded.buddy.requested, request.buddy)
+        self.assertEqual(decoded.buddy.checked, rc.CheckedBuddy())
         with self.assertRaises(BoardError, msg="observed"):
             rc.decode_run_result({**result.to_payload(),
-                                  "configuration": {**result.configuration.to_payload(),
+                                  "buddy": {**result.buddy.to_payload(),
                                                     "observed": {"model": "fixture-model"}}})
 
     def test_signal_terminations_and_windows_codes_roundtrip(self):
@@ -369,7 +369,7 @@ class CodecRoundtripTests(unittest.TestCase):
             with self.assertRaises(BoardError, msg=path):
                 rc.decode_run_request(without(json.loads(json.dumps(request)), path))
         result = full_result().to_payload()
-        for path in ("stopEvidence.native.groupState", "configuration.checked.model",
+        for path in ("stopEvidence.native.groupState", "buddy.checked.model",
                      "end.message", "completionEvidence.streamEnd"):
             self.assertIsInstance(
                 rc.decode_run_result(without(json.loads(json.dumps(result)), path)), rc.RunResult, path)
@@ -502,7 +502,7 @@ class StrictScalarTypeTests(unittest.TestCase):
     The step 1 review confirmed the behavior was right but untested: an int
     never passes a bool field and a str never passes an int field, on the
     Python constructor exactly as on the wire decode. The covered fields are
-    the ones whose type is held by the shared strict configuration alone.
+    the ones whose type is held by the shared strict run contract alone.
     """
 
     def test_python_construction_refuses_int_for_bool_and_str_for_int(self):
@@ -548,7 +548,7 @@ class FreezingTests(unittest.TestCase):
         tools = ["mcp__finish__buddy_finish_turn"]
         request = rc.RunRequest(
             identity=rc.RunIdentity.from_payload(mutable_identity), harness="codex",
-            configuration=rc.RunConfiguration.from_payload(requested), cwd="/tmp/checkout",
+            buddy=rc.RunBuddy.from_payload(requested), cwd="/tmp/checkout",
             private_state=rc.PrivateStatePaths(invocation_root="/tmp/inv", native_root="/tmp/native"),
             input_text="x",
             tool_scope="none",
@@ -561,7 +561,7 @@ class FreezingTests(unittest.TestCase):
         tools.append("mcp__finish__buddy_checkpoint")
         self.assertEqual(request.identity.attempt_id, "attempt-fixture")
         self.assertEqual(request.identity.input_sha256, "a" * 64)
-        self.assertEqual(request.configuration.model, "fixture-model")
+        self.assertEqual(request.buddy.model, "fixture-model")
         self.assertEqual(request.output_schema.value["properties"]["answer"]["type"], "string")
         self.assertEqual(request.session_services[0].tool_names, ("mcp__finish__buddy_finish_turn",))
 

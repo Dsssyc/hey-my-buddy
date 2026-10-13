@@ -51,8 +51,8 @@ describe("recorded routing facts", () => {
     expect(JSON.stringify(fields)).not.toContain("历史降级原因");
   });
   it("shows the selected target, preference deviation and measured usage without the internal task id", () => {
-    const result = card({ configuration: { ...OPUS, model: "router-own-model" }, routing: {
-      selectedProfile: OPUS, reason: "读取接口后选择更适合的模型", policyCheck: {
+    const result = card({ buddy: { ...OPUS, model: "router-own-model" }, routing: {
+      selectedBuddy: OPUS, reason: "读取接口后选择更适合的模型", policyCheck: {
         userPreference: "matched",
       }, usage: { elapsedMs: 1250, toolCalls: 0, bytesRead: 2048 },
     } });
@@ -67,7 +67,7 @@ describe("recorded routing facts", () => {
     expect(JSON.stringify(fields)).not.toContain("router-own-model");
   });
 
-  it("keeps omitted historic facts unrecorded instead of borrowing the current execution configuration or timestamps", () => {
+  it("keeps omitted historic facts unrecorded instead of borrowing the current execution buddy or timestamps", () => {
     const result = card({ routing: undefined, decisionId: undefined });
     const fields = Object.fromEntries(result.fields.map(field => [field.label, field.value]));
     for (const label of ["已选配置", "理由", "偏好结果", "用时（elapsedMs）", "工具调用（toolCalls）", "读取量（bytesRead）"]) {

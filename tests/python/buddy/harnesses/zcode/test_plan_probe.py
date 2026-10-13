@@ -116,8 +116,8 @@ class PlanProbeModelTests(unittest.TestCase):
 
     def offline_run(self, request, **kwargs):
         # The model ID differs between installed and offline fixtures.
-        request = request.model_copy(update={"configuration":
-            request.configuration.model_copy(update={"model": "fixture-model"})})
+        request = request.model_copy(update={"buddy":
+            request.buddy.model_copy(update={"model": "fixture-model"})})
         return self.original_run(request, **kwargs)
 
     def test_probe_can_resume_the_same_plan_session_through_the_offline_native_path(self):

@@ -41,8 +41,8 @@ class CatalogTrustTests(BoardTestCase):
             row = db.execute('SELECT status, reason, discovery_id FROM catalog_current WHERE adapter=?', (adapter,)).fetchone()
             pending = catalog.pending_model_services(db)
             read_at = catalog.catalog_read_at(db, adapter)
-            profiles = db.execute('SELECT profile_id, available, unavailable_reason FROM evaluation_profiles WHERE adapter=?', (adapter,)).fetchall()
-        return row, pending, read_at, profiles
+            buddies = db.execute('SELECT buddy_id, available, unavailable_reason FROM buddies WHERE adapter=?', (adapter,)).fetchall()
+        return row, pending, read_at, buddies
 
     def test_unknown_discovery_retains_catalog_without_confirming_model_absence(self):
         confirmed = self.record(reading(models=('alpha', 'beta')))
@@ -57,12 +57,12 @@ class CatalogTrustTests(BoardTestCase):
                  patch.object(catalog, '_override', return_value=None):
                 discovered = catalog.discover(directory=self.board.directory)
             result = catalog_store.record(self.evaluation, discovered)
-            row, pending, read_at, profiles = self.state()
+            row, pending, read_at, buddies = self.state()
             self.assertEqual(row['status'], 'unknown')
             self.assertEqual(row['reason'], payload['discoveries'][0]['reason'])
             self.assertEqual(row['discovery_id'], confirmed['discoveryId'])
             self.assertEqual(read_at, before[2])
-            self.assertEqual([tuple(profile) for profile in profiles], [tuple(profile) for profile in before[3]])
+            self.assertEqual([tuple(buddy) for buddy in buddies], [tuple(buddy) for buddy in before[3]])
             self.assertEqual(pending, {})
             self.assertEqual(self.events(), [])
             self.assertNotIn('tableRevision', result)
@@ -142,13 +142,13 @@ class CatalogTrustTests(BoardTestCase):
                 if account_status is None:
                     del payload['discoveries'][0]['accountStatus']
                 self.record(payload)
-        row, pending, read_at, profiles = self.state()
+        row, pending, read_at, buddies = self.state()
         self.assertEqual(row['status'], 'unknown')
         self.assertEqual(row['reason'], 'ACCOUNT_STATUS_UNKNOWN')
         self.assertIsNotNone(row['discovery_id'], 'The previously confirmed payload is retained')
         self.assertEqual(read_at, trusted_at, 'An unknown reading is not a successful read')
-        self.assertEqual([p['profile_id'] for p in profiles], ['dsh:fixture:alpha:max'])
-        self.assertTrue(profiles[0]['available'])
+        self.assertEqual([p['buddy_id'] for p in buddies], ['dsh:fixture:alpha:max'])
+        self.assertTrue(buddies[0]['available'])
         with self.board.store.db.read() as db:
             view = catalog_store.current(db)
             self.assertIsNotNone(view.lookup('dsh', 'fixture', 'alpha'))
@@ -163,11 +163,11 @@ class CatalogTrustTests(BoardTestCase):
     def test_c01_cold_start_never_trusts_a_reading_without_the_account_fact(self):
         result = self.record(reading(account_status='unknown'))
         self.assertEqual(result['appliedAdapters'], ['dsh'])
-        row, pending, read_at, profiles = self.state()
+        row, pending, read_at, buddies = self.state()
         self.assertEqual(row['status'], 'unknown')
         self.assertIsNone(row['discovery_id'])
         self.assertIsNone(read_at)
-        self.assertEqual(profiles, [])
+        self.assertEqual(buddies, [])
         with self.board.store.db.read() as db:
             self.assertIsNone(catalog.pending_model_efforts(db, 'dsh', 'fixture', 'alpha'))
 
@@ -175,21 +175,21 @@ class CatalogTrustTests(BoardTestCase):
     def test_c03_first_absence_is_pending_before_the_window_and_unavailable_after(self):
         self.record(reading())
         self.record(reading(models=()))
-        row, pending, read_at, profiles = self.state()
+        row, pending, read_at, buddies = self.state()
         self.assertEqual(list(pending), [('dsh', 'fixture', 'alpha')])
         first_absence = pending[('dsh', 'fixture', 'alpha')]
-        self.assertTrue(profiles[0]['available'], 'A pending model keeps its routable state')
+        self.assertTrue(buddies[0]['available'], 'A pending model keeps its routable state')
         self.clock.advance(3599)
         self.record(reading(models=()))
-        _, pending, _, profiles = self.state()
+        _, pending, _, buddies = self.state()
         self.assertEqual(pending[('dsh', 'fixture', 'alpha')], first_absence, 'The first absence time never moves')
-        self.assertTrue(profiles[0]['available'])
+        self.assertTrue(buddies[0]['available'])
         self.clock.advance(2)
         self.record(reading(models=()))
-        row, pending, _, profiles = self.state()
+        row, pending, _, buddies = self.state()
         self.assertEqual(pending, {})
-        self.assertFalse(profiles[0]['available'])
-        self.assertEqual(profiles[0]['unavailable_reason'], catalog.CONFIRMED_ABSENCE_REASON)
+        self.assertFalse(buddies[0]['available'])
+        self.assertEqual(buddies[0]['unavailable_reason'], catalog.CONFIRMED_ABSENCE_REASON)
         kinds = [kind for kind, _ in self.events()]
         self.assertEqual(kinds, ['catalog.model_pending', 'catalog.model_unavailable'])
 
@@ -201,9 +201,9 @@ class CatalogTrustTests(BoardTestCase):
         self.record(reading(models=('alpha',), account_status='unknown'))
         self.clock.advance(1)
         self.record(reading(models=()))
-        row, pending, _, profiles = self.state()
+        row, pending, _, buddies = self.state()
         self.assertEqual(pending, {})
-        self.assertFalse(profiles[0]['available'], 'The window still counts from the first confirmed absence')
+        self.assertFalse(buddies[0]['available'], 'The window still counts from the first confirmed absence')
 
     def test_c04_reappearance_recovers_and_clears_the_first_absence(self):
         self.record(reading())
@@ -213,10 +213,10 @@ class CatalogTrustTests(BoardTestCase):
         self.assertFalse(self.state()[3][0]['available'])
         self.clock.advance(60)
         self.record(reading())
-        row, pending, _, profiles = self.state()
+        row, pending, _, buddies = self.state()
         self.assertEqual(pending, {})
-        self.assertTrue(profiles[0]['available'])
-        self.assertIsNone(profiles[0]['unavailable_reason'])
+        self.assertTrue(buddies[0]['available'])
+        self.assertIsNone(buddies[0]['unavailable_reason'])
         events = self.events()
         self.assertEqual([kind for kind, _ in events], ['catalog.model_pending', 'catalog.model_unavailable', 'catalog.model_recovered'])
         self.assertEqual(events[1][1]['pendingSince'], events[0][1]['pendingSince'], 'The confirmation names the first absence')
@@ -226,9 +226,9 @@ class CatalogTrustTests(BoardTestCase):
         self.record(reading(models=()))
         self.clock.advance(30)
         self.record(reading())
-        _, pending, _, profiles = self.state()
+        _, pending, _, buddies = self.state()
         self.assertEqual(pending, {})
-        self.assertTrue(profiles[0]['available'])
+        self.assertTrue(buddies[0]['available'])
         events = self.events()
         self.assertEqual([kind for kind, _ in events], ['catalog.model_pending', 'catalog.model_recovered'])
         self.assertEqual(events[1][1]['pendingSince'], events[0][1]['pendingSince'])
@@ -251,9 +251,9 @@ class CatalogTrustTests(BoardTestCase):
     def test_effort_only_change_is_not_a_model_disappearance(self):
         self.record(reading(models=('alpha',), efforts=('max', 'high')))
         self.record(reading(models=('alpha',), efforts=('max',)))
-        _, pending, _, profiles = self.state()
+        _, pending, _, buddies = self.state()
         self.assertEqual(pending, {}, 'An effort-only change never opens a window')
-        by_id = {p['profile_id']: p for p in profiles}
+        by_id = {p['buddy_id']: p for p in buddies}
         self.assertTrue(by_id['dsh:fixture:alpha:max']['available'])
         self.assertFalse(by_id['dsh:fixture:alpha:high']['available'])
         self.assertEqual(by_id['dsh:fixture:alpha:high']['unavailable_reason'], 'not present in the latest complete native discovery')

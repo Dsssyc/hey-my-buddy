@@ -9,7 +9,7 @@ import { Segmented, SegmentedItem } from "@/components/ui/segmented";
 import { ROUTER_RETRY_INTERVAL_MAX, ROUTER_RETRY_INTERVAL_MIN, retryIntervalSeconds } from "../console-data";
 import { routerListEqual } from "../draft";
 import { locale } from "../i18n";
-import type { Configuration, Profile, RoutingBudget, RoutingMode, Snapshot } from "../types";
+import type { Configuration, Buddy, RoutingBudget, RoutingMode, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
 import { RolesRecords } from "./RolesRecords";
 import { RouterList, routerLineId } from "./RouterList";
@@ -25,14 +25,14 @@ const LIST_ID = "router-list";
 const RECORDS_ID = "router-records";
 
 /** The note under the list, written out. */
-function noteText(note: RouterNote | null, profiles: Profile[], t: TFunction<"buddies">): string | undefined {
+function noteText(note: RouterNote | null, buddies: Buddy[], t: TFunction<"buddies">): string | undefined {
   switch (note?.kind) {
     case undefined: return undefined;
     case "nobody": return t("roles.list.attention.none");
     case "head": {
-      const profile = profiles.find(candidate => candidate.profileId === note.profileId);
+      const buddy = buddies.find(candidate => candidate.buddyId === note.buddyId);
       return t("roles.list.attention.head", {
-        name: profile ? buddyQuad(profile) : note.profileId, reason: note.refusal ? t(`roles.refusal.${note.refusal}`) : t("roles.list.attention.gone"),
+        name: buddy ? buddyQuad(buddy) : note.buddyId, reason: note.refusal ? t(`roles.refusal.${note.refusal}`) : t("roles.list.attention.gone"),
       });
     }
     case "unavailable": return note.code ? t("roles.list.attention.unavailableCode", { code: note.code }) : t("roles.list.attention.unavailable");
@@ -56,13 +56,13 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
   const recorded = snapshot.configuration;
   // Settings that cannot be read leave nothing to show, whatever a retained draft still holds.
   const configuration = recorded === null ? null : data.configuration;
-  const lines = routerLines(configuration?.routerProfileIds ?? [], recorded?.routerProfileIds ?? [], data.profiles, snapshot.routingHealth);
+  const lines = routerLines(configuration?.routerBuddyIds ?? [], recorded?.routerBuddyIds ?? [], data.buddies, snapshot.routingHealth);
   const locked = !configuration ? t("roles.upgrade.locked")
     : !editor.sessionWritable ? t("pane.locked.session")
       : !editor.editing ? t("pane.locked.saving") : undefined;
   const changed = !!editor.draft && !!recorded && !!configuration;
   const unsaved = {
-    list: changed && !routerListEqual(recorded.routerProfileIds, configuration.routerProfileIds),
+    list: changed && !routerListEqual(recorded.routerBuddyIds, configuration.routerBuddyIds),
     mode: changed && recorded.defaultRoutingMode !== configuration.defaultRoutingMode,
     budget: changed && recorded.routingBudget !== configuration.routingBudget,
     interval: changed && recorded.routerRetryIntervalSeconds !== configuration.routerRetryIntervalSeconds,
@@ -79,7 +79,7 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
   useEffect(() => {
     if (!active || !location.target || handledLocation.current === location) return;
     const current = lines.find(line => line.status?.kind === "current");
-    const target = document.getElementById(location.target === "health" ? RECORDS_ID : current ? routerLineId(current.profileId) : LIST_ID);
+    const target = document.getElementById(location.target === "health" ? RECORDS_ID : current ? routerLineId(current.buddyId) : LIST_ID);
     target?.focus(); target?.scrollIntoView?.({ block: "nearest" });
     handledLocation.current = location;
   }, [location, active]);
@@ -94,12 +94,12 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
         {snapshot.configurationError?.message ? t("roles.upgrade.titleWith", { message: snapshot.configurationError.message }) : t("roles.upgrade.title")}</p>}
 
       <Section name={t("roles.list.name")} unsaved={mark(unsaved.list)} id={LIST_ID} tabIndex={-1}>
-        <RouterList lines={lines} profiles={data.profiles} mode={configuration?.defaultRoutingMode} locked={locked}
-          note={configuration ? noteText(routerNote(data, snapshot.routingHealth), data.profiles, t) : undefined}
-          onShow={profileId => onNavigate({ view: "models", target: profileId })}
-          onAdd={profileId => editor.update(draft => addRouter(draft, profileId))}
-          onMove={(profileId, by) => editor.update(draft => moveRouter(draft, profileId, by))}
-          onRemove={profileId => editor.update(draft => removeRouter(draft, profileId))} />
+        <RouterList lines={lines} buddies={data.buddies} mode={configuration?.defaultRoutingMode} locked={locked}
+          note={configuration ? noteText(routerNote(data, snapshot.routingHealth), data.buddies, t) : undefined}
+          onShow={buddyId => onNavigate({ view: "models", target: buddyId })}
+          onAdd={buddyId => editor.update(draft => addRouter(draft, buddyId))}
+          onMove={(buddyId, by) => editor.update(draft => moveRouter(draft, buddyId, by))}
+          onRemove={buddyId => editor.update(draft => removeRouter(draft, buddyId))} />
       </Section>
 
       <Section name={t("roles.mode.name")} hint={t("roles.mode.nameHint")} unsaved={mark(unsaved.mode)}>

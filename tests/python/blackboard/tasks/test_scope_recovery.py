@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 
 from protocol.fixtures import native_turn
-from blackboard.tasks.test_workflow_real import CONFIGURATION, GIT_ENV, RealWorkspaceTestCase
+from blackboard.tasks.test_workflow_real import BUDDY, GIT_ENV, RealWorkspaceTestCase
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.blackboard.tasks import workspace as workspace_module
@@ -40,7 +40,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
 
     def governed_submit(self, board, *, request_id="scope-run", scope=("src",), kind="existing", cwd=None):
         response = board.call("workflow_submit", {
-            **CONFIGURATION,
+            **BUDDY,
             "requestId": request_id,
             "hostId": "host-1",
             "task": "scoped real workspace task",
@@ -712,7 +712,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
             "runId": run_id, "requestId": view["activeRequest"]["requestId"], "commandId": "decide-helper",
             "expectedRevision": view["revision"], "decision": "approve", "reason": "one isolated helper",
             "helpers": [{
-                **CONFIGURATION, "requestId": "helper-scope-1", "task": "helper task", "cwd": str(self.repo),
+                **BUDDY, "requestId": "helper-scope-1", "task": "helper task", "cwd": str(self.repo),
                 "executionWorkspace": {"kind": "worktree", "access": "write"},
             }],
             **self.control(view),

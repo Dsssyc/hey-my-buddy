@@ -108,7 +108,7 @@ def result_frame(session_id):
     structured = {"outcome": {"disposition": "completed", "summary": "stream fixture", "remaining": [],
                               "decisions": [], "artifacts": [], "request": None}}
     if "--json-schema" in sys.argv:
-        structured = {"profileId": "legal", "reason": "Read-only stream fixture", "evidence": []}
+        structured = {"buddyId": "legal", "reason": "Read-only stream fixture", "evidence": []}
     return {"type": "result", "subtype": "success", "is_error": False, "session_id": session_id,
             "structured_output": structured}
 
@@ -245,14 +245,14 @@ def run_stream(case, session_id):
     elif case == "structured-unverified":
         # The bare name without the association: the use input is not the
         # value the result frame carried, so nothing may be exempted.
-        send(structured_use("toolu_so_1", {"profileId": "forged",
+        send(structured_use("toolu_so_1", {"buddyId": "forged",
                                            "reason": "not the delivered value", "evidence": []}))
         send(tool_result("toolu_so_1"))
     elif case in ("structured-conflict-ab", "structured-conflict-ba"):
         # One native call id whose two full projections disagree on the input.
         # Whichever order they arrive in, the conflict refuses the exemption.
         structured = result_frame(session_id)["structured_output"]
-        other = {"profileId": "conflict", "reason": "a different complete input", "evidence": []}
+        other = {"buddyId": "conflict", "reason": "a different complete input", "evidence": []}
         order = (structured, other) if case == "structured-conflict-ab" else (other, structured)
         for value in order:
             send(structured_use("toolu_so_1", value))

@@ -76,7 +76,7 @@ class BoundaryTests(BoardTestCase):
     def test_collect_deadline_takes_earliest_future_boundary(self):
         after = parse_boundary("2026-10-07T12:00:00Z")
         projection = {
-            "profiles": [
+            "buddies": [
                 {"quotaRetry": {"eligibleAt": "2026-10-07T12:30:00Z"}},
                 {"quotaExhausted": {"resetsAt": "2027-01-01T00:00:00Z"}},
             ],

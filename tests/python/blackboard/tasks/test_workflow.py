@@ -21,7 +21,7 @@ from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.errors import BoardError
 
 NONCE = "n" * 16
-CONFIGURATION = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
+BUDDY = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
 
 
 class WorkflowTestCase(BoardTestCase):
@@ -32,8 +32,8 @@ class WorkflowTestCase(BoardTestCase):
         workflow_module._workspace_module = self.workspace
         self.controls: dict[str, dict] = {}
         self.addCleanup(self._restore_workspace)
-        self.catalog_validation = self.enterContext(patch("hey_my_buddy.blackboard.catalog.catalog.validate_configuration", create=True,
-                                                        side_effect=lambda configuration, **_: dict(configuration)))
+        self.catalog_validation = self.enterContext(patch("hey_my_buddy.blackboard.catalog.catalog.validate_buddy", create=True,
+                                                        side_effect=lambda buddy, **_: dict(buddy)))
         self.executors = {name: SimpleNamespace(native_resume=name == "zcode", native_resume_permission_change=name == "zcode", validate_turn_provenance=lambda record: None)
                           for name in ("dsh", "zcode", "command", "external")}
         self.enterContext(patch.object(workflow_module.WorkflowCoordinator, "_execution_adapter",
@@ -45,7 +45,7 @@ class WorkflowTestCase(BoardTestCase):
     # -- driven helpers -----------------------------------------------------
     def submit(self, board, *, request_id="req-1", host_id="host-1", task="do the thing", cwd=None, **extra):
         params = {
-            **(CONFIGURATION if extra.get("adapter", "dsh") in ("dsh", "zcode") else {}),
+            **(BUDDY if extra.get("adapter", "dsh") in ("dsh", "zcode") else {}),
             "requestId": request_id,
             "hostId": host_id,
             "task": task,
@@ -154,7 +154,7 @@ class WorkflowTestCase(BoardTestCase):
 
     def decide(self, board, view, request_id, *, command_id="decide-1", decision="approve", **extra):
         if "helpers" in extra:
-            extra["helpers"] = [{**CONFIGURATION, **helper} for helper in extra["helpers"]]
+            extra["helpers"] = [{**BUDDY, **helper} for helper in extra["helpers"]]
         params = {
             "runId": view["runId"],
             "requestId": request_id,
@@ -167,10 +167,10 @@ class WorkflowTestCase(BoardTestCase):
         return board.call("workflow_decide", params)
 
     def continue_run(self, board, view, *, command_id="continue-1", input="keep going", helper_policy="keep", **extra):
-        if extra.get("configuration") is not None:
-            from support import enable_fixture_configuration
-            enable_fixture_configuration(board.store, extra["configuration"])
-            extra.setdefault("reason", "Use the explicit fixture configuration for this continuation")
+        if extra.get("buddy") is not None:
+            from support import enable_fixture_buddy
+            enable_fixture_buddy(board.store, extra["buddy"])
+            extra.setdefault("reason", "Use the explicit fixture buddy for this continuation")
         params = {
             "runId": view["runId"],
             "commandId": command_id,
@@ -210,7 +210,7 @@ class LifecycleTests(WorkflowTestCase):
             self.assertNotIn('account', claim['claim'])
             self.finish_turn(board, claim)
             view = board.call('workflow_get', {'runId': run_id})
-            self.assertEqual(view['executionConfiguration'], {'adapter': 'command'})
+            self.assertEqual(view['buddy'], {'adapter': 'command'})
             self.assertEqual(view['quotaWarnings'], [])
             self.assertEqual(view['task']['adapter'], 'command')
             self.assertTrue(board.call('task_result', {'runId': run_id})['resultDelivered'])
@@ -623,7 +623,7 @@ class LifecycleTests(WorkflowTestCase):
         for operation, params in (
             ("task_submit", {"requestId": "forged", "task": "x", "cwd": str(self.workdir("evil"))}),
             ("workflow_submit", {"requestId": "forged", "hostId": "host-1", "task": "x", "cwd": str(self.workdir("evil"))}),
-            ("user_policy_publish", {"commandId": "forged", "expectedRevision": 0, "profileSettings": []}),
+            ("user_policy_publish", {"commandId": "forged", "expectedRevision": 0, "buddySettings": []}),
             ("worker_list", {}),
         ):
             with self.assertRaises(BoardError) as raised:
@@ -692,7 +692,7 @@ class WorkspaceTests(WorkflowTestCase):
             with self.subTest(workspace=workspace):
                 with self.assertRaises(BoardError) as raised:
                     board.call("workflow_submit", {
-                        **CONFIGURATION, "requestId": f"missing-workspace-{index}", "hostId": "host-1",
+                        **BUDDY, "requestId": f"missing-workspace-{index}", "hostId": "host-1",
                         "task": "must choose a checkout", "cwd": str(self.workdir(f"missing-workspace-{index}")),
                         **workspace,
                     })

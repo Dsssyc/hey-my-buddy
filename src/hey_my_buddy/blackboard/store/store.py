@@ -549,15 +549,15 @@ class BoardStore:
 
     #: The queued-task model service as one SQL expression. It mirrors
     #: :func:`scheduling.model_service` over the task's effective specification: a
-    #: governed run's resolved execution configuration wins over the immutable
+    #: governed run's resolved buddy wins over the immutable
     #: original request, and tasks without a complete adapter/provider/model triple
     #: have no model service.
     _QUEUED_MODEL_SERVICE_PROVIDER = (
-        "COALESCE(json_extract(r.execution_configuration_json,'$.provider'),"
+        "COALESCE(json_extract(r.buddy_json,'$.provider'),"
         " json_extract(t.spec_json,'$.provider'))"
     )
     _QUEUED_MODEL_SERVICE_MODEL = (
-        "COALESCE(json_extract(r.execution_configuration_json,'$.model'),"
+        "COALESCE(json_extract(r.buddy_json,'$.model'),"
         " json_extract(t.spec_json,'$.model'))"
     )
 
@@ -604,7 +604,7 @@ class BoardStore:
         """Observation rows ``{adapter, provider, model, limit, active}`` for capacity views.
 
         ``model services`` restricts the rows to the model services represented in one response
-        (a console snapshot page or a model-profile page). Without it, the rows cover
+        (a console snapshot page or a model-buddy page). Without it, the rows cover
         every model service relevant to capacity right now: explicit settings, model services of
         unresolved attempts and model services of queued work.
         """
@@ -638,9 +638,9 @@ class BoardStore:
             if row["provider"] and row["model"] and row["adapter"] in schemas.CODING_ADAPTERS
         }
         for row in connection.execute("SELECT r.input_json FROM decision_requests r JOIN tasks t ON t.task_id=r.task_id WHERE t.state='queued'"):
-            profile = (json.loads(row["input_json"]) if row["input_json"] else {}).get("profile") or {}
-            if all(profile.get(key) for key in ("adapter", "provider", "model")):
-                model_services.add(tuple(profile[key] for key in ("adapter", "provider", "model")))
+            buddy = (json.loads(row["input_json"]) if row["input_json"] else {}).get("buddy") or {}
+            if all(buddy.get(key) for key in ("adapter", "provider", "model")):
+                model_services.add(tuple(buddy[key] for key in ("adapter", "provider", "model")))
         return model_services
 
     def _full_model_services(self, connection: sqlite3.Connection) -> set[tuple[str, str, str]]:
@@ -728,7 +728,7 @@ class BoardStore:
         """The capacity blocker for one already-resolved model service (no spec needed).
 
         Used where the model service is resolved inside the claim transaction itself — the
-        fixed decision profile of a routing task — so its quota is checked *before*
+        fixed decision buddy of a routing task — so its quota is checked *before*
         the claim commits and before any selection reader is admitted.
         """
         if self._total_active(connection) >= self.max_concurrent:

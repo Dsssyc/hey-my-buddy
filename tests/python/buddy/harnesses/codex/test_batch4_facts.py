@@ -13,7 +13,7 @@ from hey_my_buddy.buddy.harnesses.codex import native_run
 from hey_my_buddy.buddy.harnesses.controller import STRICT_RESULT_BYTES
 from hey_my_buddy.buddy.harnesses.codex.protocol import Connection, CodexProtocolError, TurnEvidence
 from hey_my_buddy.buddy.harnesses.run_contract import (
-    PrivateStatePaths, RunBudget, RunConfiguration, RunIdentity, RunRequest,
+    PrivateStatePaths, RunBudget, RunBuddy, RunIdentity, RunRequest,
 )
 from hey_my_buddy.buddy.roles import run_execution
 from hey_my_buddy.buddy.harnesses.registry import worker_permission
@@ -27,7 +27,7 @@ class NativeFactsTests(unittest.TestCase):
         self.request = RunRequest(
             identity=RunIdentity(task_id="task", attempt_id="attempt", generation=1,
                                  invocation_id="invocation"),
-            harness="codex", configuration=RunConfiguration(provider="openai", model="model", effort="low"),
+            harness="codex", buddy=RunBuddy(provider="openai", model="model", effort="low"),
             cwd=str(self.root), private_state=PrivateStatePaths(invocation_root=str(self.root),
                                                               native_root=str(self.root / "native")),
             input_text="Read the input", output_schema={"type": "object"}, tool_scope="none",
@@ -120,7 +120,7 @@ class NativeFactsTests(unittest.TestCase):
         self.assertEqual(native_run._read_evidence_ref(result, "fast-thread-receipt")["approvalPolicy"], "on-request")
 
     def test_different_native_model_still_refuses_even_beyond_readback_bound(self):
-        for mode, code in (("review", "readonly-configuration-mismatch"), ("fast", "configuration-mismatch")):
+        for mode, code in (("review", "readonly-configuration-mismatch"), ("fast", "buddy-mismatch")):
             for model in ("different-model", "", "x" * (STRICT_RESULT_BYTES + 1)):
                 with self.subTest(mode=mode, model_length=len(model)):
                     receipt = {**self.receipt, "model": model}
@@ -135,7 +135,7 @@ class NativeFactsTests(unittest.TestCase):
                 thread, state = self.configure("review", receipt, {})
                 self.assertEqual(thread, "thread")
                 self.assertEqual(state.policy_checks["selectedModel"]["status"], "unknown")
-                checked = native_run._checked_configuration(self.request, state, "review").checked
+                checked = native_run._checked_buddy(self.request, state, "review").checked
                 self.assertIsNone(checked.model)
                 self.assertIsNone(checked.effort)
 
@@ -194,9 +194,9 @@ class NativeFactsTests(unittest.TestCase):
         self.assertEqual(state.policy_checks["configReadback"]["status"], "confirmed")
 
     def test_different_provider_refuses_even_without_catalog_confirmation(self):
-        for mode, code in (("fast", "configuration-mismatch"),
+        for mode, code in (("fast", "buddy-mismatch"),
                            ("review", "readonly-configuration-mismatch"),
-                           ("worker", "configuration-mismatch")):
+                           ("worker", "buddy-mismatch")):
             for provider in ("other", "", "x" * (STRICT_RESULT_BYTES + 1)):
                 with self.subTest(mode=mode, provider_length=len(provider)):
                     connection = mock.Mock()
@@ -226,7 +226,7 @@ class NativeFactsTests(unittest.TestCase):
                     else:
                         thread = getattr(native_run, "_configure_" + mode)(connection, self.request, state)
                     self.assertEqual(thread, "thread")
-                    self.assertIsNone(native_run._checked_configuration(self.request, state, mode).checked.provider)
+                    self.assertIsNone(native_run._checked_buddy(self.request, state, mode).checked.provider)
 
     def test_review_checkout_and_thread_ownership_still_refuse(self):
         for top, nested, reason in (({"cwd": str(self.root / "foreign")}, {}, "readonly-configuration-mismatch"),

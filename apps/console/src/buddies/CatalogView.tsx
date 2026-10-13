@@ -13,7 +13,7 @@ import { modelServiceKey, modelServices } from "../console-data";
 import { historyView } from "../draft";
 import type { Snapshot } from "../types";
 import type { Editor } from "../use-editor";
-import { MAX_HISTORY_PROFILES, PROFILE_PAGE_SIZE, historySourceKey, useProfileHistory } from "../use-profile-history";
+import { MAX_HISTORY_BUDDIES, BUDDY_PAGE_SIZE, historySourceKey, useBuddyHistory } from "../use-buddy-history";
 import { useViewPreference } from "../view-preferences";
 import type { BuddyAttention } from "./attention";
 import { BuddyHeader } from "./BuddyHeader";
@@ -54,15 +54,15 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [note, setNote] = useState("");
   const [refused, setRefused] = useState(false);
   const sourceKey = historySourceKey(snapshot);
-  const history = useProfileHistory(api, snapshot.csrfToken, sourceKey,
+  const history = useBuddyHistory(api, snapshot.csrfToken, sourceKey,
     { query, adapter: "", enabled: active && showUnavailable, autoOpen: showUnavailable });
   const data = editor.view;
   const recorded = historyView(snapshot, history.page);
-  const listed = listedModels(data.profiles, { query, enabledOnly, showUnavailable });
+  const listed = listedModels(data.buddies, { query, enabledOnly, showUnavailable });
   const listedKeys = new Set(listed.map(modelService => modelService.key));
-  const blocks = harnessBlocks({ listed: modelServices(data.profiles), data, recorded, harnesses: actions.rows, folded, fresh })
+  const blocks = harnessBlocks({ listed: modelServices(data.buddies), data, recorded, harnesses: actions.rows, folded, fresh })
     .map(block => ({ ...block, modelCount: block.models.length, models: block.models.filter(row => listedKeys.has(row.key)) }));
-  const healthBlocks = actions.rows.filter(health => !data.profiles.some(profile => profile.adapter === health.adapter))
+  const healthBlocks = actions.rows.filter(health => !data.buddies.some(buddy => buddy.adapter === health.adapter))
     .map(health => ({ adapter: health.adapter, name: harnessName(health.adapter), state: health.status === "ready" ? null : health.status,
       reasons: [], folded: folded[health.adapter] ?? true, models: [], modelCount: 0, providers: Object.keys(health.billingByProvider ?? {}), enabled: 0, total: 0 }));
   const sections = [...blocks, ...healthBlocks].map(block => {
@@ -73,9 +73,9 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   const buddies = blocks.flatMap(block => block.models).flatMap(model => model.chips);
   // The count on the filter is the table-wide number the board records, never
   // below what this view already holds; without the field it is the local count.
-  const loadedUnavailable = data.profiles.filter(profile => !profile.available).length;
-  const unavailableCount = typeof snapshot.unavailableProfileCount === "number" && Number.isFinite(snapshot.unavailableProfileCount)
-    ? Math.max(snapshot.unavailableProfileCount, loadedUnavailable) : loadedUnavailable;
+  const loadedUnavailable = data.buddies.filter(buddy => !buddy.available).length;
+  const unavailableCount = typeof snapshot.unavailableBuddyCount === "number" && Number.isFinite(snapshot.unavailableBuddyCount)
+    ? Math.max(snapshot.unavailableBuddyCount, loadedUnavailable) : loadedUnavailable;
   // A checked filter asks for every unavailable buddy, so the bounded pages
   // continue on their own; the hook's display budget is the hard stop, and this
   // counter keeps a server that repeats a cursor from being asked forever.
@@ -84,7 +84,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   useEffect(() => {
     if (!showUnavailable) { autoPages.current = 0; return; }
     if (!active || history.error || history.loading || !history.hasMore) return;
-    if (autoPages.current >= Math.ceil(MAX_HISTORY_PROFILES / PROFILE_PAGE_SIZE)) return;
+    if (autoPages.current >= Math.ceil(MAX_HISTORY_BUDDIES / BUDDY_PAGE_SIZE)) return;
     autoPages.current += 1;
     history.loadMore();
   }, [active, showUnavailable, history.error, history.loading, history.hasMore, history.loadMore]);
@@ -100,19 +100,19 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
       setFocusRequest(previous => ({ id: `account-summary-${location.target}`, n: (previous?.n ?? 0) + 1 }));
       setQuery(""); setEnabledOnlyForView(false);
     } else {
-      const target = data.profiles.find(profile => location.targetKind === "model" ? modelServiceKey(profile) === location.target : profile.profileId === location.target);
+      const target = data.buddies.find(buddy => location.targetKind === "model" ? modelServiceKey(buddy) === location.target : buddy.buddyId === location.target);
       if (!target) return;
-      const modelService = modelServices(data.profiles).find(row => row.key === modelServiceKey(target))!;
-      const first = modelService.profiles.find(profile => profile.enabled) ?? modelService.profiles[0];
-      const profileId = location.targetKind === "model" ? first.profileId : target.profileId;
-      setSelected(modelServiceKey(target)); setChosen(previous => ({ ...previous, [modelServiceKey(target)]: profileId }));
+      const modelService = modelServices(data.buddies).find(row => row.key === modelServiceKey(target))!;
+      const first = modelService.buddies.find(buddy => buddy.enabled) ?? modelService.buddies[0];
+      const buddyId = location.targetKind === "model" ? first.buddyId : target.buddyId;
+      setSelected(modelServiceKey(target)); setChosen(previous => ({ ...previous, [modelServiceKey(target)]: buddyId }));
       setQuery(""); setEnabledOnlyForView(false);
       if (!target.available) setShowUnavailableForView(true);
       setFolded(previous => ({ ...previous, [target.adapter]: false }));
-      setFocusRequest(previous => ({ id: buddyRowId(profileId), n: (previous?.n ?? 0) + 1 }));
+      setFocusRequest(previous => ({ id: buddyRowId(buddyId), n: (previous?.n ?? 0) + 1 }));
     }
     handledLocation.current = buddyHash(location);
-  }, [location, active, data.profiles, actions.rows]);
+  }, [location, active, data.buddies, actions.rows]);
   useEffect(() => {
     if (!active || !focusRequest) return;
     const target = document.getElementById(focusRequest.id);
@@ -125,16 +125,16 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
     if (opening) {
       // Opening a model pins its harness open: switching its last buddy off must not fold it away.
       setFolded(previous => ({ ...previous, [row.modelService.adapter]: false }));
-      const first = row.chips.find(chip => chip.profile.enabled) ?? row.chips[0];
-      setChosen(previous => ({ ...previous, [row.key]: first.profile.profileId }));
+      const first = row.chips.find(chip => chip.buddy.enabled) ?? row.chips[0];
+      setChosen(previous => ({ ...previous, [row.key]: first.buddy.buddyId }));
     }
     const next: BuddyLocation = opening ? { view: "models", targetKind: "model", target: row.key } : { view: "models" };
     handledLocation.current = buddyHash(next);
     onNavigate(next);
   }
-  function selectBuddy(model: string, profileId: string) {
-    setChosen(previous => ({ ...previous, [model]: profileId }));
-    const next: BuddyLocation = { view: "models", targetKind: "buddy", target: profileId };
+  function selectBuddy(model: string, buddyId: string) {
+    setChosen(previous => ({ ...previous, [model]: buddyId }));
+    const next: BuddyLocation = { view: "models", targetKind: "buddy", target: buddyId };
     handledLocation.current = buddyHash(next);
     onNavigate(next);
   }
@@ -158,7 +158,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
       // snapshot again and moves its draft onto it. It never uploads a buddy.
       const next = await refresh();
       if (next) {
-        const added = next.profiles.filter(profile => !snapshot.profiles.some(known => known.profileId === profile.profileId));
+        const added = next.buddies.filter(buddy => !snapshot.buddies.some(known => known.buddyId === buddy.buddyId));
         editor.rebase(next);
         setFresh(previous => new Set([...previous, ...added.map(modelServiceKey)]));
         setNote(added.length ? t("models.discovered", { n: added.length }) : t("models.discoveredNone"));
@@ -189,7 +189,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
                 {t("models.showUnavailable")}<span className="text-ink3 tabular-nums">{unavailableCount}</span>
               </label>}
             </div>
-            <span className="col-span-2 col-start-2 row-start-1 justify-self-end whitespace-nowrap text-xs tabular-nums sm:text-sm" role="status">{t("models.enabled")} {buddies.filter(chip => chip.profile.enabled).length} / {buddies.length}</span>
+            <span className="col-span-2 col-start-2 row-start-1 justify-self-end whitespace-nowrap text-xs tabular-nums sm:text-sm" role="status">{t("models.enabled")} {buddies.filter(chip => chip.buddy.enabled).length} / {buddies.length}</span>
             <div data-slot="catalogue-actions" className="contents sm:flex sm:items-center sm:gap-2">
               <Hint text={actions.refusal || (actions.busy ? t("harness.checkAllBusy") : undefined)}>
                 <Button variant="outline" className="col-start-2 row-start-3 h-7 px-2 text-xs sm:h-8 sm:px-3 sm:text-sm" aria-disabled={actions.busy || !!actions.refusal || undefined} onClick={() => void actions.run({ kind: "check" })}>{t("harness.checkAll")}</Button>
@@ -205,7 +205,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
         {reading && <p className="text-ink3" role="status">{t("models.reading")}</p>}
         {readFailure && <p className="flex items-center gap-2.5 text-fail" role="alert">{readFailure}
           <Button variant="outline" size="sm" onClick={history.reload}>{t("models.retry")}</Button></p>}
-        {showUnavailable && history.limitReached && <p className="text-ink3">{t("models.limit", { n: MAX_HISTORY_PROFILES })}</p>}
+        {showUnavailable && history.limitReached && <p className="text-ink3">{t("models.limit", { n: MAX_HISTORY_BUDDIES })}</p>}
         {guard && <p className="text-ink2" role="status">{guard}</p>}
         {error && <p className="text-fail" role="alert">{error}</p>}
         {note && <p className="text-ink2" role="status">{note}</p>}
@@ -240,7 +240,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
                     <CollapsibleContent>
                       {active && <ModelDrawer row={row} data={data} recorded={recorded} editor={editor}
                         harnessState={block.state ? `${block.name} ${harnessStateText(block.state, t)}` : undefined}
-                        selectedProfileId={chosen[row.key]!} onSelectProfile={profileId => selectBuddy(row.key, profileId)} />}
+                        selectedBuddyId={chosen[row.key]!} onSelectBuddy={buddyId => selectBuddy(row.key, buddyId)} />}
                     </CollapsibleContent>
                   </Collapsible>)}
                 </CollapsibleContent>
@@ -248,8 +248,8 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
             </Collapsible>;
           })}
           {!listed.length && <div className="px-6 py-12 text-center">
-            <p className="font-medium">{t(data.profiles.length ? "models.empty.filtered" : "models.empty.none")}</p>
-            <p className="mt-1.5 text-xs text-ink2">{t(data.profiles.length ? "models.empty.filteredHint" : "models.empty.noneHint")}</p>
+            <p className="font-medium">{t(data.buddies.length ? "models.empty.filtered" : "models.empty.none")}</p>
+            <p className="mt-1.5 text-xs text-ink2">{t(data.buddies.length ? "models.empty.filteredHint" : "models.empty.noneHint")}</p>
           </div>}
         </div>
         <ScrollBar orientation="horizontal" />

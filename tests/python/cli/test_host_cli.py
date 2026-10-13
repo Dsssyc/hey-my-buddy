@@ -431,7 +431,7 @@ class HelpBoundaryTests(PrivateCliTestCase):
             ("list", "task_list", "limit", "not-an-integer"),
             ("wait", "task_wait", "timeoutMs", "not-an-integer"),
             ("inquire", "inquiry_observe", "timeoutMs", "not-an-integer"),
-            ("model-profiles", "model_profiles", "limit", "not-an-integer"),
+            ("buddy-list", "buddy_list", "limit", "not-an-integer"),
             ("stop", "service_control", "drainSeconds", "not-an-integer"),
         ):
             with self.subTest(method=method):
@@ -445,7 +445,7 @@ class HelpExtractionRegressionTests(unittest.TestCase):
     """Item 13, second pass: the rejected extraction lost facts; these keep them.
 
     Each assertion below names the exact fact the first attempt omitted (an input
-    bound, a configuration object's required strings, the task byte cap, a field-name
+    bound, a buddy object's required strings, the task byte cap, a field-name
     loop, or the two-part cwd rule). A silently skipped field would fail here rather
     than reappear as an "accepted; bound is validated inline" placeholder. The
     requiredness assertions keep the opposite error out too: a field the operation
@@ -477,12 +477,12 @@ class HelpExtractionRegressionTests(unittest.TestCase):
         self.assertIn("nonempty", parameter.bounds or "")
         self.assertIn("65536 UTF-8 bytes", parameter.bounds or "")
 
-    def test_continue_reports_every_required_configuration_string(self):
-        configuration = self.parameter("continue", "configuration")
-        self.assertEqual(configuration.kind, "object")
+    def test_continue_reports_every_required_buddy_string(self):
+        buddy = self.parameter("continue", "buddy")
+        self.assertEqual(buddy.kind, "object")
         for field in ("adapter", "provider", "model", "effort"):
             with self.subTest(field=field):
-                parameter = self.parameter("continue", f"configuration.{field}")
+                parameter = self.parameter("continue", f"buddy.{field}")
                 self.assertEqual(parameter.kind, "string")
                 self.assertTrue(parameter.required)
                 self.assertIn("256 characters", parameter.bounds or "")

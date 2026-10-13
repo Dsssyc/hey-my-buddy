@@ -9,7 +9,7 @@ from ...roles.turn_io import canonical_json
 
 #: The effort spelling used for models without native effort levels. Execution
 #: omits ``--effort`` for it, so a drifting native default cannot mix two
-#: configurations into one profile's evidence.
+#: buddy identities into one buddy's evidence.
 DEFAULT_EFFORT = "default"
 
 #: Catalog entries whose ``value`` is this alias are skipped; only the canonical

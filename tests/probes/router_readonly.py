@@ -178,7 +178,7 @@ def evaluate(report, result, handle_stopped, marker, before, after, sentinel_bef
     resolved = result.result.get("resolved") or {}
     identity_matches = (isinstance(native_identity.get("sessionId"), str)
                         and bool(native_identity["sessionId"])
-                        and all(resolved.get(key) == value for key, value in report["configuration"].items()))
+                        and all(resolved.get(key) == value for key, value in report["buddy"].items()))
     if report["adapter"] == "codex":
         identity_matches = identity_matches and isinstance(native_identity.get("turnId"), str) \
             and bool(native_identity["turnId"])
@@ -283,7 +283,7 @@ def run(args):
     request = ReadOnlyStructuredRequest(str(frozen), prompt, SCHEMA, limits, capture_evidence=True)
     report = {"adapter": args.adapter, "identity": identity, "started": False,
               "status": "prepared", "probeChecksPassed": False, "requiresHostInspection": True,
-              "configuration": {"provider": args.provider, "model": args.model, "effort": args.effort},
+              "buddy": {"provider": args.provider, "model": args.model, "effort": args.effort},
               "request": {"cwd": request.cwd, "prompt": prompt, "outputSchema": SCHEMA, "budget": limits},
               "inputHashesBefore": before, "sentinelBefore": sentinel_before,
               "criteria": CRITERIA, "modelCalls": 0,
@@ -300,10 +300,10 @@ def run(args):
     secrets = []
     handle = None
     context = ExecutionContext(task_id=identity["taskId"], attempt_id=identity["attemptId"],
-        generation=1, spec={**report["configuration"], "adapter": args.adapter,
+        generation=1, spec={**report["buddy"], "adapter": args.adapter,
                                "cwd": str(frozen), "timeoutSeconds": limits["timeoutSeconds"]},
         directory=root / "attempt", runtime={}, environment=environment)
-    private_json(root / "request.json", redact({"identity": identity, "configuration": report["configuration"],
+    private_json(root / "request.json", redact({"identity": identity, "buddy": report["buddy"],
                                                "request": report["request"]}, secrets))
     try:
         if not adapter.read_only_structured:

@@ -24,7 +24,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     FEEDBACK_CONTINUE,
     PrivateStatePaths,
     RunBudget,
-    RunConfiguration,
+    RunBuddy,
     RunContinuation,
     RunFeedback,
     RunIdentity,
@@ -42,9 +42,9 @@ from hey_my_buddy.protocol.activity import is_newer, normalize_activity
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
 STREAM_FIXTURE = Path(__file__).parent / "fixtures/mock_claude.py"
 USAGE_FIXTURE = Path(__file__).parent / "fixtures/fake_claude_usage.py"
-CONFIGURATION = {"provider": "anthropic", "model": "claude-opus-5-5[1m]", "effort": "high"}
-READ_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["profileId"],
-               "properties": {"profileId": {"type": "string"}, "reason": {"type": "string"},
+BUDDY = {"provider": "anthropic", "model": "claude-opus-5-5[1m]", "effort": "high"}
+READ_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["buddyId"],
+               "properties": {"buddyId": {"type": "string"}, "reason": {"type": "string"},
                               "evidence": {"type": "array", "items": {"type": "string"}}}}
 
 
@@ -97,7 +97,7 @@ class NativeRunCase(unittest.TestCase):
             identity=RunIdentity(task_id="task-1", attempt_id=f"attempt-{uuid.uuid4().hex[:8]}",
                                  generation=1, invocation_id=uuid.uuid4().hex, turn_id="turn-1"),
             harness="claude",
-            configuration=RunConfiguration(**CONFIGURATION),
+            buddy=RunBuddy(**BUDDY),
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(
                 invocation_root=str(self.base / f"invocation-{uuid.uuid4().hex[:8]}"),
@@ -132,16 +132,16 @@ class Batch4FactsTests(NativeRunCase):
         self.assertIn("NoneType", catalog["warnings"][0])
         self.assertEqual(self.fixture_state()["userTurns"], 0)
 
-    def test_unread_catalog_continues_the_turn_without_checked_configuration(self):
+    def test_unread_catalog_continues_the_turn_without_checked_buddy(self):
         self.fixture_case("invalid-catalog")
         result = self.execute(self.request())
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertTrue(result.model_started)
-        self.assertIsNone(result.configuration.checked.model)
-        self.assertIsNone(result.configuration.checked.effort)
+        self.assertIsNone(result.buddy.checked.model)
+        self.assertIsNone(result.buddy.checked.effort)
         facts = self.observations(result)
         self.assertEqual(facts["catalogStatus"], "unknown")
-        self.assertEqual(facts["configurationStatus"], "unknown")
+        self.assertEqual(facts["buddyStatus"], "unknown")
         self.assertIn("unread", facts["catalogWarnings"][0])
         self.assertEqual(result.native_evidence.unconfirmed, ("model-catalog",))
         self.assertIsNone(result.native_evidence.unknown_events)
@@ -150,10 +150,10 @@ class Batch4FactsTests(NativeRunCase):
         self.fixture_case("empty-catalog")
         result = self.execute(self.request())
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "invalid-configuration")
+        self.assertEqual(result.end.reason_code, "invalid-buddy")
         self.assertIsNone(result.model_started)
-        self.assertIsNone(result.configuration.checked.model)
-        self.assertIsNone(result.configuration.checked.effort)
+        self.assertIsNone(result.buddy.checked.model)
+        self.assertIsNone(result.buddy.checked.effort)
         self.assertEqual(self.fixture_state()["userTurns"], 0)
 
     def test_unknown_initialize_reply_continues_with_correlated_result_facts(self):
@@ -370,38 +370,38 @@ class WorkerCarrierTests(NativeRunCase):
 
     def test_the_catalog_check_confirms_only_what_native_readback_proved(self):
         result = self.execute(self.request())
-        checked = result.configuration.checked
+        checked = result.buddy.checked
         # Provider comes from initialize, while the directory confirms the
         # requested model and effort; no per-check ledger travels beside it.
         self.assertEqual(checked.provider.value, "anthropic")
-        self.assertEqual(checked.model.value, CONFIGURATION["model"])
-        self.assertEqual(checked.effort.value, CONFIGURATION["effort"])
+        self.assertEqual(checked.model.value, BUDDY["model"])
+        self.assertEqual(checked.effort.value, BUDDY["effort"])
 
     def test_a_model_outside_the_readable_catalog_is_refused_before_the_user_message(self):
         self.fixture_case("ok")
         request = self.request()
-        broken = request.model_copy(update={"configuration": RunConfiguration(
+        broken = request.model_copy(update={"buddy": RunBuddy(
             provider="anthropic", model="claude-not-in-catalog", effort="high")})
         result = self.execute(broken)
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "invalid-configuration")
+        self.assertEqual(result.end.reason_code, "invalid-buddy")
         self.assertIsNone(result.model_started)
-        checked = result.configuration.checked
+        checked = result.buddy.checked
         self.assertIsNone(checked.provider)
         self.assertIsNone(checked.model)
         self.assertIsNone(checked.effort)
         self.assertEqual(self.fixture_state()["userTurns"], 0)
 
     def test_an_effort_outside_the_readable_catalog_is_refused_before_the_user_message(self):
-        request = self.request().model_copy(update={"configuration": RunConfiguration(
-            provider="anthropic", model=CONFIGURATION["model"], effort="default")})
+        request = self.request().model_copy(update={"buddy": RunBuddy(
+            provider="anthropic", model=BUDDY["model"], effort="default")})
         result = self.execute(request)
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "invalid-configuration")
+        self.assertEqual(result.end.reason_code, "invalid-buddy")
         self.assertIsNone(result.model_started)
         self.assertEqual(self.fixture_state()["userTurns"], 0)
-        self.assertIsNone(result.configuration.checked.model)
-        self.assertIsNone(result.configuration.checked.effort)
+        self.assertIsNone(result.buddy.checked.model)
+        self.assertIsNone(result.buddy.checked.effort)
 
     def test_the_activity_fact_and_observed_evidence_survive_the_run(self):
         result = self.execute(self.request())
@@ -414,7 +414,7 @@ class WorkerCarrierTests(NativeRunCase):
         self.assertEqual(observations["observedModels"],
                          ["claude-haiku-4-5-20251001", "claude-opus-5-5[1m]"])
         self.assertEqual(observations["totalCostUsd"], 0.01)
-        self.assertEqual(observations["sessionModel"], CONFIGURATION["model"])
+        self.assertEqual(observations["sessionModel"], BUDDY["model"])
         turn_facts = json.loads(Path(next(ref.location for ref in result.evidence_refs
                                           if ref.kind == "native-turn-facts")).read_bytes())
         self.assertEqual(turn_facts["structuredOutputSource"], "json-schema")
@@ -425,7 +425,7 @@ class WorkerCarrierTests(NativeRunCase):
     def test_usage_comes_from_the_native_records_only(self):
         self.use_fixture(USAGE_FIXTURE)
         self.fixture_case("usage-ok")
-        request = self.request(timeout=20).model_copy(update={"configuration": RunConfiguration(
+        request = self.request(timeout=20).model_copy(update={"buddy": RunBuddy(
             provider="anthropic", model="claude-fixture-5", effort="high")})
         result = self.execute(request)
         self.assertEqual(result.end.status, "ok", result.end.message)
@@ -499,7 +499,7 @@ class ReadCarrierTests(NativeRunCase):
         result = self.execute(self.request(scope="read", schema=READ_SCHEMA,
                                            network=(), denied=self.REVIEW_DENIALS))
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertEqual(result.value.parsed.value["profileId"], "legal")
+        self.assertEqual(result.value.parsed.value["buddyId"], "legal")
         policy = result.effective_policy.tools
         self.assertEqual(policy.requested.value["tools"], ["Glob", "Grep", "LS", "Read", "Skill"])
         self.assertEqual(policy.requested.value["permissionMode"], "default")
@@ -693,7 +693,7 @@ class SettlementGuardTests(NativeRunCase):
     def test_an_oversized_delivered_value_drops_alone_and_keeps_every_confirmed_fact(self):
         # A 600 KiB structured delivery — under the native 8 MiB frame bound,
         # over the run contract's value bound — must cost the value alone:
-        # the confirmed stop, the checked configuration, the usage and the
+        # the confirmed stop, the checked buddy, the usage and the
         # completion evidence all still reach the caller.
         self.fixture_case("large-value")
         result = self.execute(self.request())
@@ -703,7 +703,7 @@ class SettlementGuardTests(NativeRunCase):
         self.assertTrue(result.completion_evidence.stream_end)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertEqual(result.end.native_exit_code, 0)
-        self.assertEqual(result.configuration.checked.model.value, CONFIGURATION["model"])
+        self.assertEqual(result.buddy.checked.model.value, BUDDY["model"])
         self.assertIsNotNone(result.last_assistant_message)
 
     def test_a_quota_rejection_is_infrastructure_not_a_model_result(self):
@@ -887,20 +887,20 @@ class DiscoveryTests(NativeRunCase):
                                 native_root=self.base / "third-party-native", timeout_seconds=25,
                                 cancelled=lambda: False)
         view = CatalogView.from_payload(catalog)
-        selected = {"adapter": "claude", **CONFIGURATION, "provider": "bedrock"}
+        selected = {"adapter": "claude", **BUDDY, "provider": "bedrock"}
         self.assertEqual(_check_recorded(selected, view, pending_efforts=None), selected)
-        profiles = view.proposed_profiles()
-        self.assertTrue(profiles)
-        self.assertTrue(all(p["provider"] == "bedrock" and p["profileId"].startswith("claude:bedrock:")
-                            for p in profiles))
+        buddies = view.proposed_buddies()
+        self.assertTrue(buddies)
+        self.assertTrue(all(p["provider"] == "bedrock" and p["buddyId"].startswith("claude:bedrock:")
+                            for p in buddies))
         self.assertEqual(catalog["discoveries"][0]["accountStatus"], "confirmed")
         self.assertEqual(self.fixture_state()["userTurns"], 0)
         for flag in ("--restricted", "--setting-sources", "--strict-mcp-config", "--mcp-config", "--safe-mode"):
             self.assertNotIn(flag, self.fixture_state()["argv"])
-        request = self.request().model_copy(update={"configuration": RunConfiguration(**{k: selected[k] for k in ("provider", "model", "effort")})})
+        request = self.request().model_copy(update={"buddy": RunBuddy(**{k: selected[k] for k in ("provider", "model", "effort")})})
         result = self.execute(request)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertEqual(result.configuration.checked.provider.value, "bedrock")
+        self.assertEqual(result.buddy.checked.provider.value, "bedrock")
         state = self.fixture_state()
         self.assertIn("--no-session-persistence", state["argv"])
         self.assertEqual(state["seenAnthropicEnv"], [])
@@ -946,7 +946,7 @@ class DiscoveryTests(NativeRunCase):
                                 native_root=self.base / "discover-native", timeout_seconds=25,
                                 cancelled=lambda: False)
         models = [model["id"] for model in catalog["providers"][0]["models"]]
-        self.assertIn(CONFIGURATION["model"], models)
+        self.assertIn(BUDDY["model"], models)
         # The default alias never becomes a catalog identity.
         self.assertTrue(all(model != "default" for model in models))
         state = self.fixture_state()
@@ -1108,7 +1108,7 @@ class StructuredDeliveryTests(NativeRunCase):
     """
 
     def delivered(self):
-        return {"profileId": "legal", "reason": "Read-only stream fixture", "evidence": []}
+        return {"buddyId": "legal", "reason": "Read-only stream fixture", "evidence": []}
 
     def review_request(self, **kwargs):
         return self.request(scope="read", schema=READ_SCHEMA, network=(),

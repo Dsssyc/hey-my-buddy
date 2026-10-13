@@ -166,7 +166,7 @@ class BuddyControl:
     def model_catalog_refresh(self, request_json: str) -> str:
         ...
 
-    def model_profiles(self, request_json: str) -> str:
+    def buddy_list(self, request_json: str) -> str:
         ...
 
     # -- governed workflow --------------------------------------------------

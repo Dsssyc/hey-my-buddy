@@ -15,7 +15,7 @@ const span = (overrides: Partial<TimelineSpan> = {}): TimelineSpan => ({
   spanId: "span-1", runId: "run-1", kind: "execution",
   startAt: at(0), endAt: at(10 * MINUTE), state: "completed",
   attemptId: "attempt-1", turnId: null, turnIndex: null, requestId: null,
-  configuration: null, shutdownConfirmed: true, uncertain: false, clockSkew: false,
+  buddy: null, shutdownConfirmed: true, uncertain: false, clockSkew: false,
   ...overrides,
 });
 

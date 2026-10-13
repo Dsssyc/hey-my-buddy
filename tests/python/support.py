@@ -553,11 +553,11 @@ def wait_for(predicate, timeout: float = 20.0, interval: float = 0.05):
     return None
 
 
-def enable_fixture_configuration(store, configuration):
+def enable_fixture_buddy(store, buddy):
     """Explicit private fixture policy; negative policy tests call the service directly."""
     keys = ("adapter", "provider", "model", "effort")
-    if not all(configuration.get(key) for key in keys):
+    if not all(buddy.get(key) for key in keys):
         return
     with store.db.write() as db:
-        db.execute("INSERT OR IGNORE INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,enabled,available) VALUES(?,?,?,?,?,?,1,1) ON CONFLICT(profile_id) DO UPDATE SET enabled=1,available=1",
-                   (":".join(configuration[key] for key in keys), "Private enabled fixture", *(configuration[key] for key in keys)))
+        db.execute("INSERT OR IGNORE INTO buddies(buddy_id,label,adapter,provider,model,effort,enabled,available) VALUES(?,?,?,?,?,?,1,1) ON CONFLICT(buddy_id) DO UPDATE SET enabled=1,available=1",
+                   (":".join(buddy[key] for key in keys), "Private enabled fixture", *(buddy[key] for key in keys)))

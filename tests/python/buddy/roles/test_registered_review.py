@@ -13,7 +13,7 @@ from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS
 from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request, decode_run_result
 from hey_my_buddy.buddy.roles import run_controller, run_execution
 from hey_my_buddy.buddy.roles.run_observers import ReviewObserver
-from buddy.harnesses.claude.test_native_run import CONFIGURATION, NativeRunCase, READ_SCHEMA, STREAM_FIXTURE
+from buddy.harnesses.claude.test_native_run import BUDDY, NativeRunCase, READ_SCHEMA, STREAM_FIXTURE
 
 
 class RegisteredReviewTests(NativeRunCase):
@@ -21,7 +21,7 @@ class RegisteredReviewTests(NativeRunCase):
         root = self.base / uuid.uuid4().hex
         root.mkdir(mode=0o700)
         control = {
-            "operation": "review", "harness": "claude", "spec": CONFIGURATION,
+            "operation": "review", "harness": "claude", "spec": BUDDY,
             "taskId": "task", "attemptId": "attempt", "generation": 1,
             "invocationId": uuid.uuid4().hex, "privateRoot": str(root),
             "directory": str(root),
@@ -46,7 +46,7 @@ class RegisteredReviewTests(NativeRunCase):
         self.assertEqual(request.tool_scope, "read")
         self.assertEqual(request.network_allowed_domains, ())
         self.assertEqual(request.additional_denied_tools, ("mcp__*", "WebFetch", "WebSearch", "Agent", "Task"))
-        self.assertEqual(payload["rawAnswer"]["profileId"], "legal")
+        self.assertEqual(payload["rawAnswer"]["buddyId"], "legal")
         self.assertTrue(payload["answerValid"])
         self.assertEqual(result.identity, request.identity)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")

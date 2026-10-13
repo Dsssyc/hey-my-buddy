@@ -123,17 +123,17 @@ class UpgradeFixtureTests(unittest.TestCase):
         board.initialize()
         evaluation = EvaluationStore(board)
         with board.db.read() as connection:
-            for profile_id, _adapter in absent:
+            for buddy_id, _adapter in absent:
                 self.assertIsNone(connection.execute(
-                    'SELECT unavailable_reason FROM evaluation_profiles WHERE profile_id=?',
-                    (profile_id,)).fetchone()[0])
-        for adapter in sorted({adapter for _profile_id, adapter in absent}):
+                    'SELECT unavailable_reason FROM buddies WHERE buddy_id=?',
+                    (buddy_id,)).fetchone()[0])
+        for adapter in sorted({adapter for _buddy_id, adapter in absent}):
             evaluation.record_catalog(reading(adapter=adapter, models=()))
         with board.db.read() as connection:
-            for profile_id, _adapter in absent:
+            for buddy_id, _adapter in absent:
                 self.assertEqual(tuple(connection.execute(
-                    'SELECT available,unavailable_reason FROM evaluation_profiles WHERE profile_id=?',
-                    (profile_id,)).fetchone()), (0, CONFIRMED_ABSENCE_REASON))
+                    'SELECT available,unavailable_reason FROM buddies WHERE buddy_id=?',
+                    (buddy_id,)).fetchone()), (0, CONFIRMED_ABSENCE_REASON))
             self.assertEqual({row[0] for row in connection.execute('SELECT key FROM meta')},
                              {'schema_version', 'created_at', 'capability_secret'})
 
@@ -166,7 +166,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                 if name == 'meta':
                     query = "SELECT key,value FROM meta WHERE key NOT IN ('capability_secret','created_at')"
                 elif name == 'evaluation_state':
-                    query = 'SELECT id,decision_profile_id FROM evaluation_state'
+                    query = 'SELECT id,decision_buddy_id FROM evaluation_state'
                 else:
                     query = f'SELECT * FROM "{name}"'
                 self.assertEqual(sorted([tuple(row) for row in upgraded.execute(query)], key=repr),
@@ -174,7 +174,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual(upgraded.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
             self.assertEqual(upgraded.execute('PRAGMA foreign_key_check').fetchall(), [])
 
-    def test_upgrade_preserves_each_buddys_composed_preference(self):
+    def test_upgrade_preserves_each_buddy_composed_preference(self):
         fixture, old = self.restored()
         # Mutate only this restored schema-18 board. Its view is the independent
         # baseline for the new board's per-buddy policy, including disabled and
@@ -183,13 +183,13 @@ class UpgradeFixtureTests(unittest.TestCase):
             'SELECT adapter,provider,model FROM evaluation_profiles ORDER BY profile_id LIMIT 1'
         ).fetchone())
         for effort in ('low', 'max'):
-            profile_id = ':'.join((*model_service, effort))
+            buddy_id = ':'.join((*model_service, effort))
             old.execute(
                 'INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,'
                 'available,enabled,capabilities_json,created_revision,updated_revision)'
                 ' VALUES(?,?,?,?,?,?,1,1,?,1,1)',
-                (profile_id, f'fixture · {effort}', *model_service, effort, json.dumps(['execution:codex'])))
-        profile_ids = [row[0] for row in old.execute(
+                (buddy_id, f'fixture · {effort}', *model_service, effort, json.dumps(['execution:codex'])))
+        buddy_ids = [row[0] for row in old.execute(
             'SELECT profile_id FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? ORDER BY profile_id',
             model_service)]
         old.execute('DELETE FROM evaluation_preferences')
@@ -197,17 +197,17 @@ class UpgradeFixtureTests(unittest.TestCase):
         old.execute('INSERT INTO family_preferences(adapter,provider,model,mode,reason,updated_revision) VALUES(?,?,?,?,?,1)',
                     (*model_service, 'prefer', 'model service reason'))
         old.execute('INSERT INTO evaluation_preferences(profile_id,mode,reason,updated_revision) VALUES(?,?,?,1)',
-                    (profile_ids[0], 'exclude', 'buddy reason'))
+                    (buddy_ids[0], 'exclude', 'buddy reason'))
         old.execute('INSERT INTO evaluation_preferences(profile_id,mode,reason,updated_revision) VALUES(?,?,?,1)',
-                    (profile_ids[1], 'none', 'clear inherited preference'))
-        old.execute('UPDATE evaluation_profiles SET available=0,enabled=0 WHERE profile_id=?', (profile_ids[2],))
+                    (buddy_ids[1], 'none', 'clear inherited preference'))
+        old.execute('UPDATE evaluation_profiles SET available=0,enabled=0 WHERE profile_id=?', (buddy_ids[2],))
         old.commit()
         expected = {row['profile_id']: (row['mode'], row['reason']) for row in old.execute(
             'SELECT profile_id,mode,reason FROM effective_preferences')}
         all_ids = [row[0] for row in old.execute('SELECT profile_id FROM evaluation_profiles ORDER BY profile_id')]
-        self.assertEqual(expected[profile_ids[0]], ('exclude', 'buddy reason'))
-        self.assertNotIn(profile_ids[1], expected)
-        self.assertEqual(expected[profile_ids[2]], ('prefer', 'model service reason'))
+        self.assertEqual(expected[buddy_ids[0]], ('exclude', 'buddy reason'))
+        self.assertNotIn(buddy_ids[1], expected)
+        self.assertEqual(expected[buddy_ids[2]], ('prefer', 'model service reason'))
         self.assertTrue(set(all_ids) - set(expected))
         old.close()
         before = idle_snapshot(fixture['state'])
@@ -215,12 +215,12 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertNotIn('family_preferences', summary['settingsRows'])
         with closing(sqlite3.connect(fixture['state'] / 'board.sqlite3')) as upgraded:
             self.assertEqual([row[0] for row in upgraded.execute(
-                'SELECT profile_id FROM evaluation_profiles ORDER BY profile_id')], all_ids)
+                'SELECT buddy_id FROM buddies ORDER BY buddy_id')], all_ids)
             actual = {row[0]: (row[1], row[2]) for row in upgraded.execute(
-                'SELECT profile_id,mode,reason FROM evaluation_preferences')}
-            for profile_id in all_ids:
-                with self.subTest(profile_id=profile_id):
-                    self.assertEqual(actual.get(profile_id), expected.get(profile_id))
+                'SELECT buddy_id,mode,reason FROM evaluation_preferences')}
+            for buddy_id in all_ids:
+                with self.subTest(buddy_id=buddy_id):
+                    self.assertEqual(actual.get(buddy_id), expected.get(buddy_id))
             self.assertEqual(actual, expected)
             self.assertEqual(upgraded.execute(
                 "SELECT name FROM sqlite_master WHERE name IN ('family_preferences','effective_preferences')"

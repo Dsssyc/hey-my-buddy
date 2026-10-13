@@ -9,7 +9,7 @@ import {
 import type { ConsoleApi, HarnessHealth } from "./api";
 import type {
   Preference,
-  Profile,
+  Buddy,
   Snapshot,
 } from "./types";
 
@@ -35,7 +35,7 @@ const SONNET = "claude / anthropic / claude-sonnet-5";
 const SOL = "codex / openai / gpt-6-sol";
 const GLM = "zcode / zhipu / glm-5";
 
-function profile(entry: Partial<Profile> & Pick<Profile, "profileId" | "label" | "adapter" | "provider" | "model" | "effort">): Profile {
+function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "adapter" | "provider" | "model" | "effort">): Buddy {
   return {
     available: true, enabled: false, capabilities: [], contextWindow: null,
     description: "", source: "catalog:fixture", ...entry,
@@ -43,22 +43,22 @@ function profile(entry: Partial<Profile> & Pick<Profile, "profileId" | "label" |
 }
 
 /** Three harnesses: one available model service, one all-disabled model service, one offline model service. */
-function profiles(): Profile[] {
+function buddies(): Buddy[] {
   return [
-    profile({ profileId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
+    buddy({ buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
       enabled: true, capabilities: ["execution:claude", "routing:fast", "decision"], contextWindow: 200_000 }),
-    profile({ profileId: highId, label: "Claude Sonnet 5 · high", ...sonnet, effort: "high",
+    buddy({ buddyId: highId, label: "Claude Sonnet 5 · high", ...sonnet, effort: "high",
       capabilities: ["execution:claude", "decision"], contextWindow: 200_000 }),
-    profile({ profileId: solMediumId, label: "GPT-6 Sol · medium", ...sol, effort: "medium",
+    buddy({ buddyId: solMediumId, label: "GPT-6 Sol · medium", ...sol, effort: "medium",
       capabilities: ["execution:codex"] }),
-    profile({ profileId: solLowId, label: "GPT-6 Sol · low", ...sol, effort: "low",
+    buddy({ buddyId: solLowId, label: "GPT-6 Sol · low", ...sol, effort: "low",
       capabilities: ["execution:codex"] }),
-    profile({ profileId: glmId, label: "GLM-5 · default", ...glm, effort: "default", available: false,
+    buddy({ buddyId: glmId, label: "GLM-5 · default", ...glm, effort: "default", available: false,
       unavailableReason: "本机未检测到 zcode CLI" }),
   ];
 }
 
-type Options = { configurationUnavailable?: boolean; routerProfileId?: string | null; preferences?: Preference[] };
+type Options = { configurationUnavailable?: boolean; routerBuddyId?: string | null; preferences?: Preference[] };
 
 /**
  * The snapshot's harness health (ADR-017 §15): the Claude harness used by the
@@ -84,10 +84,10 @@ function snapshot(options: Options = {}): HarnessSnapshot {
     csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: options.configurationUnavailable ? null : { routerProfileIds: options.routerProfileId === undefined ? [mediumId] : options.routerProfileId === null ? [] : [options.routerProfileId],
+    configuration: options.configurationUnavailable ? null : { routerBuddyIds: options.routerBuddyId === undefined ? [mediumId] : options.routerBuddyId === null ? [] : [options.routerBuddyId],
       routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard" },
     configurationError: options.configurationUnavailable ? { code: "ROUTER_SETTINGS_UPGRADE_REQUIRED", message: "请先升级设置",} : null,
-    profiles: profiles(),
+    buddies: buddies(),
     preferences: options.preferences ?? [],
 
     modelServiceNotes: [],
@@ -113,14 +113,14 @@ function applyPublication(state: HarnessSnapshot, params: Record<string, any>): 
     modelServiceNotes: [...state.modelServiceNotes],
     configuration: state.configuration ? { ...state.configuration, ...(params.configuration ?? {}) } : null,
   };
-  for (const setting of params.profileSettings ?? []) {
-    next.profiles = next.profiles.map(entry => entry.profileId === setting.profileId ? { ...entry, enabled: setting.enabled } : entry);
+  for (const setting of params.buddySettings ?? []) {
+    next.buddies = next.buddies.map(entry => entry.buddyId === setting.buddyId ? { ...entry, enabled: setting.enabled } : entry);
   }
   const key = (entry: { adapter: string; provider: string; model: string }) => JSON.stringify([entry.adapter, entry.provider, entry.model]);
   for (const change of params.preferenceChanges ?? []) {
-    next.preferences = next.preferences.filter(entry => entry.profileId !== change.profileId);
+    next.preferences = next.preferences.filter(entry => entry.buddyId !== change.buddyId);
     if (change.mode !== null) {
-      next.preferences.push({ profileId: change.profileId, mode: change.mode, reason: change.reason });
+      next.preferences.push({ buddyId: change.buddyId, mode: change.mode, reason: change.reason });
     }
   }
   for (const change of params.modelServiceNoteChanges ?? []) {
@@ -137,10 +137,10 @@ function fixture(options: Options = {}) {
 
   const command = vi.fn(async (operation: string, params: Record<string, any>, _csrfToken?: string) => {
     operations.push(operation);
-    if (operation === "model_profiles") {
+    if (operation === "buddy_list") {
       // Only a checked 显示不可用 asks for this page; it mirrors the board's
       // bounded contract and just returns the current rows.
-      return { profiles: state.profiles, modelServiceNotes: state.modelServiceNotes,
+      return { buddies: state.buddies, modelServiceNotes: state.modelServiceNotes,
         preferences: state.preferences,
         modelServiceConcurrency: state.modelServiceConcurrency, nextCursor: null };
     }
@@ -321,7 +321,7 @@ describe("the harness directory", () => {
 
 describe("a level's own preference", () => {
   it("clears one buddy's preference with 不设 and sends mode null", async () => {
-    const f = fixture({ preferences: [{ profileId: mediumId, mode: "prefer", reason: "常用" }] });
+    const f = fixture({ preferences: [{ buddyId: mediumId, mode: "prefer", reason: "常用" }] });
     const user = userEvent.setup();
     await openBuddy(f.api);
     await selectModel(user, SONNET, "Claude Code");
@@ -332,15 +332,15 @@ describe("a level's own preference", () => {
     expect(chip(SONNET, "medium").textContent).toBe("medium");
     await user.click(saveButton());
     await screen.findByText("设置已保存");
-    expect(f.published.at(-1)!.preferenceChanges).toEqual([{ profileId: mediumId, mode: null, reason: "" }]);
+    expect(f.published.at(-1)!.preferenceChanges).toEqual([{ buddyId: mediumId, mode: null, reason: "" }]);
     expect(f.published.at(-1)).not.toHaveProperty("familyPreferenceChanges");
   });
 
   it("writes enabled preferences as words and gives them the same styling", async () => {
     const f = fixture({ preferences: [
-      { profileId: highId, mode: "prefer", reason: "" },
-      { profileId: solMediumId, mode: "pin", reason: "" },
-      { profileId: solLowId, mode: "exclude", reason: "" },
+      { buddyId: highId, mode: "prefer", reason: "" },
+      { buddyId: solMediumId, mode: "pin", reason: "" },
+      { buddyId: solLowId, mode: "exclude", reason: "" },
     ] });
     const user = userEvent.setup();
     await openBuddy(f.api);

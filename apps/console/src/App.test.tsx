@@ -12,11 +12,11 @@ const initial = (): Snapshot => ({
   csrfToken: "fixture-csrf", eventCursor: 0,
   consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-  configuration: { routerProfileIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
+  configuration: { routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
   },
-  profiles: [
+  buddies: [
     {
-      profileId: "flash-off",
+      buddyId: "flash-off",
       label: "Flash 决策",
       adapter: "dsh",
       provider: "deepseek-official",

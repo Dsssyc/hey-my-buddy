@@ -7,15 +7,15 @@ import { Hint } from "@/components/hint";
 import { Button } from "@/components/ui/button";
 import { StateMark } from "@/components/ui/state-mark";
 import { formatShortDateTime } from "../i18n/format";
-import type { Profile, RoutingMode } from "../types";
+import type { Buddy, RoutingMode } from "../types";
 import { RouterAddDialog } from "./RouterAddDialog";
 import { buddyHash } from "./navigation";
 import { buddyQuad } from "./roles";
 import type { RouterLine, RouterStatus } from "./roles";
 
 /** The DOM id of one buddy's line in the list, so that an address can land on it. */
-export function routerLineId(profileId: string): string {
-  return `router-${profileId}`;
+export function routerLineId(buddyId: string): string {
+  return `router-${buddyId}`;
 }
 
 /** A small control of a line: it stays on screen when it cannot be used, and says why where it can. */
@@ -53,39 +53,39 @@ function Standing({ status }: { status: RouterStatus }) {
  * draft. Below the list are what the user needs to know about it and the
  * button that adds a buddy.
  */
-export function RouterList({ lines, profiles, mode, locked, note, onShow, onAdd, onMove, onRemove }: {
-  lines: RouterLine[]; profiles: Profile[];
+export function RouterList({ lines, buddies, mode, locked, note, onShow, onAdd, onMove, onRemove }: {
+  lines: RouterLine[]; buddies: Buddy[];
   /** The default mode, which the add dialog judges the buddies by; absent while the settings cannot be read. */
   mode: RoutingMode | undefined;
   /** Why the list cannot be changed now; absent while it can. */
   locked: string | undefined;
   /** What the user needs to know about the list, written out; absent when there is nothing. */
   note: string | undefined;
-  onShow: (profileId: string) => void;
-  onAdd: (profileId: string) => void;
-  onMove: (profileId: string, by: -1 | 1) => void;
-  onRemove: (profileId: string) => void;
+  onShow: (buddyId: string) => void;
+  onAdd: (buddyId: string) => void;
+  onMove: (buddyId: string, by: -1 | 1) => void;
+  onRemove: (buddyId: string) => void;
 }) {
   const { t } = useTranslation("buddies");
   const [adding, setAdding] = useState(false);
   return <div className="max-w-[720px]">
     {lines.length > 0 && <ol aria-label={t("roles.list.label")} className="grid grid-cols-[auto_20px_minmax(0,1fr)_auto_28px] gap-x-2.5">
-      {lines.map(({ profileId, profile, status }, index) => {
-        const name = profile ? buddyQuad(profile) : profileId;
-        return <li key={profileId} id={routerLineId(profileId)} tabIndex={-1} aria-label={name}
+      {lines.map(({ buddyId, buddy, status }, index) => {
+        const name = buddy ? buddyQuad(buddy) : buddyId;
+        return <li key={buddyId} id={routerLineId(buddyId)} tabIndex={-1} aria-label={name}
           className="col-span-full grid grid-cols-subgrid items-center border-b py-1.5 outline-none focus-visible:bg-sunk">
           <span className="flex">
-            <LineButton label={t("roles.list.moveUp", { name })} disabled={!!locked || index === 0} reason={locked} onClick={() => onMove(profileId, -1)}><ChevronUpIcon /></LineButton>
-            <LineButton label={t("roles.list.moveDown", { name })} disabled={!!locked || index === lines.length - 1} reason={locked} onClick={() => onMove(profileId, 1)}><ChevronDownIcon /></LineButton>
+            <LineButton label={t("roles.list.moveUp", { name })} disabled={!!locked || index === 0} reason={locked} onClick={() => onMove(buddyId, -1)}><ChevronUpIcon /></LineButton>
+            <LineButton label={t("roles.list.moveDown", { name })} disabled={!!locked || index === lines.length - 1} reason={locked} onClick={() => onMove(buddyId, 1)}><ChevronDownIcon /></LineButton>
           </span>
           <span className="text-right text-ink3 tabular-nums">{index + 1}</span>
-          {profile
-            ? <a href={buddyHash({ view: "models", target: profileId })} className="min-w-0 rounded-sm font-mono text-xs wrap-anywhere outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              onClick={event => { event.preventDefault(); onShow(profileId); }}>{name}</a>
+          {buddy
+            ? <a href={buddyHash({ view: "models", target: buddyId })} className="min-w-0 rounded-sm font-mono text-xs wrap-anywhere outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              onClick={event => { event.preventDefault(); onShow(buddyId); }}>{name}</a>
             : <span className="min-w-0 font-mono text-xs wrap-anywhere">{name}</span>}
           {status ? <Standing status={status} /> : <span />}
           <LineButton label={t("roles.list.remove", { name })} disabled={!!locked} reason={locked} className="max-sm:col-start-5 max-sm:row-start-1"
-            onClick={() => onRemove(profileId)}><XIcon /></LineButton>
+            onClick={() => onRemove(buddyId)}><XIcon /></LineButton>
         </li>;
       })}
     </ol>}
@@ -99,7 +99,7 @@ export function RouterList({ lines, profiles, mode, locked, note, onShow, onAdd,
         {t("roles.add.button")}
       </Button>
     </Hint>
-    {mode && <RouterAddDialog open={adding} onOpenChange={setAdding} profiles={profiles} list={lines.map(line => line.profileId)} mode={mode}
+    {mode && <RouterAddDialog open={adding} onOpenChange={setAdding} buddies={buddies} list={lines.map(line => line.buddyId)} mode={mode}
       onAdd={onAdd} />}
   </div>;
 }

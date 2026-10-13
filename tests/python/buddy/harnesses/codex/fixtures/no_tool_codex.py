@@ -151,7 +151,7 @@ def main():
                              "reasoningOutputTokens": 1, "totalTokens": 22}
                     event("thread/tokenUsage/updated", turn_id, tokenUsage={
                         "last": usage, "total": {key: value * turns for key, value in usage.items()}})
-            answer = "not-json" if case in ("format", "usage-format", "usage-then-missing") and turns == 1 else json.dumps({"profileId": "foreign" if case == "outside" else "legal"})
+            answer = "not-json" if case in ("format", "usage-format", "usage-then-missing") and turns == 1 else json.dumps({"buddyId": "foreign" if case == "outside" else "legal"})
             final = {"type": "agentMessage", "id": f"final-{turns}", "phase": "final_answer", "text": answer}
             event("item/completed", turn_id, item=final)
             items = [final]

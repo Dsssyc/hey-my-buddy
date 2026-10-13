@@ -479,7 +479,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                 context = self.context(model=model, effort=effort, index=index)
                 outcome = self.execute(context)
                 self.assertEqual(outcome.status, "failed", outcome.to_report())
-                self.assertEqual(outcome.result["code"], "invalid-configuration")
+                self.assertEqual(outcome.result["code"], "invalid-buddy")
                 self.assertFalse(outcome.result["modelStarted"])
                 self.assertNotIn("turn", outcome.result)
                 self.assertIsNone(outcome.result["resolved"])
@@ -612,7 +612,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertTrue(result.shutdown_confirmed)
         raw = result.result["rawAnswer"]
         answer = json.loads(raw) if isinstance(raw, str) else raw
-        self.assertEqual(answer["profileId"], "legal")
+        self.assertEqual(answer["buddyId"], "legal")
         self.assertIsNone(result.result["usage"]["bytesRead"])
         self.assertEqual(result.result["correctionCount"], 0)
         self.assertFalse(context.turn_output_file().exists())

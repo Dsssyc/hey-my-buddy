@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from blackboard.tasks import test_workspace_lifecycle as lifecycle_fixtures
 from blackboard.tasks.test_workflow import WorkflowTestCase
-from blackboard.tasks.test_workflow_real import CONFIGURATION, RealWorkspaceTestCase
+from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks import workspace as git_workspace
 from hey_my_buddy.buddy.harnesses.registry import _WORKER_PERMISSIONS
 from hey_my_buddy.errors import BoardError
@@ -64,7 +64,7 @@ class PermissionLevelsTests(WorkflowTestCase):
                                    provider='fixture', model='fixture', effort='high', access='read',
                                    cwd=str(self.workdir('read-' + harness)))
                 self.assertEqual(view['access'], 'read')
-                self.assertEqual(view['executionConfiguration']['adapter'], harness)
+                self.assertEqual(view['buddy']['adapter'], harness)
                 self.assertEqual(governed_brief(view)['access'], 'read')
                 self.assertNotIn('enforcement', view)
                 self.assertNotIn('enforcement', governed_brief(view))
@@ -138,7 +138,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
         board = self.board()
         self.register(board)
         submitted = board.call('workflow_submit', {
-            **CONFIGURATION, 'requestId': 'permission-git', 'hostId': 'host-1', 'task': 'Inspect and change',
+            **BUDDY, 'requestId': 'permission-git', 'hostId': 'host-1', 'task': 'Inspect and change',
             'cwd': str(self.repo), 'submissionToken': 't' * 32,
             'executionWorkspace': {'kind': 'worktree', 'access': 'write'},
         })
@@ -175,7 +175,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
         board = self.board()
         self.register(board)
         submitted = board.call('workflow_submit', {
-            **CONFIGURATION, 'requestId': 'permission-route-git', 'hostId': 'host-1', 'task': 'Full storage route',
+            **BUDDY, 'requestId': 'permission-route-git', 'hostId': 'host-1', 'task': 'Full storage route',
             'cwd': str(self.repo), 'submissionToken': 't' * 32,
             'executionWorkspace': {'kind': 'worktree', 'access': 'full', 'accessReason': 'Need system writes'},
         })
@@ -202,7 +202,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
         board = self.board()
         self.register(board)
         submitted = board.call('workflow_submit', {
-            **CONFIGURATION, 'requestId': 'permission-input', 'hostId': 'host-1', 'task': 'Read input',
+            **BUDDY, 'requestId': 'permission-input', 'hostId': 'host-1', 'task': 'Read input',
             'cwd': str(self.repo), 'submissionToken': 't' * 32,
             'executionWorkspace': {'kind': 'existing', 'access': 'write', 'includeUntracked': ['input.txt']},
         })

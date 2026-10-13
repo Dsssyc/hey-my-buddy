@@ -34,9 +34,9 @@ class CatalogRefreshServiceTests(BoardTestCase):
     def catalog_state(self):
         with self.board.store.db.read() as db:
             row = db.execute("SELECT status, reason FROM catalog_current WHERE adapter='dsh'").fetchone()
-            profiles = db.execute("SELECT profile_id FROM evaluation_profiles WHERE adapter='dsh'").fetchall()
+            buddies = db.execute("SELECT buddy_id FROM buddies WHERE adapter='dsh'").fetchall()
             read_at = catalog.catalog_read_at(db, "dsh")
-        return row, profiles, read_at
+        return row, buddies, read_at
 
     def test_refresh_preserves_native_status_and_optional_reason(self):
         for status, account_status, reason in (("unknown", "confirmed", "native model shape unreadable"),
@@ -59,7 +59,7 @@ class CatalogRefreshServiceTests(BoardTestCase):
         _, _, confirmed_at = self.catalog_state()
         with self.board.store.db.read() as db:
             confirmed_discovery = db.execute("SELECT discovery_id FROM catalog_current WHERE adapter='dsh'").fetchone()[0]
-            confirmed_profiles = [tuple(row) for row in db.execute("SELECT * FROM evaluation_profiles WHERE adapter='dsh'")]
+            confirmed_buddies = [tuple(row) for row in db.execute("SELECT * FROM buddies WHERE adapter='dsh'")]
         for elapsed in (1, catalog.CONFIRMATION_SECONDS + 1):
             self.clock.advance(elapsed)
             self.refresh_catalog("confirmed", status="unknown", reason="native model shape unreadable",
@@ -71,8 +71,8 @@ class CatalogRefreshServiceTests(BoardTestCase):
             with self.board.store.db.read() as db:
                 self.assertEqual(db.execute("SELECT discovery_id FROM catalog_current WHERE adapter='dsh'").fetchone()[0],
                                  confirmed_discovery)
-                self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM evaluation_profiles WHERE adapter='dsh'")],
-                                 confirmed_profiles)
+                self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM buddies WHERE adapter='dsh'")],
+                                 confirmed_buddies)
                 self.assertEqual(catalog.pending_model_services(db), {})
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind LIKE 'catalog.model_%'").fetchone()[0], 0)
 
@@ -80,10 +80,10 @@ class CatalogRefreshServiceTests(BoardTestCase):
         for account_status in ("confirmed", "not-applicable"):
             with self.subTest(accountStatus=account_status):
                 self.refresh_catalog(account_status)
-                row, profiles, _ = self.catalog_state()
+                row, buddies, _ = self.catalog_state()
                 self.assertEqual(row["status"], "complete")
                 self.assertIsNone(row["reason"])
-                self.assertEqual([p["profile_id"] for p in profiles], ["dsh:fixture:alpha:max"])
+                self.assertEqual([p["buddy_id"] for p in buddies], ["dsh:fixture:alpha:max"])
 
     def test_complete_refresh_updates_catalog_and_confirms_model_absence(self):
         self.refresh_catalog("confirmed", models=("alpha", "beta"))
@@ -93,18 +93,18 @@ class CatalogRefreshServiceTests(BoardTestCase):
             self.assertEqual(catalog.pending_model_services(db), {("dsh", "fixture", "beta"): self.clock.value})
         self.clock.advance(catalog.CONFIRMATION_SECONDS + 1)
         self.refresh_catalog("confirmed", models=("alpha", "gamma"))
-        row, profiles, read_at = self.catalog_state()
+        row, buddies, read_at = self.catalog_state()
         self.assertEqual(row["status"], "complete")
         self.assertIsNone(row["reason"])
         self.assertEqual(read_at, self.clock.value)
-        self.assertEqual({p["profile_id"] for p in profiles},
+        self.assertEqual({p["buddy_id"] for p in buddies},
                          {"dsh:fixture:alpha:max", "dsh:fixture:beta:max", "dsh:fixture:gamma:max"})
         with self.board.store.db.read() as db:
-            profiles = {p["model"]: p for p in db.execute("SELECT model,available,unavailable_reason FROM evaluation_profiles")}
-            self.assertTrue(profiles["alpha"]["available"])
-            self.assertTrue(profiles["gamma"]["available"])
-            self.assertFalse(profiles["beta"]["available"])
-            self.assertEqual(profiles["beta"]["unavailable_reason"], catalog.CONFIRMED_ABSENCE_REASON)
+            buddies = {p["model"]: p for p in db.execute("SELECT model,available,unavailable_reason FROM buddies")}
+            self.assertTrue(buddies["alpha"]["available"])
+            self.assertTrue(buddies["gamma"]["available"])
+            self.assertFalse(buddies["beta"]["available"])
+            self.assertEqual(buddies["beta"]["unavailable_reason"], catalog.CONFIRMED_ABSENCE_REASON)
             self.assertEqual(catalog.pending_model_services(db), {})
 
     def test_refresh_without_own_observation_keeps_complete_and_unknown_account(self):
@@ -118,20 +118,20 @@ class CatalogRefreshServiceTests(BoardTestCase):
             self.service._refresh_harness_catalog("dsh", self.record)
         self.assertEqual(record.call_args.args[1]["discoveries"],
                          [{"adapter": "dsh", "status": "complete", "accountStatus": "unknown"}])
-        row, profiles, read_at = self.catalog_state()
+        row, buddies, read_at = self.catalog_state()
         self.assertEqual(row["status"], "unknown")
         self.assertEqual(row["reason"], "ACCOUNT_STATUS_UNKNOWN")
-        self.assertEqual(profiles, [])
+        self.assertEqual(buddies, [])
         self.assertIsNone(read_at)
 
     def test_missing_or_unknown_account_fact_replaces_nothing(self):
         for account_status in (None, "unknown"):
             with self.subTest(accountStatus=account_status):
                 self.refresh_catalog(account_status)
-                row, profiles, read_at = self.catalog_state()
+                row, buddies, read_at = self.catalog_state()
                 self.assertEqual(row["status"], "unknown")
                 self.assertEqual(row["reason"], "ACCOUNT_STATUS_UNKNOWN")
-                self.assertEqual(profiles, [], "No profiles are published from an untrusted reading")
+                self.assertEqual(buddies, [], "No buddies are published from an untrusted reading")
                 self.assertIsNone(read_at)
 
     def test_explicit_validation_reread_hook_uses_the_service_refresh(self):

@@ -18,7 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 import blackboard.tasks.test_workspace_lifecycle as lifecycle_tests
-from blackboard.tasks.test_workflow_real import CONFIGURATION, RealWorkspaceTestCase
+from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 
 from hey_my_buddy.cli import main as cli, cli_views
 from hey_my_buddy.protocol import transport
@@ -76,7 +76,7 @@ class CliViewTests(RealWorkspaceTestCase):
     def delivered(self) -> tuple[dict, dict]:
         """Submit through the CLI, then finish one sealed worker turn."""
         code, submitted, _ = self.cli("submit", {
-            **CONFIGURATION, "requestId": "views-1", "hostId": "host-1", "task": PACKET, "cwd": str(self.repo),
+            **BUDDY, "requestId": "views-1", "hostId": "host-1", "task": PACKET, "cwd": str(self.repo),
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
         })
         self.assertEqual(code, 0, submitted)
@@ -111,7 +111,7 @@ class CliViewTests(RealWorkspaceTestCase):
 
     def test_macro_task_id_survives_brief_submit_and_context_recovery_get(self):
         code, submitted, _ = self.cli("submit", {
-            **CONFIGURATION, "requestId": "views-macro-task", "hostId": "host-1",
+            **BUDDY, "requestId": "views-macro-task", "hostId": "host-1",
             "task": PACKET, "title": "Implement bounded state transition", "cwd": str(self.repo),
             "macroTask": {"title": "Ship state transition"},
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
@@ -219,8 +219,8 @@ class ProjectionUnitTests(unittest.TestCase):
             "status": "completed", "source": "single-candidate", "reason": "唯一合法候选，未调用 Router",
             "decisionId": "dec-1", "constraints": {"adapter": "dsh"},
             "requiredCapabilities": ["execution:dsh"],
-            "routingBasis": {"candidateCount": 1, "excludedCount": 1, "excludedProfiles": [
-                {"profileId": "dsh:p:m:off", "adapter": "dsh", "provider": "p", "model": "m",
+            "routingBasis": {"candidateCount": 1, "excludedCount": 1, "excludedBuddies": [
+                {"buddyId": "dsh:p:m:off", "adapter": "dsh", "provider": "p", "model": "m",
                  "effort": "off", "reason": "user excluded"}]},
         }
         brief = cli_views.governed_brief({"governed": True, "runId": "r", "revision": 1,

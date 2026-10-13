@@ -79,7 +79,7 @@ class FastRegisteredSeamTests(DshNoToolTests):
         context = ExecutionContext("task", "attempt-1", 1, {**SPEC, "cwd": str(self.cwd),
                                   "timeoutSeconds": timeout}, self.root / "attempt-1", {},
             self.environment)
-        request = NoToolStructuredRequest(str(self.cwd), "Choose a profile", SCHEMA,
+        request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA,
                                           timeout_seconds=timeout, capture_evidence=capture)
         handle = start_router_preparation(
             FastPreparation("dsh",  request, context, self.cwd))

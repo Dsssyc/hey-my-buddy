@@ -53,7 +53,7 @@ class RuntimeVersionTests(unittest.TestCase):
             request = case.request()
         elif name == "codex":
             request = case.request(tool_scope="none", output_schema=codex_cases.FAST_SCHEMA,
-                                   prompt="Pick a profile", timeout=10)
+                                   prompt="Pick a buddy", timeout=10)
         elif name == "zcode":
             request = case.fast_request(zcode_cases.no_tool_prompt("prompt", zcode_cases.SCHEMA), timeout=10)
         else:

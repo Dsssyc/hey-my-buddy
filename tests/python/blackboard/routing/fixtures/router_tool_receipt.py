@@ -16,7 +16,7 @@ def tool_receipt(binding, tool_calls=0, *, native_identity=None, stream_complete
 
 
 def claim_tool_receipt(claim, tool_calls=0, **options):
-    return tool_receipt({"adapter": claim["decisionInput"]["profile"]["adapter"],
+    return tool_receipt({"adapter": claim["decisionInput"]["buddy"]["adapter"],
                          "taskId": claim["task"]["taskId"],
                          "attemptId": claim["attempt"]["attemptId"],
                          "generation": claim["attempt"]["generation"]}, tool_calls, **options)

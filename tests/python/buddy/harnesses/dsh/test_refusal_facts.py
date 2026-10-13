@@ -130,8 +130,8 @@ class RefusalFactsTests(NativeRunCase):
                 self.methods.clear()
                 result = self.run_final()
                 self.assertEqual(result.end.status, "error")
-                self.assertEqual(result.end.reason_code, "configuration-unavailable")
-                self.assertEqual(result.configuration.checked.model_dump(),
+                self.assertEqual(result.end.reason_code, "buddy-unavailable")
+                self.assertEqual(result.buddy.checked.model_dump(),
                                  {"provider": None, "model": None, "effort": None})
                 fact = self.native_facts(result)["configOptions"]
                 self.assertEqual(fact["status"], "unknown")
@@ -159,48 +159,48 @@ class RefusalFactsTests(NativeRunCase):
                 self.client.shutdown.reset_mock()
                 result = self.run_final()
                 self.assert_continued(result)
-                self.assertIsNone(result.configuration.checked.provider)
-                self.assertIsNone(result.configuration.checked.model)
-                self.assertEqual(result.configuration.checked.effort.value, "high")
+                self.assertIsNone(result.buddy.checked.provider)
+                self.assertIsNone(result.buddy.checked.model)
+                self.assertEqual(result.buddy.checked.effort.value, "high")
                 self.assertEqual(self.native_facts(result)["modelReadback"]["status"], "unknown")
 
     def test_unknown_effort_readback_continues_and_model_stays_checked(self):
         self.echoes["reasoning_effort"] = {"configOptions": "new-shape"}
         result = self.run_final()
         self.assert_continued(result)
-        self.assertEqual(result.configuration.checked.provider.value, "fake")
-        self.assertEqual(result.configuration.checked.model.value, "m1")
-        self.assertIsNone(result.configuration.checked.effort)
+        self.assertEqual(result.buddy.checked.provider.value, "fake")
+        self.assertEqual(result.buddy.checked.model.value, "m1")
+        self.assertIsNone(result.buddy.checked.effort)
         self.assertEqual(self.native_facts(result)["effortReadback"]["status"], "unknown")
 
     def test_confirmed_different_model_still_refuses_before_prompt(self):
         self.echoes["model"]["configOptions"][0]["currentValue"] = '["fake","m2"]'
         result = self.run_final()
-        self.assertEqual(result.end.reason_code, "configuration-mismatch")
+        self.assertEqual(result.end.reason_code, "buddy-mismatch")
         self.assertNotIn("session/prompt", self.methods)
 
     def test_confirmed_different_effort_still_refuses_before_prompt(self):
         self.echoes["reasoning_effort"]["configOptions"][1]["currentValue"] = "low"
         result = self.run_final()
-        self.assertEqual(result.end.reason_code, "configuration-mismatch")
+        self.assertEqual(result.end.reason_code, "buddy-mismatch")
         self.assertNotIn("session/prompt", self.methods)
 
     def test_native_configuration_refusal_is_not_an_unknown_shape(self):
         self.echoes["model"] = AcpRequestError("session/set_config_option", {"code": -1})
         result = self.run_final()
-        self.assertEqual(result.end.reason_code, "configuration-unavailable")
+        self.assertEqual(result.end.reason_code, "buddy-unavailable")
         self.assertNotIn("session/prompt", self.methods)
 
     def test_recognized_catalog_without_requested_model_still_refuses(self):
         self.session_value["configOptions"][0]["options"] = []
         result = self.run_final()
-        self.assertEqual(result.end.reason_code, "configuration-unavailable")
+        self.assertEqual(result.end.reason_code, "buddy-unavailable")
         self.assertNotIn("session/prompt", self.methods)
 
     def test_recognized_catalog_without_requested_effort_still_refuses(self):
         self.session_value["configOptions"][1]["options"] = []
         result = self.run_final()
-        self.assertEqual(result.end.reason_code, "invalid-configuration")
+        self.assertEqual(result.end.reason_code, "invalid-buddy")
         self.assertNotIn("session/prompt", self.methods)
 
     def test_unconfirmed_tool_rows_continue_with_actual_patch_and_unknown_fact(self):
@@ -328,7 +328,7 @@ class RefusalFactsTests(NativeRunCase):
         self.assert_continued(result)
         evidence = result.native_evidence
         self.assertEqual(evidence.unknown_events.counts_by_type, (("modelReadback", 1),))
-        self.assertIsNone(result.configuration.checked.model,
+        self.assertIsNone(result.buddy.checked.model,
                           "the unread readback confirms nothing")
         self.assertEqual(evidence.unconfirmed, (),
                          "a readback that confirmed nothing is not an unconfirmed request fact")

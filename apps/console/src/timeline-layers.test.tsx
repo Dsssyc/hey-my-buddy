@@ -60,7 +60,7 @@ function row(overrides: Partial<TimelineRow>): TimelineRow {
     runId: "r1", parentRunId: null, rootRunId: "r1",
     title: "已结束的短执行紧接着等待 Host", titleSource: "title", taskSummary: null, summary: null,
     createdAt: "2026-09-26T01:12:00Z", state: "running", status: "running", category: "active",
-    shutdownConfirmed: false, depth: 0, kind: "goal", configuration: null,
+    shutdownConfirmed: false, depth: 0, kind: "goal", buddy: null,
     acceptedAt: null, acceptanceVerdict: null,
     ...overrides,
   };
@@ -69,7 +69,7 @@ function row(overrides: Partial<TimelineRow>): TimelineRow {
 function span(overrides: Partial<TimelineSpan>): TimelineSpan {
   return {
     spanId: "s", runId: "r1", kind: "execution", startAt: null, endAt: null, state: "finished",
-    attemptId: null, turnId: null, turnIndex: null, requestId: null, configuration: null,
+    attemptId: null, turnId: null, turnIndex: null, requestId: null, buddy: null,
     shutdownConfirmed: null, uncertain: false, clockSkew: false,
     ...overrides,
   };
@@ -79,7 +79,7 @@ function timeline(): MacroTaskTimelineData {
   const spans: TimelineSpan[] = [
     span({ spanId: "s-exec", runId: "r1", kind: "execution", state: "finished", startAt: "2026-09-26T01:14:00Z",
       endAt: "2026-09-26T01:15:00Z", attemptId: "att-1", turnIndex: 1, resultStatus: "failed", error: "测试命令超时",
-      shutdownConfirmed: true, configuration: { adapter: "codex", provider: "openai", model: "gpt-5-codex", effort: "max" } }),
+      shutdownConfirmed: true, buddy: { adapter: "codex", provider: "openai", model: "gpt-5-codex", effort: "max" } }),
     span({ spanId: "s-wait", runId: "r1", kind: "host", state: "open", startAt: "2026-09-26T01:15:00Z",
       endAt: null, requestId: "req-wait", summary: "等待 Host 决定" }),
   ];
@@ -107,7 +107,7 @@ function unknownTailTimeline(): MacroTaskTimelineData {
   return {
     ...data, observedAt: "2026-09-26T01:30:00Z",
     spans: [span({ spanId: "s-unknown", startAt: "2026-09-26T01:14:00Z", endAt: "2026-09-26T01:18:00Z",
-      uncertain: true, shutdownConfirmed: false, turnIndex: 1, configuration: data.spans[0]!.configuration })],
+      uncertain: true, shutdownConfirmed: false, turnIndex: 1, buddy: data.spans[0]!.buddy })],
     totals: { ...data.totals, spans: 1 },
   };
 }

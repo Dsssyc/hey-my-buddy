@@ -19,7 +19,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import SessionService
 from hey_my_buddy.buddy.roles import run_controller, run_execution
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.errors import BoardError
-from buddy.harnesses.claude.test_native_run import CONFIGURATION, NativeRunCase
+from buddy.harnesses.claude.test_native_run import BUDDY, NativeRunCase
 
 
 class CodexSchemaTests(unittest.TestCase):
@@ -117,13 +117,13 @@ class CodexSchemaTests(unittest.TestCase):
 
         check(worker_format("codex").schema)
 
-    def test_codex_profile_suggestion_is_required_and_nullable(self):
+    def test_codex_buddy_suggestion_is_required_and_nullable(self):
         request = worker_format("codex").schema["properties"]["outcome"]["anyOf"][1]["properties"]["request"]
-        self.assertIn("suggestedProfileId", request["required"])
-        self.assertEqual(request["properties"]["suggestedProfileId"],
+        self.assertIn("suggestedBuddyId", request["required"])
+        self.assertEqual(request["properties"]["suggestedBuddyId"],
                          {"anyOf": [{"type": "string"}, {"type": "null"}]})
         claude_request = worker_format("claude").schema["properties"]["outcome"]["anyOf"][1]["properties"]["request"]
-        self.assertNotIn("suggestedProfileId", claude_request["required"])
+        self.assertNotIn("suggestedBuddyId", claude_request["required"])
 
 
 class SchemaWorkerTests(NativeRunCase):
@@ -136,7 +136,7 @@ class SchemaWorkerTests(NativeRunCase):
                 "executionWorkspace": {"access": "read"}}
         (root / "input.json").write_text(canonical_json(turn))
         (root / "task.txt").write_text("Do this bounded task")
-        control = {"operation": "worker", "harness": "claude", "spec": CONFIGURATION,
+        control = {"operation": "worker", "harness": "claude", "spec": BUDDY,
                    "invocationId": uuid.uuid4().hex, "privateRoot": str(root),
                    "directory": str(root), "nativeRoot": str(root / "native"),
                    "cwd": str(self.cwd), "timeoutSeconds": 10,
@@ -228,13 +228,13 @@ class SchemaWorkerTests(NativeRunCase):
                 self.assertIs(payload["processState"]["shutdownConfirmed"], stopped is True)
 
     def test_native_schemas_stay_fixed_and_full_prompt_hashes_include_the_worker_role(self):
-        # Codex requires a nullable profile suggestion; ADR-030
+        # Codex requires a nullable buddy suggestion; ADR-030
         # pins the full assembled prompt, including the published Worker text.
         hashes = {
-            "codex": ("6757ce37fb0a6de3395b1cda877c5d4b5d78e4b9cff2bee6b6a4ee250dbafd8d",
-                      "b0223e5c33d35207d459719843c853bbd590ca688feff8b79b2b9571c6984933"),
-            "claude": ("cd91d26ede0d45b6bed2b7747520a1358ab334874c26f9d19bd2f348ae5e15a3",
-                       "9cc61132209bb0c6e31d8077c485071618a1da01c1854fad0124fbda57c2bd81"),
+            "codex": ("b46e2bd89c8d171059f35ad52c7c97c8b98fd32bc49382da1c299b4d0d500f1a",
+                      "ada192d2473d90546df14c8d95e77b8c6edd0f271ea2fdd9507984619c81e93c"),
+            "claude": ("ff7983882b2a1adefe1cad314fec9c009086ca2ae3fd38d33fe9fddf248f9bca",
+                       "87a77cffeb9dffb474dac9be4d7c43e2db5ed4a5419a84141852d105cc8aa79a"),
         }
         for name, (schema_hash, prompt_hash) in hashes.items():
             with self.subTest(harness=name):

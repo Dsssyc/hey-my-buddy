@@ -277,7 +277,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
     def test_confirmed_model_readback_mismatch_is_rejected_before_work(self):
         _, outcome = self.execute(self.context("config-mismatch", effort="high"))
         self.assertEqual(outcome.status, "failed", outcome.to_report())
-        self.assertEqual(outcome.result["code"], "configuration-mismatch")
+        self.assertEqual(outcome.result["code"], "buddy-mismatch")
         self.assertFalse(outcome.result["modelStarted"])
         self.assertIsNone(outcome.result["resolved"])
         self.assertNotIn("turn", outcome.result)
@@ -362,7 +362,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertIsNone(turn["previousSessionId"])
         self.assertNotEqual(turn["sessionId"], prior_session)
 
-    def test_native_resume_requires_same_configuration_and_reconstruction_uses_a_new_root(self):
+    def test_native_resume_requires_same_buddy_and_reconstruction_uses_a_new_root(self):
         _, first = self.execute(self.context())
         self.assertEqual(first.status, "ok", first.to_report())
         previous = first.result["turn"]["sessionId"]

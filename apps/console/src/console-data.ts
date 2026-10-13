@@ -1,5 +1,5 @@
-import type { ModelService, Preference, Profile, Task } from "./types";
-import { catalogPending, effortText, profileName } from "./profile-display";
+import type { ModelService, Preference, Buddy, Task } from "./types";
+import { catalogPending, effortText, buddyName } from "./buddy-name";
 
 export const modelServiceKey = (p: ModelService) => JSON.stringify([p.adapter, p.provider, p.model]);
 
@@ -9,10 +9,10 @@ export const modelServiceKey = (p: ModelService) => JSON.stringify([p.adapter, p
  * earliest recorded first-absence time rides along, and a pending fact without
  * one stays pending with a null time rather than dropping the state.
  */
-export function modelServicePending(profiles: Profile[]): { pending: boolean; since: string | null } {
-  const pendingProfiles = profiles.filter(catalogPending);
-  if (!pendingProfiles.length) return { pending: false, since: null };
-  const times = pendingProfiles.map(p => p.pendingSince)
+export function modelServicePending(buddies: Buddy[]): { pending: boolean; since: string | null } {
+  const pendingBuddies = buddies.filter(catalogPending);
+  if (!pendingBuddies.length) return { pending: false, since: null };
+  const times = pendingBuddies.map(p => p.pendingSince)
     .filter((t): t is string => typeof t === "string" && t !== "")
     .sort();
   return { pending: true, since: times.length ? times[0] : null };
@@ -57,29 +57,29 @@ export function retryIntervalSeconds(value: unknown): number | null {
     ? value
     : null;
 }
-export type ModelServiceGroup = { key: string; name: string; adapter: string; provider: string; profiles: Profile[] };
-export function modelServices(profiles: Profile[]): ModelServiceGroup[] {
+export type ModelServiceGroup = { key: string; name: string; adapter: string; provider: string; buddies: Buddy[] };
+export function modelServices(buddies: Buddy[]): ModelServiceGroup[] {
   const groups = new Map<string, ModelServiceGroup>();
-  for (const profile of profiles) {
-    const key = modelServiceKey(profile);
-    if (!groups.has(key)) groups.set(key, { key, name: profileName(profile), adapter: profile.adapter, provider: profile.provider, profiles: [] });
-    groups.get(key)!.profiles.push(profile);
+  for (const buddy of buddies) {
+    const key = modelServiceKey(buddy);
+    if (!groups.has(key)) groups.set(key, { key, name: buddyName(buddy), adapter: buddy.adapter, provider: buddy.provider, buddies: [] });
+    groups.get(key)!.buddies.push(buddy);
   }
   // Display order only; default/off modes do not imply a capability score.
   const levels = ["default", "none", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
-  for (const group of groups.values()) group.profiles.sort((a, b) => {
+  for (const group of groups.values()) group.buddies.sort((a, b) => {
     const rank = (value: string) => levels.includes(value) ? levels.indexOf(value) : levels.length;
     return rank(a.effort) - rank(b.effort) || a.effort.localeCompare(b.effort);
   });
   return [...groups.values()].sort((a, b) => a.adapter.localeCompare(b.adapter)
-    || Number(b.profiles.some(p => p.enabled)) - Number(a.profiles.some(p => p.enabled))
+    || Number(b.buddies.some(p => p.enabled)) - Number(a.buddies.some(p => p.enabled))
     || a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
 }
 export function preferredVariant(modelService: ModelServiceGroup, preferences: Preference[]) {
   // An unavailable variant never pre-empts an available one for the initial view.
-  const available = modelService.profiles.filter(p => p.available);
-  const pool = available.length ? available : modelService.profiles;
-  return pool.find(p => p.enabled && preferences.some(x => x.profileId === p.profileId && ["pin", "prefer"].includes(x.mode)))
+  const available = modelService.buddies.filter(p => p.available);
+  const pool = available.length ? available : modelService.buddies;
+  return pool.find(p => p.enabled && preferences.some(x => x.buddyId === p.buddyId && ["pin", "prefer"].includes(x.mode)))
     || pool.find(p => p.enabled) || pool[0];
 }
 export function taskProject(task: Task) {
@@ -89,6 +89,6 @@ export function taskHost(task: Task) {
   return task.delegation?.sourceHostId || "未记录委派方";
 }
 export function taskExecutor(task: Task) {
-  const config = task.delegation?.configuration;
-  return config ? `${config.adapter} · ${config.model} / ${effortText(config.effort)}` : "执行配置待确定";
+  const buddy = task.delegation?.buddy;
+  return buddy ? `${buddy.adapter} · ${buddy.model} / ${effortText(buddy.effort)}` : "执行配置待确定";
 }

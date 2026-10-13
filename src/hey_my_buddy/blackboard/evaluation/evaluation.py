@@ -1,4 +1,4 @@
-"""Published profiles, user settings and bounded selection views."""
+"""Published buddies, user settings and bounded selection views."""
 from __future__ import annotations
 
 import json
@@ -30,7 +30,7 @@ class EvaluationStore:
         return validate_router_settings_patch(entry)
 
     def console_core(self) -> dict:
-        """One coherent view of profiles, policy, configuration and selection history."""
+        """One coherent view of buddies, policy, configuration and selection history."""
         with self.board.db.read() as connection:
             now = self._now()
             from ..routing import router
@@ -41,30 +41,30 @@ class EvaluationStore:
             except BoardError as error:
                 settings, routing_budget = None, None
                 configuration_error = {"code": error.code, "message": str(error)}
-            configured_ids = (settings or {}).get("routerProfileIds") or []
+            configured_ids = (settings or {}).get("routerBuddyIds") or []
             configured_marks = ",".join("?" for _ in configured_ids) or "NULL"
             from ..catalog.catalog import pending_model_services
             pending = pending_model_services(connection)
-            profiles = [
-                self._profile_view(row, pending=pending)
+            buddies = [
+                self._buddy_view(row, pending=pending)
                 for row in connection.execute(
-                    "SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p "
+                    "SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM buddies p "
                     "LEFT JOIN harness_health h ON h.adapter=p.adapter "
                     "LEFT JOIN catalog_current c ON c.adapter=p.adapter "
-                    f"WHERE (p.available=1 AND h.status='ready') OR p.profile_id IN ({configured_marks}) ORDER BY p.rowid LIMIT 202",
+                    f"WHERE (p.available=1 AND h.status='ready') OR p.buddy_id IN ({configured_marks}) ORDER BY p.rowid LIMIT 202",
                     configured_ids
                 )
             ]
             from ...protocol.billing import for_provider
-            from ..routing.quota_routing import configuration_retry
-            for profile in profiles:
-                profile["billing"] = for_provider(connection, profile["adapter"], profile["provider"])
+            from ..routing.quota_routing import buddy_retry
+            for buddy in buddies:
+                buddy["billing"] = for_provider(connection, buddy["adapter"], buddy["provider"])
                 from .native_observations import exhausted
-                profile['quotaExhausted'] = exhausted(connection, profile, now=now) is not None
-                if profile['quotaExhausted']:
-                    profile['quotaRetry'] = configuration_retry(connection, profile, now=now)
-            profile_ids = [profile["profileId"] for profile in profiles]
-            policy = user_policy.policy_view(connection, profile_ids)
+                buddy['quotaExhausted'] = exhausted(connection, buddy, now=now) is not None
+                if buddy['quotaExhausted']:
+                    buddy['quotaRetry'] = buddy_retry(connection, buddy, now=now)
+            buddy_ids = [buddy["buddyId"] for buddy in buddies]
+            policy = user_policy.policy_view(connection, buddy_ids)
             decisions = [
                 self._decision_view(row)
                 for row in connection.execute(
@@ -75,14 +75,14 @@ class EvaluationStore:
                 )
             ]
             unavailable_count = connection.execute(
-                "SELECT COUNT(*) AS count FROM evaluation_profiles p LEFT JOIN harness_health h ON h.adapter=p.adapter WHERE p.available=0 OR h.status IS NULL OR h.status!='ready'"
+                "SELECT COUNT(*) AS count FROM buddies p LEFT JOIN harness_health h ON h.adapter=p.adapter WHERE p.available=0 OR h.status IS NULL OR h.status!='ready'"
             ).fetchone()["count"]
             # One row per model service represented in this response, with the
             # effective limit (explicit setting or default) and the unresolved
             # attempt count. Effort variants collapse into their shared model service.
             model_services = {
-                (profile["adapter"], profile["provider"], profile["model"])
-                for profile in profiles
+                (buddy["adapter"], buddy["provider"], buddy["model"])
+                for buddy in buddies
             }
             model_service_concurrency = self.board.model_capacity_rows(connection, model_services)
             event_cursor = self.board._head_of(connection)
@@ -93,9 +93,9 @@ class EvaluationStore:
                 "routingBudgetLimits": routing_budget,
             } if settings is not None else None),
             "configurationError": configuration_error,
-            "profiles": profiles,
+            "buddies": buddies,
             "modelServiceConcurrency": model_service_concurrency,
-            "unavailableProfileCount": unavailable_count,
+            "unavailableBuddyCount": unavailable_count,
             **policy,
             "decisions": decisions,
         }
@@ -133,7 +133,7 @@ class EvaluationStore:
         return catalog_store.record(self, discovered, observation_id)
 
     @staticmethod
-    def _profile_view(row: sqlite3.Row, *, pending: dict | None = None) -> dict:
+    def _buddy_view(row: sqlite3.Row, *, pending: dict | None = None) -> dict:
         from ...buddy.harnesses.registry import adapters
         native = adapters().get(row["adapter"])
         capabilities = json.loads(row["capabilities_json"])
@@ -145,7 +145,7 @@ class EvaluationStore:
         if native and getattr(native, "no_tool_structured", False):
             capabilities.append("routing:fast")
         view = {
-            "profileId": row["profile_id"],
+            "buddyId": row["buddy_id"],
             "label": row["label"],
             "adapter": row["adapter"],
             "provider": row["provider"],
@@ -185,7 +185,7 @@ class EvaluationStore:
             "decisionId": row["decision_id"],
             "status": row["status"],
             "task": row["task"],
-            "profileId": row["profile_id"],
+            "buddyId": row["buddy_id"],
             "reason": row["reason"],
             "createdAt": row["created_at"],
         }

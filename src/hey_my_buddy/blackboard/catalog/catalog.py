@@ -1,7 +1,7 @@
-"""Bounded, harness-neutral model discovery and legal configuration validation.
+"""Bounded, harness-neutral model discovery and legal buddy validation.
 
 Adapters own native discovery. This module validates public metadata, preserves
-adapter/provider/model identity, and proposes disabled profiles. Discovery never
+adapter/provider/model identity, and proposes disabled buddies. Discovery never
 calls a model or publishes an evaluation card.
 """
 from __future__ import annotations
@@ -24,7 +24,7 @@ MAX_PROVIDERS = 32
 MAX_TEXT = 2000
 MAX_CATALOG_BYTES = 2 * 1024 * 1024
 CATALOG_FILE_ENV = "BUDDY_MODEL_CATALOG_FILE"
-CONFIGURATION_FIELDS = ("adapter", "provider", "model", "effort")
+BUDDY_FIELDS = ("adapter", "provider", "model", "effort")
 
 #: ADR-027 rule 1: the account-status fact every harness reports per discovery.
 #: The blackboard, not the harness, decides whether a reading is trusted; a
@@ -194,8 +194,8 @@ def restore_retained_availability(db, adapter: str) -> int:
     """Restore the model availability of the retained catalog after health noise.
 
     ADR-027 separates health availability from adopted catalog facts, at the
-    effort level: the 0s a harness health failure left on ``evaluation_profiles``
-    are never evidence that a native configuration disappeared. A row returns
+    effort level: the 0s a harness health failure left on ``buddies``
+    are never evidence that a native buddy disappeared. A row returns
     only when the retained confirmed catalog still lists its exact
     adapter/provider/model/effort identity, or when it is one of the last legal
     efforts recorded for a model service still awaiting disappearance confirmation. A
@@ -212,18 +212,18 @@ def restore_retained_availability(db, adapter: str) -> int:
         provider, _, model = key.partition("\x1f")
         pending_efforts[(provider, model)] = pending_model_efforts(db, adapter, provider, model) or []
     restored = 0
-    for profile in db.execute(
-            "SELECT profile_id, provider, model, effort, available, unavailable_reason"
-            " FROM evaluation_profiles WHERE adapter=?",
+    for buddy in db.execute(
+            "SELECT buddy_id, provider, model, effort, available, unavailable_reason"
+            " FROM buddies WHERE adapter=?",
             (adapter,)).fetchall():
-        if profile["available"] or profile["unavailable_reason"] in CATALOG_FACT_REASONS:
+        if buddy["available"] or buddy["unavailable_reason"] in CATALOG_FACT_REASONS:
             continue
-        model_service = (profile["provider"], profile["model"])
-        identity = (*model_service, profile["effort"])
+        model_service = (buddy["provider"], buddy["model"])
+        identity = (*model_service, buddy["effort"])
         legal_pending = pending_efforts.get(model_service)
-        if identity in identities or (legal_pending is not None and profile["effort"] in legal_pending):
-            db.execute("UPDATE evaluation_profiles SET available=1,unavailable_reason=NULL WHERE profile_id=?",
-                       (profile["profile_id"],))
+        if identity in identities or (legal_pending is not None and buddy["effort"] in legal_pending):
+            db.execute("UPDATE buddies SET available=1,unavailable_reason=NULL WHERE buddy_id=?",
+                       (buddy["buddy_id"],))
             restored += 1
     return restored
 
@@ -429,13 +429,13 @@ def discover(*, directory: Path, harnesses=None) -> dict:
 
 
 def _reject_unavailable(selected: dict, *, read_at: str | None, remedy: str) -> BoardError:
-    details = {"configuration": selected, "reason": CATALOG_UNAVAILABLE_REASON, "remedy": remedy}
+    details = {"buddy": selected, "reason": CATALOG_UNAVAILABLE_REASON, "remedy": remedy}
     if read_at:
         details["catalogReadAt"] = read_at
-    return BoardError("CONFIGURATION_UNAVAILABLE", "The requested native model route is not available", **details)
+    return BoardError("BUDDY_UNAVAILABLE", "The requested native model route is not available", **details)
 
 
-def validate_configuration(configuration: dict, *, directory: Path) -> dict:
+def validate_buddy(buddy: dict, *, directory: Path) -> dict:
     """Validate an explicit native tuple, without selection or inference.
 
     A buddy absent from the recorded catalog but still awaiting disappearance
@@ -448,9 +448,9 @@ def validate_configuration(configuration: dict, *, directory: Path) -> dict:
     join that times out — re-judges on the facts as they are then recorded, so
     a legally published catalog is never shadowed by the stale first rejection.
     """
-    if not isinstance(configuration, dict) or set(configuration) != set(CONFIGURATION_FIELDS):
-        raise BoardError("INVALID_ARGUMENT", "configuration requires exactly adapter, provider, model and effort")
-    selected = {key: _identity(configuration[key], key) for key in CONFIGURATION_FIELDS}
+    if not isinstance(buddy, dict) or set(buddy) != set(BUDDY_FIELDS):
+        raise BoardError("INVALID_ARGUMENT", "buddy requires exactly adapter, provider, model and effort")
+    selected = {key: _identity(buddy[key], key) for key in BUDDY_FIELDS}
     from ...buddy.harnesses.registry import adapter
     instance = adapter(selected["adapter"])
     if not instance.model_discovery:
@@ -479,14 +479,14 @@ def validate_configuration(configuration: dict, *, directory: Path) -> dict:
             return _check_recorded(selected, CatalogView.from_payload(recorded.payload),
                                    pending_efforts=pending_efforts)
         except BoardError as error:
-            if error.code != "CONFIGURATION_UNAVAILABLE":
+            if error.code != "BUDDY_UNAVAILABLE":
                 raise
             raise _reject_unavailable(selected, read_at=read_at, remedy=CATALOG_REMEDY) from None
 
     try:
         return judge()
     except BoardError as error:
-        if error.code not in ("CATALOG_UNAVAILABLE", "CONFIGURATION_UNAVAILABLE"):
+        if error.code not in ("CATALOG_UNAVAILABLE", "BUDDY_UNAVAILABLE"):
             raise
         first = error
     hook = _catalog_reread.get(str(directory))
@@ -508,7 +508,7 @@ def validate_configuration(configuration: dict, *, directory: Path) -> dict:
     try:
         return judge()
     except BoardError as error:
-        if error.code in ("CATALOG_UNAVAILABLE", "CONFIGURATION_UNAVAILABLE", "INVALID_ARGUMENT"):
+        if error.code in ("CATALOG_UNAVAILABLE", "BUDDY_UNAVAILABLE", "INVALID_ARGUMENT"):
             raise
         # The re-read itself broke the harness (for example the native refresh
         # invalidated health). The fresh error and its diagnostics lead, while
@@ -524,16 +524,16 @@ def _check_recorded(selected: dict, view: "CatalogView", *, pending_efforts: lis
         if pending_efforts:
             if selected["effort"] not in pending_efforts:
                 raise BoardError("INVALID_ARGUMENT", "The requested effort is not supported by this model",
-                                 legalEfforts=pending_efforts, configuration=selected)
+                                 legalEfforts=pending_efforts, buddy=selected)
             return selected
-        raise BoardError("CONFIGURATION_UNAVAILABLE", "The requested native model route is not available",
-                         configuration=selected, reason=CATALOG_UNAVAILABLE_REASON)
+        raise BoardError("BUDDY_UNAVAILABLE", "The requested native model route is not available",
+                         buddy=selected, reason=CATALOG_UNAVAILABLE_REASON)
     if not model["available"]:
-        raise BoardError("CONFIGURATION_UNAVAILABLE", "The requested native model route is not available",
-                         configuration=selected, reason=CATALOG_UNAVAILABLE_REASON)
+        raise BoardError("BUDDY_UNAVAILABLE", "The requested native model route is not available",
+                         buddy=selected, reason=CATALOG_UNAVAILABLE_REASON)
     if selected["effort"] not in model["efforts"]:
         raise BoardError("INVALID_ARGUMENT", "The requested effort is not supported by this model",
-                         legalEfforts=model["efforts"], configuration=selected)
+                         legalEfforts=model["efforts"], buddy=selected)
     return selected
 
 
@@ -573,7 +573,7 @@ class CatalogView:
         return {**self.payload, "discoveryId": self.discovery_id,
                 "discoveredAt": self.recorded_at or self.payload.get("discoveredAt")}
 
-    def proposed_profiles(self) -> list[dict]:
+    def proposed_buddies(self) -> list[dict]:
         from ...buddy.harnesses.registry import adapters
         registry = adapters()
         proposals = []
@@ -584,7 +584,7 @@ class CatalogView:
                 for effort in model["efforts"]:
                     identity = ":".join((entry["adapter"], entry["provider"], model["id"], effort))
                     safe_identity = re.sub(r"[^A-Za-z0-9._:-]", "-", identity)
-                    profile_id = identity if safe_identity == identity and len(identity) <= 128 else safe_identity[:95] + ":" + hashlib.sha256(identity.encode()).hexdigest()[:32]
+                    buddy_id = identity if safe_identity == identity and len(identity) <= 128 else safe_identity[:95] + ":" + hashlib.sha256(identity.encode()).hexdigest()[:32]
                     capabilities = ([f"execution:{entry['adapter']}", f"effort:{effort}"]
                                     + [f"input:{item}" for item in model["inputModalities"]][:30])
                     if native is not None:
@@ -592,7 +592,7 @@ class CatalogView:
                             capabilities.append("decision")
                         capabilities.extend(permission_capabilities(entry["adapter"]))
                     proposals.append({
-                        "profileId": profile_id, "label": f"{model['name']} · {effort}"[:200],
+                        "buddyId": buddy_id, "label": f"{model['name']} · {effort}"[:200],
                         "adapter": entry["adapter"], "provider": entry["provider"], "model": model["id"], "effort": effort,
                         "available": model["available"], "unavailableReason": model["unavailableReason"], "enabled": False,
                         "capabilities": capabilities,

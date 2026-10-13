@@ -49,7 +49,7 @@ class _Binding:
 class WorkerLiveRuntime:
     """Start before BoardClient use; bind only handles this Worker really holds.
 
-    Construction configures both C-Two profiles before even a BoardClient
+    Construction configures both C-Two buddies before even a BoardClient
     connect. ``start`` may then be explicit or lazy at the first valid bind.
     The resolver returns the existing role seam's ``(state, channel)`` pair;
     a bound channel must be the already bounded CTwoLiveChannel backend.

@@ -18,11 +18,11 @@ class CatalogTrustRoutingTests(BoardTestCase):
         self.evaluation = self.board.evaluation
         self.evaluation.record_catalog(reading())
         with self.board.store.db.write() as db:
-            db.execute("UPDATE evaluation_profiles SET enabled=1 WHERE adapter='dsh'")
+            db.execute("UPDATE buddies SET enabled=1 WHERE adapter='dsh'")
 
     def candidates(self):
         with self.board.store.db.read() as db:
-            return [row["profile_id"] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)]
+            return [row["buddy_id"] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)]
 
     def test_pending_model_stays_inside_the_routing_bounds(self):
         self.evaluation.record_catalog(reading(models=()))
@@ -41,16 +41,16 @@ class CatalogTrustRoutingTests(BoardTestCase):
             {'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'unknown'}]})
         self.assertEqual(self.candidates(), ['dsh:fixture:alpha:max'])
 
-    def test_user_pin_on_a_pending_profile_still_resolves(self):
+    def test_user_pin_on_a_pending_buddy_still_resolves(self):
         self.evaluation.record_catalog(reading(models=()))
         pinned = self.board.console_call(
             "user_policy_publish",
             {
                 "commandId": "pin-1",
-                "preferenceChanges": [{"profileId": "dsh:fixture:alpha:max", "mode": "pin", "reason": "still my model"}],
+                "preferenceChanges": [{"buddyId": "dsh:fixture:alpha:max", "mode": "pin", "reason": "still my model"}],
             },
         )
         self.assertEqual(pinned["counts"]["preferenceChanges"], 1)
         with self.board.store.db.read() as db:
-            row = db.execute("SELECT mode FROM evaluation_preferences WHERE profile_id='dsh:fixture:alpha:max'").fetchone()
+            row = db.execute("SELECT mode FROM evaluation_preferences WHERE buddy_id='dsh:fixture:alpha:max'").fetchone()
         self.assertEqual(row["mode"], "pin")

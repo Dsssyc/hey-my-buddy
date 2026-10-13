@@ -35,7 +35,7 @@ class WorkflowPermissionRouteTests(unittest.TestCase):
 
 class PermissionCandidateTests(BoardTestCase):
     def test_full_permission_routes_only_to_a_declaring_harness(self):
-        from blackboard.routing.test_decision import DecisionTestCase, PROFILE_ID, SECOND_PROFILE_ID
+        from blackboard.routing.test_decision import DecisionTestCase, BUDDY_ID, SECOND_BUDDY_ID
         self.catalog_fixture()
         board = self.board()
         DecisionTestCase.seed(self, board)
@@ -43,7 +43,7 @@ class PermissionCandidateTests(BoardTestCase):
         zcode_id = 'zcode:fixture:full:high'
         with board.store.db.write() as connection:
             connection.execute(
-                'INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,'
+                'INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,'
                 'available,enabled,capabilities_json)'
                 ' VALUES(?,?,?,?,?,?,1,1,?)',
                 (codex_id, codex_id, 'codex', 'fixture', 'full', 'high',
@@ -51,7 +51,7 @@ class PermissionCandidateTests(BoardTestCase):
             )
             connection.execute("UPDATE harness_health SET status='ready' WHERE adapter='codex'")
             connection.execute(
-                'INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,'
+                'INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,'
                 'available,enabled,capabilities_json)'
                 ' VALUES(?,?,?,?,?,?,1,1,?)',
                 (zcode_id, zcode_id, 'zcode', 'fixture', 'full', 'high',
@@ -62,18 +62,18 @@ class PermissionCandidateTests(BoardTestCase):
             write, _ = DecisionCoordinator._scan_candidates(connection, ['permission:write'], coding_only=True)
             self.assertTrue(write)
             read, _ = DecisionCoordinator._scan_candidates(connection, ['permission:read'], coding_only=True)
-            self.assertEqual([row['profile_id'] for row in read], [row['profile_id'] for row in write])
+            self.assertEqual([row['buddy_id'] for row in read], [row['buddy_id'] for row in write])
             full, _ = DecisionCoordinator._scan_candidates(connection, ['permission:full'], coding_only=True)
-            self.assertCountEqual([row['profile_id'] for row in full],
-                                  [codex_id, zcode_id, PROFILE_ID, SECOND_PROFILE_ID])
+            self.assertCountEqual([row['buddy_id'] for row in full],
+                                  [codex_id, zcode_id, BUDDY_ID, SECOND_BUDDY_ID])
         with patch.dict(_WORKER_PERMISSIONS, {'zcode': {
                 level: declaration for level, declaration in _WORKER_PERMISSIONS['zcode'].items()
                 if level != 'full'}}):
             zcode_capabilities = permission_capabilities('zcode')
         self.assertNotIn('permission:full', zcode_capabilities)
         with board.store.db.write() as connection:
-            connection.execute('UPDATE evaluation_profiles SET capabilities_json=? WHERE profile_id=?',
+            connection.execute('UPDATE buddies SET capabilities_json=? WHERE buddy_id=?',
                                (canonical_json(zcode_capabilities), zcode_id))
         with board.store.db.read() as connection:
             full, _ = DecisionCoordinator._scan_candidates(connection, ['permission:full'], coding_only=True)
-            self.assertCountEqual([row['profile_id'] for row in full], [codex_id, PROFILE_ID, SECOND_PROFILE_ID])
+            self.assertCountEqual([row['buddy_id'] for row in full], [codex_id, BUDDY_ID, SECOND_BUDDY_ID])

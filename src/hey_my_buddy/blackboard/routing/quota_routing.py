@@ -4,11 +4,11 @@ Display freshness is separate. Unknown/partial observations cannot clear an
 exhaustion, and billing labels never affect these routing facts. Each persistent
 record and retry window belongs to one harness, provider and native limit.
 
-An exhaustion without a recorded reset would otherwise exclude its configuration
-forever, because the excluded configuration is never routed again and so never
+An exhaustion without a recorded reset would otherwise exclude its buddy
+forever, because the excluded buddy is never routed again and so never
 produces a newer observation. Such a record carries exactly one single-use retry
 window: one hour after the blocking observation (or after the last consumed
-retry) one routing decision may admit the configuration again, and an explicit
+retry) one routing decision may admit the buddy again, and an explicit
 re-detect opens that window early. The window never claims the balance recovered
 and never calls a model or a balance query; only a newer usable observation
 clears the exhaustion itself.
@@ -155,13 +155,13 @@ def record(connection, adapter, quota, *, now=None):
                         item['observedAt'], item['observedAt'], item['resetsAt'], native_id))
 
 
-def blocking_records(connection, configuration, *, now=None):
+def blocking_records(connection, buddy, *, now=None):
     """Current native exhaustions blocking this harness/provider/model."""
     from ..evaluation.native_observations import _time
-    configuration = dict(configuration) if configuration is not None else {}
-    if not configuration or not configuration.get('adapter') or not configuration.get('provider'):
+    buddy = dict(buddy) if buddy is not None else {}
+    if not buddy or not buddy.get('adapter') or not buddy.get('provider'):
         return []
-    adapter, provider, model = (configuration.get(key) for key in ('adapter', 'provider', 'model'))
+    adapter, provider, model = (buddy.get(key) for key in ('adapter', 'provider', 'model'))
     allowed_limits = {None, model, provider, 'codex' if adapter == 'codex' else None}
     present = _time(now or utc_now())
     records = []
@@ -180,28 +180,28 @@ def _compact(item):
     return {key: item.get(key) for key in ('code', 'source', 'observedAt', 'resetsAt')}
 
 
-def exhausted(connection, configuration, *, now=None):
-    """Whether one configuration is currently excluded from normal routing.
+def exhausted(connection, buddy, *, now=None):
+    """Whether one buddy is currently excluded from normal routing.
 
     An open retry window does not change this answer: reads, reminders and the
     explicit-choice warning keep reporting the recorded exhaustion until a newer
     usable observation clears it. Only :func:`claim` admits a decision.
     """
-    records = blocking_records(connection, configuration, now=now)
+    records = blocking_records(connection, buddy, now=now)
     return _compact(records[0]['item']) if records else None
 
 
-def claim(connection, configuration, *, decision_id, consume=True, now=None):
-    """Admit one configuration's blocked no-reset exhaustions into a decision.
+def claim(connection, buddy, *, decision_id, consume=True, now=None):
+    """Admit one buddy's blocked no-reset exhaustions into a decision.
 
     Every blocking record must carry an open single-use window — or, for a
     publish-time bounds re-check, the window this very ``decision_id`` already
     consumed. With ``consume`` the open windows are claimed durably inside the
     caller's transaction, exactly once: a concurrent decision re-reads the marker
     and stays excluded. Returns the claimed/allowed facts (one
-    per blocking record) or ``None`` when the configuration stays excluded.
+    per blocking record) or ``None`` when the buddy stays excluded.
     """
-    records = blocking_records(connection, configuration, now=now)
+    records = blocking_records(connection, buddy, now=now)
     if not records:
         return []
     admitted = []
@@ -259,14 +259,14 @@ def routing_facts(connection, adapter, *, now=None):
     return views
 
 
-def configuration_retry(connection, configuration, *, now=None):
-    """The retry window a routed profile view explains to its user, or ``None``.
+def buddy_retry(connection, buddy, *, now=None):
+    """The retry window a routed buddy view explains to its user, or ``None``.
 
-    ``None`` means the configuration is not blocked, its recovery is already
+    ``None`` means the buddy is not blocked, its recovery is already
     scheduled by a known reset. Otherwise the binding record is
     the blocking one whose window opens last.
     """
-    records = blocking_records(connection, configuration, now=now)
+    records = blocking_records(connection, buddy, now=now)
     windows = [retry_facts(connection, record['item'], now=now) for record in records]
     if not records or not windows or any(facts is None for facts in windows):
         return None

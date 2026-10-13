@@ -48,7 +48,7 @@ from ....protocol.internal_models import OptionalFrozenJsonAt
 from ..native_support import (
     CancelFlag,
     ObserverInterrupt,
-    configuration_spec,
+    buddy_spec,
     execution_deadline,
     halt_owned_group,
     identity_or_none,
@@ -58,7 +58,7 @@ from ..native_support import (
 from ..run_contract import (
     ActivityPackage,
     MAX_SCHEMA_BYTES,
-    CheckedConfiguration,
+    CheckedBuddy,
     CheckedValue,
     CompletionEvidence,
     ContinuationFacts,
@@ -73,8 +73,8 @@ from ..run_contract import (
     NativeErrorRecord,
     LastAssistantMessagePackage,
     PolicyFact,
-    ResultConfiguration,
-    RunConfiguration,
+    ResultBuddy,
+    RunBuddy,
     RunEnd,
     RunFeedback,
     RunRequest,
@@ -162,31 +162,31 @@ def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, 
     row = next((x for x in rows if _readable_ref(x)
                 and x["ref"] == {"providerId": provider, "modelId": model}), None)
     if catalog_known and row is None:
-        raise NativeError("configuration-unavailable", "the requested ZCode provider/model is not in the native available catalog")
+        raise NativeError("buddy-unavailable", "the requested ZCode provider/model is not in the native available catalog")
     reasoning = row.get("reasoning") if row is not None else None
     levels = reasoning.get("levels") if isinstance(reasoning, dict) else None
     efforts_known = isinstance(levels, list) and all(isinstance(x, dict) and isinstance(x.get("value"), str) for x in levels)
     efforts = [x["value"] for x in levels] if efforts_known else []
     if efforts_known and effort not in efforts:
-        raise NativeError("invalid-configuration", "the requested reasoning effort is not supported by this native model")
+        raise NativeError("invalid-buddy", "the requested reasoning effort is not supported by this native model")
     if not catalog_known or not efforts_known:
-        note_unknown("configuration-catalog-unrecognized")
+        note_unknown("buddy-catalog-unrecognized")
     selection = {"providerId": provider, "modelId": model, "options": {"reasoningLevel": effort}}
     snapshot = connection.call("session/setModel", {"sessionId": session_id, "model": selection, "persistAsWorkspaceLastUsed": False})
     snapshot = connection.call("session/setThoughtLevel", {"sessionId": session_id, "thoughtLevel": effort, "persistAsWorkspaceLastUsed": False})
     actual = selected(snapshot)
     expected = {"provider": provider, "model": model, "effort": effort}
     if any(item is None for item in actual.values()):
-        note_unknown("configuration-selection-unrecognized")
+        note_unknown("buddy-selection-unrecognized")
     settings = snapshot.get("settings")
     thought = settings.get("thoughtLevel") if isinstance(settings, dict) else None
     thought = thought.get("current") if isinstance(thought, dict) else None
     thought = thought if isinstance(thought, str) and thought.strip() and len(thought.encode()) <= 128 else None
     if (any(value is not None and value != expected[key] for key, value in actual.items())
             or thought is not None and thought != effort):
-        raise NativeError("configuration-mismatch", "native ZCode did not retain the requested model and reasoning settings")
+        raise NativeError("buddy-mismatch", "native ZCode did not retain the requested model and reasoning settings")
     if any(item is None for item in actual.values()) or thought is None:
-        note_unknown("configuration-readback-unconfirmed")
+        note_unknown("buddy-readback-unconfirmed")
     if thought != actual["effort"]:
         actual["effort"] = None
     return actual
@@ -233,9 +233,9 @@ def catalog(snapshot: dict, access: dict, version: str) -> dict:
     if missing_effort:
         warnings.append("Models exposing no configurable native reasoning efforts were omitted")
     if incomplete:
-        warnings.append("The native model catalog shape was not fully recognized; this reading cannot retire missing profiles")
+        warnings.append("The native model catalog shape was not fully recognized; this reading cannot retire missing buddies")
     if not providers and not incomplete:
-        warnings.append("The native app server returned no models with configurable reasoning efforts; this complete empty observation retires missing ZCode profiles")
+        warnings.append("The native app server returned no models with configurable reasoning efforts; this complete empty observation retires missing ZCode buddies")
     warnings.append("The account status is not applicable to this reading: the no-prompt native "
                     "model snapshot carries no separate account check")
     return {"source": "zcode-native-app-server", "adapter": "zcode", "harnessVersion": version,
@@ -912,7 +912,7 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
         configure_mode(connection, session_id, state.create_params["mode"])
     resolved = configure_session(connection, snapshot, spec, note_unknown=connection.on_unknown)
     if on_configured is not None:
-        # The run keeps its configuration facts the moment the native readback
+        # The run keeps its buddy facts the moment the native readback
         # returned them, so a later failure still reports known values and unknown fields.
         on_configured(session_id, resolved)
     connection.call("session/subscribe", {"sessionId": session_id,
@@ -987,7 +987,7 @@ class _CarrierOutcome:
 
     The owner loop and the carrier phase share exactly this record: every
     field keeps its honest initial value until the carrier's own stage really
-    set it, so a later failure still reports the session, configuration and
+    set it, so a later failure still reports the session, buddy and
     evidence the run had really reached.
     """
     session_id: str | None = None
@@ -1241,7 +1241,7 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
         state.session_opened = True
         input_id = "buddy-no-tool-" + secrets.token_hex(16)
         outcome.session_id, outcome.resolved = _admit_root_input(
-            connection, snapshot=snapshot, request=request, spec=configuration_spec(request),
+            connection, snapshot=snapshot, request=request, spec=buddy_spec(request),
             input_id=input_id, input_text=input_text,
             previous=None, mode="initial", require_interactive=False,
             settled=lambda: bool(outcome.last_protocol is not None and outcome.last_protocol.settled),
@@ -1290,8 +1290,8 @@ def _governed_turn(*, connection: NativeConnection, request: RunRequest, service
         except (OSError, ValueError):
             raise NativeError("native-resume-unavailable", "the previous native session has no private goal binding") from None
         if binding != {"taskId": request.identity.task_id, "sessionId": previous,
-                       "cwd": request.cwd, "configuration": configuration_spec(request)}:
-            raise NativeError("native-resume-unavailable", "the previous native session does not match this goal, checkout and configuration")
+                       "cwd": request.cwd, "buddy": buddy_spec(request)}:
+            raise NativeError("native-resume-unavailable", "the previous native session does not match this goal, checkout and buddy")
         snapshot = _open_root(connection, workspace, create_params=create_params, resume=previous)
     else:
         snapshot = _open_root(connection, workspace, create_params=create_params)
@@ -1376,7 +1376,7 @@ def _governed_turn(*, connection: NativeConnection, request: RunRequest, service
             outcome.binding_path = native_root / (hashlib.sha256(opened_session.encode()).hexdigest() + ".json")
             private_json(outcome.binding_path, {"taskId": request.identity.task_id,
                                                 "sessionId": opened_session,
-                                                "cwd": request.cwd, "configuration": resolved_spec},
+                                                "cwd": request.cwd, "buddy": resolved_spec},
                          exclusive=True)
 
     def after_admit(opened_session: str) -> None:
@@ -1384,7 +1384,7 @@ def _governed_turn(*, connection: NativeConnection, request: RunRequest, service
             outcome.inquiry_bridge.activate(opened_session)
 
     outcome.session_id, outcome.resolved = _admit_root_input(
-        connection, snapshot=snapshot, request=request, spec=configuration_spec(request),
+        connection, snapshot=snapshot, request=request, spec=buddy_spec(request),
         input_id=mount.input_id, input_text=request.input_text,
         previous=previous, mode=mode, require_interactive=True,
         settled=lambda: bool(outcome.evidence is not None and outcome.evidence.settled_ordinal),
@@ -1609,9 +1609,9 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
         requested=True if state.interrupted else None,
         basis="owned-group-signal" if state.signalled else
         ("observer-request" if state.observer_stopped else None))
-    checked = CheckedConfiguration()
+    checked = CheckedBuddy()
     if resolved is not None:
-        checked = CheckedConfiguration(
+        checked = CheckedBuddy(
             **{key: CheckedValue(value=value) for key, value in resolved.items() if value is not None})
     value = None
     completion = None
@@ -1656,10 +1656,10 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
         model_started=True if state.model_started else None,
         native_event_count=event_count if event_count else None,
         native_evidence=_shared_unknown_events(facts),
-        configuration=ResultConfiguration(
-            requested=RunConfiguration(provider=request.configuration.provider,
-                                       model=request.configuration.model,
-                                       effort=request.configuration.effort),
+        buddy=ResultBuddy(
+            requested=RunBuddy(provider=request.buddy.provider,
+                               model=request.buddy.model,
+                               effort=request.buddy.effort),
             checked=checked),
         native_identity=native_identity,
         value=value, completion_evidence=completion,

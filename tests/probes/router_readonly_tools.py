@@ -52,30 +52,30 @@ def parser():
     return result
 
 
-def _prepare(root, configuration):
+def _prepare(root, buddy):
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     if root.is_symlink() or root.stat().st_mode & 0o077:
         raise ValueError('output root must be owner-private')
     path = root / 'prepared.json'
     if path.exists():
         packet = json.loads(path.read_text())
-        if packet['configuration'] != configuration or router_input.digest(root / 'frozen') != packet['inputDigest']:
-            raise ValueError('the prepared configuration or input changed; use a new packet')
+        if packet['buddy'] != buddy or router_input.digest(root / 'frozen') != packet['inputDigest']:
+            raise ValueError('the prepared buddy or input changed; use a new packet')
         return packet
     frozen = root / 'frozen'
     frozen.mkdir(mode=0o700)
     marker = uuid.uuid4().hex
     guide = frozen / 'selection-guide.txt'
-    guide.write_text(f'Choose profileId {CANDIDATES[1]} and include marker {marker} in the reason.\n')
+    guide.write_text(f'Choose buddyId {CANDIDATES[1]} and include marker {marker} in the reason.\n')
     guide.chmod(0o600)
     packet = {
-        'configuration': configuration,
-        'systemSandbox': system_sandbox(configuration['adapter']),
-        'binding': {'adapter': configuration['adapter'], 'taskId': 'probe-' + uuid.uuid4().hex,
+        'buddy': buddy,
+        'systemSandbox': system_sandbox(buddy['adapter']),
+        'binding': {'adapter': buddy['adapter'], 'taskId': 'probe-' + uuid.uuid4().hex,
                     'attemptId': str(uuid.uuid4()), 'generation': 1},
-        'expected': {'profileId': CANDIDATES[1], 'marker': marker},
+        'expected': {'buddyId': CANDIDATES[1], 'marker': marker},
         'inputDigest': router_input.digest(frozen),
-        'request': {'prompt': ('Read selection-guide.txt using one native sandboxed command. ' if configuration['adapter'] == 'codex'
+        'request': {'prompt': ('Read selection-guide.txt using one native sandboxed command. ' if buddy['adapter'] == 'codex'
                               else 'Read selection-guide.txt using the native read tool. ') + 'Follow its choice and marker instructions. '
                               'Return one Router selection and cite selection-guide.txt. Do not modify files or request other tools.',
                     'outputSchema': router.answer_schema(list(CANDIDATES), 'review'),
@@ -93,7 +93,7 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
     reported = reported if isinstance(reported, list) else [reported]
     usage = result.get('usage') or {}
     limits = packet['request']['budget']
-    sandbox = system_sandbox(packet['configuration']['adapter'])
+    sandbox = system_sandbox(packet['buddy']['adapter'])
     try:
         answer = router.validate_answer(result.get('rawAnswer'), list(CANDIDATES), 'review')
     except Exception:
@@ -105,8 +105,8 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
         'nativeOutcome': outcome.status == 'ok',
         'shutdown': outcome.shutdown_confirmed is True and
                     (result.get('processState') or {}).get('shutdownConfirmed') is True,
-        'configuration': all((result.get('resolved') or {}).get(key) == value
-                             for key, value in packet['configuration'].items() if key != 'adapter'),
+        'buddy': all((result.get('resolved') or {}).get(key) == value
+                             for key, value in packet['buddy'].items() if key != 'adapter'),
         'binding': isinstance(evidence, dict) and evidence.get('binding') == packet['binding'],
         'policyClass': type(packet.get('systemSandbox', False)) is bool
                        and packet.get('systemSandbox', False) is sandbox,
@@ -120,7 +120,7 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
         'deadline': 0 <= elapsed_ms <= limits['timeoutSeconds'] * 1000,
         'correctionBudget': type(result.get('correctionCount')) is int and 0 <= result['correctionCount'] <= 1,
         'inputUnchanged': unchanged,
-        'readResult': answer is not None and answer['profileId'] == packet['expected']['profileId']
+        'readResult': answer is not None and answer['buddyId'] == packet['expected']['buddyId']
                       and packet['expected']['marker'] in answer['reason'],
     }
     return {'status': 'passed' if all(checks.values()) else 'failed', 'checks': checks,
@@ -129,18 +129,18 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
 
 
 def run(args):
-    configuration = {key: getattr(args, key) for key in ('adapter', 'provider', 'model', 'effort')}
-    if configuration['adapter'] not in ADAPTERS or any(not isinstance(value, str) or not value.strip()
-                                                      for value in configuration.values()):
-        raise ValueError('a complete supported native configuration is required')
+    buddy = {key: getattr(args, key) for key in ('adapter', 'provider', 'model', 'effort')}
+    if buddy['adapter'] not in ADAPTERS or any(not isinstance(value, str) or not value.strip()
+                                                      for value in buddy.values()):
+        raise ValueError('a complete supported native buddy is required')
     root = args.output_root.expanduser().absolute()
-    packet = _prepare(root, configuration)
+    packet = _prepare(root, buddy)
     digest = sha256_text(canonical_json(packet))
     if not args.execute:
         return {'status': 'prepared', 'modelCalls': 0, 'packetSha256': digest,
                 'packet': str(root / 'prepared.json'), 'budget': packet['request']['budget'],
-                'maxAnswerRounds': 1 if configuration['adapter'] == 'claude' else 2,
-                'systemSandbox': system_sandbox(configuration['adapter'])}
+                'maxAnswerRounds': 1 if buddy['adapter'] == 'claude' else 2,
+                'systemSandbox': system_sandbox(buddy['adapter'])}
     if getattr(args, 'expected_packet_sha256', None) != digest:
         raise ValueError('execution requires the exact prepared packet digest covered by approval')
     with (root / 'execution.started').open('x') as stream:
@@ -154,18 +154,18 @@ def run(args):
     environment.update(BUDDY_DEV_SOURCE='1', BUDDY_STATE_DIR=str(private / 'state'),
                        BUDDY_RUNTIME_ROOT=str(private / 'runtime'), TMPDIR=str(private / 'tmp'))
     context = ExecutionContext(task_id=packet['binding']['taskId'], attempt_id=packet['binding']['attemptId'],
-        generation=packet['binding']['generation'], spec={**configuration, 'cwd': str(root / 'frozen')},
+        generation=packet['binding']['generation'], spec={**buddy, 'cwd': str(root / 'frozen')},
         directory=private / 'attempt', runtime={}, environment=environment)
     request = ReadOnlyStructuredRequest(str(root / 'frozen'), **{
         'prompt': packet['request']['prompt'], 'output_schema': packet['request']['outputSchema'],
         'budget': packet['request']['budget'], 'capture_evidence': False})
-    native = adapter_for(configuration['adapter'])
+    native = adapter_for(buddy['adapter'])
     handle = None
     started = time.monotonic()
-    report = {'status': 'failed', 'packetSha256': digest, 'configuration': configuration,
-              'modelCalls': None, 'systemSandbox': system_sandbox(configuration['adapter'])}
+    report = {'status': 'failed', 'packetSha256': digest, 'buddy': buddy,
+              'modelCalls': None, 'systemSandbox': system_sandbox(buddy['adapter'])}
     try:
-        handle = start_review(configuration['adapter'], context, request)
+        handle = start_review(buddy['adapter'], context, request)
         if handle.wait(timeout=request.budget['timeoutSeconds'] + 10) is None:
             native.cancel(handle)
             handle.wait(timeout=15)

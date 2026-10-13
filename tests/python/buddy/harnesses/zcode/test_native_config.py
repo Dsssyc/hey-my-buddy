@@ -58,12 +58,12 @@ class NativeConfigTests(NativeConfigCase):
         provider = receipt["providers"][0]
         self.assertEqual(provider["provider"], "fixture-account")
         self.assertEqual(provider["accessType"], "unknown")
-        request = self.fast_request("Choose a profile. Return only one JSON value matching this schema: {}")
-        request = request.model_copy(update={"configuration": request.configuration.model_copy(
+        request = self.fast_request("Choose a buddy. Return only one JSON value matching this schema: {}")
+        request = request.model_copy(update={"buddy": request.buddy.model_copy(
             update={"provider": provider["provider"]})})
         result = native_run.run(request, observer=worker_observer, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result)
-        self.assertEqual(result.configuration.checked.provider.value, "fixture-account")
+        self.assertEqual(result.buddy.checked.provider.value, "fixture-account")
         env = json.loads(self.fake.with_name("launch-environment.json").read_text())
         self.assertEqual(env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"], str(self.builtin.resolve()))
         self.assertNotIn("ZCODE_MODEL_TELEMETRY_ENABLED", env)
@@ -222,7 +222,7 @@ class RuntimePreferenceTests(NativeConfigCase):
 class FinalMessageUsageTests(NativeRunCase):
     def execute_rounds(self, case):
         os.environ["BUDDY_ZCODE_TEST_CASE"] = case
-        request = self.fast_request("Choose a profile. Return only one JSON value matching this schema: {}")
+        request = self.fast_request("Choose a buddy. Return only one JSON value matching this schema: {}")
         correction = FastCorrection(request.output_schema.value, request.input_text)
         return native_run.run(request, observer=correction.observer, services=None, cancelled=lambda: False)
 

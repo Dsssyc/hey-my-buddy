@@ -14,8 +14,8 @@ from .turn_io import truncate_outcome_summaries, validate_outcome
 from .prompts import worker_prompt
 
 
-def outcome_schema(*, summary_description: str | None = None, suggested_profile: bool = False,
-                   require_suggested_profile: bool = False) -> dict:
+def outcome_schema(*, summary_description: str | None = None, suggested_buddy: bool = False,
+                   require_suggested_buddy: bool = False) -> dict:
     request = {
         "type": "object", "additionalProperties": False,
         "required": ["summary", "attempted", "neededWork", "expectedArtifacts", "acceptance"],
@@ -24,10 +24,10 @@ def outcome_schema(*, summary_description: str | None = None, suggested_profile:
                        "expectedArtifacts": {"type": "array", "items": {"type": "string"}},
                        "acceptance": {"type": "string"}},
     }
-    if suggested_profile:
-        request["properties"]["suggestedProfileId"] = {"anyOf": [{"type": "string"}, {"type": "null"}]}
-        if require_suggested_profile:
-            request["required"].append("suggestedProfileId")
+    if suggested_buddy:
+        request["properties"]["suggestedBuddyId"] = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+        if require_suggested_buddy:
+            request["required"].append("suggestedBuddyId")
     summary = {"type": "string"}
     if summary_description is not None:
         summary["description"] = summary_description

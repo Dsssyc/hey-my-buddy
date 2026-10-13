@@ -21,8 +21,8 @@ from hey_my_buddy.buddy.roles.structured_call import collect, correction_code
 
 FIXTURE = Path(__file__).parent / "fixtures" / "no_tool_codex.py"
 SOURCE = Path(__file__).resolve().parents[5] / "src"
-SCHEMA = {"type": "object", "additionalProperties": False, "required": ["profileId"],
-          "properties": {"profileId": {"type": "string", "enum": ["legal"]}}}
+SCHEMA = {"type": "object", "additionalProperties": False, "required": ["buddyId"],
+          "properties": {"buddyId": {"type": "string", "enum": ["legal"]}}}
 
 
 class NoToolCodexTests(unittest.TestCase):
@@ -58,7 +58,7 @@ class NoToolCodexTests(unittest.TestCase):
         context = ExecutionContext("router-task", "router-attempt", 7,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
                                     "cwd": str(self.cwd), "timeoutSeconds": timeout}, directory, {}, environment)
-        request = NoToolStructuredRequest(str(self.cwd), "Pick a profile", SCHEMA, timeout_seconds=timeout)
+        request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA, timeout_seconds=timeout)
         handle = start_router_preparation(FastPreparation("codex",  request, context, self.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(timeout + 9), "the fast role controller did not exit")
@@ -70,7 +70,7 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual(outcome.status, "ok", outcome.result)
         self.assertTrue(outcome.result["zeroToolVerified"])
         self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
-        self.assertEqual(json.loads(outcome.result["rawAnswer"]), {"profileId": "legal"})
+        self.assertEqual(json.loads(outcome.result["rawAnswer"]), {"buddyId": "legal"})
         evidence = outcome.result["toolEvidence"]
         self.assertEqual(evidence["binding"], {"adapter": "codex", "taskId": "router-task",
                                                "attemptId": "router-attempt", "generation": 7})
@@ -112,7 +112,7 @@ class NoToolCodexTests(unittest.TestCase):
                     self.assertFalse(outcome.result["zeroToolVerified"])
                 elif not phases:
                     self.assertEqual(outcome.status, "ok", outcome.result)
-                    self.assertEqual(json.loads(outcome.result["rawAnswer"]), {"profileId": "legal"})
+                    self.assertEqual(json.loads(outcome.result["rawAnswer"]), {"buddyId": "legal"})
                     self.assertTrue(evidence["streamComplete"])
                     self.assertTrue(outcome.result["zeroToolVerified"])
 
@@ -128,7 +128,7 @@ class NoToolCodexTests(unittest.TestCase):
         context = ExecutionContext("task", "attempt", 1,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
                                     "cwd": str(self.cwd), "timeoutSeconds": 3}, directory, {}, environment)
-        request = NoToolStructuredRequest(str(self.cwd), "Pick a profile", SCHEMA, 3)
+        request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA, 3)
         handle = start_router_preparation(FastPreparation("codex",  request, context, self.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(8))
@@ -237,7 +237,7 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual(outcome.result["nativeConfigPolicy"]["web_search"], "enabled")
         outcome, _control, directory = self.run_case("wrong-model")
         self.assertEqual(outcome.status, 'failed', outcome.result)
-        self.assertEqual(outcome.result["code"], "configuration-mismatch")
+        self.assertEqual(outcome.result["code"], "buddy-mismatch")
         self.assertIs(outcome.result["modelStarted"], False)
         self.assertIs(outcome.result["zeroToolVerified"], False)
         self.assertEqual(outcome.result["nativeThreadReceipt"]["model"], "other")

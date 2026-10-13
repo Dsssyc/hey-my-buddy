@@ -9,12 +9,12 @@ assert.equal(base.hostname, '127.0.0.1'); assert.notEqual(base.port, '49637');
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const errors = [];
-const basis = { candidateCount: 1, excludedCount: 1, excludedProfiles: [{
-  profileId: 'dsh:deepseek-official:deepseek-flash:off', adapter: 'dsh', provider: 'deepseek-official',
+const basis = { candidateCount: 1, excludedCount: 1, excludedBuddies: [{
+  buddyId: 'dsh:deepseek-official:deepseek-flash:off', adapter: 'dsh', provider: 'deepseek-official',
   model: 'deepseek-flash', effort: 'off', reason: '合成：提交时被用户排除', source: 'override',
 }] };
-const selected = { profileId: 'dsh:deepseek-official:deepseek-flash:max', adapter: 'dsh', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'max' };
-const fields = { selectedProfile: selected, routingPreferences: [],
+const selected = { buddyId: 'dsh:deepseek-official:deepseek-flash:max', adapter: 'dsh', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'max' };
+const fields = { selectedBuddy: selected, routingPreferences: [],
   policyCheck: { hardConstraints: { adapter: 'dsh' }, taskPreference: { ruleIndex: null, outcome: 'none' }, userPreference: 'none' }, routingBasis: basis, constraints: { adapter: 'dsh' }, requiredCapabilities: ['execution:dsh'],
   fallback: null, routingMode: 'fast', requestedRoutingMode: 'fast',
   reason: '唯一合法候选，未调用 Router', source: 'single-candidate', status: 'completed',
@@ -32,10 +32,10 @@ try {
     const data = await response.json();
     if (body.operation === 'workflow_get' && data.result.routing?.decisionId) {
       Object.assign(data.result.routing, fields);
-      data.result.executionConfiguration = selected;
+      data.result.buddy = selected;
     }
     if (body.operation === 'selection_get') {
-      Object.assign(data.result.decision, fields, { routerCalled: false, runId: null, profileId: selected.profileId,
+      Object.assign(data.result.decision, fields, { routerCalled: false, runId: null, buddyId: selected.buddyId,
         requested: { constraints: fields.constraints, requiredCapabilities: fields.requiredCapabilities },
         budget: null, usage: null, input: null, evidence: [],
         output: { programSelection: { preferences: [] } }, inputVerification: null, nativeIdentity: null, stopEvidence: null });

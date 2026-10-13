@@ -54,7 +54,7 @@ SUMMARIES: dict[str, str] = {
     "storage-plan": "Read-only storage reclamation plan.",
     "storage-apply": "Apply one confirmed storage plan.",
     "worker-sessions": "List board-proven Worker native sessions (Codex history, read-only).",
-    "submit": "Admit one governed goal, prepare its execution workspace and route its execution configuration.",
+    "submit": "Admit one governed goal, prepare its execution workspace and route its buddy.",
     "get": "Compact owner view of one governed goal; includeAudit adds the immutable record.",
     "decide": "Record Host authority on the active request and authorize concrete helpers.",
     "continue": "Record new input for a governed goal and invalidate older unconsumed continuations.",
@@ -103,7 +103,7 @@ SUMMARIES: dict[str, str] = {
     "selection-get": "Read one recorded selection decision; includeAudit adds the persisted input.",
     "selection-list": "Read-only compact selection history.",
     "model-catalog-refresh": "Explicit native model metadata discovery; one observation per request and no model call.",
-    "model-profiles": "Bounded active and unavailable configuration profile page.",
+    "buddy-list": "Bounded active and unavailable buddy page.",
     "restart": "Detach the daemon without cancelling owned work; independent workers survive.",
     "stop": "Cancel queued tasks and request durable cancellation of active attempts, then drain.",
 }

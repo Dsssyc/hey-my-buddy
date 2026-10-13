@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 from support import FakeClock
 from blackboard.routing.test_decision import DecisionTestCase
-from blackboard.tasks.test_workflow import CONFIGURATION, NONCE, WorkflowTestCase
+from blackboard.tasks.test_workflow import BUDDY, NONCE, WorkflowTestCase
 
 from hey_my_buddy.blackboard.tasks import delegation
 from hey_my_buddy.errors import BoardError
@@ -73,14 +73,14 @@ class DelegationTestCase(WorkflowTestCase):
         view = board.call("workflow_get", {"runId": parent["runId"]})
         params = {"runId": view["runId"], "requestId": view["activeRequest"]["requestId"],
                   "commandId": "delegate-helper", "expectedRevision": view["revision"], "decision": "approve",
-                  "autoContinue": False, "helpers": [self.helper_spec(**({} if routed else CONFIGURATION))],
+                  "autoContinue": False, "helpers": [self.helper_spec(**({} if routed else BUDDY))],
                   **self.control(parent)}
         approved = board.call("workflow_decide", params)
         return parent, approved["children"][0]["taskId"]
 
     def deliver_parent(self, board, parent):
         view = board.call("workflow_get", {"runId": parent["runId"]})
-        self.continue_run(board, view, command_id="parent-continues", helper_policy="keep", configuration=CONFIGURATION)
+        self.continue_run(board, view, command_id="parent-continues", helper_policy="keep", buddy=BUDDY)
         self.register(board, "parent-worker")
         claim = self.claim(board, "parent-worker", run_id=parent["runId"], claim_request_id="parent-result")
         self.finish_turn(board, claim, worker_id="parent-worker")
@@ -130,7 +130,7 @@ class GoalProvenanceTests(DelegationTestCase):
         self.assertEqual(metadata["project"]["path"], source)
         self.assertEqual(metadata["project"]["label"], "work")
         self.assertEqual(metadata["project"]["id"], f"repo:{source}")
-        self.assertEqual(metadata["configuration"], CONFIGURATION)
+        self.assertEqual(metadata["buddy"], BUDDY)
         # The existing workflow extension is unchanged and still present.
         self.assertEqual(view["workflow"]["hostId"], "host-a")
         self.assertEqual(view["workflowState"], "executing")
@@ -316,7 +316,7 @@ class GoalProvenanceTests(DelegationTestCase):
         self.assertEqual(helper["project"], goal["project"])
         self.assertNotEqual(helper_view["cwd"], helper["project"]["path"])
         self.assertNotEqual(helper["project"]["id"], f"repo:{os.path.realpath(str(helper_cwd))}")
-        self.assertEqual(helper["configuration"], CONFIGURATION)
+        self.assertEqual(helper["buddy"], BUDDY)
         self.assertEqual(goal["kind"], "goal")
 
     def test_same_named_projects_do_not_share_one_project_id(self):
@@ -350,9 +350,9 @@ class GoalProvenanceTests(DelegationTestCase):
         self.assertEqual(metadata["project"]["path"], os.path.realpath(str(self.workdir())))
         self.assertEqual(metadata["project"]["id"], os.path.realpath(str(self.workdir())))
         self.assertEqual(metadata["project"]["label"], "work")
-        # The command adapter has no complete execution configuration, so none is
+        # The command adapter has no complete execution buddy, so none is
         # invented for it.
-        self.assertIsNone(metadata["configuration"])
+        self.assertIsNone(metadata["buddy"])
 
     def test_internal_routing_decision_belongs_to_its_owning_goal(self):
         board = self.board()
@@ -381,7 +381,7 @@ class GoalProvenanceTests(DelegationTestCase):
         self.assertEqual(router["sourceHostId"], "host-a")
         self.assertEqual(router["currentHostId"], "host-a")
         self.assertEqual(router["project"], goal["project"])
-        self.assertIsNone(router["configuration"])
+        self.assertIsNone(router["buddy"])
         self.assertEqual([row["runId"] for row in self.history(board, rootsOnly=True)["runs"]], [goal_id])
 
     def test_selection_decision_outside_a_goal_is_classified_and_has_no_lineage(self):
@@ -512,7 +512,7 @@ class HistoryPagingTests(DelegationTestCase):
         self.assertEqual(self.history(board, rootsOnly=True)["total"], 5)
         self.assertEqual(self.history(board, projectId="repo:/no/such/project")["total"], 0)
 
-    def test_query_matches_task_project_hosts_and_configuration(self):
+    def test_query_matches_task_project_hosts_and_buddy(self):
         board = self.board()
         work = self.workdir("searchable-project")
         submitted = self.submit(

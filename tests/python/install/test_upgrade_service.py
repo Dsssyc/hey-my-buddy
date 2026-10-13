@@ -27,7 +27,7 @@ class UpgradeServiceTests(BoardTestCase):
             "systemSandbox": True, "sameAttemptContinuation": True,
         }), Database(state).read() as connection:
             resolution = router.current_router(connection, now="2026-01-01T00:00:00.000Z")
-        self.assertEqual(resolution.profile_id, fixture["routerProfileIds"][0], resolution.problem)
+        self.assertEqual(resolution.buddy_id, fixture["routerProfileIds"][0], resolution.problem)
         self.assertEqual(resolution.facts["routingMode"], "review")
         self.assertEqual(resolution.facts["routingBudget"], "deep")
         self.assertEqual(resolution.facts["routerRetryIntervalSeconds"], 47)
@@ -38,7 +38,7 @@ class UpgradeServiceTests(BoardTestCase):
         with self.daemon(env={"BUDDY_MAX_CONCURRENT": "1"}):
             self.assertEqual(call("health", {})["schemaVersion"], SCHEMA_VERSION)
             snapshot = call("console_snapshot", {})
-            self.assertEqual(snapshot["configuration"]["routerProfileIds"], fixture["routerProfileIds"])
+            self.assertEqual(snapshot["configuration"]["routerBuddyIds"], fixture["routerProfileIds"])
             self.assertEqual(call("task_list", {})["tasks"], [])
             with self.assertRaises(ServiceError) as caught:
                 call("workflow_get", {"runId": fixture["stableIds"]["delivered"]})

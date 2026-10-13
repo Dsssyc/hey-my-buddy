@@ -26,7 +26,7 @@ from ..harnesses.controller import (
 )
 from ..harnesses.run_contract import (
     MAX_RUN_REQUEST_BYTES, MAX_RUN_RESULT_BYTES, PrivateStatePaths,
-    ResumeCheckpoint, RunBudget, RunConfiguration, RunContinuation, RunIdentity, RunRequest, RunResult,
+    ResumeCheckpoint, RunBudget, RunBuddy, RunContinuation, RunIdentity, RunRequest, RunResult,
     decode_run_request, decode_run_result,
 )
 from . import turn_io, worker_services
@@ -62,7 +62,7 @@ def _base_result(result) -> dict:
     payload = {
         "status": result.end.status, "mode": result.harness,
         "harnessVersion": result.harness_version or "unknown",
-        "requested": result.configuration.requested.to_payload() if result.configuration.requested else None,
+        "requested": result.buddy.requested.to_payload() if result.buddy.requested else None,
         # The legacy receipts carry ``observed`` as a None placeholder; the
         # native readback is the checked block, never a look-alike observed
         # value, so this key stays a projection constant.
@@ -71,7 +71,7 @@ def _base_result(result) -> dict:
         "processState": {"shutdownConfirmed": result.stop_evidence.native.group_state == "gone",
                          "nativeExitCode": result.end.native_exit_code},
     }
-    checked = result.configuration.checked
+    checked = result.buddy.checked
     if checked.provider is not None and checked.model is not None and checked.effort is not None:
         payload["resolved"] = {"provider": checked.provider.value, "model": checked.model.value,
                                "effort": checked.effort.value}
@@ -332,7 +332,7 @@ def worker_request(control: dict, module):
                              generation=identity["generation"], invocation_id=control["invocationId"],
                              turn_id=identity["turnId"], input_sha256=input_hash(turn_input)),
         harness=control["harness"],
-        configuration=RunConfiguration(**{key: control["spec"][key]
+        buddy=RunBuddy(**{key: control["spec"][key]
                                           for key in ("provider", "model", "effort")}),
         cwd=control["cwd"],
         private_state=PrivateStatePaths(invocation_root=str(invocation_root),
@@ -370,7 +370,7 @@ def fast_request(control: dict, module):
         identity=RunIdentity(task_id=control["taskId"], attempt_id=control["attemptId"],
                              generation=control["generation"], invocation_id=control["invocationId"]),
         harness=control["harness"],
-        configuration=RunConfiguration(**{key: control["spec"][key]
+        buddy=RunBuddy(**{key: control["spec"][key]
                                           for key in ("provider", "model", "effort")}),
         cwd=control["cwd"],
         private_state=PrivateStatePaths(invocation_root=str(invocation_root),
@@ -390,7 +390,7 @@ def review_request(control: dict, module):
     request = RunRequest(
         identity=RunIdentity(task_id=control["taskId"], attempt_id=control["attemptId"],
                              generation=control["generation"], invocation_id=control["invocationId"]),
-        harness=control["harness"], configuration=RunConfiguration(**control["spec"]),
+        harness=control["harness"], buddy=RunBuddy(**control["spec"]),
         cwd=control["cwd"],
         private_state=PrivateStatePaths(invocation_root=control["privateRoot"],
                                         native_root=control["nativeRoot"]),

@@ -1,16 +1,16 @@
 import type { Shutdown, Task, TokenUsage } from "./types";
 import type { RoutingMode } from "./types";
 
-export type ExecutionConfiguration = {
+export type BuddyIdentity = {
   adapter: string;
   provider: string;
   model: string;
   effort: string;
 };
 
-/** A user-excluded configuration frozen with one routing request. */
-export type ExcludedProfile = ExecutionConfiguration & {
-  profileId: string;
+/** A user-excluded buddy frozen with one routing request. */
+export type ExcludedBuddy = BuddyIdentity & {
+  buddyId: string;
   reason?: string | null;
   source?: string | null;
 };
@@ -24,7 +24,7 @@ export type ExcludedProfile = ExecutionConfiguration & {
 export type RoutingBasis = {
   candidateCount?: number;
   excludedCount?: number;
-  excludedProfiles?: ExcludedProfile[];
+  excludedBuddies?: ExcludedBuddy[];
 };
 
 export type RoutingRecord = {
@@ -32,9 +32,9 @@ export type RoutingRecord = {
   routingMode?: RoutingMode | null;
   decisionId?: string | null;
   taskId?: string | null;
-  selectedProfile?: ExecutionConfiguration | null;
+  selectedBuddy?: BuddyIdentity | null;
   reason?: string | null;
-  constraints?: Partial<ExecutionConfiguration>;
+  constraints?: Partial<BuddyIdentity>;
   requiredCapabilities?: string[];
   /** `model-selection` for a Router choice, `single-candidate` for the program's direct selection, `no-candidate` for a zero-candidate Host boundary. */
   source?: string | null;
@@ -47,8 +47,8 @@ export type RoutingHistory = {
 };
 export type TurnRouting = {
   turnId: string; turnIndex: number; attemptId: string;
-  executionConfiguration?: ExecutionConfiguration | null;
-  routing?: { decisionId: string | null; executionConfigurationRevision: number } | null;
+  buddy?: BuddyIdentity | null;
+  routing?: { decisionId: string | null; buddyRevision: number } | null;
   /** Native usage of this one execution; null or absent means unknown. */
   tokenUsage?: TokenUsage | null;
 };
@@ -142,12 +142,12 @@ export type Workflow = {
   awaitingHost: boolean;
   waitReason: string;
   continuationCount: number;
-  /** ADR-018 §18: true only when the user required this configuration as a hard constraint. */
-  configurationLocked?: boolean | null;
+  /** ADR-018 §18: true only when the user required this buddy as a hard constraint. */
+  buddyLocked?: boolean | null;
   /** ADR-018 §16: the independent Host conclusion of a failed or cancelled goal. */
   hostConclusion?: HostConclusion | null;
-  executionConfiguration?: ExecutionConfiguration | null;
-  executionConfigurationRevision?: number;
+  buddy?: BuddyIdentity | null;
+  buddyRevision?: number;
   routing?: RoutingRecord | null;
   turns?: TurnRouting[];
   truncated?: { turns?: number };
@@ -206,7 +206,7 @@ export type Workflow = {
 
 export type HelperDraft = {
   id: string;
-  profileId: string;
+  buddyId: string;
   task: string;
   cwd: string;
   kind: "worktree" | "existing";
