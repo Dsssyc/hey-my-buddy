@@ -89,6 +89,39 @@ class ObjectiveSummaryCacheTests(unittest.TestCase):
                 self.assertEqual(self.read(), expected)
                 self.assert_recomputed(counter, [])
 
+    def test_repository_location_precedence_and_corrections_invalidate_only_its_group(self):
+        group = self.fixture.macros[0]
+        root = self.root_for(group)
+        self.sql("UPDATE workflow_runs SET workspace_manifest_json=json_set(workspace_manifest_json,"
+                 "'$.snapshot.repositoryPath','/fictional/run-repository/.git') WHERE run_id=?", (root,))
+        with patch.object(objectives, "_summary", wraps=objectives._summary) as counter:
+            self.read()
+            self.assert_recomputed(counter, self.fixture.macros)
+            for path, label in (("/fictional/input-repository/.git/", "input-repository"),
+                                ("/fictional/corrected-repository/.git", "corrected-repository"),
+                                ("/fictional/bare-repository", "bare-repository")):
+                with self.subTest(path=path):
+                    self.sql("UPDATE workflow_artifacts SET manifest_json=json_set(manifest_json,"
+                             "'$.snapshot.repositoryPath',?) WHERE run_id=? AND kind='input'", (path, root))
+                    summary = self.rows()[group]
+                    self.assertEqual(summary["project"]["label"], label)
+                    self.assert_recomputed(counter, [group])
+                    task = self.fixture.board.call("task_get", {"runId": root})["task"]
+                    self.assertEqual(task["delegation"]["project"]["label"], label)
+                    self.assertEqual(task["delegation"]["project"]["id"], summary["project"]["id"])
+            # Changes to a lower-priority source cannot invalidate the derived
+            # repository location while the input artifact still supplies it.
+            self.sql("UPDATE workflow_runs SET workspace_manifest_json=json_set(workspace_manifest_json,"
+                     "'$.snapshot.repositoryPath','/fictional/fallback-repository/.git') WHERE run_id=?", (root,))
+            self.assertEqual(self.rows()[group]["project"]["label"], "bare-repository")
+            self.assert_recomputed(counter, [])
+            self.sql("UPDATE workflow_artifacts SET manifest_json=json_remove(manifest_json,"
+                     "'$.snapshot.repositoryPath') WHERE run_id=? AND kind='input'", (root,))
+            self.assertEqual(self.rows()[group]["project"]["label"], "fallback-repository")
+            self.assert_recomputed(counter, [group])
+            task = self.fixture.board.call("task_get", {"runId": root})["task"]
+            self.assertEqual(task["delegation"]["project"]["label"], "fallback-repository")
+
     def test_root_helper_and_router_stop_changes_are_selective(self):
         group = self.fixture.macros[0]
         parent = self.root_for(group)
