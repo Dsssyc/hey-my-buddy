@@ -17,8 +17,7 @@ DEFAULT_EFFORT = "default"
 #: model over time.
 DEFAULT_MODEL_ALIAS = "default"
 
-#: The only outbound network the sandbox allows: package-manager registries, so
-#: a fresh worktree without ignored ``node_modules`` can still install deps.
+#: The unchanged read/default posture; checkout-write Workers use all domains.
 PACKAGE_REGISTRY_DOMAINS = (
     "registry.npmjs.org",
     "registry.yarnpkg.com",
@@ -81,15 +80,15 @@ def cli_command(environment: dict | None = None) -> list[str]:
 
 
 def sandbox_settings(network_allowed_domains=None) -> dict:
-    """Documented native sandbox settings: Bash sandboxed, registries only.
+    """The read/default sandbox posture and explicit Router domain controls.
 
     Key names follow the primary sandboxing documentation
     (code.claude.com/docs/en/sandboxing): the domain list is
     ``network.allowedDomains`` with plain string entries, and
-    ``strictAllowlist``/``allowUnsandboxedCommands: false`` deny any fallback
-    out of the sandbox. ``network_allowed_domains`` is None for the native
-    default allowlist (the package registries, the only value the legacy
-    paths ever wrote); an explicit sequence — empty included — is written
+    ``strictAllowlist`` rejects unknown domains, while
+    ``allowUnsandboxedCommands: false`` denies fallback out of the sandbox.
+    ``network_allowed_domains`` is None for the existing registry list;
+    an explicit sequence — empty included — is written
     verbatim, so an offline run is a caller decision, never a scope
     inference.
     """
@@ -114,13 +113,27 @@ def base_args() -> list[str]:
     return ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
 
 
+def worker_sandbox_settings(level: str) -> dict:
+    """Express this Worker's file scope through native sandbox settings."""
+    if level == "full":
+        return {"sandbox": {"enabled": False}}
+    settings = sandbox_settings()
+    if level == "write":
+        settings["sandbox"]["network"] = {
+            "strictAllowlist": False,
+            "allowedDomains": ["*"],
+            "allowLocalBinding": True,
+        }
+    return settings
+
+
 def discovery_args() -> list[str]:
     """Initialize-only invocation: no user message, no session persistence."""
     return [*base_args(), "--no-session-persistence"]
 
 
 def execution_args(*, session_id: str, model: str, effort: str, settings_path: str, read_only: bool,
-                   output_schema: dict, additional_denied_tools=()) -> list[str]:
+                   output_schema: dict, additional_denied_tools=(), full_access: bool = False) -> list[str]:
     """The native permission invocation; user configuration sources stay enabled.
 
     ``output_schema`` is the run's own ending contract and is always explicit:
@@ -145,9 +158,10 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
         # mode would deny every edit and always end as attention). acceptEdits
         # auto-approves edits in native working directories; user allow rules
         # can extend access. Any remaining request is denied by the controller.
-        # Bash uses the sandbox without an unsandboxed fallback, and this
-        # explicit CLI mode overrides the user's permissions.defaultMode.
-        args += ["--permission-mode", "acceptEdits"]
+        # Full access skips native approvals with sandbox.enabled false;
+        # checkout-write keeps sandboxed Bash without unsandboxed fallback.
+        # This CLI mode overrides the user's permissions.defaultMode.
+        args += ["--permission-mode", "bypassPermissions" if full_access else "acceptEdits"]
     if effort != DEFAULT_EFFORT:
         args += ["--effort", effort]
     if additional_denied_tools:

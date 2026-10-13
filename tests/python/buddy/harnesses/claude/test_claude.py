@@ -518,7 +518,9 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         settings = json.loads(settings_path.read_text())
         self.assertEqual(set(settings), {"sandbox"})
         self.assertTrue(settings["sandbox"]["enabled"])
-        self.assertTrue(settings["sandbox"]["network"]["strictAllowlist"])
+        self.assertFalse(settings["sandbox"]["network"]["strictAllowlist"])
+        self.assertEqual(settings["sandbox"]["network"]["allowedDomains"], ["*"])
+        self.assertTrue(settings["sandbox"]["network"]["allowLocalBinding"])
         self.assertEqual(stat.S_IMODE(settings_path.stat().st_mode), 0o600)
 
     def test_read_only_workspace_refuses_write_and_bash_tools(self):

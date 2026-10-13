@@ -170,7 +170,8 @@ class CodecRoundtripTests(unittest.TestCase):
                     module.run(edited(request, harness=name), observer=lambda _event: None,
                                services=None, cancelled=lambda: False)
                 self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-                self.assertIn("full access is not implemented", caught.exception.message)
+                self.assertIn("full access requires a Worker permission" if name == "claude"
+                              else "full access is not implemented", caught.exception.message)
                 spawn.assert_not_called()
 
     def test_worker_permission_roundtrips_and_keeps_native_scope_consistent(self):
@@ -190,7 +191,8 @@ class CodecRoundtripTests(unittest.TestCase):
         with mock.patch.object(codex, "_run", return_value=object()) as native:
             codex.run(request, observer=lambda _event: None, services=None, cancelled=lambda: False)
         self.assertEqual(native.call_args.args[2], "worker")
-        for harness in ("claude", "dsh", "zcode"):
+        require_permission({"adapter": "claude"}, "full")
+        for harness in ("dsh", "zcode"):
             with self.subTest(harness=harness), self.assertRaises(BoardError) as caught:
                 require_permission({"adapter": harness}, "full")
             self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")
@@ -204,13 +206,11 @@ class CodecRoundtripTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
     def test_full_level_is_refused_even_when_native_scope_is_write(self):
-        from hey_my_buddy.buddy.harnesses.claude import native_run as claude
         from hey_my_buddy.buddy.harnesses.dsh import native_run as dsh
         from hey_my_buddy.buddy.harnesses.zcode import native_run as zcode
         permission = rc.WorkerPermission(level="full", tool_scope="write", enforcement="convention")
         request = edited(full_request(Path("/private/tmp")), tool_scope="write", worker_permission=permission)
-        for name, module in (("claude", claude),
-                             ("dsh", dsh), ("zcode", zcode)):
+        for name, module in (("dsh", dsh), ("zcode", zcode)):
             with self.subTest(harness=name), mock.patch("subprocess.Popen",
                                                         side_effect=AssertionError("native launch")) as spawn:
                 with self.assertRaises(BoardError) as caught:

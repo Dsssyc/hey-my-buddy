@@ -168,6 +168,25 @@ class OutcomeTruncationTests(unittest.TestCase):
                 self.assertEqual(record["outcome"]["disposition"], "attention")
                 self.assertNotIn("outcomeTruncated", record)
 
+    def test_attention_without_denied_operation_fact_keeps_the_exact_original_outcome(self):
+        for harness, facts, summary, attempted in (
+                ("codex", {"nativeRequestMethod": "interaction/request"},
+                 "Codex requested Host interaction through interaction/request",
+                 "The owned controller declined the correlated native request without granting access"),
+                ("claude", {"deniedControlRequestIds": ["denied-1"], "deniedToolNames": ["Bash"]},
+                 "Claude requested Host interaction through a native tool permission (Bash)",
+                 "The owned controller denied the correlated native permission request without granting access"),
+                ("claude", {"permissionDenials": 1},
+                 "Claude denied 1 native tool permission request(s) during the turn",
+                 "The owned controller denied the correlated native permission request without granting access")):
+            with self.subTest(harness=harness, facts=facts):
+                expected = {"disposition": "attention", "summary": summary, "remaining": [], "decisions": [],
+                    "artifacts": [], "request": {"summary": summary, "attempted": attempted,
+                        "neededWork": "Host must review the requested action and choose a permitted continuation",
+                        "expectedArtifacts": [],
+                        "acceptance": "The Host resolves this boundary and starts an authorized continuation"}}
+                self.assertEqual(canonical_json(worker_format(harness).attention_outcome(facts)), canonical_json(expected))
+
     def test_completion_tools_refuse_oversize_and_accept_corrected_retry(self):
         configuration = {"identity": self.turn, "inputSha256": "a" * 64, "key": "b" * 64}
         for field in ("remaining", "decisions"):

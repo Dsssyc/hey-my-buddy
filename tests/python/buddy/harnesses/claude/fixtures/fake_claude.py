@@ -208,10 +208,16 @@ def run_turn(case):
     if case == "unknown-response":
         send({"type": "control_response", "response": {"subtype": "success", "request_id": "buddy-999", "response": {}}})
         return
-    if case == "permission":
+    if case in ("permission", "permission-command", "permission-path", "permission-long-command"):
+        tool, inputs = {
+            "permission": ("WebFetch", {"url": "https://example.com"}),
+            "permission-command": ("Bash", {"command": "FOO=bar npm --prefix apps/console test"}),
+            "permission-path": ("Write", {"file_path": "/outside/denied.txt", "content": "not an input summary"}),
+            "permission-long-command": ("Bash", {"command": "echo " + "测" * 300}),
+        }[case]
         send({"type": "control_request", "request_id": "perm-1",
-              "request": {"subtype": "can_use_tool", "tool_name": "WebFetch",
-                          "input": {"url": "https://example.com"}, "tool_use_id": "toolu_fixture_1"}})
+              "request": {"subtype": "can_use_tool", "tool_name": tool,
+                          "input": inputs, "tool_use_id": "toolu_fixture_1"}})
         reply = json.loads(sys.stdin.readline())
         response = reply.get("response") or {}
         write_state({"permissionReply": {"subtype": response.get("subtype"),
@@ -235,10 +241,17 @@ def run_turn(case):
                 "resetsAt": "2026-09-26T12:00:00Z"}})
         wait_for_interrupt()
         return
-    send({"type": "system", "subtype": "init",
+    init = {"type": "system", "subtype": "init",
           "session_id": "not-the-allocation" if case == "init-wrong-session" else session_id,
           "cwd": "/definitely/elsewhere" if case == "wrong-cwd" else os.getcwd(),
-          "model": argv_value("--model") or "", "permissionMode": "default", "tools": []})
+          "model": argv_value("--model") or "",
+          "permissionMode": "default" if case == "permission-mode-mismatch" else
+          {"future": "mode"} if case == "permission-mode-unread" else
+          "future-mode" if case == "permission-mode-future" else
+          argv_value("--permission-mode") or "default", "tools": []}
+    if case == "permission-mode-missing":
+        del init["permissionMode"]
+    send(init)
     if case in ("bg-running", "bg-settled", "bg-not-completed"):
         send({"type": "system", "subtype": "task_started", "task_id": "task-bg-1", "task_type": "local_agent"})
         if case == "bg-settled":

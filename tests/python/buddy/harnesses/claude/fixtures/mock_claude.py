@@ -168,7 +168,7 @@ def run_stream(case, session_id):
         # A root tool fact that arrives before any handshake cannot be proven.
         send(assistant_tool("Read", "toolu_early_1"))
     send({"type": "system", "subtype": "init", "session_id": session_id, "cwd": os.getcwd(),
-          "model": argv_value("--model") or "", "permissionMode": "default", "tools": []})
+          "model": argv_value("--model") or "", "permissionMode": argv_value("--permission-mode") or "default", "tools": []})
     if case == "clean":
         send(assistant_tool("Read", "toolu_1"))
         send(tool_result("toolu_1"))
