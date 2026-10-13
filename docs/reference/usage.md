@@ -30,7 +30,19 @@ The first command that needs the service installs a content-addressed stable run
 
 DSH session grouping was removed ([ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md)): every DSH execution writes its session rollout in the execution-private area, and a `workspace` field on a submission is rejected as unknown.
 
-Governed coding work names its Git isolation contract in a separate `executionWorkspace` object: `kind` (`existing` or `worktree`), source `cwd`, `access` (`read` or `write`), `base` (`commit` with `ref`, or `working-tree`), `includeUntracked`, `writeScope` and `integrator`. It is an ownership and artifact-verification contract, not session grouping and not an OS sandbox: concurrent writers use independent worktrees, a read workspace must keep its input unchanged, and declared paths are checkout-root-relative. The fixed-input matrix and reservation rules are in [workflow.md#workspace-and-artifact-rules](workflow.md#workspace-and-artifact-rules).
+Governed coding work names its Git isolation contract in a separate `executionWorkspace` object: `kind` (`existing` or `worktree`), source `cwd`, `access` (`read`, `write` or `full`, the Worker permission level), `base` (`commit` with `ref`, or `working-tree`), `includeUntracked`, `writeScope` and `integrator`. It is an ownership and artifact-verification contract, not session grouping and not an OS sandbox: concurrent writers use independent worktrees, a read workspace must keep its input unchanged, and declared paths are checkout-root-relative. The fixed-input matrix and reservation rules are in [workflow.md#workspace-and-artifact-rules](workflow.md#workspace-and-artifact-rules).
+
+The level says where a Worker may modify files: nowhere under `read`, inside the checkout and the temporary directory under `write`, anywhere under `full`, which needs a one-line `accessReason`. A later turn may run at another level: give `access` on `continue`. On DSH that turn starts a new native session, which receives the blackboard's record of the micro task but not the earlier conversation. Choose `write` unless the task only reads, and `full` only when the task needs something that `write` refuses on the buddy's harness:
+
+| Under `write` | Codex | Claude Code | DSH | ZCode |
+| --- | --- | --- | --- | --- |
+| A write outside the checkout | refused | refused | refused | not stopped |
+| A Unix socket | works | refused | works | works |
+| Shared memory | refused | works | works | works |
+| Listing processes | refused | refused | refused | works |
+| The network | open | HTTP and HTTPS through its sandbox proxy | open | open |
+
+Writes in the checkout and the temporary directory and a loopback port work on all four. ZCode carries `write` out by convention: its Worker is told to stay inside the checkout, and nothing stops a command that does not. Under `read`, Codex and DSH still run commands as long as they write nothing, ZCode runs read-only commands, and Claude Code offers no command tool. What a level refuses is reported back with the operation that was refused; continue at another level when the task needs it. These are measurements on macOS from 2026-10-12 and 2026-10-13 with Codex 0.162.1, Claude Code 2.1.284, DSH 0.1.5-rc.1 and ZCode 0.16.9; the pages of [Codex](codex.md), [Claude Code](claude.md) and the [Workers](workers.md) have the details, and other platforms are not measured.
 
 ### 3. Write a bounded packet
 
