@@ -1,14 +1,21 @@
 """The single Python process entry for roles using a registered harness run."""
 from __future__ import annotations
 
+import signal
+import threading
+
+_cancelled = threading.Event()
+if __name__ == "__main__":
+    for sig in (signal.SIGTERM, signal.SIGINT,
+                *((signal.SIGBREAK,) if hasattr(signal, "SIGBREAK") else ())):
+        signal.signal(sig, lambda _sig, _frame: _cancelled.set())
+
 import argparse
 import hashlib
 import os
 from contextlib import contextmanager
 from dataclasses import replace
-import signal
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -129,13 +136,9 @@ def main() -> int:
     if not selected:
         parser.error("BUDDY_STATE_DIR is required")
     state_dir = Path(selected)
-    cancelled = threading.Event()
-    for sig in (signal.SIGTERM, signal.SIGINT,
-                *((signal.SIGBREAK,) if hasattr(signal, "SIGBREAK") else ())):
-        signal.signal(sig, lambda _sig, _frame: cancelled.set())
     try:
         control = decode_strict_json(guard_private_path(Path(args.control)).read_bytes())
-        frame, code = execute(control, cancelled, state_dir)
+        frame, code = execute(control, _cancelled, state_dir)
     except Exception:
         # No native receipt can be inferred from a controller failure. The
         # normal result reader refuses this diagnostic as a RunResult.
