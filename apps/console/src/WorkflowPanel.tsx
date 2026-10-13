@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task } from "./types";
 import type { IntegrationRecord } from "./workflow-types";
-import type { TimelineRow } from "./objective-types";
+import type { TimelineRow } from "./macro-task-types";
 import { useWorkflow } from "./use-workflow";
 import { RoutingPanel } from "./RoutingPanel";
 import { Status } from "./ui";
@@ -15,7 +15,7 @@ import { TaskActivityView } from "./task-activity";
 import { finalArtifact, finalIntegration, recordedIntegrations } from "./integration";
 import { formatDate } from "./ui";
 import { NativeSessionView } from "./native-session";
-import { DelegationDetailRows } from "./ObjectiveOverview";
+import { DelegationDetailRows } from "./MacroTaskOverview";
 import {
   artifactKindLabel, artifactStateView, configurationLockText, cumulativePatchView,
   hostConclusionView, integrationHostPaths, tokenUsageView,
@@ -44,7 +44,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
   /** Section to preselect once when opened from the timeline; later tab use stays the user's. */
   initialSection?: string;
   routingDecisionId?: string | null;
-  /** Objective-level stop status for this detail's overview tab (timeline context). */
+  /** MacroTask-level stop status for this detail's overview tab (timeline context). */
   stopStatusNode?: ReactNode;
   /** The timeline's own row powering the fixed three-row overview block. */
   overviewRow?: TimelineRow | null;

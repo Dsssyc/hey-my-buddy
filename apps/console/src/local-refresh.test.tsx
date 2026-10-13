@@ -24,7 +24,7 @@ function deferred<T>() {
 function fixture() {
   const api = {
     task: vi.fn(async () => task()), command: vi.fn(),
-    snapshot: vi.fn(), tasks: vi.fn(), objectives: vi.fn(), objectiveTimeline: vi.fn(),
+    snapshot: vi.fn(), tasks: vi.fn(), macroTasks: vi.fn(), macroTaskTimeline: vi.fn(),
     readVerifiedAt: vi.fn(() => null as number | null),
   } as unknown as ConsoleApi;
   return { api, refresh: vi.fn(async () => null), select: vi.fn() };
@@ -54,7 +54,7 @@ describe("opened microtask local refresh", () => {
     expect(reader).toHaveBeenLastCalledWith("command-1", expect.any(AbortSignal));
     expect(disclosure.open).toBe(true); expect(body.scrollTop).toBe(73);
     expect(screen.queryByText(readVerificationText(serverAt))).not.toBeNull();
-    for (const name of ["command", "tasks", "snapshot", "objectives", "objectiveTimeline"] as const) expect(f.api[name]).not.toHaveBeenCalled();
+    for (const name of ["command", "tasks", "snapshot", "macroTasks", "macroTaskTimeline"] as const) expect(f.api[name]).not.toHaveBeenCalled();
     expect(f.refresh).not.toHaveBeenCalled();
   });
 
@@ -105,7 +105,7 @@ describe("opened microtask local refresh", () => {
     const f = fixture(); const user = userEvent.setup();
     const reader = f.api.task as ReturnType<typeof vi.fn>;
     reader.mockResolvedValue(task());
-    render(<RunDetailPane objectiveTitle="工作目标" target={{ runId: "command-1" }} snapshot={snapshot} api={f.api}
+    render(<RunDetailPane macroTaskTitle="工作目标" target={{ runId: "command-1" }} snapshot={snapshot} api={f.api}
       refresh={f.refresh} active onBack={vi.fn()} onNavigate={vi.fn()} />);
     await screen.findByRole("button", { name: "刷新微任务详情" });
     await screen.findByText("结果 command-1");
@@ -237,7 +237,7 @@ describe("opened microtask local refresh", () => {
     expect(screen.queryByRole("button", { name: "加载更早记录" }) !== null).toBe(cursor !== null);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(f.api.task).toHaveBeenCalledTimes(detailReads);
-    for (const name of ["command", "snapshot", "objectives", "objectiveTimeline"] as const) expect(f.api[name]).not.toHaveBeenCalled();
+    for (const name of ["command", "snapshot", "macroTasks", "macroTaskTimeline"] as const) expect(f.api[name]).not.toHaveBeenCalled();
     expect(f.refresh).not.toHaveBeenCalled();
   });
 

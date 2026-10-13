@@ -3,12 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { DelegationStrip } from "./ObjectiveOverview";
-import { ObjectiveTimeline, type ObjectiveTimelineProps } from "./ObjectiveTimeline";
-import { objectiveTimelineFixture } from "./objective-fixtures";
+import { DelegationStrip } from "./MacroTaskOverview";
+import { MacroTaskTimeline, type MacroTaskTimelineProps } from "./MacroTaskTimeline";
+import { macroTaskTimelineFixture } from "./macro-task-fixtures";
 
 function manyCards(count = 21) {
-  const timeline = objectiveTimelineFixture();
+  const timeline = macroTaskTimelineFixture();
   const template = timeline.rows.find(row => row.parentRunId === null)!;
   timeline.rows = Array.from({ length: count }, (_, index) => ({ ...template, runId: `card-${index}`, rootRunId: `card-${index}`,
     title: `可辨认微任务 ${index + 1}`, createdAt: `2026-09-26T01:${String(index).padStart(2, "0")}:00Z` }));
@@ -184,14 +184,14 @@ describe("U7 measured card budget and independent scrolling", () => {
       return 0;
     });
     const timeline = manyCards(24);
-    const props: ObjectiveTimelineProps = {
-      summary: timeline.objective, timeline, loading: false, error: "", stale: false,
+    const props: MacroTaskTimelineProps = {
+      summary: timeline.macroTask, timeline, loading: false, error: "", stale: false,
       newRunIds: new Set(), hidden: false, openedKey: null, openedRunId: null, selection: null,
       onSelectItem: vi.fn(), onOpenItem: vi.fn(), onSelectRun: vi.fn(), onOpenRun: vi.fn(),
       onClearSelection: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn(),
     };
     if (singleColumn) style.textContent += "\n.delegation-strip { flex-direction: column; }";
-    const view = render(<ObjectiveTimeline {...props} />);
+    const view = render(<MacroTaskTimeline {...props} />);
     const root = view.container.querySelector<HTMLElement>(".timeline-view")!;
     const band = root.querySelector<HTMLElement>(".delegation-band")!;
     const strip = band.querySelector<HTMLElement>(".delegation-strip")!;
@@ -231,10 +231,10 @@ describe("U7 measured card budget and independent scrolling", () => {
     expect(observed).toContain(control.parentElement);
     // A newly mounted warning must enter the budget and observer target set.
     view.sizes.banner = 20;
-    view.rerender(<ObjectiveTimeline {...view.props} timeline={{ ...view.props.timeline!, filtered: true }} />);
+    view.rerender(<MacroTaskTimeline {...view.props} timeline={{ ...view.props.timeline!, filtered: true }} />);
     expect(view.band.style.maxHeight).toBe("85px"); // 113 − 20px banner − its existing 8px margin
     expect(view.observers.flatMap(observer => observer.targets)).toContain(view.root.querySelector(".trunc-banner"));
-    view.rerender(<ObjectiveTimeline {...view.props} />);
+    view.rerender(<MacroTaskTimeline {...view.props} />);
     expect(view.band.style.maxHeight).toBe("113px");
     view.sizes.column = 700;
     view.sizes.drawer = 168;
@@ -283,7 +283,7 @@ describe("U7 measured card budget and independent scrolling", () => {
     const scrollCard = vi.fn();
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollCard });
     const previousFocus = document.activeElement;
-    view.rerender(<ObjectiveTimeline {...view.props} selection={{ type: "run", runId: "card-23" }} />);
+    view.rerender(<MacroTaskTimeline {...view.props} selection={{ type: "run", runId: "card-23" }} />);
     await waitFor(() => expect(scrollCard.mock.contexts).toContain(cards()[23]));
     expect(document.activeElement).toBe(previousFocus);
     expect(cards()[23]!.getAttribute("aria-pressed")).toBe("true");

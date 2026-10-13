@@ -23,18 +23,18 @@ class HostAdmissionTests(WorkflowTestCase):
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT enabled FROM evaluation_profiles WHERE effort='high'").fetchone()[0], 0)
 
-    def test_objective_of_is_atomic_scoped_and_idempotent(self):
+    def test_macro_task_of_is_atomic_scoped_and_idempotent(self):
         board = self.board()
-        first = self.submit(board, kind="worktree", objective={"title": "Host agenda"})
-        second = self.submit(board, kind="worktree", request_id="second", objectiveOf=first["runId"])
-        self.assertEqual(second["objectiveId"], first["objectiveId"])
-        replay = self.submit(board, kind="worktree", request_id="second", objectiveOf=first["runId"])
+        first = self.submit(board, kind="worktree", macroTask={"title": "Host agenda"})
+        second = self.submit(board, kind="worktree", request_id="second", macroTaskOf=first["runId"])
+        self.assertEqual(second["macroTaskId"], first["macroTaskId"])
+        replay = self.submit(board, kind="worktree", request_id="second", macroTaskOf=first["runId"])
         self.assertTrue(replay["duplicate"])
         with self.assertRaises(BoardError) as caught:
-            self.submit(board, kind="worktree", request_id="foreign", host_id="another-host", objectiveOf=first["runId"])
+            self.submit(board, kind="worktree", request_id="foreign", host_id="another-host", macroTaskOf=first["runId"])
         self.assertEqual(caught.exception.code, "CONFLICT")
         with self.assertRaises(BoardError):
-            self.submit(board, kind="worktree", request_id="ambiguous", objectiveOf=first["runId"], objectiveId=first["objectiveId"])
+            self.submit(board, kind="worktree", request_id="ambiguous", macroTaskOf=first["runId"], macroTaskId=first["macroTaskId"])
         self.assertEqual(board.store.count_tasks(), 2)
 
     def test_failed_explicit_configuration_can_change_with_a_reason(self):

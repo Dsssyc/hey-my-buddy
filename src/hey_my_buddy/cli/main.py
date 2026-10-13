@@ -67,9 +67,9 @@ METHODS = [
     "workspace-resolve",
     "await",
     "suggest",
-    # -- work objectives: read-only browsing of grouped delegations ----------
-    "objective-list",
-    "objective-timeline",
+    # -- work macro tasks: read-only browsing of grouped delegations ----------
+    "macro-task-list",
+    "macro-task-timeline",
     # -- execution records for command/external/decision infrastructure -----
     "execution-submit",
     "execution-cancel",

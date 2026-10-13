@@ -83,7 +83,7 @@ def _optional_identifier(value: object, name: str) -> str | None:
 def _append_event(connection, *, kind: str, task_id: str | None, attempt_id: str | None,
                   payload: dict, now: str) -> int:
     """One event inside the caller's transaction, matching the board's append shape."""
-    from ..tasks.objectives import record_activity
+    from ..tasks.macro_tasks import record_activity
     cursor = connection.execute(
         "INSERT INTO events(task_id, attempt_id, revision, kind, payload_json, created_at) VALUES(?,?,?,?,?,?)",
         (task_id, attempt_id, None, kind, canonical_json(payload), now),

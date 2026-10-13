@@ -1,8 +1,8 @@
 import { useRef } from "react";
-import type { ObjectiveTimeline } from "./objective-types";
-import type { TimelineItem } from "./objective-display";
+import type { MacroTaskTimeline } from "./macro-task-types";
+import type { TimelineItem } from "./macro-task-display";
 import { buildInspectorCard, type CardField, type CardLink, type InspectorCard, type InspectorSelection } from "./inspector-card";
-import type { FriendlyProfile } from "./objective-display";
+import type { FriendlyProfile } from "./macro-task-display";
 
 const MISSING_TITLE = "记录在当前范围外，无法打开";
 
@@ -10,7 +10,7 @@ export type TimelineInspectorProps = {
   selection: InspectorSelection | null;
   /** Last selected facts retained by the parent while this drawer was folded. */
   cachedCard?: InspectorCard | null;
-  timeline: ObjectiveTimeline | null;
+  timeline: MacroTaskTimeline | null;
   itemsByKey: ReadonlyMap<string, TimelineItem>;
   truncatedEvents: boolean;
   /** Snapshot profiles for friendly configuration names (0.16 0.3). */

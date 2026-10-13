@@ -17,9 +17,9 @@ import type { Snapshot } from "./types";
  * refused to load it).
  *
  * This test consumes the synthetic scenario tree emitted by
- * `tests/probes/objective_console_preview.py --emit-fixtures` through the real
- * console parsers — `createApi(...).snapshot()`, `.objectives()`,
- * `.objectiveTimeline()`, the `workflow_get` command path and
+ * `tests/probes/macro_task_console_preview.py --emit-fixtures` through the real
+ * console parsers — `createApi(...).snapshot()`, `.macroTasks()`,
+ * `.macroTaskTimeline()`, the `workflow_get` command path and
  * `parseWorkflowReply`. Only synthetic Router settings and eligibility are
  * re-authored for L4 at the test boundary below. A future
  * snapshot shape the frontend refuses, or preview data that stops matching the
@@ -34,12 +34,12 @@ import type { Snapshot } from "./types";
 type ManifestEntry = {
   scenario: string;
   path: string;
-  kind: "console-snapshot" | "task-page" | "backup-preflight" | "runtime-version" | "objectives-page" | "objective-timeline" | "workflow-get";
+  kind: "console-snapshot" | "task-page" | "backup-preflight" | "runtime-version" | "macro-tasks-page" | "macro-task-timeline" | "workflow-get";
   endpoint: string;
   httpStatus: number;
   expected: "accepted" | "rejected";
   expectedCode?: string;
-  request?: { runId?: string; objectiveId?: string };
+  request?: { runId?: string; macroTaskId?: string };
   mutation?: string;
   note?: string;
 };
@@ -53,7 +53,7 @@ type Manifest = {
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(testDirectory, "..", "..", "..");
-const previewScript = join(repositoryRoot, "tests", "probes", "objective_console_preview.py");
+const previewScript = join(repositoryRoot, "tests", "probes", "macro_task_console_preview.py");
 
 /** The preview script's emitted tree, generated once for this test file. */
 function resolveFixtures(): { directory: string; generated: boolean } {
@@ -146,13 +146,13 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
       const version = await api.runtimeVersion();
       outcome.facts = { mode: version.running.mode, softwareVersion: version.running.softwareVersion,
         installed: version.installed !== null };
-    } else if (entry.kind === "objectives-page") {
-      const page = await api.objectives({});
+    } else if (entry.kind === "macro-tasks-page") {
+      const page = await api.macroTasks({});
       outcome.facts = { total: page.total, cursor: page.cursor, changed: page.changed };
-    } else if (entry.kind === "objective-timeline") {
-      const { timeline } = await api.objectiveTimeline(entry.request?.objectiveId ?? "", {});
+    } else if (entry.kind === "macro-task-timeline") {
+      const { timeline } = await api.macroTaskTimeline(entry.request?.macroTaskId ?? "", {});
       outcome.facts = {
-        objectiveId: timeline.objective.objectiveId,
+        macroTaskId: timeline.macroTask.macroTaskId,
         rows: timeline.rows.length,
         spans: timeline.spans.length,
         events: timeline.events.length,
@@ -197,10 +197,10 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
 describe("synthetic preview fixtures through the real console parsers", () => {
   it("declares the six preview reads and a self-consistent manifest", () => {
     expect(manifest.fixtureVersion).toBe(1);
-    expect(manifest.source).toBe("tests/probes/objective_console_preview.py");
+    expect(manifest.source).toBe("tests/probes/macro_task_console_preview.py");
     expect(manifest.scenarios).toEqual(["normal", "readonly", "truncated", "error"]);
     expect(new Set(manifest.files.map(entry => entry.kind))).toEqual(
-      new Set(["console-snapshot", "task-page", "backup-preflight", "runtime-version", "objectives-page", "objective-timeline", "workflow-get"]));
+      new Set(["console-snapshot", "task-page", "backup-preflight", "runtime-version", "macro-tasks-page", "macro-task-timeline", "workflow-get"]));
     for (const entry of manifest.files) {
       expect(entry.expected === "accepted" ? entry.expectedCode === undefined : typeof entry.expectedCode === "string").toBe(true);
     }
@@ -224,7 +224,7 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     expect([...byScenario.keys()].sort()).toEqual([...manifest.scenarios, "incompatible"].sort());
     expect(byScenario.get("readonly")!.some(outcome => outcome.kind === "console-snapshot" && outcome.code === "INVALID_RESPONSE")).toBe(true);
     expect(byScenario.get("readonly")!.some(outcome => outcome.kind === "workflow-get" && outcome.accepted)).toBe(true);
-    expect(byScenario.get("truncated")!.find(outcome => outcome.kind === "objective-timeline")!.accepted).toBe(true);
+    expect(byScenario.get("truncated")!.find(outcome => outcome.kind === "macro-task-timeline")!.accepted).toBe(true);
     expect(byScenario.get("error")!.filter(outcome => !outcome.accepted).map(outcome => outcome.code))
       .toEqual(["SERVICE_UNAVAILABLE", "SERVICE_UNAVAILABLE"]);
     const incompatible = byScenario.get("incompatible")!;

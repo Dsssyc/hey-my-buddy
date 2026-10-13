@@ -41,7 +41,7 @@ const initial = (): Snapshot => ({
   capabilities: { selection: false },
 });
 
-const emptyObjectives = () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false });
+const emptyMacroTasks = () => ({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false });
 
 afterEach(() => {
   cleanup();
@@ -77,7 +77,7 @@ describe("console interactions", () => {
       task: vi.fn(async () => records[0]),
       tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : records,
         total: rootsOnly ? 0 : records.length, nextCursor: null })),
-      objectives: vi.fn(async () => emptyObjectives()),
+      macroTasks: vi.fn(async () => emptyMacroTasks()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
@@ -132,7 +132,7 @@ describe("console interactions", () => {
       })),
       tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : records,
         total: rootsOnly ? 0 : records.length, nextCursor: null })),
-      objectives: vi.fn(async () => emptyObjectives()),
+      macroTasks: vi.fn(async () => emptyMacroTasks()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
@@ -155,7 +155,7 @@ describe("console interactions", () => {
       command: vi.fn(),
       task: vi.fn(),
       tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-      objectives: vi.fn(async () => emptyObjectives()),
+      macroTasks: vi.fn(async () => emptyMacroTasks()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
@@ -191,7 +191,7 @@ describe("console interactions", () => {
       command: vi.fn(),
       task: vi.fn(),
       tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-      objectives: vi.fn(async () => emptyObjectives()),
+      macroTasks: vi.fn(async () => emptyMacroTasks()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     window.location.hash = "#buddies";
@@ -226,7 +226,7 @@ describe("console interactions", () => {
       command,
       task: vi.fn(),
       tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-      objectives: vi.fn(async () => emptyObjectives()),
+      macroTasks: vi.fn(async () => emptyMacroTasks()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     window.location.hash = "#buddies";
@@ -247,7 +247,7 @@ describe("console interactions", () => {
       snapshot: failure ? vi.fn(async () => { throw new Error("fixture offline"); }) : vi.fn(async () => initial()),
       command: vi.fn(),
       tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-      objectives: vi.fn(async () => emptyObjectives()),
+      macroTasks: vi.fn(async () => emptyMacroTasks()),
     } as unknown as ConsoleApi;
     render(<App suppliedApi={api} />);
     if (failure) {

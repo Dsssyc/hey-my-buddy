@@ -33,19 +33,19 @@ try {
         return route.fulfill({ json: { ok: true, result: access } });
       }
     }
-    if (!['/api/console', '/api/objectives'].includes(url.pathname)) return route.continue();
+    if (!['/api/console', '/api/macro-tasks'].includes(url.pathname)) return route.continue();
     const response = await route.fetch();
     assert.equal(response.headers()['x-buddy-preview'], 'synthetic-fixture-data');
     const data = await response.json();
     if (url.pathname === '/api/console') data.consoleAccess = access;
     else {
-      const original = data.objectives.find(row => row.kind === 'objective');
+      const original = data.macroTasks.find(row => row.kind === 'macro-task');
       rows = Array.from({ length: 24 }, (_, i) => ({ ...original,
-        objectiveId: i === 0 ? original.objectiveId : `obj-90000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        macroTaskId: i === 0 ? original.macroTaskId : `macro-90000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
         title: i === 0 ? original.title : `合成目标 ${i}`,
         lastActivitySeq: i === updated && updated ? 1000 + updated : 100 - i,
       }));
-      data.objectives = [...rows].sort((a, b) => b.lastActivitySeq - a.lastActivitySeq);
+      data.macroTasks = [...rows].sort((a, b) => b.lastActivitySeq - a.lastActivitySeq);
       data.total = rows.length; data.nextCursor = null; data.changed = false;
     }
     return route.fulfill({ response, json: data });
@@ -53,26 +53,26 @@ try {
   const response = await page.goto(new URL('#tasks', base).href);
   assert.equal(response.headers()['x-buddy-preview'], 'synthetic-fixture-data');
   const list = page.getByRole('region', { name: '工作目标列表', exact: true });
-  await list.locator('[data-objective-id]').first().waitFor();
-  const firstId = () => list.locator('[data-objective-id]').first().getAttribute('data-objective-id');
-  const waitFirst = index => page.waitForFunction(id => document.querySelector('.list-panel [data-objective-id]')?.getAttribute('data-objective-id') === id, rows[index].objectiveId);
-  assert.equal(await firstId(), rows[0].objectiveId);
+  await list.locator('[data-macro-task-id]').first().waitFor();
+  const firstId = () => list.locator('[data-macro-task-id]').first().getAttribute('data-macro-task-id');
+  const waitFirst = index => page.waitForFunction(id => document.querySelector('.list-panel [data-macro-task-id]')?.getAttribute('data-macro-task-id') === id, rows[index].macroTaskId);
+  assert.equal(await firstId(), rows[0].macroTaskId);
   updated = 1;
   await page.getByRole('button', { name: '刷新工作台' }).click();
   await waitFirst(1);
   assert.equal(await list.getByRole('button', { name: '有更新' }).count(), 0);
   checks.push('top and pointer outside: silent reorder');
-  await list.locator(`[data-objective-id="${rows[0].objectiveId}"] button`).click();
+  await list.locator(`[data-macro-task-id="${rows[0].macroTaskId}"] button`).click();
   await page.getByRole('complementary', { name: '工作目标详情' }).waitFor();
   await list.hover({ position: { x: 20, y: 20 } });
   updated = 2;
   const marker = list.getByRole('button', { name: '有更新' });
   await marker.waitFor();
-  assert.equal(await firstId(), rows[1].objectiveId);
+  assert.equal(await firstId(), rows[1].macroTaskId);
   assert.equal(await list.locator('.new-records').count(), 0);
   await marker.click();
   await waitFirst(2);
-  assert.equal(await list.locator(`[data-objective-id="${rows[0].objectiveId}"] button`).getAttribute('aria-pressed'), 'true');
+  assert.equal(await list.locator(`[data-macro-task-id="${rows[0].macroTaskId}"] button`).getAttribute('aria-pressed'), 'true');
   checks.push('hover defers; heading marker applies and preserves selection');
   const scroll = list.getByLabel('工作目标条目', { exact: true });
   await scroll.hover(); await page.mouse.wheel(0, 350);
@@ -80,11 +80,11 @@ try {
   updated = 3;
   await page.getByRole('button', { name: '刷新工作台' }).click();
   await marker.waitFor();
-  assert.equal(await firstId(), rows[2].objectiveId);
+  assert.equal(await firstId(), rows[2].macroTaskId);
   await scroll.press('Home');
   await waitFirst(3);
   checks.push('scrolled list defers; returning to top applies');
-  await page.screenshot({ path: `${output}/objective-updates.png` });
+  await page.screenshot({ path: `${output}/macro-task-updates.png` });
   await page.getByRole('link', { name: '设置', exact: true }).click();
   const toggle = page.getByRole('switch', { name: '需要登录' });
   await toggle.click();

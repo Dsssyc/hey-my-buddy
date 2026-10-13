@@ -55,10 +55,10 @@ class TestWorkflowRouting(WorkflowTestCase):
                        "decision": self.valid_decision(owned["decisionInput"], profile_id)},
         })
 
-    def test_objective_description_never_enters_selector_or_worker(self):
+    def test_macro_task_description_never_enters_selector_or_worker(self):
         board = self.board()
         self.seed(board)
-        view = self.routed(board, objective={'title': 'Human-only group', 'description': 'Hidden description sentinel'}, title='Human-only title')
+        view = self.routed(board, macroTask={'title': 'Human-only group', 'description': 'Hidden description sentinel'}, title='Human-only title')
         claim = self.router_claim(board, view)
         serialized = json.dumps(claim)
         for hidden in ('Hidden description sentinel', 'Human-only group', 'Human-only title'):

@@ -19,9 +19,9 @@ follows the turn itself. Every turn of index 2 or later captures the rebuilt
 continuation context and completes through the governed finish. Turn 1 dies the
 offline quota death (real edit, one message chunk, no finish call, ``refusal``
 stop, machine ``QUOTA`` turn end in this run's private session record) exactly
-when the objective is the quota fixture's; any other turn 1 completes.
+when the task is the quota fixture's; any other turn 1 completes.
 ``--workflow-mode`` pins the behavior for a direct launch when needed
-(``auto`` resolves by objective), and ``--native-error-code`` swaps the quota
+(``auto`` resolves by task), and ``--native-error-code`` swaps the quota
 record's machine code (fault injection: a code the quota classification does
 not recognize must surface as no quota failure at all, never as a
 misattributed one).
@@ -43,8 +43,8 @@ _SPEC = importlib.util.spec_from_file_location(
 fake_agent = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(fake_agent)
 
-#: The quota scenario's objective; the quota tests submit exactly this task.
-QUOTA_OBJECTIVE = "Implement the fixture change"
+#: The quota scenario's task; the quota tests submit exactly this task.
+QUOTA_TASK = "Implement the fixture change"
 QUOTA_EDIT = "partial work preserved after quota failure\n"
 QUOTA_MESSAGE = "The first change is saved; verification remains."
 OUTPUT_FILE = "mock-output.txt"
@@ -108,7 +108,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
         index = (turn_input.get("context") or {}).get("turnIndex")
         quota = self.workflow_mode == "quota" or (
             self.workflow_mode == "auto" and index == 1
-            and (turn_input.get("context") or {}).get("objective") == QUOTA_OBJECTIVE)
+            and (turn_input.get("context") or {}).get("task") == QUOTA_TASK)
         if quota and index == 1:
             self.run_quota_turn(message, turn_input)
             return

@@ -323,7 +323,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
                     "turnId": f"turn-{index}",
                     "resumeMode": "initial",
                     "previousSessionId": None,
-                    "context": {"objective": "do work"},
+                    "context": {"task": "do work"},
                     "executionWorkspace": manifest,
                 },
             },

@@ -30,7 +30,7 @@ function api(): ConsoleApi {
     command: vi.fn(),
     task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
 }
 

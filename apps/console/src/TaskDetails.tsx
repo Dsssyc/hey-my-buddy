@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText, readVerificationText } from "./api";
 import type { Snapshot, Task } from "./types";
-import type { TimelineRow } from "./objective-types";
+import type { TimelineRow } from "./macro-task-types";
 import { WorkflowPanel } from "./WorkflowPanel";
 import { taskExecutor, taskHost, taskProject } from "./console-data";
 import { excerpt, resultText, taskStatus, taskTitle, titleTooltip, TASK_TITLE_SOURCE_LABEL } from "./task-state";
@@ -16,7 +16,7 @@ import { tokenUsageView } from "./host-workflow";
  * One delegation's detail (0.15.1 U4): read-only browsing of the recorded
  * facts. The task_cancel/task_retry/task_acknowledge controls and their record
  * drafts are gone — execution history stays inspectable and navigation is
- * never locked; the objective-level 停止目标 lives on the work-objective
+ * never locked; the macro-task-level 停止目标 lives on the work macro task
  * header instead.
  */
 export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, onTaskUpdate, hideBackButton = false, initialSection, routingDecisionId, stopStatusNode, overviewRow }: {
@@ -28,7 +28,7 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   /** Section of the existing detail tabs to preselect once on open. */
   initialSection?: string;
   routingDecisionId?: string | null;
-  /** Objective-level stop status for the overview tab (timeline context only). */
+  /** MacroTask-level stop status for the overview tab (timeline context only). */
   stopStatusNode?: ReactNode;
   /** The timeline's own row for the fixed three-row overview block. */
   overviewRow?: TimelineRow | null;

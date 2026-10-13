@@ -601,7 +601,7 @@ class RestartPreparationTests(WorkflowTestCase):
         self.register(board)
         run = self.submit(board, request_id="initial-project", cwd=str(self.repo),
                           executionWorkspace={"kind": "worktree", "access": "write"},
-                          objective={"title": "initial project"})
+                          macroTask={"title": "initial project"})
         original = self.manifest(board, run["runId"])
         project = workspace.inspect(str(self.repo))["repositoryId"]
         other = self.repository("other-project")
@@ -623,8 +623,8 @@ class RestartPreparationTests(WorkflowTestCase):
         self.assertIn(run["runId"], {row["runId"] for row in listed["runs"]})
         foreign_list = board.call("task_list", {"projectId": foreign_manifest["repositoryId"]})
         self.assertNotIn(run["runId"], {row["runId"] for row in foreign_list["runs"]})
-        timeline = board.call("objective_timeline", {"objectiveId": run["objectiveId"]})
-        self.assertEqual(timeline["objective"]["project"]["id"], project)
+        timeline = board.call("macro_task_timeline", {"macroTaskId": run["macroTaskId"]})
+        self.assertEqual(timeline["macroTask"]["project"]["id"], project)
         with board.store.db.read() as connection:
             retained = json.loads(connection.execute(
                 "SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1",

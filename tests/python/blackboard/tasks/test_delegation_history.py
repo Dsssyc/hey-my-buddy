@@ -512,7 +512,7 @@ class HistoryPagingTests(DelegationTestCase):
         self.assertEqual(self.history(board, rootsOnly=True)["total"], 5)
         self.assertEqual(self.history(board, projectId="repo:/no/such/project")["total"], 0)
 
-    def test_query_matches_objective_project_hosts_and_configuration(self):
+    def test_query_matches_task_project_hosts_and_configuration(self):
         board = self.board()
         work = self.workdir("searchable-project")
         submitted = self.submit(

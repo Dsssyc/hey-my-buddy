@@ -17,7 +17,7 @@ import type { Editor } from "./use-editor";
 import { useTheme } from "./theme";
 import { createAuthorityLatch } from "./console-session";
 import { formatClock, formatDateTime } from "./i18n/format";
-import { Objectives } from "./Objectives";
+import { MacroTasks } from "./MacroTasks";
 import { BuddyConfig } from "./BuddyConfig";
 import { Settings } from "./Settings";
 import buddyIcon from "../../../docs/assets/icon.svg?no-inline";
@@ -192,7 +192,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
           https://react.dev/learn/preserving-and-resetting-state */}
       {tabs.map(key => visited.has(key) && <section key={key} hidden={tab !== key}
         className={"min-h-0 min-w-0 flex-1 overflow-hidden" + (key === "buddies" ? "" : " p-2 sm:p-4")} aria-label={t(`nav.${key}`)}>
-        {key === "tasks" ? <Objectives snapshot={snapshot} api={api} refresh={refresh} active={tab === key}
+        {key === "tasks" ? <MacroTasks snapshot={snapshot} api={api} refresh={refresh} active={tab === key}
           authority={authority} writesAvailable={writesAvailable} /> :
           key === "buddies" ? <BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
             <Settings api={api} csrfToken={snapshot.csrfToken} connectionError={connectionError}

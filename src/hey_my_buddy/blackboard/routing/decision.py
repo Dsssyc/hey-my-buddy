@@ -656,13 +656,13 @@ class DecisionCoordinator:
         needs_host_reason = None
         if task_bytes > MAX_DECISION_TASK_BYTES:
             # The immutable Goal owns the full text. A selector cannot choose from
-            # an incomplete objective, and its bounded audit stores only a reference.
+            # an incomplete task, and its bounded audit stores only a reference.
             request["task"] = f"Goal {run_id} (full task retained in workflow)"
             request["taskReference"] = {"runId": run_id, "bytes": task_bytes, "sha256": sha256_text(task_text)}
             needs_host_reason = (
                 f"The complete Goal contains {task_bytes} UTF-8 bytes, above the selector's "
                 f"{MAX_DECISION_TASK_BYTES}-byte task limit. No model call was made. "
-                "Continue the same Goal with a complete configuration; its full objective remains unchanged."
+                "Continue the same Goal with a complete configuration; its full task remains unchanged."
             )
         return self._create(f"workflow:{run_id}:{sequence}", request, connection=connection,
                             needs_host_reason=needs_host_reason)

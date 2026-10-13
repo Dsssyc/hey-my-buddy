@@ -2,10 +2,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ObjectiveTimeline } from "./ObjectiveTimeline";
-import type { ObjectiveTimelineProps } from "./ObjectiveTimeline";
-import { objectiveSummary, objectiveTimelineFixture } from "./objective-fixtures";
-import type { ObjectiveTimeline as ObjectiveTimelineData, TimelineRow, TimelineSpan } from "./objective-types";
+import { MacroTaskTimeline } from "./MacroTaskTimeline";
+import type { MacroTaskTimelineProps } from "./MacroTaskTimeline";
+import { macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
+import type { MacroTaskTimeline as MacroTaskTimelineData, TimelineRow, TimelineSpan } from "./macro-task-types";
 
 // These are DOM/cascade regressions, not pixel or hit-testing evidence. In
 // particular, child z-index cannot escape a transformed/filtered span parent.
@@ -75,7 +75,7 @@ function span(overrides: Partial<TimelineSpan>): TimelineSpan {
   };
 }
 
-function timeline(): ObjectiveTimelineData {
+function timeline(): MacroTaskTimelineData {
   const spans: TimelineSpan[] = [
     span({ spanId: "s-exec", runId: "r1", kind: "execution", state: "finished", startAt: "2026-09-26T01:14:00Z",
       endAt: "2026-09-26T01:15:00Z", attemptId: "att-1", turnIndex: 1, resultStatus: "failed", error: "测试命令超时",
@@ -84,25 +84,25 @@ function timeline(): ObjectiveTimelineData {
       endAt: null, requestId: "req-wait", summary: "等待 Host 决定" }),
   ];
   return {
-    objective: objectiveSummary(), observedAt: FIXTURE_OBSERVED_AT, cursor: 1, rows: [row({})], spans, events: [],
+    macroTask: macroTaskSummary(), observedAt: FIXTURE_OBSERVED_AT, cursor: 1, rows: [row({})], spans, events: [],
     totals: { rows: 1, spans: 2, events: 0, allRows: 1 },
     truncated: { rows: false, spans: false, events: false }, scopeComplete: true, filtered: false,
   };
 }
 
-function props(data: ObjectiveTimelineData, overrides: Record<string, unknown> = {}): ObjectiveTimelineProps {
+function props(data: MacroTaskTimelineData, overrides: Record<string, unknown> = {}): MacroTaskTimelineProps {
   return {
-    summary: data.objective, timeline: data, loading: false, error: "", stale: false,
+    summary: data.macroTask, timeline: data, loading: false, error: "", stale: false,
     newRunIds: new Set<string>(), hidden: false, openedKey: null, openedRunId: null, selection: null,
     onSelectItem: vi.fn(), onOpenItem: vi.fn(), onSelectRun: vi.fn(), onOpenRun: vi.fn(),
     onClearSelection: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn(),
     ...overrides,
-  } as ObjectiveTimelineProps;
+  } as MacroTaskTimelineProps;
 }
 
 const bar = (key: string) => document.querySelector<HTMLElement>(`.tl-scroll [data-key="${key}"]`);
 
-function unknownTailTimeline(): ObjectiveTimelineData {
+function unknownTailTimeline(): MacroTaskTimelineData {
   const data = timeline();
   return {
     ...data, observedAt: "2026-09-26T01:30:00Z",
@@ -119,7 +119,7 @@ describe("U2: span descendants share the track stacking context", () => {
       : state === "run-member" ? { selection: { type: "run", runId: "r1" } } : {};
     const onSelectItem = vi.fn();
     const onOpenItem = vi.fn();
-    render(<ObjectiveTimeline {...props(data, { ...overrides, onSelectItem, onOpenItem })} />);
+    render(<MacroTaskTimeline {...props(data, { ...overrides, onSelectItem, onOpenItem })} />);
     const failed = bar("span:s-exec")!;
     const wait = bar("span:s-wait")!;
     expect(wait.previousElementSibling).toBe(failed);
@@ -150,10 +150,10 @@ describe("U2: span descendants share the track stacking context", () => {
   });
 
   it("keeps queue, routing failure, running pulse and unknown-tail parents out of stacking contexts", () => {
-    const data = objectiveTimelineFixture();
+    const data = macroTaskTimelineFixture();
     const route = data.spans.find(s => s.spanId === "s-r2-r")!;
     route.resultStatus = "failed";
-    render(<ObjectiveTimeline {...props(data)} />);
+    render(<MacroTaskTimeline {...props(data)} />);
     fireEvent.click(document.querySelector<HTMLButtonElement>(".markers-toggle")!);
     zoomGeometry("max"); // A wide route retains its cross.
     const spans = [...document.querySelectorAll<HTMLElement>(".tl-scroll .sp, .tl-scroll .mk, .tl-scroll .flag")];
@@ -177,7 +177,7 @@ describe("U2: span descendants share the track stacking context", () => {
   });
 
   it("draws interaction decoration below glyphs and text without raising a span background or intercepting clicks", () => {
-    render(<ObjectiveTimeline {...props(timeline())} />);
+    render(<MacroTaskTimeline {...props(timeline())} />);
     const decorations = rules(".sp::after");
     expect(decorations).toHaveLength(1);
     const css = decorations[0]!.style;
@@ -223,7 +223,7 @@ describe("U2: unknown-tail text yields to overlapping spans on the same row", ()
     { name: "open execution with an observed end", next: { kind: "execution", state: "running" }, overlaps: true },
   ])("handles $name while preserving the unknown evidence", ({ next, overlaps }) => {
     const data = unknownTailTimeline();
-    const view = render(<ObjectiveTimeline {...props(data)} />);
+    const view = render(<MacroTaskTimeline {...props(data)} />);
     const unknown = bar("span:s-unknown")!;
     expect(unknown.querySelector(".sp-tail")!.textContent).toBe("结束未确认");
     const title = unknown.title;
@@ -234,7 +234,7 @@ describe("U2: unknown-tail text yields to overlapping spans on the same row", ()
     const other = span({ ...following, ...next });
     // Source order is deliberately not chronology: use the row's facts,
     // rather than treating only later DOM siblings as possible overlaps.
-    view.rerender(<ObjectiveTimeline {...props({ ...data,
+    view.rerender(<MacroTaskTimeline {...props({ ...data,
       rows: other.runId === "r1" ? data.rows : [...data.rows, row({ runId: "r2", rootRunId: "r2" })],
       spans: [other, ...data.spans],
       totals: { ...data.totals, rows: other.runId === "r1" ? 1 : 2, spans: 2 },
@@ -266,7 +266,7 @@ describe("U2: unknown-tail text yields to overlapping spans on the same row", ()
     data.observedAt = at("02:40:00");
     data.spans[0]!.startAt = at("01:00:00");
     data.spans[0]!.endAt = new Date(Date.parse(data.observedAt) - tailMs).toISOString();
-    render(<ObjectiveTimeline {...props(data)} />);
+    render(<MacroTaskTimeline {...props(data)} />);
     expect(bar("span:s-unknown")!.querySelector(".sp-tail")!.textContent).toBe(text);
   });
 
@@ -279,7 +279,7 @@ describe("U2: unknown-tail text yields to overlapping spans on the same row", ()
   ])("fits the Host short-bar label after both reading insets through $end", ({ end, text }) => {
     const data = unknownTailTimeline();
     data.spans.push(span({ ...following, startAt: at("01:18:00"), endAt: at(end), state: "finished" }));
-    render(<ObjectiveTimeline {...props(data)} />);
+    render(<MacroTaskTimeline {...props(data)} />);
     expect(bar("span:s-next")!.querySelector(".sp-text")!.textContent).toBe(text);
     expect(bar("span:s-unknown")!.querySelector(".sp-tail")!.textContent).toBe(end === "01:18:00" ? "结束未确认" : "");
   });
@@ -288,7 +288,7 @@ describe("U2: unknown-tail text yields to overlapping spans on the same row", ()
     const data = unknownTailTimeline();
     data.spans[0]!.endAt = at("01:15:00");
     data.spans.push(span(following));
-    render(<ObjectiveTimeline {...props(data)} />);
+    render(<MacroTaskTimeline {...props(data)} />);
     const unknown = bar("span:s-unknown")!;
     expect(unknown.querySelector(".sp-solid-text")!.textContent).toBe("");
     expect(unknown.querySelector(".sp-tail")!.textContent).toBe("");
@@ -302,7 +302,7 @@ describe("U2: unknown-tail text yields to overlapping spans on the same row", ()
     const data = unknownTailTimeline();
     data.spans.push(span({ ...following, kind: "execution", state: "finished", endAt: at(end),
       turnIndex: 2, shutdownConfirmed: true }));
-    render(<ObjectiveTimeline {...props(data)} />);
+    render(<MacroTaskTimeline {...props(data)} />);
     expect(bar("span:s-next")!.querySelector(".sp-text")!.textContent).toBe(text);
     expect(bar("span:s-unknown")!.querySelector(".sp-tail")!.textContent).toBe("");
   });
@@ -312,7 +312,7 @@ describe("U2: unknown-tail text yields to overlapping spans on the same row", ()
     if (missing === "start") data.spans[0]!.startAt = null;
     else data.spans[0]!.endAt = null;
     data.spans.push(span(following));
-    render(<ObjectiveTimeline {...props(data)} />);
+    render(<MacroTaskTimeline {...props(data)} />);
     if (missing === "start") {
       expect(bar("span:s-unknown")).toBeNull();
       expect(document.querySelector(".tl-row .trunc-chip")!.textContent).toContain("1 段时间缺失");
@@ -328,7 +328,7 @@ describe("U2: unknown-tail text yields to overlapping spans on the same row", ()
     const data = unknownTailTimeline();
     data.observedAt = reason === "missing" ? "" : reason === "invalid" ? "invalid" : at("01:17:00");
     data.spans.push(span(following));
-    render(<ObjectiveTimeline {...props(data)} />);
+    render(<MacroTaskTimeline {...props(data)} />);
     const unknown = bar("span:s-unknown")!;
     expect(unknown.querySelector(".sp-tail")!.textContent).toBe("");
     expect(unknown.querySelector(".end-mark.warn")!.textContent).toBe("?");
@@ -340,7 +340,7 @@ describe("U2: unknown-tail text yields to overlapping spans on the same row", ()
 // folding or mocked DOM measurements. At max, one second is exactly one px.
 const GEOMETRY_START = Date.parse("2026-09-26T01:12:00Z");
 const geometryAt = (ms: number) => new Date(GEOMETRY_START + ms).toISOString();
-function geometryTimeline(subject: Partial<TimelineSpan>, observedMs = 240 * 60000): ObjectiveTimelineData {
+function geometryTimeline(subject: Partial<TimelineSpan>, observedMs = 240 * 60000): MacroTaskTimelineData {
   const data = timeline();
   const spans = [
     span({ spanId: "geometry", startAt: geometryAt(0), endAt: geometryAt(3000), turnIndex: 1,
@@ -385,7 +385,7 @@ describe("U6.1: real duration geometry on a long canvas", () => {
       span({ spanId: `${kind}-${ms}`, kind, startAt: geometryAt(120000), endAt: geometryAt(120000 + ms),
         shutdownConfirmed: true, resultStatus: kind === "routing" ? "failed" : undefined })))];
     data.totals.spans = data.spans.length;
-    render(<ObjectiveTimeline {...props(data)} />);
+    render(<MacroTaskTimeline {...props(data)} />);
     zoomGeometry(level);
     const expectedTrack = level === "max" ? 14416 : level === "+2" ? 1753 : 788;
     expect(geometryTrackPx()).toBeCloseTo(expectedTrack, 10);
@@ -412,7 +412,7 @@ describe("U6.2: end instants are independent of minimum shapes", () => {
       const data = geometryTimeline({ startAt: geometryAt(120000), endAt: geometryAt(120000 + ms),
         resultStatus: unknown ? undefined : outcome, uncertain: unknown, shutdownConfirmed: !unknown },
         unknown ? 120000 + ms + 2000 : undefined);
-      const view = render(<ObjectiveTimeline {...props(data)} />);
+      const view = render(<MacroTaskTimeline {...props(data)} />);
       zoomGeometry(level);
       const pxPerMs = (geometryTrackPx() - 16) / (240 * 60000);
       const element = bar("span:geometry")!;
@@ -441,7 +441,7 @@ describe("U6.2: end instants are independent of minimum shapes", () => {
   });
 
   it("keeps a wholly zero-duration unknown record at one instant", () => {
-    render(<ObjectiveTimeline {...props(geometryTimeline({ endAt: geometryAt(0), uncertain: true, shutdownConfirmed: false }, 0))} />);
+    render(<MacroTaskTimeline {...props(geometryTimeline({ endAt: geometryAt(0), uncertain: true, shutdownConfirmed: false }, 0))} />);
     zoomGeometry("max");
     const element = bar("span:geometry")!;
     expect(spanPx(element).width).toBe(0);
@@ -454,7 +454,7 @@ describe("U6.2: end instants are independent of minimum shapes", () => {
 
   it.each([0, 1, 3000])("keeps a %i ms unknown tail and its observation endpoint without a percentage floor", ms => {
     const data = geometryTimeline({ endAt: geometryAt(2000), uncertain: true, shutdownConfirmed: false }, 2000 + ms);
-    render(<ObjectiveTimeline {...props(data)} />);
+    render(<MacroTaskTimeline {...props(data)} />);
     zoomGeometry("max");
     const element = bar("span:geometry")!;
     const geometry = spanPx(element);
@@ -478,7 +478,7 @@ describe("U6.3: label thresholds use the width remaining after insets", () => {
   ])("fits $kind text below, at and above $threshold px", ({ kind, threshold, before, at }) => {
     for (const delta of [-0.001, 0, 0.001]) {
       const data = geometryTimeline({ kind, endAt: geometryAt(Math.round((threshold + delta) * 1000)) });
-      const view = render(<ObjectiveTimeline {...props(data)} />);
+      const view = render(<MacroTaskTimeline {...props(data)} />);
       zoomGeometry("max");
       const element = bar("span:geometry")!;
       const text = element.querySelector<HTMLElement>(".sp-text")!;
@@ -494,7 +494,7 @@ describe("U6.3: label thresholds use the width remaining after insets", () => {
       const solidMs = part === "solid" ? Math.round((104 + delta) * 1000) : 120000;
       const tailMs = part === "tail" ? Math.round((84 + delta) * 1000) : 120000;
       const data = geometryTimeline({ endAt: geometryAt(solidMs), uncertain: true, shutdownConfirmed: false }, solidMs + tailMs);
-      const view = render(<ObjectiveTimeline {...props(data)} />);
+      const view = render(<MacroTaskTimeline {...props(data)} />);
       zoomGeometry("max");
       const element = bar("span:geometry")!;
       const text = element.querySelector(part === "solid" ? ".sp-solid-text" : ".sp-tail")!;
@@ -510,7 +510,7 @@ describe("U6.3: label thresholds use the width remaining after insets", () => {
       [182, "第1轮", `第1轮 · 配置未记录 · ${outcome === "failed" ? "执行失败" : "已取消"}`]] as const) {
       for (const delta of [-0.001, 0, 0.001]) {
         const data = geometryTimeline({ resultStatus: outcome, endAt: geometryAt(Math.round((threshold + delta) * 1000)) });
-        const view = render(<ObjectiveTimeline {...props(data)} />);
+        const view = render(<MacroTaskTimeline {...props(data)} />);
         zoomGeometry("max");
         const element = bar("span:geometry")!;
         const text = element.querySelector<HTMLElement>(".sp-text")!;
@@ -536,7 +536,7 @@ describe("U6.6: routing decoration preserves adjacent circle pointer targets", (
     data.totals.spans = data.spans.length;
     const callbacks = props(data, state === "selected" ? { selection: { type: "item", key: "span:route-pointer" } }
       : state === "run-member" ? { selection: { type: "run", runId: "r1" } } : {});
-    render(<ObjectiveTimeline {...callbacks} />);
+    render(<MacroTaskTimeline {...callbacks} />);
     zoomGeometry("max");
     const execution = bar("span:geometry")!;
     const route = bar("span:route-pointer")!;
@@ -590,9 +590,9 @@ describe("U6.5: opening glyphs retain room beside sticky labels", () => {
         shutdownConfirmed: outcome !== "unknown", turnIndex: 1 })))];
     data.rows = [row({ acceptedAt: geometryAt(0), acceptanceVerdict: "accepted" }),
       row({ runId: "r2", rootRunId: "r2", acceptedAt: geometryAt(0), acceptanceVerdict: "rejected" })];
-    const event = objectiveTimelineFixture().events[0]!;
+    const event = macroTaskTimelineFixture().events[0]!;
     data.events = [{ ...event, seq: 1, at: geometryAt(0) }, { ...event, seq: 2, at: geometryAt(1) }];
-    render(<ObjectiveTimeline {...props(data, { selection: { type: "run", runId: "r1" } })} />);
+    render(<MacroTaskTimeline {...props(data, { selection: { type: "run", runId: "r1" } })} />);
     fireEvent.click(document.querySelector<HTMLButtonElement>(".markers-toggle")!);
     zoomGeometry(level);
     const ppm = (geometryTrackPx() - 16) / 240;
@@ -630,7 +630,7 @@ describe("U6.5: opening glyphs retain room beside sticky labels", () => {
     const data = geometryTimeline({ resultStatus: "failed" });
     data.spans.push(span({ spanId: "route-edge", kind: "routing", startAt: geometryAt(0), endAt: geometryAt(1), resultStatus: "failed" }),
       span({ spanId: "wait-edge", kind: "host", startAt: geometryAt(3000), endAt: geometryAt(59000) }));
-    render(<ObjectiveTimeline {...props(data, { selection: { type: "item", key: "span:geometry" } })} />);
+    render(<MacroTaskTimeline {...props(data, { selection: { type: "item", key: "span:geometry" } })} />);
     zoomGeometry(level);
     const failed = bar("span:geometry")!;
     const route = bar("span:route-edge")!;
@@ -651,7 +651,7 @@ describe("U6.5: opening glyphs retain room beside sticky labels", () => {
 
   it.each([17.999, 18, 18.001, 60])("uses %s real routing pixels for the central-cross boundary", width => {
     const data = geometryTimeline({ kind: "routing", resultStatus: "failed", endAt: geometryAt(Math.round(width * 1000)) });
-    render(<ObjectiveTimeline {...props(data)} />);
+    render(<MacroTaskTimeline {...props(data)} />);
     zoomGeometry("max");
     const route = bar("span:geometry")!;
     expect(spanPx(route).width).toBeCloseTo(width, 8);
@@ -664,9 +664,9 @@ describe("U6.5: opening glyphs retain room beside sticky labels", () => {
   });
 
   it.each(["selected", "run-member", "probe-hover", "probe-focus"])("keeps %s decorations below every glyph and text in the shared context", state => {
-    const data = objectiveTimelineFixture();
+    const data = macroTaskTimelineFixture();
     data.spans.find(span => span.spanId === "s-r2-r")!.resultStatus = "failed";
-    render(<ObjectiveTimeline {...props(data)} />);
+    render(<MacroTaskTimeline {...props(data)} />);
     fireEvent.click(document.querySelector<HTMLButtonElement>(".markers-toggle")!);
     zoomGeometry("max");
     // Include a wide failed route in the same rendered/cascaded context.

@@ -3,10 +3,10 @@ import type { ReactNode } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import type { Snapshot, Task } from "./types";
-import type { TimelineRow } from "./objective-types";
+import type { TimelineRow } from "./macro-task-types";
 import { TaskDetails } from "./TaskDetails";
 import { taskTitle, titleTooltip } from "./task-state";
-import type { SectionId } from "./objective-display";
+import type { SectionId } from "./macro-task-display";
 
 export type DetailTarget = {
   runId: string;
@@ -25,14 +25,14 @@ export type DetailTarget = {
  * Right pane, layer two: the locator bar plus the existing read-only
  * TaskDetails for the delegation opened from the timeline. No control set is
  * duplicated here, and nothing locks navigation: record browsing is free even
- * while an objective-level stop has an unconfirmed reply. In dock mode the
+ * while an macro-task-level stop has an unconfirmed reply. In dock mode the
  * timeline stays visible beside or above this pane, so the return control
  * reads as closing the detail instead of going back.
  */
-export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot, api, refresh, active, onBack, onNavigate, stopStatusNode, overviewRow, rowTitleFor }: {
+export function RunDetailPane({ mode = "layer", macroTaskTitle, target, snapshot, api, refresh, active, onBack, onNavigate, stopStatusNode, overviewRow, rowTitleFor }: {
   /** "layer" replaces the timeline; "dock" keeps it visible beside/above. */
   mode?: "layer" | "dock";
-  objectiveTitle: string;
+  macroTaskTitle: string;
   target: DetailTarget;
   snapshot: Snapshot;
   api: ConsoleApi;
@@ -40,7 +40,7 @@ export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot
   active: boolean;
   onBack: () => void;
   onNavigate: (runId: string) => void;
-  /** The objective-level stop status line shown in the overview tab (§4/§7). */
+  /** The macro-task-level stop status line shown in the overview tab (§4/§7). */
   stopStatusNode?: ReactNode;
   /** The timeline's own row for the fixed three-row overview block. */
   overviewRow?: TimelineRow | null;
@@ -66,14 +66,14 @@ export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot
   const delegationTitle = remote
     ? { text: rowTitleFor?.(remote.runId) ?? taskTitle(remote).text, full: rowTitleFor?.(remote.runId) ?? titleTooltip(taskTitle(remote)) }
     : { text: target.runId, full: target.runId };
-  const crumbs = { objective: objectiveTitle, delegation: delegationTitle.text };
-  const crumbsTitle = `${crumbs.objective} › ${delegationTitle.full}`;
+  const crumbs = { macroTask: macroTaskTitle, delegation: delegationTitle.text };
+  const crumbsTitle = `${crumbs.macroTask} › ${delegationTitle.full}`;
   return <div className="run-view">
     <div className="locator">
       <button type="button" className="button small-button" aria-label={mode === "dock" ? "关闭详情" : "返回时间轴"}
         title={mode === "dock" ? "关闭详情" : "返回时间轴"} onClick={onBack}>{mode === "dock" ? "×" : "‹"}</button>
       <span className="crumbs" title={crumbsTitle}>
-        <span className="crumb">{crumbs.objective}</span>
+        <span className="crumb">{crumbs.macroTask}</span>
         <span className="crumb-sep" aria-hidden="true">›</span>
         <span className="crumb">{crumbs.delegation}</span>
       </span>

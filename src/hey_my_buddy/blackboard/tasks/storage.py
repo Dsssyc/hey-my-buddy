@@ -231,7 +231,7 @@ def _workspace_reference_rows(connection):
     locations.
     """
     for table in (
-        'tasks', 'attempts', 'artifacts', 'objectives', 'resource_claims', 'messages',
+        'tasks', 'attempts', 'artifacts', 'macro_tasks', 'resource_claims', 'messages',
         'events', 'commands', 'decision_requests', 'harness_health',
         'workflow_runs', 'workflow_children', 'workspace_reservations',
         'workflow_continuations', 'workflow_turns', 'workflow_artifacts',

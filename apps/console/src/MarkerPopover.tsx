@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import type { TimelineEvent, TimelineRow } from "./objective-types";
-import type { TimelineItem } from "./objective-display";
-import { clockTime, eventSentence, eventVocab } from "./objective-display";
+import type { TimelineEvent, TimelineRow } from "./macro-task-types";
+import type { TimelineItem } from "./macro-task-display";
+import { clockTime, eventSentence, eventVocab } from "./macro-task-display";
 import { Popover } from "./Popover";
 
 export type MarkerClusterView = {

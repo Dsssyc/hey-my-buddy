@@ -2,16 +2,16 @@ import { useRef, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ObjectiveOverview } from "./ObjectiveOverview";
+import { MacroTaskOverview } from "./MacroTaskOverview";
 import { Popover } from "./Popover";
-import { objectiveTimelineFixture } from "./objective-fixtures";
+import { macroTaskTimelineFixture } from "./macro-task-fixtures";
 
-const timeline = objectiveTimelineFixture();
+const timeline = macroTaskTimelineFixture();
 function Page({ hidden = false, second = false }: { hidden?: boolean; second?: boolean }) {
   const next = useRef<HTMLButtonElement>(null);
   return <>
     <section className="timeline-view" hidden={hidden}>
-      <ObjectiveOverview timeline={timeline} summary={timeline.objective} loading={false} stale={false} onBackToList={() => {}} />
+      <MacroTaskOverview timeline={timeline} summary={timeline.macroTask} loading={false} stale={false} onBackToList={() => {}} />
     </section>
     <button ref={next}>另一个入口</button>
     {second && <Popover anchor={next.current} label="后打开的浮层" onClose={() => {}}>后续内容</Popover>}
@@ -150,9 +150,9 @@ describe("U3 time statistics portal and dismissal", () => {
     expect(focus).not.toHaveBeenCalled();
   });
 
-  it("does not return an old pending dismissal to the statistics trigger of a changed objective", async () => {
-    const overview = (objectiveId: string) => <section className="timeline-view">
-      <ObjectiveOverview timeline={{ ...timeline, objective: { ...timeline.objective, objectiveId } }}
+  it("does not return an old pending dismissal to the statistics trigger of a changed macroTask", async () => {
+    const overview = (macroTaskId: string) => <section className="timeline-view">
+      <MacroTaskOverview timeline={{ ...timeline, macroTask: { ...timeline.macroTask, macroTaskId } }}
         summary={null} loading={false} stale={false} onBackToList={() => {}} />
     </section>;
     const view = render(overview("first"));

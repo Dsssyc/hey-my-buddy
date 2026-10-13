@@ -1,7 +1,7 @@
 """ADR-018 item 11: the shared skill keeps only the long-lived Host workflow.
 
 SKILL.md must stay near 4 KB, carry no version or installation status, keep the
-core delegation workflow (routing health, one work objective per agenda, waiting
+core delegation workflow (routing health, one work macro task per agenda, waiting
 pointers, Host acceptance) and route every detail into the shipped references. The
 tests read the source and the packaging rewrite only; they install nothing and
 change no user setting.
@@ -52,7 +52,7 @@ class SkillWorkflowTests(unittest.TestCase):
             "health",  # routing state is read before routing is trusted
             "routingMode",  # the recorded mode is reported honestly
             "objectiveId",
-            'objectiveOf: "<runId>"',  # joining an existing run's objective
+            'objectiveOf: "<runId>"',  # joining an existing run's macro task
             "controlFile",
             "`accept`",
             "`conclude`",

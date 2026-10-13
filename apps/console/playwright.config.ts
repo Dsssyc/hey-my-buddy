@@ -17,7 +17,7 @@ export default defineConfig({
   use: { baseURL: `http://127.0.0.1:${port}/`, browserName: "chromium" },
   // https://playwright.dev/docs/test-webserver
   webServer: {
-    command: `uv run --no-project python tests/probes/objective_console_preview.py --assets "${assets}" --port ${port}`,
+    command: `uv run --no-project python tests/probes/macro_task_console_preview.py --assets "${assets}" --port ${port}`,
     cwd: repository,
     url: `http://127.0.0.1:${port}/`,
     reuseExistingServer: false,

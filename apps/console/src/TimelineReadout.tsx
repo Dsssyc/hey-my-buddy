@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { Popover } from "./Popover";
-import type { TimelineGap, TimelineLayout } from "./objective-timeline-layout";
-import { clockTime, durationShort } from "./objective-display";
+import type { TimelineGap, TimelineLayout } from "./macro-task-timeline-layout";
+import { clockTime, durationShort } from "./macro-task-display";
 
 /** Idle intervals show both complete local instants, including the date across long breaks. */
 export function idleReadout(gap: TimelineGap): string {

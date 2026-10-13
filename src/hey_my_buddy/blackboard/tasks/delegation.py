@@ -62,7 +62,7 @@ _TIMESTAMP_PATTERN = re.compile(r"^[0-9A-Za-z:.+-]{1,64}$")
 #: resolved execution configuration with the task's effective adapter as fallback.
 QUERY_COLUMNS = (
     "task_id",
-    "objective",
+    "task",
     "project_path",
     "source_host_id",
     "current_host_id",
@@ -205,7 +205,7 @@ SELECT
           ORDER BY artifact.rowid LIMIT 1),
         json_extract(root_run.workspace_manifest_json, '$.snapshot.repositoryPath')
     ) AS project_repository_path,
-    COALESCE(json_extract(r.goal_json, '$.task'), json_extract(t.spec_json, '$.task')) AS objective,
+    COALESCE(json_extract(r.goal_json, '$.task'), json_extract(t.spec_json, '$.task')) AS task,
     COALESCE(json_extract(r.execution_configuration_json, '$.adapter'), t.adapter) AS effective_adapter,
     COALESCE(json_extract(r.execution_configuration_json, '$.model'), json_extract(t.spec_json, '$.model'))
         AS effective_model,

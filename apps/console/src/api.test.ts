@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApi, parseRoutingHealth, readVerificationText, validRoutingConfiguration } from "./api";
-import { objectiveTimelineFixture, OBSERVED_AT } from "./objective-fixtures";
+import { macroTaskTimelineFixture, OBSERVED_AT } from "./macro-task-fixtures";
 
 describe("L4 ordered Router list configuration", () => {
   const current = { routerProfileIds: [], routerRetryIntervalSeconds: 600,
@@ -546,7 +546,7 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
   });
 
   it("names each response's own HTTP Date as the verification time, fresh on 304 even for a cached body", async () => {
-    const warm = objectiveTimelineFixture();                            // body observedAt 08:12 — may predate the read
+    const warm = macroTaskTimelineFixture();                            // body observedAt 08:12 — may predate the read
     const warmDate = new Date("2026-09-24T12:00:00Z").toUTCString();    // served earlier
     const fresh304 = new Date("2026-09-24T12:05:00Z").toUTCString();    // revalidated later
     const fetcher = vi.fn<typeof fetch>()
@@ -555,12 +555,12 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     const api = createApi("/private", fetcher);
     // Warm 200: the verification time is the response's own Date — the body's
     // observedAt may be older, and that fact stays in the body untouched.
-    const { timeline, verifiedAtMs } = await api.objectiveTimeline("obj-1", {});
+    const { timeline, verifiedAtMs } = await api.macroTaskTimeline("macro-1", {});
     expect(timeline.observedAt).toBe(OBSERVED_AT);
     expect(verifiedAtMs).toBe(Date.parse(warmDate));
     // Same-body 304: the Date is the revalidation instant — fresh, not the
     // cached body's date.
-    const second = await api.objectiveTimeline("obj-1", {});
+    const second = await api.macroTaskTimeline("macro-1", {});
     expect(second.timeline).toEqual(timeline);
     expect(second.verifiedAtMs).toBe(Date.parse(fresh304));
   });
@@ -615,9 +615,9 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
   });
 
   it("tolerates a response without a Date header by reporting no verification time", async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify(objectiveTimelineFixture())));
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(macroTaskTimelineFixture())));
     const api = createApi("/private", fetcher);
-    const { verifiedAtMs } = await api.objectiveTimeline("obj-1", {});
+    const { verifiedAtMs } = await api.macroTaskTimeline("macro-1", {});
     expect(verifiedAtMs).toBeNull();
   });
 

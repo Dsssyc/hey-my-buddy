@@ -46,14 +46,14 @@ def console_snapshot_projection(service, *, clock=_time.time) -> tuple[dict, flo
         service.harnesses.kick()
     now = clock()
     from ..blackboard.service.harness_health import SCAN_SECONDS
-    from ..blackboard.tasks import objectives
+    from ..blackboard.tasks import macro_tasks
     from .read_cache import collect_deadline
 
     projection = service.evaluation.console_core()
     projection["harnesses"] = service.harnesses.all()
     projection["routingHealth"] = service.decisions.health_summary()
     projection["capabilities"] = service.evaluation.capabilities()
-    projection["tasks"] = {"pendingCount": objectives.pending_root_count(service.store)}
+    projection["tasks"] = {"pendingCount": macro_tasks.pending_root_count(service.store)}
     deadline = collect_deadline(projection, after=now)
     if automatic:
         deadline = min(deadline, now + SCAN_SECONDS)

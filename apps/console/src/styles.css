@@ -147,8 +147,8 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .list-error { padding: 0 12px; }
 .success-message { color: var(--accent); font-size: 12px; margin: 8px 0; }
 .load-more, .new-records { display: block; width: 100%; border: 0; padding: 12px; font-size: 12px; color: var(--accent); background: var(--accent-wash); flex-shrink: 0; }
-.objective-update { margin-right: auto; border: 0; border-radius: 3px; padding: 3px 6px; font-size: 11px; color: var(--accent); background: var(--accent-wash); white-space: nowrap; }
-.objective-update:hover { background: var(--subtle); }
+.macro-task-update { margin-right: auto; border: 0; border-radius: 3px; padding: 3px 6px; font-size: 11px; color: var(--accent); background: var(--accent-wash); white-space: nowrap; }
+.macro-task-update:hover { background: var(--subtle); }
 .loading-row { padding: 16px; color: var(--muted); font-size: 12px; text-align: center; }
 .small { font-size: 11px; } .muted { color: var(--muted); } .wrap { overflow-wrap: anywhere; }
 .truncate { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -170,7 +170,7 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
-/* ---- Work objectives: secondary history switch and left list ---- */
+/* ---- Work macroTasks: secondary history switch and left list ---- */
 .history-switch { height: 100%; min-height: 0; display: flex; flex-direction: column; }
 .history-view-toggle { flex: 0 0 auto; }
 .list-collapse { margin-left: auto; }
@@ -182,7 +182,7 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .local-read-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
 .history-view { flex: 1; min-height: 0; overflow: hidden; }
 
-/* ---- Work objective timeline (right pane, layer one) ---- */
+/* ---- Work macroTask timeline (right pane, layer one) ---- */
 .timeline-view, .run-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* Clipped so an oversized header or inspector can never paint over a docked
    sibling pane; each section is bounded itself. Vertically the column only
@@ -462,10 +462,10 @@ button.tl-label:hover { background: var(--subtle); }
 .list-drawer { position: absolute; left: 48px; top: 0; bottom: 0; z-index: 24; width: min(320px, calc(100vw - 48px - 200px)); display: flex; flex-direction: column; border: 1px solid var(--line-strong); border-radius: 0 6px 6px 0; background: var(--surface); box-shadow: 0 6px 24px color-mix(in srgb, var(--ink) 22%, transparent); }
 .list-drawer > .list-panel { border: 0; border-radius: 0; flex: 1; }
 
-/* ---- 0.15.1 §3: the objective header ---- */
+/* ---- 0.15.1 §3: the macroTask header ---- */
 .one-line-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.objective-description { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-.objective-vitals { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin: 0; font-size: 12px; }
+.macro-task-description { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.macro-task-vitals { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin: 0; font-size: 12px; }
 .time-stats { border-block: 1px solid var(--line); }
 .time-stats > summary { padding: 5px 0; font-weight: 550; }
 .time-stats-body { padding: 4px 0 10px; }
@@ -486,7 +486,7 @@ button.tl-label:hover { background: var(--subtle); }
 .tl-entry .e-title.single-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; -webkit-line-clamp: unset; }
 h2 .title-source-note { font-size: 10px; font-weight: 500; vertical-align: middle; }
 
-/* ---- 0.15.1 §7: objective stop control and honest stop status ---- */
+/* ---- 0.15.1 §7: macroTask stop control and honest stop status ---- */
 .stop-control { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .stop-status { font-size: 11px; font-weight: 600; white-space: nowrap; }
 .stop-stopping, .stop-in-progress { color: var(--accent); }
@@ -506,16 +506,16 @@ h2 .title-source-note { font-size: 10px; font-weight: 500; vertical-align: middl
   .inspector-group { flex-direction: column; gap: 1px; }
 }
 
-.objective-title-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.objective-title-row h2 { flex: 1; min-width: 0; }
-.objective-title-row > .chip-row { flex: 0 0 auto; }
+.macro-task-title-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.macro-task-title-row h2 { flex: 1; min-width: 0; }
+.macro-task-title-row > .chip-row { flex: 0 0 auto; }
 
 /* Keep all five detail tabs visible in the 360px dock. */
 .detail-stage .detail-tabs { padding-inline: 6px; gap: 0; }
 .detail-stage .detail-tabs button { padding-inline: 6px; flex: 0 0 auto; }
 /* Fallback provenance stays visible independently of the clipped title. */
 .task-title.single-line { display: flex; align-items: center; }
-.task-title.single-line .objective-list-title-text { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.task-title.single-line .macro-task-list-title-text { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .title-source-note { flex: 0 0 auto; white-space: nowrap; }
 
 /* ---- 0.16 human presentation ---- */
@@ -560,10 +560,10 @@ h2 .title-source-note { font-size: 10px; font-weight: 500; vertical-align: middl
 .filters-popover-body { display: grid; gap: 10px; font-size: 12px; min-width: 18em; }
 .filters-popover-body label { display: grid; gap: 4px; }
 .filters-popover-body .field-label { font-weight: 550; }
-.objective-row .objective-row-vitals { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11px; color: var(--muted); }
-.objective-row .objective-row-vitals .objective-row-state { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
-.objective-row .objective-row-vitals .objective-row-progress { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.objective-row .objective-row-vitals time { flex-shrink: 0; }
+.macro-task-row .macro-task-row-vitals { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11px; color: var(--muted); }
+.macro-task-row .macro-task-row-vitals .macro-task-row-state { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.macro-task-row .macro-task-row-vitals .macro-task-row-progress { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.macro-task-row .macro-task-row-vitals time { flex-shrink: 0; }
 .group-heading .group-count { font-size: 10px; color: var(--faint); font-weight: 500; }
 
 /* P1.6: the inspector's structured six-field grid. */
@@ -614,9 +614,9 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 
 /* P2.1: compact header form at short viewports. */
 .tl-head.compact { padding-block: 8px; }
-.tl-head.compact .objective-description { -webkit-line-clamp: 1; }
-.tl-head.compact .objective-title-row { flex-wrap: wrap; }
-.tl-head.compact .objective-vitals { font-size: 11px; }
+.tl-head.compact .macro-task-description { -webkit-line-clamp: 1; }
+.tl-head.compact .macro-task-title-row { flex-wrap: wrap; }
+.tl-head.compact .macro-task-vitals { font-size: 11px; }
 
 /* The storage panel (0.16). */
 .storage-panel { padding: 20px; }
@@ -723,9 +723,9 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 /* Console polish: keep the timeline canvas as the scrolling surface. */
 .timeline-view { overflow-x: hidden; overflow-y: auto; }
 .tl-head { flex-shrink: 0; max-height: none; min-height: 0; overflow: visible; padding-block: 8px; gap: 4px; }
-.tl-head .objective-title-row h2 { flex: 1 1 0; }
-.tl-head .objective-title-row .objective-description { flex: 1 1 0; min-width: 0; display: block; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
-.tl-head .objective-vitals { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.tl-head .macro-task-title-row h2 { flex: 1 1 0; }
+.tl-head .macro-task-title-row .macro-task-description { flex: 1 1 0; min-width: 0; display: block; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.tl-head .macro-task-vitals { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .tl-head .time-stats { white-space: nowrap; }
 .timeline-view > .tl-head, .timeline-view > .delegation-band, .timeline-view > .tl-toolbar { flex-shrink: 0; min-height: 0; overflow: visible; }
 .timeline-view > .delegation-band { flex: 0 1 auto; display: flex; flex-direction: column; max-height: 40%; }
