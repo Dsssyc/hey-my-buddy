@@ -46,7 +46,7 @@
 | 7 | 改名：模型服务一族 | `family` 一族的表、字段与前端的名字改称模型服务（`modelService`、`model_service`）；按它记的并发上限 `model_concurrency` 与 `modelConcurrency` 同样改名 | 无 |
 | 8 | 改名：微任务一族与终态 | 指微任务的 `goal`、名词的 `delegation` 与 `governed`；终态 `concluded`，失败或取消之后被结束的也归到它，`list` 的待验收筛选、宏任务的待验收计数与控制台的那一处判断随之只看状态 | 已交付而被 Host 结束的微任务的终态；`get` 看不出摘要被截断；被打回过的微任务失败之后写不了结论 |
 | 9 | `meta` 里有结构的记录搬进表 | Router 的设置成为表；按 harness 的目录读取时间、账户状态与下次扫描时间成为目录当前行的属性；其余按 L18 的清点逐项搬，或在已经没有读者时删掉 | 升级之后不在目录里的 buddy 的不可用原因 |
-| 9′ | 删掉模型服务一层的偏好 | 开发者 2026-10-13 定：偏好是对 buddy 的偏好。删掉 `family_preferences` 表、把两层合成一层的视图与“来源”、只为盖过上一层而存在的取值 `none`、接口与控制台里那一层；日常看板上这一层是 0 条，buddy 一层 5 条 | `harness_set` 与 `console_access_set` 去掉 `expectedRevision`（设置后写的生效） |
+| 9′ | 删掉模型服务一层的偏好 | 开发者 2026-10-13 定：偏好是对 buddy 的偏好。删掉 `family_preferences` 表、把两层合成一层的视图与“来源”、只为盖过上一层而存在的取值 `none`、接口与控制台里那一层；日常看板上这一层是 0 条，buddy 一层 5 条 | `harness_set` 与 `console_access_set` 去掉 `expectedRevision`（设置后写的生效）；上一行留下的两个永远为空的字段（任务关系里的 `project_identity_reason`、冲突里的 `identityReason`）与同值的 `recorded_project_id` 一并删掉 |
 | 10 | 名字：产品的名字与环境变量 | skill 的目录、启动器与安装位置叫 `hey-my-buddy`，升级时移走旧的；命令在帮助与提示里的名字；其余以 `buddy` 指产品的名字；全部 `BUDDY_` 变量改为 `HMB_` | 无 |
 | 11 | 两侧互相引用清零 | 前面删改之后还剩的跨两侧的引用，搬到 `protocol/` 或根包 | 两侧互相引用的登记表 |
 | 12（Host） | 文档与 skill | L16：SKILL.md、Host 指南、参考文档、两份 README 与 `AGENTS.md` 按新名字改写 | 文档里的两处旧说法 |
