@@ -146,6 +146,73 @@ class HostCompletionTests(WorkflowTestCase):
         self.assertFalse(current["awaitingHost"])
         self.assertEqual(current["waitReason"], "the goal work was concluded by its Host without acceptance")
 
+    def test_takeover_preserves_a_conclusion_until_the_new_host_continues(self):
+        board = self.board()
+        submitted = self.submit(board)
+        self.register(board)
+        self.finish_turn(board, self.claim(board))
+        delivered = board.call("workflow_get", {"runId": submitted["runId"]})
+        note = "Delivered without acceptance; the goal is closed"
+        concluded = board.call("workflow_conclude", {
+            "runId": delivered["runId"], "note": note, **self.control(delivered)})
+        taken = board.call("workflow_takeover", {
+            "runId": delivered["runId"], "commandId": "takeover-concluded",
+            "expectedOwnerGeneration": concluded["ownerGeneration"], "newHostId": "host-2",
+            **self.control(concluded)})
+        self.controls[taken["runId"]] = taken["control"]
+        current = board.call("workflow_get", {"runId": taken["runId"]})
+        self.assertEqual(current["ownerGeneration"], concluded["ownerGeneration"] + 1)
+        self.assertEqual(current["state"], "delivered")
+        self.assertFalse(current["awaitingHost"])
+        self.assertEqual(current["hostConclusion"], concluded["hostConclusion"])
+        self.assertEqual(current["waitReason"], "the goal work was concluded by its Host without acceptance")
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_accept", {
+                "runId": current["runId"], "artifactId": current["finalArtifactId"],
+                "note": "Host checked the sealed output", "notRequired": "Fixture needs no target",
+                **self.control(current)})
+        self.assertEqual(raised.exception.code, "CONFLICT")
+        self.assertIn("already has a recorded conclusion", str(raised.exception))
+        params = {"runId": current["runId"], "note": note, **self.control(current)}
+        replay = board.call("workflow_conclude", params)
+        self.assertTrue(replay["duplicate"])
+        self.assertEqual(replay["hostConclusion"], concluded["hostConclusion"])
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_conclude", {**params, "note": "A different conclusion"})
+        self.assertEqual(raised.exception.code, "CONFLICT")
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0], 1)
+            self.assertIsNone(db.execute("SELECT accepted_at FROM tasks").fetchone()[0])
+        continued = self.continue_run(board, current)
+        self.assertEqual(continued["state"], "executing")
+        self.assertIsNone(continued["hostConclusion"])
+        self.assertIsNone(board.call("workflow_get", {"runId": current["runId"]})["hostConclusion"])
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0], 1)
+
+    def test_takeover_fences_a_late_conclusion_from_the_old_host(self):
+        board = self.board()
+        submitted = self.submit(board)
+        self.register(board)
+        self.finish_turn(board, self.claim(board))
+        delivered = board.call("workflow_get", {"runId": submitted["runId"]})
+        old_control = self.control(delivered)
+        taken = board.call("workflow_takeover", {
+            "runId": delivered["runId"], "commandId": "takeover-before-conclusion",
+            "expectedOwnerGeneration": delivered["ownerGeneration"], "newHostId": "host-2",
+            **old_control})
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_conclude", {
+                "runId": taken["runId"], "note": "Late conclusion", **old_control})
+        self.assertEqual(raised.exception.code, "STALE_GENERATION")
+        current = board.call("workflow_get", {"runId": taken["runId"]})
+        self.assertIsNone(current["hostConclusion"])
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0], 0)
+        concluded = board.call("workflow_conclude", {
+            "runId": taken["runId"], "note": "Current Host conclusion", **taken["control"]})
+        self.assertEqual(concluded["hostConclusion"]["ownerGeneration"], taken["ownerGeneration"])
+
     def test_direct_helper_completion_settles_the_owned_graph_without_a_worker_round(self):
         board = self.board()
         parent = self.submit(board, kind="worktree")

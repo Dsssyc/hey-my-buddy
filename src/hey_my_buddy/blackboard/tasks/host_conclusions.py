@@ -20,8 +20,7 @@ def current(connection, run, task):
     # execution result stays what it was, the conclusion is what closes it.
     if row is None or run["state"] not in ("failed", "cancelled", "delivered"):
         return None
-    if (row["execution_status"] != run["state"] or row["attempt_id"] != task["selected_attempt_id"]
-            or row["owner_generation"] != run["owner_generation"]):
+    if row["execution_status"] != run["state"] or row["attempt_id"] != task["selected_attempt_id"]:
         return None
     if connection.execute("SELECT 1 FROM events WHERE task_id=? AND kind='workflow.continued' AND revision>? LIMIT 1",
                           (run["run_id"], row["run_revision"])).fetchone():
