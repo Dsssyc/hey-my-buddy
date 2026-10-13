@@ -93,6 +93,10 @@ _Avoid_: Worker (for the process)
 
 ### Work
 
+**项目 / project**:
+The code repository that a macro task belongs to. Every worktree and checkout of one repository belongs to the same project; a worktree or a checkout is not a project.
+_Avoid_: 工作区, workspace (an execution workspace is a checkout, not a project)
+
 **宏任务 / macro task**:
 A user's overall piece of work, holding one or more micro tasks and used to group them for browsing. It is the unit by which the user deletes records. It does not schedule work or grant control authority.
 _Avoid_: 工作目标, objective
