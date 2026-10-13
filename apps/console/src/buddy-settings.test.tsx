@@ -42,7 +42,7 @@ function profile(entry: Partial<Profile> & Pick<Profile, "profileId" | "label" |
   };
 }
 
-/** Three harnesses: one available family, one all-disabled family, one offline family. */
+/** Three harnesses: one available model service, one all-disabled model service, one offline model service. */
 function profiles(): Profile[] {
   return [
     profile({ profileId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
@@ -62,8 +62,8 @@ type Options = { configurationUnavailable?: boolean; routerProfileId?: string | 
 
 /**
  * The snapshot's harness health (ADR-017 §15): the Claude harness used by the
- * available family is ready, and the ZCode harness behind the unavailable
- * family is recorded as missing with an attempted location and a remedy.
+ * available model service is ready, and the ZCode harness behind the unavailable
+ * model service is recorded as missing with an attempted location and a remedy.
  */
 function harnesses(): HarnessHealth[] {
   return [
@@ -90,11 +90,11 @@ function snapshot(options: Options = {}): HarnessSnapshot {
     profiles: profiles(),
     preferences: options.preferences ?? [],
 
-    familyAnnotations: [],
+    modelServiceNotes: [],
 
     decisions: [],
 
-    modelConcurrency: [
+    modelServiceConcurrency: [
       { ...sonnet, limit: 2, active: 0 },
       { ...sol, limit: 2, active: 0 },
       { ...glm, limit: 2, active: 0 },
@@ -110,7 +110,7 @@ function applyPublication(state: HarnessSnapshot, params: Record<string, any>): 
     ...state,
 
     preferences: [...state.preferences],
-    familyAnnotations: [...state.familyAnnotations],
+    modelServiceNotes: [...state.modelServiceNotes],
     configuration: state.configuration ? { ...state.configuration, ...(params.configuration ?? {}) } : null,
   };
   for (const setting of params.profileSettings ?? []) {
@@ -123,9 +123,9 @@ function applyPublication(state: HarnessSnapshot, params: Record<string, any>): 
       next.preferences.push({ profileId: change.profileId, mode: change.mode, reason: change.reason });
     }
   }
-  for (const change of params.familyAnnotationChanges ?? []) {
-    next.familyAnnotations = next.familyAnnotations.filter(entry => key(entry) !== key(change));
-    next.familyAnnotations.push({ ...change, updatedAt: null });
+  for (const change of params.modelServiceNoteChanges ?? []) {
+    next.modelServiceNotes = next.modelServiceNotes.filter(entry => key(entry) !== key(change));
+    next.modelServiceNotes.push({ ...change, updatedAt: null });
   }
   return next;
 }
@@ -140,9 +140,9 @@ function fixture(options: Options = {}) {
     if (operation === "model_profiles") {
       // Only a checked 显示不可用 asks for this page; it mirrors the board's
       // bounded contract and just returns the current rows.
-      return { profiles: state.profiles, familyAnnotations: state.familyAnnotations,
+      return { profiles: state.profiles, modelServiceNotes: state.modelServiceNotes,
         preferences: state.preferences,
-        modelConcurrency: state.modelConcurrency, nextCursor: null };
+        modelServiceConcurrency: state.modelServiceConcurrency, nextCursor: null };
     }
 
     if (operation === "user_policy_publish") {

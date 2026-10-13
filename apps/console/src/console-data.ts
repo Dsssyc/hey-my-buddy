@@ -1,15 +1,15 @@
-import type { ModelFamily, Preference, Profile, Task } from "./types";
+import type { ModelService, Preference, Profile, Task } from "./types";
 import { catalogPending, effortText, profileName } from "./profile-display";
 
-export const familyKey = (p: ModelFamily) => JSON.stringify([p.adapter, p.provider, p.model]);
+export const modelServiceKey = (p: ModelService) => JSON.stringify([p.adapter, p.provider, p.model]);
 
 /**
- * The family's aggregated pending fact (ADR-027 §6): pending is a model-identity
+ * The model service's aggregated pending fact (ADR-027 §6): pending is a model-identity
  * state, so its efforts share one mark. Pending when any effort is pending; the
  * earliest recorded first-absence time rides along, and a pending fact without
  * one stays pending with a null time rather than dropping the state.
  */
-export function familyPending(profiles: Profile[]): { pending: boolean; since: string | null } {
+export function modelServicePending(profiles: Profile[]): { pending: boolean; since: string | null } {
   const pendingProfiles = profiles.filter(catalogPending);
   if (!pendingProfiles.length) return { pending: false, since: null };
   const times = pendingProfiles.map(p => p.pendingSince)
@@ -18,27 +18,27 @@ export function familyPending(profiles: Profile[]): { pending: boolean; since: s
   return { pending: true, since: times.length ? times[0] : null };
 }
 /**
- * ADR-011 shared model concurrency: one user-owned concurrent-task limit per
- * exact adapter/provider/model family. All effort variants, routing decisions
- * and execution attempts of the family share the count; the default is 2 and
+ * ADR-011 shared model service concurrency: one user-owned concurrent-task
+ * limit per exact adapter/provider/model tuple. All effort variants, routing
+ * decisions and execution attempts of the model service share the count; the default is 2 and
  * the accepted range is the integers 1–32.
  */
-export const MODEL_CONCURRENCY_DEFAULT = 2;
-export const MODEL_CONCURRENCY_MIN = 1;
-export const MODEL_CONCURRENCY_MAX = 32;
+export const MODEL_SERVICE_CONCURRENCY_DEFAULT = 2;
+export const MODEL_SERVICE_CONCURRENCY_MIN = 1;
+export const MODEL_SERVICE_CONCURRENCY_MAX = 32;
 
-/** The family's entry in a snapshot/page or draft list, or null when absent. */
-export function concurrencyEntryFor<E extends ModelFamily>(
+/** The model service's entry in a snapshot/page or draft list, or null when absent. */
+export function concurrencyEntryFor<E extends ModelService>(
   entries: E[] | undefined,
-  family: ModelFamily,
+  modelService: ModelService,
 ): E | null {
-  return entries?.find((entry) => familyKey(entry) === familyKey(family)) ?? null;
+  return entries?.find((entry) => modelServiceKey(entry) === modelServiceKey(modelService)) ?? null;
 }
 
 /** Only an integer within 1–32 is a limit setting; anything else is not one. */
 export function concurrencyLimit(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value)
-    && value >= MODEL_CONCURRENCY_MIN && value <= MODEL_CONCURRENCY_MAX
+    && value >= MODEL_SERVICE_CONCURRENCY_MIN && value <= MODEL_SERVICE_CONCURRENCY_MAX
     ? value
     : null;
 }
@@ -57,11 +57,11 @@ export function retryIntervalSeconds(value: unknown): number | null {
     ? value
     : null;
 }
-export type ModelFamilyGroup = { key: string; name: string; adapter: string; provider: string; profiles: Profile[] };
-export function modelFamilies(profiles: Profile[]): ModelFamilyGroup[] {
-  const groups = new Map<string, ModelFamilyGroup>();
+export type ModelServiceGroup = { key: string; name: string; adapter: string; provider: string; profiles: Profile[] };
+export function modelServices(profiles: Profile[]): ModelServiceGroup[] {
+  const groups = new Map<string, ModelServiceGroup>();
   for (const profile of profiles) {
-    const key = familyKey(profile);
+    const key = modelServiceKey(profile);
     if (!groups.has(key)) groups.set(key, { key, name: profileName(profile), adapter: profile.adapter, provider: profile.provider, profiles: [] });
     groups.get(key)!.profiles.push(profile);
   }
@@ -75,10 +75,10 @@ export function modelFamilies(profiles: Profile[]): ModelFamilyGroup[] {
     || Number(b.profiles.some(p => p.enabled)) - Number(a.profiles.some(p => p.enabled))
     || a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
 }
-export function preferredVariant(family: ModelFamilyGroup, preferences: Preference[]) {
+export function preferredVariant(modelService: ModelServiceGroup, preferences: Preference[]) {
   // An unavailable variant never pre-empts an available one for the initial view.
-  const available = family.profiles.filter(p => p.available);
-  const pool = available.length ? available : family.profiles;
+  const available = modelService.profiles.filter(p => p.available);
+  const pool = available.length ? available : modelService.profiles;
   return pool.find(p => p.enabled && preferences.some(x => x.profileId === p.profileId && ["pin", "prefer"].includes(x.mode)))
     || pool.find(p => p.enabled) || pool[0];
 }

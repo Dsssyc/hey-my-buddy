@@ -73,7 +73,7 @@ class CatalogRefreshServiceTests(BoardTestCase):
                                  confirmed_discovery)
                 self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM evaluation_profiles WHERE adapter='dsh'")],
                                  confirmed_profiles)
-                self.assertEqual(catalog.pending_families(db), {})
+                self.assertEqual(catalog.pending_model_services(db), {})
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind LIKE 'catalog.model_%'").fetchone()[0], 0)
 
     def test_confirmed_account_fact_publishes_the_catalog(self):
@@ -90,7 +90,7 @@ class CatalogRefreshServiceTests(BoardTestCase):
         self.clock.advance(1)
         self.refresh_catalog("confirmed", models=("alpha", "gamma"))
         with self.board.store.db.read() as db:
-            self.assertEqual(catalog.pending_families(db), {("dsh", "fixture", "beta"): self.clock.value})
+            self.assertEqual(catalog.pending_model_services(db), {("dsh", "fixture", "beta"): self.clock.value})
         self.clock.advance(catalog.CONFIRMATION_SECONDS + 1)
         self.refresh_catalog("confirmed", models=("alpha", "gamma"))
         row, profiles, read_at = self.catalog_state()
@@ -105,7 +105,7 @@ class CatalogRefreshServiceTests(BoardTestCase):
             self.assertTrue(profiles["gamma"]["available"])
             self.assertFalse(profiles["beta"]["available"])
             self.assertEqual(profiles["beta"]["unavailable_reason"], catalog.CONFIRMED_ABSENCE_REASON)
-            self.assertEqual(catalog.pending_families(db), {})
+            self.assertEqual(catalog.pending_model_services(db), {})
 
     def test_refresh_without_own_observation_keeps_complete_and_unknown_account(self):
         payload = native_payload("confirmed")

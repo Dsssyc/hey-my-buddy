@@ -3,10 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiError, type ConsoleApi } from "./api";
-import type { FamilyAnnotation, Profile, Snapshot } from "./types";
+import type { ModelServiceNote, Profile, Snapshot } from "./types";
 import { chip, effortCell, level, levelSwitch, listed, modelRow, pane, selectModel } from "./buddies/page.testing";
 
-/** One family with an enabled and a disabled effort, plus a second enabled family. */
+/** One model service with an enabled and a disabled effort, plus a second enabled model service. */
 function catalog(): Profile[] {
   const entries = [
     { model: "deepseek-flash", effort: "off", enabled: true },
@@ -22,9 +22,9 @@ function catalog(): Profile[] {
   }));
 }
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
-const flashFamily = { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
+const flashModelService = { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
 const FLASH = "dsh / deepseek-official / deepseek-flash";
-const flashNote = (text: string): FamilyAnnotation => ({ ...flashFamily, text, updatedAt: null });
+const flashNote = (text: string): ModelServiceNote => ({ ...flashModelService, text, updatedAt: null });
 /** A configuration that only a completed program discovery can add. */
 const discovered = "dsh:deepseek-official:deepseek-v5:medium";
 
@@ -38,10 +38,10 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
     configuration: { routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
 
-    familyAnnotations: [flashNote("原备注")],
+    modelServiceNotes: [flashNote("原备注")],
     preferences: [], decisions: [],
 
-    modelConcurrency: [
+    modelServiceConcurrency: [
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 },
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-v4-pro", limit: 5, active: 3 },
     ],
@@ -59,9 +59,9 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
       if (scripted === "network") throw new ApiError("NETWORK", "lost publish reply");
       if (scripted === "forbidden") throw new ApiError("FORBIDDEN", "stale CSRF after restart");
       state = { ...state,
-        familyAnnotations: params.familyAnnotationChanges
-          ? params.familyAnnotationChanges.map((change: { text: string }) => flashNote(change.text))
-          : state.familyAnnotations,
+        modelServiceNotes: params.modelServiceNoteChanges
+          ? params.modelServiceNoteChanges.map((change: { text: string }) => flashNote(change.text))
+          : state.modelServiceNotes,
         profiles: params.profileSettings
           ? state.profiles.map(profile => ({ ...profile, enabled: params.profileSettings.find(
               (change: { profileId: string; enabled: boolean }) => change.profileId === profile.profileId)?.enabled ?? profile.enabled }))
@@ -73,7 +73,7 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
       // The program publishes the directory itself; the page only re-reads it.
       // A discovery can coincide with another settings publication.
       state = { ...state,
-        ...(options.discoveryNote ? { familyAnnotations: [flashNote(options.discoveryNote)] } : {}),
+        ...(options.discoveryNote ? { modelServiceNotes: [flashNote(options.discoveryNote)] } : {}),
         profiles: [...state.profiles, { profileId: discovered, label: "deepseek-v5 · medium", adapter: "dsh",
           provider: "deepseek-official", model: "deepseek-v5", effort: "medium", available: true, enabled: false,
           capabilities: [], contextWindow: null, source: "catalog:refresh", description: "" }] };
@@ -142,8 +142,8 @@ describe("direct editing and the save bar", () => {
     await waitFor(() => expect(f.operations).toEqual(["user_policy_publish"]));
     expect(f.published[0]).toMatchObject({ commandId: expect.any(String) });
     expect(f.published[0]).not.toHaveProperty("expectedRevision");
-    // Only the changed family note is published: no profiles table and no card.
-    expect(f.published[0].familyAnnotationChanges).toEqual([{ ...flashFamily, text: "本地草稿，未发布" }]);
+    // Only the changed model service note is published: no profiles table and no card.
+    expect(f.published[0].modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "本地草稿，未发布" }]);
     expect(f.published[0]).not.toHaveProperty("annotationChanges");
     expect(f.published[0]).not.toHaveProperty("profiles");
     expect(f.published[0]).not.toHaveProperty("cards");
@@ -236,13 +236,13 @@ describe("direct editing and the save bar", () => {
     await openBuddy(f.api, user);
     await user.clear(note());
     await user.type(note(), "我的备注");
-    f.setSnapshot({ ...f.snapshot(), familyAnnotations: [flashNote("其他窗口的备注")] });
+    f.setSnapshot({ ...f.snapshot(), modelServiceNotes: [flashNote("其他窗口的备注")] });
     await readSnapshotOnForeground(f.api.snapshot);
     expect(note().value).toBe("我的备注");
     await user.click(save());
     await screen.findByText(PUBLISHED);
     expect(f.published).toHaveLength(1);
-    expect(f.published[0].familyAnnotationChanges).toEqual([{ ...flashFamily, text: "我的备注" }]);
+    expect(f.published[0].modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "我的备注" }]);
     expect(note().value).toBe("我的备注");
   });
 
@@ -276,7 +276,7 @@ describe("direct editing and the save bar", () => {
     expect(note().value).toBe("原备注，我的补充");
     await user.click(save());
     await screen.findByText(PUBLISHED);
-    expect(f.published[0].familyAnnotationChanges).toEqual([{ ...flashFamily, text: "原备注，我的补充" }]);
+    expect(f.published[0].modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "原备注，我的补充" }]);
   });
 
   it("keeps an unsaved note while discovery refreshes the directory", async () => {
@@ -292,7 +292,7 @@ describe("direct editing and the save bar", () => {
     await user.click(save());
     await screen.findByText(PUBLISHED);
     expect(f.published[0]).not.toHaveProperty("expectedRevision");
-    expect(f.published[0].familyAnnotationChanges).toEqual([{ ...flashFamily, text: "原备注，保留的备注" }]);
+    expect(f.published[0].modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "原备注，保留的备注" }]);
     expect(f.published[0]).not.toHaveProperty("profiles");
   });
 

@@ -5,7 +5,7 @@ import { App } from "../App";
 import type { ConsoleApi, HarnessHealth } from "../api";
 import type { Profile, Snapshot } from "../types";
 import { effortCell, level, listed, modelButton, note, pane, queryModel, search, selectModel } from "./page.testing";
-import { familyKey } from "../console-data";
+import { modelServiceKey } from "../console-data";
 
 /**
  * The Buddy page's own navigation: two sections, 目录 and 角色, and inside the
@@ -39,7 +39,7 @@ function profile(entry: Partial<Profile> & Pick<Profile, "profileId" | "label" |
   };
 }
 
-/** One enabled family per harness plus an offline family hidden by default. */
+/** One enabled model service per harness plus an offline model service hidden by default. */
 function profiles(): Profile[] {
   return [
     profile({ profileId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
@@ -89,9 +89,9 @@ function snapshot(routerProfileId: string | null = solMediumId): SnapshotWithHar
     configuration: { routerProfileIds: routerProfileId ? [routerProfileId] : [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review" as const, routingBudget: "standard" },
     profiles: profiles(),
-    preferences: [], familyAnnotations: [],
+    preferences: [], modelServiceNotes: [],
     decisions: [],
-    modelConcurrency: [
+    modelServiceConcurrency: [
       { ...sonnet, limit: 2, active: 0 }, { ...sol, limit: 2, active: 0 },
       { ...flash, limit: 2, active: 0 }, { ...glm, limit: 2, active: 0 },
     ],
@@ -107,9 +107,9 @@ function fixture(routerProfileId: string | null = solMediumId, extra: Partial<Sn
     if (operation === "model_profiles") {
       // Only the checked 显示不可用 asks for this page; the fixture keeps
       // every recorded row on one bounded page.
-      return { profiles: state.profiles, familyAnnotations: state.familyAnnotations,
+      return { profiles: state.profiles, modelServiceNotes: state.modelServiceNotes,
         preferences: state.preferences,
-        modelConcurrency: state.modelConcurrency, nextCursor: null };
+        modelServiceConcurrency: state.modelServiceConcurrency, nextCursor: null };
     }
     throw new Error(`Unexpected command: ${operation}`);
   });
@@ -240,7 +240,7 @@ describe("deep links", () => {
   it("opens a whole model from #buddies/catalog/model/<key> on its first enabled effort, and a click on a row writes that address", async () => {
     const user = userEvent.setup();
     const f = fixture();
-    const address = (index: number) => `#buddies/catalog/model/${encodeURIComponent(familyKey(profiles()[index]))}`;
+    const address = (index: number) => `#buddies/catalog/model/${encodeURIComponent(modelServiceKey(profiles()[index]))}`;
     renderBuddy(address(0), f);
     await listed(3, 4);
     await waitFor(() => pane(SONNET));

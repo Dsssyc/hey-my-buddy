@@ -520,7 +520,7 @@ class Daemon:
             lease_seconds=_env_int("BUDDY_LEASE_SECONDS", 120),
         )
         #: One generic supervisor per slot of the machine-wide ceiling. Routing and
-        #: execution share it and the same per-family counters. Existing supervisors
+        #: execution share it and the same per-model-service counters. Existing supervisors
         #: are reused by lock ownership.
         self.pool = WorkerPool(
             self.directory,

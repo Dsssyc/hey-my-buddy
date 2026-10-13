@@ -134,11 +134,11 @@ class SingleRouterClaimTests(DecisionTestCase):
         with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.no_tool_structured', False):
             self.assert_unclaimed(board, request, 'router-no-tool-unsupported', frozen)
 
-    def test_family_capacity_is_frozen_and_unknown_stop_keeps_its_slot(self):
+    def test_model_service_capacity_is_frozen_and_unknown_stop_keeps_its_slot(self):
         board = self.board(max_concurrent=3)
         self.seed(board)
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO model_concurrency(adapter,provider,model,concurrency_limit,created_at,updated_at) VALUES(?,?,?,1,'fixture','fixture')",
+            connection.execute("INSERT INTO model_service_concurrency(adapter,provider,model,concurrency_limit,created_at,updated_at) VALUES(?,?,?,1,'fixture','fixture')",
                                (PROFILE['adapter'], PROFILE['provider'], PROFILE['model']))
         first = self.request(board, request_id='one')
         second = self.request(board, request_id='two')
@@ -153,16 +153,16 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.assertIsNone(blocked['claim'])
         self.assertEqual(blocked['reason'], 'model-capacity')
         with board.store.db.read() as connection:
-            family = connection.execute('SELECT model_adapter,model_provider,model_model,shutdown_confirmed FROM attempts').fetchone()
-            self.assertEqual(tuple(family), ('dsh', 'deepseek-official', 'deepseek-flash', 0))
+            model_service = connection.execute('SELECT model_adapter,model_provider,model_model,shutdown_confirmed FROM attempts').fetchone()
+            self.assertEqual(tuple(model_service), ('dsh', 'deepseek-official', 'deepseek-flash', 0))
             self.assertEqual(board.store._model_active_counts(connection), {('dsh', 'deepseek-official', 'deepseek-flash'): 1})
         self.assertIsNone(self.decision(board, first['decisionId'])['selectedProfile'])
 
-    def test_confirmed_stop_releases_same_router_family_for_next_claim(self):
+    def test_confirmed_stop_releases_same_router_model_service_for_next_claim(self):
         board = self.board(max_concurrent=3)
         self.seed(board)
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO model_concurrency(adapter,provider,model,concurrency_limit,created_at,updated_at) VALUES(?,?,?,1,'fixture','fixture')",
+            connection.execute("INSERT INTO model_service_concurrency(adapter,provider,model,concurrency_limit,created_at,updated_at) VALUES(?,?,?,1,'fixture','fixture')",
                                ('dsh', 'deepseek-official', 'deepseek-flash'))
         first = self.request(board, request_id='one')
         second = self.request(board, request_id='two')

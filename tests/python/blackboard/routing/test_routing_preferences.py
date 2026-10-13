@@ -31,7 +31,7 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install.runtime import resource_path
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.routing.test_decision import DecisionTestCase, PROFILE, PROFILE_ID, SECOND_PROFILE, SECOND_PROFILE_ID, THIRD_PROFILE, THIRD_PROFILE_ID
-from blackboard.evaluation.test_evaluation import family_key
+from blackboard.evaluation.test_evaluation import model_service_key
 from blackboard.tasks.test_workflow import CONFIGURATION, WorkflowTestCase
 
 NONCE = "n" * 16
@@ -264,7 +264,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         catalog = board.call("model_catalog_refresh", {"requestId": "annotations-catalog"})
         board.console_call("user_policy_publish", {
             "commandId": "annotations-publish",
-            "familyAnnotationChanges": [{**family_key(PROFILE), "text": "Human preference for this workflow"}],
+            "modelServiceNoteChanges": [{**model_service_key(PROFILE), "text": "Human preference for this workflow"}],
         })
 
     def routed(self, board, *, request_id, **extra):
@@ -341,7 +341,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         self.assertNotIn("taskPreference", document["policyFacts"])
         note = document["annotations"][0]
         self.assertEqual({key: note[key] for key in ("adapter", "provider", "model", "text")},
-                         {**family_key(PROFILE), "text": "Human preference for this workflow"})
+                         {**model_service_key(PROFILE), "text": "Human preference for this workflow"})
         board.call("worker_result", {
             "workerId": "router", "attemptId": owned["claim"]["attempt"]["attemptId"],
             "generation": owned["claim"]["attempt"]["generation"], "nonce": NONCE,

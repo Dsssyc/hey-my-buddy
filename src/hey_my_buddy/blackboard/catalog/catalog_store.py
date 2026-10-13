@@ -79,7 +79,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
         applied, stale = [], []
         transitions = []
         from .catalog import (CONFIRMATION_SECONDS, CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON,
-                              TRUSTED_ACCOUNT_STATUSES, _family_key, _parse_time, _pending_map,
+                              TRUSTED_ACCOUNT_STATUSES, _model_service_key, _parse_time, _pending_map,
                               _write_pending_map, identities_from_payload, note_confirmed_read,
                               restore_retained_availability)
         for result in payload['discoveries']:
@@ -126,9 +126,9 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             with bound([read_health(db, name)]):
                 entries = view.proposed_profiles()
             seen = {p['profileId'] for p in entries}
-            families = {(p['provider'], p['model']) for p in entries}
+            model_services = {(p['provider'], p['model']) for p in entries}
             pending = _pending_map(db, name)
-            # The families the last adopted catalog still listed as available.
+            # The model services the last adopted catalog still listed as available.
             # Health 0s on profile rows are deliberately absent here: they are
             # not evidence that a native model disappeared (ADR-027 rule 2).
             retained_identities = identities_from_payload(
@@ -136,32 +136,32 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             retained = {(provider, model) for provider, model, _effort in retained_identities}
             existing = db.execute('SELECT profile_id,provider,model,effort,available,unavailable_reason'
                                   ' FROM evaluation_profiles WHERE adapter=?', (name,)).fetchall()
-            family_rows: dict[tuple[str, str], list] = {}
+            model_service_rows: dict[tuple[str, str], list] = {}
             for row in existing:
-                family_rows.setdefault((row['provider'], row['model']), []).append(row)
-            absent_before = {family for family, rows in family_rows.items()
+                model_service_rows.setdefault((row['provider'], row['model']), []).append(row)
+            absent_before = {model_service for model_service, rows in model_service_rows.items()
                              if rows and all(not row['available'] for row in rows)
                              and any(row['unavailable_reason'] == CONFIRMED_ABSENCE_REASON for row in rows)}
-            for family, rows in family_rows.items():
-                if family in families:
+            for model_service, rows in model_service_rows.items():
+                if model_service in model_services:
                     continue
-                if _family_key(*family) not in pending and family not in retained:
+                if _model_service_key(*model_service) not in pending and model_service not in retained:
                     # An archived board can retain a user's configured buddy
                     # without retaining any catalog history. Its first trusted
                     # reading grounds the absence directly in catalog evidence.
                     db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
                                ' WHERE adapter=? AND provider=? AND model=?',
-                               (CONFIRMED_ABSENCE_REASON, name, *family))
+                               (CONFIRMED_ABSENCE_REASON, name, *model_service))
                     continue
                 # ADR-027 rule 2: disappearance is a model-identity question. An
                 # effort that vanished while its model remains is a metadata
                 # retirement, never a model disappearance.
-                key = _family_key(*family)
+                key = _model_service_key(*model_service)
                 since = pending[key]['since'] if key in pending else None
                 first_absence, moment = _parse_time(since), _parse_time(now)
                 if since is None:
                     efforts = sorted(effort for provider, model, effort in retained_identities
-                                     if (provider, model) == family)
+                                     if (provider, model) == model_service)
                     pending[key] = {'since': now, 'efforts': efforts}
                     # The prior adopted reading proves the legal efforts even
                     # when old health code overwrote a retirement reason. Save
@@ -172,22 +172,22 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                             db.execute('UPDATE evaluation_profiles SET available=1,unavailable_reason=NULL'
                                        ' WHERE profile_id=?', (row['profile_id'],))
                     transitions.append({'kind': 'catalog.model_pending', 'adapter': name,
-                                        'provider': family[0], 'model': family[1], 'pendingSince': now})
+                                        'provider': model_service[0], 'model': model_service[1], 'pendingSince': now})
                 elif (first_absence is not None and moment is not None
                         and (moment - first_absence).total_seconds() >= CONFIRMATION_SECONDS):
                     db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
                                ' WHERE adapter=? AND provider=? AND model=? AND available=1',
-                               (CONFIRMED_ABSENCE_REASON, name, *family))
+                               (CONFIRMED_ABSENCE_REASON, name, *model_service))
                     pending.pop(key, None)
                     transitions.append({'kind': 'catalog.model_unavailable', 'adapter': name,
-                                        'provider': family[0], 'model': family[1],
+                                        'provider': model_service[0], 'model': model_service[1],
                                         'pendingSince': since, 'confirmedAt': now})
                 # Still inside the confirmation window (or an unparseable stamp):
                 # the model stays usable and no transition is invented.
             # Effort rows missing while their model remains are metadata
             # retirements; enabled remains the user's intent.
             for old in existing:
-                if old['profile_id'] not in seen and (old['provider'], old['model']) in families:
+                if old['profile_id'] not in seen and (old['provider'], old['model']) in model_services:
                     db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=? WHERE profile_id=?', (RETIRED_EFFORT_REASON, old['profile_id']))
             for p in entries:
                 health = db.execute('SELECT status FROM harness_health WHERE adapter=?', (name,)).fetchone()
@@ -198,18 +198,18 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                     raise BoardError('CATALOG_INVALID', 'A native profile ID collided with a different execution identity', profileId=p['profileId'])
                 db.execute('INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,available,enabled,capabilities_json,context_window,description,source,unavailable_reason) VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?) ON CONFLICT(profile_id) DO UPDATE SET label=excluded.label,available=excluded.available,capabilities_json=excluded.capabilities_json,context_window=excluded.context_window,description=excluded.description,source=excluded.source,unavailable_reason=excluded.unavailable_reason', (p['profileId'], p['label'], p['adapter'], p['provider'], p['model'], p['effort'], int(p['available']), canonical_json(p['capabilities']), p['contextWindow'], p['description'], p['source'], p['unavailableReason']))
             # ADR-027 rules 2 and 6: reappearance inside a trusted reading
-            # recovers the family, clears its first absence and says so once.
-            for family in families:
-                key = _family_key(*family)
-                if key not in pending and family not in absent_before:
+            # recovers the model service, clears its first absence and says so once.
+            for model_service in model_services:
+                key = _model_service_key(*model_service)
+                if key not in pending and model_service not in absent_before:
                     continue
                 window = pending.pop(key, None)
                 since = window['since'] if window is not None else None
                 usable = db.execute('SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND available=1 LIMIT 1',
-                                    (name, *family)).fetchone() is not None
+                                    (name, *model_service)).fetchone() is not None
                 if usable:
                     transition = {'kind': 'catalog.model_recovered', 'adapter': name,
-                                  'provider': family[0], 'model': family[1], 'recoveredAt': now}
+                                  'provider': model_service[0], 'model': model_service[1], 'recoveredAt': now}
                     if since:
                         transition['pendingSince'] = since
                     transitions.append(transition)
@@ -263,8 +263,8 @@ def profiles(evaluation, params):
         raise BoardError('INVALID_ARGUMENT', 'query accepts at most 8 search terms')
     with evaluation.db.read() as db:
         rows = db.execute('SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM evaluation_profiles p LEFT JOIN harness_health h ON h.adapter=p.adapter LEFT JOIN catalog_current c ON c.adapter=p.adapter WHERE ' + ' AND '.join(clauses) + ' ORDER BY p.profile_id LIMIT ?', [*values, limit + 1]).fetchall()
-        from .catalog import pending_families
-        pending = pending_families(db)
+        from .catalog import pending_model_services
+        pending = pending_model_services(db)
         values = [evaluation._profile_view(row, pending=pending) for row in rows[:limit]]
         from ...protocol.billing import for_provider
         from ..routing.quota_routing import configuration_retry
@@ -275,7 +275,7 @@ def profiles(evaluation, params):
             if value['quotaExhausted']:
                 value['quotaRetry'] = configuration_retry(db, value)
         ids = [value['profileId'] for value in values]
-        families = {(value['adapter'], value['provider'], value['model']) for value in values}
+        model_services = {(value['adapter'], value['provider'], value['model']) for value in values}
         return {'profiles': values, **user_policy.policy_view(db, ids),
-                'modelConcurrency': evaluation.board.model_capacity_rows(db, families),
+                'modelServiceConcurrency': evaluation.board.model_capacity_rows(db, model_services),
                 'nextCursor': rows[limit - 1]['profile_id'] if len(rows) > limit else None}

@@ -99,7 +99,7 @@ EXPECTED_FLASH_FACTS = {
                      "openWeights": True, "inputModalities": ["text", "image"], "outputModalities": ["text"]},
 }
 
-FLASH_FAMILY = ("dsh", "deepseek-official", "deepseek-flash")
+FLASH_MODEL_SERVICE = ("dsh", "deepseek-official", "deepseek-flash")
 FLASH_PROFILE_ID = "dsh:deepseek-official:deepseek-flash:off"
 FLASH_LOW_PROFILE_ID = "dsh:deepseek-official:deepseek-flash:low"
 
@@ -119,22 +119,22 @@ class ModelFactsTestCase(EvaluationTestCase):
     def remove_fixture(self) -> None:
         self.fixture_path().unlink(missing_ok=True)
 
-    def row(self, board, family: tuple[str, str, str]) -> dict | None:
+    def row(self, board, model_service: tuple[str, str, str]) -> dict | None:
         with board.store.db.read() as db:
-            row = db.execute("SELECT * FROM model_facts WHERE adapter=? AND provider=? AND model=?", family).fetchone()
+            row = db.execute("SELECT * FROM model_facts WHERE adapter=? AND provider=? AND model=?", model_service).fetchone()
         return dict(row) if row is not None else None
 
     def count_refresh_calls(self):
         """Count enablement-triggered refresh calls without changing their behavior."""
         calls = []
-        original = model_facts.refresh_families
+        original = model_facts.refresh_model_services
 
-        def counting(board, families, **kwargs):
-            calls.append([list(family) for family in families])
-            return original(board, families, **kwargs)
+        def counting(board, model_services, **kwargs):
+            calls.append([list(model_service) for model_service in model_services])
+            return original(board, model_services, **kwargs)
 
-        model_facts.refresh_families = counting
-        self.addCleanup(setattr, model_facts, "refresh_families", original)
+        model_facts.refresh_model_services = counting
+        self.addCleanup(setattr, model_facts, "refresh_model_services", original)
         return calls
 
     # -- source and request boundaries ---------------------------------------
@@ -250,14 +250,14 @@ class ModelFactsTestCase(EvaluationTestCase):
             self.assertEqual(caught.exception.code, "MODEL_FACTS_SOURCE_INVALID")
 
     # -- refresh semantics over the real store -------------------------------
-    def test_refresh_writes_one_dated_snapshot_per_family(self):
+    def test_refresh_writes_one_dated_snapshot_per_model_service(self):
         board = self.board()
-        outcome = model_facts.refresh_families(board.store, [FLASH_FAMILY], now="2026-10-01T00:00:00.000Z",
+        outcome = model_facts.refresh_model_services(board.store, [FLASH_MODEL_SERVICE], now="2026-10-01T00:00:00.000Z",
                                                source=lambda: (json.dumps(facts_fixture()).encode(), "file:fixture"))
         self.assertTrue(outcome["ok"])
-        self.assertEqual(outcome["refreshed"], [list(FLASH_FAMILY)])
+        self.assertEqual(outcome["refreshed"], [list(FLASH_MODEL_SERVICE)])
         self.assertEqual(outcome["unknown"], [])
-        view = model_facts.family_facts(board.store, [FLASH_FAMILY])[FLASH_FAMILY]
+        view = model_facts.model_service_facts(board.store, [FLASH_MODEL_SERVICE])[FLASH_MODEL_SERVICE]
         self.assertEqual(view["status"], "current")
         self.assertEqual(view["facts"], EXPECTED_FLASH_FACTS)
         self.assertEqual(view["identity"], {"devProvider": "deepseek", "devModel": "deepseek-flash"})
@@ -267,32 +267,32 @@ class ModelFactsTestCase(EvaluationTestCase):
 
     def test_refresh_failure_retains_the_previous_snapshot(self):
         board = self.board()
-        model_facts.refresh_families(board.store, [FLASH_FAMILY], source=lambda: (json.dumps(facts_fixture()).encode(), "file:one"))
-        before = self.row(board, FLASH_FAMILY)
-        outcome = model_facts.refresh_families(board.store, [FLASH_FAMILY], source=lambda: (_ for _ in ()).throw(
+        model_facts.refresh_model_services(board.store, [FLASH_MODEL_SERVICE], source=lambda: (json.dumps(facts_fixture()).encode(), "file:one"))
+        before = self.row(board, FLASH_MODEL_SERVICE)
+        outcome = model_facts.refresh_model_services(board.store, [FLASH_MODEL_SERVICE], source=lambda: (_ for _ in ()).throw(
             BoardError("MODEL_FACTS_SOURCE_UNAVAILABLE", "down")))
         self.assertFalse(outcome["ok"])
-        self.assertEqual(outcome["retained"], [list(FLASH_FAMILY)])
-        self.assertEqual(self.row(board, FLASH_FAMILY), before)
+        self.assertEqual(outcome["retained"], [list(FLASH_MODEL_SERVICE)])
+        self.assertEqual(self.row(board, FLASH_MODEL_SERVICE), before)
         # A later successful fetch replaces the retained snapshot.
-        model_facts.refresh_families(board.store, [FLASH_FAMILY], source=lambda: (json.dumps(facts_fixture()).encode(), "file:two"))
-        self.assertEqual(self.row(board, FLASH_FAMILY)["source"], "file:two")
+        model_facts.refresh_model_services(board.store, [FLASH_MODEL_SERVICE], source=lambda: (json.dumps(facts_fixture()).encode(), "file:two"))
+        self.assertEqual(self.row(board, FLASH_MODEL_SERVICE)["source"], "file:two")
 
     def test_refresh_missing_entry_records_unknown(self):
         board = self.board()
         fixture = facts_fixture()
         del fixture["deepseek"]["models"]["deepseek-flash"]
-        outcome = model_facts.refresh_families(board.store, [FLASH_FAMILY], source=lambda: (json.dumps(fixture).encode(), "file:fixture"))
+        outcome = model_facts.refresh_model_services(board.store, [FLASH_MODEL_SERVICE], source=lambda: (json.dumps(fixture).encode(), "file:fixture"))
         self.assertTrue(outcome["ok"])
-        self.assertEqual(outcome["unknown"], [{"family": list(FLASH_FAMILY), "reason": "entry-missing"}])
-        view = model_facts.family_facts(board.store, [FLASH_FAMILY])[FLASH_FAMILY]
+        self.assertEqual(outcome["unknown"], [{"modelService": list(FLASH_MODEL_SERVICE), "reason": "entry-missing"}])
+        view = model_facts.model_service_facts(board.store, [FLASH_MODEL_SERVICE])[FLASH_MODEL_SERVICE]
         self.assertEqual(view["status"], "unknown")
         self.assertEqual(view["reason"], "entry-missing")
         self.assertIsNone(view["facts"])
 
     def test_refresh_unresolvable_identity_records_unknown(self):
         board = self.board()
-        outcome = model_facts.refresh_families(board.store, [("dsh", "fixture-api", "fixture-model")],
+        outcome = model_facts.refresh_model_services(board.store, [("dsh", "fixture-api", "fixture-model")],
                                                source=lambda: (json.dumps(facts_fixture()).encode(), "file:fixture"))
         self.assertEqual(outcome["unknown"][0]["reason"], "identity-unresolved")
         row = self.row(board, ("dsh", "fixture-api", "fixture-model"))
@@ -301,55 +301,55 @@ class ModelFactsTestCase(EvaluationTestCase):
 
     def test_refresh_records_plan_inclusion_not_a_free_api(self):
         board = self.board()
-        family = ("zcode", "zai-api", "glm-5.3")
-        model_facts.refresh_families(board.store, [family],
+        model_service = ("zcode", "zai-api", "glm-5.3")
+        model_facts.refresh_model_services(board.store, [model_service],
                                      source=lambda: (json.dumps(facts_fixture()).encode(), "file:fixture"))
-        view = model_facts.family_facts(board.store, [family])[family]
+        view = model_facts.model_service_facts(board.store, [model_service])[model_service]
         self.assertEqual(view["facts"]["billing"]["method"], "per-token")
         self.assertEqual(view["facts"]["price"]["input"], 1.4)
         # The same model under a subscription plan provider is recorded as
         # plan-included, so its zeros are never read as a free API.
-        plan_family = ("zcode", "zai-coding-plan", "glm-5.3")
-        model_facts.refresh_families(board.store, [plan_family],
+        plan_model_service = ("zcode", "zai-coding-plan", "glm-5.3")
+        model_facts.refresh_model_services(board.store, [plan_model_service],
                                      source=lambda: (json.dumps(facts_fixture()).encode(), "file:fixture"))
-        plan_view = model_facts.family_facts(board.store, [plan_family])[plan_family]
+        plan_view = model_facts.model_service_facts(board.store, [plan_model_service])[plan_model_service]
         self.assertEqual(plan_view["facts"]["billing"]["method"], "plan-included")
         self.assertEqual(plan_view["identity"], {"devProvider": "zai-coding-plan", "devModel": "glm-5.3"})
 
-    def test_family_facts_without_a_row_is_unknown(self):
+    def test_model_service_facts_without_a_row_is_unknown(self):
         board = self.board()
-        view = model_facts.family_facts(board.store, [FLASH_FAMILY])[FLASH_FAMILY]
+        view = model_facts.model_service_facts(board.store, [FLASH_MODEL_SERVICE])[FLASH_MODEL_SERVICE]
         self.assertEqual(view["status"], "unknown")
         self.assertEqual(view["reason"], "never-fetched")
         self.assertIsNone(view["facts"])
 
-    def test_refresh_rejects_bad_families(self):
+    def test_refresh_rejects_bad_model_services(self):
         board = self.board()
         with self.assertRaises(BoardError) as caught:
-            model_facts.refresh_families(board.store, [("dsh", "provider",)])
+            model_facts.refresh_model_services(board.store, [("dsh", "provider",)])
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         with self.assertRaises(BoardError) as caught:
-            model_facts.refresh_families(board.store, [("dsh", f"provider-{index}", "model") for index in range(model_facts.MAX_FAMILIES + 1)])
+            model_facts.refresh_model_services(board.store, [("dsh", f"provider-{index}", "model") for index in range(model_facts.MAX_MODEL_SERVICES + 1)])
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
     # -- the user enablement trigger over the real publish path --------------
     def seed(self, board):
         self.seed_catalog(board)
 
-    def test_enablement_refreshes_the_enabled_family(self):
+    def test_enablement_refreshes_the_enabled_model_service(self):
         board = self.board()
         self.write_fixture()
         self.seed(board)
         calls = self.count_refresh_calls()
         self.publish(board, profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
-        self.assertEqual(calls, [[list(FLASH_FAMILY)]])
-        view = model_facts.family_facts(board.store, [FLASH_FAMILY])[FLASH_FAMILY]
+        self.assertEqual(calls, [[list(FLASH_MODEL_SERVICE)]])
+        view = model_facts.model_service_facts(board.store, [FLASH_MODEL_SERVICE])[FLASH_MODEL_SERVICE]
         self.assertEqual(view["status"], "current")
         self.assertEqual(view["facts"], EXPECTED_FLASH_FACTS)
         self.assertTrue(view["source"].startswith("file:"))
         self.assertIsNotNone(view["fetchedAt"])
 
-    def test_only_a_family_enablement_transition_triggers(self):
+    def test_only_a_model_service_enablement_transition_triggers(self):
         board = self.board()
         self.write_fixture()
         self.seed(board)
@@ -357,7 +357,7 @@ class ModelFactsTestCase(EvaluationTestCase):
         self.publish(board, request_id="w1", command_id="c1",
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
         self.assertEqual(len(calls), 1)
-        # A second effort of the already enabled family is not a new enablement.
+        # A second effort of the already enabled model service is not a new enablement.
         self.publish(board, request_id="w2", command_id="c2",
                      profileSettings=[{"profileId": FLASH_LOW_PROFILE_ID, "enabled": True}])
         self.assertEqual(len(calls), 1)
@@ -365,22 +365,22 @@ class ModelFactsTestCase(EvaluationTestCase):
         self.publish(board, request_id="w3", command_id="c3",
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
         self.assertEqual(len(calls), 1)
-        # While another effort of the family stays enabled, re-enabling this one is
-        # still not a family enablement.
+        # While another effort of the model service stays enabled, re-enabling this one is
+        # still not a model service enablement.
         self.publish(board, request_id="w4", command_id="c4",
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": False}])
         self.publish(board, request_id="w5", command_id="c5",
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
         self.assertEqual(len(calls), 1)
-        # Once every effort of the family is disabled again, enabling one is a fresh
-        # user enablement of the family.
+        # Once every effort of the model service is disabled again, enabling one is a fresh
+        # user enablement of the model service.
         self.publish(board, request_id="w6", command_id="c6",
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": False},
                                       {"profileId": FLASH_LOW_PROFILE_ID, "enabled": False}])
         self.publish(board, request_id="w7", command_id="c7",
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
         self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[-1], [list(FLASH_FAMILY)])
+        self.assertEqual(calls[-1], [list(FLASH_MODEL_SERVICE)])
 
     def test_switching_enabled_efforts_in_one_patch_never_refetches(self):
         board = self.board()
@@ -430,14 +430,14 @@ class ModelFactsTestCase(EvaluationTestCase):
         self.seed(board)
         self.publish(board, request_id="w1", command_id="c1",
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
-        self.assertIsNone(self.row(board, FLASH_FAMILY))
+        self.assertIsNone(self.row(board, FLASH_MODEL_SERVICE))
         # A snapshot from an earlier fetch survives the next failed fetch untouched.
         self.write_fixture()
         self.publish(board, request_id="w2", command_id="c2",
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": False}])
         self.publish(board, request_id="w3", command_id="c3",
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
-        retained = self.row(board, FLASH_FAMILY)
+        retained = self.row(board, FLASH_MODEL_SERVICE)
         self.assertEqual(retained["status"], "current")
         first_hash = retained["payload_sha256"]
         self.remove_fixture()
@@ -445,7 +445,7 @@ class ModelFactsTestCase(EvaluationTestCase):
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": False}])
         self.publish(board, request_id="w5", command_id="c5",
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
-        after = self.row(board, FLASH_FAMILY)
+        after = self.row(board, FLASH_MODEL_SERVICE)
         self.assertEqual(after["payload_sha256"], first_hash)
         self.assertEqual(after["status"], "current")
 
@@ -455,7 +455,7 @@ class ModelFactsTestCase(EvaluationTestCase):
         self.seed(board)
         self.publish(board, request_id="w1", command_id="c1",
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
-        self.assertEqual(self.row(board, FLASH_FAMILY)["status"], "current")
+        self.assertEqual(self.row(board, FLASH_MODEL_SERVICE)["status"], "current")
         # A completed fetch without the entry records unknown with its date.
         removed = facts_fixture()
         del removed["deepseek"]["models"]["deepseek-flash"]
@@ -464,7 +464,7 @@ class ModelFactsTestCase(EvaluationTestCase):
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": False}])
         self.publish(board, request_id="w3", command_id="c3",
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
-        unknown = self.row(board, FLASH_FAMILY)
+        unknown = self.row(board, FLASH_MODEL_SERVICE)
         self.assertEqual(unknown["status"], "unknown")
         self.assertEqual(unknown["reason"], "entry-missing")
         unknown_hash = unknown["payload_sha256"]
@@ -474,11 +474,11 @@ class ModelFactsTestCase(EvaluationTestCase):
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": False}])
         self.publish(board, request_id="w5", command_id="c5",
                      profileSettings=[{"profileId": FLASH_PROFILE_ID, "enabled": True}])
-        retained = self.row(board, FLASH_FAMILY)
+        retained = self.row(board, FLASH_MODEL_SERVICE)
         self.assertEqual(retained["payload_sha256"], unknown_hash)
         self.assertEqual(retained["reason"], "entry-missing")
 
-    def test_disabled_family_policy_publish_does_not_fetch(self):
+    def test_disabled_model_service_policy_publish_does_not_fetch(self):
         board = self.board()
         self.write_fixture()
         self.seed(board)
@@ -491,7 +491,7 @@ class ModelFactsTestCase(EvaluationTestCase):
     def test_resaving_an_enabled_effort_does_not_trigger(self):
         # A single-effort catalog removes the "another effort is enabled" shield, so
         # this test pins the re-save rule itself: only the disabled-to-enabled
-        # transition of a family is a user enablement.
+        # transition of a model service is a user enablement.
         catalog = json.loads(json.dumps(FIXTURE_CATALOG))
         catalog["providers"][0]["efforts"] = ["off"]
         self.catalog_fixture(catalog)
@@ -514,11 +514,11 @@ class ModelFactsClockTestCase(BoardTestCase):
         clock = FakeClock()
         board = self.board(clock=clock)
         source = lambda: (json.dumps(facts_fixture()).encode(), "file:fixture")  # noqa: E731
-        model_facts.refresh_families(board.store, [FLASH_FAMILY], now=clock(), source=source)
+        model_facts.refresh_model_services(board.store, [FLASH_MODEL_SERVICE], now=clock(), source=source)
         first = model_facts.snapshot_marker(board.store)
         self.assertNotEqual(first, "empty")
         clock.advance(3600)
-        model_facts.refresh_families(board.store, [FLASH_FAMILY], now=clock(), source=source)
+        model_facts.refresh_model_services(board.store, [FLASH_MODEL_SERVICE], now=clock(), source=source)
         second = model_facts.snapshot_marker(board.store)
         self.assertNotEqual(first, second)
         with board.store.db.read() as db:

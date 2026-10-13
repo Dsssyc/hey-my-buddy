@@ -4,21 +4,21 @@ import {
   changeCount,
   configurationChanged,
   draftDiffers,
-  familyAnnotationChanges,
-  familyAnnotationText,
+  modelServiceNoteChanges,
+  modelServiceNoteText,
   makeDraft,
-  modelConcurrencyChanges,
+  modelServiceConcurrencyChanges,
   preferenceChanges,
   profileSettings,
   publication,
   rebaseDraft,
   setConcurrencyLimit,
-  setFamilyAnnotation,
+  setModelServiceNote,
   setPreference,
 } from "./draft";
 import { blockingIssues } from "./policy";
 import type { HistoryEntries } from "./draft";
-import type { Draft, FamilyAnnotation, Profile, Snapshot } from "./types";
+import type { Draft, ModelServiceNote, Profile, Snapshot } from "./types";
 
 const flash = {
   profileId: "flash-off",
@@ -34,7 +34,7 @@ const flash = {
   description: "",
   source: "catalog",
 } satisfies Profile;
-const flashFamily = { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
+const flashModelService = { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
 /** A configuration that is still enabled but no longer listed by the catalog. */
 const retired = {
   ...flash,
@@ -43,18 +43,18 @@ const retired = {
   available: false,
   unavailableReason: "provider paused",
 } satisfies Profile;
-const retiredFamily = { adapter: "dsh", provider: "deepseek-official", model: "retired-model" };
-const note = (family: typeof flashFamily, text: string): FamilyAnnotation =>
-  ({ ...family, text, updatedAt: null });
+const retiredModelService = { adapter: "dsh", provider: "deepseek-official", model: "retired-model" };
+const note = (modelService: typeof flashModelService, text: string): ModelServiceNote =>
+  ({ ...modelService, text, updatedAt: null });
 const snapshot = {
   profiles: [flash],
 
   preferences: [],
-      familyAnnotations: [],
+      modelServiceNotes: [],
   configuration: { routerProfileIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
   },
 
-  modelConcurrency: [
+  modelServiceConcurrency: [
     { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 },
   ],
 } as unknown as Snapshot;
@@ -68,7 +68,7 @@ describe("editing a published snapshot", () => {
 
   it("publishes only the dirty user patches, never a table, a card or an effective preference", () => {
     const baseline = makeDraft(snapshot);
-    let draft = setFamilyAnnotation(baseline, flash, "我的使用备注");
+    let draft = setModelServiceNote(baseline, flash, "我的使用备注");
     draft = setPreference(draft, "flash-off", "exclude", "太贵");
     draft = {
       ...draft,
@@ -79,7 +79,7 @@ describe("editing a published snapshot", () => {
       commandId: "c",
       profileSettings: [{ profileId: "flash-off", enabled: false }],
       preferenceChanges: [{ profileId: "flash-off", mode: "exclude", reason: "太贵" }],
-      familyAnnotationChanges: [{ ...flashFamily, text: "我的使用备注" }],
+      modelServiceNoteChanges: [{ ...flashModelService, text: "我的使用备注" }],
     });
     const wire = JSON.stringify(patch);
     // Program-owned profile facts are not human publication inputs.
@@ -104,15 +104,15 @@ describe("editing a published snapshot", () => {
   it("sends a clear for an emptied note, a cleared preference", () => {
     const baseline = {
       ...makeDraft(snapshot),
-      familyAnnotations: [note(flashFamily, "旧备注")],
+      modelServiceNotes: [note(flashModelService, "旧备注")],
       preferences: [{ profileId: "flash-off", mode: "exclude" as const, reason: "贵" }],
     };
-    let draft = setFamilyAnnotation(baseline, flash, "");
+    let draft = setModelServiceNote(baseline, flash, "");
     draft = setPreference(draft, "flash-off", "");
     const patch = publication(baseline, draft, "c");
-    expect(patch.familyAnnotationChanges).toEqual([{ ...flashFamily, text: "" }]);
+    expect(patch.modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "" }]);
     expect(patch.preferenceChanges).toEqual([{ profileId: "flash-off", mode: null, reason: "" }]);
-    expect(familyAnnotationChanges(baseline, draft)).toEqual([{ ...flashFamily, text: "" }]);
+    expect(modelServiceNoteChanges(baseline, draft)).toEqual([{ ...flashModelService, text: "" }]);
     expect(preferenceChanges(baseline, draft)).toEqual([{ profileId: "flash-off", mode: null, reason: "" }]);
   });
 
@@ -134,9 +134,9 @@ describe("editing a published snapshot", () => {
     expect(publication(baseline, draft, "c")).not.toHaveProperty("preferenceChanges");
     expect(publication(baseline, draft, "c")).not.toHaveProperty("configuration");
     // An unrelated note still publishes while the old settings stay as they are.
-    const withNote = setFamilyAnnotation(draft, flash, "只改备注");
+    const withNote = setModelServiceNote(draft, flash, "只改备注");
     const patch = publication(baseline, withNote, "c");
-    expect(patch.familyAnnotationChanges).toEqual([{ ...flashFamily, text: "只改备注" }]);
+    expect(patch.modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "只改备注" }]);
     expect(patch).not.toHaveProperty("preferenceChanges");
     expect(patch).not.toHaveProperty("profileSettings");
   });
@@ -162,10 +162,10 @@ describe("editing a published snapshot", () => {
     const preferred = setPreference(baseline, flash.profileId, "prefer", "更快");
     expect(draftDiffers(baseline, preferred)).toBe(true);
     expect(changeCount(baseline, preferred)).toBe(1);
-    const noted = setFamilyAnnotation(preferred, flash, "备注");
+    const noted = setModelServiceNote(preferred, flash, "备注");
     expect(changeCount(baseline, noted)).toBe(2);
     // An emptied note that never existed is not content.
-    expect(draftDiffers(baseline, setFamilyAnnotation(baseline, flash, ""))).toBe(false);
+    expect(draftDiffers(baseline, setModelServiceNote(baseline, flash, ""))).toBe(false);
     const disabled = {
       ...baseline,
       profiles: [{ ...baseline.profiles[0], enabled: false }],
@@ -193,7 +193,7 @@ describe("editing a published snapshot", () => {
 
   it("rebases the draft onto refreshed directory facts without losing user patches", () => {
     const baseline = makeDraft(snapshot);
-    let draft = setFamilyAnnotation(baseline, flash, "保留的备注");
+    let draft = setModelServiceNote(baseline, flash, "保留的备注");
     draft = setPreference(draft, "flash-off", "prefer", "更快");
     draft = {
       ...draft,
@@ -217,9 +217,9 @@ describe("editing a published snapshot", () => {
     // Program availability is adopted; the user's enablement and note are replayed.
     expect(adopted.draft.profiles.find((p) => p.profileId === "flash-off")!.available).toBe(false);
     expect(adopted.draft.profiles.find((p) => p.profileId === "flash-off")!.enabled).toBe(false);
-    expect(familyAnnotationText(adopted.draft, flash)).toBe("保留的备注");
+    expect(modelServiceNoteText(adopted.draft, flash)).toBe("保留的备注");
     const patch = publication(adopted.baseline, adopted.draft, "c");
-    expect(patch.familyAnnotationChanges).toEqual([{ ...flashFamily, text: "保留的备注" }]);
+    expect(patch.modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "保留的备注" }]);
     expect(patch.preferenceChanges).toEqual([{ profileId: "flash-off", mode: "prefer", reason: "更快" }]);
     expect(patch.profileSettings).toEqual([{ profileId: "flash-off", enabled: false }]);
     expect(profileSettings(baseline, draft)).toEqual([
@@ -230,15 +230,15 @@ describe("editing a published snapshot", () => {
 
 describe("replaying a draft on refreshed content", () => {
   it("keeps the local note when another writer changed the same field", () => {
-    const baseline = { ...makeDraft(snapshot), familyAnnotations: [note(flashFamily, "A")] };
-    const draft = setFamilyAnnotation(baseline, flash, "B");
-    const refreshed = { ...snapshot, familyAnnotations: [note(flashFamily, "C")] };
+    const baseline = { ...makeDraft(snapshot), modelServiceNotes: [note(flashModelService, "A")] };
+    const draft = setModelServiceNote(baseline, flash, "B");
+    const refreshed = { ...snapshot, modelServiceNotes: [note(flashModelService, "C")] };
     const adopted = rebaseDraft(draft, baseline, refreshed);
     expect(adopted.conflicts).toEqual([]);
-    expect(familyAnnotationText(adopted.baseline, flash)).toBe("C");
-    expect(familyAnnotationText(adopted.draft, flash)).toBe("B");
-    expect(publication(adopted.baseline, adopted.draft, "save").familyAnnotationChanges).toEqual([
-      { ...flashFamily, text: "B" },
+    expect(modelServiceNoteText(adopted.baseline, flash)).toBe("C");
+    expect(modelServiceNoteText(adopted.draft, flash)).toBe("B");
+    expect(publication(adopted.baseline, adopted.draft, "save").modelServiceNoteChanges).toEqual([
+      { ...flashModelService, text: "B" },
     ]);
   });
 
@@ -281,34 +281,34 @@ describe("retained history with local removals", () => {
 
   it("still fills identities neither the draft nor the baseline knows", () => {
     const baseline = makeDraft(snapshot);
-    const page: HistoryEntries = { profiles: [retired], familyAnnotations: [note(retiredFamily, "history")] };
+    const page: HistoryEntries = { profiles: [retired], modelServiceNotes: [note(retiredModelService, "history")] };
     const adopted = rebaseDraft(baseline, baseline, snapshot, page);
     expect(adopted.conflicts).toEqual([]);
     expect(adopted.draft.profiles.some(row => row.profileId === retired.profileId)).toBe(true);
-    expect(familyAnnotationText(adopted.draft, retired)).toBe("history");
+    expect(modelServiceNoteText(adopted.draft, retired)).toBe("history");
   });
 });
 
-describe("model family concurrency", () => {
+describe("model modelService concurrency", () => {
   const flashLimit = (draft: Draft): number | null =>
-    draft.modelConcurrency.find((entry) => entry.model === "deepseek-flash")?.limit ?? null;
+    draft.modelServiceConcurrency.find((entry) => entry.model === "deepseek-flash")?.limit ?? null;
   const entry = (limit: number) => ({
     adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit, active: 0,
   });
   const basedAt = () => makeDraft(snapshot);
   const tableAt = (limit: number) =>
-    ({ ...snapshot, modelConcurrency: [entry(limit)] }) as Snapshot;
+    ({ ...snapshot, modelServiceConcurrency: [entry(limit)] }) as Snapshot;
 
-  it("publishes only changed family limits and never the occupancy", () => {
+  it("publishes only changed model service limits and never the occupancy", () => {
     const baseline = makeDraft(snapshot);
     expect(flashLimit(baseline)).toBe(2);
-    expect(modelConcurrencyChanges(baseline, baseline)).toEqual([]);
+    expect(modelServiceConcurrencyChanges(baseline, baseline)).toEqual([]);
     const draft = setConcurrencyLimit(baseline, flash, 6);
-    expect(modelConcurrencyChanges(baseline, draft)).toEqual([
+    expect(modelServiceConcurrencyChanges(baseline, draft)).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
     ]);
     const patch = publication(baseline, draft, "c");
-    expect(patch.modelConcurrency).toEqual([
+    expect(patch.modelServiceConcurrency).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
     ]);
     const wire = JSON.stringify(patch);
@@ -316,8 +316,8 @@ describe("model family concurrency", () => {
     expect(wire).not.toContain("active");
     expect(wire).not.toContain("flash-off");
     // An unrelated edit keeps the concurrency patch out entirely.
-    expect(publication(baseline, setFamilyAnnotation(baseline, flash, "只改备注"), "c"))
-      .not.toHaveProperty("modelConcurrency");
+    expect(publication(baseline, setModelServiceNote(baseline, flash, "只改备注"), "c"))
+      .not.toHaveProperty("modelServiceConcurrency");
   });
 
   it("never publishes a limit outside the 1–32 integer range", () => {
@@ -325,9 +325,9 @@ describe("model family concurrency", () => {
     for (const limit of [0, 33, 2.5]) {
       const invalid = {
         ...baseline,
-        modelConcurrency: [{ ...baseline.modelConcurrency[0], limit }],
+        modelServiceConcurrency: [{ ...baseline.modelServiceConcurrency[0], limit }],
       };
-      expect(modelConcurrencyChanges(baseline, invalid)).toEqual([]);
+      expect(modelServiceConcurrencyChanges(baseline, invalid)).toEqual([]);
     }
   });
 
@@ -336,14 +336,14 @@ describe("model family concurrency", () => {
     const draft = basedAt();
     const refreshed = {
       ...snapshot,
-      modelConcurrency: [{ ...entry(2), active: 9 }],
+      modelServiceConcurrency: [{ ...entry(2), active: 9 }],
     } as unknown as Snapshot;
     const adopted = rebaseDraft(draft, baseline, refreshed);
     expect(adopted.conflicts).toEqual([]);
     expect(flashLimit(adopted.draft)).toBe(2);
     expect(draftDiffers(adopted.baseline, adopted.draft)).toBe(false);
     // The draft shape drops occupancy, so it can never be published.
-    expect("active" in adopted.draft.modelConcurrency[0]).toBe(false);
+    expect("active" in adopted.draft.modelServiceConcurrency[0]).toBe(false);
   });
 
   it("retains invalid local limits during a rebase instead of discarding the input", () => {
@@ -351,7 +351,7 @@ describe("model family concurrency", () => {
     for (const limit of [33, NaN]) {
       const draft = setConcurrencyLimit(baseline, flash, limit);
       const rebased = rebaseDraft(draft, baseline, tableAt(2));
-      expect(rebased.conflicts.some(conflict => conflict.field === "modelConcurrency")).toBe(true);
+      expect(rebased.conflicts.some(conflict => conflict.field === "modelServiceConcurrency")).toBe(true);
       expect(Object.is(flashLimit(rebased.draft), limit)).toBe(true);
     }
   });
@@ -363,19 +363,19 @@ describe("model family concurrency", () => {
     expect(adopted.conflicts).toEqual([]);
     expect(flashLimit(adopted.baseline)).toBe(4);
     expect(flashLimit(adopted.draft)).toBe(6);
-    expect(publication(adopted.baseline, adopted.draft, "save").modelConcurrency).toEqual([
-      { ...flashFamily, limit: 6 },
+    expect(publication(adopted.baseline, adopted.draft, "save").modelServiceConcurrency).toEqual([
+      { ...flashModelService, limit: 6 },
     ]);
   });
 
-  it("waits for a retained family row omitted by a bounded snapshot", () => {
+  it("waits for a retained model service row omitted by a bounded snapshot", () => {
     const baseline = basedAt();
     const draft = setConcurrencyLimit(baseline, flash, 6);
-    const refreshed = { ...snapshot, profiles: [], modelConcurrency: [] };
+    const refreshed = { ...snapshot, profiles: [], modelServiceConcurrency: [] };
     expect(rebaseDraft(draft, baseline, refreshed).conflicts).toMatchObject([
-      { kind: "unread", field: "modelConcurrency" },
+      { kind: "unread", field: "modelServiceConcurrency" },
     ]);
-    const ready = rebaseDraft(draft, baseline, refreshed, { profiles: [flash], modelConcurrency: [entry(2)] });
+    const ready = rebaseDraft(draft, baseline, refreshed, { profiles: [flash], modelServiceConcurrency: [entry(2)] });
     expect(ready.conflicts).toEqual([]);
     expect(flashLimit(ready.draft)).toBe(6);
   });
@@ -467,13 +467,13 @@ describe("unavailable Router settings in the editor", () => {
     configurationError: { code: "router-settings-upgrade-required", message: "Router 设置需升级",} } as Snapshot;
   it("publishes unrelated changes while leaving upgrade-only settings null", () => {
     const baseline = makeDraft(unavailable);
-    const draft = setFamilyAnnotation(baseline, flash, "仍可保存备注");
+    const draft = setModelServiceNote(baseline, flash, "仍可保存备注");
     expect(blockingIssues(baseline, draft)).toEqual([]);
     expect(publication(baseline, draft, "note")).not.toHaveProperty("configuration");
     const merged = rebaseDraft(draft, baseline, { ...unavailable,});
     expect(merged.conflicts).toEqual([]);
     expect(merged.draft.configuration).toBeNull();
-    expect(familyAnnotationText(merged.draft, flash)).toBe("仍可保存备注");
+    expect(modelServiceNoteText(merged.draft, flash)).toBe("仍可保存备注");
   });
   it("keeps a dirty Router intent as a conflict when refreshed settings need upgrade", () => {
     const baseline = makeDraft(snapshot);

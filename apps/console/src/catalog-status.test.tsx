@@ -25,11 +25,11 @@ const model = (name: string) => `dsh / deepseek-official / ${name}`;
 const nameCell = (name: string) => modelRow(model(name));
 
 /**
- * One DSH catalog covering the ADR-027 §6 states: a pending family whose
- * efforts record different first-absence times, a family the board marks
+ * One DSH catalog covering the ADR-027 §6 states: a pending model service whose
+ * efforts record different first-absence times, a model service the board marks
  * catalog-available while harness health makes it unusable, a pre-ADR-027
- * fixture profile without the new fields, a pending family that never recorded
- * a time, and a retired unavailable family.
+ * fixture profile without the new fields, a pending model service that never recorded
+ * a time, and a retired unavailable model service.
  */
 function catalog(): Profile[] {
   const base = {
@@ -67,9 +67,9 @@ function fixture() {
       defaultRoutingMode: "review" as const, routingBudget: "standard" },
     profiles: live,
     unavailableProfileCount: profiles.filter(p => !p.available).length,
- familyAnnotations: [], preferences: [],  decisions: [],
+ modelServiceNotes: [], preferences: [],  decisions: [],
 
-    modelConcurrency: [],
+    modelServiceConcurrency: [],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
   };
@@ -84,7 +84,7 @@ function fixture() {
       const slice = [...visible].sort((a, b) => a.profileId.localeCompare(b.profileId))
         .filter(p => p.profileId > after).slice(0, limit);
       const page: ProfilePage = {
-        profiles: slice, preferences: [],         familyAnnotations: [], modelConcurrency: [],
+        profiles: slice, preferences: [],         modelServiceNotes: [], modelServiceConcurrency: [],
         nextCursor: null,
       };
       return page;

@@ -156,7 +156,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         status, headers, body = browser.get("/api/console")
         self.assertEqual(status, 200)
         snapshot = json.loads(body)
-        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "csrfToken", "eventCursor", "configuration", "configurationError", "profiles", "modelConcurrency", "routingHealth", "unavailableProfileCount", "familyAnnotations", "preferences", "decisions", "tasks", "capabilities"]))
+        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "csrfToken", "eventCursor", "configuration", "configurationError", "profiles", "modelServiceConcurrency", "routingHealth", "unavailableProfileCount", "modelServiceNotes", "preferences", "decisions", "tasks", "capabilities"]))
         self.assertIsNone(snapshot['configurationError'])
         self.assertEqual(snapshot["routingHealth"], board.call("health", {})["routingHealth"])
         self.assertEqual(snapshot["routingHealth"]["sampleCount"], 0)
@@ -311,7 +311,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         csrf = browser.bootstrap()["csrfToken"]
         board.call("model_catalog_refresh", {"requestId": "cat"})
         profile = next(p for p in board.call("console_snapshot", {})["profiles"] if p["profileId"] == PROFILE_ID)
-        family = {key: profile[key] for key in ("adapter", "provider", "model")}
+        model_service = {key: profile[key] for key in ("adapter", "provider", "model")}
         status, _h, data = browser.command("task_cancel", {"runId": run_id, "reason": "console operator"}, csrf=csrf)
         self.assertEqual(status, 404, data)
         self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["status"], "queued")
@@ -322,7 +322,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
             {
                 "commandId": "browser-publish",
                 "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
-                "modelConcurrency": [{**family, "limit": 4}],
+                "modelServiceConcurrency": [{**model_service, "limit": 4}],
             },
             csrf=csrf,
         )
@@ -332,9 +332,9 @@ class ConsoleSecurityTests(ConsoleTestCase):
         self.assertTrue(next(p for p in board.call("console_snapshot", {})["profiles"] if p["profileId"] == PROFILE_ID)["enabled"])
         status, _headers, data = browser.get("/api/console")
         self.assertEqual(status, 200)
-        capacity = next(row for row in json.loads(data)["modelConcurrency"]
-                        if all(row[key] == value for key, value in family.items()))
-        self.assertEqual(capacity, {**family, "limit": 4, "active": 0})
+        capacity = next(row for row in json.loads(data)["modelServiceConcurrency"]
+                        if all(row[key] == value for key, value in model_service.items()))
+        self.assertEqual(capacity, {**model_service, "limit": 4, "active": 0})
         # Invalid input is a safe 4xx envelope, never a traceback.
         status, _h, data = browser.command("objective_stop", {"objectiveId": "run:" + run_id, "commandId": "invalid-stop", "nonsense": True}, csrf=csrf)
         self.assertEqual(status, 400, data)

@@ -140,7 +140,7 @@ export type Profile = {
   unavailableReason?: string;
   /**
    * Model-identity (adapter/provider/model) catalog state, shared by every
-   * effort of the family; absent on boards and fixtures from before ADR-027.
+   * effort of the model service; absent on boards and fixtures from before ADR-027.
    */
   catalogStatus?: CatalogStatus;
   /** First recorded absence of a pending model, UTC ISO; absent otherwise. */
@@ -149,8 +149,8 @@ export type Profile = {
 /** A user's preference for one buddy; an absent row means no preference. */
 export type PreferenceMode = "prefer" | "pin" | "exclude";
 export type Preference = { profileId: string; mode: PreferenceMode; reason: string };
-/** The family's human note. */
-export type FamilyAnnotation = ModelFamily & {
+/** The model service's human note. */
+export type ModelServiceNote = ModelService & {
   text: string;
   updatedAt: string | null;
 };
@@ -278,18 +278,18 @@ export type Shutdown = {
   truncated: boolean;
 };
 /**
- * Identity of one model family: the exact adapter, provider and model tuple.
- * Effort variants share one family and never enter the key.
+ * Identity of one model service: the exact adapter, provider and model tuple.
+ * Effort variants share one model service and never enter the key.
  */
-export type ModelFamily = { adapter: string; provider: string; model: string };
-/** The user-owned per-family concurrent-task limit (integer 1–32, default 2). */
-export type ModelConcurrencySetting = ModelFamily & { limit: number };
+export type ModelService = { adapter: string; provider: string; model: string };
+/** The user-owned per-model-service concurrent-task limit (integer 1–32, default 2). */
+export type ModelServiceConcurrencySetting = ModelService & { limit: number };
 /**
- * One snapshot/page observation entry per represented model family. `active`
+ * One snapshot/page observation entry per represented model service. `active`
  * counts unresolved attempts and is observation only; a draft never carries or
  * publishes it.
  */
-export type ModelConcurrencyEntry = ModelConcurrencySetting & { active: number };
+export type ModelServiceConcurrencyEntry = ModelServiceConcurrencySetting & { active: number };
 export type RoutingMode = "fast" | "review";
 export type RoutingBudget = "brief" | "standard" | "deep";
 export type RoutingBudgetLimits = { preset: RoutingBudget; timeoutSeconds: number; toolCalls: number; bytesRead: number };
@@ -400,8 +400,8 @@ export type Snapshot = {
   profiles: Profile[];
   /** Preferences for individual buddies. */
   preferences: Preference[];
-  /** Family notes. */
-  familyAnnotations: FamilyAnnotation[];
+  /** Model service notes. */
+  modelServiceNotes: ModelServiceNote[];
   /**
    * Every unavailable configuration in the table, including one the snapshot
    * still lists (the retained decision selector). The console subtracts the
@@ -413,11 +413,11 @@ export type Snapshot = {
   /** Read-only bounded selection health; absent data is unknown, not success. */
   routingHealth?: RoutingHealth;
   /**
-   * One concurrent-task entry per model family represented in the response,
-   * including defaults for families without an explicit override. `active` is
+   * One concurrent-task entry per model service represented in the response,
+   * including defaults for model services without an explicit override. `active` is
    * read-only occupancy; publishing it is refused.
    */
-  modelConcurrency: ModelConcurrencyEntry[];
+  modelServiceConcurrency: ModelServiceConcurrencyEntry[];
   /**
    * The board-wide count of delegation roots awaiting their Host, computed by
    * the service over every run. It is never inferred from a page of recent
@@ -429,25 +429,25 @@ export type Snapshot = {
 /** Local draft of the fields a human may publish through `user_policy_publish`. */
 export type Draft = Pick<
   Snapshot,
-  "profiles" | "preferences" | "familyAnnotations" | "configuration"
+  "profiles" | "preferences" | "modelServiceNotes" | "configuration"
 > & {
   /**
-   * User limit settings keyed by the exact family tuple. Occupancy (`active`)
+   * User limit settings keyed by the exact model service tuple. Occupancy (`active`)
    * is never carried here, so a draft cannot publish it.
    */
-  modelConcurrency: ModelConcurrencySetting[];
+  modelServiceConcurrency: ModelServiceConcurrencySetting[];
 };
 /** Full console view: recorded facts with the human draft's user fields. */
-export type ConsoleView = Omit<Snapshot, "modelConcurrency"> & {
-  modelConcurrency: ModelConcurrencySetting[];
+export type ConsoleView = Omit<Snapshot, "modelServiceConcurrency"> & {
+  modelServiceConcurrency: ModelServiceConcurrencySetting[];
 };
 /** One page of retained profile identities, including unavailable history. */
 export type ProfilePage = {
   profiles: Profile[];
   preferences: Preference[];
-  familyAnnotations?: FamilyAnnotation[];
-  /** Concurrent-task entries for the families this page represents. */
-  modelConcurrency: ModelConcurrencyEntry[];
+  modelServiceNotes?: ModelServiceNote[];
+  /** Concurrent-task entries for the model services this page represents. */
+  modelServiceConcurrency: ModelServiceConcurrencyEntry[];
   nextCursor: string | null;
 };
 

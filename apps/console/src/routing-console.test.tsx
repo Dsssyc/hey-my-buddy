@@ -23,8 +23,8 @@ function snapshot(): Snapshot {
     configuration: { routerProfileIds: [worker.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: [{ ...worker, label: "现在已改名的模型 · max" }],
     preferences: [{ profileId: worker.profileId, mode: "exclude", reason: "当前已改为排除" }],
-    familyAnnotations: [], decisions: [],
-    modelConcurrency: [],
+    modelServiceNotes: [], decisions: [],
+    modelServiceConcurrency: [],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
   };

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
-import type { FamilyAnnotation, Preference, Profile, ProfilePage, Snapshot } from "./types";
+import type { ModelServiceNote, Preference, Profile, ProfilePage, Snapshot } from "./types";
 import {
   chip, choosePreference, effortCell, level, levelPreference, levelSwitch, listed, modelButton, modelRow, note, pane, queryModel, search, selectModel,
 } from "./buddies/page.testing";
@@ -12,7 +12,7 @@ const flashOff = "dsh:deepseek-official:deepseek-flash:off";
 const flashHigh = "dsh:deepseek-official:deepseek-flash:high";
 const retiredMax = "dsh:deepseek-official:retired-model:max";
 const retiredLow = "dsh:deepseek-official:retired-model:low";
-const retiredFamily = { adapter: "dsh", provider: "deepseek-official", model: "retired-model" };
+const retiredModelService = { adapter: "dsh", provider: "deepseek-official", model: "retired-model" };
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 const RETIRED = "dsh / deepseek-official / retired-model";
 
@@ -39,7 +39,7 @@ function catalog(): Profile[] {
 function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSize?: number } = {}) {
   const profiles = catalog();
   const decisionId = options.staleDecision ? retiredMax : flashOff;
-  const familyAnnotations: FamilyAnnotation[] = [{ ...retiredFamily, text: "用户保留的历史意见", updatedAt: null }];
+  const modelServiceNotes: ModelServiceNote[] = [{ ...retiredModelService, text: "用户保留的历史意见", updatedAt: null }];
   const preferences: Preference[] = options.stalePin
     ? [{ profileId: retiredMax, mode: "pin" as const, reason: "以前固定" }]
     : [];
@@ -55,10 +55,10 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
     return {
       profiles: slice,
 
-      familyAnnotations: ids.has(retiredMax) || ids.has(retiredLow) ? familyAnnotations : [],
+      modelServiceNotes: ids.has(retiredMax) || ids.has(retiredLow) ? modelServiceNotes : [],
       preferences: preferences.filter(p => ids.has(p.profileId)),
 
-      modelConcurrency: [],
+      modelServiceConcurrency: [],
       nextCursor: ordered.length > slice.length ? slice[slice.length - 1].profileId : null,
     };
   };
@@ -73,11 +73,11 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
     // subtracts what it has loaded and pages the rest.
     unavailableProfileCount: profiles.filter(p => !p.available).length,
 
-    familyAnnotations: live.some(p => p.profileId === retiredMax || p.profileId === retiredLow) ? familyAnnotations : [],
+    modelServiceNotes: live.some(p => p.profileId === retiredMax || p.profileId === retiredLow) ? modelServiceNotes : [],
     preferences: preferences.filter(p => live.some(x => x.profileId === p.profileId)),
      decisions: [],
 
-    modelConcurrency: [],
+    modelServiceConcurrency: [],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
   };
@@ -265,7 +265,7 @@ describe("unavailable buddies", () => {
     expect(f.published[0]).toEqual({
       commandId: expect.any(String),
       profileSettings: [{ profileId: retiredMax, enabled: false }],
-      familyAnnotationChanges: [{ ...retiredFamily, text: "用户保留的历史意见，仍可用于历史对照" }],
+      modelServiceNoteChanges: [{ ...retiredModelService, text: "用户保留的历史意见，仍可用于历史对照" }],
     });
     const wire = JSON.stringify(f.published[0]);
     // Availability, provider and model are program-owned and are never uploaded.
@@ -374,7 +374,7 @@ describe("stale settings and unrelated saves", () => {
     // The stale selector stays untouched and does not block the unrelated patch.
     expect(f.published[0].configuration).toBeUndefined();
     expect(f.published[0].preferenceChanges).toBeUndefined();
-    expect(f.published[0].familyAnnotationChanges).toEqual([
+    expect(f.published[0].modelServiceNoteChanges).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "只改这条意见" },
     ]);
   });
@@ -392,7 +392,7 @@ describe("stale settings and unrelated saves", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
     expect(f.published[0]).not.toHaveProperty("preferenceChanges");
-    expect(f.published[0].familyAnnotationChanges).toEqual([
+    expect(f.published[0].modelServiceNoteChanges).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "，补充说明" },
     ]);
   });
@@ -427,7 +427,7 @@ describe("the two filters as browser habits", () => {
     const f = fixture();
     const state = f.snapshot();
     state.unavailableProfileCount = 0;
-    f.command.mockImplementation(async () => ({ profiles: state.profiles, preferences: [], modelConcurrency: [], nextCursor: null }));
+    f.command.mockImplementation(async () => ({ profiles: state.profiles, preferences: [], modelServiceConcurrency: [], nextCursor: null }));
     window.location.hash = "#buddies";
     const view = render(<App suppliedApi={f.api} />);
     await listed(1, 2);

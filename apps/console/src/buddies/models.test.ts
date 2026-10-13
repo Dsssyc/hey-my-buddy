@@ -35,8 +35,8 @@ function snapshot(list: Profile[] = profiles()): Snapshot {
   return {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "s", canWrite: true, reason: null },
 
-    configuration: null, profiles: list, preferences: [],  familyAnnotations: [], decisions: [],
-    modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "flash", limit: 3, active: 1 }],
+    configuration: null, profiles: list, preferences: [],  modelServiceNotes: [], decisions: [],
+    modelServiceConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "flash", limit: 3, active: 1 }],
     tasks: { pendingCount: 0 }, capabilities: {},
   };
 }
@@ -115,12 +115,12 @@ describe("the table's blocks", () => {
 
   it("reads the limit from the draft and the occupancy from what is published, unknown when unreported", () => {
     const recorded = snapshot();
-    const data = { ...historyView(recorded, null), modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "flash", limit: 7 }] };
+    const data = { ...historyView(recorded, null), modelServiceConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "flash", limit: 7 }] };
     const dsh = blocks({ recorded, data }).find(block => block.adapter === "dsh")!;
-    const flash = dsh.models.find(model => model.family.profiles[0].model === "flash")!;
+    const flash = dsh.models.find(model => model.modelService.profiles[0].model === "flash")!;
     expect([flash.limit, flash.occupancy]).toEqual([7, 1]);
     // A model the board has not reported keeps the default limit and an unknown occupancy, never 0.
-    const pro = dsh.models.find(model => model.family.profiles[0].model === "pro")!;
+    const pro = dsh.models.find(model => model.modelService.profiles[0].model === "pro")!;
     expect([pro.limit, pro.occupancy]).toEqual([2, null]);
   });
 
@@ -142,7 +142,7 @@ describe("the table's blocks", () => {
   it("marks a model as new when this page discovered it", () => {
     const recorded = snapshot(profiles());
     const fresh = JSON.stringify(["dsh", "second-provider", "pro"]);
-    const marked = blocks({ recorded, fresh: [fresh] }).flatMap(block => block.models).filter(model => model.fresh).map(model => modelIdentity(model.family));
+    const marked = blocks({ recorded, fresh: [fresh] }).flatMap(block => block.models).filter(model => model.fresh).map(model => modelIdentity(model.modelService));
     expect(marked).toEqual(["dsh / second-provider / pro"]);
   });
 });

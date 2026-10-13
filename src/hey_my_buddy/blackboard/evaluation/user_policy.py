@@ -4,33 +4,33 @@ from __future__ import annotations
 from ...protocol import schemas
 from ...errors import BoardError
 
-PATCH_FIELDS = frozenset({'profileSettings', 'preferenceChanges', 'familyAnnotationChanges',
-                          'configuration', 'modelConcurrency'})
-FAMILY_FIELDS = ('adapter', 'provider', 'model')
+PATCH_FIELDS = frozenset({'profileSettings', 'preferenceChanges', 'modelServiceNoteChanges',
+                          'configuration', 'modelServiceConcurrency'})
+MODEL_SERVICE_FIELDS = ('adapter', 'provider', 'model')
 
-#: The per-family limit a user may set, and the fields one patch entry accepts.
+#: The per-model-service limit a user may set, and the fields one patch entry accepts.
 #: ``active`` and every other derived field are rejected: occupancy is observation,
-#: never input. There is no effort dimension — effort variants share one family.
-MODEL_CONCURRENCY_FIELDS = frozenset({'adapter', 'provider', 'model', 'limit'})
+#: never input. There is no effort dimension — effort variants share one model service.
+MODEL_SERVICE_CONCURRENCY_FIELDS = frozenset({'adapter', 'provider', 'model', 'limit'})
 
 
-def _model_concurrency_changes(params: dict) -> list[dict]:
-    """Validate the ``modelConcurrency`` patch: family tuples and limits only."""
-    values = params.get('modelConcurrency', [])
+def _model_service_concurrency_changes(params: dict) -> list[dict]:
+    """Validate the ``modelServiceConcurrency`` patch: model service tuples and limits only."""
+    values = params.get('modelServiceConcurrency', [])
     if not isinstance(values, list) or len(values) > 200:
-        raise BoardError('INVALID_ARGUMENT', 'modelConcurrency must contain at most 200 patches')
+        raise BoardError('INVALID_ARGUMENT', 'modelServiceConcurrency must contain at most 200 patches')
     seen: set[tuple[str, str, str]] = set()
     for value in values:
         if not isinstance(value, dict):
-            raise BoardError('INVALID_ARGUMENT', 'modelConcurrency entries must be objects')
-        schemas.reject_unknown(value, MODEL_CONCURRENCY_FIELDS, 'modelConcurrency')
-        family = tuple(
+            raise BoardError('INVALID_ARGUMENT', 'modelServiceConcurrency entries must be objects')
+        schemas.reject_unknown(value, MODEL_SERVICE_CONCURRENCY_FIELDS, 'modelServiceConcurrency')
+        model_service = tuple(
             schemas.required_string(value, name, max_length=256)
             for name in ('adapter', 'provider', 'model')
         )
-        if family in seen:
-            raise BoardError('INVALID_ARGUMENT', 'modelConcurrency repeats a model family')
-        seen.add(family)
+        if model_service in seen:
+            raise BoardError('INVALID_ARGUMENT', 'modelServiceConcurrency repeats a model service')
+        seen.add(model_service)
         limit = value.get('limit')
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 32:
             raise BoardError('INVALID_ARGUMENT', 'limit must be an integer between 1 and 32')
@@ -44,8 +44,8 @@ def require_console() -> None:
         raise BoardError('FORBIDDEN', 'User policy requires the authenticated console')
 
 
-def _family_changes(params: dict, field: str, fields: set[str]) -> list[dict]:
-    """Validate a family-keyed patch: one entry per ``(adapter, provider, model)``."""
+def _model_service_changes(params: dict, field: str, fields: set[str]) -> list[dict]:
+    """Validate a model-service-keyed patch: one entry per ``(adapter, provider, model)``."""
     values = params.get(field, [])
     if not isinstance(values, list) or len(values) > 200:
         raise BoardError('INVALID_ARGUMENT', f'{field} must contain at most 200 patches')
@@ -54,15 +54,15 @@ def _family_changes(params: dict, field: str, fields: set[str]) -> list[dict]:
         if not isinstance(value, dict):
             raise BoardError('INVALID_ARGUMENT', f'{field} entries must be objects')
         schemas.reject_unknown(value, fields, field)
-        family = tuple(schemas.required_string(value, name, max_length=256) for name in FAMILY_FIELDS)
-        if family in seen:
-            raise BoardError('INVALID_ARGUMENT', f'{field} repeats a model family')
-        seen.add(family)
+        model_service = tuple(schemas.required_string(value, name, max_length=256) for name in MODEL_SERVICE_FIELDS)
+        if model_service in seen:
+            raise BoardError('INVALID_ARGUMENT', f'{field} repeats a model service')
+        seen.add(model_service)
     return values
 
 
-def _family(entry: dict) -> tuple[str, str, str]:
-    return tuple(entry[name] for name in FAMILY_FIELDS)
+def _model_service(entry: dict) -> tuple[str, str, str]:
+    return tuple(entry[name] for name in MODEL_SERVICE_FIELDS)
 
 
 def _reason(entry: dict) -> str:
@@ -76,7 +76,7 @@ def policy_view(connection, profile_ids: list[str]) -> dict:
     """User-owned buddy preferences and model annotations for the console."""
     return {
         'preferences': preferences(connection, profile_ids),
-        'familyAnnotations': family_annotations(connection, profile_ids),
+        'modelServiceNotes': model_service_notes(connection, profile_ids),
     }
 
 
@@ -87,12 +87,12 @@ def preferences(connection, profile_ids: list[str]) -> list[dict]:
                                           ' ORDER BY profile_id', profile_ids)]
 
 
-def family_annotations(connection, profile_ids: list[str]) -> list[dict]:
+def model_service_notes(connection, profile_ids: list[str]) -> list[dict]:
     marks = ','.join('?' for _ in profile_ids) or 'NULL'
     return [{'adapter': row['adapter'], 'provider': row['provider'], 'model': row['model'], 'text': row['text'],
              'updatedAt': row['updated_at']}
             for row in connection.execute(
-                'SELECT * FROM family_annotations f WHERE EXISTS(SELECT 1 FROM evaluation_profiles p'
+                'SELECT * FROM model_service_notes f WHERE EXISTS(SELECT 1 FROM evaluation_profiles p'
                 ' WHERE p.adapter=f.adapter AND p.provider=f.provider AND p.model=f.model'
                 f' AND p.profile_id IN ({marks})) ORDER BY f.adapter, f.provider, f.model', profile_ids)]
 
@@ -121,9 +121,9 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
         raise BoardError('INVALID_ARGUMENT', 'A user publication must contain a field patch')
     settings = _changes(params, 'profileSettings', {'profileId', 'enabled'})
     preferences = _changes(params, 'preferenceChanges', {'profileId', 'mode', 'reason'})
-    annotations = _family_changes(params, 'familyAnnotationChanges', {*FAMILY_FIELDS, 'text'})
-    model_limits = _model_concurrency_changes(params)
-    enabled_families: list[tuple[str, str, str]] = []
+    annotations = _model_service_changes(params, 'modelServiceNoteChanges', {*MODEL_SERVICE_FIELDS, 'text'})
+    model_limits = _model_service_concurrency_changes(params)
+    enabled_model_services: list[tuple[str, str, str]] = []
     profiles = {}
     for entry in settings + preferences:
         profile_id = entry['profileId']
@@ -133,13 +133,13 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
                 raise BoardError('NOT_FOUND', 'Unknown profileId', profileId=profile_id)
             profiles[profile_id] = dict(row)
             profiles[profile_id]['available'] = bool(row['available']) and read_health(connection, row['adapter'])['available']
-    touched_families = {tuple(profiles[entry["profileId"]][name] for name in FAMILY_FIELDS) for entry in settings}
+    touched_model_services = {tuple(profiles[entry["profileId"]][name] for name in MODEL_SERVICE_FIELDS) for entry in settings}
     initially_enabled = {
-        family: connection.execute(
+        model_service: connection.execute(
             "SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND enabled=1 LIMIT 1",
-            family,
+            model_service,
         ).fetchone() is not None
-        for family in touched_families
+        for model_service in touched_model_services
     }
     for entry in settings:
         if type(entry.get('enabled')) is not bool:
@@ -151,17 +151,17 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
         connection.execute('UPDATE evaluation_profiles SET enabled=? WHERE profile_id=?', (profile['enabled'], entry['profileId']))
     # Compare the whole publication's before/after state. Moving the enabled
     # effort within one model must not make a transient disable trigger a fetch.
-    for family in sorted(touched_families):
-        if not initially_enabled[family] and connection.execute(
+    for model_service in sorted(touched_model_services):
+        if not initially_enabled[model_service] and connection.execute(
             "SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND enabled=1 LIMIT 1",
-            family,
+            model_service,
         ).fetchone() is not None:
-            enabled_families.append(family)
+            enabled_model_services.append(model_service)
     for entry in annotations:
-        family = _family(entry)
+        model_service = _model_service(entry)
         if connection.execute('SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? LIMIT 1',
-                              family).fetchone() is None:
-            raise BoardError('NOT_FOUND', 'Unknown model family')
+                              model_service).fetchone() is None:
+            raise BoardError('NOT_FOUND', 'Unknown model service')
     for entry in preferences:
         if 'mode' not in entry or entry['mode'] not in (None, 'pin', 'prefer', 'exclude'):
             raise BoardError('INVALID_ARGUMENT', 'mode must be pin, prefer, exclude or null')
@@ -178,21 +178,21 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
         if not isinstance(text, str) or len(text) > 4000:
             raise BoardError('INVALID_ARGUMENT', 'text must be a string of at most 4000 characters')
         if not text:
-            connection.execute('DELETE FROM family_annotations WHERE adapter=? AND provider=? AND model=?', _family(entry))
+            connection.execute('DELETE FROM model_service_notes WHERE adapter=? AND provider=? AND model=?', _model_service(entry))
         else:
-            connection.execute('INSERT INTO family_annotations(adapter,provider,model,text,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(adapter,provider,model) DO UPDATE SET text=excluded.text,updated_at=excluded.updated_at', (*_family(entry), text, now))
+            connection.execute('INSERT INTO model_service_notes(adapter,provider,model,text,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(adapter,provider,model) DO UPDATE SET text=excluded.text,updated_at=excluded.updated_at', (*_model_service(entry), text, now))
     for entry in model_limits:
         if connection.execute(
             'SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? LIMIT 1',
             (entry['adapter'], entry['provider'], entry['model']),
         ).fetchone() is None:
-            raise BoardError('NOT_FOUND', 'Unknown model family')
-        # A family setting is independent of profile availability: it survives
-        # discovery marking a model unavailable and applies again when the family
-        # returns. Only the named families are touched; unrelated settings and
+            raise BoardError('NOT_FOUND', 'Unknown model service')
+        # A model service setting is independent of profile availability: it survives
+        # discovery marking a model unavailable and applies again when the model service
+        # returns. Only the named model services are touched; unrelated settings and
         # fields keep their stored values.
         connection.execute(
-            'INSERT INTO model_concurrency(adapter,provider,model,concurrency_limit,created_at,updated_at)'
+            'INSERT INTO model_service_concurrency(adapter,provider,model,concurrency_limit,created_at,updated_at)'
             ' VALUES(?,?,?,?,?,?)'
             ' ON CONFLICT(adapter,provider,model) DO UPDATE SET concurrency_limit=excluded.concurrency_limit,'
             ' updated_at=excluded.updated_at',
@@ -232,13 +232,13 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
     counts = {
         'profileSettings': len(settings),
         'preferenceChanges': len(preferences),
-        'familyAnnotationChanges': len(annotations),
-        'modelConcurrency': len(model_limits),
+        'modelServiceNoteChanges': len(annotations),
+        'modelServiceConcurrency': len(model_limits),
         'provided': sorted(provided),
     }
     connection.execute('UPDATE evaluation_state SET updated_at=? WHERE id=1', (now,))
-    # ``enabledFamilies`` is an internal caller value, never a published response
+    # ``enabledModelServices`` is an internal caller value, never a published response
     # field: the facts refresh runs after the publication transaction commits and is
     # not part of the idempotent receipt.
     return {'counts': counts,
-            'enabledFamilies': enabled_families}
+            'enabledModelServices': enabled_model_services}

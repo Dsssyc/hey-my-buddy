@@ -1,70 +1,70 @@
 import type {
   Draft,
-  FamilyAnnotation,
-  ModelConcurrencyEntry,
-  ModelConcurrencySetting,
-  ModelFamily,
+  ModelServiceNote,
+  ModelServiceConcurrencyEntry,
+  ModelServiceConcurrencySetting,
+  ModelService,
   Preference,
   PreferenceMode,
   Profile,
   Configuration,
   Snapshot,
 } from "./types";
-import { concurrencyLimit, familyKey } from "./console-data";
+import { concurrencyLimit, modelServiceKey } from "./console-data";
 
 /** Retained identity rows the current snapshot no longer lists. */
 export type HistoryEntries = {
   profiles?: Profile[];
   preferences?: Preference[];
-  familyAnnotations?: FamilyAnnotation[];
-  modelConcurrency?: ModelConcurrencyEntry[];
+  modelServiceNotes?: ModelServiceNote[];
+  modelServiceConcurrency?: ModelServiceConcurrencyEntry[];
 };
 
-const familyOf = (row: ModelFamily): ModelFamily =>
+const modelServiceOf = (row: ModelService): ModelService =>
   ({ adapter: row.adapter, provider: row.provider, model: row.model });
 
 export function makeDraft(snapshot: Snapshot): Draft {
   return structuredClone({
     profiles: snapshot.profiles,
     preferences: snapshot.preferences,
-    familyAnnotations: snapshot.familyAnnotations ?? [],
+    modelServiceNotes: snapshot.modelServiceNotes ?? [],
     configuration: snapshot.configuration,
     // The draft carries the user limit settings only; occupancy is observation
     // and is dropped here so no publication path can ever emit it.
-    modelConcurrency: snapshot.modelConcurrency.map(
+    modelServiceConcurrency: snapshot.modelServiceConcurrency.map(
       ({ adapter, provider, model, limit }) => ({ adapter, provider, model, limit }),
     ),
   });
 }
 
-export function emptyFamilyAnnotation(family: ModelFamily): FamilyAnnotation {
-  return { ...familyOf(family), text: "", updatedAt: null };
+export function emptyModelServiceNote(modelService: ModelService): ModelServiceNote {
+  return { ...modelServiceOf(modelService), text: "", updatedAt: null };
 }
 
-/** One note per family; empty text is a deliberate clear, not a delete. */
-export function setFamilyAnnotation(
+/** One note per model service; empty text is a deliberate clear, not a delete. */
+export function setModelServiceNote(
   draft: Draft,
-  family: ModelFamily,
+  modelService: ModelService,
   text: string,
 ): Draft {
-  const key = familyKey(family);
-  const known = draft.familyAnnotations.find((a) => familyKey(a) === key);
-  const next: FamilyAnnotation = { ...(known ?? emptyFamilyAnnotation(family)), text };
+  const key = modelServiceKey(modelService);
+  const known = draft.modelServiceNotes.find((a) => modelServiceKey(a) === key);
+  const next: ModelServiceNote = { ...(known ?? emptyModelServiceNote(modelService)), text };
   return {
     ...draft,
-    familyAnnotations: [
-      ...draft.familyAnnotations.filter((a) => familyKey(a) !== key),
+    modelServiceNotes: [
+      ...draft.modelServiceNotes.filter((a) => modelServiceKey(a) !== key),
       next,
     ],
   };
 }
 
-export function familyAnnotationText(
-  source: { familyAnnotations: FamilyAnnotation[] },
-  family: ModelFamily,
+export function modelServiceNoteText(
+  source: { modelServiceNotes: ModelServiceNote[] },
+  modelService: ModelService,
 ): string {
-  const key = familyKey(family);
-  return source.familyAnnotations.find((a) => familyKey(a) === key)?.text ?? "";
+  const key = modelServiceKey(modelService);
+  return source.modelServiceNotes.find((a) => modelServiceKey(a) === key)?.text ?? "";
 }
 
 /** An empty mode clears this buddy's preference. */
@@ -81,18 +81,18 @@ function addMissing<T extends { profileId: string }>(current: T[], extra: T[] | 
   return added.length ? [...current, ...added] : current;
 }
 
-function addMissingFamilies<T extends ModelFamily>(
+function addMissingModelServices<T extends ModelService>(
   current: T[],
   extra: T[] | undefined,
 ): T[] {
   if (!extra?.length) return current;
-  const known = new Set(current.map(familyKey));
-  const added = extra.filter((entry) => !known.has(familyKey(entry)) && (known.add(familyKey(entry)), true));
+  const known = new Set(current.map(modelServiceKey));
+  const added = extra.filter((entry) => !known.has(modelServiceKey(entry)) && (known.add(modelServiceKey(entry)), true));
   return added.length ? [...current, ...added] : current;
 }
 
-type UserRows = Pick<Draft, "profiles" | "preferences" | "familyAnnotations">
-  & { modelConcurrency?: ModelConcurrencySetting[] };
+type UserRows = Pick<Draft, "profiles" | "preferences" | "modelServiceNotes">
+  & { modelServiceConcurrency?: ModelServiceConcurrencySetting[] };
 
 /**
  * Adds retained history rows the snapshot no longer lists. Live snapshot rows
@@ -104,16 +104,16 @@ export function withHistory<T extends UserRows>(
   entries: HistoryEntries | null | undefined,
 ): T {
   if (!entries) return source;
-  // A draft never carries occupancy, so retained family entries join as settings.
-  const retainedSettings = entries.modelConcurrency?.map(
+  // A draft never carries occupancy, so retained model service entries join as settings.
+  const retainedSettings = entries.modelServiceConcurrency?.map(
     ({ adapter, provider, model, limit }) => ({ adapter, provider, model, limit }),
   );
   return {
     ...source,
     profiles: addMissing(source.profiles, entries.profiles),
     preferences: addMissing(source.preferences, entries.preferences),
-    familyAnnotations: addMissingFamilies(source.familyAnnotations, entries.familyAnnotations),
-    modelConcurrency: addMissingFamilies(source.modelConcurrency ?? [], retainedSettings),
+    modelServiceNotes: addMissingModelServices(source.modelServiceNotes, entries.modelServiceNotes),
+    modelServiceConcurrency: addMissingModelServices(source.modelServiceConcurrency ?? [], retainedSettings),
   };
 }
 
@@ -124,68 +124,68 @@ export function historyView<T extends UserRows>(
 ): T {
   if (!entries) return source;
   const base = withHistory(source, entries);
-  // Retained family entries keep their recorded occupancy for the read-only view.
+  // Retained model service entries keep their recorded occupancy for the read-only view.
   return { ...base,
-    modelConcurrency: addMissingFamilies(source.modelConcurrency ?? [], entries.modelConcurrency) };
+    modelServiceConcurrency: addMissingModelServices(source.modelServiceConcurrency ?? [], entries.modelServiceConcurrency) };
 }
 
 /**
- * Sets one family's concurrent-task limit, identified by the exact
+ * Sets one model service's concurrent-task limit, identified by the exact
  * adapter/provider/model tuple of any of its effort variants. The setting
- * exists independently of availability and is keyed once per family.
+ * exists independently of availability and is keyed once per model service.
  */
 export function setConcurrencyLimit(
   draft: Draft,
-  family: ModelFamily,
+  modelService: ModelService,
   limit: number,
 ): Draft {
-  const key = familyKey(family);
-  const exists = draft.modelConcurrency.some((entry) => familyKey(entry) === key);
-  const modelConcurrency = exists
-    ? draft.modelConcurrency.map((entry) => (familyKey(entry) === key ? { ...entry, limit } : entry))
-    : [...draft.modelConcurrency, { adapter: family.adapter, provider: family.provider, model: family.model, limit }];
-  return { ...draft, modelConcurrency };
+  const key = modelServiceKey(modelService);
+  const exists = draft.modelServiceConcurrency.some((entry) => modelServiceKey(entry) === key);
+  const modelServiceConcurrency = exists
+    ? draft.modelServiceConcurrency.map((entry) => (modelServiceKey(entry) === key ? { ...entry, limit } : entry))
+    : [...draft.modelServiceConcurrency, { adapter: modelService.adapter, provider: modelService.provider, model: modelService.model, limit }];
+  return { ...draft, modelServiceConcurrency };
 }
 
-const byFamily = (a: ModelFamily, b: ModelFamily) => familyKey(a).localeCompare(familyKey(b));
+const byModelService = (a: ModelService, b: ModelService) => modelServiceKey(a).localeCompare(modelServiceKey(b));
 
-/** Limit patches, one per family whose user setting changed; never occupancy. */
-export function modelConcurrencyChanges(
+/** Limit patches, one per model service whose user setting changed; never occupancy. */
+export function modelServiceConcurrencyChanges(
   baseline: Draft,
   draft: Draft,
-): ModelConcurrencySetting[] {
-  const before = new Map(baseline.modelConcurrency.map((entry) => [familyKey(entry), entry]));
-  const changed: ModelConcurrencySetting[] = [];
-  for (const entry of draft.modelConcurrency) {
+): ModelServiceConcurrencySetting[] {
+  const before = new Map(baseline.modelServiceConcurrency.map((entry) => [modelServiceKey(entry), entry]));
+  const changed: ModelServiceConcurrencySetting[] = [];
+  for (const entry of draft.modelServiceConcurrency) {
     const limit = concurrencyLimit(entry.limit);
-    const old = before.get(familyKey(entry));
+    const old = before.get(modelServiceKey(entry));
     if (limit === null || (old && old.limit === limit)) continue;
     changed.push({ adapter: entry.adapter, provider: entry.provider, model: entry.model, limit });
   }
-  return changed.sort(byFamily);
+  return changed.sort(byModelService);
 }
 
 /** The only fields a human may publish; program-owned profile/catalog fields stay out. */
 export type ProfileSettingPatch = { profileId: string; enabled: boolean };
 /** One buddy's preference; `mode: null` clears it. */
 export type PreferenceChangePatch = { profileId: string; mode: PreferenceMode | null; reason: string };
-/** Family note patch; `text: ""` clears the note. */
-export type FamilyAnnotationChangePatch = ModelFamily & { text: string };
+/** Model service note patch; `text: ""` clears the note. */
+export type ModelServiceNoteChangePatch = ModelService & { text: string };
 
 export type UserPolicyPublication = {
   commandId: string;
   profileSettings?: ProfileSettingPatch[];
   preferenceChanges?: PreferenceChangePatch[];
-  familyAnnotationChanges?: FamilyAnnotationChangePatch[];
+  modelServiceNoteChanges?: ModelServiceNoteChangePatch[];
   configuration?: Partial<Pick<Configuration,
     "routerProfileIds" | "routerRetryIntervalSeconds" | "defaultRoutingMode" | "routingBudget">>;
-  /** Per-family limit patches; the board refuses any `active` occupancy here. */
-  modelConcurrency?: ModelConcurrencySetting[];
+  /** Limit patches per model service; the board refuses any `active` occupancy here. */
+  modelServiceConcurrency?: ModelServiceConcurrencySetting[];
 };
 
 type UserEditable = Pick<
   Draft,
-  "profiles" | "preferences" | "familyAnnotations" | "configuration" | "modelConcurrency"
+  "profiles" | "preferences" | "modelServiceNotes" | "configuration" | "modelServiceConcurrency"
 >;
 
 const byProfileId = (a: { profileId: string }, b: { profileId: string }) =>
@@ -219,20 +219,20 @@ export function preferenceChanges(baseline: Draft, draft: Draft): PreferenceChan
   return changed.sort(byProfileId);
 }
 
-/** Family note patches; `text: ""` clears the recorded note. */
-export function familyAnnotationChanges(
+/** Model service note patches; `text: ""` clears the recorded note. */
+export function modelServiceNoteChanges(
   baseline: Draft,
   draft: Draft,
-): FamilyAnnotationChangePatch[] {
-  const before = new Map(baseline.familyAnnotations.map((a) => [familyKey(a), a]));
-  const after = new Map(draft.familyAnnotations.map((a) => [familyKey(a), a]));
-  const changed: FamilyAnnotationChangePatch[] = [];
+): ModelServiceNoteChangePatch[] {
+  const before = new Map(baseline.modelServiceNotes.map((a) => [modelServiceKey(a), a]));
+  const after = new Map(draft.modelServiceNotes.map((a) => [modelServiceKey(a), a]));
+  const changed: ModelServiceNoteChangePatch[] = [];
   for (const key of new Set([...before.keys(), ...after.keys()])) {
     const previous = before.get(key)?.text ?? "";
     const next = after.get(key)?.text ?? "";
-    if (previous !== next) changed.push({ ...familyOf((after.get(key) ?? before.get(key))!), text: next });
+    if (previous !== next) changed.push({ ...modelServiceOf((after.get(key) ?? before.get(key))!), text: next });
   }
-  return changed.sort(byFamily);
+  return changed.sort(byModelService);
 }
 
 /** The ordered Router list is equal when it holds the same ids in the same order. */
@@ -270,14 +270,14 @@ export function publication(
 ): UserPolicyPublication {
   const settings = profileSettings(baseline, draft);
   const preferences = preferenceChanges(baseline, draft);
-  const notes = familyAnnotationChanges(baseline, draft);
-  const concurrency = modelConcurrencyChanges(baseline, draft);
+  const notes = modelServiceNoteChanges(baseline, draft);
+  const concurrency = modelServiceConcurrencyChanges(baseline, draft);
   return {
     commandId,
     ...(settings.length ? { profileSettings: settings } : {}),
     ...(preferences.length ? { preferenceChanges: preferences } : {}),
-    ...(notes.length ? { familyAnnotationChanges: notes } : {}),
-    ...(concurrency.length ? { modelConcurrency: concurrency } : {}),
+    ...(notes.length ? { modelServiceNoteChanges: notes } : {}),
+    ...(concurrency.length ? { modelServiceConcurrency: concurrency } : {}),
     ...(configurationChanged(baseline, draft)
       ? { configuration: {
           ...(routerFieldChanged(baseline, draft, "routerProfileIds")
@@ -304,9 +304,9 @@ function fingerprint(draft: UserEditable): string {
       .map(({ profileId, enabled }) => ({ profileId, enabled }))
       .sort(byProfileId),
     preferences: [...draft.preferences].map(({ profileId, mode, reason }) => ({ profileId, mode, reason })).sort(byProfileId),
-    familyAnnotations: draft.familyAnnotations
+    modelServiceNotes: draft.modelServiceNotes
       .filter((a) => a.text)
-      .map((a) => ({ key: familyKey(a), text: a.text }))
+      .map((a) => ({ key: modelServiceKey(a), text: a.text }))
       .sort((a, b) => a.key.localeCompare(b.key)),
     configuration: draft.configuration ? {
       routerProfileIds: draft.configuration.routerProfileIds ?? [],
@@ -314,8 +314,8 @@ function fingerprint(draft: UserEditable): string {
       defaultRoutingMode: draft.configuration.defaultRoutingMode,
       routingBudget: draft.configuration.routingBudget,
     } : null,
-    modelConcurrency: [...draft.modelConcurrency]
-      .map(({ adapter, provider, model, limit }) => ({ key: familyKey({ adapter, provider, model }), limit }))
+    modelServiceConcurrency: [...draft.modelServiceConcurrency]
+      .map(({ adapter, provider, model, limit }) => ({ key: modelServiceKey({ adapter, provider, model }), limit }))
       .sort((a, b) => a.key.localeCompare(b.key)),
   });
 }
@@ -327,17 +327,17 @@ export function draftDiffers(baseline: Draft, draft: Draft): boolean {
 
 /**
  * Number of unsaved user changes, counted as the patches a save would carry.
- * A family limit that is not a valid setting yet still counts, so the save bar
+ * A model service limit that is not a valid setting yet still counts, so the save bar
  * never says "0 项" while the draft differs.
  */
 export function changeCount(baseline: Draft, draft: Draft): number {
-  const limits = new Map(baseline.modelConcurrency.map((entry) => [familyKey(entry), entry.limit]));
-  const concurrency = draft.modelConcurrency.filter(
-    (entry) => !Object.is(limits.get(familyKey(entry)), entry.limit),
+  const limits = new Map(baseline.modelServiceConcurrency.map((entry) => [modelServiceKey(entry), entry.limit]));
+  const concurrency = draft.modelServiceConcurrency.filter(
+    (entry) => !Object.is(limits.get(modelServiceKey(entry)), entry.limit),
   ).length;
   return profileSettings(baseline, draft).length
     + preferenceChanges(baseline, draft).length
-    + familyAnnotationChanges(baseline, draft).length
+    + modelServiceNoteChanges(baseline, draft).length
     + concurrency
     + ROUTER_FIELDS.filter(field => routerFieldChanged(baseline, draft, field)).length
     + (routingBudgetChanged(baseline, draft) ? 1 : 0);
@@ -352,8 +352,8 @@ export function changeCount(baseline: Draft, draft: Draft): number {
 export type RebaseConflictKind = "changed" | "unread";
 export type RebaseConflict = {
   kind: RebaseConflictKind;
-  field: "enabled" | "preference" | "familyAnnotation" | "configuration" | "defaultRoutingMode" | "routingBudget" | "routerRetryIntervalSeconds" | "modelConcurrency";
-  /** The profile id, or the `adapter/provider/model` of a family-level field. */
+  field: "enabled" | "preference" | "modelServiceNote" | "configuration" | "defaultRoutingMode" | "routingBudget" | "routerRetryIntervalSeconds" | "modelServiceConcurrency";
+  /** The profile id, or the `adapter/provider/model` of a model service field. */
   profileId: string;
   message: string;
 };
@@ -367,22 +367,22 @@ export type RebaseOutcome = {
 const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
   enabled: "启用状态",
   preference: "推理强度偏好",
-  familyAnnotation: "家族备注",
+  modelServiceNote: "家族备注",
   configuration: "Router 列表",
   defaultRoutingMode: "默认路由模式",
   routingBudget: "路由预算",
   routerRetryIntervalSeconds: "重试间隔",
-  modelConcurrency: "并发上限",
+  modelServiceConcurrency: "并发上限",
 };
 
-const familyText = (family: ModelFamily) => `${family.adapter}/${family.provider}/${family.model}`;
+const modelServiceText = (modelService: ModelService) => `${modelService.adapter}/${modelService.provider}/${modelService.model}`;
 
 function conflictSubject(field: RebaseConflict["field"], profileId: string): string {
   if (field === "configuration") return profileId ? `Router 列表（${profileId}）` : "Router 列表";
   if (field === "defaultRoutingMode") return "默认路由模式";
   if (field === "routingBudget") return "路由预算";
   if (field === "routerRetryIntervalSeconds") return "重试间隔";
-  if (field === "familyAnnotation" || field === "modelConcurrency") {
+  if (field === "modelServiceNote" || field === "modelServiceConcurrency") {
     return `模型家族 ${profileId} 的${FIELD_NAMES[field]}`;
   }
   return `配置 ${profileId} 的${FIELD_NAMES[field]}`;
@@ -399,7 +399,7 @@ function merge<T>(old: T, wanted: T, fresh: T, same: (a: T, b: T) => boolean = O
  *
  * Human-owned edits are replayed on the refreshed table. Concurrent changes
  * to the same field use the local edit when it is published. A dirty field
- * whose profile (or, for a family field, every profile of the family) is
+ * whose profile (or, for a model service field, every profile of the model service) is
  * missing from the bounded snapshot stays unresolved until a fresh retained
  * history page supplies the row.
  */
@@ -428,7 +428,7 @@ export function rebaseDraft(
     });
   };
   const freshProfiles = new Map(nextBaseline.profiles.map((p) => [p.profileId, p]));
-  const freshFamilies = new Set(nextBaseline.profiles.map(familyKey));
+  const freshModelServices = new Set(nextBaseline.profiles.map(modelServiceKey));
 
   // Enabled intent: only a profile that still exists in the refreshed table can
   // be compared; a missing row is unresolved rather than silently dropped.
@@ -460,12 +460,12 @@ export function rebaseDraft(
     else preferenceMerges.set(profileId, { profileId, mode: mode.value, reason: reason.value });
   }
 
-  // Family notes: replay the local text over the refreshed value.
-  const mergedNotes = new Map<string, FamilyAnnotationChangePatch>();
-  for (const change of familyAnnotationChanges(baseline, draft)) {
-    const key = familyKey(change);
-    if (!freshFamilies.has(key)) {
-      fail("unread", "familyAnnotation", familyText(change));
+  // Model service notes: replay the local text over the refreshed value.
+  const mergedNotes = new Map<string, ModelServiceNoteChangePatch>();
+  for (const change of modelServiceNoteChanges(baseline, draft)) {
+    const key = modelServiceKey(change);
+    if (!freshModelServices.has(key)) {
+      fail("unread", "modelServiceNote", modelServiceText(change));
       continue;
     }
     mergedNotes.set(key, change);
@@ -486,19 +486,19 @@ export function rebaseDraft(
     fail("changed", "configuration", "", "（设置需升级）");
   }
 
-  // Family concurrency limits: the key is the exact adapter/provider/model
+  // Model service concurrency limits: the key is the exact adapter/provider/model
   // tuple, so effort variants and occupancy never take part in the comparison.
-  const mergedConcurrency = new Map<string, ModelConcurrencySetting>();
-  for (const entry of draft.modelConcurrency) {
+  const mergedConcurrency = new Map<string, ModelServiceConcurrencySetting>();
+  for (const entry of draft.modelServiceConcurrency) {
     if (concurrencyLimit(entry.limit) === null) {
-      fail("changed", "modelConcurrency", familyText(entry), "（请先修正草稿中的无效值）");
+      fail("changed", "modelServiceConcurrency", modelServiceText(entry), "（请先修正草稿中的无效值）");
     }
   }
-  for (const change of modelConcurrencyChanges(baseline, draft)) {
-    const key = familyKey(change);
-    const freshEntry = nextBaseline.modelConcurrency.find((entry) => familyKey(entry) === key);
+  for (const change of modelServiceConcurrencyChanges(baseline, draft)) {
+    const key = modelServiceKey(change);
+    const freshEntry = nextBaseline.modelServiceConcurrency.find((entry) => modelServiceKey(entry) === key);
     if (!freshEntry) {
-      fail("unread", "modelConcurrency", familyText(change));
+      fail("unread", "modelServiceConcurrency", modelServiceText(change));
       continue;
     }
     mergedConcurrency.set(key, change);
@@ -508,12 +508,12 @@ export function rebaseDraft(
 
   const preferences = nextBaseline.preferences.filter(p => !preferenceMerges.has(p.profileId) && !preferenceRemovals.has(p.profileId));
   for (const preference of preferenceMerges.values()) preferences.push(preference);
-  const familyAnnotations = nextBaseline.familyAnnotations.filter(
-    (annotation) => !mergedNotes.has(familyKey(annotation)),
+  const modelServiceNotes = nextBaseline.modelServiceNotes.filter(
+    (annotation) => !mergedNotes.has(modelServiceKey(annotation)),
   );
   for (const [key, change] of mergedNotes) {
-    const known = nextBaseline.familyAnnotations.find((a) => familyKey(a) === key);
-    familyAnnotations.push({ ...(known ?? emptyFamilyAnnotation(change)), text: change.text });
+    const known = nextBaseline.modelServiceNotes.find((a) => modelServiceKey(a) === key);
+    modelServiceNotes.push({ ...(known ?? emptyModelServiceNote(change)), text: change.text });
   }
   return {
     baseline: nextBaseline,
@@ -525,10 +525,10 @@ export function rebaseDraft(
           : profile,
       ),
       preferences,
-      familyAnnotations,
+      modelServiceNotes,
       configuration: mergedRouting,
-      modelConcurrency: nextBaseline.modelConcurrency.map((entry) =>
-        mergedConcurrency.get(familyKey(entry)) ?? entry),
+      modelServiceConcurrency: nextBaseline.modelServiceConcurrency.map((entry) =>
+        mergedConcurrency.get(modelServiceKey(entry)) ?? entry),
     },
     conflicts,
   };

@@ -197,7 +197,7 @@ class CatalogObservationTests(BoardTestCase):
         profile_id = 'dsh:fixture:alpha:max'
         with self.e.db.write() as db:
             db.execute('UPDATE evaluation_profiles SET enabled=1 WHERE profile_id=?', (profile_id,))
-            db.execute("INSERT INTO family_annotations VALUES('dsh','fixture','alpha','human text','now')")
+            db.execute("INSERT INTO model_service_notes VALUES('dsh','fixture','alpha','human text','now')")
             db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','my reason')", (profile_id,))
         # A first confirmed absence is pending, not a retirement: the profile
         # keeps its metadata, its routability and the user's intent (ADR-027).
@@ -219,8 +219,8 @@ class CatalogObservationTests(BoardTestCase):
         self.assertEqual(current['profiles'][0]['catalogStatus'], 'available')
         self.assertNotIn('pendingSince', current['profiles'][0])
         self.assertTrue(current['profiles'][0]['enabled'])
-        self.assertEqual(current['familyAnnotations'][0]['text'], 'human text')
-        self.assertEqual({key: current['familyAnnotations'][0][key] for key in ('adapter', 'provider', 'model')},
+        self.assertEqual(current['modelServiceNotes'][0]['text'], 'human text')
+        self.assertEqual({key: current['modelServiceNotes'][0][key] for key in ('adapter', 'provider', 'model')},
                          {'adapter': 'dsh', 'provider': 'fixture', 'model': 'alpha'})
         with self.e.db.read() as db:
             self.assertIsNotNone(catalog_store.current(db).lookup('dsh', 'fixture', 'alpha'))

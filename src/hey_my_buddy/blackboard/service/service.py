@@ -314,7 +314,7 @@ class BoardService(_BaseResource):
                 "runtimeStable": bool(identity.get("stable")),
                 "runtimeContentId": identity.get("contentId"),
                 # One machine-wide concurrent-attempt ceiling shared by routing and
-                # execution; ``capacity.models`` reports the per-family limits and
+                # execution; ``capacity.models`` reports the per-model-service limits and
                 # occupancy so a caller never has to infer which limit refused a
                 # claim.
                 "maxConcurrent": self.store.max_concurrent,

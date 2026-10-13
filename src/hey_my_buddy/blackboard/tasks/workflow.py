@@ -5595,7 +5595,7 @@ class WorkflowCoordinator:
         """Read the shared stash state of the claim's actual candidates, outside every transaction.
 
         The candidate set mirrors the claim scan itself — the same bounded
-        queued-candidate window in the same arrival order (family exclusions are
+        queued-candidate window in the same arrival order (model service exclusions are
         not repeated: they can only shrink the claim's own choice, and the
         retry below covers any drift) — so the observation the claim's write
         transaction freezes is normally the observation of exactly the run it

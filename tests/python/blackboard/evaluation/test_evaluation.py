@@ -38,8 +38,8 @@ SECOND_PROFILE = {
 }
 
 
-def family_key(profile: dict) -> dict:
-    """The ``(adapter, provider, model)`` key a family-keyed row or patch uses."""
+def model_service_key(profile: dict) -> dict:
+    """The ``(adapter, provider, model)`` key a model-service-keyed row or patch uses."""
     return {key: profile[key] for key in ("adapter", "provider", "model")}
 
 
@@ -106,7 +106,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(snapshot["configuration"]["routingBudget"], "standard")
         self.assertEqual(snapshot["profiles"], [])
         self.assertEqual(snapshot["preferences"], [])
-        self.assertEqual(snapshot["familyAnnotations"], [])
+        self.assertEqual(snapshot["modelServiceNotes"], [])
         self.assertEqual(snapshot["decisions"], [])
         # A no-tool executor can offer selection without a configured Router;
         # fresh settings remain empty until the user chooses each slot.
@@ -121,13 +121,13 @@ class EvaluationPublishTests(EvaluationTestCase):
         first = self.publish(board, command_id="c1",
                              profileSettings=[{"profileId": PROFILE_ID, "enabled": True}],
                              preferenceChanges=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "cheap and fast"}],
-                             familyAnnotationChanges=[{**family_key(PROFILE), "text": "human context"}])
+                             modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "human context"}])
         self.assertTrue(first["published"])
         self.publish(board, command_id="c2", profileSettings=[])
         snapshot = self.snapshot(board)
         self.assertTrue(next(item for item in snapshot["profiles"] if item["profileId"] == PROFILE_ID)["enabled"])
         self.assertEqual(snapshot["preferences"][0]["reason"], "cheap and fast")
-        self.assertEqual(snapshot["familyAnnotations"][0]["text"], "human context")
+        self.assertEqual(snapshot["modelServiceNotes"][0]["text"], "human context")
 
     def test_program_fields_are_rejected(self):
         board = self.board()
@@ -139,15 +139,15 @@ class EvaluationPublishTests(EvaluationTestCase):
         board = self.board()
         self.seed_catalog(board)
         params = self.publication_params(board)
-        first = self.publish_with(board, params, "first-tab", familyAnnotationChanges=[{**family_key(PROFILE), "text": "first"}])
+        first = self.publish_with(board, params, "first-tab", modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "first"}])
         second = self.publish_with(board, params, "second-tab",
-                                   familyAnnotationChanges=[{**family_key(PROFILE), "text": "second"}])
+                                   modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "second"}])
         snapshot = self.snapshot(board)
         self.assertTrue(first["published"] and second["published"])
         self.assertFalse(next(p for p in snapshot["profiles"] if p["profileId"] == PROFILE_ID)["enabled"])
-        self.assertEqual(snapshot["familyAnnotations"][0]["text"], "second")
-        self.assertTrue(self.publish_with(board, params, "first-tab", familyAnnotationChanges=[{**family_key(PROFILE), "text": "first"}])["duplicate"])
-        self.assertEqual(self.snapshot(board)["familyAnnotations"][0]["text"], "second")
+        self.assertEqual(snapshot["modelServiceNotes"][0]["text"], "second")
+        self.assertTrue(self.publish_with(board, params, "first-tab", modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "first"}])["duplicate"])
+        self.assertEqual(self.snapshot(board)["modelServiceNotes"][0]["text"], "second")
 
     def test_profile_execution_identity_is_program_owned(self):
         board = self.board()
@@ -171,11 +171,11 @@ class EvaluationPublishTests(EvaluationTestCase):
                      configuration={"routerProfileIds": [SECOND_PROFILE_ID]})
         self.publish(board, request_id="w4", command_id="c4",
                      profileSettings=[{"profileId": SECOND_PROFILE_ID, "enabled": False}],
-                     familyAnnotationChanges=[{**family_key(PROFILE), "text": "other edit"}])
+                     modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "other edit"}])
         snapshot = self.snapshot(board)
         self.assertEqual(snapshot["preferences"][0]["mode"], "pin")
         self.assertEqual(snapshot["configuration"]["routerProfileIds"], [SECOND_PROFILE_ID])
-        self.assertEqual(snapshot["familyAnnotations"][0]["text"], "other edit")
+        self.assertEqual(snapshot["modelServiceNotes"][0]["text"], "other edit")
 
     def test_configuration_carries_router_profile_and_budget_without_maintenance(self):
         from protocol.fixtures import mock_readonly
@@ -217,17 +217,17 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.seed_catalog(board)
         grant = self.publication_params(board)
         base = {"commandId": "same-command", **grant}
-        payload = {**base, "familyAnnotationChanges": [{**family_key(PROFILE), "text": "first"}]}
+        payload = {**base, "modelServiceNoteChanges": [{**model_service_key(PROFILE), "text": "first"}]}
         board.console_call("user_policy_publish", payload)
         self.assertTrue(board.console_call("user_policy_publish", payload)["duplicate"])
         self.assert_code("CONFLICT", board.console_call, "user_policy_publish",
-                         {**base, "familyAnnotationChanges": []})
+                         {**base, "modelServiceNoteChanges": []})
         self.assert_code("CONFLICT", board.console_call, "user_policy_publish",
-                         {**base, "familyAnnotationChanges": None})
+                         {**base, "modelServiceNoteChanges": None})
         other = self.publication_params(board)
         self.assert_code("INVALID_ARGUMENT", self.publish_with, board, other, "fresh-command",
-                         familyAnnotationChanges=None)
-        self.assertEqual(self.snapshot(board)["familyAnnotations"][0]["text"], "first")
+                         modelServiceNoteChanges=None)
+        self.assertEqual(self.snapshot(board)["modelServiceNotes"][0]["text"], "first")
 
 
     def test_snapshot_never_leaks_credentials(self):
@@ -235,7 +235,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.seed_catalog(board)
         grant = self.publication_params(board)
         self.publish_with(board, grant, "c1",
-                          familyAnnotationChanges=[{**family_key(PROFILE), "text": "visible opinion"}])
+                          modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "visible opinion"}])
         raw = json.dumps(self.snapshot(board))
         self.assertNotIn(board.service.token, raw)
         self.assertNotIn("token_verifier", raw)
@@ -272,29 +272,29 @@ class EvaluationPublishTests(EvaluationTestCase):
         board = self.board()
         self.seed_catalog(board)
         self.refused_publish(board, "INVALID_ARGUMENT", request_id="w1", command_id="c1",
-                             familyPreferenceChanges=[{**family_key(PROFILE), "mode": "prefer"}])
+                             familyPreferenceChanges=[{**model_service_key(PROFILE), "mode": "prefer"}])
         self.refused_publish(board, "INVALID_ARGUMENT", request_id="w2", command_id="c2",
                              preferenceChanges=[{"profileId": PROFILE_ID, "mode": "none"}])
         self.assertEqual(self.snapshot(board)["preferences"], [])
 
-    def test_family_annotations_write_update_and_clear(self):
+    def test_model_service_notes_write_update_and_clear(self):
         board = self.board()
         self.seed_catalog(board)
         first = self.publish(board, request_id="w1", command_id="c1",
-                             familyAnnotationChanges=[{**family_key(PROFILE), "text": "first note"}])
-        self.assertEqual(first["counts"]["familyAnnotationChanges"], 1)
-        note = self.snapshot(board)["familyAnnotations"][0]
+                             modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "first note"}])
+        self.assertEqual(first["counts"]["modelServiceNoteChanges"], 1)
+        note = self.snapshot(board)["modelServiceNotes"][0]
         self.assertEqual((note["adapter"], note["provider"], note["model"]),
                          (PROFILE["adapter"], PROFILE["provider"], PROFILE["model"]))
         self.assertEqual(note["text"], "first note")
         self.assertTrue(note["updatedAt"])
         self.publish(board, request_id="w2", command_id="c2",
-                     familyAnnotationChanges=[{**family_key(PROFILE), "text": "second note"}])
-        updated = self.snapshot(board)["familyAnnotations"][0]
+                     modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": "second note"}])
+        updated = self.snapshot(board)["modelServiceNotes"][0]
         self.assertEqual(updated["text"], "second note")
         self.publish(board, request_id="w3", command_id="c3",
-                     familyAnnotationChanges=[{**family_key(PROFILE), "text": ""}])
-        self.assertEqual(self.snapshot(board)["familyAnnotations"], [])
+                     modelServiceNoteChanges=[{**model_service_key(PROFILE), "text": ""}])
+        self.assertEqual(self.snapshot(board)["modelServiceNotes"], [])
 
 
 class CatalogRefreshTests(EvaluationTestCase):
@@ -343,7 +343,7 @@ class ConsoleCoreTests(BoardTestCase):
         board = self.board()
         core = board.evaluation.console_core()
         for key in ("configuration", "configurationError", "profiles",
-                    "modelConcurrency", "unavailableProfileCount", "preferences", "familyAnnotations",
+                    "modelServiceConcurrency", "unavailableProfileCount", "preferences", "modelServiceNotes",
                     "decisions"):
             self.assertIn(key, core)
         snapshot = board.evaluation.snapshot({})

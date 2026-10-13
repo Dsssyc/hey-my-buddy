@@ -4,7 +4,7 @@ import {
   preferenceChanges,
   profileSettings,
 } from "./draft";
-import { concurrencyLimit, familyKey, retryIntervalSeconds } from "./console-data";
+import { concurrencyLimit, modelServiceKey, retryIntervalSeconds } from "./console-data";
 import { profileName, profileTitle } from "./profile-display";
 
 /** The two capabilities have distinct authority and cannot stand in for each other. */
@@ -84,8 +84,8 @@ export type PolicyIssue = {
   profileId: string;
   label: string;
   message: string;
-  /** Family key for a family-level issue; profile-level issues leave it unset. */
-  family?: string;
+  /** Model service key for a model service issue; profile-level issues leave it unset. */
+  modelService?: string;
   /** The Router itself needs attention; the page's routing status shows it. */
   router?: boolean;
 };
@@ -116,7 +116,7 @@ function pinRefusal(profile: Profile | undefined): string | null {
  * *transitions into* pin or a changed
  * Router needs a currently legal model; changing the reason of an existing pin,
  * a disable and every other edit stay independent of current availability. A
- * family's concurrency limit is equally independent of availability — it only
+ * model service's concurrency limit is equally independent of availability — it only
  * has to be an integer in 1–32.
  */
 export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
@@ -125,13 +125,13 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
     baseline.preferences.map((p) => [p.profileId, p.mode]),
   );
   const issues: PolicyIssue[] = [];
-  for (const entry of draft.modelConcurrency) {
+  for (const entry of draft.modelServiceConcurrency) {
     if (concurrencyLimit(entry.limit) !== null) continue;
-    const member = draft.profiles.find((profile) => familyKey(profile) === familyKey(entry));
+    const member = draft.profiles.find((profile) => modelServiceKey(profile) === modelServiceKey(entry));
     const subject = member ? profileName(member) : `${entry.adapter}/${entry.provider}/${entry.model}`;
     issues.push({
       profileId: member?.profileId ?? `${entry.adapter}/${entry.provider}/${entry.model}`,
-      family: familyKey(entry),
+      modelService: modelServiceKey(entry),
       label: subject,
       message: `${subject} 并发上限须为 1–32 的整数；请修改。`,
     });

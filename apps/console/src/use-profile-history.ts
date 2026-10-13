@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
-import { familyKey } from "./console-data";
-import type { ModelFamily, ProfilePage, Snapshot } from "./types";
+import { modelServiceKey } from "./console-data";
+import type { ModelService, ProfilePage, Snapshot } from "./types";
 
 /** One bounded page of retained identities, including unavailable history. */
 export const PROFILE_PAGE_SIZE = 100;
@@ -20,13 +20,13 @@ export const FILTER_DEBOUNCE_MS = 300;
 /** Rejects an incomplete envelope instead of rendering invented profile facts. */
 export function parseProfilePage(value: unknown): ProfilePage {
   const page = value as ProfilePage | null;
-  // Family annotations are optional on a page, but a present value must be a list.
+  // Model service notes are optional on a page, but a present value must be a list.
   const optionalList = (value: unknown) => value === undefined || Array.isArray(value);
   const valid = !!page
     && Array.isArray(page.profiles)
     && Array.isArray(page.preferences)
-    && optionalList(page.familyAnnotations)
-    && Array.isArray(page.modelConcurrency)
+    && optionalList(page.modelServiceNotes)
+    && Array.isArray(page.modelServiceConcurrency)
     && (page.nextCursor === null || typeof page.nextCursor === "string");
   if (!valid) throw new Error("配置历史响应不完整，请检查服务版本。");
   return page;
@@ -60,9 +60,9 @@ function addMissing<T extends { profileId: string }>(current: T[], extra: T[]): 
   return added.length ? [...current, ...added] : current;
 }
 
-function addMissingFamilies<T extends ModelFamily>(current: T[], extra: T[]): T[] {
-  const known = new Set(current.map(familyKey));
-  const added = extra.filter((entry) => !known.has(familyKey(entry)) && (known.add(familyKey(entry)), true));
+function addMissingModelServices<T extends ModelService>(current: T[], extra: T[]): T[] {
+  const known = new Set(current.map(modelServiceKey));
+  const added = extra.filter((entry) => !known.has(modelServiceKey(entry)) && (known.add(modelServiceKey(entry)), true));
   return added.length ? [...current, ...added] : current;
 }
 
@@ -74,8 +74,8 @@ export function mergePage(previous: ProfilePage | null, next: ProfilePage): Prof
   return {
     profiles: addMissing(previous.profiles, next.profiles),
     preferences: addMissing(previous.preferences, next.preferences),
-    familyAnnotations: addMissingFamilies(previous.familyAnnotations ?? [], next.familyAnnotations ?? []),
-    modelConcurrency: addMissingFamilies(previous.modelConcurrency, next.modelConcurrency),
+    modelServiceNotes: addMissingModelServices(previous.modelServiceNotes ?? [], next.modelServiceNotes ?? []),
+    modelServiceConcurrency: addMissingModelServices(previous.modelServiceConcurrency, next.modelServiceConcurrency),
     nextCursor: next.nextCursor,
   };
 }
@@ -97,8 +97,8 @@ export function historySourceKey(snapshot: Snapshot): string {
     eventCursor: snapshot.eventCursor,
     profiles: snapshot.profiles.map(({ profileId, available, enabled }) => [profileId, available, enabled]),
     preferences: snapshot.preferences,
-    familyAnnotations: snapshot.familyAnnotations,
-    modelConcurrency: snapshot.modelConcurrency.map(({ adapter, provider, model, limit }) => [adapter, provider, model, limit]),
+    modelServiceNotes: snapshot.modelServiceNotes,
+    modelServiceConcurrency: snapshot.modelServiceConcurrency.map(({ adapter, provider, model, limit }) => [adapter, provider, model, limit]),
     configuration: snapshot.configuration,
     unavailableProfileCount: snapshot.unavailableProfileCount,
   });

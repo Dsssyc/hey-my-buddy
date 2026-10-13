@@ -121,7 +121,6 @@ class FailoverTests(RouterDispatchTestCase):
         self.assert_switch(request, first, output)
         second = self.next_claim(request)
         self.assertEqual(second["decisionInput"]["routerProfileId"], B)
-        self.assertEqual(second["attempt"]["modelFamily"], {"adapter": "dsh", "provider": "fixture", "model": "bravo"})
         self.assertEqual(self.tool_policy(second["attempt"]["attemptId"]), {"systemSandbox": False})
         result = self.report(second, self.failure(second, "provider-error"), status="failed")
         self.assertEqual(result["decision"]["status"], "needs-host")

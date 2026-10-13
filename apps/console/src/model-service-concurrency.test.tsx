@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
-import type { ModelConcurrencyEntry, Profile, Snapshot } from "./types";
+import type { ModelServiceConcurrencyEntry, Profile, Snapshot } from "./types";
 import { listed, modelRow, pane, selectModel } from "./buddies/page.testing";
 
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
@@ -28,10 +28,10 @@ function catalog(): Profile[] {
   ];
 }
 
-const flashEntry: ModelConcurrencyEntry = {
+const flashEntry: ModelServiceConcurrencyEntry = {
   adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1,
 };
-const retiredEntry: ModelConcurrencyEntry = {
+const retiredEntry: ModelServiceConcurrencyEntry = {
   adapter: "dsh", provider: "deepseek-official", model: "retired-model", limit: 3, active: 0,
 };
 
@@ -45,13 +45,13 @@ function fixture(options: { discoveryLimit?: number } = {}) {
     configuration: { routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
 
-    familyAnnotations: [], preferences: [], decisions: [],
-    modelConcurrency: [flashEntry, retiredEntry],
+    modelServiceNotes: [], preferences: [], decisions: [],
+    modelServiceConcurrency: [flashEntry, retiredEntry],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
   };
 
-  const applyLimits = (patches: LimitPatch[]) => state.modelConcurrency.map((entry) => {
+  const applyLimits = (patches: LimitPatch[]) => state.modelServiceConcurrency.map((entry) => {
     const patch = patches.find((candidate) => candidate.adapter === entry.adapter
       && candidate.provider === entry.provider && candidate.model === entry.model);
     return patch ? { ...entry, limit: patch.limit } : entry;
@@ -62,22 +62,22 @@ function fixture(options: { discoveryLimit?: number } = {}) {
     operations.push(operation);
     if (operation === "user_policy_publish") {
       published.push(params);
-      const limits = (params.modelConcurrency ?? []) as LimitPatch[];
-      state = { ...state, modelConcurrency: limits.length ? applyLimits(limits) : state.modelConcurrency,
+      const limits = (params.modelServiceConcurrency ?? []) as LimitPatch[];
+      state = { ...state, modelServiceConcurrency: limits.length ? applyLimits(limits) : state.modelServiceConcurrency,
  };
       return { published: true,};
     }
 
 
     if (operation === "model_profiles") {
-      return { profiles, familyAnnotations: [], preferences: [],         modelConcurrency: structuredClone(state.modelConcurrency), nextCursor: null };
+      return { profiles, modelServiceNotes: [], preferences: [],         modelServiceConcurrency: structuredClone(state.modelServiceConcurrency), nextCursor: null };
     }
     if (operation === "model_catalog_refresh") {
       // The program publishes directory facts itself. A discovery can also
-      // carry another writer's concurrency limit for the flash family.
+      // carry another writer's concurrency limit for the flash model service.
       state = { ...state,
         ...(options.discoveryLimit !== undefined
-          ? { modelConcurrency: applyLimits([{ adapter: "dsh", provider: "deepseek-official",
+          ? { modelServiceConcurrency: applyLimits([{ adapter: "dsh", provider: "deepseek-official",
               model: "deepseek-flash", limit: options.discoveryLimit }]) }
           : {}) };
       return {};
@@ -140,7 +140,7 @@ describe("a model's concurrency", () => {
     expect(f.command).not.toHaveBeenCalled();
   });
 
-  it("publishes a changed limit as a family patch and never the occupancy", async () => {
+  it("publishes a changed limit as a model service patch and never the occupancy", async () => {
     const f = fixture();
     const user = userEvent.setup();
     await openFlashCard(f, user);
@@ -153,7 +153,7 @@ describe("a model's concurrency", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
     expect(f.published).toHaveLength(1);
-    expect(f.published[0].modelConcurrency).toEqual([
+    expect(f.published[0].modelServiceConcurrency).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
     ]);
     const wire = JSON.stringify(f.published[0]);
@@ -198,7 +198,7 @@ describe("a model's concurrency", () => {
     await user.type(input, "4");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
-    expect(f.published[0].modelConcurrency[0].limit).toBe(4);
+    expect(f.published[0].modelServiceConcurrency[0].limit).toBe(4);
   });
 
   it("edits the concurrency limit of an unavailable model", async () => {
@@ -220,7 +220,7 @@ describe("a model's concurrency", () => {
     await unsaved();
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
-    expect(f.published[0].modelConcurrency).toEqual([
+    expect(f.published[0].modelServiceConcurrency).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "retired-model", limit: 4 },
     ]);
   });
@@ -237,7 +237,7 @@ describe("a model's concurrency", () => {
     expect(concurrencyInput()).toHaveProperty("value", "6");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
-    expect(f.published[0].modelConcurrency).toEqual([{ adapter: "dsh", provider: "deepseek-official",
+    expect(f.published[0].modelServiceConcurrency).toEqual([{ adapter: "dsh", provider: "deepseek-official",
       model: "deepseek-flash", limit: 6 }]);
   });
 });

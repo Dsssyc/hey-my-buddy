@@ -43,8 +43,8 @@ class EvaluationStore:
                 configuration_error = {"code": error.code, "message": str(error)}
             configured_ids = (settings or {}).get("routerProfileIds") or []
             configured_marks = ",".join("?" for _ in configured_ids) or "NULL"
-            from ..catalog.catalog import pending_families
-            pending = pending_families(connection)
+            from ..catalog.catalog import pending_model_services
+            pending = pending_model_services(connection)
             profiles = [
                 self._profile_view(row, pending=pending)
                 for row in connection.execute(
@@ -77,14 +77,14 @@ class EvaluationStore:
             unavailable_count = connection.execute(
                 "SELECT COUNT(*) AS count FROM evaluation_profiles p LEFT JOIN harness_health h ON h.adapter=p.adapter WHERE p.available=0 OR h.status IS NULL OR h.status!='ready'"
             ).fetchone()["count"]
-            # One row per model family represented in this response, with the
+            # One row per model service represented in this response, with the
             # effective limit (explicit setting or default) and the unresolved
-            # attempt count. Effort variants collapse into their shared family.
-            families = {
+            # attempt count. Effort variants collapse into their shared model service.
+            model_services = {
                 (profile["adapter"], profile["provider"], profile["model"])
                 for profile in profiles
             }
-            model_concurrency = self.board.model_capacity_rows(connection, families)
+            model_service_concurrency = self.board.model_capacity_rows(connection, model_services)
             event_cursor = self.board._head_of(connection)
         return {
             "eventCursor": event_cursor,
@@ -94,7 +94,7 @@ class EvaluationStore:
             } if settings is not None else None),
             "configurationError": configuration_error,
             "profiles": profiles,
-            "modelConcurrency": model_concurrency,
+            "modelServiceConcurrency": model_service_concurrency,
             "unavailableProfileCount": unavailable_count,
             **policy,
             "decisions": decisions,
@@ -167,8 +167,8 @@ class EvaluationStore:
             # ADR-027 rule 6: the model-level catalog judgment, separate from the
             # harness-level reading state above. Pending is per model identity.
             from ..catalog.catalog import CONFIRMED_ABSENCE_REASON
-            family = (row["adapter"], row["provider"], row["model"])
-            since = (pending or {}).get(family)
+            model_service = (row["adapter"], row["provider"], row["model"])
+            since = (pending or {}).get(model_service)
             if since:
                 view["catalogStatus"] = "pending"
                 view["pendingSince"] = since
@@ -217,10 +217,10 @@ class EvaluationStore:
             self.board._store_receipt(connection, command_id, "user_policy.publish", request, response)
             head = self.board._head_of(connection)
         self.board._notify(head)
-        if published.get("enabledFamilies"):
+        if published.get("enabledModelServices"):
             from . import model_facts
             try:
-                model_facts.refresh_families(self.board, published["enabledFamilies"], now=self._now())
+                model_facts.refresh_model_services(self.board, published["enabledModelServices"], now=self._now())
             except Exception:  # noqa: BLE001 - a committed setting does not depend on the network
                 pass
         return response

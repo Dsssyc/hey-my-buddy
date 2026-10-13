@@ -278,14 +278,14 @@ class BoundaryReadingTests(RouterDispatchTestCase):
     def test_later_profiles_and_preferences_cannot_replace_frozen_facts(self):
         self.set_settings(ids=[])
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO family_annotations VALUES('dsh','fixture','alpha','private note',?)", (T0,))
+            db.execute("INSERT INTO model_service_notes VALUES('dsh','fixture','alpha','private note',?)", (T0,))
             db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','private preference')", (B,))
         request = self.request()
         frozen = self.boundary(request["decisionId"])
         with self.board_.store.db.write() as db:
             db.execute("UPDATE evaluation_profiles SET model='later-model'")
             db.execute("UPDATE evaluation_preferences SET reason='later preference'")
-            db.execute("DELETE FROM family_annotations")
+            db.execute("DELETE FROM model_service_notes")
         current = self.boundary(request["decisionId"])
         self.assertEqual(current["facts"], frozen["facts"])
         self.assertEqual(current["candidates"], frozen["candidates"])

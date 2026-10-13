@@ -39,7 +39,7 @@ class CatalogTrustTests(BoardTestCase):
     def state(self, adapter='dsh'):
         with self.board.store.db.read() as db:
             row = db.execute('SELECT status, reason, discovery_id FROM catalog_current WHERE adapter=?', (adapter,)).fetchone()
-            pending = catalog.pending_families(db)
+            pending = catalog.pending_model_services(db)
             read_at = catalog.catalog_read_at(db, adapter)
             profiles = db.execute('SELECT profile_id, available, unavailable_reason FROM evaluation_profiles WHERE adapter=?', (adapter,)).fetchall()
         return row, pending, read_at, profiles
@@ -100,7 +100,7 @@ class CatalogTrustTests(BoardTestCase):
         before_events = self.events()
         with self.assertRaises(AssertionError):
             with self.board.store.db.write() as db:
-                catalog._write_pending_map(db, 'dsh', {catalog._family_key('fixture', 'beta'):
+                catalog._write_pending_map(db, 'dsh', {catalog._model_service_key('fixture', 'beta'):
                                                       {'since':'later','efforts':['max']}})
                 raise AssertionError('private publisher rollback')
         self.assertEqual(self.state()[1], before)
