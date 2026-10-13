@@ -102,7 +102,7 @@ Manual continuation records new input on the same logical goal and invalidates e
 
 Continue and retry have different meanings. Continuation consumes new input after a stopped execution; `execution-retry` repeats a failed attempt record. Control mutations are fenced by owner generation, expected revision and idempotent command receipts: a stale generation is rejected with `STALE_GENERATION`, a stale revision with `REVISION_CONFLICT`, and replaying the same command ID with changed input is a `CONFLICT`.
 
-Takeover rotates the control capability and owner generation without restarting the current execution. Keep the new returned `controlFile`; late operations by the old generation are rejected. An authenticated console user can make an explicit decision or takeover through the private console, whose server attaches its own session authority; browser JSON flags cannot claim user authority.
+Takeover rotates the control capability and owner generation without restarting the current execution. What the earlier Host accepted or concluded stays in force: a concluded micro task remains closed for the new Host until it continues the work. Keep the new returned `controlFile`; late operations by the old generation are rejected. An authenticated console user can make an explicit decision or takeover through the private console, whose server attaches its own session authority; browser JSON flags cannot claim user authority.
 
 ## Workspace and artifact rules
 
