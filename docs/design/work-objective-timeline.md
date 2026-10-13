@@ -1,6 +1,6 @@
 # 工作目标时间轴：视觉与交互设计稿
 
-状态：设计稿，供实现与视觉审查使用；不是实现、验收或安装记录。范围来自 [ADR-012 第十节](../decisions/012-claude-code-distribution-and-evidence-routing.md#十宏任务与委派时间轴) 的用户授权：界面名称“工作目标”，默认按最近活动排序，超过 30 分钟的真正空闲区间折叠且可展开。静态示意稿见 [`apps/console/design/work-objective-timeline.html`](../../apps/console/design/work-objective-timeline.html)，其中所有数据都是设计示例。
+状态：设计稿，供实现与视觉审查使用；不是实现、验收或安装记录。范围来自 [ADR-012 第十节](../decisions/012-claude-code-distribution-and-evidence-routing.md#十宏任务与委派时间轴) 的开发者授权：界面名称“工作目标”，默认按最近活动排序，超过 30 分钟的真正空闲区间折叠且可展开。静态示意稿见 [`apps/console/design/work-objective-timeline.html`](../../apps/console/design/work-objective-timeline.html)，其中所有数据都是设计示例。
 
 ## 1. 不变量
 

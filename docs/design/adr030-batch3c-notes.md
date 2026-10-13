@@ -7,7 +7,7 @@
 第二实现回合封存为 `b00d4ada` 的四项更正如下；第三回合封存 `ca1cad90` 只检查和验证已有实现、补记本说明，没有再改设计或实现代码。
 
 1. 内置供应方文件改为定位安装中的原文件，绝不复制，且缺失在可用性与准备边界报真实不可用；个人文件由 ZCode 自己定位，计费读取失败只标未知。
-2. 删除 `ZCODE_MODEL_TELEMETRY_ENABLED=0`，按 Host 传达的用户决定让遥测跟 ZCode 自己的设置走。
+2. 删除 `ZCODE_MODEL_TELEMETRY_ENABLED=0`，按 Host 传达的开发者决定让遥测跟 ZCode 自己的设置走。
 3. 每次启动只读取用户设置的 `memoryEnabled` 与 `nativeSearchEnhancementsEnabled`，按用户值答复原生请求，在无工具范围收紧搜索，并保留成功发出的偏好答复事实。
 4. 修正非密钥供应方准备测试的成功判据，要求调用成功并产生输入文件；模拟 CLI 与版本包装命令补齐原生必需的合成内置文件布局。
 
@@ -15,7 +15,7 @@
 
 ## 本次续接：标题用原生默认，核对真实 CLI 测试隔离
 
-Host 在 `ca1cad90` 后传达用户的决定：交给 harness 的内容清单是穷尽的，省一次模型调用也不是例外。本次从发现、带会话工具的 Worker 与最终消息载体的两种范围中删除 `titleGenerationEnabled=False`，问询实验与本说明的握手探针同步删除该字段。会话标题跟 ZCode 原生默认走；空工具清单、空会话 MCP、off-peak 与 dynamic workflow 的关闭仍表达无工具权限，不改；没有为可能出现的标题事件增加处理。模拟原生程序在收到建会话参数时明确断言没有标题覆盖，带工具的模拟程序对建会话与续接参数都作同一检查。
+Host 在 `ca1cad90` 后传达开发者的决定：交给 harness 的内容清单是穷尽的，省一次模型调用也不是例外。本次从发现、带会话工具的 Worker 与最终消息载体的两种范围中删除 `titleGenerationEnabled=False`，问询实验与本说明的握手探针同步删除该字段。会话标题跟 ZCode 原生默认走；空工具清单、空会话 MCP、off-peak 与 dynamic workflow 的关闭仍表达无工具权限，不改；没有为可能出现的标题事件增加处理。模拟原生程序在收到建会话参数时明确断言没有标题覆盖，带工具的模拟程序对建会话与续接参数都作同一检查。
 
 Host 在本次续接输入中报告：真实 ZCode 0.16.9 无须另外指定就能以发现、Worker、无工具三种方式启动，目录的 12 个四段名字与原有目录相同，启动前后用户供应方文件与应用包内置文件均未改写；额度用尽时 Worker 与无工具路径均带回原生失败原因和额度事实，回合里的记忆与搜索答复来自用户设置。这些是 Host 对标题覆盖删除前源码的实测，本实现方没有执行真实 CLI 或读取用户文件；删除覆盖后、原生生成标题时的无工具真实调用留给 Host 复核，不能用模拟程序的通过代替。
 
@@ -41,7 +41,7 @@ Host 在本次续接输入中报告：真实 ZCode 0.16.9 无须另外指定就�
 | `ZCODE_SESSION_DB_PATH` | 保留，指向同一根下的 `sessions.sqlite` | 会话续接；绑定与精确身份校验未改 |
 | `ZCODE_LOG_DIR` | 保留，指向本次 invocation 的 `native-logs` | 原生证据的位置 |
 | `ZCODE_LOG_CONSOLE=0` | 保留 | stdout 是 JSON-RPC 传输，日志走独立证据路径 |
-| `ZCODE_MODEL_TELEMETRY_ENABLED=0` | 删除 | Host 传达用户已同意：遥测跟用户自己的 ZCode 设置走 |
+| `ZCODE_MODEL_TELEMETRY_ENABLED=0` | 删除 | Host 传达开发者已同意：遥测跟用户自己的 ZCode 设置走 |
 | `ZCODE_DATA_BASE_DIR` | 沿用共用白名单，不改值 | 原生用户配置位置，计费读取使用同一位置 |
 | `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` | 保留定位，等于 `provider_paths` 返回的安装内置原文件路径 | 独立 CLI 启动所需；缺失在准备阶段报不可用，不复制 |
 | `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` | 不设置 | 原生自己找得到个人配置；shell 覆盖不属于共用白名单 |
@@ -192,7 +192,7 @@ Host 仍需完整运行上述启动器/IPC 用例，以及 `cli.test_checks_clea
 
 ## 本次 Host 打回：两处断言与标题证据清理
 
-Host 在 `0a1c05d4` 上报告用户批准的三次真实调用均正常结束：经角色控制器、用户真实主目录的可写回合、同一原生会话的续接和无工具调用；删除标题参数后无工具路径不受影响，启动前后用户供应方文件未改写。Host 的合并树完整检查为 217 个文件中 215 个通过，剩余两处是本批改动后没有更新的测试断言；这些是 Host 提供的实测结果，本实现方没有执行真实调用。
+Host 在 `0a1c05d4` 上报告开发者批准的三次真实调用均正常结束：经角色控制器、用户真实主目录的可写回合、同一原生会话的续接和无工具调用；删除标题参数后无工具路径不受影响，启动前后用户供应方文件未改写。Host 的合并树完整检查为 217 个文件中 215 个通过，剩余两处是本批改动后没有更新的测试断言；这些是 Host 提供的实测结果，本实现方没有执行真实调用。
 
 本次给 `WorkerSeamTests.test_a_failed_close_keeps_the_observed_completion_tool_facts` 的允许证据集合加入 `native-runtime-preferences`，保持失败关闭不能发布角色记录的其余断言；给 `FastRegisteredRunTests.test_fast_consumes_public_frames_and_corrects_on_the_registered_process` 删除标题字段期望。仓库检索未找到运行代码单独读取 `titleGenerationEnabled`：`run_execution._fast_result` 与 `router` 只转发整个 `nativeEvidence`，因此删除 ZCode `native_evidence` 中这项旧标题覆盖投影，并同步更新该文件的 `NativeEvidenceProjectionTests`；保留事件数、工具清单、EOF 和原生身份的既有投影，不改共享角色实现。
 

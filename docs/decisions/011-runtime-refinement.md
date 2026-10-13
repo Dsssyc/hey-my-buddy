@@ -2,7 +2,7 @@
 
 ## Status
 
-Implementation authorized by the user on 2026-09-25. Experiments and implementation remain unverified until recorded in acceptance evidence. This decision supersedes the separate business and decision capacity lanes.
+Implementation authorized by the developer on 2026-09-25. Experiments and implementation remain unverified until recorded in acceptance evidence. This decision supersedes the separate business and decision capacity lanes.
 
 ## Model capacity
 

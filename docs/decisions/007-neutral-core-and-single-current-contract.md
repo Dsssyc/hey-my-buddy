@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted by the user on 2026-09-22. Implementation proceeds from released source `0b674e9`, not the older `6442456` checkout used for ADR-006. This decision supersedes the standalone-distribution and backward-compatibility requirements in earlier implementation documents. Historical decisions remain evidence, not active compatibility promises.
+Accepted by the developer on 2026-09-22. Implementation proceeds from released source `0b674e9`, not the older `6442456` checkout used for ADR-006. This decision supersedes the standalone-distribution and backward-compatibility requirements in earlier implementation documents. Historical decisions remain evidence, not active compatibility promises.
 
 ## Source and distribution
 
@@ -16,7 +16,7 @@ The new release is 0.6.0. `CONTRACT_VERSION` remains a single current C-Two vers
 
 Execution records and worker primitives remain current infrastructure for internal decisions and process ownership. The public coding path has one controlled goal lifecycle; old `start`/`run` and standalone aliases do not remain as compatibility redirects. Current public goal commands are `submit`, `get`, `decide`, `continue`, `takeover`, `cancel`, `acknowledge` and `await`. Process/result observation remains distinct where it conveys different information. Harness execution cannot bypass the goal's authorization and workspace rules through an old one-shot public path.
 
-The user chose to retain the old daily board intact as an archive and start the new release from clean state. Do not reinterpret old records at runtime or delete the archive. Switch the daily installation only after all owned implementation/acceptance work has concluded with real shutdown evidence.
+The developer chose to retain the old daily board intact as an archive and start the new release from clean state. Do not reinterpret old records at runtime or delete the archive. Switch the daily installation only after all owned implementation/acceptance work has concluded with real shutdown evidence.
 
 ## Routing
 

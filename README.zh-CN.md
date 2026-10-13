@@ -4,7 +4,7 @@
 
 [English](README.md)
 
-hey-my-buddy 让 Host buddy（拥有目标的 agent）把边界明确的工作交给运行在本地编码 harness 中的 Worker buddy，同时保留对整体目标的责任。两者都是地位对等的 buddy，只通过共享黑板协作，区别在于角色。Host 可以亲自实现一部分，再把其他部分交给能力、成本或模型更适合的 Worker。目前接入的编码 harness 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）、ZCode（`zcode`）以及实验性的 Codex App Server（`codex`）；Claude Code 适配器（`claude`，[参考文档](docs/reference/claude-code.md)）作为 P1 适配器加入，默认采用用户确认的隔离设置；已授权的实机探针验证了原生结果、取消和有界沙箱路径，随后又通过已安装服务完成了单独获准的只读委派链路验收。
+hey-my-buddy 让 Host buddy（拥有目标的 agent）把边界明确的工作交给运行在本地编码 harness 中的 Worker buddy，同时保留对整体目标的责任。两者都是地位对等的 buddy，只通过共享黑板协作，区别在于角色。Host 可以亲自实现一部分，再把其他部分交给能力、成本或模型更适合的 Worker。目前接入的编码 harness 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）、ZCode（`zcode`）以及实验性的 Codex App Server（`codex`）；Claude Code 适配器（`claude`，[参考文档](docs/reference/claude-code.md)）作为 P1 适配器加入，默认采用开发者确认的隔离设置；已授权的实机探针验证了原生结果、取消和有界沙箱路径，随后又通过已安装服务完成了单独获准的只读委派链路验收。
 
 目标、决定与结果保存在本地 SQLite 黑板中。编码任务有明确的 Git 工作区和固定输入、产物快照；私有 React/Vite 控制台可以查看任务、路由、共享模型配置、用户偏好和模型并发设置。
 
@@ -20,14 +20,14 @@ hey-my-buddy 让 Host buddy（拥有目标的 agent）把边界明确的工作�
 
 hey-my-buddy 是一个共享 Agent Skill `buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.29.0（contract 0.29.0、schema 16），2026-10-11 由 0.27.0 升级而来；当前源码是同一个版本。skill 位于 `~/.agents/skills/buddy`，Claude Code 通过 `~/.claude/skills/buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。[原生沙盒审阅验收](docs/acceptance/native-sandbox-review-0.27.0.md)记录由固定原生探针拥有、不再解读模型输出的验证。[路由与验证验收](docs/acceptance/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同目标委派、Host 直接收尾、失败结论与清理、部分成果、改配续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未发布；schema 14 → 15 仅通过显式空闲升级迁移。
 
-在用户确定发布渠道与确切版本之后，安装入口是一条固定版本的包命令：
+在开发者确定发布渠道与确切版本之后，安装入口是一条固定版本的包命令：
 
 ```sh
 # 发布渠道与版本确定之后使用；目前不可用
 uvx hey-my-buddy@0.21.0 install
 ```
 
-包名是否可用、是否发布到 PyPI 仍待用户决定，本候选尚未发布到 PyPI。在正式发布之前，可以从冻结源码构建 wheel，并用绝对路径安装：
+包名是否可用、是否发布到 PyPI 仍待开发者决定，本候选尚未发布到 PyPI。在正式发布之前，可以从冻结源码构建 wheel，并用绝对路径安装：
 
 ```sh
 uv build --wheel --out-dir dist

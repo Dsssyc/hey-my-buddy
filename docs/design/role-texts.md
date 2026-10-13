@@ -1,6 +1,6 @@
 # 角色说明
 
-2026-10-11，Claude Code Host 应用户的要求起草，同日按用户的三点意见改过一次；用户看过，认为可以用，以后在自举开发里看效果再改。[ADR-030](../decisions/030-harness-layer-scope.md) 第 8 条把它定为产品的一部分，批次 1 起三段文字随运行时发布：正文只有一份，在 `src/hey_my_buddy/buddy/roles/texts/` 下的 `worker.txt`、`router.txt` 与 `lead.txt`，由黑板机械地放在提示词的最前面。这份文档不再抄录正文，只留下为什么要有、写法上的约定与核对到哪里。
+2026-10-11，Claude Code Host 应开发者的要求起草，同日按开发者的三点意见改过一次；开发者看过，认为可以用，以后在自举开发里看效果再改。[ADR-030](../decisions/030-harness-layer-scope.md) 第 8 条把它定为产品的一部分，批次 1 起三段文字随运行时发布：正文只有一份，在 `src/hey_my_buddy/buddy/roles/texts/` 下的 `worker.txt`、`router.txt` 与 `lead.txt`，由黑板机械地放在提示词的最前面。这份文档不再抄录正文，只留下为什么要有、写法上的约定与核对到哪里。
 
 ## 为什么要有
 

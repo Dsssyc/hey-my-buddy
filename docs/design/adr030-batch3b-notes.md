@@ -43,9 +43,9 @@ D 类四处删除：`_initialize` 的 ChatGPT-only 与固定 openai 条件、`_c
 
 服务按已有的明确 `storageOwner` 区分位置：Codex 新回执为 `harness-user-store`，存储范围 `harness-user-store`；旧 `buddy-goal` 回执不再原生续接，而以 `native-storage-changed` 重建。运行模块只读七字段新绑定，旧形式直接拒绝，不增加第二种读法或历史转换。历史回执与最终消息原样保留，会话历史列表仍可列出旧的归属事实；DSH 的归属判断与理由不变。没有改变 SQLite 存储字段形式，schema 保持 17。
 
-Host 于验收时测量真实状态目录并提供结果：10 个旧 `codex-home`，7064 个文件，495 MiB，7 个链接，其中 1 个是指向用户自己 Codex 目录的 `auth.json`；只量名字、数量与大小，未读取凭据内容。该组数字来自 Host，不是实现方在本回合重新访问状态目录的结果。
+Host 于验收时测量真实状态目录并提供结果：10 个旧 `codex-home`，7064 个文件，495 MiB，7 个链接，其中 1 个是指向开发者自己 Codex 目录的 `auth.json`；只量名字、数量与大小，未读取凭据内容。该组数字来自 Host，不是实现方在本回合重新访问状态目录的结果。
 
-Host 已同意本批不清理旧私有主目录，是否清理由用户另定；本批不删除这些存量。今后若授权清理，仍需明确范围、来源执行的停止依据及备份；现有备份排除了部分原生/凭据路径，不能据升级或缺少进程 ID 推断可以删除。
+Host 已同意本批不清理旧私有主目录，是否清理由开发者另定；本批不删除这些存量。今后若授权清理，仍需明确范围、来源执行的停止依据及备份；现有备份排除了部分原生/凭据路径，不能据升级或缺少进程 ID 推断可以删除。
 
 ## 第二回合：会话归属读者核对
 
@@ -98,7 +98,7 @@ Codex 的 NativeSchemaWorker 使用 `outcome_schema(suggested_profile=True, requ
 
 受沙盒阻挡的测试没有改成 skip，没有绕过监听限制：角色控制器的 C-Two live endpoint 创建返回 `Operation not permitted (os error 1)`，由此出现 role-controller-failed 或 invalid-native-result，后续无法得到真实 checkpoint / 停止帧。Host 需在允许本地监听的环境运行：`buddy.harnesses.codex.test_codex` 的控制器生命周期部分、`buddy.harnesses.codex.test_no_tool_codex` 全部、`buddy.harnesses.codex.test_codex_tool_evidence.CodexReviewToolEvidenceTests`、`buddy.harnesses.codex.test_codex_continuation.CodexContinuationTests.test_controller_failure_to_workflow_continue_keeps_the_native_thread`，以及 `buddy.roles.test_registered_run_wiring` 的 FastRegisteredRunTests/WorkerRegisteredRunTests/DshPublishedReceiptTests。完整检查、真实启动器、真实 Worker/Router 回合和故障注入仍按冻结任务由 Host 做。
 
-Host 的真实验收还应核对：用户第三方供应方可用，MCP/skill/钩子/用户指令可见且角色说明生效，Worker 普通会话写进原生目录并原生续接、两种 Router 调用使用 ephemeral，原生和控制器两层停止证据真实，运行与异常结束均没有新建私有配置主目录或凭据链接；旧私有主目录本批不清理，未来清理由用户另定。Windows/Linux、本次真实权限回读与真实 fast 用量仍未验证。
+Host 的真实验收还应核对：用户第三方供应方可用，MCP/skill/钩子/用户指令可见且角色说明生效，Worker 普通会话写进原生目录并原生续接、两种 Router 调用使用 ephemeral，原生和控制器两层停止证据真实，运行与异常结束均没有新建私有配置主目录或凭据链接；旧私有主目录本批不清理，未来清理由开发者另定。Windows/Linux、本次真实权限回读与真实 fast 用量仍未验证。
 
 第二回合最终源码的可运行选择共 108 项，27.295 秒，`OK`：`buddy.harnesses.codex.test_native_run`、`blackboard.tasks.test_storage`、`buddy.harnesses.codex.test_codex_protocol` 全文件，`buddy.runtime.test_worker_sessions.WorkerSessionTests` 的 `test_dsh_sessions_are_no_longer_listed_or_archived` 与 `test_codex_list_uses_board_only_and_never_guesses_other_sessions`，以及上列三条 Codex 发现/readiness 测试；清环境与解释器命令同上。`git diff --check` 通过；未改前端。
 
@@ -180,11 +180,11 @@ PY
 
 第三回合最终源码的可运行选择共 145 项，26.402 秒，`OK`；使用上述清环境命令与指定解释器，模块为 `buddy.harnesses.codex.test_native_run`、`buddy.harnesses.codex.test_codex_protocol`、`buddy.roles.test_schema_worker`、`buddy.roles.test_run_execution`、`buddy.roles.test_role_prompts`、`buddy.roles.test_registered_run_wiring.RegisteredDescriptionTests`、`buddy.roles.test_registered_run_wiring.NativeEvidenceProjectionTests`、`buddy.harnesses.codex.test_codex_tool_evidence.CodexToolEventProjectionTests`。另外以 AST 解析确认上述 Host 脚本语法有效，RPC 调用只有 initialize 与 config/read；没有执行真实 CLI。`git diff --check` 通过。
 
-本回合未重复运行已确认受 C-Two 监听限制阻挡的 `buddy.harnesses.codex.test_codex` 控制器生命周期用例、`buddy.harnesses.codex.test_no_tool_codex.NoToolCodexTests`、`buddy.harnesses.codex.test_codex_tool_evidence.CodexReviewToolEvidenceTests`；由 Host 在允许监听的环境复验，未增加 skip 或模拟停止。Host 在上一候选上的完整 Python 与前端通过是该候选的机械证据，不是第三回合源码的验收；真实配置读回、三种路径重跑与安装验收仍由 Host 在获得用户批准后完成。
+本回合未重复运行已确认受 C-Two 监听限制阻挡的 `buddy.harnesses.codex.test_codex` 控制器生命周期用例、`buddy.harnesses.codex.test_no_tool_codex.NoToolCodexTests`、`buddy.harnesses.codex.test_codex_tool_evidence.CodexReviewToolEvidenceTests`；由 Host 在允许监听的环境复验，未增加 skip 或模拟停止。Host 在上一候选上的完整 Python 与前端通过是该候选的机械证据，不是第三回合源码的验收；真实配置读回、三种路径重跑与安装验收仍由 Host 在获得开发者批准后完成。
 
 ## 第四回合：原生续接被明确拒绝后的原因码（按 Host 第五回合更正）
 
-Host 报告：在第三候选 `db3126fa` 上，真实 codex-cli 0.162.1 使用含点号的冻结检出运行无模型 initialize/config/read 步骤，权限读回符合预期；审阅启动语法问题已由 Host 确认修好。第三回合其余三项真实验证仍待用户批准；本实现方没有重跑真实 CLI 或读取用户配置。
+Host 报告：在第三候选 `db3126fa` 上，真实 codex-cli 0.162.1 使用含点号的冻结检出运行无模型 initialize/config/read 步骤，权限读回符合预期；审阅启动语法问题已由 Host 确认修好。第三回合其余三项真实验证仍待开发者批准；本实现方没有重跑真实 CLI 或读取用户配置。
 
 Host 随后在真实 codex-cli 0.162.1 上做了无模型探测，只发送 initialize、thread/read、thread/resume，没有发送回合：不存在的会话对 includeTurns 的 thread/read 回答关联 JSON-RPC 错误 `thread not loaded: <id>`；thread/resume 回答 `no rollout found for thread id <id>`；存在但未加载的会话，thread/read 正常返回其回合。这三条是 Host 提供的实测事实，不是本实现方的探测，也不是官方文档保证的措辞。[官方 App Server 文档](https://learn.chatgpt.com/docs/app-server#start-or-resume-a-thread)说明读取和续接操作，但没有提供稳定的不存在专用错误码或文案契约。
 
@@ -194,11 +194,11 @@ Host 随后在真实 codex-cli 0.162.1 上做了无模型探测，只发送 init
 
 最终模拟 app-server 分别采用 Host 实测的 thread/read 与 thread/resume 拒绝文本，测试断言 native-resume-unavailable、有界原生消息保留、模型未启动、没有 thread/start；额外采用不同的 MCP 拒绝文本守住规则不依赖措辞，并保留没有回答仍为 deadline 的反例。docs/reference/workers.md 在 Codex 的既有续接描述中补上原生一侧已读不到会话的情况；Host 引用的原句实际位于 ZCode 小节，因此仅补 Codex 小节，ZCode 内容保持原样，没有改变回执或存储形式。
 
-第五回合最终可运行选择共 123 项，29.952 秒，`OK`；使用上述清环境命令与指定只读解释器运行 `buddy.harnesses.codex.test_native_run`、`buddy.harnesses.codex.test_codex_protocol`、`buddy.roles.test_run_execution`、`buddy.roles.test_schema_worker` 四个完整文件，以及已有的 `buddy.harnesses.codex.test_codex_continuation.CodexContinuationTests.test_refused_resume_does_not_erase_the_last_message_before_reconstruction`，`git diff --check` 通过。撤回后的 protocol.py、run_execution.py、test_codex.py、test_codex_protocol.py 均与第三候选对应文件一致；源码与测试内已无第四回合同回合重建的名称和模拟分支。test_codex 的完整控制器生命周期测试与 test_codex_continuation 的 test_controller_failure_to_workflow_continue_keeps_the_native_thread 需要本沙盒不允许的 C-Two 监听，仍由 Host 复验。第四回合新增的控制器重建测试已随机制删除，不再列为待运行项目；真实三种路径与完整验收仍由 Host 在得到用户批准后完成。
+第五回合最终可运行选择共 123 项，29.952 秒，`OK`；使用上述清环境命令与指定只读解释器运行 `buddy.harnesses.codex.test_native_run`、`buddy.harnesses.codex.test_codex_protocol`、`buddy.roles.test_run_execution`、`buddy.roles.test_schema_worker` 四个完整文件，以及已有的 `buddy.harnesses.codex.test_codex_continuation.CodexContinuationTests.test_refused_resume_does_not_erase_the_last_message_before_reconstruction`，`git diff --check` 通过。撤回后的 protocol.py、run_execution.py、test_codex.py、test_codex_protocol.py 均与第三候选对应文件一致；源码与测试内已无第四回合同回合重建的名称和模拟分支。test_codex 的完整控制器生命周期测试与 test_codex_continuation 的 test_controller_failure_to_workflow_continue_keeps_the_native_thread 需要本沙盒不允许的 C-Two 监听，仍由 Host 复验。第四回合新增的控制器重建测试已随机制删除，不再列为待运行项目；真实三种路径与完整验收仍由 Host 在得到开发者批准后完成。
 
 ## 第六回合：未配置供应方时使用 Codex 内置默认名
 
-Host 报告：第五候选 `3c624079` 及其整合树上，受影响的 13 个文件 268 项（含监听控制器）通过；用户批准的四次真实调用——只读审阅、可写 Worker、同一原生会话续接、无工具快速调用——正常结束，前三处真实接口缺陷及线程级通知记录已确认修好，续接拒绝规则与实测一致。这是 Host 对上一候选的验收事实，不是本实现方对本回合源码做的真实检查。
+Host 报告：第五候选 `3c624079` 及其整合树上，受影响的 13 个文件 268 项（含监听控制器）通过；开发者批准的四次真实调用——只读审阅、可写 Worker、同一原生会话续接、无工具快速调用——正常结束，前三处真实接口缺陷及线程级通知记录已确认修好，续接拒绝规则与实测一致。这是 Host 对上一候选的验收事实，不是本实现方对本回合源码做的真实检查。
 
 Host 随后在真实 codex-cli 0.162.1 上做了三次无模型探测：空配置目录的 config/read 返回 model_provider=null、model_providers={}；旧读取点因此输出 unknown，使目录供应方和 billingByProvider 键变成 unknown，并丢失已知 ChatGPT 订阅计费；thread/start 若传 modelProvider=unknown 则明确拒绝（Model provider `unknown` not found），不传供应方或传 openai 可建成线程，回执分别给出配置的默认供应方和 openai。这些是 Host 提供的实测事实，本实现方没有读用户配置、建真实线程或发模型回合。
 

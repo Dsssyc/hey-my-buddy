@@ -1,8 +1,8 @@
 # ADR-018 第二部分：schema 15 实施前确认
 
-状态：用户于 2026-09-29 明确同意，作为源码和私有测试板的实施依据。2026-09-29 从 `socu/buddy-core` 的 `cf4d70a4faa3c9884b4cccb21c1ceb105f46f579` 创建 `socu/host-workflow`；基线包含第一部分合并提交 `f97dea8`。日常安装与数据迁移仍需另行授权。
+状态：开发者于 2026-09-29 明确同意，作为源码和私有测试板的实施依据。2026-09-29 从 `socu/buddy-core` 的 `cf4d70a4faa3c9884b4cccb21c1ceb105f46f579` 创建 `socu/host-workflow`；基线包含第一部分合并提交 `f97dea8`。日常安装与数据迁移仍需另行授权。
 
-依据为 [ADR-018](../decisions/018-routing-modes-and-host-workflow.md) 第 11–23 条与同时修复的四个缺陷。用户要求“需要 schema 变更时先停下向用户说明并取得同意”。本次在持久化预检阶段触发此确认点；完整实现与验收继续以 ADR 的“试用观察的去向”表为准。
+依据为 [ADR-018](../decisions/018-routing-modes-and-host-workflow.md) 第 11–23 条与同时修复的四个缺陷。开发者要求“需要 schema 变更时先停下向用户说明并取得同意”。本次在持久化预检阶段触发此确认点；完整实现与验收继续以 ADR 的“试用观察的去向”表为准。
 
 ## 已核对的持久化边界
 
@@ -48,4 +48,4 @@
 
 实现后的逐项验证包括：第 11 条约 4 KB 的 skill 与参考链接；第 12 条三种输入方式等价；第 13 条帮助与实际校验同源及拼写候选；第 14 条 objectiveOf 的归属、Host 权限与幂等；第 15、16 条直接收尾、结论和清理的权限／停止／旧计划拒绝；第 17、18 条模拟 harness 额度失败、部分成果、同检出换配置续做的跨进程集成；第 19 条 hostPaths 核验；第 20 条多轮累计补丁可独立应用；第 21 条服务环境白名单与 Worker 身份保留；第 22、23 条 DSH/Codex 原生记录夹具和 CLI/控制台投影；四个独立缺陷各自回归。测试均使用私有 state/runtime 根，不进行付费复跑。
 
-收尾在冻结候选上运行 `uv run --frozen python -m buddy.checks`，把实际结果和未验证项逐行对应 ADR 的观察表写入 `docs/acceptance/`。候选 wheel 用 `uv build --wheel` 构建，同时验证 sdist → wheel 的 sourceCommit 保留。委派走 Buddy 并由显式轻量监控子代理等待，不派 Claude Worker。合并、安装和用户配置修改均保留给用户后续授权。
+收尾在冻结候选上运行 `uv run --frozen python -m buddy.checks`，把实际结果和未验证项逐行对应 ADR 的观察表写入 `docs/acceptance/`。候选 wheel 用 `uv build --wheel` 构建，同时验证 sdist → wheel 的 sourceCommit 保留。委派走 Buddy 并由显式轻量监控子代理等待，不派 Claude Worker。合并、安装和用户配置修改均保留给开发者后续授权。
