@@ -76,10 +76,10 @@ uv run --frozen python packaging/build-skill.py --destination /path/to/dist/budd
 | Code | Meaning and repair |
 | --- | --- |
 | `BACKUP_PREFLIGHT_FAILED` | Evidence inventory contains unsafe, unrecognized or unconfirmed paths. Inspect the reported paths with `backup-preflight`; the service was not stopped for this refusal. |
-| `UPGRADE_NOT_IDLE` | Queued/running/cancelling/reconciliation-needed work, an unresolved attempt blocks the switch. The work reply lists the tasks and unresolved attempts. Wait for actual completion or owner recovery, then rerun install. Nothing was cancelled or declared stopped. |
+| `UPGRADE_NOT_IDLE` | Work that can still move on its own blocks the switch: running, cancelling or reconciliation-needed work, queued work a Worker can claim (a queued continuation and a Router call included), and an attempt that has not finished or whose stop is not confirmed. A micro task stopped at a Host boundary with no continuation pending does not block it. The reply lists the tasks and unresolved attempts. Wait for actual completion or owner recovery, then rerun install. Nothing was cancelled or declared stopped. |
 | `UPGRADE_RECOVERY_REQUIRED` | An interrupted journal could not be recovered automatically; the journal and backup are retained. Rerun the same fixed-version install command, or inspect the recorded phase first. |
 | `UPGRADE_NO_ROLLBACK_RUNTIME` | An existing board has no provable previous runtime to hand over from; recover that previous package before installing. |
-| `UPGRADE_IN_PROGRESS` | Another install/upgrade holds the launcher fence; wait for it or rerun the same command to recover its journal. |
+| `UPGRADE_IN_PROGRESS` | An install or upgrade holds the fence. A Host command refused with this code recorded nothing: send the same command again with the same identity after the upgrade finishes. An `await` that spans the upgrade ends with this code and names the same run to wait on again. For the installer itself, wait for the other install or rerun the same command to recover its journal. |
 | `SKILL_TARGET_CONFLICT` | The skill directory or the Claude Code link is occupied by something else; move it away and rerun install. |
 | `CLAUDE_LINK_FAILED` | The link could not be created (for example Windows without Developer Mode); fix permissions and rerun. A failed coordinated cutover restores the previous generation. |
 | `SKILL_INVALID` | The installed copy itself is incomplete; rerun the fixed-version package install command. |
