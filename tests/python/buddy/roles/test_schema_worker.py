@@ -86,6 +86,23 @@ class CodexSchemaTests(unittest.TestCase):
                     self.assertEqual(request.tool_scope, declaration.tool_scope)
                     self.assertEqual(request.worker_permission, declaration)
 
+    def test_worker_rejects_an_undeclared_full_permission(self):
+        from hey_my_buddy.buddy.harnesses.registry import _WORKER_PERMISSIONS
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "input.json").write_text(canonical_json({
+                "taskId": "task", "attemptId": "attempt", "generation": 1,
+                "turnId": "turn", "executionWorkspace": {"access": "full"}}))
+            (root / "task.txt").write_text("Task")
+            control = {"harness": "zcode", "privateRoot": str(root), "directory": str(root),
+                       "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt")}
+            with mock.patch.dict(_WORKER_PERMISSIONS, {"zcode": {
+                    level: declaration for level, declaration in _WORKER_PERMISSIONS["zcode"].items()
+                    if level != "full"}}), self.assertRaises(BoardError) as caught:
+                run_execution.worker_request(control, SimpleNamespace())
+            self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")
+            self.assertEqual(caught.exception.details["requiredCapability"], "permission:full")
+
     def test_every_codex_object_has_required_properties_and_rejects_additions(self):
         def check(node):
             if isinstance(node, dict):

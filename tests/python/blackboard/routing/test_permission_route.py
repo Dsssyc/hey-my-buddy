@@ -6,6 +6,7 @@ from support import BoardTestCase
 from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
 from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.buddy.harnesses.registry import _WORKER_PERMISSIONS
 
 
 class WorkflowPermissionRouteTests(unittest.TestCase):
@@ -65,3 +66,14 @@ class PermissionCandidateTests(BoardTestCase):
             full, _ = DecisionCoordinator._scan_candidates(connection, ['permission:full'], coding_only=True)
             self.assertCountEqual([row['profile_id'] for row in full],
                                   [codex_id, zcode_id, PROFILE_ID, SECOND_PROFILE_ID])
+        with patch.dict(_WORKER_PERMISSIONS, {'zcode': {
+                level: declaration for level, declaration in _WORKER_PERMISSIONS['zcode'].items()
+                if level != 'full'}}):
+            zcode_capabilities = permission_capabilities('zcode')
+        self.assertNotIn('permission:full', zcode_capabilities)
+        with board.store.db.write() as connection:
+            connection.execute('UPDATE evaluation_profiles SET capabilities_json=? WHERE profile_id=?',
+                               (canonical_json(zcode_capabilities), zcode_id))
+        with board.store.db.read() as connection:
+            full, _ = DecisionCoordinator._scan_candidates(connection, ['permission:full'], coding_only=True)
+            self.assertCountEqual([row['profile_id'] for row in full], [codex_id, PROFILE_ID, SECOND_PROFILE_ID])

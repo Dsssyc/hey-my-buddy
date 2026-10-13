@@ -76,28 +76,28 @@ class NativeResumeCase(NativeRunCase):
 class ResumeTurnTests(NativeResumeCase):
     """V-R2 and V-R4: the resumed turn itself, its launch and its configuration."""
 
-    def assert_changed_permission(self, first_level, next_level, first_mode, next_mode):
-        _, _, _, first = self.first_turn(level=first_level)
+    def assert_same_permission(self, level, mode):
+        _, _, _, first = self.first_turn(level=level)
         self.assertEqual(first.end.status, "ok", first.end.message)
         previous = first.native_identity.session_id
-        request, _, mount, second = self.resumed_turn(previous, level=next_level)
+        request, _, mount, second = self.resumed_turn(previous, level=level)
         self.assertEqual(second.end.status, "ok", second.end.message)
         self.assertEqual(second.native_identity.session_id, previous)
         self.assertEqual(second.value.parsed.value["disposition"], "completed")
         homes = [entry for entry in self.agent_log() if entry.get("event") == "home-check"]
-        self.assertEqual([entry["permissionMode"] for entry in homes], [first_mode, next_mode])
-        self.assertEqual(first.effective_policy.tools.requested.value, {"permissionMode": first_mode})
-        self.assertEqual(second.effective_policy.tools.requested.value, {"permissionMode": next_mode})
+        self.assertEqual([entry["permissionMode"] for entry in homes[-2:]], [mode, mode])
+        self.assertEqual(first.effective_policy.tools.requested.value, {"permissionMode": mode})
+        self.assertEqual(second.effective_policy.tools.requested.value, {"permissionMode": mode})
         self.assertIn("session/resume", self.methods_after_last_initialize())
         self.assertNotIn("session/new", self.methods_after_last_initialize())
         self.assertEqual(_provenance(second)["nativeTool"], mount.finish_tool)
         self.assertEqual(second.identity, request.identity)
 
-    def test_read_then_write_launches_the_new_preset_on_the_same_session(self):
-        self.assert_changed_permission("read", "write", "read-only", "workspace-write")
-
-    def test_write_then_full_launches_the_new_preset_on_the_same_session(self):
-        self.assert_changed_permission("write", "full", "workspace-write", "danger-full-access")
+    def test_same_level_resumes_with_the_same_preset(self):
+        for level, mode in (("read", "read-only"), ("write", "workspace-write"),
+                            ("full", "danger-full-access")):
+            with self.subTest(level=level):
+                self.assert_same_permission(level, mode)
 
     def test_two_invocations_resume_the_same_session_over_the_shared_root(self):
         request1, _bound1, mount1, result1 = self.first_turn()

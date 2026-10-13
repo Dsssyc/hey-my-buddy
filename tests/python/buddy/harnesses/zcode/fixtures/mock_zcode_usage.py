@@ -23,11 +23,14 @@ if "--version" in sys.argv:
 
 FIXTURE = json.loads(Path(__file__).with_name("native-usage-zcode.json").read_text())
 case = os.environ.get("BUDDY_ZCODE_TEST_CASE", "usage-ok")
+state = Path(os.environ["ZCODE_SESSION_DB_PATH"]).with_suffix(".fixture.json")
 log_dir = Path(os.environ["ZCODE_LOG_DIR"])
 instance = hashlib.sha256(os.environ["ZCODE_SESSION_DB_PATH"].encode()).hexdigest()[:16]
 session_id = "sess-fixture-" + instance
 turn_id = "turn-fixture-" + instance + ("-b" if case == "resume-ok" else "")
 selection = {"providerId": "fixture-api", "modelId": "fixture-model", "options": {"reasoningLevel": "low"}}
+permission_mode = "build"
+plan_active = False
 workspace = {}
 mcp = []
 sequence = 0
@@ -58,9 +61,11 @@ def snapshot():
         "providerLabel": "Fixture API", "contextWindow": 200000,
         "reasoning": {"levels": [{"value": "low"}, {"value": "high"}], "defaultLevel": "low"},
         "properties": {"inputFormat": {"supportsText": True}}}]
-    return {"session": {"sessionId": session_id, "sessionKind": "interactive", "workspace": workspace},
+    return {"session": {"sessionId": session_id, "sessionKind": "interactive", "workspace": workspace,
+                        "mode": "build"},
             "settings": {"model": {"current": selection, "available": available},
-                         "thoughtLevel": {"current": selection["options"]["reasoningLevel"]}}}
+                         "thoughtLevel": {"current": selection["options"]["reasoningLevel"]},
+                         "mode": {"current": permission_mode}}}
 
 
 def event(kind, payload):
@@ -106,6 +111,9 @@ def emit_deltas():
 def run_turn(params):
     global prompt_input_id
     prompt_input_id = params["inputId"]
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(json.dumps({"sessionId": session_id, "selection": selection,
+                                "permissionMode": permission_mode}))
     event("turn.started", {"inputId": prompt_input_id, "resultType": None})
     if case == "usage-quota":
         emit_deltas()
@@ -166,11 +174,23 @@ for line in sys.stdin:
     elif method == "session/create":
         workspace = params.get("workspace") or {}
         mcp = params.get("mcpServers") or []
+        requested_mode = params.get("mode", "build")
+        plan_active = requested_mode == "plan"
+        permission_mode = "build" if plan_active else requested_mode
         send({"id": request_id, "result": snapshot()})
     elif method == "session/resume":
         workspace = params.get("workspace") or {}
         mcp = params.get("mcpServers") or []
-        session_id = params["sessionId"]
+        stored = json.loads(state.read_text())
+        assert stored["sessionId"] == params["sessionId"]
+        session_id, selection, permission_mode = stored["sessionId"], stored["selection"], stored["permissionMode"]
+        plan_active = False
+        send({"id": request_id, "result": snapshot()})
+    elif method == "session/setMode":
+        assert params == {"sessionId": session_id, "mode": params["mode"]}
+        plan_active = params["mode"] == "plan"
+        if not plan_active:
+            permission_mode = params["mode"]
         send({"id": request_id, "result": snapshot()})
     elif method == "session/setModel":
         selection = params["model"]

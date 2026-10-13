@@ -185,6 +185,7 @@ class Adapter:
     name = "base"
     capabilities: tuple[str, ...] = ()
     native_resume = False
+    native_resume_permission_change = False
     model_discovery = False
     read_only_structured = False
     read_only_structured_resume = False

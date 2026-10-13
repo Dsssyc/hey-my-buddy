@@ -868,10 +868,15 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     interrupt = InterruptEvidence(
         requested=True if state.interrupt_requested else None,
         basis="claude/control-request-interrupt" if state.interrupt_requested else None)
+    unconfirmed = []
+    if (collector is not None and collector.expected_permission_mode is not None
+            and evidence is not None and evidence.init_observed and evidence.permission_mode is None):
+        unconfirmed.append("settings-readback")
+    if state.catalog is not None and state.catalog["discoveries"][0]["status"] == "unknown":
+        unconfirmed.append("model-catalog")
     native_evidence = NativeEvidence(
         unknown_events=_unknown_events(collector._connection) if collector is not None else None,
-        unconfirmed=("model-catalog",) if state.catalog is not None
-        and state.catalog["discoveries"][0]["status"] == "unknown" else ())
+        unconfirmed=tuple(unconfirmed))
 
     def compose(*, packages: bool) -> RunResult:
         return RunResult(
