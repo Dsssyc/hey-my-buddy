@@ -6,7 +6,7 @@
 
 hey-my-buddy 让 Host buddy（拥有目标的 agent）把边界明确的工作交给运行在本地编码 harness 中的 Worker buddy，同时保留对整体目标的责任。两者都是地位对等的 buddy，只通过共享黑板协作，区别在于角色。Host 可以亲自实现一部分，再把其他部分交给能力、成本或模型更适合的 Worker。目前接入的编码 harness 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）、ZCode（`zcode`）以及实验性的 Codex App Server（`codex`）；Claude Code 适配器（`claude`，[参考文档](docs/reference/claude-code.md)）作为 P1 适配器加入，默认采用用户确认的隔离设置；已授权的实机探针验证了原生结果、取消和有界沙箱路径，随后又通过已安装服务完成了单独获准的只读委派链路验收。
 
-目标、决定与结果保存在本地 SQLite 黑板中。编码任务有明确的 Git 工作区和固定输入、产物快照；私有 React/Vite 控制台可以查看任务、路由、共享模型配置、用户偏好、模型并发设置和评价卡片。
+目标、决定与结果保存在本地 SQLite 黑板中。编码任务有明确的 Git 工作区和固定输入、产物快照；私有 React/Vite 控制台可以查看任务、路由、共享模型配置、用户偏好和模型并发设置。
 
 ## 如何协作
 
@@ -70,11 +70,9 @@ BUDDY="$HOME/.agents/skills/buddy/scripts/buddy"
 
 控制台默认免登录，通过默认浏览器打开固定回环地址。可在设置中开启“需要登录”，使用有效期 10 分钟的一次性入口；会话不按 30 天过期，可显式退出或撤销。每个获准访问的窗口都可以在版本检查下编辑设置；草稿与冲突按窗口保留。使用 `console '{"browser":false}'` 可自行打开链接；使用 `console '{"wait":true}'` 可让 CLI 留在前台，Ctrl-C 只关闭对应控制台。会话有效期、安全边界与独立的安装边界见[控制台入口说明](docs/reference/console.md)。
 
-打开命令返回的 loopback 地址，顶部提供“委派记录 / Buddy 配置 / 设置”三个页签。委派按来源项目分组，显示原始委派方、当前 Host、执行回合和固定的路由依据；工作目标以概览卡与委派时间轴呈现，独立委派折叠在“未归档委派”中。Buddy 配置按 harness 归组模型家族，各推理强度保留独立评价；家族行显示已启用的推理强度数与 Router 标记，已启用的推理强度有勾选标记，路由状态行分别显示两个 Router 位置与默认模式。页面直接编辑，没有全局编辑开关：改动控件即产生草稿，底部保存栏只提供放弃与保存，保存时才申请短时发布资格；版本冲突和结果未确认时保留恢复信息。编辑只涉及你自己的家族偏好与备注、推理强度的覆盖、启用状态、模型并发设置和 Router 位置：自动评价、证据和目录事实始终只读。每个模型家族还有用户拥有的并发上限，在下一次认领时生效，调低上限不会停止正在运行的任务。同一页还显示记录的 harness 状态，提供显式“重新检测”和自动检测失败时的高级手动路径；重新检测不调用模型。“更新记录”显示已发布版本，“设置”页放浅色/深色/跟随系统主题和本地存储检查与回收面板。查看、刷新和编辑草稿都不调用模型。
+打开命令返回的 loopback 地址，顶部提供“委派记录 / Buddy 配置 / 设置”三个页签。委派按来源项目分组，显示原始委派方、当前 Host、执行回合和固定的路由依据；工作目标以概览卡与委派时间轴呈现，独立委派折叠在“未归档委派”中。Buddy 配置按 harness 归组模型家族，各推理强度保留独立评价；家族行显示已启用的推理强度数与 Router 标记，已启用的推理强度有勾选标记，路由状态行分别显示两个 Router 位置与默认模式。页面直接编辑，没有全局编辑开关：改动控件即产生草稿，底部保存栏只提供放弃与保存；版本冲突和结果未确认时保留恢复信息。编辑只涉及你自己的家族偏好与备注、推理强度的覆盖、启用状态、模型并发设置和 Router 位置：目录事实始终只读。每个模型家族还有用户拥有的并发上限，在下一次认领时生效，调低上限不会停止正在运行的任务。同一页还显示记录的 harness 状态，提供显式“重新检测”和自动检测失败时的高级手动路径；重新检测不调用模型。“设置”页放浅色/深色/跟随系统主题和本地存储检查与回收面板。查看、刷新和编辑草稿都不调用模型。
 
-可以直接让具备 skill 的 Harness“更新黑板中的模型评价”，或在你明确需要定期更新时，通过该 Harness 自身的定时功能安排更新。[维护流程](docs/reference/evaluation-maintenance.md)增量采集跨 Host、跨项目的已验收事实，保留有证据的失败与重试结果，并以有界的卡片补丁发布，不改写用户偏好和人工备注。任务验收不触发模型调用；没有新材料时可以跳过归纳，不宣称产生了新评价。
-
-路由由 Python 冻结合法候选并检查答案边界；不健康的 harness 会从候选中排除。路由分两种模式：快速路由只做一次调用、由 harness 真正关闭全部工具，输入只有任务、偏好与评价卡片；审阅路由是只读模式，另会读取冻结的仓库副本。快速路由已为 DSH、ZCode 与 Codex 实现：DSH 已通过授权实测，ZCode/Codex 已通过原生离线零工具检查；ZCode 的提供方验收被 429 限流阻断，Codex 快速路由尚未做付费实测。0.19.0 源码已在 macOS 的 Codex CLI 0.157.0 上验证 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算。Linux/Windows 与其他 harness 的审阅路由尚未验证；指定的 Router 还必须可用且已启用。提交时可指定 `routingMode`；审阅 Router 不可用时默认降级到快速路由，除非 Host 传入 `allowRoutingFallback:false`。请注意：快速路由会把每个任务的描述发送给快速 Router 所在的模型提供方（包括准备交给其他模型执行的任务），审阅路由还会读取冻结的仓库副本。安装后由用户在 Buddy 配置中选择配置，本候选不修改用户设置。见[路由契约](docs/reference/decision.md)、[harness 发现](docs/reference/harnesses.md)和[验收证据](docs/acceptance/routing-modes-0.20.0.md)。
+路由由 Python 冻结合法候选并检查答案边界；不健康的 harness 会从候选中排除。路由分两种模式：快速路由只做一次调用、由 harness 真正关闭全部工具，输入只有任务、候选的事实、偏好与备注；审阅路由是只读模式，另会读取冻结的仓库副本。快速路由已为 DSH、ZCode 与 Codex 实现：DSH 已通过授权实测，ZCode/Codex 已通过原生离线零工具检查；ZCode 的提供方验收被 429 限流阻断，Codex 快速路由尚未做付费实测。0.19.0 源码已在 macOS 的 Codex CLI 0.157.0 上验证 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算。Linux/Windows 与其他 harness 的审阅路由尚未验证；指定的 Router 还必须可用且已启用。提交时可指定 `routingMode`；审阅 Router 不可用时默认降级到快速路由，除非 Host 传入 `allowRoutingFallback:false`。请注意：快速路由会把每个任务的描述发送给快速 Router 所在的模型提供方（包括准备交给其他模型执行的任务），审阅路由还会读取冻结的仓库副本。安装后由用户在 Buddy 配置中选择配置，本候选不修改用户设置。见[路由契约](docs/reference/decision.md)、[harness 发现](docs/reference/harnesses.md)和[验收证据](docs/acceptance/routing-modes-0.20.0.md)。
 
 ## 执行与恢复
 
@@ -92,7 +90,7 @@ Codex Host 为每个运行中的委派派生一个只做监控的原生子代理
 
 日常安装是 [0.29.0/contract 0.29.0/schema 16](docs/acceptance/installed-0.29.0.md)。它由 0.27.0 经显式的 schema 15 → 16 升级而来，升级前做了经过校验的备份，记录全部保留。[0.29.0 安装记录](docs/acceptance/installed-0.29.0.md)列出这个版本带来了什么，并区分已验证的行为与尚未确认的部分。
 
-日常运行时支持 macOS 与 Linux、本地单用户 SQLite 状态；Windows 的代码与脚本可移植，但未在真机验证。ZCode 支持活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry。0.19.0 源码在 macOS 的 Codex CLI 0.157.0 上验证了 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算；Linux/Windows 与其他 harness 仍未验证。安装不会修改用户的 Router 设置。Claude P1 需要 Anthropic 第一方认证，默认使用隔离设置，每次接续都重建会话，未声明 inquiry。其[参考文档](docs/reference/claude-code.md)记录已验证的原生路径、日常安装的只读委派链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价、内置定期维护或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
+日常运行时支持 macOS 与 Linux、本地单用户 SQLite 状态；Windows 的代码与脚本可移植，但未在真机验证。ZCode 支持活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry。0.19.0 源码在 macOS 的 Codex CLI 0.157.0 上验证了 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算；Linux/Windows 与其他 harness 仍未验证。安装不会修改用户的 Router 设置。Claude P1 需要 Anthropic 第一方认证，默认使用隔离设置，每次接续都重建会话，未声明 inquiry。其[参考文档](docs/reference/claude-code.md)记录已验证的原生路径、日常安装的只读委派链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
 
 ## 文档与开发
 
