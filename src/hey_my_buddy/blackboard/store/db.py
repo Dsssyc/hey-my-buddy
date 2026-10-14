@@ -46,10 +46,11 @@ ACTIVE_ATTEMPT_STATES = frozenset({"starting", "executing", "finalizing", "uncer
 MESSAGE_STATES = ("queued", "claimed", "delivered", "answered", "discarded", "unavailable")
 TERMINAL_MESSAGE_STATES = frozenset({"answered", "discarded", "unavailable"})
 
-#: Why an attempt really stopped. A user cancellation, an exhausted Router budget, a
-#: harness failure, a transport failure and a genuine completion are separate
-#: facts; a completion that beat a cancellation is never relabelled by the race.
-TERMINATION_REASONS = ("completed", "user-cancel", "deadline", "harness-error", "transport-error")
+#: The observed outcome of one attempt. The stop initiator is recorded separately.
+TERMINATION_REASONS = (
+    "completed", "wrap-up", "grace-expired", "forced-stop", "console-stop",
+    "service-stop", "unknown-stop", "deadline", "harness-error", "transport-error",
+)
 
 WORKER_STATES = ("starting", "idle", "busy", "stopping", "lost")
 
@@ -124,6 +125,8 @@ CREATE TABLE IF NOT EXISTS attempts (
     error               TEXT,
     shutdown_confirmed  INTEGER NOT NULL DEFAULT 0,
     cancel_requested_at TEXT,
+    stop_initiator      TEXT CHECK (stop_initiator IN ('host','console','service','unknown')),
+    grace_deadline      TEXT,
     exit_code           INTEGER,
     signal              TEXT,
     started_at          TEXT,

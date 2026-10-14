@@ -111,6 +111,8 @@ def outcome(case):
         request = {"summary": "Contradictory request", "attempted": "Finished", "neededWork": "None",
                    "expectedArtifacts": [], "acceptance": "Already complete", "suggestedBuddyId": None}
     summary = "fixture work completed"
+    if case == "wrap-up":
+        summary = "Stopped partial work summary"
     if case == "long-summary-citation":
         summary = "调研结论。" * 600 + "\n<oai-mem-citation>reference</oai-mem-citation>"
     return {"disposition": disposition, "summary": summary, "remaining": [],
@@ -317,8 +319,8 @@ def main():
                 state["threads"][thread_id]["turns"].append(turn)
                 write_state(state)
                 continue
-            if case == "hang":
-                # Only the hang scenario records an explicit start fact, and only
+            if case in ("hang", "interrupt-settled", "interrupt-foreign") or (case == "wrap-up" and turn_index == 0):
+                # These scenarios record an explicit start fact, and only
                 # after the turn/start response and the turn/started notification
                 # were actually emitted: a thread merely existing never counts as a
                 # started turn. The cancellation tests wait for this fact instead
@@ -326,7 +328,19 @@ def main():
                 state = read_state()
                 state['threads'][thread_id]['turnStart'] = {"threadId": thread_id, "turnId": turn_id}
                 write_state(state)
-                time.sleep(60)
+                if case == "hang":
+                    time.sleep(60)
+                else:
+                    request = json.loads(sys.stdin.readline())
+                    if request.get("method") != "turn/interrupt":
+                        raise RuntimeError("expected the native turn interrupt")
+                    send({"id": request["id"], "result": {}})
+                    terminal_id = "foreign-turn" if case == "interrupt-foreign" else turn_id
+                    turn = {"id": terminal_id, "status": "interrupted", "items": []}
+                    send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn}})
+                    state = read_state()
+                    state["threads"][thread_id]["turns"].append(turn)
+                    write_state(state)
                 continue
             if case == 'worker-tool':
                 send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,

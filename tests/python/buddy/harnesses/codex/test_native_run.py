@@ -844,7 +844,14 @@ class WorkerSeamTests(CodexSeamCase):
                                        output_schema=OUTCOME_SCHEMA, prompt="Work",
                                        turn_id="turn-check", input_sha256="a" * 64)
                 root = ensure_private_dir(Path(request.private_state.invocation_root))
+                turn_input = {"taskId": request.identity.task_id, "attemptId": request.identity.attempt_id,
+                              "generation": request.identity.generation, "turnId": request.identity.turn_id}
+                input_file = root / "turn-input.json"
+                native_run.private_json(input_file, turn_input, exclusive=True)
+                request = request.model_copy(update={"identity": request.identity.model_copy(
+                    update={"input_sha256": run_execution.input_hash(turn_input)})})
                 control = {"operation": "worker", "harness": "codex", "privateRoot": str(root),
+                           "inputFile": str(input_file), "outputFile": str(root / "turn-output.json"),
                            "requestFile": str(root / "request.json"), "verdictFile": str(root / "verdict.json")}
                 with mock.patch.object(run_execution, "worker_request", return_value=(
                         request, self.worker_services(), lambda _facts: FEEDBACK_CONTINUE, None)):
@@ -1024,6 +1031,34 @@ class WorkerSeamTests(CodexSeamCase):
         resumed = self.worker_run("ok", continuation=continuation)
         self.assertEqual(resumed.end.reason_code, "native-resume-unavailable")
         self.assertIsNone(resumed.model_started)
+
+    def test_binding_with_an_unexpected_field_is_refused(self):
+        first = self.worker_run("ok")
+        previous = first.native_identity.session_id
+        path = native_run._binding_path(self.base / "worker-native", previous)
+        binding = json.loads(path.read_text())
+        binding["lastTurnStatus"] = "completed"
+        path.write_text(json.dumps(binding))
+        result = self.worker_run("ok", continuation=RunContinuation(
+            mode="native-session", previous_session_id=previous))
+        self.assertEqual(result.end.reason_code, "native-resume-unavailable")
+        self.assertIsNone(result.model_started)
+
+    def test_binding_write_failure_keeps_delivered_turn_and_disables_resume(self):
+        original = native_run.private_json
+        native_root = self.base / "worker-native"
+
+        def write(path, value, *, exclusive=False):
+            if Path(path).parent == native_root and Path(path).suffix == ".json":
+                raise OSError("fixture binding write denied")
+            return original(path, value, exclusive=exclusive)
+
+        with mock.patch.object(native_run, "private_json", side_effect=write):
+            result = self.worker_run("ok")
+        self.assertEqual(result.end.status, "ok")
+        self.assertIsNone(result.end.reason_code)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.assertIs(result.continuation.resumable, False)
 
     def test_codex_schema_accepts_a_nullable_buddy_suggestion(self):
         from hey_my_buddy.buddy.roles.turn_io import validate_outcome
@@ -1274,6 +1309,18 @@ class WorkerSeamTests(CodexSeamCase):
     def test_resume_without_answer_keeps_deadline_reason(self):
         self.assert_resume_failed_without_new_thread('resume-no-answer', 'deadline')
 
+    def test_failed_resumed_turn_retains_previous_binding_without_a_new_resume_fact(self):
+        first = self.worker_run("ok")
+        previous = first.native_identity.session_id
+        path = native_run._binding_path(self.base / "worker-native", previous)
+        self.assertTrue(path.is_file())
+        original = path.read_bytes()
+        result = self.worker_run("hang", timeout=2, continuation=RunContinuation(
+            mode="native-session", previous_session_id=previous))
+        self.assertEqual(result.end.reason_code, "deadline")
+        self.assertEqual(path.read_bytes(), original)
+        self.assertFalse(result.continuation.resumable)
+
     def test_resume_without_a_binding_is_refused(self):
         result = self.worker_run(
             "ok", continuation=RunContinuation(mode="native-session", previous_session_id="thread-404"))
@@ -1396,6 +1443,52 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(result.stop_evidence.interrupt.basis, "native-turn-interrupt-unconfirmed")
         # The native SIGTERM survives as its own exit-code fact.
         self.assertEqual(result.end.native_exit_code, -15)
+
+    def test_interrupted_terminal_turn_keeps_a_checkpoint_bound_resume(self):
+        started_at = time.monotonic()
+        self.set_case("interrupt-settled")
+        request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA,
+                               prompt="fixture micro task task", timeout=12,
+                               input_sha256=input_hash({"taskId": "micro-task-1",
+                                                        "attemptId": "attempt-check",
+                                                        "generation": 7, "turnId": "turn-check"}),
+                               turn_id="turn-check", native="worker-native")
+        first = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                    services=self.worker_services(),
+                    cancelled=lambda: time.monotonic() - started_at > 0.5)
+        self.assertEqual(first.end.status, "cancelled")
+        self.assertEqual(first.stop_evidence.native.group_state, "gone")
+        self.assertIs(first.continuation.resumable, True)
+        checkpoint = json.loads(Path(next(ref.location for ref in first.evidence_refs
+                                          if ref.kind == "native-checkpoint")).read_text())
+        self.assertEqual(checkpoint["nativeTurnStatus"], "interrupted")
+        previous = first.native_identity.session_id
+        binding = json.loads(native_run._binding_path(
+            self.base / "worker-native", previous).read_text())
+        self.assertEqual(set(binding), {"taskId", "threadId", "cwd", "buddy", "lastTurnId",
+                                        "lastAttemptId", "lastInputSha256"})
+        resumed = self.worker_run("ok", continuation=RunContinuation(
+            mode="native-session", previous_session_id=previous,
+            checkpoint=ResumeCheckpoint(native_turn_id=checkpoint["nativeTurnId"],
+                                        attempt_id=checkpoint["attemptId"],
+                                        input_sha256=checkpoint["inputSha256"])))
+        self.assertEqual(resumed.end.status, "ok", resumed.end.message)
+        self.assertEqual(resumed.native_identity.session_id, previous)
+
+    def test_foreign_terminal_turn_does_not_make_an_interrupt_resumable(self):
+        started_at = time.monotonic()
+        self.set_case("interrupt-foreign")
+        request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA,
+                               prompt="fixture micro task task", timeout=12,
+                               input_sha256=input_hash({"taskId": "micro-task-1",
+                                                        "attemptId": "attempt-check",
+                                                        "generation": 7, "turnId": "turn-check"}),
+                               turn_id="turn-check", native="worker-native")
+        result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                     services=self.worker_services(),
+                     cancelled=lambda: time.monotonic() - started_at > 0.5)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.assertIsNone(result.continuation.resumable)
 
 
 class DiscoveryBoundaryTests(unittest.TestCase):

@@ -79,7 +79,7 @@ describe("0.16 Host event sentences and cluster glyphs (P1.7)", () => {
     expect(eventSentence(event("integrate"), row("修复标题"))).toContain("Host 整合了「修复标题」的产出");
     expect(eventSentence(event("accept"), row("修复标题"))).toContain("Host 验收通过「修复标题」");
     expect(eventSentence(event("reject"), row("修复标题"))).toContain("Host 对「修复标题」提出验收问题");
-    expect(eventSentence(event("cancel"), row("修复标题"))).toContain("Host 取消了「修复标题」");
+    expect(eventSentence(event("cancel"), row("修复标题"))).toContain("Host 停止了「修复标题」");
     expect(eventSentence(event("takeover"), row("修复标题"))).toContain("Host 接管了「修复标题」");
   });
 

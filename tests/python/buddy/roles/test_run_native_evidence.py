@@ -82,8 +82,10 @@ class NativeEvidenceRoleTests(unittest.TestCase):
             context = ExecutionContext("task", "attempt", 1, {}, Path(directory), {}, {})
             context.turn = {"input": {"resumeMode": "initial"}}
             context.effective_workspace = {"partial": True}
-            handle = SimpleNamespace(role_run_control={"nativeRoot": directory}, cancel_requested=False,
-                                     log_paths={})
+            control = {"nativeRoot": directory}
+            handle = SimpleNamespace(role_run_control=control, role_run_identity=result.identity,
+                                     role_run_active_control=control, role_run_active_identity=result.identity,
+                                     cancel_requested=False, log_paths={})
             collection = SimpleNamespace(payload=result, exit_code=0, stop_confirmed=True)
             partial = [{"kind": "partial-workspace", "location": directory}]
             with mock.patch.object(run_execution, "collect_controller", return_value=collection), \

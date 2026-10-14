@@ -76,23 +76,57 @@ def _turn(connection: sqlite3.Connection, row: dict) -> dict:
     return row
 
 
-def _receipt_object(value, member: str | None = None):
+def _attempt(row: dict) -> dict:
+    receipt = json.loads(row['result_json']) if row['result_json'] is not None else None
+    old_stop = isinstance(receipt, dict) and receipt.get('terminationReason') == 'user-cancel'
+    row['stop_initiator'] = 'unknown' if row['cancel_requested_at'] or old_stop else None
+    row['grace_deadline'] = None
+    if receipt is not None:
+        converted = _receipt_object(receipt, service_receipt=True, adapter=row['adapter'])
+        row['result_json'] = canonical_json(converted)
+    return row
+
+
+def _termination(value: dict, *, adapter: str | None = None) -> dict:
+    reason = value.get('terminationReason')
+    if reason == 'user-cancel':
+        value['terminationReason'] = 'unknown-stop' if value.get('shutdownConfirmed') is True else None
+    elif reason == 'deadline' and adapter is not None and adapter != 'decision':
+        # A historical Worker deadline was a task time limit, not a Router budget.
+        value['terminationReason'] = None
+    return value
+
+
+def _receipt_object(value, member: str | None = None, *, service_receipt: bool = False,
+                    adapter: str | None = None):
     """Update durable service task projections; leave native outcomes alone."""
     if isinstance(value, list):
-        return [_receipt_object(item) for item in value]
+        return [_receipt_object(item, service_receipt=service_receipt, adapter=adapter) for item in value]
     if not isinstance(value, dict):
         return value
-    # Model outcomes and original turn inputs are evidence, never service views.
-    value = {key: item if key in ('result', 'outcome', 'spec', 'input', 'context', 'provenance')
-             else _receipt_object(item, key) for key, item in value.items()}
-    task_view = ('taskId' in value or 'runId' in value) and 'adapter' in value
-    if task_view and value['adapter'] != 'decision':
-        if value.get('terminationReason') == 'deadline':
-            value['terminationReason'] = None
-        for member in ('result', 'resultMeta'):
-            receipt = value.get(member)
-            if isinstance(receipt, dict) and receipt.get('terminationReason') == 'deadline':
-                value[member] = {**receipt, 'terminationReason': None}
+    # Native model outcomes and original inputs are evidence. The result immediately
+    # under an attempt view is a service receipt; its own result remains native.
+    legacy_stop = value.get('terminationReason') == 'user-cancel'
+    attempt_view = ('attemptId' in value and 'adapter' in value
+                    and any(key in value for key in ('generation', 'executionState', 'cancelRequestedAt', 'result')))
+    value = {key: (_receipt_object(item, key, service_receipt=True, adapter=value.get('adapter'))
+                   if key == 'result' and attempt_view else
+                   item if key in ('result', 'outcome', 'spec', 'input', 'context', 'provenance', 'report')
+                   else _receipt_object(item, key)) for key, item in value.items()}
+    task_view = ('taskId' in value or 'runId' in value) and 'adapter' in value and not attempt_view
+    if task_view or service_receipt or 'terminationReason' in value:
+        _termination(value, adapter=value.get('adapter', adapter))
+    if attempt_view:
+        receipt = value.get('result')
+        value['stopInitiator'] = ('unknown' if value.get('cancelRequestedAt')
+                                  or isinstance(receipt, dict) and receipt.get('terminationReason') == 'unknown-stop'
+                                  else None)
+        value['graceDeadline'] = None
+    if task_view:
+        selected = value.get('selectedAttempt')
+        value['stopInitiator'] = ('unknown' if isinstance(selected, dict) and selected.get('stopInitiator') == 'unknown'
+                                  or legacy_stop or value.get('stopInitiator') == 'unknown' else None)
+        value['graceDeadline'] = None
     if task_view and 'timeoutSeconds' in value:
         old = value.pop('timeoutSeconds')
         if value['adapter'] == 'decision':
@@ -126,13 +160,7 @@ def migrate(state: Path) -> None:
                 raise ValueError('Expected the schema-19 upgrade base')
             _rebuild(connection, 'tasks', _task)
             _rebuild(connection, 'workflow_turns', lambda row: _turn(connection, row))
-            # A historical Worker deadline cannot be relabelled as a Router budget.
-            for row in connection.execute("SELECT attempt_id,result_json FROM attempts WHERE adapter!='decision' AND result_json IS NOT NULL").fetchall():
-                receipt = json.loads(row['result_json'])
-                if receipt.get('terminationReason') == 'deadline':
-                    receipt['terminationReason'] = None
-                    connection.execute('UPDATE attempts SET result_json=? WHERE attempt_id=?',
-                                       (canonical_json(receipt), row['attempt_id']))
+            _rebuild(connection, 'attempts', _attempt)
             for row in connection.execute('SELECT run_id,micro_task_json FROM workflow_runs').fetchall():
                 spec, _, _ = _spec(json.loads(row['micro_task_json']))
                 connection.execute('UPDATE workflow_runs SET micro_task_json=?,micro_task_fingerprint=? WHERE run_id=?',
@@ -144,10 +172,14 @@ def migrate(state: Path) -> None:
                     request['routerBudgetSeconds'] = old
                 connection.execute('UPDATE decision_requests SET requested_json=? WHERE decision_id=?',
                                    (canonical_json(request), row['decision_id']))
-            for row in connection.execute("SELECT command_id,response_json FROM commands WHERE response_json LIKE '%timeoutSeconds%'").fetchall():
+            for row in connection.execute("SELECT command_id,response_json FROM commands").fetchall():
                 response = _receipt_object(json.loads(row['response_json']))
                 connection.execute('UPDATE commands SET response_json=? WHERE command_id=?',
                                    (canonical_json(response), row['command_id']))
+            for row in connection.execute("SELECT seq,payload_json FROM events WHERE payload_json LIKE '%terminationReason%'").fetchall():
+                payload = _receipt_object(json.loads(row['payload_json']))
+                connection.execute('UPDATE events SET payload_json=? WHERE seq=?',
+                                   (canonical_json(payload), row['seq']))
             for row in connection.execute(
                 "SELECT c.command_id,t.request_id,t.input_fingerprint FROM commands c"
                 " JOIN tasks t ON t.task_id=c.task_id WHERE c.kind='task.submit'"

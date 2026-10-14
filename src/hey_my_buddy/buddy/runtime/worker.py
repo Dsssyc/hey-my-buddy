@@ -12,6 +12,7 @@ import os
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -33,12 +34,14 @@ def supervisor_start_stop_path(directory: Path) -> Path | None:
         return directory / f"stop-{identity}.request"
     return None
 
-#: Result vocabulary, in the service-side order documented by
-#: ``hey_my_buddy.blackboard.store.db.TERMINATION_REASONS``: completed, user-cancel, deadline,
-#: harness-error, transport-error. The worker never invents another label.
 (
     TERMINATION_COMPLETED,
-    TERMINATION_USER_CANCEL,
+    TERMINATION_WRAP_UP,
+    TERMINATION_GRACE_EXPIRED,
+    TERMINATION_FORCED_STOP,
+    TERMINATION_CONSOLE_STOP,
+    TERMINATION_SERVICE_STOP,
+    TERMINATION_UNKNOWN_STOP,
     TERMINATION_DEADLINE,
     TERMINATION_HARNESS_ERROR,
     TERMINATION_TRANSPORT_ERROR,
@@ -92,20 +95,22 @@ def is_transport_failure(payload: Any) -> bool:
     return False
 
 
-def classify_termination(outcome, *, timed_out: bool, cancel_requested: bool) -> str:
+def classify_termination(outcome, *, timed_out: bool, cancel_requested: bool,
+                         stop_initiator: str | None = None, grace_expired: bool = False) -> str | None:
     """The real reason this attempt stopped.
 
-    Order matters: a genuine completion is never re-labelled, the worker's own
-    deadline outranks the cancellation it triggered, a user cancellation is named as
-    such, and a failure that the adapter attributed to transport is kept distinct
-    from an ordinary harness failure.
+    A real completion keeps its reason; an exhausted Router budget and transport
+    failure keep theirs. Stop classification belongs to the shared role layer.
     """
     if outcome.status == "ok":
         return TERMINATION_COMPLETED
     if timed_out:
         return TERMINATION_DEADLINE
     if cancel_requested:
-        return TERMINATION_USER_CANCEL
+        return role_seam.stop_termination_reason(shutdown_confirmed=outcome.shutdown_confirmed,
+            stop_initiator=stop_initiator,
+            grace_expired=outcome.result.get("graceExpired", grace_expired),
+            wrap_up_delivered=outcome.result.get("wrapUpDelivered", False))
     if is_transport_failure(getattr(outcome, "result", None)):
         return TERMINATION_TRANSPORT_ERROR
     return TERMINATION_HARNESS_ERROR
@@ -784,9 +789,14 @@ class Worker:
             while True:
                 if self.stop_requested() and not handle.cancel_requested:
                     self.log("stop requested; cancelling this owned process group")
-                    role_seam.worker_cancel(implementation, handle)
+                    role_seam.worker_stop(implementation, handle, stop_initiator="unknown", grace_deadline=None)
                 if handle.wait(timeout=0.25) is not None:
                     break
+                if (handle.grace_deadline is not None and time.monotonic() >= handle.grace_deadline
+                        and not handle.force_stop_requested):
+                    handle.grace_expired = True
+                    self.log("Host stop grace reached; forcing the owned run to stop")
+                    role_seam.worker_cancel(implementation, handle)
                 if deadline is not None and time.monotonic() >= deadline:
                     timed_out = True
                     self.log("Router budget reached; cancelling this owned process group")
@@ -822,17 +832,25 @@ class Worker:
                 outcome.result = {**outcome.result, "status": "error", "code": "router-budget-exhausted"}
         from .partial_outputs import enrich
         enrich(context, outcome)
-        report = outcome.to_report()
-        if holder.get('harnessHistory'):
-            report['result'] = {**(report.get('result') or {}), 'harnessAttempts': holder['harnessHistory']}
         # The genuine reason this attempt stopped. It is recorded with the receipt,
         # so a cancelled task, an expired deadline, a harness failure and a completed
         # turn stay distinguishable even after a transport outage.
-        report["terminationReason"] = classify_termination(
+        termination_reason = classify_termination(
             outcome,
             timed_out=timed_out,
             cancel_requested=bool(handle.cancel_requested),
+            stop_initiator=handle.stop_initiator,
+            grace_expired=handle.grace_expired,
         )
+        if termination_reason in (TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED, TERMINATION_FORCED_STOP,
+                                  TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP, TERMINATION_UNKNOWN_STOP):
+            outcome.status = "cancelled"
+        if "partialOutput" in outcome.result:
+            outcome.result["partialOutput"]["reason"] = termination_reason
+        report = outcome.to_report()
+        if holder.get('harnessHistory'):
+            report['result'] = {**(report.get('result') or {}), 'harnessAttempts': holder['harnessHistory']}
+        report["terminationReason"] = termination_reason
         report["elapsedSeconds"] = round(time.monotonic() - started, 1)
         report["logPaths"] = context.log_paths()
         report["runtimeIdentity"] = context.runtime.get("identity")
@@ -953,10 +971,23 @@ class _Renewal(threading.Thread):
             return False
         if not view.get("cancelRequested"):
             return False
-        if not self.handle.cancel_requested:
-            self.worker.log("durable cancel intent observed; cancelling this owned process group")
-            role_seam.worker_cancel(self.implementation, self.handle)
-        return True
+        return self._request_cancel(view)
+
+    def _request_cancel(self, view: dict) -> bool:
+        initiator = view.get("stopInitiator") or "unknown"
+        current = self.handle.stop_initiator
+        if not self.handle.cancel_requested or current != initiator:
+            deadline = None
+            if initiator == "host" and view.get("graceDeadline") is not None:
+                remaining = (datetime.fromisoformat(view["graceDeadline"].replace("Z", "+00:00"))
+                             - datetime.now(timezone.utc)).total_seconds()
+                deadline = time.monotonic() + max(0, remaining)
+            self.worker.log(f"durable {initiator} stop intent observed")
+            role_seam.worker_stop(self.implementation, self.handle,
+                                  stop_initiator=initiator, grace_deadline=deadline)
+        # During a summary turn keep the lease and keep observing a console
+        # escalation. The original durable deadline is never extended.
+        return False
 
     def _renew(self) -> bool:
         """Renew the lease; returns False when this worker must stop touching it."""
@@ -977,9 +1008,7 @@ class _Renewal(threading.Thread):
             # The daemon may be down: the worker keeps its child and deadline and
             # reattaches later with the same attempt identity.
             return True
-        if response.get("cancelRequested") and not self.handle.cancel_requested:
-            self.worker.log("durable cancel intent observed; cancelling this owned process group")
-            role_seam.worker_cancel(self.implementation, self.handle)
+        if response.get("cancelRequested") and self._request_cancel(response):
             return False
         if response.get("finished"):
             # A committed result is terminal and immutable; the completion path in

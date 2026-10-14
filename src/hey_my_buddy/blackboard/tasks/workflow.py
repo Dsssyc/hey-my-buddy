@@ -24,6 +24,7 @@ exact removal so concurrent admission cannot register a checkout being removed.
 from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
+from datetime import datetime, timedelta
 import json
 import re
 import threading
@@ -91,6 +92,7 @@ MAX_CONTEXT_TEXT = 4000
 #: The micro-task task-title fallback is bounded like the turn-view summary it
 #: projects; the stored outcome itself may be longer and stays intact in audit.
 MAX_RESULT_SUMMARY = 2000
+WRAP_UP_SECONDS = 300
 
 #: Bounded views of the lifecycle records added by the workspace-lifecycle slice.
 MAX_CONFLICT_VIEW = 8
@@ -754,6 +756,9 @@ class WorkflowCoordinator:
             "tokenUsage": decorated.get("tokenUsage"),
             "quotaFailure": decorated.get("quotaFailure"),
             "shutdownConfirmed": decorated["shutdownConfirmed"],
+            "terminationReason": decorated["terminationReason"],
+            "stopInitiator": decorated["stopInitiator"],
+            "graceDeadline": decorated["graceDeadline"],
             "acceptedAt": decorated["acceptedAt"],
             "acceptanceVerdict": decorated["acceptanceVerdict"],
             "acceptanceNote": decorated["acceptanceNote"],
@@ -805,10 +810,10 @@ class WorkflowCoordinator:
         return "the run is queued for its next turn"
 
     # -- authority -----------------------------------------------------------
-    def _authorize(self, connection, run_row, params: dict, *, console_authority: dict | None, action: str) -> str:
-        """Validate Host control or console-user authority; return the actor label."""
+    def _authorize(self, connection, run_row, params: dict, *, console_authority: dict | None, action: str) -> tuple[str, str]:
+        """Validate control and return the actor label with its known origin."""
         if console_authority is not None:
-            return f"console:{console_authority.get('sessionId', 'session')}"
+            return f"console:{console_authority.get('sessionId', 'session')}", "console"
         control = schemas.normalize_control(params)
         if control is None:
             raise BoardError(
@@ -834,7 +839,7 @@ class WorkflowCoordinator:
         expected = self.db.control_token_verifier(control["controlToken"])
         if not hmac.compare_digest(expected, run_row["control_verifier"]):
             raise BoardError("UNAUTHORIZED", "Invalid control capability for this run")
-        return f"host:{control['hostId']}"
+        return f"host:{control['hostId']}", "host"
 
     def _expect_revision(self, run_row, expected: int | None) -> None:
         if expected is None:
@@ -2018,7 +2023,7 @@ class WorkflowCoordinator:
             with self.db.write() as connection:
                 run_row = self._run_row(connection, run_id)
                 task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-                actor = self._authorize(connection, run_row, params, console_authority=console_authority, action="A Host decision")
+                actor, _initiator = self._authorize(connection, run_row, params, console_authority=console_authority, action="A Host decision")
                 receipt = self.board._receipt(connection, command_id, "workflow.decide", request_key)
                 if receipt is not None:
                     return {**receipt, "duplicate": True}
@@ -2754,7 +2759,7 @@ class WorkflowCoordinator:
         now = self.now()
         with self.db.write() as connection:
             owner = self._run_row(connection, owner_run_id)
-            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A continuation")
+            actor, initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A continuation")
             receipt = self.board._receipt(connection, command_id, "workflow.continue", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
@@ -2799,7 +2804,7 @@ class WorkflowCoordinator:
             helper_outcomes = self._helper_outcomes(connection, run_id)
             if policy == "cancel":
                 self._cancel_children(connection, run_id, reason or "manual continuation cancelled live helpers", now,
-                                      actor=actor)
+                                      actor=actor, initiator=initiator)
             # New manual input supersedes every older unconsumed intent, including
             # an earlier manual input that has not acquired an execution attempt.
             connection.execute(
@@ -3119,7 +3124,7 @@ class WorkflowCoordinator:
                     connection, run_row, params, console_authority, expected_generation, receipt
                 )
                 return {**receipt, "duplicate": True}
-            actor = self._authorize(connection, run_row, params, console_authority=console_authority, action="A takeover")
+            actor, _initiator = self._authorize(connection, run_row, params, console_authority=console_authority, action="A takeover")
             self._expect_revision(run_row, expected)
             if run_row["owner_generation"] != expected_generation:
                 raise BoardError(
@@ -3229,14 +3234,14 @@ class WorkflowCoordinator:
         with self.db.write() as connection:
             run_row = self._run_row(connection, run_id)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-            actor = self._authorize(connection, run_row, params, console_authority=console_authority, action="Cancellation")
+            actor, initiator = self._authorize(connection, run_row, params, console_authority=console_authority, action="Cancellation")
             if command_id:
                 receipt = self.board._receipt(connection, command_id, "workflow.cancel", request_key)
                 if receipt is not None:
                     return {**receipt, "duplicate": True}
             if run_row["state"] in ("accepted", "concluded"):
                 raise BoardError("CONFLICT", "This run is already closed; cancellation cannot undo it")
-            response = self._cancel_in_transaction(connection, run_row, task, reason, actor, now)
+            response = self._cancel_in_transaction(connection, run_row, task, reason, actor, initiator, now)
             if command_id:
                 self.board._store_receipt(
                     connection, command_id, "workflow.cancel", request_key, response, task_id=run_id
@@ -3285,7 +3290,7 @@ class WorkflowCoordinator:
                     continue
                 task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (root["run_id"],)).fetchone()
                 results.append(self._cancel_in_transaction(
-                    connection, root, task, reason, f"console:{console_authority['sessionId']}", now,
+                    connection, root, task, reason, f"console:{console_authority['sessionId']}", "console", now,
                 ))
             response = {"macroTaskId": identifier, "runIds": [r["runId"] for r in results],
                         "acceptedRunIds": accepted, "concludedRunIds": concluded, "results": results, "duplicate": False}
@@ -3338,7 +3343,7 @@ class WorkflowCoordinator:
                 if run_row["state"] in ("accepted", "concluded"):
                     raise BoardError("CONFLICT", "Closed Micro task still owns active work during service stop", runId=root_id)
                 task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (root_id,)).fetchone()
-                self._cancel_in_transaction(connection, run_row, task, reason, "service-stop", now)
+                self._cancel_in_transaction(connection, run_row, task, reason, "service-stop", "service", now)
                 cancelled_roots.add(root_id)
             head = self.board._head_of(connection)
             counts = {"queued": 0, "active": 0}
@@ -3349,15 +3354,15 @@ class WorkflowCoordinator:
             self.board._notify(head)
         return counts, set(candidates)
 
-    def _cancel_in_transaction(self, connection, run_row, task, reason: str, actor: str, now: str) -> dict:
+    def _cancel_in_transaction(self, connection, run_row, task, reason: str, actor: str, initiator: str, now: str) -> dict:
         run_id = run_row["run_id"]
         # Fence the root before descendants settle: a transferred checkout must
         # not be handed back to a micro task cancelled in this transaction.
-        self._cancel_owned_run(connection, task, now, explicit=True)
-        self._cancel_children(connection, run_id, reason, now, actor=actor)
+        self._cancel_owned_run(connection, task, now, explicit=True, actor=actor, initiator=initiator)
+        self._cancel_children(connection, run_id, reason, now, actor=actor, initiator=initiator)
         self.board._append_event(
             connection, "workflow.cancelled", task_id=run_id, revision=run_row["revision"] + 1,
-            payload={"reason": reason, "actor": actor, "honestShutdown": True},
+            payload={"reason": reason, "actor": actor, "stopInitiator": initiator, "honestShutdown": True},
         )
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
         child = connection.execute("SELECT * FROM workflow_children WHERE child_task_id=?", (run_id,)).fetchone()
@@ -3375,7 +3380,8 @@ class WorkflowCoordinator:
             ),
         }
 
-    def _cancel_children(self, connection, run_id: str, reason: str, now: str, *, actor: str | None = None) -> list[str]:
+    def _cancel_children(self, connection, run_id: str, reason: str, now: str, *,
+                         actor: str | None = None, initiator: str = "unknown") -> list[str]:
         """Fence the whole owned graph, including work behind settled helpers."""
         cancelled: list[str] = []
         rows = self._owned_children(connection, run_id)
@@ -3383,11 +3389,11 @@ class WorkflowCoordinator:
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child["child_task_id"],)).fetchone()
             if task is None:
                 continue
-            if self._cancel_owned_run(connection, task, now):
+            if self._cancel_owned_run(connection, task, now, actor=actor, initiator=initiator):
                 self.board._append_event(
                     connection, "workflow.helper_cancelled", task_id=task["task_id"], revision=task["revision"] + 1,
                     payload={"parentRunId": child["parent_run_id"], "cancelledByRunId": run_id, "reason": reason,
-                             **({"actor": actor} if actor is not None else {})},
+                             "stopInitiator": initiator, **({"actor": actor} if actor is not None else {})},
                 )
                 cancelled.append(task["task_id"])
         # Every descendant is fenced before ownership can move upward. Settlement
@@ -3428,7 +3434,8 @@ class WorkflowCoordinator:
         if pending is not None:
             raise BoardError("CONFLICT", "Model selection is still pending; wait or cancel its owning Micro task before continuing")
 
-    def _cancel_routes(self, connection, run_id: str, reason: str, now: str) -> bool:
+    def _cancel_routes(self, connection, run_id: str, reason: str, now: str, *,
+                       actor: str | None = None, initiator: str = "unknown") -> bool:
         fenced = False
         for link in connection.execute("SELECT * FROM workflow_routes WHERE run_id=?", (run_id,)).fetchall():
             decision = self.board.decisions._row(connection, link["decision_id"])
@@ -3445,11 +3452,7 @@ class WorkflowCoordinator:
                     self.board._transition_task(connection, task, "cancelling" if unconfirmed else "cancelled")
                 connection.execute("UPDATE tasks SET queue_reason=NULL WHERE task_id=?", (task["task_id"],))
                 if unconfirmed:
-                    connection.execute(
-                        "UPDATE attempts SET cancel_requested_at=COALESCE(cancel_requested_at,?),updated_at=?,revision=revision+1"
-                        " WHERE task_id=? AND (execution_state!='finished' OR shutdown_confirmed!=1)",
-                        (now, now, task["task_id"]),
-                    )
+                    self._request_attempt_stop(connection, task["task_id"], now, initiator=initiator, wrap_up=False)
                 self.board.decisions.cancelled(connection, task=task, reason=reason, now=now)
                 self.board._append_event(connection, "task.cancel_requested" if unconfirmed else "task.cancelled",
                                          task_id=task["task_id"], payload={"reason": reason, "owningRunId": run_id})
@@ -3503,7 +3506,28 @@ class WorkflowCoordinator:
             raise BoardError("ANCESTOR_TERMINAL", "An owned helper cannot continue beneath a cancelled or accepted ancestor",
                              runId=run_id, ancestorRunId=ancestor["run_id"], ancestorState=ancestor["state"])
 
-    def _cancel_owned_run(self, connection, task, now: str, *, explicit: bool = False) -> bool:
+    def _request_attempt_stop(self, connection, task_id: str, now: str, *, initiator: str,
+                              wrap_up: bool = True) -> None:
+        for attempt in connection.execute(
+            "SELECT * FROM attempts WHERE task_id=? AND (execution_state!='finished' OR shutdown_confirmed!=1)",
+            (task_id,),
+        ).fetchall():
+            if attempt["cancel_requested_at"] is not None and initiator == "host":
+                continue
+            deadline = attempt["grace_deadline"]
+            if (wrap_up and initiator == "host" and attempt["adapter"] != "external"
+                    and self._execution_adapter(attempt["adapter"]).interrupted_resume
+                    and attempt["execution_state"] in ("starting", "executing")):
+                deadline = (datetime.fromisoformat(now.replace("Z", "+00:00")) + timedelta(seconds=WRAP_UP_SECONDS)).isoformat(
+                    timespec="milliseconds").replace("+00:00", "Z")
+            connection.execute(
+                "UPDATE attempts SET cancel_requested_at=COALESCE(cancel_requested_at,?),stop_initiator=?,"
+                " grace_deadline=?,updated_at=?,revision=revision+1 WHERE attempt_id=?",
+                (now, initiator, deadline, now, attempt["attempt_id"]),
+            )
+
+    def _cancel_owned_run(self, connection, task, now: str, *, explicit: bool = False,
+                          actor: str | None = None, initiator: str = "unknown") -> bool:
         run_id = task["task_id"]
         run_row = self._run_row(connection, run_id)
         cancel_micro_task = explicit or run_row["state"] not in ("delivered", "accepted", "concluded", "failed")
@@ -3514,7 +3538,8 @@ class WorkflowCoordinator:
             "UPDATE workflow_continuations SET state='cancelled' WHERE run_id=? AND state IN ('recorded','queued')", (run_id,),
         )
         self._revoke_credentials(connection, run_id, now)
-        self._cancel_routes(connection, run_id, "Owning Micro task cancelled", now)
+        self._cancel_routes(connection, run_id, "Owning Micro task cancelled", now, actor=actor,
+                            initiator=initiator)
         if cancel_micro_task:
             connection.execute(
                 "UPDATE workflow_runs SET state='cancelled', active_request_id=NULL, updated_at=?, revision=revision+1 WHERE run_id=?",
@@ -3533,18 +3558,16 @@ class WorkflowCoordinator:
             self.board._transition_task(connection, task, "cancelled" if stopped else "cancelling")
             connection.execute("UPDATE tasks SET queue_reason=NULL, updated_at=? WHERE task_id=?", (now, run_id))
         if not stopped:
-            connection.execute(
-                "UPDATE attempts SET cancel_requested_at=?, updated_at=?, revision=revision+1 WHERE task_id=?"
-                " AND (execution_state != 'finished' OR shutdown_confirmed != 1) AND cancel_requested_at IS NULL",
-                (now, now, run_id),
-            )
+            self._request_attempt_stop(connection, run_id, now, initiator=initiator)
         return cancel_micro_task
 
     def _late_cancelled_turn(self, connection, run_row, turn_row, attempt, payload, now):
         """Keep real receipt/artifact evidence without reopening a fenced micro task."""
         turn = self.turn_outcome(payload)
         disposition = None
-        if attempt["shutdown_confirmed"] and turn is not None and self._validate_turn(turn, turn_row, attempt) is None:
+        if (attempt["shutdown_confirmed"] and payload is not None
+                and payload.get("terminationReason") != "grace-expired"
+                and turn is not None and self._validate_turn(turn, turn_row, attempt) is None):
             disposition = turn["outcome"]["disposition"]
             connection.execute(
                 "UPDATE workflow_turns SET state='returned', disposition=?, outcome_json=?, outcome_truncated_json=?, provenance_json=?,"
@@ -3683,7 +3706,7 @@ class WorkflowCoordinator:
         duplicate = None
         with self.db.read() as connection:
             owner = self._run_row(connection, owner_run_id)
-            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="An acceptance")
+            actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="An acceptance")
             receipt = self.board._receipt(connection, command_id, "workflow.accept", request_key)
             if receipt is not None:
                 duplicate = {**receipt, "duplicate": True}
@@ -3722,7 +3745,7 @@ class WorkflowCoordinator:
         now = self.now()
         with self.db.write() as connection:
             owner = self._run_row(connection, owner_run_id)
-            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="An acceptance")
+            actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="An acceptance")
             receipt = self.board._receipt(connection, command_id, "workflow.accept", request_key)
             if receipt is not None:
                 duplicate = {**receipt, "duplicate": True}
@@ -4211,7 +4234,7 @@ class WorkflowCoordinator:
         duplicate = None
         with self.db.read() as connection:
             owner = self._run_row(connection, owner_run_id)
-            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A Host conclusion")
+            actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A Host conclusion")
             target_snapshot = self._target_run(connection, owner, target_id)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (target_id,)).fetchone()
             request_key = {"runId": owner_run_id, "targetRunId": target_id, "note": note,
@@ -4241,7 +4264,7 @@ class WorkflowCoordinator:
         now = self.now()
         with self.db.write() as connection:
             owner = self._run_row(connection, owner_run_id)
-            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A Host conclusion")
+            actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A Host conclusion")
             receipt = self.board._receipt(connection, command_id, "workflow.conclude", request_key)
             if receipt is not None:
                 duplicate = {**receipt, "duplicate": True}
@@ -4586,7 +4609,7 @@ class WorkflowCoordinator:
         now = self.now()
         with self.db.write() as connection:
             owner = self._run_row(connection, owner_run_id)
-            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A scope amendment")
+            actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A scope amendment")
             receipt = self.board._receipt(connection, command_id, "workflow.scope_amend", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
@@ -4798,7 +4821,7 @@ class WorkflowCoordinator:
                        "paths": paths, "observedFingerprint": observed, "reason": reason, "expectedRevision": expected}
         with self.db.read() as connection:
             owner = self._run_row(connection, run_id)
-            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A workspace resolution")
+            actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A workspace resolution")
             receipt = self.board._receipt(connection, command_id, "workflow.workspace_resolve", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
@@ -4843,7 +4866,7 @@ class WorkflowCoordinator:
         now = self.now()
         with self.db.write() as connection:
             owner = self._run_row(connection, owner_run_id)
-            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A workspace resolution")
+            actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A workspace resolution")
             receipt = self.board._receipt(connection, command_id, "workflow.workspace_resolve", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
@@ -5161,7 +5184,7 @@ class WorkflowCoordinator:
         request_key = {"runId": run_id, "targetRunId": target_id, "expectedRevision": expected}
         with self.db.read() as connection:
             owner = self._run_row(connection, run_id)
-            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup plan")
+            actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup plan")
             receipt = self.board._receipt(connection, command_id, "workflow.cleanup_plan", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
@@ -5216,7 +5239,7 @@ class WorkflowCoordinator:
         expires_at = self._expiry(CLEANUP_PLAN_TTL_SECONDS)
         with self.db.write() as connection:
             owner = self._run_row(connection, owner_run_id)
-            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup plan")
+            actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup plan")
             receipt = self.board._receipt(connection, command_id, "workflow.cleanup_plan", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
@@ -5752,7 +5775,12 @@ class WorkflowCoordinator:
         previous_session = previous["session_id"] if previous is not None else None
         if native is not None:
             previous_session = native[1]["sessionId"]
-        native_completed = previous is not None and previous["state"] == "returned"
+        prior = (connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?',
+                                    (previous['attempt_id'],)).fetchone() if previous is not None else None)
+        prior_result = json.loads(prior['result_json'] or '{}') if prior else {}
+        native_completed = (previous is not None and previous["state"] == "returned"
+                            and prior_result.get('status') == 'ok'
+                            and prior_result.get('shutdownConfirmed') is True)
         if native is not None:
             from ...buddy.roles.turn_io import checkpoint_resumable
             native_completed = checkpoint_resumable(*native)
@@ -5765,8 +5793,7 @@ class WorkflowCoordinator:
                 executor = self._execution_adapter(buddy["harness"])
                 from ..service.harness_health import read_health
                 health = read_health(connection, buddy['harness'])
-                prior = connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?', (previous['attempt_id'],)).fetchone()
-                result = json.loads(prior['result_json'] or '{}') if prior else {}
+                result = prior_result
                 history = result.get('harnessAttempts') or result.get('result', {}).get('harnessAttempts') or []
                 old_version = history[-1].get('harness', {}).get('version') if history else None
                 harness_changed = bool(old_version and health.get('version') and old_version != health['version'])
@@ -6362,7 +6389,8 @@ class WorkflowCoordinator:
                 raise BoardError("WORKSPACE_INVALID", "A partial output requires a stopped failed attempt")
             bound = json.loads(turn_row["input_json"])["executionWorkspace"]
             workspace_module()._validate_output_record(bound, partial)
-        if params.get("status") != "ok" or not params.get("shutdownConfirmed"):
+        if (params.get("status") != "ok" and params.get("terminationReason") != "wrap-up"
+                or not params.get("shutdownConfirmed")):
             return
         if turn_row is None:
             raise BoardError("TURN_INVALID", "the micro-task attempt has no service-owned turn to import")

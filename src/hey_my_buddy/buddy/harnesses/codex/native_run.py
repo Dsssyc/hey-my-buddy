@@ -320,13 +320,16 @@ class _RunState:
     exit_code: int | None = None
     interrupt_requested: bool = False
     interrupt_basis: str | None = None
+    interrupt_terminal_confirmed: bool = False
     correction_count: int = 0
     event_count: int = 0
     raw_answer: str | None = None
     drained: bool | None = None
     rounds_complete: bool = False
     checkpoint: dict | None = None
+    turn_evidence: TurnEvidence | None = None
     binding_saved: bool = False
+    binding_save_failed: bool = False
     binding_path: Path | None = None
     token_usage: dict | None = None
     usage_rounds: list[TurnEvidence] = dataclasses.field(default_factory=list)
@@ -595,10 +598,7 @@ def _binding_path(root: Path, thread_id: str) -> Path:
 
 
 def _write_binding(root: Path, thread_id: str, binding: dict) -> None:
-    path = _binding_path(root, thread_id)
-    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    private_json(temp, binding)
-    os.replace(temp, path)
+    private_json(_binding_path(root, thread_id), binding)
 
 
 def _read_binding(root: Path, thread_id: str) -> dict:
@@ -643,7 +643,8 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
         binding = _read_binding(prep.native_root, previous)
         expected = {"taskId": request.identity.task_id, "threadId": previous,
                     "cwd": request.cwd, "buddy": requested}
-        if set(binding) != set(expected) | {"lastTurnId", "lastAttemptId", "lastInputSha256"} \
+        fields = set(expected) | {"lastTurnId", "lastAttemptId", "lastInputSha256"}
+        if set(binding) != fields \
                 or {key: binding.get(key) for key in expected} != expected \
                 or not isinstance(binding.get("lastTurnId"), str):
             raise CodexProtocolError("native-resume-unavailable",
@@ -659,12 +660,16 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
             read = connection.call("thread/read", {"threadId": previous, "includeTurns": True}).get("thread")
             turns = read.get("turns") if isinstance(read, dict) else None
             if not isinstance(turns, list) or not turns or turns[-1].get("id") != binding["lastTurnId"] \
-                    or turns[-1].get("status") != "completed":
+                    or turns[-1].get("status") not in ("completed", "interrupted"):
                 raise CodexProtocolError("native-resume-unavailable",
-                                         "the Codex thread has changed since its bound completed turn")
+                                         "the Codex thread has changed since its bound terminal turn")
+            if turns[-1]["status"] == "interrupted" and checkpoint is None:
+                raise CodexProtocolError("native-resume-unavailable",
+                                         "an interrupted Codex turn requires its exact previous attempt checkpoint")
             response = connection.call("thread/resume", {"threadId": previous, "cwd": request.cwd,
                                                          "model": requested["model"], "modelProvider": requested["provider"],
                                                          "approvalPolicy": "never", "sandbox": sandbox})
+            state.binding_path = _binding_path(prep.native_root, previous)
         except CodexProtocolError as error:
             if error.code != "native-rpc-error":
                 raise
@@ -1152,6 +1157,7 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
         # The trusted root identity comes only from this native turn receipt.
         chain.projector.observe_root(thread_id, turn_id)
     evidence = TurnEvidence(thread_id, turn_id)
+    state.turn_evidence = evidence
 
     def carrier(message: dict) -> None:
         _capture_native_error(state, message, thread_id, turn_id)
@@ -1358,19 +1364,36 @@ def _drain_to_eof(connection: Connection, chain: _EventChain,
 def _interrupt(connection: Connection, state: _RunState) -> None:
     """A fresh short control budget permits a native interrupt after the deadline."""
     try:
-        connection.on_notification = lambda message: None
+        # The interrupted root's terminal notification is separate from the
+        # interrupt RPC receipt. Keep its exact thread/turn correlation after
+        # the role observer has stopped receiving events.
+        evidence = state.turn_evidence
+        connection.on_notification = (lambda message: evidence.observe(message)
+                                      if evidence is not None else None)
+        connection.after_pump = None
         connection.cancelled = CancelFlag(lambda: False)
         connection.deadline = time.monotonic() + 2
         connection.call("turn/interrupt", {"threadId": state.thread_id, "turnId": state.turn_id})
         state.interrupt_requested = True
         state.interrupt_basis = ("native-turn-interrupt-ack" if connection.last_result_readable is True
                                  else "native-turn-interrupt-unconfirmed")
+        while evidence is not None and evidence.completed is None:
+            connection.pump()
+        state.interrupt_terminal_confirmed = bool(
+            evidence is not None and evidence.started
+            and (evidence.completed or {}).get("status") == "interrupted")
     except (CodexProtocolError, OSError, ValueError):
         # A closed input (the fast drain already ended the stream) or a failed
         # control write is an unconfirmed interrupt, never a crash and never a
         # claim that the native turn was interrupted.
         state.interrupt_requested = True
         state.interrupt_basis = "native-turn-interrupt-unconfirmed"
+    finally:
+        evidence = state.turn_evidence
+        if evidence is not None and state.checkpoint is not None:
+            state.checkpoint["nativeTurnStatus"] = (evidence.completed or {}).get("status", "incomplete")
+            state.checkpoint["eventSeq"] = evidence.event_seq
+            state.event_count = evidence.event_seq
 
 
 # -- phase 5: stop collection -------------------------------------------------------
@@ -1408,13 +1431,19 @@ def _save_binding(request: RunRequest, prep: _Preparation,
                   state: _RunState) -> None:
     checkpoint = state.checkpoint
     if not checkpoint or checkpoint.get("nativeTurnStarted") is not True \
-            or checkpoint.get("nativeTurnStatus") != "completed" \
-            or not state.shutdown or state.exit_code != 0:
+            or checkpoint.get("nativeTurnStatus") not in ("completed", "interrupted") \
+            or not state.shutdown \
+            or checkpoint["nativeTurnStatus"] == "interrupted" and not state.interrupt_terminal_confirmed \
+            or checkpoint["nativeTurnStatus"] == "completed" and state.exit_code != 0:
         return
     binding = {"taskId": checkpoint["taskId"], "threadId": state.thread_id, "cwd": request.cwd,
                "buddy": state.requested, "lastTurnId": state.turn_id,
                "lastAttemptId": checkpoint["attemptId"], "lastInputSha256": checkpoint["inputSha256"]}
-    _write_binding(prep.native_root, state.thread_id, binding)
+    try:
+        _write_binding(prep.native_root, state.thread_id, binding)
+    except (OSError, BoardError):
+        state.binding_save_failed = True
+        return
     checkpoint["bindingSaved"] = True
     state.binding_saved = True
     state.binding_path = _binding_path(prep.native_root, state.thread_id)
@@ -1547,7 +1576,8 @@ def _last_assistant_message(checkpoint: dict | None) -> dict | None:
 def _continuation_facts(state: _RunState, mode: str) -> ContinuationFacts | None:
     if mode != "worker" or state.thread_id is None:
         return None
-    return ContinuationFacts(resumable=True if state.binding_saved else None)
+    return ContinuationFacts(resumable=False if state.binding_save_failed
+                             else True if state.binding_saved else None)
 
 
 def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> tuple[EvidenceRef, ...]:

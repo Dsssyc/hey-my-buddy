@@ -400,6 +400,10 @@ def _micro_task_binding(request: RunRequest, session_id: str) -> dict:
                               "effort": request.buddy.effort}}
 
 
+def _valid_micro_task_binding(request: RunRequest, session_id: str, binding: object) -> bool:
+    return binding == _micro_task_binding(request, session_id)
+
+
 def _continuation_of(request: RunRequest) -> tuple[str, str | None]:
     """The request's continuation mode and the previous session it names.
 
@@ -580,6 +584,7 @@ class _RunState:
     attention_error: str | None = None
     update_overflow: bool = False
     prompt_stop_reason: str | None = None
+    interrupted_turn_closed: bool = False
     event_count: int = 0
     #: The update pump's cumulative unknown-notification counts. The run's
     #: result projection reads this same mapping; an empty one carries no
@@ -1027,7 +1032,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             except (OSError, ValueError):
                 raise NativeError("native-resume-unavailable",
                                   "the previous native session has no private micro task binding") from None
-            if binding != _micro_task_binding(request, previous):
+            if not _valid_micro_task_binding(request, previous, binding):
                 raise NativeError("native-resume-unavailable",
                                   "the previous native session does not match this micro task, "
                                   "checkout and buddy")
@@ -1108,24 +1113,24 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     else:
         record = None
     continuation = None
-    if micro_task and sessions and state.status == "ok" and state.provenance is not None \
-            and state.stop.get("shutdown") is True:
+    completed = state.status == "ok" and state.provenance is not None
+    interrupted = (state.status == "cancelled" and state.interrupt_requested
+                   and state.prompt_stop_reason == "cancelled" and state.interrupted_turn_closed)
+    if micro_task and sessions and (completed or interrupted) and state.stop.get("shutdown") is True:
         # The reusable binding needs the complete native turn, its verified
-        # provenance, the correct session binding and the really-gone group —
-        # a resumed turn keeps the binding it already verified; a fresh root
-        # writes its own once, and nothing else may stand in for either.
+        # provenance or acknowledged cancellation, plus the really-gone group.
         session_id = sessions[-1]
         expected = _micro_task_binding(request, session_id)
         try:
             binding_file = _binding_path(native_root, session_id)
-            if binding_file.is_file():
-                bound = decode_json(binding_file.read_bytes()) == expected
-            else:
+            try:
                 private_json(binding_file, expected, exclusive=True)
-                bound = True
+            except FileExistsError:
+                if decode_json(binding_file.read_bytes()) != expected:
+                    raise ValueError("the existing DSH session binding differs")
         except (OSError, ValueError, BoardError):
-            bound = False
-        if bound:
+            continuation = ContinuationFacts(resumable=False)
+        else:
             continuation = ContinuationFacts(resumable=True)
     return _build_result(request, state=state, tools=tools, activity=activity, client=client,
                          sessions=sessions, evidence=evidence, raw_answer=raw_answer,
@@ -1421,6 +1426,10 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
     if value.get("stopReason") == "cancelled":
         # A cancelled turn owes no finish receipt; the reason, not a missing
         # tool, is what the turn's end means.
+        state.prompt_stop_reason = "cancelled"
+        if state.interrupt_requested:
+            _close_session(client, session_id)
+            state.interrupted_turn_closed = True
         raise NativeError("native-cancelled", "the native root turn stopped cancelled")
     failure = _settle_stop_reason(state, value.get("stopReason"))
     if state.status == "unknown":

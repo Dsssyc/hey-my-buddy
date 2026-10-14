@@ -125,6 +125,12 @@ export function countsText(activity: TaskActivity): string {
 }
 
 const terminationLabels: Record<string, string> = {
+  "wrap-up": "Host 收尾完成",
+  "grace-expired": "收尾宽限到期后停止",
+  "forced-stop": "强制停止",
+  "console-stop": "在控制台停止",
+  "service-stop": "服务停止",
+  "unknown-stop": "停止（发起者未知）",
   deadline: "Router 预算用完",
   "harness-error": "Harness 错误",
   "transport-error": "传输故障",
@@ -139,19 +145,24 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function cancellationDetails(task: Task): { label: string; hostId: string | null; reason: string | null } {
   const cancellation = record(task.cancellation);
+  const initiator = task.selectedAttempt?.stopInitiator ?? task.stopInitiator;
   const actor = cancellation?.actor;
   const reason = cancellation?.reason;
   const safeReason = typeof reason === "string" && reason.trim() && reason.length <= 4000
     ? reason.trim() : null;
+  if (initiator === "console") return { label: "在控制台停止", hostId: null, reason: safeReason };
+  if (initiator === "service") return { label: "服务停止", hostId: null, reason: safeReason };
+  if (initiator === "unknown") return { label: "停止（发起者未知）", hostId: null, reason: safeReason };
   if (typeof actor === "string" && actor.startsWith("host:") && actor.length <= 261) {
     const hostId = actor.slice(5);
-    if (hostId && !/[\x00-\x1f\x7f]/.test(hostId)) return { label: "Host 取消", hostId, reason: safeReason };
+    if (hostId && !/[\x00-\x1f\x7f]/.test(hostId)) return { label: "Host 停止", hostId, reason: safeReason };
   }
   if (typeof actor === "string" && /^console:[^\x00-\x1f\x7f]{1,128}$/.test(actor)) {
     return { label: "在控制台停止", hostId: null, reason: safeReason };
   }
   if (actor === "service-stop") return { label: "服务停止", hostId: null, reason: safeReason };
-  return { label: "取消（发起者未知）", hostId: null, reason: safeReason };
+  if (initiator === "host") return { label: "Host 停止", hostId: null, reason: safeReason };
+  return { label: "停止（发起者未知）", hostId: null, reason: safeReason };
 }
 
 /**
@@ -174,7 +185,6 @@ export function recordedTermination(task: Task): string | null {
 /** Recorded termination cause. A missing cause stays unknown, never "user cancel". */
 export function terminationText(task: Task): string | null {
   const raw = recordedTermination(task);
-  if (raw === "user-cancel") return cancellationDetails(task).label;
   if (raw) return terminationLabels[raw] ?? raw;
   if (task.status === "cancelled") {
     return cancellationDetails(task).label;
@@ -237,9 +247,9 @@ export function TaskActivityView({ task }: { task: Task }) {
         </p>
       )}
       {cancellation && <dl className="facts">
-        {termination !== cancellation.label && <><dt>取消发起</dt><dd>{cancellation.label}</dd></>}
+        {termination !== cancellation.label && <><dt>停止发起</dt><dd>{cancellation.label}</dd></>}
         {cancellation.hostId && <><dt>发起 Host</dt><dd className="mono wrap">{cancellation.hostId}</dd></>}
-        {cancellation.reason && <><dt>取消理由</dt><dd className="wrap">{cancellation.reason}</dd></>}
+        {cancellation.reason && <><dt>停止理由</dt><dd className="wrap">{cancellation.reason}</dd></>}
       </dl>}
     </section>
   );

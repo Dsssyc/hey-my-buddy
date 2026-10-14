@@ -20,6 +20,8 @@ from ..harnesses.base import (
 )
 from . import structured_call as read_only
 
+ROUTER_STOP_GRACE_SECONDS = 12.0
+
 
 def prepare_router_fast(document: dict, buddy: dict, native: Adapter,
                         context: ExecutionContext) -> role_seam.FastPreparation:
@@ -161,6 +163,6 @@ class DecisionAdapter(Adapter):
         outcome.result = result
         return outcome
 
-    def cancel(self, handle: ProcessHandle, *, grace_seconds: float = 12.0) -> None:
+    def cancel(self, handle: ProcessHandle, *, grace_seconds: float = ROUTER_STOP_GRACE_SECONDS) -> None:
         # Controllers translate SIGTERM into native interrupt, then reap their own groups.
         handle.terminate(grace_seconds=grace_seconds)

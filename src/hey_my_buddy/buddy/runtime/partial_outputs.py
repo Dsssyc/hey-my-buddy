@@ -24,8 +24,7 @@ def capture(context, outcome):
         if seal and seal.get("changedPaths"):
             payload["partialWorkspaceSeal"] = seal
             payload["workspaceManifest"] = manifest
-            payload["partialOutput"] = {"partial": True, "verified": False, "final": False,
-                                        "reason": payload.get("code") or outcome.status}
+            payload["partialOutput"] = {"partial": True, "verified": False, "final": False}
     except BoardError as error:
         payload["partialSealError"] = {"code": error.code, "message": error.message}
 

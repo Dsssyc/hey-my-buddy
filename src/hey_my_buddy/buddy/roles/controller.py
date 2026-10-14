@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import signal
+import time
 from typing import Callable, Mapping, TYPE_CHECKING
 
 from ...errors import BoardError
@@ -27,6 +29,7 @@ __all__ = [
     'run_harness',
     'start_router_preparation',
     'worker_cancel',
+    'worker_stop',
     'worker_collect',
     'worker_executor',
     'worker_start',
@@ -92,12 +95,67 @@ def worker_collect(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle,
     return executor.collect(handle, context)
 
 
+def stop_termination_reason(*, shutdown_confirmed: bool, stop_initiator: str | None,
+                            grace_expired: bool = False, wrap_up_delivered: bool = False) -> str | None:
+    """Classify a stop once, separately from its initiator and shutdown evidence."""
+    if shutdown_confirmed is not True:
+        return None
+    if wrap_up_delivered:
+        return "wrap-up"
+    if grace_expired:
+        return "grace-expired"
+    if stop_initiator == "host":
+        return "forced-stop"
+    if stop_initiator == "console":
+        return "console-stop"
+    if stop_initiator == "service":
+        return "service-stop"
+    return "unknown-stop"
+
+
 def worker_cancel(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle, *, grace_seconds: float | None = None) -> None:
     """Cancel through the executor; a None grace keeps each adapter's own default."""
-    if grace_seconds is None:
-        executor.cancel(handle)
-    else:
-        executor.cancel(handle, grace_seconds=grace_seconds)
+    with handle.stop_lock:
+        if handle.force_stop_requested:
+            return
+        handle.force_stop_requested = True
+        if handle.stop_initiator is None:
+            handle.stop_initiator = "unknown"
+        if grace_seconds is None:
+            executor.cancel(handle)
+        else:
+            executor.cancel(handle, grace_seconds=grace_seconds)
+
+
+def worker_stop(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle, *,
+                stop_initiator: str, grace_deadline: float | None) -> None:
+    """Route the first stop request through the selected executor's policy."""
+    with handle.stop_lock:
+        if handle.force_stop_requested or (handle.cancel_requested and
+                (not handle.wrap_up_started or stop_initiator == "host")):
+            return
+        handle.stop_initiator = stop_initiator
+        if handle.cancel_requested:
+            handle.force_stop_requested = True
+        executor.stop(handle, stop_initiator=stop_initiator, grace_deadline=grace_deadline)
+
+
+def start_wrap_up(handle: ProcessHandle, deadline: float) -> None:
+    """Interrupt the current native turn once, with its bounded wrap-up intent."""
+    from .turn_io import private_json
+    from .run_execution import _STOP_CONTROL
+
+    control = handle.role_run_control
+    private_json(Path(control["privateRoot"]) / _STOP_CONTROL, {
+        "kind": "host-wrap-up", "graceDeadline": deadline,
+        "binding": handle.role_run_identity.to_payload(),
+    }, exclusive=True)
+    handle.stop_initiator = "host"
+    handle.wrap_up_started = True
+    handle.grace_deadline = deadline
+    handle.cancel_requested = True
+    handle.signalled_at = time.monotonic()
+    handle.signal_group(signal.SIGTERM)
 
 
 # -- the Router's preparation results and carrier call point ------------------

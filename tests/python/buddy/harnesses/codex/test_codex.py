@@ -20,6 +20,7 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
+from hey_my_buddy.buddy.roles import controller
 from hey_my_buddy.buddy.roles.controller import ReviewPreparation, start_router_preparation, worker_executor
 
 FIXTURE = Path(__file__).parent / "fixtures/mock_codex.py"
@@ -424,6 +425,34 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertNotIn("turn", outcome.result)
+
+    def test_host_wrap_up_resumes_same_native_session_for_structured_summary(self):
+        context = self.context("wrap-up", timeout=None)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        started = self.wait_native_turn_start()
+        controller.worker_stop(self.adapter, handle, stop_initiator="host",
+                               grace_deadline=time.monotonic() + 10)
+        self.assertIsNotNone(handle.wait(15), "Codex fixture summary controller did not exit")
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "cancelled", outcome.to_report())
+        self.assertIs(outcome.result.get("wrapUpDelivered"), True, outcome.to_report())
+        from hey_my_buddy.buddy.runtime.worker import classify_termination
+        self.assertEqual(classify_termination(outcome, timed_out=False, cancel_requested=True,
+                                              stop_initiator="host"), "wrap-up")
+        self.assertTrue(outcome.shutdown_confirmed)
+        turn = outcome.result["turn"]
+        from hey_my_buddy.buddy.roles.turn_io import validate_outcome
+        self.assertIsNone(validate_outcome(turn["outcome"]))
+        self.assertEqual(turn["outcome"]["summary"], "Stopped partial work summary")
+        self.assertEqual(turn["sessionId"], started["threadId"])
+        self.assertEqual(turn["provenance"]["nativeTurnId"], "native-turn-2")
+        state = json.loads(Path(self.environment["HMB_CODEX_FIXTURE_STATE"]).read_text())
+        self.assertEqual(set(state["threads"]), {started["threadId"]})
+        native_turns = state["threads"][started["threadId"]]["turns"]
+        self.assertEqual([(item["id"], item["status"]) for item in native_turns],
+                         [(started["turnId"], "interrupted"), ("native-turn-2", "completed")])
+        self.assertEqual(len(state["threads"][started["threadId"]]["resumeRequests"]), 1)
 
     def test_read_only_refuses_a_conflicting_policy_receipt(self):
         result, _context = self.review('readonly-policy-mismatch', index=41)

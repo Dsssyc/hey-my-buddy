@@ -11,6 +11,7 @@ class CodexAdapter:
     name = "codex"
     capabilities = ("codex", "workspace", "cancel", "artifacts", "deadline", "native-session")
     native_resume = True
+    interrupted_resume = True
     native_resume_permission_change = True
     model_discovery = True
     read_only_structured = True

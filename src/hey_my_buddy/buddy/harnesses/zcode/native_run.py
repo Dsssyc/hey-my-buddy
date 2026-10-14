@@ -1004,6 +1004,7 @@ class _CarrierOutcome:
     usage_rounds: list[ZcodeAttemptUsage] = dataclasses.field(default_factory=list)
     inquiry_bridge: InquiryBridge | None = None
     binding_path: Path | None = None
+    binding_save_failed: bool = False
     record: dict | None = None
     verified_outcome: dict | None = None
     verified_completion: dict | None = None
@@ -1165,6 +1166,19 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
         drained = _stop_collection(spawn=spawn, deadline=deadline, cancel=cancel, state=state,
                                    tools=tools, classifier=classifier, facts=facts, notify=notify,
                                    completion_carrier=completion_carrier, outcome=outcome)
+    if (completion_carrier and state.status == "ok" and state.shutdown
+            and state.exit_code == 0 and outcome.record is not None
+            and outcome.binding_path is not None and outcome.session_id is not None):
+        try:
+            expected = {"taskId": request.identity.task_id, "sessionId": outcome.session_id,
+                        "cwd": request.cwd, "buddy": outcome.resolved}
+            try:
+                private_json(outcome.binding_path, expected, exclusive=True)
+            except FileExistsError:
+                if decode_strict_json(outcome.binding_path.read_bytes()) != expected:
+                    raise ValueError("the existing ZCode session binding differs")
+        except (OSError, ValueError, BoardError):
+            outcome.binding_save_failed = True
     tool_package = None
     if state.session_opened:
         # A stream is complete only when it was read to its EOF with the owned
@@ -1374,10 +1388,6 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         state.configured = True
         if mode != "native-session":
             outcome.binding_path = native_root / (hashlib.sha256(opened_session.encode()).hexdigest() + ".json")
-            private_json(outcome.binding_path, {"taskId": request.identity.task_id,
-                                                "sessionId": opened_session,
-                                                "cwd": request.cwd, "buddy": resolved_spec},
-                         exclusive=True)
 
     def after_admit(opened_session: str) -> None:
         if outcome.inquiry_bridge is not None:
@@ -1542,7 +1552,8 @@ def _finish_result(*, request: RunRequest, spawn: _Spawn | None, state: _RunStat
                              raw_answer=outcome.raw_answer,
                              correction_count=outcome.correction_count, event_count=outcome.event_count,
                              record=outcome.record, projection=outcome.projection,
-                             binding_path=outcome.binding_path, drained=drained,
+                             binding_path=outcome.binding_path,
+                             binding_save_failed=outcome.binding_save_failed, drained=drained,
                              evidence_refs=evidence_refs, tool_package=tool_package, facts=facts)
     except BoardError:
         # A fact that cannot be represented in the common result is the run's
@@ -1561,7 +1572,8 @@ def _finish_result(*, request: RunRequest, spawn: _Spawn | None, state: _RunStat
                              session_id=outcome.session_id, turn_id=outcome.turn_id,
                              raw_answer=outcome.raw_answer,
                              correction_count=outcome.correction_count, event_count=outcome.event_count,
-                             record=None, projection=None, binding_path=outcome.binding_path, drained=drained,
+                             record=None, projection=None, binding_path=outcome.binding_path,
+                             binding_save_failed=outcome.binding_save_failed, drained=drained,
                              evidence_refs=evidence_refs, tool_package=None, facts=facts)
 
 
@@ -1580,7 +1592,7 @@ def _activity_package(projection) -> Any:
 
 def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, session_id,
                   turn_id, raw_answer, correction_count, event_count, record,
-                  projection, binding_path, drained, evidence_refs, tool_package,
+                  projection, binding_path, binding_save_failed, drained, evidence_refs, tool_package,
                   completion_carrier, verified_outcome, verified_completion,
                   final_message_completed, facts: _RunFacts) -> RunResult:
     native_identity = None
@@ -1646,7 +1658,8 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
     continuation = None
     if binding_path is not None and session_id is not None:
         continuation = ContinuationFacts(
-            resumable=bool(binding_path.is_file() and state.shutdown and record is not None))
+            resumable=bool(state.status == "ok" and not binding_save_failed and binding_path.is_file()
+                           and state.shutdown and record is not None))
     return RunResult(
         identity=request.identity, harness="zcode",
         end=RunEnd(status=state.status, reason_code=state.reason,

@@ -110,7 +110,7 @@ export function eventSentence(event: TimelineEvent, row: TimelineRow | null): st
     case "integrate": return `${time} Host 整合了「${title}」的产出`;
     case "accept": return `${time} Host 验收通过「${title}」`;
     case "reject": return `${time} Host 对「${title}」提出验收问题`;
-    case "cancel": return `${time} Host 取消了「${title}」`;
+    case "cancel": return `${time} Host 停止了「${title}」`;
     case "takeover": return `${time} Host 接管了「${title}」`;
     default: return `${time} Host ${event.label || eventVocab(event.kind).label}「${title}」`;
   }

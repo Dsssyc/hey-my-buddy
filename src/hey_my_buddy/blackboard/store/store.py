@@ -362,6 +362,9 @@ class BoardStore:
             "reviewRejectionNote": row["review_rejection_note"],
             "resultAvailable": False,
             "shutdownConfirmed": False,
+            "terminationReason": None,
+            "stopInitiator": None,
+            "graceDeadline": None,
             # The bounded latest native activity of the selected attempt, or null.
             # A task view always carries the field so a reader can distinguish
             # "no observation" from "field not supported".
@@ -391,6 +394,8 @@ class BoardStore:
             "shutdownConfirmed": bool(row["shutdown_confirmed"]),
             "cancelRequested": row["cancel_requested_at"] is not None,
             "cancelRequestedAt": row["cancel_requested_at"],
+            "stopInitiator": row["stop_initiator"],
+            "graceDeadline": row["grace_deadline"],
             "exitCode": row["exit_code"],
             "signal": row["signal"],
             "error": row["error"],
@@ -503,11 +508,14 @@ class BoardStore:
             view["selectedAttempt"] = self._attempt_view(attempt)
             view["resultAvailable"] = attempt["result_json"] is not None
             view["shutdownConfirmed"] = bool(attempt["shutdown_confirmed"])
+            view["terminationReason"] = recorded.get("terminationReason")
             view["attemptGeneration"] = attempt["generation"]
             view["attemptState"] = attempt["execution_state"]
             view["workerId"] = attempt["worker_id"]
             view["logPaths"] = json.loads(attempt["log_paths"])
             view["cancelRequested"] = attempt["cancel_requested_at"] is not None
+            view["stopInitiator"] = attempt["stop_initiator"]
+            view["graceDeadline"] = attempt["grace_deadline"]
             # The projection is looked up by the *selected* attempt, so a replacement
             # generation never inherits the previous attempt's observation.
             view["activity"] = self._activity_latest(connection, attempt["attempt_id"])
@@ -1119,11 +1127,8 @@ class BoardStore:
                     if task["state"] not in ("cancelling",):
                         self._transition_task(connection, task, "cancelling")
                     if attempt is not None and attempt["cancel_requested_at"] is None:
-                        connection.execute(
-                            "UPDATE attempts SET cancel_requested_at=?, updated_at=?, revision=revision+1"
-                            " WHERE attempt_id = ?",
-                            (now, now, attempt["attempt_id"]),
-                        )
+                        self.workflow._request_attempt_stop(connection, task["task_id"], now, initiator="unknown",
+                                                            wrap_up=False)
                     self._append_event(
                         connection,
                         "task.cancel_requested",
@@ -2075,6 +2080,8 @@ class BoardStore:
                     "leaseSeconds": attempt["lease_seconds"],
                     "leaseExpiresAt": attempt["lease_expires_at"],
                     "cancelRequested": attempt["cancel_requested_at"] is not None,
+                    "stopInitiator": attempt["stop_initiator"],
+                    "graceDeadline": attempt["grace_deadline"],
                     "finished": True,
                     "reattached": True,
                     "immutable": True,
@@ -2130,6 +2137,8 @@ class BoardStore:
                 "leaseSeconds": self.lease_seconds,
                 "leaseExpiresAt": lease_expires_at,
                 "cancelRequested": attempt_row["cancel_requested_at"] is not None,
+                "stopInitiator": attempt_row["stop_initiator"],
+                "graceDeadline": attempt_row["grace_deadline"],
                 "finished": attempt_row["execution_state"] == "finished",
                 "reattached": True,
                 "restored": restored,
@@ -2152,6 +2161,8 @@ class BoardStore:
                     "attempt": self._attempt_view(attempt),
                     "task": self._decorate(connection, task),
                     "cancelRequested": attempt["cancel_requested_at"] is not None,
+                    "stopInitiator": attempt["stop_initiator"],
+                    "graceDeadline": attempt["grace_deadline"],
                     "finished": True,
                     "leaseExpiresAt": attempt["lease_expires_at"],
                 }
@@ -2181,6 +2192,8 @@ class BoardStore:
                 "attempt": self._attempt_view(attempt_row, include_result=False),
                 "task": self._decorate(connection, task),
                 "cancelRequested": attempt_row["cancel_requested_at"] is not None,
+                "stopInitiator": attempt_row["stop_initiator"],
+                "graceDeadline": attempt_row["grace_deadline"],
                 "finished": False,
                 "leaseExpiresAt": lease_expires_at,
                 "uncertain": uncertain,
@@ -2298,6 +2311,13 @@ class BoardStore:
                 f"terminationReason must be one of {', '.join(TERMINATION_REASONS)}",
                 field="terminationReason",
             )
+        stop_reasons = {"wrap-up", "grace-expired", "forced-stop", "console-stop", "service-stop", "unknown-stop"}
+        if termination_reason in stop_reasons and not shutdown_confirmed:
+            raise BoardError("INVALID_ARGUMENT", "A stop termination reason requires confirmed shutdown",
+                             field="terminationReason")
+        if termination_reason == "wrap-up" and status != "cancelled":
+            raise BoardError("INVALID_ARGUMENT", "wrap-up requires a cancelled result",
+                             field="terminationReason")
         error_text = schemas.optional_string(params, "error", max_length=4000)
         command_id = schemas.optional_string(params, "commandId", max_length=128) or f"result:{params.get('attemptId')}"
         attempt_id_param = schemas.required_string(params, "attemptId", max_length=128)
@@ -2317,12 +2337,16 @@ class BoardStore:
         try:
             self.workflow.precheck_result(params)
         except BoardError as error:
-            status = "failed"
+            status = "cancelled" if termination_reason == "wrap-up" and shutdown_confirmed else "failed"
+            if termination_reason == "wrap-up":
+                termination_reason = "forced-stop" if shutdown_confirmed else None
             error_text = f"the micro-task result could not be imported: {error.message}"
             result = {
                 **(result or {}),
                 "microTaskError": {"code": error.code, "message": error.message},
             }
+            if isinstance(result.get("partialOutput"), dict):
+                result["partialOutput"] = {**result["partialOutput"], "reason": termination_reason}
         # The seal-side shared-stash observation of this attempt's repository is
         # read here, outside the result transaction; the turn's pinned fact binds
         # it below. A failed or partial seal keeps the same honest collection.
@@ -2346,6 +2370,18 @@ class BoardStore:
                 raise BoardError("INVALID_ARGUMENT", "attemptId does not match the request")
             if termination_reason == "deadline" and attempt["adapter"] != "decision":
                 raise BoardError("INVALID_ARGUMENT", "deadline is reserved for an exhausted Router budget", field="terminationReason")
+            if termination_reason in ("wrap-up", "grace-expired") and attempt["grace_deadline"] is None:
+                raise BoardError("INVALID_ARGUMENT", "Wrap-up requires a durable grace deadline",
+                                 field="terminationReason")
+            if termination_reason == "console-stop" and attempt["stop_initiator"] != "console":
+                known_console_stop = connection.execute(
+                    "SELECT 1 FROM events WHERE task_id=? AND kind IN ('workflow.cancelled','workflow.helper_cancelled')"
+                    " AND json_extract(payload_json,'$.stopInitiator')='console' LIMIT 1",
+                    (attempt["task_id"],),
+                ).fetchone()
+                if known_console_stop is None:
+                    raise BoardError("INVALID_ARGUMENT", "console-stop requires a durable console stop",
+                                     field="terminationReason")
             subject = self._subject(params["workerId"], params["nonce"], attempt["attempt_id"])
             if attempt["result_json"] is not None:
                 previous = json.loads(attempt["result_json"])
@@ -2421,13 +2457,10 @@ class BoardStore:
                 self._transition_attempt(connection, attempt, "finished" if shutdown_confirmed else "uncertain")
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
             cancel_requested = attempt["cancel_requested_at"] is not None or task["state"] == "cancelling"
-            if status == "cancelled" and shutdown_confirmed:
-                task_state = "cancelled"
-            elif status == "cancelled":
-                # The attempt reports a cancellation whose shutdown is unconfirmed:
-                # a surviving process is possible, so the task is honestly
-                # reconciliation-needed and keeps its retained resource claims.
+            if not shutdown_confirmed and (cancel_requested or attempt["stop_initiator"] is not None or status == "cancelled"):
                 task_state = "reconciliation-needed"
+            elif status == "cancelled" and shutdown_confirmed:
+                task_state = "cancelled"
             elif status == "ok" and shutdown_confirmed:
                 # A completion that beat a cancel request is the one legal durable
                 # outcome; the race is recorded rather than re-labelled. A micro-task
@@ -2447,7 +2480,7 @@ class BoardStore:
             connection.execute(
                 "UPDATE attempts SET result_json=?, result_command_id=?, error=?, exit_code=?, signal=?,"
                 " shutdown_confirmed=?, runtime_identity=COALESCE(?, runtime_identity), log_paths=COALESCE(?, log_paths),"
-                " finished_at=?, updated_at=?, revision=revision+1 WHERE attempt_id=?",
+                " stop_initiator=COALESCE(stop_initiator,?),finished_at=?, updated_at=?, revision=revision+1 WHERE attempt_id=?",
                 (
                     canonical_json(payload),
                     command_id,
@@ -2457,6 +2490,7 @@ class BoardStore:
                     1 if shutdown_confirmed else 0,
                     schemas.optional_string(params, "runtimeIdentity"),
                     canonical_json(log_paths) if log_paths else None,
+                    "unknown" if termination_reason == "unknown-stop" else None,
                     now,
                     now,
                     attempt["attempt_id"],
