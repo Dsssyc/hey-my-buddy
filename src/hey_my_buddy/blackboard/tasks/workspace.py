@@ -857,6 +857,9 @@ def verify(manifest: dict, *, require_unchanged: bool = True) -> dict:
         snapshot = manifest["snapshot"]
         if _line(root, "rev-parse", manifest["inputCommit"] + "^{tree}") != manifest["inputTree"]:
             raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The pinned input tree is inconsistent")
+        if manifest["kind"] == "existing" and snapshot["stagedTree"] != manifest["inputTree"]:
+            if _line(root, "rev-parse", snapshot["stagedCommit"] + "^{tree}") != snapshot["stagedTree"]:
+                raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The pinned staged tree is inconsistent")
         unchanged = None
         if require_unchanged or manifest["access"] == "read":
             observation = _observe(root, snapshot["executionSelectors"])
@@ -948,7 +951,7 @@ def _borrowed_submission_allocation(state_dir, intent):
             or original["repositoryId"] != actual["repositoryId"]):
         raise BoardError("WORKSPACE_CHANGED", "The borrowed execution checkout identity changed")
     registration = _worktree_record(Path(actual["repositoryPath"]), directory / "checkout")
-    if registration is None or registration.get("locked") != "buddy:" + parts[0]:
+    if registration is None or registration.get("locked") != "hey-my-buddy:" + parts[0]:
         raise BoardError("WORKSPACE_UNSAFE", "The borrowed checkout lost its original Git allocation lock")
     lock = directory / ".lock"
     facts = lock.lstat()
@@ -991,7 +994,7 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
         path = Path(intent["cwd"])
         if intent["kind"] == "worktree":
             target = directory / "checkout"
-            identity = _prepare_worktree(source, target, pinned, "buddy:" + workspace_id)
+            identity = _prepare_worktree(source, target, pinned, "hey-my-buddy:" + workspace_id)
             relative = path.relative_to(source["checkoutRoot"])
             path = target / relative
             if relative.parts:
@@ -1023,7 +1026,7 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
         return manifest
     except Exception as error:
         if identity is not None:
-            _preparation_rollback(error, target, identity, pinned, "buddy:" + workspace_id)
+            _preparation_rollback(error, target, identity, pinned, "hey-my-buddy:" + workspace_id)
         raise
 
 
@@ -1284,6 +1287,9 @@ def cumulative_patch(manifest: dict, artifact: dict, original_commit: str) -> di
     with _errors():
         if original_commit == manifest.get("inputCommit"):
             _validate_output_record(manifest, artifact)
+            if artifact["snapshot"]["changedEntriesTruncated"]:
+                raise BoardError("WORKSPACE_UNSUPPORTED", "The artifact has too many changed paths to verify",
+                                 limit=OUTPUT_ENTRY_LIMIT)
             data = _read(Path(artifact["diffPath"]))
             if data is None or _sha(data) != artifact["diffSha256"]:
                 raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output patch changed")
@@ -2162,7 +2168,7 @@ def resolve_allocation(state_dir, manifest: dict, retained=None) -> dict | None:
     hold together: the same repositoryId/checkoutId, the allocation's own
     immutable manifest record under its own workspace directory, the exact
     ``<state>/workspaces/<allocationId>/checkout`` path and a checkout inside that
-    path. The caller rechecks the Git ``buddy:<allocationId>`` lock against the
+    path. The caller rechecks the Git ``hey-my-buddy:<allocationId>`` lock against the
     returned identity before any deletion.
     """
     with _errors():
@@ -2220,7 +2226,7 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retai
     retained manifests, not the current turn/input snapshot: a continuation
     reuses the same checkout under a new logical workspace id, so the original
     worktree manifest, the exact allocation path and the original
-    ``buddy:<allocationId>`` Git lock are what authorize a removal. An arbitrary
+    ``hey-my-buddy:<allocationId>`` Git lock are what authorize a removal. An arbitrary
     existing cwd under ``state/workspaces`` proves nothing by itself: the source
     checkout, a borrowed directory, a sibling worktree and an unknown path are all
     reported as retention reasons instead of being deleted. ``allowed`` names the
@@ -2291,7 +2297,7 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
         # Registration itself is missing: its own reason, never a claim about
         # locks or branches that were not read.
         result["reasons"].append("unregistered-checkout")
-    elif record.get("locked") != "buddy:" + allocation["workspaceId"]:
+    elif record.get("locked") != "hey-my-buddy:" + allocation["workspaceId"]:
         # A worktree someone else locked stays theirs; the mismatch keeps its
         # own reason instead of hiding behind "unregistered".
         result["reasons"].append("lock-mismatch")
@@ -2404,7 +2410,7 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None) -> dict:
                 raise BoardError("WORKSPACE_CHANGED", "The cleanup target identity changed", field=field)
         repository = Path(actual["repositoryPath"])
         record = _worktree_record(repository, checkout_root)
-        if record is not None and record.get("locked") == "buddy:" + allocation["workspaceId"] and "detached" not in record:
+        if record is not None and record.get("locked") == "hey-my-buddy:" + allocation["workspaceId"] and "detached" not in record:
             # Registration and lock are exactly this allocation's; only the
             # attached HEAD blocks the removal. Refuse with the branch, the safe
             # detach command and the retry — never detach, delete or move any
@@ -2420,7 +2426,7 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None) -> dict:
         if record is None:
             raise BoardError("WORKSPACE_UNSAFE", "The cleanup target has no worktree registration",
                              path=str(checkout_root))
-        if record.get("locked") != "buddy:" + allocation["workspaceId"]:
+        if record.get("locked") != "hey-my-buddy:" + allocation["workspaceId"]:
             raise BoardError("WORKSPACE_UNSAFE", "The cleanup target is locked by a different allocation",
                              path=str(checkout_root))
         removal["repositoryPath"] = str(repository)
@@ -2438,7 +2444,7 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None) -> dict:
                             for field in ("checkoutId", "repositoryId"))
                             and registration is not None and "detached" in registration
                             and not registration.get("locked")):
-                        _git(repository, "worktree", "lock", "--reason", "buddy:" + allocation["workspaceId"], str(checkout_root))
+                        _git(repository, "worktree", "lock", "--reason", "hey-my-buddy:" + allocation["workspaceId"], str(checkout_root))
                 except BoardError as relock_error:
                     error.details["relockError"] = relock_error.payload()
             # A concurrent owner of this same allocation completed the removal in

@@ -59,7 +59,7 @@ class StorageOrphanTests(WorkflowTestCase):
         row = next(row for row in planned['candidates'] if row['path'] == str(checkout))
         self.assertTrue(row['eligible'], row['reasons'])
         self.assertTrue(row['orphan'])
-        self.assertEqual(row['proof']['locked'], 'buddy:' + manifest['workspaceId'])
+        self.assertEqual(row['proof']['locked'], 'hey-my-buddy:' + manifest['workspaceId'])
         return manifest, checkout, planned
 
     def apply(self, planned):
