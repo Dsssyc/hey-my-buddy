@@ -41,5 +41,6 @@
 | 2026-10-14 | [回合结束之后，Host 的会话能不能被叫醒](2026-10-14-waking-an-idle-host-session.md) | ADR-026 第 9 条与 Lead 的唤醒；Codex 与 Claude Code 的 Host 指南 |
 | 2026-10-14 | [从外面排进的消息能不能叫醒开在 Codex app 里的会话](2026-10-14-waking-a-codex-app-session.md) | 续查上一份；Codex 的 Host 指南 |
 | 2026-10-14 | [Codex 会话正忙时排进的消息，以及接连排进的几条](2026-10-14-codex-queue-during-a-turn.md) | 给 Host 推通知的设计 |
+| 2026-10-14 | [只跑受影响的测试，有没有成熟的工具](2026-10-14-test-impact-analysis.md) | 检查运行器的影响分析（待开发者定） |
 
 2026-10-11 之前的四份是从各自的决定里移过来的，当时没有按上面的写法记录读到哪里为止，这一点在各份记录里照实写明。
