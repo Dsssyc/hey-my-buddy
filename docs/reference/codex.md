@@ -28,7 +28,7 @@ Review uses the native `hey-my-buddy-router` permission profile through permissi
 
 The controller counts both canonical command events and raw tool requests, so sandbox-denied calls are not omitted. Counts describe observable native requests; code-mode and command events can have different granularity. `bytesRead` remains null when unavailable, and no dollar limit is provided. One format correction is allowed within the original attempt and deadline. Probe evidence includes native call IDs and results; ordinary routing does not retain raw tool content in the blackboard.
 
-Use an enabled, available Codex buddy with the `standard` review budget after installing this candidate. The verified native probe used 5 tools and about 148 seconds; the `brief` preset (60 seconds) did not complete. The user chooses the Router in Buddy 配置; installation does not change that setting.
+Use an enabled, available Codex buddy with the `standard` review budget after installing this candidate. The verified native probe used 5 tools and about 148 seconds; the `brief` preset (60 seconds) did not complete. The user chooses the Router on the console's Buddy page; installation does not change that setting.
 
 ## Fast Router tool boundary
 

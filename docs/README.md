@@ -40,7 +40,7 @@ Daily [installation is 0.34.0/schema 18](acceptance/install-0.34.0.md): the shar
 | [reference/claude-code.md](reference/claude-code.md) | Claude Code Worker execution: native configuration and login, structured results, native-probe boundaries and quota classification |
 | [reference/cli.md](reference/cli.md) | Complete `hey-my-buddy` command reference: parameters, defaults, bounds, result envelopes, event kinds and error codes |
 | [reference/operations.md](reference/operations.md) | Installation, runtime lifecycle, private state and environment, DSH session privacy, recovery and removal |
-| [reference/evaluation.md](reference/evaluation.md) | Shared buddies, preferences, model service notes, the private console HTTP surface and the Buddy 配置/设置 pages |
+| [reference/evaluation.md](reference/evaluation.md) | Shared buddies, preferences, model service notes, the private console HTTP surface and the Buddy and 设置 pages |
 | [reference/console.md](reference/console.md) | Console access and CLI lifecycle, persistent sessions, buddy sections, deep links and verification |
 | [reference/macro-tasks.md](reference/macro-tasks.md) | Macro task grouping, `macro-task-list`/`macro-task-timeline` read shapes and timeline presentation |
 | [reference/decision.md](reference/decision.md) | The harness-neutral Router protocol in both modes: the tool-free fast request and the read-only review request, frozen candidates, answer bounds, provisional budgets, input verification and the native capability boundary |
