@@ -676,6 +676,7 @@ class WorkflowCoordinator:
             "requestFingerprint": run_row["request_fingerprint"],
             "buddy": self._buddy(run_row),
             "buddyLocked": bool(run_row["buddy_locked"]),
+            "delegationAuthority": bool(run_row["delegation_authority"]),
             "buddyRevision": run_row["buddy_revision"],
             "quotaWarnings": warnings(connection, self._buddy(run_row), now=self.now()),
             "routing": self._routing_view(connection, run_row, now=projection_now),
@@ -1478,6 +1479,7 @@ class WorkflowCoordinator:
         submissionToken: str | None = None,
         presentation: dict | None = None,
         buddyLocked: bool = False,
+        delegationAuthority: bool = False,
         now: str,
     ) -> str:
         """Insert the run, its reservation and its pinned input manifest.
@@ -1489,6 +1491,8 @@ class WorkflowCoordinator:
         access = "read" if executionWorkspace["access"] == "read" else "write"
         from .macro_tasks import attach_macro_task
         presentation = presentation or {}
+        if delegationAuthority:
+            self._require_enabled_buddy(connection, buddy)
         macro_task_id = attach_macro_task(connection, presentation, spec=spec, host_id=hostId, manifest=manifest, now=now)
         connection.execute(
             "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier, micro_task_json,"
@@ -1511,8 +1515,11 @@ class WorkflowCoordinator:
                 now,
             ),
         )
-        connection.execute("UPDATE workflow_runs SET macro_task_id=?,title=?,buddy_locked=? WHERE run_id=?",
-                           (macro_task_id, presentation.get("title"), int(buddyLocked), run_id))
+        connection.execute("UPDATE workflow_runs SET macro_task_id=?,title=?,buddy_locked=?,delegation_authority=? WHERE run_id=?",
+                           (macro_task_id, presentation.get("title"), int(buddyLocked), int(delegationAuthority), run_id))
+        if delegationAuthority:
+            self.board._append_event(connection, "workflow.delegation_authority_granted", task_id=run_id,
+                                     payload={"actor": f"host:{hostId}", "buddy": buddy})
         if "macroTask" in presentation:
             self.board._append_event(
                 connection, "workflow.macro_task_created", task_id=run_id,
@@ -1582,7 +1589,7 @@ class WorkflowCoordinator:
         fingerprint = schemas.spec_fingerprint(spec)
         request_fingerprint = schemas.workflow_request_fingerprint(
             spec, normalized["executionWorkspace"], host_id, presentation=normalized["presentation"],
-            buddy_locked=normalized["buddyLocked"]
+            buddy_locked=normalized["buddyLocked"], delegation_authority=normalized["delegationAuthority"]
         )
 
         # Recovery first: an idempotent submit must recover the original prepared
@@ -1647,6 +1654,7 @@ class WorkflowCoordinator:
                             "buddy": buddy,
                             "presentation": normalized["presentation"],
                             "buddyLocked": normalized["buddyLocked"],
+                            "delegationAuthority": normalized["delegationAuthority"],
                         },
                     )
                 except BoardError as error:
@@ -2651,7 +2659,7 @@ class WorkflowCoordinator:
                              fields=mismatches)
 
     @staticmethod
-    def _require_enabled_override(connection, buddy):
+    def _require_enabled_buddy(connection, buddy):
         """Recheck current availability and the user's independent enabled gate.
 
         ADR-027: catalog facts — including the one bounded re-read — were already
@@ -2679,12 +2687,12 @@ class WorkflowCoordinator:
             "buddy": buddy,
             "enabled": False,
             "reason": "not-enabled",
-            "remedy": f"Enable this buddy for the Host override; {CATALOG_REMEDY} only re-reads the catalog and never enables a buddy",
+            "remedy": f"Enable this buddy; {CATALOG_REMEDY} only re-reads the catalog and never enables a buddy",
         }
         if read_at:
             details["catalogReadAt"] = read_at
         raise BoardError("BUDDY_UNAVAILABLE",
-                         "A Host override must name a buddy the user enabled; the catalog route itself is admitted",
+                         "The Host must name a buddy the user enabled; the catalog route itself is admitted",
                          **details)
 
     def continue_run(self, params: dict, *, console_authority: dict | None = None) -> dict:
@@ -2748,6 +2756,11 @@ class WorkflowCoordinator:
             target_snapshot = self._continuation_target(connection, run, target_id)
             self._buddy_matches_micro_task(target_snapshot, supplied_buddy)
             current_choice = json.loads(target_snapshot["execution_workspace_json"])
+            if target_snapshot["delegation_authority"]:
+                if reroute:
+                    raise BoardError("INVALID_ARGUMENT", "delegationAuthority requires an explicit buddy; a Lead cannot be routed")
+                if access_selection is not None and access_selection[0] != "full":
+                    raise BoardError("INVALID_ARGUMENT", "delegationAuthority requires access='full'", field="access")
             self._require_permission(supplied_buddy if supplied_buddy is not None else
                                      (None if reroute else self._buddy(target_snapshot)),
                                      access_selection[0] if access_selection else current_choice["access"])
@@ -2767,7 +2780,7 @@ class WorkflowCoordinator:
             run_row = self._continuation_target(connection, owner, target_id)
             self._expect_revision(run_row, target_snapshot["revision"])
             self._buddy_matches_micro_task(run_row, buddy)
-            self._require_enabled_override(connection, buddy)
+            self._require_enabled_buddy(connection, buddy)
             current_workspace = json.loads(run_row["execution_workspace_json"])
             next_access, next_reason = access_selection or (current_workspace["access"], current_workspace.get("accessReason"))
             run_id = run_row["run_id"]
@@ -6264,6 +6277,7 @@ class WorkflowCoordinator:
             "taskId": run_row["run_id"],
             "turnIndex": turn_index,
             "buddy": self._buddy(run_row),
+            "delegationAuthority": bool(run_row["delegation_authority"]),
             # The frozen routing identity of this turn: the decision that produced this
             # exact buddy. Null means the buddy was explicit;
             # it is never inferred later from the current run, timestamps or model names.

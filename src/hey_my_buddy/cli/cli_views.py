@@ -208,6 +208,7 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "accessReason",
                 "buddy",
                 "buddyLocked",
+                "delegationAuthority",
                 "hostConclusion",
                 "quotaWarnings",
                 "quotaFailure",

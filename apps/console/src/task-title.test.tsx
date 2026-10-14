@@ -51,6 +51,23 @@ function fixture(workflow: Workflow) {
 }
 
 describe("micro task title rule in components (0.16 T1)", () => {
+  it("shows delegation authority beside the assigned buddy only when granted", () => {
+    const f = fixture(workflowValue(microTask));
+    const withAuthority = { ...microTask,
+      lineage: { ...microTask.lineage!, delegationAuthority: true,
+        buddy: { harness: "codex", provider: "openai", model: "gpt-6", effort: "high" } } };
+    const view = render(<TaskDetails {...f.props} task={withAuthority} />);
+    const assignment = view.container.querySelector(".assignment-line")!;
+    expect(assignment.textContent).toContain("codex · openai · gpt-6 / high");
+    expect(assignment.textContent).toContain("带委派权");
+    view.rerender(<TaskDetails {...f.props} task={{ ...withAuthority, delegationAuthority: true,
+      lineage: { ...withAuthority.lineage, delegationAuthority: false } }} />);
+    expect(view.container.querySelector(".assignment-line")!.textContent).toContain("带委派权");
+    view.rerender(<TaskDetails {...f.props} task={{ ...withAuthority, delegationAuthority: false }} />);
+    expect(view.container.querySelector(".assignment-line")!.textContent).not.toContain("带委派权");
+    expect(view.container.querySelector(".assignment-line")!.textContent).toContain("codex · gpt-6 / high");
+  });
+
   it("uses the explicit title in the detail heading; the Worker summary never becomes the title", async () => {
     const f = fixture(workflowValue(microTask));
     const { container } = render(<TaskDetails {...f.props} task={microTask} />);

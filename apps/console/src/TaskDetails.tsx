@@ -11,6 +11,7 @@ import { Status } from "./ui";
 import { DecisionDetails } from "./DecisionDetails";
 import { TaskActivityView } from "./task-activity";
 import { tokenUsageView } from "./host-workflow";
+import { effortText } from "./buddy-name";
 
 /**
  * One micro task's detail (0.15.1 U4): read-only browsing of the recorded
@@ -95,6 +96,11 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   // Worker resultSummary never appears here.
   const title = taskTitle(task);
   const titleNote = title.source === "task" ? TASK_TITLE_SOURCE_LABEL.task : "";
+  const delegationAuthority = task.delegationAuthority ?? task.lineage?.delegationAuthority;
+  const assignedBuddy = task.lineage?.buddy;
+  const executor = delegationAuthority && assignedBuddy
+    ? `${assignedBuddy.harness} · ${assignedBuddy.provider} · ${assignedBuddy.model} / ${effortText(assignedBuddy.effort)}`
+    : taskExecutor(task);
   // One execution's own recorded usage; unknown stays unknown (ADR-018 §22).
   const usage = tokenUsageView(task.tokenUsage ?? task.selectedAttempt?.tokenUsage);
   const quotaFailureLabel = task.quotaFailure?.code === "quota-exceeded" ? "额度耗尽" : task.quotaFailure?.code === "rate-limited" ? "原生服务限流" : null;
@@ -113,8 +119,9 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
       {error && <p role="alert" className="error-message">{error}
         <button type="button" className="button small-button" disabled={!active || busy} onClick={() => { void readTask(); }}>重试读取</button></p>}
       <p className="assignment-line"><span title={taskHost(task)}>委派方：{taskHost(task)}</span>
-        {task.workflow ? <button className="routing-link" aria-label="查看选择依据" title={taskExecutor(task)} onClick={() => setRoutingRequest(n => n + 1)}>
-          <span>→ {taskExecutor(task)}</span><span>查看选择依据</span></button> : <span title={taskExecutor(task)}>→ {taskExecutor(task)}</span>}</p>
+        {task.workflow ? <button className="routing-link" aria-label="查看选择依据" title={executor} onClick={() => setRoutingRequest(n => n + 1)}>
+          <span>→ {executor}</span><span>查看选择依据</span></button> : <span title={executor}>→ {executor}</span>}
+        {delegationAuthority && <span>带委派权</span>}</p>
     </header>
     {task.workflow ? <WorkflowPanel task={task} snapshot={snapshot} api={api} refresh={refresh}
         selectTask={selectTask} active={active} onTaskUpdate={propagateUpdate} recordInfo={recordInfo} routingRequest={routingRequest}

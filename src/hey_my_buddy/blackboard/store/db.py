@@ -530,7 +530,8 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     revision                INTEGER NOT NULL DEFAULT 1,
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL,
-    buddy_locked    INTEGER NOT NULL DEFAULT 0 CHECK (buddy_locked IN (0,1))
+    buddy_locked    INTEGER NOT NULL DEFAULT 0 CHECK (buddy_locked IN (0,1)),
+    delegation_authority INTEGER NOT NULL DEFAULT 0 CHECK (delegation_authority IN (0,1))
 );
 """,
     """
