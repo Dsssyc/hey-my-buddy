@@ -55,4 +55,6 @@ Record an investigation of other projects, papers or products in `docs/research/
 
 Records, fixtures and saved evidence name locations with `~` or a placeholder, never a machine's absolute home directory or the layout of its project directories; the check suite fails when a tracked file carries those of the machine running it.
 
+A statement about how a harness behaves names its form (CLI or app) and the version it was observed on, unless it holds for every form.
+
 Public docs and the shared skill describe product behavior for any user. They do not carry one user's model, harness, quota or workflow choices; those belong in what that user sets in the console or in the instructions of a specific task.

@@ -81,6 +81,10 @@ An occasional routing choice of a rarely used buddy for a short micro task, made
 **harness**:
 A native agent product in which a buddy runs, such as DSH, ZCode, Codex or Claude Code. One harness can run buddies in any role.
 
+**形态 / form**:
+The way a harness is run: as a CLI in a terminal, or as an app (a desktop app or an IDE extension), such as the Claude Code CLI or the Codex app. One harness can behave differently in its forms, so a statement about a harness names its form unless it holds for every form.
+_Avoid_: 前端, frontend (that is the console's), client
+
 **adapter**:
 The connector through which one harness takes part in the blackboard in one role.
 
