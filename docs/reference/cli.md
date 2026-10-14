@@ -45,7 +45,7 @@ The projection only omits material the caller already supplied (the micro task p
 | `status`, `execution-*` | Task identity (`runId`, `taskId`, `requestId`, `createdAt`) and state, attempt identity/state and `workerId`, `resultAvailable`, `shutdownConfirmed`, acceptance fields, `buddy`, the compact `workflow` summary, `workflowShutdown`, `activity`, `inquiries` and a `title`; no `spec`, task text or runner payload |
 | `result` | The `status` view plus `attemptId`, `resultDelivered`, the verified execution `artifacts`, `resultMeta` without its duplicate artifact list, and the micro task result view (or the opaque infrastructure `result`) |
 
-Cancelled micro task `get` and execution `result` views expose `cancellation: {actor, reason}` in both brief and full output when their own durable cancellation event exists. A missing event or field stays unknown; the attempt's `terminationReason: user-cancel` describes its stop cause, not who initiated it. A completion already recorded before micro task cancellation keeps its completed execution result.
+Cancelled micro task `get` and execution `result` views expose `cancellation: {actor, reason}` in both brief and full output when their own durable cancellation event exists. A missing event or field stays unknown. A full `get` also carries the selected attempt's `task.terminationReason`, `task.stopInitiator` and `task.graceDeadline` ([architecture](architecture.md)). A completion already recorded before micro task cancellation keeps its completed execution result.
 | `list` | `runs` rows with `runId`, `requestId`, `adapter`, `model`, `status`, `workflowState`, `awaitingHost`, `kind`, `parentRunId`, `currentHostId`, `createdAt` and a `title`; `total`, `cursor`, `nextCursor` |
 
 ## Service
