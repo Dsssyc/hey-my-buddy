@@ -51,8 +51,8 @@ class SkillWorkflowTests(unittest.TestCase):
         for marker in (
             "health",  # routing state is read before routing is trusted
             "routingMode",  # the recorded mode is reported honestly
-            "objectiveId",
-            'objectiveOf: "<runId>"',  # joining an existing run's macro task
+            "macroTaskId",
+            'macroTaskOf: "<runId>"',  # joining an existing run's macro task
             "controlFile",
             "`accept`",
             "`conclude`",
@@ -71,7 +71,7 @@ class SkillWorkflowTests(unittest.TestCase):
         self.assertNotIn("#waiting-from-", self.text)
 
     def test_launcher_help_and_the_three_input_modes_are_documented(self):
-        for marker in ("--params-file", "stdin", "buddy help", "output"):
+        for marker in ("--params-file", "stdin", "hey-my-buddy help", "output"):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.text)
 
