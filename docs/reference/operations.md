@@ -4,7 +4,7 @@ How to install, run, recover and retire a hey-my-buddy installation. Command syn
 
 ## Installed state
 
-The recorded daily installation is [0.35.0/contract 0.35.0/schema 19](../acceptance/install-0.35.0.md); the current source is 0.36.0 (contract 0.36.0, schema 20) and is not installed yet; source preparation does not install anything, upgrade the daily board, publish a release or change user settings. The shared skill lives in `~/.agents/skills/hey-my-buddy`, with Claude Code reading the same directory through its link. Runtime, state and backup roots remain owned by `hey_my_buddy.home`.
+The recorded daily installation is [0.36.0/contract 0.36.0/schema 20](../acceptance/install-0.36.0.md), the same version as the current source; source preparation does not install anything, upgrade the daily board, publish a release or change user settings. The shared skill lives in `~/.agents/skills/hey-my-buddy`, with Claude Code reading the same directory through its link. Runtime, state and backup roots remain owned by `hey_my_buddy.home`.
 
 ## Installation
 
@@ -165,7 +165,7 @@ Backup, restore, relocation, storage and cleanup neither traverse links/reparse 
 
 The [installed runtime](../acceptance/install-0.34.1.md) is 0.34.1 with contract 0.34.1 and schema 18. It was installed on 2026-10-13 over an idle 0.34.0 service with one verified backup and no schema change; the schema 17 to 18 upgrade ran with [0.31.0](../acceptance/install-0.31.0.md) on 2026-10-12. The recorded runtime identity and the preserved configuration are installation facts, distinct from source acceptance.
 
-The current source is contract 0.35.0, schema 20 and C-Two 0.7.4 (its version moves when it is installed); the daily installation runs 0.35.0 with schema 19. The upgrade base is 0.35.0 with schema 19, the form written by commit `4ca5344b`; the source carries one pending upgrade from 19 to 20, which replaces the old execution timeout with the expected duration and the Router call's own budget, and accepts no older board. `ping` is the lightweight attachment check; `health` performs explicit current diagnostics. Source changes do not switch an installed client, daemon or worker.
+The current source and the daily installation are contract 0.36.0, schema 20 and C-Two 0.7.4. The upgrade from schema 19 to 20, which replaced the old execution timeout with the expected duration and the Router call's own budget and added the tables of execution identities and interruptions, ran on the daily board on 2026-10-15 and is consumed; until the change that moves the upgrade base to commit `6b385e53`, the source still carries it and accepts no older board. `ping` is the lightweight attachment check; `health` performs explicit current diagnostics. Source changes do not switch an installed client, daemon or worker.
 
 hey-my-buddy installs Python dependencies with uv from a frozen lock (PyPI `c-two==0.7.4` and PyYAML; Python `>=3.12,<3.15`). The service and its workers execute from a **content-addressed stable runtime** outside the skill directory, so replacing the skill does not disturb a running service.
 

@@ -18,7 +18,7 @@ hey-my-buddy 让 Host buddy（拥有微任务的 agent）把边界明确的工�
 
 ## 安装
 
-hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.35.0（contract 0.35.0、schema 19），安装于 2026-10-14；当前源码是 0.36.0（contract 0.36.0、schema 20），尚未安装。skill 位于 `~/.agents/skills/hey-my-buddy`，Claude Code 通过 `~/.claude/skills/hey-my-buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。[原生沙盒审阅验收](docs/acceptance/native-sandbox-review-0.27.0.md)记录由固定原生探针拥有、不再解读模型输出的验证。[路由与验证验收](docs/acceptance/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同一宏任务内委派、Host 直接收尾、失败结论与清理、部分成果、更换 buddy 续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未发布。把它装到 0.34.1 的看板上时，旧看板保留为归档，新看板只带走设置（见[运行参考](docs/reference/operations.md#archive-upgrade)）。
+hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.36.0（contract 0.36.0、schema 20），安装于 2026-10-15；当前源码是同一个版本。skill 位于 `~/.agents/skills/hey-my-buddy`，Claude Code 通过 `~/.claude/skills/hey-my-buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。[原生沙盒审阅验收](docs/acceptance/native-sandbox-review-0.27.0.md)记录由固定原生探针拥有、不再解读模型输出的验证。[路由与验证验收](docs/acceptance/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同一宏任务内委派、Host 直接收尾、失败结论与清理、部分成果、更换 buddy 续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未发布。把它装到 0.35.0 的看板上时，在校验过的备份之后把这块看板就地转换到 schema 20（见[运行参考](docs/reference/operations.md#installation)）。
 
 在开发者确定发布渠道与确切版本之后，安装入口是一条固定版本的包命令：
 
@@ -34,7 +34,7 @@ uv build --wheel --out-dir dist
 uvx --from /absolute/path/hey_my_buddy-0.36.0-py3-none-any.whl hey-my-buddy install
 ```
 
-机器上没有 `uv` 时，发布包里的 `install.sh`（macOS、Linux）或 `install.ps1`（Windows）会先准备固定版本的私有 `uv`，再调用同一个安装入口；它们不修改 `PATH`、shell 或 Host 设置，也不会安装全局 `hey-my-buddy` 命令。安装会先列出将写入的路径、物化版本化运行时；有未结束的微任务、未确认的停止或未回收的受管检出时拒绝并列出阻塞项（`UPGRADE_NOT_IDLE`）；空闲后整体切换 skill、启动器、运行时与服务，并保留校验过的备份用于回滚；待执行的 schema 升级把这份备份保留为永久归档。重跑完整同版本只补齐缺失内容、不重启服务；内容损坏时用同一条固定版本命令修复；同版本内容变化会报告 `updated`。sdist 保留来源提交，解包后构建 wheel 仍保留相同 `sourceCommit`。安装或升级日常服务都需要用户的单独授权。代码与脚本可移植到 Windows，但尚未在真机验证。
+机器上没有 `uv` 时，发布包里的 `install.sh`（macOS、Linux）或 `install.ps1`（Windows）会先准备固定版本的私有 `uv`，再调用同一个安装入口；它们不修改 `PATH`、shell 或 Host 设置，也不会安装全局 `hey-my-buddy` 命令。安装会先列出将写入的路径、物化版本化运行时；有排队或在跑的工作、未确认的停止时拒绝并列出阻塞项（`UPGRADE_NOT_IDLE`）；空闲后整体切换 skill、启动器、运行时与服务，并保留校验过的备份用于回滚。重跑完整同版本只补齐缺失内容、不重启服务；内容损坏时用同一条固定版本命令修复；同版本内容变化会报告 `updated`。sdist 保留来源提交，解包后构建 wheel 仍保留相同 `sourceCommit`。安装或升级日常服务都需要用户的单独授权。代码与脚本可移植到 Windows，但尚未在真机验证。
 
 ### 可直接交给安装 agent 的提示
 
@@ -84,11 +84,11 @@ Codex Host 为每个运行中的微任务派生一个只做监控的原生子代
 
 `expectedSeconds`（默认 1800 秒）是 Host 该回头看一眼的时刻，不是期限：到点不停止任何东西，也没有“不设预期”的写法。只有 Router 调用保留硬预算，取自 Router 设置。Host 仍可主动取消，单次 `await` 等待结束也不会停止任务。选择该配置前可查阅[执行期限与等待窗口](docs/reference/cli.md#defaults-and-bounds)。
 
-服务和 Worker 从上述稳定私有运行时执行。日常命令直接执行 active 运行时自己的 Python，不经过 `uv`；`uv` 只用于安装与升级。全新黑板位于 `~/.local/share/hey-my-buddy/state`；待执行的升级把旧黑板与历史证据保留为校验过的归档，新建只带走设置的黑板。工作目录和 Git worktree 都不是操作系统沙箱。
+服务和 Worker 从上述稳定私有运行时执行。日常命令直接执行 active 运行时自己的 Python，不经过 `uv`；`uv` 只用于安装与升级。黑板位于 `~/.local/share/hey-my-buddy/state`；升级在校验过的备份之后就地转换它。工作目录和 Git worktree 都不是操作系统沙箱。
 
 ## 当前状态与限制
 
-日常安装是 [0.35.0/contract 0.35.0/schema 19](docs/acceptance/install-0.35.0.md)。安装时 0.34.1 的看板保留为归档，新看板只带走设置。
+日常安装是 [0.36.0/contract 0.36.0/schema 20](docs/acceptance/install-0.36.0.md)。安装时在校验过的备份之后把 0.35.0 的看板就地转换，新服务把一次断电留下的两个未知的执行结算为被中断。
 
 日常运行时支持 macOS 与 Linux、本地单用户 SQLite 状态；Windows 的代码与脚本可移植，但未在真机验证。ZCode 支持活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry。0.19.0 源码在 macOS 的 Codex CLI 0.157.0 上验证了 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算；Linux/Windows 与其他 harness 仍未验证。安装不会修改用户的 Router 设置。Claude P1 读取用户原生的提供方、账户与设置，每次接续都重建会话，未声明 inquiry。其[参考文档](docs/reference/claude-code.md)记录已验证的原生路径、日常安装的只读微任务链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
 
@@ -104,4 +104,4 @@ Codex Host 为每个运行中的微任务派生一个只做监控的原生子代
 
 B 批源码加入原生计费标注和额度耗尽的候选过滤。取消显示记录中的发起者与理由，控制台说明已精简。[源码与原生检查记录](docs/acceptance/worker-accounts-phase1-0.23.0.md)与日常安装分别记录。
 
-0.24.0 源码将 attempt 证据与 harness 私有状态分区。请求安装授权前，用新包的 `hey-my-buddy backup-preflight '{}'` 查看将复制、跳过和拒绝的路径；它不启动服务、不写数据。安装器在停机前检查该清单；待执行的升级归档已校验的旧黑板，新建只带走设置的黑板。凭据与原生私有目录不进入备份。详情见[操作文档](docs/reference/operations.md#backup-upgrade-and-storage-contract)。
+0.24.0 源码将 attempt 证据与 harness 私有状态分区。请求安装授权前，用新包的 `hey-my-buddy backup-preflight '{}'` 查看将复制、跳过和拒绝的路径；它不启动服务、不写数据。安装器在停机前检查该清单。凭据与原生私有目录不进入备份。详情见[操作文档](docs/reference/operations.md#backup-upgrade-and-storage-contract)。
