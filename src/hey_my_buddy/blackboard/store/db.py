@@ -2,7 +2,7 @@
 
 One database file owns every authoritative fact: tasks, attempts, workers,
 messages, artifacts, events, command receipts and resource claims. Connections are
-opened per operation, transactions are short, and no transaction ever spans RPC, a
+owned per thread, transactions are short, and no transaction ever spans RPC, a
 subprocess, an LLM call or an event wait.
 """
 from __future__ import annotations
@@ -1037,6 +1037,9 @@ class Database:
         self.path = self.directory / DB_FILE
         self._lock = threading.Lock()
         self._secret: bytes | None = None
+        self._connection_lock = threading.Lock()
+        self._connections: dict[int, sqlite3.Connection] = {}
+        self._closed = False
 
     # -- connections ---------------------------------------------------------
     def _configure(self, connection: sqlite3.Connection) -> None:
@@ -1049,13 +1052,32 @@ class Database:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        """A fresh connection with the durable pragmas applied."""
-        connection = sqlite3.connect(self.path, isolation_level=None, timeout=10)
-        try:
-            self._configure(connection)
-            yield connection
-        finally:
-            connection.close()
+        """Reuse this thread's configured connection across short transactions."""
+        # Native C-Two callbacks may rebuild their Python thread state between
+        # calls. Keep ownership by thread identity, not in threading.local().
+        identity = threading.get_ident()
+        with self._connection_lock:
+            if self._closed:
+                raise RuntimeError("Database is closed")
+            connection = self._connections.get(identity)
+            if connection is None:
+                # Only shutdown closes another thread's connection, after users stop.
+                connection = sqlite3.connect(self.path, isolation_level=None, timeout=10, check_same_thread=False)
+                try:
+                    self._configure(connection)
+                except BaseException:
+                    connection.close()
+                    raise
+                self._connections[identity] = connection
+        yield connection
+
+    def close(self) -> None:
+        """Close all surviving thread connections after the service has stopped."""
+        with self._connection_lock:
+            self._closed = True
+            for connection in self._connections.values():
+                connection.close()
+            self._connections.clear()
 
     @contextmanager
     def write(self, immediate: bool = True) -> Iterator[sqlite3.Connection]:
@@ -1064,11 +1086,10 @@ class Database:
             connection.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
             try:
                 yield connection
-            except BaseException:
-                connection.execute("ROLLBACK")
-                raise
-            else:
                 connection.execute("COMMIT")
+            except BaseException:
+                connection.rollback()
+                raise
 
     @contextmanager
     def read(self) -> Iterator[sqlite3.Connection]:
@@ -1077,11 +1098,10 @@ class Database:
             connection.execute("BEGIN")
             try:
                 yield connection
-            except BaseException:
-                connection.execute("ROLLBACK")
-                raise
-            else:
                 connection.execute("COMMIT")
+            except BaseException:
+                connection.rollback()
+                raise
 
     # -- lifecycle -----------------------------------------------------------
     def _require_current_schema(self) -> None:

@@ -504,6 +504,7 @@ class Daemon:
     def __init__(self, directory: Path):
         self.directory = Path(directory)
         self.stopping = threading.Event()
+        self._sweeper: threading.Thread | None = None
         self._pool_lifecycle_lock = threading.RLock()
         self.started_at = utc_now()
         self.service_id = str(uuid.uuid4())
@@ -645,8 +646,8 @@ class Daemon:
                     "runtimeIdentity": self.control["runtime"],
                 },
             )
-            sweeper = threading.Thread(target=self._sweep, name="hey-my-buddy-lease-sweeper", daemon=True)
-            sweeper.start()
+            self._sweeper = threading.Thread(target=self._sweep, name="hey-my-buddy-lease-sweeper", daemon=True)
+            self._sweeper.start()
             self.stopping.wait()
             return self.finish()
         finally:
@@ -706,6 +707,7 @@ class Daemon:
         with self._pool_lifecycle_lock:
             workers_asked = self.pool.request_stop()
         self.stopping.set()
+        self.store.stop_waiters()
         return {
             "action": "stop",
             "stopped": not unresolved,
@@ -733,6 +735,7 @@ class Daemon:
             {"requestedAt": utc_now(), "reason": reason, "serviceId": self.service_id, "drainSeconds": drain},
         )
         self.stopping.set()
+        self.store.stop_waiters()
         return {
             "action": "restart",
             "restarting": True,
@@ -804,6 +807,10 @@ class Daemon:
         return 0
 
     def cleanup(self) -> None:
+        self.stopping.set()
+        self.store.stop_waiters()
+        if self._sweeper is not None:
+            self._sweeper.join()
         if getattr(self, 'harnesses', None) is not None:
             self.harnesses.close()
         try:
@@ -812,6 +819,7 @@ class Daemon:
             pass
         if self.console is not None:
             self.console.close()
+        self.store.db.close()
         try:
             value = json.loads(self.endpoint_path.read_text())
             if hmac.compare_digest(value.get("serviceId", ""), self.service_id):

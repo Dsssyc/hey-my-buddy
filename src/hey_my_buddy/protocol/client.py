@@ -16,10 +16,12 @@ Example::
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import os
 import socket
 import secrets
 import uuid
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 
@@ -291,6 +293,17 @@ class BoardClient:
         )
 
     # -- events -------------------------------------------------------------
+    @contextmanager
+    def event_waiter(self, *, worker_id: str):
+        """One existing-service attachment for consecutive bounded event waits."""
+        if self._call is not None:
+            yield partial(self.wait_events, workerId=worker_id)
+        else:
+            directory = transport.get_state_dir(self.state_dir)
+            with transport._event_waiter(directory) as request:
+                yield partial(BoardClient(directory, call=lambda operation, params: request(params)).wait_events,
+                              workerId=worker_id)
+
     def read_events(self, after: int = 0, limit: int = 100, **selector: Any) -> dict:
         return self.call("events_read", {**selector, "after": after, "limit": limit})
 
