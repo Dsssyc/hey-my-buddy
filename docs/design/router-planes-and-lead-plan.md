@@ -1,5 +1,26 @@
 # Router 三个面与 Lead 执行计划
 
+## Lead 先行的顺序（2026-10-14 修订）
+
+开发者于 2026-10-14 定：Lead 比 Router 的几个面更要紧，第 3 步走主线，工作区提速与两侧互相引用退为副线；Lead 走一条更短的路，但不能因此让排在后面的事要大改或返工。本节是按这个要求、并按[独立审查](router-planes-and-lead-plan-review.md)里整合 Host 核对过的几条修订后的顺序；下面原来的清点与 45 个微任务的表仍是依据，编号沿用。
+
+**Lead 之前必须先做的。**
+
+- 挪升级基点到 0.35.0，删掉用掉的归档升级。0.35.0 装上之后，归档升级已经在日常看板上跑过；在这一步之前不能改任何存储形式。（已交付，在验收。）
+
+**Lead 的主线，按真实的依赖排。** 07 → 11 → 12 → 13 → 14。
+
+- 07 预期时长取代 Worker 的硬时限。Router 调用的预算现在和 Worker 的硬时限共用 `timeoutSeconds`，Router 的切换又认终止原因 `deadline`（整合 Host 核对过：`blackboard/routing/decision.py:686`、`buddy/runtime/worker.py:781`）。所以 07 要把 Router 的预算换成只有 Router 调用才有的字段，到点照旧硬停，`deadline` 只表示 Router 的预算用完；预期时长只给微任务与命令用，并记在黑板的回合记录里，以后的提醒（08）就只是往上加。
+- 11 有序收尾与终止原因。控制台的停止今天就有，11 要把它和 Host 的 `cancel` 分开：控制台的停止立即生效，Host 的停止先收尾。终止原因一次定全，发起者单独记一列；以后 Lead 发起的停止只是多一个发起者。收尾写在角色层，不写进各 harness 的运行模块，这样以后各 harness 的档位工作（02–05）不会与它冲突。
+- 12 Lead 名单、授予与选用，连同控制台里启用 Lead 的设置入口（原来放在 16）：设置只经控制台写，没有这个入口，装上之后用户启用不了 Lead。“两层模型不同”只在说明里提示用户，黑板不做检查：黑板不知道 Host 用的是什么模型。
+- 13 名下的 Host 权限：只把对名下微任务的 Host 操作加进执行凭据现有的白名单，不另立一组拒绝。Lead 提交微任务用与 Host 同一套字段校验，能动哪些微任务由归属来限。
+- 14 Lead 名下的生命周期。名下微任务的归属不复用协助任务的表 `workflow_children`：那张表的批准命令一列不能为空、状态是协助任务的取值（整合 Host 核对过），塞进去会让同一列的意思随行而变。要么另建一张表，要么每行写明种类、批准命令只有协助任务才填。归属记在 Lead 所执行的微任务上；名下微任务带 Lead 的宏任务；在等 Lead 的微任务不计入“等 Host”。停止 Lead 时连带名下的微任务走现有的 `_cancel_children`，同一条收尾路径，不另写一条级联。
+
+**推到 Lead 之后、不会因此返工的。** 01 与 02–05（四个 harness 都已经声明了“放开”一档，Lead 用它就够；各 harness 的档位与续接只是往上加）、06、08–10（提醒挂在被等待的微任务上；急停的范围收窄只改 `_cancel_children` 一处）、15（只在 `workflow_runs` 上加一列可空的“修正的是哪一个”，不建新模块与新表）、16（Lead 的泳道；它的三种状态都能从已有的事实推出，不需要新的存储），以及 Router 三个面的 17–25 等。原生检查一律用 `tests/probes/` 下的探针、有意去跑，不复制用户的配置。
+
+**计划漏掉、另外排的。** ADR-022 第 2、3 条在控制台上的显示与“可能卡住”的阈值入口；数据流向说明的更新；维护面的数据包超过运行合约 2 MiB 上限时改用只读一档、把数据包放成目录；15 排在 17 之前。
+
+
 291dddbd（0.35.0，schema 19）；完成仅源码，未跑测试、服务或原生检查。
 
 缩写：O=src/hey_my_buddy，B=O/blackboard，W=O/buddy，P=O/protocol，F=apps/console/src；H=W/harnesses，E=B/evaluation，R=W/roles，I=O/install，C=O/cli。别名：d=B/store/db，s=B/store/store，w=B/tasks/workflow，r=B/routing/router，a=B/routing/decision，g=H/registry，p=P/schemas，k=H/run_contract，u=P/usage，x=R/run_execution，z=R/structured_call，b=C/blocking，t=F/console-data.ts；冒号为行号，Python文件省略.py、组件省略.tsx。
