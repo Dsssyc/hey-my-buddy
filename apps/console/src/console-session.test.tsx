@@ -33,7 +33,7 @@ function microTask(runId: string, task: string, extra: Partial<Task> = {}): Task
   return { runId, task, status: "queued", owner: "worker:fixture", cwd: `/worktrees/${runId}`,
     revision: 1, createdAt: "2026-09-24T10:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
-    lineage: { kind: "micro-task", sourceHostId: "codex-source", currentHostId: "current-host", parentRunId: null, rootRunId: runId,
+    lineage: { kind: "micro-task", sourceHostId: "codex-source", currentHostId: "current-host", parentRunId: null, rootRunId: runId, rootLeadRunId: null,
       project: { id: "fixture-project", label: "fixture-project", path: "/source/fixture-project" },
       buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } },
     ...extra };
@@ -550,6 +550,28 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(f.operations).toContain("selection_get");
     // Only read operations were dispatched.
     expect(f.operations.every(operation => ["selection_get", "selection_list", "buddy_list", "workflow_get"].includes(operation))).toBe(true);
+  });
+
+  it("excludes a Lead tree's helper from the Host wait filter", async () => {
+    const waiting = { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 };
+    const host = microTask("host-wait", "Host 等待项", { workflow: waiting });
+    const root = microTask("lead-root", "Lead 根任务", { workflow: waiting,
+      lineage: { ...microTask("lead-root", "").lineage!, rootLeadRunId: "lead-1",
+        leadOwnership: { leadRunId: "lead-1", leadTurnId: "turn-1", createdAt: "2026-09-24T10:00:00Z" } } });
+    const helper = microTask("lead-helper", "Lead 协助任务", { workflow: waiting,
+      lineage: { ...root.lineage!, kind: "helper", parentRunId: root.runId, rootRunId: root.runId, leadOwnership: null } });
+    const f = fixture({ records: [host, root, helper] });
+    const user = userEvent.setup();
+    render(<App suppliedApi={f.api} />);
+    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(screen.getByRole("checkbox", { name: "显示协助任务与内部执行" }));
+    await screen.findByRole("button", { name: /Lead 协助任务/ });
+    const helperRow = screen.getByRole("button", { name: /Lead 协助任务/ });
+    expect(helperRow.textContent).toContain("等待 Lead");
+    await user.click(screen.getByRole("button", { name: "等待 Host", pressed: false }));
+    expect(await screen.findByRole("button", { name: /Host 等待项/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Lead 根任务/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Lead 协助任务/ })).toBeNull();
   });
 
   const failedPolls: [string, ApiError][] = [

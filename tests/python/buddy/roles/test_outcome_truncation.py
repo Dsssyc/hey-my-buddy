@@ -49,6 +49,17 @@ class OutcomeTruncationTests(unittest.TestCase):
         run_execution._worker_result(result, {"outputFile": str(path)}, self.turn, "prompt", payload)
         return json.loads(path.read_bytes()), path.read_bytes()
 
+    def test_waiting_native_outcome_is_bound_to_the_lead_turn(self):
+        for harness in ("codex", "claude"):
+            with self.subTest(harness=harness):
+                value = outcome(disposition="waiting")
+                with self.assertRaises(BoardError):
+                    self.record(self.result(harness, value))
+                self.turn["context"] = {"delegationAuthority": True}
+                record, _raw = self.record(self.result(harness, value))
+                self.assertEqual(record["outcome"]["disposition"], "waiting")
+                self.turn.pop("context")
+
     def test_final_message_item_count_is_truncated_and_recorded(self):
         for harness in ("codex", "claude"):
             for field in ("remaining", "decisions"):

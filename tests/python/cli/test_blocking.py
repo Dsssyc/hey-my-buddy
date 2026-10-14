@@ -109,6 +109,16 @@ class FakeService:
 class WaitWindowTests(unittest.TestCase):
     """The wait window is CLI-owned, explicit and bounded; nothing else is a deadline."""
 
+    def test_host_await_keeps_waiting_while_lead_is_parked_on_owned_work(self):
+        clock = VirtualClock()
+        service = FakeService(clock, complete_after_waits=1)
+        service.run.update(status="queued", workflowState="waiting-owned", resultAvailable=True,
+                           shutdownConfirmed=True)
+        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60},
+                             state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
+        self.assertEqual(service.calls.count("wait"), 1)
+        self.assertEqual(envelope["workflowState"], "delivered")
+
     def test_wait_seconds_defaults_to_24h_and_is_bounded_by_it(self):
         clock = VirtualClock()
         service = FakeService(clock, listed=True, complete_after_waits=1)

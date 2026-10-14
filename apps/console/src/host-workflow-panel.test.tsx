@@ -19,7 +19,7 @@ function task(): Task {
   return {
     runId: "parent", task: "完成状态内核", status: "failed", owner: "host-a", cwd: "/repo",
     revision: 4, createdAt: "2026-09-22", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
-    lineage: { kind: "micro-task", sourceHostId: "host-a", currentHostId: "host-a", parentRunId: null, rootRunId: "parent",
+    lineage: { kind: "micro-task", sourceHostId: "host-a", currentHostId: "host-a", parentRunId: null, rootRunId: "parent", rootLeadRunId: null,
       project: { id: "repo", path: "/repo", label: "repo" }, buddy: null },
     spec: { workspace: false }, shutdownConfirmed: true,
     workflow: { state: "failed", awaitingHost: false, hostId: "host-a", ownerGeneration: 2, revision: 7 },

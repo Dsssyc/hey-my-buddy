@@ -71,7 +71,7 @@ describe("console grouping and recorded attribution", () => {
     expect(taskProject(task)).toMatchObject({ id: "unknown", label: "未记录项目", path: null });
     expect(taskHost(task)).toBe("未记录委派方");
     task.lineage = { kind: "helper", sourceHostId: "codex-original", currentHostId: "codex-new",
-      parentRunId: "parent", rootRunId: "root", project: { id: "repo-id", path: "/source/project", label: "Project" }, buddy: null };
+      parentRunId: "parent", rootRunId: "root", rootLeadRunId: null, project: { id: "repo-id", path: "/source/project", label: "Project" }, buddy: null };
     expect(taskProject(task)).toEqual(task.lineage.project);
     expect(taskHost(task)).toBe("codex-original");
   });

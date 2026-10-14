@@ -65,6 +65,10 @@ export type TimelineRow = {
   /** 0 for a root, +1 per helper level. Rows arrive in tree order. */
   depth: number;
   kind: "micro-task" | "helper";
+  /** Lead owning this row's root tree, including helper descendants. */
+  rootLeadRunId: string | null;
+  /** Recorded owner of a Lead's own micro task, if any. */
+  leadOwnership?: { leadRunId: string; leadTurnId: string; createdAt: string } | null;
   buddy: TimelineBuddy | null;
   acceptedAt: string | null;
   acceptanceVerdict: string | null;
@@ -113,6 +117,7 @@ export type TimelineEvent = {
   label: string; summary: string; actor: string | null;
   attemptId: string | null; requestId: string | null; artifactId: string | null;
   integrationId?: string | null; continuationId?: string | null; eventKind?: string;
+  stopInitiator?: "host" | "lead" | "console" | "service" | "unknown" | null;
 };
 export type MacroTaskTimeline = {
   macroTask: MacroTaskSummary; observedAt: string; cursor: number;

@@ -6,7 +6,8 @@ a process nor interprets a vendor event.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, replace
 
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
@@ -64,9 +65,20 @@ class NativeSchemaWorker:
     native_identity_keys: tuple[str, ...] = ()
     validation_error_key: str | None = None
     reject_previous_on_initial: bool = False
+    delegation_authority: bool = False
+
+    def for_turn(self, turn_input: dict) -> NativeSchemaWorker:
+        if turn_input.get("context", {}).get("delegationAuthority") is not True:
+            return self
+        schema = deepcopy(self.schema)
+        schema["properties"]["outcome"]["anyOf"][0]["properties"]["disposition"]["enum"].append("waiting")
+        return replace(self, schema=schema, delegation_authority=True)
 
     def prompt(self, task_text: str, turn_input: dict) -> str:
-        return worker_prompt(task_text, turn_input, delivery=self.prefixes)
+        delivery = self.prefixes + ((
+            "When you have handed off work to micro tasks you own and need their results, conclude this Lead turn with disposition waiting, request: null and a clear summary. The blackboard will start a later turn when an owned task needs your attention.",
+        ) if self.delegation_authority else ())
+        return worker_prompt(task_text, turn_input, delivery=delivery)
 
     def parse_value(self, result) -> tuple[dict | None, str | None, dict]:
         """Use the same outcome validator for the decision and its diagnostic."""
@@ -80,7 +92,7 @@ class NativeSchemaWorker:
                 if not isinstance(wrapper, dict) or set(wrapper) != {"outcome"}:
                     raise ValueError("The native result must contain exactly the structured outcome")
                 bounded, truncated = truncate_outcome_summaries(wrapper["outcome"])
-                error = validate_outcome(bounded)
+                error = validate_outcome(bounded, delegation_authority=self.delegation_authority)
                 if error is None:
                     outcome = bounded
             except (ValueError, TypeError, RecursionError) as problem:
@@ -106,7 +118,7 @@ class NativeSchemaWorker:
             denied = bool(facts.get("nativeRequestMethod"))
         else:
             denied = bool(facts.get("deniedControlRequestIds") or facts.get("permissionDenials"))
-        attention = denied and (outcome is None or outcome["disposition"] == "completed")
+        attention = denied and (outcome is None or outcome["disposition"] in ("completed", "waiting"))
         if attention:
             outcome = self.attention_outcome(facts)
             truncated = {}

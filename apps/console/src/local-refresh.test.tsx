@@ -15,7 +15,7 @@ const task = (runId = "command-1", extra: Partial<Task> = {}): Task => ({
   revision: 1, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-09T00:00:00Z",
   acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
   lineage: extra.workflow ? { kind: "micro-task", sourceHostId: "host", currentHostId: "host", parentRunId: null,
-    rootRunId: runId, project: { id: "project", path: "~/project", label: "project" }, buddy: null } : undefined,
+    rootRunId: runId, rootLeadRunId: null, project: { id: "project", path: "~/project", label: "project" }, buddy: null } : undefined,
   selectedAttempt: { result: { result: { stdout: `结果 ${runId}` } } }, ...extra,
 });
 function deferred<T>() {

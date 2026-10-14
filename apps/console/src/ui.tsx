@@ -198,6 +198,8 @@ export const statusLabels: Record<string, string> = {
   "waiting-decision": "等待决定",
   "waiting-host": "等待 Host",
   "awaiting-host": "等待 Host",
+  "awaiting-lead": "等待 Lead",
+  "waiting-owned": "等待名下的微任务",
   "waiting-helpers": "协助执行中",
   executing: "执行中",
   delivered: "等待验收",

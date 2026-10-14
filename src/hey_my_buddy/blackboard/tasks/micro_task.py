@@ -73,13 +73,16 @@ QUERY_COLUMNS = (
 #: ``filter`` semantics, applied in SQL before any LIMIT:
 FILTER_SQL = {
     "all": None,
-    # Work that is still in flight: an open task, or a micro-task run between turns.
+    # Open work, including Lead-owned runs waiting for the Lead to resume them.
     "active": (
         "(state IN ('queued','running','cancelling','reconciliation-needed')"
-        " OR run_state IN ('executing','awaiting-host','waiting-helpers'))"
+        " OR run_state IN ('executing','awaiting-host','waiting-helpers','waiting-owned'))"
     ),
-    # The Host's own decision is the current boundary.
-    "host": "(run_state = 'awaiting-host')",
+    # A Lead-owned tree is active for its Lead, including helper descendants
+    # parked on their own Host boundary. The tree root carries that ownership.
+    "host": ("(run_state = 'awaiting-host' AND NOT EXISTS ("
+             "SELECT 1 FROM workflow_lead_tasks lead_tree "
+             "WHERE lead_tree.owned_run_id = root_run_id))"),
     # A terminal result that is still unaccepted: the same condition the console's
     # review gate uses (delivered run or plain task, durable result, confirmed stop).
     # Micro-task review_ready also proves stop for every owned child and router.
@@ -175,6 +178,7 @@ SELECT
     lead.lead_run_id AS lead_run_id,
     lead.lead_turn_id AS lead_turn_id,
     lead.created_at AS lead_owned_at,
+    root_lead.lead_run_id AS root_lead_run_id,
     c.parent_run_id AS child_parent_run_id,
     COALESCE(c.parent_run_id, wr.run_id) AS delegated_parent_run_id,
     dr.decision_id AS decision_id,
@@ -240,6 +244,8 @@ LEFT JOIN roots wr_roots ON wr_roots.task_id = wr.run_id
 LEFT JOIN source_hosts source_run ON source_run.run_id = COALESCE(r.run_id, wr.run_id)
 LEFT JOIN tasks root_task ON root_task.task_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, wr.run_id)
 LEFT JOIN workflow_runs root_run ON root_run.run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, wr.run_id)
+LEFT JOIN workflow_lead_tasks root_lead
+  ON root_lead.owned_run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, wr.run_id)
 """
 
 #: The relation wrapped as a table expression: ``SELECT * FROM (task_history) AS resolved``.
@@ -303,6 +309,7 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
         },
         "buddy": buddy,
         "delegationAuthority": bool(row["run_delegation_authority"]),
+        "rootLeadRunId": row["root_lead_run_id"],
         "leadOwnership": ({"leadRunId": row["lead_run_id"], "leadTurnId": row["lead_turn_id"],
                            "createdAt": row["lead_owned_at"]} if row["lead_run_id"] is not None else None),
     }

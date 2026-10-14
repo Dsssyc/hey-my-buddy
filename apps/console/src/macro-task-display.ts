@@ -110,7 +110,14 @@ export function eventSentence(event: TimelineEvent, row: TimelineRow | null): st
     case "integrate": return `${time} Host 整合了「${title}」的产出`;
     case "accept": return `${time} Host 验收通过「${title}」`;
     case "reject": return `${time} Host 对「${title}」提出验收问题`;
-    case "cancel": return `${time} Host 停止了「${title}」`;
+    case "cancel": {
+      const initiator = event.stopInitiator;
+      if (initiator === "host") return `${time} Host 停止了「${title}」`;
+      if (initiator === "lead") return `${time} Lead 停止了「${title}」`;
+      if (initiator === "console") return `${time} 在控制台停止了「${title}」`;
+      if (initiator === "service") return `${time} 服务停止了「${title}」`;
+      return `${time} 停止了「${title}」（发起者未知）`;
+    }
     case "takeover": return `${time} Host 接管了「${title}」`;
     default: return `${time} Host ${event.label || eventVocab(event.kind).label}「${title}」`;
   }
@@ -186,6 +193,7 @@ export function totalMicroTasks(counts: MacroTaskSummary["counts"]): number {
 const ROW_STATE_STYLE: Record<string, { tone: "green" | "amber" | "red" | "neutral"; glyph: string; glyphClass: string }> = {
   executing: { tone: "green", glyph: "▸", glyphClass: "running" },
   "awaiting-host": { tone: "amber", glyph: "◆", glyphClass: "warn" },
+  "waiting-owned": { tone: "amber", glyph: "◆", glyphClass: "warn" },
   "waiting-helpers": { tone: "green", glyph: "▸", glyphClass: "running" },
   delivered: { tone: "neutral", glyph: "✓", glyphClass: "muted" },
   accepted: { tone: "neutral", glyph: "✓", glyphClass: "ok" },
@@ -198,6 +206,7 @@ const STATE_LABELS: Record<string, string> = {
   queued: "排队中", running: "执行中", cancelling: "正在取消", completed: "执行完成",
   cancelled: "已取消", failed: "执行失败", "reconciliation-needed": "等待核对",
   executing: "执行中", "awaiting-host": "等待 Host", "waiting-helpers": "协助执行中",
+  "waiting-owned": "等待名下的微任务",
   delivered: "等待验收", accepted: "已验收", concluded: "已结束",
 };
 
@@ -205,7 +214,7 @@ export function rowStateInfo(row: TimelineRow): { label: string; tone: "green" |
   const key = row.state || row.status;
   const style = ROW_STATE_STYLE[key];
   return {
-    label: STATE_LABELS[key] || key || "未知",
+    label: key === "awaiting-host" && row.rootLeadRunId ? "等待 Lead" : STATE_LABELS[key] || key || "未知",
     tone: style?.tone ?? "neutral",
     glyph: style?.glyph ?? "■",
     glyphClass: style?.glyphClass ?? "muted",
@@ -484,7 +493,7 @@ export function spanFacts(
 ): { item: TimelineItem; startMs: number | null; endMs: number | null; recordedEndMs: number | null; outcome: SpanOutcome } {
   const outcome = spanOutcome(span);
   const { startMs, recordedEndMs, endMs } = spanPlacement(span, observedAtMs);
-  const head = spanHead(span.kind);
+  const head = span.kind === "host" && row.rootLeadRunId ? "等待 Lead" : spanHead(span.kind);
   const parts: string[] = [displayTitle(row.titleSource, row.title).text];
   if (span.kind === "execution" || span.kind === "routing") {
     if (span.turnIndex !== null && span.turnIndex !== undefined) parts.push(`第 ${span.turnIndex} 轮`);
@@ -505,8 +514,8 @@ export function spanFacts(
     : endMs === null ? `${clockTime(startMs)} 起 · 结束时间缺失`
       : `${clockTime(startMs)}–${clockTime(endMs)}`;
   const locator = span.kind === "host"
-    ? (startMs === null ? "等待 Host · 时间未记录"
-      : endMs === null ? `等待 Host ${clockTime(startMs)} 起` : `等待 Host ${clockTime(startMs)}–${clockTime(endMs)}`)
+    ? (startMs === null ? `${head} · 时间未记录`
+      : endMs === null ? `${head} ${clockTime(startMs)} 起` : `${head} ${clockTime(startMs)}–${clockTime(endMs)}`)
     : span.kind === "queue"
       ? (startMs === null ? "排队 · 时间未记录" : endMs === null ? `排队 ${clockTime(startMs)} 起` : `排队 ${clockTime(startMs)}–${clockTime(endMs)}`)
       : `${roundPrefix} ${timeFact}`;

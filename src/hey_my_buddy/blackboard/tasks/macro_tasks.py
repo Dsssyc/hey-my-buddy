@@ -80,11 +80,10 @@ MARKER_LABELS = {
 # -- admission and activity ----------------------------------------------------
 
 
-#: The console top bar's pending count: distinct micro-task-tree roots that
-#: currently have a run parked on its Host. It reuses the same lineage walk as
-#: the history relation (``micro_task.RELATION_SQL``) but selects nothing beyond
-#: the root of each awaiting-host run, so it stays a bounded aggregate over the
-#: whole board instead of decorating the latest page of tasks.
+#: The console top bar's pending count: distinct micro-task-tree roots with an
+#: awaiting-host run, except trees owned by a Lead. It reuses the same lineage
+#: walk as the history relation (``micro_task.RELATION_SQL``) and stays a bounded
+#: aggregate over the whole board instead of decorating the latest task page.
 PENDING_ROOTS_SQL = """
 WITH RECURSIVE lineage(task_id, root_run_id) AS (
     SELECT child_task_id, child_task_id FROM workflow_children
@@ -103,6 +102,10 @@ SELECT COUNT(DISTINCT COALESCE(roots.root_run_id, tasks.task_id)) AS pending
   FROM tasks
   JOIN workflow_runs awaiting ON awaiting.run_id = tasks.task_id AND awaiting.state = 'awaiting-host'
   LEFT JOIN roots ON roots.task_id = tasks.task_id
+ WHERE NOT EXISTS (
+       SELECT 1 FROM workflow_lead_tasks owned
+        WHERE owned.owned_run_id = COALESCE(roots.root_run_id, tasks.task_id)
+ )
 """
 
 
@@ -259,10 +262,10 @@ def _run_presentation(connection, run_id: str) -> tuple[str | None, str, str | N
 def _state(row) -> str:
     """One member's display state: host, active, review or ended."""
     run_state, state = row["run_state"], row["state"]
-    if run_state == "awaiting-host":
+    if run_state == "awaiting-host" and row["root_lead_run_id"] is None:
         return "host"
     if state in ("queued", "running", "cancelling", "reconciliation-needed") or run_state in (
-        "executing", "waiting-helpers"
+        "executing", "waiting-helpers", "waiting-owned", "awaiting-host"
     ):
         return "active"
     if (
@@ -553,6 +556,8 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "shutdownConfirmed": attempts == confirmed and not unproven,
         "depth": depth,
         "kind": metadata["kind"],
+        "leadOwnership": metadata["leadOwnership"],
+        "rootLeadRunId": metadata["rootLeadRunId"],
         "buddy": _full_buddy(metadata["buddy"]),
         "acceptedAt": row["accepted_at"],
         "acceptanceVerdict": row["acceptance_verdict"],
@@ -799,6 +804,7 @@ def _markers(connection, run_ids: list[str]) -> list[dict]:
             "artifactId": text("artifactId"),
             "integrationId": text("integrationId"),
             "continuationId": text("continuationId"),
+            "stopInitiator": text("stopInitiator"),
             "eventKind": row["kind"],
         })
     return markers

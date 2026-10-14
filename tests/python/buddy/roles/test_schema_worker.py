@@ -23,6 +23,17 @@ from buddy.harnesses.claude.test_native_run import BUDDY, NativeRunCase
 
 
 class CodexSchemaTests(unittest.TestCase):
+    def test_native_result_schema_offers_waiting_only_for_lead(self):
+        for harness in ("codex", "claude"):
+            with self.subTest(harness=harness):
+                ordinary = worker_format(harness)
+                lead = ordinary.for_turn({"context": {"delegationAuthority": True}})
+                ordinary_choices = ordinary.schema["properties"]["outcome"]["anyOf"][0]["properties"]["disposition"]["enum"]
+                lead_choices = lead.schema["properties"]["outcome"]["anyOf"][0]["properties"]["disposition"]["enum"]
+                self.assertNotIn("waiting", ordinary_choices)
+                self.assertIn("waiting", lead_choices)
+                self.assertNotIn("waiting", ordinary.schema["properties"]["outcome"]["anyOf"][0]["properties"]["disposition"]["enum"])
+
     def test_worker_permission_capabilities_match_role_paths(self):
         expected = {
             "codex": ("codex", "workspace", "cancel", "artifacts", "deadline", "native-session",

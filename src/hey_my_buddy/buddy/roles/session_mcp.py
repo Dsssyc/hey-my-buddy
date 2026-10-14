@@ -38,7 +38,8 @@ def respond(message: dict, configuration: dict) -> dict | None:
         result = {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
                   "serverInfo": {"name": "hey-my-buddy", "version": "1"}}
     elif method == "tools/list":
-        result = {"tools": worker_services.session_tools()}
+        result = {"tools": worker_services.session_tools(
+            delegation_authority=configuration.get("delegationAuthority") is True)}
     elif method == "tools/call":
         params = message.get("params") or {}
         result = worker_services.call_session_tool(params.get("name"), params.get("arguments"), configuration)

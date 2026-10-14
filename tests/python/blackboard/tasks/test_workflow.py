@@ -414,7 +414,7 @@ class LifecycleTests(WorkflowTestCase):
         second = self.claim(board, claim_request_id="c2")
         context = second["claim"]["turn"]["input"]["context"]
         self.assertEqual(context["continuation"]["reason"], "the plan is not acceptable; use the existing schema")
-        self.assertEqual(context["continuation"]["authorizedBy"], "auto")
+        self.assertEqual(context["continuation"]["kind"], "helper")
 
     def test_decline_without_auto_continue_waits_for_host(self):
         board = self.board()
@@ -546,8 +546,9 @@ class LifecycleTests(WorkflowTestCase):
         self.assertEqual(continued["state"], "executing")
         self.assertEqual(continued["helperPolicy"], "cancel")
         audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
-        auto = [item for item in audit["audit"]["continuations"] if item["authorizedBy"] == "auto"]
+        auto = [item for item in audit["audit"]["continuations"] if item["kind"] == "helper"]
         self.assertEqual([item["state"] for item in auto], ["invalidated"])
+        self.assertTrue(all("authorizedBy" not in item for item in audit["audit"]["continuations"]))
         # The cancelled helper can never requeue the parent later.
         child = approved["children"][0]["taskId"]
         child_task = board.call("task_get", {"runId": child})["task"]

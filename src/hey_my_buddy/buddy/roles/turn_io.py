@@ -188,7 +188,7 @@ def truncate_outcome_summaries(outcome: object) -> tuple[object, dict]:
     return bounded, truncated
 
 
-def validate_outcome(outcome: object) -> str | None:
+def validate_outcome(outcome: object, *, delegation_authority: bool = False) -> str | None:
     fields = {"disposition", "summary", "remaining", "decisions", "artifacts", "request"}
     if not isinstance(outcome, dict) or set(outcome) != fields:
         return "the outcome must contain exactly the current outcome fields"
@@ -196,7 +196,9 @@ def validate_outcome(outcome: object) -> str | None:
         return isinstance(value, str) and bool(value.strip()) and "\0" not in value and len(value.encode()) <= limit
     def strings(value: object) -> bool:
         return isinstance(value, list) and len(value) <= MAX_OUTCOME_ITEMS and all(text(x, MAX_OUTCOME_ITEM_BYTES) for x in value)
-    if outcome["disposition"] not in ("completed", "assistance", "attention"):
+    dispositions = ("completed", "assistance", "attention", "waiting") if delegation_authority else (
+        "completed", "assistance", "attention")
+    if outcome["disposition"] not in dispositions:
         return "the turn outcome requires a valid disposition and nonblank summary"
     # A report can occupy the bounded outcome. Request text and references keep
     # their smaller bounds; JSON framing and all other fields still count below.
@@ -215,8 +217,8 @@ def validate_outcome(outcome: object) -> str | None:
     except (TypeError, ValueError, RecursionError):
         return "the outcome must contain finite JSON values"
     request = outcome["request"]
-    if outcome["disposition"] == "completed":
-        return None if request is None else "a completed outcome requires request: null"
+    if outcome["disposition"] in ("completed", "waiting"):
+        return None if request is None else f"a {outcome['disposition']} outcome requires request: null"
     required = {"summary", "attempted", "neededWork", "expectedArtifacts", "acceptance"}
     if not isinstance(request, dict) or not required <= set(request) or set(request) - required - {"suggestedBuddyId"}:
         return "an assistance or attention outcome requires the current request fields"
@@ -259,7 +261,8 @@ def read_turn(context: ExecutionContext, shutdown_confirmed: bool, exit_code: in
             return None, f"the turn record {key} does not match the service-owned execution identity"
     if record.get("inputSha256") != input_hash(turn_input):
         return None, "the turn record inputSha256 does not match the turn input the service wrote"
-    error = validate_outcome(record.get("outcome"))
+    error = validate_outcome(record.get("outcome"), delegation_authority=turn_input.get(
+        "context", {}).get("delegationAuthority") is True)
     if error:
         return None, error
     if not isinstance(record.get("sessionId"), str) or not record["sessionId"]:

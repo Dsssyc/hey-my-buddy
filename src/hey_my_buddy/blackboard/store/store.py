@@ -155,6 +155,7 @@ class BoardStore:
         )
         from ..tasks.macro_tasks import record_activity
         record_activity(connection, task_id, int(cursor.lastrowid), at)
+        self.workflow.owned_event(connection, task_id=task_id, kind=kind, seq=int(cursor.lastrowid), now=at)
         return int(cursor.lastrowid)
 
     def head(self) -> int:

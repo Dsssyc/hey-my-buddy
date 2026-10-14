@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from copy import deepcopy
 from pathlib import Path
 
 from .turn_io import canonical_json, validate_outcome
@@ -77,6 +78,19 @@ OUTCOME_SCHEMA = {
         ]},
     },
 }
+
+
+def outcome_schema_for(*, delegation_authority: bool = False) -> dict:
+    if not delegation_authority:
+        return OUTCOME_SCHEMA
+    schema = deepcopy(OUTCOME_SCHEMA)
+    schema["properties"]["disposition"]["enum"].append("waiting")
+    schema["properties"]["request"]["description"] = (
+        "Required for every outcome. Use null when disposition is completed or waiting; "
+        "otherwise provide the complete assistance or attention request.")
+    return schema
+
+
 ANSWER_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["inquiryId", "answer"],
@@ -132,6 +146,8 @@ def micro_task_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
     return worker_prompt(task_text, turn_input, delivery=(
         "This is a Buddy root turn for a micro task. Complete the authorized task using the available coding tools and internal subagents. Follow the frozen Host input and its allocated workspace. Allocated workspaces share Git stash, branches and tags with the owner's repository: do not use git stash or create, switch, move or delete branches or tags; leave changes in the workspace or commit on the current detached HEAD.",
         f"Only the root may conclude this Buddy turn. After your work and internal subagents settle, obtain one successful receipt from {finish_tool} with the complete structured outcome. Include all six fields: disposition, summary, remaining, decisions, artifacts, request. Completed requires request: null. Use assistance for bounded help or attention for a Host decision. If a native permission or user-input request was refused, you must conclude with attention instead of completed. If a session tool refuses your call — including with a signed JSON refusal envelope naming the correction — correct the arguments and retry in this same turn. Plain final text is not a recorded outcome. After a successful finish receipt, do not start more tools; end the native turn.",
+        *(("When you have handed off work to micro tasks you own and need their results, conclude this Lead turn with disposition waiting, request: null and a clear summary. The blackboard will start a later turn when an owned task needs your attention.",)
+          if turn_input.get("context", {}).get("delegationAuthority") is True else ()),
         inquiry,
     ))
 
@@ -341,12 +357,15 @@ def _finish_receipt(arguments: dict, configuration: dict) -> dict:
     return {"content": [{"type": "text", "text": canonical_json(receipt)}]}
 
 
-def session_tools() -> list[dict]:
+def session_tools(*, delegation_authority: bool = False) -> list[dict]:
     """The three session tools this role exposes inside one native root turn."""
     return [
         {"name": "hey_my_buddy_checkpoint", "inputSchema": CHECKPOINT_SCHEMA, "description": CHECKPOINT_DESCRIPTION},
         {"name": "hey_my_buddy_answer_inquiry", "inputSchema": ANSWER_SCHEMA, "description": ANSWER_DESCRIPTION},
-        {"name": "hey_my_buddy_finish_turn", "inputSchema": OUTCOME_SCHEMA, "description": FINISH_DESCRIPTION},
+        {"name": "hey_my_buddy_finish_turn", "inputSchema": outcome_schema_for(
+            delegation_authority=delegation_authority), "description": FINISH_DESCRIPTION + (
+                " A Lead may use waiting with request: null after handing off owned work; the board will open a later turn."
+                if delegation_authority else "")},
     ]
 
 
@@ -370,15 +389,15 @@ def call_session_tool(name: object, arguments: object, configuration: dict) -> d
     if name == "hey_my_buddy_answer_inquiry":
         return _answer_inquiry(arguments, configuration)
     if name == "hey_my_buddy_finish_turn":
-        error = validate_outcome(arguments)
+        error = validate_outcome(arguments, delegation_authority=configuration.get("delegationAuthority") is True)
         if error:
             return _refusal(configuration, "hey_my_buddy_finish_turn", "invalid-arguments", error)
-        if arguments["disposition"] == "completed" and attention_requests(configuration):
+        if arguments["disposition"] in ("completed", "waiting") and attention_requests(configuration):
             # A refused native approval must reach the Host as attention, never
             # as silently completed work. The root is still live and can issue
             # the attention receipt in this same turn.
             return _refusal(configuration, "hey_my_buddy_finish_turn", "attention-outstanding", ATTENTION_REFUSAL)
-        if arguments["disposition"] == "completed":
+        if arguments["disposition"] in ("completed", "waiting"):
             refusal = inquiry_refusal(pending_inquiries(configuration) or [])
             if refusal:
                 # Same contract as a refused native approval: the root is still

@@ -49,7 +49,7 @@ function row(runId: string, overrides: Partial<TimelineRow> = {}): TimelineRow {
   return {
     runId,
     parentRunId: null,
-    rootRunId: runId,
+    rootRunId: runId, rootLeadRunId: null,
     title: `微任务 ${runId}`,
     titleSource: "title",
     taskSummary: null,
@@ -94,7 +94,7 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
       buddy: CODEX, acceptedAt: "2026-09-26T03:30:00Z", acceptanceVerdict: "accepted" }),
     row("r3", { title: "补充 schema 升级离线副本的验证测试", taskSummary: "为离线副本升级补充验证测试，覆盖行数与哈希不变。",
       summary: "已补充离线副本验证测试，全部通过。", createdAt: "2026-09-26T01:38:00Z", state: "completed", status: "completed",
-      parentRunId: "r2", rootRunId: "r2", depth: 1, kind: "helper", buddy: GLM }),
+      parentRunId: "r2", rootRunId: "r2", rootLeadRunId: null, depth: 1, kind: "helper", buddy: GLM }),
     row("r5", { title: "按设计稿实现 ObjectiveTimeline 组件与布局计算", taskSummary: "按设计稿实现 ObjectiveTimeline 组件与折叠布局计算。",
       summary: null, createdAt: "2026-09-26T05:30:00Z", state: "cancelled", status: "cancelled",
       buddy: GLM }),

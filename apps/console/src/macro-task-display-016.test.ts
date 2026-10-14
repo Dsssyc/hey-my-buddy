@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { MacroTaskSummary, TimelineEvent, TimelineRow, TimelineSpan } from "./macro-task-types";
 import {
   acceptanceWaitMs, acceptanceWaitText, buddyLabel, buddyNamer, eventClusterGlyph,
-  eventClusterLabel, eventSentence, macroTaskProgressText, macroTaskStateLabel, spanFacts,
+  eventClusterLabel, eventSentence, macroTaskProgressText, macroTaskStateLabel, rowStateInfo, spanFacts,
 } from "./macro-task-display";
 
 function summary(overrides: Partial<MacroTaskSummary> = {}): MacroTaskSummary {
@@ -61,7 +61,7 @@ describe("0.16 friendly buddy names (0.3)", () => {
 
 describe("0.16 Host event sentences and cluster glyphs (P1.7)", () => {
   const row = (title: string): TimelineRow => ({
-    runId: "r1", parentRunId: null, rootRunId: "r1", title, titleSource: "title", taskSummary: null, summary: null,
+    runId: "r1", parentRunId: null, rootRunId: "r1", rootLeadRunId: null, title, titleSource: "title", taskSummary: null, summary: null,
     createdAt: "2026-09-26T01:00:00Z", state: "delivered", status: "completed", category: "review",
     shutdownConfirmed: true, depth: 0, kind: "micro-task", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
   });
@@ -79,8 +79,21 @@ describe("0.16 Host event sentences and cluster glyphs (P1.7)", () => {
     expect(eventSentence(event("integrate"), row("修复标题"))).toContain("Host 整合了「修复标题」的产出");
     expect(eventSentence(event("accept"), row("修复标题"))).toContain("Host 验收通过「修复标题」");
     expect(eventSentence(event("reject"), row("修复标题"))).toContain("Host 对「修复标题」提出验收问题");
-    expect(eventSentence(event("cancel"), row("修复标题"))).toContain("Host 停止了「修复标题」");
+    expect(eventSentence(event("cancel", undefined, { stopInitiator: "host" }), row("修复标题"))).toContain("Host 停止了「修复标题」");
     expect(eventSentence(event("takeover"), row("修复标题"))).toContain("Host 接管了「修复标题」");
+  });
+
+  it("names every recorded stop initiator, and leaves a missing one unknown", () => {
+    const target = row("修复标题");
+    const sentences = [
+      ["host", "Host 停止了"], ["lead", "Lead 停止了"],
+      ["console", "在控制台停止了"], ["service", "服务停止了"],
+      ["unknown", "停止了「修复标题」（发起者未知）"],
+    ] as const;
+    for (const [initiator, phrase] of sentences) {
+      expect(eventSentence(event("cancel", undefined, { stopInitiator: initiator }), target)).toContain(phrase);
+    }
+    expect(eventSentence(event("cancel"), target)).toContain("发起者未知");
   });
 
   it("labels clusters by kind with counts and picks the shared glyph", () => {
@@ -96,7 +109,7 @@ describe("0.16 Host event sentences and cluster glyphs (P1.7)", () => {
 
 describe("0.16 span-facts locator (T4)", () => {
   const row: TimelineRow = {
-    runId: "r1", parentRunId: null, rootRunId: "r1", title: "修复标题错位", titleSource: "title", taskSummary: null,
+    runId: "r1", parentRunId: null, rootRunId: "r1", rootLeadRunId: null, title: "修复标题错位", titleSource: "title", taskSummary: null,
     summary: null, createdAt: "2026-09-26T01:00:00Z", state: "delivered", status: "completed", category: "review",
     shutdownConfirmed: true, depth: 0, kind: "micro-task",
     buddy: { harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" },
@@ -117,11 +130,24 @@ describe("0.16 span-facts locator (T4)", () => {
     expect(spanFacts(span({ endAt: null }), row, null).item.locator).toMatch(/^第 1 轮 \d{2}:\d{2} 起 · 结束时间缺失$/);
     expect(spanFacts(span({ startAt: null, endAt: null }), row, null).item.locator).toBe("第 1 轮 时间未记录");
   });
+
+  it("shows the Lead on root and helper waits using root ownership", () => {
+    const owned = { ...row, state: "awaiting-host", rootLeadRunId: "lead-1",
+      leadOwnership: { leadRunId: "lead-1", leadTurnId: "turn-1", createdAt: row.createdAt } };
+    expect(rowStateInfo(owned).label).toBe("等待 Lead");
+    expect(spanFacts(span({ kind: "host" }), owned, null).item.head).toBe("等待 Lead");
+    expect(spanFacts(span({ kind: "host" }), owned, null).item.locator).toMatch(/^等待 Lead /);
+    const helper = { ...owned, kind: "helper" as const, parentRunId: "r1", leadOwnership: null };
+    expect(rowStateInfo(helper).label).toBe("等待 Lead");
+    expect(spanFacts(span({ kind: "host" }), helper, null).item.head).toBe("等待 Lead");
+    expect(spanFacts(span({ kind: "host" }), helper, null).item.locator).toMatch(/^等待 Lead /);
+    expect(rowStateInfo({ ...row, state: "waiting-owned" }).label).toBe("等待名下的微任务");
+  });
 });
 
 describe("0.16 acceptance wait (P1.8)", () => {
   const row: TimelineRow = {
-    runId: "r1", parentRunId: null, rootRunId: "r1", title: "修复标题错位", titleSource: "title", taskSummary: null,
+    runId: "r1", parentRunId: null, rootRunId: "r1", rootLeadRunId: null, title: "修复标题错位", titleSource: "title", taskSummary: null,
     summary: null, createdAt: "2026-09-26T01:00:00Z", state: "accepted", status: "completed", category: "ended",
     shutdownConfirmed: true, depth: 0, kind: "micro-task", buddy: null,
     acceptedAt: "2026-09-26T07:25:00Z", acceptanceVerdict: "accepted", reviewRejectedAt: null, reviewRejectionNote: null,

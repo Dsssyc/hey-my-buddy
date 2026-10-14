@@ -451,7 +451,7 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
                                                    "credential": loaded})
             self.assertEqual(denied.exception.code, "UNAUTHORIZED")
 
-    def test_lead_cli_saves_control_and_await_keeps_its_credential_for_every_read(self):
+    def test_lead_cli_saves_control_and_await_is_denied_with_its_credential(self):
         from blackboard.tasks.test_workflow import BUDDY
         from support import enable_fixture_buddy
         board = self.board()
@@ -474,12 +474,12 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
             calls = []
             def record(method, params, directory):
                 calls.append((method, dict(params)))
-                if method in ("wait", "watch"):
-                    self.finish_turn(board, child_claim, worker_id="w2")
                 return original(method, params, directory)
             with mock.patch.object(cli, "_call_service", side_effect=record):
                 code, result = self.run_cli("await", json.dumps({"requestId": "owned", "waitSeconds": 1}))
-            self.assertEqual(code, 0, result)
+            self.assertEqual(code, 1, result)
+            self.assertEqual(result["error"]["code"], "FORBIDDEN")
+            self.assertEqual(result["error"]["details"]["operation"], "events_wait")
             self.assertTrue(calls)
             self.assertTrue(all(params["credential"] == credential for _, params in calls))
             self.assertNotIn("list", [method for method, _ in calls])
