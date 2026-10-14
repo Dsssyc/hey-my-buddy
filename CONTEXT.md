@@ -132,7 +132,7 @@ What a Host buddy does when it hands a micro task to the blackboard for a Worker
 A micro task explicitly authorized by the Host to help another micro task.
 
 **执行回合 / turn**:
-One Worker buddy execution ending in a result, assistance request or attention boundary.
+One Worker buddy execution ending in a result, assistance request or attention boundary; a Lead's turn may also end waiting on its owned micro tasks.
 
 **封存 / seal**:
 The fixed artifact the blackboard makes of a checkout's content when a turn ends; acceptance judges it, never the Worker's own report.
