@@ -54,7 +54,7 @@ Cancelled micro task `get` and execution `result` views expose `cancellation: {a
 | --- | --- | --- |
 | `ping` | none | Authenticated process liveness: status, protocol/contract/schema versions, service id, PID and the stored persistence error; no integrity or runtime inspection. Internal client attachment uses this operation |
 | `health` | none | Protocol/contract/schema versions, service id, state dir, runtime identity and stability, model `capacity` (`totalLimit`, `totalActive`, `models` entries `{harness, provider, model, limit, active}`), `managedWorkerIds`, `unstartedWorkerIds`, `stoppedWorkerIds`, `surplusWorkerIds`, `surplusDraining`, `surplusRetained`, `waitCapacity`, `backupPreflight`, integrity and active work |
-| `capabilities` / `harnesses` | optional `includeUnavailable`, `refresh`, `harness` | Connector reports under `adapters`, recorded `harnesses` health, `localCapabilities`, named operations, wait admission and the honest `limitations` map |
+| `harnesses` | optional `includeUnavailable`, `refresh`, `harness` | Connector reports under `adapters`, recorded `harnesses` health, `localCapabilities`, named operations, wait admission and the honest `limitations` map |
 | `backup-preflight` | none (CLI-local) | Read-only whitelist inventory of copied, skipped and refused entries; no service or runtime startup |
 | `runtime` | optional `destination` | Runtime identity, installed-runtime description and source-leak report |
 | `restart` | optional `reason`, `drainSeconds` 0–120 (default 10) | Detaches the daemon without cancelling owned work; independent workers survive. With no running daemon returns `alreadyStopped` and starts nothing |
@@ -326,13 +326,13 @@ A micro task Host boundary additionally reports `microTaskComplete: false`, the 
 
 ## Local harness commands (0.19.0)
 
-Every CLI JSON envelope carries `contractVersion`. `harnesses` aliases `capabilities` and returns recorded `harnesses` health; `harnesses '{"refresh":true,"harness":"codex"}'` performs an explicit bounded rescan (omit `harness` for all). `harness set codex /absolute/path/to/codex` maps to `harness_set`; `harness set codex --auto` removes the override. The named operation accepts `{harness,path}`, with `path:null` restoring automatic detection; the later write wins. Manual paths require Host or authenticated-console authority. [Harnesses](harnesses.md) owns status, retry and diagnostic semantics.
+Every CLI JSON envelope carries `contractVersion`. `harnesses` returns the connector reports and the recorded `harnesses` health; `harnesses '{"refresh":true,"harness":"codex"}'` performs an explicit bounded rescan (omit `harness` for all). `harness set codex /absolute/path/to/codex` maps to `harness_set`; `harness set codex --auto` removes the override. The named operation accepts `{harness,path}`, with `path:null` restoring automatic detection; the later write wins. Manual paths require Host or authenticated-console authority. [Harnesses](harnesses.md) owns status, retry and diagnostic semantics.
 
 `harness_prepare` is an internal Worker operation authenticated by `workerId`, `attemptId`, `generation`, `nonce` and `commandId`; `retry` or `failedOnly` additionally binds `healthRevision`. It returns the selected health record and records attempt provenance; one proven pre-model retry is permitted. A Worker cannot use this operation to change a manual path.
 
 ## Review eligibility
 
-`capabilities`/`harnesses` expose local read-only eligibility and system-sandbox facts without a model call. Eligibility is not a paid certificate; runtime effective-policy, tool evidence, budget, frozen-input and actual stop checks remain mandatory.
+`harnesses` exposes local read-only eligibility and system-sandbox facts without a model call. Eligibility is not a paid certificate; runtime effective-policy, tool evidence, budget, frozen-input and actual stop checks remain mandatory.
 
 ## Worker session history
 

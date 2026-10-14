@@ -4,7 +4,7 @@ Built-in tasks run in a Worker object inside an **independent supervisor process
 
 ## Harnesses and adapters
 
-`hey-my-buddy capabilities` (also `hey-my-buddy harnesses`) reports adapters under `adapters`, each with `available`, `reason`, `capabilities` and `executedBy`. It also reports `localCapabilities`, the named operations, wait admission, `limitations`, `readOnlyStructured` and `noToolStructured` where applicable, and harness records under `harnesses`. A new harness, or a behavior that several harnesses share, follows the integration principles in [ADR-023](../decisions/023-harness-integration-principles.md).
+`hey-my-buddy harnesses` reports adapters under `adapters`, each with `available`, `reason`, `capabilities` and `executedBy`. It also reports `localCapabilities`, the named operations, wait admission, `limitations`, `readOnlyStructured` and `noToolStructured` where applicable, and harness records under `harnesses`. A new harness, or a behavior that several harnesses share, follows the integration principles in [ADR-023](../decisions/023-harness-integration-principles.md).
 
 | Harness or adapter | `executedBy` | Capabilities | Requirements |
 | --- | --- | --- | --- |
