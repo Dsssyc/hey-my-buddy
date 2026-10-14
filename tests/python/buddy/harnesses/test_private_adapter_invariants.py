@@ -370,10 +370,12 @@ class PrivateAdapterInvariants(unittest.TestCase):
                         "buddies": [{"buddyId": "legal"}], "routingMode": "fast",
                         "task": "Select", "outputSchema": router.answer_schema(["legal"]),
                         "budget": {"timeoutSeconds": 60}})
-                handle = DecisionAdapter().start(context)
+                decision_adapter = DecisionAdapter()
+                decision_adapter.prepare(context)
+                handle = decision_adapter.start(context)
                 self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.1) if h.group_alive() else None)
                 self.assertIsNotNone(handle.wait(8))
-                outcome = DecisionAdapter().collect(handle, context)
+                outcome = decision_adapter.collect(handle, context)
                 self.assertTrue(outcome.shutdown_confirmed, outcome.to_report())
                 control = (handle.role_run_control if hasattr(handle, "role_run_control")
                            else json.loads((context.directory / "no-tool-control.json").read_text()))

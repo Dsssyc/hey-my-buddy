@@ -571,6 +571,14 @@ class BoardService(_BaseResource):
                 if retry and db.execute("SELECT 1 FROM events WHERE task_id=? AND kind='harness.start_retry' AND json_extract(payload_json,'$.attemptId')=?", (attempt['task_id'], attempt['attempt_id'])).fetchone():
                     raise BoardError('HARNESS_RETRY_EXHAUSTED', 'Only one pre-model retry is permitted per attempt')
                 response = {'harness': record, 'retry': retry}
+                unknown = (record['status'] == 'unknown'
+                           or (record.get('lastProbe') or {}).get('status') == 'unknown')
+                if unknown:
+                    db.execute("UPDATE tasks SET queue_reason='harness-probe-unknown' WHERE task_id=?",
+                               (attempt['task_id'],))
+                else:
+                    db.execute("UPDATE tasks SET queue_reason=NULL WHERE task_id=? AND queue_reason='harness-probe-unknown'",
+                               (attempt['task_id'],))
                 self.store._append_event(db, 'harness.start_failed' if failed_only else 'harness.start_retry' if retry else 'harness.execution_selected', task_id=attempt['task_id'],
                                          payload={'attemptId': attempt['attempt_id'], 'harness': record})
                 self.store._store_receipt(db, command_id, 'harness.prepare', request, response, subject=subject, task_id=attempt['task_id'])

@@ -2,7 +2,6 @@
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
-import time
 import unittest
 from unittest import mock
 
@@ -109,7 +108,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
         collection = SimpleNamespace(payload=payload, stop_confirmed=True)
         context = SimpleNamespace(decision_input={"buddy": {}, "budget": {},
                                                  "routingMode": mode, "buddies": [{"buddyId": "chosen"}]})
-        handle = SimpleNamespace(router_started=time.monotonic(), role_run_control={"operation": mode},
+        handle = SimpleNamespace(role_run_control={"operation": mode},
                                  process=SimpleNamespace(returncode=0))
         with mock.patch.object(structured_call, "collect_controller", return_value=collection), \
                 mock.patch.object(router.router, "routing_facts", return_value={}):

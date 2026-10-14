@@ -809,12 +809,21 @@ def discover_models(name: str) -> dict:
                 else:
                     stopped = creation.shutdown_confirmed
                 raise
-            if handle.wait(30) is None:
+            wait_expired = handle.wait(30) is None
+            if wait_expired:
                 handle.terminate(grace_seconds=8)
             collection = collect_controller(handle, read=read_strict_result,
                                             stop=lambda payload, owned: stop_confirmed(payload, owned.shutdown_confirmed))
             stopped = collection.stop_confirmed
-            if not collection.payload or collection.exit_code != 0 or collection.payload.get("status") != "ok" or not stopped:
+            if not stopped:
+                raise BoardError('HARNESS_DISCOVERY_STOP_UNCONFIRMED',
+                                 'The native metadata read process stop is unconfirmed', harness=name)
+            payload = collection.payload
+            if wait_expired or payload.get('status') == 'unknown':
+                return {'source': 'native-discovery', 'providers': [], 'discoveries': [{
+                    'harness': name, 'status': 'unknown', 'accountStatus': 'unknown',
+                    'reason': 'native-metadata-wait-expired'}]}
+            if collection.exit_code != 0 or collection.payload.get("status") != "ok":
                 message = (collection.payload or {}).get("error")
                 if not isinstance(message, str) or not message or len(message) > 512:
                     message = "Native model discovery did not settle successfully"

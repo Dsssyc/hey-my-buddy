@@ -39,6 +39,34 @@ class HarnessHealthTests(BoardTestCase):
         self.native.assert_called_once()
         self.assertEqual(len(self.refreshed), 1)
 
+    def test_slow_scan_preserves_ready_health_and_next_scan_can_succeed(self):
+        first = self.health.refresh('codex', force=True)
+        self.discovered = {'harness': 'codex', 'status': 'unknown', 'reasonCode': 'scan-timeout'}
+        pending = self.health.refresh('codex', force=True)
+        self.assertEqual(pending['status'], 'ready')
+        self.assertTrue(pending['available'])
+        self.assertEqual(pending['command'], first['command'])
+        self.assertEqual(pending['checkedAt'], first['checkedAt'])
+        self.assertEqual(pending['lastProbe']['status'], 'unknown')
+        self.discovered = {'harness': 'codex', 'status': 'ready', 'command': ['/native/codex'],
+                           'available': True, 'version': '2.0'}
+        cached = self.health.refresh('codex', preflight=True)
+        self.assertEqual(cached['lastProbe']['status'], 'unknown')
+        self.assertEqual(self.native.call_count, 2)
+        with self.board.db.write() as db:
+            db.execute("UPDATE harness_health SET scan_after=NULL WHERE harness='codex'")
+        recovered = self.health.refresh('codex', preflight=True)
+        self.assertEqual(recovered['version'], '2.0')
+        self.assertEqual(recovered['lastProbe']['status'], 'complete')
+
+    def test_first_slow_scan_remains_unknown_and_does_not_invalidate_buddies(self):
+        self.discovered = {'harness': 'codex', 'status': 'unknown', 'reasonCode': 'timeout'}
+        result = self.health.refresh('codex', force=True)
+        self.assertEqual(result['status'], 'unknown')
+        self.assertEqual(result['lastProbe']['reasonCode'], 'timeout')
+        with self.board.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='harness.invalidated'").fetchone()[0], 0)
+
     def test_caller_path_is_a_transient_hint_and_never_stored(self):
         cli_dir = self.directory / 'new-cli'
         node_dir = self.directory / 'other-bin'
@@ -866,6 +894,27 @@ class NativeAccountReadFailureTests(BoardTestCase):
         with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)):
             recovered = self.health.refresh('codex', force=True)
         self.assertTrue(recovered['available'])
+        self.assertNotIn('accountReadFailure', recovered)
+
+    def test_account_wait_expiry_keeps_health_and_billing_then_retries(self):
+        from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+        billing = {'kind': 'metered', 'provider': 'openai', 'source': 'codex/account-read', 'observedAt': _stamp(0)}
+        with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(billing, None, None)):
+            first = self.health.refresh('codex', force=True)
+        with self.board.db.write() as db:
+            db.execute("DELETE FROM harness_account_reads WHERE harness='codex'")
+        with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', side_effect=CodexProtocolError('deadline', 'wait expired')):
+            pending = self.health.refresh('codex', force=True)
+        self.assertEqual(pending['status'], 'ready')
+        self.assertTrue(pending['available'])
+        self.assertEqual(pending['billingByProvider'], first['billingByProvider'])
+        self.assertEqual(pending['accountReadFailure']['status'], 'unknown')
+        self.assertEqual(len(self.events('harness.account_read_unknown')), 1)
+        self.assertEqual(self.events('harness.invalidated'), [])
+        with self.board.db.write() as db:
+            db.execute("DELETE FROM harness_account_reads WHERE harness='codex'")
+        with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(billing, None, None)):
+            recovered = self.health.refresh('codex', force=True)
         self.assertNotIn('accountReadFailure', recovered)
 
     def test_late_account_failure_cannot_invalidate_a_new_health_generation(self):

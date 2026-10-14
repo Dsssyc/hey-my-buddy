@@ -1180,13 +1180,14 @@ class TestDelivery(BoardTestCase):
         client.register_worker("w-load", adapter="command", capabilities=["command"])
         claim = client.claim("w-load", "claim-load-1", "a" * 32)
         attempt = claim["claim"]["attempt"]
+        cursor = board.store.head()
         results: list[str] = []
         barrier = threading.Barrier(9, timeout=30)
 
         def waiter():
             barrier.wait()
             try:
-                client.wait_events(after=0, timeout_ms=2000)
+                client.wait_events(after=cursor, timeout_ms=2000)
                 results.append("ok")
             except BoardError as error:
                 results.append(error.code)
@@ -1195,7 +1196,9 @@ class TestDelivery(BoardTestCase):
         for thread in threads:
             thread.start()
         barrier.wait()
-        time.sleep(0.3)
+        self.assertTrue(wait_for(lambda: board.admission.stats()["admitted"] == 2
+                                 and board.admission.stats()["rejected"] >= 1, 10),
+                        "two waits must occupy capacity and an overflow must be observed")
         # Mutations must stay responsive: renew, cancel and the result commit.
         client.renew("w-load", attempt["attemptId"], attempt["generation"], "a" * 32)
         client.cancel(runId=task["runId"], reason="race")
@@ -1375,7 +1378,9 @@ class TestExtensibility(BoardTestCase):
         worker.run_once()
         result = client.result(runId=task["runId"])
         self.assertEqual(result["status"], "failed")
-        self.assertIsNone(result["result"], "no adapter result exists for an unusable executable")
+        self.assertEqual(result['result']['code'], 'ADAPTER_UNAVAILABLE')
+        self.assertEqual(result['result']['stopEvidence'], {
+            'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}})
         self.assertIn("ADAPTER_UNAVAILABLE", result["resultMeta"]["error"])
         self.assertTrue(result["shutdownConfirmed"], "no process was ever created, so shutdown is confirmed")
         self.assertEqual(client.get(runId=task["runId"])["status"], "failed")

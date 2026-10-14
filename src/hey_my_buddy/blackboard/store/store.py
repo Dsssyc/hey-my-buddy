@@ -2217,9 +2217,9 @@ class BoardStore:
         )
         message = schemas.optional_string(params, "message")
         phase = schemas.optional_string(params, "phase")
-        # ``data`` carries the bounded native-activity projection, and activity is
-        # its only accepted field: a typo can therefore never smuggle prose, tool
-        # arguments or credentials into the projection. Activity is stored only when
+        # ``data`` carries bounded native activity and the control waiting reason;
+        # unknown keys cannot smuggle tool arguments into either projection.
+        # Activity is stored only when
         # a caller actually publishes one - a routine renewal or heartbeat is never
         # turned into fake native progress.
         activity = None
@@ -2227,7 +2227,7 @@ class BoardStore:
         if data is not None:
             if not isinstance(data, dict):
                 raise BoardError("INVALID_ARGUMENT", "data must be an object")
-            schemas.reject_unknown(data, {"activity"}, "worker.progress.data")
+            schemas.reject_unknown(data, {"activity", "waitingReason"}, "worker.progress.data")
             if data.get("activity") is not None:
                 activity = activity_module.normalize_activity(data["activity"])
         with self.db.write() as connection:
@@ -2237,6 +2237,12 @@ class BoardStore:
             if phase in ("starting", "executing", "finalizing") and attempt["execution_state"] != "uncertain":
                 self._transition_attempt(connection, attempt, phase)
             now = self.now()
+            if data is not None and 'waitingReason' in data:
+                waiting = schemas.optional_string(data, 'waitingReason', max_length=200)
+                connection.execute('UPDATE tasks SET queue_reason=? WHERE task_id=?',
+                                   (waiting, attempt['task_id']))
+                self._append_event(connection, 'attempt.waiting', task_id=attempt['task_id'],
+                                   attempt_id=attempt['attempt_id'], payload={'reason': waiting})
             connection.execute(
                 "UPDATE attempts SET updated_at=?, lease_expires_at=?, revision=revision+1 WHERE attempt_id=?",
                 (now, self._lease_deadline(), attempt["attempt_id"]),

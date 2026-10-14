@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import uuid
@@ -821,6 +822,17 @@ class ReviewSeamTests(CodexSeamCase):
 
 
 class WorkerSeamTests(CodexSeamCase):
+    def cancel_after_native_start(self):
+        admitted = threading.Event()
+        observe = native_run.TurnEvidence.observe
+        def record_start(evidence, message):
+            response = observe(evidence, message)
+            if evidence.started:
+                admitted.set()
+            return response
+        self.enterContext(mock.patch.object(native_run.TurnEvidence, 'observe', record_start))
+        return admitted.is_set
+
     def expected_worker_policy(self, level):
         sandbox, policy = {
             "read": ("read-only", {"type": "readOnly", "networkAccess": True}),
@@ -1424,14 +1436,10 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertTrue(handle.shutdown_confirmed(settle_seconds=0.5))
 
     def test_cancelled_run_reports_cancel_and_native_interrupt(self):
-        started_at = time.monotonic()
-
-        def cancel_after_admission():
-            return time.monotonic() - started_at > 1.5
-
+        cancel_after_admission = self.cancel_after_native_start()
         self.set_case("hang")
         result = run(self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA,
-                                  prompt="fixture micro task task", timeout=12,
+                                  prompt="fixture micro task task", timeout=None,
                                   input_sha256=input_hash({"taskId": "micro-task-1", "attemptId": "attempt-check",
                                                            "generation": 7, "turnId": "turn-check"}),
                                   turn_id="turn-check", native="worker-native"),
@@ -1445,17 +1453,17 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(result.end.native_exit_code, -15)
 
     def test_interrupted_terminal_turn_keeps_a_checkpoint_bound_resume(self):
-        started_at = time.monotonic()
+        cancelled = self.cancel_after_native_start()
         self.set_case("interrupt-settled")
         request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA,
-                               prompt="fixture micro task task", timeout=12,
+                               prompt="fixture micro task task", timeout=None,
                                input_sha256=input_hash({"taskId": "micro-task-1",
                                                         "attemptId": "attempt-check",
                                                         "generation": 7, "turnId": "turn-check"}),
                                turn_id="turn-check", native="worker-native")
         first = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                     services=self.worker_services(),
-                    cancelled=lambda: time.monotonic() - started_at > 0.5)
+                    cancelled=cancelled)
         self.assertEqual(first.end.status, "cancelled")
         self.assertEqual(first.stop_evidence.native.group_state, "gone")
         self.assertIs(first.continuation.resumable, True)
@@ -1476,17 +1484,17 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(resumed.native_identity.session_id, previous)
 
     def test_foreign_terminal_turn_does_not_make_an_interrupt_resumable(self):
-        started_at = time.monotonic()
+        cancelled = self.cancel_after_native_start()
         self.set_case("interrupt-foreign")
         request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA,
-                               prompt="fixture micro task task", timeout=12,
+                               prompt="fixture micro task task", timeout=None,
                                input_sha256=input_hash({"taskId": "micro-task-1",
                                                         "attemptId": "attempt-check",
                                                         "generation": 7, "turnId": "turn-check"}),
                                turn_id="turn-check", native="worker-native")
         result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                      services=self.worker_services(),
-                     cancelled=lambda: time.monotonic() - started_at > 0.5)
+                     cancelled=cancelled)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertIsNone(result.continuation.resumable)
 

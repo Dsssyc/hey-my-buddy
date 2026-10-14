@@ -40,6 +40,7 @@ import time
 import uuid
 from unittest.mock import patch
 from blackboard.routing.fixtures.router_tool_receipt import tool_receipt
+from hey_my_buddy.buddy.roles.router_input import verify as verify_frozen_input
 
 
 def prepare_input(manifest, directory):
@@ -52,11 +53,9 @@ def prepare_input(manifest, directory):
 
 
 def verify_input(manifest, root, expected):
-    from hey_my_buddy.buddy.roles.router_input import digest
-
-    return {"unchanged": digest(root) == expected,
-            "manifestSha256": (manifest or {}).get("manifestSha256"),
-            "snapshotSha256": expected}
+    result = verify_frozen_input(None, root, expected)
+    result["manifestSha256"] = (manifest or {}).get("manifestSha256")
+    return result
 
 
 def install(testcase, *, path=None, **options):

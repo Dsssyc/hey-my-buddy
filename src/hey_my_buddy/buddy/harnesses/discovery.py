@@ -591,6 +591,8 @@ def _node_for(path: Path, environment: dict, deadline: float) -> tuple[str | Non
             return found["executable"], found["version"]
         if not shutdown:
             return None, found["reasonCode"]
+        if found['status'] == 'unknown' or any(code in ('timeout', 'scan-timeout') for code in failures):
+            return None, 'scan-timeout' if found['reasonCode'] == 'scan-timeout' else 'timeout'
         missing = "node-missing" if found["status"] == "missing" else found["reasonCode"]
         return None, failures[0] if failures else missing or "node-missing"
     except Exception as error:
@@ -632,6 +634,8 @@ def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadl
             node, problem = _node_for(path, environment, deadline)
             shutdown = problem != "shutdown-unverified"
             if node is None:
+                if problem in ('timeout', 'scan-timeout'):
+                    result['status'] = 'unknown'
                 result["reasonCode"] = problem
                 return result
             command = [node, str(path)]
@@ -646,6 +650,8 @@ def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadl
                         probe([*command, "--version"], child_env, deadline=deadline))
         shutdown = code != "shutdown-unverified"
         if code is not None:
+            if code in ("timeout", "scan-timeout"):
+                result["status"] = "unknown"
             result["reasonCode"] = code
             return result
         match = _VERSION.search(output.decode("utf-8", "replace")[:256])
@@ -662,6 +668,8 @@ def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadl
                 result.update(status="login-required", reasonCode="login-required")
                 return result
             if code is not None:
+                if code in ("timeout", "scan-timeout"):
+                    result["status"] = "unknown"
                 result["reasonCode"] = code
                 return result
             if "logged in" not in status:
@@ -673,6 +681,9 @@ def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadl
             shutdown = code != "shutdown-unverified"
             if not shutdown:
                 result["reasonCode"] = code
+                return result
+            if code in ("timeout", "scan-timeout"):
+                result.update(status="unknown", reasonCode=code)
                 return result
             try:
                 account = json.loads(output)
@@ -759,9 +770,11 @@ def _discover(harness: str, *, manual_path: str | None = None,
                                                 tuple(-part for part in _version_key(item["version"])))) if ready else None
         if incomplete:
             selected = None
-            status, reason = "unhealthy", incomplete_reason
+            status = "unknown" if incomplete_reason == "scan-timeout" else "unhealthy"
+            reason = incomplete_reason
         elif selected is None:
-            failure = next((item for item in attempts if item["status"] == "login-required"), None)
+            failure = next((item for item in attempts if item["status"] == "unknown"), None)
+            failure = failure or next((item for item in attempts if item["status"] == "login-required"), None)
             failure = failure or (attempts[0] if attempts else None)
             status = failure["status"] if failure else "missing"
             reason = failure["reasonCode"] if failure else "not-found"

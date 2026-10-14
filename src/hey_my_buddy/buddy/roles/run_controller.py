@@ -193,9 +193,11 @@ def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple
                 native_root=Path(control["nativeRoot"]), timeout_seconds=control["timeoutSeconds"],
                 cancelled=cancelled.is_set)
         except Exception as error:
-            return canonical_json({"status": "error", "modelStarted": False,
+            unknown = getattr(error, 'code', None) == 'deadline'
+            return canonical_json({"status": "unknown" if unknown else "error", "modelStarted": False,
+                "code": getattr(error, 'code', None),
                 "error": str(error)[:512], "processState": {
-                    "shutdownConfirmed": getattr(error, "discovery_shutdown_confirmed", None) is True}}), 1
+                    "shutdownConfirmed": getattr(error, "discovery_shutdown_confirmed", None) is True}}), 0 if unknown else 1
         return canonical_json({"status": "ok", "modelStarted": False, "catalog": catalog,
                                "processState": {"shutdownConfirmed": True, "nativeExitCode": 0}}), 0
     started = time.monotonic()

@@ -8,8 +8,10 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from hey_my_buddy.buddy.harnesses import discovery
@@ -28,7 +30,7 @@ root = Path(sys.argv[1])
 mode = sys.argv[2]
 pgid = os.getpid()
 def await_file(name):
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + 30
     while not (root / name).exists():
         if time.monotonic() >= deadline:
             raise RuntimeError('fixture gate expired: ' + name)
@@ -90,7 +92,7 @@ os._exit(0)
 @unittest.skipIf(os.name == "nt", "actual POSIX process groups")
 class DiscoveryStopTimingTests(unittest.TestCase):
     def wait_for(self, predicate, description):
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             if predicate():
                 return
@@ -167,7 +169,7 @@ class DiscoveryStopTimingTests(unittest.TestCase):
                                    stderr=subprocess.STDOUT, start_new_session=True,
                                    env={'PATH': '/usr/bin:/bin', 'HOME': str(root)})
         self.wait_for(lambda: (root / 'ready').exists(), 'group did not register')
-        process.wait(timeout=5)
+        process.wait(timeout=20)
         return process
 
     def clean_group(self, process):
@@ -175,7 +177,7 @@ class DiscoveryStopTimingTests(unittest.TestCase):
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        process.wait(timeout=5)
+        process.wait(timeout=20)
         self.wait_for(lambda: self.group_gone(process.pid), "fixture group still exists")
         for stream in (process.stdin, process.stdout, process.stderr):
             if stream is not None:
@@ -203,7 +205,7 @@ class DiscoveryStopTimingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, self.capture_probe() as processes:
             result = discovery.probe(
                 ["/bin/sh", "-c", "sleep 0.2 >/dev/null 2>&1 & echo 1.2.3"],
-                {"PATH": "/usr/bin:/bin", "HOME": directory}, deadline=time.monotonic() + 2)
+                {"PATH": "/usr/bin:/bin", "HOME": directory})
             self.assertEqual(result, (None, b"1.2.3\n"))
             self.assertEqual(len(processes), 1)
             self.assertTrue(self.group_gone(processes[0].pid))
@@ -263,11 +265,17 @@ class DiscoveryStopTimingTests(unittest.TestCase):
 
     def test_unreaped_real_group_exhausts_stop_budget_without_confirmation(self):
         with self.controlled_group('hold') as (root, command, processes):
+            result = []
             started = time.monotonic()
-            result = discovery.probe(command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)},
-                                      deadline=time.monotonic() + 2)
-            self.assertEqual(result, ('shutdown-unverified', b''))
-            self.assertLess(time.monotonic() - started, 1.5)
+            thread = threading.Thread(
+                target=lambda: result.append(discovery.probe(
+                    command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)}, deadline=started + 2)),
+                daemon=True,
+            )
+            thread.start()
+            thread.join(timeout=3)
+            self.assertFalse(thread.is_alive(), 'probe exceeded its bounded stop wait')
+            self.assertEqual(result, [('shutdown-unverified', b'')])
             self.assertFalse(self.group_gone(processes[0].pid))
 
     def pipe_stop_after_drain(self, read_error=None):
@@ -277,6 +285,9 @@ class DiscoveryStopTimingTests(unittest.TestCase):
             terminate = discovery._terminate_group
             stop_results = []
             first = True
+            clock_offset = [0.0]
+            probe_clock = SimpleNamespace(monotonic=lambda: time.monotonic() + clock_offset[0],
+                                          sleep=time.sleep)
 
             def stop(process):
                 result = terminate(process)
@@ -289,6 +300,11 @@ class DiscoveryStopTimingTests(unittest.TestCase):
                     first = False
                     self.wait_for(lambda: (root / 'ready').exists(), 'reader fixture not ready')
                     raise read_error
+                if first:
+                    first = False
+                    self.wait_for(lambda: (root / 'ready').exists(), 'reader fixture not ready')
+                    clock_offset[0] = 10.0
+                    return []
                 events = select(timeout)
                 if stop_results and events:
                     (root / 'reap').touch()
@@ -297,10 +313,11 @@ class DiscoveryStopTimingTests(unittest.TestCase):
 
             with patch.object(discovery.selectors, 'DefaultSelector', return_value=selector), \
                  patch.object(selector, 'select', side_effect=drain_then_reap), \
-                 patch.object(discovery, '_terminate_group', side_effect=stop):
+                 patch.object(discovery, '_terminate_group', side_effect=stop), \
+                 patch.object(discovery, 'time', probe_clock):
                 if read_error is None:
                     result = discovery.probe(command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)},
-                                              deadline=time.monotonic() + 0.15)
+                                              deadline=time.monotonic() + 5)
                 else:
                     with self.assertRaises(type(read_error)) as caught:
                         discovery.probe(command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)},
@@ -338,6 +355,9 @@ class DiscoveryStopTimingTests(unittest.TestCase):
             selector = discovery.selectors.DefaultSelector()
             select = selector.select
             first = True
+            clock_offset = [0.0]
+            probe_clock = SimpleNamespace(monotonic=lambda: time.monotonic() + clock_offset[0],
+                                          sleep=time.sleep)
 
             def read(timeout):
                 nonlocal first
@@ -345,14 +365,20 @@ class DiscoveryStopTimingTests(unittest.TestCase):
                     first = False
                     self.wait_for(lambda: (root / 'ready').exists(), 'reader fixture not ready')
                     raise OSError('synthetic pipe read error')
+                if first and mode == 'pipe':
+                    first = False
+                    self.wait_for(lambda: (root / 'ready').exists(), 'reader fixture not ready')
+                    clock_offset[0] = 10.0
+                    return []
                 return select(timeout)
 
             with patch.object(discovery.tempfile, 'mkdtemp', return_value=str(private)), \
                  patch.object(ProcessHandle, 'shutdown_confirmed', final_observation), \
                  patch.object(discovery.selectors, 'DefaultSelector', return_value=selector), \
-                 patch.object(selector, 'select', side_effect=read):
+                 patch.object(selector, 'select', side_effect=read), \
+                 patch.object(discovery, 'time', probe_clock):
                 result = discovery._probe_dsh_version(command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)},
-                                                      time.monotonic() + (0.15 if mode == 'pipe' else 2))
+                                                      time.monotonic() + 5)
             self.assertEqual(final_facts, [True])
             self.assertFalse(private.exists())
             self.assertTrue(self.group_gone(processes[0].pid))

@@ -17,6 +17,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import sys
 import tempfile
@@ -38,6 +39,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     SessionService,
 )
 from hey_my_buddy.buddy.harnesses.dsh import native_run
+from hey_my_buddy.buddy.harnesses.dsh.acp.connection import AcpConnection
 from hey_my_buddy.buddy.harnesses.registry import worker_permission
 from hey_my_buddy.buddy.harnesses.dsh.native_run import SessionServices, prepare_session_service, run
 from hey_my_buddy.buddy.roles import worker_services
@@ -118,7 +120,7 @@ class NativeRunCase(unittest.TestCase):
                                                              maximum=MAX_SCHEMA_BYTES),
             budget=RunBudget(timeout_seconds=timeout))
 
-    def worker_request(self, *, timeout: int = FAST_TIMEOUT, inquiry: bool = False,
+    def worker_request(self, *, timeout: int | None = FAST_TIMEOUT, inquiry: bool = False,
                        continuation=None, native_root=None, level="write"):
         """The micro task binding: a real mount, the real role validator and prompt.
 
@@ -204,6 +206,18 @@ class NativeRunCase(unittest.TestCase):
 
 class FastSeamTests(NativeRunCase):
     """The final-message carrier over the none/read/write launch configurations."""
+
+    def test_session_open_obeys_the_router_budget(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
+        self.extra_agent_args = ["--prompt-mode", "final", "--delay", "session/new:1.5"]
+        result = run(self.fast_request("prompt", timeout=1),
+                     observer=lambda _facts: FEEDBACK_CONTINUE,
+                     services=None, cancelled=lambda: False)
+        self.assertEqual(result.end.reason_code, "deadline")
+        methods = [entry.get("raw", {}).get("method") for entry in self.agent_log()
+                   if entry.get("dir") == "in"]
+        self.assertEqual(methods.count("session/new"), 1)
+        self.assertNotIn("session/prompt", methods)
 
     def test_a_settled_answer_is_a_final_message_fact(self):
         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
@@ -768,6 +782,28 @@ class MountTests(NativeRunCase):
 
 class WorkerSeamTests(NativeRunCase):
     """The micro task completion-tool carrier over real signed receipts."""
+
+    def test_slow_setup_waits_for_the_single_request_without_a_worker_deadline(self):
+        request, bound, mount = self.worker_request(timeout=None)
+        self.micro_task_agent_args(mount)
+        self.extra_agent_args += ["--delay", "initialize:0.1", "--delay", "session/new:0.1",
+                                  "--delay", "session/set_config_option:0.1"]
+        observed = []
+        request_call = AcpConnection.request
+
+        def record_request(connection, method, params, timeout):
+            if method in ("initialize", "session/new", "session/set_config_option"):
+                observed.append((method, timeout))
+            return request_call(connection, method, params, timeout)
+
+        with mock.patch.object(AcpConnection, "request", record_request):
+            result = run(request, observer=worker_observer, services=bound.services,
+                         cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual([method for method, _ in observed],
+                         ["initialize", "session/new", "session/set_config_option",
+                          "session/set_config_option"])
+        self.assertTrue(all(math.isinf(timeout) for _, timeout in observed), observed)
 
     def test_a_micro_task_turn_settles_with_a_verified_completion_tool_value(self):
         request, bound, mount = self.worker_request()
@@ -1384,6 +1420,28 @@ class InquirySeamTests(NativeRunCase):
 
 class DiscoveryTests(NativeRunCase):
     """The no-prompt discovery: declared selectors only, never a model call."""
+
+    def test_a_slow_required_close_awaits_the_fact_without_a_worker_time_limit(self):
+        self.extra_agent_args = ['--prompt-mode', 'final', '--final-answer', '{"choice":"a"}',
+                                 '--delay', 'session/close:0.2']
+        request = self.fast_request('prompt').model_copy(update={'budget': RunBudget(timeout_seconds=None)})
+        with mock.patch.object(native_run, '_CLOSE_TIMEOUT', 0.01):
+            result = run(request, observer=lambda _f: run_contract.FEEDBACK_CONTINUE, services=None, cancelled=lambda: False)
+        self.assertEqual(result.end.status, 'ok', result.end.message)
+        methods = [entry.get('raw', {}).get('method') for entry in self.agent_log() if entry.get('dir') == 'in']
+        self.assertEqual(methods.count('session/close'), 1)
+
+    def test_initialize_obeys_the_discovery_budget(self):
+        self.extra_agent_args = ["--prompt-mode", "final", "--delay", "initialize:1.5"]
+        with self.assertRaises(native_run.NativeError) as caught:
+            native_run.run_discovery(
+                cwd=str(self.base / "cwd"), invocation_root=self.base / "disc-inv",
+                native_root=self.root, timeout_seconds=1, cancelled=lambda: False)
+        self.assertEqual(caught.exception.code, "deadline")
+        methods = [entry.get("raw", {}).get("method") for entry in self.agent_log()
+                   if entry.get("dir") == "in"]
+        self.assertEqual(methods.count("initialize"), 1)
+        self.assertNotIn("session/new", methods)
 
     def test_discovery_reads_the_declared_selectors_without_a_prompt(self):
         self.extra_agent_args = ["--prompt-mode", "final"]

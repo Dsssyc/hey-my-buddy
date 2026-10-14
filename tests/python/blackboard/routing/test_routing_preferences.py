@@ -210,7 +210,9 @@ class DecisionCapabilityTests(unittest.TestCase):
             with mock.patch("hey_my_buddy.buddy.roles.router_input.prepare", return_value=(frozen, "digest")) as prepare, mock.patch(
                 "hey_my_buddy.buddy.harnesses.registry.adapter", return_value=Native()
             ), mock.patch("hey_my_buddy.buddy.roles.run_execution.start_review", side_effect=start):
-                handle = DecisionAdapter().start(context)
+                native_adapter = DecisionAdapter()
+                native_adapter.prepare(context)
+                handle = native_adapter.start(context)
             from hey_my_buddy.private_dirs import context_root
             private_root = context_root(context, "codex")
             prepare.assert_called_once_with(manifest, private_root)
@@ -233,13 +235,13 @@ class DecisionCapabilityTests(unittest.TestCase):
     def test_ineligible_capability_is_rejected_before_input_preparation_or_spawn(self):
         context = ExecutionContext(task_id="microTask", attempt_id="attempt", generation=1,
                                    spec={}, directory=Path("/tmp/unused"), runtime={}, environment={},
-                                   decision_input={"buddy": {"harness": "codex"}})
+                                       decision_input={"buddy": {"harness": "codex"}, "budget": router.budget("brief")})
         with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=CodexAdapter()), mock.patch(
             "hey_my_buddy.buddy.roles.router_input.prepare"
         ) as prepare, mock.patch.object(CodexAdapter, 'local_read_only_check', return_value={'eligible': False}), \
                 mock.patch("hey_my_buddy.buddy.roles.controller.start_router_preparation") as start:
             with self.assertRaises(BoardError) as raised:
-                DecisionAdapter().start(context)
+                DecisionAdapter().prepare(context)
         self.assertEqual(raised.exception.code, "router-review-unsupported")
         prepare.assert_not_called()
         start.assert_not_called()

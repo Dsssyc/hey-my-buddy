@@ -23,6 +23,47 @@ from hey_my_buddy.private_dirs import native_root
 
 
 class UpgradeFixtureTests(unittest.TestCase):
+    def test_upgrade_makes_health_observation_status_explicit_in_stock_and_replays(self):
+        fixture, connection = self.restored()
+        observed = '2026-10-14T00:00:00.000Z'
+        record = {'harness': 'codex', 'status': 'ready', 'revision': 1,
+                  'checkedAt': observed, 'accountReadFailure': {'reasonCode': 'deadline',
+                                                              'observedAt': observed}}
+        connection.execute("UPDATE harness_health SET status='ready',checked_at=?,record_json=? WHERE harness='codex'",
+                           (observed, json.dumps(record)))
+        command_id = connection.execute('SELECT command_id FROM commands LIMIT 1').fetchone()[0]
+        connection.execute('UPDATE commands SET response_json=? WHERE command_id=?',
+                           (json.dumps({'harness': record}), command_id))
+        seq = connection.execute('SELECT seq FROM events LIMIT 1').fetchone()[0]
+        connection.execute("UPDATE events SET kind='harness.account_read_failed',payload_json=? WHERE seq=?",
+                           (json.dumps({'harness': 'codex', 'accountReadFailure': record['accountReadFailure']}), seq))
+        connection.commit()
+        connection.close()
+        board_upgrade.migrate(fixture['state'])
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as db:
+            stored = json.loads(db.execute("SELECT record_json FROM harness_health WHERE harness='codex'").fetchone()[0])
+            replay = json.loads(db.execute('SELECT response_json FROM commands WHERE command_id=?', (command_id,)).fetchone()[0])['harness']
+            event = json.loads(db.execute('SELECT payload_json FROM events WHERE seq=?', (seq,)).fetchone()[0])
+            self.assertEqual(stored['lastProbe'], {'status': 'complete', 'observedAt': observed, 'reasonCode': None})
+            self.assertEqual(replay['lastProbe'], stored['lastProbe'])
+            self.assertEqual(stored['accountReadFailure']['status'], 'unknown')
+            self.assertEqual(replay['accountReadFailure']['status'], 'unknown')
+            self.assertEqual(event['accountReadFailure']['status'], 'unknown')
+            self.assertEqual(db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '20')
+
+    def test_upgrade_marks_actual_account_errors_failed_and_unchecked_health_has_no_probe(self):
+        fixture, connection = self.restored()
+        record = {'accountReadFailure': {'reasonCode': 'native-rpc-error'}}
+        connection.execute("UPDATE harness_health SET checked_at=NULL,record_json=? WHERE harness='codex'",
+                           (json.dumps(record),))
+        connection.commit()
+        connection.close()
+        board_upgrade.migrate(fixture['state'])
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as db:
+            stored = json.loads(db.execute("SELECT record_json FROM harness_health WHERE harness='codex'").fetchone()[0])
+        self.assertIsNone(stored['lastProbe'])
+        self.assertEqual(stored['accountReadFailure']['status'], 'failed')
+
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix='upgrade-base-fixture-'))
 

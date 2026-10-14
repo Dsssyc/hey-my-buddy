@@ -157,7 +157,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
                               'processState': {'shutdownConfirmed': False}}).encode()
         with controller_log_close_failure(log=None, receipt=receipt, exit_after_receipt=True) as state:
             result = self.controller_discovery()
-            self.assertEqual(result['discoveries'][0].get('reason'), 'HARNESS_UNAVAILABLE')
+            self.assertEqual(result['discoveries'][0].get('reason'), 'HARNESS_DISCOVERY_STOP_UNCONFIRMED')
             self.assertEqual(result['discoveries'][0]['status'], 'unknown')
             self.assertEqual(state['process'].poll(), 0)
 

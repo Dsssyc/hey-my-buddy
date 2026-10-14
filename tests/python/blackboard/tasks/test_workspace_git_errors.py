@@ -54,13 +54,27 @@ class GitErrorTests(unittest.TestCase):
                 self.assertEqual(error.details["returncode"], 128)
                 self.assertEqual(run.call_args.args[0][-2:], ["status", "--porcelain=v1"])
 
-    def test_timeout_entries_preserve_cause_and_captured_binary_outputs(self):
+    def test_timeout_entries_keep_unknown_and_bounded_diagnostics(self):
         for entry in self.run_entries():
             failure = subprocess.TimeoutExpired(["placeholder"], 60, output=self.stdout, stderr=self.stderr)
-            with self.subTest(entry=entry.__name__), patch.object(workspace.subprocess, "run", side_effect=failure) as run:
-                error = self.failure(lambda: entry(self.root, "rev-parse", "HEAD"))
-                self.diagnostics(error, run.call_args.args[0], "rev-parse")
-                self.assertIs(error.__cause__, failure)
+            with self.subTest(entry=entry.__name__), patch.object(workspace.subprocess, "run", side_effect=failure) as run, \
+                 self.assertRaises(BoardError) as caught:
+                entry(self.root, 'rev-parse', 'HEAD')
+            self.assertEqual(caught.exception.code, 'WORKSPACE_GIT_UNKNOWN')
+            self.diagnostics(caught.exception, run.call_args.args[0], "rev-parse")
+            self.assertIs(caught.exception.__cause__, failure)
+            self.assertEqual(run.call_args.kwargs["timeout"], workspace._GIT_TIMEOUT_SECONDS)
+            self.assertEqual(run.call_args.kwargs["env"]["GIT_NO_LAZY_FETCH"], "1")
+
+    def test_commit_and_inspect_do_not_reclassify_unknown_git_read(self):
+        unknown = BoardError("WORKSPACE_GIT_UNKNOWN", "controlled timeout")
+        with patch.object(workspace, "_line", side_effect=unknown):
+            with self.assertRaises(BoardError) as commit:
+                workspace._commit(self.root, "HEAD")
+            with self.assertRaises(BoardError) as inspect:
+                workspace.inspect(str(self.root))
+        self.assertIs(commit.exception, unknown)
+        self.assertIs(inspect.exception, unknown)
 
     def test_oserror_entries_preserve_cause_and_bound_the_exception_reason(self):
         for entry in self.run_entries():
@@ -99,16 +113,11 @@ class GitErrorTests(unittest.TestCase):
         """Drive the real stream/capture code with a controlled child handle."""
         state = {}
 
-        class BrokenInput(io.BytesIO):
-            def write(self, data):
-                raise BrokenPipeError("controlled broken pipe")
-
         class Child:
             returncode = None
             killed = False
 
             def __init__(self):
-                self.stdin = BrokenInput() if broken else io.BytesIO()
                 self.wait_calls = 0
 
             def poll(self):
@@ -117,20 +126,23 @@ class GitErrorTests(unittest.TestCase):
             def kill(self):
                 self.killed = True
 
-            def wait(self, timeout=None):
+            def communicate(self, input=None, timeout=None):
                 self.wait_calls += 1
+                if broken and input is not None:
+                    raise BrokenPipeError("controlled broken pipe")
                 if timed_out and timeout is not None:
                     failure = subprocess.TimeoutExpired(state["command"], timeout)
                     state["failure"] = failure
                     raise failure
                 self.returncode = -9 if self.killed else code
-                return self.returncode
+                return None, None
 
         child = Child()
         state["child"] = child
 
         def start(command, *, stdout, stderr, **kwargs):
             state["command"] = command
+            state["environment"] = kwargs["env"]
             stdout.write(self.stdout)
             stderr.write(self.stderr)
             if marks is not None:
@@ -163,17 +175,21 @@ class GitErrorTests(unittest.TestCase):
         self.diagnostics(error, state["command"], "fast-import")
         self.assertIsInstance(error.__cause__, BrokenPipeError)
         self.assertTrue(state["child"].killed)
-        self.assertEqual(state["child"].wait_calls, 1)
+        self.assertEqual(state["child"].wait_calls, 2)
         self.assertEqual(error.details["returncode"], -9)
 
     def test_fast_import_timeout_reaps_child_and_keeps_diagnostics_and_cause(self):
         state, start = self.importer(timed_out=True)
-        with patch.object(workspace.subprocess, "Popen", side_effect=start):
-            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}))
+        with patch.object(workspace.subprocess, "Popen", side_effect=start), self.assertRaises(BoardError) as caught:
+            workspace._write_objects(self.root, {self.oid: b"payload"})
+        error = caught.exception
+        self.assertEqual(error.code, 'WORKSPACE_GIT_UNKNOWN')
         self.diagnostics(error, state["command"], "fast-import")
         self.assertIs(error.__cause__, state["failure"])
         self.assertTrue(state["child"].killed)
         self.assertEqual(state["child"].wait_calls, 2)
+        self.assertEqual(state["failure"].timeout, workspace._GIT_TIMEOUT_SECONDS)
+        self.assertEqual(state["environment"]["GIT_NO_LAZY_FETCH"], "1")
 
     def test_fast_import_missing_marks_after_success_still_names_the_command(self):
         state, start = self.importer(code=0)

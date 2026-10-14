@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
-import time
 
 from ...errors import BoardError
 from ...private_dirs import context_root, ensure_private_dir
@@ -57,11 +55,15 @@ def prepare_router_review(document: dict, buddy: dict, native: Adapter,
         raise BoardError("router-review-unsupported", f"Router 不可用：{detail}")
     manifest = document.get("executionWorkspace")
     root, digest = router_input.prepare(manifest, ensure_private_dir(context_root(context, native.name)))
-    request = ReadOnlyStructuredRequest(str(root), router_prompt(router.render_prompt(document)), document["outputSchema"],
-                                        document["budget"], capture_evidence=document.get("captureEvidence") is True)
-    child_context = replace(context, spec={**context.spec, **buddy, "cwd": str(root)}, turn=None, agent_credential=None)
-    return role_seam.ReviewPreparation(harness=native.name, native=native, request=request, context=child_context,
-                                       mirror=(manifest, root, digest))
+    try:
+        request = ReadOnlyStructuredRequest(str(root), router_prompt(router.render_prompt(document)), document["outputSchema"],
+                                            document["budget"], capture_evidence=document.get("captureEvidence") is True)
+        child_context = replace(context, spec={**context.spec, **buddy, "cwd": str(root)}, turn=None, agent_credential=None)
+        return role_seam.ReviewPreparation(harness=native.name, native=native, request=request, context=child_context,
+                                           mirror=(manifest, root, digest))
+    except Exception:
+        router_input.discard(root)
+        raise
 
 
 class DecisionAdapter(Adapter):
@@ -75,8 +77,10 @@ class DecisionAdapter(Adapter):
                 return True, None
         return False, "No native harness has an eligible structured Router entrypoint"
 
-    def start(self, context: ExecutionContext) -> ProcessHandle:
+    def prepare(self, context: ExecutionContext) -> None:
         from ..harnesses.registry import adapter
+        if hasattr(self, "_preparation"):
+            raise BoardError("CONFLICT", "The Router already has a prepared call")
         document = context.decision_input
         if not isinstance(document, dict):
             raise BoardError("INVALID_ARGUMENT", "The Router has no frozen input")
@@ -85,12 +89,19 @@ class DecisionAdapter(Adapter):
         fast = document.get("routingMode") == "fast"
         context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         if fast:
-            preparation = prepare_router_fast(document, buddy, native, context)
+            self._preparation = prepare_router_fast(document, buddy, native, context)
         else:
-            preparation = prepare_router_review(document, buddy, native, context)
-        started = time.monotonic()
+            self._preparation = prepare_router_review(document, buddy, native, context)
+        self._prepared_context = context
+
+    def start(self, context: ExecutionContext) -> ProcessHandle:
+        if getattr(self, "_prepared_context", None) is not context:
+            raise BoardError("INVALID_ARGUMENT", "The Router preparation belongs to another attempt")
+        preparation = self._preparation
+        del self._preparation
+        del self._prepared_context
+        fast = isinstance(preparation, role_seam.FastPreparation)
         handle = role_seam.start_router_preparation(preparation)
-        handle.router_started = started
         if fast:
             handle.router_input = None
             handle.no_tool_cwd = preparation.no_tool_cwd
@@ -99,7 +110,10 @@ class DecisionAdapter(Adapter):
         return handle
 
     def collect(self, handle: ProcessHandle, context: ExecutionContext):
-        outcome = read_only.collect(handle)
+        outcome = getattr(handle, "router_native_outcome", None)
+        if outcome is None:
+            outcome = read_only.collect(handle)
+            handle.router_native_outcome = outcome
         native_result = outcome.result
         document = context.decision_input
         verification = None
@@ -110,13 +124,15 @@ class DecisionAdapter(Adapter):
                 pass  # Retain unexpected native files for inspection.
         if outcome.shutdown_confirmed and getattr(handle, 'router_input', None) is not None:
             verification = router_input.verify(*handle.router_input)
+            if verification["unchanged"] is None:
+                raise BoardError("router-input-unknown", "The frozen Router input could not yet be verified")
             # The mirror is a full copy of the frozen input. Once the native group is
             # proven stopped and the copy verified, the digests are the evidence; keep
-            # a changed copy for inspection only.
+            # an unverified or changed copy for inspection only.
             if verification["unchanged"]:
                 router_input.discard(handle.router_input[1])
         usage = {
-            "elapsedMs": round((time.monotonic() - handle.router_started) * 1000),
+            "elapsedMs": None,
             "toolCalls": None, "bytesRead": None,
             **(native_result.get("usage") or {}),
         }
@@ -148,7 +164,7 @@ class DecisionAdapter(Adapter):
             code = "router-review-unavailable"
             result.update(reason="The native review permission policy could not be verified")
         if verification is not None and not verification["unchanged"]:
-            code = "router-input-changed"
+            code = verification["code"]
         if code is None and outcome.status == "ok":
             try:
                 result["decision"] = router.validate_answer(native_result.get("rawAnswer"),

@@ -280,6 +280,89 @@ class WorkerSeamTests(unittest.TestCase):
 
 
 class RouterCallPointTests(unittest.TestCase):
+    def test_adapter_prepares_before_start_and_preserves_full_native_budget(self):
+        from types import SimpleNamespace
+        from hey_my_buddy.buddy.roles import router as calls
+
+        document = {"buddy": {"harness": "dsh"}, "routingMode": "review",
+                    "budget": {"timeoutSeconds": 60, "toolCalls": 2},
+                    "outputSchema": {"type": "object"}, "task": "choose", "buddies": []}
+        context = self.context(decision_input=document)
+        frozen = self.root / "frozen"
+        frozen.mkdir()
+        handle = SimpleNamespace()
+        adapter = calls.DecisionAdapter()
+        with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=self.Native()), \
+             mock.patch.object(calls.router_input, "prepare", return_value=(frozen, "digest")), \
+             mock.patch.object(controller, "start_router_preparation", return_value=handle) as start:
+            adapter.prepare(context)
+            start.assert_not_called()
+            self.assertIs(adapter.start(context), handle)
+        preparation = start.call_args.args[0]
+        self.assertEqual(preparation.request.budget, document["budget"])
+        self.assertEqual(handle.router_input, (None, frozen, "digest"))
+
+    def test_router_usage_keeps_the_native_reported_elapsed_time(self):
+        from types import SimpleNamespace
+        from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
+        from hey_my_buddy.buddy.roles import router as calls
+
+        context = self.context(decision_input={"buddy": {}, "routingMode": "review",
+                                               "budget": {"timeoutSeconds": 60}, "buddies": []})
+        native = AdapterOutcome(status="failed", result={"code": "deadline", "usage": {"elapsedMs": 200}},
+                                shutdown_confirmed=False)
+        with mock.patch.object(calls.read_only, "collect", return_value=native):
+            outcome = calls.DecisionAdapter().collect(SimpleNamespace(), context)
+        self.assertEqual(outcome.result["usage"]["elapsedMs"], 200)
+
+    def test_unknown_input_check_reuses_native_result_on_retry(self):
+        from types import SimpleNamespace
+        from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
+        from hey_my_buddy.buddy.roles import router as calls
+
+        context = self.context(decision_input={"buddy": {}, "routingMode": "review",
+                                               "budget": {"timeoutSeconds": 60},
+                                               "buddies": [{"buddyId": "chosen"}]})
+        handle = SimpleNamespace(router_input=(None, self.root, "digest"))
+        native = AdapterOutcome(status="ok", result={"rawAnswer": "native answer", "usage": {"elapsedMs": 200}},
+                                shutdown_confirmed=True)
+        unknown = {"unchanged": None, "code": "router-input-unknown", "manifestSha256": None}
+        verified = {"unchanged": True, "manifestSha256": None, "snapshotSha256": "digest"}
+        adapter = calls.DecisionAdapter()
+        with mock.patch.object(calls.read_only, "collect", return_value=native) as collect, \
+             mock.patch.object(calls.router_input, "verify", side_effect=[unknown, verified]) as verify, \
+             mock.patch.object(calls.router_input, "discard") as discard, \
+             mock.patch.object(calls.router, "validate_answer", return_value={"buddyId": "chosen"}) as answer:
+            with self.assertRaises(BoardError) as waiting:
+                adapter.collect(handle, context)
+            self.assertEqual(waiting.exception.code, "router-input-unknown")
+            self.assertEqual(native.result["rawAnswer"], "native answer")
+            answer.assert_not_called()
+            discard.assert_not_called()
+            result = adapter.collect(handle, context)
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.result["decision"]["buddyId"], "chosen")
+        self.assertEqual(result.result["usage"]["elapsedMs"], 200)
+        collect.assert_called_once_with(handle)
+        self.assertEqual(verify.call_count, 2)
+        discard.assert_called_once_with(self.root)
+
+    def test_failed_review_preparation_discards_its_mirror_before_start(self):
+        from hey_my_buddy.buddy.roles import router as calls
+
+        document = {"buddy": {"harness": "dsh"}, "routingMode": "review",
+                    "budget": {"timeoutSeconds": 60}, "outputSchema": {"type": "object"}}
+        frozen = self.root / "failed-preparation"
+        frozen.mkdir()
+        with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=self.Native()), \
+             mock.patch.object(calls.router_input, "prepare", return_value=(frozen, "digest")), \
+             mock.patch.object(calls.router, "render_prompt", side_effect=BoardError("INVALID_ARGUMENT", "bad prompt")), \
+             mock.patch.object(controller, "start_router_preparation") as start:
+            with self.assertRaises(BoardError):
+                calls.DecisionAdapter().prepare(self.context(decision_input=document))
+        self.assertFalse(frozen.exists())
+        start.assert_not_called()
+
     def setUp(self):
         self.module = FakeHarnessRun()
         registrations = mock.patch.dict(RUN_SEAMS, {"dsh": self.module})

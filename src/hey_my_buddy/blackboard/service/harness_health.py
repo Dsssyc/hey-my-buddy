@@ -109,7 +109,8 @@ class HarnessHealth:
         with self.board.db.write() as db:
             for name in HARNESSES:
                 if db.execute('SELECT 1 FROM harness_health WHERE harness=?', (name,)).fetchone() is None:
-                    db.execute('INSERT INTO harness_health(harness) VALUES(?)', (name,))
+                    db.execute('INSERT INTO harness_health(harness,record_json) VALUES(?,?)',
+                               (name, canonical_json({'lastProbe': None})))
                     from ..catalog.catalog import CATALOG_FACT_REASONS
                     db.execute("UPDATE buddies SET available=0,unavailable_reason='HARNESS_NOT_CHECKED'"
                                ' WHERE harness=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?))',
@@ -158,7 +159,7 @@ class HarnessHealth:
         if path is not None and (not isinstance(path, str) or len(path) > 4096 or not Path(path).expanduser().is_absolute()):
             raise BoardError('INVALID_ARGUMENT', 'path must be an absolute executable path, or null for automatic detection')
         with self.board.db.write() as db:
-            db.execute("INSERT INTO harness_health(harness,manual_path,revision) VALUES(?,?,1) ON CONFLICT(harness) DO UPDATE SET manual_path=excluded.manual_path,revision=revision+1,status='unknown',record_json='{}',checked_at=NULL,expires_at=NULL,scan_after=NULL", (name, str(Path(path).expanduser()) if path else None))
+            db.execute("INSERT INTO harness_health(harness,manual_path,revision,record_json) VALUES(?,?,1,?) ON CONFLICT(harness) DO UPDATE SET manual_path=excluded.manual_path,revision=revision+1,status='unknown',record_json=excluded.record_json,checked_at=NULL,expires_at=NULL,scan_after=NULL", (name, str(Path(path).expanduser()) if path else None, canonical_json({'lastProbe': None})))
             from ..catalog.catalog import CATALOG_FACT_REASONS
             db.execute("UPDATE buddies SET available=0,unavailable_reason='HARNESS_NOT_CHECKED'"
                        ' WHERE harness=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?))',
@@ -175,6 +176,9 @@ class HarnessHealth:
             if (self.board.directory / 'upgrade.json').exists():
                 return old
             now = utc_now()
+            if (not force and (old.get('lastProbe') or {}).get('status') == 'unknown'
+                    and (old.get('scanAfter') or '') > now):
+                return old
             if not force and not preflight:
                 if (old.get('scanAfter') or '') > now:
                     return old
@@ -186,7 +190,8 @@ class HarnessHealth:
             from ...buddy.harnesses.discovery import location_fingerprint
             signature = location_fingerprint(snapshot)
             unchanged = old.get('locationFingerprint') == signature
-            if not force and unchanged and (old.get('expiresAt') or '') > now:
+            if (not force and unchanged and (old.get('expiresAt') or '') > now
+                    and (old.get('lastProbe') or {}).get('status') != 'unknown'):
                 if name == "codex":
                     self._codex_account_read(old)
                 if stale_catalog_due:
@@ -207,10 +212,29 @@ class HarnessHealth:
             except Exception:
                 record = {'harness': name, 'status': 'unhealthy', 'reasonCode': 'HARNESS_HANDSHAKE_FAILED',
                           'remedy': 'Repair the native CLI installation and run hey-my-buddy harnesses with refresh:true'}
+            if record.get('status') == 'unknown':
+                with self.board.db.write() as db:
+                    if self._closed or (self.board.directory / 'upgrade.json').exists():
+                        return read_health(db, name)
+                    current = db.execute('SELECT revision,record_json FROM harness_health WHERE harness=?', (name,)).fetchone()
+                    if current['revision'] != generation:
+                        return read_health(db, name)
+                    retained = json.loads(current['record_json'])
+                    retained['lastProbe'] = {'status': 'unknown', 'reasonCode': record.get('reasonCode'),
+                                             'observedAt': now, 'candidates': record.get('candidates', [])}
+                    db.execute('UPDATE harness_health SET record_json=?,scan_after=? WHERE harness=?',
+                               (canonical_json(retained), _later(SCAN_SECONDS), name))
+                    self.board._append_event(db, 'harness.probe_unknown', payload={
+                        'harness': name, 'revision': generation, 'reasonCode': record.get('reasonCode')})
+                    head = self.board._head_of(db)
+                self.board._notify(head)
+                return self.get(name)
             retained = {key: old[key] for key in ("billingByProvider", "accountReadFailure") if key in old}
             if record.get("status") != "ready" or old.get("fingerprint") != record.get("fingerprint"):
                 retained.pop("billingByProvider", None)
             record = {**retained, **record, 'locationFingerprint': signature,
+                      'lastProbe': {'status': 'complete', 'observedAt': now,
+                                    'reasonCode': record.get('reasonCode')},
                       'systemSandbox': old['systemSandbox']}
             status = record.get('status')
             native_ready = status == 'ready'
@@ -347,7 +371,7 @@ class HarnessHealth:
         if error is not None:
             reason = error.code if isinstance(error, (BoardError, CodexProtocolError)) else 'HARNESS_ACCOUNT_READ_FAILED'
             failure = {'reasonCode': reason, 'errorType': type(error).__name__, 'message': str(error)[:512],
-                       'observedAt': utc_now()}
+                       'observedAt': utc_now(), 'status': 'unknown' if reason == 'deadline' else 'failed'}
             if reason == 'HARNESS_ACCOUNT_STOP_UNCONFIRMED':
                 self.invalidate('codex', health['revision'], reason, account_read_failure=failure)
                 return
@@ -359,7 +383,7 @@ class HarnessHealth:
             if row is None:
                 return
             if failure is not None:
-                self.board._append_event(db, 'harness.account_read_failed', payload={
+                self.board._append_event(db, 'harness.account_read_unknown' if failure['status'] == 'unknown' else 'harness.account_read_failed', payload={
                     'harness': 'codex', 'reasonCode': failure['reasonCode'], 'revision': health['revision'],
                     'currentRevision': row['revision'], 'accountReadFailure': failure})
             if row['revision'] == health['revision']:
@@ -375,12 +399,14 @@ class HarnessHealth:
                 if failure is not None:
                     record['accountReadFailure'] = failure
                 observed_at = utc_now()
+                billing_read = billing is not None
                 if billing is None:
                     from ...protocol.billing import fact
                     billing = fact('unknown', 'codex/account-read', observed_at)
                 provider = billing.get('provider', 'unknown')
                 billing = {key: value for key, value in billing.items() if key != 'provider'}
-                record['billingByProvider'] = {provider: billing}
+                if failure is None or failure['status'] != 'unknown' or billing_read:
+                    record['billingByProvider'] = {provider: billing}
                 db.execute("UPDATE harness_health SET record_json=? WHERE harness='codex'", (canonical_json(record),))
                 if recovered_stop:
                     db.execute("UPDATE harness_health SET status='ready',expires_at=? WHERE harness='codex'", (_later(READY_SECONDS),))

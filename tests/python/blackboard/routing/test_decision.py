@@ -452,14 +452,13 @@ class DecisionFailureTests(DecisionTestCase):
         self.seed(board)
         with patch('hey_my_buddy.buddy.roles.router_input.prepare', side_effect=BoardError('router-input-changed', 'changed')):
             decision = self.outcome(board, 'select_first')
-        # The generic Worker crossed start(), so an exception without a handle
-        # carries unknown shutdown even though the fixture never spawned native work.
-        self.assertEqual(decision['status'], 'failed')
-        self.assertEqual(decision['output']['code'], 'router-stop-unconfirmed')
+        # Preparation fails before start(), so the Worker has no child to stop.
+        self.assertEqual(decision['status'], 'needs-host')
+        self.assertEqual(decision['output']['code'], 'router-input-changed')
         self.assertEqual(self.own_receipt(board, decision)['result']['code'], 'router-input-changed')
         task = board.call('task_get', {'runId': decision['runId']})['task']
-        self.assertFalse(task['shutdownConfirmed'])
-        self.assertEqual(task['attemptState'], 'uncertain')
+        self.assertTrue(task['shutdownConfirmed'])
+        self.assertEqual(task['attemptState'], 'finished')
         self.assertEqual(board.store.decisions.health_summary()['inputChangedCount'], 1)
         self.readonly_start.assert_not_called()
 

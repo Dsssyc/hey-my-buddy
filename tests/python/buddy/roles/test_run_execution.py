@@ -64,7 +64,7 @@ class DiscoveryReceiptTests(unittest.TestCase):
         with self.assertRaises(BoardError) as caught:
             self._discover({"status": "ok", "catalog": _catalog("codex", "confirmed")},
                            stopped=False)
-        self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
+        self.assertEqual(caught.exception.code, "HARNESS_DISCOVERY_STOP_UNCONFIRMED")
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
 
     def test_a_failed_control_write_proves_no_controller_created(self):

@@ -25,6 +25,7 @@ from . import windows_paths
 from . import workspace_identity
 
 _WINDOWS = os.name == "nt"
+_GIT_TIMEOUT_SECONDS = 60
 
 
 _EXCLUSION_POLICY = {"version": 1, "kind": "git-standard",
@@ -55,7 +56,8 @@ def _git_command(root, *args):
     # Do not inherit a caller's private index, repository, worktree or config
     # override. Read operations must not refresh the source index or run hooks.
     git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    git_env.update(GIT_OPTIONAL_LOCKS="0", GIT_LITERAL_PATHSPECS="1", GIT_NO_REPLACE_OBJECTS="1", LC_ALL="C")
+    git_env.update(GIT_OPTIONAL_LOCKS="0", GIT_LITERAL_PATHSPECS="1", GIT_NO_REPLACE_OBJECTS="1",
+                   GIT_NO_LAZY_FETCH="1", LC_ALL="C")
     command = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
                "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false", "-C", str(root), *args]
     return command, git_env
@@ -93,12 +95,22 @@ def _git_failure(command, operation, *, stdout=None, stderr=None, returncode=Non
                       reason=reason, reasonTruncated=diagnostic_truncated or reason_truncated, **details)
 
 
+def _git_unknown(command, operation, error, *, stdout=None, stderr=None, returncode=None):
+    failure = _git_failure(command, operation, stdout=stdout, stderr=stderr,
+                           returncode=returncode, error=error)
+    return BoardError("WORKSPACE_GIT_UNKNOWN", "Git did not finish within the workspace wait limit",
+                      **failure.details)
+
+
 def _git(root, *args, data=None, env=None, allowed=(0,)):
     command, git_env = _git_command(root, *args)
     git_env.update(env or {})
     try:
-        result = subprocess.run(command, input=data, capture_output=True, env=git_env, timeout=60)
-    except (OSError, subprocess.TimeoutExpired) as error:
+        result = subprocess.run(command, input=data, capture_output=True, env=git_env,
+                                timeout=_GIT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as error:
+        raise _git_unknown(command, args[0], error, stdout=error.stdout, stderr=error.stderr) from error
+    except OSError as error:
         raise _git_failure(command, args[0], stdout=getattr(error, "stdout", None),
                            stderr=getattr(error, "stderr", None), error=error) from error
     if result.returncode not in allowed:
@@ -120,13 +132,17 @@ def _git_in(git_dir, *args, allowed=(0,)):
     (``rev-parse``, ``reflog show``) need no work tree at all.
     """
     git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    git_env.update(GIT_OPTIONAL_LOCKS="0", GIT_LITERAL_PATHSPECS="1", GIT_NO_REPLACE_OBJECTS="1", LC_ALL="C")
+    git_env.update(GIT_OPTIONAL_LOCKS="0", GIT_LITERAL_PATHSPECS="1", GIT_NO_REPLACE_OBJECTS="1",
+                   GIT_NO_LAZY_FETCH="1", LC_ALL="C")
     command = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
                "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false",
                "--git-dir", str(git_dir), *args]
     try:
-        result = subprocess.run(command, input=None, capture_output=True, env=git_env, timeout=60)
-    except (OSError, subprocess.TimeoutExpired) as error:
+        result = subprocess.run(command, input=None, capture_output=True, env=git_env,
+                                timeout=_GIT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as error:
+        raise _git_unknown(command, args[0], error, stdout=error.stdout, stderr=error.stderr) from error
+    except OSError as error:
         raise _git_failure(command, args[0], stdout=getattr(error, "stdout", None),
                            stderr=getattr(error, "stderr", None), error=error) from error
     if result.returncode not in allowed:
@@ -147,6 +163,8 @@ def _commit(root, ref):
     try:
         return _line(root, "rev-parse", "--verify", "--end-of-options", ref + "^{commit}")
     except BoardError as error:
+        if error.code == "WORKSPACE_GIT_UNKNOWN":
+            raise
         raise BoardError("WORKSPACE_REF_INVALID", "The workspace revision does not resolve to a commit", ref=ref) from error
 
 
@@ -168,6 +186,8 @@ def inspect(cwd: str) -> dict:
             git_dir = Path(_line(path, "rev-parse", "--absolute-git-dir")).resolve(strict=True)
             common = Path(_line(path, "rev-parse", "--path-format=absolute", "--git-common-dir")).resolve(strict=True)
         except BoardError as error:
+            if error.code == "WORKSPACE_GIT_UNKNOWN":
+                raise
             raise BoardError("WORKSPACE_UNSUPPORTED", "A non-bare Git checkout is required", cwd=str(path)) from error
         if not path.is_relative_to(root):
             raise BoardError("WORKSPACE_UNSUPPORTED", "cwd is outside the Git checkout root", cwd=str(path))
@@ -294,33 +314,26 @@ def _write_objects(root, objects):
                 raise _git_failure(command, "fast-import", error=error) from error
             code, recorded = 1, {}
             try:
-                stream = process.stdin
-                stream.write(b"feature done\n")
+                parts = [b"feature done\n"]
                 for number, (oid, data) in enumerate(objects.items(), start=1):
-                    stream.write(b"blob\nmark :%d\ndata %d\n" % (number, len(data)))
-                    stream.write(data)
-                    stream.write(b"\n")
-                stream.write(b"done\n")
-                stream.close()
-                code = process.wait(timeout=60)
+                    parts.extend((b"blob\nmark :%d\ndata %d\n" % (number, len(data)), data, b"\n"))
+                parts.append(b"done\n")
+                process.communicate(input=b"".join(parts), timeout=_GIT_TIMEOUT_SECONDS)
+                code = process.returncode
             except (OSError, subprocess.TimeoutExpired) as error:
-                # A broken input pipe is still a Git command failure. Reap our
-                # process before reading its captured output and retain the
-                # original exception even if shutdown itself encounters I/O.
+                # communicate bounds both pipe writes and the final wait. Reap
+                # our child before reading captured diagnostics.
                 try:
                     if process.poll() is None:
                         process.kill()
-                    process.wait()
+                    process.communicate()
                 except OSError:
                     pass
+                if isinstance(error, subprocess.TimeoutExpired):
+                    raise _git_unknown(command, "fast-import", error, stdout=output, stderr=diagnostics,
+                                       returncode=process.returncode) from error
                 raise _git_failure(command, "fast-import", stdout=output, stderr=diagnostics,
                                    returncode=process.returncode, error=error) from error
-            finally:
-                if not stream.closed:
-                    try:
-                        stream.close()
-                    except OSError:
-                        pass
             if code != 0:
                 raise _git_failure(command, "fast-import", stdout=output, stderr=diagnostics, returncode=code)
             try:
@@ -1895,7 +1908,9 @@ def _tree_entry(root, commit, path):
 def _is_ancestor(root, ancestor, descendant):
     try:
         _git(root, "merge-base", "--is-ancestor", ancestor, descendant)
-    except BoardError:
+    except BoardError as error:
+        if error.code == "WORKSPACE_GIT_UNKNOWN":
+            raise
         return False
     return True
 
@@ -2260,7 +2275,9 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retai
             result["reasons"].append("unsafe-path")
         try:
             actual = inspect(str(checkout_root))
-        except BoardError:
+        except BoardError as error:
+            if error.code == "WORKSPACE_GIT_UNKNOWN":
+                raise
             result["reasons"].append("checkout-missing")
             return result
         if actual["checkoutRoot"] != manifest["checkoutRoot"]:
@@ -2319,13 +2336,17 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
             expected += ((sealed["ref"], sealed["commit"]),)
         try:
             return all(_commit(repository, ref) == commit for ref, commit in expected)
-        except BoardError:
+        except BoardError as error:
+            if error.code == "WORKSPACE_GIT_UNKNOWN":
+                raise
             return False
 
     if not isinstance(sealed, dict) or not isinstance(sealed.get("snapshot"), dict):
         try:
             verify(manifest, require_unchanged=True)
-        except BoardError:
+        except BoardError as error:
+            if error.code == "WORKSPACE_GIT_UNKNOWN":
+                raise
             result["reasons"].append("unsealed-changes")
             return
         if not fixed_refs_match(False):
@@ -2341,7 +2362,9 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
         return
     try:
         _artifact_binding(manifest, manifest, sealed)
-    except BoardError:
+    except BoardError as error:
+        if error.code == "WORKSPACE_GIT_UNKNOWN":
+            raise
         result["reasons"].append("sealed-output-invalid")
         return
     if not fixed_refs_match(True):

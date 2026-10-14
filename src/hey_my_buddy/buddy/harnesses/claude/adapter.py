@@ -3,7 +3,7 @@
 P1 scope (ADR-012 section six): a ``--json-schema`` structured result, native
 permission requests converted to controller attention, and a freshly allocated
 ``--session-id`` per attempt with no native resume. Availability reports the
-native initialize metadata; bounded native metadata failures are cached
+native initialize metadata; unknown observations and failures are cached
 briefly so repeated
 capability reads do not respawn the CLI. The micro task Worker turn, the
 read-only structured call and model discovery all execute through the
@@ -58,9 +58,13 @@ class ClaudeAdapter:
         if not usable:
             return False, reason
         try:
-            _cached_native_metadata()
+            metadata = _cached_native_metadata()
         except BoardError as error:
             return False, error.message
+        unknown = next((item for item in metadata['catalog']['discoveries']
+                        if item['status'] == 'unknown'), None)
+        if unknown is not None:
+            return False, unknown.get('reason') or 'Native metadata is still unknown'
         return True, None
 
     def discovery_available(self) -> tuple[bool, str | None]:
@@ -129,9 +133,9 @@ def _cached_native_metadata() -> dict:
 def _load_native_metadata() -> dict:
     """Cached initialize metadata for repeated capability reads.
 
-    Bounded failures (a missing native metadata, an unusable CLI) are cached
-    too, so console and capability checks do not respawn the native CLI on
-    every call while the native read stays unavailable. ``discover_models``
+    Unknown observations and explicit failures are cached too, so console and
+    capability checks do not respawn the native CLI on every call while the
+    result stays unknown or unavailable. ``discover_models``
     always resets the cache for an explicit fresh discovery.
     """
     global _metadata_cache
