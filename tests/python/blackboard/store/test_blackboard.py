@@ -349,6 +349,11 @@ class TestCrashWindows(BoardTestCase):
         handle.pgid = 123
         handle.wait = lambda timeout: 0
         handle.shutdown_confirmed = lambda: True
+        handle.identity = lambda: {
+            'bootId': 'macos:00000000-0000-4000-8000-000000000001', 'pid': 123,
+            'startedAt': 10, 'processGroupId': 123, 'jobName': None,
+            'worker': {'bootId': 'macos:00000000-0000-4000-8000-000000000001',
+                       'pid': 122, 'startedAt': 8}}
         return handle
 
     def test_crash_before_spawn_releases_the_attempt_honestly(self):
@@ -379,185 +384,7 @@ class TestCrashWindows(BoardTestCase):
             board.store.active_work()["attempts"], [], "a never-spawned attempt must not retain resources"
         )
 
-    def test_a_killed_worker_keeps_the_surviving_child_uncertain_and_unretryable(self):
-        """Real fault injection: kill the worker while its child is confirmed alive.
-
-        Nothing in this test hand-writes an intent file. A real supervisor process
-        (whose handle this test owns) claims a real task, spawns a real child, and is
-        then SIGKILLed. The adapter starts children in their own session, so the
-        grandchild survives; the board must keep the attempt uncertain, keep its
-        resource claims and refuse to retry it, and only this test may clean up the
-        processes it created.
-        """
-        supervisor = None
-        pgid = None
-        try:
-            with self.daemon(env={"HMB_WORKER_ID": "idle-local"}):
-                environment = {
-                    **os.environ,
-                    "HMB_STATE_DIR": str(self.directory),
-                    "PYTHONPATH": str((Path(__file__).resolve().parents[4] / "src")),
-                    "VIRTUAL_ENV": "",
-                }
-                supervisor = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-m",
-                        "hey_my_buddy.buddy.runtime.supervisor",
-                        "--worker-id",
-                        "fault",
-                        "--state-dir",
-                        str(self.directory),
-                        "--capabilities",
-                        "fault-worker",
-                    ],
-                    env=environment,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-                code, task = self.cli(
-                    "execution-submit",
-                    json.dumps(
-                        {
-                            "requestId": "fault-1",
-                            "task": "long running work",
-                            "cwd": str(self.workdir()),
-                            "adapter": "command",
-                            # This test owns the final group cleanup; its child
-                            # must not expire naturally while recovery is observed.
-                            "argv": [sys.executable, "-c", "import signal; signal.pause()"],
-                            "expectedSeconds": 120,
-                            "requiredCapabilities": ["fault-worker"],
-                        }
-                    ),
-                )
-                self.assertEqual(code, 0, task)
-                run_id = task["runId"]
-                self.assertTrue(
-                    wait_for(lambda: self.cli("status", json.dumps({"runId": run_id}))[1].get("status") == "running", 30),
-                    "the fault worker must claim the task",
-                )
-                status = self.cli("status", json.dumps({"runId": run_id}))[1]
-                attempt_id = status["selectedAttemptId"]
-                marker_path = self.directory / "attempts" / run_id / attempt_id / "spawn.marker"
-                self.assertTrue(wait_for(lambda: marker_path.exists(), 20), "the worker must record its real spawn")
-                marker = json.loads(marker_path.read_text())
-                pgid = marker["pgid"]
-                self.assertIsInstance(pgid, int)
-                self.assertTrue(self._group_alive(pgid), "the spawned child must be alive before the fault")
-                # Kill only the worker process itself; the child leads its own session.
-                supervisor.kill()
-                supervisor.wait(timeout=20)
-                self.assertTrue(self._group_alive(pgid), "the child must survive its killed worker")
-            # A restarted daemon reconciles the attempt as uncertain and keeps its claims.
-            with self.daemon(env={"HMB_WORKER_ID": "idle-local"}):
-                status = self.cli("status", json.dumps({"runId": run_id}))[1]
-                self.assertEqual(status["attemptState"], "uncertain")
-                self.assertNotEqual(status["status"], "failed", "an unknown attempt is never reported as stopped")
-                self.assertTrue(self._group_alive(pgid), "the surviving child is still running")
-                code, retry = self.cli("execution-retry", json.dumps({"runId": run_id, "reason": "operator says it is gone"}))
-                self.assertEqual(code, 1)
-                self.assertEqual(retry["error"]["code"], "SHUTDOWN_UNCONFIRMED")
-                self.assertEqual(status["selectedAttemptId"], attempt_id, "no replacement generation may exist")
-                # A replacement worker with the same identity must not release it either:
-                # it no longer holds the handle, so it has no evidence of termination.
-                replacement = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-c",
-                        '''
-import json, os
-from pathlib import Path
-from hey_my_buddy.errors import BoardError
-from hey_my_buddy.protocol.client import BoardClient
-from hey_my_buddy.buddy.runtime.supervisor import main
-original = BoardClient.claim
-def observed_claim(self, *args, **kwargs):
-    try:
-        result = original(self, *args, **kwargs)
-    except BoardError as error:
-        outcome = error.code
-        raise
-    else:
-        outcome = "returned"
-        return result
-    finally:
-        path = Path(self.state_dir) / "workers/fault/replacement-claim.json"
-        path.write_text(json.dumps({"pid": os.getpid(), "outcome": outcome}))
-BoardClient.claim = observed_claim
-raise SystemExit(main())
-''',
-                        "--worker-id",
-                        "fault",
-                        "--state-dir",
-                        str(self.directory),
-                        "--capabilities",
-                        "fault-worker",
-                    ],
-                    env={
-                        **os.environ,
-                        "HMB_STATE_DIR": str(self.directory),
-                        "PYTHONPATH": str((Path(__file__).resolve().parents[4] / "src")),
-                        "VIRTUAL_ENV": "",
-                    },
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-                self.children.append(replacement)
-                # The test-only client records a completed claim after boot
-                # reconciliation. The replacement still owns no child handle.
-                from hey_my_buddy.cli.checks import lock_is_held
-
-                replacement_dir = self.directory / "workers" / "fault"
-                def replacement_ran_a_claim_pass() -> bool:
-                    path = replacement_dir / "replacement-claim.json"
-                    try:
-                        observation = json.loads(path.read_text())
-                    except (OSError, ValueError, KeyError):
-                        return False
-                    return (observation == {"pid": replacement.pid, "outcome": "WORKER_BUSY"}
-                            and lock_is_held(replacement_dir / "supervisor.lock"))
-
-                self.assertTrue(
-                    wait_for(replacement_ran_a_claim_pass, 30),
-                    "the replacement worker never completed a claim pass",
-                )
-                after = self.cli("status", json.dumps({"runId": run_id}))[1]
-                self.assertEqual(
-                    after["attemptState"],
-                    "uncertain",
-                    "a new process with the same worker id has no handle, so it must not resume or release the work",
-                )
-                self.assertIn(after["status"], ("running", "cancelling"))
-                self.assertEqual(after["selectedAttemptId"], attempt_id)
-                code, retry_after = self.cli("execution-retry", json.dumps({"runId": run_id, "reason": "still gone"}))
-                self.assertEqual(code, 1)
-                self.assertEqual(retry_after["error"]["code"], "SHUTDOWN_UNCONFIRMED")
-        finally:
-            # Clean up only the processes this test created.
-            if supervisor is not None and supervisor.poll() is None:
-                supervisor.kill()
-                supervisor.wait(timeout=20)
-            if pgid is not None and self._group_alive(pgid):
-                try:
-                    os.killpg(pgid, signal.SIGKILL)
-                except OSError:
-                    pass
-                wait_for(lambda: not self._group_alive(pgid), 20)
-
-    @staticmethod
-    def _group_alive(pgid: int) -> bool:
-        try:
-            os.killpg(pgid, 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except OSError:
-            return True
+    # Real killed-Worker recovery is covered by buddy/runtime/test_repair_recovery.py.
 
     def test_a_receipt_that_cannot_be_committed_is_replayed_never_re_executed(self):
         """A daemon outage past the retry budget must not run the task twice."""

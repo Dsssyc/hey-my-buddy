@@ -218,7 +218,11 @@ def _fold_event(event: dict, session: str, acc: RecordAccumulator) -> None:
     """Fold one already-attributed record event line into the accumulator."""
     kind = event.get("type")
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
-    if kind == "assistant/message":
+    if kind in ("turn/start", "user/message"):
+        # A previous turn/end does not close a later, unfinished prompt.
+        acc.turn_end_seen = False
+        acc.turn_end_completed = False
+    elif kind == "assistant/message":
         message = data.get("message") if isinstance(data.get("message"), dict) else {}
         source = message.get("source") if isinstance(message.get("source"), dict) else {}
         acc.fold_usage(data.get("usage"), {
@@ -303,12 +307,13 @@ def session_record_facts(sessions_root: Path, session_ids) -> dict | None:
     except OSError:
         acc.truncated = True
     usage = acc.usage()
-    if usage is None and acc.model is None and acc.last_assistant is None and acc.failure is None:
+    if usage is None and acc.model is None and acc.last_assistant is None and acc.failure is None and not acc.turn_end_seen:
         return None
     return {"usage": usage, "model": acc.model, "lastAssistant": acc.last_assistant,
             "lastAssistantSourceId": acc.last_assistant_id,
             "failure": acc.failure, "steps": acc.steps, "sessions": acc.sessions,
-            "recordsRead": len(candidates), "truncated": acc.truncated}
+            "recordsRead": len(candidates), "truncated": acc.truncated,
+            "turnEndSeen": acc.turn_end_seen, "turnEndCompleted": acc.turn_end_completed}
 
 
 # -- the resumed-turn boundary -------------------------------------------------------
@@ -418,6 +423,7 @@ def _unknown_resumed_facts(baseline: RecordBaseline, reason: str, records_read: 
     return {"usage": None, "model": None, "lastAssistant": None, "lastAssistantSourceId": None,
             "failure": None, "steps": [], "sessions": [baseline.session_id],
             "recordsRead": records_read, "truncated": False,
+            "turnEndSeen": False, "turnEndCompleted": False,
             "resumeBoundary": {"proven": False, "reason": reason,
                                "baselineFiles": len(baseline.files),
                                "baselineLines": sum(len(frozen.digests) for frozen in baseline.files)}}
@@ -492,7 +498,7 @@ def resumed_session_record_facts(sessions_root: Path, baseline: RecordBaseline) 
         if stream.truncated:
             acc.truncated = True
     usage = acc.usage()
-    if usage is None and acc.model is None and acc.last_assistant is None and acc.failure is None:
+    if usage is None and acc.model is None and acc.last_assistant is None and acc.failure is None and not acc.turn_end_seen:
         facts = _unknown_resumed_facts(baseline, "no-appendable-records", records_read)
     else:
         facts = {"usage": usage, "model": acc.model, "lastAssistant": acc.last_assistant,
@@ -500,6 +506,7 @@ def resumed_session_record_facts(sessions_root: Path, baseline: RecordBaseline) 
                  "failure": acc.failure, "steps": acc.steps,
                  "sessions": acc.sessions, "recordsRead": records_read,
                  "truncated": acc.truncated,
+                 "turnEndSeen": acc.turn_end_seen, "turnEndCompleted": acc.turn_end_completed,
                  "resumeBoundary": {"proven": True, "reason": None,
                                     "baselineFiles": len(baseline.files),
                                     "baselineLines": baseline_lines,

@@ -64,7 +64,6 @@ class EmptyClaimTests(BoardTestCase):
             empty = client.claim("w-poll", f"claim-poll-{index}", NONCE)
             self.assertIsNone(empty["claim"])
             self.assertEqual(empty["reason"], "no-queued-work")
-            self.assertEqual(empty["cursor"], board.store.head())
         # Repeating one id while idle rescans the board each time; the pre-0.10
         # ledger would hold one negative receipt that replays forever.
         for _ in range(5):

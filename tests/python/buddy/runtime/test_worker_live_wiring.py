@@ -176,6 +176,11 @@ class LoopRecordingClient(WorkerLiveWiringTests.RecordingClient):
         self.registrations.append(worker_id)
         return {"workerId": worker_id}
 
+    def call(self, operation, params):
+        if operation == "worker_recover":
+            return {"candidates": []}
+        raise AssertionError(f"unexpected worker call: {operation}")
+
     def claim(self, worker_id, claim_request_id, nonce, **kwargs):
         self.claims.append({"workerId": worker_id, "claimRequestId": claim_request_id,
                             "nonce": nonce})

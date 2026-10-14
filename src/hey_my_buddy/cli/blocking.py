@@ -165,6 +165,8 @@ def _envelope(
         "ok": success,
         "resultAvailable": bool(run.get("resultAvailable")),
         "resultDelivered": result_delivered,
+        "terminationReason": run.get("terminationReason"),
+        "interruptionEvidence": run.get("interruptionEvidence"),
         # For a micro task, cancellation/completion never implies that a
         # still-running descendant is stopped just because the parent is idle.
         "shutdownConfirmed": (
@@ -300,6 +302,8 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
     disposition = outcome.get("disposition")
     return {
         "status": result.get("status"),
+        "terminationReason": full.get("terminationReason"),
+        "interruptionEvidence": result.get("interruptionEvidence"),
         "tokenUsage": full.get("tokenUsage"),
         "quotaFailure": failure_view(result, harness=full.get("adapter")),
         "turn": None

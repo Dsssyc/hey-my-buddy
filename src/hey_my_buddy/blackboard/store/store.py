@@ -117,6 +117,7 @@ class BoardStore:
         # The micro-task workflow layer wraps this same store: it opens no second
         # authority and every one of its mutations is one of these transactions.
         self.workflow = WorkflowCoordinator(self, clock=self._clock)
+        self._recovery_lock = threading.Lock()
 
     # -- lifecycle -----------------------------------------------------------
     def initialize(self) -> None:
@@ -522,6 +523,8 @@ class BoardStore:
             view["resultAvailable"] = attempt["result_json"] is not None
             view["shutdownConfirmed"] = bool(attempt["shutdown_confirmed"])
             view["terminationReason"] = recorded.get("terminationReason")
+            view["interruptionEvidence"] = (recorded.get("result") or {}).get("interruptionEvidence")
+            view["selectedAttempt"]["processIdentity"] = self._process_identity(connection, attempt["attempt_id"])
             view["attemptGeneration"] = attempt["generation"]
             view["attemptState"] = attempt["execution_state"]
             view["workerId"] = attempt["worker_id"]
@@ -1752,7 +1755,7 @@ class BoardStore:
                     else:
                         blocker = "no-queued-work"
                 head = self._head_of(connection)
-                response = {"claim": None, "reason": blocker, "cursor": head}
+                response = {"claim": None, "reason": blocker}
                 # An empty claim is a transient observation, never an allocation
                 # receipt: no commands row exists to replay, so a retried
                 # claimRequestId scans the board again and can observe newly
@@ -2016,6 +2019,10 @@ class BoardStore:
         # newer attempt, and the superseded worker must not mutate the task even
         # though its nonce still verifies against its own immutable attempt row.
         self._require_effective_attempt(connection, attempt)
+        if connection.execute("SELECT 1 FROM attempt_interruptions WHERE attempt_id=? AND state='sealing'",
+                              (attempt_id,)).fetchone() is not None:
+            raise BoardError('ATTEMPT_FINISHED', 'Proven stop has fenced this attempt for interruption settlement',
+                             attemptId=attempt_id)
         return attempt, connection.execute("SELECT * FROM workers WHERE worker_id=?", (worker_id,)).fetchone()
 
     def _require_effective_attempt(self, connection: sqlite3.Connection, attempt: sqlite3.Row) -> None:
@@ -2213,10 +2220,17 @@ class BoardStore:
 
     def worker_progress(self, params: dict) -> dict:
         schemas.reject_unknown(
-            params, {"workerId", "attemptId", "generation", "nonce", "message", "phase", "data"}, "worker.progress"
+            params, {"workerId", "attemptId", "generation", "nonce", "message", "phase", "data", "processIdentity", "previousProcessStopped"}, "worker.progress"
         )
         message = schemas.optional_string(params, "message")
         phase = schemas.optional_string(params, "phase")
+        process_identity = params.get("processIdentity")
+        previous_stopped = schemas.optional_bool(params, 'previousProcessStopped', False)
+        if previous_stopped and process_identity is None:
+            raise BoardError('INVALID_ARGUMENT', 'previousProcessStopped requires a new process identity')
+        if process_identity is not None:
+            from ...protocol.process_identity import validate_process_identity
+            validate_process_identity(process_identity)
         # ``data`` carries bounded native activity and the control waiting reason;
         # unknown keys cannot smuggle tool arguments into either projection.
         # Activity is stored only when
@@ -2234,6 +2248,8 @@ class BoardStore:
             attempt, _worker = self._verify_attempt_actor(connection, params)
             if attempt["execution_state"] == "finished":
                 raise BoardError("ATTEMPT_FINISHED", "This attempt is already finished; progress is not accepted")
+            if process_identity is not None:
+                self._record_process_identity(connection, attempt["attempt_id"], process_identity, previous_stopped=previous_stopped)
             if phase in ("starting", "executing", "finalizing") and attempt["execution_state"] != "uncertain":
                 self._transition_attempt(connection, attempt, phase)
             now = self.now()
@@ -2325,6 +2341,9 @@ class BoardStore:
                 f"terminationReason must be one of {', '.join(TERMINATION_REASONS)}",
                 field="terminationReason",
             )
+        if termination_reason == "interrupted":
+            raise BoardError("INVALID_ARGUMENT", "Only service recovery can record an interrupted result",
+                             field="terminationReason")
         stop_reasons = {"wrap-up", "grace-expired", "forced-stop", "console-stop", "service-stop", "unknown-stop"}
         if termination_reason in stop_reasons and not shutdown_confirmed:
             raise BoardError("INVALID_ARGUMENT", "A stop termination reason requires confirmed shutdown",
@@ -3005,6 +3024,26 @@ class BoardStore:
         return {"artifacts": [self._artifact_view(row) for row in rows]}
 
     # -- recovery ------------------------------------------------------------
+    @staticmethod
+    def _process_identity(connection, attempt_id: str) -> dict | None:
+        from ..tasks.interruption import read_identity
+        return read_identity(connection, attempt_id)
+
+    @staticmethod
+    def _record_process_identity(connection, attempt_id: str, record: dict, *, previous_stopped: bool = False) -> None:
+        from ..tasks.interruption import record_identity
+        record_identity(connection, attempt_id, record, previous_stopped=previous_stopped)
+
+    def recover_interrupted_attempts(self, *, legacy_only: bool = False) -> int:
+        from ..tasks.interruption import recover
+        with self._recovery_lock:
+            return recover(self, legacy_only=legacy_only)
+
+    def worker_recover(self, params: dict) -> dict:
+        from ..tasks.interruption import worker_recover
+        with self._recovery_lock:
+            return worker_recover(self, params)
+
     def reconcile_startup(self) -> dict:
         """Make pre-restart in-flight attempts uncertain.
 
@@ -3068,6 +3107,7 @@ class BoardStore:
             head = self._head_of(connection)
         if summary["uncertain"] or head:
             self._notify(head)
+        summary["interrupted"] = self.recover_interrupted_attempts()
         return summary
 
     def mark_expired_leases(self, *, grace_seconds: int = 0) -> int:
@@ -3109,6 +3149,7 @@ class BoardStore:
             head = self._head_of(connection) if marked else 0
         if marked:
             self._notify(head)
+        self.recover_interrupted_attempts()
         return marked
 
     def _now_minus(self, seconds: int) -> str:

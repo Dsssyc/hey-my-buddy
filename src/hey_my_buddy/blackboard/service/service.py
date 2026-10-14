@@ -59,6 +59,7 @@ CONTROL_OPERATIONS = (
     "worker_register",
     "worker_claim",
     "worker_reconcile",
+    "worker_recover",
     "worker_renew",
     "worker_progress",
     "worker_live_attach",
@@ -908,6 +909,9 @@ class BoardService(_BaseResource):
     def worker_reconcile(self, request_json: str) -> str:
         return self._guard("worker.reconcile", request_json, self.store.worker_reconcile)
 
+    def worker_recover(self, request_json: str) -> str:
+        return self._guard("worker.recover", request_json, self.store.worker_recover)
+
     def worker_renew(self, request_json: str) -> str:
         return self._guard("worker.renew", request_json, self.store.worker_renew)
 
@@ -987,7 +991,18 @@ class WaitService(_BaseResource):
                     cursor=params.get("after", self.store.head()), retryAfterMs=250, capacity=self.admission.capacity,
                 )
             try:
-                return handler(params)
+                result = handler(params)
+                if worker_id is not None:
+                    # Worker waits need only one event to wake for claiming, but
+                    # must see uncertainty anywhere through the advertised head.
+                    result["recoveryNeeded"] = False
+                    if result["events"]:
+                        with self.store.db.read() as connection:
+                            result["recoveryNeeded"] = connection.execute(
+                                "SELECT 1 FROM events WHERE seq>? AND seq<=?"
+                                " AND kind IN ('attempt.uncertain','attempt.lease_expired') LIMIT 1",
+                                (params.get("after", 0), result["head"])).fetchone() is not None
+                return result
             finally:
                 self.admission.release(worker_id=worker_id)
 

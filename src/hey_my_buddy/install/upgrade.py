@@ -74,6 +74,17 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
             " AND c.state IN ('recorded','queued'))))"
         ).fetchall()
         unresolved = connection.execute("SELECT attempt_id FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1").fetchall()
+        if schema[0] == str(board_upgrade.BASE_SCHEMA_VERSION):
+            from ..blackboard.tasks.interruption import legacy_boot_evidence
+            # Schema 19 cannot record the complete identity. The new source may
+            # admit its explicit conversion only for unknown executions that this
+            # boot itself proves ended; it never cancels live work to make it idle.
+            stock = connection.execute(
+                "SELECT attempt_id,task_id,COALESCE(started_at,created_at) FROM attempts"
+                " WHERE execution_state='uncertain'").fetchall()
+            proven = {row[0]: row[1] for row in stock if legacy_boot_evidence(row[2])}
+            unresolved = [row for row in unresolved if row[0] not in proven]
+            active = [row for row in active if row[0] not in proven.values()]
         if active or unresolved:
             raise BoardError('UPGRADE_NOT_IDLE', 'Upgrade requires idle work and confirmed shutdown; no task was cancelled',
                              active=[{'runId': row[0], 'state': row[1]} for row in active[:20]], unresolvedAttempts=[r[0] for r in unresolved[:20]])

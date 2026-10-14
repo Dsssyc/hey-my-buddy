@@ -240,7 +240,7 @@ class ControlWaitTests(unittest.TestCase):
         renewal._request_cancel({'cancelRequested': True, 'stopInitiator': 'console'})
         handle = SimpleNamespace(pid=1, pgid=1, stop_initiator=None, cancel_requested=False,
                                  grace_deadline=None, force_stop_requested=False, grace_expired=False,
-                                 wait=lambda timeout: 0)
+                                 wait=lambda timeout: 0, identity=dict)
         self.worker.state_dir = self.root
         self.worker._release_controller_endpoint = Mock()
         self.worker._cleanup_attempt_credentials = Mock()

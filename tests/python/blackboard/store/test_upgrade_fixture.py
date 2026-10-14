@@ -74,6 +74,49 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.addCleanup(connection.close)
         return fixture, connection
 
+    def test_conversion_recovers_only_proven_preboot_unknown_stock(self):
+        from hey_my_buddy.errors import BoardError
+        from hey_my_buddy.blackboard.store.store import BoardStore
+        for older_boot in (True, False):
+            with self.subTest(older_boot=older_boot):
+                fixture, old = self.restored('stock-' + str(older_boot))
+                run_id = fixture['stableIds']['failed']
+                attempt_id = old.execute('SELECT selected_attempt_id FROM tasks WHERE task_id=?', (run_id,)).fetchone()[0]
+                old.execute("UPDATE attempts SET execution_state='uncertain',ownership='uncertain',result_json=NULL,"
+                            "shutdown_confirmed=0,finished_at=NULL,started_at='2026-01-01T00:00:00Z' WHERE attempt_id=?", (attempt_id,))
+                old.execute("UPDATE tasks SET state='running',active_attempt_id=?,queue_reason='attempt-uncertain-after-restart' WHERE task_id=?",
+                            (attempt_id, run_id))
+                old.execute("UPDATE workflow_runs SET state='executing',current_attempt_id=? WHERE run_id=?", (attempt_id, run_id))
+                old.execute("UPDATE workflow_turns SET state='running' WHERE attempt_id=?", (attempt_id,))
+                old.execute("UPDATE resource_claims SET state='retained' WHERE attempt_id=?", (attempt_id,))
+                old.commit()
+                old.close()
+                with mock.patch('hey_my_buddy.protocol.process_identity.boot_started_at', return_value=2_000_000_000 if older_boot else 1):
+                    if older_boot:
+                        self.assertEqual(upgrade.idle_snapshot(fixture['state'])['schema'], 19)
+                    else:
+                        with self.assertRaises(BoardError) as caught:
+                            upgrade.idle_snapshot(fixture['state'])
+                        self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
+                    board_upgrade.migrate(fixture['state'])
+                board = BoardStore(fixture['state'])
+                try:
+                    with board.db.read() as current:
+                        row = current.execute('SELECT * FROM attempts WHERE attempt_id=?', (attempt_id,)).fetchone()
+                        self.assertEqual(row['execution_state'], 'finished' if older_boot else 'uncertain')
+                        self.assertEqual(bool(row['shutdown_confirmed']), older_boot)
+                        self.assertEqual(current.execute('SELECT started_at FROM attempt_legacy_starts WHERE attempt_id=?',
+                                                         (attempt_id,)).fetchone()[0], '2026-01-01T00:00:00Z')
+                        self.assertIsNone(current.execute('SELECT 1 FROM attempt_process_identities WHERE attempt_id=?', (attempt_id,)).fetchone())
+                        if older_boot:
+                            receipt = json.loads(row['result_json'])
+                            self.assertEqual(receipt['terminationReason'], 'interrupted')
+                            self.assertEqual(receipt['result']['interruptionEvidence']['kind'], 'boot-changed')
+                            self.assertIn('partialWorkspaceSeal', receipt['result'])
+                            self.assertEqual(current.execute('SELECT state FROM workflow_turns WHERE attempt_id=?', (attempt_id,)).fetchone()[0], 'interrupted')
+                finally:
+                    board.db.close()
+
     def native_bindings(self, state):
         bindings = []
         for harness in ('codex', 'dsh'):
@@ -510,7 +553,8 @@ class UpgradeFixtureTests(unittest.TestCase):
             (task_id, json.dumps({'actor': 'console:active-session'})))
         connection.commit()
         connection.close()
-        board_upgrade.migrate(fixture['state'])
+        with mock.patch('hey_my_buddy.protocol.process_identity.boot_started_at', return_value=1):
+            board_upgrade.migrate(fixture['state'])
         with sqlite3.connect(fixture['state'] / 'board.sqlite3') as current:
             initiator, result = current.execute(
                 'SELECT stop_initiator,result_json FROM attempts WHERE attempt_id=?', (attempt_id,)).fetchone()

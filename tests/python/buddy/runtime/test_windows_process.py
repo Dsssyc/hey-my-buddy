@@ -52,7 +52,8 @@ class FakeAPI:
         self.count = 1
         self.fail_at = None
 
-    def create_job(self):
+    def create_job(self, name):
+        self.name = name
         self.events.append("create")
         return 77
 
@@ -97,6 +98,8 @@ class WindowsProcessTests(unittest.TestCase):
         child = self.launch(api, process)
         self.assertEqual(api.events[:3], ["create", ("assign", 77, 42), ("resume", 42)])
         self.assertIs(child._buddy_job.api, api)
+        self.assertEqual(child._buddy_job.name, api.name)
+        self.assertTrue(api.name.startswith("Local\\HeyMyBuddy-"))
         child._buddy_job.close()
 
     def test_assignment_failure_kills_suspended_child_before_returning(self):

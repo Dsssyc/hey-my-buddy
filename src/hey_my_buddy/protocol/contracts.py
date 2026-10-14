@@ -104,6 +104,9 @@ class BuddyControl:
     def worker_reconcile(self, request_json: str) -> str:
         ...
 
+    def worker_recover(self, request_json: str) -> str:
+        ...
+
     def worker_live_attach(self, request_json: str) -> str:
         ...
 

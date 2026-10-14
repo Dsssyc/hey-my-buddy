@@ -931,6 +931,7 @@ class DaemonPoolTests(CapacityTestCase):
             self.assertTrue(wait_for(lambda: client.get(runId=third)["status"] == "completed", timeout=90))
 
     def readonly_bootstrap_path(self):
+        import psutil
         # Test-only Python startup instrumentation reaches the independent daemon
         # and supervisors without adding a production capability override.
         root = self.directory / 'mock-native-startup'
@@ -945,7 +946,8 @@ class DaemonPoolTests(CapacityTestCase):
             '    target = _original(*args, **kwargs)\n'
             '    return {**target, "pythonPath": os.environ["PYTHONPATH"]}\n'
             'runtime.launch_target = _launch\n')
-        return os.pathsep.join([str(root), str(Path(__file__).resolve().parents[2]), str(Path(__file__).resolve().parents[4] / 'src')])
+        return os.pathsep.join([str(root), str(Path(psutil.__file__).resolve().parent.parent),
+                                str(Path(__file__).resolve().parents[2]), str(Path(__file__).resolve().parents[4] / 'src')])
 
     def test_decision_completes_on_the_pool_with_a_free_total_slot(self):
         catalog = self.catalog_fixture()

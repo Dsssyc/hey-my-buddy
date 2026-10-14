@@ -49,7 +49,7 @@ TERMINAL_MESSAGE_STATES = frozenset({"answered", "discarded", "unavailable"})
 #: The observed outcome of one attempt. The stop initiator is recorded separately.
 TERMINATION_REASONS = (
     "completed", "wrap-up", "grace-expired", "forced-stop", "console-stop",
-    "service-stop", "unknown-stop", "deadline", "harness-error", "transport-error",
+    "service-stop", "unknown-stop", "deadline", "harness-error", "transport-error", "interrupted",
 )
 
 WORKER_STATES = ("starting", "idle", "busy", "stopping", "lost")
@@ -146,6 +146,37 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempts_effective_unique ON attempts(task_id)
 CREATE INDEX IF NOT EXISTS attempts_active_idx ON attempts(execution_state);
 CREATE INDEX IF NOT EXISTS attempts_model_service_idx
     ON attempts(model_harness, model_provider, model_model) WHERE model_model IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS attempt_process_identities (
+    attempt_id          TEXT NOT NULL REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    ordinal             INTEGER NOT NULL CHECK (ordinal >= 0),
+    boot_id             TEXT NOT NULL,
+    root_pid            INTEGER NOT NULL CHECK (root_pid > 0),
+    root_started_at     INTEGER NOT NULL CHECK (root_started_at > 0),
+    process_group_id    INTEGER CHECK (process_group_id > 0),
+    job_name            TEXT,
+    worker_boot_id      TEXT NOT NULL,
+    worker_pid          INTEGER NOT NULL CHECK (worker_pid > 0),
+    worker_started_at   INTEGER NOT NULL CHECK (worker_started_at > 0),
+    PRIMARY KEY (attempt_id, ordinal),
+    CHECK ((process_group_id IS NOT NULL AND job_name IS NULL)
+        OR (process_group_id IS NULL AND job_name IS NOT NULL))
+);
+
+-- Only the schema-19 conversion writes these rows. Their timestamp is explicitly
+-- legacy evidence, never a second representation of a complete process identity.
+CREATE TABLE IF NOT EXISTS attempt_legacy_starts (
+    attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    started_at          TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS attempt_interruptions (
+    attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    evidence_kind       TEXT NOT NULL CHECK (evidence_kind IN ('boot-changed','identity-absent','worker-stopped')),
+    observed_at         TEXT NOT NULL,
+    state               TEXT NOT NULL CHECK (state IN ('sealing','settled')),
+    seal_error          TEXT
+);
 
 CREATE TABLE IF NOT EXISTS workers (
     worker_id           TEXT PRIMARY KEY,
@@ -461,7 +492,7 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
     -- Only an explicit full turn carries the Host's one-line reason.
     access_reason       TEXT,
     expected_seconds    INTEGER NOT NULL CHECK (expected_seconds > 0),
-    state               TEXT NOT NULL CHECK (state IN ('prepared','running','returned','failed')),
+    state               TEXT NOT NULL CHECK (state IN ('prepared','running','returned','failed','interrupted')),
     disposition         TEXT CHECK (disposition IN ('completed','assistance','attention','waiting')),
     outcome_json        TEXT,
     outcome_truncated_json TEXT,

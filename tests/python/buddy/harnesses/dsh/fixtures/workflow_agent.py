@@ -47,6 +47,9 @@ _SPEC.loader.exec_module(fake_agent)
 QUOTA_TASK = "Implement the fixture change"
 QUOTA_EDIT = "partial work preserved after quota failure\n"
 QUOTA_MESSAGE = "The first change is saved; verification remains."
+NETWORK_TASK = "Exercise the offline network-error fixture"
+NETWORK_EDIT = "partial work preserved after network error\n"
+NETWORK_MESSAGE = "The connection dropped after this edit; verification remains."
 OUTPUT_FILE = "mock-output.txt"
 CONTEXT_FILE = "continued-context.json"
 
@@ -116,6 +119,10 @@ class WorkflowAgent(fake_agent.FakeAgent):
         if quota and index == 1:
             self.run_quota_turn(message, turn_input)
             return
+        if self.workflow_mode == "auto" and index == 1 and (turn_input.get("context") or {}).get("task") == NETWORK_TASK:
+            self.run_quota_turn(message, turn_input, code="NETWORK_UNAVAILABLE",
+                                edit=NETWORK_EDIT, message_text=NETWORK_MESSAGE)
+            return
         self.prepare_workspace(message, turn_input)
         super().run_micro_task_prompt(message)
 
@@ -130,7 +137,8 @@ class WorkflowAgent(fake_agent.FakeAgent):
             (root / CONTEXT_FILE).write_text(json.dumps(turn_input.get("context") or {}))
         (root / OUTPUT_FILE).write_text(f"output for turn {turn_input.get('turnId')}\n")
 
-    def run_quota_turn(self, message: dict, turn_input: dict) -> None:
+    def run_quota_turn(self, message: dict, turn_input: dict, *, code: str | None = None,
+                       edit: str = QUOTA_EDIT, message_text: str = QUOTA_MESSAGE) -> None:
         """The offline quota death: real edits, one message, no finish call.
 
         The native failure lives only in this run's private session record - the
@@ -143,16 +151,17 @@ class WorkflowAgent(fake_agent.FakeAgent):
         self.last_session_id = session_id
         cwd = self.session_cwd.get(session_id)
         if cwd:
-            (Path(cwd) / "tracked.txt").write_text(QUOTA_EDIT)
+            (Path(cwd) / "tracked.txt").write_text(edit)
         self.notify_client("session/update", {"sessionId": session_id, "update": {
             "sessionUpdate": "agent_message_chunk",
-            "content": {"type": "text", "text": QUOTA_MESSAGE}}})
-        self.write_quota_record(session_id)
+            "content": {"type": "text", "text": message_text}}})
+        self.write_quota_record(session_id, code=code, message_text=message_text)
         self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": "refusal"}})
         fake_agent.log(self.log_path, {"event": "quota-turn", "sessionId": session_id,
-                                       "code": self.native_error_code})
+                                       "code": code or self.native_error_code})
 
-    def write_quota_record(self, session_id: str) -> None:
+    def write_quota_record(self, session_id: str, *, code: str | None = None,
+                           message_text: str = QUOTA_MESSAGE) -> None:
         """One synthetic ``session.v3`` rollout: partial usage, retained root
         assistant text, and the machine error turn end. A fixture written by the
         fake agent under this run's private session root, never a native record."""
@@ -172,14 +181,14 @@ class WorkflowAgent(fake_agent.FakeAgent):
             {"type": "assistant/message", "seq": 7, "data": {
                 "turn": 1, "step": 1,
                 "message": {"id": f"assistant-{session_id}-7", "role": "assistant",
-                            "content": [{"type": "text", "text": QUOTA_MESSAGE}],
+                            "content": [{"type": "text", "text": message_text}],
                             "source": source},
                 "usage": {"inputTokens": 1000, "outputTokens": 100, "totalTokens": 1150,
                           "cacheReadTokens": 50, "reasoningTokens": 10}}},
             {"type": "step/end", "seq": 8, "data": {"turn": 1, "step": 1}},
             {"type": "turn/end", "seq": 9, "data": {
                 "turn": 1, "reason": {"kind": "error",
-                                      "error": {"code": self.native_error_code,
+                                      "error": {"code": code or self.native_error_code,
                                                 "message": "provider wording never retained"}}}},
         ]
         lines = "".join(json.dumps(event) + "\n" for event in events)

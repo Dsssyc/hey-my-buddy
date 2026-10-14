@@ -198,6 +198,8 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "state",
                 "cancellation",
                 "status",
+                "terminationReason",
+                "interruptionEvidence",
                 "queueReason",
                 "awaitingHost",
                 "waitReason",
@@ -268,7 +270,7 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
         brief["finalArtifactId"] = view["finalArtifactId"]
     task = view.get("task")
     if isinstance(task, dict):
-        brief.update(_pick(task, ("acceptedAt", "acceptanceVerdict")))
+        brief.update(_pick(task, ("acceptedAt", "acceptanceVerdict", "terminationReason", "interruptionEvidence")))
     if "shutdown" in view:
         brief["shutdown"] = _shutdown(view["shutdown"])
     if counts:
@@ -404,6 +406,8 @@ _TASK_BRIEF = (
     "attemptState",
     "resultAvailable",
     "shutdownConfirmed",
+    "terminationReason",
+    "interruptionEvidence",
     "cancelRequestedAt",
     "acceptedAt",
     "acceptanceVerdict",

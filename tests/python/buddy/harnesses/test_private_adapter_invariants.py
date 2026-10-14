@@ -288,7 +288,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 if adapter.name == "codex":
                     environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
                     environment.update(HOME=str(fixture.root), CODEX_HOME=str(fixture.home),
-                        PYTHONPATH=str(Path(__file__).parents[4] / "src"), HMB_DEV_SOURCE="1",
+                        PYTHONPATH=os.pathsep.join((str(Path(__file__).parents[4] / "src"), os.environ.get('PYTHONPATH', ''))), HMB_DEV_SOURCE="1",
                         HMB_CODEX_CLI=str(codex_fast_tests.FIXTURE),
                         HMB_CODEX_FIXTURE_STATE=str(fixture.root / "trace.json"),
                         HMB_STATE_DIR=str(fixture.root / "state"), HMB_RUNTIME_ROOT=str(fixture.root / "runtime"))
@@ -308,6 +308,12 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 from hey_my_buddy.buddy.roles.structured_call import collect
                 outcome = collect(handle)
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
+                from hey_my_buddy.protocol.process_identity import native_process_journal_path, read_native_process_journal
+                journal_path = native_process_journal_path(context_root(context, adapter.name), handle.identity())
+                journal = read_native_process_journal(journal_path, {
+                    'taskId': context.task_id, 'attemptId': context.attempt_id, 'generation': context.generation})
+                self.assertIsNotNone(journal, 'Router recovery must find the native identities at the fixed attempt root')
+                self.assertEqual(journal['pending'], 0)
                 control = (handle.role_run_control if hasattr(handle, "role_run_control")
                            else json.loads((evidence / "no-tool-control.json").read_text()))
                 self.assertTrue(Path(control["nativeRoot"]).is_relative_to(context_root(context, adapter.name)))
@@ -358,7 +364,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 else:
                     env = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
                     env.update(HOME=str(fixture.root), CODEX_HOME=str(fixture.home),
-                        PYTHONPATH=str(Path(__file__).parents[4] / "src"), HMB_DEV_SOURCE="1",
+                        PYTHONPATH=os.pathsep.join((str(Path(__file__).parents[4] / "src"), os.environ.get('PYTHONPATH', ''))), HMB_DEV_SOURCE="1",
                         HMB_CODEX_CLI=str(codex_fast_tests.FIXTURE),
                         HMB_CODEX_FIXTURE_STATE=str(fixture.root / "trace.json"),
                         HMB_STATE_DIR=str(fixture.root / "state"), HMB_RUNTIME_ROOT=str(fixture.root / "runtime"))

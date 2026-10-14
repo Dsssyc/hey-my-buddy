@@ -104,22 +104,21 @@ class IdleWorkerTests(BoardTestCase):
         board = self.board()
         worker, thread = self.start_worker(board)
         original = worker.client.claim
-        claimed, empty_cursors = [], []
+        claimed, empty_claims = [], []
         self.execute_once(worker, claimed)
 
         def claim(*args, **kwargs):
             response = original(*args, **kwargs)
             if response["claim"] is None:
-                empty_cursors.append(response["cursor"])
+                empty_claims.append(response["reason"])
                 self.submit(board)
-                self.assertLess(response["cursor"], board.store.head())
             return response
 
         worker.client.claim = claim
         thread.start()
         thread.join(1)
         self.assertFalse(thread.is_alive(), "the task queued before subscription was missed")
-        self.assertEqual(len(empty_cursors), 1)
+        self.assertEqual(len(empty_claims), 1)
         self.assertEqual(len(claimed), 1)
 
     def test_wait_timeouts_only_continue_waiting_without_claims_or_spool_writes(self):
@@ -127,11 +126,18 @@ class IdleWorkerTests(BoardTestCase):
         worker, thread = self.start_worker(board)
         original_wait = worker.client.wait_events
         cursors = []
+        quiet_baseline = []
 
         def wait(**params):
             page = original_wait(**params)
+            if not page["timedOut"]:
+                # Startup registration can wake this new Worker before it reaches
+                # steady waiting. Only empty windows belong to this observation.
+                return page
+            if not quiet_baseline:
+                quiet_baseline.extend((claim.call_count, write.call_count))
+            self.assertEqual((claim.call_count, write.call_count), tuple(quiet_baseline))
             cursors.append(params["after"])
-            self.assertTrue(page["timedOut"])
             if len(cursors) == 3:
                 worker.stop.set()
             return page
@@ -143,8 +149,7 @@ class IdleWorkerTests(BoardTestCase):
             thread.start()
             thread.join(3)
             self.assertFalse(thread.is_alive())
-            self.assertEqual(claim.call_count, 1)
-            self.assertEqual(write.call_count, 1)
+            self.assertEqual((claim.call_count, write.call_count), tuple(quiet_baseline))
         self.assertEqual(len(cursors), 3)
         self.assertEqual(len(set(cursors)), 1)
 

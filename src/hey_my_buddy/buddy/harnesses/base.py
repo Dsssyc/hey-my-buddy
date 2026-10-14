@@ -17,8 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from ...errors import BoardError
-
-COMMAND_STOP_GRACE_SECONDS = 3.0
+from ...protocol.process_identity import COMMAND_STOP_GRACE_SECONDS
 
 
 @dataclass
@@ -239,12 +238,18 @@ class Adapter:
 class ProcessHandle:
     """One owned child process group or Windows Job.
 
-    Only the object that created the child may signal it: stored PIDs are diagnostic
-    values and a restarted service never sends signals from them.
+    The creator owns normal cancellation. A replacement Worker can stop an
+    orphan only after the full durable identity and absent creator are checked.
     """
 
     def __init__(self, process: subprocess.Popen, *, own_group: bool, log_paths: dict):
         self.process = process
+        # Capture this before an adapter can poll and reap a fast child. A
+        # missing creation time remains unknown even if its PID is later reused.
+        from ...protocol.process_identity import _creation_time
+
+        self.process_started_at = (_creation_time(process.pid)
+                                   if type(process.pid) is int and process.pid > 0 else None)
         self.own_group = own_group
         self.log_paths = log_paths
         self.cancel_requested = False
@@ -270,10 +275,20 @@ class ProcessHandle:
                 self.pgid = os.getpgid(process.pid)
             except OSError:
                 self.pgid = process.pid
+        intent = vars(process).get("_buddy_native_intent")
+        if intent is not None:
+            from ...protocol.process_identity import record_native_process_spawn
+
+            record_native_process_spawn(intent, self)
 
     @property
     def pid(self) -> int | None:
         return self.process.pid
+
+    def identity(self) -> dict:
+        from ...protocol.process_identity import capture_process_identity
+
+        return capture_process_identity(self)
 
     @property
     def finished(self) -> bool:
