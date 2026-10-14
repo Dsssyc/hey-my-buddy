@@ -32,7 +32,7 @@ Caller-owned external agent -- BoardClient / C-Two --> daemon
   claims external tasks and reports its own results
 ```
 
-The daemon and each supervisor are separate OS processes. A supervisor runs the Worker object in its own process and restarts that execution loop after an exception. The Worker owns the adapter child handles and enforces positive execution deadlines while the daemon is unavailable. An explicit `timeoutSeconds: 0` leaves the attempt running until completion, explicit cancellation or another actual process outcome; the Worker still renews its lease and keeps durable receipts. External agents participate directly through RPC. Stored PIDs are diagnostic values, never sufficient authority to signal a process.
+The daemon and each supervisor are separate OS processes. A supervisor runs the Worker object in its own process and restarts that execution loop after an exception. The Worker owns the adapter child handles. It stops nothing on its own clock except a Router call, whose hard budget (`routerBudgetSeconds`, from the Router settings) it enforces even while the daemon is unavailable; a micro task or command runs until completion, explicit cancellation or another actual process outcome, and the Worker still renews its lease and keeps durable receipts. External agents participate directly through RPC. Stored PIDs are diagnostic values, never sufficient authority to signal a process.
 
 ## C-Two surface
 
@@ -48,7 +48,7 @@ hey-my-buddy transports bounded JSON strings through C-Two 0.7.4's named Python 
 
 ## Data model
 
-One schema-versioned SQLite database (`board.sqlite3`, schema version 19) owns every authoritative fact in 49 tables. Startup accepts schema 19 only; the upgrade base is 0.35.0 with the same schema, so no upgrade is pending (the [archive upgrade](operations.md#archive-upgrade) from schema 18 ran on the daily board on 2026-10-14 and is gone), and replaced by a new board that carries only the settings.
+One schema-versioned SQLite database (`board.sqlite3`, schema version 19) owns every authoritative fact in 49 tables. Startup accepts schema 20 only; a schema-19 board written by the upgrade base 0.35.0 is converted by the explicit upgrade during an install (the [archive upgrade](operations.md#archive-upgrade) from schema 18 ran on the daily board on 2026-10-14 and is gone), and replaced by a new board that carries only the settings.
 
 | Group | Tables |
 | --- | --- |

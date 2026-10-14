@@ -53,7 +53,7 @@ uvx --from /absolute/path/hey_my_buddy-0.35.0-py3-none-any.whl hey-my-buddy inst
 
 ```sh
 HMB_CLI="$HOME/.agents/skills/hey-my-buddy/scripts/hey-my-buddy"
-"$HMB_CLI" submit '{"requestId":"doc-links-1","hostId":"codex","task":"检查本仓库 README 中的相对链接，只新增 buddy-doc-review.md，并列出失效链接和修复建议。","cwd":"/abs/repo","timeoutSeconds":3600,"executionWorkspace":{"kind":"worktree","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["buddy-doc-review.md"]}}'
+"$HMB_CLI" submit '{"requestId":"doc-links-1","hostId":"codex","task":"检查本仓库 README 中的相对链接，只新增 buddy-doc-review.md，并列出失效链接和修复建议。","cwd":"/abs/repo","expectedSeconds":3600,"executionWorkspace":{"kind":"worktree","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["buddy-doc-review.md"]}}'
 "$HMB_CLI" get '{"runId":"<returned-runId>"}'
 "$HMB_CLI" await '{"runId":"<returned-runId>"}'
 ```
@@ -82,7 +82,7 @@ Codex Host 为每个运行中的微任务派生一个只做监控的原生子代
 
 等待超时、关闭终端或连接中断都不会取消任务。可以用同一个 `runId` 通过 `await`、`get` 或 `status` 接回；可用显式 `cancel` 停止微任务，并且只有拿到真实停止证据才报告已关闭。每次接续都会创建新的 attempt。DSH 与 ZCode 仅在微任务、checkout 和 buddy 绑定都匹配时恢复已有证据确认的原生会话，Codex 也只恢复其精确绑定的原生线程；没有已确认的会话或 buddy 发生变化时，harness 会重建新的根会话。守护服务重启后，仍持有子进程的同一 Worker 会按身份重连不确定的 attempt 并清除重启等待原因，其他进程无权接管；已落盘的不变完成收据只重放、不重新执行。结果会记录真实终止原因（正常完成、用户取消、执行到期、harness 错误或传输故障），到期不会被显示成用户取消。有界活动投影展示当前阶段、最后原生活动时间和诚实计数；空日志、缺失 PID 或静态会话列表都不能证明进程已停止。请区分请求的、已解析的和实际观测到的模型身份。
 
-用户授权的长任务可显式设置 `"timeoutSeconds": 0`，使执行没有总时限；省略该字段仍默认 1800 秒。Host 仍可主动取消，单次 `await` 等待结束也不会停止任务。选择该配置前可查阅[执行期限与等待窗口](docs/reference/cli.md#defaults-and-bounds)。
+`expectedSeconds`（默认 1800 秒）是 Host 该回头看一眼的时刻，不是期限：到点不停止任何东西，也没有“不设预期”的写法。只有 Router 调用保留硬预算，取自 Router 设置。Host 仍可主动取消，单次 `await` 等待结束也不会停止任务。选择该配置前可查阅[执行期限与等待窗口](docs/reference/cli.md#defaults-and-bounds)。
 
 服务和 Worker 从上述稳定私有运行时执行。日常命令直接执行 active 运行时自己的 Python，不经过 `uv`；`uv` 只用于安装与升级。全新黑板位于 `~/.local/share/hey-my-buddy/state`；待执行的升级把旧黑板与历史证据保留为校验过的归档，新建只带走设置的黑板。工作目录和 Git worktree 都不是操作系统沙箱。
 

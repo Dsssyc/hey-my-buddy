@@ -53,7 +53,7 @@ Then start with a bounded micro task:
 
 ```sh
 HMB_CLI="$HOME/.agents/skills/hey-my-buddy/scripts/hey-my-buddy"
-"$HMB_CLI" submit '{"requestId":"doc-links-1","hostId":"codex","task":"Check the relative links in this repository README, add only buddy-doc-review.md, and report broken links with fixes.","cwd":"/abs/repo","timeoutSeconds":3600,"executionWorkspace":{"kind":"worktree","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["buddy-doc-review.md"]}}'
+"$HMB_CLI" submit '{"requestId":"doc-links-1","hostId":"codex","task":"Check the relative links in this repository README, add only buddy-doc-review.md, and report broken links with fixes.","cwd":"/abs/repo","expectedSeconds":3600,"executionWorkspace":{"kind":"worktree","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["buddy-doc-review.md"]}}'
 "$HMB_CLI" get '{"runId":"<returned-runId>"}'
 "$HMB_CLI" await '{"runId":"<returned-runId>"}'
 ```
@@ -82,7 +82,7 @@ Independent work runs in parallel by default under one machine-wide concurrent-a
 
 A wait timeout, a closed terminal or a lost connection never cancels work. Recover the same `runId` with `await`, `get` or `status`. Use an explicit `cancel` to stop a micro task; shutdown is reported only with real stop evidence. Each continuation gets a new attempt. DSH and ZCode resume a proven native session only when its micro task, checkout and buddy binding matches, and Codex resumes only its exact bound native thread. Without a proven session or after a buddy change, the harness reconstructs a new root session. After a daemon restart the worker that still holds the child reattaches the uncertain attempt by identity and clears the restart waiting reason, while a different process is refused; an immutable completion receipt is replayed rather than executed again. Results record why they really stopped (completion, user cancel, deadline, harness error or transport failure), so an expiry is never displayed as a user cancel. A bounded activity projection shows phase, last native/tool activity and honest counters; an empty log, a missing PID or a static session list never proves a process stopped. Keep requested, resolved and actually observed model identity distinct.
 
-For user-authorized long tasks, `"timeoutSeconds": 0` explicitly removes the execution deadline; the ordinary default remains 1800 seconds. The Host can still cancel the task, and a bounded `await` call ending does not stop it. Read [execution duration and wait windows](docs/reference/cli.md#defaults-and-bounds) before choosing this option.
+`expectedSeconds` (default 1800) is the moment the Host should look again, not a deadline: nothing is stopped when it passes, and there is no form without an expectation. Only a Router call keeps a hard budget, taken from the Router settings. The Host can still cancel the task, and a bounded `await` call ending does not stop it. Read [execution duration and wait windows](docs/reference/cli.md#defaults-and-bounds) before choosing this option.
 
 The service and its Workers run from that stable private runtime. Daily commands execute the active runtime's own Python directly, without `uv`; `uv` is used only by install and upgrade. A fresh board lives under `~/.local/share/hey-my-buddy/state`; the pending upgrade keeps the old board and historical evidence in a verified archive and creates a new board carrying only settings. Directories and Git worktrees are not OS sandboxes.
 

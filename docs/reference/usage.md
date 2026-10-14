@@ -60,7 +60,7 @@ Delegate one independently reviewable outcome per micro task: about one module o
 - diagnose and fix the read regression that test exposes;
 - collect the before/after timings and write the report.
 
-Long work may explicitly set `"timeoutSeconds": 0` to run without an overall execution deadline. An omitted value still defaults to 1800 seconds; a positive value must be 10–86400 seconds. The no-deadline choice belongs to that task and any helper explicitly configured the same way. `await` remains a bounded, resumable caller wait; its window does not end an active execution. Observe long work and use the Host's ordinary `cancel` command if it must stop.
+`expectedSeconds` is the expected duration of the work, 1–86400 seconds, default 1800: the moment the Host should look again, not a deadline. Nothing is stopped when it passes, and there is no form without an expectation; the former `timeoutSeconds` is refused with a hint to rename it. `await` remains a bounded, resumable caller wait; its window does not end an active execution. Observe long work and use the Host's ordinary `cancel` command if it must stop.
 
 - micro task and why; expected inputs and outputs;
 - the working directory and the commands that check the work;
@@ -76,7 +76,7 @@ New macro tasks may carry an optional `description` of at most 300 characters: o
 ### 4. Submit the micro task once
 
 ```sh
-"$HMB" submit '{"requestId":"state-kernel-1","hostId":"codex-state-kernel","macroTask":{"title":"State kernel reliability"},"title":"Implement the agreed state transition","task":"Implement the agreed state transition in src/state.ts, add regression tests in tests/state.test.ts and run the package tests. Preserve unrelated files. Report completed only after checks.","cwd":"/abs/repo","timeoutSeconds":28800,"executionWorkspace":{"kind":"worktree","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["src/state.ts","tests/state.test.ts"]}}'
+"$HMB" submit '{"requestId":"state-kernel-1","hostId":"codex-state-kernel","macroTask":{"title":"State kernel reliability"},"title":"Implement the agreed state transition","task":"Implement the agreed state transition in src/state.ts, add regression tests in tests/state.test.ts and run the package tests. Preserve unrelated files. Report completed only after checks.","cwd":"/abs/repo","expectedSeconds":28800,"executionWorkspace":{"kind":"worktree","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["src/state.ts","tests/state.test.ts"]}}'
 "$HMB" get '{"runId":"<runId>"}'
 ```
 
