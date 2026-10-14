@@ -24,16 +24,16 @@ function catalog(): Buddy[] {
     available: true, enabled: enabled.has([p.harness, p.model, p.effort].join(":")), capabilities: [],
     contextWindow: null, source: "catalog:fixture", description: "" }));
 }
-function goal(runId: string, sourceHostId = "codex-source", projectId = "source-project"): Task {
+function microTask(runId: string, sourceHostId = "codex-source", projectId = "source-project"): Task {
   return { runId, task: `目标 ${runId}`, status: "queued", owner: "worker:unrelated-label", cwd: `/runtime/worktrees/${runId}`,
     revision: 1, createdAt: "2026-09-24T10:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
-    delegation: { kind: "goal", sourceHostId, currentHostId: "current-host", parentRunId: null, rootRunId: runId,
+    lineage: { kind: "micro-task", sourceHostId, currentHostId: "current-host", parentRunId: null, rootRunId: runId,
       project: { id: projectId, label: projectId, path: `/source/${projectId}` },
       buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } } };
 }
 function workflow(task: Task): Workflow {
-  return { governed: true, runId: task.runId, hostId: "current-host", ownerGeneration: 2, revision: 1,
+  return { runId: task.runId, hostId: "current-host", ownerGeneration: 2, revision: 1,
     state: "awaiting-host", awaitingHost: true, waitReason: "assistance", continuationCount: 0,
     shutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false },
     workspace: { path: task.cwd, kind: "worktree", access: "write", inputCommit: "input", manifestSha256: "hash" },
@@ -46,7 +46,7 @@ function fixture(records: Task[] = []) {
   // The board-wide awaiting-Host root count the slim snapshot carries; the
   // fixture computes it with the server's own dedup semantics.
   const pendingCount = new Set(records.filter(t => t.workflow?.awaitingHost)
-    .map(t => t.delegation?.rootRunId || t.runId)).size;
+    .map(t => t.lineage?.rootRunId || t.runId)).size;
   const snapshot: Snapshot = { csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
@@ -64,9 +64,9 @@ function fixture(records: Task[] = []) {
     throw new Error(`Unexpected write: ${operation}`);
   });
   const tasks = vi.fn(async (query: TaskQuery) => {
-    const runs = records.filter(t => (!query.rootsOnly || t.delegation?.kind === "goal")
-      && (!query.projectId || t.delegation?.project.id === query.projectId)
-      && (!query.hostId || t.delegation?.sourceHostId === query.hostId)
+    const runs = records.filter(t => (!query.rootsOnly || t.lineage?.kind === "micro-task")
+      && (!query.projectId || t.lineage?.project.id === query.projectId)
+      && (!query.hostId || t.lineage?.sourceHostId === query.hostId)
       && (!query.query || t.task.includes(query.query)));
     return { runs: structuredClone(runs), total: runs.length, nextCursor: null };
   });
@@ -117,8 +117,8 @@ describe("desktop console", () => {
   });
 
   it("shows the server's board-wide pending count in the top bar, never a count inferred from rows", async () => {
-    const f = fixture([goal("alpha")]);
-    // The fixture's rows contain no awaiting-Host goal at all; the count only
+    const f = fixture([microTask("alpha")]);
+    // The fixture's rows contain no awaiting-Host micro task at all; the count only
     // comes from the slim snapshot's server-side field.
     f.snapshot.tasks.pendingCount = 5;
     render(<App suppliedApi={f.api} />);
@@ -184,8 +184,8 @@ describe("desktop console", () => {
   });
 
   it("keeps history filters and scroll across main pages and uses backend source attribution", async () => {
-    const root = goal("alpha"), other = goal("beta", "other-host", "other-project");
-    const helper = { ...goal("helper"), delegation: { ...root.delegation!, kind: "helper" as const, parentRunId: "alpha", rootRunId: "alpha" } };
+    const root = microTask("alpha"), other = microTask("beta", "other-host", "other-project");
+    const helper = { ...microTask("helper"), lineage: { ...root.lineage!, kind: "helper" as const, parentRunId: "alpha", rootRunId: "alpha" } };
     const f = fixture([root, other, helper]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
@@ -217,8 +217,8 @@ describe("desktop console", () => {
     expect(within(detail).getByText("alpha")).toBeTruthy();
   });
 
-  it("labels each project group count explicitly for goals and internal records", async () => {
-    const f = fixture([goal("alpha"), goal("alpine")]);
+  it("labels each project group count explicitly for micro tasks and internal records", async () => {
+    const f = fixture([microTask("alpha"), microTask("alpine")]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
@@ -230,7 +230,7 @@ describe("desktop console", () => {
   });
 
   it("reloads the visible filtered history when the local history refresh is pressed", async () => {
-    const f = fixture([goal("old")]);
+    const f = fixture([microTask("old")]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
@@ -239,11 +239,11 @@ describe("desktop console", () => {
     await screen.findByRole("button", { name: /目标 old/ });
     const scroll = screen.getByLabelText("委派条目");
     scroll.scrollTop = 240;
-    f.records.unshift({ ...goal("outside", "another-host", "other-project"), createdAt: "2026-09-24T11:00:00Z" });
+    f.records.unshift({ ...microTask("outside", "another-host", "other-project"), createdAt: "2026-09-24T11:00:00Z" });
     await user.click(screen.getByRole("button", { name: "刷新全部执行记录" }));
     await waitFor(() => expect((screen.getByRole("button", { name: "刷新全部执行记录" }) as HTMLButtonElement).disabled).toBe(false));
     expect(screen.queryByRole("button", { name: /条新记录/ })).toBeNull();
-    f.records.unshift({ ...goal("new"), createdAt: "2026-09-24T11:00:00Z" });
+    f.records.unshift({ ...microTask("new"), createdAt: "2026-09-24T11:00:00Z" });
     await user.click(screen.getByRole("button", { name: "刷新全部执行记录" }));
     expect(await screen.findByRole("button", { name: /条新记录 · 回到最新/ })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /目标 new/ })).toBeNull();
@@ -259,19 +259,19 @@ describe("desktop console", () => {
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await waitFor(() => expect(f.tasks).toHaveBeenCalledTimes(1));
     await screen.findByRole("heading", { name: "没有匹配的委派" });
-    f.records.push(goal("first"));
+    f.records.push(microTask("first"));
     await user.click(screen.getByRole("button", { name: "刷新全部执行记录" }));
     expect(await screen.findByRole("button", { name: /目标 first/ })).toBeTruthy();
   });
 
-  it("keeps record details read-only: no delegation drafts, no writes when switching records or pages", async () => {
-    const f = fixture([goal("one"), goal("two")]);
+  it("keeps record details read-only: no microTask drafts, no writes when switching records or pages", async () => {
+    const f = fixture([microTask("one"), microTask("two")]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /目标 one/ }));
     await screen.findByRole("tab", { name: "协作与待办" });
-    // The delegation detail exposes no Host input or write action (0.15.1 U4).
+    // The micro task detail exposes no Host input or write action (0.15.1 U4).
     for (const label of ["决定理由", "交给下一回合的输入", "实际检查依据"]) {
       expect(screen.queryByLabelText(label)).toBeNull();
     }
@@ -286,13 +286,13 @@ describe("desktop console", () => {
   });
 
   it("refreshes an older record from a bounded workflow task summary without dropping its title or attribution", async () => {
-    const record = goal("historical");
+    const record = microTask("historical");
     const f = fixture();
     f.tasks.mockImplementation(async query => ({ runs: query.query ? [] : [structuredClone(record)],
       total: query.query ? 0 : 1, nextCursor: null }));
     const value = workflow(record);
     Object.assign(value, { revision: 7, state: "delivered", awaitingHost: false, activeRequest: null });
-    value.task = { runId: record.runId, revision: 7, status: "completed", shutdownConfirmed: true };
+    value.task = { runId: record.runId, revision: 7, status: "completed", shutdownConfirmed: true, lineage: record.lineage };
     f.workflows.set(record.runId, value);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
@@ -309,7 +309,7 @@ describe("desktop console", () => {
   });
 
   it("renders projected summaries without fetching a workflow for each list row", async () => {
-    const first = goal("first-summary"), second = goal("second-summary");
+    const first = microTask("first-summary"), second = microTask("second-summary");
     first.workflow!.resultSummary = "第一项的现有结果";
     second.workflow!.resultSummary = "第二项的现有结果";
     const f = fixture([first, second]);
@@ -325,7 +325,7 @@ describe("desktop console", () => {
   });
 
   it("keeps the list row and detail title in step when the newest concluded result arrives", async () => {
-    const record = goal("older");
+    const record = microTask("older");
     record.task = "目标 older\n不该成为标题";
     // The record exists only in paged history, outside the snapshot window.
     const f = fixture();
@@ -333,7 +333,7 @@ describe("desktop console", () => {
       total: query.query ? 0 : 1, nextCursor: null }));
     const value = workflow(record);
     Object.assign(value, { revision: 7, state: "delivered", awaitingHost: false, activeRequest: null });
-    value.task = { runId: record.runId, revision: 7, status: "completed", shutdownConfirmed: true,
+    value.task = { runId: record.runId, revision: 7, status: "completed", shutdownConfirmed: true, lineage: record.lineage,
       task: record.task,
       workflow: { state: "delivered", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 7,
         resultSummary: "历史记录的最新结论结果" } };

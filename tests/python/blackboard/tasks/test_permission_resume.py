@@ -31,7 +31,7 @@ class PermissionResumeTests(WorkflowTestCase):
         first = self.claim(board)
         self.assertEqual(first["claim"]["turn"]["resumeMode"], "initial")
         session = "original-session"
-        owner = {"codex": "harness-user-store", "dsh": "buddy-goal"}.get(harness)
+        owner = {"codex": "harness-user-store", "dsh": "buddy-micro-task"}.get(harness)
         for index, access in enumerate(levels[1:], 1):
             self.finish_turn(board, first, disposition="attention", session_id=session,
                              result_mutator=lambda result: result.update(nativeSession={"storageOwner": owner}))

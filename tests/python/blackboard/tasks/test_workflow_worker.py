@@ -1,7 +1,7 @@
-"""Real cross-process governed workflow: daemon, worker, workspace and CLI routes.
+"""Real cross-process micro-task workflow: daemon, worker, workspace and CLI routes.
 
 The DSH harness runs through its registered run module against an offline
-Python governed ACP agent (``buddy/harnesses/dsh/fixtures/workflow_agent.py``,
+Python micro-task ACP agent (``buddy/harnesses/dsh/fixtures/workflow_agent.py``,
 selected as a direct executable command through ``BUDDY_DSH_CLI``); everything
 else is the real service: real daemon, real supervisor/worker, the merged
 Git-backed workspace module, the real C-Two/CLI path and the real console
@@ -32,13 +32,13 @@ BUDDY = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-f
 
 
 def harness_environment(directory: Path) -> dict:
-    """Select the offline governed agent as the harness's CLI entry.
+    """Select the offline micro-task agent as the harness's CLI entry.
 
     The daemon chain runs the service-selected health record, and the catalog
     fixture daemon composes every harness's command from ``BUDDY_<X>_CLI`` —
     a ``.py`` entry launches under the daemon's own interpreter, anything else
     runs directly, with no wrapper script and no production compatibility
-    variable. The selection is this module's governed fixture file. HOME is
+    variable. The selection is this module's micro-task fixture file. HOME is
     pinned into the test's private root so the agent's forced-private-home
     tripwire holds off the invoking shell for the whole chain.
     """
@@ -47,7 +47,7 @@ def harness_environment(directory: Path) -> dict:
     return {"HOME": str(home), "BUDDY_DSH_CLI": str(FIXTURE)}
 
 
-class GovernedWorkerTestCase(BoardTestCase):
+class MicroTaskWorkerTestCase(BoardTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.catalog_fixture()
@@ -87,19 +87,19 @@ class GovernedWorkerTestCase(BoardTestCase):
         )
 
 
-class RealWorkerTurnTests(GovernedWorkerTestCase):
+class RealWorkerTurnTests(MicroTaskWorkerTestCase):
     def execution_diagnostics(self, run_id: str, view: dict) -> str:
         code, receipt = self.cli("result", json.dumps({"runId": run_id}), env=self.env())
         meta = receipt.get("resultMeta") or {}
         result = receipt.get("result") or {}
         details = {
-            "goalState": view.get("state"),
+            "microTaskState": view.get("state"),
             "taskState": (view.get("task") or {}).get("state"),
             "resultExitCode": code,
             "resultError": receipt.get("error"),
             "resultMeta": {key: meta.get(key) for key in ("status", "error", "exitCode", "shutdownConfirmed")},
             "turnError": result.get("turnError"),
-            "governedError": result.get("governedError"),
+            "microTaskError": result.get("microTaskError"),
             "logs": {},
         }
         for name, location in (receipt.get("logPaths") or {}).items():
@@ -157,7 +157,7 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
             _, receipt = self.cli("result", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
             native = (receipt.get("result") or {}).get("nativeSession") or {}
             self.assertEqual(native.get("storageScope"), "task-shared-sessions")
-            self.assertEqual(native.get("storageOwner"), "buddy-goal")
+            self.assertEqual(native.get("storageOwner"), "buddy-micro-task")
             self.assertEqual(native.get("nativeAppVisibility"), "not-listed-in-native-app")
             self.assertEqual(native.get("credentialsStore"), "harness-user-store")
             self.assertTrue(native.get("bindingPresent"))
@@ -239,7 +239,7 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
             self.assertEqual(refused["error"]["code"], "FORBIDDEN")
 
 
-class ConsoleWorkflowRouteTests(GovernedWorkerTestCase):
+class ConsoleWorkflowRouteTests(MicroTaskWorkerTestCase):
     def test_console_command_route_strips_the_capability_and_refuses_override(self):
         board = self.board()
         opened = board.console.start()
@@ -252,7 +252,7 @@ class ConsoleWorkflowRouteTests(GovernedWorkerTestCase):
                 **BUDDY,
                 "requestId": "console-req-1",
                 "hostId": "host-1",
-                "task": "console governed task",
+                "task": "console micro-task task",
                 "cwd": str(self.repo),
                 "executionWorkspace": {"kind": "existing", "access": "write"},
             },
@@ -291,7 +291,7 @@ class ConsoleWorkflowRouteTests(GovernedWorkerTestCase):
         board.console.close()
 
 
-class CompactRouteTests(GovernedWorkerTestCase):
+class CompactRouteTests(MicroTaskWorkerTestCase):
     def test_workflow_get_matches_the_reported_compact_shape(self):
         board = self.board()
         submitted = board.call(
@@ -307,7 +307,7 @@ class CompactRouteTests(GovernedWorkerTestCase):
         )
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         expected = {
-            "governed",
+            "microTask",
             "runId",
             "taskId",
             "requestId",
@@ -318,7 +318,7 @@ class CompactRouteTests(GovernedWorkerTestCase):
             "queueReason",
             "awaitingHost",
             "waitReason",
-            "goal",
+            "microTask",
             "revision",
             "continuationCount",
             "workspace",
@@ -341,12 +341,12 @@ class CompactRouteTests(GovernedWorkerTestCase):
         self.assertNotIn("controlToken", json.dumps(view))
         self.assertEqual(view["task"]["workflowState"], "executing")
         self.assertTrue(view["task"]["awaitingHost"] is False)
-        self.assertEqual(view["goal"]["fingerprint"], submitted["goal"]["fingerprint"])
+        self.assertEqual(view["microTask"]["fingerprint"], submitted["microTask"]["fingerprint"])
         self.assertTrue(all(isinstance(value, int) for value in view["truncated"].values()))
         self.assertTrue(all(isinstance(value, int) for value in view["counts"].values()))
 
 
-class SubmissionPreparationRaceTests(GovernedWorkerTestCase):
+class SubmissionPreparationRaceTests(MicroTaskWorkerTestCase):
     def _race(self, prepare, workers: int = 8):
         import threading
 

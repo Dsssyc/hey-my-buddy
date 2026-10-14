@@ -22,7 +22,7 @@ DECISION_BUDDY = "dsh:deepseek-official:deepseek-flash:off"
 
 
 class ModelServiceConcurrencyTestCase(StoreConcurrencyTestCase):
-    """Governed fixtures plus the authenticated console policy writer."""
+    """Micro-task fixtures plus the authenticated console policy writer."""
 
     def use_decision_helper(self) -> None:
         from protocol.fixtures import mock_readonly
@@ -115,8 +115,8 @@ class PublicationInterfaceTests(ModelServiceConcurrencyTestCase):
         board = self.board_
         self.register(board, "w-obs1")
         self.register(board, "w-obs2")
-        self.claim_governed(board, "w-obs1", "obs-1")
-        self.claim_governed(board, "w-obs2", "obs-2", model_service=MODEL_SERVICE_B)
+        self.claim_micro_task(board, "w-obs1", "obs-1")
+        self.claim_micro_task(board, "w-obs2", "obs-2", model_service=MODEL_SERVICE_B)
         snapshot = board.call("console_snapshot", {})
         self.assertEqual(self.model_service_row(snapshot, MODEL_SERVICE_A)["active"], 1)
         self.assertEqual(self.model_service_row(snapshot, MODEL_SERVICE_B)["active"], 1)
@@ -133,7 +133,7 @@ class PublicationInterfaceTests(ModelServiceConcurrencyTestCase):
         self.assertEqual(health["capacity"]["totalLimit"], 8)
         self.assertEqual(health["capacity"]["totalActive"], 0)
         self.register(board, "w-health")
-        self.claim_governed(board, "w-health", "health-1")
+        self.claim_micro_task(board, "w-health", "health-1")
         health = board.call("health", {})
         self.assertEqual(health["capacity"]["totalActive"], 1)
         self.assertEqual(self.model_service_row(health["capacity"], MODEL_SERVICE_A)["active"], 1)
@@ -257,7 +257,7 @@ class SaveAppliesAtClaimTests(ModelServiceConcurrencyTestCase):
         # Two live model-service-A attempts hold the default limit exactly.
         for index in range(2):
             self.register(self.board_, f"w-live{index}")
-            self.claim = self.claim_governed(self.board_, f"w-live{index}", f"live-{index}")
+            self.claim = self.claim_micro_task(self.board_, f"w-live{index}", f"live-{index}")
 
     def test_lowering_never_kills_live_work_and_holds_new_claims(self):
         board = self.board_
@@ -269,7 +269,7 @@ class SaveAppliesAtClaimTests(ModelServiceConcurrencyTestCase):
             view = board.call("task_get", {"requestId": f"live-{index}"})["task"]
             self.assertEqual(view["state"], "running")
         self.register(board, "w-next")
-        blocked = self.claim_governed(board, "w-next", "next-1")
+        blocked = self.claim_micro_task(board, "w-next", "next-1")
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "model-capacity")
 
@@ -280,10 +280,10 @@ class SaveAppliesAtClaimTests(ModelServiceConcurrencyTestCase):
         )
         # Occupancy must drop *below* the lowered limit: both live attempts end
         # with confirmed shutdown before a new claim is admitted.
-        self.finish(board, "w-live0", self.claim_governed_claim(board, "live-0"), shutdown=True)
-        self.finish(board, "w-live1", self.claim_governed_claim(board, "live-1"), shutdown=True)
+        self.finish(board, "w-live0", self.claim_micro_task_claim(board, "live-0"), shutdown=True)
+        self.finish(board, "w-live1", self.claim_micro_task_claim(board, "live-1"), shutdown=True)
         self.register(board, "w-after")
-        claim = self.claim_governed(board, "w-after", "after-1")
+        claim = self.claim_micro_task(board, "w-after", "after-1")
         self.assertIsNotNone(claim["claim"])
 
     def test_raising_applies_at_the_next_claim_without_a_restart(self):
@@ -292,10 +292,10 @@ class SaveAppliesAtClaimTests(ModelServiceConcurrencyTestCase):
             board, {"harness": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": 3}
         )
         self.register(board, "w-raise")
-        claim = self.claim_governed(board, "w-raise", "raise-1")
+        claim = self.claim_micro_task(board, "w-raise", "raise-1")
         self.assertIsNotNone(claim["claim"], claim)
 
-    def claim_governed_claim(self, board, request_id: str):
+    def claim_micro_task_claim(self, board, request_id: str):
         """Re-fetch the stored claim of an already-claimed fixture task."""
         with board.store.db.read() as connection:
             row = connection.execute(
@@ -325,7 +325,7 @@ class RoutingQuotaTests(ModelServiceConcurrencyTestCase):
         # The fixed decision buddy consumes MODEL_SERVICE_A; two live attempts fill it.
         for index in range(2):
             self.register(board, f"w-fill{index}")
-            self.assertIsNotNone(self.claim_governed(board, f"w-fill{index}", f"fill-{index}")["claim"])
+            self.assertIsNotNone(self.claim_micro_task(board, f"w-fill{index}", f"fill-{index}")["claim"])
         decision_id = self.request_selection(board, "route-1")
         client = board.client()
         client.register_worker("w-dec", adapter="decision", capabilities=["decision"])
@@ -346,7 +346,7 @@ class RoutingQuotaTests(ModelServiceConcurrencyTestCase):
     def test_a_freed_model_service_slot_lets_the_routing_task_claim_and_freeze_the_selector(self):
         board = self.board_
         self.register(board, "w-fill0")
-        claim_a = self.claim_governed(board, "w-fill0", "route-fill-1")["claim"]
+        claim_a = self.claim_micro_task(board, "w-fill0", "route-fill-1")["claim"]
         self.assertIsNotNone(claim_a)
         decision_id = self.request_selection(board, "route-2")
         client = board.client()
@@ -360,9 +360,9 @@ class RoutingQuotaTests(ModelServiceConcurrencyTestCase):
             ).fetchone()
         self.assertEqual(request_row["attempt_id"], claimed["attempt"]["attemptId"])
         # The claimed routing attempt now itself holds a model service slot: a second
-        # governed MODEL_SERVICE_A task is blocked behind it.
+        # micro-task MODEL_SERVICE_A task is blocked behind it.
         self.register(board, "w-after")
-        blocked = self.claim_governed(board, "w-after", "route-after-1")
+        blocked = self.claim_micro_task(board, "w-after", "route-after-1")
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "model-capacity")
 
@@ -370,11 +370,11 @@ class RoutingQuotaTests(ModelServiceConcurrencyTestCase):
         board = self.board_
         for index in range(2):
             self.register(board, f"w-block{index}")
-            self.assertIsNotNone(self.claim_governed(board, f"w-block{index}", f"block-{index}")["claim"])
+            self.assertIsNotNone(self.claim_micro_task(board, f"w-block{index}", f"block-{index}")["claim"])
         # The routing task is blocked on the selector model service; a later, runnable
         # business task of another model service must still be reached by the scan.
         self.request_selection(board, "route-3")
-        self.submit_governed(board, "route-3-business", model_service=MODEL_SERVICE_B)
+        self.submit_micro_task(board, "route-3-business", model_service=MODEL_SERVICE_B)
         client = board.client()
         client.register_worker("w-biz", adapter="dsh", capabilities=["dsh"])
         claim = client.claim("w-biz", "claim-route-3", "n" * 32)["claim"]

@@ -1,6 +1,6 @@
 """The CLI prints brief model-facing projections without changing the service views.
 
-These tests drive the real ``cli.main`` against the real governed transactions in
+These tests drive the real ``cli.main`` against the real micro-task transactions in
 process, over real temporary Git checkouts: only the C-Two socket is replaced. They
 check that the local ``output`` option never reaches RPC, that the brief views keep
 every identifier the next command needs, and that ``"output":"full"`` prints the
@@ -149,7 +149,7 @@ class CliViewTests(RealWorkspaceTestCase):
         self.assertEqual(brief["currentTurn"]["summary"], service_view["currentTurn"]["summary"])
         self.assertEqual(brief["workspace"]["path"], service_view["workspace"]["path"])
         self.assertEqual(brief["scope"]["scopeVersion"], service_view["scope"]["scopeVersion"])
-        for omitted in ("goal", "executionWorkspace", "task", "turns", "requests", "taskId", "requestFingerprint"):
+        for omitted in ("microTask", "executionWorkspace", "task", "turns", "requests", "taskId", "requestFingerprint"):
             self.assertNotIn(omitted, brief)
         code, full, _ = self.cli("get", {"runId": run_id, "output": "full"})
         self.assertEqual(code, 0, full)
@@ -211,14 +211,14 @@ class CliViewTests(RealWorkspaceTestCase):
 class ProjectionUnitTests(unittest.TestCase):
     def test_unconfirmed_shutdown_and_truncation_are_kept(self):
         view = {
-            "governed": True, "runId": "r", "revision": 3, "state": "running", "status": "running",
+            "task": {"lineage": {"kind": "micro-task"}}, "runId": "r", "revision": 3, "state": "running", "status": "running",
             "awaitingHost": False, "shutdown": {"selfConfirmed": True, "descendantsConfirmed": False,
                                                  "unconfirmedCount": 2, "unconfirmedRunIds": ["a", "b"],
                                                  "truncated": False},
             "counts": {"children": 40, "turns": 1}, "truncated": {"children": 8, "turns": 0},
             "children": [{"taskId": "c", "role": "helper", "state": "running", "createdAt": "x"}],
         }
-        brief = cli_views.governed_brief(view)
+        brief = cli_views.micro_task_brief(view)
         self.assertEqual(brief["shutdown"], view["shutdown"])
         self.assertEqual(brief["truncated"], {"children": 8})
         self.assertEqual(brief["counts"], view["counts"])
@@ -233,13 +233,13 @@ class ProjectionUnitTests(unittest.TestCase):
                 {"buddyId": "dsh:p:m:off", "harness": "dsh", "provider": "p", "model": "m",
                  "effort": "off", "reason": "user excluded"}]},
         }
-        brief = cli_views.governed_brief({"governed": True, "runId": "r", "revision": 1,
+        brief = cli_views.micro_task_brief({"task": {"lineage": {"kind": "micro-task"}}, "runId": "r", "revision": 1,
                                           "state": "executing", "status": "queued", "routing": routing})
         self.assertEqual(brief["routing"]["constraints"], {"harness": "dsh"})
         self.assertEqual(brief["routing"]["requiredCapabilities"], ["execution:dsh"])
         self.assertEqual(brief["routing"]["routingBasis"], routing["routingBasis"])
         # A route recorded before the frozen basis stays unchanged and compact.
-        legacy = cli_views.governed_brief({"governed": True, "runId": "r", "revision": 1,
+        legacy = cli_views.micro_task_brief({"task": {"lineage": {"kind": "micro-task"}}, "runId": "r", "revision": 1,
                                            "state": "executing", "status": "queued",
                                            "routing": {"status": "completed", "source": "model-selection",
                                                        "reason": "chosen", "constraints": {}}})
@@ -247,7 +247,7 @@ class ProjectionUnitTests(unittest.TestCase):
         self.assertNotIn("constraints", legacy["routing"])
 
     def test_unknown_receipt_fields_are_not_dropped(self):
-        receipt = cli_views.governed_receipt({"governed": True, "runId": "r", "revision": 1, "newField": {"x": 1}})
+        receipt = cli_views.micro_task_receipt({"task": {"lineage": {"kind": "micro-task"}}, "runId": "r", "revision": 1, "newField": {"x": 1}})
         self.assertEqual(receipt["newField"], {"x": 1})
 
     def test_error_envelopes_and_unprojected_commands_pass_through(self):
@@ -255,7 +255,7 @@ class ProjectionUnitTests(unittest.TestCase):
         self.assertIs(cli_views.render("get", error), error)
         health = {"status": "ok", "capacity": {"totalLimit": 8}}
         self.assertIs(cli_views.render("health", health), health)
-        full = {"governed": True, "runId": "r", "goal": {"task": "t"}}
+        full = {"task": {"lineage": {"kind": "micro-task"}}, "runId": "r", "microTask": {"task": "t"}}
         self.assertIs(cli_views.render("get", full, cli_views.OUTPUT_FULL), full)
 
 

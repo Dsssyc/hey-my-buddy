@@ -1,6 +1,6 @@
 """ADR-012 XI.3 task-title fallback: the read-only workflow.resultSummary projection.
 
-The projection must expose, on every governed task read, this run's newest
+The projection must expose, on every micro-task task read, this run's newest
 concluded turn outcome summary — selected by turn_index, never by clock
 timestamps — bounded to 2000 characters, without hiding a concluded result
 behind a newer prepared/running turn and without substituting a helper's or an
@@ -17,7 +17,7 @@ import unittest
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
 
-def governed_view(board, run_id: str) -> dict:
+def micro_task_view(board, run_id: str) -> dict:
     return board.call("task_get", {"runId": run_id})["task"]
 
 
@@ -56,11 +56,11 @@ class TitleFallbackTests(WorkflowTestCase):
         self.assertEqual(board.call("workflow_get", {"runId": run_id})["state"], "delivered")
         return run_id
 
-    def test_newest_concluded_own_result_reaches_every_governed_read(self):
+    def test_newest_concluded_own_result_reaches_every_micro_task_read(self):
         board = self.board(max_concurrent=1)
         run_id = self.two_turn_run(board, second_summary="整合完成并已验证")
         summary = "整合完成并已验证"
-        self.assertEqual(workflow_summary(governed_view(board, run_id)), summary)
+        self.assertEqual(workflow_summary(micro_task_view(board, run_id)), summary)
         listed = board.call("task_list", {"limit": 50})["runs"]
         self.assertEqual([row["workflow"]["resultSummary"] for row in listed if row["runId"] == run_id], [summary])
         snapshot = board.call("console_snapshot", {})
@@ -71,11 +71,11 @@ class TitleFallbackTests(WorkflowTestCase):
         fetched = board.call("workflow_get", {"runId": run_id})
         self.assertEqual(fetched["task"]["workflow"]["resultSummary"], summary)
 
-    def test_no_turns_and_ungoverned_tasks_project_no_summary(self):
+    def test_no_turns_and_execution_tasks_project_no_summary(self):
         board = self.board(max_concurrent=1)
         self.register(board)
         submitted = self.submit(board, request_id="untouched", task="never claimed\nsecond line")
-        view = governed_view(board, submitted["runId"])
+        view = micro_task_view(board, submitted["runId"])
         self.assertIsNone(workflow_summary(view))
         self.assertIn("workflow", view)
         plain = board.call(
@@ -97,12 +97,12 @@ class TitleFallbackTests(WorkflowTestCase):
         run_id = submitted["runId"]
         self.finish_turn(board, self.claim(board), disposition="assistance")
         view = board.call("workflow_get", {"runId": run_id})
-        self.assertEqual(workflow_summary(governed_view(board, run_id)), "need the Host")
+        self.assertEqual(workflow_summary(micro_task_view(board, run_id)), "need the Host")
         self.continue_run(board, view)
         self.claim(board, claim_request_id="c2")
         self.assertEqual(board.call("workflow_get", {"runId": run_id})["state"], "executing")
         # The second turn is prepared/running; the first concluded summary still shows.
-        self.assertEqual(workflow_summary(governed_view(board, run_id)), "need the Host")
+        self.assertEqual(workflow_summary(micro_task_view(board, run_id)), "need the Host")
         listed = board.call("task_list", {"limit": 10})["runs"]
         self.assertEqual([row["workflow"]["resultSummary"] for row in listed if row["runId"] == run_id], ["need the Host"])
 
@@ -115,7 +115,7 @@ class TitleFallbackTests(WorkflowTestCase):
                     "UPDATE workflow_turns SET outcome_json=? WHERE run_id=? AND turn_index=2",
                     (json.dumps({"disposition": "completed", "summary": broken}), run_id),
                 )
-            self.assertIsNone(workflow_summary(governed_view(board, run_id)), broken)
+            self.assertIsNone(workflow_summary(micro_task_view(board, run_id)), broken)
             listed = board.call("task_list", {"limit": 10})["runs"]
             self.assertIsNone([row for row in listed if row["runId"] == run_id][0]["workflow"]["resultSummary"])
         # The older nonempty first-turn result is never substituted back in.
@@ -128,12 +128,12 @@ class TitleFallbackTests(WorkflowTestCase):
                 "UPDATE workflow_turns SET outcome_json=? WHERE run_id=? AND turn_index=1",
                 (json.dumps({"disposition": "assistance", "summary": "older nonempty"}), run_id),
             )
-        self.assertIsNone(workflow_summary(governed_view(board, run_id)))
+        self.assertIsNone(workflow_summary(micro_task_view(board, run_id)))
 
     def test_json_looking_text_remains_text(self):
         board = self.board(max_concurrent=1)
         run_id = self.two_turn_run(board, second_summary='{"message":"literal text"}')
-        self.assertEqual(workflow_summary(governed_view(board, run_id)), '{"message":"literal text"}')
+        self.assertEqual(workflow_summary(micro_task_view(board, run_id)), '{"message":"literal text"}')
 
     def test_projection_does_not_add_a_per_row_query(self):
         board = self.board(max_concurrent=1)
@@ -162,7 +162,7 @@ class TitleFallbackTests(WorkflowTestCase):
                 "UPDATE workflow_turns SET created_at=?, updated_at=? WHERE run_id=? AND turn_index=2",
                 ("2026-01-01T00:01:00.000Z", "2026-01-01T00:01:00.000Z", run_id),
             )
-        self.assertEqual(workflow_summary(governed_view(board, run_id)), "newest by index")
+        self.assertEqual(workflow_summary(micro_task_view(board, run_id)), "newest by index")
 
     def test_helper_results_never_leak_into_the_parent_summary(self):
         board = self.board(max_concurrent=1)
@@ -197,8 +197,8 @@ class TitleFallbackTests(WorkflowTestCase):
                 "request": None,
             },
         )
-        self.assertEqual(workflow_summary(governed_view(board, parent["runId"])), "need the Host")
-        self.assertEqual(workflow_summary(governed_view(board, helper_id)), "helper自己的结论")
+        self.assertEqual(workflow_summary(micro_task_view(board, parent["runId"])), "need the Host")
+        self.assertEqual(workflow_summary(micro_task_view(board, helper_id)), "helper自己的结论")
         listed = {row["runId"]: row["workflow"]["resultSummary"] for row in board.call("task_list", {"limit": 10})["runs"]}
         self.assertEqual(listed[parent["runId"]], "need the Host")
         self.assertEqual(listed[helper_id], "helper自己的结论")
@@ -207,7 +207,7 @@ class TitleFallbackTests(WorkflowTestCase):
         board = self.board(max_concurrent=1)
         long_summary = "长" * 2500 + "tail"
         run_id = self.two_turn_run(board, second_summary=long_summary)
-        projected = workflow_summary(governed_view(board, run_id))
+        projected = workflow_summary(micro_task_view(board, run_id))
         self.assertEqual(len(projected), 2000)
         self.assertEqual(projected, long_summary[:2000])
         listed = [row for row in board.call("task_list", {"limit": 10})["runs"] if row["runId"] == run_id][0]
@@ -226,7 +226,7 @@ class TitleFallbackTests(WorkflowTestCase):
                 "total": board.call("task_list", {"limit": 1})["total"],
             }
         for _ in range(2):
-            self.assertEqual(workflow_summary(governed_view(board, run_id)), "stable result")
+            self.assertEqual(workflow_summary(micro_task_view(board, run_id)), "stable result")
             board.call("task_list", {"limit": 50})
             board.call("workflow_get", {"runId": run_id})
             board.call("console_snapshot", {})

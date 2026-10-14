@@ -1556,9 +1556,9 @@ class TestTransitionTables(BoardTestCase):
 
 
 class TestTaskHistory(BoardTestCase):
-    """Group 11: read-only delegation metadata and filtered task history."""
+    """Group 11: read-only micro task metadata and filtered task history."""
 
-    DELEGATION_FIELDS = (
+    MICRO_TASK_FIELDS = (
         "kind",
         "sourceHostId",
         "currentHostId",
@@ -1577,7 +1577,7 @@ class TestTaskHistory(BoardTestCase):
             argv=["/bin/true"],
         )["task"]
 
-    def test_every_task_view_carries_the_delegation_contract(self):
+    def test_every_task_view_carries_the_micro_task_contract(self):
         board = self.board()
         created = self.submit_one(board, "hist-1")
         listing = board.call("task_list", {"limit": 10})
@@ -1586,8 +1586,8 @@ class TestTaskHistory(BoardTestCase):
         self.assertEqual(listing["total"], 1)
         self.assertEqual(listing["cursor"], board.store.head())
         self.assertIsNone(listing["nextCursor"])
-        metadata = listing["runs"][0]["delegation"]
-        self.assertEqual(sorted(metadata), sorted(self.DELEGATION_FIELDS))
+        metadata = listing["runs"][0]["lineage"]
+        self.assertEqual(sorted(metadata), sorted(self.MICRO_TASK_FIELDS))
         self.assertEqual(metadata["kind"], "execution")
         self.assertIsNone(metadata["sourceHostId"])
         self.assertIsNone(metadata["currentHostId"])
@@ -1596,9 +1596,9 @@ class TestTaskHistory(BoardTestCase):
         self.assertIsNone(metadata["buddy"])
         self.assertEqual(sorted(metadata["project"]), sorted(["id", "path", "label"]))
         self.assertEqual(metadata["project"]["path"], os.path.realpath(str(self.workdir())))
-        self.assertEqual(board.call("task_get", {"runId": created["runId"]})["task"]["delegation"], metadata)
+        self.assertEqual(board.call("task_get", {"runId": created["runId"]})["task"]["lineage"], metadata)
         snapshot = board.call("console_snapshot", {})
-        self.assertEqual(snapshot["tasks"]["runs"][0]["delegation"], metadata)
+        self.assertEqual(snapshot["tasks"]["runs"][0]["lineage"], metadata)
         self.assertIsNone(snapshot["tasks"]["nextCursor"])
         self.assertEqual(snapshot["tasks"]["total"], 1)
 

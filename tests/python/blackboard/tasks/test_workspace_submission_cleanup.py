@@ -63,7 +63,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 (view['finalArtifactId'],)).fetchone()[0])
         original = BoardError('ADMISSION_FAILED', 'Controlled admission refusal after integration')
         def admission(*args, **kwargs):
-            manifest = kwargs['governed']['manifest']
+            manifest = kwargs['micro_task']['manifest']
             accepted = board.call('workflow_accept', {
                 'runId': delivered['runId'], 'artifactId': view['finalArtifactId'],
                 'note': 'Retained private integration target', 'keepCheckout': True,
@@ -87,7 +87,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         original = board.store.task_submit
         saved = {}
         def admission(*args, **kwargs):
-            manifest = kwargs['governed']['manifest']
+            manifest = kwargs['micro_task']['manifest']
             directory = Path(manifest['checkoutRoot']).parent
             (directory / 'outputs').mkdir()
             (directory / 'outputs/evidence.txt').write_text('retained output')
@@ -109,7 +109,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
     def test_transaction_failure_rolls_back_task_and_revokes_checkout(self):
         board = self.board()
         error = sqlite3.OperationalError('controlled database rejection')
-        with patch.object(board.store.workflow, 'attach_governed_task', side_effect=error):
+        with patch.object(board.store.workflow, 'attach_micro_task', side_effect=error):
             with self.assertRaises(sqlite3.OperationalError) as caught:
                 self.rejected(board)
         self.assertIs(caught.exception, error)
@@ -288,7 +288,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         board = self.board()
         error = BoardError('ADMISSION_FAILED', 'rejected with changed content')
         def changed(*args, **kwargs):
-            checkout = Path(kwargs['governed']['manifest']['checkoutRoot'])
+            checkout = Path(kwargs['micro_task']['manifest']['checkoutRoot'])
             (checkout / 'tracked.txt').write_text('valuable new content')
             raise error
         with patch.object(board.store, 'task_submit', side_effect=changed):

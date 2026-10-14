@@ -66,7 +66,7 @@ const storageLabels: Record<string, string> = {
 
 const storageOwnerLabels: Record<string, string> = {
   "buddy-attempt": "由 Buddy 尝试持有",
-  "buddy-goal": "由 Buddy 目标持有",
+  "buddy-micro-task": "由 Buddy 目标持有",
   "harness-user-store": "由 Harness 用户目录持有",
 };
 
@@ -96,7 +96,7 @@ function resumeText(mode: string | null): string {
 }
 
 /**
- * Read-only native-session facts for one delegation. It repeats the recorded
+ * Read-only native-session facts for one micro task. It repeats the recorded
  * receipt fields without claiming that a private store can be opened from the
  * page; the activity, tool summary and fixed artifacts remain the checkable
  * entrypoints.

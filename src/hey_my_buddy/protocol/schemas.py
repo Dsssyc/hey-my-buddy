@@ -45,7 +45,7 @@ IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 RESOURCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:/@+-]{1,512}$")
 
-# -- governed workflow bounds ------------------------------------------------
+# -- micro-task workflow bounds ------------------------------------------------
 MAX_WORKFLOW_INPUT_BYTES = 64 * 1024
 MAX_WORKFLOW_REASON_BYTES = 4000
 MAX_WORKFLOW_HELPERS = 8
@@ -308,7 +308,7 @@ def bounded_text(params: dict, name: str, *, max_bytes: int, allow_empty: bool =
     return value, size
 
 
-# -- governed workflow -------------------------------------------------------
+# -- micro-task workflow -------------------------------------------------------
 def reject_untrusted_override(params: dict) -> None:
     """An untrusted caller-controlled override field is always invalid.
 
@@ -406,7 +406,7 @@ def normalize_execution_workspace(params: dict) -> dict:
         raise BoardError("INVALID_ARGUMENT", "Untracked input requires a working-tree base")
     write_scope = string_list(intent, "writeScope", limit=256)
     if access in ("write", "full"):
-        # An ordinary governed task may write inside its own checkout; the module
+        # An ordinary micro-task task may write inside its own checkout; the module
         # requires the scope explicitly, so the default is the checkout root.
         normalized["writeScope"] = write_scope or ["."]
     elif write_scope:
@@ -469,7 +469,7 @@ def _spec_fields(params: dict) -> dict:
 
 
 def workflow_request_fingerprint(spec: dict, execution_workspace: dict, host_id: str, *, presentation: dict | None = None, buddy_locked: bool = False) -> str:
-    """The governed idempotency identity: goal, execution workspace and Host.
+    """The micro-task idempotency identity: micro task, execution workspace and Host.
 
     The task fingerprint stays the ordinary spec fingerprint; this one additionally
     fences a replay whose workspace intent, base or Host changed, so a stable
@@ -572,10 +572,10 @@ def normalize_workflow_submit(params: dict) -> dict:
 
 
 def normalize_workflow_spec(params: dict) -> dict:
-    """Normalize a goal whose Worker choice is complete or absent, never partial.
+    """Normalize a micro task whose Worker choice is complete or absent, never partial.
 
-    Ordinary internal task submission retains its execution defaults. A governed
-    goal preserves exactly the harness/provider/model/effort constraints the
+    Ordinary internal task submission retains its execution defaults. A micro-task
+    micro task preserves exactly the harness/provider/model/effort constraints the
     caller supplied, and ADR-021 decision 5 allows only the two complete
     expressions: the whole quadruple (delegated directly, no Router) or none of
     it (the Router chooses). The ``command`` and ``external`` infrastructure

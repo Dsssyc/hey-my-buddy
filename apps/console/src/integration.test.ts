@@ -5,7 +5,7 @@ import type { IntegrationRecord, Workflow } from "./workflow-types";
 /** Only the fields these helpers read, so the envelope stays explicit. */
 function workflow(partial: Partial<Workflow>): Workflow {
   return {
-    governed: true, runId: "run", hostId: "host", ownerGeneration: 1, revision: 1,
+    runId: "run", hostId: "host", ownerGeneration: 1, revision: 1,
     state: "delivered", awaitingHost: false, waitReason: "", continuationCount: 0,
     workspace: null, currentTurn: null, activeRequest: null, children: [],
     artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null,

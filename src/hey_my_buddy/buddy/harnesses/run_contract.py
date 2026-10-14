@@ -203,7 +203,7 @@ class SessionService(InternalModel):
     """The fully qualified tool names of one mounted in-run session service.
 
     This is the one fact the native driver consumes: the mounted binding it
-    must find and the names the governed prompt cites. The service instance,
+    must find and the names the micro task prompt cites. The service instance,
     its schemas and its delivery mode stay with the role and the harness's own
     mount; they never travel in the request.
     """
@@ -232,7 +232,7 @@ class RunRequest(InternalModel):
     private_state: PrivateStatePaths
     input_text: NonEmptyInputText
     tool_scope: ToolScope
-    #: None for runs without a governed Worker permission choice.
+    #: None for runs without a micro task Worker permission choice.
     worker_permission: Optional[WorkerPermission] = None
     #: None preserves the native default; () explicitly permits no domains.
     #: Kept separate from file-tool scope because Claude's two existing read

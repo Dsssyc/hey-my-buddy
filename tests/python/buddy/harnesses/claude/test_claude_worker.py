@@ -12,7 +12,7 @@ from hey_my_buddy.buddy.harnesses.claude.native_run import _catalog
 from hey_my_buddy.buddy.harnesses.registry import adapter
 from hey_my_buddy.protocol import schemas
 from support import wait_for
-from blackboard.tasks.test_workflow_worker import GovernedWorkerTestCase
+from blackboard.tasks.test_workflow_worker import MicroTaskWorkerTestCase
 
 
 BUDDY = {"harness": "claude", "provider": "anthropic",
@@ -27,7 +27,7 @@ def _claude_registered() -> bool:
 
 @unittest.skipUnless(_claude_registered(),
                      "the claude run seam is registered only in the activated verification copy")
-class ClaudeWorkerTests(GovernedWorkerTestCase):
+class ClaudeWorkerTests(MicroTaskWorkerTestCase):
     def setUp(self):
         super().setUp()
         self.catalog_fixture({"source": "file:claude-worker-fixture", "providers": [{
@@ -68,7 +68,7 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
         self.assertEqual(code, 0, receipt)
         return view, receipt
 
-    def test_governed_worker_seals_only_a_proven_claude_result(self):
+    def test_micro_task_worker_seals_only_a_proven_claude_result(self):
         self.assertIn("claude", schemas.CODING_HARNESSES)
         implementation = adapter("claude")
         self.assertFalse(implementation.native_resume)

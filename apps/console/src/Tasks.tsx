@@ -39,8 +39,8 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
     // memory in the hook), so a scope change reloading the list never empties
     // the dropdowns.
     const records = history.known;
-    return { projects: [...new Map(records.filter(t => t.delegation?.kind === "goal").map(t => [taskProject(t).id, taskProject(t)])).values()],
-      hosts: [...new Set(records.map(t => t.delegation?.sourceHostId).filter((x): x is string => !!x))].sort() };
+    return { projects: [...new Map(records.filter(t => t.lineage?.kind === "micro-task").map(t => [taskProject(t).id, taskProject(t)])).values()],
+      hosts: [...new Set(records.map(t => t.lineage?.sourceHostId).filter((x): x is string => !!x))].sort() };
   }, [history.known]);
   const matchesState = (t: Task) => filter === "all" || (filter === "host" ? t.workflow?.awaitingHost :
     filter === "review" ? needsReview(t) : ["queued", "running", "cancelling", "reconciliation-needed"].includes(t.status)
@@ -126,7 +126,7 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
             <span className="row-between"><Status status={taskStatus(row)} /><time className="small muted" dateTime={row.createdAt}>{formatDate(row.createdAt)}</time></span>
             <strong className="task-title" title={titleTooltip(taskTitle(rowTask))}>{excerpt(taskTitle(rowTask).text, 100)}</strong>
             <span className="small truncate" title={taskHost(row) + " → " + taskExecutor(row)}>{taskHost(row)} → {taskExecutor(row)}</span>
-            {row.delegation?.kind !== "goal" && <span className="small muted">{row.delegation?.kind === "helper" ? "协助任务" : row.delegation?.kind === "decision" ? "内部路由 / 整理" : "执行记录"}</span>}
+            {row.lineage?.kind !== "micro-task" && <span className="small muted">{row.lineage?.kind === "helper" ? "协助任务" : row.lineage?.kind === "decision" ? "内部路由 / 整理" : "执行记录"}</span>}
           </button>
         </li>;
         })}</ul>}

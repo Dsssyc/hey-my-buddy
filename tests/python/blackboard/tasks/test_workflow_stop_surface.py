@@ -1,4 +1,4 @@
-"""Public receipt/wait boundaries preserve whole-goal stop evidence."""
+"""Public receipt/wait boundaries preserve whole-micro-task stop evidence."""
 import os
 from pathlib import Path
 import unittest
@@ -66,11 +66,11 @@ class ReceiptStopTests(WorkflowTestCase):
         self.assertEqual(view["audit"]["turns"][0]["outcome"]["summary"], "s" * 6000)
 
 
-class GoalStopWaitTests(unittest.TestCase):
+class MicroTaskStopWaitTests(unittest.TestCase):
     def setUp(self):
         self.state = Path(os.environ["BUDDY_STATE_DIR"])
 
-    def test_cancelled_goal_never_becomes_success_from_a_late_completed_execution(self):
+    def test_cancelled_micro_task_never_becomes_success_from_a_late_completed_execution(self):
         run = {"runId": "parent", "status": "completed", "workflowState": "cancelled", "revision": 9,
                "resultAvailable": True, "shutdownConfirmed": True,
                "workflowShutdown": {"selfConfirmed": True, "descendantsConfirmed": True,
@@ -143,7 +143,7 @@ class GoalStopWaitTests(unittest.TestCase):
         self.assertFalse(result["shutdownConfirmed"])
         self.assertEqual(result["shutdown"]["unconfirmedRunIds"], ["child"])
 
-    def test_goal_wait_timeout_expires_only_the_wait_and_names_current_commands(self):
+    def test_micro_task_wait_timeout_expires_only_the_wait_and_names_current_commands(self):
         clock = VirtualClock()
         run = {"runId": "parent", "status": "running", "workflowState": "executing", "revision": 9,
                "resultAvailable": False, "shutdownConfirmed": False}
@@ -163,7 +163,7 @@ class GoalStopWaitTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "wait-timeout")
         self.assertFalse(result["ok"])
         self.assertTrue(result["timedOut"])
-        self.assertEqual(set(calls) - {"status", "wait"}, set(), "a timeout never starts or cancels the goal")
+        self.assertEqual(set(calls) - {"status", "wait"}, set(), "a timeout never starts or cancels the micro task")
         commands = " ".join(result["recovery"]["commands"])
         self.assertIn("buddy status", commands)
         self.assertIn("buddy await", commands)

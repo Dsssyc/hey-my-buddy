@@ -629,7 +629,7 @@ class DecisionCoordinator:
         return self._request_response(connection=None if owns_transaction else connection, row=row, duplicate=False)
 
     def route_workflow(self, connection, *, run_id: str, sequence: int, spec: dict, manifest: dict | None = None) -> dict:
-        """Admit a fixed-selector task with the Goal in its existing transaction.
+        """Admit a fixed-selector task with the Micro task in its existing transaction.
 
         The selector itself is always the configured decision buddy. Only the
         bounded business candidate set is filtered; no recursive workflow submit
@@ -655,14 +655,14 @@ class DecisionCoordinator:
         }
         needs_host_reason = None
         if task_bytes > MAX_DECISION_TASK_BYTES:
-            # The immutable Goal owns the full text. A selector cannot choose from
+            # The immutable Micro task owns the full text. A selector cannot choose from
             # an incomplete task, and its bounded audit stores only a reference.
-            request["task"] = f"Goal {run_id} (full task retained in workflow)"
+            request["task"] = f"Micro task {run_id} (full task retained in workflow)"
             request["taskReference"] = {"runId": run_id, "bytes": task_bytes, "sha256": sha256_text(task_text)}
             needs_host_reason = (
-                f"The complete Goal contains {task_bytes} UTF-8 bytes, above the selector's "
+                f"The complete Micro task contains {task_bytes} UTF-8 bytes, above the selector's "
                 f"{MAX_DECISION_TASK_BYTES}-byte task limit. No model call was made. "
-                "Continue the same Goal with a complete buddy; its full task remains unchanged."
+                "Continue the same Micro task with a complete buddy; its full task remains unchanged."
             )
         return self._create(f"workflow:{run_id}:{sequence}", request, connection=connection,
                             needs_host_reason=needs_host_reason)
@@ -766,7 +766,7 @@ class DecisionCoordinator:
         same-tier budget, records the immutable dispatch under the new internal
         task, and re-points the request — and its pending workflow route — at that
         task while clearing the previous attempt and output bindings. The
-        governed Goal keeps waiting for routing; no business Worker turn opens.
+        micro task keeps waiting for routing; no business Worker turn opens.
         """
         decision_id = row["decision_id"]
         snapshot = router_sequence.request_snapshot(connection, decision_id)
@@ -1588,7 +1588,7 @@ class DecisionCoordinator:
                 "SELECT e.kind,e.created_at,e.payload_json,r.decision_id,r.task_id,r.output_json,"
                 " a.result_json AS receipt_json,(" + router_success + ") AS router_success,"
                 " (a.attempt_id IS NOT NULL) AS has_attempt,"
-                " (SELECT w.run_id FROM workflow_routes w WHERE w.decision_id=r.decision_id LIMIT 1) AS goal_id"
+                " (SELECT w.run_id FROM workflow_routes w WHERE w.decision_id=r.decision_id LIMIT 1) AS micro_task_id"
                 + source + " ORDER BY e.seq DESC LIMIT ?", (limit,),
             ).fetchall()
             success = connection.execute(
@@ -1640,7 +1640,7 @@ class DecisionCoordinator:
                 abstentions += int(abstained)
                 cancellations += int(row["kind"] == "decision.cancelled")
                 if is_failure:
-                    failed.append({"decisionId":row["decision_id"], "runId":row["goal_id"] or row["task_id"],
+                    failed.append({"decisionId":row["decision_id"], "runId":row["micro_task_id"] or row["task_id"],
                                    "at":row["created_at"], "code":code})
             facts = resolution.facts
             interval = facts.get("routerRetryIntervalSeconds")

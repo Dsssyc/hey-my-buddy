@@ -106,7 +106,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         identity = channel.identity
         self.assertEqual((identity.task_id, identity.attempt_id, identity.generation,
                           identity.invocation_id, identity.turn_id),
-                         ("goal-1", context.attempt_id, 1, handle.role_run_identity.invocation_id, "turn-1"))
+                         ("micro-task-1", context.attempt_id, 1, handle.role_run_identity.invocation_id, "turn-1"))
         self.assertEqual(identity.input_sha256, handle.role_run_identity.input_sha256)
         # Exactly one admitted native input, and no injected command ever.
         self.assertEqual(self.native_log(context, "methods.jsonl").split().count("session/send"), 1)
@@ -122,7 +122,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         self.assertEqual(records[2]["answer"]["text"], "fixture answer for q-1")
         self.assertEqual(records[2]["answer"]["toolCallId"], "call-answer-q-1")
         self.assertEqual(records[2]["answer"]["via"], "tool:buddy_answer_inquiry")
-        self.assertEqual(records[2]["taskId"], "goal-1")
+        self.assertEqual(records[2]["taskId"], "micro-task-1")
         self.assertEqual(records[2]["attemptId"], context.attempt_id)
         self.assertEqual(outcome.result["inquiry"]["requested"], 1)
         self.assertEqual(outcome.result["inquiry"]["answered"], 1)

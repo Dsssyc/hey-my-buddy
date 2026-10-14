@@ -1,4 +1,4 @@
-"""Service shutdown fences governed work through the authoritative workflow path."""
+"""Service shutdown fences micro-task work through the authoritative workflow path."""
 from __future__ import annotations
 
 from hey_my_buddy.blackboard.service.daemon import Daemon
@@ -6,12 +6,12 @@ from hey_my_buddy.errors import BoardError
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
 
-class GovernedServiceStopTests(WorkflowTestCase):
+class MicroTaskServiceStopTests(WorkflowTestCase):
     def stop_daemon(self, reason="test stop"):
         daemon = Daemon(self.directory)
         return daemon.on_stop({"reason": reason, "drainSeconds": 0})
 
-    def test_queued_goal_is_fenced_but_passive_host_request_is_preserved(self):
+    def test_queued_micro_task_is_fenced_but_passive_host_request_is_preserved(self):
         board = self.board()
         queued = self.submit(board, request_id="queued", cwd=str(self.workdir("queued")))
         passive = self.submit(board, request_id="passive", cwd=str(self.workdir("passive")))
@@ -66,12 +66,12 @@ class GovernedServiceStopTests(WorkflowTestCase):
         settled = board.call("workflow_get", {"runId": parent["runId"]})
         self.assertTrue(settled["shutdown"]["descendantsConfirmed"])
 
-    def test_public_task_cancel_cannot_bypass_governed_control(self):
+    def test_public_task_cancel_cannot_bypass_micro_task_control(self):
         board = self.board()
         self.register(board)
         submitted = self.submit(board)
         claim = self.claim(board)
-        for params, expected in (({}, "UNAUTHORIZED"), (self.control(submitted), "GOVERNED_REQUIRED"),
+        for params, expected in (({}, "UNAUTHORIZED"), (self.control(submitted), "MICRO_TASK_REQUIRED"),
                                  ({"credential": claim["claim"]["agentCredential"]}, "FORBIDDEN")):
             with self.subTest(params=params):
                 with self.assertRaises(BoardError) as raised:

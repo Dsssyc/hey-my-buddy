@@ -26,17 +26,17 @@ class FullModelServiceBacklogTests(StoreConcurrencyTestCase):
         self.board_ = self.board(max_concurrent=8)
         for index in range(2):
             self.register(self.board_, f"w-full{index}")
-            claim = self.claim_governed(self.board_, f"w-full{index}", f"hold-{index}")
+            claim = self.claim_micro_task(self.board_, f"w-full{index}", f"hold-{index}")
             self.assertIsNotNone(claim["claim"])
 
     def test_a_full_model_service_backlog_over_one_hundred_cannot_hide_other_model_services(self):
         board = self.board_
         for index in range(BACKLOG):
-            self.submit_governed(board, f"backlog-{index}", effort=("off", "low", "high", "max")[index % 4])
+            self.submit_micro_task(board, f"backlog-{index}", effort=("off", "low", "high", "max")[index % 4])
         # The runnable task of another model service arrives *after* the whole backlog, so
         # only the pre-window model service filter can reach it: the bounded scan of 50
         # rows is exhausted long before row 102 otherwise.
-        self.submit_governed(board, "runnable-b", model_service=MODEL_SERVICE_B)
+        self.submit_micro_task(board, "runnable-b", model_service=MODEL_SERVICE_B)
         self.register(board, "w-free")
         claim = board.client().claim("w-free", "claim-free", "n" * 32)
         self.assertIsNotNone(claim["claim"], claim["reason"])
@@ -45,7 +45,7 @@ class FullModelServiceBacklogTests(StoreConcurrencyTestCase):
     def test_a_full_model_service_backlog_cannot_hide_model_less_command_work(self):
         board = self.board_
         for index in range(BACKLOG):
-            self.submit_governed(board, f"cmd-backlog-{index}")
+            self.submit_micro_task(board, f"cmd-backlog-{index}")
         client = board.client()
         client.register_worker("w-command", adapter="command", capabilities=["command"])
         submitted = client.submit(
@@ -62,7 +62,7 @@ class FullModelServiceBacklogTests(StoreConcurrencyTestCase):
     def test_blocked_backlog_tasks_report_the_model_service_queue_reason(self):
         board = self.board_
         for index in range(BACKLOG):
-            self.submit_governed(board, f"reason-{index}")
+            self.submit_micro_task(board, f"reason-{index}")
         with board.store.db.read() as connection:
             reasons = {
                 row["queue_reason"]
@@ -75,7 +75,7 @@ class FullModelServiceBacklogTests(StoreConcurrencyTestCase):
     def test_an_empty_claim_names_the_full_model_service_not_an_idle_board(self):
         board = self.board_
         for index in range(BACKLOG):
-            self.submit_governed(board, f"idle-{index}")
+            self.submit_micro_task(board, f"idle-{index}")
         self.register(board, "w-empty")
         empty = board.client().claim("w-empty", "claim-empty", "n" * 32)
         self.assertIsNone(empty["claim"])
@@ -87,14 +87,14 @@ class ArrivalOrderTests(StoreConcurrencyTestCase):
         board = self.board(max_concurrent=8)
         self.register(board, "w1")
         self.register(board, "w2")
-        self.assertIsNotNone(self.claim_governed(board, "w1", "order-1", model_service=MODEL_SERVICE_A)["claim"])
-        self.assertIsNotNone(self.claim_governed(board, "w2", "order-2", model_service=MODEL_SERVICE_A)["claim"])
+        self.assertIsNotNone(self.claim_micro_task(board, "w1", "order-1", model_service=MODEL_SERVICE_A)["claim"])
+        self.assertIsNotNone(self.claim_micro_task(board, "w2", "order-2", model_service=MODEL_SERVICE_A)["claim"])
         # Model service A is full; model services B and C are both eligible and queued in that
         # order, behind one more blocked model-service-A task. A scan claim must respect
         # the arrival order of eligible work, not adapter, model service or any hidden
         # priority, and must skip the blocked task without visiting it.
-        self.submit_governed(board, "order-3", model_service=MODEL_SERVICE_A)
-        self.submit_governed(board, "order-4", model_service=MODEL_SERVICE_B)
+        self.submit_micro_task(board, "order-3", model_service=MODEL_SERVICE_A)
+        self.submit_micro_task(board, "order-4", model_service=MODEL_SERVICE_B)
         self.register(board, "w3")
         third = board.client().claim("w3", "claim-order-3", "n" * 32)["claim"]
         self.assertEqual(third["task"]["requestId"], "order-4")
@@ -103,10 +103,10 @@ class ArrivalOrderTests(StoreConcurrencyTestCase):
         board = self.board(max_concurrent=2)
         self.register(board, "w1")
         self.register(board, "w2")
-        self.assertIsNotNone(self.claim_governed(board, "w1", "shared-1")["claim"])
-        self.assertIsNotNone(self.claim_governed(board, "w2", "shared-2", model_service=MODEL_SERVICE_B)["claim"])
+        self.assertIsNotNone(self.claim_micro_task(board, "w1", "shared-1")["claim"])
+        self.assertIsNotNone(self.claim_micro_task(board, "w2", "shared-2", model_service=MODEL_SERVICE_B)["claim"])
         self.register(board, "w3")
-        blocked = self.claim_governed(board, "w3", "shared-3")
+        blocked = self.claim_micro_task(board, "w3", "shared-3")
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "capacity")
 

@@ -37,7 +37,7 @@ function setHidden(hidden: boolean) {
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => { cleanup(); vi.useRealTimers(); setHidden(false); });
 
-describe("delegation history", () => {
+describe("microTask history", () => {
   it("preserves backend filters, guards concurrent pagination and deduplicates overlapping pages", async () => {
     const f = harness();
     await startRead();
@@ -128,7 +128,7 @@ describe("delegation history", () => {
   it("keeps the filter choices from its own reads while a scope change reloads the rows", async () => {
     const f = harness();
     await startRead();
-    await act(async () => f.requests[0].resolve(page([{ ...task("kept"), cwd: "/p", delegation: { kind: "goal", sourceHostId: "host-a", currentHostId: "host-a", parentRunId: null, rootRunId: "kept", project: { id: "project-a", label: "A", path: "/a" }, buddy: null } }], "next")));
+    await act(async () => f.requests[0].resolve(page([{ ...task("kept"), cwd: "/p", lineage: { kind: "micro-task", sourceHostId: "host-a", currentHostId: "host-a", parentRunId: null, rootRunId: "kept", project: { id: "project-a", label: "A", path: "/a" }, buddy: null } }], "next")));
     expect(f.result.current.known.map(t => t.runId)).toEqual(["kept"]);
     // A scope change clears the displayed rows; the choices memory survives.
     f.rerender({ query: { ...query, filter: "host" }, active: true });
@@ -413,7 +413,7 @@ describe("delegation history", () => {
     expect(f.result.current.known).toHaveLength(100);
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
     const newcomer = { ...task("new-project"), cwd: "/new-project",
-      delegation: { kind: "goal" as const, sourceHostId: "new-host", currentHostId: "new-host",
+      lineage: { kind: "micro-task" as const, sourceHostId: "new-host", currentHostId: "new-host",
         parentRunId: null, rootRunId: "new-project",
         project: { id: "project-new", label: "New", path: "/new-project" }, buddy: null } };
     // A complete poll page: the whole loaded window is covered in one read.

@@ -34,9 +34,9 @@ class ExecutionContext:
     #: worker in its claim and written to disk by the decision adapter. It is the only
     #: way decision input reaches a model; adapters still never see the database.
     decision_input: dict | None = None
-    #: Governed turn claim: the service-owned turn identity plus the bounded context.
+    #: MicroTask turn claim: the service-owned turn identity plus the bounded context.
     #: Coding adapters write it to the private attempt directory and pass the
-    #: runner its absolute path; internal executions can have no governed turn.
+    #: runner its absolute path; internal executions can have no micro task turn.
     turn: dict | None = None
     #: Attempt-scoped credential handed to the coding child. It is written to a private
     #: file (never into the model-visible turn input) and exported by path.
@@ -208,7 +208,7 @@ class Adapter:
 
     @staticmethod
     def validate_turn_provenance(record: dict) -> str | None:
-        return "this adapter does not support governed turn provenance"
+        return "this adapter does not support micro task turn provenance"
 
     def available(self) -> tuple[bool, str | None]:
         return True, None

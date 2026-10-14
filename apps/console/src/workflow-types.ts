@@ -54,13 +54,13 @@ export type TurnRouting = {
 };
 
 /**
- * The independent Host conclusion of a failed or cancelled goal (ADR-018 §16).
- * It records what the Host did with the remains; it never changes the goal's
+ * The independent Host conclusion of a failed or cancelled micro task (ADR-018 §16).
+ * It records what the Host did with the remains; it never changes the micro task's
  * execution outcome into a success or an acceptance.
  */
 export type HostConclusion = {
   conclusionId: string;
-  /** The reviewed execution generation; null when the goal never started. */
+  /** The reviewed execution generation; null when the micro task never started. */
   attemptId: string | null;
   /** The recorded target outcome this conclusion explains: failed or cancelled. */
   executionStatus: string;
@@ -75,8 +75,8 @@ export type HostConclusion = {
 };
 
 /**
- * The patch from the goal's recorded `inputCommit` to one output (ADR-018 §20).
- * It is generated from the goal's own fixed input, so the Host can integrate
+ * The patch from the micro task's recorded `inputCommit` to one output (ADR-018 §20).
+ * It is generated from the micro task's own fixed input, so the Host can integrate
  * without stacking every turn's incremental patch.
  */
 export type CumulativePatch = {
@@ -133,7 +133,6 @@ export type IntegrationRecord = {
   createdAt: string;
 };
 export type Workflow = {
-  governed: true;
   runId: string;
   hostId: string;
   ownerGeneration: number;
@@ -144,7 +143,7 @@ export type Workflow = {
   continuationCount: number;
   /** ADR-018 §18: true only when the user required this buddy as a hard constraint. */
   buddyLocked?: boolean | null;
-  /** ADR-018 §16: the independent Host conclusion of a failed or cancelled goal. */
+  /** ADR-018 §16: the independent Host conclusion of a failed or cancelled micro task. */
   hostConclusion?: HostConclusion | null;
   buddy?: BuddyIdentity | null;
   buddyRevision?: number;
@@ -194,7 +193,7 @@ export type Workflow = {
     partial?: boolean;
     verified?: boolean;
     final?: boolean;
-    /** ADR-018 §20: the patch from the goal's own input commit to this output. */
+    /** ADR-018 §20: the patch from the micro task's own input commit to this output. */
     cumulativePatch?: CumulativePatch | null;
   }[];
   /** Host-recorded integration evidence, newest first. */

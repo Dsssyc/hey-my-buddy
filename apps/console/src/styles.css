@@ -423,11 +423,11 @@ button.tl-label:hover { background: var(--subtle); }
 .tl-label.opened-run { box-shadow: inset 3px 0 var(--accent); }
 .opened-mark { flex-shrink: 0; font-size: 9px; padding: 0 4px; border-radius: 3px; background: var(--accent-wash); color: var(--accent); }
 .tl-entry.opened { box-shadow: inset 3px 0 var(--accent); background: var(--subtle); }
-/* Overview: metrics and delegation cards */
+/* Overview: metrics and micro task cards */
 .metric-warn { padding: 0 6px; border-radius: 3px; background: var(--warning-wash); color: var(--warning); cursor: help; }
-.delegation-strip { display: flex; align-items: stretch; gap: 8px; overflow-x: auto; padding: 4px 20px 6px; }
-.delegation-card:hover { background: var(--subtle); }
-.delegation-card.selected { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); background: var(--subtle); }
+.micro-task-strip { display: flex; align-items: stretch; gap: 8px; overflow-x: auto; padding: 4px 20px 6px; }
+.micro-task-card:hover { background: var(--subtle); }
+.micro-task-card.selected { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); background: var(--subtle); }
 .strip-bound { align-self: center; flex-shrink: 0; font-size: 10px; padding: 0 4px; }
 /* Dock (0.15.1 §1): the viewport picks the layout; above 760px an open detail
    docks beside the timeline with an adjustable separator. One stable wrapper
@@ -501,8 +501,8 @@ h2 .title-source-note { font-size: 10px; font-weight: 500; vertical-align: middl
 /* List: A4/A5 additions */
 /* Settings: routing status */
 @media (max-width: 760px) {
-  .delegation-strip { flex-direction: column; }
-  .delegation-card { width: auto; }
+  .micro-task-strip { flex-direction: column; }
+  .micro-task-card { width: auto; }
   .inspector-group { flex-direction: column; gap: 1px; }
 }
 
@@ -527,22 +527,22 @@ h2 .title-source-note { font-size: 10px; font-weight: 500; vertical-align: middl
 /* T2: one hierarchy entry inside the vitals line, 24×24 hit area, 16px glyph. */
 .help-button { min-width: 24px; min-height: 24px; padding: 2px; border: 1px solid var(--line); border-radius: 50%; font-size: 12px; line-height: 1; color: var(--muted); }
 
-/* T3: the delegation card band and its cards. */
-.delegation-band { flex: 0 0 auto; border-bottom: 1px solid var(--line); }
-.delegation-band-toggle { display: flex; width: 100%; align-items: center; gap: 6px; padding: 4px 20px; border: 0; background: transparent; color: var(--muted); font-size: 11px; font-weight: 600; text-align: left; }
-.delegation-band-toggle:hover { color: var(--accent); }
-.delegation-band.collapsed .delegation-band-toggle { padding-block: 6px; }
-.delegation-band.collapsed { border-bottom: 1px solid var(--line); }
-.delegation-card { width: 262px; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); text-align: left; min-height: calc(2 * 1.4 * 13px + 1.4 * 11px + 20px + 16px); }
-.delegation-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
-.delegation-card-title { flex: 1 1 0; min-width: 0; font-size: 13px; font-weight: 700; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-.delegation-card-state { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; padding-top: 1px; }
-.delegation-card-result { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11px; }
-.delegation-card-result-text { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+/* T3: the micro task card band and its cards. */
+.micro-task-band { flex: 0 0 auto; border-bottom: 1px solid var(--line); }
+.micro-task-band-toggle { display: flex; width: 100%; align-items: center; gap: 6px; padding: 4px 20px; border: 0; background: transparent; color: var(--muted); font-size: 11px; font-weight: 600; text-align: left; }
+.micro-task-band-toggle:hover { color: var(--accent); }
+.micro-task-band.collapsed .micro-task-band-toggle { padding-block: 6px; }
+.micro-task-band.collapsed { border-bottom: 1px solid var(--line); }
+.micro-task-card { width: 262px; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); text-align: left; min-height: calc(2 * 1.4 * 13px + 1.4 * 11px + 20px + 16px); }
+.micro-task-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
+.micro-task-card-title { flex: 1 1 0; min-width: 0; font-size: 13px; font-weight: 700; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.micro-task-card-state { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; padding-top: 1px; }
+.micro-task-card-result { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11px; }
+.micro-task-card-result-text { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .worker-note { flex: 0 0 auto; padding: 0 4px; border-radius: 3px; background: var(--subtle); color: var(--muted); font-size: 10px; font-weight: 500; white-space: nowrap; }
-.delegation-card-meta { font-size: 10px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.delegation-card.single.expanded { width: auto; flex: 1 1 auto; }
-.delegation-card.single.expanded .delegation-card-state { gap: 8px; }
+.micro-task-card-meta { font-size: 10px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.micro-task-card.single.expanded { width: auto; flex: 1 1 auto; }
+.micro-task-card.single.expanded .micro-task-card-state { gap: 8px; }
 
 /* T4: detail title, breadcrumb and read-only hint. */
 .detail-header .detail-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
@@ -603,7 +603,7 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
    reachable. The drawer itself never shrinks below its set height. */
 .timeline-view > .timeline-body, .timeline-view > .tl-body { flex: 1 1 200px; min-height: 96px; }
 .timeline-view > .tl-head { flex-shrink: 20; min-height: 44px; }
-.timeline-view > .delegation-band, .timeline-view > .tl-toolbar { flex-shrink: 5; min-height: 28px; overflow-y: auto; }
+.timeline-view > .micro-task-band, .timeline-view > .tl-toolbar { flex-shrink: 5; min-height: 28px; overflow-y: auto; }
 /* 0.16 P2.3: the canvas keeps a short strip after the last instant so flags,
    end marks and minimum-width bars at the end never overflow 适应窗口. */
 .tl-grid .tl-row { grid-template-columns: var(--label-w) minmax(0, 1fr) var(--track-end, 0px); }
@@ -727,14 +727,14 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .tl-head .macro-task-title-row .macro-task-description { flex: 1 1 0; min-width: 0; display: block; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
 .tl-head .macro-task-vitals { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .tl-head .time-stats { white-space: nowrap; }
-.timeline-view > .tl-head, .timeline-view > .delegation-band, .timeline-view > .tl-toolbar { flex-shrink: 0; min-height: 0; overflow: visible; }
-.timeline-view > .delegation-band { flex: 0 1 auto; display: flex; flex-direction: column; max-height: 40%; }
-.timeline-view > .delegation-band.collapsed { flex: 0 0 auto; min-height: 0; max-height: none; }
+.timeline-view > .tl-head, .timeline-view > .micro-task-band, .timeline-view > .tl-toolbar { flex-shrink: 0; min-height: 0; overflow: visible; }
+.timeline-view > .micro-task-band { flex: 0 1 auto; display: flex; flex-direction: column; max-height: 40%; }
+.timeline-view > .micro-task-band.collapsed { flex: 0 0 auto; min-height: 0; max-height: none; }
 .timeline-view > .timeline-body, .timeline-view > .tl-body { min-height: 120px; }
-.delegation-strip { flex: 1 1 auto; min-height: 48px; flex-wrap: wrap; align-content: flex-start; overflow-x: hidden; overflow-y: auto; gap: 6px 8px; }
-.delegation-card { width: min(262px, 100%); }
-.delegation-strip > .delegation-card, .delegation-strip > .strip-bound { flex-shrink: 0; }
-.delegation-show-all { align-self: center; }
+.micro-task-strip { flex: 1 1 auto; min-height: 48px; flex-wrap: wrap; align-content: flex-start; overflow-x: hidden; overflow-y: auto; gap: 6px 8px; }
+.micro-task-card { width: min(262px, 100%); }
+.micro-task-strip > .micro-task-card, .micro-task-strip > .strip-bound { flex-shrink: 0; }
+.micro-task-show-all { align-self: center; }
 .timeline-legend-popover { inline-size: min(36em, calc(100vw - 16px)); display: grid; gap: 10px; padding: 12px; }
 .timeline-view-switch { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 5px; overflow: hidden; }
 .timeline-view-switch .button { border: 0; border-radius: 0; min-height: 28px; }
@@ -778,8 +778,8 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .timeline-readout-line[hidden], .timeline-readout[hidden] { display: none; }
 
 .time-stats-popover .time-stats-body { padding: 0; overflow-wrap: anywhere; }
-.delegation-band-head { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding-inline-end: 20px; }
-.delegation-band-head > .delegation-band-toggle { flex: 1 1 auto; width: auto; min-width: 0; }
-.delegation-band-head > .delegation-show-all { flex: 0 0 auto; }
-.delegation-current { flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; padding: 4px 20px; min-width: 0; }
-.delegation-hidden-current { max-inline-size: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.micro-task-band-head { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding-inline-end: 20px; }
+.micro-task-band-head > .micro-task-band-toggle { flex: 1 1 auto; width: auto; min-width: 0; }
+.micro-task-band-head > .micro-task-show-all { flex: 0 0 auto; }
+.micro-task-current { flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; padding: 4px 20px; min-width: 0; }
+.micro-task-hidden-current { max-inline-size: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

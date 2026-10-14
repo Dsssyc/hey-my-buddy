@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { DelegationStrip } from "./MacroTaskOverview";
+import { MicroTaskStrip } from "./MacroTaskOverview";
 import { MacroTaskTimeline, type MacroTaskTimelineProps } from "./MacroTaskTimeline";
 import { macroTaskTimelineFixture } from "./macro-task-fixtures";
 
@@ -20,26 +20,26 @@ function setup(selectedRunId: string | null = null) {
   const onOpenRun = vi.fn();
   const onToggleCollapsed = vi.fn();
   const props = { timeline, selectedRunId, collapsed: false, onSelectRun, onOpenRun, onToggleCollapsed };
-  const view = render(<DelegationStrip {...props} />);
+  const view = render(<MicroTaskStrip {...props} />);
   return { ...view, props, onSelectRun, onOpenRun, onToggleCollapsed, user: userEvent.setup() };
 }
-const cards = () => [...document.querySelectorAll<HTMLButtonElement>(".delegation-card")];
+const cards = () => [...document.querySelectorAll<HTMLButtonElement>(".micro-task-card")];
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-describe("U7 reversible two-row delegation strip", () => {
+describe("U7 reversible two-row microTask strip", () => {
   it("retains one two-state control and returns to precisely the first two rows", async () => {
     const view = setup();
     expect(cards()).toHaveLength(4); // default measured width 800: 2 cards per row
     const control = screen.getByRole("button", { name: "展开全部 21 个" });
     expect(control.getAttribute("aria-expanded")).toBe("false");
     const controlRow = control.parentElement;
-    expect(controlRow?.className).toBe("delegation-band-head");
-    expect(controlRow?.nextElementSibling?.classList.contains("delegation-strip")).toBe(true);
+    expect(controlRow?.className).toBe("micro-task-band-head");
+    expect(controlRow?.nextElementSibling?.classList.contains("micro-task-strip")).toBe(true);
     await view.user.click(control);
     expect(cards()).toHaveLength(21);
     expect(screen.getByRole("button", { name: "收起" })).toBe(control);
     expect(control.parentElement).toBe(controlRow);
-    expect(controlRow?.nextElementSibling?.classList.contains("delegation-strip")).toBe(true);
+    expect(controlRow?.nextElementSibling?.classList.contains("micro-task-strip")).toBe(true);
     expect(control.getAttribute("aria-expanded")).toBe("true");
     await view.user.click(control);
     expect(cards()).toHaveLength(4);
@@ -64,10 +64,10 @@ describe("U7 reversible two-row delegation strip", () => {
 
   it("reveals a new hidden selection while preserving a later manual collapse on refresh", async () => {
     const view = setup();
-    view.rerender(<DelegationStrip {...view.props} selectedRunId="card-20" />);
+    view.rerender(<MicroTaskStrip {...view.props} selectedRunId="card-20" />);
     expect(cards()).toHaveLength(21);
     await view.user.click(screen.getByRole("button", { name: "收起" }));
-    view.rerender(<DelegationStrip {...view.props} timeline={structuredClone(view.props.timeline)} selectedRunId="card-20" />);
+    view.rerender(<MicroTaskStrip {...view.props} timeline={structuredClone(view.props.timeline)} selectedRunId="card-20" />);
     expect(cards()).toHaveLength(4);
     expect(screen.getByRole("button", { name: /已选中：第 21 个/ })).toBeTruthy();
   });
@@ -97,8 +97,8 @@ describe("U7 reversible two-row delegation strip", () => {
 
   it("renders exactly two cards when responsive layout puts the strip into one column", async () => {
     const timeline = manyCards();
-    render(<><style>{".delegation-strip { flex-direction: column; }"}</style>
-      <DelegationStrip timeline={timeline} selectedRunId={null} collapsed={false}
+    render(<><style>{".micro-task-strip { flex-direction: column; }"}</style>
+      <MicroTaskStrip timeline={timeline} selectedRunId={null} collapsed={false}
         onSelectRun={() => {}} onOpenRun={() => {}} onToggleCollapsed={() => {}} />
     </>);
     expect(cards()).toHaveLength(2);
@@ -114,7 +114,7 @@ describe("U7 reversible two-row delegation strip", () => {
     fireEvent.keyDown(cards()[0]!, { key: "End" });
     await waitFor(() => expect(document.activeElement).toBe(cards()[20]));
     const shorter = { ...view.props.timeline, rows: view.props.timeline.rows.slice(0, 8) };
-    view.rerender(<DelegationStrip {...view.props} timeline={shorter} />);
+    view.rerender(<MicroTaskStrip {...view.props} timeline={shorter} />);
     expect(cards()).toHaveLength(8);
     // Fire before focusing the retained card so the old roving index still
     // exceeds the refreshed range; navigation must clamp it before stepping.
@@ -130,10 +130,10 @@ describe("U7 reversible two-row delegation strip", () => {
     const view = setup("card-20");
     await view.user.click(screen.getByRole("button", { name: "委派（21）" }));
     expect(view.onToggleCollapsed).toHaveBeenCalledOnce();
-    view.rerender(<DelegationStrip {...view.props} collapsed />);
+    view.rerender(<MicroTaskStrip {...view.props} collapsed />);
     expect(cards()).toHaveLength(0);
     expect(screen.getByRole("button", { name: "委派（21）" }).getAttribute("aria-expanded")).toBe("false");
-    view.rerender(<DelegationStrip {...view.props} />);
+    view.rerender(<MicroTaskStrip {...view.props} />);
     expect(cards()[20]!.getAttribute("aria-pressed")).toBe("true");
   });
 });
@@ -147,7 +147,7 @@ describe("U7 measured card budget and independent scrolling", () => {
     style.textContent = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
     // jsdom cannot resolve the var(--line) border shorthand. Supply its
     // existing 1px geometry explicitly as part of the measured fixture.
-    style.textContent += "\n.delegation-band { border-bottom: 1px solid black; }";
+    style.textContent += "\n.micro-task-band { border-bottom: 1px solid black; }";
     document.head.append(style);
   });
   afterEach(() => {
@@ -171,7 +171,7 @@ describe("U7 measured card budget and independent scrolling", () => {
       return this.matches(".timeline-view") ? sizes.column : 0;
     });
     vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
-      return this.matches(".delegation-strip") ? 744 : 0;
+      return this.matches(".micro-task-strip") ? 744 : 0;
     });
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
       if (this.matches(".tl-head")) return sizes.header;
@@ -179,8 +179,8 @@ describe("U7 measured card budget and independent scrolling", () => {
       if (this.matches(".inspector-dock")) return sizes.drawer;
       if (this.matches(".inspector-separator")) return sizes.separator;
       if (this.matches(".trunc-banner")) return sizes.banner;
-      if (this.matches(".delegation-band-head")) return sizes.controls;
-      if (this.matches(".delegation-current")) return sizes.locator;
+      if (this.matches(".micro-task-band-head")) return sizes.controls;
+      if (this.matches(".micro-task-current")) return sizes.locator;
       return 0;
     });
     const timeline = manyCards(24);
@@ -190,11 +190,11 @@ describe("U7 measured card budget and independent scrolling", () => {
       onSelectItem: vi.fn(), onOpenItem: vi.fn(), onSelectRun: vi.fn(), onOpenRun: vi.fn(),
       onClearSelection: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn(),
     };
-    if (singleColumn) style.textContent += "\n.delegation-strip { flex-direction: column; }";
+    if (singleColumn) style.textContent += "\n.micro-task-strip { flex-direction: column; }";
     const view = render(<MacroTaskTimeline {...props} />);
     const root = view.container.querySelector<HTMLElement>(".timeline-view")!;
-    const band = root.querySelector<HTMLElement>(".delegation-band")!;
-    const strip = band.querySelector<HTMLElement>(".delegation-strip")!;
+    const band = root.querySelector<HTMLElement>(".micro-task-band")!;
+    const strip = band.querySelector<HTMLElement>(".micro-task-strip")!;
     const resize = () => act(() => {
       for (const observer of observers) observer.callback([], observer as unknown as ResizeObserver);
     });
@@ -294,7 +294,7 @@ describe("U7 measured card budget and independent scrolling", () => {
     await view.user.click(screen.getByRole("button", { name: "收起" }));
     const locator = screen.getByRole("button", { name: /已选中：第 24 个/ });
     expect(view.strip.contains(locator)).toBe(false);
-    expect(locator.parentElement?.className).toBe("delegation-current");
+    expect(locator.parentElement?.className).toBe("micro-task-current");
     expect(getComputedStyle(locator.parentElement!).flexShrink).toBe("0");
     expect(view.band.style.minHeight).toBe("113px");
     await view.user.click(locator);

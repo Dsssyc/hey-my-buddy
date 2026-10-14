@@ -9,16 +9,18 @@ import type { Snapshot, Task } from "./types";
 afterEach(cleanup);
 
 /**
- * ADR-018 Host workflow in the read-only delegation detail: the independent
- * conclusion of a failed goal, the partial-output marks, the cumulative patch,
+ * ADR-018 Host workflow in the read-only micro task detail: the independent
+ * conclusion of a failed micro task, the partial-output marks, the cumulative patch,
  * the Host's own supplementary paths and the per-execution token usage. A
- * failed goal keeps its failure label and is never presented as accepted.
+ * failed micro task keeps its failure label and is never presented as accepted.
  */
 
 function task(): Task {
   return {
     runId: "parent", task: "完成状态内核", status: "failed", owner: "host-a", cwd: "/repo",
     revision: 4, createdAt: "2026-09-22", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
+    lineage: { kind: "micro-task", sourceHostId: "host-a", currentHostId: "host-a", parentRunId: null, rootRunId: "parent",
+      project: { id: "repo", path: "/repo", label: "repo" }, buddy: null },
     spec: { workspace: false }, shutdownConfirmed: true,
     workflow: { state: "failed", awaitingHost: false, hostId: "host-a", ownerGeneration: 2, revision: 7 },
   };
@@ -26,7 +28,7 @@ function task(): Task {
 
 function workflow(overrides: Partial<Workflow> = {}): Workflow {
   return {
-    governed: true, runId: "parent", hostId: "host-a", ownerGeneration: 2, revision: 7,
+    runId: "parent", hostId: "host-a", ownerGeneration: 2, revision: 7,
     state: "failed", awaitingHost: false, waitReason: "the run was cancelled", continuationCount: 0,
     buddyLocked: false,
     hostConclusion: {
@@ -77,8 +79,8 @@ async function openTab(name: string) {
   await user.click(screen.getByRole("tab", { name }));
 }
 
-describe("ADR-018 Host workflow in the delegation detail", () => {
-  it("shows the Host conclusion of a failed goal as an independent record, not an acceptance", async () => {
+describe("ADR-018 Host workflow in the microTask detail", () => {
+  it("shows the Host conclusion of a failed micro task as an independent record, not an acceptance", async () => {
     render(<WorkflowPanel {...fixture().props} />);
     const block = await screen.findByRole("region", { name: "Host 结论" });
     expect(within(block).getByText("Host 结论")).toBeTruthy();

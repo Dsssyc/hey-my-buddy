@@ -5,12 +5,12 @@ export type MacroTaskFilter = "all" | "active" | "host" | "review";
 export type MacroTaskCategory = "host" | "active" | "review" | "ended";
 export type MacroTaskCounts = {
   roots: number; helpers: number;
-  /** Accepted governed members (roots + helpers); the denominator of accepted progress. */
+  /** Accepted micro task members (roots + helpers); the denominator of accepted progress. */
   accepted: number;
   active: number; host: number; review: number; ended: number;
 };
 export type MacroTaskSummary = {
-  /** `macro-<id>` for an explicit macroTask, or `run:<rootRunId>` for a standalone root delegation. */
+  /** `macro-<id>` for an explicit macroTask, or `run:<rootRunId>` for a standalone root micro task. */
   macroTaskId: string;
   kind: "macro-task" | "standalone";
   /** MacroTask title, or the root's display title; `titleSource: "none"` means the 未命名委派 fallback. */
@@ -55,7 +55,7 @@ export type TimelineRow = {
   taskSummary: string | null;
   summary: string | null;
   createdAt: string;
-  /** Governed workflow state (for example executing, awaiting-host, delivered, accepted). */
+  /** Micro task workflow state (for example executing, awaiting-host, delivered, accepted). */
   state: string;
   /** Execution task status (queued, running, completed, failed, cancelled, ...). */
   status: string;
@@ -64,7 +64,7 @@ export type TimelineRow = {
   shutdownConfirmed: boolean;
   /** 0 for a root, +1 per helper level. Rows arrive in tree order. */
   depth: number;
-  kind: "goal" | "helper";
+  kind: "micro-task" | "helper";
   buddy: TimelineBuddy | null;
   acceptedAt: string | null;
   acceptanceVerdict: string | null;
@@ -117,7 +117,7 @@ export type TimelineEvent = {
 export type MacroTaskTimeline = {
   macroTask: MacroTaskSummary; observedAt: string; cursor: number;
   rows: TimelineRow[]; spans: TimelineSpan[]; events: TimelineEvent[];
-  /** rows counts the filtered scope; allRows counts every delegation of the group. */
+  /** rows counts the filtered scope; allRows counts every micro task of the group. */
   totals: { rows: number; spans: number; events: number; allRows: number };
   truncated: { rows: boolean; spans: boolean; events: boolean };
   filtered: boolean;

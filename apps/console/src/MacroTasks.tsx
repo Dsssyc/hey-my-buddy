@@ -126,9 +126,9 @@ function StopDialog({ summary, onConfirm, onCancel }: {
 }
 
 /**
- * Content of the 委派记录 tab. The primary view browses governed delegations
- * as work macroTasks; the clearly labelled secondary switch keeps the raw,
- * non-governed task history (command and external records included) reachable
+ * Content of the 委派记录 tab. The primary view browses micro tasks
+ * as work macroTasks; the clearly labelled secondary switch keeps the
+ * raw task history (command and external records included) reachable
  * instead of silently removing it.
  */
 export function MacroTasks({ snapshot, api, refresh, active = true, authority, writesAvailable = true }: {
@@ -136,7 +136,7 @@ export function MacroTasks({ snapshot, api, refresh, active = true, authority, w
   authority?: AuthorityLatch; writesAvailable?: boolean;
 }) {
   const [view, setView] = useState<"macroTasks" | "records">("macroTasks");
-  const [listCollapsed, setListCollapsed] = useViewPreference("delegation-list-collapsed");
+  const [listCollapsed, setListCollapsed] = useViewPreference("micro-task-list-collapsed");
   const destination = view === "macroTasks" ? "全部执行记录" : "工作目标";
   const listNavigation = <button type="button" className="button small-button history-view-toggle"
     title={`切换到${destination}`} aria-label={`切换到${destination}`}

@@ -179,7 +179,7 @@ export const COUNT_ORDER: readonly { key: keyof MacroTaskSummary["counts"]; glyp
   { key: "ended", glyph: "■", label: "已结束" },
 ];
 
-export function totalDelegations(counts: MacroTaskSummary["counts"]): number {
+export function totalMicroTasks(counts: MacroTaskSummary["counts"]): number {
   return counts.roots + counts.helpers;
 }
 
@@ -440,9 +440,9 @@ export function rangeText(startMs: number | null, endMs: number | null): string 
 
 export type TimelineItem = {
   key: string;
-  /** Governed delegation whose existing detail opens on Enter/double click. */
+  /** Micro task whose existing detail opens on Enter/double click. */
   runId: string;
-  /** Exact recorded routing decision to locate in the delegation's routing tab. */
+  /** Exact recorded routing decision to locate in the micro task's routing tab. */
   decisionId?: string;
   ariaLabel?: string;
   section: SectionId;
@@ -499,7 +499,7 @@ export function spanFacts(
   parts.push(outcomeLabel(span, outcome));
   if (typeof span.error === "string" && span.error.trim()) parts.push(span.error.trim());
   // The detail locator states only the recorded fact — round and time — never
-  // the delegation title, which the detail already shows once (0.16 T4).
+  // the micro task title, which the detail already shows once (0.16 T4).
   const roundPrefix = span.turnIndex != null ? `第 ${span.turnIndex} 轮` : spanHead(span.kind);
   const timeFact = startMs === null ? "时间未记录"
     : endMs === null ? `${clockTime(startMs)} 起 · 结束时间缺失`

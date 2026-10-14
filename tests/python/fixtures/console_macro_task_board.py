@@ -7,7 +7,7 @@ The source supplies its own support/MockWorkspace/catalog/native-turn fixtures.
 No daemon, Worker process, harness, account discovery or model is launched.
 
 Full scale follows the published *scale*, not an unpublished historical fixture:
-60 macros, 360 governed runs (including 10 helpers), 40 plain commands, 130
+60 macros, 360 micro-task runs (including 10 helpers), 40 plain commands, 130
 pending roots, 100 private SQL-injected 1,900,000-byte execution results and
 4,000 declared evidence files. Smoke retains every relationship at small scale.
 Only execution-result payloads bypass public admission limits; their short,
@@ -371,7 +371,7 @@ class SyntheticBoard:
         db_path = self.board.store.db.path
         return {"synthetic": True, "recipeVersion": 1, "seed": self.seed, "recipe": asdict(self.recipe),
                 "schemaVersion": int(schema), "counts": counts, "workflowStates": states, "eventKinds": event_kinds,
-                "governedRuns": counts["workflow_runs"], "plainRecords": len(self.plain),
+                "microTaskRuns": counts["workflow_runs"], "plainRecords": len(self.plain),
                 "pendingRoots": pending_root_count(self.board.store),
                 "largeResultBytes": lengths, "largeResultTotalBytes": sum(lengths),
                 "maxDisplaySummaryCharacters": max(len(outcome["summary"]) for outcome in outcomes),

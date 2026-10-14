@@ -798,7 +798,7 @@ class DecisionSurfaceTests(DecisionTestCase):
         self.assert_code("METHOD_NOT_FOUND", board.console.command, "task_submit", {})
 
     def test_selection_get_defaults_to_a_compact_host_summary(self):
-        """The default read is the low-token delegation path, not the full audit."""
+        """The default read is the low-token micro task path, not the full audit."""
         board = self.board()
         self.seed(board)
         # The decision model and the selected worker buddy are different, so the two

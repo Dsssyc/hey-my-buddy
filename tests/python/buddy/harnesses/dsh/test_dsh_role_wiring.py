@@ -2,7 +2,7 @@
 
 These cases need the harness's activation to be integrated (the registry entry
 and the declared cooperative-checkpoint capability): the Worker runtime selects
-the registered module through :func:`worker_executor`, the governed attempt runs
+the registered module through :func:`worker_executor`, the micro task attempt runs
 in the real role-controller subprocess over the fake ACP agent, and the
 collection path is the shared one — provenance and report references verified by
 size and hash, the two-layer stop, and the turn record built by the role. The
@@ -45,7 +45,7 @@ def qualified_tools(attempt_id: str) -> tuple[str, str, str]:
 
 
 class DshRoleCase(unittest.TestCase):
-    """One private root; the governed attempt runs through the shared executor."""
+    """One private root; the micro task attempt runs through the shared executor."""
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="buddy-dsh-role-")
@@ -83,24 +83,24 @@ class DshRoleCase(unittest.TestCase):
                     "context": {}, "executionWorkspace": {}}
         return ExecutionContext(
             task_id="task", attempt_id=attempt, generation=index,
-            spec={**SPEC, "cwd": str(self.cwd), "task": "fixture governed task",
+            spec={**SPEC, "cwd": str(self.cwd), "task": "fixture micro task task",
                   "timeoutSeconds": timeout},
             directory=self.root / "attempts" / attempt, runtime={}, environment=dict(self.environment),
             turn={"turnId": f"turn-{index}", "input": identity})
 
-    def governed_record(self, context, *, permission=False, answer=False) -> None:
+    def micro_task_record(self, context, *, permission=False, answer=False) -> None:
         checkpoint, _answer, finish = qualified_tools(context.attempt_id)
-        extra = ["--prompt-mode", "governed", "--bridge-config",
+        extra = ["--prompt-mode", "micro-task", "--bridge-config",
                  str(context_root(context, "dsh") / "finish-bridge.json"),
                  "--finish-tool", finish, "--checkpoint-tool", checkpoint]
         if permission:
-            extra.append("--governed-permission")
+            extra.append("--micro-task-permission")
         if answer:
             extra += ["--wait-for-inquiry", "12", "--answer-inquiry"]
         self.point_record(*extra)
 
     def execute(self, context, *, answer=False, permission=False):
-        self.governed_record(context, permission=permission, answer=answer)
+        self.micro_task_record(context, permission=permission, answer=answer)
         executor = worker_executor("dsh")
         handle = executor.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
@@ -130,7 +130,7 @@ class DescriptionSeamTests(DshRoleCase):
             self.assertTrue(callable(getattr(module, operation)), operation)
         self.assertIs(worker_executor("dsh").module, module)
         self.assertIsNone(worker_format("dsh"),
-                          "the governed role rules come from the shared worker services, not a format")
+                          "the micro task role rules come from the shared worker services, not a format")
 
     def test_a_read_only_review_stays_unimplemented(self):
         description = adapter("dsh")
@@ -180,7 +180,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         for reason in ("max_tokens", "refusal"):
             with self.subTest(reason=reason):
                 context = self.context(attempt="stop-" + reason)
-                self.governed_record(context)
+                self.micro_task_record(context)
                 record = json.loads(self.record.read_text())
                 record["dsh"]["command"] += ["--stop-reason", reason]
                 self.record.write_text(json.dumps(record))
@@ -214,7 +214,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         self.assertEqual(result.native_identity.session_id, turn["sessionId"])
         native = outcome.result["nativeSession"]
         self.assertEqual(native["sessionId"], turn["sessionId"])
-        self.assertEqual(native["storageOwner"], "buddy-goal")
+        self.assertEqual(native["storageOwner"], "buddy-micro-task")
         self.assertTrue(native["bindingPresent"])
         self.assertTrue(native["resumable"], "the native facts carry a verified complete turn")
         self.assertIn("inquiry", outcome.result)
@@ -225,14 +225,14 @@ class WorkerRegisteredRunTests(DshRoleCase):
                          "no native interactive request was refused in this turn")
         self.assertEqual(handle.process.args[2], "hey_my_buddy.buddy.roles.run_controller")
 
-    def test_an_answered_host_question_flows_through_the_governed_turn(self):
+    def test_an_answered_host_question_flows_through_the_micro_task_turn(self):
         import threading
         import time as time_module
         from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
         from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request as decode_request
         from hey_my_buddy.json_codec import decode_strict_json
         context = self.context()
-        self.governed_record(context, answer=True)
+        self.micro_task_record(context, answer=True)
         executor = worker_executor("dsh")
         holder: list = []
 

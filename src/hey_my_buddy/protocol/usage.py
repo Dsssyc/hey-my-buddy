@@ -11,7 +11,7 @@ place where the per-harness accounting rules meet:
   so its cache counters are never added again.
 
 The canonical token usage therefore always means ``inputBasis == "includes-cached"``,
-``scope == "attempt"`` (one governed attempt, never a whole native session) and an
+``scope == "attempt"`` (one micro-task attempt, never a whole native session) and an
 explicit ``completeness``. Unknown fields stay unknown; a missing cache counter is
 never turned into zero, and a session-cumulative record is refused instead of being
 counted as this attempt.

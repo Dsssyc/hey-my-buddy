@@ -40,7 +40,7 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
     view = lifecycle_tests.LifecycleTestCase.view
     run_worktree = lifecycle_tests.LifecycleTestCase.run_worktree
     target_with_artifact = lifecycle_tests.LifecycleTestCase.target_with_artifact
-    governed_submit = scope_recovery_tests.ScopeRecoveryTestCase.governed_submit
+    micro_task_submit = scope_recovery_tests.ScopeRecoveryTestCase.micro_task_submit
     scope_failure = scope_recovery_tests.ScopeRecoveryTestCase.scope_failure
     scoped_failure = scope_recovery_tests.ScopeRecoveryTestCase.scoped_failure
 
@@ -76,7 +76,7 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
 
         board = self.board()
         self.register(board)
-        submitted = self.governed_submit(board, request_id="worker-boundary", scope=("src",))
+        submitted = self.micro_task_submit(board, request_id="worker-boundary", scope=("src",))
         claim = self.claim(board, submitted["runId"])["claim"]
         credential = claim["agentCredential"]
         for operation in OPERATIONS.values():

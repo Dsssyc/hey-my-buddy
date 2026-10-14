@@ -1280,7 +1280,7 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
 
 
 def cumulative_patch(manifest: dict, artifact: dict, original_commit: str) -> dict:
-    """Freeze a whole-goal patch using immutable Git objects, independent of checkout edits."""
+    """Freeze a whole-micro-task patch using immutable Git objects, independent of checkout edits."""
     with _errors():
         if original_commit == manifest.get("inputCommit"):
             _validate_output_record(manifest, artifact)
@@ -1976,7 +1976,7 @@ def verify_sealed_output(original_input: dict, final_input: dict, artifact: dict
 
     The record's commit, tree, parent binding and patch hash are checked against
     immutable Git objects; any drift raises. The
-    returned changed paths are the whole-goal delta the record provably carries,
+    returned changed paths are the whole-micro-task delta the record provably carries,
     so a caller can trust exactly the paths this record names.
     """
     with _errors():

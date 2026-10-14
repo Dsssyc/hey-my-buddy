@@ -1,7 +1,7 @@
-"""Synthetic governed-native turn facts for the blackboard's mechanical-rules tests.
+"""Synthetic micro-task-native turn facts for the blackboard's mechanical-rules tests.
 
-The tests served here admit real governed runs through the real worker API but
-have no model process, so they synthesize the native turn record a governed
+The tests served here admit real micro-task runs through the real worker API but
+have no model process, so they synthesize the native turn record a micro-task
 harness would have imported. The provenance below matches the current adapter
 validators field for field, so a record from this module passes the same
 production provenance check a real imported turn passes.
@@ -87,11 +87,11 @@ def provenance_for(harness: str, turn: dict, session_id: str) -> dict:
     return dsh_provenance(session_id)
 
 
-def governed_record(*, harness: str, task_id: str, attempt_id: str, generation: int,
+def micro_task_record(*, harness: str, task_id: str, attempt_id: str, generation: int,
                     turn_id: str, resume_mode: str, previous_session_id, input_sha256: str,
                     outcome: dict, session_id: str | None = None,
                     prompt_sha256: str = "a" * 64) -> dict:
-    """One governed turn record carrying current synthetic native provenance."""
+    """One micro-task turn record carrying current synthetic native provenance."""
     turn = {"turnId": turn_id, "input": {"taskId": task_id, "attemptId": attempt_id,
                                          "generation": generation, "turnId": turn_id,
                                          "resumeMode": resume_mode,
@@ -108,10 +108,10 @@ def governed_record(*, harness: str, task_id: str, attempt_id: str, generation: 
 
 def claim_record(claim: dict, *, outcome: dict, session_id: str | None = None,
                  prompt_sha256: str = "a" * 64) -> dict:
-    """One governed turn record for a ``worker_claim`` response's attempt."""
+    """One micro-task turn record for a ``worker_claim`` response's attempt."""
     attempt, turn = claim["attempt"], claim["turn"]
     turn_input = turn.get("input") or {}
-    return governed_record(
+    return micro_task_record(
         harness=(attempt["adapter"] if attempt["adapter"] in ("command", "external")
                  else claim["task"]["spec"]["harness"]),
         task_id=attempt["taskId"], attempt_id=attempt["attemptId"],

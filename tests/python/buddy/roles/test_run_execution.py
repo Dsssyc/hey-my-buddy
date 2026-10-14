@@ -219,7 +219,7 @@ class CodexModelCheckProjectionTests(unittest.TestCase):
         self.assertNotIn("selectedModel", payload)
 
     def test_a_changed_model_check_reference_fails_the_coding_receipt(self):
-        # The governed receipt keeps the same verified-evidence rule as every
+        # The micro task receipt keeps the same verified-evidence rule as every
         # other reference: a changed digest fails the collection, never silently.
         request = self._request("write")
         result = self._result(request, with_ref=True)

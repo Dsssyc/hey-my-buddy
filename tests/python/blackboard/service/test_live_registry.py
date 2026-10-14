@@ -115,21 +115,21 @@ class TransactionProbe:
 
 
 class LiveRegistryTestCase(StoreConcurrencyTestCase):
-    """The shared fixtures: one claimed governed attempt and its registry."""
+    """The shared fixtures: one claimed micro-task attempt and its registry."""
 
-    governed = True
+    micro_task = True
 
     def setUp(self):
         super().setUp()
         self.board = self.board()
         self.client = self.board.client()
-        adapter = "dsh" if self.governed else "command"
+        adapter = "dsh" if self.micro_task else "command"
         self.client.register_worker("w1", adapter=adapter, capabilities=[adapter])
-        if self.governed:
-            self.run_id = self.submit_governed(self.board, "live-1")
+        if self.micro_task:
+            self.run_id = self.submit_micro_task(self.board, "live-1")
         else:
             self.run_id = self.client.submit(
-                requestId="live-1", task="no governed turn", cwd=str(self.workdir("live-1")),
+                requestId="live-1", task="no micro-task turn", cwd=str(self.workdir("live-1")),
                 adapter="command", argv=["/bin/true"],
             )["task"]["runId"]
         self.claim = self.client.claim("w1", "claim-live-1", NONCE, worker_instance="inst-real")
@@ -301,7 +301,7 @@ class TurnIdentityTests(LiveRegistryTestCase):
                 self.assert_code("UNAUTHORIZED", self.registry.attach,
                                  self.attach_payload(identity=self.identity(**overrides)))
 
-    def test_a_governed_turn_cannot_be_hidden_by_a_both_null_identity(self):
+    def test_a_micro_task_turn_cannot_be_hidden_by_a_both_null_identity(self):
         self.assert_code("UNAUTHORIZED", self.registry.attach,
                          self.attach_payload(identity=self.identity(turnId=None, inputSha256=None)))
 
@@ -352,10 +352,10 @@ class TurnIdentityTests(LiveRegistryTestCase):
         self.assertTrue(self.registry.attach(self.attach_payload())["attached"])
 
 
-class UngovernedTests(LiveRegistryTestCase):
-    governed = False
+class ExecutionTests(LiveRegistryTestCase):
+    micro_task = False
 
-    def test_a_real_ungoverned_claim_keeps_the_both_null_rule(self):
+    def test_a_real_execution_claim_keeps_the_both_null_rule(self):
         self.assertIsNone(self.claim["claim"].get("turn"))
         with self.board.store.db.read() as connection:
             self.assertIsNone(connection.execute("SELECT * FROM workflow_runs WHERE run_id=?", (self.run_id,)).fetchone())

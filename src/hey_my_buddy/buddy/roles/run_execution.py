@@ -148,7 +148,7 @@ def _worker_facts(result) -> dict:
     payload = _base_result(result)
     if format is not None:
         payload.update(format.receipt_fields(result))
-    # The governed receipt carries the on-the-spot model fact with the same
+    # The micro task receipt carries the on-the-spot model fact with the same
     # verified-evidence rule as every other reference: a reference that no
     # longer matches its content fails the collection, never silently.
     check = _evidence(result, "model-check")
@@ -251,7 +251,7 @@ def _worker_result(result, control: dict, turn_input: dict, prompt: str, payload
             payload["nativeTurnId"] = result.native_identity.turn_id
         outcome, provenance, truncated = worker_delivery(result)
         if isinstance(outcome, dict) and isinstance(provenance, dict):
-            # The governed turn record is this role's document: the attempt
+            # The micro task turn record is this role's document: the attempt
             # identity, input hash and prompt hash are the role's own facts,
             # the outcome and ordered provenance are the driver's evidence
             # parts, and the published record lands exactly where the role's
@@ -290,11 +290,11 @@ def worker_delivery(result) -> tuple[dict, dict, dict]:
 
 
 def worker_request(control: dict, module):
-    """Project one governed control file into the frozen request and services."""
+    """Project one micro task control file into the frozen request and services."""
     invocation_root = Path(control["privateRoot"])
     turn_input = decode_strict_json(Path(control["inputFile"]).read_bytes())
     if not isinstance(turn_input, dict):
-        raise BoardError("INVALID_ARGUMENT", "the governed input is not an object")
+        raise BoardError("INVALID_ARGUMENT", "the micro task input is not an object")
     identity = {key: turn_input[key] for key in ("taskId", "attemptId", "generation", "turnId")}
     inquiry = control.get("inquiry") if isinstance(control.get("inquiry"), dict) else None
     attention_path = Path(control["directory"]) / "attention.json"
@@ -310,7 +310,7 @@ def worker_request(control: dict, module):
             inquiry=inquiry, inquiry_tools=("buddy_checkpoint", "buddy_answer_inquiry"),
             validate_outcome=validate_outcome,
             native_stderr=str(Path(control["directory"]) / "native.stderr.log"))
-        prompt = worker_services.governed_prompt(
+        prompt = worker_services.micro_task_prompt(
             task_text, turn_input, binding.completion_tool,
             checkpoint_tool=binding.checkpoint_tool, answer_tool=binding.answer_tool)
         services, descriptions = binding.services, (binding.description,)
@@ -572,7 +572,7 @@ class WorkerRunExecutor:
             raise BoardError("INVALID_ARGUMENT", "Coding requires a complete provider, model and effort after routing", harness=self.name)
         self.module.check_preparation(context.spec, context.environment)
         if context.turn_input is None or not context.turn_id:
-            raise BoardError("INVALID_ARGUMENT", "Coding requires a governed turn input", harness=self.name)
+            raise BoardError("INVALID_ARGUMENT", "Coding requires a micro task turn input", harness=self.name)
         if context.turn_input.get("resumeMode") not in ("initial", "native-session", "reconstructed-new-session"):
             raise BoardError("INVALID_ARGUMENT", "Coding requires an explicit turn resume mode", harness=self.name)
         if context.turn_input.get("resumeMode") == "native-session" and not self.description.native_resume:

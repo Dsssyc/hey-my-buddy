@@ -34,7 +34,7 @@ from support import InProcessBoard
 
 
 TASK = """This is a two-turn native memory probe. Do not use file, command,
-search, browser, or delegation tools. Use only the supplied buddy checkpoint,
+search, browser, or micro task tools. Use only the supplied buddy checkpoint,
 inquiry answer and finish tools. Poll a checkpoint for the Host's question,
 answer it through the inquiry tool, and finish immediately afterwards.
 On the initial turn, remember the memory key from that question without

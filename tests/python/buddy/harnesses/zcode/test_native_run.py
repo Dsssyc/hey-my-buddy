@@ -185,7 +185,7 @@ class MockNativeCase(ZcodeFixtureCase):
             invocation_root=invocation, identity=identity, input_sha256=input_hash(turn_input),
             attention_path=self.base / "attention.json",
             session_tools=worker_services.session_tools(), completion_tool="buddy_finish_turn")
-        prompt = worker_services.governed_prompt("fixture task", turn_input, mount.finish_tool,
+        prompt = worker_services.micro_task_prompt("fixture task", turn_input, mount.finish_tool,
                                                  checkpoint_tool=None, answer_tool=None)
         request = RunRequest(
             identity=RunIdentity(task_id=identity["taskId"], attempt_id=identity["attemptId"],
@@ -561,7 +561,7 @@ def evidence_call(result):
 
 
 class WorkerSeamTests(MockNativeCase):
-    def test_worker_levels_keep_the_governed_carrier_and_record_the_sent_mode(self):
+    def test_worker_levels_keep_the_micro_task_carrier_and_record_the_sent_mode(self):
         from hey_my_buddy.buddy.harnesses.registry import worker_permission
         os.environ.update(self.environment)
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
@@ -685,7 +685,7 @@ class WorkerSeamTests(MockNativeCase):
         self.assertNotIn("session/send", [method for method, _ in calls])
 
     def turn_input(self, *, previous=None, mode=None):
-        return {"version": 1, "taskId": "goal-1", "attemptId": f"attempt-{uuid.uuid4().hex[:8]}",
+        return {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{uuid.uuid4().hex[:8]}",
                 "generation": 1, "turnId": "turn-1",
                 "resumeMode": mode or ("native-session" if previous else "initial"),
                 "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
@@ -805,7 +805,7 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual(result.activity.value["phase"], "waiting-model")
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
-    def test_a_governed_turn_settles_with_a_verified_completion_tool_value(self):
+    def test_a_micro_task_turn_settles_with_a_verified_completion_tool_value(self):
         os.environ.update(self.environment)
         os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
         turn_input = self.turn_input()
@@ -819,7 +819,7 @@ class WorkerSeamTests(MockNativeCase):
         # honest absent fact here; the adapter-path suites cover the real shape.
         self.assertIsNone(result.usage)
         self.assertEqual(result.buddy.checked.model.value, "fixture-model")
-        # The governed turn's evidence parts are retained for the role's record;
+        # The micro task turn's evidence parts are retained for the role's record;
         # the verified finish receipt and its call identity travel in the
         # provenance, read back through the size- and digest-checked reference.
         kinds = {ref.kind for ref in result.evidence_refs}

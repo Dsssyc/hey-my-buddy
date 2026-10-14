@@ -27,7 +27,7 @@ class ConsoleMacroTaskFixtureTests(unittest.TestCase):
                                                 recipe=fixture_module.Recipe.smoke(), seed=613) as fixture:
                 facts = fixture.initial_facts
                 self.assertEqual(facts["schemaVersion"], SCHEMA_VERSION)
-                self.assertEqual(facts["governedRuns"], 12)
+                self.assertEqual(facts["microTaskRuns"], 12)
                 self.assertEqual(facts["counts"]["macro_tasks"], 3)
                 self.assertEqual(facts["plainRecords"], 2)
                 self.assertEqual(facts["pendingRoots"], 4)

@@ -294,7 +294,7 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         self.catalog_fixture()
         mock_readonly.install(self)
 
-    def test_router_unavailable_opens_same_goal_attention_and_complete_host_buddy_recovers(self):
+    def test_router_unavailable_opens_same_micro_task_attention_and_complete_host_buddy_recovers(self):
         board = self.board()
         self.seed(board, decision_buddy=None)
         view = self.routed(board)

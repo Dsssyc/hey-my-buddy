@@ -83,12 +83,12 @@ export function preferredVariant(modelService: ModelServiceGroup, preferences: P
     || pool.find(p => p.enabled) || pool[0];
 }
 export function taskProject(task: Task) {
-  return task.delegation?.project || { id: "unknown", label: "未记录项目", path: null };
+  return task.lineage?.project || { id: "unknown", label: "未记录项目", path: null };
 }
 export function taskHost(task: Task) {
-  return task.delegation?.sourceHostId || "未记录委派方";
+  return task.lineage?.sourceHostId || "未记录委派方";
 }
 export function taskExecutor(task: Task) {
-  const buddy = task.delegation?.buddy;
+  const buddy = task.lineage?.buddy;
   return buddy ? `${buddy.harness} · ${buddy.model} / ${effortText(buddy.effort)}` : "执行配置待确定";
 }

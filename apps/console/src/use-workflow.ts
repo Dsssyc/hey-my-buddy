@@ -6,15 +6,16 @@ import type { Workflow } from "./workflow-types";
 import { documentVisibleNow, useDocumentVisible } from "./page-visibility";
 
 /**
- * Strict check of one `workflow_get` reply: the governed view must belong to
- * the requested run and carry an integer revision. Anything else — including a
- * future incompatible shape — is refused instead of being presented as a
+ * Strict check of one `workflow_get` reply: the micro task view must belong to
+ * the requested run and carry micro task lineage and an integer revision. Any
+ * incompatible shape is refused instead of being presented as a
  * partial collaboration record. This is the one parser both the poll and the
  * manual refresh use.
  */
 export function parseWorkflowReply(value: unknown, runId: string): Workflow {
   const result = value as Workflow | null;
-  if (!result || typeof result !== "object" || !result.governed || result.runId !== runId
+  if (!result || typeof result !== "object"
+    || !["micro-task", "helper"].includes(result.task?.lineage?.kind ?? "") || result.runId !== runId
     || !Number.isInteger(result.revision)) {
     throw new ApiError("INVALID_RESPONSE", "协作记录不完整，请检查服务版本。");
   }
@@ -22,7 +23,7 @@ export function parseWorkflowReply(value: unknown, runId: string): Workflow {
 }
 
 /**
- * Read-only workflow read for the delegation detail (0.15.1 U4). The browser
+ * Read-only workflow read for the micro task detail (0.15.1 U4). The browser
  * no longer submits, retries, acknowledges or continues anything, so this hook
  * only polls `workflow_get` — one of the reads every authenticated session
  * keeps — and never dispatches a mutation or mints a command identity.

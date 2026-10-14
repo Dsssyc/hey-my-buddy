@@ -1,7 +1,7 @@
-"""The Worker role's session tools: governed prompt, finish contract, inquiries.
+"""The Worker role's session tools: micro task prompt, finish contract, inquiries.
 
-These are the harness-neutral rules of one governed Worker root turn
-(ADR-025 decision 7): the governed prompt's full text and assembly, the
+These are the harness-neutral rules of one micro task Worker root turn
+(ADR-025 decision 7): the micro task prompt's full text and assembly, the
 six-field finish contract, the fixed Worker role text, and the completion
 rules that refuse a ``completed`` outcome while a native interactive request is
 outstanding or a Host inquiry is still unanswered. Nothing here knows a
@@ -97,7 +97,7 @@ FINISH_DESCRIPTION = (
     "the call and retry in this same turn. This tool does not dispatch other tasks."
 )
 CHECKPOINT_DESCRIPTION = (
-    "Pick up queued Host inquiries for this governed turn. Returns a signed receipt listing the questions "
+    "Pick up queued Host inquiries for this micro task turn. Returns a signed receipt listing the questions "
     "still awaiting an answer (nothing pending returns an empty list); when the serialized receipt budget "
     "cannot carry every pending question, morePending names how many stayed queued — answer the listed ones "
     "and checkpoint again to pick up the rest. Call it at natural work milestones and again just before "
@@ -118,9 +118,9 @@ ATTENTION_REFUSAL = (
 INQUIRY_CHANNEL_ABSENT = "this turn has no mounted inquiry channel"
 
 
-def governed_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
+def micro_task_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
                     checkpoint_tool: str | None = None, answer_tool: str | None = None) -> str:
-    """Bounded governed root prompt: scope, inquiry channel, finish contract."""
+    """Bounded micro task root prompt: scope, inquiry channel, finish contract."""
     inquiry = (
         f"Host inquiries arrive cooperatively: call {checkpoint_tool} at natural work milestones and again just "
         f"before finishing to pick up any queued Host questions (an empty list means none). Answer each listed "
@@ -130,7 +130,7 @@ def governed_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
         "your turn."
     ) if checkpoint_tool and answer_tool else ""
     return worker_prompt(task_text, turn_input, delivery=(
-        "This is a governed Buddy root turn. Complete the authorized task using the available coding tools and internal subagents. Follow the frozen Host input and its allocated workspace. Allocated workspaces share Git stash, branches and tags with the owner's repository: do not use git stash or create, switch, move or delete branches or tags; leave changes in the workspace or commit on the current detached HEAD.",
+        "This is a Buddy root turn for a micro task. Complete the authorized task using the available coding tools and internal subagents. Follow the frozen Host input and its allocated workspace. Allocated workspaces share Git stash, branches and tags with the owner's repository: do not use git stash or create, switch, move or delete branches or tags; leave changes in the workspace or commit on the current detached HEAD.",
         f"Only the root may conclude this Buddy turn. After your work and internal subagents settle, obtain one successful receipt from {finish_tool} with the complete structured outcome. Include all six fields: disposition, summary, remaining, decisions, artifacts, request. Completed requires request: null. Use assistance for bounded help or attention for a Host decision. If a native permission or user-input request was refused, you must conclude with attention instead of completed. If a session tool refuses your call — including with a signed JSON refusal envelope naming the correction — correct the arguments and retry in this same turn. Plain final text is not a recorded outcome. After a successful finish receipt, do not start more tools; end the native turn.",
         inquiry,
     ))

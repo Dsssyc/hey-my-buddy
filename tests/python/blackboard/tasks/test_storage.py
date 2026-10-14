@@ -321,7 +321,7 @@ class StorageTests(BoardTestCase):
             board.call('storage_apply',{'planId':planned['planId'],'commandId':'linked-no-delete','confirm':True})
         self.assertEqual(sentinel.read_bytes(),b'outside')
 
-    def test_codex_user_sessions_are_not_inventory_or_goal_removal_targets(self):
+    def test_codex_user_sessions_are_not_inventory_or_micro_task_removal_targets(self):
         from hey_my_buddy.buddy.harnesses.codex.native_run import session_facts
         board = self.board()
         user_home = self.directory / 'user-home' / '.codex'
@@ -340,21 +340,21 @@ class StorageTests(BoardTestCase):
         self.assertFalse(any(Path(row['path']).is_relative_to(user_home) for row in candidates))
         private = next(row for row in candidates if row.get('adapter') == 'codex')
         self.assertEqual(private['bytes'], 0)
-        private_dirs.remove_tree(private_dirs.goal_root(board.directory, 'codex', 'fixture-task'))
+        private_dirs.remove_tree(private_dirs.micro_task_root(board.directory, 'codex', 'fixture-task'))
         self.assertEqual(session.read_bytes(), b'user-owned native session')
 
-    def test_all_adapters_private_goals_are_visible(self):
+    def test_all_adapters_private_micro_tasks_are_visible(self):
         board = self.board()
         state = board.directory.resolve()
         for adapter in ('codex', 'claude', 'dsh', 'zcode'):
-            root = private_dirs.ensure_private_dir(private_dirs.native_root(state, adapter, 'unknown-goal'))
+            root = private_dirs.ensure_private_dir(private_dirs.native_root(state, adapter, 'unknown-micro-task'))
             (root / 'session.json').write_text('retained')
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
             planned = board.call('storage_plan', {})
-            goals = [row for row in planned['candidates'] if row['category'] == 'harnesses']
-            self.assertEqual({row['adapter'] for row in goals}, {'codex', 'claude', 'dsh', 'zcode'})
-            self.assertTrue(all(not row['eligible'] and 'owner-unproven' in row['reasons'] for row in goals))
-            board.call('storage_apply', {'planId':planned['planId'], 'commandId':'protected-goals', 'confirm':True})
+            micro_tasks = [row for row in planned['candidates'] if row['category'] == 'harnesses']
+            self.assertEqual({row['adapter'] for row in micro_tasks}, {'codex', 'claude', 'dsh', 'zcode'})
+            self.assertTrue(all(not row['eligible'] and 'owner-unproven' in row['reasons'] for row in micro_tasks))
+            board.call('storage_apply', {'planId':planned['planId'], 'commandId':'protected-micro-tasks', 'confirm':True})
 
     def test_storage_lock_plan_receipt_and_save_reject_links_without_touching_targets(self):
         board = self.board()

@@ -470,7 +470,7 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
 );
 """
 
-#: Current governed productivity workflow tables. A governed run is the existing
+#: Current micro-task productivity workflow tables. A micro-task run is the existing
 #: logical task (``run_id`` = ``task_id``) plus durable turn, request, helper,
 #: continuation, workspace-reservation, pinned-artifact and attempt-scoped
 #: credential records.
@@ -489,8 +489,8 @@ CREATE TABLE IF NOT EXISTS macro_tasks (
 CREATE INDEX IF NOT EXISTS macro_tasks_activity_idx ON macro_tasks(activity_seq DESC, macro_task_id DESC);
 CREATE INDEX IF NOT EXISTS macro_tasks_project_idx ON macro_tasks(project_id, activity_seq DESC, macro_task_id DESC);
 """,
-    # The logical goal plus its Host ownership generation and prepared workspace.
-    # ``goal_json``/``goal_fingerprint`` are immutable: continuations record their
+    # The logical micro task plus its Host ownership generation and prepared workspace.
+    # ``micro_task_json``/``micro_task_fingerprint`` are immutable: continuations record their
     # own effective input in ``workflow_continuations``.
     """
 CREATE TABLE IF NOT EXISTS workflow_runs (
@@ -502,8 +502,8 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     host_id                 TEXT NOT NULL,
     owner_generation        INTEGER NOT NULL DEFAULT 1,
     control_verifier        TEXT NOT NULL,
-    goal_json               TEXT NOT NULL,
-    goal_fingerprint        TEXT NOT NULL,
+    micro_task_json               TEXT NOT NULL,
+    micro_task_fingerprint        TEXT NOT NULL,
     request_fingerprint     TEXT NOT NULL,
     buddy_json TEXT,
     buddy_revision INTEGER NOT NULL DEFAULT 0,
@@ -669,7 +669,7 @@ CREATE INDEX IF NOT EXISTS workspace_reservations_checkout_idx ON workspace_rese
     """
 CREATE INDEX IF NOT EXISTS workspace_reservations_holder_idx ON workspace_reservations(holder_task_id, state);
 """,
-    # Append-only authorization scope per governed run. ``scope_version`` is a
+    # Append-only authorization scope per micro-task run. ``scope_version`` is a
     # per-run monotonic counter, deliberately distinct from the input snapshot it
     # happened to see: a later amendment never rewrites an earlier scope, an
     # earlier input manifest or the original submission. Version 1 is recorded
@@ -729,7 +729,7 @@ CREATE INDEX IF NOT EXISTS workflow_workspace_conflicts_run_idx ON workflow_work
 """,
     # One immutable integration record per (artifact, target, strategy). The
     # before/after commits and trees are resolved from the actual target checkout,
-    # never taken on trust from the caller; an accepted goal must hold a verified
+    # never taken on trust from the caller; an accepted micro task must hold a verified
     # record or an explicit not-required decision bound to its final artifact.
     """
 CREATE TABLE IF NOT EXISTS workflow_integrations (

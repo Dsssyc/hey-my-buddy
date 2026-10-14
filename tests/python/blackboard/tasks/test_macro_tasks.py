@@ -31,7 +31,7 @@ class ProjectLabelTests(WorkflowTestCase):
 
     def assert_projects(self, board, submitted, *, label, path, identifier):
         expected = {"id": identifier, "path": str(path), "label": label}
-        metadata = board.call("task_get", {"runId": submitted["runId"]})["task"]["delegation"]
+        metadata = board.call("task_get", {"runId": submitted["runId"]})["task"]["lineage"]
         self.assertEqual(metadata["project"], expected)
         group_id = submitted.get("macroTaskId") or f"run:{submitted['runId']}"
         summary = next(row for row in board.call("macro_task_list", {})["macroTasks"]
@@ -110,7 +110,7 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
 
     def test_description_is_atomic_immutable_display_metadata(self):
         board = self.board()
-        metadata = {'title': 'Readable goal', 'description': 'User wording sentinel.'}
+        metadata = {'title': 'Readable micro task', 'description': 'User wording sentinel.'}
         run = self.submit(board, kind='worktree', macroTask=metadata, title='Short title', task='Task opening.\nMore detail.')
         identifier = run['macroTaskId']
         summary = board.call('macro_task_timeline', {'macroTaskId': identifier})
@@ -127,7 +127,7 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
         with board.store.db.read() as db:
             self.assertEqual(head, db.execute('SELECT MAX(seq) FROM events').fetchone()[0])
             self.assertEqual(shape, [tuple(r) for r in db.execute('PRAGMA table_info(macro_tasks)')])
-            for row in db.execute('SELECT goal_json FROM workflow_runs'):
+            for row in db.execute('SELECT micro_task_json FROM workflow_runs'):
                 self.assertNotIn(metadata['description'], row[0])
         self.register(board)
         self.assertNotIn(metadata['description'], json.dumps(self.claim(board)))

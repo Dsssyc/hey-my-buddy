@@ -1,6 +1,6 @@
 """CLI surface tests: the current single-contract names, help and Host control privacy.
 
-The governed command path is driven through the real ``hey_my_buddy.cli.main`` module, the real
+The micro-task command path is driven through the real ``hey_my_buddy.cli.main`` module, the real
 ``transport.call_service`` mapping and the real store/service validators; only the
 C-Two socket is substituted with the in-process board and only the Git-backed
 workspace module is replaced by the deterministic double.
@@ -95,15 +95,15 @@ class MethodSurfaceTests(unittest.TestCase):
         self.assertEqual(set(cli.METHODS), set(transport.METHOD_MAP) | set(cli.LOCAL_METHODS) | {"await", "upgrade", "install", "paths", "backup-preflight"})
         self.assertEqual(cli.LOCAL_METHODS, ("worker-start", "worker-stop"))
 
-    def test_execution_results_unwrap_the_task_view_and_goal_results_do_not(self):
+    def test_execution_results_unwrap_the_task_view_and_micro_task_results_do_not(self):
         self.assertEqual(
             transport.UNWRAP_TASK,
             frozenset({"execution-submit", "execution-cancel", "execution-retry", "execution-acknowledge", "status"}),
         )
         self.assertEqual(transport.DIRECT_TASK_VIEW, frozenset({"wait"}))
-        for governed in ("submit", "get", "decide", "continue", "takeover", "cancel", "accept", "conclude", "reclaim", "suggest"):
-            self.assertNotIn(governed, transport.UNWRAP_TASK)
-            self.assertNotIn(governed, transport.DIRECT_TASK_VIEW)
+        for micro_task in ("submit", "get", "decide", "continue", "takeover", "cancel", "accept", "conclude", "reclaim", "suggest"):
+            self.assertNotIn(micro_task, transport.UNWRAP_TASK)
+            self.assertNotIn(micro_task, transport.DIRECT_TASK_VIEW)
 
     def test_retired_aliases_are_rejected_by_argparse(self):
         for method in RETIRED_METHODS:
@@ -130,7 +130,7 @@ class MethodSurfaceTests(unittest.TestCase):
         self.assertTrue(hasattr(BoardService, "user_policy_publish"))
         self.assertTrue(hasattr(BuddyControl, "user_policy_publish"))
 
-    def test_control_methods_are_the_current_governed_mutations(self):
+    def test_control_methods_are_the_current_micro_task_mutations(self):
         self.assertEqual(cli.CONTROL_METHODS, frozenset({"decide", "continue", "takeover", "cancel", "accept", "conclude", "reclaim", "scope-amend", "workspace-resolve"}))
 
     def test_console_keeps_the_canonical_name_and_no_alternative_spellings(self):
@@ -145,7 +145,7 @@ class MethodSurfaceTests(unittest.TestCase):
         self.assertNotIn("console", cli.LOCAL_METHODS)
 
     def test_worker_configuration_and_selection_operations_stay_distinct(self):
-        # The governed goal lifecycle never absorbs the separate worker,
+        # The micro task lifecycle never absorbs the separate worker,
         # configuration or selection surfaces.
         for method, operation in (
             ("workers", "worker_list"),
@@ -191,8 +191,8 @@ class HelpTests(unittest.TestCase):
             "wait-timeout",
             "Accept one delivered artifact",
             'adjusted":true (the note is the reason)',
-            "conclude ends a failed, cancelled or delivered-but-unaccepted goal",
-            "conclude ends a failed, cancelled or delivered-but-unaccepted goal",
+            "conclude ends a failed, cancelled or delivered-but-unaccepted micro task",
+            "conclude ends a failed, cancelled or delivered-but-unaccepted micro task",
             "execution-submit",
             "buddy get",
             "buddy await",
@@ -388,8 +388,8 @@ class ControlFileTests(PrivateStateTestCase):
         self.assertEqual(missing.exception.code, "INVALID_ARGUMENT")
 
 
-class GovernedCliTests(PrivateStateTestCase, WorkflowTestCase):
-    """End-to-end governed CLI commands through the real service path."""
+class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
+    """End-to-end micro-task CLI commands through the real service path."""
 
     def submit_payload(self, request_id: str = "cli-req-1", **extra) -> str:
         return json.dumps(
@@ -434,7 +434,7 @@ class GovernedCliTests(PrivateStateTestCase, WorkflowTestCase):
         self.assertEqual(view["state"], "executing")
         self.assertNotIn("controlToken", json.dumps(view))
 
-        # The named control file authorizes the governed mutation...
+        # The named control file authorizes the micro-task mutation...
         code, cancelled = self.run_cli(
             "cancel",
             json.dumps({"runId": run_id, "commandId": "cli-cancel-1", "reason": "host stop", "controlFile": submitted["controlFile"]}),
@@ -442,7 +442,7 @@ class GovernedCliTests(PrivateStateTestCase, WorkflowTestCase):
         self.assertEqual(code, 0, cancelled)
         self.assertTrue(cancelled["cancelled"])
 
-    def test_governed_mutation_without_the_control_file_fails_closed(self):
+    def test_micro_task_mutation_without_the_control_file_fails_closed(self):
         board = self.board()
         self.use_board_transport(board)
         code, submitted = self.run_cli("submit", self.submit_payload("cli-req-2"))

@@ -202,14 +202,15 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
         self.assertIsNone(empty["nextCursor"])
         self.assertEqual(empty["total"], 1)
 
-    def test_history_on_an_ungoverned_task_is_honestly_empty(self):
+    def test_history_on_an_execution_task_is_honestly_empty(self):
         board = self.board()
         plain = board.call("task_submit", {
             "requestId": "plain", "adapter": "command", "argv": ["true"],
             "task": "ordinary", "cwd": str(self.workdir("plain")),
         })
         view = board.call("workflow_get", {"runId": plain["task"]["runId"], "routingHistory": {"limit": 5}})
-        self.assertFalse(view["governed"])
+        self.assertEqual(view["task"]["lineage"]["kind"], "execution")
+        self.assertNotIn("microTask", view)
         self.assertEqual(view["routingHistory"], {"entries": [], "nextCursor": None, "total": 0})
         self.assertNotIn("routingHistory", board.call("workflow_get", {"runId": plain["task"]["runId"]}))
 

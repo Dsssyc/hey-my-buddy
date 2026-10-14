@@ -7,7 +7,7 @@ observation rules and session-service binding, and a :class:`RunResult` read
 back as facts. Nothing wraps a prepared dict: the request goes through the
 launch patch/permission-preset configuration, session open, the native model
 readback, the prompt and its update stream, and the result comes from the same
-stream and stop observations the driver owns. The governed cases mint their
+stream and stop observations the driver owns. The micro task cases mint their
 receipts through the real ``roles.worker_services`` rules with the run's real
 bridge key, so every verified value is one the driver could have received from
 the stdio MCP carrier.
@@ -120,10 +120,10 @@ class NativeRunCase(unittest.TestCase):
 
     def worker_request(self, *, timeout: int = FAST_TIMEOUT, inquiry: bool = False,
                        continuation=None, native_root=None, level="write"):
-        """The governed binding: a real mount, the real role validator and prompt.
+        """The micro task binding: a real mount, the real role validator and prompt.
 
         The binding is assembled through exactly the shared role controller's
-        parameter set, including the stderr mirror path the governed projection
+        parameter set, including the stderr mirror path the micro task projection
         consumes. The controller injects its optional live endpoint separately. ``inquiry`` mounts the cooperative
         channel the same way the role passes this attempt's inquiry paths.
         """
@@ -145,7 +145,7 @@ class NativeRunCase(unittest.TestCase):
             inquiry=inquiry_credentials, inquiry_tools=("buddy_checkpoint", "buddy_answer_inquiry"),
             native_stderr=str(self.base / f"native-stderr-{uuid.uuid4().hex[:8]}.log"))
         mount = bound.services.mount
-        prompt = worker_services.governed_prompt(
+        prompt = worker_services.micro_task_prompt(
             "fixture task", turn_input, mount.finish_tool,
             checkpoint_tool=mount.checkpoint_tool if inquiry else None,
             answer_tool=mount.answer_tool if inquiry else None)
@@ -168,16 +168,16 @@ class NativeRunCase(unittest.TestCase):
                 tool_names=[f"mcp__{mount.server_name}__{name}" for name in mount.bare_tools]),))
         return request, bound, mount
 
-    def governed_agent_args(self, mount, *, permission=False, **flags) -> None:
+    def micro_task_agent_args(self, mount, *, permission=False, **flags) -> None:
         # The mount carries all three session tools; the checkpoint's qualified
         # name exists whether or not this run wired an inquiry channel.
         checkpoint = f"mcp__{mount.server_name}__buddy_checkpoint"
         self.extra_agent_args = [
-            "--prompt-mode", "governed",
+            "--prompt-mode", "micro-task",
             "--bridge-config", mount.bridge_config_path,
             "--finish-tool", mount.finish_tool,
             "--checkpoint-tool", checkpoint,
-            *(["--governed-permission"] if permission else []),
+            *(["--micro-task-permission"] if permission else []),
             *[name for flag, value in flags.items() for name in (f"--{flag.replace('_', '-')}",) if value],
         ]
 
@@ -749,7 +749,7 @@ class MountTests(NativeRunCase):
                 observer=worker_observer, services=services, cancelled=lambda: False)
         with self.assertRaises(BoardError):
             run(request, observer=worker_observer, services=object(), cancelled=lambda: False)
-        # Native resume is the governed Worker carrier's path alone: a request
+        # Native resume is the micro task Worker carrier's path alone: a request
         # without any session service — the fast carrier's own shape — is
         # refused before anything else, never silently resumed or rebuilt.
         carrier = RunRequest.from_payload(self.fast_request("prompt").to_payload() | {
@@ -767,11 +767,11 @@ class MountTests(NativeRunCase):
 
 
 class WorkerSeamTests(NativeRunCase):
-    """The governed completion-tool carrier over real signed receipts."""
+    """The micro task completion-tool carrier over real signed receipts."""
 
-    def test_a_governed_turn_settles_with_a_verified_completion_tool_value(self):
+    def test_a_micro_task_turn_settles_with_a_verified_completion_tool_value(self):
         request, bound, mount = self.worker_request()
-        self.governed_agent_args(mount)
+        self.micro_task_agent_args(mount)
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
@@ -804,9 +804,9 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(checked.model.value, "m1")
         self.assertEqual(checked.effort.value, "high")
 
-    def test_a_governed_turn_carries_its_unknown_notifications_in_the_result(self):
+    def test_a_micro_task_turn_carries_its_unknown_notifications_in_the_result(self):
         request, bound, mount = self.worker_request()
-        self.governed_agent_args(mount)
+        self.micro_task_agent_args(mount)
         self.extra_agent_args.append("--emit-unknown-update")
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
@@ -817,12 +817,12 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(result.native_evidence.unknown_events.total, 1)
 
     def test_a_missing_stop_reason_ends_unknown_without_a_turn_or_binding(self):
-        # The governed carrier's unreadable end: the session still closes and
+        # The micro task carrier's unreadable end: the session still closes and
         # the owned group stop is the same confirmed fact, but no receipt
         # becomes a turn, no provenance is written and the session stays
         # non-resumable.
         request, bound, mount = self.worker_request()
-        self.governed_agent_args(mount)
+        self.micro_task_agent_args(mount)
         self.extra_agent_args.append("--stop-reason-unread")
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
@@ -837,16 +837,16 @@ class WorkerSeamTests(NativeRunCase):
         self.assertTrue(self.wait_for(lambda: any(
             entry.get("event") == "session-closed" for entry in self.agent_log())))
         self.assertFalse(any(self.root.glob("*.json")),
-                         "an unreadable end establishes no goal binding")
+                         "an unreadable end establishes no micro task binding")
 
     def test_a_worker_turn_reports_the_record_usage_and_mirrors_its_stderr(self):
-        # The Worker token-usage capability: a governed turn whose native record
+        # The Worker token-usage capability: a micro task turn whose native record
         # exists reports the shared usage facts — the fact must not degrade to
         # None while a real record stands. The bounded stderr tail also reaches
         # the role's own mirror path.
         request, bound, mount = self.worker_request()
-        note = "fixture stderr for the governed mirror"
-        self.governed_agent_args(mount)
+        note = "fixture stderr for the micro task mirror"
+        self.micro_task_agent_args(mount)
         self.extra_agent_args += ["--session-record", "usage", "--stderr-note", note]
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
@@ -866,7 +866,7 @@ class WorkerSeamTests(NativeRunCase):
 
     def test_a_refused_upgrade_request_becomes_attention_not_completed(self):
         request, bound, mount = self.worker_request()
-        self.governed_agent_args(mount, permission=True)
+        self.micro_task_agent_args(mount, permission=True)
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
@@ -890,7 +890,7 @@ class WorkerSeamTests(NativeRunCase):
 
     def test_a_failed_finish_result_is_retryable_inside_the_same_turn(self):
         request, bound, mount = self.worker_request()
-        self.governed_agent_args(mount, finish_fail_then_retry=True)
+        self.micro_task_agent_args(mount, finish_fail_then_retry=True)
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
@@ -909,7 +909,7 @@ class WorkerSeamTests(NativeRunCase):
 
     def test_a_completed_turn_without_a_finish_tool_fails(self):
         request, bound, mount = self.worker_request()
-        self.governed_agent_args(mount, no_finish=True)
+        self.micro_task_agent_args(mount, no_finish=True)
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
@@ -918,7 +918,7 @@ class WorkerSeamTests(NativeRunCase):
 
     def test_a_tampered_finish_receipt_is_fatal(self):
         request, bound, mount = self.worker_request()
-        self.governed_agent_args(mount, forge_receipt=True)
+        self.micro_task_agent_args(mount, forge_receipt=True)
         from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
@@ -938,7 +938,7 @@ class WorkerSeamTests(NativeRunCase):
         self.assertGreaterEqual(result.activity.value["counts"]["toolCalls"], 2)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
-    def test_the_governed_activity_callback_publishes_bounded_phases(self):
+    def test_the_micro_task_activity_callback_publishes_bounded_phases(self):
         from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
@@ -953,7 +953,7 @@ class WorkerSeamTests(NativeRunCase):
             return original(payload)
 
         services = dataclasses.replace(bound.services, live=endpoint)
-        self.governed_agent_args(mount)
+        self.micro_task_agent_args(mount)
         with mock.patch.object(endpoint, "publish_activity", side_effect=publish):
             result = run(request, observer=worker_observer, services=services,
                          cancelled=lambda: False)
@@ -973,7 +973,7 @@ class WorkerSeamTests(NativeRunCase):
     def test_no_live_endpoint_keeps_the_native_activity_final_fact(self):
         request, bound, mount = self.worker_request()
         self.assertIsNone(bound.services.live)
-        self.governed_agent_args(mount)
+        self.micro_task_agent_args(mount)
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
@@ -989,7 +989,7 @@ class WorkerSeamTests(NativeRunCase):
         request, bound, mount = self.worker_request()
         endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
         services = dataclasses.replace(bound.services, live=endpoint)
-        self.governed_agent_args(mount)
+        self.micro_task_agent_args(mount)
         with mock.patch.object(endpoint, "publish_activity", return_value=False) as publish:
             result = run(request, observer=worker_observer, services=services,
                          cancelled=lambda: False)
@@ -1000,7 +1000,7 @@ class WorkerSeamTests(NativeRunCase):
         self.assertIsNone(endpoint._activity, "a refusal never proves a live publication")
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
-    def test_an_answer_with_no_session_service_takes_no_governed_path(self):
+    def test_an_answer_with_no_session_service_takes_no_micro_task_path(self):
         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
         request = self.fast_request("prompt", scope="write")
         described = RunRequest.from_payload(
@@ -1010,13 +1010,13 @@ class WorkerSeamTests(NativeRunCase):
 
 
 class ContinuationTests(NativeRunCase):
-    """A reconstruction rebuilds a fresh root and saves its own goal binding."""
+    """A reconstruction rebuilds a fresh root and saves its own micro task binding."""
 
     def test_a_reconstructed_new_session_continuation_runs_a_fresh_root(self):
         request, bound, mount = self.worker_request(
             continuation=run_contract.RunContinuation(mode="reconstructed-new-session",
                                                       previous_session_id="previous-native-session"))
-        self.governed_agent_args(mount)
+        self.micro_task_agent_args(mount)
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
@@ -1025,7 +1025,7 @@ class ContinuationTests(NativeRunCase):
                             "the continuation rebuilds, never resumes the previous session")
         # Exactly one fresh root was opened.
         self.assertEqual(len(result.tool_evidence.value["nativeIdentity"]), 1)
-        # The complete verified turn saves this new root's reusable goal
+        # The complete verified turn saves this new root's reusable micro task
         # binding under the native root, and the continuation facts carry it.
         self.assertTrue(result.continuation.resumable)
         binding = self.root / (hashlib.sha256(
@@ -1045,25 +1045,25 @@ class ContinuationTests(NativeRunCase):
         self.assertIsNone(native_run.validate_turn_provenance(record),
                           "the rebuilt session passes the provenance validator")
 
-    def test_a_completed_goal_root_turn_reports_goal_owned_storage(self):
+    def test_a_completed_micro_task_root_turn_reports_micro_task_owned_storage(self):
         from hey_my_buddy import private_dirs
-        # The role's real placement for a governed Worker turn: the task's
-        # shared goal native root, exactly where private_dirs pins it.
-        goal = private_dirs.native_root(self.base / "goal-state", "dsh", "task")
-        request, bound, mount = self.worker_request(native_root=goal)
-        self.governed_agent_args(mount)
+        # The role's real placement for a micro task Worker turn: the task's
+        # shared micro task native root, exactly where private_dirs pins it.
+        micro_task = private_dirs.native_root(self.base / "micro-task-state", "dsh", "task")
+        request, bound, mount = self.worker_request(native_root=micro_task)
+        self.micro_task_agent_args(mount)
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok")
-        facts = native_run.session_facts(goal, result.native_identity.session_id)
-        self.assertEqual(facts["storageOwner"], "buddy-goal",
-                         "a normal completion over the task's shared goal root is goal-owned")
+        facts = native_run.session_facts(micro_task, result.native_identity.session_id)
+        self.assertEqual(facts["storageOwner"], "buddy-micro-task",
+                         "a normal completion over the task's shared micro task root is micro-task-owned")
         self.assertEqual(facts["storageScope"], "task-shared-sessions")
         self.assertTrue(facts["bindingPresent"])
 
-    def test_an_incomplete_governed_turn_saves_no_binding(self):
+    def test_an_incomplete_micro_task_turn_saves_no_binding(self):
         request, bound, mount = self.worker_request()
-        self.governed_agent_args(mount, no_finish=True)
+        self.micro_task_agent_args(mount, no_finish=True)
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
@@ -1071,11 +1071,11 @@ class ContinuationTests(NativeRunCase):
         self.assertIsNone(result.continuation,
                           "a turn without its verified finish provenance is not resumable")
         self.assertFalse(any(self.root.glob("*.json")),
-                         "no goal binding may exist for an incomplete turn")
+                         "no micro task binding may exist for an incomplete turn")
 
     def test_a_confirmed_turn_without_a_real_group_stop_saves_no_binding(self):
         request, bound, mount = self.worker_request()
-        self.governed_agent_args(mount)
+        self.micro_task_agent_args(mount)
         unconfirmed = {"shutdownConfirmed": False, "groupObserved": "unknown",
                        "leaderExited": True, "leaderExitCode": 0}
         with mock.patch.object(native_run.AcpClient, "shutdown", return_value=dict(unconfirmed)), \
@@ -1155,18 +1155,18 @@ class RoleSeamFunctionTests(unittest.TestCase):
         from hey_my_buddy import private_dirs
         with tempfile.TemporaryDirectory(prefix="dsh-session-facts-") as container:
             state = Path(container) / "state"
-            # The same task's two real placements: the shared goal native root
-            # private_dirs pins for the governed Worker, and an old attempt's
+            # The same task's two real placements: the shared micro task native root
+            # private_dirs pins for the micro task Worker, and an old attempt's
             # private root.
-            goal = private_dirs.native_root(state, "dsh", "task-1")
-            facts = native_run.session_facts(goal, None)
-            self.assertEqual(facts["storageOwner"], "buddy-goal",
-                             "the task's shared native root is goal-owned storage")
+            micro_task = private_dirs.native_root(state, "dsh", "task-1")
+            facts = native_run.session_facts(micro_task, None)
+            self.assertEqual(facts["storageOwner"], "buddy-micro-task",
+                             "the task's shared native root is micro-task-owned storage")
             self.assertEqual(facts["storageScope"], "task-shared-sessions")
             attempt = private_dirs.attempt_root(state, "dsh", "task-1", "attempt-1")
             other = native_run.session_facts(attempt / "dsh-private", None)
-            self.assertNotEqual(other["storageOwner"], "buddy-goal",
-                                "an old attempt root is never misreported as goal storage")
+            self.assertNotEqual(other["storageOwner"], "buddy-micro-task",
+                                "an old attempt root is never misreported as micro task storage")
             self.assertEqual(other["storageOwner"], "buddy-attempt")
             self.assertEqual(other["storageScope"], "attempt-private-sessions")
 
@@ -1232,7 +1232,7 @@ class InquirySeamTests(NativeRunCase):
 
     def inquiry_worker(self, *, extra=(), timeout: int = FAST_TIMEOUT):
         request, bound, mount = self.worker_request(inquiry=True, timeout=timeout)
-        self.governed_agent_args(mount)
+        self.micro_task_agent_args(mount)
         self.extra_agent_args += list(extra)
         credentials = bound.services.inquiry
         from buddy.harnesses.zcode.test_native_run import fixture_live_channel
@@ -1473,7 +1473,7 @@ class NativeConfigurationTests(NativeRunCase):
                         self.assertEqual(provider["models"][0]["efforts"], ["off", "low", "high", "max"])
                     elif carrier == "worker":
                         request, bound, mount = self.worker_request()
-                        self.extra_agent_args = ["--prompt-mode", "governed", "--bridge-config",
+                        self.extra_agent_args = ["--prompt-mode", "micro-task", "--bridge-config",
                                                  mount.bridge_config_path, "--finish-tool", mount.finish_tool]
                         from hey_my_buddy.buddy.roles.run_observers import worker_observer
                         result = run(request, observer=worker_observer, services=bound.services,

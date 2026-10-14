@@ -291,9 +291,9 @@ class StashChangesNeverGateWorkTests(StashInventoryTestCase):
 
 
 class RealBoardClaimStashTests(StashInventoryTestCase):
-    """The real module through the real board: one governed turn's stash facts.
+    """The real module through the real board: one micro-task turn's stash facts.
 
-    The full governed path runs on a real private repository and real Git —
+    The full micro-task path runs on a real private repository and real Git —
     submit, claim, the seal-side import and the fixed get projection — exactly
     like a lifecycle turn, with only the executed model replaced by the record
     fixture. The repository and its stashes belong to this test alone.

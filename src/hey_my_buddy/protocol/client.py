@@ -312,7 +312,7 @@ class BoardClient:
     def model_catalog_refresh(self, request_id: str | None = None) -> dict:
         return self.call("model_catalog_refresh", {"requestId": request_id})
 
-    # -- governed workflow --------------------------------------------------
+    # -- micro-task workflow --------------------------------------------------
     def workflow_submit(self, **params: Any) -> dict:
         return self.call("workflow_submit", params)
 

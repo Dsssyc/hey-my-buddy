@@ -10,7 +10,7 @@ import {
   eventItem, toMs, buddyPalette, acceptanceWaitMs, acceptanceWaitText, titleLineTooltip,
 } from "./macro-task-display";
 import { MacroTaskChronology } from "./MacroTaskChronology";
-import { DelegationStrip, MacroTaskOverview } from "./MacroTaskOverview";
+import { MicroTaskStrip, MacroTaskOverview } from "./MacroTaskOverview";
 import { TimelineInspector } from "./TimelineInspector";
 import { MarkerPopover, type MarkerClusterView } from "./MarkerPopover";
 import { Popover } from "./Popover";
@@ -81,7 +81,7 @@ export type MacroTaskTimelineProps = {
   newRunIds: ReadonlySet<string>;
   hidden: boolean;
   active?: boolean;
-  /** The delegation whose detail is currently open (accent marker on its row). */
+  /** The micro task whose detail is currently open (accent marker on its row). */
   openedKey: string | null;
   openedRunId: string | null;
   /** The pinned inspector selection; a refresh never clears it. */
@@ -137,7 +137,7 @@ function InspectorSeparator({ min, max, value, onChange, onReset }: {
 
 /**
  * Right pane, layer one: the read-only work macro task timeline. The vertical
- * structure follows 0.16 P2.1 — a compact header, a collapsible delegation
+ * structure follows 0.16 P2.1 — a compact header, a collapsible micro task
  * band, the toolbar, the timeline as the only row-scroll area (min 200px), a
  * keyboard/pointer separator and the inspector as a summary-first bottom
  * drawer. Occupancy and folding stay in the frozen layout module; the default
@@ -182,7 +182,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
     return;
   }, []);
 
-  // The delegation band (P2.1): default follows the viewport height, and the
+  // The micro task band (P2.1): default follows the viewport height, and the
   // user's toggle then applies to every macroTask for this page session.
   const [cardsCollapsed, setCardsCollapsed] = useState<boolean | null>(null);
   const cardsActuallyCollapsed = cardsCollapsed ?? (compactViewport || narrowViewport);
@@ -453,7 +453,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
   }, [timeline, layout, factsBySpan, canFold]);
 
   // Roving tabindex: one stop inside the canvas, defaulting to the first
-  // delegation row's first execution span, then a rendered marker cluster,
+  // micro task row's first execution span, then a rendered marker cluster,
   // then the first row label. Cluster buttons carry `events:` keys.
   const clusterKeys = useMemo(() => new Set(clusters.map(cluster => cluster.key)), [clusters]);
   useEffect(() => {
@@ -632,7 +632,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
       const resolved = itemsByKey.get(key);
       if (!resolved) return;
       // A row label keeps its run-level semantics on Enter: the whole
-      // delegation stays selected when its detail opens.
+      // micro task stays selected when its detail opens.
       if (key.startsWith("row:")) props.onOpenRun(resolved.runId);
       else props.onOpenItem(resolved);
       return;
@@ -693,7 +693,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
     ? (activeCluster ? activeCluster.x : scaled && activeItem && activeItem.atMs !== null ? scaled.position(activeItem.atMs) : null)
     : null;
   const selectedRunId = selection?.type === "run" ? selection.runId : null;
-  // Selecting a delegation (from a row label or an overview card) brings its
+  // Selecting a micro task (from a row label or an overview card) brings its
   // row into view without moving the horizontal time position.
   useEffect(() => {
     if (selectedRunId === null || hidden) return;
@@ -985,7 +985,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
     <MacroTaskOverview summary={props.summary} timeline={timeline} loading={loading} stale={stale}
       compact={compactViewport || narrowViewport}
       onBackToList={props.onBackToList} headerActions={props.headerActions} />
-    {timeline && <DelegationStrip timeline={timeline} selectedRunId={selectedRunId}
+    {timeline && <MicroTaskStrip timeline={timeline} selectedRunId={selectedRunId}
       collapsed={cardsActuallyCollapsed}
       onToggleCollapsed={() => setCardsCollapsed(!cardsActuallyCollapsed)}
       onSelectRun={props.onSelectRun} onOpenRun={props.onOpenRun} />}

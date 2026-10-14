@@ -47,7 +47,7 @@ def _now() -> str:
 
 
 class InquiryBridge:
-    """Owner-private cooperative inquiry bridge for one governed root turn.
+    """Owner-private cooperative inquiry bridge for one micro task root turn.
 
     The journal is attempt-private transport evidence. A committed question keeps
     its identity, question hash and delivery record across state changes, so a
@@ -146,7 +146,7 @@ class InquiryBridge:
                 if entry.get("state") in ANSWERABLE_STATES:
                     self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "unavailable",
                                    "unavailableAt": _now(),
-                                   "reason": "the governed root turn ended before this inquiry was answered",
+                                   "reason": "the micro task root turn ended before this inquiry was answered",
                                    "limitation": self.limitation})
             self._publish()
             self._stop.set()

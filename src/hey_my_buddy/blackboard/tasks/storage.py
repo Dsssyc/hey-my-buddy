@@ -452,7 +452,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
         add('zcode', state / 'harnesses' if private_dirs.linked(state / 'harnesses') else home_root, ['linked-path'])
     elif home_root.exists():
         for path in sorted(home_root.iterdir()):
-            if path.name == 'goals':
+            if path.name == 'micro-tasks':
                 continue
             run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
             add('zcode', path, reasons, runId=run_id)
@@ -465,17 +465,17 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                 continue
             if not adapter_root.exists():
                 continue
-            goals = adapter_root / 'goals'
-            if private_dirs.linked(goals):
-                add('harnesses', goals, ['linked-path'], adapter=adapter)
+            micro_tasks = adapter_root / 'micro-tasks'
+            if private_dirs.linked(micro_tasks):
+                add('harnesses', micro_tasks, ['linked-path'], adapter=adapter)
                 continue
-            if goals.exists():
-                for path in sorted(goals.iterdir()):
+            if micro_tasks.exists():
+                for path in sorted(micro_tasks.iterdir()):
                     run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
                     add('harnesses', path, reasons, runId=run_id, adapter=adapter)
             if adapter != 'zcode':
                 for path in sorted(adapter_root.iterdir()):
-                    if path.name != 'goals':
+                    if path.name != 'micro-tasks':
                         add('harnesses', path, ['legacy-layout-unmigrated'], adapter=adapter)
     seen = set()
     # Board knowledge is independent of whether physical ownership is proved.
@@ -699,7 +699,7 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
     elif category == 'zcode':
         allowed = original.parent == root / 'harnesses' / 'zcode'
     else:
-        allowed = any(original.parent == root / 'harnesses' / adapter / 'goals'
+        allowed = any(original.parent == root / 'harnesses' / adapter / 'micro-tasks'
                       for adapter in private_dirs.ADAPTERS)
     tomb = original.with_name('.reclaim-' + planned['planId'] + '-' + original.name)
     has_identity = 'device' in pending or 'inode' in pending

@@ -48,7 +48,7 @@ parameters, its HTTP status and the parser outcome (``accepted``, or
 deliberately wrong shapes a strict parser must refuse; each documents its
 ``mutation``. The mode needs no ``--assets`` and writes nothing else.
 
-ADR-018 (schema 15) fields carried by the fixture data: governed
+ADR-018 (schema 15) fields carried by the fixture data: micro task
 ``workflow_get`` views add ``buddyLocked`` and ``hostConclusion``;
 artifacts add ``partial``/``verified``/``final`` flags, ``kind`` may be
 ``partial-output`` and an artifact may carry ``cumulativePatch``; integration
@@ -139,7 +139,7 @@ ERROR_SCENARIO_MESSAGE = "synthetic preview: simulated read failure (--scenario 
 #: The synthetic harness quota failure the schema-15 fixtures model.
 QUOTA_ERROR = "synthetic preview: harness quota exhausted before completion"
 #: The ADR-018 Host conclusion: the Host's own recorded target outcome of a
-#: failed or cancelled goal, never a worker success claim. ``buddyLocked``
+#: failed or cancelled micro task, never a worker success claim. ``buddyLocked``
 #: is separate: a Host submission may be re-chosen, a user-locked one may not.
 HOST_CONCLUSION_KEYS = {"conclusionId", "attemptId", "executionStatus", "note", "evidence",
                         "artifactId", "integrationId", "actor", "createdAt", "ownerGeneration",
@@ -295,7 +295,7 @@ def host_conclusion(conclusion_id: str, *, attempt_id: str | None, execution_sta
                     evidence: list[str], artifact_id: str | None, integration_id: str | None,
                     actor: str, created_at: str, owner_generation: int = 1,
                     run_revision: int = 3) -> dict:
-    """An ADR-018 Host conclusion: the recorded target outcome of a failed goal."""
+    """An ADR-018 Host conclusion: the recorded target outcome of a failed micro task."""
     return {"conclusionId": conclusion_id, "attemptId": attempt_id, "executionStatus": execution_status,
             "note": note, "evidence": list(evidence), "artifactId": artifact_id,
             "integrationId": integration_id, "actor": actor, "createdAt": created_at,
@@ -386,7 +386,7 @@ def run(run_id: str, *, project: str, title: str, title_source: str, task_text: 
         integrations: list[dict] | None = None, routing: dict | None = None,
         active_request: dict | None = None, spans: list[dict] | None = None,
         markers: list[dict] | None = None, attempts: list[dict] | None = None,
-        shutdown_confirmed: bool = True, governed: bool = True, adapter: str | None = None,
+        shutdown_confirmed: bool = True, micro_task: bool = True, adapter: str | None = None,
         continuation_count: int = 0, timeout_seconds: int = 0, revision: int = 3,
         buddy_locked: bool = False, conclusion: dict | None = None) -> dict:
     return {
@@ -397,11 +397,11 @@ def run(run_id: str, *, project: str, title: str, title_source: str, task_text: 
         "acceptanceVerdict": verdict, "resultAvailable": result, "resultSummary": result_summary,
         "artifacts": artifacts or [], "integrations": integrations or [], "routing": routing,
         "activeRequest": active_request, "spans": spans or [], "markers": markers or [],
-        "attempts": attempts or [], "shutdownConfirmed": shutdown_confirmed, "governed": governed,
+        "attempts": attempts or [], "shutdownConfirmed": shutdown_confirmed,
         "adapter": adapter, "continuationCount": continuation_count, "timeoutSeconds": timeout_seconds,
         "revision": revision, "buddyLocked": buddy_locked,
         "hostConclusion": conclusion,
-        "kind": "decision" if not governed else ("helper" if parent is not None else "goal"),
+        "kind": "decision" if not micro_task else ("helper" if parent is not None else "micro-task"),
     }
 
 
@@ -438,7 +438,7 @@ def integration(integration_id: str, artifact_id: str, attempt_id: str, host: st
 
 
 def build_runs() -> dict[str, dict]:
-    """The ten governed delegations and four internal routing rows."""
+    """The ten micro tasks and four internal routing rows."""
     runs = [
         run("preview-run-a1", project="alpha", group=MACRO_A,
             title=long_title("工作目标时间轴：预览服务器合成夹具与只读接口验证 —— 这是一个刻意加长的委派标题，"
@@ -753,7 +753,7 @@ def build_runs() -> dict[str, dict]:
                         created=recorded_span["startAt"], updated=recorded_span["endAt"],
                         state="cancelled" if record["status"] == "cancelled" else "accepted",
                         status=record["status"] if record["status"] in ("failed", "cancelled") else "completed",
-                        category="ended", buddy=None, governed=False, routing=record,
+                        category="ended", buddy=None, micro_task=False, routing=record,
                         adapter="decision", revision=1))
         runs[-1]["decisionId"] = record["decisionId"]
         runs[-1]["requestId"] = f"request-{router}"
@@ -766,7 +766,7 @@ def build_runs() -> dict[str, dict]:
         entry["requestId"] = entry.get("requestId") or f"request-{entry['runId']}"
         entry["cwd"] = f"/synthetic-preview/checkouts/{entry['runId']}"
         project = PROJECTS[entry["project"]]
-        entry["delegation"] = {
+        entry["lineage"] = {
             "kind": entry["kind"], "sourceHostId": entry["sourceHostId"],
             "currentHostId": entry["currentHostId"], "parentRunId": entry["parentRunId"],
             "rootRunId": root,
@@ -794,7 +794,7 @@ def build_runs() -> dict[str, dict]:
         activity[run_id] = (item["seq"], item["at"])
     groups: dict[str, list[str]] = {}
     for entry in runs:
-        if not entry["governed"]:
+        if entry["kind"] == "decision":
             continue
         group = entry["group"] or (f"run:{by_id[entry['parentRunId']]['rootRunId']}"
                                    if entry["parentRunId"] else f"run:{entry['runId']}")
@@ -819,10 +819,10 @@ MACRO_TASKS = {
 # Thin projections: fixture record -> console DTO                              #
 # --------------------------------------------------------------------------- #
 def shutdown_view(entry: dict) -> dict:
-    """Recorded stop evidence over the governed helper lineage.
+    """Recorded stop evidence over the micro task helper lineage.
 
     Routing rows are internal decision records with no attempt of their own in
-    this fixture, so only governed helpers are aggregated.
+    this fixture, so only micro task helpers are aggregated.
     """
     unconfirmed: list[str] = []
     stack = [entry]
@@ -831,7 +831,7 @@ def shutdown_view(entry: dict) -> dict:
         if not current["shutdownConfirmed"]:
             unconfirmed.append(current["runId"])
         stack.extend(child for child in FIXTURES["runs"].values()
-                     if child["governed"] and child["parentRunId"] == current["runId"])
+                     if child["kind"] in ("micro-task", "helper") and child["parentRunId"] == current["runId"])
     own = entry["shutdownConfirmed"]
     return {"selfConfirmed": own, "descendantsConfirmed": unconfirmed == ([] if own else [entry["runId"]]),
             "unconfirmedRunIds": unconfirmed[:32], "unconfirmedCount": len(unconfirmed), "truncated": False}
@@ -878,13 +878,13 @@ def task_view(entry: dict) -> dict:
         "createdAt": entry["createdAt"], "updatedAt": entry["updatedAt"], "acceptedAt": entry["acceptedAt"],
         "acceptanceNote": None, "acceptanceVerdict": entry["acceptanceVerdict"],
         "resultAvailable": receipt is not None, "shutdownConfirmed": entry["shutdownConfirmed"],
-        "activity": None, "delegation": entry["delegation"], "artifacts": entry["artifacts"],
+        "activity": None, "lineage": entry["lineage"], "artifacts": entry["artifacts"],
         "artifactCount": len(entry["artifacts"]), "inquiries": {},
         # ADR-018: the selected attempt's per-attempt usage, also inside
         # `selectedAttempt`; null when no usage was recorded (never 0).
         "tokenUsage": selected["usage"] if selected is not None else None,
     }
-    if entry["governed"]:
+    if entry["kind"] in ("micro-task", "helper"):
         view["workflow"] = workflow_extension(entry)
         view["workflowState"] = entry["state"]
         view["awaitingHost"] = entry["state"] == "awaiting-host"
@@ -957,29 +957,30 @@ def turn_views(entry: dict) -> list[dict]:
 
 
 def workflow_view(entry: dict) -> dict:
-    """The governed view consumed by ``TaskDetails``/``WorkflowPanel``."""
+    """The micro task view consumed by ``TaskDetails``/``WorkflowPanel``."""
     turns = turn_views(entry)
     children = [{"taskId": child["runId"], "role": "helper", "state": child["state"],
                  "integrator": False, "autoContinue": True, "requestId": child["requestId"]}
                 for child in FIXTURES["runs"].values()
-                if child["governed"] and child["parentRunId"] == entry["runId"]]
+                if child["kind"] in ("micro-task", "helper") and child["parentRunId"] == entry["runId"]]
     routing = entry["routing"] or {"status": "explicit" if entry["buddy"] else "needs-host",
                                    "decisionId": None, "taskId": None, "constraints": {},
                                    "source": None}
     return {
-        "governed": True, "runId": entry["runId"], "taskId": entry["runId"],
+        "runId": entry["runId"], "taskId": entry["runId"],
         "requestId": entry["requestId"], "title": entry["title"], "macroTaskId": entry["group"],
         "hostId": entry["currentHostId"], "ownerGeneration": 1, "revision": entry["revision"],
         "state": entry["state"], "status": entry["status"], "queueReason": None,
         "awaitingHost": entry["state"] == "awaiting-host", "waitReason": wait_reason(entry),
         "continuationCount": entry["continuationCount"],
         # ADR-018: whether the Host may still re-choose the buddy, and
-        # the Host's own recorded conclusion for a failed or cancelled goal.
+        # the Host's own recorded conclusion for a failed or cancelled micro task.
         "buddyLocked": entry["buddyLocked"],
         "hostConclusion": entry["hostConclusion"],
-        "goal": {"task": entry["task"], "taskTruncated": False,
-                 "adapter": entry["adapter"] or (entry["buddy"] or {}).get("harness", "dsh"),
-                 "cwd": entry["cwd"], "fingerprint": digest(f"{entry['runId']}-goal")},
+        "microTask": {"task": entry["task"], "taskTruncated": False,
+                 "taskBytes": len(entry["task"].encode("utf-8")),
+                 "harness": entry["adapter"] or (entry["buddy"] or {}).get("harness", "dsh"),
+                 "cwd": entry["cwd"], "fingerprint": digest(f"{entry['runId']}-micro-task")},
         "buddy": entry["buddy"],
         "buddyRevision": 2 if entry["buddy"] else None,
         "routing": routing, "turns": turns, "currentTurn": turns[0] if turns else None,
@@ -1343,11 +1344,11 @@ def pending_root_count() -> int:
     """The slim snapshot's board-wide awaiting-Host root count.
 
     Mirrors ``macro_tasks.pending_root_count`` over the synthetic runs: one
-    distinct delegation root per governed run whose state awaits its Host,
+    distinct lineage root per micro task run whose state awaits its Host,
     deduplicated by ``rootRunId`` exactly like the service computes it.
     """
-    roots = {entry["delegation"]["rootRunId"] for entry in FIXTURES["runs"].values()
-             if entry["governed"] and entry["state"] == "awaiting-host"}
+    roots = {entry["lineage"]["rootRunId"] for entry in FIXTURES["runs"].values()
+             if entry["kind"] in ("micro-task", "helper") and entry["state"] == "awaiting-host"}
     return len(roots)
 
 
@@ -1476,8 +1477,8 @@ def workflow_get(params: dict) -> dict:
     entry = FIXTURES["runs"].get(run_id)
     if entry is None:
         raise PreviewError("NOT_FOUND", "Unknown runId")
-    if not entry["governed"]:
-        view = {"governed": False, "runId": run_id, "task": task_view(entry)}
+    if entry["kind"] == "decision":
+        view = {"runId": run_id, "task": task_view(entry)}
         if params.get("routingHistory") is not None:
             view["routingHistory"] = {"entries": [], "nextCursor": None, "total": 0}
         return view
@@ -1956,7 +1957,7 @@ def validate_fixtures() -> list[str]:
     standalone_rows = macro_task_timeline({"macroTaskId": STANDALONE_GROUP}, "normal")["rows"]
     if not any(row["taskSummary"] is None for row in standalone_rows):
         problems.append("the blank-task helper must keep a null taskSummary")
-    categories = {entry["category"] for entry in FIXTURES["runs"].values() if entry["governed"]}
+    categories = {entry["category"] for entry in FIXTURES["runs"].values() if entry["kind"] in ("micro-task", "helper")}
     if categories != {"host", "active", "review", "ended"}:
         problems.append(f"fixture categories are {sorted(categories)}")
     kinds = {item["kind"] for _run_id, item in FIXTURES["markers"]}
@@ -2016,13 +2017,13 @@ def validate_fixtures() -> list[str]:
     usage_sources: set[str] = set()
     unknown_usage = False
     for entry in FIXTURES["runs"].values():
-        if not entry["governed"]:
+        if entry["kind"] == "decision":
             continue
         view = workflow_get({"runId": entry["runId"]})
         if not isinstance(view.get("buddyLocked"), bool):
             problems.append(f"{entry['runId']}: buddyLocked must be a boolean")
         if "hostConclusion" not in view:
-            problems.append(f"{entry['runId']}: governed view must carry hostConclusion")
+            problems.append(f"{entry['runId']}: micro task view must carry hostConclusion")
         if view.get("buddyLocked"):
             locked += 1
         conclusion = view.get("hostConclusion")
@@ -2313,7 +2314,7 @@ def emit_fixture_files() -> list[dict]:
     missing_revision.pop("revision", None)
     add("incompatible", "workflow-missing-revision.json", "workflow-get", workflow_endpoint, 200,
         "rejected", missing_revision, request={"runId": "preview-run-a1"}, expected_code="INVALID_RESPONSE",
-        mutation="revision removed from the governed workflow view, so owner-generation fencing is unprovable")
+        mutation="revision removed from the micro task workflow view, so owner-generation fencing is unprovable")
     malformed_quota = clone(normal)
     malformed_quota["harnesses"][0]["quota"]["windows"] = "near-limit"
     add("incompatible", "harness-quota-malformed.json", "console-snapshot", "GET /api/console", 200,
@@ -2477,7 +2478,7 @@ def smoke(assets: Path, scenario: str) -> int:
         if scenario == "error":
             check("workflow_get fails closed", status == 503, f"status={status}")
         else:
-            check("POST workflow_get is read-only", status == 200 and result["result"]["governed"] is True,
+            check("POST workflow_get is read-only", status == 200 and result["result"]["microTask"]["task"] == FIXTURES["runs"]["preview-run-a1"]["task"],
                   f"status={status}")
         status, denied, _headers = call("POST", "/api/command", payload={"operation": "workflow_cancel",
                                                                "params": {"runId": "preview-run-a1"}})

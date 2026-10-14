@@ -2,7 +2,7 @@
   "comment": "Desensitized Codex controller result payloads for the ADR-025 step 1-A value mapping. Field names and structure are copied unchanged from src/hey_my_buddy/buddy/harnesses/codex/runner.py and codex/no_tool.py result dicts and from tests/python/buddy/harnesses/codex/fixtures/native-usage-codex.json; every identifier, account value and text is synthetic. The fast payloads carry exactly the fields the no-tool/read-only controllers write: rawAnswer, answerValid and correctionCount, with no parsed value. No real harness or model was started.",
   "harness": "codex",
   "payloads": {
-    "governedSuccess": {
+    "microTaskSuccess": {
       "status": "ok",
       "mode": "codex",
       "harnessVersion": "0.157.0",
@@ -30,7 +30,7 @@
                 "ordinaryUsageAllowed": true},
       "processState": {"shutdownConfirmed": true, "nativeExitCode": 0}
     },
-    "governedQuotaFailure": {
+    "microTaskQuotaFailure": {
       "status": "error",
       "mode": "codex",
       "harnessVersion": "0.157.0",

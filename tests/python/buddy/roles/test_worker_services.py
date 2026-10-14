@@ -1,6 +1,6 @@
 """The Worker role's session-tool rules, independent of any harness.
 
-ADR-025 decision 7 moves the governed prompt, the six-field finish contract and
+ADR-025 decision 7 moves the micro task prompt, the six-field finish contract and
 the attention/inquiry completion refusals into the role layer. These tests pin
 that boundary itself: the rules take the native, fully qualified tool names as
 arguments, importing the role module pulls in no harness package, and the
@@ -79,11 +79,11 @@ class WorkerServicesCase(unittest.TestCase):
                                      "generation": identity["generation"], "turnId": identity["turnId"]}) + "\n")
 
 
-class GovernedPromptTests(unittest.TestCase):
+class MicroTaskPromptTests(unittest.TestCase):
     def test_scope_reminds_shared_git_ownership_without_rewriting_turn_protocol(self):
         for resume in ("initial", "reconstructed-new-session", "native-session"):
             with self.subTest(resume=resume):
-                prompt = worker_services.governed_prompt("task", {"resumeMode": resume}, "finish")
+                prompt = worker_services.micro_task_prompt("task", {"resumeMode": resume}, "finish")
                 scope = prompt.split("\n\n")[1]
                 self.assertIn("share Git stash, branches and tags", scope)
                 self.assertIn("owner's repository", scope)
@@ -93,10 +93,10 @@ class GovernedPromptTests(unittest.TestCase):
                 self.assertIn("commit on the current detached HEAD", scope)
 
     def test_the_prompt_assembles_role_scope_finish_contract_task_and_input_in_order(self):
-        prompt = worker_services.governed_prompt("task text", {"resumeMode": "initial"}, "mcp__srv__buddy_finish_turn")
+        prompt = worker_services.micro_task_prompt("task text", {"resumeMode": "initial"}, "mcp__srv__buddy_finish_turn")
         sections = prompt.split("\n\n")
         self.assertEqual(sections[0] + "\n", resource_path("roles.worker").read_text())
-        self.assertTrue(sections[1].startswith("This is a governed Buddy root turn."))
+        self.assertTrue(sections[1].startswith("This is a Buddy root turn for a micro task."))
         self.assertIn("obtain one successful receipt from mcp__srv__buddy_finish_turn", sections[2])
         self.assertIn("all six fields: disposition, summary, remaining, decisions, artifacts, request", sections[2])
         self.assertEqual(sections[-2], "task text")
@@ -107,11 +107,11 @@ class GovernedPromptTests(unittest.TestCase):
     def test_the_inquiry_paragraph_arrives_only_with_both_fully_qualified_tool_names(self):
         finish, checkpoint, answer = ("mcp__other__buddy_finish_turn", "mcp__other__buddy_checkpoint",
                                       "mcp__other__buddy_answer_inquiry")
-        neither = worker_services.governed_prompt("t", {"turn": 1}, finish)
+        neither = worker_services.micro_task_prompt("t", {"turn": 1}, finish)
         self.assertNotIn("Host inquiries arrive cooperatively", neither)
-        half = worker_services.governed_prompt("t", {"turn": 1}, finish, checkpoint_tool=checkpoint)
+        half = worker_services.micro_task_prompt("t", {"turn": 1}, finish, checkpoint_tool=checkpoint)
         self.assertNotIn("Host inquiries arrive cooperatively", half)
-        both = worker_services.governed_prompt("t", {"turn": 1}, finish, checkpoint_tool=checkpoint,
+        both = worker_services.micro_task_prompt("t", {"turn": 1}, finish, checkpoint_tool=checkpoint,
                                                answer_tool=answer)
         self.assertIn(f"call {checkpoint} at natural work milestones", both)
         self.assertIn(f"Answer each listed question with {answer}", both)
@@ -142,7 +142,7 @@ class RoleBoundaryTests(unittest.TestCase):
                                     "print(w.__file__);"
                                     "print(any('harnesses.zcode' in m or 'harnesses.codex' in m"
                                     " or 'harnesses.claude' in m or 'harnesses.dsh' in m for m in sys.modules));"
-                                    "print(callable(w.call_session_tool), callable(w.governed_prompt))"],
+                                    "print(callable(w.call_session_tool), callable(w.micro_task_prompt))"],
                                    capture_output=True, text=True, env=environment, cwd=outside)
         self.assertEqual(probe.returncode, 0, probe.stderr)
         module_file, harness_free, callables = probe.stdout.splitlines()

@@ -31,7 +31,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
         return board, root, approved, approved["children"][0]["taskId"]
 
     def cancel(self, board, view):
-        return board.call("workflow_cancel", {"runId": view["runId"], "reason": "Host stopped this goal", **self.control(view)})
+        return board.call("workflow_cancel", {"runId": view["runId"], "reason": "Host stopped this micro task", **self.control(view)})
 
     def reservations(self, board):
         with board.store.db.read() as connection:
@@ -123,7 +123,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
         self.assertIn((child, "released"), self.reservations(board))
         self.submit(board, request_id="after-stop", cwd=str(root))
 
-    def test_late_completed_artifact_is_retained_without_reviving_cancelled_goal(self):
+    def test_late_completed_artifact_is_retained_without_reviving_cancelled_micro_task(self):
         board, _, parent, child = self.parent_and_child()
         helper = self.claim(board, claim_request_id="helper-claim", run_id=child)
         self.cancel(board, parent)
@@ -199,13 +199,13 @@ class WorkflowCancellationTests(WorkflowTestCase):
         board.store.workflow.cancel({"runId": child, "reason": "later"},
                                     console_authority={"sessionId": "later"})
         self.assertEqual(board.call("workflow_get", {"runId": child})["cancellation"],
-                         {"actor": None, "reason": "Host stopped this goal"})
+                         {"actor": None, "reason": "Host stopped this micro task"})
 
     def test_new_cancellation_after_continuation_has_its_own_actor(self):
         board = self.board()
         submitted = self.submit(board)
         cancelled = self.cancel(board, submitted)
-        continued = self.continue_run(board, cancelled, input='Resume this cancelled goal')
+        continued = self.continue_run(board, cancelled, input='Resume this cancelled micro task')
         self.assertIsNone(continued['cancellation'])
         second = board.store.workflow.cancel({'runId': continued['runId'], 'reason': 'second stop'},
                                             console_authority={'sessionId': 'second-browser'})

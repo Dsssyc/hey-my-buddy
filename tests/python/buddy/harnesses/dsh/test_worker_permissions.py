@@ -20,7 +20,7 @@ class WorkerPermissionTests(NativeRunCase):
             with self.subTest(level=level):
                 require_permission({"harness": "dsh"}, level)
                 request, bound, mount = self.worker_request(level=level, inquiry=True)
-                self.governed_agent_args(mount)
+                self.micro_task_agent_args(mount)
                 with mock.patch.dict(os.environ, {"DSH_PERMISSION_MODE": "inherited-mode"}):
                     result = native_run.run(request, observer=worker_observer, services=bound.services,
                                             cancelled=lambda: False)
@@ -48,7 +48,7 @@ class WorkerPermissionTests(NativeRunCase):
                             ("full", "danger-full-access")):
             with self.subTest(level=level):
                 request, bound, mount = self.worker_request(level=level)
-                self.governed_agent_args(mount)
+                self.micro_task_agent_args(mount)
                 self.extra_agent_args += ["--die-before-answer", "initialize"]
                 result = native_run.run(request, observer=worker_observer, services=bound.services,
                                         cancelled=lambda: False)
@@ -63,7 +63,7 @@ class WorkerPermissionTests(NativeRunCase):
         request, bound, mount = self.worker_request(
             level="full", continuation=RunContinuation(mode="reconstructed-new-session",
                                                        previous_session_id="previous-read-session"))
-        self.governed_agent_args(mount)
+        self.micro_task_agent_args(mount)
         result = native_run.run(request, observer=worker_observer, services=bound.services,
                                 cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
@@ -92,7 +92,7 @@ class WorkerPermissionTests(NativeRunCase):
         for inquiry in (False, True):
             with self.subTest(inquiry=inquiry):
                 request, bound, mount = self.worker_request(level="read", inquiry=inquiry)
-                self.governed_agent_args(mount, permission=True)
+                self.micro_task_agent_args(mount, permission=True)
                 path = "/outside/" + "汉字" * 300
                 self.extra_agent_args += ["--permission-path", path]
                 result = native_run.run(request, observer=worker_observer, services=bound.services,

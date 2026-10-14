@@ -1137,12 +1137,12 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         control = json.loads((context_root(context, "zcode") / "role-run-control.json").read_text())
         self.assertEqual(tree["inquiryJournalPath"], control["inquiry"]["resultsPath"])
         self.assertEqual(control["inquiry"]["resultsPath"], str(context.directory / "inquiry.results.jsonl"))
-        self.assertEqual(tree["identity"], {"taskId": "goal-1", "attemptId": context.attempt_id,
+        self.assertEqual(tree["identity"], {"taskId": "micro-task-1", "attemptId": context.attempt_id,
                                             "generation": 1, "turnId": "turn-1"})
         self.assertIn(COOPERATIVE_INQUIRY_NOTE, outcome.result["inquiry"]["limitation"])
-        from hey_my_buddy.buddy.roles.worker_services import governed_prompt
+        from hey_my_buddy.buddy.roles.worker_services import micro_task_prompt
 
-        prompt = governed_prompt("task", {"turn": 1}, "mcp__buddy_x__buddy_finish_turn",
+        prompt = micro_task_prompt("task", {"turn": 1}, "mcp__buddy_x__buddy_finish_turn",
                                  checkpoint_tool="mcp__buddy_x__buddy_checkpoint",
                                  answer_tool="mcp__buddy_x__buddy_answer_inquiry")
         self.assertIn("mcp__buddy_x__buddy_checkpoint", prompt)

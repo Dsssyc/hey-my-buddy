@@ -13,7 +13,7 @@ import { TaskActivityView } from "./task-activity";
 import { tokenUsageView } from "./host-workflow";
 
 /**
- * One delegation's detail (0.15.1 U4): read-only browsing of the recorded
+ * One micro task's detail (0.15.1 U4): read-only browsing of the recorded
  * facts. The task_cancel/task_retry/task_acknowledge controls and their record
  * drafts are gone — execution history stays inspectable and navigation is
  * never locked; the macro-task-level 停止目标 lives on the work macro task
@@ -87,9 +87,9 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   const project = taskProject(task);
   const decision = task.spec?.decision as { decisionId?: string } | undefined;
   const recordInfo = <details className="detail-section"><summary>来源与标识</summary><dl className="facts">
-    <dt>原始委派方</dt><dd>{taskHost(task)}</dd><dt>当前 Host</dt><dd>{task.delegation?.currentHostId || task.workflow?.hostId || "未记录"}</dd>
+    <dt>原始委派方</dt><dd>{taskHost(task)}</dd><dt>当前 Host</dt><dd>{task.lineage?.currentHostId || task.workflow?.hostId || "未记录"}</dd>
     <dt>来源项目</dt><dd>{project.path || "未记录"}</dd><dt>委派 ID</dt><dd>{task.runId}</dd>
-    <dt>上级目标</dt><dd>{task.delegation?.parentRunId || "无"}</dd><dt>执行位置</dt><dd>{task.cwd}</dd>
+    <dt>上级目标</dt><dd>{task.lineage?.parentRunId || "无"}</dd><dt>执行位置</dt><dd>{task.cwd}</dd>
   </dl></details>;
   // T1: the one title rule — explicit title, task first line, 未命名委派; the
   // Worker resultSummary never appears here.

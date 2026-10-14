@@ -1,4 +1,4 @@
-"""Receipt, byte-budget and shared-log primitives of one governed session.
+"""Receipt, byte-budget and shared-log primitives of one micro task session.
 
 The Worker role's session tools and the native drivers that verify what those
 tools returned share exactly this module and nothing else (ADR-025 decision 7's
@@ -26,7 +26,7 @@ from typing import Callable, NamedTuple
 from ... import locking
 from ...json_codec import canonical_json, decode_strict_json
 
-#: The byte bound of one governed outcome document, shared by the Worker role's
+#: The byte bound of one micro task outcome document, shared by the Worker role's
 #: six-field validator, the MCP carrier's input frames and the refusal budgets
 #: below. It lives here — the common receipt primitive — so both sides take it
 #: from one place and the roles do not own a byte budget the native verification

@@ -224,14 +224,14 @@ class SessionServiceMount:
 
 @dataclasses.dataclass(frozen=True)
 class SessionServices:
-    """The role-held service instance of one governed run (the seam's ``services``).
+    """The role-held service instance of one micro task run (the seam's ``services``).
 
     The driver sees only this narrow binding: the mechanical mount, the role's
     outcome validator for finish-receipt verification, the optional inquiry
     channel credentials and the controller-owned live endpoint. No board client,
     database handle, execution context or credential file travels in it.
     ``native_stderr`` is the role's own path for the child's captured stderr
-    tail; the ACP wrapper owns the capture, and the governed driver mirrors its
+    tail; the ACP wrapper owns the capture, and the micro task driver mirrors its
     bounded tail there when the role supplied a path.
     """
 
@@ -302,7 +302,7 @@ def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str
     """Expose only the binding the role actually consumes, without a process.
 
     The role supplies the mechanical mount and outcome validator.
-    ``native_stderr`` is consumed as the governed stderr-tail mirror; the
+    ``native_stderr`` is consumed as the micro task stderr-tail mirror; the
     controller injects its optional live endpoint after preparation.
     """
     mount = prepare_session_service(
@@ -380,15 +380,15 @@ def check_preparation(spec: dict, environment: dict) -> None:
                          harness="dsh")
 
 
-# The private goal-binding file name of one native session: the sha256 of the
-# session id, exactly the naming the ZCode goal binding established, filed
+# The private micro task-binding file name of one native session: the sha256 of the
+# session id, exactly the naming the ZCode micro task binding established, filed
 # directly under the task's native root.
 def _binding_path(native_root: Path, session_id: str) -> Path:
     return Path(native_root) / (hashlib.sha256(session_id.encode()).hexdigest() + ".json")
 
 
-def _goal_binding(request: RunRequest, session_id: str) -> dict:
-    """The resumable goal binding of one session: task, session, cwd, buddy.
+def _micro_task_binding(request: RunRequest, session_id: str) -> dict:
+    """The resumable micro task binding of one session: task, session, cwd, buddy.
 
     The buddy is the frozen requested selection — the same values the
     native readback confirmed for the turn that wrote the binding.
@@ -415,19 +415,19 @@ def _continuation_of(request: RunRequest) -> tuple[str, str | None]:
     return "reconstructed-new-session", previous
 
 
-#: The task-shared native root's placement is exactly ``private_dirs``' goal
-#: layout: ``<state>/harnesses/<harness>/goals/<sha256(task_id)>/native``.
+#: The task-shared native root's placement is exactly ``private_dirs``' micro task
+#: layout: ``<state>/harnesses/<harness>/micro-tasks/<sha256(task_id)>/native``.
 #: Matching that placement is a fact about where the sessions root lives —
 #: an attempt root hangs under ``attempts/``, a fast carrier's root under its
 #: own private tree — never a proof about the vendor.
-_TASK_GOAL_DIGEST = re.compile(r"[0-9a-f]{64}")
+_TASK_MICRO_TASK_DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
-def _goal_shared_native(native_root: Path) -> bool:
+def _micro_task_shared_native(native_root: Path) -> bool:
     root = Path(native_root)
     return (root.name == "native"
-            and root.parent.parent.name == "goals"
-            and _TASK_GOAL_DIGEST.fullmatch(root.parent.name) is not None)
+            and root.parent.parent.name == "micro-tasks"
+            and _TASK_MICRO_TASK_DIGEST.fullmatch(root.parent.name) is not None)
 
 
 def session_facts(native_root: Path, session_id: str | None) -> dict:
@@ -437,25 +437,25 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
     layout: a Worker run whose rollout is pinned into the task's shared
     native-root ``sessions`` directory — with the launch
     patch and the frame logs in the invocation's private root — is
-    goal-owned storage, while a fast or review carrier's own private root
+    micro task-owned storage, while a fast or review carrier's own private root
     stays attempt-owned; the placement is a directory fact, and an old
-    attempt root is never misreported as goal storage. The native settings
+    attempt root is never misreported as micro task storage. The native settings
     and credentials stay in the user's DSH home; the session root remains
     separate from the native app's session store. The binding fact is the private
-    goal binding's real presence on disk: it is written only after a
+    micro task binding's real presence on disk: it is written only after a
     complete, verified, confirmed-stopped native turn, and its absence is
     the honest fact — presence alone never proves the session resumable;
     the run's continuation facts carry that verdict.
     """
     binding = _binding_path(Path(native_root), session_id) if session_id else None
-    if _goal_shared_native(native_root):
-        scope, owner = "task-shared-sessions", "buddy-goal"
+    if _micro_task_shared_native(native_root):
+        scope, owner = "task-shared-sessions", "buddy-micro-task"
         note = (
             "a Worker run's session rollout lives under the task's shared native-root sessions "
             "directory, pinned there by this run's private launch patch, while the launch "
             "patch and the frame logs stay in this invocation's private root; the DSH "
             "home, settings and credentials store are loaded by the owning harness; the "
-            "session root is separate from the native app store. A resumable goal binding (task, session, cwd, "
+            "session root is separate from the native app store. A resumable micro task binding (task, session, cwd, "
             "buddy) is saved under the native root only after a complete native turn with "
             "verified provenance and a confirmed group stop"
         )
@@ -465,7 +465,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
             "this run's session rollout lives under a private sessions root of this carrier's own "
             "private root, not the task's shared native root; the DSH home, settings and "
             "credentials store are loaded by the owning harness; the session root is "
-            "separate from the native app store. A resumable goal binding (task, session, cwd, buddy) is "
+            "separate from the native app store. A resumable micro task binding (task, session, cwd, buddy) is "
             "saved under the run's native root only after a complete native turn with verified "
             "provenance and a confirmed group stop"
         )
@@ -480,7 +480,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
 
 
 def validate_turn_provenance(record: dict) -> str | None:
-    """The governed turn needs the ordered finish, settlement and close evidence.
+    """The micro task turn needs the ordered finish, settlement and close evidence.
 
     The expected provenance is exactly what :meth:`RootTurnEvidence.provenance`
     retains, so a real verified receipt is the only shape that passes; a forged,
@@ -882,7 +882,7 @@ def _fold_update(message: object, state: _RunState, *, facts: _RunFacts, tools: 
     """Fold one native notification in; return whether a new retained fact appeared.
 
     Projection precedes every judgment: the tool facts, the unknown-event
-    classification and the bridge's bounded live view run before the governed
+    classification and the bridge's bounded live view run before the micro task
     evidence, so a foreign or malformed frame still lands in the retained facts.
     Nothing here fails the run; a verified receipt inside the evidence advances
     the journal through the evidence's own callbacks.
@@ -917,29 +917,29 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         raise BoardError("INVALID_ARGUMENT", "this run module drives dsh", harness=request.harness)
     if services is not None and not isinstance(services, SessionServices):
         raise BoardError("INVALID_ARGUMENT", "dsh accepts its own narrow session service binding")
-    governed = request.worker_permission is not None
-    if governed != (services is not None):
+    micro_task = request.worker_permission is not None
+    if micro_task != (services is not None):
         raise BoardError("INVALID_ARGUMENT", "dsh Worker permission and session services must be supplied together")
-    if not governed and request.tool_scope == "full":
+    if not micro_task and request.tool_scope == "full":
         raise BoardError("INVALID_ARGUMENT", "dsh full tool scope requires a Worker permission level")
-    if not governed and request.session_services:
+    if not micro_task and request.session_services:
         raise BoardError("INVALID_ARGUMENT",
                          "the request describes session services but this run mounts none")
-    # The continuation is the request's own fact: only the governed Worker
+    # The continuation is the request's own fact: only the micro task Worker
     # carrier resumes a native session; the fast and review carriers rebuild a
     # fresh root session whatever they carry.
     mode, previous = _continuation_of(request)
-    if mode == "native-session" and not governed:
+    if mode == "native-session" and not micro_task:
         raise BoardError("INVALID_ARGUMENT",
-                         "dsh resumes a native session only through the governed Worker carrier; "
+                         "dsh resumes a native session only through the micro task Worker carrier; "
                          "the fast and review carriers rebuild a fresh root session")
-    if governed:
+    if micro_task:
         _check_service_descriptions(request, services.mount)
     deadline = execution_deadline(request.budget.timeout_seconds)
     cancel = CancelFlag(cancelled)
     invocation_root = ensure_private_dir(Path(request.private_state.invocation_root))
     native_root = ensure_private_dir(Path(request.private_state.native_root))
-    if governed:
+    if micro_task:
         # The Worker run's shared rollout root is the task's native root — the
         # root a later attempt of the same micro-task resumes — while this
         # invocation's own private root holds the launch
@@ -960,7 +960,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     # the native connection; it queues questions for the root's own checkpoint
     # tool and journals delivered/answered state after the verified receipt.
     inquiry_bridge: InquiryBridge | None = None
-    if governed and services.inquiry is not None:
+    if micro_task and services.inquiry is not None:
         inquiry_bridge = make_inquiry_bridge(
             identity={"taskId": request.identity.task_id,
                                         "attemptId": request.identity.attempt_id,
@@ -1017,8 +1017,8 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
 
     try:
         if mode == "native-session":
-            # Eligibility confirms existence only: the private goal binding this
-            # run itself wrote for that exact session, goal, checkout and
+            # Eligibility confirms existence only: the private micro task binding this
+            # run itself wrote for that exact session, micro task, checkout and
             # configuration. Nothing vendor-side is statically proven here, and
             # a missing or foreign binding fails the run before any process
             # exists, inside the same honest error result as every other stage.
@@ -1026,10 +1026,10 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                 binding = decode_json(_binding_path(native_root, previous).read_bytes())
             except (OSError, ValueError):
                 raise NativeError("native-resume-unavailable",
-                                  "the previous native session has no private goal binding") from None
-            if binding != _goal_binding(request, previous):
+                                  "the previous native session has no private micro task binding") from None
+            if binding != _micro_task_binding(request, previous):
                 raise NativeError("native-resume-unavailable",
-                                  "the previous native session does not match this goal, "
+                                  "the previous native session does not match this micro task, "
                                   "checkout and buddy")
         scope_rows, extra_env = _launch_policy(request)
         state.scope_rows = scope_rows
@@ -1039,7 +1039,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                                                "reason": "scope-configuration-unconfirmed",
                                                "disabledRows": [row["id"] for row in scope_rows]}
         policy = (_AttentionPolicy(services.mount.bridge, state, inquiry_bridge)
-                  if governed else PermissionPolicy())
+                  if micro_task else PermissionPolicy())
         client = _launch_agent(cwd=request.cwd, launch_root=launch_root,
                                invocation_root=invocation_root,
                                sessions_root=sessions_root,
@@ -1047,7 +1047,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                                permission_policy=policy)
         state.harness_version = _initialize(client, state.native_facts)
         pump = _Pump(client.connection)
-        if governed:
+        if micro_task:
             mount = services.mount
             evidence = RootTurnEvidence(
                 "", mount.finish_tool, mount.bridge,
@@ -1057,7 +1057,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                 on_answer=(lambda receipt, call_id: inquiry_bridge.record_answer(receipt, call_id))
                 if inquiry_bridge is not None else None,
                 validate_outcome=services.validate_outcome, mounted_tools=mount.bare_tools)
-            _governed_round(client=client, pump=pump, request=request, services=services,
+            _micro_task_round(client=client, pump=pump, request=request, services=services,
                             deadline=deadline, cancel=cancel, state=state, tools=tools,
                             activity=activity, sessions=sessions, evidence=evidence,
                             inquiry_bridge=inquiry_bridge, sessions_root=sessions_root,
@@ -1108,14 +1108,14 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     else:
         record = None
     continuation = None
-    if governed and sessions and state.status == "ok" and state.provenance is not None \
+    if micro_task and sessions and state.status == "ok" and state.provenance is not None \
             and state.stop.get("shutdown") is True:
         # The reusable binding needs the complete native turn, its verified
         # provenance, the correct session binding and the really-gone group —
         # a resumed turn keeps the binding it already verified; a fresh root
         # writes its own once, and nothing else may stand in for either.
         session_id = sessions[-1]
-        expected = _goal_binding(request, session_id)
+        expected = _micro_task_binding(request, session_id)
         try:
             binding_file = _binding_path(native_root, session_id)
             if binding_file.is_file():
@@ -1131,7 +1131,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                          sessions=sessions, evidence=evidence, raw_answer=raw_answer,
                          correction_count=correction_count, drained=drained,
                          invocation_root=invocation_root, record=record,
-                         stderr_mirror=services.native_stderr if governed else None,
+                         stderr_mirror=services.native_stderr if micro_task else None,
                          continuation=continuation)
 
 
@@ -1354,14 +1354,14 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
         return raw, correction_count
 
 
-def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
+def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
                     services: SessionServices, deadline: float, cancel: CancelFlag,
                     state: _RunState, tools: DshToolFacts, activity: DshActivity,
                     sessions: list, evidence: RootTurnEvidence,
                     inquiry_bridge: InquiryBridge | None, sessions_root: Path,
                     fold, notify,
                     denied, send_cancel) -> None:
-    """The governed completion-tool carrier: one root turn, one verified receipt.
+    """The micro task completion-tool carrier: one root turn, one verified receipt.
 
     The same session-open, configuration and prompt sites run with the mounted
     session service; the value is the signed receipt's outcome and nothing else.
@@ -1405,7 +1405,7 @@ def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
     state.checked = _configure(client, session_id, snapshot, request.buddy, state.native_facts)
     publisher = ActivityPublisher(services.live.publish_activity if services.live else None)
 
-    def governed_fold(message: object) -> bool:
+    def micro_task_fold(message: object) -> bool:
         changed = fold(message)
         if changed:
             try:
@@ -1416,7 +1416,7 @@ def _governed_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
 
     value = _prompt_and_observe(client=client, pump=pump, session_id=session_id,
                                 input_text=request.input_text, deadline=deadline, cancel=cancel,
-                                state=state, fold=governed_fold, notify=notify, activity=activity,
+                                state=state, fold=micro_task_fold, notify=notify, activity=activity,
                                 denied=denied, send_cancel=send_cancel)
     if value.get("stopReason") == "cancelled":
         # A cancelled turn owes no finish receipt; the reason, not a missing

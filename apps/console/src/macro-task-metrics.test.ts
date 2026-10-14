@@ -197,7 +197,7 @@ describe("related Host events by recorded identity", () => {
   });
 });
 
-describe("per-delegation rollups", () => {
+describe("per-micro-task rollups", () => {
   it("orders root cards by recorded creation time, not by list order", () => {
     const timeline = macroTaskTimelineFixture();
     // r5 was created after r4 but appears earlier in the tree; creation order rules.

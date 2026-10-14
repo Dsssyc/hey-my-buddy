@@ -1,8 +1,8 @@
-"""Read-only delegation provenance and keyset task-history paging.
+"""Read-only micro task provenance and keyset task-history paging.
 
 Everything runs against the real store and the real service through the in-process
 board harness: private state directories, no model call, no worker process. The
-workspace module is the deterministic double, exactly like the governed workflow
+workspace module is the deterministic double, exactly like the micro-task workflow
 tests, so a temporary execution worktree can be distinguished from the source
 project without running Git.
 """
@@ -17,12 +17,12 @@ from support import FakeClock
 from blackboard.routing.test_decision import DecisionTestCase
 from blackboard.tasks.test_workflow import BUDDY, NONCE, WorkflowTestCase
 
-from hey_my_buddy.blackboard.tasks import delegation
+from hey_my_buddy.blackboard.tasks import micro_task
 from hey_my_buddy.errors import BoardError
 
 
-class DelegationTestCase(WorkflowTestCase):
-    """Shared fixtures: governed goals, ordinary tasks and helper/decision runs."""
+class MicroTaskTestCase(WorkflowTestCase):
+    """Shared fixtures: micro tasks, ordinary tasks and helper/decision runs."""
 
     seed = DecisionTestCase.seed
 
@@ -46,8 +46,8 @@ class DelegationTestCase(WorkflowTestCase):
     def task_view(self, board, run_id: str) -> dict:
         return board.call("task_get", {"runId": run_id})["task"]
 
-    def delegation_of(self, board, run_id: str) -> dict:
-        return self.task_view(board, run_id)["delegation"]
+    def micro_task_of(self, board, run_id: str) -> dict:
+        return self.task_view(board, run_id)["lineage"]
 
     def history(self, board, **params):
         return board.call("task_list", params)
@@ -90,7 +90,7 @@ class DelegationTestCase(WorkflowTestCase):
         # Reproduce records from before these optional event facts were written.
         # Existing owner/actor labels remain, and must never be parsed as evidence.
         with board.store.db.write() as connection:
-            connection.execute("UPDATE events SET payload_json=json_remove(payload_json, '$.governed.sourceHostId',"
+            connection.execute("UPDATE events SET payload_json=json_remove(payload_json, '$.microTask.sourceHostId',"
                                " '$.sourceHostId', '$.previousHostId', '$.previousOwnerGeneration') WHERE task_id=?", (run_id,))
 
     def page_all(self, board, *, page_size: int, **params):
@@ -110,19 +110,19 @@ class DelegationTestCase(WorkflowTestCase):
                 return collected, pages
 
 
-class GoalProvenanceTests(DelegationTestCase):
-    def test_goal_reports_source_and_current_host_with_the_source_project(self):
+class MicroTaskProvenanceTests(MicroTaskTestCase):
+    def test_micro_task_reports_source_and_current_host_with_the_source_project(self):
         board = self.board()
-        submitted = self.submit(board, request_id="goal-1", host_id="host-a", kind="worktree")
+        submitted = self.submit(board, request_id="micro-task-1", host_id="host-a", kind="worktree")
         run_id = submitted["runId"]
         view = self.task_view(board, run_id)
-        metadata = view["delegation"]
+        metadata = view["lineage"]
         source = os.path.realpath(str(self.workdir()))
         worktree = view["cwd"]
         # The execution checkout is a temporary worktree; the project stays the
-        # source Goal's original cwd and its saved repository identity.
+        # source Micro task's original cwd and its saved repository identity.
         self.assertNotEqual(worktree, source)
-        self.assertEqual(metadata["kind"], "goal")
+        self.assertEqual(metadata["kind"], "micro-task")
         self.assertEqual(metadata["sourceHostId"], "host-a")
         self.assertEqual(metadata["currentHostId"], "host-a")
         self.assertIsNone(metadata["parentRunId"])
@@ -137,7 +137,7 @@ class GoalProvenanceTests(DelegationTestCase):
 
     def test_takeover_never_passes_the_current_host_off_as_the_source(self):
         board = self.board()
-        submitted = self.submit(board, request_id="goal-1", host_id="host-a")
+        submitted = self.submit(board, request_id="micro-task-1", host_id="host-a")
         run_id = submitted["runId"]
         board.call(
             "workflow_takeover",
@@ -149,14 +149,14 @@ class GoalProvenanceTests(DelegationTestCase):
                 **submitted["control"],
             },
         )
-        metadata = self.delegation_of(board, run_id)
+        metadata = self.micro_task_of(board, run_id)
         self.assertEqual(metadata["currentHostId"], "host-b")
         self.assertEqual(self.task_view(board, run_id)["workflow"]["hostId"], "host-b")
         self.assertEqual(metadata["sourceHostId"], "host-a")
         with board.store.db.read() as connection:
             admission = json.loads(connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='task.submitted'", (run_id,)).fetchone()[0])
             takeover = json.loads(connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.takeover'", (run_id,)).fetchone()[0])
-        self.assertEqual(admission["governed"]["sourceHostId"], "host-a")
+        self.assertEqual(admission["microTask"]["sourceHostId"], "host-a")
         self.assertEqual(takeover["previousHostId"], "host-a")
         self.assertEqual(takeover["previousOwnerGeneration"], 1)
         # Root lineage and project survive the ownership change.
@@ -166,10 +166,10 @@ class GoalProvenanceTests(DelegationTestCase):
     def test_helper_keeps_the_host_that_delegated_it_across_a_root_takeover(self):
         board = self.board(max_concurrent=1)
         self.register(board)
-        submitted = self.submit(board, request_id="goal-1", host_id="host-a")
-        goal_id = submitted["runId"]
+        submitted = self.submit(board, request_id="micro-task-1", host_id="host-a")
+        micro_task_id = submitted["runId"]
         self.finish_turn(board, self.claim(board), disposition="assistance")
-        view = board.call("workflow_get", {"runId": goal_id})
+        view = board.call("workflow_get", {"runId": micro_task_id})
         approved = self.decide(
             board,
             view,
@@ -184,36 +184,36 @@ class GoalProvenanceTests(DelegationTestCase):
             ],
         )
         helper_id = approved["children"][0]["taskId"]
-        self.assertEqual(self.delegation_of(board, helper_id)["sourceHostId"], "host-a")
+        self.assertEqual(self.micro_task_of(board, helper_id)["sourceHostId"], "host-a")
         board.call(
             "workflow_takeover",
             {
-                "runId": goal_id,
+                "runId": micro_task_id,
                 "commandId": "takeover-1",
                 "newHostId": "host-b",
                 "expectedOwnerGeneration": 1,
                 **submitted["control"],
             },
         )
-        goal = self.delegation_of(board, goal_id)
-        helper = self.delegation_of(board, helper_id)
-        self.assertEqual(goal["sourceHostId"], "host-a")
-        self.assertEqual(goal["currentHostId"], "host-b")
+        micro_task = self.micro_task_of(board, micro_task_id)
+        helper = self.micro_task_of(board, helper_id)
+        self.assertEqual(micro_task["sourceHostId"], "host-a")
+        self.assertEqual(micro_task["currentHostId"], "host-b")
         # The helper's own generation-1 creation record still names the Host that
         # authorized it, so the original delegating Host is recovered instead of the
         # post-takeover controller.
         self.assertEqual(helper["sourceHostId"], "host-a")
         self.assertEqual(helper["currentHostId"], "host-b")
-        self.assertEqual(helper["rootRunId"], goal_id)
+        self.assertEqual(helper["rootRunId"], micro_task_id)
 
     def test_old_generation_one_source_is_fixed_by_its_first_new_takeover(self):
         board = self.board()
         original = self.submit(board, host_id="host-a")
         self.remove_source_evidence(board, original["runId"])
-        self.assertEqual(self.delegation_of(board, original["runId"])["sourceHostId"], "host-a")
+        self.assertEqual(self.micro_task_of(board, original["runId"])["sourceHostId"], "host-a")
         second = self.take_over(board, original, "host-b", "old-first-takeover")
         self.take_over(board, second, "host-c", "old-second-takeover")
-        metadata = self.delegation_of(board, original["runId"])
+        metadata = self.micro_task_of(board, original["runId"])
         self.assertEqual(metadata["sourceHostId"], "host-a")
         self.assertEqual(metadata["currentHostId"], "host-c")
 
@@ -223,7 +223,7 @@ class GoalProvenanceTests(DelegationTestCase):
         second = self.take_over(board, original, "host-b", "historical-takeover")
         self.remove_source_evidence(board, original["runId"])
         self.take_over(board, second, "host-c", "new-later-takeover")
-        metadata = self.delegation_of(board, original["runId"])
+        metadata = self.micro_task_of(board, original["runId"])
         self.assertIsNone(metadata["sourceHostId"])
         self.assertEqual(metadata["currentHostId"], "host-c")
         self.assertEqual(self.history(board, hostId="host-a")["total"], 0)
@@ -234,7 +234,7 @@ class GoalProvenanceTests(DelegationTestCase):
         child_view = board.call("workflow_get", {"runId": child})
         child_view = self.take_over(board, child_view, "child-host-b", "child-first", console=True)
         self.take_over(board, child_view, "child-host-c", "child-second", console=True)
-        metadata = self.delegation_of(board, child)
+        metadata = self.micro_task_of(board, child)
         self.assertEqual(metadata["sourceHostId"], "host-a")
         self.assertEqual(metadata["currentHostId"], "host-a")
         self.assertEqual(metadata["rootRunId"], parent["runId"])
@@ -250,13 +250,13 @@ class GoalProvenanceTests(DelegationTestCase):
         view = self.take_over(board, view, "grandchild-host-b", "deep-first", console=True)
         self.take_over(board, view, "grandchild-host-c", "deep-second", console=True)
         self.remove_source_evidence(board, grandchild)
-        metadata = self.delegation_of(board, grandchild)
+        metadata = self.micro_task_of(board, grandchild)
         self.assertEqual(board.call("workflow_get", {"runId": parent["runId"]})["ownerGeneration"], 1)
         self.assertIsNone(metadata["sourceHostId"])
         self.assertEqual(metadata["currentHostId"], "host-a")
         self.assertEqual(metadata["parentRunId"], child)
 
-    def test_proxy_delegation_records_the_actual_authorizing_host_after_root_takeover(self):
+    def test_proxy_micro_task_records_the_actual_authorizing_host_after_root_takeover(self):
         board = self.board()
         self.seed(board)
         parent, child = self.parent_and_helper(board)
@@ -271,23 +271,23 @@ class GoalProvenanceTests(DelegationTestCase):
         created = board.call("workflow_get", {"runId": grandchild})
         router_id = created["routing"]["taskId"]
         self.assertEqual(created["hostId"], "host-a", "provenance must not change the helper's authorization contract")
-        self.assertEqual(self.delegation_of(board, grandchild)["sourceHostId"], "host-b")
-        self.assertEqual(self.delegation_of(board, router_id)["sourceHostId"], "host-b")
+        self.assertEqual(self.micro_task_of(board, grandchild)["sourceHostId"], "host-b")
+        self.assertEqual(self.micro_task_of(board, router_id)["sourceHostId"], "host-b")
         root = board.call("workflow_get", {"runId": parent["runId"]})
         self.take_over(board, root, "host-c", "later-controller")
-        self.assertEqual(self.delegation_of(board, child)["sourceHostId"], "host-a")
+        self.assertEqual(self.micro_task_of(board, child)["sourceHostId"], "host-a")
         for run_id in (grandchild, router_id):
-            metadata = self.delegation_of(board, run_id)
+            metadata = self.micro_task_of(board, run_id)
             self.assertEqual(metadata["sourceHostId"], "host-b")
             self.assertEqual(metadata["currentHostId"], "host-c")
 
-    def test_helper_takes_lineage_project_and_hosts_from_its_root_goal(self):
+    def test_helper_takes_lineage_project_and_hosts_from_its_root_micro_task(self):
         board = self.board(max_concurrent=1)
         self.register(board)
-        submitted = self.submit(board, request_id="goal-1", host_id="host-a", kind="worktree")
-        goal_id = submitted["runId"]
+        submitted = self.submit(board, request_id="micro-task-1", host_id="host-a", kind="worktree")
+        micro_task_id = submitted["runId"]
         self.finish_turn(board, self.claim(board), disposition="assistance")
-        view = board.call("workflow_get", {"runId": goal_id})
+        view = board.call("workflow_get", {"runId": micro_task_id})
         helper_cwd = self.workdir("helper-project")
         approved = self.decide(
             board,
@@ -304,20 +304,20 @@ class GoalProvenanceTests(DelegationTestCase):
         )
         helper_id = approved["children"][0]["taskId"]
         helper_view = self.task_view(board, helper_id)
-        goal = self.delegation_of(board, goal_id)
-        helper = helper_view["delegation"]
+        micro_task = self.micro_task_of(board, micro_task_id)
+        helper = helper_view["lineage"]
         self.assertEqual(helper["kind"], "helper")
-        self.assertEqual(helper["parentRunId"], goal_id)
-        self.assertEqual(helper["rootRunId"], goal_id)
+        self.assertEqual(helper["parentRunId"], micro_task_id)
+        self.assertEqual(helper["rootRunId"], micro_task_id)
         self.assertEqual(helper["sourceHostId"], "host-a")
         self.assertEqual(helper["currentHostId"], "host-a")
-        # The project is the root Goal's, never the helper's own temporary checkout
+        # The project is the root Micro task's, never the helper's own temporary checkout
         # and never the helper's declared cwd.
-        self.assertEqual(helper["project"], goal["project"])
+        self.assertEqual(helper["project"], micro_task["project"])
         self.assertNotEqual(helper_view["cwd"], helper["project"]["path"])
         self.assertNotEqual(helper["project"]["id"], f"repo:{os.path.realpath(str(helper_cwd))}")
         self.assertEqual(helper["buddy"], BUDDY)
-        self.assertEqual(goal["kind"], "goal")
+        self.assertEqual(micro_task["kind"], "micro-task")
 
     def test_same_named_projects_do_not_share_one_project_id(self):
         board = self.board()
@@ -325,10 +325,10 @@ class GoalProvenanceTests(DelegationTestCase):
         second = self.workdir("two")
         (first / "proj").mkdir()
         (second / "proj").mkdir()
-        one = self.submit(board, request_id="goal-1", host_id="host-a", cwd=str(first / "proj"))
-        two = self.submit(board, request_id="goal-2", host_id="host-b", cwd=str(second / "proj"))
-        left = self.delegation_of(board, one["runId"])
-        right = self.delegation_of(board, two["runId"])
+        one = self.submit(board, request_id="micro-task-1", host_id="host-a", cwd=str(first / "proj"))
+        two = self.submit(board, request_id="micro-task-2", host_id="host-b", cwd=str(second / "proj"))
+        left = self.micro_task_of(board, one["runId"])
+        right = self.micro_task_of(board, two["runId"])
         self.assertEqual(left["project"]["label"], "proj")
         self.assertEqual(right["project"]["label"], "proj")
         self.assertNotEqual(left["project"]["id"], right["project"]["id"])
@@ -338,10 +338,10 @@ class GoalProvenanceTests(DelegationTestCase):
             [one["runId"]],
         )
 
-    def test_execution_task_without_a_source_goal_reports_unknown_hosts(self):
+    def test_execution_task_without_a_source_micro_task_reports_unknown_hosts(self):
         board = self.board()
         created = self.execution_task(board, "plain-1")
-        metadata = self.delegation_of(board, created["runId"])
+        metadata = self.micro_task_of(board, created["runId"])
         self.assertEqual(metadata["kind"], "execution")
         self.assertIsNone(metadata["sourceHostId"])
         self.assertIsNone(metadata["currentHostId"])
@@ -354,7 +354,7 @@ class GoalProvenanceTests(DelegationTestCase):
         # invented for it.
         self.assertIsNone(metadata["buddy"])
 
-    def test_internal_routing_decision_belongs_to_its_owning_goal(self):
+    def test_internal_routing_decision_belongs_to_its_owning_micro_task(self):
         board = self.board()
         self.seed(board)
         with patch("hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available", return_value=(True, None)):
@@ -369,22 +369,22 @@ class GoalProvenanceTests(DelegationTestCase):
                     "executionWorkspace": {"kind": "existing", "access": "write"},
                 },
             )
-        goal_id = submitted["runId"]
-        router_id = board.call("workflow_get", {"runId": goal_id})["routing"]["taskId"]
+        micro_task_id = submitted["runId"]
+        router_id = board.call("workflow_get", {"runId": micro_task_id})["routing"]["taskId"]
         self.assertIsNotNone(router_id)
-        goal = self.delegation_of(board, goal_id)
-        router = self.delegation_of(board, router_id)
+        micro_task = self.micro_task_of(board, micro_task_id)
+        router = self.micro_task_of(board, router_id)
         self.assertEqual(router["kind"], "decision")
         # The relation is the authoritative workflow_routes link, never a parsed label.
-        self.assertEqual(router["parentRunId"], goal_id)
-        self.assertEqual(router["rootRunId"], goal_id)
+        self.assertEqual(router["parentRunId"], micro_task_id)
+        self.assertEqual(router["rootRunId"], micro_task_id)
         self.assertEqual(router["sourceHostId"], "host-a")
         self.assertEqual(router["currentHostId"], "host-a")
-        self.assertEqual(router["project"], goal["project"])
+        self.assertEqual(router["project"], micro_task["project"])
         self.assertIsNone(router["buddy"])
-        self.assertEqual([row["runId"] for row in self.history(board, rootsOnly=True)["runs"]], [goal_id])
+        self.assertEqual([row["runId"] for row in self.history(board, rootsOnly=True)["runs"]], [micro_task_id])
 
-    def test_selection_decision_outside_a_goal_is_classified_and_has_no_lineage(self):
+    def test_selection_decision_outside_a_micro_task_is_classified_and_has_no_lineage(self):
         board = self.board()
         self.seed(board)
         created = board.call("selection_request", {"requestId": "pick-1", "task": "which model"})
@@ -393,7 +393,7 @@ class GoalProvenanceTests(DelegationTestCase):
             task_id = connection.execute(
                 "SELECT task_id FROM decision_requests WHERE decision_id=?", (created["decisionId"],)
             ).fetchone()["task_id"]
-        metadata = self.delegation_of(board, task_id)
+        metadata = self.micro_task_of(board, task_id)
         self.assertEqual(metadata["kind"], "decision")
         self.assertIsNone(metadata["parentRunId"])
         self.assertIsNone(metadata["rootRunId"])
@@ -404,29 +404,29 @@ class GoalProvenanceTests(DelegationTestCase):
 
     def test_every_decorated_view_carries_the_same_metadata(self):
         board = self.board()
-        submitted = self.submit(board, request_id="goal-1", host_id="host-a")
+        submitted = self.submit(board, request_id="micro-task-1", host_id="host-a")
         run_id = submitted["runId"]
         with board.store.db.read() as connection:
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-            resolved = delegation.resolve(connection, task)
-            self.assertEqual(resolved, self.delegation_of(board, run_id))
+            resolved = micro_task.resolve(connection, task)
+            self.assertEqual(resolved, self.micro_task_of(board, run_id))
             # The batch read returns exactly the rows that exist; an unknown id is
             # absent instead of being invented.
-            self.assertEqual(delegation.resolve_many(connection, [run_id, "missing-run"]), {run_id: resolved})
-            self.assertEqual(delegation.resolve_many(connection, []), {})
-        listed = self.history(board, limit=100)["runs"][0]["delegation"]
-        self.assertEqual(listed, self.delegation_of(board, run_id))
+            self.assertEqual(micro_task.resolve_many(connection, [run_id, "missing-run"]), {run_id: resolved})
+            self.assertEqual(micro_task.resolve_many(connection, []), {})
+        listed = self.history(board, limit=100)["runs"][0]["lineage"]
+        self.assertEqual(listed, self.micro_task_of(board, run_id))
         snapshot = board.call("console_snapshot", {})
-        self.assertEqual(snapshot["tasks"]["runs"][0]["delegation"], self.delegation_of(board, run_id))
+        self.assertEqual(snapshot["tasks"]["runs"][0]["lineage"], self.micro_task_of(board, run_id))
         self.assertIsNone(snapshot["tasks"]["nextCursor"])
-        self.assertEqual(self.task_view(board, run_id)["delegation"], listed)
+        self.assertEqual(self.task_view(board, run_id)["lineage"], listed)
         compact_task = board.call("workflow_get", {"runId": run_id})["task"]
-        self.assertEqual(compact_task["delegation"], listed)
+        self.assertEqual(compact_task["lineage"], listed)
         self.assertNotIn("task", compact_task)
         self.assertNotIn("spec", compact_task)
 
 
-class HistoryPagingTests(DelegationTestCase):
+class HistoryPagingTests(MicroTaskTestCase):
     def test_more_than_one_hundred_records_page_without_skips_or_duplicates(self):
         board = self.board(clock=FakeClock())
         for index in range(105):
@@ -516,7 +516,7 @@ class HistoryPagingTests(DelegationTestCase):
         board = self.board()
         work = self.workdir("searchable-project")
         submitted = self.submit(
-            board, request_id="goal-1", host_id="host-zed", cwd=str(work), task="Refactor the parser"
+            board, request_id="micro-task-1", host_id="host-zed", cwd=str(work), task="Refactor the parser"
         )
         run_id = submitted["runId"]
         self.execution_task(board, "noise", cwd=self.workdir("unrelated"), task_text="unrelated workload")
@@ -576,7 +576,7 @@ class HistoryPagingTests(DelegationTestCase):
         with self.assertRaises(BoardError) as raised:
             self.history(board, before="not-a-cursor")
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        valid = delegation.encode_cursor("2026-01-01T00:00:00.000Z", "run-1")
+        valid = micro_task.encode_cursor("2026-01-01T00:00:00.000Z", "run-1")
         with self.assertRaises(BoardError) as raised:
             self.history(board, limit=1, offset=1, before=valid)
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
@@ -585,7 +585,7 @@ class HistoryPagingTests(DelegationTestCase):
             "!!!!",
             "e30",  # {}
             valid + "=",
-            "x" * (delegation.CURSOR_MAX_LENGTH + 1),
+            "x" * (micro_task.CURSOR_MAX_LENGTH + 1),
             "W10",  # []
         ):
             with self.subTest(cursor=cursor):
@@ -593,9 +593,9 @@ class HistoryPagingTests(DelegationTestCase):
                     self.history(board, before=cursor)
                 self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         for params in (
-            {"query": "x" * (delegation.QUERY_MAX_LENGTH + 1)},
-            {"projectId": "x" * (delegation.PROJECT_ID_MAX_LENGTH + 1)},
-            {"hostId": "x" * (delegation.HOST_ID_MAX_LENGTH + 1)},
+            {"query": "x" * (micro_task.QUERY_MAX_LENGTH + 1)},
+            {"projectId": "x" * (micro_task.PROJECT_ID_MAX_LENGTH + 1)},
+            {"hostId": "x" * (micro_task.HOST_ID_MAX_LENGTH + 1)},
             {"filter": "everything"},
             {"rootsOnly": "true"},
             {"limit": 101},
@@ -623,12 +623,12 @@ class HistoryPagingTests(DelegationTestCase):
         self.assertEqual(window["total"], 9)
 
     def test_cursor_round_trips_through_its_own_encoding(self):
-        cursor = delegation.encode_cursor("2026-01-01T00:00:00.000Z", "run-1")
-        self.assertEqual(delegation.decode_cursor(cursor), ("2026-01-01T00:00:00.000Z", "run-1"))
-        self.assertEqual(delegation.keyset_where(*delegation.decode_cursor(cursor))[1][2], "run-1")
+        cursor = micro_task.encode_cursor("2026-01-01T00:00:00.000Z", "run-1")
+        self.assertEqual(micro_task.decode_cursor(cursor), ("2026-01-01T00:00:00.000Z", "run-1"))
+        self.assertEqual(micro_task.keyset_where(*micro_task.decode_cursor(cursor))[1][2], "run-1")
 
 
-class ShutdownHistoryTests(DelegationTestCase):
+class ShutdownHistoryTests(MicroTaskTestCase):
     def test_review_filter_waits_for_child_stop_before_paging_and_counts(self):
         clock = FakeClock()
         board = self.board(clock=clock, max_concurrent=2)
@@ -692,14 +692,14 @@ class ShutdownHistoryTests(DelegationTestCase):
         self.assertEqual(self.history(board, filter="review")["total"], 0)
 
 
-class BulkDecoratedViewsTests(DelegationTestCase):
+class BulkDecoratedViewsTests(MicroTaskTestCase):
     def test_task_list_and_snapshot_keep_helper_and_decision_rows(self):
         board = self.board(max_concurrent=1)
         self.register(board)
-        submitted = self.submit(board, request_id="goal-1", host_id="host-a")
-        goal_id = submitted["runId"]
+        submitted = self.submit(board, request_id="micro-task-1", host_id="host-a")
+        micro_task_id = submitted["runId"]
         self.finish_turn(board, self.claim(board), disposition="assistance")
-        view = board.call("workflow_get", {"runId": goal_id})
+        view = board.call("workflow_get", {"runId": micro_task_id})
         approved = self.decide(
             board,
             view,
@@ -715,16 +715,16 @@ class BulkDecoratedViewsTests(DelegationTestCase):
         )
         helper_id = approved["children"][0]["taskId"]
         all_rows = self.history(board, limit=100)
-        kinds = {row["runId"]: row["delegation"]["kind"] for row in all_rows["runs"]}
-        self.assertEqual(kinds[goal_id], "goal")
+        kinds = {row["runId"]: row["lineage"]["kind"] for row in all_rows["runs"]}
+        self.assertEqual(kinds[micro_task_id], "micro-task")
         self.assertEqual(kinds[helper_id], "helper")
         snapshot = board.call("console_snapshot", {})
-        snapshot_kinds = {row["runId"]: row["delegation"]["kind"] for row in snapshot["tasks"]["runs"]}
+        snapshot_kinds = {row["runId"]: row["lineage"]["kind"] for row in snapshot["tasks"]["runs"]}
         self.assertEqual(snapshot_kinds[helper_id], "helper")
         self.assertEqual(snapshot["tasks"]["total"], 2)
         self.assertIsNone(snapshot["tasks"]["nextCursor"])
         roots = self.history(board, rootsOnly=True)
-        self.assertEqual([row["runId"] for row in roots["runs"]], [goal_id])
+        self.assertEqual([row["runId"] for row in roots["runs"]], [micro_task_id])
 
     def test_helpers_and_decisions_never_appear_in_root_history(self):
         board = self.board()

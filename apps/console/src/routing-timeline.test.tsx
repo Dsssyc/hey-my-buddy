@@ -157,7 +157,7 @@ describe("routing timeline interactions", () => {
     { name: "cancelled", overrides: { state: "finished", resultStatus: "cancelled" }, label: "已取消", css: "cancelled" },
     { name: "unknown", overrides: { state: "uncertain", uncertain: true }, label: "结束未确认", css: "unknown" },
     { name: "abstention", overrides: { state: "abstention", resultStatus: "ok", error: "没有合适候选" }, label: "已放弃选择", css: null },
-  ])("renders a text-free $name fragment and opens the routed delegation's exact decision", ({ overrides, label, css }) => {
+  ])("renders a text-free $name fragment and opens the routed microTask's exact decision", ({ overrides, label, css }) => {
     const { timeline, span } = fixture(overrides as Partial<TimelineSpan>);
     const originalTimes = [span.startAt, span.endAt];
     const callbacks = props(timeline);

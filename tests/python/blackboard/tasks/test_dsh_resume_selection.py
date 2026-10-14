@@ -1,4 +1,4 @@
-"""DSH rides the common governed resume selection; no DSH condition is added.
+"""DSH rides the common micro-task resume selection; no DSH condition is added.
 
 Every case drives the real WorkflowCoordinator turn creation through the same
 worker claim flow as the rest of this package, under this suite's declared
@@ -9,7 +9,7 @@ executor instance is what selects ``native-session`` here, and each case
 captures the product ``DshAdapter`` declaration before and after the injection
 and compares them, so the tests stay valid whichever value the product declares
 after real verification — none of them pins that value. A qualified prior DSH
-turn reports ``nativeSession.storageOwner == "buddy-goal"``, the
+turn reports ``nativeSession.storageOwner == "buddy-micro-task"``, the
 same fact the common ownership judgment consumes for codex; the old
 attempt-private reporting shape gets its own reconstruction case. Which
 judgments are common blackboard rules and which are a native module's private
@@ -49,9 +49,9 @@ class DshResumeSelectionTests(WorkflowTestCase):
         self.assertEqual(registry_adapter("dsh").native_resume, before,
                          "the executor instance injection must not change the product declaration")
 
-    def goal_owned_storage(self):
-        """The positive prior-turn fact: the goal-owned native storage shape."""
-        return lambda result: result.update(nativeSession={"storageOwner": "buddy-goal"})
+    def micro_task_owned_storage(self):
+        """The positive prior-turn fact: the micro-task-owned native storage shape."""
+        return lambda result: result.update(nativeSession={"storageOwner": "buddy-micro-task"})
 
     def attempt_owned_storage(self):
         """The shape a pre-wiring DSH result reported: attempt-private storage."""
@@ -68,7 +68,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
         self.assertEqual(first["claim"]["turn"]["resumeMode"], "initial")
         self.assertIsNone(first["claim"]["turn"]["input"]["previousSessionId"])
         self.finish_turn(board, first, disposition="attention", session_id=CANDIDATE_SESSION,
-                         result_mutator=self.goal_owned_storage())
+                         result_mutator=self.micro_task_owned_storage())
 
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.continue_run(board, view, command_id="continue-to-native")
@@ -99,7 +99,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
         submitted = self.submit(board)
         first = self.claim(board)
         self.finish_turn(board, first, disposition="attention", session_id=CANDIDATE_SESSION,
-                         result_mutator=self.goal_owned_storage())
+                         result_mutator=self.micro_task_owned_storage())
 
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.continue_run(board, view, command_id="continue-unwired")
@@ -134,7 +134,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
         submitted = self.submit(board)
         first = self.claim(board)
         self.finish_turn(board, first, disposition="attention", session_id=CANDIDATE_SESSION,
-                         result_mutator=self.goal_owned_storage())
+                         result_mutator=self.micro_task_owned_storage())
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.continue_run(board, view, command_id="continue-native")
         resumed = self.claim(board, claim_request_id="native-turn-2")
@@ -161,7 +161,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
         submitted = self.submit(board)
         first = self.claim(board)
         self.finish_turn(board, first, disposition="attention", session_id=CANDIDATE_SESSION,
-                         result_mutator=self.goal_owned_storage())
+                         result_mutator=self.micro_task_owned_storage())
         attempt_id = first["claim"]["attempt"]["attemptId"]
         with board.store.db.write() as db:
             result = json.loads(db.execute(
@@ -187,7 +187,7 @@ class DshResumeSelectionTests(WorkflowTestCase):
         submitted = self.submit(board)
         first = self.claim(board)
         self.finish_turn(board, first, disposition="attention", session_id=CANDIDATE_SESSION,
-                         result_mutator=self.goal_owned_storage())
+                         result_mutator=self.micro_task_owned_storage())
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.continue_run(board, view, command_id="continue-new-effort",
                           buddy={**BUDDY, "effort": "high"},

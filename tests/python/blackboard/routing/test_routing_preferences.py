@@ -6,7 +6,7 @@ source/integrator fields no longer exist; partial coding quadruples are
 rejected with the three remaining expressions. This suite keeps every retired
 entry point covered by a rejection test (nothing is silently deleted), while
 the parts of the old scenarios that survive — user pin/prefer/exclude, hard
-capabilities, override audit, direct delegation and sole-candidate selection —
+capabilities, override audit, direct micro task and sole-candidate selection —
 stay asserted under the new contract.
 """
 from __future__ import annotations
@@ -41,7 +41,7 @@ class RetiredSubmissionInputTests(unittest.TestCase):
     """The schema rejects every removed spelling at its entry, with guidance."""
 
     def submit_params(self, root):
-        return {"requestId": "goal-1", "hostId": "host-1", "task": "Inspect this checkout", "cwd": root,
+        return {"requestId": "micro-task-1", "hostId": "host-1", "task": "Inspect this checkout", "cwd": root,
                 "executionWorkspace": {"kind": "existing", "access": "write"}}
 
     def test_nested_spec_is_rejected_at_both_entries(self):
@@ -202,7 +202,7 @@ class DecisionCapabilityTests(unittest.TestCase):
             document = {"buddy": {"harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"},
                         "executionWorkspace": manifest, "budget": budget, "outputSchema": router.answer_schema([BUDDY_ID]),
                         "buddies": [{"buddyId": BUDDY_ID}], "task": "bounded read"}
-            context = ExecutionContext(task_id="goal", attempt_id="attempt", generation=1,
+            context = ExecutionContext(task_id="microTask", attempt_id="attempt", generation=1,
                                        spec={"cwd": root, "timeoutSeconds": 60}, directory=directory,
                                        runtime={}, environment={"BUDDY_STATE_DIR": str(Path(root) / "state"),
                                            "BUDDY_RUNTIME_ROOT": str(Path(root) / "runtime"), "BUDDY_DEV_SOURCE": "1"}, decision_input=document,
@@ -231,7 +231,7 @@ class DecisionCapabilityTests(unittest.TestCase):
             self.assertEqual(handle.router_input, (manifest, frozen, "digest"))
 
     def test_ineligible_capability_is_rejected_before_input_preparation_or_spawn(self):
-        context = ExecutionContext(task_id="goal", attempt_id="attempt", generation=1,
+        context = ExecutionContext(task_id="microTask", attempt_id="attempt", generation=1,
                                    spec={}, directory=Path("/tmp/unused"), runtime={}, environment={},
                                    decision_input={"buddy": {"harness": "codex"}})
         with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=CodexAdapter()), mock.patch(
@@ -360,9 +360,9 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         with board.store.db.read() as connection:
             requested = json.loads(connection.execute(
                 "SELECT payload_json FROM events WHERE kind='workflow.routing_requested'").fetchone()[0])
-            goal = json.loads(connection.execute("SELECT goal_json FROM workflow_runs").fetchone()[0])
+            micro_task = json.loads(connection.execute("SELECT micro_task_json FROM workflow_runs").fetchone()[0])
         self.assertNotIn("routingPreferences", requested)
-        self.assertNotIn("routingPreferences", goal)
+        self.assertNotIn("routingPreferences", micro_task)
 
     def test_capabilities_still_filter_and_user_alternative_is_audited(self):
         board = self.board()
@@ -414,7 +414,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
                 ]})
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         self.assertIn("inheritRoutingPreferences", raised.exception.message)
-        # A plain helper carries no preference slot in its goal.
+        # A plain helper carries no preference slot in its micro task.
         approved = board.call("workflow_decide", {"runId": parent["runId"],
             "requestId": current["activeRequest"]["requestId"], "commandId": "helper-plain",
             "expectedRevision": current["revision"], "decision": "approve", **self.control(parent),
@@ -428,7 +428,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
                 (parent["runId"],),
             )}
         plain = board.call("workflow_get", {"runId": children["plain-helper"], "includeAudit": True})
-        self.assertNotIn("routingPreferences", plain["audit"]["goal"])
+        self.assertNotIn("routingPreferences", plain["audit"]["microTask"])
         self.assertEqual(approved["children"][0]["taskId"], children["plain-helper"])
 
     def test_host_override_requires_reason_and_records_no_preferences(self):

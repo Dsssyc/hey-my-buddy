@@ -69,11 +69,11 @@ class StructuredOutcomeTests(unittest.TestCase):
 
 
 class NativeCheckpointTests(unittest.TestCase):
-    document = {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "turn"}
+    document = {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "turn"}
 
     def request(self) -> RunRequest:
         return RunRequest(
-            identity=RunIdentity(task_id="goal", attempt_id="attempt", generation=1,
+            identity=RunIdentity(task_id="micro-task", attempt_id="attempt", generation=1,
                                  invocation_id="invocation", turn_id="turn",
                                  input_sha256=input_hash(self.document)),
             harness="codex", buddy=RunBuddy(provider="openai", model="fixture-model", effort="low"),

@@ -14,7 +14,7 @@ import threading
 import time
 from collections import OrderedDict
 
-from . import delegation
+from . import micro_task
 
 MAX_ENTRIES = 256
 MAX_BYTES = 4 * 1024 * 1024
@@ -26,14 +26,14 @@ _CREATION_LOCK = threading.Lock()
 # rules. Drop t.* before materializing: spec/input/result JSON does not belong
 # in a list's change marker. Query-only columns remain inside SQLite, evaluated
 # before the bounded scalar projection is materialized.
-THIN_HISTORY_SQL = delegation.TASK_HISTORY_SQL.replace(
+THIN_HISTORY_SQL = micro_task.TASK_HISTORY_SQL.replace(
     "t.*,",
     "t.rowid AS task_rowid, t.task_id, t.adapter, t.state, t.selected_attempt_id, t.active_attempt_id,"
     " t.created_at, t.accepted_at, t.revision, t.updated_at,",
 )
 MEMBER_COLUMNS = (
     "task_id", "task_rowid", "adapter", "state", "selected_attempt_id", "active_attempt_id",
-    "created_at", "accepted_at", "revision", "updated_at", "governed_run_id",
+    "created_at", "accepted_at", "revision", "updated_at", "micro_task_run_id",
     "run_state", "child_parent_run_id", "delegated_parent_run_id", "decision_id",
     "route_run_id", "root_run_id", "root_host_id", "root_owner_generation",
     "source_host_id", "current_host_id", "project_path", "project_id",
@@ -187,8 +187,8 @@ def dependencies(connection, members):
 
         else:
             row = connection.execute(
-                "SELECT " + _bounded("r.title") + "," + _bounded("json_extract(r.goal_json,'$.task')",
-                    kind="json_type(r.goal_json,'$.task')") + ","
+                "SELECT " + _bounded("r.title") + "," + _bounded("json_extract(r.micro_task_json,'$.task')",
+                    kind="json_type(r.micro_task_json,'$.task')") + ","
                 + _bounded("(SELECT CASE WHEN json_type(t.outcome_json,'$.summary')='text'"
                            " THEN json_extract(t.outcome_json,'$.summary') END FROM workflow_turns t"
                            " WHERE t.run_id=r.run_id AND t.state='concluded' AND t.outcome_json IS NOT NULL"

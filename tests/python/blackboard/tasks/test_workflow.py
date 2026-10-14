@@ -1,4 +1,4 @@
-"""Governed productivity workflow: lifecycle, exclusion, fencing and idempotency.
+"""Micro-task productivity workflow: lifecycle, exclusion, fencing and idempotency.
 
 Every test drives the real store, the real service validation and the real
 transactions through the in-process board harness; only the Git-backed workspace
@@ -68,7 +68,7 @@ class WorkflowTestCase(BoardTestCase):
         return board.call("worker_claim", params)
 
     def turn_record(self, claim_response, *, disposition="completed", outcome=None, session_id="sess-1", **overrides):
-        """A synthetic governed turn record in the current provenance format.
+        """A synthetic micro-task turn record in the current provenance format.
 
         This suite's boundary keeps its own executor stand-ins (the workspace is
         the mock module), so the record passes the stand-in validator here while
@@ -679,7 +679,7 @@ class LifecycleTests(WorkflowTestCase):
             board.call("workflow_get", {"runId": run_id, "credential": "forged-token"})
         self.assertEqual(raised.exception.code, "UNAUTHORIZED")
 
-    def test_governed_task_ops_require_host_control(self):
+    def test_micro_task_task_ops_require_host_control(self):
         board = self.board()
         self.register(board)
         submitted = self.submit(board)
@@ -693,7 +693,7 @@ class LifecycleTests(WorkflowTestCase):
                 self.assertEqual(raised.exception.code, "UNAUTHORIZED")
                 with self.assertRaises(BoardError) as raised:
                     board.call(operation, {**parameters, **self.control(submitted)})
-                self.assertEqual(raised.exception.code, "GOVERNED_REQUIRED")
+                self.assertEqual(raised.exception.code, "MICRO_TASK_REQUIRED")
                 self.assertIn(command, raised.exception.message)
         unchanged = board.call("workflow_get", {"runId": run_id})
         self.assertEqual(unchanged["revision"], submitted["revision"])
@@ -762,7 +762,7 @@ class WorkspaceTests(WorkflowTestCase):
         self.assertEqual(replay["workspace"]["manifestSha256"], first["workspace"]["manifestSha256"])
         self.assertEqual(len(self.workspace.prepare_calls), before)
         with self.assertRaises(BoardError) as raised:
-            self.submit(board, request_id="req-1", task="a different goal")
+            self.submit(board, request_id="req-1", task="a different micro task")
         self.assertEqual(raised.exception.code, "CONFLICT")
 
     def test_stopped_execution_retains_logical_workspace_until_acknowledgement(self):
@@ -827,7 +827,7 @@ class WorkspaceTests(WorkflowTestCase):
 
         failed = self.finish_turn(board, claim, seal=False, result_mutator=bad_seal)
         self.assertEqual(failed["taskState"], "failed")
-        self.assertIn("governed", (failed["attempt"]["error"] or "").lower())
+        self.assertIn("micro-task", (failed["attempt"]["error"] or "").lower())
         audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         self.assertEqual([row for row in audit["artifacts"] if row["kind"] == "output"], [])
 
@@ -1171,7 +1171,7 @@ class BoundedViewTests(WorkflowTestCase):
 
 
 class NestedSpecTests(WorkflowTestCase):
-    def test_governed_goal_can_explicitly_omit_an_execution_deadline(self):
+    def test_micro_task_can_explicitly_omit_an_execution_deadline(self):
         board = self.board()
         submitted = self.submit(board, request_id="no-deadline", timeoutSeconds=0)
         self.assertEqual(submitted["task"]["timeoutSeconds"], 0)
@@ -1230,7 +1230,7 @@ class LateCancellationTests(WorkflowTestCase):
         self.assertEqual(late["taskState"], "completed")
         child_view = board.call("workflow_get", {"runId": child})
         # The helper's run was cancelled with the parent, so its late completion is
-        # recorded as evidence and can never revive the goal; the sealed output it
+        # recorded as evidence and can never revive the micro task; the sealed output it
         # produced stays pinned as an immutable reference.
         self.assertEqual(child_view["state"], "cancelled")
         self.assertIn("output", [row["kind"] for row in child_view["artifacts"]])
@@ -1366,7 +1366,7 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         self.register(board)
         submitted = self.submit(board)
         # An assistance boundary whose turn never sealed an output is not a final
-        # artifact, so the Host cannot finish the goal from it.
+        # artifact, so the Host cannot finish the micro task from it.
         self.finish_turn(board, self.claim(board), disposition="assistance", seal=False)
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         output = next((row for row in view["artifacts"] if row["kind"] == "output"), None)
@@ -1418,7 +1418,7 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         with self.assertRaises(BoardError) as raised:
             board.call("task_acknowledge", {"runId": submitted["runId"], "note": "bypass artifact review",
                                            **self.control(submitted)})
-        self.assertEqual(raised.exception.code, "GOVERNED_REQUIRED")
+        self.assertEqual(raised.exception.code, "MICRO_TASK_REQUIRED")
         with self.assertRaises(BoardError) as raised:
             board.call(
                 "workflow_accept",
@@ -1518,7 +1518,7 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         self.assertIsNone(accepted["task"]["reviewRejectedAt"])
         self.assertIsNone(accepted["task"]["reviewRejectionNote"])
 
-    def test_late_result_never_reopens_a_cancelled_goal(self):
+    def test_late_result_never_reopens_a_cancelled_micro_task(self):
         board = self.board()
         self.register(board)
         submitted = self.submit(board)
@@ -1736,12 +1736,12 @@ class CompactReadBoundTests(WorkflowTestCase):
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         serialized = json.dumps(view)
         self.assertLess(len(serialized), 20000, "the compact view must stay bounded")
-        self.assertTrue(view["goal"]["taskTruncated"])
+        self.assertTrue(view["microTask"]["taskTruncated"])
         self.assertNotIn("spec", view["task"])
         self.assertNotIn(big_task, serialized)
         audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         self.assertEqual(audit["audit"]["spec"]["task"], big_task)
-        self.assertEqual(audit["audit"]["goal"]["task"], big_task)
+        self.assertEqual(audit["audit"]["microTask"]["task"], big_task)
         self.assertIn(big_task[:8000], audit["audit"]["turns"][0]["input"]["context"]["task"])
         self.assertTrue(audit["audit"]["turns"][0]["input"]["context"]["taskTruncated"])
         self.assertGreater(len(json.dumps(audit["audit"])), len(serialized))

@@ -1,7 +1,7 @@
 /**
  * ADR-018 Host-workflow facts for the read-only console: per-execution token
  * usage, recorded harness quota observations, the independent Host conclusion
- * of a failed or cancelled goal, partial outputs and cumulative patches.
+ * of a failed or cancelled micro task, partial outputs and cumulative patches.
  *
  * Every helper is total: a missing, malformed or unknown value resolves to an
  * explicit unknown — never to 0, an empty success or a fabricated acceptance.
@@ -223,8 +223,8 @@ export type HostConclusionView = {
 };
 
 /**
- * The recorded Host conclusion of a failed or cancelled goal. It is evidence
- * about the remains, never an acceptance: the goal keeps its recorded outcome.
+ * The recorded Host conclusion of a failed or cancelled micro task. It is evidence
+ * about the remains, never an acceptance: the micro task keeps its recorded outcome.
  */
 export function hostConclusionView(value: unknown): HostConclusionView | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -337,7 +337,7 @@ export function integrationHostPaths(value: IntegrationRecord | null | undefined
 }
 
 /**
- * ADR-018 §18: whether the delegation's explicit buddy is a user
+ * ADR-018 §18: whether the micro task's explicit buddy is a user
  * hard constraint. Absent is unknown, not a default.
  */
 export function buddyLockText(locked: boolean | null | undefined): string | null {

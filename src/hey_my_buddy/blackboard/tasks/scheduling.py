@@ -61,8 +61,8 @@ def model_service(spec: dict) -> tuple[str, str, str] | None:
     """The model service a specification will consume, or ``None`` when it has none.
 
     The model service is the exact harness/provider/model tuple. Partial buddies and
-    model-less work (``command``/``external``, an unresolved governed run) return
-    ``None``: they are admitted against the machine-wide ceiling only. A governed
+    model-less work (``command``/``external``, an unresolved micro-task run) return
+    ``None``: they are admitted against the machine-wide ceiling only. A micro-task
     run's effective specification already merges the resolved execution
     buddy over the immutable original request, so this is the tuple the
     attempt will actually run with.

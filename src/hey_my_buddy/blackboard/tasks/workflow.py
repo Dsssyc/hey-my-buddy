@@ -1,11 +1,11 @@
-"""Governed productivity workflow: Host-directed assistance over ordinary tasks.
+"""Micro-task productivity workflow: Host-directed assistance over ordinary tasks.
 
 The current contract is documented in ``docs/reference/workflow.md``. A
-governed run *is* the existing logical task (``runId`` = ``taskId``): it uses the
+micro-task run *is* the existing logical task (``runId`` = ``taskId``): it uses the
 ordinary task/attempt/worker/capacity/receipt machinery, never a second job engine.
 What the coordinator adds is durable governance around it:
 
-* an immutable original goal, a Host owner generation and a control capability;
+* an immutable original micro task, a Host owner generation and a control capability;
 * one durable turn per actual execution, with the bounded context and the validated
   structured outcome the coding adapter imported after confirmed shutdown;
 * assistance/attention requests, explicit helper tasks, one-use automatic
@@ -88,7 +88,7 @@ MAX_REQUEST_VIEW = 5
 MAX_CONTEXT_HELPERS = 8
 MAX_CONTEXT_ARTIFACTS = 8
 MAX_CONTEXT_TEXT = 4000
-#: The governed task-title fallback is bounded like the turn-view summary it
+#: The micro-task task-title fallback is bounded like the turn-view summary it
 #: projects; the stored outcome itself may be longer and stays intact in audit.
 MAX_RESULT_SUMMARY = 2000
 
@@ -145,7 +145,7 @@ def workspace_module():
     if _workspace_module is None:
         raise BoardError(
             "UNSUPPORTED",
-            "The workspace module is not part of this build, so no governed workspace can be prepared or sealed",
+            "The workspace module is not part of this build, so no micro-task workspace can be prepared or sealed",
         )
     return _workspace_module
 
@@ -235,7 +235,7 @@ class WorkflowCoordinator:
     def _run_row(self, connection, run_id: str):
         row = connection.execute("SELECT * FROM workflow_runs WHERE run_id=?", (run_id,)).fetchone()
         if row is None:
-            raise BoardError("NOT_FOUND", "This run is not a governed workflow run", runId=run_id)
+            raise BoardError("NOT_FOUND", "This run is not a micro-task workflow run", runId=run_id)
         return row
 
     def _run_optional(self, connection, run_id: str):
@@ -462,7 +462,7 @@ class WorkflowCoordinator:
         if row is None:
             raise BoardError(
                 "STATE_INTEGRITY",
-                "This governed run has no recorded authorization scope; a current-contract board records scope "
+                "This micro-task run has no recorded authorization scope; a current-contract board records scope "
                 "version 1 for every creation path, so this state must be converted offline",
                 runId=run_row["run_id"],
             )
@@ -577,7 +577,7 @@ class WorkflowCoordinator:
         }
 
     def compact(self, connection, run_row, task_row=None) -> dict:
-        """The compact governed view. Never contains control or scoped tokens."""
+        """The compact micro-task view. Never contains control or scoped tokens."""
         task_row = task_row or connection.execute(
             "SELECT * FROM tasks WHERE task_id=?", (run_row["run_id"],)
         ).fetchone()
@@ -648,11 +648,10 @@ class WorkflowCoordinator:
         active = self._open_boundary(connection, run_row)
         projection_now = self.now()
         active_request = self._request_view(active, connection=connection, now=projection_now) if active is not None else None
-        goal = json.loads(run_row["goal_json"])
+        micro_task = json.loads(run_row["micro_task_json"])
         state = run_row["state"]
         from ..evaluation.native_observations import warnings
         view = {
-            "governed": True,
             "runId": run_row["run_id"],
             "taskId": run_row["run_id"],
             "requestId": task_row["request_id"],
@@ -664,7 +663,7 @@ class WorkflowCoordinator:
             "queueReason": task_row["queue_reason"],
             "awaitingHost": state == "awaiting-host",
             "waitReason": self._wait_reason(state, task_row, active_request),
-            "goal": self._goal_view(goal, run_row["goal_fingerprint"]),
+            "microTask": self._micro_task_view(micro_task, run_row["micro_task_fingerprint"]),
             "revision": run_row["revision"],
             "continuationCount": run_row["continuation_count"],
             "workspace": self._workspace_view(run_row, connection=connection),
@@ -719,17 +718,17 @@ class WorkflowCoordinator:
         return for_run(connection, run_row["run_id"])
 
     @staticmethod
-    def _goal_view(goal: dict, fingerprint: str) -> dict:
-        """The bounded goal summary; the immutable original spec is in audit."""
-        task = goal.get("task") if isinstance(goal.get("task"), str) else ""
+    def _micro_task_view(micro_task: dict, fingerprint: str) -> dict:
+        """The bounded micro task summary; the immutable original spec is in audit."""
+        task = micro_task.get("task") if isinstance(micro_task.get("task"), str) else ""
         limit = 2000
         return {
             "task": task if len(task) <= limit else task[:limit],
             "taskTruncated": len(task) > limit,
             "taskBytes": len(task.encode("utf-8")),
-            **({"adapter": goal["adapter"]} if goal.get("adapter") in ("command", "external")
-               else {"harness": goal.get("harness")}),
-            "cwd": goal.get("cwd"),
+            **({"adapter": micro_task["adapter"]} if micro_task.get("adapter") in ("command", "external")
+               else {"harness": micro_task.get("harness")}),
+            "cwd": micro_task.get("cwd"),
             "fingerprint": fingerprint,
         }
 
@@ -762,7 +761,7 @@ class WorkflowCoordinator:
             "artifactCount": decorated["artifactCount"],
             "inquiries": decorated["inquiries"],
             "activity": decorated["activity"],
-            "delegation": decorated["delegation"],
+            "lineage": decorated["lineage"],
             "createdAt": decorated["createdAt"],
             "updatedAt": decorated["updatedAt"],
         }
@@ -772,7 +771,7 @@ class WorkflowCoordinator:
         if "workflow" in decorated:
             summary["workflow"] = decorated["workflow"]
         if "workflowState" in decorated:
-            # The governed marker the UI keys on, kept alongside the full record.
+            # The micro-task marker the UI keys on, kept alongside the full record.
             summary["workflowState"] = decorated["workflowState"]
             summary["awaitingHost"] = decorated["awaitingHost"]
             summary["workflowShutdown"] = decorated["workflowShutdown"]
@@ -791,9 +790,9 @@ class WorkflowCoordinator:
         if state == "waiting-helpers":
             return "authorized helpers are still running"
         if state == "concluded":
-            return "the goal work was concluded by its Host without acceptance"
+            return "the micro task work was concluded by its Host without acceptance"
         if state == "delivered":
-            return "the goal work is delivered and awaits final acknowledgement"
+            return "the micro task work is delivered and awaits final acknowledgement"
         if state == "accepted":
             return "the final artifact was acknowledged"
         if state == "cancelled":
@@ -842,7 +841,7 @@ class WorkflowCoordinator:
         if expected != run_row["revision"]:
             raise BoardError(
                 "REVISION_CONFLICT",
-                "The governed run changed since this decision was prepared; re-read it and retry",
+                "The micro-task run changed since this decision was prepared; re-read it and retry",
                 expectedRevision=expected,
                 currentRevision=run_row["revision"],
             )
@@ -1084,7 +1083,7 @@ class WorkflowCoordinator:
 
     def _release_reservations(self, connection, holder_task_id: str, now: str, *, state: str = "released") -> None:
         # A transferred reservation is still this task's logical ownership: cancelling
-        # or accepting the goal releases it too, so no writer claim leaks forever.
+        # or accepting the micro task releases it too, so no writer claim leaks forever.
         connection.execute(
             "UPDATE workspace_reservations SET state=?, updated_at=?, released_at=? WHERE holder_task_id=?"
             " AND state IN ('held','transferred')",
@@ -1244,7 +1243,7 @@ class WorkflowCoordinator:
 
     def _routing_view(self, connection, run, *, now=None) -> dict:
         from ..routing.router import selection_source
-        goal = json.loads(run["goal_json"])
+        micro_task = json.loads(run["micro_task_json"])
         if not run["current_routing_id"]:
             request = self._open_boundary(connection, run)
             needs_host = request is not None and json.loads(request["payload_json"]).get("source") == "routing"
@@ -1255,13 +1254,13 @@ class WorkflowCoordinator:
             override_payload = json.loads(override["payload_json"]) if override else None
             source = ("host-override" if override_payload and
                       override_payload.get("buddyRevision") == run["buddy_revision"]
-                      else "original-explicit" if len(schemas.buddy_constraints(goal)) == len(schemas.BUDDY_FIELDS)
+                      else "original-explicit" if len(schemas.buddy_constraints(micro_task)) == len(schemas.BUDDY_FIELDS)
                       else None)
             preparing = (run["state"] == "executing" and self._buddy(run) is None
                          and connection.execute("SELECT 1 FROM workflow_continuations WHERE run_id=? AND state='queued'"
                                                 " AND workspace_manifest_json IS NULL LIMIT 1", (run["run_id"],)).fetchone() is not None)
             return {"status": "needs-host" if needs_host else "queued" if preparing else "explicit", "decisionId": None, "taskId": None,
-                    "constraints": schemas.buddy_constraints(goal),
+                    "constraints": schemas.buddy_constraints(micro_task),
                     "source": None if preparing else source}
         link = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (run["current_routing_id"],)).fetchone()
         decision = self.board.decisions._row(connection, run["current_routing_id"])
@@ -1275,7 +1274,7 @@ class WorkflowCoordinator:
             "attemptId": decision["decision_attempt_id"], "generation": decision["decision_generation"],
             "selectedBuddy": json.loads(decision["selected_json"]) if decision["selected_json"] else None,
             "reason": link["reason"] or decision["reason"],
-            "constraints": requested.get("constraints", schemas.buddy_constraints(goal)),
+            "constraints": requested.get("constraints", schemas.buddy_constraints(micro_task)),
             "requiredCapabilities": requested.get("requiredCapabilities", []),
             "source": selection_source(requested),
             **{key: current[key] for key in (
@@ -1293,11 +1292,11 @@ class WorkflowCoordinator:
     def _start_routing(self, connection, run_id: str, now: str) -> None:
         run = self._run_row(connection, run_id)
         sequence = connection.execute("SELECT COUNT(*) FROM workflow_routes WHERE run_id=?", (run_id,)).fetchone()[0] + 1
-        goal = json.loads(run["goal_json"])
+        micro_task = json.loads(run["micro_task_json"])
         if run["continuation_count"] and not run["buddy_locked"]:
-            goal = {key: value for key, value in goal.items() if key not in schemas.BUDDY_FIELDS}
+            micro_task = {key: value for key, value in micro_task.items() if key not in schemas.BUDDY_FIELDS}
         response = self.board.decisions.route_workflow(
-            connection, run_id=run_id, sequence=sequence, spec=goal,
+            connection, run_id=run_id, sequence=sequence, spec=micro_task,
             manifest=json.loads(run["workspace_manifest_json"]),
         )
         decision_id = response["decisionId"]
@@ -1321,9 +1320,9 @@ class WorkflowCoordinator:
 
         The route's internal task pointer is the decision request's current task,
         which the dispatch step itself re-points; a pending route only records the
-        movement. The governed Goal keeps waiting for routing — no business Worker
+        movement. The micro task keeps waiting for routing — no business Worker
         turn opens here, and a link that does not exist yet (first routing of a
-        Goal) is not fabricated.
+        Micro task) is not fabricated.
         """
         connection.execute(
             "UPDATE workflow_routes SET updated_at=? WHERE decision_id=? AND state='pending'",
@@ -1347,7 +1346,7 @@ class WorkflowCoordinator:
         selected = json.loads(decision["selected_json"]) if decision["selected_json"] else None
         if decision["status"] == "completed" and selected is not None:
             buddy = schemas.buddy_constraints(selected)
-            constraints = (schemas.buddy_constraints(json.loads(run["goal_json"]))
+            constraints = (schemas.buddy_constraints(json.loads(run["micro_task_json"]))
                            if run["buddy_locked"] or not run["continuation_count"] else {})
             if (len(buddy) == len(schemas.BUDDY_FIELDS)
                     and buddy.get("harness") in schemas.CODING_HARNESSES
@@ -1370,7 +1369,7 @@ class WorkflowCoordinator:
                                 decision["error"] or decision["reason"] or "No legal coding buddy was selected")
 
     def _routing_attention(self, connection, run, now: str, reason: str) -> None:
-        """A service boundary, with no invented agent turn or completed Goal."""
+        """A service boundary, with no invented agent turn or completed Micro task."""
         reason = str(reason)[:2000]
         if run["current_routing_id"]:
             connection.execute("UPDATE workflow_routes SET state='needs-host',reason=?,updated_at=? WHERE decision_id=?",
@@ -1458,7 +1457,7 @@ class WorkflowCoordinator:
                     head = self.board._head_of(connection)
                 self.board._notify(head)
 
-    def attach_governed_task(
+    def attach_micro_task(
         self,
         connection,
         task_row,
@@ -1467,7 +1466,7 @@ class WorkflowCoordinator:
         spec: dict,
         executionWorkspace: dict,
         manifest: dict,
-        goalFingerprint: str,
+        microTaskFingerprint: str,
         requestFingerprint: str,
         buddy: dict | None = None,
         submissionToken: str | None = None,
@@ -1486,8 +1485,8 @@ class WorkflowCoordinator:
         presentation = presentation or {}
         macro_task_id = attach_macro_task(connection, presentation, spec=spec, host_id=hostId, manifest=manifest, now=now)
         connection.execute(
-            "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier, goal_json,"
-            " goal_fingerprint, request_fingerprint, submission_verifier, execution_workspace_json,"
+            "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier, micro_task_json,"
+            " micro_task_fingerprint, request_fingerprint, submission_verifier, execution_workspace_json,"
             " workspace_manifest_json, workspace_id, workspace_manifest_sha256, state, revision, created_at,"
             " updated_at) VALUES(?,?,1,?,?,?,?,?,?,?,?,?,'executing',1,?,?)",
             (
@@ -1495,7 +1494,7 @@ class WorkflowCoordinator:
                 hostId,
                 self.db.control_token_verifier(self.db.control_token(run_id, 1)),
                 canonical_json(spec),
-                goalFingerprint,
+                microTaskFingerprint,
                 requestFingerprint,
                 self.db.agent_token_verifier(submissionToken) if submissionToken else None,
                 canonical_json(executionWorkspace),
@@ -1561,7 +1560,7 @@ class WorkflowCoordinator:
         return run_id
 
     def submit(self, params: dict) -> dict:
-        """Prepare the workspace, admit one ordinary governed task and return control.
+        """Prepare the workspace, admit one ordinary micro-task task and return control.
 
         Authority is a private submission capability chosen by the caller before the
         first RPC, never the ``hostId`` label: a client that can read a run can never
@@ -1589,21 +1588,21 @@ class WorkflowCoordinator:
                 if run_row is None:
                     raise BoardError(
                         "CONFLICT",
-                        "This requestId belongs to a task that is not a governed workflow run; use a new requestId",
+                        "This requestId belongs to a task that is not a micro-task workflow run; use a new requestId",
                         requestId=request_id,
                         existingTaskId=existing["task_id"],
                     )
                 if existing["input_fingerprint"] != fingerprint:
                     raise BoardError(
                         "CONFLICT",
-                        "requestId already belongs to a governed run with a different specification",
+                        "requestId already belongs to a micro-task run with a different specification",
                         requestId=request_id,
                         existingTaskId=existing["task_id"],
                     )
                 if run_row["request_fingerprint"] != request_fingerprint:
                     raise BoardError(
                         "CONFLICT",
-                        "requestId already belongs to a governed run with a different execution workspace or Host",
+                        "requestId already belongs to a micro-task run with a different execution workspace or Host",
                         requestId=request_id,
                         existingTaskId=existing["task_id"],
                     )
@@ -1631,12 +1630,12 @@ class WorkflowCoordinator:
                     response = self.board.task_submit(
                         store_params,
                         task_id=task_id,
-                        governed={
+                        micro_task={
                             "hostId": host_id,
                             "spec": spec,
                             "executionWorkspace": normalized["executionWorkspace"],
                             "manifest": manifest,
-                            "goalFingerprint": fingerprint,
+                            "microTaskFingerprint": fingerprint,
                             "requestFingerprint": request_fingerprint,
                             "submissionToken": submission_token,
                             "buddy": buddy,
@@ -1795,7 +1794,7 @@ class WorkflowCoordinator:
                 raise BoardError("NOT_FOUND", "Unknown runId", runId=run_id)
             run_row = self._run_optional(connection, run_id)
             if run_row is None:
-                view = {"governed": False, "runId": run_id, "task": self.board._decorate(connection, task)}
+                view = {"runId": run_id, "task": self.board._decorate(connection, task)}
                 if raw_history is not None:
                     view["routingHistory"] = {"entries": [], "nextCursor": None, "total": 0}
                 return view
@@ -1947,8 +1946,8 @@ class WorkflowCoordinator:
                 for row in suggestions
             ],
             "ownerGeneration": run_row["owner_generation"],
-            "goalFingerprint": run_row["goal_fingerprint"],
-            "goal": json.loads(run_row["goal_json"]),
+            "microTaskFingerprint": run_row["micro_task_fingerprint"],
+            "microTask": json.loads(run_row["micro_task_json"]),
             "spec": _original_spec(connection, run_row["run_id"]),
         }
 
@@ -2027,7 +2026,7 @@ class WorkflowCoordinator:
                 if json.loads(request_row["payload_json"]).get("source") == "routing":
                     raise BoardError(
                         "BUDDY_REQUIRED",
-                        "Resolve this routing boundary with a complete buddy buddy or explicit reroute on the same goal; only changing shared Router settings needs the user",
+                        "Resolve this routing boundary with a complete buddy buddy or explicit reroute on the same micro task; only changing shared Router settings needs the user",
                         routingBoundary=self._request_view(request_row, connection=connection).get("routingBoundary"),
                     )
                 if request_row["state"] != "open":
@@ -2091,7 +2090,7 @@ class WorkflowCoordinator:
                     if auto_continue:
                         approve_continuation = str(uuid.uuid4())
                         approval_input = (
-                            reason or "Host approved assistance; continue the original goal with the helper results"
+                            reason or "Host approved assistance; continue the original micro task with the helper results"
                         )
                         connection.execute(
                             "INSERT INTO workflow_continuations(continuation_id, run_id, command_id, authorized_by,"
@@ -2255,7 +2254,7 @@ class WorkflowCoordinator:
             if json.loads(request_row["payload_json"]).get("source") == "routing":
                 raise BoardError(
                     "BUDDY_REQUIRED",
-                    "Resolve this routing boundary with a complete buddy buddy or explicit reroute on the same goal; only changing shared Router settings needs the user",
+                    "Resolve this routing boundary with a complete buddy buddy or explicit reroute on the same micro task; only changing shared Router settings needs the user",
                     routingBoundary=self._request_view(request_row, connection=connection).get("routingBoundary"),
                 )
             if request_row["state"] != "open" or active is None or active["request_id"] != request_id:
@@ -2571,12 +2570,12 @@ class WorkflowCoordinator:
                 now,
             ),
         )
-        # A helper run uses the ordinary turn machinery: its goal is the helper spec,
+        # A helper run uses the ordinary turn machinery: its micro task is the helper spec,
         # its Host is the parent's Host and it can never be reached by a Host control
         # capability of its own (only the parent run is addressed by workflow ops).
         connection.execute(
-            "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier, goal_json,"
-            " goal_fingerprint, request_fingerprint, execution_workspace_json, workspace_manifest_json, workspace_id,"
+            "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier, micro_task_json,"
+            " micro_task_fingerprint, request_fingerprint, execution_workspace_json, workspace_manifest_json, workspace_id,"
             " workspace_manifest_sha256, state, revision, created_at, updated_at)"
             " VALUES(?,?,1,?,?,?,?,?,?,?,?,'executing',1,?,?)",
             (
@@ -2621,7 +2620,7 @@ class WorkflowCoordinator:
         authenticates the caller and only its ``expectedRevision`` fences the
         command. ``targetRunId`` may name that same run or an owned descendant
         (a helper). The descent is re-walked on every call, so a sibling, a
-        foreign run, or a target that has since been detached from this Goal is
+        foreign run, or a target that has since been detached from this Micro task is
         refused instead of acted on. Ownership is the ``workflow_children`` link,
         not the helper's admission-time host label: a root takeover fences the old
         capability while the current owner can still act on the same helper. No
@@ -2629,20 +2628,20 @@ class WorkflowCoordinator:
         """
         if target_id != owner["run_id"] and target_id not in {
                 child["child_task_id"] for child in self._owned_children(connection, owner["run_id"])}:
-            raise BoardError("UNAUTHORIZED", "targetRunId must be an authorized descendant of this owning Goal")
+            raise BoardError("UNAUTHORIZED", "targetRunId must be an authorized descendant of this owning Micro task")
         return self._run_row(connection, target_id)
 
     def _continuation_target(self, connection, owner, target_id: str):
         return self._target_run(connection, owner, target_id)
 
     @staticmethod
-    def _buddy_matches_goal(run, buddy: dict | None) -> None:
+    def _buddy_matches_micro_task(run, buddy: dict | None) -> None:
         if buddy is None or not run["buddy_locked"]:
             return
-        constraints = schemas.buddy_constraints(json.loads(run["goal_json"]))
+        constraints = schemas.buddy_constraints(json.loads(run["micro_task_json"]))
         mismatches = [key for key, value in constraints.items() if buddy.get(key) != value]
         if mismatches:
-            raise BoardError("BUDDY_CONFLICT", "buddy must preserve the original Goal's hard constraints; submit a new Goal to change them",
+            raise BoardError("BUDDY_CONFLICT", "buddy must preserve the original Micro task's hard constraints; submit a new Micro task to change them",
                              fields=mismatches)
 
     @staticmethod
@@ -2741,7 +2740,7 @@ class WorkflowCoordinator:
                 return {**receipt, "duplicate": True}
             self._expect_revision(run, expected)
             target_snapshot = self._continuation_target(connection, run, target_id)
-            self._buddy_matches_goal(target_snapshot, supplied_buddy)
+            self._buddy_matches_micro_task(target_snapshot, supplied_buddy)
             current_choice = json.loads(target_snapshot["execution_workspace_json"])
             self._require_permission(supplied_buddy if supplied_buddy is not None else
                                      (None if reroute else self._buddy(target_snapshot)),
@@ -2761,7 +2760,7 @@ class WorkflowCoordinator:
             self._expect_revision(owner, expected)
             run_row = self._continuation_target(connection, owner, target_id)
             self._expect_revision(run_row, target_snapshot["revision"])
-            self._buddy_matches_goal(run_row, buddy)
+            self._buddy_matches_micro_task(run_row, buddy)
             self._require_enabled_override(connection, buddy)
             current_workspace = json.loads(run_row["execution_workspace_json"])
             next_access, next_reason = access_selection or (current_workspace["access"], current_workspace.get("accessReason"))
@@ -2769,17 +2768,17 @@ class WorkflowCoordinator:
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             self._assert_lineage_open(connection, run_id)
             if run_row["state"] in ("accepted", "concluded"):
-                raise BoardError("CONFLICT", "A finished goal cannot be continued")
+                raise BoardError("CONFLICT", "A finished micro task cannot be continued")
             cleanup = connection.execute("SELECT state FROM workspace_cleanup_plans WHERE run_id=? AND state IN ('applying','applied') LIMIT 1", (run_id,)).fetchone()
             if cleanup is not None:
-                raise BoardError("CONFLICT", "This goal's checkout is being cleaned or has been removed")
+                raise BoardError("CONFLICT", "This micro task's checkout is being cleaned or has been removed")
             self._require_routing_stopped(connection, run_id)
             routing = self._routing_view(connection, run_row)
             if buddy is None and not reroute and (
                     self._buddy(run_row) is None or routing["status"] in ("needs-host", "fenced")):
                 raise BoardError(
                     "BUDDY_REQUIRED",
-                    "Continue the same goal with a complete buddy buddy, or explicitly reroute at the boundary's retry time; only changing shared Router settings needs the user",
+                    "Continue the same micro task with a complete buddy buddy, or explicitly reroute at the boundary's retry time; only changing shared Router settings needs the user",
                     routingBoundary=routing.get("routingBoundary"),
                 )
             live_helpers = sum(
@@ -3046,13 +3045,13 @@ class WorkflowCoordinator:
                 (task["task_id"],),
             )
         if task["state"] == "completed":
-            # A rejected final review reopens the governed logical task for another
+            # A rejected final review reopens the micro-task logical task for another
             # turn. This is not an execution retry of completed work
-            # (which stays refused); only a governed run at a Host boundary may do it.
+            # (which stays refused); only a micro-task run at a Host boundary may do it.
             if run_row["state"] not in ("awaiting-host", "delivered"):
                 raise BoardError(
                     "CONFLICT",
-                    "A completed governed task can only be reopened from a Host boundary",
+                    "A completed micro-task task can only be reopened from a Host boundary",
                     state=task["state"],
                     runState=run_row["state"],
                 )
@@ -3075,7 +3074,7 @@ class WorkflowCoordinator:
             (now, run_row["run_id"], run_row["revision"]),
         )
         if updated.rowcount != 1:
-            raise BoardError("REVISION_CONFLICT", "The governed run changed concurrently; re-read it and retry")
+            raise BoardError("REVISION_CONFLICT", "The micro-task run changed concurrently; re-read it and retry")
         if continuation_id is not None:
             connection.execute(
                 "UPDATE workflow_continuations SET state='queued' WHERE continuation_id=?", (continuation_id,)
@@ -3336,7 +3335,7 @@ class WorkflowCoordinator:
                 if run_row["state"] == "cancelled":
                     continue
                 if run_row["state"] in ("accepted", "concluded"):
-                    raise BoardError("CONFLICT", "Closed Goal still owns active work during service stop", runId=root_id)
+                    raise BoardError("CONFLICT", "Closed Micro task still owns active work during service stop", runId=root_id)
                 task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (root_id,)).fetchone()
                 self._cancel_in_transaction(connection, run_row, task, reason, "service-stop", now)
                 cancelled_roots.add(root_id)
@@ -3352,7 +3351,7 @@ class WorkflowCoordinator:
     def _cancel_in_transaction(self, connection, run_row, task, reason: str, actor: str, now: str) -> dict:
         run_id = run_row["run_id"]
         # Fence the root before descendants settle: a transferred checkout must
-        # not be handed back to a goal cancelled in this transaction.
+        # not be handed back to a micro task cancelled in this transaction.
         self._cancel_owned_run(connection, task, now, explicit=True)
         self._cancel_children(connection, run_id, reason, now, actor=actor)
         self.board._append_event(
@@ -3426,7 +3425,7 @@ class WorkflowCoordinator:
             " WHERE r.run_id=? AND r.state='pending' AND d.status IN ('queued','running') LIMIT 1", (run_id,),
         ).fetchone()
         if pending is not None:
-            raise BoardError("CONFLICT", "Model selection is still pending; wait or cancel its owning Goal before continuing")
+            raise BoardError("CONFLICT", "Model selection is still pending; wait or cancel its owning Micro task before continuing")
 
     def _cancel_routes(self, connection, run_id: str, reason: str, now: str) -> bool:
         fenced = False
@@ -3506,7 +3505,7 @@ class WorkflowCoordinator:
     def _cancel_owned_run(self, connection, task, now: str, *, explicit: bool = False) -> bool:
         run_id = task["task_id"]
         run_row = self._run_row(connection, run_id)
-        cancel_goal = explicit or run_row["state"] not in ("delivered", "accepted", "concluded", "failed")
+        cancel_micro_task = explicit or run_row["state"] not in ("delivered", "accepted", "concluded", "failed")
         connection.execute(
             "UPDATE workflow_requests SET state='cancelled', updated_at=? WHERE run_id=? AND state='open'", (now, run_id),
         )
@@ -3514,8 +3513,8 @@ class WorkflowCoordinator:
             "UPDATE workflow_continuations SET state='cancelled' WHERE run_id=? AND state IN ('recorded','queued')", (run_id,),
         )
         self._revoke_credentials(connection, run_id, now)
-        self._cancel_routes(connection, run_id, "Owning Goal cancelled", now)
-        if cancel_goal:
+        self._cancel_routes(connection, run_id, "Owning Micro task cancelled", now)
+        if cancel_micro_task:
             connection.execute(
                 "UPDATE workflow_runs SET state='cancelled', active_request_id=NULL, updated_at=?, revision=revision+1 WHERE run_id=?",
                 (now, run_id),
@@ -3538,10 +3537,10 @@ class WorkflowCoordinator:
                 " AND (execution_state != 'finished' OR shutdown_confirmed != 1) AND cancel_requested_at IS NULL",
                 (now, now, run_id),
             )
-        return cancel_goal
+        return cancel_micro_task
 
     def _late_cancelled_turn(self, connection, run_row, turn_row, attempt, payload, now):
-        """Keep real receipt/artifact evidence without reopening a fenced goal."""
+        """Keep real receipt/artifact evidence without reopening a fenced micro task."""
         turn = self.turn_outcome(payload)
         disposition = None
         if attempt["shutdown_confirmed"] and turn is not None and self._validate_turn(turn, turn_row, attempt) is None:
@@ -3876,15 +3875,15 @@ class WorkflowCoordinator:
                        verification: dict, not_required: str | None):
         """Record one acceptance, its integration binding and the events, in one transaction."""
         run_id = run_row["run_id"]
-        # Acceptance is bound to the current delivered goal, never to a Host
+        # Acceptance is bound to the current delivered micro task, never to a Host
         # decision boundary, an active helper, or an older attempt's output.
         if run_row["state"] == "concluded":
-            raise BoardError("CONFLICT", "This goal already has a recorded conclusion; it is closed without acceptance", runId=run_id)
+            raise BoardError("CONFLICT", "This micro task already has a recorded conclusion; it is closed without acceptance", runId=run_id)
         host_completion = run_row["state"] == "awaiting-host"
         if run_row["state"] not in ("delivered", "accepted") and not host_completion:
             raise BoardError(
                 "NOT_READY",
-                "Only a delivered goal can be accepted; a Host decision boundary or a running turn is "
+                "Only a delivered micro task can be accepted; a Host decision boundary or a running turn is "
                 "not a final artifact",
                 runId=run_id,
                 state=run_row["state"],
@@ -3922,7 +3921,7 @@ class WorkflowCoordinator:
         if not host_completion and run_row["final_attempt_id"] != attempt["attempt_id"]:
             raise BoardError(
                 "CONFLICT",
-                "The selected attempt is not the current final attempt of this goal",
+                "The selected attempt is not the current final attempt of this micro task",
                 attemptId=attempt["attempt_id"],
                 finalAttemptId=run_row["final_attempt_id"],
             )
@@ -4078,7 +4077,7 @@ class WorkflowCoordinator:
             (now, note, now, run_id),
         )
         if updated.rowcount != 1:
-            raise BoardError("REVISION_CONFLICT", "The goal changed concurrently; re-read it and retry")
+            raise BoardError("REVISION_CONFLICT", "The micro task changed concurrently; re-read it and retry")
         if host_completion:
             connection.execute("UPDATE tasks SET state='completed',queue_reason=NULL WHERE task_id=?", (run_id,))
             open_requests = connection.execute("SELECT request_id FROM workflow_requests WHERE run_id=? AND state='open'", (run_id,)).fetchall()
@@ -4100,7 +4099,7 @@ class WorkflowCoordinator:
             ),
         )
         if updated.rowcount != 1:
-            raise BoardError("REVISION_CONFLICT", "The governed run changed concurrently; re-read it and retry")
+            raise BoardError("REVISION_CONFLICT", "The micro-task run changed concurrently; re-read it and retry")
         if not host_completion:
             # Logical ownership ends with the recorded acceptance exactly as before;
             # keepCheckout keeps the checkout directory, not the writer exclusion.
@@ -4185,11 +4184,11 @@ class WorkflowCoordinator:
             return self._adopted_board_paths(connection, run_id, manifest)
 
     def conclude(self, params: dict, *, console_authority: dict | None = None) -> dict:
-        """End one goal that will not be accepted, then reclaim its checkout.
+        """End one micro task that will not be accepted, then reclaim its checkout.
 
-        A failed, cancelled or delivered-but-unaccepted goal receives one
+        A failed, cancelled or delivered-but-unaccepted micro task receives one
         independent Host conclusion next to the real execution result; an
-        accepted goal is already closed. After the stop evidence holds, managed
+        accepted micro task is already closed. After the stop evidence holds, managed
         changes that no fixed output has sealed yet become an independent Host
         partial output (never overwriting an earlier partial of the same
         attempt), the conclusion and that seal commit together, and the
@@ -4206,7 +4205,7 @@ class WorkflowCoordinator:
         owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
         target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         note, _ = schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)
-        # The receipt binds the reviewed execution and note; a closed goal only replays it.
+        # The receipt binds the reviewed execution and note; a closed micro task only replays it.
         seal_work = None
         duplicate = None
         with self.db.read() as connection:
@@ -4277,14 +4276,14 @@ class WorkflowCoordinator:
         return response
 
     def _conclude_precheck(self, connection, run_row, task) -> dict:
-        """Everything that must hold before one goal may be concluded."""
+        """Everything that must hold before one micro task may be concluded."""
         run_id = run_row["run_id"]
         if run_row["state"] in ("accepted", "concluded"):
-            raise BoardError("CONFLICT", "A finished goal cannot receive another conclusion", runId=run_id)
+            raise BoardError("CONFLICT", "A finished micro task cannot receive another conclusion", runId=run_id)
         if run_row["state"] not in ("failed", "cancelled", "delivered"):
             raise BoardError(
                 "NOT_READY",
-                "Only a failed, cancelled or delivered goal can be concluded; a running turn or a Host decision "
+                "Only a failed, cancelled or delivered micro task can be concluded; a running turn or a Host decision "
                 "boundary is not an execution result",
                 runId=run_id,
                 state=run_row["state"],
@@ -4311,7 +4310,7 @@ class WorkflowCoordinator:
         """The manifest, allowed paths and attempt of one Host partial seal, or None.
 
         ``None`` means there is no prepared workspace whose managed changes could
-        be unsealed; a cancelled-before-preparation goal concludes without a seal.
+        be unsealed; a cancelled-before-preparation micro task concludes without a seal.
         """
         manifest_value = run_row["workspace_manifest_json"]
         if not manifest_value:
@@ -4385,7 +4384,7 @@ class WorkflowCoordinator:
         return response
 
     def reclaim(self, params: dict, *, console_authority: dict | None = None) -> dict:
-        """Reclaim this goal's own registered managed checkout.
+        """Reclaim this micro task's own registered managed checkout.
 
         Used after an acceptance that kept the checkout, or after a reclaim that
         was blocked and whose blocker is now gone. Only the checkout this run
@@ -4482,13 +4481,13 @@ class WorkflowCoordinator:
 
     # -- workspace lifecycle (Host-owned) ------------------------------------
     def _bump_run(self, connection, run_row, now: str):
-        """Advance the governed run revision for a recorded lifecycle mutation."""
+        """Advance the micro-task run revision for a recorded lifecycle mutation."""
         updated = connection.execute(
             "UPDATE workflow_runs SET updated_at=?, revision=revision+1 WHERE run_id=? AND revision=?",
             (now, run_row["run_id"], run_row["revision"]),
         )
         if updated.rowcount != 1:
-            raise BoardError("REVISION_CONFLICT", "The governed run changed concurrently; re-read it and retry")
+            raise BoardError("REVISION_CONFLICT", "The micro-task run changed concurrently; re-read it and retry")
         return self._run_row(connection, run_row["run_id"])
 
     def _find_integration(self, connection, run_id: str, artifact_id: str):
@@ -4529,7 +4528,7 @@ class WorkflowCoordinator:
                 currentScopeVersion=scope["scopeVersion"],
             )
         if run_row["state"] in ("accepted", "concluded", "cancelled"):
-            raise BoardError("CONFLICT", "A finished goal cannot be reauthorized; submit a new goal instead",
+            raise BoardError("CONFLICT", "A finished micro task cannot be reauthorized; submit a new micro task instead",
                              state=run_row["state"])
         pending = int(connection.execute(
             "SELECT COUNT(*) AS count FROM workflow_continuations WHERE run_id=? AND state IN ('recorded','queued')",
@@ -4817,7 +4816,7 @@ class WorkflowCoordinator:
                 (target_id,),
             ).fetchone()
             if original is None:
-                raise BoardError("NOT_READY", "Workspace resolution requires the goal's fixed original input")
+                raise BoardError("NOT_READY", "Workspace resolution requires the micro task's fixed original input")
             original_commit = json.loads(original["manifest_json"])["inputCommit"]
         try:
             result = workspace_module().resolve(
@@ -4871,7 +4870,7 @@ class WorkflowCoordinator:
             if proof is not None and proof["disposition"] == "completed":
                 # The only failure was the refused scope seal and this attempt's own
                 # native completed outcome survives intact, so the resolved artifact is
-                # the delivered result of this goal: it can be integrated and
+                # the delivered result of this micro task: it can be integrated and
                 # acknowledged without another model turn. The failed attempt, its
                 # failed turn and its command receipts stay exactly as they were; the
                 # Host-resolution delivery is recorded separately on the conflict.
@@ -5311,16 +5310,16 @@ class WorkflowCoordinator:
             # Board eligibility proves the whole owned lineage stopped. Reclaim
             # only sessions bound to the checkout being removed, including
             # routing tasks and helpers that borrowed this exact allocation.
-            private_goals = [run_id]
+            private_micro_tasks = [run_id]
             for child in self._owned_children(connection, run_id):
                 child_run = connection.execute("SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?",
                                                (child['child_task_id'],)).fetchone()
                 if child_run is not None:
                     child_manifest = json.loads(child_run['workspace_manifest_json'] or '{}')
                     if child_manifest.get('checkoutRoot') == plan['path']:
-                        private_goals.append(child['child_task_id'])
-            for goal_id in list(private_goals):
-                private_goals.extend(task['task_id'] for task in self._routing_tasks(connection, goal_id))
+                        private_micro_tasks.append(child['child_task_id'])
+            for micro_task_id in list(private_micro_tasks):
+                private_micro_tasks.extend(task['task_id'] for task in self._routing_tasks(connection, micro_task_id))
         path = Path(plan["path"])
         inspection = None
         if path.exists() or path.is_symlink():
@@ -5385,9 +5384,9 @@ class WorkflowCoordinator:
         if path.exists() or path.is_symlink():
             removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained)
         from ... import private_dirs
-        for goal_id in dict.fromkeys(private_goals):
+        for micro_task_id in dict.fromkeys(private_micro_tasks):
             for adapter in private_dirs.ADAPTERS:
-                private_dirs.remove_tree(private_dirs.goal_root(self.board.directory, adapter, goal_id))
+                private_dirs.remove_tree(private_dirs.micro_task_root(self.board.directory, adapter, micro_task_id))
         with self.db.write() as connection:
             run_row = self._run_row(connection, run_id)
             plan = connection.execute(
@@ -5528,7 +5527,7 @@ class WorkflowCoordinator:
 
     # -- claim gate ----------------------------------------------------------
     def claim_blocker(self, connection, task_row) -> str | None:
-        """Why a governed task may not be claimed right now (never a fake stop)."""
+        """Why a micro-task task may not be claimed right now (never a fake stop)."""
         run_row = self._run_optional(connection, task_row["task_id"])
         if run_row is None:
             route = connection.execute(
@@ -5661,7 +5660,7 @@ class WorkflowCoordinator:
             return {"repositories": {}, "state": "unknown", "reason": _head(str(error), 512)}
 
     def run_repository_path(self, connection, task_id: str) -> str | None:
-        """The shared repository path of one governed run's current workspace manifest."""
+        """The shared repository path of one micro-task run's current workspace manifest."""
         row = connection.execute(
             "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (task_id,)
         ).fetchone()
@@ -5679,7 +5678,7 @@ class WorkflowCoordinator:
 
         Called by the result path before its write transaction, so the turn's
         seal boundary records what the repository actually exposes at import
-        time. ``None`` means no governed workspace applies; the turn-side pin
+        time. ``None`` means no micro-task workspace applies; the turn-side pin
         then records an honest ``unknown`` instead of inventing a reading.
         """
         attempt_id = params.get("attemptId")
@@ -5721,7 +5720,7 @@ class WorkflowCoordinator:
         if run_row["state"] != "executing":
             raise BoardError(
                 "CONFLICT",
-                "This governed run is not ready for another turn",
+                "This micro-task run is not ready for another turn",
                 state=run_row["state"],
             )
         turn_count = int(
@@ -5736,7 +5735,7 @@ class WorkflowCoordinator:
         if turn_count > 0 and continuation is None:
             raise BoardError(
                 "CONFLICT",
-                "A continuation input is required before another turn of this governed run can start",
+                "A continuation input is required before another turn of this micro-task run can start",
                 runId=run_row["run_id"],
             )
         previous = connection.execute(
@@ -5774,7 +5773,7 @@ class WorkflowCoordinator:
                 native_home_changed = (buddy['harness'] == 'codex'
                                        and native_session.get('storageOwner') != 'harness-user-store'
                                        or buddy['harness'] == 'dsh'
-                                       and native_session.get('storageOwner') != 'buddy-goal')
+                                       and native_session.get('storageOwner') != 'buddy-micro-task')
                 permission_reconstruction = (executor.native_resume
                                              and previous["access"] != execution_workspace["access"]
                                              and not executor.native_resume_permission_change)
@@ -6156,7 +6155,7 @@ class WorkflowCoordinator:
                     payload = {
                         "summary": "Continuation workspace preparation needs Host attention",
                         "attempted": f"Prepare continuation {row['continuation_id']}",
-                        "neededWork": ["Resolve the workspace conflict and explicitly continue the goal"],
+                        "neededWork": ["Resolve the workspace conflict and explicitly continue the micro task"],
                         "expectedArtifacts": [], "acceptance": "The allocated checkout has a verified fixed input",
                         "continuationId": row["continuation_id"], "preparationError": problem,
                     }
@@ -6227,8 +6226,8 @@ class WorkflowCoordinator:
         return token
 
     def _turn_context(self, connection, run_row, task, spec, continuation, previous, turn_index) -> dict:
-        goal = json.loads(run_row["goal_json"])
-        task_text = goal.get("task") if isinstance(goal.get("task"), str) else ""
+        micro_task = json.loads(run_row["micro_task_json"])
+        task_text = micro_task.get("task") if isinstance(micro_task.get("task"), str) else ""
         context: dict[str, Any] = {
             # Bounded on purpose: the immutable full text stays in the task record.
             "task": task_text if len(task_text) <= 8000 else task_text[:8000],
@@ -6246,7 +6245,7 @@ class WorkflowCoordinator:
         }
         original = connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1", (run_row["run_id"],)).fetchone()
         if original is not None:
-            context["goalInputCommit"] = json.loads(original["manifest_json"]).get("inputCommit")
+            context["microTaskInputCommit"] = json.loads(original["manifest_json"]).get("inputCommit")
         if previous is not None:
             prior = connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?", (previous["attempt_id"],)).fetchone()
             payload = self.result_payload(json.loads(prior["result_json"] or "{}")) if prior else {}
@@ -6311,9 +6310,9 @@ class WorkflowCoordinator:
         return _bound_context(context)
 
     def precheck_result(self, params: dict) -> None:
-        """Validate a governed result outside any database transaction.
+        """Validate a micro-task result outside any database transaction.
 
-        A sealed output record must bind its input, and a successful governed attempt must
+        A sealed output record must bind its input, and a successful micro-task attempt must
         carry a turn record whose identity, input hash and disposition are importable.
         A failure here is turned into an honest failed result by the caller instead of
         publishing an unverified success.
@@ -6364,7 +6363,7 @@ class WorkflowCoordinator:
         if params.get("status") != "ok" or not params.get("shutdownConfirmed"):
             return
         if turn_row is None:
-            raise BoardError("TURN_INVALID", "the governed attempt has no service-owned turn to import")
+            raise BoardError("TURN_INVALID", "the micro-task attempt has no service-owned turn to import")
         rejection = self._validate_turn(self.turn_outcome(result), turn_row, attempt)
         if rejection is not None:
             raise BoardError("TURN_INVALID", rejection, turnId=turn_row["turn_id"])
@@ -6397,7 +6396,7 @@ class WorkflowCoordinator:
         self, connection, *, task, attempt, payload: dict | None, task_state: str, now: str,
         seal_stash: dict | None = None,
     ) -> dict | None:
-        """Import one validated structured outcome and advance the governed run."""
+        """Import one validated structured outcome and advance the micro-task run."""
         run_row = self._run_optional(connection, task["task_id"])
         if run_row is None:
             return None
@@ -6412,7 +6411,7 @@ class WorkflowCoordinator:
         # It is evidence only and never changes this import's state machine.
         shared_refs = self._pin_shared_refs(connection, run_row, attempt, turn_row, seal_stash, now)
         if (attempt["shutdown_confirmed"] and self.result_payload(payload).get("partialWorkspaceSeal")
-                and not self.result_payload(payload).get("governedError")):
+                and not self.result_payload(payload).get("microTaskError")):
             self._pin_result_artifacts(connection, run_row, attempt, payload, turn_row["turn_id"], now)
             connection.execute("UPDATE workflow_turns SET sealed_artifacts_json=? WHERE turn_id=?", (canonical_json(self._sealed_artifacts(payload)), turn_row["turn_id"]))
             self.board._append_event(connection, "workflow.partial_output_preserved", task_id=run_row["run_id"], attempt_id=attempt["attempt_id"], payload={"partial": True, "verified": False, "final": False})
@@ -6440,7 +6439,7 @@ class WorkflowCoordinator:
             )
             if conflict_ids:
                 # Sealing refused managed changes outside the authorized scope. The
-                # stopped site and its evidence stay recoverable, and the goal opens
+                # stopped site and its evidence stay recoverable, and the micro task opens
                 # an explicit Host boundary instead of silently absorbing them.
                 request_id = self._record_scope_attention(connection, run_row, turn_row, attempt, conflict_ids, now)
                 return {
@@ -6660,7 +6659,7 @@ class WorkflowCoordinator:
         payload = {
             "summary": "Workspace changes outside the authorized write scope need a Host decision",
             "attempted": f"Seal attempt {attempt['attempt_id']} on turn {turn_row['turn_id']}",
-            "neededWork": ["Record restore, adopt or abandon for the conflict, then continue the goal"],
+            "neededWork": ["Record restore, adopt or abandon for the conflict, then continue the micro task"],
             "expectedArtifacts": [],
             "acceptance": "The failed site has an explicit resolution and a fixed handoff",
             "conflictIds": list(conflict_ids),
@@ -6780,7 +6779,7 @@ class WorkflowCoordinator:
         return record
 
     def _pin_shared_refs(self, connection, run_row, attempt, turn_row, seal_stash, now: str) -> dict | None:
-        """Freeze the seal-side shared-stash fact of one governed turn.
+        """Freeze the seal-side shared-stash fact of one micro-task turn.
 
         The start observation is the turn input's own frozen record; the seal
         observation comes from the result path's outside-transaction collection
@@ -7116,7 +7115,7 @@ class WorkflowCoordinator:
 
     # -- primitive boundary --------------------------------------------------
     def guard_task_control(self, connection, task_row, params: dict, *, operation: str) -> None:
-        """Low-level execution controls cannot bypass governed lineage/evidence."""
+        """Low-level execution controls cannot bypass micro-task lineage/evidence."""
         run_row = self._run_optional(connection, task_row["task_id"])
         if run_row is None:
             return
@@ -7127,7 +7126,7 @@ class WorkflowCoordinator:
         if control is None and authority is None:
             raise BoardError(
                 "UNAUTHORIZED",
-                f"{operation} on a governed run requires the Host control capability or an authenticated console "
+                f"{operation} on a micro-task run requires the Host control capability or an authenticated console "
                 "session; use the workflow operations instead",
                 runId=task_row["task_id"],
             )
@@ -7137,7 +7136,7 @@ class WorkflowCoordinator:
             "task_retry": ("continue", "workflow_continue"),
             "task_acknowledge": ("accept", "workflow_accept"),
         }[operation]
-        raise BoardError("GOVERNED_REQUIRED", f"Use {command} ({native_operation}) for this governed Goal", runId=run_row["run_id"])
+        raise BoardError("MICRO_TASK_REQUIRED", f"Use {command} ({native_operation}) for this micro task", runId=run_row["run_id"])
 
 
 # -- module helpers ----------------------------------------------------------

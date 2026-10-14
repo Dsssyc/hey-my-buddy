@@ -138,7 +138,7 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
     """The native permission invocation; user configuration sources stay enabled.
 
     ``output_schema`` is the run's own ending contract and is always explicit:
-    the governed turn passes the shared worker schema, the read-only call the
+    the micro task turn passes the shared worker schema, the read-only call the
     caller's answer schema. ``additional_denied_tools`` is the caller's
     explicit sequence of extra session-wide denials — empty by default;
     nothing is ever derived from the schema's presence or the tool scope.

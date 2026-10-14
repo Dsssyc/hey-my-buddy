@@ -60,7 +60,7 @@ function row(runId: string, overrides: Partial<TimelineRow> = {}): TimelineRow {
     category: "ended",
     shutdownConfirmed: true,
     depth: 0,
-    kind: "goal",
+    kind: "micro-task",
     buddy: GLM,
     acceptedAt: null,
     acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
@@ -83,7 +83,7 @@ function event(seq: number, runId: string, kind: TimelineEvent["kind"], at: stri
     attemptId: null, requestId: null, artifactId: null, ...overrides };
 }
 
-/** Six delegations, folding gaps, every span kind and terminal marker. */
+/** Six micro tasks, folding gaps, every span kind and terminal marker. */
 export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> = {}): MacroTaskTimeline {
   const rows: TimelineRow[] = [
     row("r1", { title: "设计工作目标时间轴视图与交互规范", taskSummary: "设计只读的工作目标时间轴视图、交互规范与验收标准。",

@@ -52,10 +52,10 @@ class ZcodeFixtureCase(unittest.TestCase):
         # Concurrent private suites keep an attempt stable within this fixture
         # and distinct across roots, so journals and live endpoints never cross.
         attempt_id = f"attempt-{self.root.name}-{index}"
-        identity = {"version": 1, "taskId": "goal-1", "attemptId": attempt_id, "generation": index,
+        identity = {"version": 1, "taskId": "micro-task-1", "attemptId": attempt_id, "generation": index,
                     "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
                     "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
-        return ExecutionContext(task_id="goal-1", attempt_id=attempt_id, generation=index,
+        return ExecutionContext(task_id="micro-task-1", attempt_id=attempt_id, generation=index,
                                 spec={"cwd": str(self.cwd), "task": "fixture task", "timeoutSeconds": timeout,
                                       "provider": "fixture-api", "model": "fixture-model", "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
@@ -222,7 +222,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         native = outcome.result["nativeSession"]
         self.assertEqual(native["sessionId"], turn["sessionId"])
         self.assertEqual(native["storageScope"], "task-private")
-        self.assertEqual(native["storageOwner"], "buddy-goal")
+        self.assertEqual(native["storageOwner"], "buddy-micro-task")
         self.assertEqual(native["nativeAppVisibility"], "not-listed-in-native-app")
         self.assertTrue(native["bindingPresent"])
         self.assertTrue(native["resumable"])

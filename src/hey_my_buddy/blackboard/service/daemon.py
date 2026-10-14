@@ -697,9 +697,9 @@ class Daemon:
         with self._pool_lifecycle_lock:
             self.control["stopping"] = True
         atomic_json(self.stop_path, {"requestedAt": utc_now(), "reason": reason, "drainSeconds": drain})
-        governed, governed_task_ids = self.store.workflow.cancel_for_service_stop(f"service stop: {reason}")
-        queued = governed["queued"] + self.cancel_queued(reason, exclude=governed_task_ids)
-        active = governed["active"] + self.cancel_active(reason, exclude=governed_task_ids)
+        micro_task, micro_task_task_ids = self.store.workflow.cancel_for_service_stop(f"service stop: {reason}")
+        queued = micro_task["queued"] + self.cancel_queued(reason, exclude=micro_task_task_ids)
+        active = micro_task["active"] + self.cancel_active(reason, exclude=micro_task_task_ids)
         unresolved = self.drain(drain)
         # Every managed pool worker — including a surplus supervisor retained from a
         # higher limit — receives a cooperative stop request; none is signalled.

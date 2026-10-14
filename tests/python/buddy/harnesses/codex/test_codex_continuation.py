@@ -123,7 +123,7 @@ class CodexContinuationTests(WorkflowTestCase):
         with board.store.db.write() as connection:
             row = connection.execute('SELECT attempt_id,result_json FROM attempts WHERE task_id=?', (failed['runId'],)).fetchone()
             receipt = json.loads(row['result_json'])
-            receipt['result']['nativeSession']['storageOwner'] = 'buddy-goal'
+            receipt['result']['nativeSession']['storageOwner'] = 'buddy-micro-task'
             connection.execute('UPDATE attempts SET result_json=? WHERE attempt_id=?', (json.dumps(receipt), row['attempt_id']))
         document = self.continued_input(board, failed)
         self.assertEqual(document['resumeMode'], 'reconstructed-new-session')

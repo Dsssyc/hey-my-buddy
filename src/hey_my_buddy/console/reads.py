@@ -8,7 +8,7 @@ module builds the projection the console actually polls:
 * the evaluation core (``EvaluationStore.console_core``) — configuration,
   routed buddies with quota facts, policy and model-service capacity;
 * harness health and routing health, as before;
-* ``tasks`` reduced to ``pendingCount`` — the full-board count of delegation
+* ``tasks`` reduced to ``pendingCount`` — the full-board count of micro task
   roots awaiting their Host, with the exact dedup semantics the top bar used.
 
 Full execution records stay on the existing paginated ``task_list`` route, and

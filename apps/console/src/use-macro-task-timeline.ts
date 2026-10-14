@@ -10,7 +10,7 @@ import type { MacroTaskTimeline } from "./macro-task-types";
  * A failed read keeps the last good data (open tails stop extending because
  * the kept `observedAt` no longer advances) and surfaces an error with the
  * age of what is displayed; row order is preserved across merges and new
- * delegations are appended at the end, exactly as the read contract requires.
+ * micro tasks are appended at the end, exactly as the read contract requires.
  */
 export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null, active: boolean) {
   const [data, setData] = useState<MacroTaskTimeline | null>(null);
@@ -66,7 +66,7 @@ export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null
       let appended: string[] = [];
       if (previous && previous.macroTask.macroTaskId === next.macroTask.macroTaskId) {
         // The service sends tree order; keep committed row order and append new
-        // delegations at the end so a refresh never moves a row under the reader.
+        // micro tasks at the end so a refresh never moves a row under the reader.
         const byId = new Map(next.rows.map(row => [row.runId, row]));
         const known = new Set(previous.rows.map(row => row.runId));
         appended = next.rows.filter(row => !known.has(row.runId)).map(row => row.runId);

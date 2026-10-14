@@ -1,4 +1,4 @@
-"""The governed turn's shared-stash facts through the in-process board double.
+"""The micro-task turn's shared-stash facts through the in-process board double.
 
 The workspace module is the mock double (the Git read is injected), so these
 tests pin the board's own contract: the start observation is collected outside

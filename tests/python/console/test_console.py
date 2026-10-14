@@ -466,7 +466,7 @@ class ConsoleTaskHistoryTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(payload["runs"], payload["tasks"])
         self.assertEqual(payload["total"], 1)
         self.assertEqual(payload["runs"][0]["runId"], created["runId"])
-        self.assertIn("delegation", payload["runs"][0])
+        self.assertIn("lineage", payload["runs"][0])
         direct = board.call("task_list", {"limit": 5})
         self.assertEqual([row["runId"] for row in payload["runs"]], [row["runId"] for row in direct["runs"]])
         self.assertEqual(payload["total"], direct["total"])
@@ -484,12 +484,12 @@ class ConsoleTaskHistoryTests(ConsoleTestCase, WorkflowTestCase):
 
     def test_roots_only_history_pages_over_http(self):
         board = self.board()
-        goals = [
+        micro_tasks = [
             self.submit(
                 board,
-                request_id=f"goal-{index}",
+                request_id=f"micro-task-{index}",
                 host_id="host-a",
-                cwd=str(self.workdir(f"goal-{index}")),
+                cwd=str(self.workdir(f"micro-task-{index}")),
                 kind="worktree",
             )["runId"]
             for index in range(3)
@@ -502,16 +502,16 @@ class ConsoleTaskHistoryTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(first["total"], 3)
         self.assertEqual(len(first["runs"]), 2)
         self.assertIsNotNone(first["nextCursor"])
-        self.assertTrue(all(row["delegation"]["kind"] == "goal" for row in first["runs"]))
+        self.assertTrue(all(row["lineage"]["kind"] == "micro-task" for row in first["runs"]))
         status, _headers, body = browser.get(f"/api/tasks?rootsOnly=true&limit=2&before={first['nextCursor']}")
         self.assertEqual(status, 200, body[:300])
         second = json.loads(body)
         self.assertEqual(len(second["runs"]), 1)
         self.assertIsNone(second["nextCursor"])
         seen = {row["runId"] for row in first["runs"]} | {row["runId"] for row in second["runs"]}
-        self.assertEqual(seen, set(goals))
+        self.assertEqual(seen, set(micro_tasks))
         # A filtered history never counts the excluded rows.
-        status, _headers, body = browser.get("/api/tasks?rootsOnly=true&hostId=host-a&query=goal")
+        status, _headers, body = browser.get("/api/tasks?rootsOnly=true&hostId=host-a&query=micro-task")
         self.assertEqual(json.loads(body)["total"], 3)
         status, _headers, body = browser.get("/api/tasks?rootsOnly=true&hostId=nobody")
         self.assertEqual(json.loads(body)["total"], 0)
@@ -848,7 +848,8 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
         )
         self.assertEqual(status, 200, data)
         result = json.loads(data)["result"]
-        self.assertFalse(result["governed"])
+        self.assertEqual(result["task"]["lineage"]["kind"], "execution")
+        self.assertNotIn("microTask", result)
         self.assertEqual(result["routingHistory"], {"entries": [], "nextCursor": None, "total": 0})
         status, _headers, data = browser.command(
             "workflow_get",

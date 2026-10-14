@@ -1,7 +1,7 @@
 """Structured CLI for the Buddy service (the single supported entrypoint).
 
 Everything the plugin offers is one ``buddy`` command: one method name, one JSON
-object argument, one JSON object on stdout. The single governed goal lifecycle owns
+object argument, one JSON object on stdout. The single micro task lifecycle owns
 the bare names (``submit``, ``get``, ``decide``, ``continue``, ``takeover``,
 ``cancel``, ``accept``, ``conclude``, ``reclaim``, ``await``, ``suggest``); ``execution-*`` names reach the
 ordinary task records that the command/external adapters and internal decision
@@ -53,7 +53,7 @@ METHODS = [
     "storage-plan",
     "storage-apply",
     "worker-sessions",
-    # -- single governed goal lifecycle ------------------------------------
+    # -- single micro task lifecycle ------------------------------------
     "submit",
     "get",
     "decide",
@@ -67,7 +67,7 @@ METHODS = [
     "workspace-resolve",
     "await",
     "suggest",
-    # -- work macro tasks: read-only browsing of grouped delegations ----------
+    # -- work macro tasks: read-only browsing of grouped micro tasks ----------
     "macro-task-list",
     "macro-task-timeline",
     # -- execution records for command/external/decision infrastructure -----
@@ -122,7 +122,7 @@ EPILOG = """\
 examples:
   Input: one JSON object as the positional argument, --params-file PATH or "-" (stdin); the three are mutually exclusive, decoded as UTF-8 and never re-interpreted by a shell. `buddy help [METHOD]` prints the methods or one method's validated parameters and starts no service.
   buddy submit '{"requestId":"fix-123","hostId":"host-1","task":"...","cwd":"/abs/path","executionWorkspace":{"kind":"existing","access":"write"}}'
-      Admit one governed goal in an explicit executionWorkspace: kind existing|worktree,
+      Admit one micro task in an explicit executionWorkspace: kind existing|worktree,
       access read|write|full (default write; full requires accessReason), base {kind:commit|working-tree,ref?}, includeUntracked,
       writeScope and targetRef; the source cwd and the integrator are derived from
       the top-level cwd and the submitting Host.
@@ -135,10 +135,10 @@ examples:
       and prints only its controlFile path. The control token is never printed.
 
   buddy get '{"runId":"<runId>"}'      buddy get '{"runId":"<runId>","includeAudit":true}'
-      Read the compact governed view (control tokens are never exposed) or the full
+      Read the compact micro-task view (control tokens are never exposed) or the full
       audit. `suggest '{"runId":"...","body":"..."}'` records one bounded suggestion
       on the caller's own run. Unknown never means stopped: read `shutdown` before
-      treating a goal as closed.
+      treating a micro task as closed.
 
   buddy decide '{"runId":"<runId>","requestId":"req-1","commandId":"cmd-1","expectedRevision":1,"decision":"approve","helpers":[],"controlFile":"/path/from-submit"}'
   buddy continue '{"runId":"<runId>","commandId":"cmd-2","expectedRevision":2,"input":"...","helperPolicy":"keep","controlFile":"..."}'
@@ -147,13 +147,13 @@ examples:
   buddy cancel '{"runId":"<runId>","commandId":"cmd-4","reason":"...","controlFile":"..."}'
   buddy scope-amend '{"runId":"<runId>","commandId":"cmd-5","expectedRevision":3,"expectedScopeVersion":1,"writeScope":["src"],"reason":"...","controlFile":"..."}'
   buddy conclude '{"runId":"<runId>","note":"failed after the schema change; partial work retained","controlFile":"..."}'   buddy reclaim '{"runId":"<runId>","controlFile":"..."}'
-      conclude ends a failed, cancelled or delivered-but-unaccepted goal: unsealed
+      conclude ends a failed, cancelled or delivered-but-unaccepted micro task: unsealed
       managed changes are sealed as an independent Host partial output, the
-      goal enters terminal concluded and the checkout is reclaimed. reclaim retries the
+      micro task enters terminal concluded and the checkout is reclaimed. reclaim retries the
       removal after a blocked reclaim or a keepCheckout acceptance. All three take
       targetRunId for an owned helper and no command number: the same request
       replays, a changed payload conflicts. controlFile injects the control triple;
-      no implicit latest-generation lookup. accepted and concluded goals cannot continue.
+      no implicit latest-generation lookup. accepted and concluded micro tasks cannot continue.
   buddy workspace-resolve '{"runId":"<runId>","commandId":"cmd-6","expectedRevision":4,"conflictId":"...","action":"restore","paths":["file"],"observedFingerprint":"...","controlFile":"..."}'
   buddy accept '{"runId":"<runId>","artifactId":"...","note":"inspected the diff and ran the checks","target":{"path":"/abs/target","ref":"main"},"controlFile":"..."}'
   buddy accept '{"runId":"<runId>","artifactId":"...","note":"no repository target needed","notRequired":"the artifact needs no repository target","controlFile":"..."}'
@@ -167,17 +167,17 @@ examples:
       Wait without starting, resuming or cancelling work. waitSeconds is at most
       86400 (the default); wait-timeout leaves the run active. Re-await the same
       runId, use status/get for live state, and result only after a receipt exists.
-      Cancel a goal with cancel, or an execution record with execution-cancel.
+      Cancel a micro task with cancel, or an execution record with execution-cancel.
 
   Advanced execution records (command/external adapters and internal decision
-  infrastructure only; the service refuses ungoverned dsh/zcode here):
+  infrastructure only; the service refuses execution dsh/zcode here):
   buddy execution-submit '{"requestId":"probe-1","task":"...","cwd":"/abs/path","adapter":"command","argv":["/bin/echo","hi"],"timeoutSeconds":1800}'
   buddy execution-cancel '{"runId":"<runId>","reason":"..."}'
   buddy execution-retry '{"runId":"<runId>","reason":"..."}'
   buddy execution-acknowledge '{"runId":"<runId>","note":"...","verdict":"accepted"}'
-      Explicit task operations, separate from the goal lifecycle. execution-submit
+      Explicit task operations, separate from the micro task lifecycle. execution-submit
       requires requestId, task and an absolute cwd; use the command or external
-      adapter. A governed run's execution record additionally needs its Host control.
+      adapter. A micro-task run's execution record additionally needs its Host control.
 
   buddy status '{"runId":"<runId>"}'   buddy result '{"runId":"<runId>"}'   buddy list '{"limit":20}'
   buddy artifacts '{"runId":"<runId>"}'   buddy events '{"after":0}'
@@ -309,7 +309,7 @@ def _worker_command_unlocked(action: str, params: dict, state_dir: Path) -> dict
 
 #: Bound on a control file this CLI is willing to read.
 MAX_CONTROL_FILE_BYTES = 64 * 1024
-#: Governed mutations whose Host control triple is required by the service.
+#: Micro-task mutations whose Host control triple is required by the service.
 CONTROL_METHODS = frozenset({"decide", "continue", "takeover", "cancel", "accept", "conclude", "reclaim", "scope-amend", "workspace-resolve"})
 _CONTROL_TRIPLE = ("hostId", "ownerGeneration", "controlToken")
 _CONTROL_FILE_FIELDS = frozenset({*_CONTROL_TRIPLE, "runId", "savedAt"})
@@ -654,7 +654,7 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
     parser = argparse.ArgumentParser(
-        description="Buddy service: governed goals, durable execution records, independent workers and routed harness execution",
+        description="Buddy service: micro tasks, durable execution records, independent workers and routed harness execution",
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

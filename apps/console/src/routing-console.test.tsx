@@ -46,18 +46,18 @@ function decision(id: string, overrides: Partial<Decision> = {}) {
     ...overrides,
   };
 }
-function task(runId = "goal"): Task {
+function task(runId = "micro-task"): Task {
   return {
-    runId, task: `完成 ${runId} 状态内核`, status: "running", owner: "host:source", cwd: "/repo",
+    runId, task: runId === "micro-task" ? "完成 goal 状态内核" : `完成 ${runId} 状态内核`, status: "running", owner: "host:source", cwd: "/repo",
     revision: 2, createdAt: "2026-09-24T08:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     workflow: { state: "executing", awaitingHost: false, hostId: "source", ownerGeneration: 1, revision: 4 },
-    delegation: { kind: "goal", sourceHostId: "source", currentHostId: "source", parentRunId: null, rootRunId: runId,
+    lineage: { kind: "micro-task", sourceHostId: "source", currentHostId: "source", parentRunId: null, rootRunId: runId,
       project: { id: "repo", path: "/repo", label: "repo" }, buddy: { ...worker } },
   };
 }
 function workflow(record = task()): Workflow {
   return {
-    governed: true, runId: record.runId, hostId: "source", ownerGeneration: 1, revision: 4,
+    runId: record.runId, hostId: "source", ownerGeneration: 1, revision: 4,
     state: "executing", awaitingHost: false, waitReason: "", continuationCount: 0,
     buddy: { ...worker },
     routing: { status: "completed", decisionId: "decision-current",
@@ -302,7 +302,7 @@ describe("recorded decision details", () => {
   });
 });
 
-describe("delegation routing rationale", () => {
+describe("microTask routing rationale", () => {
   it("opens the route from the executor header using frozen preferences and buddy", async () => {
     const record = task(), value = workflow(record), state = snapshot();
     const audit = decision("decision-current");
@@ -355,7 +355,7 @@ describe("delegation routing rationale", () => {
     expect(command).toHaveBeenCalledExactlyOnceWith("selection_get", { decisionId: "decision-current", includeAudit: true }, "csrf");
   });
 
-  it("paginates the delegation's own routes and inspects the exact older decision", async () => {
+  it("paginates the microTask's own routes and inspects the exact older decision", async () => {
     const value = workflow();
     const recent: RoutingHistory["entries"] = Array.from({ length: 20 }, (_, index) => ({
       decisionId: `route-${index}`, status: "completed", taskId: `calculation-${index}`, selectedBuddy: { ...worker }, reason: `近期理由 ${index}`, ownerGeneration: 1,
@@ -377,13 +377,13 @@ describe("delegation routing rationale", () => {
     const history = screen.getByText("此前的路由决定").closest("details")!;
     await user.click(within(history).getByText("此前的路由决定"));
     await waitFor(() => expect(within(history).getAllByRole("button", { name: /deepseek-flash/ })).toHaveLength(20));
-    expect(command).toHaveBeenCalledWith("workflow_get", { runId: "goal", routingHistory: { limit: 20 } }, "csrf");
+    expect(command).toHaveBeenCalledWith("workflow_get", { runId: "micro-task", routingHistory: { limit: 20 } }, "csrf");
     await user.click(within(history).getByRole("button", { name: "加载更早决定" }));
     await user.click(await within(history).findByRole("button", { name: /historical-model/ }));
     await screen.findByText("older-route 的持久选择依据");
     expect(history.open).toBe(false);
     expect(document.activeElement).toBe(screen.getByRole("region", { name: "所选路由决定" }));
-    expect(command).toHaveBeenCalledWith("workflow_get", { runId: "goal", routingHistory: { limit: 20, before: 31 } }, "csrf");
+    expect(command).toHaveBeenCalledWith("workflow_get", { runId: "micro-task", routingHistory: { limit: 20, before: 31 } }, "csrf");
     expect(command).toHaveBeenCalledWith("selection_get", { decisionId: "older-route", includeAudit: true }, "csrf");
     expect(screen.queryByText("decision-current 的持久选择依据")).toBeNull();
     await user.click(screen.getByRole("button", { name: "返回当前配置" }));
@@ -426,7 +426,7 @@ describe("delegation routing rationale", () => {
     { status: "failed", reason: "路由服务不可用，没有选中执行配置", label: "执行失败" },
   ])("keeps a $status route inspectable before any executor is selected", async ({ status, reason, label }) => {
     const record = task();
-    record.delegation!.buddy = null;
+    record.lineage!.buddy = null;
     const value = workflow(record);
     value.buddy = null;
     value.routing = { status, decisionId: "pending-or-failed", reason };

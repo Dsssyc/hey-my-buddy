@@ -260,14 +260,14 @@ def _continuation_context(connection, row, run_id, owner_run_id):
         return False, None, None, None
     run = connection.execute("SELECT * FROM workflow_runs WHERE run_id=?", (run_id,)).fetchone()
     if run is None:
-        return False, "No governed goal is recorded", None, None
+        return False, "No micro task is recorded", None, None
     own_stopped = _stopped(connection, run_id)
     owner_id = owner_run_id or run_id
     owned = connection.execute(
         "WITH RECURSIVE owned(id) AS (SELECT ? UNION SELECT c.child_task_id FROM workflow_children c JOIN owned o ON c.parent_run_id=o.id) SELECT id FROM owned",
         (owner_id,)).fetchall()
     if run_id not in {item[0] for item in owned}:
-        return own_stopped, "The target is not owned by this controlling goal", None, run
+        return own_stopped, "The target is not owned by this controlling micro task", None, run
     route = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (row["decision_id"],)).fetchone()
     if (run["current_routing_id"] != row["decision_id"] or route is None or route["run_id"] != run_id
             or route["owner_generation"] != run["owner_generation"]):
@@ -276,11 +276,11 @@ def _continuation_context(connection, row, run_id, owner_run_id):
         "WITH RECURSIVE ancestors(id) AS (SELECT ? UNION SELECT c.parent_run_id FROM workflow_children c JOIN ancestors a ON c.child_task_id=a.id) SELECT w.* FROM workflow_runs w JOIN ancestors a ON w.run_id=a.id",
         (run_id,)).fetchall()
     if any(item["state"] in ("accepted", "concluded", "cancelled") for item in ancestors):
-        return own_stopped, "The goal or an owning ancestor is closed or cancelled", None, run
+        return own_stopped, "The micro task or an owning ancestor is closed or cancelled", None, run
     if connection.execute("SELECT 1 FROM workspace_cleanup_plans WHERE run_id=? AND state IN ('applying','applied')", (run_id,)).fetchone():
-        return own_stopped, "The goal checkout is being cleaned or was removed", None, run
+        return own_stopped, "The micro task checkout is being cleaned or was removed", None, run
     if not own_stopped:
-        return False, "The goal's execution has no confirmed stop", None, run
+        return False, "The micro task's execution has no confirmed stop", None, run
     descendants = connection.execute(
         "WITH RECURSIVE owned(id) AS (SELECT ? UNION SELECT c.child_task_id FROM workflow_children c JOIN owned o ON c.parent_run_id=o.id) SELECT c.* FROM workflow_children c JOIN owned o ON c.child_task_id=o.id",
         (run_id,)).fetchall()
@@ -307,14 +307,14 @@ def _continuation_context(connection, row, run_id, owner_run_id):
                 current[key] != manifest.get(field)
                 for key, field in (
                 ("checkout_id", "checkoutId"), ("repository_id", "repositoryId"), ("path", "path"))):
-            return True, "The goal no longer owns its frozen checkout allocation", helper_policy, run
+            return True, "The micro task no longer owns its frozen checkout allocation", helper_policy, run
         conflicts = connection.execute(
             "SELECT holder_task_id FROM workspace_reservations WHERE checkout_id=?"
             " AND holder_task_id!=? AND state='held' AND (access='write' OR ?='write')",
             (manifest["checkoutId"], run_id, reservation_access)).fetchall()
         if conflicts and (current["state"] != "transferred" or any(
                 item["holder_task_id"] not in ids for item in conflicts)):
-            return True, "Another owner holds the goal's checkout", helper_policy, run
+            return True, "Another owner holds the micro task's checkout", helper_policy, run
     return True, None, helper_policy, run
 
 
@@ -326,9 +326,9 @@ def _candidate_problem(connection, candidate, request, run, now):
         return "The frozen buddy is no longer enabled and available"
     constraints = request.get("constraints") or {}
     if run is not None and run["buddy_locked"]:
-        constraints = {**constraints, **schemas.buddy_constraints(_json(run["goal_json"], {}))}
+        constraints = {**constraints, **schemas.buddy_constraints(_json(run["micro_task_json"], {}))}
     if any(candidate.get(key) != value for key, value in constraints.items()):
-        return "The frozen buddy no longer satisfies the goal's hard constraints"
+        return "The frozen buddy no longer satisfies the micro task's hard constraints"
     capabilities = set(_json(published["capabilities_json"], []))
     if not set(request.get("requiredCapabilities") or []) <= capabilities:
         return "The frozen buddy no longer provides the required capabilities"

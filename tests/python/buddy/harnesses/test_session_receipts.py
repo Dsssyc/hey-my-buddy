@@ -47,7 +47,7 @@ RULE_BUNDLES = (("bounded", BOUNDED_REFUSAL_DETAIL), ("typed", TYPED_REFUSAL_DET
 
 class ReceiptTests(unittest.TestCase):
     def setUp(self):
-        self.bridge = {"identity": {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
+        self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64}
         self.outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [], "artifacts": [], "request": None}
 
@@ -121,7 +121,7 @@ class InquiryReceiptTests(unittest.TestCase):
     """The receipt stages both drivers share, run under both registered bundles."""
 
     def setUp(self):
-        self.bridge = {"identity": {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
+        self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64}
 
     def receipt(self, kind: str, payload: dict) -> str:
@@ -196,7 +196,7 @@ class ToolRefusalEnvelopeTests(unittest.TestCase):
     """The signed refusal envelope itself: exact binding, fatal forgery, dispatch."""
 
     def setUp(self):
-        self.bridge = {"identity": {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
+        self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64}
         self.names = {"buddy_finish_turn": "mcp__buddy_x__buddy_finish_turn",
                       "buddy_checkpoint": "mcp__buddy_x__buddy_checkpoint",
@@ -258,7 +258,7 @@ class ToolRefusalEnvelopeTests(unittest.TestCase):
                 cases = {
                     "changed detail": json.dumps({**json.loads(self.refusal()), "detail": "changed after signing"}),
                     "changed signature": json.dumps({**json.loads(self.refusal()), "signature": "0" * 64}),
-                    "foreign identity": self.refusal(identity={"taskId": "goal", "attemptId": "other",
+                    "foreign identity": self.refusal(identity={"taskId": "micro-task", "attemptId": "other",
                                                                "generation": 1, "turnId": "logical"}),
                     "foreign input": self.refusal(inputSha256="c" * 64),
                     "unknown reason": self.refusal(reason="quota-exhausted"),
@@ -316,7 +316,7 @@ class RuleDifferenceTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.bridge = {"identity": {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
+        self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64}
 
     def refusal(self, detail: str) -> str:
@@ -386,7 +386,7 @@ class RefusalWireBudgetTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.bridge = {"identity": {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
+        self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64}
         self.finish = "mcp__buddy_x__buddy_finish_turn"
 

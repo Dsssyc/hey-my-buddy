@@ -1,6 +1,6 @@
 """ADR-018 items 12 and 13: parameter documents and generated per-method help.
 
-The governed path runs through the real ``hey_my_buddy.cli.main`` module, the real
+The micro-task path runs through the real ``hey_my_buddy.cli.main`` module, the real
 ``hey_my_buddy.protocol.transport`` mapping and the real store/service validators; only the C-Two
 socket is substituted with the in-process board, exactly as in ``test_cli.py``.
 Every test uses a private state directory, starts no paid model and changes no user
@@ -257,10 +257,10 @@ class ParameterDocumentTests(PrivateCliTestCase):
         self.assertIn(str(missing), refused["error"]["message"])
 
 
-class GovernedParameterDocumentTests(PrivateCliTestCase, WorkflowTestCase):
-    """Item 12: a governed mutation keeps its private control capability by any input."""
+class MicroTaskParameterDocumentTests(PrivateCliTestCase, WorkflowTestCase):
+    """Item 12: a micro-task mutation keeps its private control capability by any input."""
 
-    def test_a_governed_mutation_from_a_file_uses_the_same_private_control_file(self):
+    def test_a_micro_task_mutation_from_a_file_uses_the_same_private_control_file(self):
         self.catalog_fixture()
         board = self.board()
         self.use_board_transport(board)
@@ -335,7 +335,7 @@ class HelpTests(unittest.TestCase):
         self.assertIn("executionWorkspace", text)
         self.assertIn("requestId", text)
         self.assertIn("cli-local", text)
-        # A governed mutation names the private Host control file the CLI accepts locally.
+        # A micro-task mutation names the private Host control file the CLI accepts locally.
         self.assertIn("controlFile", self.help_text("cancel"))
         wait = self.help_text("wait")
         self.assertIn("timeoutMs", wait)

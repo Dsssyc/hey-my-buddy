@@ -1,7 +1,7 @@
 """Current store facts: frozen attempt model services, shared admission, capacity.
 
 Every test uses the production store and resource implementations against a private
-state directory. Governed tasks use the deterministic workspace double, so real
+state directory. Micro-task tasks use the deterministic workspace double, so real
 admission, claim, attempt and result transactions run without a model call.
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ MODEL_SERVICE_B = ("dsh", "deepseek-official", "deepseek-v4-pro")
 
 
 class StoreConcurrencyTestCase(EvaluationFixtures):
-    """The evaluation fixtures plus governed submit/claim helpers."""
+    """The evaluation fixtures plus micro-task submit/claim helpers."""
 
     def setUp(self):
         super().setUp()
@@ -32,7 +32,7 @@ class StoreConcurrencyTestCase(EvaluationFixtures):
         self.model_workspace = MockWorkspace(self.directory)
         self.enterContext(patch.object(workflow, "_workspace_module", self.model_workspace))
 
-    def submit_governed(self, board, request_id: str, model_service=MODEL_SERVICE_A, *, effort: str = "off") -> str:
+    def submit_micro_task(self, board, request_id: str, model_service=MODEL_SERVICE_A, *, effort: str = "off") -> str:
         submitted = board.call(
             "workflow_submit",
             {
@@ -49,8 +49,8 @@ class StoreConcurrencyTestCase(EvaluationFixtures):
         )
         return submitted["runId"]
 
-    def claim_governed(self, board, worker_id: str, request_id: str, model_service=MODEL_SERVICE_A, *, effort: str = "off"):
-        self.submit_governed(board, request_id, model_service, effort=effort)
+    def claim_micro_task(self, board, worker_id: str, request_id: str, model_service=MODEL_SERVICE_A, *, effort: str = "off"):
+        self.submit_micro_task(board, request_id, model_service, effort=effort)
         return board.client().claim(worker_id, f"claim-{request_id}", "n" * 32)
 
     def register(self, board, worker_id: str, *, adapter: str = "dsh"):
@@ -113,7 +113,7 @@ class FrozenModelServiceTests(StoreConcurrencyTestCase):
     def test_a_claim_freezes_the_resolved_model_service_onto_the_attempt(self):
         board = self.board()
         self.register(board, "w1")
-        claim = self.claim_governed(board, "w1", "freeze-1")
+        claim = self.claim_micro_task(board, "w1", "freeze-1")
         attempt = claim["claim"]["attempt"]
         with board.store.db.read() as connection:
             row = connection.execute(
@@ -155,12 +155,12 @@ class ModelServiceQuotaTests(StoreConcurrencyTestCase):
         board = self.board(max_concurrent=8)
         for index in range(2):
             self.register(board, f"w-a{index}")
-            claim = self.claim_governed(board, f"w-a{index}", f"fam-a-{index}")
+            claim = self.claim_micro_task(board, f"w-a{index}", f"fam-a-{index}")
             self.assertIsNotNone(claim["claim"])
         # The third task of the same model service waits on the model service limit, not the
         # machine ceiling: a different model service still claims.
         self.register(board, "w-a2")
-        blocked = self.claim_governed(board, "w-a2", "fam-a-2")
+        blocked = self.claim_micro_task(board, "w-a2", "fam-a-2")
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "model-capacity")
         with board.store.db.read() as connection:
@@ -169,7 +169,7 @@ class ModelServiceQuotaTests(StoreConcurrencyTestCase):
             ).fetchone()["queue_reason"]
         self.assertEqual(reason, "model-capacity")
         self.register(board, "w-b")
-        other = self.claim_governed(board, "w-b", "fam-b-1", model_service=MODEL_SERVICE_B)
+        other = self.claim_micro_task(board, "w-b", "fam-b-1", model_service=MODEL_SERVICE_B)
         self.assertIsNotNone(other["claim"])
 
     def test_effort_variants_share_one_model_service_limit(self):
@@ -177,10 +177,10 @@ class ModelServiceQuotaTests(StoreConcurrencyTestCase):
         efforts = ("off", "low")
         for index, effort in enumerate(efforts):
             self.register(board, f"w-e{index}")
-            claim = self.claim_governed(board, f"w-e{index}", f"effort-{effort}", effort=effort)
+            claim = self.claim_micro_task(board, f"w-e{index}", f"effort-{effort}", effort=effort)
             self.assertIsNotNone(claim["claim"])
         self.register(board, "w-e2")
-        blocked = self.claim_governed(board, "w-e2", "effort-high", effort="high")
+        blocked = self.claim_micro_task(board, "w-e2", "effort-high", effort="high")
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "model-capacity")
 
@@ -188,10 +188,10 @@ class ModelServiceQuotaTests(StoreConcurrencyTestCase):
         board = self.board(max_concurrent=2)
         self.register(board, "w1")
         self.register(board, "w2")
-        self.assertIsNotNone(self.claim_governed(board, "w1", "cap-1")["claim"])
-        self.assertIsNotNone(self.claim_governed(board, "w2", "cap-2", model_service=MODEL_SERVICE_B)["claim"])
+        self.assertIsNotNone(self.claim_micro_task(board, "w1", "cap-1")["claim"])
+        self.assertIsNotNone(self.claim_micro_task(board, "w2", "cap-2", model_service=MODEL_SERVICE_B)["claim"])
         self.register(board, "w3")
-        blocked = self.claim_governed(board, "w3", "cap-3")
+        blocked = self.claim_micro_task(board, "w3", "cap-3")
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "capacity")
 
@@ -199,13 +199,13 @@ class ModelServiceQuotaTests(StoreConcurrencyTestCase):
         board = self.board(max_concurrent=8)
         self.register(board, "w1")
         self.register(board, "w2")
-        first = self.claim_governed(board, "w1", "uncertain-1")
-        second = self.claim_governed(board, "w2", "uncertain-2")
+        first = self.claim_micro_task(board, "w1", "uncertain-1")
+        second = self.claim_micro_task(board, "w2", "uncertain-2")
         # A completed result with unconfirmed shutdown leaves the attempt
         # uncertain: a survivor may still be running, so its model service slot stays.
         self.finish(board, "w2", second, shutdown=False)
         self.register(board, "w3")
-        blocked = self.claim_governed(board, "w3", "uncertain-3")
+        blocked = self.claim_micro_task(board, "w3", "uncertain-3")
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "model-capacity")
         with board.store.db.read() as connection:
@@ -218,7 +218,7 @@ class ModelServiceQuotaTests(StoreConcurrencyTestCase):
         # A confirmed completion frees the slot for the next claim.
         self.finish(board, "w1", first, shutdown=True)
         self.register(board, "w4")
-        released = self.claim_governed(board, "w4", "uncertain-4")
+        released = self.claim_micro_task(board, "w4", "uncertain-4")
         self.assertIsNotNone(released["claim"])
 
     def test_capacity_report_counts_total_and_per_model_service_occupancy(self):
@@ -226,11 +226,11 @@ class ModelServiceQuotaTests(StoreConcurrencyTestCase):
         self.register(board, "w1")
         self.register(board, "w2")
         self.register(board, "w3")
-        self.claim_governed(board, "w1", "report-1")
-        self.claim_governed(board, "w2", "report-2")
-        self.claim_governed(board, "w3", "report-3", model_service=MODEL_SERVICE_B)
+        self.claim_micro_task(board, "w1", "report-1")
+        self.claim_micro_task(board, "w2", "report-2")
+        self.claim_micro_task(board, "w3", "report-3", model_service=MODEL_SERVICE_B)
         # One more queued task of model service A so pending model services appear too.
-        self.submit_governed(board, "report-queued")
+        self.submit_micro_task(board, "report-queued")
         capacity = board.store.capacity_report()
         self.assertEqual(capacity["totalLimit"], 8)
         self.assertEqual(capacity["totalActive"], 3)
@@ -245,7 +245,7 @@ class IdentityImmutabilityTests(StoreConcurrencyTestCase):
     def test_an_historical_attempt_never_changes_its_frozen_model_service(self):
         board = self.board()
         self.register(board, "w1")
-        claim = self.claim_governed(board, "w1", "history-1")
+        claim = self.claim_micro_task(board, "w1", "history-1")
         attempt_id = claim["claim"]["attempt"]["attemptId"]
         self.finish(board, "w1", claim, shutdown=True)
         # The stored model service survives completion and stays exactly what was frozen.

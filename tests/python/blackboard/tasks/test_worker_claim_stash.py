@@ -60,7 +60,7 @@ class ClaimStashTestCase(BoardTestCase):
         return board.call("worker_claim", params)
 
     def finish_turn(self, board, claimed, *, worker_id="w1", nonce=NONCE, session_id="sess-1"):
-        """A genuine synthetic governed turn: the real import path, no model."""
+        """A genuine synthetic micro-task turn: the real import path, no model."""
         from protocol.fixtures import native_turn
         claim = claimed["claim"]
         attempt = claim["attempt"]

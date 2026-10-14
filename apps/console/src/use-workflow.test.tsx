@@ -2,7 +2,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import type { ConsoleApi } from "./api";
-import { useWorkflow } from "./use-workflow";
+import { parseWorkflowReply, useWorkflow } from "./use-workflow";
 import type { Snapshot, Task } from "./types";
 import type { Workflow } from "./workflow-types";
 
@@ -20,11 +20,13 @@ function fixture() {
     runId: "parent", task: "完成状态内核", status: "waiting-host", owner: "host-a", cwd: "/repo",
     revision: 4, createdAt: "2026-09-22", acceptedAt: null, acceptanceVerdict: null,
     reviewRejectedAt: null, reviewRejectionNote: null,
+    lineage: { kind: "micro-task", sourceHostId: "host-a", currentHostId: "host-a", parentRunId: null, rootRunId: "parent",
+      project: { id: "repo", path: "/repo", label: "repo" }, buddy: null },
     spec: { workspace: false }, shutdownConfirmed: true,
     workflow: { state: "awaiting-host", awaitingHost: true, hostId: "host-a", ownerGeneration: 2, revision: 7 },
   };
   const workflow: Workflow = {
-    governed: true, runId: task.runId, hostId: "host-a", ownerGeneration: 2, revision: 7,
+    runId: task.runId, hostId: "host-a", ownerGeneration: 2, revision: 7,
     state: "awaiting-host", awaitingHost: true, waitReason: "assistance", continuationCount: 0,
     shutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false },
     workspace: { path: "/repo", kind: "existing", access: "write", inputCommit: "commit-a", manifestSha256: "manifest-a" },
@@ -47,6 +49,15 @@ function fixture() {
 }
 
 describe("read-only workflow read (0.15.1 U4)", () => {
+  it("recognizes micro task and helper lineage and rejects ordinary execution records", () => {
+    const f = fixture();
+    expect(parseWorkflowReply(f.workflow, "parent")).toBe(f.workflow);
+    expect(parseWorkflowReply({ ...f.workflow, task: { ...f.task, lineage: { ...f.task.lineage!, kind: "helper" } } }, "parent").runId).toBe("parent");
+    for (const lineage of [undefined, { ...f.task.lineage!, kind: "execution" }]) {
+      expect(() => parseWorkflowReply({ ...f.workflow, task: { ...f.task, lineage } }, "parent")).toThrowError(ApiError);
+    }
+  });
+
   it("polls workflow_get only and never exposes a mutation entry point", async () => {
     const f = fixture();
     const { result } = renderHook(() => useWorkflow(f.api, f.task, f.snapshot, true));

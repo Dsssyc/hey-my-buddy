@@ -50,7 +50,7 @@ class HostAdmissionTests(WorkflowTestCase):
         self.assertEqual(continued["buddy"], changed)
         self.assertFalse(continued["buddyLocked"])
         with board.store.db.read() as db:
-            original = json.loads(db.execute("SELECT goal_json FROM workflow_runs").fetchone()[0])
+            original = json.loads(db.execute("SELECT micro_task_json FROM workflow_runs").fetchone()[0])
             self.assertEqual(original["effort"], "off")
             event = db.execute("SELECT payload_json FROM events WHERE kind='workflow.buddy_overridden'").fetchone()
             self.assertEqual(json.loads(event[0])["buddy"], changed)
@@ -116,7 +116,7 @@ class HostCompletionTests(WorkflowTestCase):
         self.assertIsNone(continued["finalAttemptId"])
         self.assertIn(delivered["finalArtifactId"], [item["artifactId"] for item in continued["artifacts"]])
 
-    def test_delivered_goal_without_a_conclusion_still_awaits_final_acknowledgement(self):
+    def test_delivered_micro_task_without_a_conclusion_still_awaits_final_acknowledgement(self):
         board = self.board()
         submitted = self.submit(board)
         self.register(board)
@@ -125,26 +125,26 @@ class HostCompletionTests(WorkflowTestCase):
         self.assertEqual(delivered["state"], "delivered")
         self.assertFalse(delivered["awaitingHost"])
         self.assertIsNone(delivered["hostConclusion"])
-        self.assertEqual(delivered["waitReason"], "the goal work is delivered and awaits final acknowledgement")
+        self.assertEqual(delivered["waitReason"], "the micro task work is delivered and awaits final acknowledgement")
 
-    def test_concluded_delivered_goal_reports_the_conclusion_instead_of_acknowledgement(self):
+    def test_concluded_delivered_micro_task_reports_the_conclusion_instead_of_acknowledgement(self):
         board = self.board()
         submitted = self.submit(board)
         self.register(board)
         self.finish_turn(board, self.claim(board))
         delivered = board.call("workflow_get", {"runId": submitted["runId"]})
         concluded = board.call("workflow_conclude", {
-            "runId": delivered["runId"], "note": "Delivered without acceptance; the goal is closed",
+            "runId": delivered["runId"], "note": "Delivered without acceptance; the micro task is closed",
             **self.control(delivered)})
         self.assertEqual(concluded["state"], "concluded")
         self.assertFalse(concluded["awaitingHost"])
         self.assertIsNotNone(concluded["hostConclusion"])
-        self.assertEqual(concluded["waitReason"], "the goal work was concluded by its Host without acceptance")
+        self.assertEqual(concluded["waitReason"], "the micro task work was concluded by its Host without acceptance")
         # A later read keeps the terminal state and the same conclusion.
         current = board.call("workflow_get", {"runId": delivered["runId"]})
         self.assertEqual(current["hostConclusion"], concluded["hostConclusion"])
         self.assertFalse(current["awaitingHost"])
-        self.assertEqual(current["waitReason"], "the goal work was concluded by its Host without acceptance")
+        self.assertEqual(current["waitReason"], "the micro task work was concluded by its Host without acceptance")
 
     def test_takeover_preserves_a_terminal_conclusion(self):
         board = self.board()
@@ -152,7 +152,7 @@ class HostCompletionTests(WorkflowTestCase):
         self.register(board)
         self.finish_turn(board, self.claim(board))
         delivered = board.call("workflow_get", {"runId": submitted["runId"]})
-        note = "Delivered without acceptance; the goal is closed"
+        note = "Delivered without acceptance; the micro task is closed"
         concluded = board.call("workflow_conclude", {
             "runId": delivered["runId"], "note": note, **self.control(delivered)})
         taken = board.call("workflow_takeover", {
@@ -165,7 +165,7 @@ class HostCompletionTests(WorkflowTestCase):
         self.assertEqual(current["state"], "concluded")
         self.assertFalse(current["awaitingHost"])
         self.assertEqual(current["hostConclusion"], concluded["hostConclusion"])
-        self.assertEqual(current["waitReason"], "the goal work was concluded by its Host without acceptance")
+        self.assertEqual(current["waitReason"], "the micro task work was concluded by its Host without acceptance")
         with self.assertRaises(BoardError) as raised:
             board.call("workflow_accept", {
                 "runId": current["runId"], "artifactId": current["finalArtifactId"],
@@ -234,7 +234,7 @@ class HostCompletionTests(WorkflowTestCase):
         self.assertEqual(parent["counts"]["turns"], 1)
         artifact = next(item for item in parent["artifacts"] if item["kind"] == "output")
         finished = board.call("workflow_accept", {"runId": parent["runId"],
-            "artifactId": artifact["artifactId"], "note": "Host checked the whole goal",
+            "artifactId": artifact["artifactId"], "note": "Host checked the whole micro task",
             "notRequired": "Fixture evidence checked without a separate target", **self.control(parent)})
         self.assertEqual(finished["state"], "accepted")
         self.assertEqual(finished["counts"]["turns"], 1)
@@ -322,7 +322,7 @@ class HostCompletionTests(WorkflowTestCase):
                                if item["macroTaskId"] == submitted["macroTaskId"])
                 self.assertEqual(summary["counts"]["review"], 0)
 
-    def test_rejected_then_failed_goal_can_be_concluded(self):
+    def test_rejected_then_failed_micro_task_can_be_concluded(self):
         board = self.board()
         submitted = self.submit(board)
         self.register(board)
@@ -402,7 +402,7 @@ class HostConclusionCleanupTests(LifecycleTestCase):
         self.assertEqual(proof["hostPaths"], ["host-note.txt"])
         self.assertNotIn("host-note.txt", proof["matchingPaths"])
 
-    def test_cancelled_goal_can_cleanup_only_after_a_recorded_conclusion(self):
+    def test_cancelled_micro_task_can_cleanup_only_after_a_recorded_conclusion(self):
         board = self.board()
         submitted = board.call("workflow_submit", {
             **BUDDY, "requestId": "cancel-before-start", "hostId": "host-1", "task": "cancelled work",
