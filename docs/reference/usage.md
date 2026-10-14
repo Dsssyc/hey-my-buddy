@@ -198,6 +198,10 @@ Capacity and cwd/exclusive-resource conflicts queue with a `queueReason` instead
 
 Before waiting on a running micro task, submit the micro tasks that are independent of it; the queue holds whatever exceeds capacity, so nothing is lost by submitting early. Two micro tasks are independent when neither needs the other's result and they do not change the same files or the same stored form. A name, a format or another convention that two of them must share is written into both task texts first: the board makes submission safe, not the compatibility of what comes back. Each micro task is still verified and accepted on its own. When several finish together, integrate them and run the project's checks on the integrated result before accepting any of them, because a change that passes alone can break what another one relies on; an accepted micro task cannot be continued, and its repair is a new micro task.
 
+## A Lead for a large macro task
+
+Use a Lead only when the user asks for one. Before granting delegation authority, confirm with the user and say what it costs: more spend and more time for more precision, worth it for a macro task on the scale of an architecture decision and not for ordinary work. The user names the buddy that leads; write it completely and do not route it. The Lead runs at the full level without an OS sandbox, accepts the micro tasks it delegates, and delivers one integrated result that you accept; it never talks to the user, so anything that needs the user comes to you as a request. Talk to it with `continue` at its boundaries or while it waits. The rules are in [workflow](workflow.md#delegation-authority-lead); this path is in the source for 0.36.0 and has not yet been run with a real Lead.
+
 ## Operating rules
 
 State the user's language explicitly in every Worker task packet and require the result summary in that language. Every micro task in an agenda retains its macroTaskId and a short intent title. The browser never translates results or invokes a model for wording. Each Host keeps its own waiting flow and reads only its own guide ([Codex](host-codex.md), [Claude Code](host-claude-code.md)).
