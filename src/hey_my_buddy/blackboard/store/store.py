@@ -2528,7 +2528,7 @@ class BoardStore:
             # Micro-task import and helper fan-in commit with the result: the validated
             # turn outcome, the assistance request and the workspace seal are one
             # durable fact with the attempt that produced them.
-            micro_task = self.workflow.turn_concluded(
+            micro_task = self.workflow.settle_turn(
                 connection,
                 task=task_row,
                 attempt=attempt_row,

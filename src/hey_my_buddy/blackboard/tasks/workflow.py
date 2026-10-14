@@ -3572,7 +3572,7 @@ class WorkflowCoordinator:
             return
         if not self._stop_proven(connection, task):
             raise BoardError("SHUTDOWN_UNCONFIRMED", "A workflow release requires durable finished and confirmed stop evidence")
-        self.turn_concluded(connection, task=task, attempt=attempt, payload=None, task_state=task["state"], now=now,
+        self.settle_turn(connection, task=task, attempt=attempt, payload=None, task_state=task["state"], now=now,
                             seal_stash=seal_stash)
         self.child_settled(connection, task=task, attempt=attempt, payload=None, task_state=task["state"], now=now)
         self._release_reservations(connection, task["task_id"], now)
@@ -6392,7 +6392,7 @@ class WorkflowCoordinator:
         disposition = outcome.get("disposition")
         return disposition if disposition in ("assistance", "attention") else None
 
-    def turn_concluded(
+    def settle_turn(
         self, connection, *, task, attempt, payload: dict | None, task_state: str, now: str,
         seal_stash: dict | None = None,
     ) -> dict | None:
@@ -6517,7 +6517,7 @@ class WorkflowCoordinator:
             )
             self.board._append_event(
                 connection,
-                "workflow.turn_concluded",
+                "workflow.turn_returned",
                 task_id=run_row["run_id"],
                 attempt_id=attempt["attempt_id"],
                 revision=run_row["revision"] + 1,
@@ -6528,7 +6528,7 @@ class WorkflowCoordinator:
         request_id = self._record_request(connection, run_row, turn_row, turn, disposition, now)
         self.board._append_event(
             connection,
-            "workflow.turn_concluded",
+            "workflow.turn_returned",
             task_id=run_row["run_id"],
             attempt_id=attempt["attempt_id"],
             revision=run_row["revision"] + 1,

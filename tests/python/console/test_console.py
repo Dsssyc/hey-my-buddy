@@ -706,7 +706,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
                 code, health = self.cli("health", env=environment)
                 self.assertEqual(code, 0, health)
                 self.assertEqual(Path(health["stateDir"]), self.directory)
-                code, capabilities = self.cli("capabilities", "{}", env=environment)
+                code, capabilities = self.cli("harnesses", "{}", env=environment)
                 self.assertEqual(code, 0, capabilities)
                 self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
                 code, opened = self.cli("console", json.dumps({"action": "open", "browser": False}), env=environment)
@@ -766,7 +766,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
 
     def test_cli_policy_publish_round_trip_through_ctwo(self):
         with self.daemon():
-            code, caps = self.cli("capabilities", "{}")
+            code, caps = self.cli("harnesses", "{}")
             self.assertEqual(code, 0, caps)
             self.assertIn("console_snapshot", caps["operations"]["control"])
             for operation in ("selection_request", "selection_get", "user_policy_publish"):
