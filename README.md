@@ -14,7 +14,7 @@ Use it for scoped implementation, testing, reproducible investigations, document
 
 1. The Host chooses the micro task, the buddy and the execution workspace. A complete harness/provider/model/effort tuple is validated and dispatched directly; omit all four fields to let the Router choose from bounded candidates using the shared routing mode and user preferences. Parallel writers get independent Git worktrees, and one named integrator owns the combined result.
 2. The Worker acts with its own tools and internal subagents. When it needs help, it ends the turn with a structured request, and the Host approves explicit helpers, declines with a reason, continues with new input or supplies a complete buddy at a routing boundary. Ownership is fenced by a private control capability; a Host name alone is never authority.
-3. The Host inspects the real diff, runs the relevant checks, records the verified integration (or an explicit not-required decision) bound to the fixed final artifact and acknowledges it, then reclaims the managed checkout through a recorded two-step cleanup. Execution, helper completion, integration and acceptance are separate facts.
+3. The Host inspects the real diff, runs the relevant checks and accepts the fixed final artifact, naming the integration target (or an explicit not-required decision): one `accept` verifies the integration, records the acceptance and reclaims the managed checkout. A micro task the Host will not accept is ended with `conclude`, after which nothing continues it. Execution, helper completion, integration and acceptance are separate facts.
 
 ## Install
 
@@ -76,7 +76,7 @@ Python freezes legal routing candidates and validates answer bounds; unhealthy h
 
 ## Execution and recovery
 
-Codex Hosts use one monitoring-only native subagent per running micro task, explicitly selecting the cheapest model currently available to Codex that can execute commands, at the lowest reasoning effort. The parent continues independent work and owns every decision and acceptance; Claude Code keeps its background Bash wait. See [waiting from Codex](docs/reference/usage.md#waiting-from-codex) for permissions, wait limits and foreground fallback.
+Codex Hosts use one monitoring-only native subagent per running micro task, explicitly selecting the cheapest model currently available to Codex that can execute commands, at the lowest reasoning effort. The parent continues independent work and owns every decision and acceptance; Claude Code keeps its background Bash wait. See [waiting from Codex](docs/reference/host-codex.md) for permissions, wait limits and foreground fallback.
 
 Independent work runs in parallel by default under one machine-wide concurrent-attempt ceiling (default 8, configurable 1–32) shared by routing and execution; on top of it, each model service (an exact harness/provider/model) keeps a user-set limit (default 2), and effort variants plus the routing decisions using that model share its counter. The daemon starts the corresponding worker pool automatically; a running installation may be configured with a different ceiling, so read `health.capacity` rather than assuming. Workspace overlap and exclusive resources still serialize conflicting work; parallel editors need separate worktrees. See [capacity settings](docs/reference/operations.md#private-state-and-environment) and inspect `health.capacity` for the total and per-model occupancy.
 

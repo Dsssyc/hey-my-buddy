@@ -14,7 +14,7 @@ hey-my-buddy 让 Host buddy（拥有微任务的 agent）把边界明确的工�
 
 1. Host 确定微任务、buddy 和执行工作区。完整的 harness/provider/model/effort 组合经过校验后直接派发；省略全部四个字段时，Router 按共享路由模式与用户偏好从有界候选中选择。并行写入使用独立 Git worktree，整合后的结果由明确指定的整合者负责。
 2. Worker 使用自己的工具和内部 subagent 完成工作。需要协助时，它以结构化结果结束当前回合；Host 可以批准明确的辅助任务、说明理由后拒绝、补充新的接续输入，或在路由边界给出完整 buddy。控制权由私有 control 凭据约束，Host 名称本身不是权限。
-3. Host 检查真实 diff、运行相关验证，把已验证的整合记录（或明确的无需整合决定）绑定到固定产物后完成验收，再通过记录在案的两步回收释放受管 checkout。执行、辅助任务完成、整合与验收是彼此独立的事实。
+3. Host 检查真实 diff、运行相关验证，然后验收固定产物，并给出整合的目标（或明确的无需整合决定）：一次 `accept` 核对整合、记录验收并回收受管检出。Host 不验收的微任务用 `conclude` 结束，之后不能再继续。执行、辅助任务完成、整合与验收是彼此独立的事实。
 
 ## 安装
 
@@ -76,7 +76,7 @@ HMB_CLI="$HOME/.agents/skills/hey-my-buddy/scripts/hey-my-buddy"
 
 ## 执行与恢复
 
-Codex Host 为每个运行中的微任务派生一个只做监控的原生子代理，显式选择当前 Codex 可用、能执行命令的最便宜模型，并使用最低的推理强度。父代理继续独立工作，并负责全部决策与验收；Claude Code 保持后台 Bash 等待。权限、等待上限与前台回退见 [Codex 等待指引](docs/reference/usage.md#waiting-from-codex)。
+Codex Host 为每个运行中的微任务派生一个只做监控的原生子代理，显式选择当前 Codex 可用、能执行命令的最便宜模型，并使用最低的推理强度。父代理继续独立工作，并负责全部决策与验收；Claude Code 保持后台 Bash 等待。权限、等待上限与前台回退见 [Codex 等待指引](docs/reference/host-codex.md)。
 
 独立任务默认在一个机器级并发总上限下并行运行（默认 8，可配置 1–32），路由与执行共享该上限；在此之上，每个模型服务（一组确定的 harness/provider/model）还有用户设置的上限（默认 2），各推理强度与使用该模型的路由决策共享同一个计数。服务会自动启动相应的 worker 池；实际安装可配置不同的总上限，请以 `health.capacity` 为准。工作区重叠和独占资源仍会让冲突任务排队；并行修改代码需要使用不同 worktree。可在[容量配置](docs/reference/operations.md#private-state-and-environment)中调整上限，并用 `health.capacity` 查看总量与各模型占用。
 
