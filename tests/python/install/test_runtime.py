@@ -472,7 +472,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
             copied.write_bytes(source.read_bytes())
         target = self.materialize()
         expected = {name: runtime.resource_path("roles." + name, self.root).read_text()
-                    for name in ("worker", "router", "lead")}
+                    for name in ("worker", "router", "lead", "wrap_up")}
         replaced = self.root.with_name("project-replaced")
         self.root.rename(replaced)
         try:
@@ -482,10 +482,11 @@ class RuntimeMaterializationTests(unittest.TestCase):
             probe = subprocess.run(
                 [sys.executable, "-c",
                  "import json; from hey_my_buddy.install.runtime import resource_path; "
-                 "from hey_my_buddy.buddy.roles.prompts import worker_prompt, router_prompt; "
+                 "from hey_my_buddy.buddy.roles.prompts import worker_prompt, router_prompt, wrap_up_prompt; "
                  "print(json.dumps({'resources': {n: [str(resource_path('roles.'+n)), "
-                 "resource_path('roles.'+n).read_text()] for n in ('worker','router','lead')}, "
-                 "'worker': worker_prompt('ROLE: task', {}, delivery=()), 'router': router_prompt('ROLE: task')}))"],
+                 "resource_path('roles.'+n).read_text()] for n in ('worker','router','lead','wrap_up')}, "
+                 "'worker': worker_prompt('ROLE: task', {}, delivery=()), 'router': router_prompt('ROLE: task'), "
+                 "'wrap_up': wrap_up_prompt()}))"],
                 cwd=target, env=environment, capture_output=True, text=True, timeout=30)
             self.assertEqual(probe.returncode, 0, probe.stderr)
             actual = json.loads(probe.stdout)
@@ -494,6 +495,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
                 self.assertEqual(text, expected[name])
             self.assertTrue(actual["worker"].startswith(expected["worker"] + "\n"))
             self.assertTrue(actual["router"].startswith(expected["router"] + "\n"))
+            self.assertEqual(actual["wrap_up"], expected["wrap_up"])
             self.assertTrue(runtime.is_ready(target))
         finally:
             replaced.rename(self.root)

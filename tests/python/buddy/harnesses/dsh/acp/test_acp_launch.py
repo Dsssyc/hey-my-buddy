@@ -136,6 +136,21 @@ class LegalLaunchTest(AcpTestCase):
         self.assertEqual(synthetic, inherited)
         self.assertNotIn("DSH_HOME", inherited)
 
+    def test_only_lead_child_receives_its_board_and_file_credential(self):
+        from hey_my_buddy.buddy.harnesses.runtime_selection import LEAD_LAUNCHER
+        source = {"PATH": "/usr/bin", "HMB_STATE_DIR": "/private/board",
+                  "HMB_AGENT_CREDENTIAL_FILE": "/private/attempt/credential.json",
+                  "HMB_AGENT_CREDENTIAL": "secret", "HMB_WORKER_ID": "worker"}
+        ordinary = child_environment(source=source)
+        self.assertNotIn("HMB_STATE_DIR", ordinary)
+        self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", ordinary)
+        child = child_environment(source={**source, LEAD_LAUNCHER: "1"})
+        self.assertEqual(child["HMB_STATE_DIR"], source["HMB_STATE_DIR"])
+        self.assertEqual(child["HMB_AGENT_CREDENTIAL_FILE"], source["HMB_AGENT_CREDENTIAL_FILE"])
+        self.assertNotIn(LEAD_LAUNCHER, child)
+        self.assertNotIn("HMB_AGENT_CREDENTIAL", child)
+        self.assertNotIn("HMB_WORKER_ID", child)
+
     def test_spawned_child_receives_inherited_native_homes(self):
         junk_value = "secret-junk-value"
         os.environ["ACP_TEST_JUNK"] = junk_value

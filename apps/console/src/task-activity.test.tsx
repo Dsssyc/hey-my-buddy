@@ -156,6 +156,25 @@ describe("bounded activity projection", () => {
     expect(completed.container.textContent).toContain("正常完成");
     expect(completed.container.textContent).toContain("停止发起Host 停止");
   });
+
+  it("shows a Lead stop and its bounded actor and reason from the selected attempt", () => {
+    const lead = render(<TaskActivityView task={task({ status: "cancelled", terminationReason: "wrap-up",
+      stopInitiator: "host", selectedAttempt: { stopInitiator: "lead" },
+      cancellation: { actor: "lead:review-lead", reason: "Please summarize the current work" } })} />);
+    expect(lead.container.textContent).toContain("Lead 收尾完成");
+    expect(lead.container.textContent).toContain("停止发起Lead 停止");
+    expect(lead.container.textContent).toContain("发起 Leadreview-lead");
+    expect(lead.container.textContent).toContain("停止理由Please summarize the current work");
+    expect(lead.container.textContent).not.toContain("发起 Host");
+    lead.unmount();
+
+    const mismatched = render(<TaskActivityView task={task({ status: "cancelled",
+      stopInitiator: "lead", cancellation: { actor: "host:old-owner", reason: null } })} />);
+    expect(mismatched.container.textContent).toContain("Lead 停止");
+    expect(mismatched.container.textContent).not.toContain("old-owner");
+    expect(terminationText(task({ status: "cancelled",
+      cancellation: { actor: `lead:${"x".repeat(257)}`, reason: null } }))).toBe("停止（发起者未知）");
+  });
 });
 
 describe("activity rendering", () => {

@@ -17,7 +17,7 @@ from functools import partial
 from pathlib import Path
 from unittest import mock
 
-from support import BoardTestCase
+from support import BoardTestCase, InProcessBoard
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
 import hey_my_buddy.cli.main as cli
@@ -363,12 +363,11 @@ class ControlFileTests(PrivateStateTestCase):
             {"runId": "run-1", "hostId": "explicit", "ownerGeneration": 1, "controlToken": "token-1"},
         )
 
-    def test_agent_credential_cannot_use_a_host_control_file(self):
+    def test_agent_credential_passes_explicit_control_file_for_service_authorization(self):
         path = cli._save_control("run-1", {"hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"}, state_dir=self.directory)
         with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": "scoped-token"}):
-            with self.assertRaises(BoardError) as refused:
-                cli._apply_control({"runId": "run-1", "controlFile": path}, "decide")
-            self.assertEqual(refused.exception.code, "FORBIDDEN")
+            self.assertEqual(cli._apply_control({"runId": "run-1", "controlFile": path}, "decide"),
+                             {"runId": "run-1", "hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"})
             # A scoped caller may still pass the explicit triple through.
             self.assertEqual(cli._apply_control({"runId": "run-1"}, "get"), {"runId": "run-1"})
         with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": ""}):
@@ -426,6 +425,72 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
                 **extra,
             }
         )
+
+    def test_file_credential_is_valid_only_on_its_issuing_board(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board)
+        claim = self.claim(board)
+        token = claim["claim"]["agentCredential"]
+        credential_file = self.directory / "attempt-credential.json"
+        credential_file.write_text(json.dumps({"token": token}))
+        credential_file.chmod(0o600)
+
+        other_state = self.directory / "other-board"
+        other_state.mkdir(mode=0o700)
+        other_board = InProcessBoard(other_state)
+        self._stack.append(other_board)
+        with mock.patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory),
+                                       "HMB_AGENT_CREDENTIAL_FILE": str(credential_file)}):
+            loaded = cli._agent_credential()
+            self.assertEqual(loaded, token)
+            self.assertEqual(board.call("workflow_get", {"runId": submitted["runId"],
+                                                         "credential": loaded})["runId"], submitted["runId"])
+            with self.assertRaises(BoardError) as denied:
+                other_board.call("workflow_get", {"runId": submitted["runId"],
+                                                   "credential": loaded})
+            self.assertEqual(denied.exception.code, "UNAUTHORIZED")
+
+    def test_lead_cli_saves_control_and_await_keeps_its_credential_for_every_read(self):
+        from blackboard.tasks.test_workflow import BUDDY
+        from support import enable_fixture_buddy
+        board = self.board()
+        enable_fixture_buddy(board.store, BUDDY)
+        lead = self.submit(board, request_id="lead", access="full", delegationAuthority=True,
+                           executionWorkspace={"kind": "existing", "access": "full", "accessReason": "Lead checks"})
+        self.register(board)
+        credential = self.claim(board)["claim"]["agentCredential"]
+        self.use_board_transport(board)
+        payload = json.loads(self.submit_payload("owned", cwd=str(self.workdir("owned"))))
+        payload.pop("hostId")
+        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": credential}):
+            code, child = self.run_cli("submit", json.dumps({**payload, "output": "full"}))
+            self.assertEqual(code, 0, child)
+            self.assertTrue(Path(child["controlFile"]).is_file())
+            self.assertNotIn("controlToken", json.dumps(child))
+            self.register(board, "w2")
+            child_claim = self.claim(board, "w2", claim_request_id="owned-claim", run_id=child["runId"])
+            original = transport._call_service
+            calls = []
+            def record(method, params, directory):
+                calls.append((method, dict(params)))
+                if method in ("wait", "watch"):
+                    self.finish_turn(board, child_claim, worker_id="w2")
+                return original(method, params, directory)
+            with mock.patch.object(cli, "_call_service", side_effect=record):
+                code, result = self.run_cli("await", json.dumps({"requestId": "owned", "waitSeconds": 1}))
+            self.assertEqual(code, 0, result)
+            self.assertTrue(calls)
+            self.assertTrue(all(params["credential"] == credential for _, params in calls))
+            self.assertNotIn("list", [method for method, _ in calls])
+            self.assertTrue(set(method for method, _ in calls) & {"wait", "watch"})
+            code, stopped = self.run_cli("cancel", json.dumps({"runId": child["runId"], "controlFile": child["controlFile"], "output": "full"}))
+            self.assertEqual(code, 0, stopped)
+            foreign = self.submit(board, request_id="foreign", cwd=str(self.workdir("foreign")))
+            for selector in ({"runId": foreign["runId"]}, {"requestId": "foreign"}):
+                code, denied = self.run_cli("await", json.dumps({**selector, "waitSeconds": 1}))
+                self.assertEqual(code, 1, denied)
+                self.assertEqual(denied["error"]["code"], "FORBIDDEN")
 
     def test_submit_persists_private_control_and_decide_injects_the_named_file(self):
         board = self.board()
@@ -516,14 +581,15 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
         self.assertEqual(code, 0, cancelled)
         self.assertTrue(cancelled["cancelled"])
 
-    def test_scoped_caller_never_mints_a_submission_capability(self):
+    def test_invalid_scoped_submission_cannot_admit_work_despite_local_submission_capability(self):
         board = self.board()
         self.use_board_transport(board)
         with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": "not-a-real-credential"}):
             code, refused = self.run_cli("submit", self.submit_payload("cli-req-4"))
         self.assertEqual(code, 1)
         self.assertEqual(refused["error"]["code"], "UNAUTHORIZED")
-        self.assertEqual(list((self.directory / "submissions").glob("*.json")), [])
+        self.assertEqual(len(list((self.directory / "submissions").glob("*.json"))), 1)
+        self.assertEqual(board.store.count_tasks(), 0)
 
 
 if __name__ == "__main__":

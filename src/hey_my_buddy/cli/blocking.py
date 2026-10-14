@@ -191,16 +191,12 @@ def _envelope(
 
 
 def _find_run(request_id: str, service: Callable[..., dict], state_dir: Path) -> dict | None:
-    offset = 0
-    while True:
-        page = service("list", {"limit": 100, "offset": offset}, state_dir)
-        runs = page.get("runs", []) if isinstance(page, dict) else []
-        for run in runs:
-            if run.get("requestId") == request_id:
-                return run
-        offset += len(runs)
-        if not runs or offset >= page.get("total", offset):
+    try:
+        return service("status", {"requestId": request_id}, state_dir)
+    except ServiceError as error:
+        if error.code == "NOT_FOUND":
             return None
+        raise
 
 
 def _result_undelivered(
@@ -469,6 +465,7 @@ def _wait_until_terminal(
     service: Callable[..., dict],
     state_dir: Path,
     stop: threading.Event | None,
+    scoped: bool,
 ) -> dict:
     """Follow one existing durable run with bounded event waits.
 
@@ -528,7 +525,9 @@ def _wait_until_terminal(
                 # A terminal task with unconfirmed shutdown can make task_wait
                 # return immediately. Use the durable event cursor instead, with
                 # a recheck after reading it so a concurrent stop is not missed.
-                target = shutdown["unconfirmedRunIds"][0]
+                # Scoped callers can wait on the owning run's facts, but cannot
+                # directly address its internal Router or assistance executions.
+                target = run_id if scoped else shutdown["unconfirmedRunIds"][0]
                 events = service("events", {"runId": target, "limit": 1}, state_dir)
                 head = events.get("head")
                 if isinstance(head, bool) or not isinstance(head, int):
@@ -678,6 +677,8 @@ def await_run(
     stop: threading.Event | None = None,
     clock: Callable[[], float] = time.monotonic,
     service: Callable[..., dict] = _call_service,
+    *,
+    scoped: bool = False,
 ) -> dict:
     """Wait for an already existing durable run without starting or replaying anything.
 
@@ -732,6 +733,7 @@ def await_run(
             service=service,
             state_dir=state_dir,
             stop=stop,
+            scoped=scoped,
         )
     except KeyboardInterrupt:
         raise WaitAbandoned(request_id, run_id) from None

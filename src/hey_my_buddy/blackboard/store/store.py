@@ -1013,6 +1013,11 @@ class BoardStore:
         if filter_name not in micro_task.HISTORY_FILTERS:
             raise BoardError("INVALID_ARGUMENT", "filter must be one of: all, active, host, review")
         clauses, values = [], []
+        from ..tasks.workflow import AGENT_KIND, current_scope
+        scope = current_scope()
+        if scope is not None and scope["kind"] == AGENT_KIND:
+            clauses.append("EXISTS (SELECT 1 FROM workflow_lead_tasks owned WHERE owned.owned_run_id=task_id AND owned.lead_run_id=?)")
+            values.append(scope["runId"])
         if state:
             clauses.append("state = ?")
             values.append(state)

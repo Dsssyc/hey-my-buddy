@@ -143,26 +143,30 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function cancellationDetails(task: Task): { label: string; hostId: string | null; reason: string | null } {
+function cancellationDetails(task: Task): { label: string; actorRole: "Host" | "Lead" | null; actorId: string | null; reason: string | null } {
   const cancellation = record(task.cancellation);
   const initiator = task.selectedAttempt?.stopInitiator ?? task.stopInitiator;
   const actor = cancellation?.actor;
   const reason = cancellation?.reason;
   const safeReason = typeof reason === "string" && reason.trim() && reason.length <= 4000
     ? reason.trim() : null;
-  if (initiator === "console") return { label: "在控制台停止", hostId: null, reason: safeReason };
-  if (initiator === "service") return { label: "服务停止", hostId: null, reason: safeReason };
-  if (initiator === "unknown") return { label: "停止（发起者未知）", hostId: null, reason: safeReason };
-  if (typeof actor === "string" && actor.startsWith("host:") && actor.length <= 261) {
-    const hostId = actor.slice(5);
-    if (hostId && !/[\x00-\x1f\x7f]/.test(hostId)) return { label: "Host 停止", hostId, reason: safeReason };
+  if (initiator === "console") return { label: "在控制台停止", actorRole: null, actorId: null, reason: safeReason };
+  if (initiator === "service") return { label: "服务停止", actorRole: null, actorId: null, reason: safeReason };
+  if (initiator === "unknown") return { label: "停止（发起者未知）", actorRole: null, actorId: null, reason: safeReason };
+  const actorPerson = typeof actor === "string" && actor.length <= 261
+    && /^(host|lead):[^\x00-\x1f\x7f]+$/.test(actor)
+    ? actor.slice(0, 4) as "host" | "lead" : null;
+  const person = initiator === "host" || initiator === "lead" ? initiator : actorPerson;
+  if (person) {
+    const actorRole = person === "host" ? "Host" : "Lead";
+    const actorId = typeof actor === "string" && actorPerson === person ? actor.slice(5) : null;
+    return { label: `${actorRole} 停止`, actorRole, actorId, reason: safeReason };
   }
   if (typeof actor === "string" && /^console:[^\x00-\x1f\x7f]{1,128}$/.test(actor)) {
-    return { label: "在控制台停止", hostId: null, reason: safeReason };
+    return { label: "在控制台停止", actorRole: null, actorId: null, reason: safeReason };
   }
-  if (actor === "service-stop") return { label: "服务停止", hostId: null, reason: safeReason };
-  if (initiator === "host") return { label: "Host 停止", hostId: null, reason: safeReason };
-  return { label: "停止（发起者未知）", hostId: null, reason: safeReason };
+  if (actor === "service-stop") return { label: "服务停止", actorRole: null, actorId: null, reason: safeReason };
+  return { label: "停止（发起者未知）", actorRole: null, actorId: null, reason: safeReason };
 }
 
 /**
@@ -185,6 +189,9 @@ export function recordedTermination(task: Task): string | null {
 /** Recorded termination cause. A missing cause stays unknown, never "user cancel". */
 export function terminationText(task: Task): string | null {
   const raw = recordedTermination(task);
+  if (raw === "wrap-up" && (task.selectedAttempt?.stopInitiator ?? task.stopInitiator) === "lead") {
+    return "Lead 收尾完成";
+  }
   if (raw) return terminationLabels[raw] ?? raw;
   if (task.status === "cancelled") {
     return cancellationDetails(task).label;
@@ -248,7 +255,7 @@ export function TaskActivityView({ task }: { task: Task }) {
       )}
       {cancellation && <dl className="facts">
         {termination !== cancellation.label && <><dt>停止发起</dt><dd>{cancellation.label}</dd></>}
-        {cancellation.hostId && <><dt>发起 Host</dt><dd className="mono wrap">{cancellation.hostId}</dd></>}
+        {cancellation.actorId && <><dt>发起 {cancellation.actorRole}</dt><dd className="mono wrap">{cancellation.actorId}</dd></>}
         {cancellation.reason && <><dt>停止理由</dt><dd className="wrap">{cancellation.reason}</dd></>}
       </dl>}
     </section>

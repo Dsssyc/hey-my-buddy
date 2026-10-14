@@ -232,6 +232,11 @@ def migrate(state: Path) -> None:
             _rebuild(connection, 'workflow_turns', lambda row: _turn(connection, row))
             _rebuild(connection, 'attempts', lambda row: _attempt(row, stops))
             _rebuild(connection, 'workflow_runs', _run)
+            _rebuild(connection, 'agent_credentials', lambda row: row)
+            ddl, indexes = _fresh_ddl('workflow_lead_tasks')
+            connection.execute(ddl)
+            for index in indexes:
+                connection.execute(index)
             for row in connection.execute('SELECT decision_id,requested_json FROM decision_requests').fetchall():
                 request = json.loads(row['requested_json'])
                 old = request.pop('timeoutSeconds', None)

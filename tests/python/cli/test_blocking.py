@@ -41,7 +41,7 @@ class FakeService:
     an assertion failure, which is how "never starts or cancels" is enforced.
     """
 
-    READ_ONLY = frozenset({"list", "status", "events", "watch", "wait", "result"})
+    READ_ONLY = frozenset({"status", "events", "watch", "wait", "result"})
 
     def __init__(self, clock, *, complete_after_waits=None, fail_waits=0, fail_status=0,
                  status_queue=None, stop_event=None, terminal_without_result=False,
@@ -67,10 +67,11 @@ class FakeService:
     def __call__(self, method, params, state_dir=None):
         assert method in self.READ_ONLY, f"await must stay read-only, but called {method!r}"
         self.calls.append(method)
-        if method == "list":
-            runs = [dict(self.run)] if self.listed else []
-            return {"runs": runs, "total": len(runs)}
         if method == "status":
+            if "requestId" in params:
+                if not self.listed or params["requestId"] != self.run["requestId"]:
+                    raise ServiceError("NOT_FOUND", "Unknown requestId")
+                return dict(self.run)
             if self.fail_status > 0:
                 self.fail_status -= 1
                 raise ServiceError("SERVICE_UNAVAILABLE", "fixture outage")
@@ -207,7 +208,7 @@ class AwaitTests(unittest.TestCase):
         self.assertEqual(envelope["outcome"], "completed")
         self.assertEqual(envelope["runId"], "run-fixture")
         self.assertEqual(envelope["result"]["finalText"], "fixture result")
-        self.assertEqual(service.calls, ["list", "wait", "result"])
+        self.assertEqual(service.calls, ["status", "wait", "result"])
 
     def test_await_accepts_a_run_id_and_checks_a_mismatched_request(self):
         clock = VirtualClock()
@@ -229,7 +230,7 @@ class AwaitTests(unittest.TestCase):
         self.assertIn("hey-my-buddy submit", message)
         self.assertIn("execution-submit", message)
         self.assertNotIn("buddy run", message)
-        self.assertEqual(service.calls, ["list"])
+        self.assertEqual(service.calls, ["status"])
 
     def test_await_timeout_is_a_wait_limit_and_never_cancels(self):
         clock = VirtualClock()
@@ -259,7 +260,7 @@ class AwaitTests(unittest.TestCase):
         self.assertEqual(failure.exception.run_id, "run-fixture")
         self.assertEqual(failure.exception.request_id, "fixture")
         # list + one event wait; the durable run is never cancelled by losing the wait.
-        self.assertEqual(service.calls, ["list", "wait"])
+        self.assertEqual(service.calls, ["status", "wait"])
 
 
 class ReconnectTests(unittest.TestCase):
@@ -297,7 +298,7 @@ class ReconnectTests(unittest.TestCase):
         self.assertEqual(envelope["error"]["code"], "SERVICE_UNAVAILABLE")
         self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
         self.assertFalse(envelope["ok"])
-        self.assertEqual(service.calls, ["list", "wait", "status"])
+        self.assertEqual(service.calls, ["status", "wait", "status"])
 
     def test_exhausted_reconnects_return_unavailable_bounded(self):
         clock = VirtualClock()
@@ -358,7 +359,7 @@ class ResultTruthTests(unittest.TestCase):
         self.assertEqual(envelope["error"]["code"], "RESULT_NOT_AVAILABLE")
         self.assertIn("hey-my-buddy result", envelope["recovery"]["reason"])
         self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
-        self.assertEqual(service.calls, ["list", "wait"])
+        self.assertEqual(service.calls, ["status", "wait"])
 
     def test_result_read_service_error_cannot_claim_success(self):
         clock = VirtualClock()
@@ -585,6 +586,29 @@ class CompactMicroTaskEnvelopeTests(unittest.TestCase):
         self.assertEqual(envelope["outcome"], "completed")
         self.assertNotIn("resultCompact", envelope)
         self.assertEqual(envelope["result"]["finalText"], "fixture result")
+
+    def test_scoped_await_waits_on_owned_run_events_without_addressing_internal_executions(self):
+        clock = VirtualClock()
+        run = {"runId": "owned", "requestId": "owned-request", "status": "running", "workflowState": "executing",
+               "workflowShutdown": {"selfConfirmed": False, "descendantsConfirmed": False,
+                                    "unconfirmedRunIds": ["internal-router"]}, "revision": 1, "resultAvailable": False}
+        watched = []
+        def service(method, params, state_dir):
+            self.assertEqual(params["runId"], "owned")
+            if method == "status":
+                return dict(run)
+            if method == "events":
+                return {"head": 10}
+            if method == "watch":
+                watched.append(params["runId"])
+                run.update(status="cancelled", workflowState="cancelled",
+                           workflowShutdown={"selfConfirmed": True, "descendantsConfirmed": True, "unconfirmedRunIds": []})
+                return {"head": 11}
+            self.fail("Unexpected operation: " + method)
+        result = await_run({"runId": "owned", "waitSeconds": 1}, state_dir=Path(os.environ["HMB_STATE_DIR"]),
+                           service=service, clock=clock, scoped=True)
+        self.assertEqual(watched, ["owned"])
+        self.assertEqual(result["outcome"], "cancelled")
 
 
 if __name__ == "__main__":

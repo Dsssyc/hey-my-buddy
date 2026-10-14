@@ -209,6 +209,8 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "buddy",
                 "buddyLocked",
                 "delegationAuthority",
+                "leadOwnership",
+                "ownedMicroTasks",
                 "hostConclusion",
                 "quotaWarnings",
                 "quotaFailure",
@@ -425,7 +427,7 @@ def task_brief(view: dict) -> dict:
         buddy = lineage.get("buddy")
         if isinstance(buddy, dict):
             brief["buddy"] = _pick(buddy, ("harness", "provider", "model", "effort"))
-        brief.update(_pick(lineage, ("kind", "parentRunId")))
+        brief.update(_pick(lineage, ("kind", "parentRunId", "leadOwnership")))
     workflow = view.get("workflow")
     if isinstance(workflow, dict):
         brief["workflow"] = _pick(
@@ -463,7 +465,7 @@ def list_brief(response: dict) -> dict:
             buddy = lineage.get("buddy")
             if isinstance(buddy, dict) and buddy.get("model"):
                 entry["model"] = buddy["model"]
-            entry.update(_pick(lineage, ("kind", "parentRunId", "currentHostId")))
+            entry.update(_pick(lineage, ("kind", "parentRunId", "currentHostId", "leadOwnership")))
         workflow = row.get("workflow") if isinstance(row.get("workflow"), dict) else {}
         title = _title(row.get("task") or (row.get("spec") or {}).get("task"), workflow.get("resultSummary"))
         explicit = workflow.get("title")

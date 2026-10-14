@@ -13,10 +13,11 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
-from support import BoardTestCase, wait_for
+from support import BoardTestCase, enable_fixture_buddy, wait_for
 from console.test_console import Browser
 
 GIT_ENV = {
@@ -183,6 +184,10 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             self.assertNotIn("sidecarWritten", activity_meta)
             attempt_directory = self.directory / "attempts" / run_id / turn["attemptId"]
             self.assertFalse((attempt_directory / "activity.json").exists())
+            bindings = [json.loads(line) for log in self.directory.rglob("fixture-agent.log")
+                        for line in log.read_text().splitlines() if '"workflow-binding"' in line]
+            self.assertEqual(len(bindings), 1)
+            self.assertEqual(bindings[0]["launcherEnvKeys"], [])
 
             # The final acceptance is separate from execution and bound to the
             # actual sealed artifact, with its explicit integration decision.
@@ -220,7 +225,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             )
             self.assertEqual(code, 1)
             self.assertEqual(refused["error"]["code"], "UNAUTHORIZED")
-            # A scoped caller can never use a Host control file.
+            # A control file cannot make an invalid execution credential valid.
             code, refused = self.cli(
                 "decide",
                 json.dumps(
@@ -236,7 +241,62 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                 env=env,
             )
             self.assertEqual(code, 1)
-            self.assertEqual(refused["error"]["code"], "FORBIDDEN")
+            self.assertEqual(refused["error"]["code"], "UNAUTHORIZED")
+
+
+    def test_ordinary_harness_launcher_has_no_board_or_agent_file(self):
+        from hey_my_buddy.buddy.harnesses.runtime_selection import controller_environment
+        from hey_my_buddy.buddy.harnesses.dsh.acp.launch import child_environment
+        board = self.board()
+        enable_fixture_buddy(board.store, BUDDY)
+        submitted = board.call("workflow_submit", {
+            **BUDDY, "requestId": "ordinary-launcher", "hostId": "host-1", "task": "run the mock turn",
+            "cwd": str(self.repo), "executionWorkspace": {"kind": "existing", "access": "write"},
+        })
+        board.call("worker_register", {"workerId": "ordinary-worker", "capabilities": ["dsh"]})
+        response = board.call("worker_claim", {"workerId": "ordinary-worker",
+                                               "claimRequestId": "ordinary-claim",
+                                               "runId": submitted["runId"], "nonce": "o" * 16})
+        credential = self.directory / "ordinary-credential.json"
+        credential.write_text(json.dumps({"token": response["claim"]["agentCredential"]}))
+        credential.chmod(0o600)
+        incoming = {**self.child_environment(self.env()), "HMB_AGENT_CREDENTIAL_FILE": str(credential)}
+        controller = controller_environment(self.directory, incoming,
+                                            turn_input=response["claim"]["turn"]["input"])
+        child = child_environment(source=controller)
+        self.assertNotIn("HMB_STATE_DIR", child)
+        self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", child)
+
+    def test_lead_harness_launcher_reaches_the_private_issuing_board(self):
+        from hey_my_buddy.buddy.harnesses.runtime_selection import controller_environment
+        from hey_my_buddy.buddy.harnesses.dsh.acp.launch import child_environment
+        enable_fixture_buddy(self.board().store, BUDDY)
+        with self.daemon(env=self.env()):
+            code, submitted = self.cli("submit", json.dumps({
+                **BUDDY, "requestId": "launcher-private", "hostId": "host-1", "task": "run the mock turn",
+                "cwd": str(self.repo), "submissionToken": "l" * 32, "delegationAuthority": True,
+                "executionWorkspace": {"kind": "existing", "access": "full", "accessReason": "Lead tasks"},
+            }), env=self.env())
+            self.assertEqual(code, 0, submitted)
+            code, registered = self.cli("worker-register", json.dumps({"workerId": "launcher-worker", "capabilities": ["dsh"]}), env=self.env())
+            self.assertEqual(code, 0, registered)
+            code, response = self.cli("worker-claim", json.dumps({"workerId": "launcher-worker", "claimRequestId": "launcher-claim",
+                                                                  "runId": submitted["runId"], "nonce": "n" * 16}), env=self.env())
+            self.assertEqual(code, 0, response)
+            credential = self.directory / "launcher-credential.json"
+            credential.write_text(json.dumps({"token": response["claim"]["agentCredential"]}))
+            credential.chmod(0o600)
+            incoming = {**self.child_environment(self.env()), "HMB_AGENT_CREDENTIAL_FILE": str(credential)}
+            controller = controller_environment(self.directory, incoming,
+                                                turn_input=response["claim"]["turn"]["input"])
+            environment = child_environment(source=controller)
+            self.assertEqual(environment["HMB_STATE_DIR"], str(self.directory))
+            self.assertEqual(environment["HMB_AGENT_CREDENTIAL_FILE"], str(credential))
+            launcher = Path(__file__).resolve().parents[4] / "src/hey_my_buddy/install/launcher.py"
+            result = subprocess.run([sys.executable, str(launcher), "get", json.dumps({"runId": submitted["runId"], "output": "full"})],
+                                    env=environment, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(json.loads(result.stdout)["runId"], submitted["runId"])
 
 
 class ConsoleWorkflowRouteTests(MicroTaskWorkerTestCase):

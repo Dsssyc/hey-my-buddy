@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[4]
 class RolePromptTests(unittest.TestCase):
     def test_wrap_up_prompt_is_packaged_beside_worker_role_text(self):
         prompt = prompts.wrap_up_prompt()
+        self.assertEqual(prompt, resource_path("roles.wrap_up").read_text(encoding="utf-8"))
         self.assertIn("The Host has stopped this micro task", prompt)
         self.assertIn("Do not continue implementation", prompt)
         self.assertIn("normal structured Worker outcome", prompt)

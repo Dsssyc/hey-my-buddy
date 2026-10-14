@@ -24,4 +24,4 @@ def router_prompt(call_text: str) -> str:
 
 def wrap_up_prompt() -> str:
     """One short continuation of the interrupted Worker session."""
-    return resource_path("roles.worker").with_name("wrap_up.txt").read_text(encoding="utf-8")
+    return resource_path("roles.wrap_up").read_text(encoding="utf-8")

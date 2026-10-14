@@ -8,6 +8,7 @@ import time
 from typing import Callable, Mapping, TYPE_CHECKING
 
 from ...errors import BoardError
+from ...protocol.stop import WRAP_UP_INITIATORS
 from ..harnesses.base import (
     Adapter,
     AdapterOutcome,
@@ -104,7 +105,7 @@ def stop_termination_reason(*, shutdown_confirmed: bool, stop_initiator: str | N
         return "wrap-up"
     if grace_expired:
         return "grace-expired"
-    if stop_initiator == "host":
+    if stop_initiator in WRAP_UP_INITIATORS:
         return "forced-stop"
     if stop_initiator == "console":
         return "console-stop"
@@ -132,7 +133,7 @@ def worker_stop(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle, *,
     """Route the first stop request through the selected executor's policy."""
     with handle.stop_lock:
         if handle.force_stop_requested or (handle.cancel_requested and
-                (not handle.wrap_up_started or stop_initiator == "host")):
+                (not handle.wrap_up_started or stop_initiator in WRAP_UP_INITIATORS)):
             return
         handle.stop_initiator = stop_initiator
         if handle.cancel_requested:
@@ -140,7 +141,7 @@ def worker_stop(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle, *,
         executor.stop(handle, stop_initiator=stop_initiator, grace_deadline=grace_deadline)
 
 
-def start_wrap_up(handle: ProcessHandle, deadline: float) -> None:
+def start_wrap_up(handle: ProcessHandle, deadline: float, *, stop_initiator: str = "host") -> None:
     """Interrupt the current native turn once, with its bounded wrap-up intent."""
     from .turn_io import private_json
     from .run_execution import _STOP_CONTROL
@@ -150,7 +151,7 @@ def start_wrap_up(handle: ProcessHandle, deadline: float) -> None:
         "kind": "host-wrap-up", "graceDeadline": deadline,
         "binding": handle.role_run_identity.to_payload(),
     }, exclusive=True)
-    handle.stop_initiator = "host"
+    handle.stop_initiator = stop_initiator
     handle.wrap_up_started = True
     handle.grace_deadline = deadline
     handle.cancel_requested = True

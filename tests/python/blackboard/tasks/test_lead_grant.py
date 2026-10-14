@@ -81,8 +81,7 @@ class LeadGrantTests(WorkflowTestCase):
         self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
         self.assertEqual(board.store.count_tasks(), 0)
 
-    def test_grant_is_persisted_readable_and_frozen_without_routing_or_new_credentials(self):
-        from hey_my_buddy.blackboard.tasks.workflow import AGENT_OPERATIONS
+    def test_grant_is_persisted_readable_and_frozen_with_lead_authority(self):
         from hey_my_buddy.json_codec import decode_strict_json
         board = self.board()
         submitted = self.grant(board)
@@ -96,19 +95,12 @@ class LeadGrantTests(WorkflowTestCase):
         claimed = self.claim(board)
         self.assertTrue(claimed["claim"]["turn"]["input"]["context"]["delegationAuthority"])
         self.assertEqual(claimed["claim"]["turn"]["input"]["executionWorkspace"]["access"], "full")
-        with self.assertRaises(BoardError) as caught:
-            board.call("workflow_submit", self.params(requestId="forged",
-                       credential=claimed["claim"]["agentCredential"]))
-        self.assertEqual(caught.exception.code, "FORBIDDEN")
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT delegation_authority FROM workflow_runs").fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 0)
             event = decode_strict_json(db.execute(
                 "SELECT payload_json FROM events WHERE kind='workflow.delegation_authority_granted'").fetchone()[0])
             self.assertEqual(event, {"actor": "host:host", "buddy": BUDDY})
-            scopes = decode_strict_json(db.execute("SELECT scopes_json FROM agent_credentials").fetchone()[0])
-            self.assertEqual(set(scopes), AGENT_OPERATIONS)
-            self.assertNotIn("workflow_submit", scopes)
 
     def test_absent_or_false_grant_has_one_identity_and_no_authority(self):
         board = self.board()

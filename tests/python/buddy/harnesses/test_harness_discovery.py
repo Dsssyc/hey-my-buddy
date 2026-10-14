@@ -12,9 +12,32 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.buddy.harnesses import discovery
+from hey_my_buddy.buddy.harnesses.runtime_selection import (
+    LEAD_LAUNCHER, controller_environment, worker_launcher_environment,
+)
 
 
 class HarnessDiscoveryTests(unittest.TestCase):
+    def test_launcher_binding_comes_from_frozen_turn_context(self):
+        source = {"HMB_STATE_DIR": "/private/board", "HMB_AGENT_CREDENTIAL": "secret",
+                  "HMB_AGENT_CREDENTIAL_FILE": "/private/attempt/credential.json",
+                  "HMB_RUNTIME_ROOT": "/private/runtime", "HMB_DEV_SOURCE": "1",
+                  LEAD_LAUNCHER: "1"}
+        ordinary = controller_environment(Path("/private/attempt"), source,
+                                          turn_input={"context": {"delegationAuthority": False}})
+        self.assertNotIn(LEAD_LAUNCHER, ordinary)
+        self.assertEqual(worker_launcher_environment(ordinary), {})
+        lead = controller_environment(Path("/private/attempt"), source,
+                                      turn_input={"context": {"delegationAuthority": True}})
+        self.assertEqual(lead[LEAD_LAUNCHER], "1")
+        self.assertEqual(worker_launcher_environment(lead), {
+            "HMB_STATE_DIR": "/private/board",
+            "HMB_AGENT_CREDENTIAL_FILE": "/private/attempt/credential.json",
+            "HMB_RUNTIME_ROOT": "/private/runtime",
+            "HMB_DEV_SOURCE": "1",
+        })
+        self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", discovery.native_environment(source))
+
     def test_claude_reports_native_provider_and_unknown_billing_without_refusal(self):
         for account, provider in (({"loggedIn": True, "apiProvider": "bedrock", "authMethod": "api_key"}, "bedrock"),
                                   ({"loggedIn": True, "apiProvider": "firstParty"}, "anthropic"),

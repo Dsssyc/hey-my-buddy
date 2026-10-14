@@ -59,6 +59,18 @@ class UpgradeFixtureTests(unittest.TestCase):
         for path, _ in bindings:
             self.assertEqual(path.read_bytes(), before[path])
 
+    def test_upgrade_removes_stored_scopes_and_preserves_credentials(self):
+        fixture, connection = self.restored()
+        columns = [row[1] for row in connection.execute('PRAGMA table_info(agent_credentials)') if row[1] != 'scopes_json']
+        projection = ','.join(columns)
+        before = [tuple(row) for row in connection.execute(f'SELECT {projection} FROM agent_credentials ORDER BY credential_id')]
+        self.assertTrue(before)
+        connection.close()
+        board_upgrade.migrate(fixture['state'])
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as current:
+            self.assertEqual([row[1] for row in current.execute('PRAGMA table_info(agent_credentials)')], columns)
+            self.assertEqual(list(current.execute(f'SELECT {projection} FROM agent_credentials ORDER BY credential_id')), before)
+
     def test_failed_upgrade_leaves_native_bindings_byte_for_byte_unchanged(self):
         fixture, connection = self.restored()
         bindings = self.native_bindings(fixture['state'])
@@ -216,6 +228,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             fresh_schema = [tuple(row) for row in baseline.execute(
                 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
             self.assertEqual(source_schema, fresh_schema)
+            self.assertEqual(upgraded.execute('SELECT COUNT(*) FROM workflow_lead_tasks').fetchone()[0], 0)
             self.assertEqual({row[0] for row in upgraded.execute(
                 'SELECT delegation_authority FROM workflow_runs')}, {0})
             migrated_columns = {row[1] for row in upgraded.execute('PRAGMA table_info(attempts)')}

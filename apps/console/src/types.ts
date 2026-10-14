@@ -208,7 +208,7 @@ export type Task = {
   activity?: TaskActivity | null;
   /** Recorded real termination cause when the task view carries it directly. */
   terminationReason?: string | null;
-  stopInitiator?: "host" | "console" | "service" | "unknown" | null;
+  stopInitiator?: "host" | "lead" | "console" | "service" | "unknown" | null;
   graceDeadline?: string | null;
   /** First durable cancellation event for this run, when recorded. */
   cancellation?: { actor: string | null; reason: string | null } | null;
@@ -245,7 +245,7 @@ export type AttemptReceipt = {
   result?: Record<string, unknown> | null;
   error?: string | null;
   terminationReason?: string | null;
-  stopInitiator?: "host" | "console" | "service" | "unknown" | null;
+  stopInitiator?: "host" | "lead" | "console" | "service" | "unknown" | null;
   graceDeadline?: string | null;
   /** Native usage of exactly this execution; null or absent means unknown. */
   tokenUsage?: TokenUsage | null;

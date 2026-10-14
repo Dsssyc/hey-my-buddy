@@ -19,6 +19,7 @@ from ...errors import BoardError
 from ...json_codec import decode_strict_json
 from ...private_dirs import context_root, native_root, ensure_private_dir
 from ...protocol import usage
+from ...protocol.stop import WRAP_UP_INITIATORS
 from ..harnesses.base import AdapterOutcome, ExecutionContext, ProcessHandle
 from ..harnesses.controller import (
     STRICT_RESULT_BYTES, collect_controller, launch_controller, read_strict_result,
@@ -421,7 +422,9 @@ def _launch(control: dict, context: ExecutionContext, *, environment: dict,
         prepare=lambda: (
             [sys.executable, "-m", "hey_my_buddy.buddy.roles.run_controller", "--control", str(path)],
             control["cwd"], controller_environment(context.directory, environment,
-                                                  read_only=control["operation"] in ("fast", "review"))),
+                                                  read_only=control["operation"] in ("fast", "review"),
+                                                  turn_input=(context.turn_input if control["operation"] == "worker"
+                                                              else None))),
         log_paths=context.log_paths(), timeout_seconds=control["timeoutSeconds"],
         grace_seconds=grace_seconds)
     if control["timeoutSeconds"] is None:
@@ -741,10 +744,10 @@ class WorkerRunExecutor:
 
     def stop(self, handle: ProcessHandle, *, stop_initiator: str,
              grace_deadline: float | None) -> None:
-        if (stop_initiator == "host" and grace_deadline is not None
+        if (stop_initiator in WRAP_UP_INITIATORS and grace_deadline is not None
                 and self.description.interrupted_resume):
             from .controller import start_wrap_up
-            start_wrap_up(handle, grace_deadline)
+            start_wrap_up(handle, grace_deadline, stop_initiator=stop_initiator)
         else:
             handle.force_stop_requested = True
             self.cancel(handle)

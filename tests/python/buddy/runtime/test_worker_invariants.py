@@ -189,6 +189,15 @@ class DurableStopObservationTests(unittest.TestCase):
         self.assertEqual(handle.grace_deadline, deadline)
         stop.assert_called_once()
 
+    def test_lead_stop_passes_its_durable_deadline_to_the_role(self):
+        view = {"cancelRequested": True, "stopInitiator": "lead", "graceDeadline":
+                (datetime.now(timezone.utc) + timedelta(seconds=300)).isoformat()}
+        renewal, handle, _executor = self.renewal(view)
+        with mock.patch.object(worker_module.role_seam, "worker_stop") as stop:
+            self.assertFalse(renewal._cancel_observed())
+        self.assertEqual(stop.call_args.kwargs["stop_initiator"], "lead")
+        self.assertGreater(stop.call_args.kwargs["grace_deadline"], 0)
+
     def test_console_escalation_stops_immediately_using_the_executor_default(self):
         view = {"cancelRequested": True, "stopInitiator": "console", "graceDeadline": "old deadline"}
         renewal, handle, executor = self.renewal(view)

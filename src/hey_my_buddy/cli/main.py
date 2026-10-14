@@ -467,10 +467,6 @@ def _apply_control(params: object, method: str) -> dict:
     """
     if not isinstance(params, dict):
         raise BoardError("INVALID_ARGUMENT", "params must be a JSON object")
-    if _agent_credential() is not None:
-        if "controlFile" in params:
-            raise BoardError("FORBIDDEN", "an attempt-scoped credential cannot use a Host control file")
-        return params
     prepared = dict(params)
     path_value = prepared.pop("controlFile", None)
     if path_value is None:
@@ -692,8 +688,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.method == "await":
             from .blocking import WaitAbandoned, await_run, recovery_commands
 
+            credential = _agent_credential()
+            def wait_service(method, parameters, directory):
+                return _call_service(method, {**parameters, **({"credential": credential} if credential is not None else {})}, directory)
             try:
-                result = await_run(params, state_dir=state_dir)
+                result = await_run(params, state_dir=state_dir, service=wait_service, scoped=credential is not None)
             except WaitAbandoned as abandoned:
                 print(_dumps(_abandoned(abandoned, recovery_commands(abandoned.request_id, abandoned.run_id))))
                 return 1
@@ -705,9 +704,7 @@ def main(argv: list[str] | None = None) -> int:
                 params["credential"] = credential
             prepared = _apply_control(params, args.method)
             if args.method == "submit" and not prepared.get("submissionToken"):
-                # An agent-scoped caller must never mint Host authority.
-                if credential is None:
-                    prepared["submissionToken"] = _submission_token(prepared.get("requestId"), prepared, state_dir)
+                prepared["submissionToken"] = _submission_token(prepared.get("requestId"), prepared, state_dir)
             result = _call_service(args.method, prepared, state_dir)
             if isinstance(result, dict):
                 _scrub_and_save(result, state_dir)

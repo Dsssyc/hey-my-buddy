@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ...protocol import activity as activity_module
+from ...protocol.stop import WRAP_UP_INITIATORS
 from ..harnesses.registry import ExecutionContext, supported_capabilities
 from ..roles import controller as role_seam
 from ...protocol.client import BoardClient, new_nonce
@@ -978,7 +979,7 @@ class _Renewal(threading.Thread):
         current = self.handle.stop_initiator
         if not self.handle.cancel_requested or current != initiator:
             deadline = None
-            if initiator == "host" and view.get("graceDeadline") is not None:
+            if initiator in WRAP_UP_INITIATORS and view.get("graceDeadline") is not None:
                 remaining = (datetime.fromisoformat(view["graceDeadline"].replace("Z", "+00:00"))
                              - datetime.now(timezone.utc)).total_seconds()
                 deadline = time.monotonic() + max(0, remaining)

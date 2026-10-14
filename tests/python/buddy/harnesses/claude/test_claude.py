@@ -591,7 +591,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(stat.S_IMODE(context.credential_file().stat().st_mode), 0o600)
         self.assertEqual(context.environment["HMB_AGENT_CREDENTIAL_FILE"], str(context.credential_file()))
         self.assertNotIn("private-attempt-secret", json.dumps(outcome.to_report()))
-        # The allowlisted native child environment never sees Buddy credentials.
+        # Ordinary native Worker children do not receive launcher credentials or roots.
         state = self.fixture_state()
         self.assertEqual(state["seenBuddyEnv"], ["HMB_CLAUDE_FIXTURE_CASE", "HMB_CLAUDE_FIXTURE_STATE"])
         self.assertEqual(state["seenAnthropicEnv"], [])

@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from ...protocol import schemas
+from ...protocol.stop import WRAP_UP_INITIATORS
 from . import host_conclusions
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
@@ -77,6 +78,16 @@ AGENT_RUN_BOUND_OPERATIONS = frozenset(
         "message_update",
         "inquiry_observe",
     }
+)
+
+#: Additional Host operations for a granted run's execution credential only.
+LEAD_OPERATIONS = frozenset({
+    "workflow_submit", "workflow_decide", "workflow_continue", "workflow_cancel",
+    "workflow_accept", "workflow_conclude", "workflow_reclaim", "workflow_scope_amend",
+    "workflow_workspace_resolve", "task_list", "task_wait", "message_wait", "events_wait",
+})
+LEAD_OWNED_OPERATIONS = LEAD_OPERATIONS - {"workflow_submit"} | (
+    AGENT_RUN_BOUND_OPERATIONS - {"workflow_suggest", "message_update"}
 )
 
 TURN_INPUT_VERSION = 1
@@ -597,6 +608,15 @@ class WorkflowCoordinator:
             "SELECT * FROM workflow_children WHERE parent_run_id=? ORDER BY created_at, child_task_id LIMIT ?",
             (run_row["run_id"], MAX_CHILD_VIEW + 1),
         ).fetchall()
+        owned = connection.execute(
+            "SELECT l.*, r.state FROM workflow_lead_tasks l JOIN workflow_runs r ON r.run_id=l.owned_run_id"
+            " WHERE l.lead_run_id=? ORDER BY l.created_at,l.owned_run_id LIMIT ?",
+            (run_row["run_id"], MAX_CHILD_VIEW + 1),
+        ).fetchall()
+        owned_total = connection.execute("SELECT COUNT(*) FROM workflow_lead_tasks WHERE lead_run_id=?",
+                                         (run_row["run_id"],)).fetchone()[0]
+        ownership = connection.execute("SELECT * FROM workflow_lead_tasks WHERE owned_run_id=?",
+                                       (run_row["run_id"],)).fetchone()
         artifacts = connection.execute(
             "SELECT * FROM workflow_artifacts WHERE run_id=? ORDER BY created_at DESC LIMIT ?",
             (run_row["run_id"], MAX_ARTIFACT_VIEW + 1),
@@ -642,6 +662,7 @@ class WorkflowCoordinator:
             "turns": max(0, turn_total - MAX_ACTIVE_TURNS_VIEW),
             "requests": max(0, request_total - MAX_REQUEST_VIEW),
             "children": max(0, child_total - MAX_CHILD_VIEW),
+            "ownedMicroTasks": max(0, owned_total - MAX_CHILD_VIEW),
             "artifacts": max(0, artifact_total - MAX_ARTIFACT_VIEW),
             "pendingRequests": max(0, open_count - MAX_REQUEST_VIEW),
         }
@@ -677,6 +698,11 @@ class WorkflowCoordinator:
             "buddy": self._buddy(run_row),
             "buddyLocked": bool(run_row["buddy_locked"]),
             "delegationAuthority": bool(run_row["delegation_authority"]),
+            "leadOwnership": ({"leadRunId": ownership["lead_run_id"], "leadTurnId": ownership["lead_turn_id"],
+                               "createdAt": ownership["created_at"]} if ownership is not None else None),
+            "ownedMicroTasks": [{"runId": row["owned_run_id"], "leadTurnId": row["lead_turn_id"],
+                                 "createdAt": row["created_at"], "state": row["state"]}
+                                for row in owned[:MAX_CHILD_VIEW]],
             "buddyRevision": run_row["buddy_revision"],
             "quotaWarnings": warnings(connection, self._buddy(run_row), now=self.now()),
             "routing": self._routing_view(connection, run_row, now=projection_now),
@@ -697,6 +723,7 @@ class WorkflowCoordinator:
                 "requests": request_total,
                 "openRequests": open_count,
                 "children": child_total,
+                "ownedMicroTasks": owned_total,
                 "artifacts": artifact_total,
             },
             "truncated": truncated,
@@ -840,6 +867,10 @@ class WorkflowCoordinator:
         expected = self.db.control_token_verifier(control["controlToken"])
         if not hmac.compare_digest(expected, run_row["control_verifier"]):
             raise BoardError("UNAUTHORIZED", "Invalid control capability for this run")
+        scope = current_scope()
+        if scope is not None and scope["kind"] == AGENT_KIND:
+            self._active_credential(connection, scope)
+            return f"lead:{scope['runId']}", "lead"
         return f"host:{control['hostId']}", "host"
 
     def _expect_revision(self, run_row, expected: int | None) -> None:
@@ -854,6 +885,13 @@ class WorkflowCoordinator:
             )
 
     # -- scoped credentials --------------------------------------------------
+    @staticmethod
+    def _active_credential(connection, scope: dict) -> None:
+        """Fence a prepared mutation against execution revocation at commit."""
+        if connection.execute("SELECT 1 FROM agent_credentials WHERE credential_id=? AND state='active'",
+                              (scope["credentialId"],)).fetchone() is None:
+            raise BoardError("UNAUTHORIZED", "The Lead execution credential was revoked before the operation committed")
+
     def role_for(self, connection, payload: dict) -> str | None:
         """Classify a run as a parent run or a helper run."""
         row = connection.execute(
@@ -868,7 +906,9 @@ class WorkflowCoordinator:
         verifier = self.db.agent_token_verifier(token)
         with self.db.read() as connection:
             row = connection.execute(
-                "SELECT * FROM agent_credentials WHERE token_verifier=? AND state='active'", (verifier,)
+                "SELECT c.*, r.delegation_authority FROM agent_credentials c"
+                " JOIN workflow_runs r ON r.run_id=c.run_id"
+                " WHERE c.token_verifier=? AND c.state='active'", (verifier,)
             ).fetchone()
         if row is None:
             raise BoardError(
@@ -886,21 +926,21 @@ class WorkflowCoordinator:
             "attemptId": row["attempt_id"],
             "generation": row["generation"],
             "turnId": row["turn_id"],
+            "delegationAuthority": bool(row["delegation_authority"]),
         }
 
     def authorize_agent_operation(self, operation: str, params: dict, scope: dict) -> None:
         """Enforce the permitted operation set of an attempt-scoped credential."""
-        if operation not in AGENT_OPERATIONS:
+        lead = scope["delegationAuthority"]
+        if operation not in AGENT_OPERATIONS | (LEAD_OPERATIONS if lead else frozenset()):
             raise BoardError(
                 "FORBIDDEN",
-                f"An attempt-scoped credential cannot call {operation}; it may observe its own task and record "
-                "suggestions, but it cannot submit tasks, create helpers, approve, take over, cancel, write "
-                "evaluations or control other runs",
+                f"This attempt-scoped credential cannot call {operation}",
                 operation=operation,
             )
-        if operation not in AGENT_RUN_BOUND_OPERATIONS:
+        if operation not in AGENT_RUN_BOUND_OPERATIONS | LEAD_OWNED_OPERATIONS:
             return
-        target = params.get("runId") or params.get("taskId")
+        targets = [params[key] for key in ("runId", "taskId") if params.get(key)]
         selectors = (
             ("requestId", "SELECT task_id FROM tasks WHERE request_id=?"),
             ("attemptId", "SELECT task_id FROM attempts WHERE attempt_id=?"),
@@ -908,19 +948,29 @@ class WorkflowCoordinator:
         )
         with self.db.read() as connection:
             for key, query in selectors:
-                if target is not None:
-                    break
+                # A decision request belongs to the bound run; its handler checks
+                # that request and any helper target through the existing tree.
+                if operation == "workflow_decide" and key == "requestId":
+                    continue
                 value = params.get(key)
                 if isinstance(value, str) and value:
                     row = connection.execute(query, (value,)).fetchone()
-                    target = row["task_id"] if row is not None else "__unknown__"
-        if target is not None and target != scope["runId"]:
-            raise BoardError(
-                "FORBIDDEN",
-                "An attempt-scoped credential can only address its own run, whatever selector it supplies",
-                runId=scope["runId"],
-            )
-        if target is None:
+                    targets.append(row["task_id"] if row is not None else "__unknown__")
+            for target in targets:
+                own = operation in AGENT_RUN_BOUND_OPERATIONS and target == scope["runId"]
+                owned = lead and operation in LEAD_OWNED_OPERATIONS and connection.execute(
+                    "SELECT 1 FROM workflow_lead_tasks WHERE owned_run_id=? AND lead_run_id=?",
+                    (target, scope["runId"]),
+                ).fetchone() is not None
+                if not (own or owned):
+                    raise BoardError("FORBIDDEN", "An execution credential can only address its own permitted runs, whatever selector it supplies",
+                                     runId=scope["runId"])
+        if not targets:
+            if operation == "task_list":
+                # The list query binds every returned row to this Lead's ownership.
+                return
+            if operation not in AGENT_RUN_BOUND_OPERATIONS:
+                raise BoardError("FORBIDDEN", "A Lead operation requires an owned micro task target")
             params["runId"] = scope["runId"]
 
     # -- workspace reservations ---------------------------------------------
@@ -1480,6 +1530,7 @@ class WorkflowCoordinator:
         presentation: dict | None = None,
         buddyLocked: bool = False,
         delegationAuthority: bool = False,
+        lead: dict | None = None,
         now: str,
     ) -> str:
         """Insert the run, its reservation and its pinned input manifest.
@@ -1493,7 +1544,10 @@ class WorkflowCoordinator:
         presentation = presentation or {}
         if delegationAuthority:
             self._require_enabled_buddy(connection, buddy)
-        macro_task_id = attach_macro_task(connection, presentation, spec=spec, host_id=hostId, manifest=manifest, now=now)
+        if lead is not None:
+            self._active_credential(connection, lead)
+        macro_task_id = (self._run_row(connection, lead["runId"])["macro_task_id"] if lead is not None else
+                         attach_macro_task(connection, presentation, spec=spec, host_id=hostId, manifest=manifest, now=now))
         connection.execute(
             "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier, micro_task_json,"
             " micro_task_fingerprint, request_fingerprint, submission_verifier, execution_workspace_json,"
@@ -1517,6 +1571,13 @@ class WorkflowCoordinator:
         )
         connection.execute("UPDATE workflow_runs SET macro_task_id=?,title=?,buddy_locked=?,delegation_authority=? WHERE run_id=?",
                            (macro_task_id, presentation.get("title"), int(buddyLocked), int(delegationAuthority), run_id))
+        if lead is not None:
+            connection.execute(
+                "INSERT INTO workflow_lead_tasks(owned_run_id,lead_run_id,lead_turn_id,created_at) VALUES(?,?,?,?)",
+                (run_id, lead["runId"], lead["turnId"], now),
+            )
+            self.board._append_event(connection, "workflow.lead_task_created", task_id=run_id,
+                                     payload={"leadRunId": lead["runId"], "leadTurnId": lead["turnId"]})
         if delegationAuthority:
             self.board._append_event(connection, "workflow.delegation_authority_granted", task_id=run_id,
                                      payload={"actor": f"host:{hostId}", "buddy": buddy})
@@ -1581,7 +1642,16 @@ class WorkflowCoordinator:
         returned only for the original owner generation and only to the caller that
         still presents the same submission capability.
         """
+        scope = current_scope()
+        lead = scope if scope is not None and scope["kind"] == AGENT_KIND else None
+        if lead is not None:
+            for field in ("hostId", "owner", "macroTask", "macroTaskId", "macroTaskOf"):
+                if field in params:
+                    raise BoardError("INVALID_ARGUMENT", f"A Lead submission derives {field} from its execution credential", field=field)
+            params = {**params, "hostId": f"lead:{lead['runId']}"}
         normalized = schemas.normalize_workflow_submit(params)
+        if lead is not None and normalized["delegationAuthority"]:
+            raise BoardError("FORBIDDEN", "A Lead cannot grant delegationAuthority to an owned micro task")
         request_id = normalized["requestId"]
         spec = normalized["spec"]
         host_id = normalized["hostId"]
@@ -1597,6 +1667,11 @@ class WorkflowCoordinator:
         with self.db.read() as connection:
             existing = connection.execute("SELECT * FROM tasks WHERE request_id=?", (request_id,)).fetchone()
             if existing is not None:
+                if lead is not None and connection.execute(
+                    "SELECT 1 FROM workflow_lead_tasks WHERE owned_run_id=? AND lead_run_id=?",
+                    (existing["task_id"], lead["runId"]),
+                ).fetchone() is None:
+                    raise BoardError("FORBIDDEN", "This requestId belongs to a micro task outside the Lead's ownership")
                 run_row = self._run_optional(connection, existing["task_id"])
                 if run_row is None:
                     raise BoardError(
@@ -1655,6 +1730,7 @@ class WorkflowCoordinator:
                             "presentation": normalized["presentation"],
                             "buddyLocked": normalized["buddyLocked"],
                             "delegationAuthority": normalized["delegationAuthority"],
+                            "lead": lead,
                         },
                     )
                 except BoardError as error:
@@ -1670,6 +1746,10 @@ class WorkflowCoordinator:
                                 and run_row is not None
                                 and task["input_fingerprint"] == fingerprint
                                 and run_row["request_fingerprint"] == request_fingerprint
+                                and (lead is None or connection.execute(
+                                    "SELECT 1 FROM workflow_lead_tasks WHERE owned_run_id=? AND lead_run_id=?",
+                                    (run_row["run_id"], lead["runId"]),
+                                ).fetchone() is not None)
                             )
                             if not identical:
                                 # A different input for the same requestId is a conflict, never
@@ -3525,10 +3605,10 @@ class WorkflowCoordinator:
             "SELECT * FROM attempts WHERE task_id=? AND (execution_state!='finished' OR shutdown_confirmed!=1)",
             (task_id,),
         ).fetchall():
-            if attempt["cancel_requested_at"] is not None and initiator == "host":
+            if attempt["cancel_requested_at"] is not None and initiator in WRAP_UP_INITIATORS:
                 continue
             deadline = attempt["grace_deadline"]
-            if (wrap_up and initiator == "host" and attempt["adapter"] != "external"
+            if (wrap_up and initiator in WRAP_UP_INITIATORS and attempt["adapter"] != "external"
                     and self._execution_adapter(attempt["adapter"]).interrupted_resume
                     and attempt["execution_state"] in ("starting", "executing")):
                 deadline = (datetime.fromisoformat(now.replace("Z", "+00:00")) + timedelta(seconds=WRAP_UP_SECONDS)).isoformat(
@@ -6252,7 +6332,7 @@ class WorkflowCoordinator:
         )
         connection.execute(
             "INSERT INTO agent_credentials(credential_id, run_id, task_id, attempt_id, generation, turn_id,"
-            " token_verifier, scopes_json, state, created_at) VALUES(?,?,?,?,?,?,?,?,'active',?)",
+            " token_verifier, state, created_at) VALUES(?,?,?,?,?,?,?,'active',?)",
             (
                 f"cred-{attempt_id}",
                 run_row["run_id"],
@@ -6261,7 +6341,6 @@ class WorkflowCoordinator:
                 generation,
                 turn_id,
                 self.db.agent_token_verifier(token),
-                canonical_json(sorted(AGENT_OPERATIONS)),
                 now,
             ),
         )
