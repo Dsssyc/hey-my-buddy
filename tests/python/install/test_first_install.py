@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -171,16 +172,17 @@ class DocumentationTests(unittest.TestCase):
         text = OPERATIONS.read_text()
         self.assertIn("hey_my_buddy.protocol.rpc_config", text)
         self.assertIn("## Installation", text)
-        for fragment in ("~/.agents/skills/buddy", "~/.claude/skills/buddy", "scripts/buddy install",
+        for fragment in ("~/.agents/skills/hey-my-buddy", "~/.claude/skills/hey-my-buddy", "scripts/hey-my-buddy install",
                          "packaging/build-skill.py", "codex plugin remove"):
             self.assertIn(fragment, text)
         self.assertNotIn("codex plugin add", text)
 
     def test_readmes_keep_first_install_parity(self):
+        version = re.search(r'^version = "([^"]+)"', (ROOT / "pyproject.toml").read_text(), re.MULTILINE).group(1)
         for name in ("README.md", "README.zh-CN.md"):
             text = (ROOT / name).read_text()
-            self.assertIn("uvx hey-my-buddy@0.21.0 install", text, name)
-            self.assertIn("~/.agents/skills/buddy", text, name)
+            self.assertIn(f"uvx hey-my-buddy@{version} install", text, name)
+            self.assertIn("~/.agents/skills/hey-my-buddy", text, name)
             self.assertIn("docs/reference/operations.md#installation", text, name)
             self.assertNotIn("codex plugin add", text, name)
 
