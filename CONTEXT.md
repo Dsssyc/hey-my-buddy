@@ -42,6 +42,10 @@ _Avoid_: sub-Host, coordinator, orchestrator, manager, supervisor
 **委派权 / delegation authority**:
 The right to act as Host for the micro tasks created under one micro task. A Host grants it together with that micro task, only at the user's request. It covers no other micro task and no shared setting, and a Lead cannot grant it to anyone.
 
+**名下的微任务 / owned micro task**:
+A micro task a Lead delegates under the micro task that carries delegation authority. It belongs to that micro task, not to the buddy executing it, so it stays there when that micro task changes hands. The Lead decides its boundaries and accepts it; the Host does neither.
+_Avoid_: child task, sub-task; a helper is a different thing
+
 **Router buddy**:
 The buddy acting with routing authority. The user lists one or more buddies for the role in order, and the first available one holds it. It works in three planes: it chooses the Worker buddy for a micro task within the routing bounds, it maintains evaluations from recorded outcomes, and it builds model profiles from public sources. When the role passes to the next buddy in the list, all three planes pass with it. Unlike a Worker's result, its output takes effect without Host acceptance; the blackboard checks it for bounds and structure only. Short form: Router.
 _Avoid_: decision Buddy, selector (for the buddy)
