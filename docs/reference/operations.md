@@ -101,6 +101,8 @@ The new board carries the Router list, mode, budget preset and retry interval; e
 
 When the new service fails to start or verify, the old board and its files are restored from the archive and the previous runtime is started; the archive stays. To look at an archive, copy it to another private directory, decompress the board, copy the archived `state/` beside it and open that directory with the runtime of `archivedFrom.sourceCommit`; the current version does not open it.
 
+The old board also left Git references in every repository it worked in, under `refs/buddy/`: they pin the sealed outputs that the archived records name, so they belong to the archive. The upgrade never touches a user's repositories; the current version keeps its own references under `refs/hey-my-buddy/`, does not list the old ones, and storage reclamation does not remove them. When an archive is no longer wanted, delete them in each such repository with `git for-each-ref --format='delete %(refname)' refs/buddy/ | git update-ref --stdin`.
+
 Verification boundary: the sequence was rehearsed in process on a private copy of the daily installation's last verified backup, with a refusal for each precondition and for a history file changed after archiving. With real service processes it has run on a fresh board in an empty private home: once to completion from 0.34.1, and once from a previous version without a recorded commit, which was refused with the old service untouched. It has not run on a board with history outside the in-process rehearsal.
 
 ## Launcher, sandbox and environment
