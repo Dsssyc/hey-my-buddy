@@ -57,7 +57,7 @@ def _inventory(store) -> list[dict]:
             # provenance. Never infer ownership from an app title or path.
             if row['execution_state'] != 'finished' or not row['shutdown_confirmed']:
                 continue
-            if native.get('storageOwner') not in {'harness-user-store', 'buddy-micro-task'}:
+            if native.get('storageOwner') not in {'harness-user-store', 'hey-my-buddy-micro-task'}:
                 continue
             checkpoint = result.get('nativeCheckpoint')
             checkpoint_bound = (isinstance(checkpoint, dict) and checkpoint.get('version') == 1

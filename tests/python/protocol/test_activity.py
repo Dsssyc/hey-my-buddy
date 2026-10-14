@@ -28,16 +28,16 @@ from hey_my_buddy.buddy.runtime.worker import Worker, _Renewal
 #: Inherited variables that would otherwise point a test subprocess at a production
 #: runtime, a Worker identity or an agent credential instead of this private root.
 SANITIZED_VARIABLES = (
-    "BUDDY_STATE_DIR",
-    "BUDDY_RUNTIME_ROOT",
-    "BUDDY_RUNTIME",
-    "BUDDY_RUNTIME_IDENTITY",
-    "BUDDY_WORKER_STATE",
-    "BUDDY_WORKER_ID",
-    "BUDDY_TASK_ID",
-    "BUDDY_ATTEMPT_ID",
-    "BUDDY_AGENT_CREDENTIAL",
-    "BUDDY_AGENT_CREDENTIAL_FILE",
+    "HMB_STATE_DIR",
+    "HMB_RUNTIME_ROOT",
+    "HMB_RUNTIME",
+    "HMB_RUNTIME_IDENTITY",
+    "HMB_WORKER_STATE",
+    "HMB_WORKER_ID",
+    "HMB_TASK_ID",
+    "HMB_ATTEMPT_ID",
+    "HMB_AGENT_CREDENTIAL",
+    "HMB_AGENT_CREDENTIAL_FILE",
     "VIRTUAL_ENV",
     "UV_PROJECT_ENVIRONMENT",
 )
@@ -50,9 +50,9 @@ def private_environment(directory: Path, **extra: str) -> dict:
     values = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES}
     values.update(
         {
-            "BUDDY_STATE_DIR": str(directory),
-            "BUDDY_RUNTIME_ROOT": str(directory / "runtime-root"),
-            "BUDDY_DEV_SOURCE": "1",
+            "HMB_STATE_DIR": str(directory),
+            "HMB_RUNTIME_ROOT": str(directory / "runtime-root"),
+            "HMB_DEV_SOURCE": "1",
             "VIRTUAL_ENV": "",
             "PYTHONPATH": os.pathsep.join([str(SOURCE_ROOT), str(TEST_ROOT)]),
             **extra,
@@ -381,9 +381,9 @@ class WorkerActivityForwarding(BoardTestCase):
                                generation=attempt["generation"], invocation_id="activity-invocation",
                                turn_id="activity-turn", input_sha256="f" * 64)
         endpoint = ctl.CTwoLiveEndpoint(identity, LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
-                                       contract, instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                                       contract, instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         channel = ctl.CTwoLiveChannel(identity, contract, name="Activity Fixture",
-                                     address="ipc://activity-fixture", instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                                     address="ipc://activity-fixture", instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.addCleanup(lambda: endpoint.close(reason="fixture-finished"))
         self.addCleanup(lambda: channel.close(reason="fixture-finished"))
         def connect(*args, timeout, **kwargs):

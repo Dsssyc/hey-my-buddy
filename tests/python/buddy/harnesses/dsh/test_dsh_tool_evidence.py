@@ -169,10 +169,10 @@ class DshReceiptSeamTests(unittest.TestCase):
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64}
         self.outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [], "artifacts": [], "request": None}
-        self.native = "mcp__buddy_x__buddy_finish_turn"
+        self.native = "mcp__buddy_x__hey_my_buddy_finish_turn"
 
     def test_the_finish_receipt_verifies_and_binds_identity_through_the_dsh_name(self):
-        raw = respond({"id": 1, "method": "tools/call", "params": {"name": "buddy_finish_turn", "arguments": self.outcome}},
+        raw = respond({"id": 1, "method": "tools/call", "params": {"name": "hey_my_buddy_finish_turn", "arguments": self.outcome}},
                       self.bridge)["result"]["content"][0]["text"]
         self.assertEqual(verify_finish_receipt(raw, self.bridge, validate_outcome)["outcome"], self.outcome)
         other = {**self.bridge, "identity": {**self.bridge["identity"], "attemptId": "other"}}
@@ -182,17 +182,17 @@ class DshReceiptSeamTests(unittest.TestCase):
 
     def test_a_tampered_refusal_envelope_fails_its_signature_through_the_dsh_name(self):
         envelope = {"version": 1, "kind": "tool-refusal", "identity": self.bridge["identity"],
-                    "inputSha256": self.bridge["inputSha256"], "tool": "buddy_finish_turn",
+                    "inputSha256": self.bridge["inputSha256"], "tool": "hey_my_buddy_finish_turn",
                     "reason": "invalid-arguments", "detail": "the turn request references are invalid",
                     "receiptId": "f" * 32}
         envelope["signature"] = sign_receipt(envelope, self.bridge["key"])
         raw = json.dumps(envelope)
         self.assertTrue(refusal_shaped(raw))
-        self.assertEqual(verify_tool_refusal(raw, self.bridge, self.native, ("buddy_finish_turn",))["tool"],
-                         "buddy_finish_turn")
+        self.assertEqual(verify_tool_refusal(raw, self.bridge, self.native, ("hey_my_buddy_finish_turn",))["tool"],
+                         "hey_my_buddy_finish_turn")
         tampered = json.dumps({**envelope, "detail": "changed after signing"})
         with self.assertRaises(NativeError) as error:
-            verify_tool_refusal(tampered, self.bridge, self.native, ("buddy_finish_turn",))
+            verify_tool_refusal(tampered, self.bridge, self.native, ("hey_my_buddy_finish_turn",))
         self.assertEqual(error.exception.code, "invalid-tool-refusal")
         self.assertIn("signature", str(error.exception))
 

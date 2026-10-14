@@ -221,7 +221,7 @@ class CatalogTests(unittest.TestCase):
     def test_explicit_validation_does_not_select_or_guess_an_effort(self):
         class Harness:
             model_discovery = True
-        with tempfile.TemporaryDirectory(prefix="buddy-catalog-test-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-catalog-test-") as temporary:
             directory = Path(temporary)
             file = directory / "catalog.json"
             file.write_text(json.dumps(self.payload()))

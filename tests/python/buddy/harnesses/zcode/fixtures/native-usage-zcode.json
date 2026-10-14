@@ -12,7 +12,7 @@
       "occurredAt": "2026-09-26T12:00:00Z",
       "sessionId": "sess-fixture-0001",
       "turnId": "turn-fixture-0001",
-      "sourceCommandId": "buddy-fixture-input",
+      "sourceCommandId": "hey-my-buddy-fixture-input",
       "kind": "usage.delta",
       "requestId": "req-fixture-0001",
       "providerId": "fixture-api",

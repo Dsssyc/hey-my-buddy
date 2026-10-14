@@ -148,7 +148,7 @@ class SchemaWorkerTests(NativeRunCase):
         # frames without editing that microtask's native files.
         with mock.patch.dict(RUN_SEAMS, {"claude": native_run}), \
                 mock.patch.object(native_run, "prepare_run_services", return_value=None, create=True):
-            frame, code = run_controller.execute(control, threading.Event(), state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+            frame, code = run_controller.execute(control, threading.Event(), state_dir=Path(os.environ["HMB_STATE_DIR"]))
         result = decode_run_result(frame)
         request = decode_run_request((root / "request.json").read_bytes())
         verdict = json.loads((root / "verdict.json").read_bytes())
@@ -220,7 +220,7 @@ class SchemaWorkerTests(NativeRunCase):
                 error.discovery_shutdown_confirmed = stopped
                 with mock.patch.dict(RUN_SEAMS, {"claude": native_run}), \
                         mock.patch.object(native_run, "run_discovery", side_effect=error):
-                    frame, code = run_controller.execute(control, threading.Event(), state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                    frame, code = run_controller.execute(control, threading.Event(), state_dir=Path(os.environ["HMB_STATE_DIR"]))
                 payload = json.loads(frame)
                 self.assertEqual(code, 1)
                 self.assertEqual(payload["error"], "tokenSource none")
@@ -232,9 +232,9 @@ class SchemaWorkerTests(NativeRunCase):
         # pins the full assembled prompt, including the published Worker text.
         hashes = {
             "codex": ("b46e2bd89c8d171059f35ad52c7c97c8b98fd32bc49382da1c299b4d0d500f1a",
-                      "bfe9d49b529fae37a598265f04979c7590161c3bfbb55bd823ffc154822a65b1"),
+                      "c622f607ce8db225e6ae7d01ef3f4079406868ff17333b5342ed5c86668d7bf0"),
             "claude": ("ff7983882b2a1adefe1cad314fec9c009086ca2ae3fd38d33fe9fddf248f9bca",
-                       "6216a2d312b1bb9cd887e15c6781e39ee176ad1d52f347411b653721a97ac7a1"),
+                       "f508ab6757415e03a44a6f95138018d4eb7d2b2b4e9581d455500e9b383eaef9"),
         }
         for name, (schema_hash, prompt_hash) in hashes.items():
             with self.subTest(harness=name):

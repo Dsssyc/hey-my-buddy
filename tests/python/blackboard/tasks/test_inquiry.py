@@ -91,7 +91,7 @@ class JournalOwner:
             "activity": [{"at": "2026-10-07T00:00:00.000Z", "kind": "tool_call", "toolName": "bash"}],
         }
         capabilities = LiveCapabilities(inquiry_delivery="cooperative-checkpoint")
-        self.endpoint = CTwoLiveEndpoint(identity, capabilities, WorkerRuntimeLive, token=self.token, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+        self.endpoint = CTwoLiveEndpoint(identity, capabilities, WorkerRuntimeLive, token=self.token, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.lock = threading.RLock()
         self.stopping = threading.Event()
         self.errors = []
@@ -175,12 +175,12 @@ class JournalOwner:
     def deliver_inquiries(self, receipt, tool_call_id):
         # Fixture source facts only; verification of native signed receipts is C1.
         for entry in receipt["inquiries"]:
-            self.append({**entry, "state": "delivered", "via": "tool:buddy_checkpoint",
+            self.append({**entry, "state": "delivered", "via": "tool:hey_my_buddy_checkpoint",
                          "toolCallId": tool_call_id})
 
     def record_answer(self, receipt, tool_call_id):
         self.append({"inquiryId": receipt["inquiryId"], "state": "answered",
-                     "answer": {"text": receipt["answer"], "via": "tool:buddy_answer_inquiry",
+                     "answer": {"text": receipt["answer"], "via": "tool:hey_my_buddy_answer_inquiry",
                                 "toolCallId": tool_call_id}})
 
     def withdraw(self, question_id):
@@ -235,7 +235,7 @@ def attach_owner(case, board, client, task, adapter):
     case.assertIsInstance(getattr(board.store, "live_registry", None), LiveRegistry)
     board.store.live_registry = LiveRegistry(board.store, lambda frame: CTwoLiveChannel(
         frame.identity, WorkerRuntimeLive, name=frame.name, address=frame.address,
-        instance_id=frame.instance_id, token=frame.live_token, state_dir=Path(os.environ["BUDDY_STATE_DIR"])))
+        instance_id=frame.instance_id, token=frame.live_token, state_dir=Path(os.environ["HMB_STATE_DIR"])))
     attachment = {"workerId": worker_id, "workerInstance": worker_instance,
                   "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": nonce,
                   "identity": identity.to_payload(), "instanceId": owner.endpoint.instance_id,
@@ -368,13 +368,13 @@ class TestInquiry(BoardTestCase):
                                      "startsNewTurn": False, "extendsDeadline": False, "supported": True}})
             + "\n"
             + json.dumps({**bound, "inquiryId": "q-real", "state": "delivered",
-                          "deliveredAt": "2026-10-07T05:00:00.000Z", "via": "tool:buddy_checkpoint",
+                          "deliveredAt": "2026-10-07T05:00:00.000Z", "via": "tool:hey_my_buddy_checkpoint",
                           "toolCallId": "call-41"})
             + "\n"
             + json.dumps({**bound, "inquiryId": "q-real", "state": "answered",
                           "answeredAt": "2026-10-07T05:00:04.000Z",
                           "answer": {"text": "the tests are still running", "bytes": 27,
-                                     "via": "tool:buddy_answer_inquiry", "toolCallId": "call-42",
+                                     "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": "call-42",
                                      "at": "2026-10-07T05:00:04.000Z", "truncated": False}})
             + "\n"
         )
@@ -383,7 +383,7 @@ class TestInquiry(BoardTestCase):
             message = client.get_message("q-real", runId=task["runId"])
             self.assertEqual(message["state"], "answered")
             self.assertEqual(message["answer"]["text"], "the tests are still running")
-            self.assertEqual(message["answer"]["via"], "tool:buddy_answer_inquiry")
+            self.assertEqual(message["answer"]["via"], "tool:hey_my_buddy_answer_inquiry")
             self.assertEqual(message["answer"]["toolCallId"], "call-42")
             self.assertEqual(message["answer"]["at"], "2026-10-07T05:00:04.000Z")
             self.assertEqual(message["answer"]["source"], "bridge-journal")
@@ -406,10 +406,10 @@ class TestInquiry(BoardTestCase):
         journal = Path(bridge.directory) / "inquiry.results.jsonl"
         journal.write_text(
             json.dumps({**bound, "inquiryId": "q-empty", "state": "delivered",
-                        "via": "tool:buddy_checkpoint", "toolCallId": "call-1"})
+                        "via": "tool:hey_my_buddy_checkpoint", "toolCallId": "call-1"})
             + "\n"
             + json.dumps({**bound, "inquiryId": "q-empty", "state": "answered",
-                          "via": "tool:buddy_answer_inquiry"})
+                          "via": "tool:hey_my_buddy_answer_inquiry"})
             + "\n"
         )
         try:
@@ -577,7 +577,7 @@ class TestInquiry(BoardTestCase):
             "version": 1, "taskId": "another-task", "attemptId": "another-attempt", "generation": 0,
             "turnId": "other-turn", "inquiryId": "q-foreign", "state": "answered",
             "answer": {"text": "answer that belongs to a different run"},
-            "via": "tool:buddy_answer_inquiry",
+            "via": "tool:hey_my_buddy_answer_inquiry",
         }) + "\n")
         try:
             result = board.call(
@@ -678,7 +678,7 @@ class TestInquiry(BoardTestCase):
         client = board.client()
         task, attempt, owner = self._attempt_directory(board, client)
         owner.append({"inquiryId": "q-terminal", "state": "answered",
-                      "answer": {"text": "durable history", "via": "tool:buddy_answer_inquiry",
+                      "answer": {"text": "durable history", "via": "tool:hey_my_buddy_answer_inquiry",
                                  "toolCallId": "terminal-answer"}})
         owner.append({"inquiryId": "q-foreign-terminal", "taskId": "foreign-task", "state": "answered",
                       "answer": {"text": "foreign history"}})
@@ -871,7 +871,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         journal.write_text(json.dumps({
             "version": 1, "taskId": task["runId"], "attemptId": attempt["attemptId"],
             "generation": attempt["generation"], "turnId": bridge.identity.turn_id,
-            "inquiryId": "q-empty", "state": "answered", "via": "tool:buddy_answer_inquiry",
+            "inquiryId": "q-empty", "state": "answered", "via": "tool:hey_my_buddy_answer_inquiry",
         }) + "\n")
         board.call("inquiry_observe", {
             "runId": task["runId"], "inquiryId": "q-empty", "question": "status?",
@@ -976,7 +976,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
                          "generation": attempt["generation"], "turnId": bridge.identity.turn_id,
                          "inquiryId": f"q{index}", "state": "answered",
                          "answer": {"text": "x" * 4000, "bytes": 4000,
-                                    "via": "tool:buddy_answer_inquiry", "toolCallId": f"call-{index}",
+                                    "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": f"call-{index}",
                                     "at": "2026-10-06T00:00:00Z", "truncated": False}})
         journal = Path(bridge.journal_path)
         journal.write_text("".join(json.dumps(row) + "\n" for row in rows))
@@ -1056,7 +1056,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
                  "generation": attempt["generation"], "turnId": bridge.identity.turn_id,
                  "inquiryId": "q-last", "state": "answered",
                  "answer": {"text": "owned answer", "bytes": 12,
-                            "via": "tool:buddy_answer_inquiry"}}
+                            "via": "tool:hey_my_buddy_answer_inquiry"}}
         journal.write_text(json.dumps(foreign) + "\n" + json.dumps(valid) + "\n")
         result = board.call("inquiry_observe", {
             "runId": task["runId"], "inquiryId": "q-last", "question": "probe",

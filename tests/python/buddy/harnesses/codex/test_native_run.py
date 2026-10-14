@@ -67,7 +67,7 @@ REVIEW_SCHEMA = answer_schema(["legal"])
 
 def activity_endpoint(identity):
     return CTwoLiveEndpoint(identity, EXISTING_CAPABILITIES["codex"], HarnessRunLive,
-                            instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                            instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
 
 
 def observed_activity(endpoint, identity):
@@ -80,11 +80,11 @@ class SeamCase(unittest.TestCase):
     """The shared private environment for direct seam calls."""
 
     def setUp(self):
-        developer_source = mock.patch.dict(os.environ, {"BUDDY_DEV_SOURCE": "1"})
+        developer_source = mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1"})
         developer_source.start()
         self.addCleanup(developer_source.stop)
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-codex-seam-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-seam-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
         self.cwd = self.base / "checkout"
@@ -93,16 +93,16 @@ class SeamCase(unittest.TestCase):
         self.home.mkdir()
         (self.home / "auth.json").write_text('{"fixture": "fake-auth-only"}')
         self.environment = {key: value for key, value in os.environ.items()
-                            if not key.startswith("BUDDY_") and key not in
+                            if not key.startswith("HMB_") and key not in
                             ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "OPENAI_API_KEY", "CODEX_API_KEY")}
         self.environment.update(HOME=str(self.base), CODEX_HOME=str(self.home),
-                                BUDDY_STATE_DIR=str(self.base / "state"),
-                                BUDDY_RUNTIME_ROOT=str(self.base / "runtime"))
+                                HMB_STATE_DIR=str(self.base / "state"),
+                                HMB_RUNTIME_ROOT=str(self.base / "runtime"))
         os.environ.update(self.environment)
 
     def set_case(self, case: str) -> None:
-        os.environ["BUDDY_CODEX_FIXTURE_CASE"] = case
-        self.addCleanup(os.environ.pop, "BUDDY_CODEX_FIXTURE_CASE", None)
+        os.environ["HMB_CODEX_FIXTURE_CASE"] = case
+        self.addCleanup(os.environ.pop, "HMB_CODEX_FIXTURE_CASE", None)
 
     def halt_reported_unconfirmed(self):
         """Run the real group halt once, then record its confirmation as unconfirmed.
@@ -148,7 +148,7 @@ class SeamCase(unittest.TestCase):
             with self.subTest(provider=configured, scope=scope):
                 if configured is not None:
                     (self.home / 'config.toml').write_text(f'model_provider = "{configured}"\n')
-                trace = Path(os.environ['BUDDY_CODEX_FIXTURE_STATE'])
+                trace = Path(os.environ['HMB_CODEX_FIXTURE_STATE'])
                 before = trace.read_bytes() if trace.exists() else None
                 marker = uuid.uuid4().hex
                 catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / ('discovery-' + marker),
@@ -189,8 +189,8 @@ class FastSeamTests(SeamCase):
         FIXTURE.chmod(0o755)
         FAST_FIXTURE.chmod(0o755)
         os.environ.update(self.environment)
-        os.environ["BUDDY_CODEX_CLI"] = str(FAST_FIXTURE)
-        os.environ["BUDDY_CODEX_FIXTURE_STATE"] = str(self.base / "fast-trace.json")
+        os.environ["HMB_CODEX_CLI"] = str(FAST_FIXTURE)
+        os.environ["HMB_CODEX_FIXTURE_STATE"] = str(self.base / "fast-trace.json")
         cache = {"client_version": "0.157.0", "models": [{
             "slug": "fixture-model", "display_name": "Fixture", "shell_type": "unified_exec",
             "apply_patch_tool_type": "freeform", "experimental_supported_tools": ["clock"],
@@ -312,7 +312,7 @@ class FastSeamTests(SeamCase):
         correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = run(request, observer=correction.observer, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
         self.assertEqual(trace["home"], str(self.home))
         self.assertEqual(trace["userHome"], str(self.base))
         overrides = [trace["argv"][index + 1] for index, item in enumerate(trace["argv"][:-1]) if item == "-c"]
@@ -331,7 +331,7 @@ class FastSeamTests(SeamCase):
         self.assertEqual(result.value.raw, '{"buddyId": "legal"}')
         # Both root turns are listed as native roots of this one run.
         self.assertEqual(len(result.tool_evidence.value["nativeIdentity"]), 2)
-        trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
         self.assertEqual([turn["input"][0]["text"] for turn in trace["turns"]],
                          ["Pick a buddy",
                           "Pick a buddy\n\nFormat correction: answer-invalid-json" + CORRECTION_SUFFIX])
@@ -446,14 +446,14 @@ class FastSeamTests(SeamCase):
         self.assertEqual(result.end.reason_code, "buddy-mismatch")
         self.assertIsNone(result.model_started)
         self.assertEqual(native_run.native_evidence(result)["nativeThreadReceipt"]["model"], "other")
-        trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
         self.assertNotIn("turns", trace)
 
     def test_fast_provider_mismatch_refuses_and_unreadable_provider_continues(self):
         for case in ("provider-wrong", "provider-missing", "provider-unreadable"):
             with self.subTest(case=case):
                 result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a buddy"))
-                trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+                trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
                 if case == "provider-wrong":
                     self.assertEqual(result.end.reason_code, "buddy-mismatch")
                     self.assertIsNone(result.model_started)
@@ -505,7 +505,7 @@ class FastSeamTests(SeamCase):
         garbage = self.base / "not-a-cli"
         garbage.write_bytes(b"\x00\x01not an executable")
         garbage.chmod(0o755)
-        os.environ["BUDDY_CODEX_CLI"] = str(garbage)
+        os.environ["HMB_CODEX_CLI"] = str(garbage)
         request = self.request(tool_scope="none", output_schema=FAST_SCHEMA,
                                prompt="Pick a buddy", timeout=5)
         correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
@@ -534,7 +534,7 @@ class FastSeamTests(SeamCase):
         # The bounded native refusal message rides beside the machine code.
         self.assertEqual(result.end.message,
                          "Codex rejected turn/start: model not found")
-        trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
         self.assertEqual(trace["thread"]["model"], "fixture-model")
         evidence = native_run.native_evidence(result)
         self.assertIs(evidence["selectedModelListed"], False)
@@ -548,8 +548,8 @@ class CodexSeamCase(SeamCase):
         super().setUp()
         FIXTURE.chmod(0o755)
         os.environ.update(self.environment)
-        os.environ["BUDDY_CODEX_CLI"] = str(FIXTURE)
-        os.environ["BUDDY_CODEX_FIXTURE_STATE"] = str(self.base / "trace.json")
+        os.environ["HMB_CODEX_CLI"] = str(FIXTURE)
+        os.environ["HMB_CODEX_FIXTURE_STATE"] = str(self.base / "trace.json")
 
     def worker_run(self, case: str, *, continuation=None, timeout: int = 12,
                    observer=None, input_text: str = "fixture micro task task", live=None, level="write"):
@@ -581,7 +581,7 @@ class ProviderReceiptSeamTests(CodexSeamCase):
                 result = getattr(self, mode + "_run")("provider-wrong")
                 self.assertEqual(result.end.reason_code, code)
                 self.assertIsNone(result.model_started)
-                trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+                trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
                 self.assertTrue(all("turnRequests" not in thread for thread in trace["threads"].values()))
 
     def test_worker_and_review_unreadable_provider_continues(self):
@@ -599,7 +599,7 @@ class ProviderReceiptSeamTests(CodexSeamCase):
         result = self.worker_run("provider-wrong", continuation=continuation)
         self.assertEqual(result.end.reason_code, "buddy-mismatch")
         self.assertIsNone(result.model_started)
-        trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
         thread = trace["threads"][first.native_identity.session_id]
         self.assertEqual(len(thread["turnRequests"]), 1)
         self.assertEqual(len(thread["resumeRequests"]), 1)
@@ -649,9 +649,9 @@ class ReviewSeamTests(CodexSeamCase):
         pairs = [prep.command[index + 1].split("=", 1)
                  for index, value in enumerate(prep.command[:-1]) if value == "-c"]
         self.assertEqual({key for key, _ in pairs},
-                         {"web_search", "approval_policy", "default_permissions", "permissions.buddy-router"})
-        profile = tomllib.loads("value = " + dict(pairs)["permissions.buddy-router"])["value"]
-        expected = tomllib.loads(native_run.read_only_config(str(self.cwd)))["permissions"]["buddy-router"]
+                         {"web_search", "approval_policy", "default_permissions", "permissions.hey-my-buddy-router"})
+        profile = tomllib.loads("value = " + dict(pairs)["permissions.hey-my-buddy-router"])["value"]
+        expected = tomllib.loads(native_run.read_only_config(str(self.cwd)))["permissions"]["hey-my-buddy-router"]
         self.assertEqual(profile, expected)
         self.assertEqual(profile["filesystem"][str(self.cwd.resolve())], "read")
         result = self.review_run("ok")
@@ -711,14 +711,14 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(result.native_identity.session_id,
                          package["nativeIdentity"][0]["sessionId"])
         policy = result.effective_policy.tools
-        self.assertEqual(policy.requested.value, {"permissions": "buddy-router", "approvalPolicy": "never"})
+        self.assertEqual(policy.requested.value, {"permissions": "hey-my-buddy-router", "approvalPolicy": "never"})
         # The read-back native configuration — the acknowledged state, with its
         # own filesystem grant for this checkout — is the retained evidence.
         retained = {ref.kind: ref for ref in result.evidence_refs}
         readback = json.loads(Path(retained["review-config-readback"].location).read_text())
-        filesystem = readback["config"]["permissions"]["buddy-router"]["filesystem"]
+        filesystem = readback["config"]["permissions"]["hey-my-buddy-router"]["filesystem"]
         self.assertEqual(filesystem[str(self.cwd.resolve())], "read")
-        thread = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())["threads"][result.native_identity.session_id]
+        thread = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())["threads"][result.native_identity.session_id]
         self.assertIs(thread["start"]["ephemeral"], True)
         for name in ("baseInstructions", "environments", "dynamicTools", "selectedCapabilityRoots", "allowProviderModelFallback"):
             self.assertNotIn(name, thread["start"])
@@ -764,8 +764,8 @@ class ReviewSeamTests(CodexSeamCase):
                 if check == "threadReceipt":
                     self.assertIs(facts["nativePolicy"]["sandbox"]["networkAccess"], True)
                 else:
-                    self.assertIs(facts["nativeConfigPolicy"]["permissions"]["buddy-router"]["network"]["enabled"], True)
-                trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+                    self.assertIs(facts["nativeConfigPolicy"]["permissions"]["hey-my-buddy-router"]["network"]["enabled"], True)
+                trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
                 self.assertTrue(all("turnRequests" not in thread for thread in trace["threads"].values()))
 
     def test_unreadable_review_model_continues_with_unknown_checked_model(self):
@@ -783,7 +783,7 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(result.end.reason_code, "readonly-configuration-mismatch")
         self.assertIsNone(result.model_started)
         self.assertEqual(native_run.native_evidence(result)["nativePolicy"]["model"], "different-model")
-        trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
         self.assertTrue(all("turnRequests" not in thread for thread in trace["threads"].values()))
 
     def test_review_without_read_only_sandbox_is_refused_before_model_input(self):
@@ -796,7 +796,7 @@ class ReviewSeamTests(CodexSeamCase):
                 facts = native_run.native_evidence(result)
                 self.assertIn("nativePolicy", facts)
                 self.assertEqual(facts["policyCheck"]["threadReceipt"]["status"], "unknown")
-                trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+                trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
                 self.assertTrue(all("turnRequests" not in thread for thread in trace["threads"].values()))
 
     def test_review_unknown_item_shapes_continue_through_bounded_capture(self):
@@ -849,7 +849,7 @@ class WorkerSeamTests(CodexSeamCase):
                 with mock.patch.object(run_execution, "worker_request", return_value=(
                         request, self.worker_services(), lambda _facts: FEEDBACK_CONTINUE, None)):
                     frame, code = run_controller.execute(control, threading.Event(),
-                                                         Path(os.environ["BUDDY_STATE_DIR"]))
+                                                         Path(os.environ["HMB_STATE_DIR"]))
                 result = decode_run_result(frame)
                 self.assertEqual(code, 0, result.end.message)
                 sandbox, policy = self.expected_worker_policy(level)
@@ -858,7 +858,7 @@ class WorkerSeamTests(CodexSeamCase):
                 self.assertEqual(native_run.native_evidence(result)["nativePolicy"], policy)
                 self.assertEqual(facts["nativeEvidence"]["workerPermission"]["permission"],
                                  permission.to_payload())
-                trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+                trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
                 thread = trace["threads"][result.native_identity.session_id]
                 self.assertEqual(thread["start"]["sandbox"], sandbox)
                 self.assertEqual(thread["start"]["approvalPolicy"], "never")
@@ -879,7 +879,7 @@ class WorkerSeamTests(CodexSeamCase):
                 sandbox, policy = self.expected_worker_policy(after)
                 self.assertEqual(second.effective_policy.tools.requested.value, policy)
                 self.assertEqual(native_run.native_evidence(second)["nativePolicy"], policy)
-                trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+                trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
                 thread = trace["threads"][previous]
                 self.assertEqual(thread["resumeRequests"][-1]["sandbox"], sandbox)
                 self.assertEqual(thread["resumeRequests"][-1]["approvalPolicy"], "never")
@@ -962,7 +962,7 @@ class WorkerSeamTests(CodexSeamCase):
                                              "networkAccess": True}, "approvalPolicy": "never"}
         self.assertEqual(result.effective_policy.tools.requested.value, expected_policy)
         self.assertEqual(native_run.native_evidence(result)["nativePolicy"], expected_policy)
-        trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
         thread = trace["threads"][result.native_identity.session_id]
         self.assertEqual(thread["turnRequests"], [{"cwd": str(self.cwd), **expected_policy}])
         self.assertEqual(thread["start"]["sandbox"], "workspace-write")
@@ -1000,7 +1000,7 @@ class WorkerSeamTests(CodexSeamCase):
                      services=RunServices(), cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.buddy.checked.provider.value, "fixture-provider")
-        state = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        state = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
         thread = state["threads"][result.native_identity.session_id]
         self.assertEqual(thread["start"]["modelProvider"], "fixture-provider")
         self.assertNotIn("ephemeral", thread["start"])
@@ -1236,7 +1236,7 @@ class WorkerSeamTests(CodexSeamCase):
         expected_policy = {"sandboxPolicy": {"type": "workspaceWrite", "writableRoots": [str(self.cwd)],
                                              "networkAccess": True}, "approvalPolicy": "never"}
         self.assertEqual(second.effective_policy.tools.requested.value, expected_policy)
-        trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
         self.assertEqual(trace["threads"][previous]["turnRequests"],
                          [{"cwd": str(self.cwd), **expected_policy}] * 2)
 
@@ -1244,7 +1244,7 @@ class WorkerSeamTests(CodexSeamCase):
         first = self.worker_run('ok')
         self.assertEqual(first.end.status, 'ok', first.end.message)
         previous = first.native_identity.session_id
-        path = Path(os.environ['BUDDY_CODEX_FIXTURE_STATE'])
+        path = Path(os.environ['HMB_CODEX_FIXTURE_STATE'])
         before = json.loads(path.read_text())
         result = self.worker_run(case, timeout=2, continuation=RunContinuation(
             mode='native-session', previous_session_id=previous))
@@ -1402,8 +1402,8 @@ class DiscoveryBoundaryTests(unittest.TestCase):
     """Private commands and the actual public probe/owned-creation boundaries."""
 
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix='buddy-codex-discovery-boundary-',
-                                                dir=os.environ.get('BUDDY_CHECKS_TMPDIR', '/tmp'))
+        temporary = tempfile.TemporaryDirectory(prefix='hey-my-buddy-codex-discovery-boundary-',
+                                                dir=os.environ.get('HMB_CHECKS_TMPDIR', '/tmp'))
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name)
         self.command = self.base / 'native.py'
@@ -1411,8 +1411,8 @@ class DiscoveryBoundaryTests(unittest.TestCase):
         self.home = self.base / 'home'
         self.home.mkdir()
         environment = {**os.environ, 'HOME': str(self.home), 'CODEX_HOME': str(self.home / '.codex')}
-        environment.pop('BUDDY_CODEX_CLI', None)
-        environment.pop('BUDDY_HARNESS_RECORD_FILE', None)
+        environment.pop('HMB_CODEX_CLI', None)
+        environment.pop('HMB_HARNESS_RECORD_FILE', None)
         self.environment = environment
         context = mock.patch.dict(os.environ, environment, clear=True)
         context.start()
@@ -1594,9 +1594,9 @@ class DiscoverySeamTests(SeamCase):
         super().setUp()
         FIXTURE.chmod(0o755)
         os.environ.update(self.environment)
-        os.environ["BUDDY_CODEX_CLI"] = str(FIXTURE)
-        os.environ["BUDDY_CODEX_FIXTURE_STATE"] = str(self.base / "discovery-trace.json")
-        self.addCleanup(os.environ.pop, "BUDDY_CODEX_FIXTURE_CASE", None)
+        os.environ["HMB_CODEX_CLI"] = str(FIXTURE)
+        os.environ["HMB_CODEX_FIXTURE_STATE"] = str(self.base / "discovery-trace.json")
+        self.addCleanup(os.environ.pop, "HMB_CODEX_FIXTURE_CASE", None)
 
     def discover(self, marker: str):
         self.set_case("bad-catalog")
@@ -1733,7 +1733,7 @@ class CatalogTrustTests(CodexSeamCase):
         self.assertEqual(result.end.reason_code, "native-rpc-error")
         self.assertEqual(result.end.message,
                          "Codex rejected turn/start: model not found: fixture-model")
-        state = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        state = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
         thread = next(iter(state["threads"].values()))
         self.assertEqual(thread["model"], "fixture-model")
         self.assertEqual(thread["rejectedTurns"],
@@ -1789,8 +1789,8 @@ class CatalogTrustTests(CodexSeamCase):
         self.assertEqual(result.end.reason_code, "invalid-buddy")
         self.assertIn("not in the current native catalog", result.end.message)
         # The refusal precedes any native thread, and records no absence fact.
-        state = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text()) \
-            if Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).exists() else {"threads": {}}
+        state = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text()) \
+            if Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).exists() else {"threads": {}}
         self.assertEqual(state["threads"], {})
         self.assertIsNone(result.model_started)
         self.assertFalse(any(ref.kind == "model-check" for ref in result.evidence_refs))
@@ -1804,8 +1804,8 @@ class CatalogTrustTests(CodexSeamCase):
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "invalid-buddy")
         self.assertIn("not in the current native catalog", result.end.message)
-        state = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text()) \
-            if Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).exists() else {"threads": {}}
+        state = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text()) \
+            if Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).exists() else {"threads": {}}
         self.assertEqual(state["threads"], {})
         self.assertIsNone(result.model_started)
         self.assertFalse(any(ref.kind == "model-check" for ref in result.evidence_refs))

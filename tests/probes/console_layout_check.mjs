@@ -22,7 +22,7 @@ try {
   // display. Only a synthetic response is extended, never a board response.
   await page.route('**/api/console', async route => {
     const response = await route.fetch();
-    assert.equal(response.headers()['x-buddy-preview'], 'synthetic-fixture-data');
+    assert.equal(response.headers()['x-hey-my-buddy-preview'], 'synthetic-fixture-data');
     const snapshot = await response.json();
     snapshot.consoleAccess = { requireLogin: true, revision: 2, sessions: Array.from({ length: 16 }, (_, i) => ({
       id: i.toString(16).padStart(24, '0'), lastSeen: 1_790_582_400 + i, current: i === 0,
@@ -32,7 +32,7 @@ try {
   for (const [width, height] of [[1280, 720], [1440, 900], [390, 720]]) {
     await page.setViewportSize({ width, height });
     const response = await page.goto(new URL(`?layout=${width}#buddy`, base).href);
-    assert.equal(response.headers()['x-buddy-preview'], 'synthetic-fixture-data');
+    assert.equal(response.headers()['x-hey-my-buddy-preview'], 'synthetic-fixture-data');
     await page.getByRole('region', { name: '路由状态', exact: true }).getByRole('button', { name: '详情', exact: true }).click();
     for (const name of ['DSH', 'ZCode', 'Codex', 'Claude Code']) {
       await page.getByRole('button', { name: `${name} 检测详情`, exact: true }).click();

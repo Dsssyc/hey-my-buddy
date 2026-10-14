@@ -17,7 +17,7 @@ class WorkspaceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        temporary = tempfile.TemporaryDirectory(prefix="buddy-workspace-repository-")
+        temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-workspace-repository-")
         cls.addClassCleanup(temporary.cleanup)
         fixture = cls(methodName="runTest")
         fixture.repo = Path(temporary.name) / "repo"
@@ -26,7 +26,7 @@ class WorkspaceTests(unittest.TestCase):
         cls._repository_template = fixture.repo
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-workspace-")
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-workspace-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.repo = self.root / "repo"
@@ -368,7 +368,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_symbolic_input_reference_cannot_modify_a_branch(self):
         workspace_id, _ = workspace._workspace_directory(self.state, "request")
-        reference = f"refs/buddy/workspaces/{workspace_id}/input"
+        reference = f"refs/hey-my-buddy/workspaces/{workspace_id}/input"
         self.git("symbolic-ref", reference, "refs/heads/unborn-target")
         self.assert_error("WORKSPACE_CONFLICT", self.prepare)
         result = subprocess.run(["git", "-C", str(self.repo), "show-ref", "--verify", "refs/heads/unborn-target"], capture_output=True)

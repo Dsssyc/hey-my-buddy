@@ -132,9 +132,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--control", required=True)
     args = parser.parse_args()
-    selected = os.environ.get("BUDDY_STATE_DIR")
+    selected = os.environ.get("HMB_STATE_DIR")
     if not selected:
-        parser.error("BUDDY_STATE_DIR is required")
+        parser.error("HMB_STATE_DIR is required")
     state_dir = Path(selected)
     try:
         control = decode_strict_json(guard_private_path(Path(args.control)).read_bytes())

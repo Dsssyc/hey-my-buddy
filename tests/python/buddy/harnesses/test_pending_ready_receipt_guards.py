@@ -172,7 +172,7 @@ def minted_finish_receipt(input_sha256: str) -> tuple[str, dict]:
     """One real signed finish receipt minted by the session tool itself."""
     bridge = {"identity": dict(FINISH_IDENTITY), "inputSha256": input_sha256, "key": FINISH_KEY}
     result = respond({"id": 1, "method": "tools/call",
-                      "params": {"name": "buddy_finish_turn", "arguments": FINISH_OUTCOME}}, bridge)
+                      "params": {"name": "hey_my_buddy_finish_turn", "arguments": FINISH_OUTCOME}}, bridge)
     return result["result"]["content"][0]["text"], bridge
 
 
@@ -233,8 +233,8 @@ class ReadinessMaterialBarrierTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-c2-readiness-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-c2-readiness-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name).resolve()
 

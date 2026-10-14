@@ -32,7 +32,7 @@ describe("the harness wire contract", () => {
     await expect(api.harnessRefresh("csrf", "codex")).resolves.toEqual([codexRow]);
     expect(fetcher).toHaveBeenCalledWith("/private/api/command", expect.objectContaining({
       method: "POST", credentials: "same-origin",
-      headers: { "Content-Type": "application/json", "X-Buddy-CSRF": "csrf" },
+      headers: { "Content-Type": "application/json", "X-Hey-My-Buddy-CSRF": "csrf" },
       body: JSON.stringify({ operation: "capabilities", params: { refresh: true, harness: "codex" } }),
     }));
   });

@@ -22,7 +22,7 @@ FIXTURE = Path(__file__).parent / "fixtures/mock_zcode.py"
 
 class ZcodeFixtureCase(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="buddy-zcode-test-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-test-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.cwd = self.root / "checkout"
@@ -35,12 +35,12 @@ class ZcodeFixtureCase(unittest.TestCase):
         self.personal.write_text(json.dumps({"config": {"providerConfigRules": {"providerRules": [
             {"providerId": "fixture-api", "config": {"access": {"type": "api-key", "apiKey": "fixture-secret-never-public"}}}]}}}))
         FIXTURE.chmod(0o755)
-        self.environment = {k: v for k, v in os.environ.items() if not k.startswith(("BUDDY_", "ANTHROPIC_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_")) and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
+        self.environment = {k: v for k, v in os.environ.items() if not k.startswith(("HMB_", "ANTHROPIC_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_")) and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         native_home = self.root / "native-user-home"
         native_home.mkdir(mode=0o700, exist_ok=True)
         self.environment.update(HOME=str(native_home), USERPROFILE=str(native_home),
-                                ZCODE_DATA_BASE_DIR=str(native_home), BUDDY_CONSOLE_PORT="0", BUDDY_ZCODE_CLI=str(FIXTURE.resolve()), BUDDY_STATE_DIR=str(self.root / "state"),
-                                BUDDY_RUNTIME_ROOT=str(self.root / "runtime"), BUDDY_DEV_SOURCE="1",
+                                ZCODE_DATA_BASE_DIR=str(native_home), HMB_CONSOLE_PORT="0", HMB_ZCODE_CLI=str(FIXTURE.resolve()), HMB_STATE_DIR=str(self.root / "state"),
+                                HMB_RUNTIME_ROOT=str(self.root / "runtime"), HMB_DEV_SOURCE="1",
                                 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(self.builtin), ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(self.personal))
         from hey_my_buddy.protocol.rpc_config import configure_client
         configure_client(self.root / "state")
@@ -59,7 +59,7 @@ class ZcodeFixtureCase(unittest.TestCase):
                                 spec={"cwd": str(self.cwd), "task": "fixture task", "timeoutSeconds": timeout,
                                       "provider": "fixture-api", "model": "fixture-model", "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
-                                environment={**self.environment, "BUDDY_ZCODE_TEST_CASE": case},
+                                environment={**self.environment, "HMB_ZCODE_TEST_CASE": case},
                                 turn={"turnId": f"turn-{index}", "input": identity})
 
     def execute(self, context):
@@ -93,9 +93,9 @@ class ZcodeFixtureCase(unittest.TestCase):
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             state, channel = handle_live_binding(
-                handle, state_dir=Path(self.environment["BUDDY_STATE_DIR"]))
+                handle, state_dir=Path(self.environment["HMB_STATE_DIR"]))
             if channel is not None:
-                self.assertEqual(channel._state_dir, Path(self.environment["BUDDY_STATE_DIR"]).resolve(),
+                self.assertEqual(channel._state_dir, Path(self.environment["HMB_STATE_DIR"]).resolve(),
                                  "the role channel must use the fixture's private state root")
                 return channel
             time.sleep(0.05)
@@ -185,7 +185,7 @@ class ZcodeFixtureCase(unittest.TestCase):
 
 class ZcodeAdapterTests(ZcodeFixtureCase):
     def test_slow_version_metadata_does_not_block_native_catalog_discovery(self):
-        with mock.patch.dict(os.environ, {**self.environment, "BUDDY_ZCODE_TEST_CASE": "slow-version"}, clear=True):
+        with mock.patch.dict(os.environ, {**self.environment, "HMB_ZCODE_TEST_CASE": "slow-version"}, clear=True):
             result = self.description.discover_models()
         self.assertEqual(result["harnessVersion"], "unknown")
         self.assertEqual(result["providers"][0]["models"][0]["id"], "fixture-model")
@@ -222,7 +222,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         native = outcome.result["nativeSession"]
         self.assertEqual(native["sessionId"], turn["sessionId"])
         self.assertEqual(native["storageScope"], "task-private")
-        self.assertEqual(native["storageOwner"], "buddy-micro-task")
+        self.assertEqual(native["storageOwner"], "hey-my-buddy-micro-task")
         self.assertEqual(native["nativeAppVisibility"], "not-listed-in-native-app")
         self.assertTrue(native["bindingPresent"])
         self.assertTrue(native["resumable"])
@@ -478,7 +478,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
                     self.assertFalse(context.directory.exists())
 
     def test_catalog_omits_models_without_native_effort_options(self):
-        with mock.patch.dict(os.environ, {**self.environment, "BUDDY_ZCODE_TEST_CASE": "no-effort"}, clear=True):
+        with mock.patch.dict(os.environ, {**self.environment, "HMB_ZCODE_TEST_CASE": "no-effort"}, clear=True):
             result = self.description.discover_models()
         self.assertEqual(result["providers"], [])
         self.assertTrue(any("effort" in warning for warning in result["warnings"]))

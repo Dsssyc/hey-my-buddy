@@ -18,7 +18,7 @@ import hashlib
 
 from hey_my_buddy.json_codec import canonical_json
 
-FINISH_TOOL = "buddy_finish_turn"
+FINISH_TOOL = "hey_my_buddy_finish_turn"
 
 #: A 32-hex-character fixture receipt identity; the dsh validator only checks
 #: the shape, and no fixture receipt is ever a real carrier receipt.
@@ -53,7 +53,7 @@ def zcode_provenance(identity: dict, session_id: str) -> dict:
         "rootSessionMatched": True, "receiptVerified": True, "toolResultSuccess": True,
         "toolResultTruncated": False, "turnResultType": "success", "settlement": "session-closed",
         "nativeSessionId": session_id,
-        "inputId": "buddy-" + hashlib.sha256(canonical_json(identity).encode()).hexdigest(),
+        "inputId": "hey-my-buddy-" + hashlib.sha256(canonical_json(identity).encode()).hexdigest(),
         "nativeTurnId": "fixture-native-turn-1", "toolCallId": "fixture-finish-1",
         "receiptId": FIXTURE_RECEIPT_ID,
         "turnStartSeq": 1, "toolCallSeq": 2, "toolResultSeq": 3, "turnEndSeq": 4,

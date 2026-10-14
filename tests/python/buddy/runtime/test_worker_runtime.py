@@ -21,13 +21,13 @@ from hey_my_buddy.protocol.transport import ServiceError
 
 class WorkerLaunchEnvironmentTests(unittest.TestCase):
     def test_stable_target_replaces_inherited_cli_python_paths(self):
-        with tempfile.TemporaryDirectory(prefix="buddy-worker-env-") as directory:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-worker-env-") as directory:
             target = {"python": "/stable/runtime/venv/bin/python", "pythonPath": None,
                       "identity": "runtime:fixed", "stable": True,
                       "runtime": {"runtimeDir": "/stable/runtime", "environment": "/stable/runtime/venv"}}
             inherited = {"PATH": "/plugin/venv/bin:/usr/bin", "PYTHONPATH": "/plugin/python",
-                         "BUDDY_PYTHON": "/plugin/venv/bin/python", "VIRTUAL_ENV": "/plugin/venv",
-                         "UV_PROJECT_ENVIRONMENT": "/plugin/venv", "BUDDY_RUNTIME": "/old/runtime",
+                         "HMB_PYTHON": "/plugin/venv/bin/python", "VIRTUAL_ENV": "/plugin/venv",
+                         "UV_PROJECT_ENVIRONMENT": "/plugin/venv", "HMB_RUNTIME": "/old/runtime",
                          "CLAUDECODE": "1", "CLAUDE_CODE_OAUTH_TOKEN": "session-token"}
             with patch.dict(os.environ, inherited, clear=True), patch.object(runtime, "launch_target", return_value=target) as select, patch.object(cli.subprocess, "Popen") as spawn:
                 spawn.return_value.pid = 123
@@ -36,20 +36,20 @@ class WorkerLaunchEnvironmentTests(unittest.TestCase):
             args, options = spawn.call_args
             self.assertEqual(args[0][0], target["python"])
             self.assertNotIn("PYTHONPATH", options["env"])
-            self.assertEqual(options["env"]["BUDDY_RUNTIME"], "/stable/runtime")
-            self.assertNotIn("BUDDY_PYTHON", options["env"])
+            self.assertEqual(options["env"]["HMB_RUNTIME"], "/stable/runtime")
+            self.assertNotIn("HMB_PYTHON", options["env"])
             for key in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "CLAUDECODE", "CLAUDE_CODE_OAUTH_TOKEN",
-                        "BUDDY_AGENT_CREDENTIAL"):
+                        "HMB_AGENT_CREDENTIAL"):
                 self.assertNotIn(key, options["env"])
             self.assertEqual(options["env"]["PATH"].split(os.pathsep)[0], "/stable/runtime/venv/bin")
-            self.assertEqual(options["env"]["BUDDY_RUNTIME_IDENTITY"], target["identity"])
+            self.assertEqual(options["env"]["HMB_RUNTIME_IDENTITY"], target["identity"])
             self.assertEqual(result["supervisorPid"], 123)
 
     def test_dev_source_with_private_empty_runtime_keeps_source_semantics(self):
-        with tempfile.TemporaryDirectory(prefix="buddy-worker-source-") as directory:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-worker-source-") as directory:
             runtime_root = Path(directory) / "runtime"
-            inherited = {"BUDDY_DEV_SOURCE": "1", "BUDDY_RUNTIME_ROOT": str(runtime_root),
-                         "PYTHONPATH": "/dev/extra", "BUDDY_PYTHON": "/dev/python", "PATH": "/dev/bin:/usr/bin",
+            inherited = {"HMB_DEV_SOURCE": "1", "HMB_RUNTIME_ROOT": str(runtime_root),
+                         "PYTHONPATH": "/dev/extra", "HMB_PYTHON": "/dev/python", "PATH": "/dev/bin:/usr/bin",
                          "VIRTUAL_ENV": "/dev/venv", "UV_PROJECT_ENVIRONMENT": "/dev/venv"}
             with patch.dict(os.environ, inherited, clear=True), patch.object(cli.subprocess, "Popen") as spawn:
                 spawn.return_value.pid = 123
@@ -59,16 +59,16 @@ class WorkerLaunchEnvironmentTests(unittest.TestCase):
             # The checkout's own source path is set explicitly; a Host session's
             # extra PYTHONPATH and uv environment overrides never reach a service.
             self.assertEqual(options["env"]["PYTHONPATH"], str(runtime.project_root() / "src"))
-            self.assertTrue(options["env"]["BUDDY_RUNTIME_IDENTITY"].startswith("source:"))
-            self.assertNotIn("BUDDY_RUNTIME", options["env"])
-            self.assertNotIn("BUDDY_PYTHON", options["env"])
+            self.assertTrue(options["env"]["HMB_RUNTIME_IDENTITY"].startswith("source:"))
+            self.assertNotIn("HMB_RUNTIME", options["env"])
+            self.assertNotIn("HMB_PYTHON", options["env"])
             self.assertEqual(options["env"]["PATH"], inherited["PATH"])
             for key in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"):
                 self.assertNotIn(key, options["env"])
             self.assertFalse(runtime_root.exists(), "development start must not materialize a runtime")
 
     def test_worker_stop_does_not_select_runtime_or_spawn(self):
-        with tempfile.TemporaryDirectory(prefix="buddy-worker-stop-") as directory:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-worker-stop-") as directory:
             with patch.object(runtime, "launch_target") as select, patch.object(cli.subprocess, "Popen") as spawn:
                 result = cli._worker_command("worker-stop", {"workerId": "extra", "stateDir": directory}, Path(directory).resolve())
             select.assert_not_called()
@@ -78,7 +78,7 @@ class WorkerLaunchEnvironmentTests(unittest.TestCase):
 
 class StagedWorkerRuntimeTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-staged-worker-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-staged-worker-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.root = Path(self.temp.name).resolve()
         self.state = self.root / "state"
         self.runtime_root = self.root / "runtime"
@@ -90,17 +90,17 @@ class StagedWorkerRuntimeTests(unittest.TestCase):
         self.extra_work.mkdir()
         self.client = BoardClient(self.state, autostart=False)
         self.environment = {key: value for key, value in os.environ.items()
-                            if not key.startswith("BUDDY") and key not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH", "PLUGIN_DATA"}}
-        self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_STATE_DIR=str(self.state), BUDDY_RUNTIME_ROOT=str(self.runtime_root),
-                                BUDDY_AGENT_SKILLS_DIR=str(self.root / 'agents'), BUDDY_CLAUDE_SKILLS_DIR=str(self.root / 'claude'),
-                                BUDDY_MAX_CONCURRENT="2", UV_PROJECT_ENVIRONMENT=str(self.root / "cli-venv"),
-                                BUDDY_CLAUDE_CLI=str(self.root / "claude-not-installed"))
+                            if not key.startswith("HMB_") and key not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH", "PLUGIN_DATA"}}
+        self.environment.update(HMB_CONSOLE_PORT="0", HMB_STATE_DIR=str(self.state), HMB_RUNTIME_ROOT=str(self.runtime_root),
+                                HMB_AGENT_SKILLS_DIR=str(self.root / 'agents'), HMB_CLAUDE_SKILLS_DIR=str(self.root / 'claude'),
+                                HMB_MAX_CONCURRENT="2", UV_PROJECT_ENVIRONMENT=str(self.root / "cli-venv"),
+                                HMB_CLAUDE_CLI=str(self.root / "claude-not-installed"))
         # Building reads the current checkout and never rewrites it, so the real root
-        # is built directly; the one public launcher is the skill's scripts/buddy.
-        self.stage = self.root / "skill" / "buddy"
+        # is built directly; the one public launcher is the skill's scripts/hey-my-buddy.
+        self.stage = self.root / "skill" / "hey-my-buddy"
         with contextlib.redirect_stdout(io.StringIO()):
             load_build_skill().build(ROOT, self.stage)
-        self.launcher = self.stage / "scripts" / "buddy"
+        self.launcher = self.stage / "scripts" / "hey-my-buddy"
         # Controlled ownership: the daemon pool sizes itself from the configured
         # limits (two business slots plus one reserved decision slot). This test
         # holds the lifetime locks of the two spare slots, so the pool sees them as
@@ -168,7 +168,7 @@ class StagedWorkerRuntimeTests(unittest.TestCase):
 
         started = self.staged_cli("worker-start", {"workerId": "acceptance-extra"}, extra_env={
             "PYTHONPATH": str(self.stage / "src"),
-            "BUDDY_PYTHON": str(self.stage / "replaceable-python"),
+            "HMB_PYTHON": str(self.stage / "replaceable-python"),
         })
         self.assertEqual(json.loads(local_status.read_text())["supervisorPid"], original_local_pid)
         probe = "import pathlib,time,json,os,sys; gate=pathlib.Path(" + repr(str(self.work / "release-extra")) + "); end=time.monotonic()+35\nwhile not gate.exists() and time.monotonic()<end: time.sleep(0.05)\nfrom hey_my_buddy.install import runtime\nr=runtime.resolve_runtime(); print(json.dumps({k:r[k] for k in ('identity','stable','actual','leaks','resourcesMissing')} | {'workerPython':sys.executable,'virtualEnv':os.environ.get('VIRTUAL_ENV'),'uvEnvironment':os.environ.get('UV_PROJECT_ENVIRONMENT')}))"

@@ -148,9 +148,9 @@ class CrossHarnessQuotaRecoveryTests(HostQuotaRecoveryTests):
 
     def env(self):
         return {**super().env(), "CODEX_HOME": str(self.directory / "codex-home"),
-                "BUDDY_CODEX_CLI": str(Path(__file__).resolve().parents[2] / "buddy/harnesses/codex/fixtures/mock_quota_codex.py"),
-                "BUDDY_CODEX_FIXTURE_STATE": str(self.directory / "codex-native.json"),
-                "BUDDY_CODEX_FIXTURE_CASE": "quota-failure"}
+                "HMB_CODEX_CLI": str(Path(__file__).resolve().parents[2] / "buddy/harnesses/codex/fixtures/mock_quota_codex.py"),
+                "HMB_CODEX_FIXTURE_STATE": str(self.directory / "codex-native.json"),
+                "HMB_CODEX_FIXTURE_CASE": "quota-failure"}
 
     def test_failed_codex_reconstructs_in_dsh_with_bound_partial_output_and_message(self):
         with self.daemon(env=self.env()):

@@ -1,12 +1,12 @@
-"""Build the shared, self-contained ``buddy`` Agent Skill from a source checkout.
+"""Build the shared, self-contained ``hey-my-buddy`` Agent Skill from a source checkout.
 
 The skill is the only distribution (ADR-015). Its directory follows the Agent Skills
 layout and carries everything a Host needs, with no repository or plugin path:
 
-    buddy/
+    hey-my-buddy/
       SKILL.md              instructions; links point into references/
       skill.json            version marker used to skip a repeated install
-      scripts/buddy         the CLI launcher
+      scripts/hey-my-buddy         the CLI launcher
       references/*.md       the current operational references
       package/              the uv project the stable runtime is materialized from
 
@@ -27,7 +27,7 @@ import tomllib
 from ..errors import BoardError
 from .runtime import iter_assets
 
-SKILL_NAME = "buddy"
+SKILL_NAME = "hey-my-buddy"
 UNSUPPORTED_PARTS = ("tests", "node_modules", ".venv", "__pycache__", ".git", "tmp", "apps")
 IGNORED_COPY = ("__pycache__", "*.pyc", "*.pyo")
 _LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
@@ -102,13 +102,13 @@ def assemble(source: Path, skill: Path) -> dict:
     source = Path(source).resolve()
     version = project_version(source)
     skill.mkdir(parents=True, exist_ok=True)
-    text = (source / "skills/buddy/SKILL.md").read_text()
+    text = (source / "skills/hey-my-buddy/SKILL.md").read_text()
     (skill / "SKILL.md").write_text(_with_version(_rewrite(text, _skill_link), version))
     (skill / "scripts").mkdir()
-    shutil.copy2(source / "skills/buddy/scripts/buddy", skill / "scripts/buddy")
-    (skill / "scripts/buddy").chmod(0o755)
-    for name in ("buddy.cmd", "buddy.ps1"):
-        shutil.copy2(source / "skills/buddy/scripts" / name, skill / "scripts" / name)
+    shutil.copy2(source / "skills/hey-my-buddy/scripts/hey-my-buddy", skill / "scripts/hey-my-buddy")
+    (skill / "scripts/hey-my-buddy").chmod(0o755)
+    for name in ("hey-my-buddy.cmd", "hey-my-buddy.ps1"):
+        shutil.copy2(source / "skills/hey-my-buddy/scripts" / name, skill / "scripts" / name)
     (skill / "references").mkdir()
     for reference in sorted((source / "docs/reference").glob("*.md")):
         (skill / "references" / reference.name).write_text(_rewrite(reference.read_text(), _reference_link))
@@ -130,9 +130,9 @@ def build(source: Path, destination: Path) -> Path:
     """Assemble the skill next to *destination* and publish it by rename."""
     destination = Path(destination).expanduser().absolute()
     if destination.name != SKILL_NAME:
-        raise BoardError("SKILL_INVALID", "The skill directory must be named buddy")
+        raise BoardError("SKILL_INVALID", "The skill directory must be named hey-my-buddy")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    staged = Path(tempfile.mkdtemp(prefix=".buddy-build-", dir=destination.parent))
+    staged = Path(tempfile.mkdtemp(prefix=".hey-my-buddy-build-", dir=destination.parent))
     try:
         assemble(source, staged / SKILL_NAME)
         publish(staged / SKILL_NAME, destination)

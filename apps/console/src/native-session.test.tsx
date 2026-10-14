@@ -24,7 +24,7 @@ describe("native session evidence from the attempt receipt", () => {
     const evidence = nativeSessionEvidence(taskWith({
       nativeSession: {
         harness: "zcode", sessionId: "sess-z", captured: true, storageScope: "task-private",
-        storageOwner: "buddy-attempt", nativeAppVisibility: "not-listed-in-native-app",
+        storageOwner: "hey-my-buddy-attempt", nativeAppVisibility: "not-listed-in-native-app",
         resumeMode: "native-session", bindingPresent: true, resumable: true, note: "私有原生根",
       },
     }, "zcode"));
@@ -70,7 +70,7 @@ describe("native session evidence from the attempt receipt", () => {
   it("renders the ZCode private storage and visibility without an invented open link", () => {
     render(<NativeSessionView task={taskWith({
       nativeSession: {
-        harness: "zcode", sessionId: "sess-z", storageScope: "task-private", storageOwner: "buddy-attempt",
+        harness: "zcode", sessionId: "sess-z", storageScope: "task-private", storageOwner: "hey-my-buddy-attempt",
         nativeAppVisibility: "not-listed-in-native-app", resumeMode: "native-session", bindingPresent: true,
         resumable: true, note: "私有原生根",
       },

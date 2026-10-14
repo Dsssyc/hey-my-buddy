@@ -1,4 +1,4 @@
-"""Schema-versioned SQLite storage for the Buddy blackboard.
+"""Schema-versioned SQLite storage for the hey-my-buddy blackboard.
 
 One database file owns every authoritative fact: tasks, attempts, workers,
 messages, artifacts, events, command receipts and resource claims. Connections are

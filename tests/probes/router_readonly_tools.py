@@ -2,7 +2,7 @@
 
 Each --execute invocation requires separate human approval. The prepared
 packet is immutable and an exclusive marker prevents a repeat invocation.
-No Buddy board or service is started, and no credentials are inspected.
+No hey-my-buddy board or service is started, and no credentials are inspected.
 """
 from __future__ import annotations
 
@@ -151,8 +151,8 @@ def run(args):
     # exceed the socket-address limit before any model input is admitted.
     private = create_private_root(directory=Path('/tmp') if os.name == 'posix' else Path(tempfile.gettempdir()))
     environment = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES}
-    environment.update(BUDDY_DEV_SOURCE='1', BUDDY_STATE_DIR=str(private / 'state'),
-                       BUDDY_RUNTIME_ROOT=str(private / 'runtime'), TMPDIR=str(private / 'tmp'))
+    environment.update(HMB_DEV_SOURCE='1', HMB_STATE_DIR=str(private / 'state'),
+                       HMB_RUNTIME_ROOT=str(private / 'runtime'), TMPDIR=str(private / 'tmp'))
     context = ExecutionContext(task_id=packet['binding']['taskId'], attempt_id=packet['binding']['attemptId'],
         generation=packet['binding']['generation'], spec={**buddy, 'cwd': str(root / 'frozen')},
         directory=private / 'attempt', runtime={}, environment=environment)

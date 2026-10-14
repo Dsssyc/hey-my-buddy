@@ -26,7 +26,7 @@ from hey_my_buddy.protocol import rpc_config, transport
 
 def cli_health(selected, environment):
     command = [sys.executable, '-m', 'hey_my_buddy.cli.main', 'health']
-    child = subprocess.Popen(command, env=dict(environment, BUDDY_STATE_DIR=str(selected)),
+    child = subprocess.Popen(command, env=dict(environment, HMB_STATE_DIR=str(selected)),
                              text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = child.communicate(timeout=30)
     return child, {'pid': child.pid, 'command': command, 'waitExit': child.returncode,
@@ -37,10 +37,10 @@ def run_path_case(name, work):
     state = work / 'state'
     state.mkdir(mode=0o700)
     write_catalog_fixture(state)
-    environment = dict(os.environ, BUDDY_STATE_DIR=str(state),
-                       BUDDY_MODEL_CATALOG_FILE=str(state / 'model-catalog.json'),
-                       BUDDY_MODEL_FACTS_FILE=str(state / 'model-facts-fixture.json'),
-                       BUDDY_RUNTIME_ROOT=str(work / 'runtime'))
+    environment = dict(os.environ, HMB_STATE_DIR=str(state),
+                       HMB_MODEL_CATALOG_FILE=str(state / 'model-catalog.json'),
+                       HMB_MODEL_FACTS_FILE=str(state / 'model-facts-fixture.json'),
+                       HMB_RUNTIME_ROOT=str(work / 'runtime'))
     evidence = {'case': name, 'state': str(state), 'processes': [], 'requests': []}
     handles = []
     modes = {state: 0o700}
@@ -137,7 +137,7 @@ class PathStateTests(unittest.TestCase):
         self.state.mkdir(mode=0o700)
         alias = self.work / 'alias'
         alias.symlink_to(self.state, target_is_directory=True)
-        with patch.dict(os.environ, {'BUDDY_STATE_DIR': str(alias)}):
+        with patch.dict(os.environ, {'HMB_STATE_DIR': str(alias)}):
             self.assertEqual(transport.get_state_dir(), self.state)
             self.assertEqual(transport.get_state_dir(self.work / 'explicit'), self.work / 'explicit')
         with patch.dict(os.environ, {}, clear=True), patch.object(transport.home, 'default_state_dir', return_value=alias):
@@ -185,7 +185,7 @@ class PathStateTests(unittest.TestCase):
                 self.fail('owner preflight refused its 0755 state: ' + json.dumps(error.payload()))
         self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
         self.assertEqual(set(self.state.iterdir()), before | {self.state / 'ipc'})
-        temporary.assert_called_once_with(prefix='buddy-ipc-')
+        temporary.assert_called_once_with(prefix='hey-my-buddy-ipc-')
 
     def test_path03_daemon_run_repairs_before_rpc_configuration(self):
         from hey_my_buddy.blackboard.service.daemon import Daemon
@@ -259,8 +259,8 @@ class RealPathStateTests(unittest.TestCase):
         sentinel = work / 'native-forbidden'
         sentinel.write_text("#!/bin/sh\nprintf unexpected >> '" + str(work / 'native-invoked') + "'\nexit 99\n")
         sentinel.chmod(0o700)
-        environment.update({'BUDDY_' + name + '_CLI': str(sentinel) for name in ('CLAUDE', 'CODEX', 'DSH', 'ZCODE')})
-        environment.update(BUDDY_MAX_CONCURRENT='1', BUDDY_CHECKS_TMPDIR=os.environ['BUDDY_CHECKS_TMPDIR'])
+        environment.update({'HMB_' + name + '_CLI': str(sentinel) for name in ('CLAUDE', 'CODEX', 'DSH', 'ZCODE')})
+        environment.update(HMB_MAX_CONCURRENT='1', HMB_CHECKS_TMPDIR=os.environ['HMB_CHECKS_TMPDIR'])
         command = [sys.executable, str(Path(__file__).resolve()), '--case', name, str(work)]
         child = subprocess.Popen(command, env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         stdout, stderr = child.communicate(timeout=100)
@@ -296,8 +296,8 @@ class ReadonlyPathStateTests(unittest.TestCase):
 
             def offline_environment(root, **overrides):
                 environment = original_environment(root, **overrides)
-                environment['BUDDY_MODEL_CATALOG_FILE'] = str(catalog)
-                environment.update({'BUDDY_' + harness + '_CLI': str(sentinel)
+                environment['HMB_MODEL_CATALOG_FILE'] = str(catalog)
+                environment.update({'HMB_' + harness + '_CLI': str(sentinel)
                                     for harness in ('CLAUDE', 'CODEX', 'DSH', 'ZCODE')})
                 return environment
 
@@ -327,7 +327,7 @@ class ReadonlyPathStateTests(unittest.TestCase):
             clean = fixture.doCleanups()
             evidence['cleanupCompleted'] = clean
             evidence['peerReceipt'] = getattr(fixture, 'peer_receipt', {})
-            Path(os.environ['BUDDY_CHECKS_TMPDIR'], 'readonly-path-evidence.json').write_text(json.dumps(evidence, indent=2))
+            Path(os.environ['HMB_CHECKS_TMPDIR'], 'readonly-path-evidence.json').write_text(json.dumps(evidence, indent=2))
             self.assertTrue(clean, 'native peer cleanup failed')
             self.assertEqual(evidence['peerReceipt'].get('waitExit'), 0)
 

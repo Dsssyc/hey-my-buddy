@@ -297,9 +297,9 @@ def preflight_command(params: dict) -> dict:
     from ...protocol import schemas
     from ... import home
     schemas.reject_unknown(params, set(), 'backup-preflight')
-    if os.environ.get('BUDDY_AGENT_CREDENTIAL') or os.environ.get('BUDDY_AGENT_CREDENTIAL_FILE'):
+    if os.environ.get('HMB_AGENT_CREDENTIAL') or os.environ.get('HMB_AGENT_CREDENTIAL_FILE'):
         raise BoardError('UNAUTHORIZED', 'A Worker cannot inspect Host backup sources')
-    state = Path(os.environ.get('BUDDY_STATE_DIR') or home.default_state_dir()).expanduser().absolute()
+    state = Path(os.environ.get('HMB_STATE_DIR') or home.default_state_dir()).expanduser().absolute()
     return preflight(state)
 
 
@@ -354,21 +354,21 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
                     row = updates[key][offset:offset + len(row)]
                 return json.dumps(list(row), ensure_ascii=False, separators=(',', ':'), default=lambda value:value.hex())[1:-1]
 
-            connection.create_function('buddy_snapshot_part', -1, encode_part)
+            connection.create_function('hey_my_buddy_snapshot_part', -1, encode_part)
             quoted_columns = ['"' + column.replace('"', '""') + '"' for column in columns]
-            parts = ['buddy_snapshot_part(' + str(offset) + ',' + quoted_columns[0] + ','
+            parts = ['hey_my_buddy_snapshot_part(' + str(offset) + ',' + quoted_columns[0] + ','
                      + ','.join(quoted_columns[offset:offset + limit - 2]) + ')'
                      for offset in range(0, len(columns), limit - 2)]
             arguments = "'[' || " + " || ',' || ".join(parts) + " || ']'"
         else:
-            arguments = 'buddy_snapshot_row(' + arguments + ')'
+            arguments = 'hey_my_buddy_snapshot_row(' + arguments + ')'
         sql, args = 'SELECT ' + arguments + ' AS encoded FROM ' + quoted, ()
         if name == 'events':
             sql += ' WHERE seq<=?'; args = (event_head,)
         elif name == 'sqlite_sequence' and not exempt:
             sql += " WHERE name NOT IN ('events','workers')"
         sql += ' ORDER BY encoded COLLATE BINARY'
-        connection.create_function('buddy_snapshot_row', -1, encode)
+        connection.create_function('hey_my_buddy_snapshot_row', -1, encode)
         try:
             rows = (row[0] for row in connection.execute(sql, args))
             added = sorted(encode(*row) for row in inserts.values())
@@ -380,9 +380,9 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
                 separator = b'\n'
             return result.hexdigest()
         finally:
-            connection.create_function('buddy_snapshot_row', -1, None)
+            connection.create_function('hey_my_buddy_snapshot_row', -1, None)
             if wide:
-                connection.create_function('buddy_snapshot_part', -1, None)
+                connection.create_function('hey_my_buddy_snapshot_part', -1, None)
 
     fingerprints = {name:fingerprint(name) for name in tables if name != 'workers'}
     result = {'tables':{name:counts[name] + len((changes or {}).get(name, ({}, {}))[1]) for name in tables},

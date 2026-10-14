@@ -259,7 +259,7 @@ describe("an exhausted quota", () => {
 
   it("starts a new request when the one the session kept is not a request number", async () => {
     const user = userEvent.setup();
-    sessionStorage.setItem("buddy-quota-redetect:dsh:deepseek-official", "not a valid id!");
+    sessionStorage.setItem("hey-my-buddy-quota-redetect:dsh:deepseek-official", "not a valid id!");
     const f = fixture({ harnesses: withRecords(exhausted()), replies: { quota_redetect: () => ({ quota: { opened: [null], alreadyOpen: [] } }) } });
     await openHarness(f);
     await user.click(open());

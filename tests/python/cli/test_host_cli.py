@@ -41,10 +41,10 @@ class PrivateCliTestCase(BoardTestCase):
         self._set_private_environment()
 
     def _set_private_environment(self) -> None:
-        names = ("BUDDY_STATE_DIR", "BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE")
+        names = ("HMB_STATE_DIR", "HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE")
         previous = {name: os.environ.get(name) for name in names}
-        os.environ["BUDDY_STATE_DIR"] = str(self.directory)
-        for name in ("BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE"):
+        os.environ["HMB_STATE_DIR"] = str(self.directory)
+        for name in ("HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE"):
             os.environ.pop(name, None)
 
         def restore() -> None:
@@ -168,7 +168,7 @@ class ParameterDocumentTests(PrivateCliTestCase):
         captured: list = []
         self.use_capture_transport(captured)
         payload = {**command_payload("host-cli-4"), "cwd": str(self.workdir())}
-        with mock.patch.dict(os.environ, {"BUDDY_AGENT_CREDENTIAL": "scoped-token"}):
+        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": "scoped-token"}):
             code, _, _ = self.run_cli("execution-submit", "--params-file", str(self.write_params(payload)))
             self.assertEqual(code, 0)
             code, _, _ = self.run_cli("execution-submit", json.dumps(payload))
@@ -307,12 +307,12 @@ class HelpTests(unittest.TestCase):
         self.assertRegex(text, r"(?m)^  help +[A-Z]")
         self.assertNotIn(cli_help.MISSING_SUMMARY, text, "every method needs its one-sentence summary")
         self.assertIn("--params-file", text)
-        self.assertIn("buddy help METHOD", text)
+        self.assertIn("hey-my-buddy help METHOD", text)
 
     def test_help_starts_no_service_and_no_model(self):
         # ``help_text`` already fails on any transport call; this also refuses a spawn.
         with mock.patch("subprocess.Popen", side_effect=AssertionError("help must not spawn a process")):
-            self.assertIn("buddy submit", self.help_text("submit"))
+            self.assertIn("hey-my-buddy submit", self.help_text("submit"))
             self.assertIn("methods", self.help_text())
 
     def test_every_method_has_parameter_help_and_never_a_silent_empty_list(self):
@@ -321,7 +321,7 @@ class HelpTests(unittest.TestCase):
                 facts = cli_help.method_help(method)
                 self.assertIsNotNone(facts, method)
                 rendered = cli_help.render_method(facts)
-                self.assertIn(f"buddy {method}", rendered)
+                self.assertIn(f"hey-my-buddy {method}", rendered)
                 self.assertTrue(
                     facts.parameters or facts.inline or "takes no parameters" in " ".join(facts.notes),
                     f"{method} must list parameters or say it takes none",
@@ -594,8 +594,8 @@ class HelpSourceFreshnessTests(unittest.TestCase):
     """The answer comes from the validators on disk, not from a frozen table."""
 
     def test_a_changed_validator_constant_changes_the_help(self):
-        with tempfile.TemporaryDirectory(prefix="buddy-help-source-") as directory:
-            copy = Path(directory) / "buddy"
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-help-source-") as directory:
+            copy = Path(directory) / "hey-my-buddy"
             for path in sorted(Path(cli_help.PACKAGE_ROOT).rglob("*.py")):
                 if "__pycache__" in path.parts:
                     continue

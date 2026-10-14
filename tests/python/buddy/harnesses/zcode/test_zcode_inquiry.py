@@ -112,7 +112,7 @@ class BridgeHarness:
         self.attention_path = self.directory / "attention.json"
         self.live = (CTwoLiveEndpoint(RUN_IDENTITY, LiveCapabilities(
             inquiry_delivery="cooperative-checkpoint"), TEST_CRM,
-            instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, state_dir=Path(os.environ["BUDDY_STATE_DIR"])) if live else None)
+            instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, state_dir=Path(os.environ["HMB_STATE_DIR"])) if live else None)
         self.bridge = make_inquiry_bridge(identity=IDENTITY,
                                          journal_path=self.credentials["resultsPath"],
                                          attention_path=str(self.attention_path), live=self.live)
@@ -157,7 +157,7 @@ def answer_receipt(inquiry_id: str, answer: str, config: dict, *, sha: str = "b"
 
 class BridgeQueueTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="buddy-zcode-inquiry-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-inquiry-")
         self.addCleanup(self.temporary.cleanup)
         self.harness = BridgeHarness(Path(self.temporary.name))
         self.addCleanup(self.harness.close)
@@ -298,7 +298,7 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(entry["state"], "answered")
         self.assertEqual(entry["answer"]["text"], "do this")
         self.assertEqual(entry["answer"]["toolCallId"], "root-answer-call")
-        self.assertEqual(entry["answer"]["via"], "tool:buddy_answer_inquiry")
+        self.assertEqual(entry["answer"]["via"], "tool:hey_my_buddy_answer_inquiry")
         # An identical binding replay changes nothing; a different answer conflicts.
         self.harness.bridge.record_answer(answer, "root-answer-call-2")
         conflicting = verify_inquiry_receipt(answer_receipt("q-1", "do that instead", config, sha=sha), config, "inquiry-answer")
@@ -361,7 +361,7 @@ class BridgeQueueTests(unittest.TestCase):
             {"version": 1, "inquiryId": "q-mine", "state": "answered", "question": question,
              "questionSha256": digest, "askedAt": "t", **IDENTITY,
              "answer": {"text": "mine", "bytes": 4, "truncated": False,
-                        "via": "tool:buddy_answer_inquiry", "toolCallId": "c", "at": "t"}},
+                        "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": "c", "at": "t"}},
             {"version": 1, "inquiryId": "q-foreign", "state": "answered", "question": question,
              "questionSha256": digest, "askedAt": "t", **OTHER_IDENTITY,
              "answer": {"text": "foreign", "bytes": 7, "truncated": False, "via": "x", "toolCallId": "c", "at": "t"}},
@@ -414,7 +414,7 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertTrue(value["supported"])
         self.assertEqual(value["deliveryMode"], "cooperative-checkpoint")
         self.assertEqual(value["inbox"]["pending"], 1)
-        self.assertEqual(value["replyTool"]["name"], "buddy_answer_inquiry")
+        self.assertEqual(value["replyTool"]["name"], "hey_my_buddy_answer_inquiry")
         self.assertEqual(value["limits"]["inquiry"], "cooperative-checkpoint")
         self.assertFalse(value["limits"]["startsNewTurn"])
         self.assertFalse(value["limits"]["extendsDeadline"])
@@ -439,7 +439,7 @@ class BridgeQueueTests(unittest.TestCase):
                          ("q-1", "answered", "all good"))
         self.assertEqual((answered.bytes, answered.tool_call_id, answered.via,
                           answered.at, answered.truncated),
-                         (native_answer["bytes"], "root-answer-call", "tool:buddy_answer_inquiry",
+                         (native_answer["bytes"], "root-answer-call", "tool:hey_my_buddy_answer_inquiry",
                           native_answer["at"], False))
         self.assertEqual(answered.delivery, pending.inquiries[0].delivery)
         self.assertGreater(answered.seq, pending.inquiries[0].seq)
@@ -572,7 +572,7 @@ class BridgeQueueTests(unittest.TestCase):
         answer = inquiry_module.normalize_journal_answer(merged)
         self.assertEqual(answer["text"], "proceed")
         self.assertEqual(answer["toolCallId"], "root-answer-call")
-        self.assertEqual(answer["via"], "tool:buddy_answer_inquiry")
+        self.assertEqual(answer["via"], "tool:hey_my_buddy_answer_inquiry")
 
     def test_attention_is_bounded_and_readable_while_the_turn_is_live(self):
         for index in range(10):
@@ -593,7 +593,7 @@ class JournalBarrierTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="buddy-zcode-journal-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-journal-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.journal = self.root / "inquiry.results.jsonl"
@@ -633,7 +633,7 @@ class JournalBarrierTests(unittest.TestCase):
         record = self.queued_record("q-cross-process")
         fd = os.open(self.journal, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
         environment = {key: value for key, value in os.environ.items()
-                       if not key.startswith(("BUDDY_", "ZCODE_")) and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
+                       if not key.startswith(("HMB_", "ZCODE_")) and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         process = subprocess.Popen([sys.executable, "-m", "hey_my_buddy.buddy.roles.session_mcp", "--config", str(config_path)],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=environment)
 
@@ -649,7 +649,7 @@ class JournalBarrierTests(unittest.TestCase):
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                                            "params": {"name": "buddy_checkpoint", "arguments": {}}}).encode() + b"\n")
+                                            "params": {"name": "hey_my_buddy_checkpoint", "arguments": {}}}).encode() + b"\n")
             process.stdin.flush()
             ready, _, _ = select.select([process.stdout], [], [], 0.4)
             self.assertFalse(ready, "the session tool observed the journal while the writer held the barrier")
@@ -712,7 +712,7 @@ class JournalBarrierTests(unittest.TestCase):
 
 class FinishToolTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="buddy-zcode-finish-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-finish-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.attention = self.root / "attention.json"
@@ -728,7 +728,7 @@ class FinishToolTests(unittest.TestCase):
         """Verify the isError text as the signed refusal envelope it must be."""
         self.assertTrue(result.get("isError"), result)
         return verify_tool_refusal(result["content"][0]["text"], self.config, f"mcp__buddy_x__{tool}",
-                                              ("buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn"))
+                                              ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn"))
 
     @staticmethod
     def outcome(disposition: str) -> dict:
@@ -752,35 +752,35 @@ class FinishToolTests(unittest.TestCase):
     def test_all_three_session_tools_are_exposed(self):
         listed = respond({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}, self.config)
         names = [tool["name"] for tool in listed["result"]["tools"]]
-        self.assertEqual(names, ["buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn"])
+        self.assertEqual(names, ["hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn"])
 
     def test_checkpoint_returns_a_signed_receipt_of_the_pending_questions(self):
         self.queue()
-        result = self.call("buddy_checkpoint", {})
+        result = self.call("hey_my_buddy_checkpoint", {})
         self.assertFalse(result.get("isError"), result)
         receipt = verify_inquiry_receipt(result["content"][0]["text"], self.config, "inquiry-checkpoint")
         self.assertEqual(receipt["inquiries"][0]["inquiryId"], "q-1")
         self.assertEqual(receipt["inquiries"][0]["question"], "what is the deployment word?")
         # The handler is read-only, so another checkpoint still exposes the same
         # unanswered question under an independent receipt.
-        again = self.call("buddy_checkpoint", {})
+        again = self.call("hey_my_buddy_checkpoint", {})
         second = verify_inquiry_receipt(again["content"][0]["text"], self.config, "inquiry-checkpoint")
         self.assertEqual(second["inquiries"], receipt["inquiries"])
         self.assertNotEqual(second["receiptId"], receipt["receiptId"])
 
     def test_a_foreign_journal_identity_is_never_exposed(self):
         self.queue("q-foreign", "other attempt question?", identity=OTHER_IDENTITY)
-        result = self.call("buddy_checkpoint", {})
+        result = self.call("hey_my_buddy_checkpoint", {})
         receipt = verify_inquiry_receipt(result["content"][0]["text"], self.config, "inquiry-checkpoint")
         self.assertEqual(receipt["inquiries"], [])
-        refused = self.call("buddy_answer_inquiry", {"inquiryId": "q-foreign", "answer": "nope"})
-        envelope = self.refusal(refused, "buddy_answer_inquiry")
+        refused = self.call("hey_my_buddy_answer_inquiry", {"inquiryId": "q-foreign", "answer": "nope"})
+        envelope = self.refusal(refused, "hey_my_buddy_answer_inquiry")
         self.assertEqual(envelope["reason"], "unknown-inquiry")
         self.assertIn("unknown inquiryId", envelope["detail"])
 
     def test_answer_receipts_are_bound_and_bounded(self):
         self.queue()
-        accepted = self.call("buddy_answer_inquiry", {"inquiryId": "q-1", "answer": "deploy-ok"})
+        accepted = self.call("hey_my_buddy_answer_inquiry", {"inquiryId": "q-1", "answer": "deploy-ok"})
         self.assertFalse(accepted.get("isError"), accepted)
         receipt = verify_inquiry_receipt(accepted["content"][0]["text"], self.config, "inquiry-answer")
         self.assertEqual(receipt["answer"], "deploy-ok")
@@ -792,8 +792,8 @@ class FinishToolTests(unittest.TestCase):
             ({}, "exactly", "invalid-arguments"),
         ):
             with self.subTest(fragment=fragment):
-                refused = self.call("buddy_answer_inquiry", arguments)
-                envelope = self.refusal(refused, "buddy_answer_inquiry")
+                refused = self.call("hey_my_buddy_answer_inquiry", arguments)
+                envelope = self.refusal(refused, "hey_my_buddy_answer_inquiry")
                 self.assertEqual(envelope["reason"], reason)
                 self.assertIn(fragment, envelope["detail"])
         # A tampered receipt must fail controller verification.
@@ -811,26 +811,26 @@ class FinishToolTests(unittest.TestCase):
         answered = {"version": 1, "inquiryId": "q-1", "state": "answered", "question": question,
                     "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
                     "answer": {"text": "deploy-ok", "bytes": 10, "truncated": False,
-                               "via": "tool:buddy_answer_inquiry", "toolCallId": "root-call",
+                               "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": "root-call",
                                "at": "2026-01-01T00:00:00Z"}, **IDENTITY}
         with self.journal.open("a") as stream:
             stream.write(json.dumps(answered) + "\n")
-        refused = self.call("buddy_answer_inquiry", {"inquiryId": "q-1", "answer": "another"})
+        refused = self.call("hey_my_buddy_answer_inquiry", {"inquiryId": "q-1", "answer": "another"})
         self.assertTrue(refused["isError"])
         self.assertIn("already has its recorded answer", refused["content"][0]["text"])
 
     def test_completed_is_refused_while_a_question_is_unanswered(self):
         self.queue()
-        refused = self.call("buddy_finish_turn", self.outcome("completed"))
-        envelope = self.refusal(refused, "buddy_finish_turn")
+        refused = self.call("hey_my_buddy_finish_turn", self.outcome("completed"))
+        envelope = self.refusal(refused, "hey_my_buddy_finish_turn")
         self.assertEqual(envelope["reason"], "inquiry-pending")
         self.assertIn("what is the deployment word?", envelope["detail"])
         self.assertIn("q-1", envelope["detail"])
-        self.assertIn("buddy_checkpoint", envelope["detail"])
+        self.assertIn("hey_my_buddy_checkpoint", envelope["detail"])
         # Assistance and attention stay legal with a pending question.
         for disposition in ("assistance", "attention"):
             with self.subTest(disposition=disposition):
-                accepted = self.call("buddy_finish_turn", self.outcome(disposition))
+                accepted = self.call("hey_my_buddy_finish_turn", self.outcome(disposition))
                 self.assertFalse(accepted.get("isError"), accepted)
         # Once answered, completion passes again.
         import hashlib
@@ -840,9 +840,9 @@ class FinishToolTests(unittest.TestCase):
             stream.write(json.dumps({"version": 1, "inquiryId": "q-1", "state": "answered", "question": question,
                                      "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
                                      "answer": {"text": "deploy-ok", "bytes": 10, "truncated": False,
-                                                "via": "tool:buddy_answer_inquiry", "toolCallId": "root-call",
+                                                "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": "root-call",
                                                 "at": "2026-01-01T00:00:00Z"}, **IDENTITY}) + "\n")
-        settled = self.call("buddy_finish_turn", self.outcome("completed"))
+        settled = self.call("hey_my_buddy_finish_turn", self.outcome("completed"))
         self.assertFalse(settled.get("isError"), settled)
         verify_receipt(settled["content"][0]["text"], self.config, turn_io.validate_outcome)
 
@@ -868,34 +868,34 @@ class FinishToolTests(unittest.TestCase):
         ]
         with self.journal.open("a") as stream:
             stream.write("not json at all\n" + "".join(json.dumps(record) + "\n" for record in records))
-        result = self.call("buddy_checkpoint", {})
+        result = self.call("hey_my_buddy_checkpoint", {})
         receipt = verify_inquiry_receipt(result["content"][0]["text"], self.config, "inquiry-checkpoint")
         self.assertEqual([item["inquiryId"] for item in receipt["inquiries"]], ["q-mine"])
         for inquiry_id in ("q-foreign", "q-unbound", "q-old"):
             with self.subTest(inquiryId=inquiry_id):
-                refused = self.call("buddy_answer_inquiry", {"inquiryId": inquiry_id, "answer": "x"})
+                refused = self.call("hey_my_buddy_answer_inquiry", {"inquiryId": inquiry_id, "answer": "x"})
                 self.assertTrue(refused["isError"])
                 self.assertIn("unknown inquiryId", refused["content"][0]["text"])
         # A finish is not blocked by a foreign "answered" or unversioned record.
-        completed = self.call("buddy_finish_turn", self.outcome("completed"))
+        completed = self.call("hey_my_buddy_finish_turn", self.outcome("completed"))
         self.assertTrue(completed["isError"], "q-mine still blocks completion")
         with self.journal.open("a") as stream:
             stream.write(json.dumps({"version": 1, "inquiryId": "q-mine", "state": "answered",
                                      "question": question, "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
                                      "askedAt": "t", **IDENTITY,
                                      "answer": {"text": "done", "bytes": 4, "truncated": False,
-                                                "via": "tool:buddy_answer_inquiry", "toolCallId": "c", "at": "t"}}) + "\n")
-        settled = self.call("buddy_finish_turn", self.outcome("completed"))
+                                                "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": "c", "at": "t"}}) + "\n")
+        settled = self.call("hey_my_buddy_finish_turn", self.outcome("completed"))
         self.assertFalse(settled.get("isError"), settled)
 
     def test_pending_inquiries_is_none_without_a_journal(self):
         bare = {k: v for k, v in self.config.items() if k != "inquiryJournalPath"}
         self.assertIsNone(pending_inquiries(bare))
         checkpoint = respond({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                              "params": {"name": "buddy_checkpoint", "arguments": {}}}, bare)["result"]
+                              "params": {"name": "hey_my_buddy_checkpoint", "arguments": {}}}, bare)["result"]
         self.assertTrue(checkpoint["isError"])
         refused = respond({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                           "params": {"name": "buddy_answer_inquiry",
+                           "params": {"name": "hey_my_buddy_answer_inquiry",
                                       "arguments": {"inquiryId": "q-1", "answer": "x"}}}, bare)["result"]
         self.assertTrue(refused["isError"])
 
@@ -904,17 +904,17 @@ class FinishToolTests(unittest.TestCase):
         self.attention.write_text(json.dumps({"version": 1, "requests": [
             {"kind": "unsupported-native-request", "method": "interaction/requestPermission"}]}))
         self.assertEqual(attention_requests(self.config), 1)
-        refused = self.call("buddy_finish_turn", self.outcome("completed"))
-        envelope = self.refusal(refused, "buddy_finish_turn")
+        refused = self.call("hey_my_buddy_finish_turn", self.outcome("completed"))
+        envelope = self.refusal(refused, "hey_my_buddy_finish_turn")
         self.assertEqual(envelope["reason"], "attention-outstanding")
         self.assertIn("attention", envelope["detail"])
-        attention = self.call("buddy_finish_turn", self.outcome("attention"))
+        attention = self.call("hey_my_buddy_finish_turn", self.outcome("attention"))
         self.assertFalse(attention.get("isError"), attention)
         receipt = verify_receipt(attention["content"][0]["text"], self.config, turn_io.validate_outcome)
         self.assertEqual(receipt["outcome"]["disposition"], "attention")
 
     def test_a_completed_outcome_still_verifies_without_attention(self):
-        accepted = self.call("buddy_finish_turn", self.outcome("completed"))
+        accepted = self.call("hey_my_buddy_finish_turn", self.outcome("completed"))
         receipt = verify_receipt(accepted["content"][0]["text"], self.config, turn_io.validate_outcome)
         self.assertEqual(receipt["outcome"]["disposition"], "completed")
         tampered = json.loads(accepted["content"][0]["text"])
@@ -923,10 +923,10 @@ class FinishToolTests(unittest.TestCase):
             verify_receipt(json.dumps(tampered), self.config, turn_io.validate_outcome)
 
     def test_unknown_tools_and_invalid_outcomes_are_bounded_errors(self):
-        unknown = self.call("buddy_something_else", {})
+        unknown = self.call("hey_my_buddy_something_else", {})
         self.assertTrue(unknown["isError"])
-        invalid = self.call("buddy_finish_turn", {"disposition": "completed"})
-        envelope = self.refusal(invalid, "buddy_finish_turn")
+        invalid = self.call("hey_my_buddy_finish_turn", {"disposition": "completed"})
+        envelope = self.refusal(invalid, "hey_my_buddy_finish_turn")
         self.assertEqual(envelope["reason"], "invalid-arguments")
 
     def test_expected_refusals_are_signed_envelopes_bound_to_attempt_input_and_tool(self):
@@ -935,9 +935,9 @@ class FinishToolTests(unittest.TestCase):
         # attempt, this input and exactly the tool that refused.
         self.queue()
         refusals = [
-            ("buddy_finish_turn", self.outcome("completed"), "inquiry-pending"),
-            ("buddy_finish_turn", {"disposition": "guessing"}, "invalid-arguments"),
-            ("buddy_answer_inquiry", {"inquiryId": "q-none", "answer": "x"}, "unknown-inquiry"),
+            ("hey_my_buddy_finish_turn", self.outcome("completed"), "inquiry-pending"),
+            ("hey_my_buddy_finish_turn", {"disposition": "guessing"}, "invalid-arguments"),
+            ("hey_my_buddy_answer_inquiry", {"inquiryId": "q-none", "answer": "x"}, "unknown-inquiry"),
         ]
         for tool, arguments, reason in refusals:
             with self.subTest(tool=tool, reason=reason):
@@ -950,16 +950,16 @@ class FinishToolTests(unittest.TestCase):
                 # The envelope is bound to its exact tool: another tool's native
                 # name must not verify it.
                 with self.assertRaises(NativeError) as error:
-                    verify_tool_refusal(result["content"][0]["text"], self.config, "mcp__buddy_x__buddy_checkpoint"
-                                        if tool != "buddy_checkpoint" else "mcp__buddy_x__buddy_finish_turn",
-                                        ("buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn"))
+                    verify_tool_refusal(result["content"][0]["text"], self.config, "mcp__buddy_x__hey_my_buddy_checkpoint"
+                                        if tool != "hey_my_buddy_checkpoint" else "mcp__buddy_x__hey_my_buddy_finish_turn",
+                                        ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn"))
                 self.assertEqual(error.exception.code, "invalid-tool-refusal")
         # A foreign attempt configuration cannot verify another attempt's refusal.
         foreign = {**self.config, "identity": OTHER_IDENTITY, "key": "e" * 64}
         with self.assertRaises(NativeError):
-            verify_tool_refusal(self.call("buddy_finish_turn", self.outcome("completed"))["content"][0]["text"],
-                                foreign, "mcp__buddy_x__buddy_finish_turn",
-                                ("buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn"))
+            verify_tool_refusal(self.call("hey_my_buddy_finish_turn", self.outcome("completed"))["content"][0]["text"],
+                                foreign, "mcp__buddy_x__hey_my_buddy_finish_turn",
+                                ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn"))
 
     def test_an_explicit_null_suggested_buddy_is_the_accepted_no_suggestion(self):
         # The incident's finish arguments are now valid: an explicit null
@@ -968,7 +968,7 @@ class FinishToolTests(unittest.TestCase):
         # detail names the correction.
         with_null = self.outcome("attention")
         with_null["request"]["suggestedBuddyId"] = None
-        accepted = self.call("buddy_finish_turn", with_null)
+        accepted = self.call("hey_my_buddy_finish_turn", with_null)
         self.assertFalse(accepted.get("isError"), accepted)
         receipt = verify_receipt(accepted["content"][0]["text"], self.config, turn_io.validate_outcome)
         self.assertIsNone(receipt["outcome"]["request"]["suggestedBuddyId"])
@@ -976,7 +976,7 @@ class FinishToolTests(unittest.TestCase):
             with self.subTest(invalid=invalid):
                 bad = self.outcome("attention")
                 bad["request"]["suggestedBuddyId"] = invalid
-                envelope = self.refusal(self.call("buddy_finish_turn", bad), "buddy_finish_turn")
+                envelope = self.refusal(self.call("hey_my_buddy_finish_turn", bad), "hey_my_buddy_finish_turn")
                 self.assertEqual(envelope["reason"], "invalid-arguments")
                 self.assertIn("references are invalid", envelope["detail"])
 
@@ -988,21 +988,21 @@ class FinishToolTests(unittest.TestCase):
         # queued — the finish refusal still names them all by count.
         for index in range(32):
             self.queue(f"q-{index}", chr(1) * 4000)
-        checkpoint = self.call("buddy_checkpoint", {})
+        checkpoint = self.call("hey_my_buddy_checkpoint", {})
         self.assertFalse(checkpoint.get("isError"), checkpoint)
         receipt = verify_inquiry_receipt(checkpoint["content"][0]["text"], self.config, "inquiry-checkpoint")
         self.assertLess(len(receipt["inquiries"]), 32)
         self.assertEqual(receipt["morePending"], 32 - len(receipt["inquiries"]))
-        refused = self.call("buddy_finish_turn", self.outcome("completed"))
-        envelope = self.refusal(refused, "buddy_finish_turn")
+        refused = self.call("hey_my_buddy_finish_turn", self.outcome("completed"))
+        envelope = self.refusal(refused, "hey_my_buddy_finish_turn")
         self.assertEqual(envelope["reason"], "inquiry-pending")
         self.assertIn("(+28 more)", envelope["detail"])
-        self.assertIn("Call buddy_checkpoint", envelope["detail"])
+        self.assertIn("Call hey_my_buddy_checkpoint", envelope["detail"])
 
     def test_realistic_questions_all_fit_one_checkpoint_receipt(self):
         for index in range(32):
             self.queue(f"q-{index}", "What is the deployment word? " * 130)
-        checkpoint = self.call("buddy_checkpoint", {})
+        checkpoint = self.call("hey_my_buddy_checkpoint", {})
         receipt = verify_inquiry_receipt(checkpoint["content"][0]["text"], self.config, "inquiry-checkpoint")
         self.assertEqual(len(receipt["inquiries"]), 32)
         self.assertEqual(receipt.get("morePending", 0), 0)
@@ -1016,9 +1016,9 @@ class LiveActivityTests(ZcodeFixtureCase):
         from hey_my_buddy.buddy.roles.live import handle_live_binding
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            _, channel = handle_live_binding(handle, state_dir=Path(self.environment["BUDDY_STATE_DIR"]))
+            _, channel = handle_live_binding(handle, state_dir=Path(self.environment["HMB_STATE_DIR"]))
             if channel is not None:
-                self.assertEqual(channel._state_dir, Path(self.environment["BUDDY_STATE_DIR"]).resolve(),
+                self.assertEqual(channel._state_dir, Path(self.environment["HMB_STATE_DIR"]).resolve(),
                                  "the role channel must use the fixture's private state root")
                 return channel
             time.sleep(0.05)
@@ -1142,11 +1142,11 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         self.assertIn(COOPERATIVE_INQUIRY_NOTE, outcome.result["inquiry"]["limitation"])
         from hey_my_buddy.buddy.roles.worker_services import micro_task_prompt
 
-        prompt = micro_task_prompt("task", {"turn": 1}, "mcp__buddy_x__buddy_finish_turn",
-                                 checkpoint_tool="mcp__buddy_x__buddy_checkpoint",
-                                 answer_tool="mcp__buddy_x__buddy_answer_inquiry")
-        self.assertIn("mcp__buddy_x__buddy_checkpoint", prompt)
-        self.assertIn("mcp__buddy_x__buddy_answer_inquiry", prompt)
+        prompt = micro_task_prompt("task", {"turn": 1}, "mcp__buddy_x__hey_my_buddy_finish_turn",
+                                 checkpoint_tool="mcp__buddy_x__hey_my_buddy_checkpoint",
+                                 answer_tool="mcp__buddy_x__hey_my_buddy_answer_inquiry")
+        self.assertIn("mcp__buddy_x__hey_my_buddy_checkpoint", prompt)
+        self.assertIn("mcp__buddy_x__hey_my_buddy_answer_inquiry", prompt)
         self.assertIn("never on a timer", prompt)
 
 
@@ -1189,7 +1189,7 @@ class TransportWindowBoundaryTests(unittest.TestCase):
 
     def test_the_channel_entry_keeps_the_same_edges_and_refuses_bools(self):
         channel = CTwoLiveChannel(RUN_IDENTITY, TEST_CRM, name="window-probe", address="ipc://window-probe",
-                                  instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                                  instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         channel.close(reason="fixture-no-endpoint")
         for accepted in (100, 5000):
             with self.subTest(timeout_ms=accepted):
@@ -1210,7 +1210,7 @@ class NativeCatalogEmptyTests(ZcodeFixtureCase):
         import os
         from unittest import mock
 
-        with mock.patch.dict(os.environ, {**self.environment, "BUDDY_ZCODE_TEST_CASE": "catalog-empty"}, clear=True):
+        with mock.patch.dict(os.environ, {**self.environment, "HMB_ZCODE_TEST_CASE": "catalog-empty"}, clear=True):
             result = self.description.discover_models()
         # A successful native snapshot with no usable provider is a complete
         # observation, so the service can retire missing buddies instead of

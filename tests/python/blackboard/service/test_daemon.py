@@ -1,7 +1,7 @@
-"""Daemon wiring of the shared ceiling: BUDDY_MAX_CONCURRENT is the only limit.
+"""Daemon wiring of the shared ceiling: HMB_MAX_CONCURRENT is the only limit.
 
-BUDDY_MAX_CONCURRENT (default 8, range 1–32) sizes both the store's admission
-ceiling and the managed supervisor pool. The separate BUDDY_MAX_DECISIONS setting
+HMB_MAX_CONCURRENT (default 8, range 1–32) sizes both the store's admission
+ceiling and the managed supervisor pool. The separate HMB_MAX_DECISIONS setting
 and its reserved lane are gone: routing and execution share one ceiling and the
 same per-model-service counters.
 """
@@ -26,15 +26,15 @@ from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 CLEAN_ENV = {
     key: value
     for key, value in os.environ.items()
-    if not key.startswith("BUDDY_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
+    if not key.startswith("HMB_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
 }
 
 
 @contextmanager
 def clean_buddy_env(**overrides):
     environment = {**CLEAN_ENV,
-                   "BUDDY_CONSOLE_PORT": "0",
-                   "BUDDY_CLAUDE_CLI": str(PYTHON_ROOT.parent / "tests/python/fixtures/claude-not-installed"),
+                   "HMB_CONSOLE_PORT": "0",
+                   "HMB_CLAUDE_CLI": str(PYTHON_ROOT.parent / "tests/python/fixtures/claude-not-installed"),
                    **overrides}
     with patch.dict(os.environ, environment, clear=True):
         yield
@@ -55,18 +55,18 @@ class DaemonCeilingTests(BoardTestCase):
         self.assertEqual(daemon.pool.worker_ids[-1], "local-8")
 
     def test_buddy_max_concurrent_sizes_the_store_and_the_pool_together(self):
-        daemon = self.make_daemon("three", BUDDY_MAX_CONCURRENT="3")
+        daemon = self.make_daemon("three", HMB_MAX_CONCURRENT="3")
         self.assertEqual(daemon.store.max_concurrent, 3)
         self.assertEqual(daemon.pool.worker_ids, ["local", "local-2", "local-3"])
         self.assertEqual(daemon.pool.total_limit, 3)
 
     def test_the_ceiling_clamps_to_the_documented_one_to_thirty_two_range(self):
-        self.assertEqual(self.make_daemon("high", BUDDY_MAX_CONCURRENT="99").store.max_concurrent, 32)
-        self.assertEqual(self.make_daemon("low", BUDDY_MAX_CONCURRENT="0").store.max_concurrent, 1)
-        self.assertEqual(len(self.make_daemon("low2", BUDDY_MAX_CONCURRENT="0").pool.worker_ids), 1)
+        self.assertEqual(self.make_daemon("high", HMB_MAX_CONCURRENT="99").store.max_concurrent, 32)
+        self.assertEqual(self.make_daemon("low", HMB_MAX_CONCURRENT="0").store.max_concurrent, 1)
+        self.assertEqual(len(self.make_daemon("low2", HMB_MAX_CONCURRENT="0").pool.worker_ids), 1)
 
     def test_buddy_max_decisions_no_longer_exists_as_a_separate_limit(self):
-        daemon = self.make_daemon("nodecisions", BUDDY_MAX_CONCURRENT="4", BUDDY_MAX_DECISIONS="3")
+        daemon = self.make_daemon("nodecisions", HMB_MAX_CONCURRENT="4", HMB_MAX_DECISIONS="3")
         self.assertFalse(hasattr(daemon.store, "decision_concurrent"))
         self.assertEqual(daemon.pool.total_limit, 4)
         self.assertEqual(len(daemon.pool.worker_ids), 4)
@@ -273,10 +273,10 @@ class DaemonPoolLifecycleTests(BoardTestCase):
         from hey_my_buddy.buddy.runtime.supervisor import Supervisor
         from hey_my_buddy.buddy.runtime.worker import Worker
 
-        with patch.dict(os.environ, {"BUDDY_SUPERVISOR_START_ID": "1" * 32}):
+        with patch.dict(os.environ, {"HMB_SUPERVISOR_START_ID": "1" * 32}):
             first = Supervisor("shared", self.directory)
             first_worker = Worker("shared", self.directory)
-        with patch.dict(os.environ, {"BUDDY_SUPERVISOR_START_ID": "2" * 32}):
+        with patch.dict(os.environ, {"HMB_SUPERVISOR_START_ID": "2" * 32}):
             other = Supervisor("shared", self.directory)
             other_worker = Worker("shared", self.directory)
         first.directory.mkdir(parents=True, exist_ok=True)
@@ -310,7 +310,7 @@ class DaemonHealthTests(BoardTestCase):
         from hey_my_buddy.protocol.transport import _read_endpoint, _request
 
         with clean_buddy_env():
-            with self.daemon(env={"BUDDY_MAX_CONCURRENT": "2", "BUDDY_WORKER_ID": "local"}) as process:
+            with self.daemon(env={"HMB_MAX_CONCURRENT": "2", "HMB_WORKER_ID": "local"}) as process:
                 self.assertNotEqual(process.poll(), 0)
                 endpoint = _read_endpoint(self.directory)
                 def check_state(*args, **kwargs):

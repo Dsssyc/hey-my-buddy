@@ -260,7 +260,7 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
     and this mount only names it in the child command.
     """
     root = ensure_private_dir(Path(invocation_root))
-    server_name = "buddy_" + hashlib.sha256(identity["attemptId"].encode()).hexdigest()[:16]
+    server_name = "hey_my_buddy_" + hashlib.sha256(identity["attemptId"].encode()).hexdigest()[:16]
     qualified = {tool["name"]: f"mcp__{server_name}__{tool['name']}" for tool in session_tools}
     if completion_tool not in qualified:
         raise BoardError("INVALID_ARGUMENT",
@@ -273,8 +273,8 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
     # envelopes are the session-tool seam's own delivery evidence either way.
     # The inquiry channel only decides whether the bridge carries the journal
     # the tools read and which names the role's prompt cites.
-    checkpoint_tool = qualified.get("buddy_checkpoint")
-    answer_tool = qualified.get("buddy_answer_inquiry")
+    checkpoint_tool = qualified.get("hey_my_buddy_checkpoint")
+    answer_tool = qualified.get("hey_my_buddy_answer_inquiry")
     bridge = {"identity": dict(identity), "inputSha256": input_sha256, "key": secrets.token_hex(32),
               "attentionPath": str(attention_path)}
     if inquiry is not None and isinstance(inquiry.get("resultsPath"), str):
@@ -326,9 +326,9 @@ def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str
 #: the native turn, no input arrives mid-turn, and only a verified root-turn
 #: receipt advances the journal.
 CHECKPOINT_INQUIRY_NOTE = (
-    "Host questions reach this root only when the root itself calls buddy_checkpoint inside the one "
+    "Host questions reach this root only when the root itself calls hey_my_buddy_checkpoint inside the one "
     "admitted native turn (cooperative-checkpoint delivery); they are never injected mid-turn, never "
-    "start a new turn, and an answer counts only through buddy_answer_inquiry verified against this "
+    "start a new turn, and an answer counts only through hey_my_buddy_answer_inquiry verified against this "
     "root turn's own tool evidence"
 )
 
@@ -449,7 +449,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
     """
     binding = _binding_path(Path(native_root), session_id) if session_id else None
     if _micro_task_shared_native(native_root):
-        scope, owner = "task-shared-sessions", "buddy-micro-task"
+        scope, owner = "task-shared-sessions", "hey-my-buddy-micro-task"
         note = (
             "a Worker run's session rollout lives under the task's shared native-root sessions "
             "directory, pinned there by this run's private launch patch, while the launch "
@@ -460,7 +460,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
             "verified provenance and a confirmed group stop"
         )
     else:
-        scope, owner = "attempt-private-sessions", "buddy-attempt"
+        scope, owner = "attempt-private-sessions", "hey-my-buddy-attempt"
         note = (
             "this run's session rollout lives under a private sessions root of this carrier's own "
             "private root, not the task's shared native root; the DSH home, settings and "
@@ -487,7 +487,7 @@ def validate_turn_provenance(record: dict) -> str | None:
     foreign-session or reordered record fails here before the turn is imported.
     """
     p = record.get("provenance")
-    expected = {"version": 1, "harness": "dsh", "tool": "buddy_finish_turn", "turnEnd": "completed",
+    expected = {"version": 1, "harness": "dsh", "tool": "hey_my_buddy_finish_turn", "turnEnd": "completed",
                 "stopReason": "end_turn", "rootSessionMatched": True, "receiptVerified": True,
                 "sessionClose": "acknowledged"}
     if not isinstance(p, dict) or any(type(p.get(k)) is not type(v) or p.get(k) != v for k, v in expected.items()):

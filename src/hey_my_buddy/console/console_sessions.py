@@ -85,7 +85,7 @@ class ConsoleSessions:
         self.expire()
         deadline = self.entries.get(ticket)
         if deadline is None or self.clock() >= deadline:
-            raise BoardError("CONSOLE_ENTRY_EXPIRED", "This entry link is used or expired; run buddy console again")
+            raise BoardError("CONSOLE_ENTRY_EXPIRED", "This entry link is used or expired; run hey-my-buddy console again")
         if cookie:
             try:
                 current = self.authenticate(None, cookie)
@@ -116,7 +116,7 @@ class ConsoleSessions:
         digest = hashlib.sha256(cookie.encode()).hexdigest()
         session = next((s for s in self.sessions.values() if (session_id is None or s.id == session_id) and hmac.compare_digest(s.token_hash, digest)), None)
         if not cookie or session is None:
-            raise BoardError("CONSOLE_SESSION_EXPIRED", "This browser session is unavailable; run buddy console again")
+            raise BoardError("CONSOLE_SESSION_EXPIRED", "This browser session is unavailable; run hey-my-buddy console again")
         session.last_seen = self.clock()
         session.cookie = cookie
         self._save()

@@ -45,8 +45,8 @@ class FastRouterProbeTests(unittest.TestCase):
         start.assert_called_once()
         context = start.call_args.args[0]
         self.assertIsNone(context.agent_credential)
-        self.assertEqual(Path(context.environment['BUDDY_STATE_DIR']).parent, self.args.output_root.resolve())
-        self.assertEqual(Path(context.environment['BUDDY_RUNTIME_ROOT']).parent, self.args.output_root.resolve())
+        self.assertEqual(Path(context.environment['HMB_STATE_DIR']).parent, self.args.output_root.resolve())
+        self.assertEqual(Path(context.environment['HMB_RUNTIME_ROOT']).parent, self.args.output_root.resolve())
 
     def test_a_changed_packet_needs_a_new_output_root(self):
         probe.run(self.args)

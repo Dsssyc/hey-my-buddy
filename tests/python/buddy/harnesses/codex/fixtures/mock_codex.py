@@ -16,7 +16,7 @@ def send(value):
 
 
 def state_path():
-    return Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"])
+    return Path(os.environ["HMB_CODEX_FIXTURE_STATE"])
 
 
 def read_state():
@@ -121,7 +121,7 @@ def main():
     if "--version" in sys.argv:
         print("codex-cli fixture")
         return
-    case = os.environ.get("BUDDY_CODEX_FIXTURE_CASE", "ok")
+    case = os.environ.get("HMB_CODEX_FIXTURE_CASE", "ok")
     native_config = {"mcp_servers": {"user-tool": {}},
                      "features": {"apps": True}, "web_search": "enabled", "approval_policy": "on-request"}
     if case == "custom-provider":
@@ -155,7 +155,7 @@ def main():
         elif method == 'config/read':
             configured = dict(native_config)
             if case == 'readonly-config-mismatch' and 'permissions' in configured:
-                configured['permissions']['buddy-router']['network']['enabled'] = True
+                configured['permissions']['hey-my-buddy-router']['network']['enabled'] = True
             result = {'config': [] if case == 'config-unreadable' else configured}
             if case == 'config-result-unreadable':
                 result = []

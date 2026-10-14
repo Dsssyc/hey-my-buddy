@@ -1,6 +1,6 @@
-"""Structured CLI for the Buddy service (the single supported entrypoint).
+"""Structured CLI for the hey-my-buddy service (the single supported entrypoint).
 
-Everything the plugin offers is one ``buddy`` command: one method name, one JSON
+Everything the plugin offers is one ``hey-my-buddy`` command: one method name, one JSON
 object argument, one JSON object on stdout. The single micro task lifecycle owns
 the bare names (``submit``, ``get``, ``decide``, ``continue``, ``takeover``,
 ``cancel``, ``accept``, ``conclude``, ``reclaim``, ``await``, ``suggest``); ``execution-*`` names reach the
@@ -11,7 +11,7 @@ infrastructure own. The current command surface is documented in
 The one JSON object may be given as the positional argument, as ``--params-file
 PATH`` or on standard input (``-``); the three are mutually exclusive and the file
 or stream content is decoded as UTF-8 and parsed directly, never through a shell.
-``buddy help`` lists every method and ``buddy help METHOD`` prints the parameters
+``hey-my-buddy help`` lists every method and ``hey-my-buddy help METHOD`` prints the parameters
 that method actually validates (see :mod:`hey_my_buddy.cli.cli_help`).
 """
 import argparse
@@ -120,8 +120,8 @@ MAX_PARAMS_BYTES = transport.MAX_MESSAGE_BYTES
 
 EPILOG = """\
 examples:
-  Input: one JSON object as the positional argument, --params-file PATH or "-" (stdin); the three are mutually exclusive, decoded as UTF-8 and never re-interpreted by a shell. `buddy help [METHOD]` prints the methods or one method's validated parameters and starts no service.
-  buddy submit '{"requestId":"fix-123","hostId":"host-1","task":"...","cwd":"/abs/path","executionWorkspace":{"kind":"existing","access":"write"}}'
+  Input: one JSON object as the positional argument, --params-file PATH or "-" (stdin); the three are mutually exclusive, decoded as UTF-8 and never re-interpreted by a shell. `hey-my-buddy help [METHOD]` prints the methods or one method's validated parameters and starts no service.
+  hey-my-buddy submit '{"requestId":"fix-123","hostId":"host-1","task":"...","cwd":"/abs/path","executionWorkspace":{"kind":"existing","access":"write"}}'
       Admit one micro task in an explicit executionWorkspace: kind existing|worktree,
       access read|write|full (default write; full requires accessReason), base {kind:commit|working-tree,ref?}, includeUntracked,
       writeScope and targetRef; the source cwd and the integrator are derived from
@@ -134,19 +134,19 @@ examples:
       capability) returns the Host control capability; the CLI saves it to a 0600 file
       and prints only its controlFile path. The control token is never printed.
 
-  buddy get '{"runId":"<runId>"}'      buddy get '{"runId":"<runId>","includeAudit":true}'
+  hey-my-buddy get '{"runId":"<runId>"}'      hey-my-buddy get '{"runId":"<runId>","includeAudit":true}'
       Read the compact micro-task view (control tokens are never exposed) or the full
       audit. `suggest '{"runId":"...","body":"..."}'` records one bounded suggestion
       on the caller's own run. Unknown never means stopped: read `shutdown` before
       treating a micro task as closed.
 
-  buddy decide '{"runId":"<runId>","requestId":"req-1","commandId":"cmd-1","expectedRevision":1,"decision":"approve","helpers":[],"controlFile":"/path/from-submit"}'
-  buddy continue '{"runId":"<runId>","commandId":"cmd-2","expectedRevision":2,"input":"...","helperPolicy":"keep","controlFile":"..."}'
+  hey-my-buddy decide '{"runId":"<runId>","requestId":"req-1","commandId":"cmd-1","expectedRevision":1,"decision":"approve","helpers":[],"controlFile":"/path/from-submit"}'
+  hey-my-buddy continue '{"runId":"<runId>","commandId":"cmd-2","expectedRevision":2,"input":"...","helperPolicy":"keep","controlFile":"..."}'
       continue may set access and accessReason for the next turn; omission keeps the current choice.
-  buddy takeover '{"runId":"<runId>","commandId":"cmd-3","expectedOwnerGeneration":1,"newHostId":"host-2","controlFile":"..."}'
-  buddy cancel '{"runId":"<runId>","commandId":"cmd-4","reason":"...","controlFile":"..."}'
-  buddy scope-amend '{"runId":"<runId>","commandId":"cmd-5","expectedRevision":3,"expectedScopeVersion":1,"writeScope":["src"],"reason":"...","controlFile":"..."}'
-  buddy conclude '{"runId":"<runId>","note":"failed after the schema change; partial work retained","controlFile":"..."}'   buddy reclaim '{"runId":"<runId>","controlFile":"..."}'
+  hey-my-buddy takeover '{"runId":"<runId>","commandId":"cmd-3","expectedOwnerGeneration":1,"newHostId":"host-2","controlFile":"..."}'
+  hey-my-buddy cancel '{"runId":"<runId>","commandId":"cmd-4","reason":"...","controlFile":"..."}'
+  hey-my-buddy scope-amend '{"runId":"<runId>","commandId":"cmd-5","expectedRevision":3,"expectedScopeVersion":1,"writeScope":["src"],"reason":"...","controlFile":"..."}'
+  hey-my-buddy conclude '{"runId":"<runId>","note":"failed after the schema change; partial work retained","controlFile":"..."}'   hey-my-buddy reclaim '{"runId":"<runId>","controlFile":"..."}'
       conclude ends a failed, cancelled or delivered-but-unaccepted micro task: unsealed
       managed changes are sealed as an independent Host partial output, the
       micro task enters terminal concluded and the checkout is reclaimed. reclaim retries the
@@ -154,16 +154,16 @@ examples:
       targetRunId for an owned helper and no command number: the same request
       replays, a changed payload conflicts. controlFile injects the control triple;
       no implicit latest-generation lookup. accepted and concluded micro tasks cannot continue.
-  buddy workspace-resolve '{"runId":"<runId>","commandId":"cmd-6","expectedRevision":4,"conflictId":"...","action":"restore","paths":["file"],"observedFingerprint":"...","controlFile":"..."}'
-  buddy accept '{"runId":"<runId>","artifactId":"...","note":"inspected the diff and ran the checks","target":{"path":"/abs/target","ref":"main"},"controlFile":"..."}'
-  buddy accept '{"runId":"<runId>","artifactId":"...","note":"no repository target needed","notRequired":"the artifact needs no repository target","controlFile":"..."}'
+  hey-my-buddy workspace-resolve '{"runId":"<runId>","commandId":"cmd-6","expectedRevision":4,"conflictId":"...","action":"restore","paths":["file"],"observedFingerprint":"...","controlFile":"..."}'
+  hey-my-buddy accept '{"runId":"<runId>","artifactId":"...","note":"inspected the diff and ran the checks","target":{"path":"/abs/target","ref":"main"},"controlFile":"..."}'
+  hey-my-buddy accept '{"runId":"<runId>","artifactId":"...","note":"no repository target needed","notRequired":"the artifact needs no repository target","controlFile":"..."}'
       Accept one delivered artifact. The service compares the artifact with the
       target itself; differing paths are refused with their names first, and your
       own adjustments are confirmed with "adjusted":true (the note is the reason).
       Optional hostPaths with beforeCommit verify real Host additions; the checkout
       is reclaimed afterwards unless "keepCheckout":true.
 
-  buddy await '{"runId":"<runId>"}'      buddy await '{"requestId":"fix-123","waitSeconds":3600}'
+  hey-my-buddy await '{"runId":"<runId>"}'      hey-my-buddy await '{"requestId":"fix-123","waitSeconds":3600}'
       Wait without starting, resuming or cancelling work. waitSeconds is at most
       86400 (the default); wait-timeout leaves the run active. Re-await the same
       runId, use status/get for live state, and result only after a receipt exists.
@@ -171,45 +171,45 @@ examples:
 
   Advanced execution records (command/external adapters and internal decision
   infrastructure only; the service refuses execution dsh/zcode here):
-  buddy execution-submit '{"requestId":"probe-1","task":"...","cwd":"/abs/path","adapter":"command","argv":["/bin/echo","hi"],"timeoutSeconds":1800}'
-  buddy execution-cancel '{"runId":"<runId>","reason":"..."}'
-  buddy execution-retry '{"runId":"<runId>","reason":"..."}'
-  buddy execution-acknowledge '{"runId":"<runId>","note":"...","verdict":"accepted"}'
+  hey-my-buddy execution-submit '{"requestId":"probe-1","task":"...","cwd":"/abs/path","adapter":"command","argv":["/bin/echo","hi"],"timeoutSeconds":1800}'
+  hey-my-buddy execution-cancel '{"runId":"<runId>","reason":"..."}'
+  hey-my-buddy execution-retry '{"runId":"<runId>","reason":"..."}'
+  hey-my-buddy execution-acknowledge '{"runId":"<runId>","note":"...","verdict":"accepted"}'
       Explicit task operations, separate from the micro task lifecycle. execution-submit
       requires requestId, task and an absolute cwd; use the command or external
       adapter. A micro-task run's execution record additionally needs its Host control.
 
-  buddy status '{"runId":"<runId>"}'   buddy result '{"runId":"<runId>"}'   buddy list '{"limit":20}'
-  buddy artifacts '{"runId":"<runId>"}'   buddy events '{"after":0}'
-  buddy wait '{"runId":"<runId>","timeoutMs":30000}'   buddy watch '{"after":0,"timeoutMs":30000}'
-  buddy inquire '{"runId":"<runId>"}'
-  buddy inquire '{"runId":"<runId>","inquiryId":"q1","question":"what is blocking you?","waitMs":20000}'
+  hey-my-buddy status '{"runId":"<runId>"}'   hey-my-buddy result '{"runId":"<runId>"}'   hey-my-buddy list '{"limit":20}'
+  hey-my-buddy artifacts '{"runId":"<runId>"}'   hey-my-buddy events '{"after":0}'
+  hey-my-buddy wait '{"runId":"<runId>","timeoutMs":30000}'   hey-my-buddy watch '{"after":0,"timeoutMs":30000}'
+  hey-my-buddy inquire '{"runId":"<runId>"}'
+  hey-my-buddy inquire '{"runId":"<runId>","inquiryId":"q1","question":"what is blocking you?","waitMs":20000}'
       Execution observation stays distinct: status, result, list, artifacts and events
       read execution records, wait/watch use the dedicated bounded wait resource, and
       inquire is bounded read-only observation or one correlated question to a live
       agent whose adapter declares inquiry support.
 
-  buddy workers   buddy wait-capacity   buddy message '{"runId":"<runId>","inquiryId":"q2","question":"status?"}'
-  buddy message-get '{"runId":"<runId>","inquiryId":"q2"}'
-  buddy worker-start '{"workerId":"local"}'   buddy worker-stop '{"workerId":"local"}'
+  hey-my-buddy workers   hey-my-buddy wait-capacity   hey-my-buddy message '{"runId":"<runId>","inquiryId":"q2","question":"status?"}'
+  hey-my-buddy message-get '{"runId":"<runId>","inquiryId":"q2"}'
+  hey-my-buddy worker-start '{"workerId":"local"}'   hey-my-buddy worker-stop '{"workerId":"local"}'
       Board operations for external workers and operators. The local worker commands
       start or cooperatively stop one independent Python worker supervisor.
 
-  buddy health   buddy capabilities   buddy runtime   buddy console   buddy restart   buddy stop
-      Service control. `buddy stop` cancels queued work, durably requests cancellation
+  hey-my-buddy health   hey-my-buddy capabilities   hey-my-buddy runtime   hey-my-buddy console   hey-my-buddy restart   hey-my-buddy stop
+      Service control. `hey-my-buddy stop` cancels queued work, durably requests cancellation
       for active attempts, drains for a bounded interval and lists unresolved attempts.
-      `buddy restart` detaches the daemon while preserving every independent worker.
+      `hey-my-buddy restart` detaches the daemon while preserving every independent worker.
 
-  buddy console-snapshot '{}'   buddy model-catalog-refresh '{"requestId":"first"}'
+  hey-my-buddy console-snapshot '{}'   hey-my-buddy model-catalog-refresh '{"requestId":"first"}'
       Read the bounded evaluation snapshot, or explicitly discover the installed
       harness model catalog. Neither runs a model; discovery never exposes credentials.
 
-  buddy buddy-list '{"includeUnavailable":true,"limit":100,"query":"GLM","harness":"zcode"}'
+  hey-my-buddy buddy-list '{"includeUnavailable":true,"limit":100,"query":"GLM","harness":"zcode"}'
       Search retained buddy identities before pagination; query has at most
       200 characters and 8 whitespace-separated terms. Read nextCursor for more.
 
-  buddy selection-request '{"requestId":"pick-1","task":"make the failing parser test pass","requiredCapabilities":["effort:high"]}'
-  buddy selection-get '{"decisionId":"dec-..."}'
+  hey-my-buddy selection-request '{"requestId":"pick-1","task":"make the failing parser test pass","requiredCapabilities":["effort:high"]}'
+  hey-my-buddy selection-get '{"decisionId":"dec-..."}'
       One durable, bounded selection decision. The default read is a compact Host
       summary carrying selectedBuddy (the frozen execution identity to delegate
       with); add "includeAudit":true for the persisted model input, envelope and
@@ -269,14 +269,14 @@ def _worker_command_unlocked(action: str, params: dict, state_dir: Path) -> dict
     # The supervisor is a service process: build its environment from the explicit
     # allowlist instead of the CLI's Host session, then select the runtime.
     environment = service_environment({
-        "BUDDY_STATE_DIR": str(state_dir),
-        "BUDDY_WORKER_ID": worker_id,
-        "BUDDY_RUNTIME_IDENTITY": target["identity"],
+        "HMB_STATE_DIR": str(state_dir),
+        "HMB_WORKER_ID": worker_id,
+        "HMB_RUNTIME_IDENTITY": target["identity"],
     })
     if target["pythonPath"]:
         environment["PYTHONPATH"] = target["pythonPath"]
     if target["stable"]:
-        environment["BUDDY_RUNTIME"] = target["runtime"]["runtimeDir"]
+        environment["HMB_RUNTIME"] = target["runtime"]["runtimeDir"]
         # The explicit interpreter selects its own venv; PATH makes it the first
         # interpreter for tools that run in a delegated workspace.
         environment["PATH"] = str(Path(target["python"]).parent) + os.pathsep + environment.get("PATH", os.defpath)
@@ -318,20 +318,20 @@ _RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 def _agent_credential() -> str | None:
     """The attempt-scoped credential from the environment, never the administrator token."""
-    token = os.environ.get("BUDDY_AGENT_CREDENTIAL")
+    token = os.environ.get("HMB_AGENT_CREDENTIAL")
     if token is not None:
         if not token.strip():
             raise BoardError(
                 "UNAUTHORIZED",
-                "BUDDY_AGENT_CREDENTIAL is empty; an attempt-scoped credential is never replaced by the "
+                "HMB_AGENT_CREDENTIAL is empty; an attempt-scoped credential is never replaced by the "
                 "administrator token",
             )
         return token.strip()
-    path_value = os.environ.get("BUDDY_AGENT_CREDENTIAL_FILE")
+    path_value = os.environ.get("HMB_AGENT_CREDENTIAL_FILE")
     if path_value is None:
         return None
     if not path_value.strip():
-        raise BoardError("UNAUTHORIZED", "BUDDY_AGENT_CREDENTIAL_FILE is empty")
+        raise BoardError("UNAUTHORIZED", "HMB_AGENT_CREDENTIAL_FILE is empty")
     try:
         value = json.loads(Path(path_value).expanduser().read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, ValueError) as exc:
@@ -618,9 +618,9 @@ def _parse_parameters(text: str) -> dict:
 
 
 def _help_command(arguments: list[str]) -> int:
-    """``buddy help [METHOD]``: generated from the validators, starting nothing."""
+    """``hey-my-buddy help [METHOD]``: generated from the validators, starting nothing."""
     if len(arguments) > 1:
-        _usage_error({"code": "UNKNOWN_METHOD", "message": "buddy help takes at most one method name"})
+        _usage_error({"code": "UNKNOWN_METHOD", "message": "hey-my-buddy help takes at most one method name"})
     text, candidates = cli_help.render(arguments[0] if arguments else None, METHODS)
     if text is not None:
         print(text)
@@ -654,11 +654,11 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
     parser = argparse.ArgumentParser(
-        description="Buddy service: micro tasks, durable execution records, independent workers and routed harness execution",
+        description="hey-my-buddy service: micro tasks, durable execution records, independent workers and routed harness execution",
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("method", metavar="METHOD", help="run `buddy help` for every method and its parameters")
+    parser.add_argument("method", metavar="METHOD", help="run `hey-my-buddy help` for every method and its parameters")
     parser.add_argument("params", nargs="?", default=None, help='one JSON object, or "-" to read it from standard input')
     parser.add_argument("--params-file", metavar="PATH", default=None, help='read the JSON object from PATH ("-" for standard input)')
     args = parser.parse_args(argv)

@@ -2,7 +2,7 @@
 
 The DSH harness runs through its registered run module against an offline
 Python micro-task ACP agent (``buddy/harnesses/dsh/fixtures/workflow_agent.py``,
-selected as a direct executable command through ``BUDDY_DSH_CLI``); everything
+selected as a direct executable command through ``HMB_DSH_CLI``); everything
 else is the real service: real daemon, real supervisor/worker, the merged
 Git-backed workspace module, the real C-Two/CLI path and the real console
 command route.
@@ -35,7 +35,7 @@ def harness_environment(directory: Path) -> dict:
     """Select the offline micro-task agent as the harness's CLI entry.
 
     The daemon chain runs the service-selected health record, and the catalog
-    fixture daemon composes every harness's command from ``BUDDY_<X>_CLI`` —
+    fixture daemon composes every harness's command from ``HMB_<X>_CLI`` —
     a ``.py`` entry launches under the daemon's own interpreter, anything else
     runs directly, with no wrapper script and no production compatibility
     variable. The selection is this module's micro-task fixture file. HOME is
@@ -44,7 +44,7 @@ def harness_environment(directory: Path) -> dict:
     """
     home = directory / "home"
     home.mkdir(mode=0o700, exist_ok=True)
-    return {"HOME": str(home), "BUDDY_DSH_CLI": str(FIXTURE)}
+    return {"HOME": str(home), "HMB_DSH_CLI": str(FIXTURE)}
 
 
 class MicroTaskWorkerTestCase(BoardTestCase):
@@ -157,7 +157,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             _, receipt = self.cli("result", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
             native = (receipt.get("result") or {}).get("nativeSession") or {}
             self.assertEqual(native.get("storageScope"), "task-shared-sessions")
-            self.assertEqual(native.get("storageOwner"), "buddy-micro-task")
+            self.assertEqual(native.get("storageOwner"), "hey-my-buddy-micro-task")
             self.assertEqual(native.get("nativeAppVisibility"), "not-listed-in-native-app")
             self.assertEqual(native.get("credentialsStore"), "harness-user-store")
             self.assertTrue(native.get("bindingPresent"))
@@ -212,7 +212,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             credential = self.directory / "agent-credential.json"
             credential.write_text(json.dumps({"token": "not-a-real-credential"}))
             os.chmod(credential, 0o600)
-            env = {**self.env(), "BUDDY_AGENT_CREDENTIAL_FILE": str(credential)}
+            env = {**self.env(), "HMB_AGENT_CREDENTIAL_FILE": str(credential)}
             code, refused = self.cli(
                 "submit",
                 json.dumps({"requestId": "forged", "task": "x", "cwd": str(self.repo)}),
@@ -373,7 +373,7 @@ class SubmissionPreparationRaceTests(MicroTaskWorkerTestCase):
         from hey_my_buddy.cli import main as cli
         from hey_my_buddy.errors import BoardError
 
-        with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory)}):
+        with mock.patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory)}):
             tokens = self._race(lambda: cli._submission_token("req-race", {}, self.directory))
             self.assertEqual(len(set(tokens)), 1, tokens)
             path = next((self.directory / "submissions").glob("*.json"))

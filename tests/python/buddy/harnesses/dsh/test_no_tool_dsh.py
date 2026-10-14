@@ -43,7 +43,7 @@ class DshNoToolTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-no-tool-dsh-")
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-no-tool-dsh-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / "state").mkdir(mode=0o700)
@@ -52,7 +52,7 @@ class DshNoToolTests(unittest.TestCase):
         self.log = self.root / "logs" / "fake-agent.log"
         self.record = self.root / "harness-record.json"
         self.select('{"choice":"a"}')
-        self.environment = {k: v for k, v in os.environ.items() if not k.startswith("BUDDY_")
+        self.environment = {k: v for k, v in os.environ.items() if not k.startswith("HMB_")
                             and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         self.environment["PYTHONPATH"] = str(Path(__file__).parents[5] / "src") + os.pathsep + \
             str(Path(__file__).parents[3]) + os.pathsep + os.environ.get("PYTHONPATH", "")
@@ -61,9 +61,9 @@ class DshNoToolTests(unittest.TestCase):
         # so the agent's forced-private-home tripwire holds off the invoking shell.
         (self.root / "home").mkdir(mode=0o700)
         self.environment.update(HOME=str(self.root / "home"),
-                                BUDDY_STATE_DIR=str(self.root / "state"),
-                                BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
-                                BUDDY_DEV_SOURCE="1", BUDDY_HARNESS_RECORD_FILE=str(self.record))
+                                HMB_STATE_DIR=str(self.root / "state"),
+                                HMB_RUNTIME_ROOT=str(self.root / "runtime"),
+                                HMB_DEV_SOURCE="1", HMB_HARNESS_RECORD_FILE=str(self.record))
 
     def select(self, *answers: str) -> None:
         """Point the harness record at the fake agent with these final answers."""

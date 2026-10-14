@@ -44,7 +44,7 @@ export type AuthorityLatch = ReturnType<typeof createAuthorityLatch>;
  * without a reload; drafts stay right here.
  */
 export const LOGIN_EXPIRED_BANNER =
-  "登录已失效：在终端运行 buddy console 重新登录后，本页会自动恢复。草稿保留在本页。";
+  "登录已失效：在终端运行 hey-my-buddy console 重新登录后，本页会自动恢复。草稿保留在本页。";
 
 /** Copy for a mutation control an unauthenticated page cannot use. */
 export const LOGIN_EXPIRED_ACTION_REFUSAL =

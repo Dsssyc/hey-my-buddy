@@ -18,7 +18,7 @@ touching the user's ``~/.zcode`` state:
    the CLI session exactly.
 
 Every native subprocess runs with an explicitly constructed minimal
-environment: Buddy runtime/worker/agent credentials and virtual-environment
+environment: hey-my-buddy runtime/worker/agent credentials and virtual-environment
 variables are scrubbed (AGENTS.md), ZCode state/log/session paths point inside
 the private work directory, and provider credentials are used only through the
 same ``ZCODE_*_PROVIDER_CONFIG_FILE`` variables the harness passes to this
@@ -64,14 +64,14 @@ DEFAULT_NODE_CANDIDATES = (
 # AGENTS.md: clear inherited runtime, Worker and agent credentials for every
 # test subprocess, plus the virtual-environment variables uv injects.
 CREDENTIAL_ENV_VARS = (
-    "BUDDY_STATE_DIR",
-    "BUDDY_RUNTIME_ROOT",
-    "BUDDY_RUNTIME",
-    "BUDDY_RUNTIME_IDENTITY",
-    "BUDDY_WORKER_STATE",
-    "BUDDY_WORKER_ID",
-    "BUDDY_AGENT_CREDENTIAL",
-    "BUDDY_AGENT_CREDENTIAL_FILE",
+    "HMB_STATE_DIR",
+    "HMB_RUNTIME_ROOT",
+    "HMB_RUNTIME",
+    "HMB_RUNTIME_IDENTITY",
+    "HMB_WORKER_STATE",
+    "HMB_WORKER_ID",
+    "HMB_AGENT_CREDENTIAL",
+    "HMB_AGENT_CREDENTIAL_FILE",
     "VIRTUAL_ENV",
     "UV_PROJECT_ENVIRONMENT",
 )

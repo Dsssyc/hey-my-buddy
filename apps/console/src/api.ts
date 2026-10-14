@@ -21,14 +21,14 @@ const messages: Record<string, string> = {
   SHUTDOWN_UNCONFIRMED: "停止未确认；请稍后核对再重试。",
   STORAGE_INCOMPLETE: "清理未完成；请重试同一请求。",
   PLAN_EXPIRED: "计划已过期；请重新检查。",
-  CONSOLE_SESSION_EXPIRED: "登录已失效；请运行 buddy console 重新登录。",
+  CONSOLE_SESSION_EXPIRED: "登录已失效；请运行 hey-my-buddy console 重新登录。",
   CONSOLE_ENTRY_EXPIRED: "入口已过期；请重新打开控制台。",
 };
 
 /**
  * The one identity-loss refusal the board still issues: an HTTP 401
  * `CONSOLE_SESSION_EXPIRED`. A callback receiving it must not automatically
- * retry a write; a fresh `buddy console` login restores authority.
+ * retry a write; a fresh `hey-my-buddy console` login restores authority.
  */
 export const SESSION_EXPIRED_CODE = "CONSOLE_SESSION_EXPIRED";
 
@@ -639,7 +639,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Buddy-CSRF": csrfToken,
+          "X-Hey-My-Buddy-CSRF": csrfToken,
         },
         body: JSON.stringify({ operation, params }),
       })) as { ok: boolean; result: T };
@@ -813,7 +813,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Buddy-CSRF": csrfToken,
+        "X-Hey-My-Buddy-CSRF": csrfToken,
       },
       body: JSON.stringify({ operation, params }),
     }) as { ok: boolean; result: T };

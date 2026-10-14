@@ -89,7 +89,7 @@ class Browser:
     def command(self, operation: str, params: dict, *, csrf: str | None = None):
         headers = {"Content-Type": "application/json"}
         if csrf is not None:
-            headers["X-Buddy-CSRF"] = csrf
+            headers["X-Hey-My-Buddy-CSRF"] = csrf
         return self.call(
             "POST",
             self.prefix + "/api/command",
@@ -104,7 +104,7 @@ def raw_status(browser: Browser, csrf: str, *, extra_headers: str) -> str:
         raw.sendall(
             (
                 f"POST {browser.prefix}/api/command HTTP/1.1\r\nHost: {browser.host}:{browser.port}\r\n"
-                f"Origin: {browser.origin}\r\nCookie: {browser.cookie}\r\nX-Buddy-CSRF: {csrf}\r\n"
+                f"Origin: {browser.origin}\r\nCookie: {browser.cookie}\r\nX-Hey-My-Buddy-CSRF: {csrf}\r\n"
                 f"{extra_headers}Connection: close\r\n\r\n"
             ).encode()
         )
@@ -140,7 +140,7 @@ class ConsoleTestCase(BoardTestCase):
         if assets:
             root = board.console.assets_dir
             (root / "assets").mkdir(parents=True, exist_ok=True)
-            (root / "index.html").write_text("<!doctype html><div id=root>Buddy console fixture</div>")
+            (root / "index.html").write_text("<!doctype html><div id=root>hey-my-buddy console fixture</div>")
             (root / "assets" / "app.js").write_text("export const ready = true;\n")
             (root / "assets" / "app.css").write_text("body{color:#20332e}\n")
         stated = board.call("console", {"action": "open"})
@@ -193,7 +193,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
             "POST",
             browser.prefix + "/api/command",
             body=body,
-            headers={"Host": f"{browser.host}:{browser.port}", "Origin": browser.origin, "X-Buddy-CSRF": csrf},
+            headers={"Host": f"{browser.host}:{browser.port}", "Origin": browser.origin, "X-Hey-My-Buddy-CSRF": csrf},
         )
         self.assertEqual(status, 401, data)
         # Session cookie but no CSRF header.
@@ -204,12 +204,12 @@ class ConsoleSecurityTests(ConsoleTestCase):
             "POST",
             browser.prefix + "/api/command",
             body=body,
-            headers={"Cookie": "buddy_console_session=forged", "X-Buddy-CSRF": csrf},
+            headers={"Cookie": "hey_my_buddy_console_session=forged", "X-Hey-My-Buddy-CSRF": csrf},
         )
         self.assertEqual(status, 401)
         # Wrong CSRF value.
         status, _headers, _data = browser.call(
-            "POST", browser.prefix + "/api/command", body=body, headers={"X-Buddy-CSRF": "nope"}
+            "POST", browser.prefix + "/api/command", body=body, headers={"X-Hey-My-Buddy-CSRF": "nope"}
         )
         self.assertEqual(status, 403)
         self.assertEqual(board.call("console_snapshot", {})["configuration"], snapshot["configuration"])
@@ -220,7 +220,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         snapshot = browser.bootstrap()
         csrf = snapshot["csrfToken"]
         body = {"operation": "model_catalog_refresh", "params": {"requestId": "origin-check"}}
-        good_headers = {"X-Buddy-CSRF": csrf, "Content-Type": "application/json"}
+        good_headers = {"X-Hey-My-Buddy-CSRF": csrf, "Content-Type": "application/json"}
 
         status, _h, _d = browser.call(
             "POST", browser.prefix + "/api/command", body=body, headers={**good_headers, "Origin": "http://evil.example"}
@@ -268,7 +268,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
             "POST",
             browser.prefix + "/api/command",
             body={"operation": "task_list", "params": {}, "nonsense": 1},
-            headers={"X-Buddy-CSRF": csrf},
+            headers={"X-Hey-My-Buddy-CSRF": csrf},
         )
         self.assertEqual(status, 400)
         self.assertEqual(json.loads(data)["error"]["code"], "INVALID_ARGUMENT")
@@ -277,7 +277,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         self.assertIn("411", raw_status(browser, csrf, extra_headers=""))
         self.assertIn("413", raw_status(browser, csrf, extra_headers="Content-Length: 1048577\r\n"))
         status, _h, _data = browser.call(
-            "POST", browser.prefix + "/api/command", body=b"", headers={"X-Buddy-CSRF": csrf}
+            "POST", browser.prefix + "/api/command", body=b"", headers={"X-Hey-My-Buddy-CSRF": csrf}
         )
         self.assertEqual(status, 413)
         # A real oversized body is refused before any of it is parsed. The server may
@@ -288,7 +288,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
                 "POST",
                 browser.prefix + "/api/command",
                 body=b"x" * (1024 * 1024 + 1),
-                headers={"X-Buddy-CSRF": csrf, "Content-Type": "application/json"},
+                headers={"X-Hey-My-Buddy-CSRF": csrf, "Content-Type": "application/json"},
             )
         except (ConnectionResetError, BrokenPipeError):
             status = 413
@@ -609,7 +609,7 @@ class ConsoleAssetTests(ConsoleTestCase):
         _, browser = self.open_console(board, assets=True)
         status, headers, body = browser.get("/")
         self.assertEqual(status, 200)
-        self.assertIn("Buddy console fixture", body.decode())
+        self.assertIn("hey-my-buddy console fixture", body.decode())
         self.assertEqual(headers["cache-control"], "no-cache")
         status, headers, body = browser.get("/assets/app.js")
         self.assertEqual(status, 200)
@@ -644,7 +644,7 @@ class ConsoleAssetTests(ConsoleTestCase):
         status, headers, body = browser.get("/evaluation/table")
         self.assertEqual(status, 200)
         self.assertIn("text/html", headers["content-type"])
-        self.assertIn("Buddy console fixture", body.decode())
+        self.assertIn("hey-my-buddy console fixture", body.decode())
 
     def test_console_close_and_reopen_requires_cookie_at_stable_path(self):
         board = self.board()
@@ -695,7 +695,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
         )
         environment = {
             "PYTHONPATH": os.pathsep.join((str(guard), str(PYTHON_ROOT), os.environ.get("PYTHONPATH", ""))),
-            **{f"BUDDY_{name}_CLI": str(decoy) for name in ("CLAUDE", "CODEX", "DSH", "ZCODE")},
+            **{f"HMB_{name}_CLI": str(decoy) for name in ("CLAUDE", "CODEX", "DSH", "ZCODE")},
         }
         payload = json.loads(self._catalog_fixture_path.read_text())
         model = payload["providers"][0]["models"][0]

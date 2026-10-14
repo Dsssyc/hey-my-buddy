@@ -1,0 +1,26 @@
+#!/bin/sh
+# The shared skill's POSIX command entry. Daily calls use the active Python.
+set -eu
+HMB_SKILL_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ -f "$HMB_SKILL_DIR/package/pyproject.toml" ]; then
+  HMB_PROJECT_DIR="$HMB_SKILL_DIR/package"
+else
+  HMB_PROJECT_DIR=$(CDPATH= cd -- "$HMB_SKILL_DIR/../.." && pwd)
+fi
+export HMB_SKILL_DIR
+case "${1:-}" in
+  install|upgrade)
+    exec "${UV_BIN:-uv}" run --frozen --python 3.12 --project "$HMB_PROJECT_DIR" python "$HMB_PROJECT_DIR/src/hey_my_buddy/install/launcher.py" "$@"
+    ;;
+esac
+if [ "${HMB_DEV_SOURCE:-}" = 1 ]; then
+  exec "${UV_BIN:-uv}" run --frozen --python 3.12 --project "$HMB_PROJECT_DIR" python "$HMB_PROJECT_DIR/src/hey_my_buddy/install/launcher.py" "$@"
+fi
+if [ -z "${HMB_BOOTSTRAP_PYTHON:-}" ] && [ -f "$HMB_SKILL_DIR/.runtime-python" ]; then
+  IFS= read -r HMB_BOOTSTRAP_PYTHON < "$HMB_SKILL_DIR/.runtime-python"
+fi
+if ! command -v "${HMB_BOOTSTRAP_PYTHON:-python3}" >/dev/null 2>&1; then
+  printf '%s\n' '{"contractVersion":"unknown","error":{"code":"ACTIVE_RUNTIME_UNAVAILABLE","message":"Run the fixed-version package install command to repair the runtime interpreter"}}'
+  exit 1
+fi
+exec "${HMB_BOOTSTRAP_PYTHON:-python3}" "$HMB_PROJECT_DIR/src/hey_my_buddy/install/launcher.py" "$@"

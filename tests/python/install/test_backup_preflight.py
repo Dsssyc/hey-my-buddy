@@ -124,7 +124,7 @@ class BackupPreflightTests(BoardTestCase):
             return {str(path): (path.lstat().st_mtime_ns, path.lstat().st_size,
                                path.read_bytes() if path.is_file() else None)
                     for base in (board.directory, runtime) for path in [base, *base.rglob('*')]}
-        environment = _child_environment(board.directory, {'BUDDY_RUNTIME_ROOT': str(runtime)})
+        environment = _child_environment(board.directory, {'HMB_RUNTIME_ROOT': str(runtime)})
         before = snapshot()
         result = subprocess.run([sys.executable, '-m', 'hey_my_buddy.cli.main', 'backup-preflight', '{}'],
                                 cwd=DELEGATE_ROOT, env=environment, capture_output=True, text=True)

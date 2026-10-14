@@ -14,14 +14,14 @@ import stat
 import sys
 import uuid
 
-LAUNCH_KEYS = {'BUDDY_MAX_CONCURRENT': (1, 32), 'BUDDY_WAIT_CAPACITY': (1, 1024)}
+LAUNCH_KEYS = {'HMB_MAX_CONCURRENT': (1, 32), 'HMB_WAIT_CAPACITY': (1, 1024)}
 HOST_INTERNAL_KEYS = frozenset({
-    'BUDDY_RUNTIME', 'BUDDY_RUNTIME_IDENTITY',
-    'BUDDY_WORKER_STATE', 'BUDDY_WORKER_ID',
-    'BUDDY_SUPERVISOR_START_ID', 'BUDDY_TASK_ID', 'BUDDY_ATTEMPT_ID', 'BUDDY_HARNESS_RECORD_FILE',
+    'HMB_RUNTIME', 'HMB_RUNTIME_IDENTITY',
+    'HMB_WORKER_STATE', 'HMB_WORKER_ID',
+    'HMB_SUPERVISOR_START_ID', 'HMB_TASK_ID', 'HMB_ATTEMPT_ID', 'HMB_HARNESS_RECORD_FILE',
 })
 
-#: The environment a long-lived Buddy service process may inherit. The daemon, an
+#: The environment a long-lived hey-my-buddy service process may inherit. The daemon, an
 #: upgrade-started daemon and every worker supervisor are built from this explicit
 #: allowlist instead of the Host session: Claude Code ``CLAUDE_CODE_*`` session
 #: variables and tokens, Codex session identity, Host identity, provider routing
@@ -47,23 +47,23 @@ SERVICE_ENVIRONMENT_KEYS = frozenset({
     # Native harness account configuration. Model authentication stays native.
     'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'ZCODE_DATA_BASE_DIR', 'DSH_HOME',
     # This program's private roots, interpreter selection and launch settings.
-    'BUDDY_STATE_DIR', 'BUDDY_RUNTIME_ROOT', 'BUDDY_RUNTIME', 'BUDDY_RUNTIME_IDENTITY',
-    'BUDDY_WORKER_ID', 'BUDDY_WORKER_STATE',
-    'BUDDY_MAX_CONCURRENT', 'BUDDY_WAIT_CAPACITY', 'BUDDY_CONSOLE_PORT', 'BUDDY_LEASE_SECONDS',
-    'BUDDY_MODEL_CATALOG_FILE', 'BUDDY_DEBUG',
-    'BUDDY_AGENT_SKILLS_DIR', 'BUDDY_CLAUDE_SKILLS_DIR', 'UV_BIN',
+    'HMB_STATE_DIR', 'HMB_RUNTIME_ROOT', 'HMB_RUNTIME', 'HMB_RUNTIME_IDENTITY',
+    'HMB_WORKER_ID', 'HMB_WORKER_STATE',
+    'HMB_MAX_CONCURRENT', 'HMB_WAIT_CAPACITY', 'HMB_CONSOLE_PORT', 'HMB_LEASE_SECONDS',
+    'HMB_MODEL_CATALOG_FILE', 'HMB_DEBUG',
+    'HMB_AGENT_SKILLS_DIR', 'HMB_CLAUDE_SKILLS_DIR', 'UV_BIN',
 })
 
-#: Extra variables only an explicit ``BUDDY_DEV_SOURCE=1`` session may pass into a
+#: Extra variables only an explicit ``HMB_DEV_SOURCE=1`` session may pass into a
 #: service. They select the checkout, its private test CLIs and its harness
 #: fixtures for development and tests; a normal installation never reads them.
-#: Test fixtures are named individually rather than passed through a ``BUDDY_*``
+#: Test fixtures are named individually rather than passed through a ``HMB_*``
 #: prefix rule.
 DEVELOPMENT_ENVIRONMENT_KEYS = frozenset({
-    'BUDDY_DEV_SOURCE', 'BUDDY_DSH_CLI', 'BUDDY_CLAUDE_CLI', 'BUDDY_CODEX_CLI', 'BUDDY_ZCODE_CLI',
-    'BUDDY_NODE',
-    'BUDDY_CLAUDE_FIXTURE_CASE', 'BUDDY_CLAUDE_FIXTURE_STATE',
-    'BUDDY_CODEX_FIXTURE_CASE', 'BUDDY_CODEX_FIXTURE_STATE', 'BUDDY_ZCODE_TEST_CASE',
+    'HMB_DEV_SOURCE', 'HMB_DSH_CLI', 'HMB_CLAUDE_CLI', 'HMB_CODEX_CLI', 'HMB_ZCODE_CLI',
+    'HMB_NODE',
+    'HMB_CLAUDE_FIXTURE_CASE', 'HMB_CLAUDE_FIXTURE_STATE',
+    'HMB_CODEX_FIXTURE_CASE', 'HMB_CODEX_FIXTURE_STATE', 'HMB_ZCODE_TEST_CASE',
 })
 HOST_ENDPOINT_KEYS = frozenset({
     'ANTHROPIC_BASE_URL', 'ANTHROPIC_BEDROCK_BASE_URL',
@@ -85,7 +85,7 @@ def is_model_endpoint(key: str) -> bool:
 
 def clean_host_environment() -> None:
     """Scrub only a Host entry. An attempt credential always keeps Worker scope."""
-    scoped = 'BUDDY_AGENT_CREDENTIAL' in os.environ or 'BUDDY_AGENT_CREDENTIAL_FILE' in os.environ
+    scoped = 'HMB_AGENT_CREDENTIAL' in os.environ or 'HMB_AGENT_CREDENTIAL_FILE' in os.environ
     for key in list(os.environ):
         if (not scoped and key in HOST_INTERNAL_KEYS) or is_model_endpoint(key):
             os.environ.pop(key, None)
@@ -155,7 +155,7 @@ def _bootstrap_runtime() -> object | None:
 
 def _runtime_root() -> Path:
     from hey_my_buddy.home import default_runtime_root
-    return Path(os.environ.get('BUDDY_RUNTIME_ROOT') or default_runtime_root()).expanduser().resolve()
+    return Path(os.environ.get('HMB_RUNTIME_ROOT') or default_runtime_root()).expanduser().resolve()
 
 
 def _installed_package() -> bool:
@@ -207,9 +207,9 @@ def entry_modules(target: Path) -> dict[str, str]:
 
 def selected_runtime(state: Path, *, allow_overrides: bool = True) -> Path | None:
     from hey_my_buddy.errors import BoardError
-    if allow_overrides and os.environ.get('BUDDY_RUNTIME'):
-        target = Path(os.environ['BUDDY_RUNTIME']).expanduser().resolve()
-    elif allow_overrides and os.environ.get('BUDDY_DEV_SOURCE') == '1':
+    if allow_overrides and os.environ.get('HMB_RUNTIME'):
+        target = Path(os.environ['HMB_RUNTIME']).expanduser().resolve()
+    elif allow_overrides and os.environ.get('HMB_DEV_SOURCE') == '1':
         return None
     else:
         try:
@@ -230,7 +230,7 @@ def selected_runtime(state: Path, *, allow_overrides: bool = True) -> Path | Non
             if not isinstance(identity, str) or not identity.startswith('runtime:'):
                 if _installed_package():
                     raise BoardError('ACTIVE_RUNTIME_MISSING', 'Installed runtime pointer is missing; rerun the fixed-version package install command')
-                raise BoardError('DEV_SOURCE_REQUIRED', 'Source commands require BUDDY_DEV_SOURCE=1; use install for a stable runtime')
+                raise BoardError('DEV_SOURCE_REQUIRED', 'Source commands require HMB_DEV_SOURCE=1; use install for a stable runtime')
             target = _runtime_root() / identity.removeprefix('runtime:')
         if (not target.is_absolute() or target.parent.resolve() != _runtime_root()
                 or not re.fullmatch(r'[0-9a-f]{32}', target.name) or target.is_symlink()):
@@ -245,10 +245,10 @@ def service_environment(overrides: dict[str, str] | None = None) -> dict[str, st
 
     The caller adds the private state/runtime selections, interpreter paths and
     ``PYTHONPATH`` it needs; nothing else from the Host session is copied. The
-    development list is read only under an explicit ``BUDDY_DEV_SOURCE=1``.
+    development list is read only under an explicit ``HMB_DEV_SOURCE=1``.
     """
     allowed = SERVICE_ENVIRONMENT_KEYS
-    if os.environ.get('BUDDY_DEV_SOURCE') == '1':
+    if os.environ.get('HMB_DEV_SOURCE') == '1':
         allowed = allowed | DEVELOPMENT_ENVIRONMENT_KEYS
     environment = {key: value for key, value in os.environ.items() if key in allowed}
     if 'PATH' in environment and sys.prefix != sys.base_prefix:
@@ -267,7 +267,7 @@ def runtime_environment(target: Path) -> dict[str, str]:
     # the selected CLI builds its request. The service allowlist above applies only
     # where a daemon or worker supervisor is created.
     env = {k:v for k,v in os.environ.items() if k not in {'PYTHONPATH','VIRTUAL_ENV','UV_PROJECT_ENVIRONMENT'}}
-    env.update(BUDDY_RUNTIME=str(target), BUDDY_RUNTIME_IDENTITY='runtime:' + target.name)
+    env.update(HMB_RUNTIME=str(target), HMB_RUNTIME_IDENTITY='runtime:' + target.name)
     return env
 
 
@@ -283,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         clean_host_environment()
         from hey_my_buddy.home import default_state_dir
-        state = Path(os.environ.get('BUDDY_STATE_DIR') or default_state_dir()).expanduser().resolve()
+        state = Path(os.environ.get('HMB_STATE_DIR') or default_state_dir()).expanduser().resolve()
         if args and args[0] not in {'upgrade','install','backup-preflight','--help','-h'}:
             if (state / 'upgrade.json').exists():
                 from hey_my_buddy.errors import BoardError

@@ -50,11 +50,11 @@ CHECKOUT = Path(__file__).resolve().parents[2]
 #: The env keys this probe refuses to inherit: they could redirect the probe at
 #: the daily board, a pinned runtime identity, a Worker or agent credential, or
 #: a foreign virtualenv instead of this checkout.
-FORBIDDEN_ENV_PREFIXES = ("BUDDY_WORKER", "BUDDY_AGENT_CREDENTIAL", "ANTHROPIC_")
-FORBIDDEN_ENV_KEYS = ("BUDDY_RUNTIME_IDENTITY", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
+FORBIDDEN_ENV_PREFIXES = ("HMB_WORKER", "HMB_AGENT_CREDENTIAL", "ANTHROPIC_")
+FORBIDDEN_ENV_KEYS = ("HMB_RUNTIME_IDENTITY", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
 #: Env keys a focused run may carry, but only when they name the task root.
-ALLOWED_INSIDE_TASK_ROOT = ("TMPDIR", "BUDDY_CHECKS_TMPDIR", "BUDDY_STATE_DIR",
-                            "BUDDY_RUNTIME_ROOT")
+ALLOWED_INSIDE_TASK_ROOT = ("TMPDIR", "HMB_CHECKS_TMPDIR", "HMB_STATE_DIR",
+                            "HMB_RUNTIME_ROOT")
 
 #: The public row ids this probe pins, kept literally beside the production
 #: constants they mirror (asserted against them before any launch).
@@ -352,7 +352,7 @@ class Probe:
                 "args": [str(Path(__file__).resolve()), "--mcp-stub", str(stub_evidence)],
                 "env": ([{"name": "PYTHONPATH", "value": os.environ["PYTHONPATH"]}]
                         if os.environ.get("PYTHONPATH") else [])
-                        + [{"name": "BUDDY_R1_PROBE_STUB", "value": f"r1_{attempt_id}"}],
+                        + [{"name": "HMB_R1_PROBE_STUB", "value": f"r1_{attempt_id}"}],
             },
             "dshSelection": {"version": selection.get("version"), "command": command},
             "argv": argv,

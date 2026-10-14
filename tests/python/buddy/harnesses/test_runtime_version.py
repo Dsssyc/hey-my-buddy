@@ -63,7 +63,7 @@ class RuntimeVersionTests(unittest.TestCase):
 
     def discover(self, name, case, module):
         if name == "zcode":
-            os.environ["BUDDY_ZCODE_TEST_CASE"] = "discovery"
+            os.environ["HMB_ZCODE_TEST_CASE"] = "discovery"
         return module.run_discovery(cwd=str(case.base / "cwd" if name == "dsh" else case.cwd),
                                     invocation_root=case.base / "version-discovery",
                                     native_root=case.base / "version-discovery-native",

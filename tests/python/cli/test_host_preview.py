@@ -38,9 +38,9 @@ VITEST = CONSOLE / "node_modules" / "vitest" / "vitest.mjs"
 #: Variables an outer hey-my-buddy process may export; a child test never
 #: inherits them (AGENTS.md verification rules).
 _INHERITED_KEYS = (
-    "BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY",
-    "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL",
-    "BUDDY_AGENT_CREDENTIAL_FILE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
+    "HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
+    "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL",
+    "HMB_AGENT_CREDENTIAL_FILE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
 )
 
 
@@ -83,21 +83,21 @@ class PreviewFixtureTest(unittest.TestCase):
         self.assertIn("CHECK OK", result.stdout)
 
     def test_preview_tree_is_deterministic(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="buddy-preview-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-preview-") as temporary:
             first, second = Path(temporary) / "first", Path(temporary) / "second"
             emit_fixtures(first)
             emit_fixtures(second)
             self.assertEqual(tree_files(first), tree_files(second))
 
     def test_frontend_parsers_consume_the_emitted_fixtures(self) -> None:
-        node = os.environ.get("BUDDY_NODE") or shutil.which("node")
+        node = os.environ.get("HMB_NODE") or shutil.which("node")
         self.assertTrue(node, "Node.js is required to run the console parser test")
         self.assertTrue(
             VITEST.is_file(),
             "console dev dependencies are not installed, so the preview fixtures cannot be consumed "
             f"by the real frontend parser ({VITEST}); run `npm ci` in {CONSOLE.relative_to(ROOT)}",
         )
-        with tempfile.TemporaryDirectory(prefix="buddy-preview-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-preview-") as temporary:
             workspace = Path(temporary)
             emitted = workspace / "fixtures"
             manifest = emit_fixtures(emitted)
@@ -106,8 +106,8 @@ class PreviewFixtureTest(unittest.TestCase):
                 [str(node), str(VITEST), "run", FRONTEND_TEST],
                 cwd=str(CONSOLE),
                 env=child_environment({
-                    "BUDDY_PREVIEW_FIXTURES": str(emitted),
-                    "BUDDY_PREVIEW_REPORT": str(report_path),
+                    "HMB_PREVIEW_FIXTURES": str(emitted),
+                    "HMB_PREVIEW_REPORT": str(report_path),
                     "CI": "1",
                     "NO_COLOR": "1",
                 }),

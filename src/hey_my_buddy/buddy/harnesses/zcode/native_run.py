@@ -316,7 +316,7 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
     contract or any role's business rules.
     """
     root = ensure_private_dir(Path(invocation_root))
-    server_name = "buddy_" + hashlib.sha256(identity["attemptId"].encode()).hexdigest()[:16]
+    server_name = "hey_my_buddy_" + hashlib.sha256(identity["attemptId"].encode()).hexdigest()[:16]
     qualified = {tool["name"]: f"mcp__{server_name}__{tool['name']}" for tool in session_tools}
     if completion_tool not in qualified:
         raise BoardError("INVALID_ARGUMENT",
@@ -337,7 +337,7 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
             "args": ["-m", "hey_my_buddy.buddy.roles.session_mcp", "--config", str(bridge_path)],
             "env": [{"name": "PYTHONPATH", "value": os.environ["PYTHONPATH"]}] if os.environ.get("PYTHONPATH") else [],
             "isolation": "session", "protocolVersion": "legacy"}]
-    input_id = "buddy-" + hashlib.sha256(canonical_json(identity).encode()).hexdigest()
+    input_id = "hey-my-buddy-" + hashlib.sha256(canonical_json(identity).encode()).hexdigest()
     return SessionServiceMount(
         server_name=server_name, finish_tool=finish_tool,
         checkpoint_tool=inquiry_names[0] if len(inquiry_names) > 0 else None,
@@ -402,7 +402,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
     binding = native_root / (hashlib.sha256(session_id.encode()).hexdigest() + ".json") if session_id else None
     return {
         "harness": "zcode", "sessionId": session_id, "captured": session_id is not None,
-        "storageScope": "task-private", "storageOwner": "buddy-micro-task",
+        "storageScope": "task-private", "storageOwner": "hey-my-buddy-micro-task",
         "nativeAppVisibility": "not-listed-in-native-app",
         "bindingPresent": binding is not None and binding.is_file(),
         "note": (
@@ -414,7 +414,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
 
 def validate_turn_provenance(record: dict) -> str | None:
     p = record.get("provenance") or {}
-    expected = {"harness": "zcode", "tool": "buddy_finish_turn", "turnEnd": "completed",
+    expected = {"harness": "zcode", "tool": "hey_my_buddy_finish_turn", "turnEnd": "completed",
                 "rootSessionMatched": True, "receiptVerified": True, "toolResultSuccess": True,
                 "toolResultTruncated": False, "turnResultType": "success", "settlement": "session-closed"}
     if not isinstance(p, dict) or any(type(p.get(k)) is not type(v) or p.get(k) != v for k, v in expected.items()) or "flush" in p:
@@ -425,7 +425,7 @@ def validate_turn_provenance(record: dict) -> str | None:
         if not isinstance(p.get(key), str) or not p[key]:
             return f"the ZCode turn lacks {key}"
     identity = {key: record.get(key) for key in ("taskId", "attemptId", "generation", "turnId")}
-    expected_input = "buddy-" + hashlib.sha256(canonical_json(identity).encode()).hexdigest()
+    expected_input = "hey-my-buddy-" + hashlib.sha256(canonical_json(identity).encode()).hexdigest()
     if p["inputId"] != expected_input:
         return "the ZCode native input does not match the authorized attempt"
     for keys in (("turnStartSeq", "toolCallSeq", "toolResultSeq", "turnEndSeq"),
@@ -728,8 +728,8 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     command = cli_command(incoming)
     environment = native_environment(incoming, command=command)
     private = ensure_private_dir(invocation_root)
-    if incoming.get("BUDDY_DEV_SOURCE") == "1" and "BUDDY_ZCODE_TEST_CASE" in incoming:
-        environment["BUDDY_ZCODE_TEST_CASE"] = incoming["BUDDY_ZCODE_TEST_CASE"]
+    if incoming.get("HMB_DEV_SOURCE") == "1" and "HMB_ZCODE_TEST_CASE" in incoming:
+        environment["HMB_ZCODE_TEST_CASE"] = incoming["HMB_ZCODE_TEST_CASE"]
     builtin, _personal = provider_paths(environment, command)
     preferences = load_runtime_preferences(environment)
     # The standalone CLI needs the installed built-in file's location. No
@@ -1239,7 +1239,7 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
         connection.observe = final_chain(protocol_holder)
         snapshot = _open_root(connection, workspace, create_params=create_params)
         state.session_opened = True
-        input_id = "buddy-no-tool-" + secrets.token_hex(16)
+        input_id = "hey-my-buddy-no-tool-" + secrets.token_hex(16)
         outcome.session_id, outcome.resolved = _admit_root_input(
             connection, snapshot=snapshot, request=request, spec=buddy_spec(request),
             input_id=input_id, input_text=input_text,

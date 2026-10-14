@@ -29,7 +29,7 @@ export default {
     unresolvedNote: "The result of the save is unknown and it may have taken effect; check before retrying.",
     unavailable: {
       connection: "The connection is lost; retry the connection. The draft is kept.",
-      login: "The login has expired; run buddy console to log in again. The draft is kept.",
+      login: "The login has expired; run hey-my-buddy console to log in again. The draft is kept.",
     },
     reload: "Reread settings",
   },

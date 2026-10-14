@@ -150,11 +150,11 @@ class ScheduledModulesTests(unittest.TestCase):
 
 class ResolveJobsTests(unittest.TestCase):
     def test_the_flag_wins_over_the_environment_over_the_default(self):
-        with patch.dict(os.environ, {"BUDDY_CHECKS_JOBS": "5"}):
+        with patch.dict(os.environ, {"HMB_CHECKS_JOBS": "5"}):
             self.assertEqual(checks.resolve_jobs(None), 5)
             self.assertEqual(checks.resolve_jobs("2"), 2)
             self.assertEqual(checks.resolve_jobs("1"), 1)
-        environment = {key: value for key, value in os.environ.items() if key != "BUDDY_CHECKS_JOBS"}
+        environment = {key: value for key, value in os.environ.items() if key != "HMB_CHECKS_JOBS"}
         with patch.dict(os.environ, environment, clear=True):
             self.assertEqual(checks.resolve_jobs(None), checks.default_jobs())
         self.assertGreaterEqual(checks.default_jobs(), 1)
@@ -164,7 +164,7 @@ class ResolveJobsTests(unittest.TestCase):
         for value in ("0", "-1", "many"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 checks.resolve_jobs(value)
-        with patch.dict(os.environ, {"BUDDY_CHECKS_JOBS": "none"}), self.assertRaises(ValueError):
+        with patch.dict(os.environ, {"HMB_CHECKS_JOBS": "none"}), self.assertRaises(ValueError):
             checks.resolve_jobs(None)
 
 
@@ -216,9 +216,9 @@ class ParallelOutcomeTests(RunnerTestCase):
 
             class Passing(unittest.TestCase):
                 def test_runs_in_its_own_private_root(self):
-                    root = Path(os.environ["BUDDY_STATE_DIR"]).parent
+                    root = Path(os.environ["HMB_STATE_DIR"]).parent
                     self.assertEqual(Path(os.environ["TMPDIR"]), root / "tmp")
-                    self.assertEqual(Path(os.environ["BUDDY_RUNTIME_ROOT"]), root / "runtime")
+                    self.assertEqual(Path(os.environ["HMB_RUNTIME_ROOT"]), root / "runtime")
                     home = Path(os.environ["HOME"])
                     self.assertEqual(home.parent, root.parent)
                     self.assertFalse(home.is_relative_to(root))

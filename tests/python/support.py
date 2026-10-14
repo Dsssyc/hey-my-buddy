@@ -31,7 +31,7 @@ from hey_my_buddy.blackboard.service.service import BoardService, WaitAdmission,
 from hey_my_buddy.blackboard.store.store import BoardStore  # noqa: E402
 
 #: A discovery document with the same shape the installed-harness helper emits. Tests
-#: point ``BUDDY_MODEL_CATALOG_FILE`` at this fixture instead of invoking Node.
+#: point ``HMB_MODEL_CATALOG_FILE`` at this fixture instead of invoking Node.
 FIXTURE_CATALOG = {
     "source": "file:test-fixture",
     "harnessVersion": "test-harness-1",
@@ -182,10 +182,10 @@ def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
 
 
 _INHERITED_CHILD_KEYS = {
-    "BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY",
-    "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL",
-    "BUDDY_AGENT_CREDENTIAL_FILE", "BUDDY_DEV_SOURCE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
-    "BUDDY_SUPERVISOR_START_ID",
+    "HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
+    "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL",
+    "HMB_AGENT_CREDENTIAL_FILE", "HMB_DEV_SOURCE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
+    "HMB_SUPERVISOR_START_ID",
     "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
 }
 
@@ -201,7 +201,7 @@ def offline_facts_source(directory: Path) -> str:
 
 
 def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
-    environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS and not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_", "DSH_", "DEEPSEEK_"))}
+    environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS and not key.startswith(("HMB_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_", "DSH_", "DEEPSEEK_"))}
     # HOME and SDK locations belong to this fixture, never to the interpreter's
     # inherited account. Do not create native configuration files in this home.
     private_home = directory / "home"
@@ -220,49 +220,49 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
         XDG_RUNTIME_DIR=str(directory / "runtime-root"),
         APPDATA=str(private_home / "AppData/Roaming"),
         LOCALAPPDATA=str(private_home / "AppData/Local"),
-        BUDDY_STATE_DIR=str(directory),
-        BUDDY_RUNTIME_ROOT=str(directory / "runtime-root"),
+        HMB_STATE_DIR=str(directory),
+        HMB_RUNTIME_ROOT=str(directory / "runtime-root"),
         PYTHONPATH=str(PYTHON_ROOT) + (os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else ""),
-        BUDDY_DEV_SOURCE="1",
+        HMB_DEV_SOURCE="1",
         # A test child never shares the console backend's fixed default port; the
         # operating system assigns a private one. Tests may override this explicitly.
-        BUDDY_CONSOLE_PORT="0",
-        BUDDY_CLAUDE_CLI=str(PYTHON_ROOT.parent / "tests/python/fixtures/claude-not-installed"),
-        BUDDY_CODEX_CLI=str(PYTHON_ROOT.parent / "tests/python/fixtures/codex-not-installed"),
+        HMB_CONSOLE_PORT="0",
+        HMB_CLAUDE_CLI=str(PYTHON_ROOT.parent / "tests/python/fixtures/claude-not-installed"),
+        HMB_CODEX_CLI=str(PYTHON_ROOT.parent / "tests/python/fixtures/codex-not-installed"),
         # Model-facts refreshes stay offline: the pinned source is a private fixture
         # path, and a missing one is a retained snapshot, never a network request.
-        BUDDY_MODEL_FACTS_FILE=str(directory / "model-facts-fixture.json"),
+        HMB_MODEL_FACTS_FILE=str(directory / "model-facts-fixture.json"),
     )
     environment.update(overrides or {})
     # Test-supplied paths may vary within the fixture, but must not redirect its
     # daemon or installed runtime into another board's state.
-    environment["BUDDY_STATE_DIR"] = str(directory)
-    if not Path(environment["BUDDY_RUNTIME_ROOT"]).resolve().is_relative_to(directory.resolve()):
+    environment["HMB_STATE_DIR"] = str(directory)
+    if not Path(environment["HMB_RUNTIME_ROOT"]).resolve().is_relative_to(directory.resolve()):
         raise ValueError("Test runtime root must be inside its private state directory")
     for key in ("HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "ZCODE_DATA_BASE_DIR",
                 "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", "DSH_HOME",
                 "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
-                "XDG_RUNTIME_DIR", "APPDATA", "LOCALAPPDATA", "BUDDY_MODEL_CATALOG_FILE"):
+                "XDG_RUNTIME_DIR", "APPDATA", "LOCALAPPDATA", "HMB_MODEL_CATALOG_FILE"):
         if key in environment and not Path(environment[key]).resolve().is_relative_to(directory.resolve()):
             raise ValueError(f"Test {key} must be inside its private state directory")
     return environment
 
 
 @contextmanager
-def private_state_dir(prefix: str = "buddy-test-"):
+def private_state_dir(prefix: str = "hey-my-buddy-test-"):
     # The resolved form keeps one path identity for the whole board: macOS's
     # per-user /var/folders alias and its /private/var target must never be two
     # different roots inside one test (storage boundaries and Git both resolve).
     directory = Path(tempfile.mkdtemp(prefix=prefix)).resolve()
     os.chmod(directory, 0o700)
-    previous = os.environ.get("BUDDY_MODEL_FACTS_FILE")
-    os.environ["BUDDY_MODEL_FACTS_FILE"] = offline_facts_source(directory)
+    previous = os.environ.get("HMB_MODEL_FACTS_FILE")
+    os.environ["HMB_MODEL_FACTS_FILE"] = offline_facts_source(directory)
 
     def restore_facts_source() -> None:
         if previous is None:
-            os.environ.pop("BUDDY_MODEL_FACTS_FILE", None)
+            os.environ.pop("HMB_MODEL_FACTS_FILE", None)
         else:
-            os.environ["BUDDY_MODEL_FACTS_FILE"] = previous
+            os.environ["HMB_MODEL_FACTS_FILE"] = previous
 
     try:
         yield directory
@@ -361,21 +361,21 @@ class InProcessBoard:
 class BoardTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._stack = []
-        self.directory = Path(tempfile.mkdtemp(prefix="buddy-test-")).resolve()
+        self.directory = Path(tempfile.mkdtemp(prefix="hey-my-buddy-test-")).resolve()
         os.chmod(self.directory, 0o700)
         # In-process boards read the source hook from this process environment; pin
         # the same offline fixture path the child environments get, so enabling a
         # model in any test cannot reach the network.
-        previous = os.environ.get("BUDDY_MODEL_FACTS_FILE")
-        os.environ["BUDDY_MODEL_FACTS_FILE"] = offline_facts_source(self.directory)
+        previous = os.environ.get("HMB_MODEL_FACTS_FILE")
+        os.environ["HMB_MODEL_FACTS_FILE"] = offline_facts_source(self.directory)
         self.addCleanup(self._restore_facts_source, previous)
         self.addCleanup(self._cleanup)
 
     def _restore_facts_source(self, previous: str | None) -> None:
         if previous is None:
-            os.environ.pop("BUDDY_MODEL_FACTS_FILE", None)
+            os.environ.pop("HMB_MODEL_FACTS_FILE", None)
         else:
-            os.environ["BUDDY_MODEL_FACTS_FILE"] = previous
+            os.environ["HMB_MODEL_FACTS_FILE"] = previous
 
     def _cleanup(self) -> None:
         stop_private_service(self.directory)
@@ -425,14 +425,14 @@ class BoardTestCase(unittest.TestCase):
         """Point discovery at a private fixture instead of the installed harness."""
         path = write_catalog_fixture(self.directory, payload)
         self._catalog_fixture_path = path
-        previous = os.environ.get("BUDDY_MODEL_CATALOG_FILE")
-        os.environ["BUDDY_MODEL_CATALOG_FILE"] = str(path)
+        previous = os.environ.get("HMB_MODEL_CATALOG_FILE")
+        os.environ["HMB_MODEL_CATALOG_FILE"] = str(path)
 
         def restore() -> None:
             if previous is None:
-                os.environ.pop("BUDDY_MODEL_CATALOG_FILE", None)
+                os.environ.pop("HMB_MODEL_CATALOG_FILE", None)
             else:
-                os.environ["BUDDY_MODEL_CATALOG_FILE"] = previous
+                os.environ["HMB_MODEL_CATALOG_FILE"] = previous
 
         self.addCleanup(restore)
         return path
@@ -441,7 +441,7 @@ class BoardTestCase(unittest.TestCase):
         """Pass this owner's catalog explicitly after inherited pins are cleared."""
         explicit = {}
         if getattr(self, "_catalog_fixture_path", None) is not None:
-            explicit["BUDDY_MODEL_CATALOG_FILE"] = str(self._catalog_fixture_path)
+            explicit["HMB_MODEL_CATALOG_FILE"] = str(self._catalog_fixture_path)
         explicit.update(overrides or {})
         return _child_environment(self.directory, explicit)
 
@@ -456,7 +456,7 @@ class BoardTestCase(unittest.TestCase):
         environment = self.child_environment(env)
         log = open(self.directory / "test-daemon.log", "ab")
         command = [sys.executable, '-m', 'hey_my_buddy.blackboard.service.daemon']
-        if environment.get('BUDDY_MODEL_CATALOG_FILE'):
+        if environment.get('HMB_MODEL_CATALOG_FILE'):
             command = [sys.executable, str(Path(__file__).parent / 'blackboard/service/fixtures/daemon_with_catalog.py')]
         process = subprocess.Popen(
             command,

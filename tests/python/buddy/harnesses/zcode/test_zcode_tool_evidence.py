@@ -37,7 +37,7 @@ import json, os, sys, time
 from pathlib import Path
 if '--version' in sys.argv:
     print('fixture-0.16.9'); sys.exit(0)
-case = os.environ.get('BUDDY_ZCODE_TEST_CASE', 'ok')
+case = os.environ.get('HMB_ZCODE_TEST_CASE', 'ok')
 session = 0
 subscribed = False
 closed = False
@@ -499,7 +499,7 @@ class FakeAppServerTests(unittest.TestCase):
     """The shared fake ZCode app-server harness (migrated from test_no_tool_zcode)."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-zcode-evidence-")
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-evidence-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.cwd = self.root / "empty"
@@ -512,11 +512,11 @@ class FakeAppServerTests(unittest.TestCase):
         builtin.write_text('{"config":{"providerConfigRules":{"templateRules":[],"providerRules":[]}}}')
         native_home = self.root / "native-user-home"
         native_home.mkdir(mode=0o700)
-        self.environment = {k: v for k, v in os.environ.items() if not k.startswith(("BUDDY_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_"))
+        self.environment = {k: v for k, v in os.environ.items() if not k.startswith(("HMB_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_"))
                             and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         self.environment["PYTHONPATH"] = str(Path(__file__).parents[5] / "src") + os.pathsep + os.environ.get("PYTHONPATH", "")
-        self.environment.update(BUDDY_DEV_SOURCE="1", BUDDY_STATE_DIR=str(self.root / "state"),
-                                BUDDY_RUNTIME_ROOT=str(self.root / "runtime"), BUDDY_ZCODE_CLI=str(self.fake),
+        self.environment.update(HMB_DEV_SOURCE="1", HMB_STATE_DIR=str(self.root / "state"),
+                                HMB_RUNTIME_ROOT=str(self.root / "runtime"), HMB_ZCODE_CLI=str(self.fake),
                                 HOME=str(native_home), USERPROFILE=str(native_home),
                                 ZCODE_DATA_BASE_DIR=str(native_home))
 
@@ -526,7 +526,7 @@ class FakeAppServerTests(unittest.TestCase):
         context = ExecutionContext("task", "attempt", 1,
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low", "cwd": str(self.cwd),
              "timeoutSeconds": timeout}, self.root / "attempt", {},
-            {**self.environment, "BUDDY_ZCODE_TEST_CASE": case})
+            {**self.environment, "HMB_ZCODE_TEST_CASE": case})
         request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA, timeout_seconds=timeout)
         handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)

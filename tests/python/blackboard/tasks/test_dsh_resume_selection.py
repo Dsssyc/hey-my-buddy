@@ -9,7 +9,7 @@ executor instance is what selects ``native-session`` here, and each case
 captures the product ``DshAdapter`` declaration before and after the injection
 and compares them, so the tests stay valid whichever value the product declares
 after real verification — none of them pins that value. A qualified prior DSH
-turn reports ``nativeSession.storageOwner == "buddy-micro-task"``, the
+turn reports ``nativeSession.storageOwner == "hey-my-buddy-micro-task"``, the
 same fact the common ownership judgment consumes for codex; the old
 attempt-private reporting shape gets its own reconstruction case. Which
 judgments are common blackboard rules and which are a native module's private
@@ -51,11 +51,11 @@ class DshResumeSelectionTests(WorkflowTestCase):
 
     def micro_task_owned_storage(self):
         """The positive prior-turn fact: the micro-task-owned native storage shape."""
-        return lambda result: result.update(nativeSession={"storageOwner": "buddy-micro-task"})
+        return lambda result: result.update(nativeSession={"storageOwner": "hey-my-buddy-micro-task"})
 
     def attempt_owned_storage(self):
         """The shape a pre-wiring DSH result reported: attempt-private storage."""
-        return lambda result: result.update(nativeSession={"storageOwner": "buddy-attempt"})
+        return lambda result: result.update(nativeSession={"storageOwner": "hey-my-buddy-attempt"})
 
     def test_a_candidate_capable_dsh_selects_native_session_and_retains_the_session(self):
         before = registry_adapter("dsh").native_resume

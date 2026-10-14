@@ -3,7 +3,7 @@
 Run this file in its own Python process, as the check runner normally does.
 Every process belongs to this fixture and has a saved Popen; no default board
 attachment, PID discovery, manual deletion or model invocation is permitted.
-Raw facts remain below BUDDY_CHECKS_TMPDIR for independent Host acceptance.
+Raw facts remain below HMB_CHECKS_TMPDIR for independent Host acceptance.
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ from protocol.fixtures.ctwo_controller import BUDDY, SELF, exchange
 class CTwoIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="ctwo-integration-",
-            dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))).resolve()
+            dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))).resolve()
         self.state = self.root / "state"
         self.state.mkdir(mode=0o700)
         (self.root / "tmp").mkdir(mode=0o700)
@@ -49,9 +49,9 @@ class CTwoIntegrationTests(unittest.TestCase):
         self.service_endpoint = None
         self.descriptors = {}
         self.env = _child_environment(self.state, {
-            "TMPDIR": str(self.root / "tmp"), "BUDDY_CHECKS_TMPDIR": str(self.root / "tmp"),
-            "BUDDY_MODEL_CATALOG_FILE": str(write_catalog_fixture(self.state)),
-            "BUDDY_MAX_CONCURRENT": "1", "BUDDY_CONSOLE_PORT": "0",
+            "TMPDIR": str(self.root / "tmp"), "HMB_CHECKS_TMPDIR": str(self.root / "tmp"),
+            "HMB_MODEL_CATALOG_FILE": str(write_catalog_fixture(self.state)),
+            "HMB_MAX_CONCURRENT": "1", "HMB_CONSOLE_PORT": "0",
             "PYTHONPATH": os.pathsep.join((str(SELF.parents[2]), str(SELF.parents[4] / "src"))),
             "PYTHONDONTWRITEBYTECODE": "1", "C2_RELAY_ANCHOR_ADDRESS": "", "C2_ENV_FILE": "",
         })

@@ -65,8 +65,8 @@ const storageLabels: Record<string, string> = {
 };
 
 const storageOwnerLabels: Record<string, string> = {
-  "buddy-attempt": "由 Buddy 尝试持有",
-  "buddy-micro-task": "由 Buddy 目标持有",
+  "hey-my-buddy-attempt": "由 Hey my buddy 尝试持有",
+  "hey-my-buddy-micro-task": "由 Hey my buddy 微任务持有",
   "harness-user-store": "由 Harness 用户目录持有",
 };
 

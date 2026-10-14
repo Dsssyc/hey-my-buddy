@@ -1,14 +1,14 @@
 """One caller-owned external agent that really participates through the public API.
 
-Run it against a running Buddy service; it registers itself as an ``external``
+Run it against a running hey-my-buddy service; it registers itself as an ``external``
 worker, claims a real submitted task (no argv and no dsh pretence), executes the
 task text with its own logic, publishes an artifact and reports the result.
 
-    BUDDY_STATE_DIR=/path/to/state python -m hey_my_buddy.protocol.examples.external_worker --worker-id my-agent
+    HMB_STATE_DIR=/path/to/state python -m hey_my_buddy.protocol.examples.external_worker --worker-id my-agent
 
 Submit a task for it first:
 
-    buddy submit '{"requestId":"ext-1","task":"summarize the repository","cwd":"/abs/path","adapter":"external"}'
+    hey-my-buddy submit '{"requestId":"ext-1","task":"summarize the repository","cwd":"/abs/path","adapter":"external"}'
 """
 from __future__ import annotations
 

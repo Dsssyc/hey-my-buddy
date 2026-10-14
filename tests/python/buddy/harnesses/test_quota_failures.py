@@ -80,7 +80,7 @@ class ZcodeQuotaProtocolTests(unittest.TestCase):
 
 class NativeQuotaFailureTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="buddy-quota-run-")
+        temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-quota-run-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
 

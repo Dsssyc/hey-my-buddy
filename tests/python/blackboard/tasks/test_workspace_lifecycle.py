@@ -48,7 +48,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        temporary = tempfile.TemporaryDirectory(prefix="buddy-lifecycle-repository-")
+        temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-lifecycle-repository-")
         cls.addClassCleanup(temporary.cleanup)
         fixture = RealWorkspaceTestCase(methodName="runTest")
         try:
@@ -369,7 +369,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         run_id = submitted["runId"]
 
         def clear_workspace_refs():
-            refs = git(self.repo, "for-each-ref", "--format=%(refname)", "refs/buddy/workspaces/").splitlines()
+            refs = git(self.repo, "for-each-ref", "--format=%(refname)", "refs/hey-my-buddy/workspaces/").splitlines()
             self.assertTrue(refs)
             for ref in refs:
                 git(self.repo, "update-ref", "-d", ref)
@@ -388,7 +388,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             task_id=run_id, attempt_id=attempt["attemptId"], generation=attempt["generation"],
             spec={**BUDDY, "cwd": second_manifest["path"], "task": "second turn", "timeoutSeconds": 30},
             directory=self.directory / "cleared-refs-turn", runtime={},
-            environment={"BUDDY_STATE_DIR": str(self.directory)}, turn=second_claim["claim"]["turn"],
+            environment={"HMB_STATE_DIR": str(self.directory)}, turn=second_claim["claim"]["turn"],
         )
         turn_io.verify_workspace(context)
         self.assertEqual(context.effective_workspace, second_manifest)
@@ -492,7 +492,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
 
     def test_storage_apply_reuses_workspace_protection_and_current_revision(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
-        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str(self.directory / 'runtime')}), mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([],[],True)):
+        with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT':str(self.directory / 'runtime')}), mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([],[],True)):
             planned = board.call('storage_plan', {})
             candidate = next(r for r in planned['candidates'] if r['path'] == str(checkout))
             self.assertTrue(candidate['eligible'], candidate)
@@ -511,7 +511,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         native = private_dirs.micro_task_root(board.directory, 'zcode', run_id)
         session = private_dirs.ensure_private_dir(native / 'native') / 'sessions.sqlite'
         session.write_bytes(b'private session fixture')
-        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str(self.directory / 'runtime')}), mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([],[],True)):
+        with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT':str(self.directory / 'runtime')}), mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([],[],True)):
             planned = board.call('storage_plan', {})
             request = {'planId':planned['planId'], 'commandId':'native-interrupted', 'confirm':True}
             with mock.patch('hey_my_buddy.blackboard.tasks.storage.private_dirs.remove_tree', side_effect=OSError('injected')):
@@ -533,7 +533,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                     board, request_id=f"storage-dirty-{preserve_stat}")
                 target = self.target_with_artifact(artifact, name=f"storage-dirty-target-{preserve_stat}")
                 self.accept(board, view, artifact, target=target, keepCheckout=True)
-                with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(self.directory / 'runtime')}), \
+                with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT': str(self.directory / 'runtime')}), \
                         mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
                     planned = board.call('storage_plan', {})
                     candidate = next(row for row in planned['candidates'] if row['path'] == str(checkout))
@@ -545,7 +545,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                         os.utime(tracked, ns=(facts.st_atime_ns, facts.st_mtime_ns))
                     retained = {path.relative_to(checkout): path.read_bytes()
                                 for path in checkout.rglob('*') if path.is_file()}
-                    refs = git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/buddy/')
+                    refs = git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/hey-my-buddy/')
                     result = board.call('storage_apply', {
                         'planId': planned['planId'], 'commandId': f'storage-dirty-{preserve_stat}', 'confirm': True})
                 skipped = next(row for row in result['skipped'] if row['path'] == str(checkout))
@@ -554,7 +554,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                 self.assertTrue(checkout.is_dir())
                 self.assertEqual({path.relative_to(checkout): path.read_bytes()
                                   for path in checkout.rglob('*') if path.is_file()}, retained)
-                self.assertEqual(git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/buddy/'), refs)
+                self.assertEqual(git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/hey-my-buddy/'), refs)
 
     # -- continuation cleanup -------------------------------------------------
     def two_turn_worktree(self, *, request_id="continuation-cleanup"):
@@ -611,7 +611,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         workspace_dir = Path(self.directory) / "workspaces" / manifest["workspaceId"]
         self.assertTrue((workspace_dir / "manifest.json").exists())
         self.assertTrue(Path(artifact["diffPath"]).exists())
-        refs = git(self.repo, "for-each-ref", "--format=%(refname)", f"refs/buddy/workspaces/{manifest['workspaceId']}/")
+        refs = git(self.repo, "for-each-ref", "--format=%(refname)", f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/")
         self.assertIn("outputs", refs)
         still = self.view(board, run_id)
         self.assertEqual(still["cleanup"]["state"], "applied")
@@ -919,8 +919,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue((Path(self.directory) / "workspaces" / second["workspaceId"] / "manifest.json").exists())
         self.assertTrue(Path(final["diffPath"]).exists())
         refs = git(self.repo, "for-each-ref", "--format=%(refname)")
-        self.assertIn(f"refs/buddy/workspaces/{first['workspaceId']}/", refs)
-        self.assertIn(f"refs/buddy/workspaces/{second['workspaceId']}/", refs)
+        self.assertIn(f"refs/hey-my-buddy/workspaces/{first['workspaceId']}/", refs)
+        self.assertIn(f"refs/hey-my-buddy/workspaces/{second['workspaceId']}/", refs)
         # The applied plan stays the one authorization; repeating it is a replay.
         repeat_view = self.view(board, run_id)
         self.assertEqual(repeat_view["cleanup"]["state"], "applied")
@@ -1675,7 +1675,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         (checkout / "tracked.txt").unlink()
         retained = {path.relative_to(checkout): path.read_bytes()
                     for path in checkout.rglob("*") if path.is_file()}
-        refs = git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/buddy/")
+        refs = git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/hey-my-buddy/")
         with self.assertRaises(BoardError) as refused:
             self.reclaim(board, self.view(board, run_id))
         self.assertEqual(refused.exception.code, "NOT_READY")
@@ -1693,7 +1693,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual({path.relative_to(checkout): path.read_bytes()
                           for path in checkout.rglob("*") if path.is_file()}, retained)
         self.assertEqual((checkout / "kept.txt").read_text(), "retained tracked file\n")
-        self.assertEqual(git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/buddy/"), refs)
+        self.assertEqual(git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/hey-my-buddy/"), refs)
 
     # -- an attached branch blocks removal with its honest diagnosis ----------
     def branch_ref(self, name):
@@ -1779,7 +1779,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         # The branch appears between planning and applying.
         git(checkout, "switch", "-q", "-c", "socu/late-branch")
         branch_commit = self.branch_ref("socu/late-branch")
-        refs_before = git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/buddy/")
+        refs_before = git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/hey-my-buddy/")
         checkout_files_before = {path.relative_to(checkout): path.read_bytes()
                                  for path in checkout.rglob("*") if path.is_file() and ".git" not in path.parts}
         with self.assertRaises(BoardError) as raised:
@@ -1800,7 +1800,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(checkout.exists())
         self.assertEqual(self.branch_ref("socu/late-branch"), branch_commit)
         self.assertEqual(git(checkout, "rev-parse", "--abbrev-ref", "HEAD").strip(), "socu/late-branch")
-        self.assertEqual(git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/buddy/"),
+        self.assertEqual(git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/hey-my-buddy/"),
                          refs_before)
         self.assertEqual({path.relative_to(checkout): path.read_bytes()
                           for path in checkout.rglob("*") if path.is_file() and ".git" not in path.parts},
@@ -1844,7 +1844,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             task_id=submitted["runId"], attempt_id=attempt["attemptId"], generation=attempt["generation"],
             spec={**BUDDY, "cwd": original["path"], "task": "private identity seam", "timeoutSeconds": 30},
             directory=self.directory / "native-seam", runtime={},
-            environment={"BUDDY_STATE_DIR": str(self.directory)}, turn=claimed["claim"]["turn"],
+            environment={"HMB_STATE_DIR": str(self.directory)}, turn=claimed["claim"]["turn"],
         )
         # These role functions verify the retained input without a coordinator context.
         turn_io.verify_workspace(context)

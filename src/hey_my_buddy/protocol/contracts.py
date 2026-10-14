@@ -1,4 +1,4 @@
-"""Named C-Two contracts for the Buddy blackboard.
+"""Named C-Two contracts for the hey-my-buddy blackboard.
 
 Every operation is a named method with a validated request schema — there is no
 public ``dispatch(method, JSON)`` facade and no Python-to-Node engine relay. Complex
@@ -14,8 +14,8 @@ control capacity that cancel, renew and result commits need.
 import c_two as cc
 
 CONTRACT_VERSION = "0.34.1"
-CONTROL_NAME = "buddy-control"
-WAIT_NAME = "buddy-wait"
+CONTROL_NAME = "hey-my-buddy-control"
+WAIT_NAME = "hey-my-buddy-wait"
 
 
 @cc.crm(namespace="hey.my.buddy", version=CONTRACT_VERSION)

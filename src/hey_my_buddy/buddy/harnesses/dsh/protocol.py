@@ -322,9 +322,9 @@ class RootTurnEvidence:
     driver's own ``session/new`` receipt, the turn is that one prompt, and its
     end is the prompt response's stop reason — never an observed frame. Besides
     the finish tool this tracker owns the inquiry channel's authority: a
-    question becomes delivered only through a ``buddy_checkpoint`` result whose
+    question becomes delivered only through a ``hey_my_buddy_checkpoint`` result whose
     signed receipt verifies here, and an answer counts only through a verified
-    ``buddy_answer_inquiry`` receipt. Child or foreign sessions never match —
+    ``hey_my_buddy_answer_inquiry`` receipt. Child or foreign sessions never match —
     the projection keeps their tool facts, and they contribute no turn evidence.
     """
 
@@ -419,7 +419,7 @@ class RootTurnEvidence:
                               "the native root result lacks ordered tool, turn and session settlement evidence")
         return {
             "version": 1,
-            "harness": HARNESS, "tool": "buddy_finish_turn", "nativeTool": self.tool_name,
+            "harness": HARNESS, "tool": "hey_my_buddy_finish_turn", "nativeTool": self.tool_name,
             "turnEnd": "completed", "stopReason": self.stop_reason, "rootSessionMatched": True,
             "nativeSessionId": self.session_id, "toolCallId": self.call_id,
             "receiptId": self.receipt["receiptId"], "receiptVerified": True,

@@ -27,7 +27,7 @@ class PrivateDirectoryTests(BoardTestCase):
         self.assertEqual((root / 'role-run-results.json').read_text(), 'retain unknown filename')
 
     def test_explicit_state_and_reparse_guard(self):
-        context = SimpleNamespace(environment={'BUDDY_STATE_DIR': str(self.directory.resolve())},
+        context = SimpleNamespace(environment={'HMB_STATE_DIR': str(self.directory.resolve())},
                                   spec={'adapter': 'codex'}, task_id='microTask', attempt_id='attempt')
         root = private_dirs.context_root(context)
         self.assertEqual(root, private_dirs.attempt_root(self.directory, 'codex', 'microTask', 'attempt'))

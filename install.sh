@@ -62,5 +62,5 @@ elif [ ! -x "$UV_BIN" ]; then
 fi
 
 if [ -n "$WHEEL_URL" ]; then source=$WHEEL_URL; else source="hey-my-buddy==$PACKAGE_VERSION"; fi
-printf 'Package source: %s\nuv: %s\nWrites: %s; ~/.agents/skills/buddy; ~/.claude/skills/buddy; ~/.local/share/hey-my-buddy\n' "$source" "$UV_BIN" "$UV_PRIVATE_DIR"
+printf 'Package source: %s\nuv: %s\nWrites: %s; ~/.agents/skills/hey-my-buddy; ~/.claude/skills/hey-my-buddy; ~/.local/share/hey-my-buddy\n' "$source" "$UV_BIN" "$UV_PRIVATE_DIR"
 UV_BIN="$UV_BIN" "$UV_BIN" tool run --from "$source" hey-my-buddy install || fail PACKAGE_INSTALL_FAILED "Package installation failed." "Read the installer error above, correct it, and rerun this command."

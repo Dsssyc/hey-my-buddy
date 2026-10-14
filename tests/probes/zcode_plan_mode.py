@@ -114,7 +114,7 @@ class ModeProbe(InstalledZcodeTests):
         request = request.model_copy(update={
             "buddy": request.buddy.model_copy(update={"model": "GLM-5.3-Flash"}),
             "worker_permission": permission})
-        finish = next(name for name in request.session_services[0].tool_names if name.endswith("__buddy_finish_turn"))
+        finish = next(name for name in request.session_services[0].tool_names if name.endswith("__hey_my_buddy_finish_turn"))
         self.call_prefix = "call_probe_" + request.identity.invocation_id[:12]
         prefix = f"resumed-{self.turn_index}-" if previous else ""
         if previous:

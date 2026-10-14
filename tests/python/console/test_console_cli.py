@@ -56,7 +56,7 @@ class FakeRpc:
 
     def __call__(self, method: str, params: dict, state_dir: Path | None = None) -> dict:
         if state_dir is not None:
-            assert state_dir == Path(os.environ["BUDDY_STATE_DIR"])
+            assert state_dir == Path(os.environ["HMB_STATE_DIR"])
         self.calls.append((method, dict(params)))
         return dict(self.reply)
 
@@ -108,7 +108,7 @@ class ConsoleCliTestCase(unittest.TestCase):
     def setUp(self) -> None:
         # This process runs inside a Buddy attempt, so clear both scoped-credential
         # variables for every case and restore them afterwards.
-        names = ("BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE")
+        names = ("HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE")
         previous = {name: os.environ.get(name) for name in names}
         for name in names:
             os.environ.pop(name, None)
@@ -137,7 +137,7 @@ class LocalOptionTests(ConsoleCliTestCase):
     def test_default_fixed_loopback_url_opens_without_a_ticket(self):
         url = "http://127.0.0.1:8123/"
         opener = mock.Mock(return_value=True)
-        result = console_cli.run({}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), call_service=FakeRpc(open_reply(url=url, expiresAt=None)), browser_open=opener)
+        result = console_cli.run({}, state_dir=Path(os.environ["HMB_STATE_DIR"]), call_service=FakeRpc(open_reply(url=url, expiresAt=None)), browser_open=opener)
         self.assertEqual(result["url"], url)
         opener.assert_called_once_with(url, new=2)
         for invalid in (url + "other", url + "?x=1", url + "#x", url.replace("127.0.0.1", "localhost")):
@@ -251,13 +251,13 @@ class CredentialTests(ConsoleCliTestCase):
     def test_environment_credential_is_refused_before_anything_happens(self):
         rpc = FakeRpc()
         browser = mock.Mock(side_effect=AssertionError("no browser may be launched"))
-        with mock.patch.dict(os.environ, {"BUDDY_AGENT_CREDENTIAL": "scoped-token"}):
+        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": "scoped-token"}):
             with mock.patch.object(transport, "_call_service", rpc), mock.patch.object(
                 console_cli.webbrowser, "open", browser
             ):
                 code, result, stderr = self.run_cli("console", '{"action":"open","wait":true}')
             # The credential is never stripped or borrowed: it stays in the environment.
-            self.assertEqual(os.environ["BUDDY_AGENT_CREDENTIAL"], "scoped-token")
+            self.assertEqual(os.environ["HMB_AGENT_CREDENTIAL"], "scoped-token")
         self.assertEqual(code, 1)
         self.assertEqual(result["error"]["code"], "FORBIDDEN")
         self.assertNotIn("scoped-token", json.dumps(result))
@@ -271,7 +271,7 @@ class CredentialTests(ConsoleCliTestCase):
             path.write_text(json.dumps({"token": "file-token"}))
             os.chmod(path, 0o600)
             rpc = FakeRpc()
-            with mock.patch.dict(os.environ, {"BUDDY_AGENT_CREDENTIAL_FILE": str(path)}):
+            with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(path)}):
                 with mock.patch.object(transport, "_call_service", rpc):
                     code, result, _stderr = self.run_cli("console", '{"action":"status"}')
         self.assertEqual(code, 1)
@@ -281,8 +281,8 @@ class CredentialTests(ConsoleCliTestCase):
     def test_malformed_credential_pins_keep_the_existing_unauthorized_semantics(self):
         rpc = FakeRpc()
         environments = (
-            {"BUDDY_AGENT_CREDENTIAL": " "},
-            {"BUDDY_AGENT_CREDENTIAL_FILE": "/absent/credential.json"},
+            {"HMB_AGENT_CREDENTIAL": " "},
+            {"HMB_AGENT_CREDENTIAL_FILE": "/absent/credential.json"},
         )
         for environment in environments:
             with self.subTest(environment=sorted(environment)):
@@ -302,7 +302,7 @@ class OpenTests(ConsoleCliTestCase):
         else:
             browser = mock.Mock(return_value=browser_result)
         stderr = io.StringIO()
-        result = console_cli.run(params, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), call_service=rpc, browser_open=browser, stderr=stderr)
+        result = console_cli.run(params, state_dir=Path(os.environ["HMB_STATE_DIR"]), call_service=rpc, browser_open=browser, stderr=stderr)
         return rpc, browser, stderr, result
 
     def test_open_launches_the_default_browser_once_and_keeps_the_lifecycle_reply(self):
@@ -338,7 +338,7 @@ class OpenTests(ConsoleCliTestCase):
     def test_the_default_browser_opener_is_python_webbrowser_with_new_2(self):
         rpc = FakeRpc()
         with mock.patch.object(console_cli.webbrowser, "open", return_value=True) as browser:
-            result = console_cli.run({"action": "open"}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), call_service=rpc)
+            result = console_cli.run({"action": "open"}, state_dir=Path(os.environ["HMB_STATE_DIR"]), call_service=rpc)
         self.assertEqual(browser.call_args_list, [mock.call(ENTRY_URL, new=2)])
         self.assertTrue(result["browserOpened"])
         self.assertEqual(rpc.calls, [("console", {"action": "open"})])
@@ -373,7 +373,7 @@ class OpenTests(ConsoleCliTestCase):
                 with self.subTest(case=name, browser=choice.get("browser", True)):
                     browser = mock.Mock(side_effect=AssertionError("no browser may be launched"))
                     with self.assertRaises(BoardError) as refused:
-                        console_cli.run(choice, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), call_service=FakeRpc(open_reply(url=url)), browser_open=browser)
+                        console_cli.run(choice, state_dir=Path(os.environ["HMB_STATE_DIR"]), call_service=FakeRpc(open_reply(url=url)), browser_open=browser)
                     self.assertEqual(refused.exception.code, "INVALID_RESPONSE")
                     self.assertEqual(browser.call_args_list, [])
 
@@ -398,7 +398,7 @@ class OpenTests(ConsoleCliTestCase):
                 with self.subTest(case=name, browser=choice.get("browser", True)):
                     browser = mock.Mock(side_effect=AssertionError("no browser may be launched"))
                     with self.assertRaises(BoardError) as refused:
-                        console_cli.run(choice, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), call_service=FakeRpc(reply), browser_open=browser)
+                        console_cli.run(choice, state_dir=Path(os.environ["HMB_STATE_DIR"]), call_service=FakeRpc(reply), browser_open=browser)
                     self.assertEqual(refused.exception.code, "INVALID_RESPONSE")
                     self.assertEqual(browser.call_args_list, [])
 
@@ -425,7 +425,7 @@ class OpenTests(ConsoleCliTestCase):
         factory = mock.Mock(side_effect=AssertionError("no client may be built"))
         with self.assertRaises(BoardError) as refused:
             console_cli.run(
-                {"action": "open", "wait": True}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]),
+                {"action": "open", "wait": True}, state_dir=Path(os.environ["HMB_STATE_DIR"]),
                 call_service=rpc,
                 browser_open=browser,
                 sleep=sleep,
@@ -448,7 +448,7 @@ class ObserveAndCloseTests(ConsoleCliTestCase):
         with mock.patch.object(transport, "_call_service", cold), mock.patch.object(
             console_cli.webbrowser, "open", browser
         ):
-            result = console_cli.run({"action": "status"}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), client_factory=factory)
+            result = console_cli.run({"action": "status"}, state_dir=Path(os.environ["HMB_STATE_DIR"]), client_factory=factory)
         self.assertEqual(cold.call_args_list, [])
         self.assertEqual(browser.call_args_list, [])
         self.assertEqual(factory.call_count, 1)
@@ -461,7 +461,7 @@ class ObserveAndCloseTests(ConsoleCliTestCase):
         cold = mock.Mock(side_effect=AssertionError("close must not use the cold-starting call surface"))
         with mock.patch.object(transport, "_call_service", cold):
             result = console_cli.run(
-                {"action": "close", "expectedConsoleId": REPLACEMENT_ID}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), client_factory=factory
+                {"action": "close", "expectedConsoleId": REPLACEMENT_ID}, state_dir=Path(os.environ["HMB_STATE_DIR"]), client_factory=factory
             )
         self.assertEqual(cold.call_args_list, [])
         self.assertEqual(client.calls, [("console", {"action": "close", "expectedConsoleId": REPLACEMENT_ID})])
@@ -472,7 +472,7 @@ class ObserveAndCloseTests(ConsoleCliTestCase):
             with self.subTest(params=params):
                 with tempfile.TemporaryDirectory() as directory:
                     cold = mock.Mock(side_effect=AssertionError("a missing service must never be cold-started"))
-                    with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": directory}), mock.patch.object(
+                    with mock.patch.dict(os.environ, {"HMB_STATE_DIR": directory}), mock.patch.object(
                         transport, "_call_service", cold
                     ):
                         code, result, _stderr = self.run_cli("console", json.dumps(params))
@@ -490,7 +490,7 @@ class ObserveAndCloseTests(ConsoleCliTestCase):
         )
         with mock.patch("hey_my_buddy.protocol.client.BoardClient", return_value=client) as built:
             code, result, _stderr = self.run_cli("console", '{"action":"status"}')
-        self.assertEqual(built.call_args_list, [mock.call(Path(os.environ["BUDDY_STATE_DIR"]), call=mock.ANY, autostart=False)])
+        self.assertEqual(built.call_args_list, [mock.call(Path(os.environ["HMB_STATE_DIR"]), call=mock.ANY, autostart=False)])
         self.assertEqual(code, 1)
         self.assertEqual(result["error"]["code"], "SERVICE_UNAVAILABLE")
         self.assertNotIn("running", result)
@@ -514,7 +514,7 @@ class WaitTests(ConsoleCliTestCase):
         sleep = FakeSleep(interrupt_after=interrupt_after)
         stderr = io.StringIO()
         result = console_cli.run(
-            {"action": "open", "wait": True}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]),
+            {"action": "open", "wait": True}, state_dir=Path(os.environ["HMB_STATE_DIR"]),
             call_service=rpc,
             client_factory=factory,
             browser_open=mock.Mock(return_value=browser_result),
@@ -627,15 +627,15 @@ class WaitTests(ConsoleCliTestCase):
         self.assertNotEqual(result["wait"]["status"], "closed")
 
     def test_unavailable_daemon_uses_the_non_autostart_board_client(self):
-        client = console_cli._non_autostart_client(Path(os.environ["BUDDY_STATE_DIR"]))
+        client = console_cli._non_autostart_client(Path(os.environ["HMB_STATE_DIR"]))
         self.assertIsInstance(client, BoardClient)
         self.assertIs(client.autostart, False)
 
     def test_a_real_missing_daemon_ends_the_wait_without_starting_one(self):
         with tempfile.TemporaryDirectory() as directory:
-            with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": directory}):
+            with mock.patch.dict(os.environ, {"HMB_STATE_DIR": directory}):
                 result = console_cli.run(
-                    {"action": "open", "browser": False, "wait": True}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]),
+                    {"action": "open", "browser": False, "wait": True}, state_dir=Path(os.environ["HMB_STATE_DIR"]),
                     call_service=FakeRpc(),
                     sleep=FakeSleep(),
                     stderr=io.StringIO(),
@@ -694,7 +694,7 @@ class WaitTests(ConsoleCliTestCase):
         result = json.loads(stdout.getvalue())
         self.assertEqual(result["wait"], {"status": "closed"})
         self.assertIs(result["browserOpened"], False)
-        self.assertEqual(constructed["args"], (Path(os.environ["BUDDY_STATE_DIR"]),))
+        self.assertEqual(constructed["args"], (Path(os.environ["HMB_STATE_DIR"]),))
         self.assertEqual(constructed["kwargs"], {"call": mock.ANY, "autostart": False})
         self.assertEqual(rpc.calls, [("console", {"action": "open"})])
         self.assertEqual(client.calls, [("console", {"action": "status"})])

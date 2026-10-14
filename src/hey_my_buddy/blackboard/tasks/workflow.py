@@ -5140,7 +5140,7 @@ class WorkflowCoordinator:
         return reasons, evidence, retention
 
     def cleanup_plan(self, params: dict, *, console_authority: dict | None = None) -> dict:
-        """Plan the removal of exactly one registered disposable Buddy checkout.
+        """Plan the removal of exactly one registered disposable hey-my-buddy checkout.
 
         The plan names the allocation and checks board eligibility without reading
         Git. Execution proves the live checkout and records its retention evidence
@@ -5773,7 +5773,7 @@ class WorkflowCoordinator:
                 native_home_changed = (buddy['harness'] == 'codex'
                                        and native_session.get('storageOwner') != 'harness-user-store'
                                        or buddy['harness'] == 'dsh'
-                                       and native_session.get('storageOwner') != 'buddy-micro-task')
+                                       and native_session.get('storageOwner') != 'hey-my-buddy-micro-task')
                 permission_reconstruction = (executor.native_resume
                                              and previous["access"] != execution_workspace["access"]
                                              and not executor.native_resume_permission_change)

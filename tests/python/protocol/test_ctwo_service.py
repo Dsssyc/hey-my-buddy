@@ -56,7 +56,7 @@ class TestNamedContract(BoardTestCase):
                 self.assertEqual(rejected["error"]["code"], "INVALID_ARGUMENT")
 
     def test_the_wait_route_is_a_separate_resource_with_its_own_capacity(self):
-        with self.daemon(env={"BUDDY_WAIT_CAPACITY": "1"}):
+        with self.daemon(env={"HMB_WAIT_CAPACITY": "1"}):
             endpoint = self._endpoint()
             capacity = self._wait_call(endpoint, "wait_capacity", {})
             self.assertEqual(capacity["capacity"], 1)

@@ -27,10 +27,10 @@ from ...errors import BoardError
 #: The one public machine-readable source. Facts record this origin with their fetch
 #: date; no other source, and no local note or evaluation, ever counts as a fact.
 SOURCE_URL = "https://models.dev/api.json"
-#: Offline fixture hook, the same pattern as ``BUDDY_MODEL_CATALOG_FILE``: when set,
+#: Offline fixture hook, the same pattern as ``HMB_MODEL_CATALOG_FILE``: when set,
 #: the source is read from this file instead of the network. Test harnesses pin it so
 #: the suite never touches the network.
-SOURCE_FILE_ENV = "BUDDY_MODEL_FACTS_FILE"
+SOURCE_FILE_ENV = "HMB_MODEL_FACTS_FILE"
 FETCH_TIMEOUT_SECONDS = 10
 MAX_SOURCE_BYTES = 32 * 1024 * 1024
 MAX_MODEL_SERVICES = 200

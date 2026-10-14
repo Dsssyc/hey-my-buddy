@@ -94,7 +94,7 @@ class BoardStore:
     ):
         self.directory = Path(directory)
         self.db = Database(self.directory)
-        #: The one machine-wide concurrent-attempt ceiling (BUDDY_MAX_CONCURRENT).
+        #: The one machine-wide concurrent-attempt ceiling (HMB_MAX_CONCURRENT).
         #: Routing/selection attempts and business attempts share it and the same
         #: per-model-service counters; there is no separate decision lane.
         self.max_concurrent = scheduling.clamp_total(max_concurrent)

@@ -1,5 +1,5 @@
 ---
-name: buddy
+name: hey-my-buddy
 description: Delegate bounded work with routing and owned workspaces; verify artifacts. Host handles trivial or unclear work.
 ---
 

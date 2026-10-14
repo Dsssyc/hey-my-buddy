@@ -51,8 +51,8 @@ class ClaudeFixtureCase(unittest.TestCase):
     """The shared fake-CLI harness: private roots, scrubbed environment."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-claude-test-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-test-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / "state").mkdir(mode=0o700)
@@ -60,11 +60,11 @@ class ClaudeFixtureCase(unittest.TestCase):
         self.cwd.mkdir()
         FIXTURE.chmod(0o755)
         self.environment = {key: value for key, value in os.environ.items()
-                            if not key.startswith("BUDDY_") and not key.startswith(("ANTHROPIC_", "CLAUDE_"))
+                            if not key.startswith("HMB_") and not key.startswith(("ANTHROPIC_", "CLAUDE_"))
                             and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_CLAUDE_CLI=str(FIXTURE), BUDDY_CLAUDE_FIXTURE_STATE=str(self.root / "fixture.json"),
-                                BUDDY_STATE_DIR=str(self.root / "state"), BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
-                                BUDDY_DEV_SOURCE="1")
+        self.environment.update(HMB_CONSOLE_PORT="0", HMB_CLAUDE_CLI=str(FIXTURE), HMB_CLAUDE_FIXTURE_STATE=str(self.root / "fixture.json"),
+                                HMB_STATE_DIR=str(self.root / "state"), HMB_RUNTIME_ROOT=str(self.root / "runtime"),
+                                HMB_DEV_SOURCE="1")
         # Controllers change cwd to the fixture checkout; a relative
         # PYTHONPATH would import the interpreter's installed source instead.
         self.environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[5] / "src")
@@ -81,7 +81,7 @@ class ClaudeFixtureCase(unittest.TestCase):
                                 spec={"cwd": str(self.cwd), "task": "Write a fixture result", "timeoutSeconds": timeout,
                                       "provider": "anthropic", "model": model, "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
-                                environment={**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": case},
+                                environment={**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case},
                                 turn={"turnId": f"turn-{index}", "input": turn_input})
 
 
@@ -435,7 +435,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         for case in ("empty-account", "invalid-account", "null-account", "missing-account"):
             with self.subTest(case=case):
                 (self.root / "fixture.json").unlink(missing_ok=True)
-                environment = {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": case}
+                environment = {**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case}
                 with mock.patch.dict("os.environ", environment, clear=False):
                     catalog = self.adapter.discover_models()
                 self.assertEqual(catalog["discoveries"],
@@ -560,11 +560,11 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(stat.S_IMODE(context.credential_file().stat().st_mode), 0o600)
-        self.assertEqual(context.environment["BUDDY_AGENT_CREDENTIAL_FILE"], str(context.credential_file()))
+        self.assertEqual(context.environment["HMB_AGENT_CREDENTIAL_FILE"], str(context.credential_file()))
         self.assertNotIn("private-attempt-secret", json.dumps(outcome.to_report()))
         # The allowlisted native child environment never sees Buddy credentials.
         state = self.fixture_state()
-        self.assertEqual(state["seenBuddyEnv"], ["BUDDY_CLAUDE_FIXTURE_CASE", "BUDDY_CLAUDE_FIXTURE_STATE"])
+        self.assertEqual(state["seenBuddyEnv"], ["HMB_CLAUDE_FIXTURE_CASE", "HMB_CLAUDE_FIXTURE_STATE"])
         self.assertEqual(state["seenAnthropicEnv"], [])
 
 
@@ -602,7 +602,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         context = self.context()
         context.turn = None
         context.agent_credential = "must-not-reach-native"
-        context.environment["BUDDY_AGENT_CREDENTIAL"] = "must-not-reach-native"
+        context.environment["HMB_AGENT_CREDENTIAL"] = "must-not-reach-native"
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]), budget())
         handle = start_review("claude", context, request)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)

@@ -57,8 +57,8 @@ class ControllerSignalTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "self SIGTERM delivery and PID observation use POSIX")
     def test_cancel_before_heavy_import_has_a_collected_native_stop_receipt(self):
-        with tempfile.TemporaryDirectory(prefix="buddy-controller-signals-",
-                                         dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp")) as temporary:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-controller-signals-",
+                                         dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")) as temporary:
             root = Path(temporary)
             state = root / "state"
             state.mkdir(mode=0o700)
@@ -74,13 +74,13 @@ class ControllerSignalTests(unittest.TestCase):
                 f"runpy.run_path({str(NATIVE_FIXTURE)!r}, run_name='__main__')\n")
             native.chmod(0o755)
             environment = {key: value for key, value in os.environ.items()
-                           if not key.startswith("BUDDY_")
+                           if not key.startswith("HMB_")
                            and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
             environment.update(HOME=str(root), CODEX_HOME=str(root / "codex-home"),
-                               BUDDY_DEV_SOURCE="1", BUDDY_STATE_DIR=str(state),
-                               BUDDY_RUNTIME_ROOT=str(root / "runtime"),
-                               BUDDY_CODEX_CLI=str(native), BUDDY_CODEX_FIXTURE_CASE="ok",
-                               BUDDY_CODEX_FIXTURE_STATE=str(root / "fixture.json"),
+                               HMB_DEV_SOURCE="1", HMB_STATE_DIR=str(state),
+                               HMB_RUNTIME_ROOT=str(root / "runtime"),
+                               HMB_CODEX_CLI=str(native), HMB_CODEX_FIXTURE_CASE="ok",
+                               HMB_CODEX_FIXTURE_STATE=str(root / "fixture.json"),
                                PYTHONPATH=str(SOURCE))
             turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": "attempt-1",
                           "generation": 1, "turnId": "turn-1", "resumeMode": "initial",

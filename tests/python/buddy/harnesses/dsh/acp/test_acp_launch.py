@@ -110,7 +110,7 @@ class LegalLaunchTest(AcpTestCase):
             "NO_PROXY": "localhost",
             "SSL_CERT_FILE": "/synthetic/ca.pem",
             "NODE_EXTRA_CA_CERTS": "/synthetic/node-ca.pem",
-            "BUDDY_AGENT_CREDENTIAL": "synthetic-credential-value",
+            "HMB_AGENT_CREDENTIAL": "synthetic-credential-value",
             "ACP_TEST_SECRET": "synthetic-secret-value",
         }
         extras = {"DSH_PERMISSION_MODE": "read-only"}
@@ -127,7 +127,7 @@ class LegalLaunchTest(AcpTestCase):
         self.assertEqual("/synthetic/node-ca.pem", explicit["NODE_EXTRA_CA_CERTS"])
         # Nothing outside the native allow-list - least of all a credential
         # variable - is brought in from the parent environment.
-        self.assertNotIn("BUDDY_AGENT_CREDENTIAL", explicit)
+        self.assertNotIn("HMB_AGENT_CREDENTIAL", explicit)
         self.assertNotIn("ACP_TEST_SECRET", explicit)
 
     def test_an_unset_dsh_home_stays_unset(self):

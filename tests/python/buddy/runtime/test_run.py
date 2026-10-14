@@ -1,6 +1,6 @@
 """Real cross-process CLI/C-Two integration for execution records and the read-only wait.
 
-Everything runs against an isolated ``BUDDY_STATE_DIR`` with the real daemon, the
+Everything runs against an isolated ``HMB_STATE_DIR`` with the real daemon, the
 real local worker supervisor and the real ``command`` adapter; no model is called.
 The CLI is invoked exactly as a user invokes it from an unrelated working directory.
 
@@ -82,7 +82,7 @@ class TestExecutionRecords(BoardTestCase):
             self.assertEqual(missing["error"]["code"], "NOT_FOUND")
             message = missing["error"]["message"]
             self.assertIn("execution-submit", message)
-            self.assertIn("buddy submit", message)
+            self.assertIn("hey-my-buddy submit", message)
             self.assertNotIn("buddy run", message)
 
             task = self.command_task("exec-await-1", ["/bin/sleep", "4"])
@@ -94,8 +94,8 @@ class TestExecutionRecords(BoardTestCase):
             self.assertFalse(envelope["resultDelivered"])
             self.assertTrue(envelope["recovery"]["commands"], "a wait timeout must name real recovery commands")
             commands = " ".join(envelope["recovery"]["commands"])
-            self.assertIn("buddy status", commands)
-            self.assertIn("buddy await", commands)
+            self.assertIn("hey-my-buddy status", commands)
+            self.assertIn("hey-my-buddy await", commands)
             self.assertNotIn("buddy start", commands)
             self.assertNotIn("buddy run", commands)
 

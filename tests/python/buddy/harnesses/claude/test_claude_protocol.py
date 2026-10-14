@@ -281,7 +281,7 @@ class ConnectionTests(unittest.TestCase):
 
     def test_unknown_control_response_identity_is_rejected(self):
         self._write_frame({"type": "control_response", "response": {
-            "subtype": "success", "request_id": "buddy-999", "response": {}}})
+            "subtype": "success", "request_id": "hey-my-buddy-999", "response": {}}})
         with self.assertRaises(ClaudeProtocolError) as caught:
             self.connection.pump()
         self.assertEqual(caught.exception.code, "invalid-protocol")
@@ -343,7 +343,7 @@ class ConnectionTests(unittest.TestCase):
         facts = self.connection.observations()
         self.assertEqual(facts["status"], "incomplete")
         self.assertEqual(facts["unreadResponses"], 3)
-        self.assertEqual([item["requestId"] for item in facts["samples"]], ["buddy-1", "buddy-2", "buddy-3"])
+        self.assertEqual([item["requestId"] for item in facts["samples"]], ["hey-my-buddy-1", "hey-my-buddy-2", "hey-my-buddy-3"])
         self.assertNotIn("credential-fragment", json.dumps(facts))
 
     def test_control_request_resource_bounds_still_reject(self):

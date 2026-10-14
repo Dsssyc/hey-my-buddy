@@ -396,7 +396,7 @@ describe("private same-origin API", () => {
     const [url, init] = fetcher.mock.calls[0];
     expect(url).toBe("/private-console/api/command");
     expect(init.credentials).toBe("same-origin");
-    expect(init.headers["X-Buddy-CSRF"]).toBe("csrf");
+    expect(init.headers["X-Hey-My-Buddy-CSRF"]).toBe("csrf");
   });
   it("preserves a stale-version error instead of pretending the write succeeded", async () => {
     const fetcher = vi

@@ -45,7 +45,7 @@ def read_health(connection, harness):
     row = connection.execute('SELECT * FROM harness_health WHERE harness=?', (harness,)).fetchone()
     if row is None:
         record = {'harness': harness, 'status': 'unknown', 'available': False, 'revision': 0,
-                'manualPath': None, 'reasonCode': 'HARNESS_NOT_CHECKED', 'remedy': 'Run buddy harnesses with refresh:true'}
+                'manualPath': None, 'reasonCode': 'HARNESS_NOT_CHECKED', 'remedy': 'Run hey-my-buddy harnesses with refresh:true'}
         return {**record, 'account': account, 'systemSandbox': eligibility['systemSandbox'],
                 'readOnlyStructured': eligibility}
     from ..evaluation.native_observations import quota_view, latest_quota
@@ -206,7 +206,7 @@ class HarnessHealth:
                 record = _discover(name, old['manualPath'], environment)
             except Exception:
                 record = {'harness': name, 'status': 'unhealthy', 'reasonCode': 'HARNESS_HANDSHAKE_FAILED',
-                          'remedy': 'Repair the native CLI installation and run buddy harnesses with refresh:true'}
+                          'remedy': 'Repair the native CLI installation and run hey-my-buddy harnesses with refresh:true'}
             retained = {key: old[key] for key in ("billingByProvider", "accountReadFailure") if key in old}
             if record.get("status") != "ready" or old.get("fingerprint") != record.get("fingerprint"):
                 retained.pop("billingByProvider", None)

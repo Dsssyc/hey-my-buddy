@@ -21,7 +21,7 @@ from buddy.harnesses.test_run_contract import full_request
 class WorkerPermissionEvidenceTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="worker-permission-evidence-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(temporary.cleanup)
         self.root = ensure_private_dir(Path(temporary.name) / "inv")
 

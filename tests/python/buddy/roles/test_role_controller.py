@@ -149,8 +149,8 @@ class RunCallPointTests(unittest.TestCase):
         patcher = mock.patch.dict(RUN_SEAMS, {}, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-roles-seam-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-roles-seam-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.request = run_request(self.root)
@@ -285,8 +285,8 @@ class RouterCallPointTests(unittest.TestCase):
         registrations = mock.patch.dict(RUN_SEAMS, {"dsh": self.module})
         registrations.start()
         self.addCleanup(registrations.stop)
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-roles-router-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-roles-router-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
 
@@ -306,7 +306,7 @@ class RouterCallPointTests(unittest.TestCase):
         values = dict(task_id="task-router", attempt_id="attempt-router", generation=1,
                       spec={"cwd": str(self.root), "task": "choose", "timeoutSeconds": 60},
                       directory=self.root / "attempt",
-                      environment={"BUDDY_STATE_DIR": str(self.root / "state")}, runtime={})
+                      environment={"HMB_STATE_DIR": str(self.root / "state")}, runtime={})
         values.update(kwargs)
         return ExecutionContext(**values)
 

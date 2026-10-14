@@ -66,7 +66,7 @@ def controller():
                 endpoint_type = SlowEndpoint if command.get("slow") else ctl.CTwoLiveEndpoint
                 endpoint = endpoint_type(identity, LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
                                          HarnessRunLive, token=token, name="Ada",
-                                         state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                                         state_dir=Path(os.environ["HMB_STATE_DIR"]))
                 descriptor = endpoint.start()
                 journal = Path(command["journal"])
                 if not command.get("paused"):
@@ -164,7 +164,7 @@ def worker():
                     return "bound", channels[handle]
 
                 with patch("hey_my_buddy.buddy.runtime.live.random_person_name", return_value="Ada"):
-                    runtime = WorkerLiveRuntime(client, command["workerId"], command["workerInstance"], resolve, state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                    runtime = WorkerLiveRuntime(client, command["workerId"], command["workerInstance"], resolve, state_dir=Path(os.environ["HMB_STATE_DIR"]))
                 descriptor = runtime.start()
                 emit({"ok": True, "descriptor": descriptor.to_payload()})
             elif op == "spawn":
@@ -179,7 +179,7 @@ def worker():
                 descriptor = ctl.LiveEndpointDescriptor.from_payload(result["descriptor"])
                 channels[handle] = ctl.CTwoLiveChannel(
                     handle.role_run_identity, HarnessRunLive, name=descriptor.name,
-                    address=descriptor.address, instance_id=descriptor.instance_id, token=result["token"], state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                    address=descriptor.address, instance_id=descriptor.instance_id, token=result["token"], state_dir=Path(os.environ["HMB_STATE_DIR"]))
                 descriptors[command["label"]] = descriptor
                 emit({"ok": True, "descriptor": descriptor.to_payload()})
             elif op in ("bind", "refresh"):

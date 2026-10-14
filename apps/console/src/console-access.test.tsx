@@ -52,7 +52,7 @@ it("logout blocks subsequent writes and gives the login entry instruction", asyn
   command.mockResolvedValue({ ...login, sessions: [other] });
   await user.click(screen.getByRole("button", { name: "退出当前登录" }));
   expect(command).toHaveBeenCalledWith("console_logout", {}, "fixture-csrf");
-  expect(screen.getByRole("status").textContent).toContain("buddy console");
+  expect(screen.getByRole("status").textContent).toContain("hey-my-buddy console");
   expect(screen.getByRole("switch")).toHaveProperty("disabled", true);
   await user.click(screen.getByRole("button", { name: "撤销登录 bbbbbbbb" }));
   expect(command).toHaveBeenCalledTimes(1);

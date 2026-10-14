@@ -37,9 +37,9 @@ def flag_value(args: list[str], flag: str) -> str | None:
 #: this file states the same boundary itself so `python -m unittest
 #: tests.python.test_claude_config` is self-sufficient.
 FOCUSED_CLEARED_VARIABLES = (
-    "BUDDY_STATE_DIR", "BUDDY_RUNTIME_ROOT", "BUDDY_RUNTIME", "BUDDY_RUNTIME_IDENTITY",
-    "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL",
-    "BUDDY_AGENT_CREDENTIAL_FILE", "BUDDY_HARNESS_RECORD_FILE",
+    "HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
+    "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL",
+    "HMB_AGENT_CREDENTIAL_FILE", "HMB_HARNESS_RECORD_FILE",
     "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
 )
 
@@ -57,19 +57,19 @@ class ClaudeConfigTests(unittest.TestCase):
         # focused file must supply it rather than rely on hey_my_buddy.cli.checks having set it.
         environment = {key: value for key, value in os.environ.items()
                        if key not in FOCUSED_CLEARED_VARIABLES}
-        environment["BUDDY_DEV_SOURCE"] = "1"
+        environment["HMB_DEV_SOURCE"] = "1"
         patcher = mock.patch.dict(os.environ, environment, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
 
     def test_cli_override_and_missing_cli(self):
-        with tempfile.TemporaryDirectory(prefix="buddy-claude-config-") as temp:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-config-") as temp:
             cli = Path(temp) / "claude"
             cli.write_text("#!/bin/sh\n")
             cli.chmod(0o755)
-            self.assertEqual(cli_command({"BUDDY_CLAUDE_CLI": str(cli), "PATH": tempfile.mkdtemp()}),
+            self.assertEqual(cli_command({"HMB_CLAUDE_CLI": str(cli), "PATH": tempfile.mkdtemp()}),
                              [str(cli.resolve())])
-            with tempfile.TemporaryDirectory(prefix="buddy-claude-empty-") as empty:
+            with tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-empty-") as empty:
                 with self.assertRaises(ClaudeUnavailable):
                     cli_command({"PATH": empty})
 
@@ -191,9 +191,9 @@ class ClaudeConfigTests(unittest.TestCase):
                "NODE_EXTRA_CA_CERTS": "/certs/node.pem",
                "CLAUDECODE": "1", "CLAUDE_CODE_EFFORT_LEVEL": "max", "ANTHROPIC_MODEL": "claude-other",
                "ANTHROPIC_AUTH_TOKEN": "bearer-secret", "ANTHROPIC_BASE_URL": "https://gateway.example.invalid",
-               "BUDDY_AGENT_CREDENTIAL": "worker-secret", "BUDDY_AGENT_CREDENTIAL_FILE": "/private/cred.json",
-               "BUDDY_STATE_DIR": "/private/state", "SOME_OTHER_HARNESS_TOKEN": "peer-secret",
-               "BUDDY_CLAUDE_FIXTURE_CASE": "ok"}
+               "HMB_AGENT_CREDENTIAL": "worker-secret", "HMB_AGENT_CREDENTIAL_FILE": "/private/cred.json",
+               "HMB_STATE_DIR": "/private/state", "SOME_OTHER_HARNESS_TOKEN": "peer-secret",
+               "HMB_CLAUDE_FIXTURE_CASE": "ok"}
         with mock.patch('hey_my_buddy.buddy.harnesses.claude.config.cli_command', return_value=[]):
             result = native_environment(env)
         self.assertEqual(result["PATH"], "/bin")
@@ -207,11 +207,11 @@ class ClaudeConfigTests(unittest.TestCase):
         self.assertEqual(result["NODE_EXTRA_CA_CERTS"], "/certs/node.pem")
         self.assertNotIn('ANTHROPIC_API_KEY', result)
         self.assertEqual(result["CLAUDE_CONFIG_DIR"], "/users/fixture/.claude")
-        self.assertEqual(result["BUDDY_CLAUDE_FIXTURE_CASE"], "ok")
+        self.assertEqual(result["HMB_CLAUDE_FIXTURE_CASE"], "ok")
         # No host, worker, agent-credential or other-harness value may leak.
         for banned in ("CLAUDECODE", "CLAUDE_CODE_EFFORT_LEVEL", "ANTHROPIC_MODEL", "ANTHROPIC_AUTH_TOKEN",
-                       "ANTHROPIC_BASE_URL", "BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE",
-                       "BUDDY_STATE_DIR", "SOME_OTHER_HARNESS_TOKEN"):
+                       "ANTHROPIC_BASE_URL", "HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE",
+                       "HMB_STATE_DIR", "SOME_OTHER_HARNESS_TOKEN"):
             self.assertNotIn(banned, result)
 
     def test_subagent_tool_list_names_the_current_agent_tool(self):

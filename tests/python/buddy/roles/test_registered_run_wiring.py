@@ -136,7 +136,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
         context = ExecutionContext("task", "attempt", 1,
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low",
              "cwd": str(self.cwd), "timeoutSeconds": WIRING_TIMEOUT}, self.root / "attempt", {},
-            {**self.environment, "BUDDY_ZCODE_TEST_CASE": case})
+            {**self.environment, "HMB_ZCODE_TEST_CASE": case})
         request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA, WIRING_TIMEOUT,
                                           capture_evidence=capture_evidence)
         handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))
@@ -195,12 +195,12 @@ class FastRegisteredRunTests(FakeAppServerTests):
         root = self.root / "discovery"
         root.mkdir(mode=0o700)
         module = run_seam("zcode")
-        with mock.patch.dict(os.environ, {**self.environment, "BUDDY_ZCODE_TEST_CASE": "discovery"}, clear=True), \
+        with mock.patch.dict(os.environ, {**self.environment, "HMB_ZCODE_TEST_CASE": "discovery"}, clear=True), \
                 mock.patch.object(module, "run", side_effect=AssertionError("model run")), \
                 mock.patch.object(module, "prepare_services", side_effect=AssertionError("session service")):
             raw, code = run_controller.execute({"operation": "discover", "harness": "zcode",
                 "cwd": str(root), "privateRoot": str(root), "nativeRoot": str(root / "native"),
-                "timeoutSeconds": WIRING_TIMEOUT}, threading.Event(), state_dir=Path(os.environ["BUDDY_STATE_DIR"]))
+                "timeoutSeconds": WIRING_TIMEOUT}, threading.Event(), state_dir=Path(os.environ["HMB_STATE_DIR"]))
         result = json.loads(raw)
         self.assertEqual(code, 0)
         self.assertFalse(result["modelStarted"])
@@ -253,7 +253,7 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         context = self.context("usage-ok")
         fixture = Path(__file__).parents[1] / "harnesses/zcode/fixtures/mock_zcode_usage.py"
         fixture.chmod(0o755)
-        context.environment["BUDDY_ZCODE_CLI"] = str(fixture)
+        context.environment["HMB_ZCODE_CLI"] = str(fixture)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(context.timeout_seconds + 10))

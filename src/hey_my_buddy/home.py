@@ -3,7 +3,7 @@
 POSIX keeps the XDG-style ``~/.local/share/hey-my-buddy``. Windows uses
 ``%LOCALAPPDATA%\\hey-my-buddy``: machine-local, per-user and not roamed. The data
 root is deliberately outside the shared skill directory, which is replaced on every
-install and is readable by agents. ``BUDDY_STATE_DIR`` and ``BUDDY_RUNTIME_ROOT``
+install and is readable by agents. ``HMB_STATE_DIR`` and ``HMB_RUNTIME_ROOT``
 still override the individual locations.
 """
 from __future__ import annotations

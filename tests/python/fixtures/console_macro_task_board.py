@@ -75,7 +75,7 @@ class Recipe:
 def clean_environment(environment: dict) -> dict:
     """Remove inherited authority *before* adding explicit private paths."""
     return {key: value for key, value in environment.items()
-            if not key.startswith(("BUDDY_", "ANTHROPIC_"))
+            if not key.startswith(("HMB_", "ANTHROPIC_"))
             and key not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"}}
 
 
@@ -107,9 +107,9 @@ def private_environment(state: Path, runtime: Path, source: Path):
     old = dict(os.environ)
     os.environ.clear()
     os.environ.update(clean_environment(old))
-    os.environ.update(BUDDY_STATE_DIR=str(state), BUDDY_RUNTIME_ROOT=str(runtime),
-                      BUDDY_DEV_SOURCE="1", BUDDY_CONSOLE_PORT="0",
-                      BUDDY_MODEL_FACTS_FILE=str(state / "offline-model-facts.json"),
+    os.environ.update(HMB_STATE_DIR=str(state), HMB_RUNTIME_ROOT=str(runtime),
+                      HMB_DEV_SOURCE="1", HMB_CONSOLE_PORT="0",
+                      HMB_MODEL_FACTS_FILE=str(state / "offline-model-facts.json"),
                       PYTHONPATH=os.pathsep.join((str(source / "src"), str(source / "tests/python"))))
     try:
         yield
@@ -165,7 +165,7 @@ class SyntheticBoard:
             self.stack.enter_context(patch.object(DshAdapter, "available", return_value=(True, "synthetic fixture")))
             # Fail closed if any generation/read path tries launching a process.
             self.launch_guard = self.stack.enter_context(patch("subprocess.Popen", side_effect=AssertionError("No subprocess in synthetic board")))
-            os.environ["BUDDY_MODEL_CATALOG_FILE"] = str(support.write_catalog_fixture(self.state))
+            os.environ["HMB_MODEL_CATALOG_FILE"] = str(support.write_catalog_fixture(self.state))
             self.board = support.InProcessBoard(self.state, clock=self.clock)
             with ExitStack() as generation:
                 ids = random.Random(self.seed)

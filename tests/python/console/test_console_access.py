@@ -51,9 +51,9 @@ class ConsoleAccessTests(ConsoleTestCase):
             with self.subTest(headers=headers):
                 self.assertEqual(browser.get("/api/console", headers=headers)[0], 403)
                 self.assertEqual(browser.call("POST", "/api/command", body=body,
-                    headers={"X-Buddy-CSRF": csrf, **headers})[0], 403)
+                    headers={"X-Hey-My-Buddy-CSRF": csrf, **headers})[0], 403)
         self.assertEqual(http_call(browser.host, browser.port, "POST", "/api/command", body=body,
-            headers={"Host": f"{browser.host}:{browser.port}", "X-Buddy-CSRF": csrf})[0], 403)
+            headers={"Host": f"{browser.host}:{browser.port}", "X-Hey-My-Buddy-CSRF": csrf})[0], 403)
         self.assertEqual(browser.command("console_access_set", body["params"])[0], 403)
         self.assertEqual(browser.call("OPTIONS", "/api/command")[0], 405)
         self.assertFalse(board.console.require_login)

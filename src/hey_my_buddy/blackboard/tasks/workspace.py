@@ -282,7 +282,7 @@ def _write_objects(root, objects):
     # marks must reproduce the computed object numbers, so the write semantics
     # stay hash-object's. Blob commands create no ref, branch, tag or stash.
     # https://git-scm.com/docs/git-fast-import
-    with tempfile.TemporaryDirectory(prefix="buddy-objects-") as directory:
+    with tempfile.TemporaryDirectory(prefix="hey-my-buddy-objects-") as directory:
         marks = Path(directory) / "marks"
         with tempfile.TemporaryFile() as diagnostics, tempfile.TemporaryFile() as output:
             command, git_env = _git_command(root, "fast-import", "--quiet", "--done",
@@ -473,7 +473,7 @@ def _stable_observation(root, selected, *, write=False, require_selected=False):
 def _tree(root, entries):
     # A private index builds raw blob trees without filters or changes to the
     # source index. https://git-scm.com/docs/git-update-index#_using_index_info
-    with tempfile.TemporaryDirectory(prefix="buddy-index-") as directory:
+    with tempfile.TemporaryDirectory(prefix="hey-my-buddy-index-") as directory:
         environment = {"GIT_INDEX_FILE": str(Path(directory) / "index")}
         _git(root, "read-tree", "--empty", env=environment)
         records = b"".join(mode.encode() + b" " + oid.encode() + b"\t" + os.fsencode(path) + b"\0"
@@ -487,8 +487,8 @@ def _commit_tree(root, tree, parent, message):
     # Fixed metadata makes recovery after object creation deterministic; these
     # are snapshot commits, not user-authored history or branch changes.
     # https://git-scm.com/docs/git-commit-tree#_commit_information
-    environment = {"GIT_AUTHOR_NAME": "Buddy snapshot", "GIT_AUTHOR_EMAIL": "buddy@localhost",
-                   "GIT_COMMITTER_NAME": "Buddy snapshot", "GIT_COMMITTER_EMAIL": "buddy@localhost",
+    environment = {"GIT_AUTHOR_NAME": "hey-my-buddy snapshot", "GIT_AUTHOR_EMAIL": "hey-my-buddy@localhost",
+                   "GIT_COMMITTER_NAME": "hey-my-buddy snapshot", "GIT_COMMITTER_EMAIL": "hey-my-buddy@localhost",
                    "GIT_AUTHOR_DATE": "@946684800 +0000", "GIT_COMMITTER_DATE": "@946684800 +0000"}
     return _line(root, "commit-tree", tree, "-p", parent, "--no-gpg-sign", data=(message + "\n").encode(), env=environment)
 
@@ -631,8 +631,8 @@ def _snapshot(source, intent, workspace_id):
     base_tree = _line(root, "rev-parse", base + "^{tree}")
     snapshot = {"repositoryPath": source["repositoryPath"], "sourceCheckoutId": source["checkoutId"],
                 "sourceHead": source["headCommit"], "includeSelectors": intent["includeUntracked"],
-                "inputRef": f"refs/buddy/workspaces/{workspace_id}/input",
-                "stagedRef": f"refs/buddy/workspaces/{workspace_id}/staged"}
+                "inputRef": f"refs/hey-my-buddy/workspaces/{workspace_id}/input",
+                "stagedRef": f"refs/hey-my-buddy/workspaces/{workspace_id}/staged"}
     if intent["base"]["kind"] == "working-tree":
         observed = _stable_observation(root, intent["includeUntracked"], write=True, require_selected=True)
         if observed["head"] != source["headCommit"]:
@@ -979,8 +979,8 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
         pinned = {"source": source, **_snapshot(source, intent, workspace_id)}
         # Keep newly created objects reachable before a durable record
         # promises they can be recovered, including across Git GC.
-        _pin(source["repositoryPath"], f"refs/buddy/workspaces/{workspace_id}/retained/input", pinned["inputCommit"])
-        _pin(source["repositoryPath"], f"refs/buddy/workspaces/{workspace_id}/retained/staged", pinned["snapshot"]["stagedCommit"])
+        _pin(source["repositoryPath"], f"refs/hey-my-buddy/workspaces/{workspace_id}/retained/input", pinned["inputCommit"])
+        _pin(source["repositoryPath"], f"refs/hey-my-buddy/workspaces/{workspace_id}/retained/staged", pinned["snapshot"]["stagedCommit"])
         _write_once(directory / "input.json", _json(pinned))
     source = pinned["source"]
     repository = Path(pinned["snapshot"]["repositoryPath"])
@@ -1159,7 +1159,7 @@ def _finish_output(repository, output, directory, *, fresh=False):
         raise BoardError("WORKSPACE_CONFLICT", "The sealed output record is inconsistent")
     bindings = ("workspaceId", "taskId", "attemptId", "manifestSha256", "baseCommit", "inputCommit", "commit",
                 "tree", "changedPaths", "includedUntracked", "diffSha256")
-    expected_ref = f"refs/buddy/workspaces/{output['workspaceId']}/outputs/{directory.name}"
+    expected_ref = f"refs/hey-my-buddy/workspaces/{output['workspaceId']}/outputs/{directory.name}"
     if _sha(_json(output["snapshot"])) != output["snapshotSha256"] or any(output.get(key) != output["snapshot"].get(key) for key in bindings) or output["ref"] != expected_ref or output["diffPath"] != str(directory / "output.patch"):
         raise BoardError("WORKSPACE_CONFLICT", "The sealed output record is inconsistent")
     patch_path = directory / "output.patch"
@@ -1261,7 +1261,7 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
                       "inputCommit": manifest["inputCommit"], "commit": commit, "tree": tree, "changedPaths": changed,
                       "includedUntracked": snapshot["includedUntracked"],
                       "snapshot": snapshot, "snapshotSha256": _sha(_json(snapshot)),
-                      "ref": f"refs/buddy/workspaces/{workspace_id}/outputs/{directory.name}",
+                      "ref": f"refs/hey-my-buddy/workspaces/{workspace_id}/outputs/{directory.name}",
                       "diffPath": str(directory / "output.patch"), "diffSha256": _sha(patch_data)}
             if kind is not None:
                 output["kind"] = kind
@@ -1273,7 +1273,7 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
                 output["snapshotSha256"] = _sha(_json(snapshot))
             # Retention precedes the recovery record: GC must not discard a
             # chosen output while final reference publication is interrupted.
-            _pin(repository, f"refs/buddy/workspaces/{workspace_id}/retained/output-{directory.name}", commit)
+            _pin(repository, f"refs/hey-my-buddy/workspaces/{workspace_id}/retained/output-{directory.name}", commit)
             _write_once(directory / "pending.json", _json(output))
             _write_once(directory / "output.patch", patch_data)
             return _finish_output(repository, output, directory, fresh=True)
@@ -1648,7 +1648,7 @@ def _snapshot_record(manifest, observation, tree, entries, changed, excluded_cha
 
 def _finish_record(repository, record, directory, *, ref_name, ref_kind, record_name, patch_name, bindings):
     expected_tree = _line(repository, "rev-parse", record["commit"] + "^{tree}")
-    expected_ref = f"refs/buddy/workspaces/{record['workspaceId']}/{ref_kind}/{ref_name}"
+    expected_ref = f"refs/hey-my-buddy/workspaces/{record['workspaceId']}/{ref_kind}/{ref_name}"
     if (expected_tree != record["tree"] or _sha(_json(record["snapshot"])) != record["snapshotSha256"]
             or any(record.get(key) != record["snapshot"].get(key) for key in bindings)
             or record["ref"] != expected_ref or record["diffPath"] != str(directory / patch_name)):
@@ -1708,9 +1708,9 @@ def _resolution_record(root, manifest, repository, directory, observation, *, ta
               "tree": tree, "changedPaths": changed, "adoptedPaths": adopted,
               "includedUntracked": snapshot["includedUntracked"],
               "snapshot": snapshot, "snapshotSha256": _sha(_json(snapshot)),
-              "ref": f"refs/buddy/workspaces/{workspace_id}/resolutions/{output_id}-{action}",
+              "ref": f"refs/hey-my-buddy/workspaces/{workspace_id}/resolutions/{output_id}-{action}",
               "diffPath": str(directory / f"resolve-{action}.patch"), "diffSha256": _sha(patch_data)}
-    _pin(repository, f"refs/buddy/workspaces/{workspace_id}/retained/resolution-{output_id}-{action}", commit)
+    _pin(repository, f"refs/hey-my-buddy/workspaces/{workspace_id}/retained/resolution-{output_id}-{action}", commit)
     _write_once(directory / f"resolve-{action}-pending.json", _json(record))
     _write_once(directory / f"resolve-{action}.patch", patch_data)
     return _finish_record(repository, record, directory, ref_name=f"{output_id}-{action}", ref_kind="resolutions",
@@ -1748,9 +1748,9 @@ def _abandoned_record(root, manifest, repository, directory, observation, *, tas
               "baseCommit": manifest["baseCommit"], "inputCommit": manifest["inputCommit"], "commit": commit,
               "tree": tree, "changedPaths": changed, "includedUntracked": snapshot["includedUntracked"],
               "snapshot": snapshot, "snapshotSha256": _sha(_json(snapshot)),
-              "ref": f"refs/buddy/workspaces/{workspace_id}/abandoned/{output_id}",
+              "ref": f"refs/hey-my-buddy/workspaces/{workspace_id}/abandoned/{output_id}",
               "diffPath": str(directory / "abandoned.patch"), "diffSha256": _sha(patch_data)}
-    _pin(repository, f"refs/buddy/workspaces/{workspace_id}/retained/abandoned-{output_id}", commit)
+    _pin(repository, f"refs/hey-my-buddy/workspaces/{workspace_id}/retained/abandoned-{output_id}", commit)
     _write_once(directory / "abandoned-pending.json", _json(record))
     _write_once(directory / "abandoned.patch", patch_data)
     return _finish_record(repository, record, directory, ref_name=output_id, ref_kind="abandoned",
@@ -1923,12 +1923,12 @@ def _validate_output_record(final_input, artifact):
     ref = artifact.get("ref")
     output_id = _sha(_json([artifact.get("taskId"), artifact.get("attemptId")]))
     if artifact.get("kind") == "resolution" and artifact.get("action") in ("restore", "adopt"):
-        expected_ref = (f"refs/buddy/workspaces/{final_input['workspaceId']}/resolutions/"
+        expected_ref = (f"refs/hey-my-buddy/workspaces/{final_input['workspaceId']}/resolutions/"
                         f"{output_id}-{artifact['action']}")
     elif artifact.get("kind") == "host-output":
-        expected_ref = f"refs/buddy/workspaces/{final_input['workspaceId']}/outputs/{output_id}-host"
+        expected_ref = f"refs/hey-my-buddy/workspaces/{final_input['workspaceId']}/outputs/{output_id}-host"
     elif artifact.get("kind") is None:
-        expected_ref = f"refs/buddy/workspaces/{final_input['workspaceId']}/outputs/{output_id}"
+        expected_ref = f"refs/hey-my-buddy/workspaces/{final_input['workspaceId']}/outputs/{output_id}"
     else:
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output record kind is invalid")
     patch_path = artifact.get("diffPath")
@@ -2206,7 +2206,7 @@ def _allocation_refs(repository, allocation_id, manifest, retained):
     refs = []
     for identifier in identifiers:
         refs.extend(os.fsdecode(line) for line in _git(
-            repository, "for-each-ref", "--format=%(refname)", f"refs/buddy/workspaces/{identifier}/").splitlines())
+            repository, "for-each-ref", "--format=%(refname)", f"refs/hey-my-buddy/workspaces/{identifier}/").splitlines())
         if len(refs) >= 64:
             break
     return sorted(set(refs))[:64]
@@ -2214,7 +2214,7 @@ def _allocation_refs(repository, allocation_id, manifest, retained):
 
 def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retained=None,
                     allowed: list[str] | None = None) -> dict:
-    """Eligibility facts for removing exactly one registered Buddy worktree.
+    """Eligibility facts for removing exactly one registered hey-my-buddy worktree.
 
     The deletion target is the *physical allocation* resolved from authoritative
     retained manifests, not the current turn/input snapshot: a continuation
@@ -2387,7 +2387,7 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None) -> dict:
         state_dir = Path(state_dir).resolve()
         allocation = resolve_allocation(state_dir, manifest, retained)
         if allocation is None or not _inside(manifest["path"], allocation["path"]):
-            raise BoardError("WORKSPACE_UNSAFE", "Cleanup only removes a registered disposable Buddy checkout",
+            raise BoardError("WORKSPACE_UNSAFE", "Cleanup only removes a registered disposable hey-my-buddy checkout",
                              path=manifest["checkoutRoot"])
         checkout_root = Path(allocation["path"])
         removal = {"removed": True, "path": str(checkout_root),

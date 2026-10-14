@@ -194,8 +194,8 @@ class HelpTests(unittest.TestCase):
             "conclude ends a failed, cancelled or delivered-but-unaccepted micro task",
             "conclude ends a failed, cancelled or delivered-but-unaccepted micro task",
             "execution-submit",
-            "buddy get",
-            "buddy await",
+            "hey-my-buddy get",
+            "hey-my-buddy await",
             "no implicit",
             "latest-generation lookup",
         ):
@@ -208,7 +208,7 @@ class HelpTests(unittest.TestCase):
         text = self.help_text()
         for removed in ("workflow-submit", "workflow-get", "workflow-decide", "workflow-continue", "buddy run ", "buddy start ",
                         "integration-record", "workspace-cleanup-plan", "workspace-cleanup-apply",
-                        "buddy acknowledge"):
+                        "hey-my-buddy acknowledge"):
             self.assertNotIn(removed, text)
         # The old misleading sentence used to promise a cached generation was reused.
         self.assertNotIn("without it the latest saved generation", text)
@@ -222,10 +222,10 @@ class PrivateStateTestCase(BoardTestCase):
         self._set_private_environment()
 
     def _set_private_environment(self) -> None:
-        names = ("BUDDY_STATE_DIR", "BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE")
+        names = ("HMB_STATE_DIR", "HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE")
         previous = {name: os.environ.get(name) for name in names}
-        os.environ["BUDDY_STATE_DIR"] = str(self.directory)
-        for name in ("BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE"):
+        os.environ["HMB_STATE_DIR"] = str(self.directory)
+        for name in ("HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE"):
             os.environ.pop(name, None)
 
         def restore() -> None:
@@ -345,13 +345,13 @@ class ControlFileTests(PrivateStateTestCase):
 
     def test_agent_credential_cannot_use_a_host_control_file(self):
         path = cli._save_control("run-1", {"hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"}, state_dir=self.directory)
-        with mock.patch.dict(os.environ, {"BUDDY_AGENT_CREDENTIAL": "scoped-token"}):
+        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": "scoped-token"}):
             with self.assertRaises(BoardError) as refused:
                 cli._apply_control({"runId": "run-1", "controlFile": path}, "decide")
             self.assertEqual(refused.exception.code, "FORBIDDEN")
             # A scoped caller may still pass the explicit triple through.
             self.assertEqual(cli._apply_control({"runId": "run-1"}, "get"), {"runId": "run-1"})
-        with mock.patch.dict(os.environ, {"BUDDY_AGENT_CREDENTIAL": ""}):
+        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": ""}):
             with self.assertRaises(BoardError) as empty:
                 cli._agent_credential()
             self.assertEqual(empty.exception.code, "UNAUTHORIZED")
@@ -499,7 +499,7 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
     def test_scoped_caller_never_mints_a_submission_capability(self):
         board = self.board()
         self.use_board_transport(board)
-        with mock.patch.dict(os.environ, {"BUDDY_AGENT_CREDENTIAL": "not-a-real-credential"}):
+        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": "not-a-real-credential"}):
             code, refused = self.run_cli("submit", self.submit_payload("cli-req-4"))
         self.assertEqual(code, 1)
         self.assertEqual(refused["error"]["code"], "UNAUTHORIZED")

@@ -120,7 +120,7 @@ describe("command receipts", () => {
     const api = createApi("/private/", fetcher as typeof fetch);
     await expect(api.command("selection_request", { requestId: "stable" }, "csrf")).resolves.toEqual({ decisionId: "durable" });
     expect(fetcher).toHaveBeenCalledWith("/private/api/command", expect.objectContaining({
-      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-Buddy-CSRF": "csrf" },
+      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-Hey-My-Buddy-CSRF": "csrf" },
       body: JSON.stringify({ operation: "selection_request", params: { requestId: "stable" } }),
     }));
   });
@@ -373,7 +373,7 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ ok: true, result: { done: true } })));
     const api = createApi("/private/", fetcher);
     await api.command("selection_request", { requestId: "stable" }, "csrf");
-    expect(fetcher.mock.calls[0][1]?.headers).toMatchObject({ "X-Buddy-CSRF": "csrf" });
+    expect(fetcher.mock.calls[0][1]?.headers).toMatchObject({ "X-Hey-My-Buddy-CSRF": "csrf" });
     expect((fetcher.mock.calls[0][1]?.headers as Record<string, string>)["If-None-Match"]).toBeUndefined();
   });
 

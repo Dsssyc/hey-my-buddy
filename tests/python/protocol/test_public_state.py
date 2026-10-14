@@ -1,7 +1,7 @@
 """Public directory selection against isolated real services, without model calls.
 
 Each case has a separate interpreter and one frozen C-Two root. Evidence and
-owned process receipts remain under BUDDY_CHECKS_TMPDIR for Host inspection.
+owned process receipts remain under HMB_CHECKS_TMPDIR for Host inspection.
 """
 from __future__ import annotations
 
@@ -43,9 +43,9 @@ def prepare_daemon_spawn(command, kwargs, state: Path):
     environment.update(
         PYTHONPATH=os.pathsep.join(paths),
         PYTHONDONTWRITEBYTECODE="1",
-        BUDDY_MODEL_CATALOG_FILE=str(state / "model-catalog.json"),
-        BUDDY_MODEL_FACTS_FILE=str(state / "model-facts-fixture.json"),
-        BUDDY_CHECKS_TMPDIR=os.environ["BUDDY_CHECKS_TMPDIR"],
+        HMB_MODEL_CATALOG_FILE=str(state / "model-catalog.json"),
+        HMB_MODEL_FACTS_FILE=str(state / "model-facts-fixture.json"),
+        HMB_CHECKS_TMPDIR=os.environ["HMB_CHECKS_TMPDIR"],
     )
     return [command[0], *DAEMON_COMMAND[1:]]
 
@@ -92,16 +92,16 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
     state = work / "selected" if name.startswith(("explicit", "environment", "late")) else default
     client = None
     if name.startswith("explicit"):
-        os.environ["BUDDY_STATE_DIR"] = str(work / "unserved-environment")
+        os.environ["HMB_STATE_DIR"] = str(work / "unserved-environment")
     elif name.startswith("late"):
-        os.environ["BUDDY_STATE_DIR"] = str(work / "construction-environment")
+        os.environ["HMB_STATE_DIR"] = str(work / "construction-environment")
         client = BoardClient(autostart=name.endswith("auto"))
         assert client.state_dir is None
-        os.environ["BUDDY_STATE_DIR"] = str(state)
+        os.environ["HMB_STATE_DIR"] = str(state)
     elif name.startswith("environment"):
-        os.environ["BUDDY_STATE_DIR"] = str(state)
+        os.environ["HMB_STATE_DIR"] = str(state)
     else:
-        assert "BUDDY_STATE_DIR" not in os.environ
+        assert "HMB_STATE_DIR" not in os.environ
 
     evidence = {"case": name, "state": str(state), "processes": [], "requests": [],
                 "substitutesOnly": substitutes_only}
@@ -204,10 +204,10 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
             return
 
         catalog = write_catalog_fixture(state)
-        os.environ["BUDDY_MODEL_CATALOG_FILE"] = str(catalog)
-        environment = dict(os.environ, BUDDY_STATE_DIR=str(state),
-                           BUDDY_RUNTIME_ROOT=str(state / "runtime-root"))
-        assert Path(environment["BUDDY_MODEL_CATALOG_FILE"]).is_relative_to(state)
+        os.environ["HMB_MODEL_CATALOG_FILE"] = str(catalog)
+        environment = dict(os.environ, HMB_STATE_DIR=str(state),
+                           HMB_RUNTIME_ROOT=str(state / "runtime-root"))
+        assert Path(environment["HMB_MODEL_CATALOG_FILE"]).is_relative_to(state)
         if name == "cold-import":
             from hey_my_buddy.install.launcher import service_environment
             with patch.dict(os.environ, environment, clear=True):
@@ -331,15 +331,15 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
 
 class PublicStateTests(unittest.TestCase):
     def case(self, name: str) -> None:
-        work = Path(tempfile.mkdtemp(prefix="public-state-", dir=os.environ.get("BUDDY_CHECKS_TMPDIR"))).resolve()
+        work = Path(tempfile.mkdtemp(prefix="public-state-", dir=os.environ.get("HMB_CHECKS_TMPDIR"))).resolve()
         environment = _child_environment(work)
         sentinel = work / "native-forbidden"
         sentinel.write_text("#!/bin/sh\nprintf 'unexpected native invocation' >> '" + str(work / "native-invoked") + "'\nexit 99\n")
         sentinel.chmod(0o700)
-        environment.update({"BUDDY_" + harness + "_CLI": str(sentinel) for harness in ("CLAUDE", "CODEX", "DSH", "ZCODE")})
-        environment.pop("BUDDY_STATE_DIR")
-        environment["BUDDY_MAX_CONCURRENT"] = "1"
-        environment["BUDDY_CHECKS_TMPDIR"] = os.environ.get("BUDDY_CHECKS_TMPDIR", str(work))
+        environment.update({"HMB_" + harness + "_CLI": str(sentinel) for harness in ("CLAUDE", "CODEX", "DSH", "ZCODE")})
+        environment.pop("HMB_STATE_DIR")
+        environment["HMB_MAX_CONCURRENT"] = "1"
+        environment["HMB_CHECKS_TMPDIR"] = os.environ.get("HMB_CHECKS_TMPDIR", str(work))
         command = [sys.executable, str(Path(__file__).resolve()), "--case", name, str(work)]
         process = subprocess.Popen(command, env=environment, text=True, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE)
@@ -404,7 +404,7 @@ class PublicStateTests(unittest.TestCase):
                 self.case("cold-" + boundary)
 
     def test_ps07_internal_request_still_requires_private_root(self):
-        environment = {key: value for key, value in os.environ.items() if key != "BUDDY_STATE_DIR"}
+        environment = {key: value for key, value in os.environ.items() if key != "HMB_STATE_DIR"}
         with patch.dict(os.environ, environment, clear=True), patch.object(transport.cc, "connect") as connect:
             with self.assertRaises(TypeError) as refused:
                 transport._request({"token": "fixture", "address": "ipc://unused"}, "ping", {})
@@ -440,9 +440,9 @@ class PublicStateTests(unittest.TestCase):
 class FixtureRepairTests(unittest.TestCase):
     def simulate_readonly(self, *, target_fails=True, stop_fails=False):
         """Failure injection only; no daemon or native RPC is started here."""
-        work = Path(tempfile.mkdtemp(prefix="cleanup-unit-", dir=os.environ["BUDDY_CHECKS_TMPDIR"])).resolve()
+        work = Path(tempfile.mkdtemp(prefix="cleanup-unit-", dir=os.environ["HMB_CHECKS_TMPDIR"])).resolve()
         environment = _child_environment(work)
-        environment.pop("BUDDY_STATE_DIR")
+        environment.pop("HMB_STATE_DIR")
         state = Path(environment["HOME"]) / ".local/share/hey-my-buddy/state"
         endpoint = {"pid": "substitute-handle", "serviceId": "cleanup-unit"}
         ready = {"serviceId": "cleanup-unit", "stateDir": str(state)}
@@ -468,7 +468,7 @@ class FixtureRepairTests(unittest.TestCase):
             if stop_fails:
                 raise RuntimeError("injected stop failure")
 
-        with patch.dict(os.environ, {**environment, "BUDDY_CHECKS_TMPDIR": os.environ["BUDDY_CHECKS_TMPDIR"]}, clear=True), \
+        with patch.dict(os.environ, {**environment, "HMB_CHECKS_TMPDIR": os.environ["HMB_CHECKS_TMPDIR"]}, clear=True), \
                 patch.object(subprocess, "Popen", new=spawn), \
                 patch.object(transport, "_read_endpoint", return_value=endpoint), \
                 patch.object(transport, "_attach_read_only", return_value=endpoint), \
@@ -505,10 +505,10 @@ class FixtureRepairTests(unittest.TestCase):
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--import-check":
         assert str(ROOT / "tests/python") in sys.path and str(ROOT / "src") in sys.path
-        state = Path(os.environ["BUDDY_STATE_DIR"])
-        assert Path(os.environ["BUDDY_MODEL_CATALOG_FILE"]) == state / "model-catalog.json"
-        assert Path(os.environ["BUDDY_MODEL_FACTS_FILE"]) == state / "model-facts-fixture.json"
-        assert Path(os.environ["BUDDY_CHECKS_TMPDIR"]).is_dir()
+        state = Path(os.environ["HMB_STATE_DIR"])
+        assert Path(os.environ["HMB_MODEL_CATALOG_FILE"]) == state / "model-catalog.json"
+        assert Path(os.environ["HMB_MODEL_FACTS_FILE"]) == state / "model-facts-fixture.json"
+        assert Path(os.environ["HMB_CHECKS_TMPDIR"]).is_dir()
         print(json.dumps({"supportFile": sys.modules["support"].__file__, "state": str(state)}))
     elif len(sys.argv) > 1 and sys.argv[1] == "--daemon-fixture":
         from hey_my_buddy.blackboard.service.daemon import Daemon

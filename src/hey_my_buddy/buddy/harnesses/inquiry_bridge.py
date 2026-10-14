@@ -282,7 +282,7 @@ class InquiryBridge:
                                       "a checkpoint receipt referenced an inquiry this attempt never committed")
                 if entry.get("state") == "queued":
                     self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "delivered",
-                                   "deliveredAt": _now(), "via": "tool:buddy_checkpoint", "toolCallId": tool_call_id})
+                                   "deliveredAt": _now(), "via": "tool:hey_my_buddy_checkpoint", "toolCallId": tool_call_id})
 
     def record_answer(self, receipt: dict, tool_call_id: str) -> None:
         """Record one correlated answer after verified root tool evidence.
@@ -318,7 +318,7 @@ class InquiryBridge:
             self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "answered",
                            "answeredAt": _now(),
                            "answer": {"text": answer, "bytes": len(answer.encode()), "truncated": False,
-                                      "via": "tool:buddy_answer_inquiry", "toolCallId": tool_call_id,
+                                      "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": tool_call_id,
                                       "at": _now()}})
 
     # -- observation ---------------------------------------------------------
@@ -358,7 +358,7 @@ class InquiryBridge:
             "lastEvent": last_event,
             "activity": activity,
             "activityDropped": self.activity_dropped,
-            "replyTool": {"name": "buddy_answer_inquiry", "checkpointTool": "buddy_checkpoint",
+            "replyTool": {"name": "hey_my_buddy_answer_inquiry", "checkpointTool": "hey_my_buddy_checkpoint",
                           "delivery": "cooperative-checkpoint"},
             "attention": attention,
             "unavailable": ["nativeReasoning", "toolArguments", "toolOutput", "providerCredentials", "immediateDelivery"],
@@ -454,7 +454,7 @@ class InquiryBridge:
         """Queue one question for cooperative delivery at the next checkpoint.
 
         No native command is ever sent: the question waits in this bridge until
-        the root calls ``buddy_checkpoint`` inside the one admitted turn (see
+        the root calls ``hey_my_buddy_checkpoint`` inside the one admitted turn (see
         the supplied limitation). The first question is journaled once with
         its committed text, question hash and delivery record; an identical
         replay returns the current committed state as a duplicate and a changed

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Build the shared ``buddy`` Agent Skill from this checkout (ADR-015).
+"""Build the shared ``hey-my-buddy`` Agent Skill from this checkout (ADR-015).
 
-    uv run --frozen python packaging/build-skill.py --destination <dir>/buddy
+    uv run --frozen python packaging/build-skill.py --destination <dir>/hey-my-buddy
 
-The destination must be a directory named ``buddy``; it is replaced by rename after
+The destination must be a directory named ``hey-my-buddy``; it is replaced by rename after
 the inventory is verified. To install for the current user, run the skill's own
-``scripts/buddy install`` (or this checkout's ``skills/buddy/scripts/buddy install``).
+``scripts/hey-my-buddy install`` (or this checkout's ``skills/hey-my-buddy/scripts/hey-my-buddy install``).
 """
 import argparse
 from pathlib import Path

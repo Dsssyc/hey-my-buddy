@@ -25,17 +25,17 @@ class CodexContinuationTests(WorkflowTestCase):
         def execute(claim_response, case):
             claim = claim_response["claim"]
             attempt = claim["attempt"]
-            environment = {key: value for key, value in os.environ.items() if not key.startswith("BUDDY_")}
-            environment.update(BUDDY_DEV_SOURCE="1", BUDDY_STATE_DIR=str(self.directory),
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("HMB_")}
+            environment.update(HMB_DEV_SOURCE="1", HMB_STATE_DIR=str(self.directory),
                                CODEX_HOME=str(self.directory / 'native-account'), HOME=str(self.directory),
-                               BUDDY_RUNTIME_ROOT=str(self.directory / "runtime"),
-                               BUDDY_CODEX_CLI=str(Path(__file__).parent / "fixtures/mock_codex.py"),
-                               BUDDY_CODEX_FIXTURE_STATE=str(self.directory / "native-state.json"),
-                               BUDDY_CODEX_FIXTURE_CASE=case,
+                               HMB_RUNTIME_ROOT=str(self.directory / "runtime"),
+                               HMB_CODEX_CLI=str(Path(__file__).parent / "fixtures/mock_codex.py"),
+                               HMB_CODEX_FIXTURE_STATE=str(self.directory / "native-state.json"),
+                               HMB_CODEX_FIXTURE_CASE=case,
                                PYTHONPATH=str(Path(__file__).parents[5] / "src") + os.pathsep + environment.get("PYTHONPATH", ""))
             # The check runner sets this for every test subprocess; a standalone
             # run of this module needs the same developer-source selection.
-            patch_env = mock.patch.dict(os.environ, {"BUDDY_DEV_SOURCE": "1"})
+            patch_env = mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1"})
             patch_env.start()
             self.addCleanup(patch_env.stop)
             context = ExecutionContext(task_id=attempt["taskId"], attempt_id=attempt["attemptId"],
@@ -123,7 +123,7 @@ class CodexContinuationTests(WorkflowTestCase):
         with board.store.db.write() as connection:
             row = connection.execute('SELECT attempt_id,result_json FROM attempts WHERE task_id=?', (failed['runId'],)).fetchone()
             receipt = json.loads(row['result_json'])
-            receipt['result']['nativeSession']['storageOwner'] = 'buddy-micro-task'
+            receipt['result']['nativeSession']['storageOwner'] = 'hey-my-buddy-micro-task'
             connection.execute('UPDATE attempts SET result_json=? WHERE attempt_id=?', (json.dumps(receipt), row['attempt_id']))
         document = self.continued_input(board, failed)
         self.assertEqual(document['resumeMode'], 'reconstructed-new-session')

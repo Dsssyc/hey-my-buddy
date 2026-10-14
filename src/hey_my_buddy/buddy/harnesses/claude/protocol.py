@@ -229,7 +229,7 @@ class Connection:
     def call(self, request: dict) -> dict | None:
         if len(self.pending) >= MAX_PENDING_RESPONSES:
             raise ClaudeProtocolError("invalid-protocol", "too many pending Claude control requests")
-        request_id = f"buddy-{self.next_id}"
+        request_id = f"hey-my-buddy-{self.next_id}"
         self.next_id += 1
         if self.next_id > 100000:
             raise ClaudeProtocolError("invalid-protocol", "the Claude control request budget is exhausted")

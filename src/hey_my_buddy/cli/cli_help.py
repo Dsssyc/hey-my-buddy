@@ -1,6 +1,6 @@
 """Per-method CLI help generated from the live request validators.
 
-``buddy help`` lists every public method with one sentence; ``buddy help METHOD``
+``hey-my-buddy help`` lists every public method with one sentence; ``hey-my-buddy help METHOD``
 prints the parameters that method actually accepts, with the type, default and bounds
 the service enforces. Those parameter facts are **read from the validation code
 itself** by static analysis of this package: every entry names the validator it came
@@ -183,7 +183,7 @@ class Parameter:
 
 @dataclass
 class MethodHelp:
-    """Everything ``buddy help METHOD`` prints for one method."""
+    """Everything ``hey-my-buddy help METHOD`` prints for one method."""
 
     method: str
     operation: str
@@ -2094,13 +2094,13 @@ def _render_parameter(parameter: Parameter, depth: int, width: int = 24) -> list
 
 
 def render_index(methods: tuple[str, ...] | list[str]) -> str:
-    """``buddy help``: every public method with its one-sentence description."""
+    """``hey-my-buddy help``: every public method with its one-sentence description."""
     entries = [(method, SUMMARIES.get(method) or MISSING_SUMMARY) for method in methods]
     entries.append(("help", SUMMARIES["help"]))
     width = max(len(method) for method, _ in entries)
     lines = [
-        f"buddy — {len(entries)} methods. Pass one JSON object, --params-file PATH, or - for stdin (mutually exclusive).",
-        "`buddy help METHOD` prints the parameters that method actually validates, with their defaults and bounds.",
+        f"hey-my-buddy — {len(entries)} methods. Pass one JSON object, --params-file PATH, or - for stdin (mutually exclusive).",
+        "`hey-my-buddy help METHOD` prints the parameters that method actually validates, with their defaults and bounds.",
         "",
     ]
     lines.extend(f"  {method:<{width}}  {summary}" for method, summary in entries)
@@ -2115,9 +2115,9 @@ def render_index(methods: tuple[str, ...] | list[str]) -> str:
 
 
 def render_method(help_: MethodHelp) -> str:
-    """``buddy help METHOD``: validated parameters, defaults, bounds and conditions."""
+    """``hey-my-buddy help METHOD``: validated parameters, defaults, bounds and conditions."""
     summary = SUMMARIES.get(help_.method, "")
-    lines = [f"buddy {help_.method}" + (f" — {summary}" if summary else "")]
+    lines = [f"hey-my-buddy {help_.method}" + (f" — {summary}" if summary else "")]
     lines.append(f"operation: {help_.operation}")
     if help_.locations:
         shown = help_.locations[:5]

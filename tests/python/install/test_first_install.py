@@ -1,7 +1,7 @@
 """First-install distribution: the shared skill in private agent/Claude skill homes.
 
-Every test points ``BUDDY_AGENT_SKILLS_DIR``, ``BUDDY_CLAUDE_SKILLS_DIR`` and
-``BUDDY_STATE_DIR`` at private directories, so the operator's ``~/.agents``,
+Every test points ``HMB_AGENT_SKILLS_DIR``, ``HMB_CLAUDE_SKILLS_DIR`` and
+``HMB_STATE_DIR`` at private directories, so the operator's ``~/.agents``,
 ``~/.claude`` and daily board are never read or written. No service is running in
 these roots, so installation places the skill and link without an upgrade.
 """
@@ -23,15 +23,15 @@ OPERATIONS = ROOT / "docs" / "reference" / "operations.md"
 
 class SkillInstallTests(unittest.TestCase):
     def setUp(self):
-        self.base = Path(tempfile.mkdtemp(prefix="buddy-install-")).resolve()
+        self.base = Path(tempfile.mkdtemp(prefix="hey-my-buddy-install-")).resolve()
         self.addCleanup(self.cleanup_private)
         self.agents = self.base / "agents/skills"
         self.claude = self.base / "claude/skills"
-        self.environment = {"BUDDY_AGENT_SKILLS_DIR": str(self.agents),
-                            "BUDDY_CLAUDE_SKILLS_DIR": str(self.claude),
-                            "BUDDY_STATE_DIR": str(self.base / "state"),
-                            "BUDDY_RUNTIME_ROOT": str(self.base / 'runtime'),
-                            'BUDDY_MAX_CONCURRENT': '1', 'BUDDY_CONSOLE_PORT': '0',
+        self.environment = {"HMB_AGENT_SKILLS_DIR": str(self.agents),
+                            "HMB_CLAUDE_SKILLS_DIR": str(self.claude),
+                            "HMB_STATE_DIR": str(self.base / "state"),
+                            "HMB_RUNTIME_ROOT": str(self.base / 'runtime'),
+                            'HMB_MAX_CONCURRENT': '1', 'HMB_CONSOLE_PORT': '0',
                             "CODEX_HOME": str(self.base / "codex")}
 
     def cleanup_private(self):
@@ -45,46 +45,46 @@ class SkillInstallTests(unittest.TestCase):
 
     def test_first_install_places_the_skill_and_links_claude(self):
         result = self.install()
-        skill = self.agents / "buddy"
+        skill = self.agents / "hey-my-buddy"
         self.assertEqual(result["skill"]["placement"], "installed")
         self.assertTrue((skill / "SKILL.md").is_file())
-        self.assertTrue(os.access(skill / "scripts/buddy", os.X_OK))
+        self.assertTrue(os.access(skill / "scripts/hey-my-buddy", os.X_OK))
         self.assertEqual(result["claude"]["status"], "linked")
-        self.assertTrue((self.claude / "buddy").is_symlink())
-        self.assertEqual(os.path.realpath(self.claude / "buddy"), os.path.realpath(skill))
+        self.assertTrue((self.claude / "hey-my-buddy").is_symlink())
+        self.assertEqual(os.path.realpath(self.claude / "hey-my-buddy"), os.path.realpath(skill))
         self.assertEqual(result["service"]["action"], "none")
         self.assertNotIn("legacyPlugins", result)
 
     def test_a_second_host_with_the_same_version_only_repairs_the_link(self):
         self.install()
-        before = (self.agents / "buddy/skill.json").stat().st_mtime_ns
-        (self.claude / "buddy").unlink()
+        before = (self.agents / "hey-my-buddy/skill.json").stat().st_mtime_ns
+        (self.claude / "hey-my-buddy").unlink()
         result = self.install()
         self.assertEqual(result["skill"]["placement"], "already-current")
-        self.assertEqual((self.agents / "buddy/skill.json").stat().st_mtime_ns, before)
+        self.assertEqual((self.agents / "hey-my-buddy/skill.json").stat().st_mtime_ns, before)
         self.assertEqual(result["claude"]["status"], "linked")
         self.assertEqual(self.install()["claude"]["status"], "already-linked")
 
     def test_a_different_version_replaces_the_skill_without_leftovers(self):
         self.install()
-        marker = self.agents / "buddy/skill.json"
+        marker = self.agents / "hey-my-buddy/skill.json"
         stale = json.loads(marker.read_text())
         marker.write_text(json.dumps({**stale, "version": "0.0.1"}))
         self.assertEqual(self.install()["skill"]["placement"], "updated")
         self.assertEqual(json.loads(marker.read_text())["version"], stale["version"])
-        self.assertEqual(sorted(path.name for path in self.agents.iterdir() if not path.name.endswith(".lock")), ["buddy"])
+        self.assertEqual(sorted(path.name for path in self.agents.iterdir() if not path.name.endswith(".lock")), ["hey-my-buddy"])
 
     def test_foreign_directories_are_never_replaced(self):
         from hey_my_buddy.errors import BoardError
-        (self.claude / "buddy").mkdir(parents=True)
+        (self.claude / "hey-my-buddy").mkdir(parents=True)
         with self.assertRaises(BoardError) as caught:
             self.install()
         self.assertEqual(caught.exception.code, "SKILL_TARGET_CONFLICT")
-        self.assertFalse((self.claude / "buddy").is_symlink())
-        (self.claude / "buddy").rmdir()
-        self.assertFalse((self.agents / "buddy").exists())
-        (self.agents / "buddy").mkdir()
-        (self.agents / "buddy/SKILL.md").write_text("---\nname: someone-else\ndescription: x\n---\n")
+        self.assertFalse((self.claude / "hey-my-buddy").is_symlink())
+        (self.claude / "hey-my-buddy").rmdir()
+        self.assertFalse((self.agents / "hey-my-buddy").exists())
+        (self.agents / "hey-my-buddy").mkdir()
+        (self.agents / "hey-my-buddy/SKILL.md").write_text("---\nname: someone-else\ndescription: x\n---\n")
         with self.assertRaises(BoardError) as caught:
             self.install()
         self.assertEqual(caught.exception.code, "SKILL_TARGET_CONFLICT")
@@ -92,17 +92,17 @@ class SkillInstallTests(unittest.TestCase):
     def test_a_worker_credential_cannot_install(self):
         from hey_my_buddy.errors import BoardError
         with self.assertRaises(BoardError) as caught:
-            self.install(BUDDY_AGENT_CREDENTIAL="attempt-token")
+            self.install(HMB_AGENT_CREDENTIAL="attempt-token")
         self.assertEqual(caught.exception.code, "UNAUTHORIZED")
         self.assertFalse(self.agents.exists())
 
     def test_an_installed_skill_copies_itself_and_reports_a_legacy_plugin(self):
-        built = load_build_skill().build(ROOT, self.base / "built/buddy")
+        built = load_build_skill().build(ROOT, self.base / "built/hey-my-buddy")
         (self.base / "codex/plugins/cache/personal/hey-my-buddy").mkdir(parents=True)
         with patch("hey_my_buddy.install.skill_install.project_root", return_value=built / "package"):
             result = self.install()
         self.assertEqual(result["skill"]["placement"], "installed")
-        self.assertEqual(json.loads((self.agents / "buddy/skill.json").read_text()),
+        self.assertEqual(json.loads((self.agents / "hey-my-buddy/skill.json").read_text()),
                          json.loads((built / "skill.json").read_text()))
         self.assertEqual(result["legacyPlugins"], [str(self.base / "codex/plugins/cache/personal/hey-my-buddy")])
         self.assertIn("codex plugin remove", result["next"])
@@ -115,8 +115,8 @@ class SkillInstallTests(unittest.TestCase):
                 self.install()
             service.assert_not_called()
         self.assertEqual(caught.exception.code, "CLAUDE_LINK_FAILED")
-        self.assertFalse((self.agents / "buddy").exists())
-        self.assertFalse((self.claude / "buddy").exists())
+        self.assertFalse((self.agents / "hey-my-buddy").exists())
+        self.assertFalse((self.claude / "hey-my-buddy").exists())
         result = self.install()
         self.assertEqual(result["skill"]["placement"], "installed")
         self.assertEqual(result["claude"]["status"], "linked")
@@ -142,7 +142,7 @@ class SkillInstallTests(unittest.TestCase):
         self.assertEqual(before["claude"]["status"], "missing")
         self.assertTrue(after["skill"]["installed"])
         self.assertEqual(after["claude"]["status"], "linked")
-        self.assertEqual(after["skill"]["launcher"], str(self.agents / "buddy/scripts/buddy"))
+        self.assertEqual(after["skill"]["launcher"], str(self.agents / "hey-my-buddy/scripts/hey-my-buddy"))
         state = os.path.realpath(self.base / "state")
         self.assertEqual(after["data"]["stateDir"], state)
         self.assertEqual(after["data"]["board"], os.path.join(state, "board.sqlite3"))
@@ -155,13 +155,13 @@ class SkillInstallTests(unittest.TestCase):
         cwd.mkdir()
         completed = subprocess.run(
             ["/bin/sh", str(LAUNCHER), "install"], cwd=cwd, capture_output=True, text=True, timeout=240,
-            env=current_environment(**self.environment, BUDDY_DEV_SOURCE="1",
+            env=current_environment(**self.environment, HMB_DEV_SOURCE="1",
                                     UV_PROJECT_ENVIRONMENT=str(self.base / "cli-venv")),
         )
         self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
         result = json.loads(completed.stdout)
         self.assertEqual(result["skill"]["placement"], "installed")
-        self.assertTrue((self.agents / "buddy/scripts/buddy").is_file())
+        self.assertTrue((self.agents / "hey-my-buddy/scripts/hey-my-buddy").is_file())
 
 
 class DocumentationTests(unittest.TestCase):

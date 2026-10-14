@@ -59,7 +59,7 @@ class HostCutoverTests(RealWorkspaceTestCase):
             self.assertEqual(bootstrap.count(entry), 1, "Offline daemon fixture entry changed")
             bootstrap = bootstrap.replace(
                 entry,
-                "    (Path(os.environ['BUDDY_STATE_DIR']) / 'daemon-environment.json').write_text(\n"
+                "    (Path(os.environ['HMB_STATE_DIR']) / 'daemon-environment.json').write_text(\n"
                 "        json.dumps({'PATH': os.environ.get('PATH'), 'VIRTUAL_ENV': os.environ.get('VIRTUAL_ENV')}))\n"
                 + entry,
             )
@@ -87,7 +87,7 @@ class HostCutoverTests(RealWorkspaceTestCase):
             distribution = metadata.distribution(name.replace("_", "-"))
             metadata_dir = next(file.parts[0] for file in distribution.files if file.parts[0].endswith(".dist-info"))
             shutil.copytree(distribution.locate_file(metadata_dir), site / metadata_dir)
-        (site / "buddy-fixture.pth").write_text(str(target / "src") + "\n")
+        (site / "hey-my-buddy-fixture.pth").write_text(str(target / "src") + "\n")
         ready = {
             "format": runtime.RUNTIME_FORMAT, "state": "READY", "contentId": target.name,
             "source": str(target), "projectRoot": str(target), "environment": str(environment),
@@ -107,11 +107,11 @@ class HostCutoverTests(RealWorkspaceTestCase):
         original_entries = os.environ.get("PATH", "").split(os.pathsep)
         inherited_entries = [markers[0], installer_bin, markers[1], *original_entries,
                              installer_bin, markers[2]]
-        environment = self.child_environment({"BUDDY_RUNTIME_ROOT": str(installer.parent),
+        environment = self.child_environment({"HMB_RUNTIME_ROOT": str(installer.parent),
                                               "PATH": os.pathsep.join(inherited_entries)})
         # The package launcher has execed into the installer interpreter by
         # this point, so VIRTUAL_ENV is absent even though sys.prefix is a venv.
-        for key in ("PYTHONPATH", "BUDDY_DEV_SOURCE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"):
+        for key in ("PYTHONPATH", "HMB_DEV_SOURCE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"):
             environment.pop(key, None)
         coordinator = (
             "import json, sys\n"
@@ -166,10 +166,10 @@ class HostCutoverTests(RealWorkspaceTestCase):
     def test_same_schema_upgrade_preserves_host_boundary_receipts_and_retriable_wait(self):
         previous = self.private_runtime("previous")
         target = self.private_runtime("target")
-        environment = self.child_environment({"BUDDY_RUNTIME_ROOT": str(previous.parent),
-                                               "BUDDY_MAX_CONCURRENT": "1", "BUDDY_WAIT_CAPACITY": "4"})
+        environment = self.child_environment({"HMB_RUNTIME_ROOT": str(previous.parent),
+                                               "HMB_MAX_CONCURRENT": "1", "HMB_WAIT_CAPACITY": "4"})
         environment.pop("PYTHONPATH", None)
-        environment.pop("BUDDY_DEV_SOURCE", None)
+        environment.pop("HMB_DEV_SOURCE", None)
         entry_modules = launcher.entry_modules
         def fixture_modules(path):
             return {**entry_modules(path), "daemon": "hey_my_buddy._upgrade_fixture_daemon"}

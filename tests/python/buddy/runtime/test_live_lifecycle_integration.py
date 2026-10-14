@@ -15,8 +15,8 @@ from hey_my_buddy.protocol.contracts import HarnessRunLive
 
 class WorkerLiveLifecycleTests(unittest.TestCase):
     def test_two_direct_attempts_use_the_same_live_runtime_until_its_owner_closes(self):
-        with tempfile.TemporaryDirectory(prefix="buddy-live-lifetime-",
-                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp")) as directory:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-live-lifetime-",
+                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")) as directory:
             client = mock.Mock(state_dir=Path(directory))
             attached = []
             client.live_attach.side_effect = lambda frame: attached.append(frame)

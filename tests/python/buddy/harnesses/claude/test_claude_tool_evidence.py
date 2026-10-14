@@ -484,20 +484,20 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
                      "the claude run seam is registered only in the activated verification copy")
 class RunnerReceiptTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-claude-evidence-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-evidence-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.cwd = self.root / "checkout"
         self.cwd.mkdir()
         FIXTURE.chmod(0o755)
         self.environment = {key: value for key, value in os.environ.items()
-                            if not key.startswith("BUDDY_") and not key.startswith(("ANTHROPIC_", "CLAUDE_"))
+                            if not key.startswith("HMB_") and not key.startswith(("ANTHROPIC_", "CLAUDE_"))
                             and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        self.environment.update(BUDDY_CONSOLE_PORT="0", BUDDY_CLAUDE_CLI=str(FIXTURE),
-                                BUDDY_CLAUDE_FIXTURE_STATE=str(self.root / "fixture.json"),
-                                BUDDY_STATE_DIR=str(self.root / "state"), BUDDY_RUNTIME_ROOT=str(self.root / "runtime"),
-                                BUDDY_DEV_SOURCE="1")
+        self.environment.update(HMB_CONSOLE_PORT="0", HMB_CLAUDE_CLI=str(FIXTURE),
+                                HMB_CLAUDE_FIXTURE_STATE=str(self.root / "fixture.json"),
+                                HMB_STATE_DIR=str(self.root / "state"), HMB_RUNTIME_ROOT=str(self.root / "runtime"),
+                                HMB_DEV_SOURCE="1")
         claude_module._reset_metadata_cache()
         self.addCleanup(claude_module._reset_metadata_cache)
         self.adapter = ClaudeAdapter()
@@ -507,7 +507,7 @@ class RunnerReceiptTests(unittest.TestCase):
                                 spec={"cwd": str(self.cwd), "task": "Review the frozen copy", "timeoutSeconds": 20,
                                       "provider": "anthropic", "model": "claude-opus-5-5[1m]", "effort": "low"},
                                 directory=self.root / "attempt-1", runtime={},
-                                environment={**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": case}, turn=None)
+                                environment={**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case}, turn=None)
 
     def run_read_only(self, case, *, tool_calls=8):
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]),

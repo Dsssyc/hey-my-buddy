@@ -11,7 +11,7 @@ def capture(context, outcome):
     if payload.get("modelStarted") is False:
         return
     manifest = getattr(context, "effective_workspace", None) or context.turn_input.get("executionWorkspace")
-    state = context.environment.get("BUDDY_STATE_DIR")
+    state = context.environment.get("HMB_STATE_DIR")
     if not manifest or not state:
         return
     try:

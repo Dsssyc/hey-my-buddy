@@ -109,12 +109,12 @@ def serve():
     for directory in (home, state, runtime, state / "ipc"):
         directory.mkdir(mode=0o700)
     environment = {key: value for key, value in os.environ.items()
-                   if not key.startswith(("BUDDY_", "ANTHROPIC_", "C2_"))
+                   if not key.startswith(("HMB_", "ANTHROPIC_", "C2_"))
                    and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
     environment.update(HOME=str(home), USERPROFILE=str(home),
-                       BUDDY_STATE_DIR=str(state), BUDDY_RUNTIME_ROOT=str(runtime),
-                       BUDDY_DEV_SOURCE="1", C2_IPC_ROOT=str(state / "ipc"),
-                       BUDDY_CHECKS_TMPDIR=os.environ["TMPDIR"])
+                       HMB_STATE_DIR=str(state), HMB_RUNTIME_ROOT=str(runtime),
+                       HMB_DEV_SOURCE="1", C2_IPC_ROOT=str(state / "ipc"),
+                       HMB_CHECKS_TMPDIR=os.environ["TMPDIR"])
     # Native config overrides from the parent also stay within this child.
     for key, suffix in (("CODEX_HOME", ".codex"), ("CLAUDE_CONFIG_DIR", ".claude"),
                         ("ZCODE_DATA_BASE_DIR", ".zcode"), ("DSH_HOME", ".dsh"),
@@ -124,7 +124,7 @@ def serve():
     environment.update(XDG_RUNTIME_DIR=str(runtime),
                        ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(home / "builtin.json"),
                        ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(home / "personal.json"),
-                       BUDDY_MODEL_FACTS_FILE=str(root / "offline-facts.json"))
+                       HMB_MODEL_FACTS_FILE=str(root / "offline-facts.json"))
     os.environ.clear()
     os.environ.update(environment)
 

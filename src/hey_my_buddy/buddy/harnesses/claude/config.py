@@ -63,16 +63,16 @@ def provider_from_account(account: object) -> str:
 
 def cli_command(environment: dict | None = None) -> list[str]:
     env = os.environ if environment is None else environment
-    if not (os.environ.get("BUDDY_DEV_SOURCE") == "1" and env.get("BUDDY_CLAUDE_CLI")):
+    if not (os.environ.get("HMB_DEV_SOURCE") == "1" and env.get("HMB_CLAUDE_CLI")):
         from ..runtime_selection import command_for
         from ....errors import BoardError
         try:
             return command_for("claude", env)
         except BoardError as error:
             raise ClaudeUnavailable(error.message) from None
-    value = env.get("BUDDY_CLAUDE_CLI") or shutil.which("claude", path=env.get("PATH"))
+    value = env.get("HMB_CLAUDE_CLI") or shutil.which("claude", path=env.get("PATH"))
     if not value:
-        raise ClaudeUnavailable("Claude Code CLI is missing; configure BUDDY_CLAUDE_CLI")
+        raise ClaudeUnavailable("Claude Code CLI is missing; configure HMB_CLAUDE_CLI")
     path = Path(value).expanduser().resolve()
     if not path.is_file() or not os.access(path, os.X_OK):
         raise ClaudeUnavailable("the configured Claude Code CLI is not executable")
@@ -182,8 +182,8 @@ def native_environment(environment: dict) -> dict:
     """Use the shared service allowlist; Claude reads its own configuration files."""
     from ..discovery import native_environment as clean
     result = clean(environment, command=cli_command(environment))
-    if os.environ.get("BUDDY_DEV_SOURCE") == "1":
-        for key in ("BUDDY_CLAUDE_FIXTURE_CASE", "BUDDY_CLAUDE_FIXTURE_STATE"):
+    if os.environ.get("HMB_DEV_SOURCE") == "1":
+        for key in ("HMB_CLAUDE_FIXTURE_CASE", "HMB_CLAUDE_FIXTURE_STATE"):
             if key in environment:
                 result[key] = environment[key]
     return result

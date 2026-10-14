@@ -314,7 +314,7 @@ class RouterProbeTests(unittest.TestCase):
             _harness, context, request = native.registered_start.call_args.args
             self.assertIsNone(context.turn)
             self.assertIsNone(context.agent_credential)
-            self.assertNotIn("BUDDY_AGENT_CREDENTIAL", context.environment)
+            self.assertNotIn("HMB_AGENT_CREDENTIAL", context.environment)
             self.assertEqual(context.attempt_id, report["identity"]["attemptId"])
             self.assertEqual(context.spec["timeoutSeconds"], request.budget["timeoutSeconds"])
             self.assertEqual(report["nativeEvidence"]["identity"]["sessionId"], "mock-session")

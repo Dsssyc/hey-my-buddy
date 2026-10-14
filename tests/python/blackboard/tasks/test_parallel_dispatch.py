@@ -3,7 +3,7 @@
 The service keeps exactly one queue and one worker pool. These tests pin the
 production rules of the priority slice:
 
-* command work overlaps up to ``BUDDY_MAX_CONCURRENT`` and the next task queues;
+* command work overlaps up to ``HMB_MAX_CONCURRENT`` and the next task queues;
 * routing decisions consume the same total ceiling and their fixed model service's
   limit, while model-free command work has no model service limit;
 * a full model service is filtered out before the bounded candidate LIMIT, so more than one
@@ -72,14 +72,14 @@ WORKER_CAPABILITIES = ["command", "decision", "dsh"]
 #: Environment keys a Buddy process exports for its own work. Tests must never let
 #: them leak into a private daemon, its workers or its state root.
 INHERITED_BUDDY_KEYS = (
-    "BUDDY_STATE_DIR",
-    "BUDDY_RUNTIME_ROOT",
-    "BUDDY_RUNTIME",
-    "BUDDY_RUNTIME_IDENTITY",
-    "BUDDY_WORKER_STATE",
-    "BUDDY_WORKER_ID",
-    "BUDDY_AGENT_CREDENTIAL",
-    "BUDDY_AGENT_CREDENTIAL_FILE",
+    "HMB_STATE_DIR",
+    "HMB_RUNTIME_ROOT",
+    "HMB_RUNTIME",
+    "HMB_RUNTIME_IDENTITY",
+    "HMB_WORKER_STATE",
+    "HMB_WORKER_ID",
+    "HMB_AGENT_CREDENTIAL",
+    "HMB_AGENT_CREDENTIAL_FILE",
     "VIRTUAL_ENV",
     "UV_PROJECT_ENVIRONMENT",
 )
@@ -886,7 +886,7 @@ class DaemonPoolTests(CapacityTestCase):
     """The real daemon-managed pool: start, overlap, decision, restart, stop, drain."""
 
     def test_fresh_private_daemon_launches_the_pool_and_overlaps_two_business_attempts(self):
-        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "2"}
+        env = {"HMB_WORKER_ID": "local", "HMB_MAX_CONCURRENT": "2"}
         with isolated_buddy_environment(), self.daemon(env=env):
             client = self.daemon_client()
             health = client.health()
@@ -950,9 +950,9 @@ class DaemonPoolTests(CapacityTestCase):
     def test_decision_completes_on_the_pool_with_a_free_total_slot(self):
         catalog = self.catalog_fixture()
         env = {
-            "BUDDY_WORKER_ID": "local",
-            "BUDDY_MAX_CONCURRENT": "3",
-            "BUDDY_MODEL_CATALOG_FILE": str(catalog),
+            "HMB_WORKER_ID": "local",
+            "HMB_MAX_CONCURRENT": "3",
+            "HMB_MODEL_CATALOG_FILE": str(catalog),
             "PYTHONPATH": self.readonly_bootstrap_path(),
         }
         with isolated_buddy_environment(), self.daemon(env=env):
@@ -1003,7 +1003,7 @@ class DaemonPoolTests(CapacityTestCase):
             self.release_gate("decision-2")
 
     def test_restart_preserves_pool_ids_and_the_same_attempt(self):
-        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "2"}
+        env = {"HMB_WORKER_ID": "local", "HMB_MAX_CONCURRENT": "2"}
         with isolated_buddy_environment(), self.daemon(env=env) as first:
             client = self.daemon_client()
             worker_ids = client.health()["managedWorkerIds"]
@@ -1051,7 +1051,7 @@ class DaemonPoolTests(CapacityTestCase):
             self.assertTrue(client.get(runId=task)["resultAvailable"])
 
     def test_stop_reaches_every_managed_worker_and_confirms_shutdown(self):
-        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "2"}
+        env = {"HMB_WORKER_ID": "local", "HMB_MAX_CONCURRENT": "2"}
         with isolated_buddy_environment(), self.daemon(env=env) as process:
             client = self.daemon_client()
             worker_ids = client.health()["managedWorkerIds"]
@@ -1083,8 +1083,8 @@ class DaemonPoolTests(CapacityTestCase):
         self.assertTrue(view["shutdownConfirmed"], "the cancelled attempt must have confirmed shutdown")
 
     def test_lowering_limits_retains_a_busy_surplus_worker_and_drains_it_later(self):
-        high = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "5"}
-        low = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "1"}
+        high = {"HMB_WORKER_ID": "local", "HMB_MAX_CONCURRENT": "5"}
+        low = {"HMB_WORKER_ID": "local", "HMB_MAX_CONCURRENT": "1"}
         pool_high = ["local", "local-2", "local-3", "local-4", "local-5"]
         with isolated_buddy_environment(), self.daemon(env=high) as first:
             client = self.daemon_client()
@@ -1177,8 +1177,8 @@ class DaemonPoolTests(CapacityTestCase):
                 )
 
     def test_scale_up_withdraws_the_retire_intent_and_restores_desired_slots(self):
-        high = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "3"}
-        low = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "1"}
+        high = {"HMB_WORKER_ID": "local", "HMB_MAX_CONCURRENT": "3"}
+        low = {"HMB_WORKER_ID": "local", "HMB_MAX_CONCURRENT": "1"}
         pool_high = ["local", "local-2", "local-3"]
         with isolated_buddy_environment(), self.daemon(env=high) as first:
             client = self.daemon_client()
@@ -1224,7 +1224,7 @@ class DaemonPoolTests(CapacityTestCase):
             )
 
     def test_a_desired_slot_that_disappears_is_restarted_by_the_pool(self):
-        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "2"}
+        env = {"HMB_WORKER_ID": "local", "HMB_MAX_CONCURRENT": "2"}
         with isolated_buddy_environment(), self.daemon(env=env):
             client = self.daemon_client()
             self.wait_worker_ids(client, ["local", "local-2"])
@@ -1251,7 +1251,7 @@ class DaemonPoolTests(CapacityTestCase):
             self.wait_worker_ids(client, ["local", "local-2"])
 
     def test_an_explicitly_stopped_slot_stays_down_until_explicitly_restarted(self):
-        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "2"}
+        env = {"HMB_WORKER_ID": "local", "HMB_MAX_CONCURRENT": "2"}
         with isolated_buddy_environment(), self.daemon(env=env):
             client = self.daemon_client()
             self.wait_worker_ids(client, ["local", "local-2"])
@@ -1295,7 +1295,7 @@ class DaemonPoolTests(CapacityTestCase):
             self.wait_worker_ids(client, ["local", "local-2"])
 
     def test_custom_worker_ids_outside_the_manifest_are_never_touched(self):
-        env = {"BUDDY_WORKER_ID": "local", "BUDDY_MAX_CONCURRENT": "2"}
+        env = {"HMB_WORKER_ID": "local", "HMB_MAX_CONCURRENT": "2"}
         with isolated_buddy_environment(), self.daemon(env=env) as first:
             client = self.daemon_client()
             self.assertEqual(client.health()["managedWorkerIds"], ["local", "local-2"])

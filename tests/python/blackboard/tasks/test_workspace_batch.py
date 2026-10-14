@@ -36,7 +36,7 @@ PAYLOADS = (
 
 class BatchedObjectTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-workspace-batch-")
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-workspace-batch-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.repo = self.root / "repo"

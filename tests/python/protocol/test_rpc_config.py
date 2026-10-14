@@ -53,14 +53,14 @@ class ProbeImpl:
         return json.dumps({"slept": int(payload)})
 
 from hey_my_buddy.protocol import rpc_config
-state = Path(os.environ["BUDDY_STATE_DIR"])
+state = Path(os.environ["HMB_STATE_DIR"])
 if os.environ.get("PROBE_SERVER_MODE") == "raw":
     rpc_config.configure_local_endpoint(state)
     cc.set_server(ipc_overrides=json.loads(os.environ["PROBE_SERVER_OVERRIDES"]))
 else:
     from hey_my_buddy.protocol import rpc_config
     rpc_config.configure_server(state)
-cc.register(ProbeContract, ProbeImpl(), name="buddy-probe",
+cc.register(ProbeContract, ProbeImpl(), name="hey-my-buddy-probe",
             concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
 Path(sys.argv[1]).write_text(json.dumps({"address": cc.server_address(), "pid": os.getpid(), "root": cc.local_endpoint_context().root}))
 stop = sys.argv[2]
@@ -82,7 +82,7 @@ class ProbeContract:
 from pathlib import Path
 from types import SimpleNamespace
 from hey_my_buddy.protocol import rpc_config
-state = Path(os.environ["BUDDY_STATE_DIR"])
+state = Path(os.environ["HMB_STATE_DIR"])
 mode = os.environ.get("PROBE_CLIENT_MODE", "profile")
 if mode == "raw":
     rpc_config.configure_local_endpoint(state)
@@ -95,7 +95,7 @@ address, operation, argument = sys.argv[1], sys.argv[2], sys.argv[3]
 payload = "x" * int(argument.split(":", 1)[1]) if argument.startswith("bytes:") else argument
 started = time.monotonic()
 try:
-    with cc.connect(ProbeContract, name="buddy-probe", address=address) as probe:
+    with cc.connect(ProbeContract, name="hey-my-buddy-probe", address=address) as probe:
         result = getattr(probe, operation)(payload)
     reply = {
         "ok": True,
@@ -392,11 +392,11 @@ class ProfileTests(unittest.TestCase):
     def test_wait_admission_cannot_consume_every_native_callback(self):
         from hey_my_buddy.blackboard.service.daemon import Daemon
         from hey_my_buddy.errors import BoardError
-        with mock.patch.dict(os.environ, {"BUDDY_WAIT_CAPACITY": "64"}):
+        with mock.patch.dict(os.environ, {"HMB_WAIT_CAPACITY": "64"}):
             with self.assertRaises(BoardError) as raised:
                 Daemon(self.state)
             self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        with mock.patch.dict(os.environ, {"BUDDY_WAIT_CAPACITY": "48"}):
+        with mock.patch.dict(os.environ, {"HMB_WAIT_CAPACITY": "48"}):
             self.assertEqual(Daemon(self.state).wait_admission.capacity, 48)
 
 
@@ -516,8 +516,8 @@ class DaemonFixtureTests(unittest.TestCase):
                 mock.patch(__name__ + "._request", return_value={"managedWorkerIds": []}) as request:
             self.assertEqual(fixture._start_daemon(), endpoint)
         environment = spawn.call_args.kwargs["env"]
-        self.assertEqual(Path(environment["BUDDY_STATE_DIR"]), fixture.state)
-        self.assertEqual(Path(environment["BUDDY_RUNTIME_ROOT"]), fixture.state / "runtime-root")
+        self.assertEqual(Path(environment["HMB_STATE_DIR"]), fixture.state)
+        self.assertEqual(Path(environment["HMB_RUNTIME_ROOT"]), fixture.state / "runtime-root")
         self.assertEqual(Path(environment["C2_IPC_ROOT"]), fixture.state / "native-fallback")
         self.assertEqual(read.call_args_list, [mock.call(fixture.state), mock.call(fixture.state)])
         request.assert_called_once_with(endpoint, "health", {}, state_dir=fixture.state)
@@ -528,17 +528,17 @@ class DaemonFixtureTests(unittest.TestCase):
                 mock.patch(__name__ + ".shutdown_private_rpc"), \
                 mock.patch(__name__ + ".shutil.rmtree"):
             fixture._cleanup()
-        selected_state = Path(environment["BUDDY_STATE_DIR"])
+        selected_state = Path(environment["HMB_STATE_DIR"])
         service.assert_called_once_with(selected_state)
         workers.assert_called_once_with(selected_state)
 
     def test_environment_helper_keeps_its_state_and_runtime_boundary(self):
         state = self.fixture.state
         outside = self.fixture.work / "outside"
-        environment = private_environment(state, BUDDY_STATE_DIR=str(outside))
-        self.assertEqual(Path(environment["BUDDY_STATE_DIR"]), state)
+        environment = private_environment(state, HMB_STATE_DIR=str(outside))
+        self.assertEqual(Path(environment["HMB_STATE_DIR"]), state)
         with self.assertRaisesRegex(ValueError, "inside its private state"):
-            private_environment(state, BUDDY_RUNTIME_ROOT=str(outside))
+            private_environment(state, HMB_RUNTIME_ROOT=str(outside))
 
     def test_cleanup_confirms_only_its_service_workers_and_child_before_removal(self):
         fixture = self.fixture
@@ -636,7 +636,7 @@ class RealDaemonControlTests(unittest.TestCase):
     CONTROL_BUDGET_SECONDS = 2.0
 
     def setUp(self):
-        self.work = Path(tempfile.mkdtemp(prefix="buddy-rpc-daemon-"))
+        self.work = Path(tempfile.mkdtemp(prefix="hey-my-buddy-rpc-daemon-"))
         os.chmod(self.work, 0o700)
         self.state = self.work / "state"
         self.state.mkdir(mode=0o700)
@@ -669,9 +669,9 @@ class RealDaemonControlTests(unittest.TestCase):
     def _start_daemon(self) -> dict:
         environment = private_environment(
             self.state,
-            BUDDY_WAIT_CAPACITY=str(self.WAIT_CAPACITY),
+            HMB_WAIT_CAPACITY=str(self.WAIT_CAPACITY),
             # Two total slots so the waited and the renewable attempt coexist.
-            BUDDY_MAX_CONCURRENT="2",
+            HMB_MAX_CONCURRENT="2",
         )
         log_path = self.work / "daemon.log"
         log = open(log_path, "ab")

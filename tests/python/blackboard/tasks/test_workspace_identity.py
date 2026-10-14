@@ -25,7 +25,7 @@ class WorkspaceIdentityFixture(WorkflowTestCase):
             return
         # Only immutable initial Git objects/config are shared. Each method gets
         # a new directory inode and board, and captures its own real manifests.
-        temporary = tempfile.TemporaryDirectory(prefix="buddy-identity-repository-")
+        temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-identity-repository-")
         cls.addClassCleanup(temporary.cleanup)
         fixture = cls(methodName="runTest")
         fixture.directory = Path(temporary.name)

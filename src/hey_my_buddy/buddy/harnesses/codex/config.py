@@ -22,19 +22,19 @@ def native_provider(configured: dict) -> str:
 
 def cli_command(environment: dict | None = None) -> list[str]:
     env = os.environ if environment is None else environment
-    if not (os.environ.get("BUDDY_DEV_SOURCE") == "1" and env.get("BUDDY_CODEX_CLI")):
+    if not (os.environ.get("HMB_DEV_SOURCE") == "1" and env.get("HMB_CODEX_CLI")):
         from ..runtime_selection import command_for
         from ....errors import BoardError
         try:
             return command_for("codex", env)
         except BoardError as error:
             raise CodexUnavailable(error.message) from None
-    value = env.get("BUDDY_CODEX_CLI") or shutil.which("codex", path=env.get("PATH"))
+    value = env.get("HMB_CODEX_CLI") or shutil.which("codex", path=env.get("PATH"))
     if not value:
         fallback = Path("/Applications/ChatGPT.app/Contents/Resources/codex")
         value = str(fallback) if fallback.is_file() else None
     if not value:
-        raise CodexUnavailable("Codex CLI is missing; configure BUDDY_CODEX_CLI")
+        raise CodexUnavailable("Codex CLI is missing; configure HMB_CODEX_CLI")
     path = Path(value).expanduser().resolve()
     if not path.is_file() or not os.access(path, os.X_OK):
         raise CodexUnavailable("the configured Codex CLI is not executable")
@@ -46,8 +46,8 @@ def native_environment(environment: dict) -> dict:
     from ..discovery import native_environment as clean
     command = cli_command(environment)
     result = clean(environment, command=command)
-    if os.environ.get("BUDDY_DEV_SOURCE") == "1":
-        for key in ("BUDDY_CODEX_FIXTURE_CASE", "BUDDY_CODEX_FIXTURE_STATE"):
+    if os.environ.get("HMB_DEV_SOURCE") == "1":
+        for key in ("HMB_CODEX_FIXTURE_CASE", "HMB_CODEX_FIXTURE_STATE"):
             if key in environment:
                 result[key] = environment[key]
     return result
@@ -56,11 +56,11 @@ def native_environment(environment: dict) -> dict:
 def read_only_config(cwd: str) -> str:
     """No implicit root/temp grant may widen a Router's frozen read scope."""
     mac_temp = '\n"/private/tmp" = "deny"' if sys.platform == 'darwin' else ''
-    return ('web_search = "disabled"\napproval_policy = "never"\ndefault_permissions = "buddy-router"\n'
-            '[permissions.buddy-router.filesystem]\n":root" = "deny"\n":minimal" = "read"\n'
+    return ('web_search = "disabled"\napproval_policy = "never"\ndefault_permissions = "hey-my-buddy-router"\n'
+            '[permissions.hey-my-buddy-router.filesystem]\n":root" = "deny"\n":minimal" = "read"\n'
             '":tmpdir" = "deny"\n":slash_tmp" = "deny"' + mac_temp + '\n'
             + json.dumps(str(Path(cwd).resolve())) + ' = "read"\n'
-            '[permissions.buddy-router.network]\nenabled = false\n')
+            '[permissions.hey-my-buddy-router.network]\nenabled = false\n')
 
 
 def policy_status(actual, wanted, *, exact=False):

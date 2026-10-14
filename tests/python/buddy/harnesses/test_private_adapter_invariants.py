@@ -60,8 +60,8 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
             {"adapter": "codex", "harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low",
              "cwd": str(self.cwd), "timeoutSeconds": 3},
             self.root / "state" / "attempts" / "task" / f"attempt-{self.index}", {},
-            {"BUDDY_STATE_DIR": str(self.root / "state"), "BUDDY_RUNTIME_ROOT": str(self.root / "runtime"),
-             "BUDDY_DEV_SOURCE": "1"})
+            {"HMB_STATE_DIR": str(self.root / "state"), "HMB_RUNTIME_ROOT": str(self.root / "runtime"),
+             "HMB_DEV_SOURCE": "1"})
         request = NoToolStructuredRequest(str(self.cwd), "frozen original prompt", {"type": "object"}, 3)
         process = SimpleNamespace(returncode=0)
         handle = SimpleNamespace(process=process, log_paths=context.log_paths(), shutdown_confirmed=lambda: True)
@@ -221,7 +221,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
             if path.is_file():
                 self.assertFalse(path.is_symlink(), path)
                 self.assertTrue(attempt_evidence.is_evidence(path.relative_to(context.directory)), path)
-        report = backup.preflight(Path(context.environment["BUDDY_STATE_DIR"]))
+        report = backup.preflight(Path(context.environment["HMB_STATE_DIR"]))
         self.assertTrue(report["ok"], report)
         self.assertEqual(report["skipped"]["count"], 0, report)
         self.assertEqual(report["rejected"]["count"], 0, report)
@@ -232,7 +232,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
             with self.subTest(harness=harness):
                 fixture = self.fixture(kind)
                 context = fixture.context()
-                state = Path(context.environment["BUDDY_STATE_DIR"])
+                state = Path(context.environment["HMB_STATE_DIR"])
                 context.directory = state / "attempts" / context.task_id / context.attempt_id
                 context.agent_credential = "private-fixture-credential"
                 execution = fixture.execute(context)
@@ -253,7 +253,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
 
     def test_mock_dsh_fast_router_and_command_leave_only_evidence(self):
         fixture = self.fixture(dsh_tests.DshNoToolTests)
-        state = Path(fixture.environment["BUDDY_STATE_DIR"])
+        state = Path(fixture.environment["HMB_STATE_DIR"])
         evidence = state / "attempts/task/attempt-1"
         context = ExecutionContext("task", "attempt-1", 1,
             {"adapter": "dsh", "harness": "dsh", **dsh_tests.SPEC,
@@ -288,15 +288,15 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 if adapter.name == "codex":
                     environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
                     environment.update(HOME=str(fixture.root), CODEX_HOME=str(fixture.home),
-                        PYTHONPATH=str(Path(__file__).parents[4] / "src"), BUDDY_DEV_SOURCE="1",
-                        BUDDY_CODEX_CLI=str(codex_fast_tests.FIXTURE),
-                        BUDDY_CODEX_FIXTURE_STATE=str(fixture.root / "trace.json"),
-                        BUDDY_STATE_DIR=str(fixture.root / "state"), BUDDY_RUNTIME_ROOT=str(fixture.root / "runtime"))
+                        PYTHONPATH=str(Path(__file__).parents[4] / "src"), HMB_DEV_SOURCE="1",
+                        HMB_CODEX_CLI=str(codex_fast_tests.FIXTURE),
+                        HMB_CODEX_FIXTURE_STATE=str(fixture.root / "trace.json"),
+                        HMB_STATE_DIR=str(fixture.root / "state"), HMB_RUNTIME_ROOT=str(fixture.root / "runtime"))
                     spec = {"provider": "openai", "model": "fixture-model", "effort": "low"}
                 else:
-                    environment = {**fixture.environment, "BUDDY_ZCODE_TEST_CASE": "ok"}
+                    environment = {**fixture.environment, "HMB_ZCODE_TEST_CASE": "ok"}
                     spec = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
-                evidence = Path(environment["BUDDY_STATE_DIR"]) / "attempts/task/attempt"
+                evidence = Path(environment["HMB_STATE_DIR"]) / "attempts/task/attempt"
                 context = ExecutionContext("task", "attempt", 1,
                     {"adapter": adapter.name, "harness": adapter.name, **spec, "cwd": str(fixture.cwd), "timeoutSeconds": 3},
                     evidence, {}, environment)
@@ -311,7 +311,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 control = (handle.role_run_control if hasattr(handle, "role_run_control")
                            else json.loads((evidence / "no-tool-control.json").read_text()))
                 self.assertTrue(Path(control["nativeRoot"]).is_relative_to(context_root(context, adapter.name)))
-                cleanup_attempt_credentials(Path(environment["BUDDY_STATE_DIR"]), adapter.name, "task", "attempt")
+                cleanup_attempt_credentials(Path(environment["HMB_STATE_DIR"]), adapter.name, "task", "attempt")
                 self.assert_partition(context)
 
     def test_review_read_only_calls_use_codex_private_root(self):
@@ -321,7 +321,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         account_home.mkdir(mode=0o700)
         (account_home / "auth.json").write_text('{"fixture":"login"}')
         context.environment["CODEX_HOME"] = str(account_home)
-        context.directory = Path(context.environment["BUDDY_STATE_DIR"]) / "attempts" / context.task_id / context.attempt_id
+        context.directory = Path(context.environment["HMB_STATE_DIR"]) / "attempts" / context.task_id / context.attempt_id
         context.turn = None
         context.agent_credential = None
         # A review-mode call is a read-only structured invocation of the native
@@ -337,7 +337,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         control = handle.role_run_control
         self.assertTrue(Path(control["nativeRoot"]).is_relative_to(context_root(context, "codex")))
         self.assertFalse((context_root(context, "codex") / "review-native/codex-home/auth.json").exists())
-        cleanup_attempt_credentials(Path(context.environment["BUDDY_STATE_DIR"]), "codex", context.task_id, context.attempt_id)
+        cleanup_attempt_credentials(Path(context.environment["HMB_STATE_DIR"]), "codex", context.task_id, context.attempt_id)
         self.assert_partition(context)
 
     def test_decision_fast_router_wraps_each_native_adapter(self):
@@ -353,19 +353,19 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     env = fixture.environment
                     spec = dsh_tests.SPEC
                 elif name == "zcode":
-                    env = {**fixture.environment, "BUDDY_ZCODE_TEST_CASE": "ok"}
+                    env = {**fixture.environment, "HMB_ZCODE_TEST_CASE": "ok"}
                     spec = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
                 else:
                     env = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
                     env.update(HOME=str(fixture.root), CODEX_HOME=str(fixture.home),
-                        PYTHONPATH=str(Path(__file__).parents[4] / "src"), BUDDY_DEV_SOURCE="1",
-                        BUDDY_CODEX_CLI=str(codex_fast_tests.FIXTURE),
-                        BUDDY_CODEX_FIXTURE_STATE=str(fixture.root / "trace.json"),
-                        BUDDY_STATE_DIR=str(fixture.root / "state"), BUDDY_RUNTIME_ROOT=str(fixture.root / "runtime"))
+                        PYTHONPATH=str(Path(__file__).parents[4] / "src"), HMB_DEV_SOURCE="1",
+                        HMB_CODEX_CLI=str(codex_fast_tests.FIXTURE),
+                        HMB_CODEX_FIXTURE_STATE=str(fixture.root / "trace.json"),
+                        HMB_STATE_DIR=str(fixture.root / "state"), HMB_RUNTIME_ROOT=str(fixture.root / "runtime"))
                     spec = {"provider": "openai", "model": "fixture-model", "effort": "low"}
                 context = ExecutionContext("task", "attempt", 1,
                     {"adapter": "decision", "cwd": str(fixture.cwd), "timeoutSeconds": 60},
-                    Path(env["BUDDY_STATE_DIR"]) / "attempts/task/attempt", {}, env,
+                    Path(env["HMB_STATE_DIR"]) / "attempts/task/attempt", {}, env,
                     decision_input={"buddy": {"harness": name, **spec},
                         "buddies": [{"buddyId": "legal"}], "routingMode": "fast",
                         "task": "Select", "outputSchema": router.answer_schema(["legal"]),
@@ -378,7 +378,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 control = (handle.role_run_control if hasattr(handle, "role_run_control")
                            else json.loads((context.directory / "no-tool-control.json").read_text()))
                 self.assertTrue(Path(control["nativeRoot"]).is_relative_to(context_root(context, name)))
-                cleanup_attempt_credentials(Path(env["BUDDY_STATE_DIR"]), name, "task", "attempt")
+                cleanup_attempt_credentials(Path(env["HMB_STATE_DIR"]), name, "task", "attempt")
                 self.assert_partition(context)
 
     def test_dsh_coding_and_reconstructed_claude_continuation(self):
@@ -393,7 +393,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         for index in (1, 2):
             with self.subTest(adapter="dsh", attempt=index):
                 context = fixture.context(index=index, attempt=f"attempt-{index}")
-                state = Path(context.environment["BUDDY_STATE_DIR"])
+                state = Path(context.environment["HMB_STATE_DIR"])
                 context.directory = state / "attempts/task" / context.attempt_id
                 handle, outcome = fixture.execute(context)
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
@@ -416,16 +416,16 @@ class PrivateAdapterInvariants(unittest.TestCase):
 
         claude = self.fixture(claude_tests.ClaudeAdapterTests)
         initial = claude.context()
-        initial.directory = Path(initial.environment["BUDDY_STATE_DIR"]) / "attempts" / initial.task_id / initial.attempt_id
+        initial.directory = Path(initial.environment["HMB_STATE_DIR"]) / "attempts" / initial.task_id / initial.attempt_id
         first = claude.execute(initial)
         self.assertEqual(first.status, "ok", first.to_report())
-        cleanup_attempt_credentials(Path(initial.environment["BUDDY_STATE_DIR"]), "claude", initial.task_id, initial.attempt_id)
+        cleanup_attempt_credentials(Path(initial.environment["HMB_STATE_DIR"]), "claude", initial.task_id, initial.attempt_id)
         continuation = claude.context(index=2, previous=first.result["turn"]["sessionId"])
-        continuation.directory = Path(continuation.environment["BUDDY_STATE_DIR"]) / "attempts" / continuation.task_id / continuation.attempt_id
+        continuation.directory = Path(continuation.environment["HMB_STATE_DIR"]) / "attempts" / continuation.task_id / continuation.attempt_id
         second = claude.execute(continuation)
         self.assertEqual(second.status, "ok", second.to_report())
         self.assertEqual(second.result["turn"]["resumeMode"], "reconstructed-new-session")
-        cleanup_attempt_credentials(Path(continuation.environment["BUDDY_STATE_DIR"]), "claude", continuation.task_id, continuation.attempt_id)
+        cleanup_attempt_credentials(Path(continuation.environment["HMB_STATE_DIR"]), "claude", continuation.task_id, continuation.attempt_id)
         self.assert_partition(initial)
         self.assert_partition(continuation)
 
@@ -435,7 +435,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
             with self.subTest(adapter=name):
                 fixture = self.fixture(kind)
                 first = fixture.context()
-                state = Path(first.environment["BUDDY_STATE_DIR"])
+                state = Path(first.environment["HMB_STATE_DIR"])
                 first.directory = state / "attempts" / first.task_id / first.attempt_id
                 execution = fixture.execute(first)
                 outcome = execution[1] if isinstance(execution, tuple) else execution

@@ -498,7 +498,7 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -
     start = time.monotonic()
     if start >= deadline:
         return "scan-timeout", b""
-    root = Path(tempfile.mkdtemp(prefix="buddy-dsh-probe-")).resolve()
+    root = Path(tempfile.mkdtemp(prefix="hey-my-buddy-dsh-probe-")).resolve()
     process = handle = None
     stopped = True  # No child exists until launch returns or transfers ownership.
     code, output = "launch-failed", b""

@@ -39,8 +39,8 @@ from ..blackboard.service.service import call_operation
 
 MAX_BODY_BYTES = 1024 * 1024
 MAX_ASSET_BYTES = 8 * 1024 * 1024
-SESSION_COOKIE = "buddy_console_session"
-CSRF_HEADER = "X-Buddy-CSRF"
+SESSION_COOKIE = "hey_my_buddy_console_session"
+CSRF_HEADER = "X-Hey-My-Buddy-CSRF"
 ACCESS_OPERATIONS = frozenset({"console_access_set", "console_logout", "console_session_revoke"})
 
 #: Conditional read responses are private to this browser and always revalidate:
@@ -218,11 +218,11 @@ CONTENT_SECURITY_POLICY = (
 
 SETUP_PAGE = """<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Buddy console — assets not built</title>
+<title>hey-my-buddy console — assets not built</title>
 <style>body{{font:16px system-ui,sans-serif;max-width:720px;margin:10vh auto;padding:0 24px;color:#20332e;background:#f4f7f5}}
 code{{background:#e5ece8;padding:2px 6px;border-radius:4px}}pre{{background:#fff;padding:16px;border-radius:10px;overflow-wrap:anywhere;white-space:pre-wrap}}</style>
 <h1>Console assets are not built</h1>
-<p>This Buddy build has no <code>assets/index.html</code>, so there is no React bundle to serve.
+<p>This hey-my-buddy build has no <code>assets/index.html</code>, so there is no React bundle to serve.
 Nothing was mocked or invented in its place; the JSON API below is live and can be read directly:</p>
 <pre>{api}</pre>
 <p>Build the frontend into <code>src/hey_my_buddy/console/assets/</code> (the frontend workstream owns
@@ -250,7 +250,7 @@ class _ConsoleHTTPServer(ThreadingHTTPServer):
         error = sys.exc_info()[1]
         if isinstance(error, (ConnectionError, TimeoutError, OSError)):
             return
-        sys.stderr.write(f"buddy-console: {type(error).__name__}\n")
+        sys.stderr.write(f"hey-my-buddy-console: {type(error).__name__}\n")
 
 
 class Console:
@@ -272,7 +272,7 @@ class Console:
             raise BoardError("CONSOLE_SESSION_STORE", "Invalid console access settings")
         try:
             if port is None:
-                value = os.environ.get("BUDDY_CONSOLE_PORT", self._settings.get("port", 49637))
+                value = os.environ.get("HMB_CONSOLE_PORT", self._settings.get("port", 49637))
                 self.port = int(value)
                 if isinstance(value, bool):
                     raise ValueError()
@@ -281,7 +281,7 @@ class Console:
             if isinstance(self.port, bool) or not isinstance(self.port, int) or not 0 <= self.port <= 65535:
                 raise ValueError()
         except (ValueError, TypeError, KeyError) as error:
-            raise BoardError("INVALID_ARGUMENT", "BUDDY_CONSOLE_PORT must be an integer port") from error
+            raise BoardError("INVALID_ARGUMENT", "HMB_CONSOLE_PORT must be an integer port") from error
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
@@ -304,7 +304,7 @@ class Console:
                     server = _ConsoleHTTPServer((self.host, self.port), self._handler())
                 except OSError as error:
                     self._sessions = None
-                    raise BoardError("CONSOLE_PORT_IN_USE", f"Cannot bind 127.0.0.1:{self.port}; free the port or configure BUDDY_CONSOLE_PORT") from error
+                    raise BoardError("CONSOLE_PORT_IN_USE", f"Cannot bind 127.0.0.1:{self.port}; free the port or configure HMB_CONSOLE_PORT") from error
                 if self._persist_port:
                     try:
                         from ..install.launcher import write_private
@@ -315,12 +315,12 @@ class Console:
                         raise
                 self._server = server
                 self.origin = f"http://{self.host}:{server.server_address[1]}"
-                self._thread = threading.Thread(target=server.serve_forever, name="buddy-console", daemon=True)
+                self._thread = threading.Thread(target=server.serve_forever, name="hey-my-buddy-console", daemon=True)
                 self._thread.start()
                 stop = threading.Event()
                 self._expiry_stop = stop
                 threading.Thread(target=self._expire_loop, args=(self._sessions.console_id, stop),
-                                 name="buddy-console-expiry", daemon=True).start()
+                                 name="hey-my-buddy-console-expiry", daemon=True).start()
             self._expire_sessions()
             if not issue_ticket:
                 return self.status()
@@ -402,7 +402,7 @@ class Console:
         if self.require_login and session is not self._local_session:
             self._sessions.authenticate(session.id, session.cookie)
             return
-        raise BoardError("CONSOLE_SESSION_EXPIRED", "Console access changed; reload or run buddy console")
+        raise BoardError("CONSOLE_SESSION_EXPIRED", "Console access changed; reload or run hey-my-buddy console")
 
     def access_view(self, session: BrowserSession | None = None) -> dict:
         return {"requireLogin": self.require_login, "revision": self.access_revision,
@@ -579,7 +579,7 @@ class Console:
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
-            server_version = "buddy-console"
+            server_version = "hey-my-buddy-console"
             #: A stalled local client must not pin a console thread forever.
             timeout = 30
 
@@ -725,7 +725,7 @@ class Console:
                 with console._lock:
                     sessions = console._sessions
                     if sessions is None:
-                        self._error(401, "CONSOLE_SESSION_EXPIRED", "The console is closed; run buddy console again")
+                        self._error(401, "CONSOLE_SESSION_EXPIRED", "The console is closed; run hey-my-buddy console again")
                         return None
                     try:
                         console._expire_sessions()
@@ -743,7 +743,7 @@ class Console:
                     with console._lock:
                         sessions = console._sessions
                         if sessions is None or re.fullmatch(r"[A-Za-z0-9_-]{43}", ticket) is None:
-                            raise BoardError("CONSOLE_ENTRY_EXPIRED", "This entry link is unavailable; run buddy console again")
+                            raise BoardError("CONSOLE_ENTRY_EXPIRED", "This entry link is unavailable; run hey-my-buddy console again")
                         console._expire_sessions()
                         session = sessions.redeem(ticket, self._cookie())
                         console.service.register_console_authority(session.cookie, session.id)
@@ -753,8 +753,8 @@ class Console:
                     # another reusable credential or a raw JSON error.
                     body = ("<!doctype html><html lang=zh-CN><meta charset=utf-8>"
                             "<meta name=viewport content='width=device-width,initial-scale=1'>"
-                            "<title>Buddy 控制台入口不可用</title><h1>控制台入口已失效或暂不可用</h1>"
-                            "<p>请重新运行 <code>buddy console</code> 打开控制台。后台任务不受影响。</p></html>").encode()
+                            "<title>hey-my-buddy 控制台入口不可用</title><h1>控制台入口已失效或暂不可用</h1>"
+                            "<p>请重新运行 <code>hey-my-buddy console</code> 打开控制台。后台任务不受影响。</p></html>").encode()
                     return self._send(STATUS_BY_CODE.get(error.code, 400), body, "text/html; charset=utf-8")
                 self.send_response(303)
                 self.send_header("Location", target)

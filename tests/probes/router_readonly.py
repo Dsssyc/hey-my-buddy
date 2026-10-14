@@ -128,8 +128,8 @@ def input_hashes(path):
 def clean_environment(root):
     from hey_my_buddy.buddy.harnesses.discovery import native_environment
     environment = native_environment(os.environ)
-    environment.update(BUDDY_STATE_DIR=str(root / "state"), BUDDY_RUNTIME_ROOT=str(root / "runtime"),
-                       BUDDY_DEV_SOURCE="1",
+    environment.update(HMB_STATE_DIR=str(root / "state"), HMB_RUNTIME_ROOT=str(root / "runtime"),
+                       HMB_DEV_SOURCE="1",
                        PYTHONPATH=str(REPO / "src"))
     return environment
 

@@ -243,7 +243,7 @@ def serve():
     case = os.environ.get("PROBE_FAKE_CASE", "ok")
     report_path = os.environ["PROBE_FAKE_REPORT"]
     nonce = os.environ["PROBE_FAKE_NONCE"]
-    state["nativePins"] = {k: v for k, v in os.environ.items() if k.startswith(("BUDDY_", "ZCODE_"))}
+    state["nativePins"] = {k: v for k, v in os.environ.items() if k.startswith(("HMB_", "ZCODE_"))}
     reader = BoundedLineReader(sys.stdin)
     while True:
         line = reader.readline()
@@ -355,7 +355,7 @@ class FakeServerLineReaderTests(unittest.TestCase):
 
 class ProbeFixtureCase(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="buddy-zcode-input-probe-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-input-probe-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.probe = load_probe()
@@ -371,7 +371,7 @@ class ProbeFixtureCase(unittest.TestCase):
     def run_fake_probe(self, case: str) -> tuple[dict, dict]:
         # The fake's control variables ride the environment; inherited native pins
         # never reach the probe child.
-        environment = {k: v for k, v in os.environ.items() if not k.startswith("BUDDY_")
+        environment = {k: v for k, v in os.environ.items() if not k.startswith("HMB_")
                        and not k.startswith("ZCODE_") and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         environment.update({"PROBE_FAKE_CASE": case, "PROBE_FAKE_REPORT": str(self.fake_report),
                             "PROBE_FAKE_NONCE": self.nonce, "PROBE_FAKE_CWD": str(self.root / "scratch"),
@@ -430,7 +430,7 @@ class ProbeAcceptFlowTests(ProbeFixtureCase):
     def test_inherited_buddy_and_native_pins_never_reach_the_probe_child(self):
         _report, fake = self.run_fake_probe("ok")
         pins = fake["nativePins"]
-        self.assertEqual(sorted(pins), ["BUDDY_ZCODE_CLI", "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_LOG_CONSOLE", "ZCODE_LOG_DIR",
+        self.assertEqual(sorted(pins), ["HMB_ZCODE_CLI", "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_LOG_CONSOLE", "ZCODE_LOG_DIR",
                                         "ZCODE_SESSION_DB_PATH",
                                         "ZCODE_STORAGE_DIR"], pins)
         self.assertEqual(pins["ZCODE_LOG_CONSOLE"], "0")

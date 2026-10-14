@@ -28,7 +28,7 @@ class ServiceHolderIntegrationTests(StoreConcurrencyTestCase):
         identity = RunIdentity(task_id=run_id, attempt_id=attempt["attemptId"],
             generation=attempt["generation"], invocation_id="held-controller-invocation",
             turn_id=turn["turnId"], input_sha256=turn["inputSha256"])
-        with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(board.directory)}), peer() as holding:
+        with mock.patch.dict(os.environ, {"HMB_STATE_DIR": str(board.directory)}), peer() as holding:
             descriptor = LiveEndpointDescriptor.from_payload(holding.call(op="spawn", label="one",
                 identity=identity.to_payload(), journal=str(holding.root / "one-journal.jsonl"))["descriptor"])
             holding.controllers.append(descriptor)
@@ -37,7 +37,7 @@ class ServiceHolderIntegrationTests(StoreConcurrencyTestCase):
             self.assertTrue(board.call("worker_live_attach", attachment.to_payload())["attached"])
             view = board.store.task_get({"runId": run_id})["task"]
             registry = board.store.live_registry
-            with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(board.directory / "foreign-state")}):
+            with mock.patch.dict(os.environ, {"HMB_STATE_DIR": str(board.directory / "foreign-state")}):
                 channel = registry.channel_for(view)
             self.assertEqual(channel.identity, identity)
             self.assertEqual(channel.request(request(identity), timeout_ms=2000).status, "queued")

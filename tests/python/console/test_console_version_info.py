@@ -25,7 +25,7 @@ FIELDS = {"softwareVersion", "contractVersion", "schemaVersion", "sourceCommit",
 
 class VersionInfoTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="buddy-version-")
+        temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-version-")
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name)
         self.source = self.base / "source"
@@ -36,7 +36,7 @@ class VersionInfoTests(unittest.TestCase):
         self.write_project(self.installed, "6.8.2", "installed-build-commit")
         self.enterContext(mock.patch.object(runtime, "project_root", return_value=self.source))
         self.enterContext(mock.patch.object(runtime, "process_identity", side_effect=self.actual))
-        self.enterContext(mock.patch.dict(os.environ, {"BUDDY_RUNTIME_ROOT": str(self.base / "runtime")}))
+        self.enterContext(mock.patch.dict(os.environ, {"HMB_RUNTIME_ROOT": str(self.base / "runtime")}))
 
     def write_project(self, root, version, commit):
         package = root / "src/hey_my_buddy"
@@ -72,7 +72,7 @@ class VersionInfoTests(unittest.TestCase):
             marker.update(sourceCommit="installed-ready-commit", installedAt="2026-09-30T01:02:03Z")
         (self.installed / "READY.json").write_text(json.dumps(marker))
         if pin:
-            self.enterContext(mock.patch.dict(os.environ, {"BUDDY_RUNTIME": str(self.installed)}))
+            self.enterContext(mock.patch.dict(os.environ, {"HMB_RUNTIME": str(self.installed)}))
         if in_use:
             self.actual_root = self.installed
             runtime.project_root.return_value = self.installed
@@ -139,7 +139,7 @@ class VersionInfoTests(unittest.TestCase):
     def test_source_uses_validated_active_old_runtime_without_a_pin(self):
         self.ready(pin=False)
         launcher.write_active_runtime(self.state, self.installed)
-        self.assertNotIn("BUDDY_RUNTIME", os.environ)
+        self.assertNotIn("HMB_RUNTIME", os.environ)
         self.assertNotEqual(runtime.content_id(), self.installed.name)
         self.assertEqual(runtime.resolve_runtime()["state"], "SOURCE")
         with mock.patch.object(backup, "preflight", side_effect=AssertionError("unexpected preflight")), \
@@ -162,7 +162,7 @@ class VersionInfoTests(unittest.TestCase):
         self.ready(pin=False)
         self.assertTrue(runtime.is_ready(first))
         self.assertTrue(runtime.is_ready(self.installed))
-        self.assertNotIn("BUDDY_RUNTIME", os.environ)
+        self.assertNotIn("HMB_RUNTIME", os.environ)
         info = version_info.version_info(self.state)
         self.assertEqual(info["running"]["mode"], "source")
         self.assertEqual(info["running"]["softwareVersion"], "7.2.1")
@@ -299,7 +299,7 @@ class VersionInfoHandlerTests(_VersionConsoleTestCase):
             def sendall(self, data):
                 self.output.extend(data)
 
-        cookie = f"Cookie: buddy_console_session={self.session.cookie}\r\n" if logged_in else ""
+        cookie = f"Cookie: hey_my_buddy_console_session={self.session.cookie}\r\n" if logged_in else ""
         request_origin = self.console.origin if origin is None else origin
         request = f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:12345\r\nOrigin: {request_origin}\r\n{cookie}Connection: close\r\n\r\n"
         connection = Connection(request.encode())
@@ -313,8 +313,8 @@ class VersionInfoHandlerTests(_VersionConsoleTestCase):
         VersionInfoTests.ready(self, pin=False)
         launcher.write_active_runtime(self.console.store.directory, self.installed)
         # The process environment may name a different state than this Console.
-        with mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory / "unrelated-state"),
-                                          "BUDDY_RUNTIME_ROOT": str(self.installed.parent)}), \
+        with mock.patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory / "unrelated-state"),
+                                          "HMB_RUNTIME_ROOT": str(self.installed.parent)}), \
              mock.patch.object(backup, "preflight", side_effect=AssertionError("unexpected preflight")):
             status, body = self.request("/api/runtime-version")
         self.assertEqual(status, 200)

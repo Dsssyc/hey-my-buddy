@@ -40,8 +40,8 @@ class ChecksUvCacheTests(unittest.TestCase):
             "HOME", "USERPROFILE", "HOMEPATH", "CODEX_HOME", "CLAUDE_CONFIG_DIR",
             "DSH_HOME", "ZCODE_DATA_BASE_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
             "XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "APPDATA",
-            "LOCALAPPDATA", "TMPDIR", "BUDDY_CHECKS_TMPDIR", "BUDDY_STATE_DIR",
-            "BUDDY_RUNTIME_ROOT",
+            "LOCALAPPDATA", "TMPDIR", "HMB_CHECKS_TMPDIR", "HMB_STATE_DIR",
+            "HMB_RUNTIME_ROOT",
         ):
             with self.subTest(key=key):
                 self.assertTrue(Path(values[key]).resolve().is_relative_to(self.private_root))

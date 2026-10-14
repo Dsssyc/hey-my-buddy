@@ -32,7 +32,7 @@ class NativeConfigCase(NativeRunCase):
         self.personal = self.native_config / ".zcode/v2/provider_config.json"
         self.personal.parent.mkdir(parents=True)
         self.write_provider("zhipu-account")
-        os.environ.update(BUDDY_ZCODE_CLI=str(self.fake), ZCODE_DATA_BASE_DIR=str(self.native_config))
+        os.environ.update(HMB_ZCODE_CLI=str(self.fake), ZCODE_DATA_BASE_DIR=str(self.native_config))
         # These deliberately wrong shell pins must not override native defaults.
         os.environ.update(ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(self.root / "missing-builtin"),
                           ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(self.root / "missing-personal"))
@@ -53,7 +53,7 @@ class NativeConfigCase(NativeRunCase):
 
 class NativeConfigTests(NativeConfigCase):
     def test_non_key_native_provider_is_discovered_and_selectable_with_no_snapshots(self):
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "native-config"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "native-config"
         receipt = self.discover()
         provider = receipt["providers"][0]
         self.assertEqual(provider["provider"], "fixture-account")
@@ -76,7 +76,7 @@ class NativeConfigTests(NativeConfigCase):
         self.assertNotIn("secret-never-returned", json.dumps(receipt))
 
     def test_unreadable_billing_files_preserve_native_catalog_and_names(self):
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "discovery"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "discovery"
         self.write_provider("api-key", provider="fixture-api")
         before = self.discover()
         self.assertEqual(before["providers"][0]["accessType"], "api-key")
@@ -137,7 +137,7 @@ class NativeConfigTests(NativeConfigCase):
     def test_unreadable_builtin_billing_content_does_not_refuse_preparation(self):
         self.builtin.write_text("not JSON")
         native_run.check_preparation({"provider": "fixture-account"}, dict(os.environ))
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "discovery"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "discovery"
         self.assertEqual(self.discover()["providers"][0]["accessType"], "unknown")
 
 
@@ -147,7 +147,7 @@ class RuntimePreferenceTests(NativeConfigCase):
         self.settings.write_text(json.dumps(value))
 
     def execute_preferences(self, *, no_tools):
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok" if no_tools else "write-final"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "ok" if no_tools else "write-final"
         request = self.fast_request("Return only one JSON value matching this schema: {}")
         if not no_tools:
             request = request.model_copy(update={"tool_scope": "write"})
@@ -206,7 +206,7 @@ class RuntimePreferenceTests(NativeConfigCase):
 
     def test_preferences_are_read_once_for_all_correction_sessions(self):
         self.write_settings({"memoryEnabled": True, "nativeSearchEnhancementsEnabled": True})
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = "preference-correct"
+        os.environ["HMB_ZCODE_TEST_CASE"] = "preference-correct"
         request = self.fast_request("Return only one JSON value matching this schema: {}")
         correction = FastCorrection(request.output_schema.value, request.input_text)
         with mock.patch.object(native_run, "load_runtime_preferences", wraps=load_runtime_preferences) as read:
@@ -221,7 +221,7 @@ class RuntimePreferenceTests(NativeConfigCase):
 
 class FinalMessageUsageTests(NativeRunCase):
     def execute_rounds(self, case):
-        os.environ["BUDDY_ZCODE_TEST_CASE"] = case
+        os.environ["HMB_ZCODE_TEST_CASE"] = case
         request = self.fast_request("Choose a buddy. Return only one JSON value matching this schema: {}")
         correction = FastCorrection(request.output_schema.value, request.input_text)
         return native_run.run(request, observer=correction.observer, services=None, cancelled=lambda: False)

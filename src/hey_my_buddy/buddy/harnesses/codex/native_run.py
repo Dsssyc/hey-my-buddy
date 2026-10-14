@@ -709,7 +709,7 @@ def _configure_review(connection: Connection, request: RunRequest,
     expected = tomllib.loads(read_only_config(cwd))
     response = connection.call("thread/start", {
         "cwd": cwd, "model": spec["model"], "modelProvider": spec["provider"],
-        "approvalPolicy": "never", "permissions": "buddy-router", "serviceName": "hey-my-buddy",
+        "approvalPolicy": "never", "permissions": "hey-my-buddy-router", "serviceName": "hey-my-buddy",
         "experimentalRawEvents": True, "ephemeral": True,
     })
     configured = connection.call("config/read", {"cwd": cwd, "includeLayers": False}).get("config")
@@ -720,9 +720,9 @@ def _configure_review(connection: Connection, request: RunRequest,
     state.review_config["mcp_servers"] = bool(configured.get("mcp_servers"))
     features = configured.get("features")
     permissions = configured.get("permissions")
-    profile = permissions.get("buddy-router") if isinstance(permissions, dict) else None
+    profile = permissions.get("hey-my-buddy-router") if isinstance(permissions, dict) else None
     state.review_config["features"] = {"apps": _readback_fact(features.get("apps")) if isinstance(features, dict) else None}
-    state.review_config["permissions"] = {"buddy-router": _readback_fact(profile)}
+    state.review_config["permissions"] = {"hey-my-buddy-router": _readback_fact(profile)}
     config_status = policy_status(configured, expected)
     state.policy_checks["configReadback"] = {
         "status": "confirmed" if config_status == "confirmed" else "unknown"}
@@ -737,7 +737,7 @@ def _configure_review(connection: Connection, request: RunRequest,
     state.review_receipt = {key: _readback_fact(value) for key, value in acknowledged.items()}
     state.policy_checks["threadReceipt"] = {
         "status": "confirmed" if (isinstance(receipt_profile, dict) and isinstance(sandbox, dict)
-                                  and receipt_profile.get("id") == "buddy-router"
+                                  and receipt_profile.get("id") == "hey-my-buddy-router"
                                   and response.get("approvalPolicy") == "never"
                                   and sandbox.get("type") == "readOnly"
                                   and sandbox.get("networkAccess") is False) else "unknown"}
@@ -754,7 +754,7 @@ def _configure_review(connection: Connection, request: RunRequest,
                                  "Codex acknowledged a different read-only provider")
     profile_id = receipt_profile.get("id") if isinstance(receipt_profile, dict) else None
     approval = response.get("approvalPolicy")
-    if config_status == "mismatch" or isinstance(profile_id, str) and profile_id != "buddy-router" \
+    if config_status == "mismatch" or isinstance(profile_id, str) and profile_id != "hey-my-buddy-router" \
             or isinstance(approval, str) and approval != "never" or sandbox.get("networkAccess") is True:
         raise CodexProtocolError("readonly-policy-unverified",
                                  "Codex acknowledged conflicting read-only restrictions")
@@ -963,7 +963,7 @@ def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
     if mode == "worker":
         _sandbox, params["sandboxPolicy"] = _worker_sandbox(request)
     elif mode == "review":
-        params["permissions"] = "buddy-router"
+        params["permissions"] = "hey-my-buddy-router"
     if mode == "worker":
         state.worker_policy = {"sandboxPolicy": params["sandboxPolicy"],
                                "approvalPolicy": params["approvalPolicy"]}
@@ -1529,7 +1529,7 @@ def _effective_policy(state: _RunState, mode: str) -> EffectivePolicy:
         return EffectivePolicy(
             tools=PolicyFact(requested=_json_package({"sandbox": "read-only", "approvalPolicy": "never"})))
     return EffectivePolicy(
-        tools=PolicyFact(requested=_json_package({"permissions": "buddy-router", "approvalPolicy": "never"})))
+        tools=PolicyFact(requested=_json_package({"permissions": "hey-my-buddy-router", "approvalPolicy": "never"})))
 
 
 def _last_assistant_message(checkpoint: dict | None) -> dict | None:

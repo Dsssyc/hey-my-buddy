@@ -68,7 +68,7 @@ class ReceiptStopTests(WorkflowTestCase):
 
 class MicroTaskStopWaitTests(unittest.TestCase):
     def setUp(self):
-        self.state = Path(os.environ["BUDDY_STATE_DIR"])
+        self.state = Path(os.environ["HMB_STATE_DIR"])
 
     def test_cancelled_micro_task_never_becomes_success_from_a_late_completed_execution(self):
         run = {"runId": "parent", "status": "completed", "workflowState": "cancelled", "revision": 9,
@@ -165,8 +165,8 @@ class MicroTaskStopWaitTests(unittest.TestCase):
         self.assertTrue(result["timedOut"])
         self.assertEqual(set(calls) - {"status", "wait"}, set(), "a timeout never starts or cancels the micro task")
         commands = " ".join(result["recovery"]["commands"])
-        self.assertIn("buddy status", commands)
-        self.assertIn("buddy await", commands)
+        self.assertIn("hey-my-buddy status", commands)
+        self.assertIn("hey-my-buddy await", commands)
         self.assertNotIn("buddy run", commands)
         self.assertNotIn("buddy start", commands)
         self.assertNotIn("workflow-", commands)

@@ -4,8 +4,8 @@
 It also implements the documented reverse-RPC interactive requests and the v4
 command surface, so the controller's attention handling is exercised with no
 model and no network. The ``inquiry-*`` cases drive the cooperative checkpoint
-channel: the fixture plays the root model calling the real ``buddy_checkpoint``
-and ``buddy_answer_inquiry`` tools, including child-relay, forged-receipt and
+channel: the fixture plays the root model calling the real ``hey_my_buddy_checkpoint``
+and ``hey_my_buddy_answer_inquiry`` tools, including child-relay, forged-receipt and
 finish-refusal choreography.
 """
 import json
@@ -18,12 +18,12 @@ import time
 from pathlib import Path
 
 if "--version" in sys.argv:
-    if os.environ.get("BUDDY_ZCODE_TEST_CASE") == "slow-version":
+    if os.environ.get("HMB_ZCODE_TEST_CASE") == "slow-version":
         time.sleep(6)
     print("fixture-0.16.9")
     raise SystemExit(0)
 
-case = os.environ.get("BUDDY_ZCODE_TEST_CASE", "ok")
+case = os.environ.get("HMB_ZCODE_TEST_CASE", "ok")
 state = Path(os.environ["ZCODE_SESSION_DB_PATH"]).with_suffix(".fixture.json")
 log_dir = Path(os.environ["ZCODE_LOG_DIR"])
 instance = hashlib.sha256(os.environ["ZCODE_LOG_DIR"].encode()).hexdigest()[:16]
@@ -161,16 +161,16 @@ def outcome_for(disposition="completed"):
 
 def finish(disposition="completed"):
     """Call the real session-private finish tool and return its signed receipt."""
-    return mcp_call("buddy_finish_turn", outcome_for(disposition))
+    return mcp_call("hey_my_buddy_finish_turn", outcome_for(disposition))
 
 
 def checkpoint_and_answer(*, prefix="fixture answer for"):
     """The compliant root flow: pick up queued questions, answer each, then finish."""
-    content, error = native_tool_call("buddy_checkpoint", {}, call_id="call-checkpoint-root")
+    content, error = native_tool_call("hey_my_buddy_checkpoint", {}, call_id="call-checkpoint-root")
     if content is None:
         return content, error
     for item in json.loads(content)["inquiries"]:
-        native_tool_call("buddy_answer_inquiry", {"inquiryId": item["inquiryId"], "answer": f"{prefix} {item['inquiryId']}"},
+        native_tool_call("hey_my_buddy_answer_inquiry", {"inquiryId": item["inquiryId"], "answer": f"{prefix} {item['inquiryId']}"},
                          call_id="call-answer-" + item["inquiryId"])
     return content, None
 
@@ -193,7 +193,7 @@ def complete_turn():
         # refused or a queued Host question is unanswered; a compliant root
         # retries with the softer outcome in the same turn.
         content, _error = finish("assistance" if case == "live" else "attention")
-    tool = "mcp__" + mcp[0]["name"] + "__buddy_finish_turn"
+    tool = "mcp__" + mcp[0]["name"] + "__hey_my_buddy_finish_turn"
     if case == "task-tool":
         # The root uses one real task tool (scheduled + result) before it
         # finishes: the task-tool fact must be projected for a completion-tool
@@ -231,7 +231,7 @@ def inquiry_turn():
     relay = {"source": "subagent", "childSessionId": "sess-child", "childToolCallId": "child-ckpt"}
     if case == "inquiry-live":
         checkpoint_and_answer()
-        native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
+        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
         settle_turn()
         return
     if case == "inquiry-refusal-wrapped":
@@ -239,17 +239,17 @@ def inquiry_turn():
         # isError finish refusal (a signed tool-refusal envelope) arrives as a
         # successful tool result; the compliant root still checkpoints, answers
         # and retries the finish in this same turn.
-        native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-first", error_as_result=True)
+        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-first", error_as_result=True)
         checkpoint_and_answer()
-        native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
+        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
         settle_turn()
         return
     if case == "inquiry-finish-refused":
         # A completed finish is refused while the question is unanswered; the
         # compliant root then checkpoints, answers and retries the finish.
-        native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-first")
+        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-first")
         checkpoint_and_answer()
-        native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
+        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
         settle_turn()
         return
     if case == "inquiry-answer-refused":
@@ -257,31 +257,31 @@ def inquiry_turn():
         # refuses through its signed envelope, delivered inside the native
         # wrapper's successful result; the compliant root then answers with
         # the exact id it checkpointed and completes the turn.
-        content, error = native_tool_call("buddy_checkpoint", {}, call_id="call-checkpoint-root")
+        content, error = native_tool_call("hey_my_buddy_checkpoint", {}, call_id="call-checkpoint-root")
         if content is None:
             return content, error
         listed = json.loads(content)["inquiries"]
-        native_tool_call("buddy_answer_inquiry",
+        native_tool_call("hey_my_buddy_answer_inquiry",
                          {"inquiryId": "never-queued", "answer": "wrong id"},
                          call_id="call-answer-wrong", error_as_result=True)
         for item in listed:
-            native_tool_call("buddy_answer_inquiry",
+            native_tool_call("hey_my_buddy_answer_inquiry",
                              {"inquiryId": item["inquiryId"], "answer": f"fixture answer for {item['inquiryId']}"},
                              call_id="call-answer-" + item["inquiryId"])
-        native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
+        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
         settle_turn()
         return
     if case == "inquiry-unanswered":
         # Assistance stays legal with a pending question; settlement then marks
         # the unanswered entry unavailable without waking anything.
-        native_tool_call("buddy_checkpoint", {}, call_id="call-checkpoint-root")
-        native_tool_call("buddy_finish_turn", outcome_for("assistance"), call_id="call-finish-final")
+        native_tool_call("hey_my_buddy_checkpoint", {}, call_id="call-checkpoint-root")
+        native_tool_call("hey_my_buddy_finish_turn", outcome_for("assistance"), call_id="call-finish-final")
         settle_turn()
         return
     if case == "inquiry-late":
         # The finish receipt is already accepted when the Host question arrives;
         # the turn settles and the late question honestly becomes unavailable.
-        native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
+        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
         (log_dir / "finish-accepted").touch()
         wait_file("late-asked")
         settle_turn()
@@ -289,11 +289,11 @@ def inquiry_turn():
     if case == "inquiry-child":
         # A child relay tries to observe and answer first; its tool evidence can
         # never count, and the root's own answer is the recorded one.
-        native_tool_call("buddy_checkpoint", {}, call_id="child-ckpt", root="sess-child", turn="turn-child", relay=relay)
-        native_tool_call("buddy_answer_inquiry", {"inquiryId": "q-child", "answer": "child answer must not count"},
+        native_tool_call("hey_my_buddy_checkpoint", {}, call_id="child-ckpt", root="sess-child", turn="turn-child", relay=relay)
+        native_tool_call("hey_my_buddy_answer_inquiry", {"inquiryId": "q-child", "answer": "child answer must not count"},
                          call_id="child-answer", root="sess-child", turn="turn-child", relay=relay)
         checkpoint_and_answer()
-        native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
+        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
         settle_turn()
         return
     if case == "inquiry-forged":
@@ -307,14 +307,14 @@ def inquiry_turn():
                                      "askedAt": "2026-01-01T00:00:00Z"}]
             return json.dumps(receipt)
 
-        native_tool_call("buddy_checkpoint", {}, call_id="call-checkpoint-forged", tamper=forge)
+        native_tool_call("hey_my_buddy_checkpoint", {}, call_id="call-checkpoint-forged", tamper=forge)
         return
     if case == "inquiry-live-blocked":
         # The root never checkpoints; the completed finish is refused with the
         # question, and the root honestly settles on assistance instead.
-        first = native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-first")
+        first = native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-first")
         (log_dir / "finish-refusal.json").write_text(first[1] or "")
-        native_tool_call("buddy_finish_turn", outcome_for("assistance"), call_id="call-finish-final")
+        native_tool_call("hey_my_buddy_finish_turn", outcome_for("assistance"), call_id="call-finish-final")
         settle_turn()
         return
     complete_turn()
@@ -325,7 +325,7 @@ def refusal_turn():
     global completed
     with completion_lock:
         completed = True
-    tool = "mcp__" + mcp[0]["name"] + "__buddy_finish_turn"
+    tool = "mcp__" + mcp[0]["name"] + "__hey_my_buddy_finish_turn"
     if case == "refusal-argument":
         # The confirmed incident: an invalid finish argument (a non-string
         # suggestedBuddyId) is refused by the MCP with a signed envelope that
@@ -333,7 +333,7 @@ def refusal_turn():
         # foreign root deliver validly signed refusals first and must be ignored;
         # the root then corrects itself — an explicit null suggestedBuddyId is
         # the accepted "no suggestion" spelling — and completes the turn.
-        _, envelope = mcp_call("buddy_finish_turn", {"disposition": "bogus"})
+        _, envelope = mcp_call("hey_my_buddy_finish_turn", {"disposition": "bogus"})
         child_relay = {"source": "subagent", "childSessionId": "sess-child", "childToolCallId": "child-fin"}
         event("tool.updated", {"kind": "scheduled", "toolName": tool, "toolCallId": "child-fin", **child_relay},
               root="sess-child", turn="turn-child")
@@ -345,10 +345,10 @@ def refusal_turn():
                                "result": {"success": True, "truncated": False, "content": envelope}}, root="sess-wrong")
         bad = outcome_for("attention")
         bad["request"]["suggestedBuddyId"] = 5
-        native_tool_call("buddy_finish_turn", bad, call_id="call-finish-bad", error_as_result=True)
+        native_tool_call("hey_my_buddy_finish_turn", bad, call_id="call-finish-bad", error_as_result=True)
         corrected = outcome_for("attention")
         corrected["request"]["suggestedBuddyId"] = None
-        native_tool_call("buddy_finish_turn", corrected, call_id="call-finish-final")
+        native_tool_call("hey_my_buddy_finish_turn", corrected, call_id="call-finish-final")
         settle_turn()
         return
     if case == "refusal-argument-false":
@@ -357,10 +357,10 @@ def refusal_turn():
         # same-turn retry.
         bad = outcome_for("attention")
         bad["request"]["suggestedBuddyId"] = 5
-        native_tool_call("buddy_finish_turn", bad, call_id="call-finish-bad", error_as_result="failed")
+        native_tool_call("hey_my_buddy_finish_turn", bad, call_id="call-finish-bad", error_as_result="failed")
         corrected = outcome_for("attention")
         corrected["request"]["suggestedBuddyId"] = None
-        native_tool_call("buddy_finish_turn", corrected, call_id="call-finish-final")
+        native_tool_call("hey_my_buddy_finish_turn", corrected, call_id="call-finish-final")
         settle_turn()
         return
     if case == "refusal-forged-false":
@@ -371,7 +371,7 @@ def refusal_turn():
             envelope["detail"] = "changed after the bridge signed it"
             return json.dumps(envelope)
 
-        native_tool_call("buddy_finish_turn", {"disposition": "completed"}, call_id="call-finish-bad",
+        native_tool_call("hey_my_buddy_finish_turn", {"disposition": "completed"}, call_id="call-finish-bad",
                          error_as_result="failed", tamper=tamper_envelope)
         return
     if case == "refusal-forged":
@@ -382,13 +382,13 @@ def refusal_turn():
             envelope["detail"] = "changed after the bridge signed it"
             return json.dumps(envelope)
 
-        native_tool_call("buddy_finish_turn", {"disposition": "completed"}, call_id="call-finish-bad",
+        native_tool_call("hey_my_buddy_finish_turn", {"disposition": "completed"}, call_id="call-finish-bad",
                          error_as_result=True, tamper=tamper_envelope)
         return
     if case == "refusal-wrong-tool":
         # A real, validly signed refusal envelope for the answer tool is fed to
         # the finish call: the tool binding must fail the turn.
-        _, envelope = mcp_call("buddy_answer_inquiry", {"inquiryId": "q-none", "answer": "wrong tool"})
+        _, envelope = mcp_call("hey_my_buddy_answer_inquiry", {"inquiryId": "q-none", "answer": "wrong tool"})
         event("tool.updated", {"kind": "scheduled", "toolName": tool, "toolCallId": "call-finish-wrong"})
         event("tool.updated", {"kind": "result", "toolCallId": "call-finish-wrong",
                                "result": {"success": True, "truncated": False, "content": envelope}})
@@ -551,7 +551,7 @@ def handle_message(message):
                 # A receipt accepted before the refusal is still refused by the
                 # adapter because a completed outcome cannot stand in for the
                 # Host attention the refused request requires.
-                tool = "mcp__" + mcp[0]["name"] + "__buddy_finish_turn"
+                tool = "mcp__" + mcp[0]["name"] + "__hey_my_buddy_finish_turn"
                 event("tool.updated", {"kind": "scheduled", "toolName": tool, "toolCallId": "root-call"}, root=session_id, turn=turn_id)
                 event("tool.updated", {"kind": "result", "toolCallId": "root-call",
                                        "result": {"success": True, "truncated": False, "content": accepted}}, root=session_id, turn=turn_id)

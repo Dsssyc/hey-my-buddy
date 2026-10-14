@@ -32,7 +32,7 @@ export function ConsoleAccessSettings({ api, csrfToken, access, refresh, unavail
   const disabled = unavailable || busy || loggedOut || !current;
   return <section className="panel settings-panel" aria-labelledby="console-access-title" aria-busy={busy}>
     <div className="panel-heading"><h2 id="console-access-title">本机访问</h2>
-      <Help label="本机访问说明">默认无需登录；开启后用 buddy console 取得 10 分钟入口，关闭会撤销全部登录。</Help></div>
+      <Help label="本机访问说明">默认无需登录；开启后用 hey-my-buddy console 取得 10 分钟入口，关闭会撤销全部登录。</Help></div>
     {current ? <>
       <label className="check-field"><input type="checkbox" role="switch" checked={current.requireLogin} disabled={disabled}
         onChange={event => void run("console_access_set", { requireLogin: event.target.checked },
@@ -45,7 +45,7 @@ export function ConsoleAccessSettings({ api, csrfToken, access, refresh, unavail
             aria-label={session.current ? "退出当前登录" : `撤销登录 ${session.id.slice(0, 8)}`}
             onClick={() => void run(session.current ? "console_logout" : "console_session_revoke",
               session.current ? {} : { sessionId: session.id },
-              session.current ? "已退出；运行 buddy console 重新登录。" : "已撤销该登录。", session.current)}>{session.current ? "退出登录" : "撤销"}</button>
+              session.current ? "已退出；运行 hey-my-buddy console 重新登录。" : "已撤销该登录。", session.current)}>{session.current ? "退出登录" : "撤销"}</button>
         </li>)}
       </ul>}
     </> : <p className="small muted">访问设置暂不可用，请刷新工作台。</p>}

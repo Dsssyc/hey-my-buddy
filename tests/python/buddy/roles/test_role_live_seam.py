@@ -55,11 +55,11 @@ def request(*, harness="zcode", invocation_id="invocation-live") -> RunRequest:
 
 class Fixture:
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="buddy-live-holder-",
-                                                dir=os.environ.get("BUDDY_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-live-holder-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name).resolve()
-        self.enterContext(mock.patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory / "state")}))
+        self.enterContext(mock.patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory / "state")}))
         from hey_my_buddy.protocol import rpc_config
         rpc_config.configure_client(self.directory / "state")
         self.addCleanup(cc.shutdown)

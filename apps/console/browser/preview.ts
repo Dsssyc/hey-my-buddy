@@ -18,7 +18,7 @@ export const test = base.extend({
 /** Opens a console page and refuses anything that is not the synthetic preview. */
 export async function open(page: Page, hash: string): Promise<void> {
   const response = await page.goto(hash);
-  expect(response?.headers()["x-buddy-preview"]).toBe("synthetic-fixture-data");
+  expect(response?.headers()["x-hey-my-buddy-preview"]).toBe("synthetic-fixture-data");
   await page.getByRole("navigation").first().waitFor();
 }
 

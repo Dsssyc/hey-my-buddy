@@ -51,9 +51,9 @@ def silent(_message: str) -> None:
 def private_environment(directory: Path, **extra: str) -> dict:
     """Explicit overrides for support's private child environment, never a copy of HOME."""
     return {
-        "BUDDY_STATE_DIR": str(directory),
-        "BUDDY_RUNTIME_ROOT": str(directory / "runtime-root"),
-        "BUDDY_DEV_SOURCE": "1",
+        "HMB_STATE_DIR": str(directory),
+        "HMB_RUNTIME_ROOT": str(directory / "runtime-root"),
+        "HMB_DEV_SOURCE": "1",
         "VIRTUAL_ENV": "",
         "PYTHONPATH": os.pathsep.join([str(SOURCE_ROOT), str(TEST_ROOT)]),
         **extra,
@@ -462,8 +462,8 @@ class RealDaemonRestart(RecoveryBase):
     def test_a_real_supervisor_keeps_its_child_and_reattaches_after_a_restart(self):
         environment = private_environment(
             self.directory,
-            BUDDY_LEASE_SECONDS="15",
-            BUDDY_MAX_CONCURRENT="1",
+            HMB_LEASE_SECONDS="15",
+            HMB_MAX_CONCURRENT="1",
         )
         self.assertFalse("HOME" in environment, "daemon overrides must leave HOME to the private child environment")
         child_environment = self.child_environment(environment)

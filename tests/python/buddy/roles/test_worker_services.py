@@ -32,7 +32,7 @@ OTHER_IDENTITY = {"taskId": "task-2", "attemptId": "attempt-9", "generation": 1,
 
 class WorkerServicesCase(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="buddy-worker-services-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-worker-services-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.attention = self.root / "attention.json"
@@ -93,11 +93,11 @@ class MicroTaskPromptTests(unittest.TestCase):
                 self.assertIn("commit on the current detached HEAD", scope)
 
     def test_the_prompt_assembles_role_scope_finish_contract_task_and_input_in_order(self):
-        prompt = worker_services.micro_task_prompt("task text", {"resumeMode": "initial"}, "mcp__srv__buddy_finish_turn")
+        prompt = worker_services.micro_task_prompt("task text", {"resumeMode": "initial"}, "mcp__srv__hey_my_buddy_finish_turn")
         sections = prompt.split("\n\n")
         self.assertEqual(sections[0] + "\n", resource_path("roles.worker").read_text())
         self.assertTrue(sections[1].startswith("This is a Buddy root turn for a micro task."))
-        self.assertIn("obtain one successful receipt from mcp__srv__buddy_finish_turn", sections[2])
+        self.assertIn("obtain one successful receipt from mcp__srv__hey_my_buddy_finish_turn", sections[2])
         self.assertIn("all six fields: disposition, summary, remaining, decisions, artifacts, request", sections[2])
         self.assertEqual(sections[-2], "task text")
         self.assertEqual(sections[-1], turn_io.canonical_json({"resumeMode": "initial"}))
@@ -105,8 +105,8 @@ class MicroTaskPromptTests(unittest.TestCase):
         self.assertLessEqual(len(prompt.encode()), 64 * 1024)
 
     def test_the_inquiry_paragraph_arrives_only_with_both_fully_qualified_tool_names(self):
-        finish, checkpoint, answer = ("mcp__other__buddy_finish_turn", "mcp__other__buddy_checkpoint",
-                                      "mcp__other__buddy_answer_inquiry")
+        finish, checkpoint, answer = ("mcp__other__hey_my_buddy_finish_turn", "mcp__other__hey_my_buddy_checkpoint",
+                                      "mcp__other__hey_my_buddy_answer_inquiry")
         neither = worker_services.micro_task_prompt("t", {"turn": 1}, finish)
         self.assertNotIn("Host inquiries arrive cooperatively", neither)
         half = worker_services.micro_task_prompt("t", {"turn": 1}, finish, checkpoint_tool=checkpoint)
@@ -130,10 +130,10 @@ class RoleBoundaryTests(unittest.TestCase):
         # parents up — not a path that only exists under this test runner.
         source = Path(__file__).resolve().parents[4] / "src"
         environment = {"PYTHONPATH": str(source)}
-        for name in ("PATH", "TMPDIR", "BUDDY_CHECKS_TMPDIR"):
+        for name in ("PATH", "TMPDIR", "HMB_CHECKS_TMPDIR"):
             if name in os.environ:
                 environment[name] = os.environ[name]
-        with tempfile.TemporaryDirectory(prefix="buddy-role-boundary-") as outside:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-role-boundary-") as outside:
             # A cwd outside the checkout plus the module's own reported file
             # prove the import resolved from this source, not from the cwd or
             # an installed copy the parent interpreter happened to carry.
@@ -153,17 +153,17 @@ class RoleBoundaryTests(unittest.TestCase):
 
     def test_the_three_session_tools_carry_the_six_field_contract(self):
         tools = {tool["name"]: tool for tool in worker_services.session_tools()}
-        self.assertEqual(set(tools), {"buddy_checkpoint", "buddy_answer_inquiry", "buddy_finish_turn"})
-        schema = tools["buddy_finish_turn"]["inputSchema"]
+        self.assertEqual(set(tools), {"hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn"})
+        schema = tools["hey_my_buddy_finish_turn"]["inputSchema"]
         self.assertEqual(schema["required"], ["disposition", "summary", "remaining", "decisions",
                                               "artifacts", "request"])
         self.assertEqual(schema["properties"]["disposition"]["enum"], ["completed", "assistance", "attention"])
-        self.assertIn("does not dispatch other tasks", tools["buddy_finish_turn"]["description"])
+        self.assertIn("does not dispatch other tasks", tools["hey_my_buddy_finish_turn"]["description"])
 
 
 class FinishBoundaryTests(WorkerServicesCase):
     def test_an_accepted_finish_mints_a_receipt_bound_to_this_attempt_and_input(self):
-        receipt = self.receipt(self.call("buddy_finish_turn", self.outcome("completed")))
+        receipt = self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome("completed")))
         self.assertEqual(receipt["version"], 1)
         self.assertEqual(receipt["identity"], IDENTITY)
         self.assertEqual(receipt["inputSha256"], "a" * 64)
@@ -173,28 +173,28 @@ class FinishBoundaryTests(WorkerServicesCase):
     def test_an_invalid_outcome_is_corrected_before_any_host_condition_is_named(self):
         self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}))
         self.queue()
-        envelope = self.envelope(self.call("buddy_finish_turn", {"disposition": "completed"}), "buddy_finish_turn")
+        envelope = self.envelope(self.call("hey_my_buddy_finish_turn", {"disposition": "completed"}), "hey_my_buddy_finish_turn")
         self.assertEqual(envelope["reason"], "invalid-arguments")
         self.assertIn("the outcome must contain exactly the current outcome fields", envelope["detail"])
         self.assertEqual(turn_io.validate_outcome(self.outcome("completed")), None)
 
     def test_an_outstanding_native_request_blocks_only_completed(self):
         self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}))
-        envelope = self.envelope(self.call("buddy_finish_turn", self.outcome("completed")), "buddy_finish_turn")
+        envelope = self.envelope(self.call("hey_my_buddy_finish_turn", self.outcome("completed")), "hey_my_buddy_finish_turn")
         self.assertEqual(envelope["reason"], "attention-outstanding")
         self.assertIn("attention", envelope["detail"])
         for disposition in ("assistance", "attention"):
             with self.subTest(disposition=disposition):
-                receipt = self.receipt(self.call("buddy_finish_turn", self.outcome(disposition)))
+                receipt = self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome(disposition)))
                 self.assertEqual(receipt["outcome"]["disposition"], disposition)
 
     def test_a_pending_inquiry_blocks_only_completed_and_names_the_question(self):
         self.queue()
-        envelope = self.envelope(self.call("buddy_finish_turn", self.outcome("completed")), "buddy_finish_turn")
+        envelope = self.envelope(self.call("hey_my_buddy_finish_turn", self.outcome("completed")), "hey_my_buddy_finish_turn")
         self.assertEqual(envelope["reason"], "inquiry-pending")
         self.assertIn("[q-1] what is the deployment word?", envelope["detail"])
-        self.assertIn("Call buddy_checkpoint", envelope["detail"])
-        receipt = self.receipt(self.call("buddy_finish_turn", self.outcome("assistance")))
+        self.assertIn("Call hey_my_buddy_checkpoint", envelope["detail"])
+        receipt = self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome("assistance")))
         self.assertEqual(receipt["outcome"]["disposition"], "assistance")
 
     def test_attention_is_named_before_a_pending_inquiry_for_a_completed_outcome(self):
@@ -202,7 +202,7 @@ class FinishBoundaryTests(WorkerServicesCase):
         # attention request first, exactly as the moved contract requires.
         self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}))
         self.queue()
-        envelope = self.envelope(self.call("buddy_finish_turn", self.outcome("completed")), "buddy_finish_turn")
+        envelope = self.envelope(self.call("hey_my_buddy_finish_turn", self.outcome("completed")), "hey_my_buddy_finish_turn")
         self.assertEqual(envelope["reason"], "attention-outstanding")
 
     def test_questions_no_longer_answerable_stop_blocking_completion(self):
@@ -215,7 +215,7 @@ class FinishBoundaryTests(WorkerServicesCase):
                 with self.journal.open("a") as stream:
                     stream.write(json.dumps({"version": 1, "inquiryId": "q-1", "state": terminal,
                                              **IDENTITY}) + "\n")
-                self.receipt(self.call("buddy_finish_turn", self.outcome("completed")))
+                self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome("completed")))
 
 
 class InquiryToolTests(WorkerServicesCase):
@@ -226,14 +226,14 @@ class InquiryToolTests(WorkerServicesCase):
         with self.journal.open("a") as stream:
             stream.write(json.dumps({"version": 1, "inquiryId": "q-answered", "state": "answered",
                                      "question": "done?", "questionSha256": "c" * 64, **IDENTITY}) + "\n")
-        receipt = self.receipt(self.call("buddy_checkpoint", {}))
+        receipt = self.receipt(self.call("hey_my_buddy_checkpoint", {}))
         self.assertEqual(receipt["kind"], "inquiry-checkpoint")
         self.assertEqual([item["inquiryId"] for item in receipt["inquiries"]], ["q-mine"])
         self.assertEqual(receipt["morePending"], 0)
 
     def test_answer_rules_are_bounded_and_bound_to_the_committed_question(self):
         self.queue()
-        accepted = self.receipt(self.call("buddy_answer_inquiry", {"inquiryId": "q-1", "answer": "deploy-ok"}))
+        accepted = self.receipt(self.call("hey_my_buddy_answer_inquiry", {"inquiryId": "q-1", "answer": "deploy-ok"}))
         self.assertEqual(accepted["kind"], "inquiry-answer")
         self.assertEqual(accepted["questionSha256"],
                          hashlib.sha256("what is the deployment word?".encode()).hexdigest())
@@ -244,22 +244,22 @@ class InquiryToolTests(WorkerServicesCase):
                 ({"inquiryId": "q-missing", "answer": "fine"}, "unknown-inquiry"),
                 ({"inquiryId": "i" * 129, "answer": "fine"}, "invalid-arguments")):
             with self.subTest(reason=reason):
-                envelope = self.envelope(self.call("buddy_answer_inquiry", arguments), "buddy_answer_inquiry")
+                envelope = self.envelope(self.call("hey_my_buddy_answer_inquiry", arguments), "hey_my_buddy_answer_inquiry")
                 self.assertEqual(envelope["reason"], reason)
         with self.journal.open("a") as stream:
             stream.write(json.dumps({"version": 1, "inquiryId": "q-1", "state": "answered",
                                      "question": "what is the deployment word?",
                                      "questionSha256": hashlib.sha256(
                                          "what is the deployment word?".encode()).hexdigest(), **IDENTITY}) + "\n")
-        replaced = self.envelope(self.call("buddy_answer_inquiry", {"inquiryId": "q-1", "answer": "another"}),
-                                 "buddy_answer_inquiry")
+        replaced = self.envelope(self.call("hey_my_buddy_answer_inquiry", {"inquiryId": "q-1", "answer": "another"}),
+                                 "hey_my_buddy_answer_inquiry")
         self.assertEqual(replaced["reason"], "inquiry-state")
         self.assertIn("cannot be replaced", replaced["detail"])
 
     def test_without_a_journal_the_channel_is_absent_for_every_tool(self):
         configuration = {key: value for key, value in self.configuration.items() if key != "inquiryJournalPath"}
         self.assertIsNone(worker_services.pending_inquiries(configuration))
-        for name, arguments in (("buddy_checkpoint", {}), ("buddy_answer_inquiry", {"inquiryId": "q", "answer": "x"})):
+        for name, arguments in (("hey_my_buddy_checkpoint", {}), ("hey_my_buddy_answer_inquiry", {"inquiryId": "q", "answer": "x"})):
             with self.subTest(tool=name):
                 result = worker_services.call_session_tool(name, arguments, configuration)
                 envelope = self.envelope(result, name)
