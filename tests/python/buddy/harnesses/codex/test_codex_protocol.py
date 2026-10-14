@@ -114,8 +114,8 @@ class NativeCheckpointTests(unittest.TestCase):
 
 
 class UnlimitedDeadlineTests(unittest.TestCase):
-    def test_zero_timeout_maps_to_an_infinite_overall_deadline_only(self):
-        self.assertEqual(execution_deadline(0), math.inf)
+    def test_absent_timeout_maps_to_an_infinite_overall_deadline_only(self):
+        self.assertEqual(execution_deadline(None), math.inf)
         before = time.monotonic()
         deadline = execution_deadline(45)
         self.assertLessEqual(before + 44, deadline)

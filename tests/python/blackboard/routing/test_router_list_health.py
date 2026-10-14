@@ -87,7 +87,7 @@ class RouterListHealthTestCase(BoardTestCase):
             with self.db.write() as db:
                 db.execute(
                     "INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
-                    "fingerprint_version,adapter,cwd,timeout_seconds,state,revision,created_at,updated_at)"
+                    "fingerprint_version,adapter,cwd,router_budget_seconds,state,revision,created_at,updated_at)"
                     " VALUES(?,?,'host','{}','{}','digest',1,'decision','<private>',60,'completed',1,?,?)",
                     (task_id, task_id, at, at))
                 db.execute(
@@ -287,7 +287,7 @@ class CurrentRoleTests(RouterListHealthTestCase):
         with self.db.write() as db:
             db.execute(
                 "INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
-                "fingerprint_version,adapter,cwd,timeout_seconds,state,revision,created_at,updated_at)"
+                "fingerprint_version,adapter,cwd,router_budget_seconds,state,revision,created_at,updated_at)"
                 " VALUES('task-live','req-live','host','{}','{}','digest',1,'decision','<private>',60,"
                 "'running',1,?,?)", (T0, T0))
             db.execute(

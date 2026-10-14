@@ -84,7 +84,7 @@ class DshRoleCase(unittest.TestCase):
         return ExecutionContext(
             task_id="task", attempt_id=attempt, generation=index,
             spec={**SPEC, "cwd": str(self.cwd), "task": "fixture micro task task",
-                  "timeoutSeconds": timeout},
+                  "expectedSeconds": 1, **({"routerBudgetSeconds": timeout} if timeout is not None else {})},
             directory=self.root / "attempts" / attempt, runtime={}, environment=dict(self.environment),
             turn={"turnId": f"turn-{index}", "input": identity})
 
@@ -104,7 +104,7 @@ class DshRoleCase(unittest.TestCase):
         executor = worker_executor("dsh")
         handle = executor.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(context.timeout_seconds + 15),
+        self.assertIsNotNone(handle.wait((context.timeout_seconds or 15) + 15),
                              "the role controller did not settle within its deadline")
         return handle, executor.collect(handle, context)
 

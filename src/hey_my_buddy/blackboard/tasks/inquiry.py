@@ -103,37 +103,6 @@ def read_journal(results_path: str | None) -> dict:
     return {"available": True, "reason": None, "entries": entries}
 
 
-def _deadline(view: dict) -> dict:
-    created = view.get("createdAt")
-    timeout_seconds = view.get("timeoutSeconds")
-    if type(timeout_seconds) is int and timeout_seconds == schemas.UNLIMITED_TIMEOUT_SECONDS:
-        return {"available": False, "unlimited": True, "reason": "this execution has no deadline"}
-    if not created or not isinstance(timeout_seconds, int):
-        return {"available": False, "reason": "no recorded deadline for this task"}
-    from datetime import datetime, timezone
-
-    try:
-        started = datetime.fromisoformat(created.replace("Z", "+00:00"))
-    except ValueError:
-        return {"available": False, "reason": "unreadable createdAt"}
-    deadline = started.timestamp() + timeout_seconds
-    now = datetime.now(timezone.utc).timestamp()
-    return {
-        "estimated": True,
-        "exact": False,
-        "kind": "estimated-runner-deadline-from-record-createdAt",
-        "clockOrigin": "task record createdAt (before the adapter spawned anything)",
-        "deadlineBasis": "createdAt + timeoutSeconds",
-        "exactTimingAvailable": False,
-        "timeoutSeconds": timeout_seconds,
-        "startedAt": created,
-        "deadlineAt": datetime.fromtimestamp(deadline, timezone.utc).isoformat().replace("+00:00", "Z"),
-        "elapsedSeconds": round(max(0.0, now - started.timestamp()), 1),
-        "remainingSeconds": round(max(0.0, deadline - now), 1),
-        "expired": now >= deadline,
-    }
-
-
 def observe(store: BoardStore, params: dict) -> dict:
     """One bounded inquiry operation: observe, ask, or read a correlated answer."""
     schemas.reject_unknown(params, {"runId", "taskId", "inquiryId", "question", "timeoutMs", "waitMs"}, "inquire")
@@ -325,7 +294,8 @@ def observe(store: BoardStore, params: dict) -> dict:
             "generation": attempt.get("generation"),
             "workerId": attempt.get("workerId"),
         },
-        "deadline": _deadline(view),
+        **({"expectedSeconds": view["expectedSeconds"]} if view["adapter"] != "decision"
+           else {"routerBudgetSeconds": view["routerBudgetSeconds"]}),
         "bridge": bridge,
         "live": live,
         "inquiry": _inquiry_view(message, duplicate) if message else None,

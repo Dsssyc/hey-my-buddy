@@ -342,9 +342,9 @@ class TurnIdentityTests(LiveRegistryTestCase):
         with self.board.store.db.write() as connection:
             connection.execute(
                 "INSERT INTO workflow_turns(turn_id, run_id, attempt_id, generation, turn_index, resume_mode,"
-                " input_json, access, access_reason, state, created_at, updated_at)"
+                " input_json, access, access_reason, expected_seconds, state, created_at, updated_at)"
                 " SELECT 'historical-turn', run_id, attempt_id, generation, turn_index+1, resume_mode,"
-                " input_json, access, access_reason, state, created_at, updated_at FROM workflow_turns WHERE turn_id=?",
+                " input_json, access, access_reason, expected_seconds, state, created_at, updated_at FROM workflow_turns WHERE turn_id=?",
                 (self.identity()["turnId"],),
             )
         self.assert_code("UNAUTHORIZED", self.registry.attach,

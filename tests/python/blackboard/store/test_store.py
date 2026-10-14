@@ -13,6 +13,7 @@ from support import BoardTestCase
 from blackboard.evaluation.test_evaluation import EvaluationTestCase as EvaluationFixtures
 
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION, Corruption
+from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.store.store import BoardStore
 
 MODEL_SERVICE_A = ("dsh", "deepseek-official", "deepseek-flash")
@@ -260,3 +261,52 @@ class IdentityImmutabilityTests(StoreConcurrencyTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExpectedDurationTests(BoardTestCase):
+    def submit(self, board, request_id, **duration):
+        return board.client().submit(requestId=request_id, task="duration fixture", cwd=str(self.workdir()),
+                                     adapter="command", argv=["/bin/true"], **duration)["task"]
+
+    def test_command_default_and_explicit_duration_are_authoritative_board_facts(self):
+        board = self.board()
+        default = self.submit(board, "duration-default")
+        explicit = self.submit(board, "duration-explicit", expectedSeconds=1)
+        self.assertEqual(default["expectedSeconds"], 1800)
+        self.assertEqual(explicit["expectedSeconds"], 1)
+        self.assertNotIn("timeoutSeconds", default)
+        self.assertNotIn("routerBudgetSeconds", explicit)
+        with board.store.db.read() as connection:
+            rows = connection.execute("SELECT expected_seconds,router_budget_seconds FROM tasks ORDER BY request_id").fetchall()
+            self.assertEqual([tuple(row) for row in rows], [(1800, None), (1, None)])
+        self.assertEqual(board.call("task_get", {"runId": explicit["runId"]})["task"]["expectedSeconds"], 1)
+
+    def test_command_duration_rejects_zero_and_renamed_field_even_together(self):
+        board = self.board()
+        for duration in ({"expectedSeconds": 0}, {"expectedSeconds": -1}, {"expectedSeconds": None}):
+            with self.subTest(duration=duration), self.assertRaises(BoardError):
+                self.submit(board, "bad-duration", **duration)
+        for duration in ({"timeoutSeconds": 60}, {"timeoutSeconds": 60, "expectedSeconds": 60}):
+            with self.subTest(duration=duration), self.assertRaises(BoardError) as raised:
+                self.submit(board, "renamed-duration", **duration)
+            self.assertIn("renamed to expectedSeconds", raised.exception.message)
+
+    def test_storage_rejects_a_mixed_duration_meaning(self):
+        board = self.board()
+        task = self.submit(board, "duration-storage")
+        for update in ("expected_seconds=0", "router_budget_seconds=60", "expected_seconds=NULL"):
+            with self.subTest(update=update), self.assertRaises(sqlite3.IntegrityError):
+                with board.store.db.write() as connection:
+                    connection.execute(f"UPDATE tasks SET {update} WHERE task_id=?", (task["runId"],))
+
+    def test_deadline_reason_is_reserved_for_router_calls(self):
+        board = self.board()
+        task = self.submit(board, "duration-reason")
+        client = board.client()
+        client.register_worker("duration-worker", adapter="command", capabilities=["command"])
+        claim = client.claim("duration-worker", "duration-claim", "n" * 32, task_id=task["runId"])["claim"]
+        with self.assertRaises(BoardError) as raised:
+            client.submit_result("duration-worker", claim["attempt"]["attemptId"], claim["attempt"]["generation"],
+                                 "n" * 32, {"status": "failed", "shutdownConfirmed": True, "terminationReason": "deadline"})
+        self.assertIn("Router budget", raised.exception.message)
+        self.assertFalse(client.get(runId=task["runId"])["shutdownConfirmed"])

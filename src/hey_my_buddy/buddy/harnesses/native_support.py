@@ -42,14 +42,14 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def execution_deadline(timeout_seconds) -> float:
-    """The one overall native execution deadline; an explicit 0 means unlimited.
+def execution_deadline(timeout_seconds: int | None) -> float:
+    """The optional overall native execution deadline.
 
     Only this deadline becomes infinite. The version probe and the per-request,
     cancel and shutdown waits keep their own finite bounds, and the cancel
     flag still ends an unlimited turn.
     """
-    return math.inf if timeout_seconds == 0 else time.monotonic() + timeout_seconds
+    return math.inf if timeout_seconds is None else time.monotonic() + timeout_seconds
 
 
 def buddy_spec(request: RunRequest) -> dict:

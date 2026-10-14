@@ -778,8 +778,8 @@ class Worker:
         renewal = _Renewal(self, claim, handle, implementation)
         renewal.start()
         try:
-            timeout_seconds = int(spec["timeoutSeconds"])
-            deadline = started + timeout_seconds if timeout_seconds else None
+            timeout_seconds = context.timeout_seconds
+            deadline = started + timeout_seconds if timeout_seconds is not None else None
             timed_out = False
             while True:
                 if self.stop_requested() and not handle.cancel_requested:
@@ -789,7 +789,7 @@ class Worker:
                     break
                 if deadline is not None and time.monotonic() >= deadline:
                     timed_out = True
-                    self.log("worker deadline reached; cancelling this owned process group")
+                    self.log("Router budget reached; cancelling this owned process group")
                     role_seam.worker_cancel(implementation, handle)
                     handle.wait(timeout=10)
                     break
@@ -815,9 +815,11 @@ class Worker:
             holder['confirmed_stopped'] = True
             holder.pop('handle', None)
             raise BoardError('HARNESS_PREMODEL_FAILED', 'The native protocol failed before any model input was sent')
-        if timed_out and outcome.status == "ok":
+        if timed_out:
             outcome.status = "failed"
-            outcome.error = f"the worker deadline of {spec['timeoutSeconds']}s was reached before the adapter finished"
+            outcome.error = f"the Router budget of {timeout_seconds}s was reached before the adapter finished"
+            if isinstance(outcome.result, dict):
+                outcome.result = {**outcome.result, "status": "error", "code": "router-budget-exhausted"}
         from .partial_outputs import enrich
         enrich(context, outcome)
         report = outcome.to_report()

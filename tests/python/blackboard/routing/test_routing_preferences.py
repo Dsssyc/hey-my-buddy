@@ -203,7 +203,7 @@ class DecisionCapabilityTests(unittest.TestCase):
                         "executionWorkspace": manifest, "budget": budget, "outputSchema": router.answer_schema([BUDDY_ID]),
                         "buddies": [{"buddyId": BUDDY_ID}], "task": "bounded read"}
             context = ExecutionContext(task_id="microTask", attempt_id="attempt", generation=1,
-                                       spec={"cwd": root, "timeoutSeconds": 60}, directory=directory,
+                                       spec={"cwd": root, "routerBudgetSeconds": 60}, directory=directory,
                                        runtime={}, environment={"HMB_STATE_DIR": str(Path(root) / "state"),
                                            "HMB_RUNTIME_ROOT": str(Path(root) / "runtime"), "HMB_DEV_SOURCE": "1"}, decision_input=document,
                                        turn={"input": {}}, agent_credential="must-not-pass")

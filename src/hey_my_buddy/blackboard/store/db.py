@@ -19,7 +19,7 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CAPABILITY_VERSION = 1
@@ -46,7 +46,7 @@ ACTIVE_ATTEMPT_STATES = frozenset({"starting", "executing", "finalizing", "uncer
 MESSAGE_STATES = ("queued", "claimed", "delivered", "answered", "discarded", "unavailable")
 TERMINAL_MESSAGE_STATES = frozenset({"answered", "discarded", "unavailable"})
 
-#: Why an attempt really stopped. A user cancellation, an execution deadline, a
+#: Why an attempt really stopped. A user cancellation, an exhausted Router budget, a
 #: harness failure, a transport failure and a genuine completion are separate
 #: facts; a completion that beat a cancellation is never relabelled by the race.
 TERMINATION_REASONS = ("completed", "user-cancel", "deadline", "harness-error", "transport-error")
@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     required_capabilities   TEXT NOT NULL DEFAULT '[]',
     cwd                     TEXT NOT NULL,
     exclusive_resources     TEXT NOT NULL DEFAULT '[]',
-    timeout_seconds         INTEGER NOT NULL,
+    expected_seconds        INTEGER CHECK (expected_seconds > 0),
+    router_budget_seconds   INTEGER CHECK (router_budget_seconds > 0),
     state                   TEXT NOT NULL
         CHECK (state IN ('queued','running','cancelling','completed','concluded','failed','cancelled','reconciliation-needed')),
     queue_reason            TEXT,
@@ -85,7 +86,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     acceptance_verdict      TEXT CHECK (acceptance_verdict = 'accepted'),
     review_rejected_at      TEXT,
     review_rejection_note   TEXT,
-    queue_position          INTEGER
+    queue_position          INTEGER,
+    CHECK ((adapter='decision' AND expected_seconds IS NULL AND router_budget_seconds IS NOT NULL)
+        OR (adapter!='decision' AND expected_seconds IS NOT NULL AND router_budget_seconds IS NULL))
 );
 CREATE INDEX IF NOT EXISTS tasks_state_idx ON tasks(state, created_at);
 CREATE INDEX IF NOT EXISTS tasks_request_idx ON tasks(request_id);
@@ -454,6 +457,7 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
     access              TEXT NOT NULL CHECK (access IN ('read','write','full')),
     -- Only an explicit full turn carries the Host's one-line reason.
     access_reason       TEXT,
+    expected_seconds    INTEGER NOT NULL CHECK (expected_seconds > 0),
     state               TEXT NOT NULL CHECK (state IN ('prepared','running','returned','failed')),
     disposition         TEXT CHECK (disposition IN ('completed','assistance','attention')),
     outcome_json        TEXT,

@@ -549,7 +549,7 @@ class InquiryEvidenceTests(unittest.TestCase):
         self.assertEqual(error.exception.code, "duplicate-finish")
 
     def test_thousands_of_inquiry_calls_stay_bounded_and_functional(self):
-        # An unlimited (timeoutSeconds: 0) turn may checkpoint constantly. Every
+        # An unbounded turn may checkpoint constantly. Every
         # verified receipt is handed to its callback and never retained, only a
         # bounded recent window of terminal call identities is kept, and no
         # cumulative count ever ends the turn.
@@ -776,8 +776,8 @@ class BuddyTests(unittest.TestCase):
 
 
 class UnlimitedDeadlineTests(unittest.TestCase):
-    def test_zero_timeout_maps_to_an_infinite_overall_deadline_only(self):
-        self.assertEqual(execution_deadline(0), math.inf)
+    def test_absent_timeout_maps_to_an_infinite_overall_deadline_only(self):
+        self.assertEqual(execution_deadline(None), math.inf)
         before = time.monotonic()
         deadline = execution_deadline(45)
         self.assertLessEqual(before + 44, deadline)

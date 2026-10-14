@@ -511,6 +511,10 @@ class StrictScalarTypeTests(unittest.TestCase):
             edited(request, capture_evidence=1)
         with self.assertRaises(BoardError, msg="budget.timeout_seconds"):
             edited(request, budget=rc.RunBudget(timeout_seconds="60"))
+        with self.assertRaises(BoardError, msg="budget.timeout_seconds"):
+            edited(request, budget=rc.RunBudget(timeout_seconds=0))
+        unbounded = edited(request, budget=rc.RunBudget(timeout_seconds=None))
+        self.assertIsNone(rc.decode_run_request(rc.encode_run_request(unbounded)).budget.timeout_seconds)
         with self.assertRaises(BoardError, msg="identity.generation"):
             rc.RunIdentity(task_id="task", attempt_id="attempt", generation=True,
                            invocation_id="invocation")

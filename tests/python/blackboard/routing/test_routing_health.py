@@ -46,12 +46,12 @@ class RoutingHealthTests(BoardTestCase):
                 " VALUES(?,'running','fixture selection',?)", (decision_id, now))
             if invoked:
                 spec = {"adapter": "decision", "task": "fixture selection",
-                        "decision": {"decisionId": decision_id, "kind": kind, "timeoutSeconds": 60}}
+                        "decision": {"decisionId": decision_id, "kind": kind, "routerBudgetSeconds": 60}}
                 encoded = canonical_json(spec)
                 task_state = "completed" if receipt_status == "ok" else receipt_status
                 connection.execute(
                     "INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,"
-                    " input_fingerprint,fingerprint_version,adapter,cwd,timeout_seconds,state,"
+                    " input_fingerprint,fingerprint_version,adapter,cwd,router_budget_seconds,state,"
                     " revision,created_at,updated_at) VALUES(?,?,?,?,?,?,1,'decision','<private-cwd>',60,?,1,?,?)",
                     (task_id, task_id, "fixture-host", encoded, encoded, sha256_text(encoded), task_state, now, now))
                 connection.execute(

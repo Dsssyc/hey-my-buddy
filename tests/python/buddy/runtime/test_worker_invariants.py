@@ -54,7 +54,7 @@ class MarkerWriteFailureTests(unittest.TestCase):
             "attempt": {"attemptId": attempt_id, "taskId": task_id, "generation": 1},
             "task": {"taskId": task_id,
                      "spec": {"adapter": "command", "cwd": str(self.work), "task": "marker invariant",
-                              "timeoutSeconds": 30,
+                              "expectedSeconds": 30,
                               "argv": [sys.executable, "-c", "print('marker-ok')"]}},
         }
 
@@ -122,7 +122,7 @@ class PreparationBoardErrorTests(unittest.TestCase):
             "attempt": {"attemptId": "attempt-prep", "taskId": task_id, "generation": 1},
             "task": {"taskId": task_id,
                      "spec": {"adapter": "dsh", "cwd": "/hey-my-buddy-tests/nowhere", "task": "prep",
-                              "timeoutSeconds": 30}},
+                              "expectedSeconds": 30}},
         }
 
     class FailingExecutor:
@@ -297,7 +297,7 @@ class LiveActivityForwardTests(unittest.TestCase):
         claim = {"attempt": {"attemptId": attempt_id, "taskId": task_id, "generation": generation},
                  "task": {"taskId": task_id,
                           "spec": {"adapter": harness, "cwd": str(self.work), "task": "live activity",
-                                   "timeoutSeconds": 30}}}
+                                   "expectedSeconds": 30}}}
         directory = self.state / "attempts" / task_id / attempt_id
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         identity = RunIdentity(task_id=task_id, attempt_id=attempt_id, generation=generation,

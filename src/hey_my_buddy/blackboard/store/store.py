@@ -341,11 +341,12 @@ class BoardStore:
             "cwd": row["cwd"],
             "task": spec.get("task"),
             "spec": spec,
+            **({"routerBudgetSeconds": row["router_budget_seconds"]} if row["adapter"] == "decision"
+               else {"expectedSeconds": row["expected_seconds"]}),
             "inputFingerprint": row["input_fingerprint"],
             "fingerprintVersion": row["fingerprint_version"],
             "requiredCapabilities": json.loads(row["required_capabilities"]),
             "exclusiveResources": json.loads(row["exclusive_resources"]),
-            "timeoutSeconds": row["timeout_seconds"],
             "status": row["state"],
             "state": row["state"],
             "queueReason": row["queue_reason"],
@@ -507,7 +508,6 @@ class BoardStore:
             view["workerId"] = attempt["worker_id"]
             view["logPaths"] = json.loads(attempt["log_paths"])
             view["cancelRequested"] = attempt["cancel_requested_at"] is not None
-            view["timeoutSeconds"] = task["timeout_seconds"]
             # The projection is looked up by the *selected* attempt, so a replacement
             # generation never inherits the previous attempt's observation.
             view["activity"] = self._activity_latest(connection, attempt["attempt_id"])
@@ -901,7 +901,7 @@ class BoardStore:
                 blocker = self._admission_blocker(connection, spec)
                 connection.execute(
                     "INSERT INTO tasks(task_id, request_id, owner, spec_json, spec_canonical_json, input_fingerprint,"
-                    " fingerprint_version, adapter, required_capabilities, cwd, exclusive_resources, timeout_seconds,"
+                    " fingerprint_version, adapter, required_capabilities, cwd, exclusive_resources, expected_seconds,"
                     " state, queue_reason, revision, created_at, updated_at)"
                     " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
@@ -916,7 +916,7 @@ class BoardStore:
                         canonical_json(spec.get("requiredCapabilities", [])),
                         spec["cwd"],
                         canonical_json(spec.get("exclusiveResources", [])),
-                        spec["timeoutSeconds"],
+                        spec["expectedSeconds"],
                         "queued",
                         blocker or "awaiting-worker",
                         1,
@@ -2344,6 +2344,8 @@ class BoardStore:
             attempt, _worker = self._verify_attempt_actor(connection, params)
             if attempt["attempt_id"] != attempt_id_param:
                 raise BoardError("INVALID_ARGUMENT", "attemptId does not match the request")
+            if termination_reason == "deadline" and attempt["adapter"] != "decision":
+                raise BoardError("INVALID_ARGUMENT", "deadline is reserved for an exhausted Router budget", field="terminationReason")
             subject = self._subject(params["workerId"], params["nonce"], attempt["attempt_id"])
             if attempt["result_json"] is not None:
                 previous = json.loads(attempt["result_json"])

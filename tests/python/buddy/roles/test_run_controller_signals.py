@@ -87,7 +87,7 @@ class ControllerSignalTests(unittest.TestCase):
                           "previousSessionId": None, "context": {}, "executionWorkspace": {}}
             context = ExecutionContext(
                 task_id="micro-task-1", attempt_id="attempt-1", generation=1,
-                spec={"cwd": str(root), "task": "Write a fixture result", "timeoutSeconds": 8,
+                spec={"cwd": str(root), "task": "Write a fixture result", "expectedSeconds": 8,
                       "provider": "openai", "model": "fixture-model", "effort": "low"},
                 directory=root / "attempt", runtime={}, environment=environment,
                 turn={"turnId": "turn-1", "input": turn_input})

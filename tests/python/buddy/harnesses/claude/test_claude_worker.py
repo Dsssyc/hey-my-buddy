@@ -46,7 +46,7 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
         code, submission = self.cli("submit", json.dumps({
             **BUDDY, "requestId": "claude-private-worker", "hostId": "host-1",
             "task": "Exercise only the mock native protocol", "cwd": str(self.repo),
-            "timeoutSeconds": 20,
+            "expectedSeconds": 20,
             "executionWorkspace": {"kind": "worktree", "access": "write",
                                    "base": {"kind": "commit", "ref": self.git("rev-parse", "HEAD").strip()},
                                    "writeScope": ["tracked.txt"]}}), env=self.env())

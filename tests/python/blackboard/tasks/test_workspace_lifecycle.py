@@ -386,7 +386,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         attempt = second_claim["claim"]["attempt"]
         context = ExecutionContext(
             task_id=run_id, attempt_id=attempt["attemptId"], generation=attempt["generation"],
-            spec={**BUDDY, "cwd": second_manifest["path"], "task": "second turn", "timeoutSeconds": 30},
+            spec={**BUDDY, "cwd": second_manifest["path"], "task": "second turn", "expectedSeconds": 30},
             directory=self.directory / "cleared-refs-turn", runtime={},
             environment={"HMB_STATE_DIR": str(self.directory)}, turn=second_claim["claim"]["turn"],
         )
@@ -1842,7 +1842,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         attempt = claimed["claim"]["attempt"]
         context = ExecutionContext(
             task_id=submitted["runId"], attempt_id=attempt["attemptId"], generation=attempt["generation"],
-            spec={**BUDDY, "cwd": original["path"], "task": "private identity seam", "timeoutSeconds": 30},
+            spec={**BUDDY, "cwd": original["path"], "task": "private identity seam", "expectedSeconds": 30},
             directory=self.directory / "native-seam", runtime={},
             environment={"HMB_STATE_DIR": str(self.directory)}, turn=claimed["claim"]["turn"],
         )

@@ -275,7 +275,7 @@ def execute(root: Path) -> dict:
                 lambda name: executor if name == "dsh" else original_executor(name)))
             submitted = board.call("workflow_submit", {**prepared["buddy"],
                 "requestId": "native-memory-probe", "hostId": "codex-adr025",
-                "task": TASK, "cwd": str(root / "repo"), "timeoutSeconds": 180,
+                "task": TASK, "cwd": str(root / "repo"), "expectedSeconds": 180,
                 "executionWorkspace": {"kind": "existing", "access": "write"}})
             run_id = submitted["runId"]
             first, view = run_round(board, executor, run_id,

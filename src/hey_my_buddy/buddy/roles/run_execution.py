@@ -420,7 +420,9 @@ def _launch(control: dict, context: ExecutionContext, *, environment: dict,
             control["cwd"], controller_environment(context.directory, environment,
                                                   read_only=control["operation"] in ("fast", "review"))),
         log_paths=context.log_paths(), timeout_seconds=control["timeoutSeconds"],
-        unbounded_deadline=math.inf, grace_seconds=grace_seconds)
+        grace_seconds=grace_seconds)
+    if control["timeoutSeconds"] is None:
+        handle.deadline = math.inf
     # These bindings are held by the process owner, independent of mutable
     # control files and native evidence written during the run.
     handle.role_run_control = decode_strict_json(canonical_json(control))

@@ -402,7 +402,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
                            HMB_DEV_SOURCE="1", HMB_CODEX_FIXTURE_CASE=case,
                            PYTHONPATH=str(Path(__file__).parents[5] / "src") + os.pathsep + environment.get("PYTHONPATH", ""))
         context = ExecutionContext(task_id=task, attempt_id=attempt, generation=generation,
-                                  spec={"cwd": str(self.cwd), "task": "Select", "timeoutSeconds": 8,
+                                  spec={"cwd": str(self.cwd), "task": "Select", "routerBudgetSeconds": 8,
                                         "provider": "openai", "model": "fixture-model", "effort": "low"},
                                   directory=self.root / f"attempt-{index}", runtime={}, environment=environment,
                                   turn=None)

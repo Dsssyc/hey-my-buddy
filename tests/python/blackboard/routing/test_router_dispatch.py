@@ -286,7 +286,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
             for index in (1, 2):
                 db.execute(
                     "INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
-                    "fingerprint_version,adapter,cwd,timeout_seconds,state,revision,created_at,updated_at)"
+                    "fingerprint_version,adapter,cwd,expected_seconds,state,revision,created_at,updated_at)"
                     " VALUES(?,?,?,?,?,'digest',1,'dsh','/work',60,'running',1,?,?)",
                     (f"busy-{index}", f"busy-{index}", "host", "{}", "{}", T0, T0))
                 db.execute(
@@ -312,7 +312,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
                                           code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
             db.execute(
                 "INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
-                "fingerprint_version,adapter,cwd,timeout_seconds,state,revision,created_at,updated_at)"
+                "fingerprint_version,adapter,cwd,expected_seconds,state,revision,created_at,updated_at)"
                 " VALUES('retry-1','retry','host','{}','{}','digest',1,'dsh','/work',60,'running',1,?,?)",
                 (T0, T0))
             db.execute(
@@ -414,7 +414,7 @@ class WorkflowWiringTests(RouterDispatchTestCase):
         with self.board_.store.db.write() as db:
             db.execute(
                 "INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
-                "fingerprint_version,adapter,cwd,timeout_seconds,state,queue_reason,revision,created_at,updated_at)"
+                "fingerprint_version,adapter,cwd,expected_seconds,state,queue_reason,revision,created_at,updated_at)"
                 " VALUES(?,?,'host','{}','{}','digest',1,'unresolved','/work',60,'queued',"
                 "'awaiting-model-selection',1,?,?)",
                 (run_id, run_id, T0, T0))
@@ -558,20 +558,19 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
         self.assertEqual(len(self.tasks()), 1)
         self.assertEqual(self.attempts(), [])
 
-    def test_request_snapshot_and_dispatch_preserve_the_same_deadline_override(self):
+    def test_request_snapshot_and_dispatch_preserve_the_settings_budget(self):
         self.set_settings(mode="review")
         with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
                 "eligible": True, "reasonCode": None, "reason": "fixture", "systemSandbox": False,
                 "sameAttemptContinuation": True}):
-            response = self.board_.call("selection_request", {"requestId": "deadline", "task": "choose",
-                                                               "timeoutSeconds": 77})
+            response = self.board_.call("selection_request", {"requestId": "deadline", "task": "choose"})
         with self.board_.store.db.read() as db:
             requested = json.loads(self.board_.store.decisions._row(db, response["decisionId"])["requested_json"])
         snapshot = self.snapshot_of(response["decisionId"])
         dispatch = self.dispatch_of(response["runId"])
         self.assertEqual(requested["budget"], snapshot["facts"]["budget"])
         self.assertEqual(dispatch["document"]["budget"], requested["budget"])
-        self.assertEqual(requested["budget"]["timeoutSeconds"], 77)
+        self.assertEqual(requested["budget"]["timeoutSeconds"], 300)
 
 
 if __name__ == "__main__":

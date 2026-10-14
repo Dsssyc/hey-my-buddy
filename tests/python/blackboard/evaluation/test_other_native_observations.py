@@ -201,7 +201,7 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
                       "context": {}, "executionWorkspace": {}}
         return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
                                 spec={"cwd": str(self.cwd), "task": "Write a fixture result",
-                                      "timeoutSeconds": timeout, "provider": "anthropic",
+                                      "expectedSeconds": timeout, "provider": "anthropic",
                                       "model": CLAUDE_MODEL, "effort": "low"},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case},
@@ -478,7 +478,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
                     "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
                     "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
         return ExecutionContext(task_id=run_id, attempt_id=f"attempt-{index}", generation=index,
-                                spec={"cwd": str(self.cwd), "task": "fixture task", "timeoutSeconds": timeout,
+                                spec={"cwd": str(self.cwd), "task": "fixture task", "expectedSeconds": timeout,
                                       "provider": "fixture-api", "model": "fixture-model", "effort": "low"},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_ZCODE_TEST_CASE": case},
@@ -488,7 +488,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
         context = self.context(case, **kwargs)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(context.timeout_seconds + 10), "ZCode fixture controller did not exit")
+        self.assertIsNotNone(handle.wait(30), "ZCode fixture controller did not exit")
         return context, self.adapter.collect(handle, context)
 
     def test_a_turn_publishes_the_bound_root_message_tokens(self):

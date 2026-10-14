@@ -7,9 +7,14 @@ queues a distinct frozen dispatch while the micro task remains pending.
 import copy
 import json
 import unittest
+import sys
+import time
+from dataclasses import replace
 from unittest.mock import patch
 
-from hey_my_buddy.blackboard.routing import router_history, router_sequence
+from hey_my_buddy.blackboard.routing import router, router_history, router_sequence, decision
+from hey_my_buddy.buddy.runtime.command import CommandAdapter
+from hey_my_buddy.buddy.runtime.worker import Worker
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
@@ -112,6 +117,51 @@ class FailoverTests(RouterDispatchTestCase):
         self.assertEqual(self.current_task(request["decisionId"]), claim["task"]["taskId"])
         self.assertEqual(self.outcomes(), [])
         return response
+
+    def test_worker_stops_router_at_its_budget_and_dispatches_the_next_router(self):
+        class SleepingRouter(CommandAdapter):
+            name = "decision"
+
+            def prepare(self, context):
+                # A model-free real child stands in for the native Router call.
+                from pathlib import Path
+                Path(context.cwd).mkdir(parents=True, exist_ok=True)
+                super().prepare(replace(context, spec={**context.spec, "argv": [sys.executable, "-c", "import time; time.sleep(60)"]}))
+
+            def start(self, context):
+                return super().start(replace(context, spec={**context.spec, "argv": [sys.executable, "-c", "import time; time.sleep(60)"]}))
+
+            def collect(self, handle, context):
+                outcome = super().collect(handle, context)
+                outcome.result = {"status": "error", "operation": "select", "code": "router-budget-exhausted",
+                                  "stopEvidence": {"shutdownConfirmed": outcome.shutdown_confirmed,
+                                                   "native": {"shutdownConfirmed": outcome.shutdown_confirmed}}}
+                return outcome
+
+        with patch.dict(router.BUDGETS["standard"], {"timeoutSeconds": 1}), \
+             patch.object(decision, "TIMEOUT_GRACE_SECONDS", 0):
+            request, first = self.start(review=True)
+            spec = first["task"]["spec"]
+            self.assertEqual(spec["routerBudgetSeconds"], 1)
+            self.assertNotIn("expectedSeconds", spec)
+            worker = Worker("w-route", self.directory, client=self.client, log=lambda _message: None)
+            worker.spool.write_startup({"nonce": first["nonce"], "attemptId": first["attempt"]["attemptId"]})
+            directory = self.directory / "budget-attempt"
+            holder = {}
+            started = time.monotonic()
+            with patch("hey_my_buddy.buddy.roles.controller.worker_executor", return_value=SleepingRouter()):
+                receipt = worker._execute_selected(first, first["task"], spec, first["attempt"], directory, holder)
+            self.assertLess(time.monotonic() - started, 15)
+            self.assertEqual(receipt["report"]["terminationReason"], "deadline")
+            self.assertTrue(receipt["report"]["shutdownConfirmed"])
+            self.assertFalse(holder["handle"].group_alive())
+            self.assertTrue(worker.deliver(receipt))
+            next_task = self.current_task(request["decisionId"])
+            self.assertNotEqual(next_task, request["runId"])
+            self.assertEqual(self.dispatch_of(next_task)["buddyId"], B)
+            second = self.next_claim(request)
+            self.assertEqual(second["decisionInput"]["routerBuddyId"], B)
+            self.assertEqual(self.outcomes()[0][1]["code"], "router-budget-exhausted")
 
     def test_two_no_answers_keep_request_and_dispatch_receipts_without_loop(self):
         request, first = self.start()
@@ -446,7 +496,7 @@ class FailoverTests(RouterDispatchTestCase):
     def busy_attempt(self, db, number, *, provider="busy", model="busy", buddy_id=None):
         task_id, attempt_id = f"busy-{number}", f"busy-attempt-{number}"
         db.execute("INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
-                   "fingerprint_version,adapter,cwd,timeout_seconds,state,revision,created_at,updated_at)"
+                   "fingerprint_version,adapter,cwd,expected_seconds,state,revision,created_at,updated_at)"
                    " VALUES(?,?,'host','{}','{}','digest',1,'dsh','/work',60,'running',1,?,?)", (task_id, task_id, T0, T0))
         db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,execution_state,"
                    "adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at)"

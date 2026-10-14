@@ -435,7 +435,7 @@ class WorkerEndpointClosureTests(unittest.TestCase):
             claim = {"attempt": {"attemptId": attempt_id, "taskId": task_id, "generation": 1},
                      "task": {"taskId": task_id,
                               "spec": {"adapter": "command", "cwd": str(self.work),
-                                       "task": "controller end wiring", "timeoutSeconds": 30}}}
+                                       "task": "controller end wiring", "expectedSeconds": 30}}}
             self.addCleanup(worker.live.stop)
             with mock.patch.object(worker_module.role_seam, "worker_executor",
                                    return_value=EndingControllerExecutor(handle)), \

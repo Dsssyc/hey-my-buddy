@@ -47,7 +47,7 @@ class RoutingModesTests(BoardTestCase):
         self.seed(board)
         # The mode comes from the Router setting; the submission no longer carries it.
         self.configure(board, routerBuddyIds=[BUDDY_ID], defaultRoutingMode='fast')
-        result = board.call('selection_request', {'requestId': 'fast', 'task': 'choose a tiny edit', 'timeoutSeconds': 500})
+        result = board.call('selection_request', {'requestId': 'fast', 'task': 'choose a tiny edit'})
         view = board.call('selection_get', {'decisionId': result['decisionId'], 'includeAudit': True})['decision']
         self.assertEqual(view['routingMode'], 'fast')
         self.assertEqual(view['budget'], {'timeoutSeconds': 60})

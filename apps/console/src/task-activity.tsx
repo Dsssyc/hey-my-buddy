@@ -125,7 +125,7 @@ export function countsText(activity: TaskActivity): string {
 }
 
 const terminationLabels: Record<string, string> = {
-  deadline: "执行时限到期",
+  deadline: "Router 预算用完",
   "harness-error": "Harness 错误",
   "transport-error": "传输故障",
   completed: "正常完成",

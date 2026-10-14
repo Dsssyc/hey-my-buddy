@@ -18,7 +18,7 @@ from support import BoardTestCase, wait_for
 
 
 class TestExecutionRecords(BoardTestCase):
-    def command_task(self, request_id: str, argv: list[str], *, timeout_seconds: int = 120) -> dict:
+    def command_task(self, request_id: str, argv: list[str], *, expected_seconds: int = 120) -> dict:
         code, task = self.cli(
             "execution-submit",
             json.dumps(
@@ -28,7 +28,7 @@ class TestExecutionRecords(BoardTestCase):
                     "cwd": str(self.workdir()),
                     "adapter": "command",
                     "argv": argv,
-                    "timeoutSeconds": timeout_seconds,
+                    "expectedSeconds": expected_seconds,
                 }
             ),
         )
@@ -63,7 +63,7 @@ class TestExecutionRecords(BoardTestCase):
                 "cwd": str(self.workdir()),
                 "adapter": "command",
                 "argv": ["/bin/true"],
-                "timeoutSeconds": 120,
+                "expectedSeconds": 120,
             }
             first = self.command_task("exec-recover-1", ["/bin/true"])
             second = self.command_task("exec-recover-1", ["/bin/true"])

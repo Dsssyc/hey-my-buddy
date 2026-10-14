@@ -135,7 +135,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
     def invoke(self, case="ok", *, capture_evidence=False):
         context = ExecutionContext("task", "attempt", 1,
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low",
-             "cwd": str(self.cwd), "timeoutSeconds": WIRING_TIMEOUT}, self.root / "attempt", {},
+             "cwd": str(self.cwd), "routerBudgetSeconds": WIRING_TIMEOUT}, self.root / "attempt", {},
             {**self.environment, "HMB_ZCODE_TEST_CASE": case})
         request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA, WIRING_TIMEOUT,
                                           capture_evidence=capture_evidence)

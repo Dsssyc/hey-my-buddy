@@ -77,7 +77,7 @@ class FastRegisteredSeamTests(DshNoToolTests):
 
     def invoke(self, *, capture=False, timeout=3):
         context = ExecutionContext("task", "attempt-1", 1, {**SPEC, "cwd": str(self.cwd),
-                                  "timeoutSeconds": timeout}, self.root / "attempt-1", {},
+                                  "routerBudgetSeconds": timeout}, self.root / "attempt-1", {},
             self.environment)
         request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA,
                                           timeout_seconds=timeout, capture_evidence=capture)

@@ -66,9 +66,8 @@ class CommandAdapter(Adapter):
             os.close(stdout)
             os.close(stderr)
         handle = ProcessHandle(process, own_group=True, log_paths=log_paths)
-        # timeout_seconds == 0 requests an unlimited execution; now + 0 must not
-        # become an immediate handle deadline, so the unlimited case is infinite.
-        handle.deadline = math.inf if context.timeout_seconds == 0 else time.monotonic() + context.timeout_seconds
+        handle.deadline = (math.inf if context.timeout_seconds is None
+                           else time.monotonic() + context.timeout_seconds)
         return handle
 
     def collect(self, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:

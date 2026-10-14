@@ -80,7 +80,7 @@ class CandidatePrepareTests(BoardTestCase):
                     "context": {}, "executionWorkspace": {}}
         return ExecutionContext(
             task_id=task_id, attempt_id=attempt_id, generation=1,
-            spec={"cwd": str(self.workdir()), "task": "fixture micro task task", "timeoutSeconds": 30,
+            spec={"cwd": str(self.workdir()), "task": "fixture micro task task", "expectedSeconds": 30,
                   "provider": "fixture-provider", "model": "fixture-model", "effort": "low"},
             directory=self.directory / "turns" / attempt_id, runtime={},
             environment=dict(self.environment), agent_credential=DUMMY_CREDENTIAL,

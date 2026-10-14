@@ -240,7 +240,7 @@ class ConsoleForegroundTests(ConsoleTestCase):
             code, task = self.cli('execution-submit', json.dumps({
                 'requestId': 'console-wait-owned-task', 'task': 'outlive the browser',
                 'cwd': str(self.workdir()), 'adapter': 'command',
-                'argv': ['/bin/sleep', '30'], 'timeoutSeconds': 0,
+                'argv': ['/bin/sleep', '30'], 'expectedSeconds': 1800,
             }))
             self.assertEqual(code, 0, task)
             child = subprocess.Popen([sys.executable, '-m', 'hey_my_buddy.cli.main', 'console',

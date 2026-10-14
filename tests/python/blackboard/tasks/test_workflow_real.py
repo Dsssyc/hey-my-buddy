@@ -306,7 +306,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
             task_id=run_id,
             attempt_id=attempt_id,
             generation=index,
-            spec={**self.FIXTURE_BUDDY, "task": "do work", "cwd": manifest["path"], "timeoutSeconds": 60},
+            spec={**self.FIXTURE_BUDDY, "task": "do work", "cwd": manifest["path"], "expectedSeconds": 60},
             directory=attempt,
             runtime={"identity": "test"},
             environment=environment,
@@ -420,7 +420,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
         settled = self._context(submitted["runId"], manifest, index=3, record=settling)
         finished = executor.start(settled)
         self.addCleanup(lambda: finished.terminate(grace_seconds=0.2) if finished.group_alive() else None)
-        self.assertIsNotNone(finished.wait(settled.timeout_seconds + 15),
+        self.assertIsNotNone(finished.wait(75),
                              "the role controller did not settle within its deadline")
         outcome = executor.collect(finished, settled)
         self.assertEqual(outcome.status, "ok", outcome.to_report())

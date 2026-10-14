@@ -160,15 +160,15 @@ class PrivateStatePaths(InternalModel):
 
 
 class RunBudget(InternalModel):
-    """The one budget item the native driver consumes: the overall deadline.
+    """The optional hard deadline consumed by a native driver.
 
-    ``timeoutSeconds: 0`` keeps the existing unlimited meaning. The old output
+    ``None`` leaves an ordinary Worker run unbounded. The old output
     byte, tool-count and read-byte bounds are not parameters of this seam: the
     harnesses enforce their own existing constants, and the fact packages
     carry their own bounds.
     """
 
-    timeout_seconds: Annotated[int, Field(ge=0, le=86400)]
+    timeout_seconds: Annotated[int | None, Field(ge=1, le=86400)]
 
 
 class ResumeCheckpoint(InternalModel):

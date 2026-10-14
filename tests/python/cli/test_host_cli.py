@@ -329,9 +329,9 @@ class HelpTests(unittest.TestCase):
 
     def test_known_defaults_and_bounds_come_from_the_validators(self):
         text = self.help_text("submit")
-        self.assertIn("timeoutSeconds", text)
+        self.assertIn("expectedSeconds", text)
         self.assertIn("default 1800", text)
-        self.assertIn("10–86400", text)
+        self.assertIn("1–86400", text)
         self.assertIn("executionWorkspace", text)
         self.assertIn("requestId", text)
         self.assertIn("cli-local", text)

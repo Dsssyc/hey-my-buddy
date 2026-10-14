@@ -29,7 +29,7 @@ DECISION_KINDS = ("select",)
 DECISION_STATUSES = ("queued", "running", "completed", "needs-host", "failed", "cancelled")
 TERMINAL_DECISION_STATUSES = frozenset({"completed", "needs-host", "failed", "cancelled"})
 
-SELECT_FIELDS = frozenset({"requestId", "task", "requiredCapabilities", "timeoutSeconds"})
+SELECT_FIELDS = frozenset({"requestId", "task", "requiredCapabilities"})
 GET_FIELDS = frozenset({"decisionId", "includeAudit"})
 LIST_FIELDS = frozenset({"kind", "limit", "before"})
 DEFAULT_LIST_LIMIT = 20
@@ -61,10 +61,6 @@ MAX_DECISION_BUDDIES = 200
 MAX_DECISION_PREFERENCES = 256
 MAX_DECISION_ANNOTATIONS = 200
 MAX_DECISION_INPUT_BYTES = 128 * 1024
-MIN_TIMEOUT_SECONDS = 5
-#: The helper refuses a value above 1800, so the service never forwards one.
-MAX_TIMEOUT_SECONDS = 1800
-DEFAULT_TIMEOUT_SECONDS = 300
 #: Extra room after the helper's own bound: the worker deadline must not fire while
 #: the helper is still shutting its detached child down.
 TIMEOUT_GRACE_SECONDS = 10
@@ -419,14 +415,10 @@ class DecisionCoordinator:
         )
         task_text, _size = schemas.bounded_text(params, "task", max_bytes=MAX_DECISION_TASK_BYTES)
         capabilities = schemas.string_list(params, "requiredCapabilities", limit=schemas.MAX_CAPABILITIES)
-        timeout = schemas.optional_int(
-            params, "timeoutSeconds", DEFAULT_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS
-        )
         request = {
             "kind": "select",
             "task": task_text,
             "requiredCapabilities": capabilities,
-            "timeoutSeconds": timeout if "timeoutSeconds" in params else None,
         }
         return self._create(request_id, request)
 
@@ -495,9 +487,9 @@ class DecisionCoordinator:
                 if resolution.problem is not None:
                     request["routerProblem"] = resolution.problem
                 if facts["routingMode"] is not None:
-                    request["timeoutSeconds"] = (60 if facts["routingMode"] == "fast" else
-                                                 request.get("timeoutSeconds") or facts["budget"]["timeoutSeconds"])
-                    facts["budget"] = {**facts["budget"], "timeoutSeconds": request["timeoutSeconds"]}
+                    request["routerBudgetSeconds"] = (60 if facts["routingMode"] == "fast" else
+                                                 facts["budget"]["timeoutSeconds"])
+                    facts["budget"] = {**facts["budget"], "timeoutSeconds": request["routerBudgetSeconds"]}
                     request["budget"] = dict(facts["budget"])
                 # The admission scan's limit protects model routing. For an
                 # oversized Host packet only, retain the entire legal slice,
@@ -667,7 +659,7 @@ class DecisionCoordinator:
         return self._create(f"workflow:{run_id}:{sequence}", request, connection=connection,
                             needs_host_reason=needs_host_reason)
 
-    def _create_task(self, connection: sqlite3.Connection, *, decision_id: str, request_id: str, kind: str, timeout_seconds: int, now: str, request_key: str | None = None) -> str:
+    def _create_task(self, connection: sqlite3.Connection, *, decision_id: str, request_id: str, kind: str, router_budget_seconds: int, now: str, request_key: str | None = None) -> str:
         """Admit one ordinary selection task, using the real queue and capacity.
 
         Each dispatched Router item owns its own internal task; ``request_key``
@@ -683,15 +675,15 @@ class DecisionCoordinator:
             # reserving any workspace a business task needs.
             "cwd": str(self.board.directory / "decisions" / decision_id),
             "task": "Bounded selection decision over the current evaluation table.",
-            "timeoutSeconds": timeout_seconds + TIMEOUT_GRACE_SECONDS,
+            "routerBudgetSeconds": router_budget_seconds + TIMEOUT_GRACE_SECONDS,
             "requiredCapabilities": [DECISION_ADAPTER],
-            "decision": {"decisionId": decision_id, "kind": kind, "timeoutSeconds": timeout_seconds},
+            "decision": {"decisionId": decision_id, "kind": kind, "routerBudgetSeconds": router_budget_seconds},
         }
         fingerprint = schemas.spec_fingerprint(spec)
         blocker = self.board._admission_blocker(connection, spec)
         connection.execute(
             "INSERT INTO tasks(task_id, request_id, owner, spec_json, spec_canonical_json, input_fingerprint,"
-            " fingerprint_version, adapter, required_capabilities, cwd, exclusive_resources, timeout_seconds,"
+            " fingerprint_version, adapter, required_capabilities, cwd, exclusive_resources, router_budget_seconds,"
             " state, queue_reason, revision, created_at, updated_at)"
             " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
@@ -706,7 +698,7 @@ class DecisionCoordinator:
                 canonical_json(spec["requiredCapabilities"]),
                 spec["cwd"],
                 canonical_json([]),
-                spec["timeoutSeconds"],
+                spec["routerBudgetSeconds"],
                 "queued",
                 blocker or "awaiting-worker",
                 1,
@@ -796,13 +788,13 @@ class DecisionCoordinator:
                              f"The complete frozen Router dispatch contains {input_bytes} UTF-8 bytes, above the "
                              f"{MAX_DECISION_INPUT_BYTES}-byte input ceiling; nothing was truncated or sent to a model.")
         request = json.loads(row["requested_json"])
-        timeout_seconds = int(request.get("timeoutSeconds") or snapshot["facts"]["budget"]["timeoutSeconds"])
+        router_budget_seconds = int(request["routerBudgetSeconds"])
         task_id = self._create_task(
             connection,
             decision_id=decision_id,
             request_id=row["request_id"],
             kind=row["kind"],
-            timeout_seconds=timeout_seconds,
+            router_budget_seconds=router_budget_seconds,
             now=now,
             request_key=f"decision:{row['request_id']}:{int(bool(request.get('selectionRetry')))}:{resolution.router_index}",
         )
@@ -1235,9 +1227,9 @@ class DecisionCoordinator:
         else:
             request.pop("routerProblem", None)
         if resolution.facts["routingMode"] is not None:
-            request["timeoutSeconds"] = (60 if resolution.facts["routingMode"] == "fast"
+            request["routerBudgetSeconds"] = (60 if resolution.facts["routingMode"] == "fast"
                                          else resolution.facts["budget"]["timeoutSeconds"])
-            request["budget"] = {**resolution.facts["budget"], "timeoutSeconds": request["timeoutSeconds"]}
+            request["budget"] = {**resolution.facts["budget"], "timeoutSeconds": request["routerBudgetSeconds"]}
         document, oversized = self._select_input(
             connection, request_id=row["request_id"], buddy_row=None, task_text=request["task"],
             candidates=candidates, hard_constraints=request.get("constraints") or {}, preserve_oversized=True)

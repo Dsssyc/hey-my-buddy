@@ -335,7 +335,7 @@ class TestCrashWindows(BoardTestCase):
         worker.spool.write_startup({"nonce": "a" * 32, "attemptId": attempt_id})
         claim = {
             "task": {"taskId": task_id, "spec": {
-                "adapter": adapter, "task": "inspect stop evidence", "cwd": str(self.workdir()), "timeoutSeconds": 60,
+                "adapter": adapter, "task": "inspect stop evidence", "cwd": str(self.workdir()), **({"routerBudgetSeconds": 60} if adapter == "decision" else {"expectedSeconds": 60}),
             }},
             "attempt": {"attemptId": attempt_id, "taskId": task_id, "generation": 1},
             "decisionInput": {"routingMode": "fast", "buddy": {"harness": "codex"}}
@@ -427,7 +427,7 @@ class TestCrashWindows(BoardTestCase):
                             # This test owns the final group cleanup; its child
                             # must not expire naturally while recovery is observed.
                             "argv": [sys.executable, "-c", "import signal; signal.pause()"],
-                            "timeoutSeconds": 120,
+                            "expectedSeconds": 120,
                             "requiredCapabilities": ["fault-worker"],
                         }
                     ),
@@ -566,7 +566,7 @@ class TestCrashWindows(BoardTestCase):
             cwd=str(cwd),
             adapter="command",
             argv=["/bin/sh", "-c", f"echo run >> {log}"],
-            timeoutSeconds=60,
+            expectedSeconds=60,
         )["task"]
         worker = Worker("w-offline", self.directory, client=client, retry_seconds=2, log=lambda _m: None)
         worker.register()
@@ -596,7 +596,7 @@ class TestCrashWindows(BoardTestCase):
             cwd=str(cwd),
             adapter="command",
             argv=["/bin/sh", "-c", "sleep 30"],
-            timeoutSeconds=60,
+            expectedSeconds=60,
         )["task"]
         worker = Worker("w-marker", self.directory, client=client, log=lambda _m: None)
         worker.register()
@@ -950,7 +950,7 @@ class TestLifecycle(BoardTestCase):
                         "cwd": str(cwd),
                         "adapter": "command",
                         "argv": ["/bin/sh", "-c", f"sleep 8; echo durable > {artifact}"],
-                        "timeoutSeconds": 120,
+                        "expectedSeconds": 120,
                     }
                 ),
             )
@@ -1019,7 +1019,7 @@ class TestLifecycle(BoardTestCase):
             self.assertEqual(status["selectedAttemptId"], attempt_id, "the same attempt must survive the restart")
             self.assertEqual(status["workerId"], worker_id)
             self.assertEqual(status["attemptGeneration"], generation)
-            self.assertEqual(status["timeoutSeconds"], 120, "the execution deadline must survive the restart")
+            self.assertEqual(status["expectedSeconds"], 120, "the expected duration must survive the restart")
             completed = wait_for(
                 lambda: self.cli("status", json.dumps({"runId": run_id}))[1]["status"] == "completed", 30
             )
