@@ -109,6 +109,26 @@ class DshResumeSelectionTests(WorkflowTestCase):
         self.assertEqual(turn["input"]["previousSessionId"], CANDIDATE_SESSION)
         self.assertNotIn("resumeReason", turn["input"]["context"])
 
+    def test_a_returned_turn_with_cancelled_attempt_reconstructs(self):
+        self.elect_candidate()
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board)
+        first = self.claim(board)
+        self.finish_turn(board, first, disposition="attention", session_id=CANDIDATE_SESSION,
+                         result_mutator=self.micro_task_owned_storage())
+        with board.store.db.write() as connection:
+            attempt_id = first["claim"]["attempt"]["attemptId"]
+            receipt = json.loads(connection.execute(
+                "SELECT result_json FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()[0])
+            receipt["status"] = "cancelled"
+            connection.execute("UPDATE attempts SET result_json=? WHERE attempt_id=?",
+                               (canonical_json(receipt), attempt_id))
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.continue_run(board, view, command_id="continue-after-cancelled-attempt")
+        resumed = self.claim(board, claim_request_id="reconstruct-after-cancelled-attempt")
+        self.assertEqual(resumed["claim"]["turn"]["resumeMode"], "reconstructed-new-session")
+
     def test_a_failed_previous_turn_reconstructs_without_a_resume_reason(self):
         board = self.board()
         self.register(board)

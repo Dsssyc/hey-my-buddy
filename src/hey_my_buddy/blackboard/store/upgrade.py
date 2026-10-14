@@ -76,23 +76,118 @@ def _turn(connection: sqlite3.Connection, row: dict) -> dict:
     return row
 
 
-def _receipt_object(value, member: str | None = None):
+def _stop_origin(actor) -> tuple[str, str]:
+    if isinstance(actor, str):
+        if actor.startswith('host:') and actor[5:]:
+            return 'host', 'forced-stop'
+        if actor.startswith('console:') and actor[8:]:
+            return 'console', 'console-stop'
+        if actor == 'service-stop':
+            return 'service', 'service-stop'
+    return 'unknown', 'unknown-stop'
+
+
+def _legacy_stops(connection: sqlite3.Connection) -> tuple[dict[str, tuple[str, str]], dict[str, list[str]]]:
+    stops = {}
+    by_task = {}
+    for row in connection.execute('SELECT attempt_id,task_id,cancel_requested_at,result_json FROM attempts'):
+        by_task.setdefault(row['task_id'], []).append(row['attempt_id'])
+        receipt = json.loads(row['result_json']) if row['result_json'] is not None else None
+        if not row['cancel_requested_at'] and not (isinstance(receipt, dict) and receipt.get('terminationReason') == 'user-cancel'):
+            continue
+        claimed = connection.execute(
+            "SELECT COALESCE(MAX(seq),0) FROM events WHERE attempt_id=? AND kind='attempt.claimed'",
+            (row['attempt_id'],),
+        ).fetchone()[0]
+        terminal = connection.execute(
+            "SELECT seq FROM events WHERE attempt_id=? AND seq>?"
+            " AND json_extract(payload_json,'$.taskState') IS NOT NULL ORDER BY seq LIMIT 1",
+            (row['attempt_id'], claimed),
+        ).fetchone()
+        # The cancellation must follow this claim and precede its terminal fact.
+        # Timestamps alone cannot distinguish two events in the same clock tick.
+        event = connection.execute(
+            "SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.cancelled'"
+            " AND (attempt_id IS NULL OR attempt_id=?) AND seq>?"
+            " AND (? IS NULL OR seq<?) AND created_at>=?"
+            " ORDER BY seq LIMIT 1",
+            (row['task_id'], row['attempt_id'], claimed, terminal['seq'] if terminal else None,
+             terminal['seq'] if terminal else None, row['cancel_requested_at']),
+        ).fetchone() if row['cancel_requested_at'] else None
+        payload = json.loads(event['payload_json']) if event else None
+        stops[row['attempt_id']] = _stop_origin(payload.get('actor') if isinstance(payload, dict) else None)
+    return stops, by_task
+
+
+def _attempt(row: dict, stops: dict[str, tuple[str, str]]) -> dict:
+    receipt = json.loads(row['result_json']) if row['result_json'] is not None else None
+    stop = stops.get(row['attempt_id'])
+    row['stop_initiator'] = stop[0] if stop else None
+    row['grace_deadline'] = None
+    if receipt is not None:
+        converted = _receipt_object(receipt, service_receipt=True, adapter=row['adapter'], stop=stop)
+        row['result_json'] = canonical_json(converted)
+    return row
+
+
+def _termination(value: dict, *, adapter: str | None = None,
+                 stop: tuple[str, str] | None = None) -> dict:
+    reason = value.get('terminationReason')
+    if reason == 'user-cancel':
+        value['terminationReason'] = (stop or ('unknown', 'unknown-stop'))[1] if value.get('shutdownConfirmed') is True else None
+    elif reason == 'deadline' and adapter is not None and adapter != 'decision':
+        # A historical Worker deadline was a task time limit, not a Router budget.
+        value['terminationReason'] = None
+    return value
+
+
+def _receipt_object(value, member: str | None = None, *, service_receipt: bool = False,
+                    adapter: str | None = None, stop: tuple[str, str] | None = None,
+                    stops: dict[str, tuple[str, str]] | None = None,
+                    by_task: dict[str, list[str]] | None = None):
     """Update durable service task projections; leave native outcomes alone."""
     if isinstance(value, list):
-        return [_receipt_object(item) for item in value]
+        return [_receipt_object(item, service_receipt=service_receipt, adapter=adapter, stop=stop,
+                                stops=stops, by_task=by_task) for item in value]
     if not isinstance(value, dict):
         return value
-    # Model outcomes and original turn inputs are evidence, never service views.
-    value = {key: item if key in ('result', 'outcome', 'spec', 'input', 'context', 'provenance')
-             else _receipt_object(item, key) for key, item in value.items()}
-    task_view = ('taskId' in value or 'runId' in value) and 'adapter' in value
-    if task_view and value['adapter'] != 'decision':
-        if value.get('terminationReason') == 'deadline':
-            value['terminationReason'] = None
-        for member in ('result', 'resultMeta'):
-            receipt = value.get(member)
-            if isinstance(receipt, dict) and receipt.get('terminationReason') == 'deadline':
-                value[member] = {**receipt, 'terminationReason': None}
+    attempt_id = value.get('attemptId')
+    selected = value.get('selectedAttempt')
+    if attempt_id is None and isinstance(selected, dict):
+        attempt_id = selected.get('attemptId')
+    if stops is not None and not service_receipt:
+        if attempt_id is None and by_task is not None:
+            task_attempts = by_task.get(value.get('taskId', value.get('runId')), [])
+            if len(task_attempts) == 1:
+                attempt_id = task_attempts[0]
+        if attempt_id is not None or 'taskId' in value or 'runId' in value:
+            stop = stops.get(attempt_id)
+    # Native model outcomes and original inputs are evidence. The result immediately
+    # under an attempt view is a service receipt; its own result remains native.
+    legacy_stop = value.get('terminationReason') == 'user-cancel'
+    attempt_view = ('attemptId' in value and 'adapter' in value
+                    and any(key in value for key in ('generation', 'executionState', 'cancelRequestedAt', 'result')))
+    value = {key: (_receipt_object(item, key, service_receipt=True, adapter=value.get('adapter'), stop=stop,
+                                  stops=stops, by_task=by_task)
+                   if key == 'result' and attempt_view else
+                   item if key in ('result', 'outcome', 'spec', 'input', 'context', 'provenance', 'report')
+                   else _receipt_object(item, key, stop=stop, stops=stops, by_task=by_task))
+             for key, item in value.items()}
+    task_view = ('taskId' in value or 'runId' in value) and 'adapter' in value and not attempt_view
+    if task_view or service_receipt or 'terminationReason' in value:
+        _termination(value, adapter=value.get('adapter', adapter), stop=stop)
+    if attempt_view:
+        receipt = value.get('result')
+        value['stopInitiator'] = ((stop or ('unknown', 'unknown-stop'))[0] if value.get('cancelRequestedAt')
+                                  or isinstance(receipt, dict) and receipt.get('terminationReason') in
+                                  ('forced-stop', 'console-stop', 'service-stop', 'unknown-stop') else None)
+        value['graceDeadline'] = None
+    if task_view:
+        selected = value.get('selectedAttempt')
+        value['stopInitiator'] = ((stop or ('unknown', 'unknown-stop'))[0]
+                                  if isinstance(selected, dict) and selected.get('stopInitiator') is not None
+                                  or legacy_stop or value.get('stopInitiator') is not None else None)
+        value['graceDeadline'] = None
     if task_view and 'timeoutSeconds' in value:
         old = value.pop('timeoutSeconds')
         if value['adapter'] == 'decision':
@@ -124,15 +219,10 @@ def migrate(state: Path) -> None:
             version = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if version is None or version[0] != str(BASE_SCHEMA_VERSION):
                 raise ValueError('Expected the schema-19 upgrade base')
+            stops, by_task = _legacy_stops(connection)
             _rebuild(connection, 'tasks', _task)
             _rebuild(connection, 'workflow_turns', lambda row: _turn(connection, row))
-            # A historical Worker deadline cannot be relabelled as a Router budget.
-            for row in connection.execute("SELECT attempt_id,result_json FROM attempts WHERE adapter!='decision' AND result_json IS NOT NULL").fetchall():
-                receipt = json.loads(row['result_json'])
-                if receipt.get('terminationReason') == 'deadline':
-                    receipt['terminationReason'] = None
-                    connection.execute('UPDATE attempts SET result_json=? WHERE attempt_id=?',
-                                       (canonical_json(receipt), row['attempt_id']))
+            _rebuild(connection, 'attempts', lambda row: _attempt(row, stops))
             for row in connection.execute('SELECT run_id,micro_task_json FROM workflow_runs').fetchall():
                 spec, _, _ = _spec(json.loads(row['micro_task_json']))
                 connection.execute('UPDATE workflow_runs SET micro_task_json=?,micro_task_fingerprint=? WHERE run_id=?',
@@ -144,10 +234,17 @@ def migrate(state: Path) -> None:
                     request['routerBudgetSeconds'] = old
                 connection.execute('UPDATE decision_requests SET requested_json=? WHERE decision_id=?',
                                    (canonical_json(request), row['decision_id']))
-            for row in connection.execute("SELECT command_id,response_json FROM commands WHERE response_json LIKE '%timeoutSeconds%'").fetchall():
-                response = _receipt_object(json.loads(row['response_json']))
+            for row in connection.execute("SELECT command_id,response_json FROM commands").fetchall():
+                response = _receipt_object(json.loads(row['response_json']), stops=stops, by_task=by_task)
                 connection.execute('UPDATE commands SET response_json=? WHERE command_id=?',
                                    (canonical_json(response), row['command_id']))
+            for row in connection.execute("SELECT seq,task_id,attempt_id,payload_json FROM events WHERE payload_json LIKE '%terminationReason%'").fetchall():
+                stop = stops.get(row['attempt_id'])
+                if stop is None and row['task_id'] is not None and len(by_task.get(row['task_id'], [])) == 1:
+                    stop = stops.get(by_task[row['task_id']][0])
+                payload = _receipt_object(json.loads(row['payload_json']), stop=stop, stops=stops, by_task=by_task)
+                connection.execute('UPDATE events SET payload_json=? WHERE seq=?',
+                                   (canonical_json(payload), row['seq']))
             for row in connection.execute(
                 "SELECT c.command_id,t.request_id,t.input_fingerprint FROM commands c"
                 " JOIN tasks t ON t.task_id=c.task_id WHERE c.kind='task.submit'"

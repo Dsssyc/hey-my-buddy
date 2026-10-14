@@ -21,6 +21,7 @@ class DshAdapter:
     name = "dsh"
     capabilities = ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session")
     native_resume = True
+    interrupted_resume = True
     native_resume_permission_change = False
     model_discovery = True
     no_tool_structured = True

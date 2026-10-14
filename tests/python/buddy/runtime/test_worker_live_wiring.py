@@ -182,7 +182,7 @@ class LoopRecordingClient(WorkerLiveWiringTests.RecordingClient):
         return {"reason": "no-queued-work"}
 
 
-class EndingControllerHandle:
+class EndingControllerHandle(ProcessHandle):
     """The holder's live handle over the owned ProcessHandle of a controller peer.
 
     ``wait`` first holds the attempt open until the worker's real renewal tick
@@ -194,16 +194,14 @@ class EndingControllerHandle:
     """
 
     def __init__(self, control, identity, owned: ProcessHandle, client):
+        super().__init__(owned.process, own_group=owned.own_group, log_paths=owned.log_paths)
         self.role_run_control = control
         self.role_run_identity = identity
         self.owned = owned
         # The fields the spawn marker, the live seam and the end path read off
         # a handle; the group identity is the one captured while the peer leads
         # its own session.
-        self.process = owned.process
-        self.pid = owned.pid
         self.pgid = owned.pgid
-        self.cancel_requested = False
         self._client = client
 
     def wait(self, timeout=None):

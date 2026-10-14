@@ -80,9 +80,14 @@ describe("bounded activity projection", () => {
     expect(countsText({ phase: "unknown", counts: { modelTurns: 3, toolCalls: null } })).toBe("模型回合 3 · 工具调用未记录");
   });
 
-  it("labels Router budget exhaustion and user cancellation separately and never invents a cause", () => {
+  it("labels every recorded stop outcome and never invents a cause", () => {
     expect(terminationText(task({ status: "cancelled", terminationReason: "deadline" }))).toBe("Router 预算用完");
-    expect(terminationText(task({ status: "cancelled", terminationReason: "user-cancel" }))).toBe("取消（发起者未知）");
+    expect(terminationText(task({ status: "cancelled", terminationReason: "wrap-up" }))).toBe("Host 收尾完成");
+    expect(terminationText(task({ status: "cancelled", terminationReason: "grace-expired" }))).toBe("收尾宽限到期后停止");
+    expect(terminationText(task({ status: "cancelled", terminationReason: "forced-stop" }))).toBe("强制停止");
+    expect(terminationText(task({ status: "cancelled", terminationReason: "console-stop" }))).toBe("在控制台停止");
+    expect(terminationText(task({ status: "cancelled", terminationReason: "service-stop" }))).toBe("服务停止");
+    expect(terminationText(task({ status: "cancelled", terminationReason: "unknown-stop" }))).toBe("停止（发起者未知）");
     expect(terminationText(task({ status: "failed", terminationReason: "harness-error" }))).toBe("Harness 错误");
     expect(terminationText(task({ status: "completed", terminationReason: "completed" }))).toBe("正常完成");
     expect(terminationText(task({ status: "cancelled" }))).toContain("未知");
@@ -92,7 +97,7 @@ describe("bounded activity projection", () => {
   it("reads the durable cause from the selected attempt receipt", () => {
     // The board records the cause on the attempt result, not on the task row.
     expect(terminationText(task({ status: "cancelled",
-      selectedAttempt: { result: { status: "cancelled", terminationReason: "user-cancel" } } }))).toBe("取消（发起者未知）");
+      selectedAttempt: { result: { status: "cancelled", terminationReason: "unknown-stop" } } }))).toBe("停止（发起者未知）");
     expect(terminationText(task({ status: "failed",
       selectedAttempt: { result: { status: "error", terminationReason: "transport-error" } } }))).toBe("传输故障");
     // A completed attempt without a recorded cause never borrows the cancel wording.
@@ -111,7 +116,7 @@ describe("bounded activity projection", () => {
   });
 
   it("prefers the canonical receipt cause over a task-level field", () => {
-    expect(recordedTermination(task({ terminationReason: "user-cancel",
+    expect(recordedTermination(task({ terminationReason: "unknown-stop",
       selectedAttempt: { result: { terminationReason: "deadline" } } }))).toBe("deadline");
     expect(recordedTermination(task({ terminationReason: "deadline" }))).toBe("deadline");
     expect(recordedTermination(task({ status: "cancelled" }))).toBeNull();
@@ -119,27 +124,37 @@ describe("bounded activity projection", () => {
 
   it("still marks a genuinely missing cause as unknown", () => {
     const rendered = render(<TaskActivityView task={task({ status: "cancelled" })} />);
-    expect(rendered.container.textContent).toContain("取消（发起者未知）");
+    expect(rendered.container.textContent).toContain("停止（发起者未知）");
     expect(rendered.container.textContent).not.toMatch(/终止原因：用户取消/);
   });
 
   it("shows the durable Host or console actor and reason without changing a completed result", () => {
-    const host = render(<TaskActivityView task={task({ status: "cancelled", terminationReason: "user-cancel",
-      cancellation: { actor: "host:codex-main", reason: "I will finish the remaining work" } })} />);
-    expect(host.container.textContent).toContain("Host 取消");
+    const host = render(<TaskActivityView task={task({ status: "cancelled", terminationReason: "wrap-up",
+      stopInitiator: "host", cancellation: { actor: "host:codex-main", reason: "I will finish the remaining work" } })} />);
+    expect(host.container.textContent).toContain("Host 停止");
     expect(host.container.textContent).toContain("发起 Hostcodex-main");
-    expect(host.container.textContent).toContain("取消理由I will finish the remaining work");
+    expect(host.container.textContent).toContain("停止理由I will finish the remaining work");
     host.unmount();
-    const consoleStop = render(<TaskActivityView task={task({ status: "cancelled", terminationReason: "user-cancel",
-      cancellation: { actor: "console:private-session", reason: "Stop objective" } })} />);
+    const consoleStop = render(<TaskActivityView task={task({ status: "cancelled", terminationReason: "console-stop",
+      stopInitiator: "console", cancellation: { actor: "console:private-session", reason: "Stop objective" } })} />);
     expect(consoleStop.container.textContent).toContain("在控制台停止");
     expect(consoleStop.container.textContent).not.toContain("private-session");
     consoleStop.unmount();
+    const serviceStop = render(<TaskActivityView task={task({ status: "cancelled", terminationReason: "service-stop",
+      stopInitiator: "service", cancellation: { actor: "service-stop", reason: null } })} />);
+    expect(serviceStop.container.textContent).toContain("服务停止");
+    expect(serviceStop.container.textContent).not.toContain("发起者未知");
+    serviceStop.unmount();
+    const unknown = render(<TaskActivityView task={task({ status: "cancelled", terminationReason: "unknown-stop",
+      selectedAttempt: { stopInitiator: "unknown" }, cancellation: { actor: "host:old-actor", reason: null } })} />);
+    expect(unknown.container.textContent).toContain("停止（发起者未知）");
+    expect(unknown.container.textContent).not.toContain("old-actor");
+    unknown.unmount();
     const completed = render(<TaskActivityView task={task({ status: "completed", terminationReason: "completed",
       workflow: { state: "cancelled", awaitingHost: false, hostId: "host", ownerGeneration: 1, revision: 1 },
       cancellation: { actor: "host:codex-main", reason: "Stop goal" } })} />);
     expect(completed.container.textContent).toContain("正常完成");
-    expect(completed.container.textContent).toContain("取消发起Host 取消");
+    expect(completed.container.textContent).toContain("停止发起Host 停止");
   });
 });
 

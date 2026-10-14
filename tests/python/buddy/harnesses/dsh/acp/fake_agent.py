@@ -243,13 +243,21 @@ class FakeAgent:
                 pass
         return Path(os.environ.get("DSH_HOME") or Path(os.environ["HOME"]) / ".dsh") / "sessions"
 
-    def persist_session(self, session_id: str, session: dict) -> None:
-        """Record the session in the pinned root's store so another process can resume it."""
+    def persist_session(self, session_id: str, session: dict, *, new: bool = False) -> bool:
+        """Record a session in the pinned root; claim new IDs across processes."""
         directory = self.sessions_dir()
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         marker = directory / f"{session_id}.fake-session.json"
-        marker.write_text(json.dumps({"cwd": session["cwd"], "model": session["model"],
-                                      "effort": session["effort"]}))
+        if new and any(directory.glob(f"{session_id}.v3.jsonl*")):
+            return False
+        try:
+            with marker.open("x" if new else "w") as handle:
+                json.dump({"cwd": session["cwd"], "model": session["model"],
+                           "effort": session["effort"]}, handle)
+        except FileExistsError:
+            if new:
+                return False
+            raise
         storage = Path(os.environ.get("DSH_HOME") or Path(os.environ["HOME"]) / ".dsh") / "storages"
         if self.patch_path:
             for row in json.loads(Path(self.patch_path).read_text()):
@@ -258,6 +266,7 @@ class FakeAgent:
         index = storage / "session_projcache" / "sessions"
         index.mkdir(mode=0o700, parents=True, exist_ok=True)
         (index / f"{session_id}.json").write_text(json.dumps({"sessionId": session_id, "cwd": session["cwd"]}))
+        return True
 
     def restore_session(self, session_id):
         """The persisted session state, or ``None`` when no store carries it."""
@@ -401,11 +410,14 @@ class FakeAgent:
             if "mcpServers" not in params:
                 return {"error": {"code": -32602, "message": "mcpServers is required"}}
             mounted = [self.mount_stub(entry) for entry in params.get("mcpServers") or []]
-            self.session_seq += 1
-            session_id = f"fake-session-{self.session_seq}"
-            self.sessions[session_id] = {"cwd": params.get("cwd"),
-                                         "model": '["fake","m1"]', "effort": "high"}
-            self.persist_session(session_id, self.sessions[session_id])
+            session = {"cwd": params.get("cwd"),
+                       "model": '["fake","m1"]', "effort": "high"}
+            while True:
+                self.session_seq += 1
+                session_id = f"fake-session-{self.session_seq}"
+                if self.persist_session(session_id, session, new=True):
+                    break
+            self.sessions[session_id] = session
             return {"result": {"sessionId": session_id, "modes": None,
                                "configOptions": config_options(self.sessions[session_id]["model"],
                                                                self.sessions[session_id]["effort"]),

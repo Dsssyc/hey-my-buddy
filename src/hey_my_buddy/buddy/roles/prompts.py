@@ -18,3 +18,8 @@ def worker_prompt(task_text: str, turn_input: dict, *, delivery: tuple[str, ...]
 def router_prompt(call_text: str) -> str:
     """All Router calls start with the same role, before the call's instructions."""
     return _role_prompt("roles.router", (call_text,))
+
+
+def wrap_up_prompt() -> str:
+    """One short continuation of the interrupted Worker session."""
+    return resource_path("roles.worker").with_name("wrap_up.txt").read_text(encoding="utf-8")

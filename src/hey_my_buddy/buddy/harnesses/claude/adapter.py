@@ -33,6 +33,7 @@ class ClaudeAdapter:
     name = "claude"
     capabilities = ("claude", "workspace", "cancel", "artifacts", "deadline")
     native_resume = False
+    interrupted_resume = False
     native_resume_permission_change = False
     model_discovery = True
     read_only_structured = True
