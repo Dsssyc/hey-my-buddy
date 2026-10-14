@@ -68,3 +68,26 @@ Python 检查全部使用 `PYTHONPATH=src <Host 指定的现成解释器> -m hey
 两次只读代码复核中，第一轮指出的 stash 漂移等待和 Worker 等待资格问题已修复并有对应检查；第二轮在指定源码与测试范围内未发现可证实的缺陷，复核代理没有运行动态检查。验收仍由 Host 完成，本文不代表已安装或发布。
 
 与本微任务要求不一致或未覆盖的情形：没有。Worker 池形态、任务并发上限、候选顺序与资格规则没有改变；没有新增设置、兼容路径或数据库形式。按写入范围，其他文档、共享技能、两份 README、AGENTS 和 CONTEXT 均未改动；整合时由 Host 同步 `docs/reference/architecture.md` 的连接描述和 `docs/reference/workflow.md` 的 stash 覆盖冲突描述。完整检查、安装和日常运行验证按任务约定留给 Host。
+
+## 同一线程嵌套事务修正（2026-10-14）
+
+在整合提交 `0aea510e` 上，按线程标识复用唯一连接使同一线程上的嵌套 `read()`、`write()` 在已经处于事务中的连接上再次执行 `BEGIN`，SQLite 报 `cannot start a transaction within a transaction`，服务返回 `INTERNAL_ERROR`。修正前按指定检查运行器复现了 `test_lead_lifecycle.py` 与 `test_lead_shutdown.py` 的失败。
+
+第一处根因是 `workflow.conclude` 的读事务调用 `_conclude_seal_work`，后者经 `_board_adopted_paths` 再开读事务；这是已有的独立事务嵌套。第二处没有事务泄漏：`test_lead_lifecycle.py` 的 `test_each_owned_outcome_wakes_a_parked_lead` 在自己的 `with board.store.db.read()` 内读取事件并调用 `self.current(board, child)`，该调用通过服务进入 `workflow.get` 的另一读事务，外层测试事务仍合法地处于活动状态。两处调用方的事务边界均未改动。
+
+`Database.connect()` 现在以线程标识和连接作用域的嵌套层次为键保留连接，进入作用域时递增层次，在 `finally` 中恢复层次；同一层次的后续事务继续复用该连接，嵌套事务分别使用独立连接。原有每次 `BEGIN`、成功 `COMMIT`、异常和提交失败时回滚的路径没有改变，连接配置也没有改变。新增四个回归测试覆盖读中读、写中读、读中写、三层连接复用、内层提交独立于外层回滚、外层快照与未提交写入的隔离、内层异常及提交失败后的连接状态和复用，以及服务关闭时关闭各层连接；临时恢复旧实现时这些新增测试失败，恢复修正后的三个定向文件共 44 项通过。
+
+完整检查还发现连接复用使数据库替换后的缓存连接继续指向旧文件，影响控制台投影和备份恢复。连接层现在在取得连接的文件边界比较设备号和 inode：文件身份改变时关闭空闲的旧连接，活动连接仍完成自己的事务后再关闭，后续作用域连接当前文件。两个控制台测试夹具只替换主文件，复用连接留下的旧 WAL 会覆盖替换文件的内容；夹具现在在复制和替换前执行 `wal_checkpoint(TRUNCATE)`，使模拟替换不会重放旧 WAL。产品的恢复路径已经在替换主文件前移除旧 WAL 与 SHM，未修改该路径，也未在普通事务退出时添加 checkpoint。
+
+本次 Python 检查全部使用 `PYTHONPATH=src <Host 指定的现成解释器> -m hey_my_buddy.cli.checks`，不带 jobs 参数，不设置 `HMB_CHECKS_JOBS`，不写入指定解释器环境；完整检查只运行一次，不带文件参数，使用默认 4 个进程。完整检查运行 245 个文件、4,066 项、零跳过，241 个文件通过，4 个文件有共 5 个失败断言，退出 1；检查器汇总中的 4,009 项仅统计通过的 241 个文件，另外四个失败文件的输出分别记录 14、3、19、21 项，共 57 项。私有根清理成功。
+
+完整检查的失败文件与后续结果如下；完整检查结束后只重跑失败文件，没有再次运行完整检查。
+
+| 文件 | 完整检查 | 重跑 |
+| --- | --- | --- |
+| `tests/python/blackboard/service/test_console_reads.py` | 14 项，2 个失败断言；数据库替换后返回旧内容 | 文件身份修正后第一次重跑仍有 2 个失败断言；补齐夹具 WAL 清空后 14 项通过 |
+| `tests/python/console/test_console_reads_http.py` | 19 项，1 个失败断言；替换后返回旧内容的 304 | 文件身份修正后第一次重跑仍有 1 个失败断言；补齐夹具 WAL 清空后 19 项通过 |
+| `tests/python/install/test_upgrade.py` | 21 项，1 个失败断言；恢复后仍读到备份之后的记录 | 文件身份修正后 21 项通过 |
+| `tests/python/cli/test_host_preview.py` | 3 项，1 个失败断言；缺少 `apps/console/node_modules/vitest/vitest.mjs` | 未重跑；前端依赖目录不在本任务写入范围内，交给 Host 准备依赖后重跑此文件 |
+
+第一次失败文件重跑共运行 54 项，只有 `test_upgrade.py` 的 21 项通过；随后两个控制台文件重跑共 33 项通过，两个运行的私有根均清理成功。完整检查中两个 Lead 文件及连接回归文件也均通过。嵌套事务修正和范围内的数据库替换修正已有上述检查证据，完整检查全通过的要求仍被前端依赖缺失阻塞；新增文件身份比较的空闲 CPU 成本未复测，未安装产品，未运行日常服务或付费模型调用，未改动写入范围外的文件，最终验收由 Host 完成。

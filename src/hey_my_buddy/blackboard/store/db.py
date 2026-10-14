@@ -1038,7 +1038,10 @@ class Database:
         self._lock = threading.Lock()
         self._secret: bytes | None = None
         self._connection_lock = threading.Lock()
-        self._connections: dict[int, sqlite3.Connection] = {}
+        self._connections: dict[tuple[int, int], sqlite3.Connection] = {}
+        self._connection_files: dict[tuple[int, int], tuple[int, int]] = {}
+        self._connection_depths: dict[int, int] = {}
+        self._file_identity: tuple[int, int] | None = None
         self._closed = False
 
     # -- connections ---------------------------------------------------------
@@ -1052,24 +1055,51 @@ class Database:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        """Reuse this thread's configured connection across short transactions."""
+        """Reuse one configured connection per thread and nesting depth."""
         # Native C-Two callbacks may rebuild their Python thread state between
         # calls. Keep ownership by thread identity, not in threading.local().
         identity = threading.get_ident()
         with self._connection_lock:
             if self._closed:
                 raise RuntimeError("Database is closed")
-            connection = self._connections.get(identity)
+            if self._connections:
+                information = self.path.stat()
+                file_identity = (information.st_dev, information.st_ino)
+                if file_identity != self._file_identity:
+                    # A restore replaces the file. Retire idle connections now;
+                    # active transactions keep their original file until exit.
+                    self._file_identity = file_identity
+                    for old_key, old_connection in tuple(self._connections.items()):
+                        owner, level = old_key
+                        if level >= self._connection_depths.get(owner, 0):
+                            old_connection.close()
+                            del self._connections[old_key]
+                            del self._connection_files[old_key]
+            depth = self._connection_depths.get(identity, 0)
+            key = (identity, depth)
+            connection = self._connections.get(key)
             if connection is None:
-                # Only shutdown closes another thread's connection, after users stop.
+                # Shutdown and file replacement may close other threads' idle connections.
                 connection = sqlite3.connect(self.path, isolation_level=None, timeout=10, check_same_thread=False)
                 try:
                     self._configure(connection)
                 except BaseException:
                     connection.close()
                     raise
-                self._connections[identity] = connection
-        yield connection
+                self._connections[key] = connection
+                information = self.path.stat()
+                self._file_identity = (information.st_dev, information.st_ino)
+                self._connection_files[key] = self._file_identity
+            self._connection_depths[identity] = depth + 1
+        try:
+            yield connection
+        finally:
+            with self._connection_lock:
+                self._connection_depths[identity] = depth
+                if self._connection_files[key] != self._file_identity:
+                    connection.close()
+                    del self._connections[key]
+                    del self._connection_files[key]
 
     def close(self) -> None:
         """Close all surviving thread connections after the service has stopped."""
@@ -1078,6 +1108,8 @@ class Database:
             for connection in self._connections.values():
                 connection.close()
             self._connections.clear()
+            self._connection_files.clear()
+            self._connection_depths.clear()
 
     @contextmanager
     def write(self, immediate: bool = True) -> Iterator[sqlite3.Connection]:
