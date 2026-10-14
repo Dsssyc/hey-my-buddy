@@ -410,7 +410,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.assertEqual(self.read(), expected)
             self.assert_recomputed(counter, [])
 
-    def test_standalone_title_task_and_latest_concluded_turn_summary(self):
+    def test_standalone_title_task_and_latest_returned_turn_summary(self):
         root = self.root_for(self.fixture.macros[1])
         self.sql("UPDATE workflow_runs SET macro_task_id=NULL,title='Fictional standalone title' WHERE run_id=?", (root,))
         group = "run:" + root
@@ -426,7 +426,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.sql("INSERT INTO workflow_turns(turn_id,run_id,turn_index,resume_mode,input_json,access,state,outcome_json,created_at,updated_at) VALUES('fictional-turn-2',?,2,'reconstructed-new-session','{}','write','prepared',?, '2026-01-01','2026-01-01')", (root,json.dumps({"summary":"Fictional newest summary"})))
             self.assertEqual(self.rows()[group]["summary"], "Fictional corrected summary")
             self.assert_recomputed(counter, [group])
-            self.sql("UPDATE workflow_turns SET state='concluded' WHERE turn_id='fictional-turn-2'")
+            self.sql("UPDATE workflow_turns SET state='returned' WHERE turn_id='fictional-turn-2'")
             self.assertEqual(self.rows()[group]["summary"], "Fictional newest summary")
             self.assert_recomputed(counter, [group])
             self.sql("UPDATE workflow_turns SET outcome_json=json_set(outcome_json,'$.summary','Fictional latest corrected') WHERE turn_id='fictional-turn-2'")

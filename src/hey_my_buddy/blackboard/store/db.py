@@ -456,7 +456,7 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
     access              TEXT NOT NULL CHECK (access IN ('read','write','full')),
     -- Only an explicit full turn carries the Host's one-line reason.
     access_reason       TEXT,
-    state               TEXT NOT NULL CHECK (state IN ('prepared','running','concluded','failed')),
+    state               TEXT NOT NULL CHECK (state IN ('prepared','running','returned','failed')),
     disposition         TEXT CHECK (disposition IN ('completed','assistance','attention')),
     outcome_json        TEXT,
     outcome_truncated_json TEXT,

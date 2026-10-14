@@ -191,7 +191,7 @@ def dependencies(connection, members):
                     kind="json_type(r.micro_task_json,'$.task')") + ","
                 + _bounded("(SELECT CASE WHEN json_type(t.outcome_json,'$.summary')='text'"
                            " THEN json_extract(t.outcome_json,'$.summary') END FROM workflow_turns t"
-                           " WHERE t.run_id=r.run_id AND t.state='concluded' AND t.outcome_json IS NOT NULL"
+                           " WHERE t.run_id=r.run_id AND t.state='returned' AND t.outcome_json IS NOT NULL"
                            " ORDER BY t.turn_index DESC LIMIT 1)") +
                 " FROM workflow_runs r WHERE r.run_id=?", (group[4:],),
             ).fetchone()

@@ -786,7 +786,7 @@ class WorkflowCoordinator:
                 return "the current turn requested Host assistance"
             if active_request is not None and active_request["kind"] == "helper-report":
                 return "all helpers reached a terminal state; the Host decides the next turn"
-            return "the current turn concluded and the Host decides the next turn"
+            return "the current turn returned and the Host decides the next turn"
         if state == "waiting-helpers":
             return "authorized helpers are still running"
         if state == "concluded":
@@ -3546,7 +3546,7 @@ class WorkflowCoordinator:
         if attempt["shutdown_confirmed"] and turn is not None and self._validate_turn(turn, turn_row, attempt) is None:
             disposition = turn["outcome"]["disposition"]
             connection.execute(
-                "UPDATE workflow_turns SET state='concluded', disposition=?, outcome_json=?, outcome_truncated_json=?, provenance_json=?,"
+                "UPDATE workflow_turns SET state='returned', disposition=?, outcome_json=?, outcome_truncated_json=?, provenance_json=?,"
                 " session_id=?, prompt_sha256=?, input_sha256=?, turn_result_path=?, sealed_artifacts_json=?,"
                 " updated_at=? WHERE turn_id=?",
                 (disposition, canonical_json(turn["outcome"]), canonical_json(turn["outcomeTruncated"]) if "outcomeTruncated" in turn else None,
@@ -3966,7 +3966,7 @@ class WorkflowCoordinator:
                 artifactKind=other["kind"],
             )
         artifact = final_artifact
-        # A normal delivery concludes a completed turn. A Host-resolution delivery
+        # A normal delivery records a returned completed turn. A Host-resolution delivery
         # is the one alternative: the failed attempt's own native completed outcome
         # is preserved in its immutable result, recorded separately on the
         # conflict, and revalidated here. The failed turn row itself stays failed.
@@ -3978,17 +3978,17 @@ class WorkflowCoordinator:
         host_proof = (previous_host_completion is not None and json.loads(previous_host_completion[0]).get("artifactId") == artifact["artifact_id"])
         if host_completion:
             current = connection.execute("SELECT * FROM workflow_turns WHERE turn_id=? AND attempt_id=?", (run_row["current_turn_id"], attempt["attempt_id"])).fetchone()
-            if current is None or current["state"] != "concluded" or current["disposition"] not in ("assistance", "attention", "completed"):
+            if current is None or current["state"] != "returned" or current["disposition"] not in ("assistance", "attention", "completed"):
                 raise BoardError("NOT_READY", "Host completion requires the current stopped and sealed turn")
         if not (host_completion or host_proof) and connection.execute(
-            "SELECT * FROM workflow_turns WHERE attempt_id=? AND state='concluded' AND disposition='completed'",
+            "SELECT * FROM workflow_turns WHERE attempt_id=? AND state='returned' AND disposition='completed'",
             (attempt["attempt_id"],),
         ).fetchone() is None:
             resolution = self._resolution_delivery(connection, run_row, attempt, artifact)
             if resolution is None:
                 raise BoardError(
                     "NOT_READY",
-                    "The current final attempt has no concluded completed turn to accept",
+                    "The current final attempt has no returned completed turn to accept",
                     attemptId=attempt["attempt_id"],
                 )
         if task["review_rejected_at"]:
@@ -5489,7 +5489,7 @@ class WorkflowCoordinator:
             "SELECT r.run_id,r.state,r.owner_generation,r.host_id,r.revision,r.continuation_count,r.active_request_id,r.title,r.macro_task_id,"
             " (SELECT CASE WHEN json_type(t.outcome_json,'$.summary')='text'"
             " THEN json_extract(t.outcome_json,'$.summary') END FROM workflow_turns t"
-            " WHERE t.run_id=r.run_id AND t.state='concluded' AND t.outcome_json IS NOT NULL"
+            " WHERE t.run_id=r.run_id AND t.state='returned' AND t.outcome_json IS NOT NULL"
             " ORDER BY t.turn_index DESC LIMIT 1) AS result_summary"
             " FROM workflow_runs r WHERE r.run_id=?", (task_row["task_id"],)
         ).fetchone()
@@ -5751,7 +5751,7 @@ class WorkflowCoordinator:
         previous_session = previous["session_id"] if previous is not None else None
         if native is not None:
             previous_session = native[1]["sessionId"]
-        native_completed = previous is not None and previous["state"] == "concluded"
+        native_completed = previous is not None and previous["state"] == "returned"
         if native is not None:
             from ...buddy.roles.turn_io import checkpoint_resumable
             native_completed = checkpoint_resumable(*native)
@@ -5795,7 +5795,7 @@ class WorkflowCoordinator:
             if checkpoint.get("lastAssistantMessage") is not None:
                 context["lastAssistantMessage"] = {
                     "source": "codex-native-agent-message",
-                    "validatedOutcome": previous["state"] == "concluded" and json.loads(previous["provenance_json"] or "{}").get("outputSchemaValidated") is True,
+                    "validatedOutcome": previous["state"] == "returned" and json.loads(previous["provenance_json"] or "{}").get("outputSchemaValidated") is True,
                     "sessionId": checkpoint["sessionId"], "nativeTurnId": checkpoint["nativeTurnId"],
                     **checkpoint["lastAssistantMessage"],
                 }
@@ -6484,7 +6484,7 @@ class WorkflowCoordinator:
         outcome = turn["outcome"]
         disposition = outcome["disposition"]
         connection.execute(
-            "UPDATE workflow_turns SET state='concluded', disposition=?, outcome_json=?, outcome_truncated_json=?, provenance_json=?,"
+            "UPDATE workflow_turns SET state='returned', disposition=?, outcome_json=?, outcome_truncated_json=?, provenance_json=?,"
             " session_id=?, prompt_sha256=?, input_sha256=?, turn_result_path=?, sealed_artifacts_json=?,"
             " updated_at=? WHERE turn_id=?",
             (

@@ -62,7 +62,12 @@ class CodexContinuationTests(WorkflowTestCase):
         self.assertEqual(resumed_result.result["nativeTurnId"], "native-turn-2")
         self.finish_turn(board, second, seal=False,
                          result_mutator=lambda payload: (payload.clear(), payload.update(resumed_result.result)))
-        self.assertEqual(board.call("workflow_get", {"runId": submitted["runId"]})["state"], "delivered")
+        delivered = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(delivered["state"], "delivered")
+        self.assertEqual(delivered["currentTurn"]["state"], "returned")
+        self.continue_run(board, delivered, command_id="continue-returned")
+        document = self.claim(board, claim_request_id="c3")["claim"]["turn"]["input"]
+        self.assertTrue(document["context"]["lastAssistantMessage"]["validatedOutcome"])
 
     def failed_run(self, *, native_status="completed", corrupt=False):
         self.executors["codex"] = CodexAdapter()

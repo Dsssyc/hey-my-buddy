@@ -213,6 +213,9 @@ class LifecycleTests(WorkflowTestCase):
             ).fetchone()
         self.assertEqual(json.loads(stored["outcome_truncated_json"]), truncated)
         view = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
+        self.assertEqual(view["currentTurn"]["state"], "returned")
+        self.assertEqual(view["turns"][0]["state"], "returned")
+        self.assertEqual(view["audit"]["turns"][0]["state"], "returned")
         self.assertEqual(view["currentTurn"]["outcomeTruncated"], truncated)
         self.assertEqual(view["turns"][0]["outcomeTruncated"], truncated)
         self.assertEqual(view["audit"]["turns"][0]["outcomeTruncated"], truncated)
@@ -1533,6 +1536,7 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         self.assertTrue(late["workflow"]["late"])
         parent = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(parent["state"], "cancelled")
+        self.assertEqual(parent["currentTurn"]["state"], "returned")
         self.assertEqual(parent["currentTurn"]["outcomeTruncated"], truncated)
 
 
