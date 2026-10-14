@@ -18,20 +18,20 @@ hey-my-buddy 让 Host buddy（拥有微任务的 agent）把边界明确的工�
 
 ## 安装
 
-hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.29.0（contract 0.29.0、schema 16），2026-10-11 由 0.27.0 升级而来；当前源码是同一个版本。skill 位于 `~/.agents/skills/hey-my-buddy`，Claude Code 通过 `~/.claude/skills/hey-my-buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。[原生沙盒审阅验收](docs/acceptance/native-sandbox-review-0.27.0.md)记录由固定原生探针拥有、不再解读模型输出的验证。[路由与验证验收](docs/acceptance/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同一宏任务内委派、Host 直接收尾、失败结论与清理、部分成果、更换 buddy 续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未发布；schema 14 → 15 仅通过显式空闲升级迁移。
+hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.34.1（contract 0.34.1、schema 18），安装于 2026-10-13；当前源码是 0.35.0（schema 19），还没有安装。skill 位于 `~/.agents/skills/hey-my-buddy`，Claude Code 通过 `~/.claude/skills/hey-my-buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。[原生沙盒审阅验收](docs/acceptance/native-sandbox-review-0.27.0.md)记录由固定原生探针拥有、不再解读模型输出的验证。[路由与验证验收](docs/acceptance/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同一宏任务内委派、Host 直接收尾、失败结论与清理、部分成果、更换 buddy 续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未发布。把它装到 0.34.1 的看板上时，旧看板保留为归档，新看板只带走设置（见[运行参考](docs/reference/operations.md#archive-upgrade)）。
 
 在开发者确定发布渠道与确切版本之后，安装入口是一条固定版本的包命令：
 
 ```sh
 # 发布渠道与版本确定之后使用；目前不可用
-uvx hey-my-buddy@0.21.0 install
+uvx hey-my-buddy@0.35.0 install
 ```
 
 包名是否可用、是否发布到 PyPI 仍待开发者决定，本候选尚未发布到 PyPI。在正式发布之前，可以从冻结源码构建 wheel，并用绝对路径安装：
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from /absolute/path/hey_my_buddy-0.21.0-py3-none-any.whl hey-my-buddy install
+uvx --from /absolute/path/hey_my_buddy-0.35.0-py3-none-any.whl hey-my-buddy install
 ```
 
 机器上没有 `uv` 时，发布包里的 `install.sh`（macOS、Linux）或 `install.ps1`（Windows）会先准备固定版本的私有 `uv`，再调用同一个安装入口；它们不修改 `PATH`、shell 或 Host 设置，也不会安装全局 `hey-my-buddy` 命令。安装会先列出将写入的路径、物化版本化运行时；有未结束的微任务、未确认的停止或未回收的受管检出时拒绝并列出阻塞项（`UPGRADE_NOT_IDLE`）；空闲后整体切换 skill、启动器、运行时与服务，并保留校验过的备份用于回滚；待执行的 schema 升级把这份备份保留为永久归档。重跑完整同版本只补齐缺失内容、不重启服务；内容损坏时用同一条固定版本命令修复；同版本内容变化会报告 `updated`。sdist 保留来源提交，解包后构建 wheel 仍保留相同 `sourceCommit`。安装或升级日常服务都需要用户的单独授权。代码与脚本可移植到 Windows，但尚未在真机验证。
@@ -88,7 +88,7 @@ Codex Host 为每个运行中的微任务派生一个只做监控的原生子代
 
 ## 当前状态与限制
 
-日常安装是 [0.29.0/contract 0.29.0/schema 16](docs/acceptance/installed-0.29.0.md)。它由 0.27.0 经显式的 schema 15 → 16 升级而来，升级前做了经过校验的备份，记录全部保留。[0.29.0 安装记录](docs/acceptance/installed-0.29.0.md)列出这个版本带来了什么，并区分已验证的行为与尚未确认的部分。
+日常安装是 [0.34.1/contract 0.34.1/schema 18](docs/acceptance/install-0.34.1.md)。当前源码是 0.35.0、schema 19，还没有安装；安装时 0.34.1 的看板保留为归档，新看板只带走设置。
 
 日常运行时支持 macOS 与 Linux、本地单用户 SQLite 状态；Windows 的代码与脚本可移植，但未在真机验证。ZCode 支持活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry。0.19.0 源码在 macOS 的 Codex CLI 0.157.0 上验证了 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算；Linux/Windows 与其他 harness 仍未验证。安装不会修改用户的 Router 设置。Claude P1 读取用户原生的提供方、账户与设置，每次接续都重建会话，未声明 inquiry。其[参考文档](docs/reference/claude-code.md)记录已验证的原生路径、日常安装的只读微任务链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
 
