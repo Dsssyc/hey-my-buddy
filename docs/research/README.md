@@ -38,5 +38,6 @@
 | 2026-10-13 | [四家 harness 的官方条款对“由别的工具来调度”说了什么](2026-10-13-harness-terms-and-orchestration.md) | 发布之前的合规边界与提示，待开发者定；ADR-023 第 9 条的强度说明 |
 | 2026-10-13 | [提供方的并发与速率限制按什么算](2026-10-13-provider-concurrency-limits.md) | ADR-021 的 L14：并发上限按什么记 |
 | 2026-10-13 | [仓库自己的目录路径里会不会有换行](2026-10-13-line-breaks-in-repository-paths.md) | 工作区模块：不支持这种路径 |
+| 2026-10-14 | [回合结束之后，Host 的会话能不能被叫醒](2026-10-14-waking-an-idle-host-session.md) | ADR-026 第 9 条与 Lead 的唤醒；Codex 与 Claude Code 的 Host 指南 |
 
 2026-10-11 之前的四份是从各自的决定里移过来的，当时没有按上面的写法记录读到哪里为止，这一点在各份记录里照实写明。
