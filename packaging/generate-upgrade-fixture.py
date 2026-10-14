@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate schema-18 upgrade stock using the frozen released base source.
+"""Generate schema-19 upgrade stock using the frozen installed base source.
 
 No product installation, daemon, native harness or model is started. The base
 named service operations run in process; only native discovery is synthetic.
@@ -26,9 +26,9 @@ import tarfile
 import tempfile
 import uuid
 
-BASE = "4b7f494670efe7a3fe053062f16cce9312a5e042"
-BASE_VERSION = "0.34.1"
-BASE_SCHEMA = 18
+BASE = "4ca5344b2103c44d425e40d9144928be54f65f60"
+BASE_VERSION = "0.35.0"
+BASE_SCHEMA = 19
 # An existing five-file repository commit keeps workspace capture bounded.
 # This is the workspace input, never the source used to create the database.
 WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
@@ -51,10 +51,10 @@ def run(argv, **kwargs):
 def private_environment(work):
     # Drop every inherited product binding, plus provider/harness credentials.
     env = {key: value for key, value in os.environ.items()
-           if not key.startswith(("BUDDY_", "OPENAI_", "ANTHROPIC_", "DEEPSEEK_", "ZAI_", "CODEX_", "CLAUDE_", "C2_", "GIT_"))
+           if not key.startswith(("HMB_", "BUDDY_", "OPENAI_", "ANTHROPIC_", "DEEPSEEK_", "ZAI_", "CODEX_", "CLAUDE_", "C2_", "GIT_"))
            and key not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"}}
-    env.update(BUDDY_STATE_DIR=str(work / "state"), BUDDY_RUNTIME_ROOT=str(work / "runtime"),
-               BUDDY_DEV_SOURCE="1", BUDDY_DEBUG="1", UV_CACHE_DIR=str(work.parent / "uv-cache"),
+    env.update(HMB_STATE_DIR=str(work / "state"), HMB_RUNTIME_ROOT=str(work / "runtime"),
+               HMB_DEV_SOURCE="1", HMB_DEBUG="1", UV_CACHE_DIR=str(work.parent / "uv-cache"),
                UV_PYTHON_DOWNLOADS="never", PYTHONDONTWRITEBYTECODE="1", TMPDIR=str(work / "scratch"))
     return env
 
@@ -118,18 +118,19 @@ def populate(args):
     from hey_my_buddy.blackboard.catalog import catalog_store, catalog as catalog_module
     from hey_my_buddy.blackboard.tasks import workspace
     from hey_my_buddy.blackboard.evaluation import native_observations
+    from hey_my_buddy.blackboard.evaluation import model_facts
     from hey_my_buddy.blackboard.routing import quota_routing
 
     assert Path(db_module.__file__).resolve() == source / "src/hey_my_buddy/blackboard/store/db.py"
     assert db_module.SCHEMA_VERSION == BASE_SCHEMA
     catalog = {"source": "fixture:upgrade-base", "harnessVersion": "fixture-only",
-               "discoveredAt": AT, "discoveries": [{"adapter": "codex", "status": "complete", "accountStatus": "confirmed"}],
-               "providers": [{"adapter": "codex", "provider": "openai", "efforts": ["high"],
+               "discoveredAt": AT, "discoveries": [{"harness": "codex", "status": "complete", "accountStatus": "confirmed"}],
+               "providers": [{"harness": "codex", "provider": "openai", "efforts": ["high"],
                               "models": [{"id": "fixture-alpha", "efforts": ["high"]},
                                          {"id": "fixture-beta", "efforts": ["high"]}]}]}
     catalog_file = work / "catalog.json"
     catalog_file.write_text(json_text(catalog) + "\n")
-    os.environ["BUDDY_MODEL_CATALOG_FILE"] = str(catalog_file)
+    os.environ["HMB_MODEL_CATALOG_FILE"] = str(catalog_file)
     operations = []
     ids = {}
     counter = itertools.count(1)
@@ -161,10 +162,11 @@ def populate(args):
         stack.enter_context(patch.object(health_module, "_later", return_value="2026-01-01T01:00:00.000Z"))
         # Replace external native discovery only. The old health/catalog writers,
         # validators and certificate lookup remain the real implementations.
-        stack.enter_context(patch.object(health_module, "_snapshot", return_value={"adapter": "codex", "manualPath": None, "managerRecords": [], "candidates": [], "fixture": True}))
+        stack.enter_context(patch.object(health_module, "_snapshot", return_value={"harness": "codex", "manualPath": None, "managerRecords": [], "candidates": [], "fixture": True}))
         stack.enter_context(patch.object(health_module, "_discover", return_value={
-            "adapter": "codex", "status": "ready", "version": "0.157.0", "command": ["fixture-codex"], "accountStatus": "confirmed", "fixture": True}))
+            "harness": "codex", "status": "ready", "version": "0.157.0", "command": ["fixture-codex"], "accountStatus": "confirmed", "fixture": True}))
         stack.enter_context(patch.object(CodexAdapter, "discover_models", return_value=catalog))
+        stack.enter_context(patch.object(model_facts, "refresh_model_services", return_value=None))
         stack.enter_context(patch("hey_my_buddy.buddy.harnesses.codex.account_probe.read", return_value=(None, None, None)))
         store = BoardStore(work / "state", clock=lambda: AT)
         store.initialize()
@@ -178,35 +180,28 @@ def populate(args):
             operations.append({"operation": name, "params": params, "response": result})
             return result
 
-        def publish(kind, **changes):
+        def publish(**changes):
             label = "publish-" + str(len(operations))
-            grant = call("evaluation_write_begin", {"requestId": label,
-                         "expectedRevision": store.evaluation.snapshot({})["tableRevision"], "kind": kind}, human=kind == "human")
-            return call("user_policy_publish" if kind == "human" else "assessment_publish",
-                        {"commandId": label, "writerId": grant["writerId"], "generation": grant["generation"],
-                         "writerToken": grant["writerToken"], "expectedRevision": grant["tableRevision"], **changes}, human=kind == "human")
+            return call("user_policy_publish", {"commandId": label, **changes}, human=True)
 
-        call("harness_set", {"adapter": "codex", "path": None})
+        call("harness_set", {"harness": "codex", "path": None})
         call("model_catalog_refresh", {"requestId": "fixture-catalog"})
-        publish("human", profileSettings=[{"profileId": profile, "enabled": True} for profile in PROFILES])
-        publish("human", preferenceChanges=[{"profileId": PROFILES[0], "mode": "prefer", "reason": "fixture preference"}],
-                familyPreferenceChanges=[{"adapter": "codex", "provider": "openai", "model": "fixture-beta",
-                                          "mode": "exclude", "reason": "fixture family preference"}],
-                modelConcurrency=[{"adapter": "codex", "provider": "openai", "model": "fixture-alpha", "limit": 3}])
-        publish("human", configuration={"routerProfileIds": PROFILES,
+        publish(buddySettings=[{"buddyId": profile, "enabled": True} for profile in PROFILES])
+        publish(preferenceChanges=[{"buddyId": PROFILES[0], "mode": "prefer", "reason": "fixture preference"},
+                                   {"buddyId": PROFILES[1], "mode": "exclude", "reason": "fixture exclusion"}],
+                modelServiceConcurrency=[{"harness": "codex", "provider": "openai", "model": "fixture-alpha", "limit": 3}])
+        publish(configuration={"routerBuddyIds": PROFILES,
                                         "routerRetryIntervalSeconds": 47,
                                         "defaultRoutingMode": "review", "routingBudget": "deep"},
-                familyAnnotationChanges=[{"adapter": "codex", "provider": "openai", "model": "fixture-alpha",
-                                          "text": "升级夹具的家族备注；应保留。"}])
-        publish("maintenance", cards=[{"profileId": PROFILES[0], "summary": "升级夹具的评价；应保留。",
-                                       "strengths": [], "limitations": [], "risks": [], "evidenceIds": []}])
+                modelServiceNoteChanges=[{"harness": "codex", "provider": "openai", "model": "fixture-alpha",
+                                          "text": "升级夹具的模型备注；应保留。"}])
         call("worker_register", {"workerId": "fixture-worker", "capabilities": ["codex"]})
         for label in ("delivered", "accepted", "failed", "cancelled"):
             submitted = call("workflow_submit", {"requestId": "fixture-" + label, "hostId": "fixture-host",
                 "submissionToken": "fixture-submission-token-" + label, "task": "fixture " + label,
-                "adapter": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
+                "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
                 "cwd": str(work / "workspaces" / label), "executionWorkspace": {"kind": "existing", "access": "read"},
-                **({"objective": {"title": "Worker 权限档位升级夹具"}} if not ids else {"objectiveOf": ids["delivered"]})})
+                **({"macroTask": {"title": "Worker 权限档位升级夹具"}} if not ids else {"macroTaskOf": ids["delivered"]})})
             run_id = submitted["runId"]
             ids[label] = run_id
             control = submitted["control"]
@@ -233,7 +228,7 @@ def populate(args):
                       "promptSha256": "a" * 64, "inputSha256": turn["inputSha256"],
                       "outcome": {"disposition": "completed", "summary": "模拟结果：无模型执行。", "remaining": [],
                                   "decisions": [], "artifacts": [], "request": None},
-                      "provenance": {"adapter": "codex", "turnEnd": "completed", "outputSchemaValidated": True,
+                      "provenance": {"harness": "codex", "turnEnd": "completed", "outputSchemaValidated": True,
                                      "finalMessageCompleted": True, "nativeTurnStarted": True, "nativeTurnCompleted": True,
                                      "nativeThreadId": "fixture-session-" + label, "nativeTurnId": "fixture-turn-" + label,
                                      "finalItemId": "fixture-item", "eventSeq": 2}}
@@ -277,9 +272,8 @@ def populate(args):
         operations.append({"operation": "catalog_store.record", "params": missing_catalog, "response": "missing-model-pending"})
         catalog_module.coordinate_catalog_reread(store.directory, "codex", reader=lambda: None, wait=True)
         operations.append({"operation": "coordinate_catalog_reread", "params": {"adapter": "codex"}, "response": "window-written"})
-        publish("human", profileSettings=[{"profileId": PROFILES[1], "enabled": False}],
-                familyPreferenceChanges=[{"adapter": "codex", "provider": "openai", "model": "fixture-alpha",
-                                          "mode": "pin", "reason": "fixture pinned family"}])
+        publish(buddySettings=[{"buddyId": PROFILES[1], "enabled": False}],
+                preferenceChanges=[{"buddyId": PROFILES[0], "mode": "pin", "reason": "fixture pinned buddy"}])
         hashing.close()
         # All rows were created by base public operations. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
@@ -316,10 +310,10 @@ def populate(args):
                             [*sorted((source / "src/hey_my_buddy").rglob("*.py")), source / "pyproject.toml",
                              source / "uv.lock", source / "packaging/runtime-assets.json"]},
             "stableIds": ids,
-            "routerProfileIds": PROFILES, "fixedTimestamp": AT,
+            "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
             "boundary": "Base BoardService named operations in process; synthetic native discovery and worker result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before upgrade; this preparation is not migration or new native execution. Host conclusions are base history only; real host_seal is tested separately.",
-            "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 18; baseline only after return",
+            "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 19; baseline only after return",
             "schemaSha256": digest(json_text([list(row) for row in source_schema]).encode()),
             "sqlSha256": digest(sql_path.read_bytes()), "operationsSha256": digest((output / "operations.json").read_bytes()),
             "catalogSha256": digest((output / "catalog.json").read_bytes()),
@@ -343,7 +337,7 @@ def export_resources(work, workspace, preimages):
             identities[actual[role]] = template(path)
     repository = work / "repository"
     refs = dict(line.split(" ") for line in subprocess.check_output(
-        ["git", "-C", str(repository), "for-each-ref", "--format=%(refname) %(objectname)", "refs/buddy/"], text=True).splitlines())
+        ["git", "-C", str(repository), "for-each-ref", "--format=%(refname) %(objectname)", "refs/hey-my-buddy/"], text=True).splitlines())
     # The fixed input is a root commit: its complete reachable object closure is
     # tiny. Export raw object bytes as hex so no generating repository is needed.
     oids = sorted({line.split(" ")[0] for line in subprocess.check_output(
@@ -406,19 +400,17 @@ def verify(output, restored):
         assert connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert dict(connection.execute("SELECT key,value FROM meta"))["schema_version"] == str(BASE_SCHEMA)
-        assert connection.execute("SELECT COUNT(*) FROM objectives").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM macro_tasks").fetchone()[0] == 1
         states = dict(connection.execute("SELECT run_id,state FROM workflow_runs"))
         assert states == {metadata["stableIds"][key]: value for key, value in
-                          (("delivered", "delivered"), ("accepted", "accepted"), ("failed", "failed"), ("cancelled", "cancelled"))}
+                          (("delivered", "concluded"), ("accepted", "accepted"), ("failed", "concluded"), ("cancelled", "cancelled"))}
         keys = dict(connection.execute("SELECT key,value FROM meta"))
-        assert keys["router_configuration_version"] == "3"
-        assert json.loads(keys["router_profile_ids"]) == PROFILES
+        assert set(keys) == {"schema_version", "created_at", "capability_secret"}
+        assert list(connection.execute("SELECT buddy_id FROM router_buddies ORDER BY position")) == [(item,) for item in PROFILES]
+        assert list(connection.execute("SELECT default_mode,budget_preset,retry_interval_seconds FROM router_settings")) == [("review", "deep", 47)]
         assert keys["capability_secret"] == "ab" * 32
-        for table in ("evaluation_cards", "family_annotations", "evaluation_catalog", "catalog_current"):
+        for table in ("model_service_notes", "evaluation_preferences", "evaluation_catalog", "catalog_current"):
             assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] >= 1
-        reviews = {json.loads(row[0])["verdict"] for row in connection.execute(
-            "SELECT payload_json FROM events WHERE kind IN ('workflow.acknowledged','workflow.review_rejected')")}
-        assert reviews == {"accepted"}
         assert connection.execute("SELECT COUNT(*) FROM workflow_host_conclusions WHERE run_id=?", (metadata["stableIds"]["delivered"],)).fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM workflow_host_conclusions WHERE run_id=?", (metadata["stableIds"]["failed"],)).fetchone()[0] == 1
         schema = [list(row) for row in connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")]

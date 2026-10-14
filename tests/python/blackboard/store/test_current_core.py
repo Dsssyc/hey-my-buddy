@@ -75,8 +75,7 @@ class CurrentCoreTests(BoardTestCase):
         self.assertFalse(hasattr(Database, "set_meta"))
 
     def test_unsupported_schema_is_rejected_without_rewriting_archive(self):
-        # The immediately previous schema is included: only ``upgrade`` migrates it,
-        # never startup.
+        # Schema 18 is now as unsupported as every older board form.
         for version in ("5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "999", None, "unrecognized"):
             with self.subTest(version=version):
                 directory = self.directory / str(version)
@@ -88,7 +87,7 @@ class CurrentCoreTests(BoardTestCase):
                     Database(directory).initialize()
                 self.assertIn("Retain other unsupported state as an archive", str(caught.exception))
                 self.assertIn(f"only schema {SCHEMA_VERSION}", str(caught.exception))
-                self.assertIn("schema 18 requires an explicit idle upgrade", str(caught.exception))
+                self.assertNotIn("schema 18 requires an explicit idle upgrade", str(caught.exception))
                 self.assertNotIn("migrate", str(caught.exception))
                 self.assertEqual(path.read_bytes(), before)
                 self.assertEqual(sorted(item.name for item in directory.iterdir()), before_entries)

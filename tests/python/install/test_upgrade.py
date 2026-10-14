@@ -6,121 +6,40 @@ from unittest import mock
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy import private_dirs
 from hey_my_buddy.install import upgrade
+from hey_my_buddy.install import launcher
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 class UpgradeTests(BoardTestCase):
-    def test_0341_runtime_receives_only_its_legacy_environment_names(self):
+    def test_runtime_environment_uses_current_names_and_excludes_worker_state(self):
         state = self.directory / 'state'
         target = self.directory / 'runtimes' / ('a' * 32)
         target.mkdir(parents=True)
         base = {'HMB_DEV_SOURCE': '1', 'HMB_WORKER_STATE': 'untrusted',
                 'HMB_MAX_CONCURRENT': '99', 'HMB_WAIT_CAPACITY': '99'}
-        with mock.patch('hey_my_buddy.install.upgrade.runtime.read_ready', return_value={
-                'sourceCommit': '4b7f494670efe7a3fe053062f16cce9312a5e042'}), \
-             mock.patch('hey_my_buddy.install.launcher.service_environment', side_effect=lambda: base.copy()):
-            old = upgrade._environment(state, target)
-        self.assertEqual(old['BUDDY_STATE_DIR'], str(state))
-        self.assertEqual(old['BUDDY_RUNTIME'], str(target))
-        self.assertEqual(old['BUDDY_RUNTIME_ROOT'], str(target.parent))
-        self.assertEqual(old['BUDDY_RUNTIME_IDENTITY'], 'runtime:' + target.name)
-        self.assertEqual(old['BUDDY_MAX_CONCURRENT'], '99')
-        self.assertEqual(old['BUDDY_WAIT_CAPACITY'], '99')
-        self.assertFalse(any(key.startswith('HMB_') for key in old))
-        self.assertNotIn('BUDDY_WORKER_STATE', old)
-        with mock.patch('hey_my_buddy.install.upgrade.runtime.read_ready', return_value={
-                'sourceCommit': 'f' * 40}), \
-             mock.patch('hey_my_buddy.install.launcher.service_environment', side_effect=lambda: base.copy()):
-            fresh = upgrade._environment(state, target)
-        self.assertEqual(fresh['HMB_STATE_DIR'], str(state))
-        self.assertEqual(fresh['HMB_RUNTIME'], str(target))
-        self.assertFalse(any(key.startswith('BUDDY_') for key in fresh))
+        with mock.patch('hey_my_buddy.install.launcher.service_environment', return_value=base):
+            environment = upgrade._environment(state, target)
+        self.assertEqual(environment['HMB_STATE_DIR'], str(state))
+        self.assertEqual(environment['HMB_RUNTIME'], str(target))
+        self.assertEqual(environment['HMB_RUNTIME_ROOT'], str(target.parent))
+        self.assertEqual(environment['HMB_RUNTIME_IDENTITY'], 'runtime:' + target.name)
+        self.assertEqual(environment['HMB_MAX_CONCURRENT'], '99')
+        self.assertEqual(environment['HMB_WAIT_CAPACITY'], '99')
+        self.assertNotIn('HMB_WORKER_STATE', environment)
 
-    def test_0341_restart_reads_and_rollback_preserves_old_launch_setting_names(self):
+    def test_runtime_switch_preserves_current_launch_settings(self):
         state = self.directory / 'state'
         state.mkdir()
         target = self.directory / 'runtimes' / ('a' * 32)
         settings = {'HMB_MAX_CONCURRENT': '3', 'HMB_WAIT_CAPACITY': '48'}
-        with mock.patch('hey_my_buddy.install.upgrade.runtime.read_ready', return_value={
-                'sourceCommit': '4b7f494670efe7a3fe053062f16cce9312a5e042'}):
-            upgrade._write_active_runtime(state, target, settings)
-            stored = json.loads((state / 'launch-settings.json').read_text())['environment']
-            self.assertEqual(stored, {'BUDDY_MAX_CONCURRENT': '3', 'BUDDY_WAIT_CAPACITY': '48'})
-            with mock.patch('hey_my_buddy.install.launcher.service_environment', return_value={}):
-                environment = upgrade._environment(state, target)
-            self.assertEqual(environment['BUDDY_MAX_CONCURRENT'], '3')
-            self.assertEqual(environment['BUDDY_WAIT_CAPACITY'], '48')
-            self.assertFalse(any(key.startswith('HMB_') for key in environment))
-        with mock.patch('hey_my_buddy.install.upgrade.runtime.read_ready', return_value={
-                'sourceCommit': 'f' * 40}):
-            upgrade._write_active_runtime(state, target, settings)
+        launcher.write_active_runtime(state, target, settings)
+        with mock.patch('hey_my_buddy.install.launcher.service_environment', return_value={}):
+            environment = upgrade._environment(state, target)
+        self.assertEqual(environment['HMB_MAX_CONCURRENT'], '3')
+        self.assertEqual(environment['HMB_WAIT_CAPACITY'], '48')
         self.assertEqual(json.loads((state / 'launch-settings.json').read_text())['environment'], settings)
 
-    def test_legacy_skill_cleanup_removes_only_owned_directory_and_exact_link(self):
-        agents = self.directory / 'agents'
-        claude = self.directory / 'claude'
-        agents.mkdir()
-        claude.mkdir()
-        old = agents / 'buddy'
-        old.mkdir()
-        (old / 'skill.json').write_text(json.dumps({'name': 'buddy'}))
-        (old / 'keep.txt').write_text('old skill')
-        link = claude / 'buddy'
-        link.symlink_to(old, target_is_directory=True)
-        with mock.patch('hey_my_buddy.install.skill_install.agent_skills_home', return_value=agents), \
-             mock.patch('hey_my_buddy.install.skill_install.claude_skills_home', return_value=claude):
-            result = upgrade._cleanup_legacy_skill()
-        self.assertEqual(result['agent']['status'], 'removed')
-        self.assertEqual(result['claude']['status'], 'removed')
-        self.assertFalse(old.exists())
-        self.assertFalse(link.is_symlink())
-
-    def test_legacy_skill_cleanup_preserves_conflicts_and_reports_errors(self):
-        agents = self.directory / 'agents'
-        claude = self.directory / 'claude'
-        agents.mkdir()
-        claude.mkdir()
-        old = agents / 'buddy'
-        old.mkdir()
-        (old / 'skill.json').write_text(json.dumps({'name': 'someone-else'}))
-        link = claude / 'buddy'
-        link.symlink_to(old, target_is_directory=True)
-        with mock.patch('hey_my_buddy.install.skill_install.agent_skills_home', return_value=agents), \
-             mock.patch('hey_my_buddy.install.skill_install.claude_skills_home', return_value=claude):
-            conflict = upgrade._cleanup_legacy_skill()
-            self.assertEqual(conflict['agent']['status'], 'conflict')
-            self.assertEqual(conflict['claude']['status'], 'conflict')
-            self.assertTrue(old.is_dir())
-            self.assertTrue(link.is_symlink())
-            (old / 'skill.json').write_text(json.dumps({'name': 'buddy'}))
-            with mock.patch('hey_my_buddy.install.upgrade.shutil.rmtree', side_effect=OSError('denied')):
-                failed = upgrade._cleanup_legacy_skill()
-        self.assertEqual(failed['agent']['status'], 'error')
-        self.assertIn('denied', failed['agent']['error'])
-        self.assertTrue(old.is_dir())
-
-    def test_legacy_skill_cleanup_does_not_follow_an_agent_directory_link(self):
-        agents = self.directory / 'agents'
-        claude = self.directory / 'claude'
-        agents.mkdir()
-        claude.mkdir()
-        foreign = self.directory / 'foreign'
-        foreign.mkdir()
-        (foreign / 'skill.json').write_text(json.dumps({'name': 'buddy'}))
-        old = agents / 'buddy'
-        old.symlink_to(foreign, target_is_directory=True)
-        link = claude / 'buddy'
-        link.symlink_to(old, target_is_directory=True)
-        with mock.patch('hey_my_buddy.install.skill_install.agent_skills_home', return_value=agents), \
-             mock.patch('hey_my_buddy.install.skill_install.claude_skills_home', return_value=claude):
-            result = upgrade._cleanup_legacy_skill()
-        self.assertEqual(result['agent']['status'], 'conflict')
-        self.assertEqual(result['claude']['status'], 'conflict')
-        self.assertTrue(old.is_symlink())
-        self.assertTrue(link.is_symlink())
-        self.assertTrue((foreign / 'skill.json').is_file())
-
-    def test_verified_recovery_keeps_the_journal_until_legacy_cleanup_and_never_rolls_back(self):
+    def test_verified_recovery_keeps_journal_when_clear_fails_without_rollback(self):
         state = self.directory / 'state'
         state.mkdir()
         root = self.directory / 'runtimes'
@@ -129,47 +48,21 @@ class UpgradeTests(BoardTestCase):
         marker = state / 'upgrade.json'
         upgrade.write_journal(marker, journal)
 
-        def clean():
+        def refuse_clear(_path):
             self.assertTrue(marker.exists())
-            return {'agent': {'status': 'removed'}, 'claude': {'status': 'removed'}}
+            self.assertEqual(json.loads((state / 'upgrade-last.json').read_text())['phase'], 'verified')
+            raise OSError('denied')
 
         with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
              mock.patch.object(upgrade, 'probe', return_value={'runtimeContentId': target.name}), \
              mock.patch.object(upgrade, 'verify_started', return_value={'runtimeContentId': target.name}), \
-             mock.patch.object(upgrade, '_write_active_runtime'), \
-             mock.patch.object(upgrade, '_cleanup_legacy_skill', side_effect=clean), \
-             mock.patch.object(upgrade, 'clear_journal', side_effect=OSError('denied')):
+             mock.patch.object(upgrade, 'write_active_runtime'), \
+             mock.patch.object(upgrade, 'clear_journal', side_effect=refuse_clear):
             result = upgrade.recover(state, root)
         self.assertTrue(result['upgraded'])
-        self.assertEqual(result['legacySkillCleanup']['journalError'], 'denied')
+        self.assertEqual(result['journalError'], 'denied')
         self.assertTrue(marker.exists())
         self.assertEqual(json.loads(marker.read_text())['phase'], 'verified')
-
-    def test_post_verification_cleanup_failure_is_reported_without_raising(self):
-        state = self.directory / 'state'
-        state.mkdir()
-        journal = {'phase': 'verified'}
-        with mock.patch.object(upgrade, '_cleanup_legacy_skill', side_effect=OSError('denied')):
-            result = upgrade._report_legacy_cleanup(state, journal)
-        self.assertEqual(result, {'status': 'error', 'error': 'denied'})
-        self.assertEqual(json.loads((state / 'upgrade-last.json').read_text())['legacySkillCleanup'], result)
-        self.assertEqual(journal['phase'], 'verified')
-
-    def test_legacy_skill_cleanup_keeps_unrelated_claude_link(self):
-        agents = self.directory / 'agents'
-        claude = self.directory / 'claude'
-        agents.mkdir()
-        claude.mkdir()
-        foreign = self.directory / 'foreign'
-        foreign.mkdir()
-        link = claude / 'buddy'
-        link.symlink_to(foreign, target_is_directory=True)
-        with mock.patch('hey_my_buddy.install.skill_install.agent_skills_home', return_value=agents), \
-             mock.patch('hey_my_buddy.install.skill_install.claude_skills_home', return_value=claude):
-            result = upgrade._cleanup_legacy_skill()
-        self.assertEqual(result['agent']['status'], 'missing')
-        self.assertEqual(result['claude']['status'], 'conflict')
-        self.assertTrue(link.is_symlink())
 
     def test_busy_upgrade_leaves_skill_launcher_runtime_and_service_unchanged(self):
         board = self.board()
@@ -462,7 +355,6 @@ class UpgradeTests(BoardTestCase):
         child.poll.return_value=None
         (self.directory/'runtime-target'/'src'/'hey_my_buddy').mkdir(parents=True)
         with mock.patch('hey_my_buddy.install.upgrade.subprocess.Popen',return_value=child), \
-             mock.patch('hey_my_buddy.install.upgrade._legacy_runtime',return_value=False), \
              mock.patch('hey_my_buddy.install.upgrade.time.monotonic',side_effect=[0,46]):
             with self.assertRaises(BoardError) as caught:
                 upgrade.start(board.directory, self.directory/'runtime-target')

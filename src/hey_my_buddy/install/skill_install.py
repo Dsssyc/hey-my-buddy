@@ -165,8 +165,7 @@ def install(params: dict) -> dict:
     from ..protocol.contracts import CONTRACT_VERSION
     print(json.dumps({'contractVersion': CONTRACT_VERSION, 'action': 'install-plan', 'writePaths': planned_paths}), file=sys.stderr, flush=True)
     if (state / 'board.sqlite3').exists() and not (state / 'upgrade.json').exists():
-        from .upgrade import idle_snapshot, backup_readiness, require_archive_readiness
-        require_archive_readiness(state)
+        from .upgrade import idle_snapshot, backup_readiness
         idle_snapshot(state)
         backup_readiness(state)
     home.mkdir(parents=True, exist_ok=True)
@@ -179,8 +178,7 @@ def install(params: dict) -> dict:
             from .upgrade import upgrade
             upgrade({})  # Recover the recorded generation before starting another install.
         if (state / 'board.sqlite3').exists():
-            from .upgrade import idle_snapshot, backup_readiness, require_archive_readiness
-            require_archive_readiness(state)
+            from .upgrade import idle_snapshot, backup_readiness
             idle_snapshot(state)
             backup_readiness(state)
         _check_claude_link(target)

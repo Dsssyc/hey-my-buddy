@@ -20,8 +20,6 @@ from typing import Iterator
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
 SCHEMA_VERSION = 19
-#: The one earlier schema that ``upgrade`` archives and replaces (see ``migrations``).
-PREVIOUS_SCHEMA_VERSION = 18
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CAPABILITY_VERSION = 1
@@ -1060,8 +1058,8 @@ class Database:
     # -- lifecycle -----------------------------------------------------------
     def _require_current_schema(self) -> None:
         """Refuse unsupported files before opening a writable/WAL connection."""
-        guidance = (f"This build accepts only schema {SCHEMA_VERSION}; schema {PREVIOUS_SCHEMA_VERSION} "
-                    "requires an explicit idle upgrade. Retain other unsupported state as an archive")
+        guidance = (f"This build accepts only schema {SCHEMA_VERSION}. "
+                    "Retain other unsupported state as an archive")
         try:
             connection = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
             try:
