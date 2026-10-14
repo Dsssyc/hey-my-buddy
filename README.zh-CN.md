@@ -18,7 +18,7 @@ hey-my-buddy 让 Host buddy（拥有微任务的 agent）把边界明确的工�
 
 ## 安装
 
-hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.34.1（contract 0.34.1、schema 18），安装于 2026-10-13；当前源码是 0.35.0（schema 19），还没有安装。skill 位于 `~/.agents/skills/hey-my-buddy`，Claude Code 通过 `~/.claude/skills/hey-my-buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。[原生沙盒审阅验收](docs/acceptance/native-sandbox-review-0.27.0.md)记录由固定原生探针拥有、不再解读模型输出的验证。[路由与验证验收](docs/acceptance/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同一宏任务内委派、Host 直接收尾、失败结论与清理、部分成果、更换 buddy 续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未发布。把它装到 0.34.1 的看板上时，旧看板保留为归档，新看板只带走设置（见[运行参考](docs/reference/operations.md#archive-upgrade)）。
+hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.35.0（contract 0.35.0、schema 19），安装于 2026-10-14；当前源码是同一个版本。skill 位于 `~/.agents/skills/hey-my-buddy`，Claude Code 通过 `~/.claude/skills/hey-my-buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。[原生沙盒审阅验收](docs/acceptance/native-sandbox-review-0.27.0.md)记录由固定原生探针拥有、不再解读模型输出的验证。[路由与验证验收](docs/acceptance/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同一宏任务内委派、Host 直接收尾、失败结论与清理、部分成果、更换 buddy 续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未发布。把它装到 0.34.1 的看板上时，旧看板保留为归档，新看板只带走设置（见[运行参考](docs/reference/operations.md#archive-upgrade)）。
 
 在开发者确定发布渠道与确切版本之后，安装入口是一条固定版本的包命令：
 
@@ -88,7 +88,7 @@ Codex Host 为每个运行中的微任务派生一个只做监控的原生子代
 
 ## 当前状态与限制
 
-日常安装是 [0.34.1/contract 0.34.1/schema 18](docs/acceptance/install-0.34.1.md)。当前源码是 0.35.0、schema 19，还没有安装；安装时 0.34.1 的看板保留为归档，新看板只带走设置。
+日常安装是 [0.35.0/contract 0.35.0/schema 19](docs/acceptance/install-0.35.0.md)。安装时 0.34.1 的看板保留为归档，新看板只带走设置。
 
 日常运行时支持 macOS 与 Linux、本地单用户 SQLite 状态；Windows 的代码与脚本可移植，但未在真机验证。ZCode 支持活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry。0.19.0 源码在 macOS 的 Codex CLI 0.157.0 上验证了 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算；Linux/Windows 与其他 harness 仍未验证。安装不会修改用户的 Router 设置。Claude P1 读取用户原生的提供方、账户与设置，每次接续都重建会话，未声明 inquiry。其[参考文档](docs/reference/claude-code.md)记录已验证的原生路径、日常安装的只读微任务链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
 

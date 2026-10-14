@@ -48,7 +48,7 @@ hey-my-buddy transports bounded JSON strings through C-Two 0.7.4's named Python 
 
 ## Data model
 
-One schema-versioned SQLite database (`board.sqlite3`, schema version 19) owns every authoritative fact in 49 tables. Startup accepts schema 19 only; a schema-18 board written by the upgrade base, the installed 0.34.1, is archived by the explicit upgrade during an install, described in [operations](operations.md#archive-upgrade), and replaced by a new board that carries only the settings.
+One schema-versioned SQLite database (`board.sqlite3`, schema version 19) owns every authoritative fact in 49 tables. Startup accepts schema 19 only; a schema-18 board written by the upgrade base, 0.34.1, is archived by the explicit upgrade during an install (this ran on the daily board on 2026-10-14), described in [operations](operations.md#archive-upgrade), and replaced by a new board that carries only the settings.
 
 | Group | Tables |
 | --- | --- |

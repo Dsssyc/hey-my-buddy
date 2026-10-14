@@ -4,7 +4,7 @@ How to install, run, recover and retire a hey-my-buddy installation. Command syn
 
 ## Installed state
 
-The recorded daily installation is [0.34.1/contract 0.34.1/schema 18](../acceptance/install-0.34.1.md). The current source is 0.35.0/contract 0.35.0/schema 19; source preparation does not install it, upgrade the daily board, publish a release or change user settings. The shared skill lives in `~/.agents/skills/hey-my-buddy`, with Claude Code reading the same directory through its link; the installed 0.34.1 keeps it under `~/.agents/skills/buddy` until the upgrade moves it. Runtime, state and backup roots remain owned by `hey_my_buddy.home`.
+The recorded daily installation is [0.35.0/contract 0.35.0/schema 19](../acceptance/install-0.35.0.md), the same version as the current source; source preparation does not install anything, upgrade the daily board, publish a release or change user settings. The shared skill lives in `~/.agents/skills/hey-my-buddy`, with Claude Code reading the same directory through its link. Runtime, state and backup roots remain owned by `hey_my_buddy.home`.
 
 ## Installation
 
@@ -91,7 +91,7 @@ uv run --frozen python packaging/build-skill.py --destination /path/to/dist/hey-
 
 ## Archive upgrade
 
-The one pending upgrade, from schema 18 (written by 0.34.1) to the current schema, does not convert the work history. It keeps the old board as an archive, creates a new board and carries only the settings over. It is in the source and has not run on the daily board: the current source has not been installed.
+The one pending upgrade, from schema 18 (written by 0.34.1) to the current schema, does not convert the work history. It keeps the old board as an archive, creates a new board and carries only the settings over. It ran on the daily board on 2026-10-14 ([record](../acceptance/install-0.35.0.md)); having run on a real board it is consumed, and the next change of stored form starts from the new upgrade base.
 
 It refuses with `UPGRADE_NOT_IDLE`, changing nothing, while any of these holds, and lists them in `active`, `unresolvedAttempts` and `managedCheckouts`: a micro task that is executing, queued, or waiting for its Host or for helpers; a delivered micro task that is neither accepted nor concluded by its Host; an execution that has not finished or whose stop is not confirmed; a managed checkout still on disk. Accept or conclude the open micro tasks and reclaim the checkouts first. It refuses with `UPGRADE_ARCHIVE_IDENTITY_UNAVAILABLE` when the previous runtime does not record the commit it was built from, because the archive must name what wrote it; this is checked before the new runtime is prepared and before the old service is stopped, so the old service keeps running untouched.
 
@@ -173,7 +173,7 @@ Backup, restore, relocation, storage and cleanup neither traverse links/reparse 
 
 The [installed runtime](../acceptance/install-0.34.1.md) is 0.34.1 with contract 0.34.1 and schema 18. It was installed on 2026-10-13 over an idle 0.34.0 service with one verified backup and no schema change; the schema 17 to 18 upgrade ran with [0.31.0](../acceptance/install-0.31.0.md) on 2026-10-12. The recorded runtime identity and the preserved configuration are installation facts, distinct from source acceptance.
 
-The current source is contract 0.35.0, schema 19 and C-Two 0.7.4; the daily installation runs 0.34.1 with schema 18. The upgrade base is 0.34.1 with schema 18, the form written by commit `4b7f4946`: the source carries the one pending upgrade from 18 to 19, the [archive upgrade](#archive-upgrade), and accepts no older board. Installing the current source over the daily board runs it; that install has not happened. `ping` is the lightweight attachment check; `health` performs explicit current diagnostics. Source changes do not switch an installed client, daemon or worker.
+The current source is contract 0.35.0, schema 19 and C-Two 0.7.4; the daily installation runs the same 0.35.0 with schema 19. The upgrade base is 0.34.1 with schema 18, the form written by commit `4b7f4946`: the source carries the one pending upgrade from 18 to 19, the [archive upgrade](#archive-upgrade), and accepts no older board. It ran when 0.35.0 was installed on 2026-10-14. `ping` is the lightweight attachment check; `health` performs explicit current diagnostics. Source changes do not switch an installed client, daemon or worker.
 
 hey-my-buddy installs Python dependencies with uv from a frozen lock (PyPI `c-two==0.7.4` and PyYAML; Python `>=3.12,<3.15`). The service and its workers execute from a **content-addressed stable runtime** outside the skill directory, so replacing the skill does not disturb a running service.
 
