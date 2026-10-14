@@ -28,7 +28,7 @@ export function parseBuddyPage(value: unknown): BuddyPage {
     && optionalList(page.modelServiceNotes)
     && Array.isArray(page.modelServiceConcurrency)
     && (page.nextCursor === null || typeof page.nextCursor === "string");
-  if (!valid) throw new Error("配置历史响应不完整，请检查服务版本。");
+  if (!valid) throw new Error("buddy 历史响应不完整，请检查服务版本。");
   return page;
 }
 

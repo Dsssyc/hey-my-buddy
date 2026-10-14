@@ -84,7 +84,7 @@ describe("desktop console", () => {
     const f = fixture();
     f.api.readVerifiedAt = () => Date.parse("2026-01-02T03:04:05Z");
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "还没有工作目标" });
+    await screen.findByRole("heading", { name: "还没有宏任务" });
     expect(screen.queryByRole("button", { name: "刷新工作台" })).toBeNull();
     // A read from an earlier day is written with its date; the top bar holds the only copy.
     const read = within(screen.getByRole("banner")).getByText(formatDateTime(Date.parse("2026-01-02T03:04:05Z")));
@@ -122,7 +122,7 @@ describe("desktop console", () => {
     // comes from the slim snapshot's server-side field.
     f.snapshot.tasks.pendingCount = 5;
     render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "还没有工作目标" });
+    await screen.findByRole("heading", { name: "还没有宏任务" });
     // The count and what it counts are both part of the tab's name.
     expect(screen.getByRole("link", { name: /^任务\s*5\s*等待 Host 决定的微任务$/ })).toBeTruthy();
     f.snapshot.tasks.pendingCount = 0;
@@ -195,19 +195,19 @@ describe("desktop console", () => {
     expect(screen.queryByRole("button", { name: /目标 helper/ })).toBeNull();
     expect(screen.getAllByText(/codex-source → dsh/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/worker:unrelated-label/)).toBeNull();
-    await user.type(screen.getByLabelText("搜索委派"), "目标");
+    await user.type(screen.getByLabelText("搜索微任务"), "目标");
     await user.selectOptions(screen.getByLabelText("项目筛选"), "source-project");
     await user.selectOptions(screen.getByLabelText("委派方筛选"), "codex-source");
     await waitFor(() => expect(f.tasks).toHaveBeenLastCalledWith(expect.objectContaining({ rootsOnly: true,
       query: "目标", projectId: "source-project", hostId: "codex-source" }), expect.any(AbortSignal)));
-    const scroll = screen.getByLabelText("委派条目");
+    const scroll = screen.getByLabelText("微任务条目");
     scroll.scrollTop = 280;
     await user.click(screen.getByRole("link", { name: /Buddy/ }));
     await user.click(screen.getByRole("link", { name: "任务" }));
-    expect(screen.getByLabelText("搜索委派")).toHaveProperty("value", "目标");
+    expect(screen.getByLabelText("搜索微任务")).toHaveProperty("value", "目标");
     expect(screen.getByLabelText("项目筛选")).toHaveProperty("value", "source-project");
     expect(screen.getByLabelText("委派方筛选")).toHaveProperty("value", "codex-source");
-    expect(screen.getByLabelText("委派条目")).toHaveProperty("scrollTop", 280);
+    expect(screen.getByLabelText("微任务条目")).toHaveProperty("scrollTop", 280);
     await user.click(screen.getByLabelText("显示协助任务与内部执行"));
     await user.click(await screen.findByRole("button", { name: /目标 helper/ }));
     expect(f.tasks).toHaveBeenLastCalledWith(expect.objectContaining({ rootsOnly: false, projectId: "source-project", hostId: "codex-source" }), expect.any(AbortSignal));
@@ -223,10 +223,10 @@ describe("desktop console", () => {
     render(<App suppliedApi={f.api} />);
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await screen.findByRole("button", { name: /目标 alpine/ });
-    expect(screen.getByText("已加载 2 个委派目标")).toBeTruthy();
+    expect(screen.getByText("已加载 2 个微任务")).toBeTruthy();
     await user.click(screen.getByLabelText("显示协助任务与内部执行"));
     expect(await screen.findByText("已加载 2 条执行记录")).toBeTruthy();
-    expect(screen.queryByText("已加载 2 个委派目标")).toBeNull();
+    expect(screen.queryByText("已加载 2 个微任务")).toBeNull();
   });
 
   it("reloads the visible filtered history when the local history refresh is pressed", async () => {
@@ -237,7 +237,7 @@ describe("desktop console", () => {
     await screen.findByRole("button", { name: /目标 old/ });
     await user.selectOptions(screen.getByLabelText("项目筛选"), "source-project");
     await screen.findByRole("button", { name: /目标 old/ });
-    const scroll = screen.getByLabelText("委派条目");
+    const scroll = screen.getByLabelText("微任务条目");
     scroll.scrollTop = 240;
     f.records.unshift({ ...microTask("outside", "another-host", "other-project"), createdAt: "2026-09-24T11:00:00Z" });
     await user.click(screen.getByRole("button", { name: "刷新全部执行记录" }));
@@ -258,7 +258,7 @@ describe("desktop console", () => {
     render(<App suppliedApi={f.api} />);
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await waitFor(() => expect(f.tasks).toHaveBeenCalledTimes(1));
-    await screen.findByRole("heading", { name: "没有匹配的委派" });
+    await screen.findByRole("heading", { name: "没有匹配的微任务" });
     f.records.push(microTask("first"));
     await user.click(screen.getByRole("button", { name: "刷新全部执行记录" }));
     expect(await screen.findByRole("button", { name: /目标 first/ })).toBeTruthy();
@@ -302,8 +302,8 @@ describe("desktop console", () => {
     await waitFor(() => expect(within(detail).getByRole("tab", { name: "产物与验收" }).getAttribute("aria-selected")).toBe("true"));
     expect(within(detail).getByRole("heading", { name: /目标 historical/ })).toBeTruthy();
     expect(within(detail).getByText("委派方：codex-source")).toBeTruthy();
-    await user.type(screen.getByLabelText("搜索委派"), "无匹配记录");
-    await screen.findByRole("heading", { name: "没有匹配的委派" });
+    await user.type(screen.getByLabelText("搜索微任务"), "无匹配记录");
+    await screen.findByRole("heading", { name: "没有匹配的微任务" });
     expect(within(detail).getByRole("heading", { name: /目标 historical/ })).toBeTruthy();
     expect(within(detail).getByText("委派方：codex-source")).toBeTruthy();
   });

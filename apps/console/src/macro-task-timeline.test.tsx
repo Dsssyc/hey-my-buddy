@@ -100,13 +100,13 @@ describe("macroTask timeline rendering", () => {
     const timeline = macroTaskTimelineFixture();
     render(<MacroTaskTimeline {...baseProps(timeline)} />);
     const head = document.querySelector(".tl-head") as HTMLElement;
-    expect(within(head).getByText("工作目标时间轴：设计、接口与实现")).toBeTruthy();
+    expect(within(head).getByText("宏任务时间轴：设计、接口与实现")).toBeTruthy();
     // U2: the header beneath the title shows only status, accepted progress
     // and latest activity; the description sits right under the title.
-    expect(within(head).getByText(/按用户认可的第 X 节设计工作目标时间轴/)).toBeTruthy();
+    expect(within(head).getByText(/按用户认可的第 X 节设计宏任务时间轴/)).toBeTruthy();
     const vitals = head.querySelector(".macro-task-vitals") as HTMLElement;
     expect(vitals.textContent).toContain("进行中");
-    expect(vitals.textContent).toContain("2 / 5 个委派已验收");
+    expect(vitals.textContent).toContain("2 / 5 个微任务已验收");
     expect(vitals.textContent).toMatch(/最近活动 \d{2}:\d{2}（/);
     // The plain-sentence durations and the record source fold into 时间统计 (§3).
     const stats = head.querySelector(".time-stats") as HTMLElement;
@@ -128,7 +128,7 @@ describe("macroTask timeline rendering", () => {
     const timeline = macroTaskTimelineFixture();
     timeline.macroTask = { ...timeline.macroTask, kind: "standalone", title: "修复标题回退在 CRLF 输入下的显示" };
     render(<MacroTaskTimeline {...baseProps(timeline)} />);
-    expect(screen.getByText("历史独立委派")).toBeTruthy();
+    expect(screen.getByText("历史独立微任务")).toBeTruthy();
   });
 
   it("renders every span kind and terminal state with non-colour markers", () => {
@@ -173,7 +173,7 @@ describe("macroTask timeline rendering", () => {
     const timeline = macroTaskTimelineFixture();
     render(<MacroTaskTimeline {...baseProps(timeline)} />);
     openLegend();
-    const legend = screen.getByLabelText("执行配置图例");
+    const legend = screen.getByLabelText("执行 buddy 图例");
     const items = [...legend.querySelectorAll(".legend-item")].map(node => node.textContent);
     // 0.16 0.3: friendly names; unknown ids stay raw.
     expect(items).toEqual(["Claude Opus 5.5 · high", "gpt-5-codex · max", "glm-5 · high", "Claude Sonnet 5 · low"]);
@@ -189,11 +189,11 @@ describe("macroTask timeline rendering", () => {
     const timeline = macroTaskTimelineFixture();
     const { container } = render(<MacroTaskTimeline {...baseProps(timeline)} />);
     const labels = [...container.querySelectorAll(".tl-row[data-nav] .tl-label")].slice(1).map(node => node.textContent);
-    expect(labels[0]).toContain("设计工作目标时间轴视图与交互规范");
+    expect(labels[0]).toContain("设计宏任务时间轴视图与交互规范");
     expect(labels[2]).toContain("↳");
     expect(labels[2]).toContain("补充 schema 升级离线副本的验证测试");
     const helper = container.querySelectorAll(".tl-row[data-nav] .tl-label")[3]! as HTMLButtonElement;
-    expect(helper.getAttribute("aria-label")).toContain("委派，补充 schema 升级离线副本的验证测试");
+    expect(helper.getAttribute("aria-label")).toContain("微任务，补充 schema 升级离线副本的验证测试");
     expect(helper.getAttribute("aria-label")).toContain("标题来源：Host 标题");
   });
 
@@ -280,7 +280,7 @@ describe("macroTask timeline rendering", () => {
     first.unmount();
     const filtered = macroTaskTimelineFixture({ filtered: true, scopeComplete: false, totals: { rows: 2, spans: 15, events: 9, allRows: 6 } });
     const second = render(<MacroTaskTimeline {...baseProps(filtered)} />);
-    expect(second.getByRole("status").textContent).toContain("已按筛选显示 6 / 6 个委派");
+    expect(second.getByRole("status").textContent).toContain("已按筛选显示 6 / 6 个微任务");
     expect(second.queryByRole("button", { name: /已折叠，展开/ })).toBeNull();
   });
 
@@ -293,14 +293,14 @@ describe("macroTask timeline rendering", () => {
     const cards = [...strip.querySelectorAll<HTMLElement>(".micro-task-card")];
     expect(cards.length).toBe(5);
     // T3: bold two-line title, top-right status, one-line result with the
-    // Worker 自述 label, and no 做什么/目标摘要 labels.
+    // Worker 自述 label, and no 做什么/微任务摘要 labels.
     const first = cards[0]!;
-    expect(first.querySelector(".micro-task-card-title")!.textContent).toBe("设计工作目标时间轴视图与交互规范");
+    expect(first.querySelector(".micro-task-card-title")!.textContent).toBe("设计宏任务时间轴视图与交互规范");
     expect(first.querySelector(".micro-task-card-state")!.textContent).toContain("已验收");
     expect(first.textContent).toContain("结果：已完成时间轴视图与交互规范设计并交付审阅。");
     expect(within(first).getByText("Worker 自述")).toBeTruthy();
     expect(first.textContent).not.toContain("做什么");
-    expect(first.textContent).not.toContain("目标摘要");
+    expect(first.textContent).not.toContain("微任务摘要");
     const executing = cards.find(card => card.textContent!.includes("时间轴界面带截图的视觉与交互审查"))!;
     expect(executing.textContent).toContain("结果未知");
     expect(within(executing).queryByText("Worker 自述")).toBeNull();
@@ -348,7 +348,7 @@ describe("macroTask timeline rendering", () => {
   it("treats unknown shutdown as outranking a recorded failure, keeping the failure text", () => {
     const timeline = macroTaskTimelineFixture({
       rows: [{
-        runId: "r7", parentRunId: null, rootRunId: "r7", title: "失败但停止未确认的委派", titleSource: "title", taskSummary: null, summary: null,
+        runId: "r7", parentRunId: null, rootRunId: "r7", title: "失败但停止未确认的微任务", titleSource: "title", taskSummary: null, summary: null,
         createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
         shutdownConfirmed: false, depth: 0, kind: "micro-task", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
       }],
@@ -373,7 +373,7 @@ describe("macroTask timeline rendering", () => {
   it("says the end time is missing for a terminal span instead of borrowing now", () => {
     const timeline = macroTaskTimelineFixture({
       rows: [{
-        runId: "r8", parentRunId: null, rootRunId: "r8", title: "结束时间缺失的委派", titleSource: "task", taskSummary: null, summary: null,
+        runId: "r8", parentRunId: null, rootRunId: "r8", title: "结束时间缺失的微任务", titleSource: "task", taskSummary: null, summary: null,
         createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
         shutdownConfirmed: true, depth: 0, kind: "micro-task", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
       }],
@@ -463,7 +463,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const inspector = document.querySelector(".timeline-inspector") as HTMLElement;
     expect(inspector.querySelector(".inspector-card")).toBeTruthy();
     expect(inspector.textContent).toContain("执行片段");
-    expect(inspector.textContent).toContain("设计工作目标时间轴视图与交互规范");
+    expect(inspector.textContent).toContain("设计宏任务时间轴视图与交互规范");
     expect(inspector.textContent).toContain("Claude Opus 5.5 · high");
     // Hover never changes the card or reference line; focus only moves the guide.
     const guideBefore = document.querySelector(".guide-line")?.getAttribute("style");
@@ -472,7 +472,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     expect(inspector.textContent).not.toContain("预览：");
     act(() => { item("span:s-r3-e1")!.focus(); });
     const after = document.querySelector(".timeline-inspector") as HTMLElement;
-    expect(after.textContent).toContain("设计工作目标时间轴视图与交互规范");
+    expect(after.textContent).toContain("设计宏任务时间轴视图与交互规范");
     expect(after.textContent).toContain("Claude Opus 5.5 · high");
     expect(after.textContent).not.toContain("预览：");
     // A refresh with the same facts keeps the pinned card.
@@ -490,7 +490,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     await user.click(item("row:r3")!);
     openInspector();
     const card = document.querySelector(".inspector-card") as HTMLElement;
-    expect(card.textContent).toContain("整项委派");
+    expect(card.textContent).toContain("整项微任务");
     await user.click(screen.getByRole("button", { name: "收起检查器" }));
     // A filtered refresh that no longer returns the helper's rows or spans.
     const dropped = macroTaskTimelineFixture({
@@ -501,7 +501,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
       totals: { rows: 5, spans: 13, events: 8, allRows: 6 },
     });
     view.rerender(<Harness timeline={dropped} selectionSource={source} />);
-    expect(document.querySelector(".inspector-dock-title")!.textContent).toContain("整项委派");
+    expect(document.querySelector(".inspector-dock-title")!.textContent).toContain("整项微任务");
     openInspector();
     const kept = document.querySelector(".inspector-card") as HTMLElement;
     expect(kept.textContent).toContain("记录在当前范围外");
@@ -567,10 +567,10 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     // P1.6: the fixed six-field card for a whole micro task.
     const inspector = document.querySelector(".timeline-inspector") as HTMLElement;
     expect(inspector.textContent).toContain("类型");
-    expect(inspector.textContent).toContain("委派");
+    expect(inspector.textContent).toContain("微任务");
     expect(inspector.textContent).toContain("回合");
     expect(inspector.textContent).toContain("共 2 轮");
-    expect(inspector.textContent).toContain("配置");
+    expect(inspector.textContent).toContain("buddy");
     expect(inspector.textContent).toContain("时间");
     expect(inspector.textContent).toContain("结果");
     expect(inspector.textContent).toContain("已验收");
@@ -615,7 +615,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const rows = [...popover.querySelectorAll(".marker-popover-main")] as HTMLButtonElement[];
     expect(rows.length).toBe(2);
     // P1.7: natural-language sentences name the micro task.
-    expect(rows[0]!.textContent).toMatch(/Host 批准 \/ 拒绝了「实现 objectives 表、objective_list 与只读时间轴接口」的请求/);
+    expect(rows[0]!.textContent).toMatch(/Host 批准 \/ 拒绝了「实现 macro_tasks 表、macro_task_list 与只读时间轴接口」的请求/);
     // A single row click pins that event and the popover stays open.
     await user.click(rows[0]!);
     expect(source.get()).toEqual({ type: "item", key: "event:5" });
@@ -816,7 +816,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const first = macroTaskTimelineFixture();
     const view = render(<MacroTaskTimeline {...baseProps(first)} />);
     openLegend();
-    const legendColors = () => [...screen.getByLabelText("执行配置图例").querySelectorAll(".legend-item .swatch")]
+    const legendColors = () => [...screen.getByLabelText("执行 buddy 图例").querySelectorAll(".legend-item .swatch")]
       .map(node => (node as HTMLElement).style.getPropertyValue("--c"));
     expect(legendColors()).toEqual(["var(--cfg-1)", "var(--cfg-2)", "var(--cfg-3)", "var(--cfg-4)"]);
     const second = macroTaskTimelineFixture();
@@ -846,7 +846,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const overflow = render(<MacroTaskTimeline {...baseProps(many)} />);
     expect([...document.querySelectorAll(".sp.exec.striped")].length).toBe(1);
     openLegend();
-    expect(screen.getByLabelText("执行配置图例").querySelectorAll(".legend-item .swatch.striped").length).toBe(1);
+    expect(screen.getByLabelText("执行 buddy 图例").querySelectorAll(".legend-item .swatch.striped").length).toBe(1);
     overflow.unmount();
   });
 });

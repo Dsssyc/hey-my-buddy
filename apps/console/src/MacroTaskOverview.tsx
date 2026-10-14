@@ -11,7 +11,7 @@ import {
 import { macroTaskMetrics, rootRollups, type RunRollup } from "./macro-task-metrics";
 
 /**
- * The detail overview's two rows (0.16 T4): 目标摘要 and the Worker's own
+ * The detail overview's two rows (0.16 T4): 微任务摘要 and the Worker's own
  * result line. The intent title is the detail heading's job and never repeats
  * here.
  */
@@ -21,7 +21,7 @@ export function MicroTaskDetailRows({ taskSummary, resultSummary }: {
 }) {
   return <div className="card-rows detail-rows">
     <span className="card-row">
-      <span className="card-row-label">目标摘要</span>
+      <span className="card-row-label">微任务摘要</span>
       <span className="card-row-text" title={taskSummary ?? undefined}>{taskSummary ?? "未记录任务原文"}</span>
     </span>
     <span className="card-row">
@@ -37,7 +37,7 @@ export function MicroTaskDetailRows({ taskSummary, resultSummary }: {
  * the top right, one single-line result with a small Worker 自述 label, and a
  * weak meta row only when it has content. The card's minimum height covers two
  * title lines plus the result line, so one-line titles never make the strip
- * jump. No visible index; screen readers get “第 n 个委派，共 m 个”.
+ * jump. No visible index; screen readers get “第 n 个微任务，共 m 个”.
  */
 function MicroTaskCard({ rollup, index, total, selected, tabbable, onFocus, onSelect, onOpen }: {
   rollup: RunRollup; index: number; total: number; selected: boolean; tabbable: boolean;
@@ -51,7 +51,7 @@ function MicroTaskCard({ rollup, index, total, selected, tabbable, onFocus, onSe
   if (rollup.helpers.length) meta.push(`协助 ${rollup.helpers.length}`);
   return <button type="button" className={"micro-task-card" + (selected ? " selected" : "")}
     aria-pressed={selected} tabIndex={tabbable ? 0 : -1}
-    aria-label={`第 ${index + 1} 个委派，共 ${total} 个：${title.text}，${state.label}（单击选中，双击打开详情）`}
+    aria-label={`第 ${index + 1} 个微任务，共 ${total} 个：${title.text}，${state.label}（单击选中，双击打开详情）`}
     onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(rollup.row.runId); } }}
     title={titleLineTooltip(title)} onFocus={onFocus}
     onClick={() => onSelect(rollup.row.runId)}
@@ -103,7 +103,7 @@ function SingleMicroTaskCard({ rollup, onOpen }: {
 }
 
 /**
- * The collapsible micro-task-card band (0.16 P2.1): “▾ 委派（n）” toggles the
+ * The collapsible micro-task-card band (0.16 P2.1): “▾ 微任务（n）” toggles the
  * whole strip; collapsed it is one 28px row. Cards wrap into at most two rows
  * until the user reveals the full set.
  */
@@ -219,7 +219,7 @@ export function MicroTaskStrip({ timeline, selectedRunId, collapsed, onToggleCol
     <div className="micro-task-band-head">
     <button type="button" className="micro-task-band-toggle" aria-expanded={!collapsed} aria-controls={stripId}
       onClick={onToggleCollapsed}>
-      <span aria-hidden="true">{collapsed ? "▸" : "▾"}</span> 委派（{roots.length}）
+      <span aria-hidden="true">{collapsed ? "▸" : "▾"}</span> 微任务（{roots.length}）
     </button>
     {!collapsed && roots.length > firstTwoRows && <button type="button" className="button small-button micro-task-show-all"
       aria-expanded={showAll} aria-controls={stripId}
@@ -231,12 +231,12 @@ export function MicroTaskStrip({ timeline, selectedRunId, collapsed, onToggleCol
     {!collapsed && (roots.length === 1
       ? <div ref={stripRoot} className="micro-task-strip single-root"><SingleMicroTaskCard rollup={roots[0]!} onOpen={onOpenRun} /></div>
       : <div className="micro-task-strip" id={stripId} ref={stripRoot} role="group"
-        aria-label="委派卡（按创建顺序）" onKeyDown={onStripKeyDown}>
+        aria-label="微任务卡（按创建顺序）" onKeyDown={onStripKeyDown}>
         {roots.slice(0, visibleCount).map((rollup, index) => <MicroTaskCard key={rollup.row.runId} rollup={rollup} index={index} total={roots.length}
           selected={selectedRunId === rollup.row.runId} tabbable={index === Math.min(cardFocus, visibleCount - 1)}
           onFocus={() => setCardFocus(index)} onSelect={onSelectRun} onOpen={onOpenRun} />)}
         {(timeline.truncated.rows || timeline.filtered) && <span className="muted strip-bound">
-          显示 {timeline.rows.filter(row => row.parentRunId === null).length} / {timeline.totals.rows} 个委派{timeline.truncated.rows ? " · 已截断" : ""}
+          显示 {timeline.rows.filter(row => row.parentRunId === null).length} / {timeline.totals.rows} 个微任务{timeline.truncated.rows ? " · 已截断" : ""}
         </span>}
       </div>)}
     {!collapsed && hiddenIndices.length > 0 && <div className="micro-task-current">
@@ -260,7 +260,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, onBackToL
   loading: boolean;
   stale: boolean;
   onBackToList: () => void;
-  /** MacroTask-level actions (停止目标 and its honest status). */
+  /** MacroTask-level actions (停止宏任务 and its honest status). */
   headerActions?: ReactNode;
   /** Compact form at viewport heights of 800px or less (P2.1). */
   compact?: boolean;
@@ -279,12 +279,12 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, onBackToL
     ? metrics.sumMs : null;
 
   return <header className={"detail-header tl-head" + (compact ? " compact" : "")}>
-    <button type="button" className="button small-button narrow-back" onClick={onBackToList}>‹ 工作目标列表</button>
+    <button type="button" className="button small-button narrow-back" onClick={onBackToList}>‹ 宏任务列表</button>
     <div className="macro-task-title-row">
       <h2 className="one-line-title" title={titleAttr}>{excerpt(title.text, 100)}</h2>
       {shown.description && <span className="macro-task-description" title={shown.description}>{shown.description}</span>}
       <span className="chip-row">
-        {shown.kind === "standalone" && <Badge tone="neutral">历史独立委派</Badge>}
+        {shown.kind === "standalone" && <Badge tone="neutral">历史独立微任务</Badge>}
         {headerActions}
       </span>
     </div>

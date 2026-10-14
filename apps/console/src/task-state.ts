@@ -20,9 +20,9 @@ function normalizeDisplay(text: string): string {
 export const TASK_TITLE_SOURCE_LABEL: Record<TitleSource, string> = {
   title: "Host 标题",
   task: "任务首行",
-  none: "未命名委派",
+  none: "未命名微任务",
 };
-export const UNTITLED_MICRO_TASK = "未命名委派";
+export const UNTITLED_MICRO_TASK = "未命名微任务";
 /** Task-first-line titles cap at roughly this many characters (0.16 0.1). */
 const TASK_LINE_CHARS = 40;
 /** Suffix pointing readers to the detail view for the full task text. */
@@ -41,7 +41,7 @@ export type TaskTitle = {
 
 /**
  * The one micro task title rule (0.16 0.1): explicit workflow.title, then the
- * first nonempty task line labelled 取自任务首行, then 未命名委派. A Worker
+ * first nonempty task line labelled 取自任务首行, then 未命名微任务. A Worker
  * resultSummary is never a title; callers show it only as a “结果” line. The
  * raw task text stays available in the detail view.
  */

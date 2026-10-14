@@ -1376,7 +1376,7 @@ class WorkflowCoordinator:
                                (reason, now, run["current_routing_id"]))
         request_id = f"routing-{uuid.uuid4()}"
         payload = {"source": "routing", "decisionId": run["current_routing_id"], "summary": reason,
-                   "neededWork": ["读取路由边界的冻结候选和事实，指定完整合法 buddy 继续同一委派，或在列明的时间后显式 reroute=true；仅更改共享 Router 设置需要用户。"],
+                   "neededWork": ["读取路由边界的冻结候选和事实，指定完整合法 buddy 继续同一微任务，或在列明的时间后显式 reroute=true；仅更改共享 Router 设置需要用户。"],
                    "attempted": "Bounded model routing and native buddy validation",
                    "acceptance": "A legal harness/provider/model/effort tuple is ready for execution"}
         if run["current_routing_id"]:

@@ -23,7 +23,7 @@ import type { Snapshot } from "./types";
  * `parseWorkflowReply`. Only synthetic Router settings and eligibility are
  * re-authored for L4 at the test boundary below. A future
  * snapshot shape the frontend refuses, or preview data that stops matching the
- * parser, fails here; `tests/python/test_host_preview.py` additionally asserts
+ * parser, fails here; `tests/python/cli/test_host_preview.py` additionally asserts
  * the resulting report and proves the emitted tree is deterministic, so the
  * guard is part of the normal `hey_my_buddy.cli.checks` run.
  *
@@ -311,12 +311,12 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     }
 
     // The report is written once, by the test that parsed every fixture above,
-    // so `tests/python/test_host_preview.py` always sees the complete surface.
+    // so `tests/python/cli/test_host_preview.py` always sees the complete surface.
   });
 });
 
 /**
- * The machine-readable report `tests/python/test_host_preview.py` asserts
+ * The machine-readable report `tests/python/cli/test_host_preview.py` asserts
  * against, so the Python side checks the real parser's output instead of its
  * own copy of the fields.
  */

@@ -45,17 +45,17 @@ afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); vi.unst
 
 
 const preference = VIEW_PREFERENCE_PREFIX + "micro-task-list-collapsed";
-const macroTaskRow = () => screen.getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ });
+const macroTaskRow = () => screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
 function macroTaskRail() {
-  expect(screen.queryByRole("region", { name: "工作目标列表（已收起）" })).not.toBeNull();
-  return screen.getByRole("region", { name: "工作目标列表（已收起）" });
+  expect(screen.queryByRole("region", { name: "宏任务列表（已收起）" })).not.toBeNull();
+  return screen.getByRole("region", { name: "宏任务列表（已收起）" });
 }
 function narrow(matches: boolean) {
   vi.stubGlobal("matchMedia", vi.fn(() => ({ matches, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
 }
 async function openDetail(f: ReturnType<typeof harness>) {
   if (!document.querySelector(".timeline-view")) {
-    await f.user.click(await screen.findByRole("button", { name: /工作目标时间轴：设计、接口与实现/ }));
+    await f.user.click(await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
   }
   await waitFor(() => expect(document.querySelector('[data-key="span:s-r1-e"]')).toBeTruthy());
   await f.user.dblClick(document.querySelector('[data-key="span:s-r1-e"]') as HTMLElement);
@@ -65,7 +65,7 @@ async function openDetail(f: ReturnType<typeof harness>) {
 describe("U08 microTask navigation", () => {
   it("keeps title-left switches and command records accessible by keyboard without a top switch row", async () => {
     const f = harness();
-    await screen.findByRole("button", { name: /工作目标时间轴：设计、接口与实现/ });
+    await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
     expect(screen.queryByRole("button", { name: "切换到全部执行记录" })).not.toBeNull();
     const button = screen.getByRole("button", { name: "切换到全部执行记录" });
     expect(button.getAttribute("title")).toBe("切换到全部执行记录");
@@ -73,8 +73,8 @@ describe("U08 microTask navigation", () => {
     expect(document.querySelector(".history-switch-bar")).toBeNull();
     button.focus();
     await f.user.keyboard("{Enter}");
-    const back = screen.getByRole("button", { name: "切换到工作目标" });
-    expect(back.getAttribute("title")).toBe("切换到工作目标");
+    const back = screen.getByRole("button", { name: "切换到宏任务" });
+    expect(back.getAttribute("title")).toBe("切换到宏任务");
     expect(back.nextElementSibling?.textContent).toBe("全部执行记录");
     await f.user.click(screen.getByLabelText("显示协助任务与内部执行"));
     expect(await screen.findByRole("button", { name: /外部命令记录/ })).toBeTruthy();
@@ -86,37 +86,37 @@ describe("U08 microTask navigation", () => {
 
   it("preserves manual collapse, mounted list scroll and pagination through view/page changes and reload", async () => {
     const f = harness(true);
-    await screen.findByRole("button", { name: /工作目标时间轴：设计、接口与实现/ });
-    const list = screen.getByLabelText("工作目标条目");
+    await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
+    const list = screen.getByLabelText("宏任务条目");
     list.scrollTop = 123;
-    const search = screen.getByLabelText("搜索工作目标");
-    const more = screen.getByRole("button", { name: "加载更早工作目标" });
-    await f.user.click(screen.getByRole("button", { name: "收起工作目标列表" }));
+    const search = screen.getByLabelText("搜索宏任务");
+    const more = screen.getByRole("button", { name: "加载更早宏任务" });
+    await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));
     expect(localStorage.getItem(preference)).toBe("true");
     expect(list.closest("[hidden]")).toBeTruthy();
     expect(list.scrollTop).toBe(123);
-    expect(screen.getByLabelText("搜索工作目标")).toBe(search);
+    expect(screen.getByLabelText("搜索宏任务")).toBe(search);
     expect(within(macroTaskRail()).queryByRole("button", { name: "切换到全部执行记录" })).not.toBeNull();
     await f.user.click(within(macroTaskRail()).getByRole("button", { name: "切换到全部执行记录" }));
     const rawRail = screen.getByRole("region", { name: "全部执行记录列表（已收起）" });
     expect(within(rawRail).getByRole("button", { name: "展开全部执行记录列表" })).toBeTruthy();
-    await f.user.click(within(rawRail).getByRole("button", { name: "切换到工作目标" }));
+    await f.user.click(within(rawRail).getByRole("button", { name: "切换到宏任务" }));
     f.rerender(<MacroTasks snapshot={snapshotFixture()} api={f.api} refresh={f.refresh} active={false} />);
     f.rerender(<MacroTasks snapshot={snapshotFixture()} api={f.api} refresh={f.refresh} active />);
     expect(macroTaskRail()).toBeTruthy();
-    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开工作目标列表" }));
-    expect(screen.getByLabelText("工作目标条目")).toBe(list);
+    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开宏任务列表" }));
+    expect(screen.getByLabelText("宏任务条目")).toBe(list);
     expect(list.scrollTop).toBe(123);
-    expect(screen.getByRole("button", { name: "加载更早工作目标" })).toBe(more);
+    expect(screen.getByRole("button", { name: "加载更早宏任务" })).toBe(more);
     await f.user.click(more);
     expect(f.api.macroTasks).toHaveBeenCalledWith(expect.objectContaining({ before: "older", limit: 50 }), expect.any(AbortSignal));
-    await f.user.click(screen.getByRole("button", { name: "收起工作目标列表" }));
+    await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));
     f.unmount();
     const next = harness();
     expect(macroTaskRail()).toBeTruthy();
-    await next.user.click(within(macroTaskRail()).getByRole("button", { name: "展开工作目标列表" }));
+    await next.user.click(within(macroTaskRail()).getByRole("button", { name: "展开宏任务列表" }));
     expect(localStorage.getItem(preference)).toBe("false");
-    expect(screen.getByRole("region", { name: "工作目标列表" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
   });
 
   it("auto detail collapse never writes a habit and manual collapse survives closing the detail", async () => {
@@ -126,14 +126,14 @@ describe("U08 microTask navigation", () => {
     expect(macroTaskRail()).toBeTruthy();
     expect(localStorage.getItem(preference)).toBeNull();
     await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "关闭详情" }));
-    expect(screen.getByRole("region", { name: "工作目标列表" })).toBeTruthy();
-    await f.user.click(within(screen.getByRole("region", { name: "工作目标列表" })).getByRole("button", { name: "收起工作目标列表" }));
+    expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
+    await f.user.click(within(screen.getByRole("region", { name: "宏任务列表" })).getByRole("button", { name: "收起宏任务列表" }));
     await openDetail(f);
     await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "关闭详情" }));
     expect(macroTaskRail()).toBeTruthy();
     expect(localStorage.getItem(preference)).toBe("true");
-    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开工作目标列表" }));
-    expect(screen.getByRole("region", { name: "工作目标列表" })).toBeTruthy();
+    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开宏任务列表" }));
+    expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
     expect(localStorage.getItem(preference)).toBe("false");
   });
 
@@ -141,12 +141,12 @@ describe("U08 microTask navigation", () => {
     narrow(false);
     const f = harness();
     await openDetail(f);
-    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开工作目标列表" }));
-    const drawer = await screen.findByRole("dialog", { name: "工作目标列表（抽屉）" });
-    await f.user.click(within(drawer).getByRole("button", { name: "收起工作目标列表" }));
+    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开宏任务列表" }));
+    const drawer = await screen.findByRole("dialog", { name: "宏任务列表（抽屉）" });
+    await f.user.click(within(drawer).getByRole("button", { name: "收起宏任务列表" }));
     expect(localStorage.getItem(preference)).toBe("true");
-    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开工作目标列表" }));
-    expect(await screen.findByRole("dialog", { name: "工作目标列表（抽屉）" })).toBeTruthy();
+    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开宏任务列表" }));
+    expect(await screen.findByRole("dialog", { name: "宏任务列表（抽屉）" })).toBeTruthy();
     expect(localStorage.getItem(preference)).toBe("false");
     expect(document.querySelector(".right-dock.side")).toBeTruthy();
   });
@@ -155,21 +155,21 @@ describe("U08 microTask navigation", () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
     const f = harness();
-    await f.user.click(screen.getByRole("button", { name: "收起工作目标列表" }));
+    await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));
     expect(macroTaskRail()).toBeTruthy();
-    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开工作目标列表" }));
-    expect(screen.getByRole("region", { name: "工作目标列表" })).toBeTruthy();
+    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开宏任务列表" }));
+    expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
   });
 
   it("offers the switch in the narrow detail title and keeps a manually collapsed rail reachable", async () => {
     narrow(true);
     const f = harness();
-    await f.user.click(await screen.findByRole("button", { name: /工作目标时间轴：设计、接口与实现/ }));
+    await f.user.click(await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
     const mobile = document.querySelector(".list-mobile-navigation") as HTMLElement;
     expect(within(mobile).queryByRole("button", { name: "切换到全部执行记录" })).not.toBeNull();
     const toggle = within(mobile).getByRole("button", { name: "切换到全部执行记录" });
     expect(toggle.getAttribute("title")).toBe("切换到全部执行记录");
-    await f.user.click(within(mobile).getByRole("button", { name: "收起工作目标列表" }));
+    await f.user.click(within(mobile).getByRole("button", { name: "收起宏任务列表" }));
     expect(macroTaskRail()).toBeTruthy();
     const css = readFileSync("src/styles.css", "utf8");
     expect(css).toContain(".workspace-grid.list-rail.has-selection > .rail-panel { display: flex; }");

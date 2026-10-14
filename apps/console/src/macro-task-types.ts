@@ -5,7 +5,7 @@ export type MacroTaskFilter = "all" | "active" | "host" | "review";
 export type MacroTaskCategory = "host" | "active" | "review" | "ended";
 export type MacroTaskCounts = {
   roots: number; helpers: number;
-  /** Accepted micro task members (roots + helpers); the denominator of accepted progress. */
+  /** Accepted root micro tasks; the numerator of progress against the root count. */
   accepted: number;
   active: number; host: number; review: number; ended: number;
 };
@@ -13,7 +13,7 @@ export type MacroTaskSummary = {
   /** `macro-<id>` for an explicit macroTask, or `run:<rootRunId>` for a standalone root micro task. */
   macroTaskId: string;
   kind: "macro-task" | "standalone";
-  /** MacroTask title, or the root's display title; `titleSource: "none"` means the 未命名委派 fallback. */
+  /** MacroTask title, or the root's display title; `titleSource: "none"` means the 未命名微任务 fallback. */
   title: string;
   titleSource: "macro-task" | "title" | "task" | "none";
   /** Immutable creation-time description in the user's words; omitted historic descriptions stay null. */
@@ -51,7 +51,7 @@ export type TimelineRow = {
   runId: string; parentRunId: string | null; rootRunId: string;
   title: string;
   titleSource: "title" | "task" | "none";
-  /** First nonempty task line (at most 200 characters); the 做什么/目标摘要 source. */
+  /** First nonempty task line (at most 200 characters); the 做什么/微任务摘要 source. */
   taskSummary: string | null;
   summary: string | null;
   createdAt: string;
@@ -105,7 +105,7 @@ export type TimelineSpan = {
   } | null;
 };
 export type TimelineEventKind =
-  "dispatch" | "decide" | "continue" | "integrate" | "accept" | "reject" | "cancel" | "takeover";
+  "dispatch" | "decide" | "continue" | "integrate" | "accept" | "reject" | "conclude" | "cancel" | "takeover";
 export type TimelineEvent = {
   seq: number; runId: string;
   /** One of TimelineEventKind from the current service; kept open for newer kinds. */

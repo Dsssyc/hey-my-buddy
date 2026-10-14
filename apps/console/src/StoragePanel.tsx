@@ -37,7 +37,7 @@ const REASON_LABEL: Record<string, string> = {
   "retained-runtime": "保留的运行时",
   "owner-unproven": "归属未证实",
   "linked-path": "存在链接路径",
-  "not-accepted": "目标尚未验收",
+  "not-accepted": "微任务尚未验收",
   "final-artifact-missing": "最终产物缺失",
   "integration-missing": "整合记录缺失",
   "unresolved-conflict": "有未解决的冲突",

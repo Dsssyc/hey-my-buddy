@@ -87,7 +87,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
   return <div className="workflow-panel">
     {state.error && <p className="error-message" role="alert">{state.error}</p>}
     {(value?.awaitingHost || value?.activeRequest?.state === "open") && <div className="attention-bar" role="status"><span>等待决定：{excerpt(value!.activeRequest?.summary || value!.waitReason, 120)}</span><button className="button small-button" onClick={() => setSection("assistance")}>查看请求</button></div>}
-    <DetailTabs id={tabsId} label="委派详情栏目" value={selectedSection}
+    <DetailTabs id={tabsId} label="微任务详情栏目" value={selectedSection}
       items={[["overview", "概览"], ["routing", "路由依据"], ["assistance", "协作与待办"], ["artifacts", "产物与验收"], ["execution", "执行记录"]]} onChange={setSection} />
     <div className="detail-body">
     {!value ? <p role="status">正在读取协作记录…</p> : <>
@@ -105,10 +105,10 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
         {conclusion && <section className={"detail-section host-conclusion" + (conclusion.failed ? " failed" : conclusion.cancelled ? " cancelled" : "")} aria-label="Host 结论">
           <h3>Host 结论</h3>
           <dl className="facts">
-            <dt>目标结果</dt><dd>{conclusion.statusLabel} · 不计入验收</dd>
+            <dt>微任务结果</dt><dd>{conclusion.statusLabel} · 不计入验收</dd>
             <dt>记录 Host</dt><dd>{conclusion.actor}{conclusion.ownerGeneration === null ? "" : ` · 第 ${conclusion.ownerGeneration} 代`}</dd>
             <dt>记录时间</dt><dd>{formatDate(conclusion.createdAt)}</dd>
-            <dt>目标版本</dt><dd>{conclusion.runRevision === null ? "未记录" : `V${conclusion.runRevision}`}</dd>
+            <dt>微任务版本</dt><dd>{conclusion.runRevision === null ? "未记录" : `V${conclusion.runRevision}`}</dd>
             {conclusion.references.map(reference => <Fragment key={reference.label}>
               <dt>{reference.label}</dt><dd className="mono wrap">{reference.value}</dd></Fragment>)}
           </dl>
@@ -118,7 +118,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
           </details>}
         </section>}
         <details className="record-facts">
-          <summary>记录细节（目标与回合）</summary>
+          <summary>记录细节（微任务与回合）</summary>
           <div className="record-facts-body">
             <Status status={value.state} />
             <dl className="facts">
@@ -128,13 +128,13 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
               <dt>已记录回合</dt><dd>{value.counts?.turns == null ? "未记录" : `共 ${value.counts.turns} 个回合`}</dd>
               <dt>接续方式</dt><dd>{value.currentTurn?.resumeMode === "native-session" ? "恢复原生会话" : value.currentTurn?.resumeMode === "reconstructed-new-session" ? "新会话，从持久上下文重建" : "首次执行"}</dd>
               {value.buddy && <Fragment>
-                <dt>执行配置</dt><dd>{
+                <dt>执行 buddy</dt><dd>{
                   `${value.buddy.harness} · ${value.buddy.model} / ${value.buddy.effort}`
-                  + (lockText ? `｜${lockText}` : "｜配置来源未记录")
+                  + (lockText ? `｜${lockText}` : "｜buddy 来源未记录")
                 }</dd></Fragment>}
               <dt>输入提交</dt><dd className="mono wrap">{value.workspace?.inputCommit || "未记录"}</dd>
               <dt>等待原因</dt><dd className="wrap">{value.waitReason}</dd>
-              <dt>执行停止</dt><dd>{value.shutdown?.selfConfirmed ? "本任务已确认停止" : "本任务尚未确认停止"}{value.shutdown && !value.shutdown.descendantsConfirmed ? `；目标范围内共 ${value.shutdown.unconfirmedCount} 项执行尚未核实` : ""}</dd>
+              <dt>执行停止</dt><dd>{value.shutdown?.selfConfirmed ? "本任务已确认停止" : "本任务尚未确认停止"}{value.shutdown && !value.shutdown.descendantsConfirmed ? `；微任务范围内共 ${value.shutdown.unconfirmedCount} 项执行尚未核实` : ""}</dd>
               <dt>验收记录</dt><dd>{value.task.acceptanceVerdict === "accepted" ? "已验收" : value.task.reviewRejectedAt ? "验收问题" : "未验收"}</dd>
             </dl>
 
@@ -235,7 +235,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
             const buddy = turn.buddy;
             return <li key={turn.turnId}>
               <span className="turn-label">第 {turn.turnIndex} 回合</span>
-              <span className="small muted">{buddy ? `${buddy.harness} · ${buddy.model} / ${buddy.effort}` : "配置未记录"}</span>
+              <span className="small muted">{buddy ? `${buddy.harness} · ${buddy.model} / ${buddy.effort}` : "buddy 未记录"}</span>
               <span className="turn-usage" title={usage.title}>{usage.text}</span>
               <span className="small muted">来源 {turn.tokenUsage?.source || "未记录"}</span>
             </li>;
@@ -244,7 +244,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
 
       </section>
       <NativeSessionView task={task} turnSessionId={value.currentTurn?.sessionId} />
-      <details className="detail-section"><summary>原始目标</summary><p className="read-text">{task.task}</p></details>
+      <details className="detail-section"><summary>原始微任务</summary><p className="read-text">{task.task}</p></details>
       </div>
     </>}
     </div>

@@ -133,7 +133,7 @@ describe("U5: audited controls retain the shared global box model and normal siz
       onFilterChange={vi.fn()} onQueryChange={vi.fn()} onProjectChange={vi.fn()} onHostChange={vi.fn()}
       onSelect={vi.fn()} onRetry={vi.fn()} onMore={vi.fn()} onApplyReorder={vi.fn()}
     />);
-    const scroll = getByLabelText("工作目标条目");
+    const scroll = getByLabelText("宏任务条目");
     const css = getComputedStyle(scroll);
     expect(css.getPropertyValue("scrollbar-gutter")).toBe("auto");
     expect(css.overflowY).toBe("auto");

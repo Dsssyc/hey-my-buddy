@@ -59,7 +59,7 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
     if (!selected || task || !active) return;
     let current = true; const controller = new AbortController(); setDetailError("");
     api.task(selected, controller.signal).then(value => {
-      if (!value || typeof value !== "object" || !("runId" in value) || value.runId !== selected || !("task" in value)) throw new Error("委派详情不完整。");
+      if (!value || typeof value !== "object" || !("runId" in value) || value.runId !== selected || !("task" in value)) throw new Error("微任务详情不完整。");
       if (current) setRemote(value as Task);
     }).catch(error => { if (current) setDetailError(errorText(error)); });
     return () => { current = false; controller.abort(); };
@@ -89,7 +89,7 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
       {listNavigation}
       <button type="button" className="rail-expand" aria-label="展开全部执行记录列表" title="展开全部执行记录列表" onClick={onExpandList}><span className="rail-text">全部执行记录</span></button>
     </section>}
-    <section className="panel list-panel" aria-label="委派列表" hidden={listCollapsed}>
+    <section className="panel list-panel" aria-label="微任务列表" hidden={listCollapsed}>
     <div className="panel-toolbar list-title-toolbar">{listNavigation}<h2>全部执行记录</h2>
       {onCollapseList && <button type="button" className="icon-button" aria-label="收起全部执行记录列表" title="收起全部执行记录列表" onClick={onCollapseList}>‹</button>}
       <button type="button" className="button small-button" aria-label="刷新全部执行记录" title="刷新全部执行记录" disabled={history.refreshing || history.loading} onClick={() => void history.refresh()}>刷新</button>
@@ -98,7 +98,7 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
     <div className="list-filters">
       <div className="segmented" aria-label="任务筛选">{([["all", "全部"], ["active", "进行中"], ["host", "等待 Host"], ["review", "等待验收"]] as const).map(([key, label]) =>
         <button key={key} aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}</button>)}</div>
-      <label className="search"><span className="sr-only">搜索委派</span><input value={query} maxLength={200} onChange={e => setQuery(e.target.value)} placeholder="目标、项目、委派方或 ID" /></label>
+      <label className="search"><span className="sr-only">搜索微任务</span><input value={query} maxLength={200} onChange={e => setQuery(e.target.value)} placeholder="微任务、项目、委派方或 ID" /></label>
       <div className="filter-pair"><label><span className="sr-only">项目筛选</span><select value={projectId} onChange={e => setProjectId(e.target.value)}><option value="">全部项目</option>
         {choices.projects.map(p => <option key={p.id} value={p.id}>{p.label} — {p.path || p.id}</option>)}</select></label>
         <label><span className="sr-only">委派方筛选</span><select value={hostId} onChange={e => setHostId(e.target.value)}><option value="">全部委派方</option>{choices.hosts.map(id => <option key={id}>{id}</option>)}</select></label></div>
@@ -107,7 +107,7 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
     </div>
     {newRecords > 0 && <button className="new-records" onClick={() => { history.reset(); if (scroll.current) scroll.current.scrollTop = 0; }}>有 {newRecords} 条新记录 · 回到最新</button>}
     {history.error && <div className="list-error" role="alert">{history.error}<button className="button small-button" onClick={() => void history.retry()}>重试读取</button></div>}
-    <div ref={scroll} className="list-scroll" tabIndex={0} aria-label="委派条目"
+    <div ref={scroll} className="list-scroll" tabIndex={0} aria-label="微任务条目"
       onWheel={() => { scrollIntent.current = true; }} onTouchMove={() => { scrollIntent.current = true; }}
       onKeyDown={e => { if (["ArrowDown", "PageDown", "End"].includes(e.key)) scrollIntent.current = true; }}
       onScroll={e => { const el = e.currentTarget; if (scrollIntent.current && el.scrollHeight - el.scrollTop - el.clientHeight < 140) { scrollIntent.current = false; loadMore(); } }}>
@@ -115,7 +115,7 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
         <button className="group-heading" aria-expanded={!collapsed.has(id)} title={group.project.path || group.project.id} onClick={() => setCollapsed(all => {
           const next = new Set(all); if (next.has(id)) next.delete(id); else next.add(id); return next;
         })}><span>{collapsed.has(id) ? "▸" : "▾"} {group.project.label}</span>
-          <span className="small">已加载 {group.runs.length} {internal ? "条执行记录" : "个委派目标"}</span></button>
+          <span className="small">已加载 {group.runs.length} {internal ? "条执行记录" : "个微任务"}</span></button>
         {!collapsed.has(id) && <ul className="task-list">{group.runs.map(row => {
           // The selected row shows the title from the freshest read (the bounded
           // workflow refresh merges it here), so an older row outside the snapshot
@@ -131,8 +131,8 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
         </li>;
         })}</ul>}
       </section>)}
-      {!visible.length && !history.loading && !history.error && <Empty title="没有匹配的委派">试试其他筛选或关键词。</Empty>}
-      {history.loading && <p className="loading-row" role="status">正在读取委派记录…</p>}
+      {!visible.length && !history.loading && !history.error && <Empty title="没有匹配的微任务">试试其他筛选或关键词。</Empty>}
+      {history.loading && <p className="loading-row" role="status">正在读取微任务记录…</p>}
       {history.nextCursor && <button className="load-more" disabled={history.loading} onClick={loadMore}>加载更早记录</button>}
     </div>
   </section></>;
@@ -143,7 +143,7 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
         aria-label={listCollapsed ? "展开全部执行记录列表" : "收起全部执行记录列表"} title={listCollapsed ? "展开全部执行记录列表" : "收起全部执行记录列表"}>{listCollapsed ? "展开列表" : "收起列表"}</button>
     </div>}
     {task ? <TaskDetails key={task.runId} task={task} snapshot={snapshot} api={api} refresh={reload} selectTask={selectTask} active={active} onTaskUpdate={updateSelected} /> :
-      <div className="detail-placeholder"><h2>{selected ? "正在读取委派…" : "选择一项委派"}</h2>{detailError && <p>{detailError}</p>}</div>}
+      <div className="detail-placeholder"><h2>{selected ? "正在读取微任务…" : "选择一项微任务"}</h2>{detailError && <p>{detailError}</p>}</div>}
   </aside>;
   return <>
     <SplitView selected={!!selected} rail={listCollapsed} list={list} detail={detail} />

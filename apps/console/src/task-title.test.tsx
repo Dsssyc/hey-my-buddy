@@ -74,7 +74,7 @@ describe("micro task title rule in components (0.16 T1)", () => {
     expect(first.container.querySelector("h2")!.textContent).not.toContain("只有结果没有标题");
     first.unmount();
     const second = render(<TaskDetails {...f.props} task={unnamed} />);
-    expect(second.getByRole("heading", { name: /未命名委派/ })).toBeTruthy();
+    expect(second.getByRole("heading", { name: /未命名微任务/ })).toBeTruthy();
     second.unmount();
   });
 

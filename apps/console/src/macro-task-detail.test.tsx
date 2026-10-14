@@ -109,14 +109,14 @@ const stopCalls = (f: ReturnType<typeof harness>) =>
     .filter(([operation]) => operation === "macro_task_stop") as [string, Record<string, unknown>][];
 
 const openMacroTask = async (f: ReturnType<typeof harness>) => {
-  await f.user.click(await screen.findByRole("button", { name: /工作目标时间轴：设计、接口与实现/ }));
-  await screen.findByRole("group", { name: "工作目标时间轴" });
+  await f.user.click(await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
+  await screen.findByRole("group", { name: "宏任务时间轴" });
 };
 // Layer mode opens details with Enter or a double click; a single click only pins.
 const openSpan = async (f: ReturnType<typeof harness>, key: string) => {
   const surface = window.matchMedia?.("(max-width: 760px)").matches ? ".tl-list" : ".tl-scroll";
   await f.user.dblClick(document.querySelector(`${surface} [data-key="span:${key}"]`) as HTMLButtonElement);
-  await screen.findByRole("complementary", { name: "工作目标详情" });
+  await screen.findByRole("complementary", { name: "宏任务详情" });
   await waitFor(() => expect(document.querySelector(".locator")).toBeTruthy());
 };
 
@@ -136,7 +136,7 @@ describe("macroTask detail navigation (layer mode, ≤760px viewport)", () => {
     const locator = document.querySelector(".locator") as HTMLElement;
     expect(within(locator).getByRole("button", { name: "返回时间轴" })).toBeTruthy();
     // T4: the breadcrumb splits into two separately truncated crumbs.
-    expect(within(locator).getAllByText("工作目标时间轴：设计、接口与实现").length).toBeGreaterThan(0);
+    expect(within(locator).getAllByText("宏任务时间轴：设计、接口与实现").length).toBeGreaterThan(0);
     // T4: the span fact states only the round and time, never the title.
     expect(within(locator).getByText(/来自时间轴：第 1 轮 /)).toBeTruthy();
     // The timeline stays mounted (hidden) while the detail is open.
@@ -221,7 +221,7 @@ describe("macroTask detail navigation (layer mode, ≤760px viewport)", () => {
     const f = harness({ writesAvailable: false });
     await openMacroTask(f);
     // The macro-task-level stop is the only write; a read-only session cannot use it.
-    const stop = screen.getByRole("button", { name: "停止目标" });
+    const stop = screen.getByRole("button", { name: "停止宏任务" });
     expect(stop).toHaveProperty("disabled", true);
     expect(stop.getAttribute("title")).toContain("登录已失效");
     await openSpan(f, "s-r1-q");
@@ -250,7 +250,7 @@ describe("macroTask detail navigation (layer mode, ≤760px viewport)", () => {
     await openMacroTask(f);
     await openSpan(f, "s-r2-r");
     await screen.findByText("第一轮的路由依据");
-    await f.user.click(screen.getByRole("button", { name: "返回当前配置" }));
+    await f.user.click(screen.getByRole("button", { name: "返回当前 buddy" }));
     expect(screen.queryByRole("region", { name: "所选路由决定" })).toBeNull();
     await f.user.click(screen.getByRole("tab", { name: "概览" }));
     await openSpan(f, "s-r2-r");
@@ -269,7 +269,7 @@ describe("macroTask detail navigation (layer mode, ≤760px viewport)", () => {
     expect(inspector.textContent).toContain("执行片段");
     await f.user.click(document.querySelector('[data-key="row:r1"]') as HTMLButtonElement);
     expect(document.querySelector(".run-view")).toBeNull();
-    expect(document.querySelector(".inspector-dock-title")!.textContent).toContain("整项委派");
+    expect(document.querySelector(".inspector-dock-title")!.textContent).toContain("整项微任务");
   });
 });
 
@@ -278,12 +278,12 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     stubViewport(true);
     const f = harness();
     await openMacroTask(f);
-    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
-    const dialog = await screen.findByRole("dialog", { name: "停止工作目标" });
+    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    const dialog = await screen.findByRole("dialog", { name: "停止宏任务" });
     // The confirmation names the macroTask and the honest scope.
-    expect(dialog.textContent).toContain("工作目标时间轴：设计、接口与实现");
+    expect(dialog.textContent).toContain("宏任务时间轴：设计、接口与实现");
     // 0.16 P1.3: the new confirmation copy names the unaccepted scope.
-    expect(dialog.textContent).toContain("尚未验收的 3 个委派及其协助任务");
+    expect(dialog.textContent).toContain("尚未验收的 3 个微任务及其协助任务");
     expect(dialog.textContent).toContain("已验收的 2 个保留");
     expect(f.api.command).not.toHaveBeenCalled();
     // Cancel submits nothing.
@@ -291,8 +291,8 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(f.api.command).not.toHaveBeenCalled();
     // Confirm dispatches macro_task_stop with a fresh command identity.
-    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止工作目标" })).getByRole("button", { name: "确认停止目标" }));
+    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     await waitFor(() => expect(f.api.command).toHaveBeenCalledWith("macro_task_stop",
       expect.objectContaining({ macroTaskId: "macro-1" }), "csrf"));
     const params = (f.api.command as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1] as { commandId: string };
@@ -318,8 +318,8 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     });
     stubViewport(true);
     await openMacroTask(f);
-    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止工作目标" })).getByRole("button", { name: "确认停止目标" }));
+    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     await waitFor(() => expect(f.stopAttempts()).toBe(1));
     const status = await screen.findByText("正在停止");
     expect(status.textContent).toBe("正在停止");
@@ -340,8 +340,8 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
       throw new Error(`Unexpected command: ${operation}`);
     });
     await openMacroTask(f);
-    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止工作目标" })).getByRole("button", { name: "确认停止目标" }));
+    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     await waitFor(() => expect(attempts).toBe(1));
     expect((await screen.findByText("停止未确认")).textContent).toContain("停止未确认");
     // The replay is refused, but that refusal proves nothing about attempt #1.
@@ -370,8 +370,8 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
       throw new Error(`Unexpected command: ${operation}`);
     });
     await openMacroTask(f);
-    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止工作目标" })).getByRole("button", { name: "确认停止目标" }));
+    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     // The reply arrived (cancellation intent known); the refresh failed after
     // it — the status must derive from the live rows, never claim a refusal.
     expect(await screen.findByText("正在停止")).toBeTruthy();
@@ -394,15 +394,15 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
       throw new Error(`Unexpected command: ${operation}`);
     });
     await openMacroTask(f);
-    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止工作目标" })).getByRole("button", { name: "确认停止目标" }));
+    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     const status = await screen.findByText("停止未确认", { exact: false });
     expect(status.textContent).toContain("停止未确认");
     // Navigation stays free while the reply is unknown: no lock note anywhere.
     expect(document.querySelector(".lock-note")).toBeNull();
-    await f.user.click(screen.getByRole("button", { name: "‹ 工作目标列表" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ })).toBeTruthy());
-    await f.user.click(screen.getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ }));
+    await f.user.click(screen.getByRole("button", { name: "‹ 宏任务列表" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ })).toBeTruthy());
+    await f.user.click(screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
     // Replay keeps the exact command identity; the server deduplicates it.
     fail = false;
     await f.user.click(await screen.findByRole("button", { name: "重试停止" }));
@@ -433,16 +433,16 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
       ({ timeline: { ...f.timeline, macroTask: summaries.get(macroTaskId) ?? f.timeline.macroTask }, verifiedAtMs: null }));
     await openMacroTask(f);
     // Confirm the first macroTask's stop; its reply stays pending.
-    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止工作目标" })).getByRole("button", { name: "确认停止目标" }));
+    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     await waitFor(() => expect(stopCalls(f).length).toBe(1));
     expect((await screen.findByText("正在停止")).textContent).toBe("正在停止");
     // Navigate to the second macroTask and stop it while the first is pending.
-    await f.user.click(screen.getByRole("button", { name: "‹ 工作目标列表" }));
+    await f.user.click(screen.getByRole("button", { name: "‹ 宏任务列表" }));
     await f.user.click(screen.getByRole("button", { name: /另一个进行中的目标/ }));
-    await screen.findByText(/0 \/ 2 个委派已验收/);
-    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止工作目标" })).getByRole("button", { name: "确认停止目标" }));
+    await screen.findByText(/0 \/ 2 个微任务已验收/);
+    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     await waitFor(() => expect(stopCalls(f).length).toBe(2));
     // Both dispatches carry their own macroTask and a distinct command identity.
     const [first, second] = stopCalls(f);
@@ -473,30 +473,30 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     await openMacroTask(f);
     // A brand-new request whose writer vanishes between dialog and confirm
     // becomes a plain refusal that was never dispatched.
-    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
-    const dialog = await screen.findByRole("dialog", { name: "停止工作目标" });
+    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    const dialog = await screen.findByRole("dialog", { name: "停止宏任务" });
     const snapshot = snapshotFixture();
     f.rerender(<MacroTasks snapshot={{ ...snapshot, consoleSession: { id: "session-a", canWrite: false, reason: null } }}
       api={f.api} refresh={f.refresh} active writesAvailable={false} />);
-    await f.user.click(within(dialog).getByRole("button", { name: "确认停止目标" }));
+    await f.user.click(within(dialog).getByRole("button", { name: "确认停止宏任务" }));
     expect(await screen.findByText("停止请求未提交")).toBeTruthy();
     expect(stopCalls(f).length).toBe(0);
     // Writer back: confirming mints a FRESH identity (the refusal's empty one
     // is never reused) and the lost reply keeps the entry unknown.
     f.rerender(<MacroTasks snapshot={snapshot} api={f.api} refresh={f.refresh} active writesAvailable />);
-    await f.user.click(await screen.findByRole("button", { name: "停止目标" }));
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止工作目标" })).getByRole("button", { name: "确认停止目标" }));
+    await f.user.click(await screen.findByRole("button", { name: "停止宏任务" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     await waitFor(() => expect(stopCalls(f).length).toBe(1));
     expect(typeof (stopCalls(f)[0]![1] as { commandId: string }).commandId).toBe("string");
     expect(((stopCalls(f)[0]![1] as { commandId: string }).commandId).length).toBeGreaterThan(0);
     expect(await screen.findByText("停止未确认")).toBeTruthy();
     // Losing the writer again with the dialog open must NOT overwrite the
     // unknown entry: its identity survives for the same-macroTask replay.
-    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
-    const secondDialog = await screen.findByRole("dialog", { name: "停止工作目标" });
+    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    const secondDialog = await screen.findByRole("dialog", { name: "停止宏任务" });
     f.rerender(<MacroTasks snapshot={{ ...snapshot, consoleSession: { id: "session-a", canWrite: false, reason: null } }}
       api={f.api} refresh={f.refresh} active writesAvailable={false} />);
-    await f.user.click(within(secondDialog).getByRole("button", { name: "确认停止目标" }));
+    await f.user.click(within(secondDialog).getByRole("button", { name: "确认停止宏任务" }));
     expect(screen.getByText("停止未确认")).toBeTruthy();
     expect(screen.queryByText("停止请求未提交")).toBeNull();
     expect(stopCalls(f).length).toBe(1);
@@ -525,8 +525,8 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
       throw new Error(`Unexpected command: ${operation}`);
     });
     await openMacroTask(f);
-    await f.user.click(screen.getByRole("button", { name: "停止目标" }));
-    await f.user.click(within(await screen.findByRole("dialog", { name: "停止工作目标" })).getByRole("button", { name: "确认停止目标" }));
+    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     // The malformed reply is refused client-side as an unknown outcome.
     await waitFor(() => expect(attempts).toBe(1));
     expect(await screen.findByText("停止未确认")).toBeTruthy();
@@ -564,7 +564,7 @@ describe("macroTask detail docking (0.15.1 U1)", () => {
     // Clicking another item in the timeline only changes the inspector.
     await f.user.click(document.querySelector('[data-key="span:s-r1-e"]') as HTMLButtonElement);
     expect(f.api.task).toHaveBeenCalledTimes(1); // still r2's detail
-    expect(document.querySelector(".inspector-dock-title")!.textContent).toContain("设计工作目标时间轴视图与交互规范");
+    expect(document.querySelector(".inspector-dock-title")!.textContent).toContain("设计宏任务时间轴视图与交互规范");
     // Selection survives closing the detail, which also restores the full list.
     await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "关闭详情" }));
     expect(document.querySelector(".run-view")).toBeNull();
@@ -588,7 +588,7 @@ describe("macroTask detail docking (0.15.1 U1)", () => {
     expect(drawer.querySelector(".list-filters")).toBeTruthy();
     expect((document.querySelector(".right-dock.side") as HTMLElement).style.getPropertyValue("--dock-detail-width")).toBe(detailWidth);
     // Selecting the SAME macroTask only closes the drawer.
-    await f.user.click(within(drawer).getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ }));
+    await f.user.click(within(drawer).getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
     await waitFor(() => expect(document.querySelector(".list-drawer")).toBeNull());
     expect(document.querySelector(".run-view")).toBeTruthy();
     expect(document.querySelector(".workspace-grid.list-rail")).toBeTruthy();
@@ -600,7 +600,7 @@ describe("macroTask detail docking (0.15.1 U1)", () => {
       return node;
     });
     // The unarchived micro task is folded by default; expand it inside the drawer.
-    await f.user.click(within(drawerAgain).getByRole("button", { name: /历史独立委派（1）/ }));
+    await f.user.click(within(drawerAgain).getByRole("button", { name: /历史独立微任务（1）/ }));
     await f.user.click(within(drawerAgain).getAllByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ })[0]!);
     await waitFor(() => expect(document.querySelector(".run-view")).toBeNull());
     await waitFor(() => expect(document.querySelector(".workspace-grid.list-rail")).toBeNull());

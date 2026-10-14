@@ -57,7 +57,7 @@ export function RunDetailPane({ mode = "layer", macroTaskTitle, target, snapshot
     api.task(target.runId, controller.signal).then(value => {
       if (!current) return;
       if (!value || typeof value !== "object" || !("runId" in value) || value.runId !== target.runId || !("task" in value)) {
-        throw new Error("委派详情不完整。");
+        throw new Error("微任务详情不完整。");
       }
       setRemote(value as Task);
     }).catch(reason => { if (current) setError(errorText(reason)); });
@@ -92,13 +92,13 @@ export function RunDetailPane({ mode = "layer", macroTaskTitle, target, snapshot
         hideBackButton initialSection={target.section} routingDecisionId={target.decisionId} stopStatusNode={stopStatusNode} overviewRow={overviewRow} />
       : error
         ? <div className="detail-placeholder">
-          <h2>读取委派失败</h2>
+          <h2>读取微任务失败</h2>
           <p role="alert">{error}</p>
           <p className="small muted">可重试读取或返回时间轴。</p>
           <div className="actions">
             <button type="button" className="button small-button" onClick={() => setAttempt(value => value + 1)}>重试读取</button>
           </div>
         </div>
-        : <div className="detail-placeholder"><h2>正在读取委派…</h2><p>{target.locator ? `来自时间轴：${target.locator}` : ""}</p></div>}
+        : <div className="detail-placeholder"><h2>正在读取微任务…</h2><p>{target.locator ? `来自时间轴：${target.locator}` : ""}</p></div>}
   </div>;
 }

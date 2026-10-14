@@ -342,6 +342,6 @@ export function integrationHostPaths(value: IntegrationRecord | null | undefined
  */
 export function buddyLockText(locked: boolean | null | undefined): string | null {
   if (locked === true) return "用户要求锁定，续做时不能更换";
-  if (locked === false) return "续做时可由 Host 附理由更换配置";
+  if (locked === false) return "续做时可由 Host 附理由更换 buddy";
   return null;
 }

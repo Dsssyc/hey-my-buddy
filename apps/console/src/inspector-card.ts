@@ -2,7 +2,7 @@
  * Pure card models for the pinned timeline inspector (0.15 C2, restructured
  * 0.16 P1.6). One selection — a span, a Host event, a settlement flag or a
  * whole micro task — becomes one card of at most six labelled fields (类型、
- * 委派、回合、配置、时间、结果); every value comes from the bounded read and
+ * 微任务、回合、buddy、时间、结果); every value comes from the bounded read and
  * missing facts render as 未记录 rather than guesses. The model keeps the last
  * resolvable facts when a refresh drops the selected record, so the inspector
  * never silently clears.
@@ -32,7 +32,7 @@ export type CardField = {
   tone?: "muted" | "warn";
   /** Tooltip carrying what the two-line clamp may hide. */
   title?: string;
-  /** The 委派 field links to selecting that micro task's row. */
+  /** The 微任务 field links to selecting that micro task's row. */
   link?: CardLink;
 };
 
@@ -42,7 +42,7 @@ export type InspectorCard = {
   /** Selection identity the card was built for. */
   key: string;
   head: string;
-  /** Fixed order 类型、委派、回合、配置、时间、结果; inapplicable fields are absent. */
+  /** Fixed order 类型、微任务、回合、buddy、时间、结果; inapplicable fields are absent. */
   fields: CardField[];
   /** What the 打开详情 button opens; null when no detail target exists. */
   openItem: TimelineItem | null;
@@ -55,7 +55,7 @@ const UNRECORDED = "未记录";
 function microTaskField(row: TimelineRow): CardField {
   const title = displayTitle(row.titleSource, row.title);
   return {
-    label: "委派",
+    label: "微任务",
     value: title.text,
     title: titleLineTooltip(title),
     link: { kind: "run", runId: row.runId, label: title.text },
@@ -105,7 +105,7 @@ function rollupFields(rollup: RunRollup, buddies?: readonly FriendlyBuddy[] | nu
   const scopeLimited = hasScopeLimitations(rollup.limitations);
   const state = rowStateInfo(row);
   const fields: CardField[] = [
-    { label: "类型", value: row.kind === "helper" ? "协助任务" : "委派" },
+    { label: "类型", value: row.kind === "helper" ? "协助任务" : "微任务" },
     microTaskField(row),
   ];
   const rounds = rollup.executions.length;
@@ -114,7 +114,7 @@ function rollupFields(rollup: RunRollup, buddies?: readonly FriendlyBuddy[] | nu
     value: rounds ? `共 ${rounds} 轮` : scopeLimited ? "已记录范围内没有执行片段" : "没有已记录的执行片段",
     tone: rounds ? undefined : "muted",
   });
-  fields.push({ label: "配置", value: buddyLabel(row.buddy, buddies), title: buddyRawLabel(row.buddy) });
+  fields.push({ label: "buddy", value: buddyLabel(row.buddy, buddies), title: buddyRawLabel(row.buddy) });
   const starts = rollup.executions.map(span => toMs(span.startAt)).filter((value): value is number => value !== null);
   const ends = rollup.executions.map(span => toMs(span.endAt)).filter((value): value is number => value !== null);
   const pending = rollup.pending.map(span => toMs(span.startAt)).filter((value): value is number => value !== null);
@@ -159,7 +159,7 @@ export function buildInspectorCard(
     const rollup = runRollup(row, timeline);
     return {
       key: `run:${selection.runId}`,
-      head: "整项委派",
+      head: "整项微任务",
       fields: rollupFields(rollup, buddies),
       openItem: itemsByKey.get(rowLabelItem(row).key) ?? rowLabelItem(row),
       relatedEvents: relatedEventsForRun(selection.runId, timeline.events)
@@ -197,7 +197,7 @@ export function buildInspectorCard(
         value != null && Number.isFinite(value) && value >= 0 ? `${value} ${unit}` : UNRECORDED;
       fields.push({ label: "类型", value: "路由" }, microTaskField(row));
       fields.push({ label: "实际模式", value: recordedRoutingMode(routing?.routingMode) });
-      fields.push({ label: "已选配置", value: routing?.selectedBuddy ? buddyLabel(routing.selectedBuddy, buddies) : UNRECORDED });
+      fields.push({ label: "选中的 buddy", value: routing?.selectedBuddy ? buddyLabel(routing.selectedBuddy, buddies) : UNRECORDED });
       fields.push({ label: "理由", value: reason });
       fields.push({ label: "偏好结果", value: routing?.policyCheck
         ? `用户：${preference(userPreference)}${deviated ? `；偏离理由：${reason}` : ""}`
@@ -213,7 +213,7 @@ export function buildInspectorCard(
         value: span.turnIndex !== null && span.turnIndex !== undefined ? `第 ${span.turnIndex} 轮` : UNRECORDED,
       });
       fields.push({
-        label: "配置",
+        label: "buddy",
         value: buddyLabel(span.buddy, buddies),
         title: buddyRawLabel(span.buddy),
       });
@@ -283,7 +283,7 @@ export function buildInspectorCard(
   const rollup = runRollup(row, timeline);
   return {
     key: selection.key,
-    head: "整项委派",
+    head: "整项微任务",
     fields: rollupFields(rollup, buddies),
     openItem: itemsByKey.get(rowLabelItem(row).key) ?? item,
     relatedEvents: relatedEventsForRun(runId, timeline.events)

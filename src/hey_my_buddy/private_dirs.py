@@ -100,7 +100,7 @@ def open_regular_fd(path: Path, flags: int, mode: int = 0o600) -> int:
 
 def _adapter(adapter: str) -> str:
     if adapter not in ADAPTERS:
-        raise BoardError('INVALID_ARGUMENT', 'Unknown private harness adapter', adapter=adapter)
+        raise BoardError('INVALID_ARGUMENT', 'Unknown adapter for private state', adapter=adapter)
     return adapter
 
 

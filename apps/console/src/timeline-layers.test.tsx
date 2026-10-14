@@ -471,7 +471,7 @@ describe("U6.3: label thresholds use the width remaining after insets", () => {
   it.each([
     { kind: "execution" as const, threshold: 54, before: "", at: "1" },
     { kind: "execution" as const, threshold: 96, before: "1", at: "第1轮" },
-    { kind: "execution" as const, threshold: 174, before: "第1轮", at: "第1轮 · 配置未记录" },
+    { kind: "execution" as const, threshold: 174, before: "第1轮", at: "第1轮 · buddy 未记录" },
     { kind: "host" as const, threshold: 58, before: "", at: "等待" },
     { kind: "host" as const, threshold: 88, before: "等待", at: "等待 Host" },
     { kind: "host" as const, threshold: 134, before: "等待 Host", at: "等待 Host · 2 分" },
@@ -498,7 +498,7 @@ describe("U6.3: label thresholds use the width remaining after insets", () => {
       zoomGeometry("max");
       const element = bar("span:geometry")!;
       const text = element.querySelector(part === "solid" ? ".sp-solid-text" : ".sp-tail")!;
-      expect(text.textContent).toBe(delta < 0 ? "" : part === "solid" ? "第1轮 · 配置未记录" : "结束未确认");
+      expect(text.textContent).toBe(delta < 0 ? "" : part === "solid" ? "第1轮 · buddy 未记录" : "结束未确认");
       expect(markCentre(element.querySelector<HTMLElement>(".end-mark")!)).toBeCloseTo(solidMs / 1000, 8);
       expect(element.getAttribute("aria-label")).toBe(element.title);
       view.unmount();
@@ -507,7 +507,7 @@ describe("U6.3: label thresholds use the width remaining after insets", () => {
 
   it.each(["failed", "cancelled"] as const)("reserves circle room at each %s execution label threshold", outcome => {
     for (const [threshold, before, at] of [[62, "", "1"], [104, "1", "第1轮"],
-      [182, "第1轮", `第1轮 · 配置未记录 · ${outcome === "failed" ? "执行失败" : "已取消"}`]] as const) {
+      [182, "第1轮", `第1轮 · buddy 未记录 · ${outcome === "failed" ? "执行失败" : "已取消"}`]] as const) {
       for (const delta of [-0.001, 0, 0.001]) {
         const data = geometryTimeline({ resultStatus: outcome, endAt: geometryAt(Math.round((threshold + delta) * 1000)) });
         const view = render(<MacroTaskTimeline {...props(data)} />);

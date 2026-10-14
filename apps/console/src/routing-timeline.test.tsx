@@ -57,7 +57,7 @@ describe("recorded routing facts", () => {
       }, usage: { elapsedMs: 1250, toolCalls: 0, bytesRead: 2048 },
     } });
     const fields = Object.fromEntries(result.fields.map(field => [field.label, field.value]));
-    expect(fields["已选配置"]).toBe("Claude Opus 5.5 · high");
+    expect(fields["选中的 buddy"]).toBe("Claude Opus 5.5 · high");
     expect(fields["理由"]).toBe("读取接口后选择更适合的模型");
     expect(fields["偏好结果"]).toBe("用户：符合偏好");
     expect(fields["用时（elapsedMs）"]).toBe("1250 ms");
@@ -70,14 +70,14 @@ describe("recorded routing facts", () => {
   it("keeps omitted historic facts unrecorded instead of borrowing the current execution buddy or timestamps", () => {
     const result = card({ routing: undefined, decisionId: undefined });
     const fields = Object.fromEntries(result.fields.map(field => [field.label, field.value]));
-    for (const label of ["已选配置", "理由", "偏好结果", "用时（elapsedMs）", "工具调用（toolCalls）", "读取量（bytesRead）"]) {
+    for (const label of ["选中的 buddy", "理由", "偏好结果", "用时（elapsedMs）", "工具调用（toolCalls）", "读取量（bytesRead）"]) {
       expect(fields[label]).toBe("未记录");
     }
     expect(result.openItem).toEqual(expect.objectContaining({ runId: "r2", section: "routing", decisionId: undefined }));
   });
 
   it("does not count abstention as failure and preserves unconfirmed-stop precedence", () => {
-    const { span } = fixture({ state: "finished", disposition: "abstention", resultStatus: "ok", error: "未选择配置的原因" });
+    const { span } = fixture({ state: "finished", disposition: "abstention", resultStatus: "ok", error: "未选择 buddy的原因" });
     expect(spanOutcome(span)).toBe("abstention");
     expect(card({ ...span }).fields.find(field => field.label === "结果")!.value).toBe("已放弃选择");
     expect(spanOutcome({ ...span, uncertain: true })).toBe("unknown");

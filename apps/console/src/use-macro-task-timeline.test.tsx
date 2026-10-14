@@ -47,7 +47,7 @@ describe("work macro task timeline hook", () => {
     await act(async () => f.reads[0]!.resolve(readWith(fixture)));
     const refresh = macroTaskTimelineFixture();
     refresh.rows = [...refresh.rows.map(row => ({ ...row, title: `${row.title}（更新）` }))];
-    const appendedRow = { ...refresh.rows[0]!, runId: "r9", title: "后来追加的委派" };
+    const appendedRow = { ...refresh.rows[0]!, runId: "r9", title: "后来追加的微任务" };
     refresh.rows = [...fixture.rows.map(row => ({ ...row, title: `${row.title}（更新）` })), appendedRow];
     await act(async () => { void f.result.current.retry(); await f.reads[1]!.resolve(readWith(refresh)); });
     const rows = f.result.current.timeline?.rows.map(row => row.runId);

@@ -106,7 +106,7 @@ describe("macroTask stop status (0.15.1 U4, Host-reviewed)", () => {
     const status = stopStatus(entry(), timeline);
     expect(status?.label).toBe("已停止");
     // runIds mixes roots and helpers; the copy names the root count only.
-    expect(status?.detail).toBe("2 个委派及协助任务已停止");
+    expect(status?.detail).toBe("2 个微任务及协助任务已停止");
   });
 
   it("the stopped copy counts roots only, even when helpers share the reply scope", () => {
@@ -128,7 +128,7 @@ describe("macroTask stop status (0.15.1 U4, Host-reviewed)", () => {
     } };
     const status = stopStatus(withHelper, timeline);
     expect(status?.label).toBe("已停止");
-    expect(status?.detail).toBe("2 个委派及协助任务已停止");
+    expect(status?.detail).toBe("2 个微任务及协助任务已停止");
   });
 
   it("a malformed reply is an unknown outcome, never a confirmed stop", () => {

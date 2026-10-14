@@ -630,7 +630,7 @@ def normalize_buddy(value: Any) -> dict:
     reject_unknown(value, set(BUDDY_FIELDS), "buddy")
     result = {key: required_string(value, key, max_length=256) for key in BUDDY_FIELDS}
     if result["harness"] not in CODING_HARNESSES:
-        raise BoardError("INVALID_ARGUMENT", "buddy requires a coding harness: dsh, zcode or codex")
+        raise BoardError("INVALID_ARGUMENT", "buddy requires a coding harness: dsh, zcode, codex or claude")
     return result
 
 

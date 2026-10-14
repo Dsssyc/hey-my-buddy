@@ -61,7 +61,7 @@ function workflow(record = task()): Workflow {
     state: "executing", awaitingHost: false, waitReason: "", continuationCount: 0,
     buddy: { ...worker },
     routing: { status: "completed", decisionId: "decision-current",
-      reason: "已记录当前配置的选择依据" },
+      reason: "已记录当前 buddy 的选择依据" },
     workspace: { path: "/repo", kind: "worktree", access: "write", inputCommit: "input", manifestSha256: "manifest" },
     currentTurn: { turnId: "turn-current", turnIndex: 2, attemptId: "attempt-current", resumeMode: "native-session" },
     activeRequest: null, children: [], artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null, task: record,
@@ -93,7 +93,7 @@ describe("sole candidate routing basis", () => {
       constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"],
       routerCalled: false, routingBasis, reason: "唯一合法候选，未调用 Router",
       routingMode: "fast",
-      output: { programSelection: { preferences: [{ buddyId: worker.buddyId, mode: "pin", reason: "当时固定此配置" }] } },
+      output: { programSelection: { preferences: [{ buddyId: worker.buddyId, mode: "pin", reason: "当时固定此 buddy" }] } },
       policyCheck: { hardConstraints: { harness: "dsh" }, userPreference: "none" },
     };
     const command = vi.fn(async () => ({ decision: audit }));
@@ -103,7 +103,7 @@ describe("sole candidate routing basis", () => {
     expect(screen.getByText("所需能力：execution:dsh")).toBeTruthy();
     expect(screen.getByText(/用户排除 1 个：.*deepseek-flash.*off.*提交时排除低推理强度/)).toBeTruthy();
     expect(screen.queryByText("当前已改为排除")).toBeNull();
-    expect(screen.getByText(/固定选择：当时固定此配置/)).toBeTruthy();
+    expect(screen.getByText(/固定选择：当时固定此 buddy/)).toBeTruthy();
     expect(screen.queryByText(/快速路由固定 60 秒/)).toBeNull();
     const mode = screen.getByText("实际模式").nextElementSibling;
     expect(mode?.textContent).toBe("未调用 Router");
@@ -343,11 +343,11 @@ describe("microTask routing rationale", () => {
     const value = workflow();
     value.state = "awaiting-host";
     value.awaitingHost = true;
-    value.routing = { ...value.routing!, status: "needs-host", reason: "CATALOG_UNAVAILABLE: 原生目录已移除所选配置" };
+    value.routing = { ...value.routing!, status: "needs-host", reason: "CATALOG_UNAVAILABLE: 原生目录已移除所选 buddy" };
     const command = vi.fn(async () => ({ decision: decision("decision-current") }));
     render(<RoutingDetails value={value} api={apiFor(snapshot(), command)} csrfToken="csrf" active />);
-    const execution = screen.getByRole("region", { name: "当前执行配置" });
-    expect(within(execution).getByRole("status").textContent).toContain("CATALOG_UNAVAILABLE: 原生目录已移除所选配置");
+    const execution = screen.getByRole("region", { name: "当前执行 buddy" });
+    expect(within(execution).getByRole("status").textContent).toContain("CATALOG_UNAVAILABLE: 原生目录已移除所选 buddy");
     expect(within(execution).getByText("需要 Host 处理")).toBeTruthy();
     const rationale = await screen.findByRole("region", { name: "决策依据详情" });
     expect(within(rationale).getByText("decision-current 的持久选择依据")).toBeTruthy();
@@ -386,7 +386,7 @@ describe("microTask routing rationale", () => {
     expect(command).toHaveBeenCalledWith("workflow_get", { runId: "micro-task", routingHistory: { limit: 20, before: 31 } }, "csrf");
     expect(command).toHaveBeenCalledWith("selection_get", { decisionId: "older-route", includeAudit: true }, "csrf");
     expect(screen.queryByText("decision-current 的持久选择依据")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "返回当前配置" }));
+    await user.click(screen.getByRole("button", { name: "返回当前 buddy" }));
     expect(await screen.findByText("decision-current 的持久选择依据")).toBeTruthy();
     expect(command.mock.calls.some(([operation]) => operation === "selection_list")).toBe(false);
   });
@@ -410,8 +410,8 @@ describe("microTask routing rationale", () => {
     const user = userEvent.setup();
     render(<RoutingDetails value={value} api={apiFor(snapshot(), command)} csrfToken="csrf" active />);
     await screen.findByText("decision-current 的持久选择依据");
-    const turns = screen.getByText("执行回合与配置对应").closest("details")!;
-    await user.click(within(turns).getByText("执行回合与配置对应"));
+    const turns = screen.getByText("执行回合与 buddy 对应").closest("details")!;
+    await user.click(within(turns).getByText("执行回合与 buddy 对应"));
     const oldTurn = within(turns).getByText("第 1 回合").closest("li")!;
     expect(within(oldTurn).getByText("回合路由未记录")).toBeTruthy();
     expect(within(oldTurn).queryByRole("button")).toBeNull();
@@ -423,7 +423,7 @@ describe("microTask routing rationale", () => {
 
   it.each([
     { status: "queued", reason: "正在等待评价表发布", label: "等待中" },
-    { status: "failed", reason: "路由服务不可用，没有选中执行配置", label: "执行失败" },
+    { status: "failed", reason: "路由服务不可用，没有选中执行 buddy", label: "执行失败" },
   ])("keeps a $status route inspectable before any executor is selected", async ({ status, reason, label }) => {
     const record = task();
     record.lineage!.buddy = null;

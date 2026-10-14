@@ -271,7 +271,7 @@ describe("0.16 P2.1: the microTask band", () => {
     const user = userEvent.setup();
     const onSelectRun = vi.fn();
     const { container } = render(<MacroTaskTimeline {...baseProps(timeline, { onSelectRun })} />);
-    const toggle = screen.getByRole("button", { name: /委派（5）/ });
+    const toggle = screen.getByRole("button", { name: /微任务（5）/ });
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(container.querySelectorAll(".micro-task-card").length).toBe(4);
     await user.click(toggle);

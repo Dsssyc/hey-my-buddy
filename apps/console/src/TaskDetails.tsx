@@ -16,7 +16,7 @@ import { tokenUsageView } from "./host-workflow";
  * One micro task's detail (0.15.1 U4): read-only browsing of the recorded
  * facts. The task_cancel/task_retry/task_acknowledge controls and their record
  * drafts are gone — execution history stays inspectable and navigation is
- * never locked; the macro-task-level 停止目标 lives on the work macro task
+ * never locked; the macro-task-level 停止宏任务 lives on the work macro task
  * header instead.
  */
 export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, onTaskUpdate, hideBackButton = false, initialSection, routingDecisionId, stopStatusNode, overviewRow }: {
@@ -58,7 +58,7 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
       const value = await api.task(task.runId, controller.signal);
       if (controller.signal.aborted || sequence !== request.current.sequence) return;
       if (!value || typeof value !== "object" || !("runId" in value) || value.runId !== task.runId || !("task" in value)) {
-        throw new Error("委派详情不完整。");
+        throw new Error("微任务详情不完整。");
       }
       const next = value as Task;
       if (next.revision < currentTask.current.revision
@@ -88,10 +88,10 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   const decision = task.spec?.decision as { decisionId?: string } | undefined;
   const recordInfo = <details className="detail-section"><summary>来源与标识</summary><dl className="facts">
     <dt>原始委派方</dt><dd>{taskHost(task)}</dd><dt>当前 Host</dt><dd>{task.lineage?.currentHostId || task.workflow?.hostId || "未记录"}</dd>
-    <dt>来源项目</dt><dd>{project.path || "未记录"}</dd><dt>委派 ID</dt><dd>{task.runId}</dd>
-    <dt>上级目标</dt><dd>{task.lineage?.parentRunId || "无"}</dd><dt>执行位置</dt><dd>{task.cwd}</dd>
+    <dt>来源项目</dt><dd>{project.path || "未记录"}</dd><dt>微任务 ID</dt><dd>{task.runId}</dd>
+    <dt>上级微任务</dt><dd>{task.lineage?.parentRunId || "无"}</dd><dt>执行位置</dt><dd>{task.cwd}</dd>
   </dl></details>;
-  // T1: the one title rule — explicit title, task first line, 未命名委派; the
+  // T1: the one title rule — explicit title, task first line, 未命名微任务; the
   // Worker resultSummary never appears here.
   const title = taskTitle(task);
   const titleNote = title.source === "task" ? TASK_TITLE_SOURCE_LABEL.task : "";
@@ -100,7 +100,7 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   const quotaFailureLabel = task.quotaFailure?.code === "quota-exceeded" ? "额度耗尽" : task.quotaFailure?.code === "rate-limited" ? "原生服务限流" : null;
   return <>
     <header className="detail-header">
-      <div className="row-between">{!hideBackButton && <button className="button small-button mobile-back" onClick={() => selectTask(null)}>返回委派列表</button>}
+      <div className="row-between">{!hideBackButton && <button className="button small-button mobile-back" onClick={() => selectTask(null)}>返回微任务列表</button>}
         <span className="small muted truncate" title={project.path || project.label}>{project.label}</span><Status status={taskStatus(task)} /></div>
       {!task.workflow && quotaFailureLabel && <p className="error-message">执行原因：{quotaFailureLabel}</p>}
       <h2 className="detail-title" title={titleTooltip(title)}>
