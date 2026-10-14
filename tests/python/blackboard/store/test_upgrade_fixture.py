@@ -216,6 +216,8 @@ class UpgradeFixtureTests(unittest.TestCase):
             fresh_schema = [tuple(row) for row in baseline.execute(
                 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
             self.assertEqual(source_schema, fresh_schema)
+            self.assertEqual({row[0] for row in upgraded.execute(
+                'SELECT delegation_authority FROM workflow_runs')}, {0})
             migrated_columns = {row[1] for row in upgraded.execute('PRAGMA table_info(attempts)')}
             self.assertTrue({'stop_initiator', 'grace_deadline'} <= migrated_columns)
             self.assertEqual(router.configuration(upgraded), expected_settings)

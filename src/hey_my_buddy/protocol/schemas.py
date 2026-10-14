@@ -98,7 +98,7 @@ TERMINAL_TASK_STATES = frozenset({"completed", "concluded", "failed", "cancelled
 #: every field one explicit helper specification accepts. The nested ``spec``
 #: spelling and ``inheritRoutingPreferences`` are retired duplicate writings
 #: (ADR-021 decisions 5 and 17).
-WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"harness", "hostId", "executionWorkspace", "submissionToken", "title", "macroTask", "macroTaskId", "macroTaskOf", "buddyLocked"}
+WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"harness", "hostId", "executionWorkspace", "submissionToken", "title", "macroTask", "macroTaskId", "macroTaskOf", "buddyLocked", "delegationAuthority"}
 WORKFLOW_HELPER_FIELDS = SUBMIT_FIELDS | {"harness", "executionWorkspace", "integrator", "role"}
 #: The retired duplicate and routing spellings ADR-021 decisions 5 and 17 remove;
 #: naming one is an explicit rejection, never a silent ignore.
@@ -464,7 +464,7 @@ def _spec_fields(params: dict) -> dict:
     return spec_params
 
 
-def workflow_request_fingerprint(spec: dict, execution_workspace: dict, host_id: str, *, presentation: dict | None = None, buddy_locked: bool = False) -> str:
+def workflow_request_fingerprint(spec: dict, execution_workspace: dict, host_id: str, *, presentation: dict | None = None, buddy_locked: bool = False, delegation_authority: bool = False) -> str:
     """The micro-task idempotency identity: micro task, execution workspace and Host.
 
     The task fingerprint stays the ordinary spec fingerprint; this one additionally
@@ -474,6 +474,8 @@ def workflow_request_fingerprint(spec: dict, execution_workspace: dict, host_id:
     request = {"spec": spec, "executionWorkspace": execution_workspace, "hostId": host_id}
     if buddy_locked:
         request["buddyLocked"] = True
+    if delegation_authority:
+        request["delegationAuthority"] = True
     if presentation:
         request["presentation"] = presentation
     return sha256_text("workflow-v1:" + canonical_json(request))
@@ -547,9 +549,19 @@ def normalize_workflow_submit(params: dict) -> dict:
     request_id = required_string(params, "requestId", max_length=MAX_REQUEST_ID)
     host_id = required_string(params, "hostId", max_length=256)
     submission_token = normalize_submission_token(params)
+    delegation_authority = optional_bool(params, "delegationAuthority", False)
+    if delegation_authority:
+        missing = [key for key in BUDDY_FIELDS if not params.get(key)]
+        if missing:
+            raise BoardError("INVALID_ARGUMENT",
+                             "delegationAuthority requires a complete explicit buddy, without routing "
+                             f"(missing {', '.join(missing)})", field=missing[0])
     spec_params = _spec_fields(params)
     spec = normalize_workflow_spec(spec_params)
     workspace_intent = normalize_execution_workspace(params)
+    if delegation_authority and workspace_intent["access"] != "full":
+        raise BoardError("INVALID_ARGUMENT", "delegationAuthority requires executionWorkspace.access='full'",
+                         field="executionWorkspace.access")
     # The workspace's source and integrator are derived, never accepted: the
     # ordinary spec's cwd is the only source spelling, and the integrator is
     # attribution owned by the submitting Host.
@@ -564,6 +576,7 @@ def normalize_workflow_submit(params: dict) -> dict:
         "owner": spec_params.get("owner"),
         "presentation": normalize_presentation(params),
         "buddyLocked": optional_bool(params, "buddyLocked", False),
+        "delegationAuthority": delegation_authority,
     }
 
 
@@ -644,6 +657,9 @@ def normalize_helpers(params: dict, *, host_id: str | None = None) -> list[dict]
             raise BoardError("INVALID_ARGUMENT", f"helpers[{index}] must be a JSON object")
         reject_untrusted_override(entry)
         _reject_retired_spec_keys(entry)
+        if "delegationAuthority" in entry:
+            raise BoardError("INVALID_ARGUMENT", "Only Host submissions may grant delegationAuthority; helpers cannot carry it",
+                             field="delegationAuthority")
         reject_unknown(entry, WORKFLOW_HELPER_FIELDS, f"helpers[{index}]")
         request_id = required_string(entry, "requestId", max_length=MAX_REQUEST_ID)
         if request_id in seen:

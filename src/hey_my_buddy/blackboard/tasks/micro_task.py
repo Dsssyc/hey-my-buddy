@@ -171,6 +171,7 @@ SELECT
     r.run_id AS micro_task_run_id,
     r.state AS run_state,
     r.buddy_json AS run_buddy_json,
+    r.delegation_authority AS run_delegation_authority,
     c.parent_run_id AS child_parent_run_id,
     COALESCE(c.parent_run_id, wr.run_id) AS delegated_parent_run_id,
     dr.decision_id AS decision_id,
@@ -297,6 +298,7 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
                                    "内部决策" if kind == "decision" and root_run is None else "未记录项目"),
         },
         "buddy": buddy,
+        "delegationAuthority": bool(row["run_delegation_authority"]),
     }
     return result
 
