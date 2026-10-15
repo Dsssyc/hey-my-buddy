@@ -421,17 +421,30 @@ def main():
                     raise RuntimeError("the controller unexpectedly approved the native request")
             item = {"type": "agentMessage", "id": "final-1", "phase": "final_answer",
                     "text": json.dumps({"outcome": outcome(case)}) if case != "invalid-json" else "not json"}
+            items = []
+            if case in ("final-invalid-then-valid", "final-valid-then-valid", "final-last-invalid"):
+                earlier = {**item, "text": json.dumps({"outcome": {
+                    **outcome(case), "summary": "较早的最终回答"}}, ensure_ascii=False)}
+                if case == "final-invalid-then-valid":
+                    earlier["text"] = '{"outcome":{"summary":"未完成"}' + " " * 680000
+                items.append(earlier)
+                send({"method": "item/completed", "params": {
+                    "threadId": thread_id, "turnId": turn_id, "item": earlier}})
+                item["id"] = "final-2"
+                if case == "final-last-invalid":
+                    item["text"] = "not json"
             if "buddyId" in params.get("outputSchema", {}).get("properties", {}):
                 item["text"] = json.dumps({"buddyId": "foreign" if case == "readonly-outside" else "legal", "reason": "Read-only fixture", "evidence": []})
                 if case in ("readonly-repair", "readonly-repair-evidence") and not state['threads'][thread_id]['turns']:
                     item["text"] = "not-json"
             if case != "no-final":
+                items.append(item)
                 send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
                                                             "item": item, "completedAtMs": 1}})
             if case == "disconnect-after-message":
                 return
             status = "failed" if case in ("failed", "approval-failed", "quota-failure") else "completed"
-            turn = {"id": turn_id, "status": status, "items": [] if case == "no-final" else [item]}
+            turn = {"id": turn_id, "status": status, "items": items}
             if case == "quota-failure":
                 turn["error"] = {"message": "native usage limit exceeded",
                                  "codexErrorInfo": "usageLimitExceeded"}
