@@ -153,6 +153,10 @@ Each Worker-sealed output retains its incremental `diffPath` and adds `cumulativ
 
 `accept.hostPaths` with `beforeCommit` lists real target changes outside the whole artifact's paths. These relative paths must be disjoint from artifact paths and present in the recorded before/after commit interval; Host adjustments within the artifact's paths are confirmed with `accept`'s `adjusted: true` after a refusal named them, with the note as the reason. `hostPaths` is stored separately under `integration.verification.hostPaths` and participates in the integration binding. A `notRequired` acceptance cannot carry either.
 
+## Fixes
+
+Acceptance is final. A defect found after a micro task was accepted is repaired by a new micro task submitted with `fixes: "<runId>"` ([ADR-026](../decisions/026-delegation-authority.md) decision 7). The submitter must be the accepted micro task's current owner: the Host of its controlling root, which a takeover changes, or the Lead that owns it, helpers included. The fix joins the fixed micro task's macro task: without a selector it is placed there, an explicit `macroTaskId` or `macroTaskOf` must resolve to the same macro task, `macroTask` is refused, and the macro task's project must match the fix's source project; the current owner may add the fix even when it is not the macro task's original Host. One fix repairs one micro task; a micro task may be fixed several times, and an accepted fix may itself be fixed. `get` and `status` show `fixes` on the fix and `fixedBy` (the fixes' run IDs in submission order) on the fixed micro task; `list` does not, and the timeline links the rows. Counting the fixed micro task as a defective delivery in evaluation is not built yet; it waits for result facts.
+
 ## Review, cancel and recover
 
 Review the final attempt's fixed artifact and its checks. Acceptance is tied to that artifact, not whichever branch or directory happens to exist later.
