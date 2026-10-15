@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受。第 11 条和子批①②③已合入 24b67af，并安装为 0.25.0；子批④在 0.26.0 源码实现第 1–5、8、9 条及第 7 条的账户来源区分，schema 保持 15。独立账户目录使用 harnesses/<adapter>/accounts/worker/，Codex 普通执行继续保留 goal 私有主目录。macOS Codex 0.159.0 的浏览器登录、取消、stdin 密钥、私有登出及 Claude Code 2.1.284 的 API-key 元数据和专用系统凭据库均取得逐次开发者同意后核查；原生完整 OAuth 第二轮成功，首次失败与十分钟窗口一致。源码模拟验证、原生结果与尚未进行的安装分别见[子批④验收](../acceptance/worker-accounts-batch4-0.26.0.md)。其他原生路径及 Windows/Linux 不宣称已验证；每次原生检查、付费调用及日常安装仍单独授权。 2026-10-12：[ADR-030](030-harness-layer-scope.md) 取代了第 1 至 5 条、第 8 条，以及第 9、11 条里为 harness 的原生主目录与凭据所设的部分；它实现之前，源码仍按本文。 0.30.0 的源码已经删除独立账户（[验收记录](../acceptance/adr030-batch2-host-review.md)），尚未安装；harness 的私有主目录留待 ADR-030 的批次 3。
+已接受。第 11 条和子批①②③已合入 24b67af，并安装为 0.25.0；子批④在 0.26.0 源码实现第 1–5、8、9 条及第 7 条的账户来源区分，schema 保持 15。独立账户目录使用 harnesses/<adapter>/accounts/worker/，Codex 普通执行继续保留 goal 私有主目录。macOS Codex 0.159.0 的浏览器登录、取消、stdin 密钥、私有登出及 Claude Code 2.1.284 的 API-key 元数据和专用系统凭据库均取得逐次开发者同意后核查；原生完整 OAuth 第二轮成功，首次失败与十分钟窗口一致。源码模拟验证、原生结果与尚未进行的安装分别见[子批④验收](../acceptance/worker-accounts-batch4-0.26.0.md)。其他原生路径及 Windows/Linux 不宣称已验证；每次原生检查、付费调用及日常安装仍单独授权。 2026-10-12：[ADR-030](030-harness-layer-scope.md) 取代了第 1 至 5 条、第 8 条，以及第 9、11 条里为 harness 的原生主目录与凭据所设的部分；它实现之前，源码仍按本文。 0.30.0 删除了独立账户（[验收记录](../acceptance/adr030-batch2-host-review.md)），于 2026-10-12 安装（[安装记录](../acceptance/install-0.30.0.md)）；harness 的私有主目录留待 ADR-030 的批次 3。
 
 ## 背景
 
