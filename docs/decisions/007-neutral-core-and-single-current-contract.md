@@ -16,6 +16,8 @@ The new release is 0.6.0. `CONTRACT_VERSION` remains a single current C-Two vers
 
 Execution records and worker primitives remain current infrastructure for internal decisions and process ownership. The public coding path has one controlled goal lifecycle; old `start`/`run` and standalone aliases do not remain as compatibility redirects. Current public goal commands are `submit`, `get`, `decide`, `continue`, `takeover`, `cancel`, `acknowledge` and `await`. Process/result observation remains distinct where it conveys different information. Harness execution cannot bypass the goal's authorization and workspace rules through an old one-shot public path.
 
+**Applied on 2026-10-15 (developer's decision).** A micro task's submission and its helper specifications no longer accept `adapter` or `argv`. Micro tasks had inherited the whole field set of execution records in 0.6, so a command or an external execution could be submitted as a micro task, but its result carries no structured turn and such a micro task could never be delivered; nothing used it. Command and external executions exist only as execution records submitted with `execution-submit`; a micro task always runs a buddy through a harness, and its buddy column holds only buddies.
+
 The developer chose to retain the old daily board intact as an archive and start the new release from clean state. Do not reinterpret old records at runtime or delete the archive. Switch the daily installation only after all owned implementation/acceptance work has concluded with real shutdown evidence.
 
 ## Routing

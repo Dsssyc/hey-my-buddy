@@ -90,7 +90,7 @@ The way a harness is run: as a CLI in a terminal, or as an app (a desktop app or
 _Avoid_: 前端, frontend (that is the console's), client
 
 **adapter**:
-The connector through which one harness takes part in the blackboard in one role.
+The connector through which an execution reaches the blackboard: a harness in one of its roles, a command, or an external agent that claims the work itself. A micro task always runs a buddy through a harness; command and external executions are never micro tasks.
 
 **模型 / model**:
 One concrete language model, whoever provides it. Providers, communities and users may call the same model by different names.
