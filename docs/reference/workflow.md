@@ -93,6 +93,8 @@ Nested helper attention is forwarded through durable requests on each owned ance
 
 ## Manual continuation and takeover
 
+A continuation that resumes the native session (`resumeMode: "native-session"`) can be refused at run time, before the model starts: the run ends with `native-resume-unavailable` and `modelStarted: false`. When its stop is confirmed, the blackboard requeues the same continuation once by itself, and the next turn rebuilds a new session (`reconstructed-new-session`) with `resumeReason: "native-resume-refused"` and the run module's explanation as `resumeDetail`; the run records `workflow.native_resume_refused` and `workflow.auto_continued`, and `get` and `status` show the latest such recovery as `resumeRecovery`. A rebuilt turn that fails stops at the Host boundary as any failed turn does, and an unconfirmed stop is never requeued. Claude Code never resumes a native session, so this does not apply to it.
+
 Manual continuation records new input on the same logical micro task and invalidates every older unconsumed continuation in `recorded` or `queued` state, including both manual inputs and automatic triggers. With active helpers, `helperPolicy` must be supplied explicitly as `"keep"` or `"cancel"` so a continuation never silently keeps or kills running work; `cancel` must still wait for actual shutdown before conflicting writes resume.
 
 ```sh
