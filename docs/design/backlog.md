@@ -87,7 +87,7 @@
 
 - **升级交接的测试里收集了子进程却没有使用。** `tests/python/install/test_upgrade_host_cutover.py` 的 `self.children`，2026-10-13 验收时看到，下一批动到安装与升级的测试时删掉。
 
-- **Codex 的一个回合出了两条最终回答，整回合判失败。** 2026-10-15 Lead 第二次试跑里，名下的预览微任务第一回合（`codex / openai / gpt-6.1-sol / max`，Codex CLI 0.162.1）跑了约 40 分钟、49 次工具调用，Codex 正常退出（退出码 0），产品却以 `invalid-result`“multiple native final messages completed”判失败：`buddy/harnesses/codex/protocol.py` 见到同一回合里第二条 `phase` 为 `final_answer` 的 `agentMessage` 就报错。Lead 用 `continue` 续了一回合才交回。要先复现，弄清 Codex 什么时候在一个回合里给出两条最终回答，再按 ADR-030 定：是记成事实、取最后一条，还是真算无效。
+- **Codex 的一个回合出了两条最终回答，整回合判失败。** 2026-10-15 Lead 第二次试跑里，名下的预览微任务第一回合（`codex / openai / gpt-6.1-sol / max`，Codex CLI 0.162.1）跑了约 40 分钟、49 次工具调用，Codex 正常退出（退出码 0），产品却以 `invalid-result`“multiple native final messages completed”判失败：`buddy/harnesses/codex/protocol.py` 见到同一回合里第二条 `phase` 为 `final_answer` 的 `agentMessage` 就报错。Lead 用 `continue` 续了一回合才交回。同日 Host 读了这个回合在用户 Codex 目录里的原生会话记录（只看消息的种类、时间与长度），查明：第一条最终回答 680,985 字符，结果 JSON 写到一半，后面接了约 68 万个空白字符，没有闭合，是结构化输出下的生成失控；16 秒后 Codex 在同一回合里又给出第二条，1,027 字符，是合法的结果；产品见到第二条就报错并中止了回合，把一个已经自行恢复的回合变成了失败。日常看板记下的 19 个 Codex Worker 会话、48 个回合里只有这一次。开发者没有给 Codex 配过任何钩子。由此不再付费复现，按 ADR-030 改：取回合完成前最后一条最终回答，被取代的记成事实（[执行计划](reliability-and-step3-plan.md)的 A1）。
 
 - **ZCode CLI 探针的变量清单还留着已删的 `HMB_AGENT_CREDENTIAL`。** `tests/probes/zcode_hooks.py` 的 `CREDENTIAL_ENV_VARS` 照 `AGENTS.md` 的测试隔离清单写；0.37.0 删掉了这个变量、加了 `HMB_AGENT_CREDENTIAL_FD`，它没跟上，只是多清一个没人设的变量，没有害处。2026-10-15 验收“Lead 的凭据与按角色认 Lead”时由实现方指出，它在那个微任务的写入范围之外；下一批动到 harness 探针时顺带改。
 

@@ -14,8 +14,8 @@ A1 与 A2 先并行，文件不重叠；A3 在 A1 之后。
 
 | 编号 | 内容 | 主要范围 | buddy | 测试与验收 |
 | --- | --- | --- | --- | --- |
-| A1 | **Codex 回合里多条最终回答。** 现在见到第二条 `phase` 为 `final_answer` 的 `agentMessage` 就把整回合判为 `invalid-result`。2026-10-15 那一回合最后一条最终回答 681 KB，是一份完整的结果 JSON，Codex 正常退出。按 ADR-030 改成记成事实：回合的结果取回合完成前的最后一条最终回答，条数与各条的摘要记进证据，不再判失败。顺带：ZCode CLI 探针的变量清单里已删的 `HMB_AGENT_CREDENTIAL`。 | `buddy/harnesses/codex/protocol.py` 与它的测试、`tests/probes/zcode_hooks.py` | Codex `gpt-6.1-sol / high` | Codex 的夹具测试；不做付费的原生调用 |
-| A2 | **一直崩溃的 Worker 要看得见。** supervisor 已在自己的状态文件里记着 `restarting` 与最后的错误，服务读出来，`health` 逐个列出 Worker 的状态与最后的错误，控制台对在重启的 Worker 给出提示。顺带：替身 Worker 在前任的执行结算之后显示为 `lost`。保持最小，只把已有的事实交出来：新底座如果取代 supervisor，这里的改动也随之换掉。 | `blackboard/service/daemon.py`、`health` 的投影、控制台的快照与显示 | Codex `gpt-6.1-sol / high` | 私有服务上让一个 Worker 起不来，`health` 与控制台照实显示；前端全量、浏览器检查、看像素 |
+| A1 | **Codex 回合里多条最终回答。** 现在见到第二条 `phase` 为 `final_answer` 的 `agentMessage` 就把整回合判为 `invalid-result`。2026-10-15 那一回合最后一条最终回答 681 KB，是一份完整的结果 JSON，Codex 正常退出。按 ADR-030 改成记成事实：回合的结果取回合完成前的最后一条最终回答，条数与各条的摘要记进证据，不再判失败。顺带：ZCode CLI 探针的变量清单里已删的 `HMB_AGENT_CREDENTIAL`。 | `buddy/harnesses/codex/protocol.py` 与它的测试、`tests/probes/zcode_hooks.py` | Codex `gpt-6.1-sol / high` | Codex 的夹具测试；不做付费复现：原生会话记录已经查明原因，见待办同名一条 |
+| A2 | **一直崩溃的 Worker 要看得见。** supervisor 已在自己的状态文件里记着 `restarting` 与最后的错误，服务读出来，`health` 与 `workers` 逐个列出 Worker 的状态与最后的错误。控制台现在没有显示 Worker 的地方，提示随第 4 步的控制台重做设计。顺带：替身 Worker 在前任的执行结算之后显示为 `lost`。保持最小，只把已有的事实交出来：新底座如果取代 supervisor，这里的改动也随之换掉。 | `blackboard/service/daemon.py`、`health` 的投影、控制台的快照与显示 | Codex `gpt-6.1-sol / high` | 私有服务上让一个 Worker 起不来，`health` 照实显示 |
 | A3 | **失败回合的原生证据不随回收删掉。** 现在微任务验收或写结论、回收检出时，`state/harnesses/<harness>/micro-tasks/<…>/attempts/<…>/` 下的原生证据一并删除，看板结果里的引用指向不存在的文件。失败回合的证据留到所属宏任务删除，或由存储回收列进计划、由用户决定；结果里的引用在文件删掉之后如实显示为已删除。 | 回收与存储回收（`blackboard/tasks/storage.py` 等）、harness 证据目录的归属 | Codex `gpt-6.1-sol / high` | 私有服务上做一次失败回合再验收，证据仍在；改的是删除路径，按约定另请 Opus 独立审查一次 |
 
 A 批之后可以装一次。`health` 多出的字段算不算面向 Host 的契约变了，决定中间一位还是最后一位加一，装之前再定。
@@ -60,8 +60,8 @@ Host 自己做，与 A 并行，不动代码。
 - **工作区少发 Git 调用。** [计划](workspace-git-calls-plan.md)的余下各步。
 - **只跑受影响的测试（TIA）。** 开发者说过可以试试；先前的试探没有拿到覆盖率数据，要先解决在 uv 下挂上覆盖率的问题。
 
-## 要开发者定的
+## 开发者已定的（2026-10-15）
 
-1. **A1 要不要先付费复现一次。** 一回合出两条最终回答，可能是用户自己给 Codex 配的钩子让模型在交出回答之后接着干，也可能是模型自己的行为。Host 不读用户的 Codex 配置，所以先问开发者：Codex 里有没有配会拦住结束的钩子？按 ADR-030，无论哪种原因，记成事实、取最后一条都站得住。Host 的建议是不付费复现。
-2. **C3 改面向 Host 的回复，C6 改契约与存储。** 都算进 C 组那一次升级，版本中间一位加一。
-3. **安装的节奏。** A 批装一次，C 组连同升级再装一次。
+- A1 先查原因：开发者认为值得复现，若不稳定就是产品的问题；开发者没有配过 Codex 的钩子。Host 随后读了原生会话记录，查明是模型在结构化输出下的偶发失控、Codex 自行恢复，而产品把恢复判成了失败，因此不再付费复现。
+- C3、C6 改面向 Host 的接口与存储，随 C 组那一次升级做，版本中间一位加一。
+- 安装两次：A 批一次，C 组连同升级一次。
