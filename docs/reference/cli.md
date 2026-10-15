@@ -263,6 +263,7 @@ Decision statuses are `queued`, `running`, `completed`, `needs-host`, `failed` a
 | `INVALID_ARGUMENT` | A parameter is missing, unknown or out of bounds; also a malformed, non-object, non-UTF-8 or oversized parameter document |
 | `UNKNOWN_METHOD` | The CLI method name is unknown; the envelope's `didYouMean` lists the closest candidates and the process exits 2 |
 | `NOT_FOUND` | The selector matches no task, worker, message or artifact |
+| `SUBMISSION_REPLAY_UNAVAILABLE` | The `requestId` belongs to a submission recorded before schema 21, whose fingerprint the upgrade cleared; submit with a new `requestId` |
 | `NOT_READY` | No persisted result/attempt exists yet (for example `result` before completion) |
 | `CONFLICT` | The same identity with changed input: changed submit input, changed inquiry text, a different repeated acknowledgement, a closed boundary or an already-published command |
 | `REVISION_CONFLICT` | A stale revision tried to mutate state |

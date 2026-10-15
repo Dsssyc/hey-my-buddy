@@ -48,7 +48,7 @@ hey-my-buddy transports bounded JSON strings through C-Two 0.7.4's named Python 
 
 ## Data model
 
-One schema-versioned SQLite database (`board.sqlite3`, schema version 20) owns every authoritative fact in 53 tables. Startup accepts schema 20 only, and an install accepts no other schema: the upgrades from schemas 18 and 19 ran on the daily board and are gone ([operations](operations.md#installation)).
+One schema-versioned SQLite database (`board.sqlite3`, schema version 21) owns every authoritative fact in 52 tables. Startup accepts schema 21 only; an install converts a schema-20 board written by the upgrade base 0.36.0 with the explicit upgrade and accepts no other schema ([operations](operations.md#installation)). Events and the records of scopes, workspace conflicts, integrations, cleanup plans and Host conclusions store who acted as a role (`host`, `lead`, `console`, `service`, `workflow` or `bridge`) and an identifier.
 
 | Group | Tables |
 | --- | --- |

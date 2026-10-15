@@ -200,7 +200,7 @@ Before waiting on a running micro task, submit the micro tasks that are independ
 
 ## A Lead for a large macro task
 
-Use a Lead only when the user asks for one. Before granting delegation authority, confirm with the user and say what it costs: more spend and more time for more precision, worth it for a macro task on the scale of an architecture decision and not for ordinary work. The user names the buddy that leads; write it completely and do not route it. The Lead runs at the full level without an OS sandbox, accepts the micro tasks it delegates, and delivers one integrated result that you accept; it never talks to the user, so anything that needs the user comes to you as a request. Talk to it with `continue` at its boundaries or while it waits. The rules are in [workflow](workflow.md#delegation-authority-lead); this path is in the source for 0.36.0 and has not yet been run with a real Lead.
+Use a Lead only when the user asks for one. Before granting delegation authority, confirm with the user and say what it costs: more spend and more time for more precision, worth it for a macro task on the scale of an architecture decision and not for ordinary work. The user names the buddy that leads; write it completely and do not route it. The Lead runs at the full level without an OS sandbox, accepts the micro tasks it delegates, and delivers one integrated result that you accept; it never talks to the user, so anything that needs the user comes to you as a request. Talk to it with `continue` at its boundaries or while it waits. The rules are in [workflow](workflow.md#delegation-authority-lead); its first real run stopped on a missing credential, which 0.37.0 corrects (in the source, not installed yet).
 
 ## Operating rules
 
