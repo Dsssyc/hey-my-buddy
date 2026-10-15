@@ -13,7 +13,7 @@ control capacity that cancel, renew and result commits need.
 """
 import c_two as cc
 
-CONTRACT_VERSION = "0.38.0"
+CONTRACT_VERSION = "0.39.0"
 CONTROL_NAME = "hey-my-buddy-control"
 WAIT_NAME = "hey-my-buddy-wait"
 
