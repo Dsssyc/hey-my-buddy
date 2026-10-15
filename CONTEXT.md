@@ -7,7 +7,7 @@ Agent buddies share delegated work through one blackboard: a Host buddy delegate
 ### The system
 
 **hey-my-buddy**:
-The product that provides the blackboard, Worker runtimes, adapters, CLI, console and skill through which buddies work together.
+The product that provides the blackboard, execution processes, adapters, CLI, console and skill through which buddies work together.
 _Avoid_: Buddy
 
 **黑板 / blackboard**:
@@ -90,7 +90,7 @@ The way a harness is run: as a CLI in a terminal, or as an app (a desktop app or
 _Avoid_: 前端, frontend (that is the console's), client
 
 **adapter**:
-The connector through which an execution reaches the blackboard: a harness in one of its roles, a command, or an external agent that claims the work itself. A micro task always runs a buddy through a harness; command and external executions are never micro tasks.
+The connector through which an execution reaches the blackboard: a harness in one of its roles or a command. A micro task always runs a buddy through a harness; a command execution is never a micro task.
 
 **模型 / model**:
 One concrete language model, whoever provides it. Providers, communities and users may call the same model by different names.
@@ -107,13 +107,9 @@ _Avoid_: 供应方, 服务商
 The blackboard's record of the models and reasoning efforts a harness reported it can provide, and so of which buddies exist in that harness. It is a reading taken at one moment, not a fact about the harness: a buddy whose model is missing from a later reading is pending, still usable, until a further reading confirms the absence.
 _Avoid_: model list (for the blackboard's record; the model list is what the harness itself returns)
 
-**Worker 运行时 / Worker runtime**:
-The hey-my-buddy-managed host that claims attempts and starts one execution process for each. Its liveness and state are not a buddy's.
-_Avoid_: Worker (for the process)
-
 **执行进程 / execution process**:
-The process that carries one attempt from start to result: it runs the Worker or Router buddy's harness or the plain command, owns the processes started for that run, keeps the attempt's result receipt and delivers it to the blackboard, and outlives a restart of the service. Its liveness and state are not a buddy's.
-_Avoid_: run controller, Worker (for this process)
+The process the service starts for one attempt, carrying it from start to result: it runs the Worker or Router buddy's harness or the plain command, owns the processes started for that run, keeps the attempt's result receipt and delivers it to the blackboard, and outlives a restart of the service. Its liveness and state are not a buddy's.
+_Avoid_: run controller, Worker runtime, Worker (for this process)
 
 ### Work
 
