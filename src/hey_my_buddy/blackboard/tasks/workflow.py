@@ -4686,10 +4686,8 @@ class WorkflowCoordinator:
         plan = planned["plan"]
         if plan["state"] == "applied":
             result = (plan.get("result") or {})
-            path = Path(plan["path"]) if plan.get("path") else None
-            gone = path is not None and not (path.exists() or path.is_symlink())
-            return {"removed": True, "alreadyRemoved": bool(result.get("alreadyRemoved")) or gone,
-                    "path": plan["path"], "planId": plan["planId"]}
+            return {"removed": True, "alreadyRemoved": bool(result.get("alreadyRemoved")),
+                    "path": plan["path"], "planId": plan["planId"], "retention": result["retention"]}
         if plan["state"] not in ("planned", "applying"):
             # An applying plan is not re-admitted here: cleanup_apply resumes it.
             blocked = {"removed": False, "reasons": plan.get("reasons") or ["blocked"], "planId": plan["planId"],
@@ -4711,6 +4709,8 @@ class WorkflowCoordinator:
                            "planId": plan["planId"], "path": plan["path"]}
                 if error.details.get("attachedBranch") is not None:
                     blocked["attachedBranch"] = error.details["attachedBranch"]
+                if error.details.get("unsealedPaths"):
+                    blocked["unsealedPaths"] = error.details["unsealedPaths"]
                 return blocked
             return {"removed": False, "reasons": [error.code], "detail": error.message,
                     "planId": plan["planId"], "path": plan["path"]}
@@ -5547,7 +5547,7 @@ class WorkflowCoordinator:
             if confirm_path != plan["path"]:
                 raise BoardError("INVALID_ARGUMENT", "confirmPath must exactly match the planned checkout path",
                                  plannedPath=plan["path"])
-            self._cleanup_apply_precheck(connection, run_row, plan)
+            resume = self._cleanup_apply_precheck(connection, run_row, plan)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             manifest = json.loads(run_row["workspace_manifest_json"] or "{}")
             retained = self._allocation_provenance(connection, run_row)
@@ -5570,7 +5570,7 @@ class WorkflowCoordinator:
         if path.exists() or path.is_symlink():
             inspection = workspace_module().cleanup_inspect(
                 self.board.directory, manifest, sealed=sealed,
-                retained=retained, allowed=self._board_adopted_paths(run_id, manifest))
+                retained=retained, allowed=self._board_adopted_paths(run_id, manifest), resume=resume)
             # The registered owner of this allocation may complete the same removal
             # while the eligibility is proven, or the checkout may already have been
             # deleted out of band. A path that is factually gone leaves nothing to
@@ -5578,7 +5578,7 @@ class WorkflowCoordinator:
             # planned path keeps every NOT_READY reason.
         blocked = inspection is not None and bool(inspection["reasons"]) and (path.exists() or path.is_symlink())
         if blocked:
-            details = {"reasons": inspection["reasons"]}
+            details = {"reasons": inspection["reasons"], "unsealedPaths": inspection["unsealedPaths"]}
             if inspection.get("attachedBranch") is not None:
                 details["attachedBranch"] = inspection["attachedBranch"]
             refusal = BoardError("NOT_READY", "This checkout is not eligible for cleanup", **details)
@@ -5604,30 +5604,30 @@ class WorkflowCoordinator:
                 # A started removal keeps its fence even when its resumption is
                 # refused; no part of that journal may be rewritten here.
                 raise refusal
-            evidence = json.loads(plan["evidence_json"])
-            retention = json.loads(plan["retention_json"])
-            if inspection is not None:
-                evidence["workspace"] = {key: inspection.get(key) for key in
-                                         ("eligible", "reasons", "kind", "checkoutId", "repositoryId", "worktree",
-                                          "locked", "unsealedPaths", "sealedObservation", "workspaceId",
-                                          "manifestWorkspaceId", "allocation", "attachedBranch")}
-                retention["fixedRefs"] = sorted(set(retention["fixedRefs"]) | set(inspection["refs"]))
-                retention["checkoutRoot"] = inspection["path"]
-                retention["cwd"] = inspection["cwd"]
-            connection.execute(
-                "UPDATE workspace_cleanup_plans SET state=?, evidence_json=?, retention_json=?, reasons_json=?,"
-                " command_id=?, revision=revision+1 WHERE plan_id=?"
-                " AND state=?",
-                ("blocked" if blocked else "applying", canonical_json(evidence), canonical_json(retention),
-                 canonical_json(inspection["reasons"] if blocked else []), command_id, plan_id, plan["state"]),
-            )
+            if plan["state"] == "planned":
+                evidence = json.loads(plan["evidence_json"])
+                retention = json.loads(plan["retention_json"])
+                if inspection is not None:
+                    evidence["workspace"] = {key: inspection.get(key) for key in
+                                             ("eligible", "reasons", "kind", "checkoutId", "repositoryId", "worktree",
+                                              "locked", "unsealedPaths", "sealedObservation", "workspaceId",
+                                              "manifestWorkspaceId", "allocation", "attachedBranch")}
+                    retention["fixedRefs"] = sorted(set(retention["fixedRefs"]) | set(inspection["refs"]))
+                    retention["checkoutRoot"] = inspection["path"]
+                    retention["cwd"] = inspection["cwd"]
+                connection.execute(
+                    "UPDATE workspace_cleanup_plans SET state=?, evidence_json=?, retention_json=?, reasons_json=?,"
+                    " command_id=?, revision=revision+1 WHERE plan_id=? AND state='planned'",
+                    ("blocked" if blocked else "applying", canonical_json(evidence), canonical_json(retention),
+                     canonical_json(inspection["reasons"] if blocked else []), command_id, plan_id),
+                )
             head = self.board._head_of(connection)
         self.board._notify(head)
         if blocked:
             raise refusal
         removed = None
         if path.exists() or path.is_symlink():
-            removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained)
+            removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained, resume=resume)
         from ... import private_dirs
         for micro_task_id in dict.fromkeys(private_micro_tasks):
             for adapter in private_dirs.ADAPTERS:
@@ -5693,7 +5693,8 @@ class WorkflowCoordinator:
         resume = plan["state"] == "applying"
         reasons, _evidence, _retention = self._cleanup_reasons(connection, run_row, task, manifest, allocation=allocation)
         planned = json.loads(plan["evidence_json"])
-        if planned.get("ownerGeneration", run_row["owner_generation"]) != run_row["owner_generation"] or planned["acceptance"]["state"] != run_row["state"]:
+        if ((not resume and planned.get("ownerGeneration", run_row["owner_generation"]) != run_row["owner_generation"])
+                or planned["acceptance"]["state"] != run_row["state"]):
             reasons.append("review-changed")
         if reasons:
             raise BoardError("NOT_READY", "This checkout is not eligible for cleanup", reasons=reasons)

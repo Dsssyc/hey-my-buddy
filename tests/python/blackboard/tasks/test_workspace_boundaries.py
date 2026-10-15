@@ -200,6 +200,169 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertEqual(rejected["reasons"], ["lock-mismatch"])
         self.assertTrue(checkout.exists())
 
+    def test_started_cleanup_without_an_output_uses_the_retained_input(self):
+        manifest = self.prepare()
+        checkout = Path(manifest["path"])
+        self.git("worktree", "unlock", str(checkout))
+        (checkout / "src/file.txt").unlink()
+        (checkout / ".git").unlink()
+        proof = workspace.cleanup_inspect(self.state, manifest, resume=True)
+        self.assertTrue(proof["eligible"], proof)
+        self.assertEqual(proof["locked"], "hey-my-buddy:" + manifest["workspaceId"])
+        removed = workspace.cleanup_remove(self.state, manifest, resume=True)
+        self.assertFalse(removed["alreadyRemoved"])
+        self.assertFalse(checkout.exists())
+
+    def test_failed_partial_remove_relocks_without_a_gitfile_and_can_resume(self):
+        manifest = self.prepare()
+        checkout = Path(manifest["path"])
+        real_git = workspace._git
+
+        def failed_remove(root, *args, **kwargs):
+            if args[:2] == ("worktree", "remove"):
+                (checkout / ".git").unlink()
+                (checkout / "src/file.txt").unlink()
+                raise BoardError("WORKSPACE_GIT_ERROR", "injected partial deletion")
+            return real_git(root, *args, **kwargs)
+
+        with patch.object(workspace, "_git", side_effect=failed_remove):
+            error = self.assert_error("WORKSPACE_GIT_ERROR", workspace.cleanup_remove, self.state, manifest)
+        self.assertNotIn("relockError", error.details)
+        self.assertEqual(workspace._worktree_record(self.repo, checkout)["locked"],
+                         "hey-my-buddy:" + manifest["workspaceId"])
+        proof = workspace.cleanup_inspect(self.state, manifest, resume=True)
+        self.assertTrue(proof["eligible"], proof)
+        self.assertFalse(workspace.cleanup_remove(self.state, manifest, resume=True)["alreadyRemoved"])
+        self.assertFalse(checkout.exists())
+
+    def test_resumed_cleanup_checks_modes_and_symlinks_without_following_them(self):
+        for change in ("mode", "file-link", "directory-link"):
+            with self.subTest(change=change):
+                if change == "mode" and workspace._WINDOWS:
+                    continue  # Windows has no independent executable file bit.
+                manifest = self.prepare(request=change)
+                checkout = Path(manifest["path"])
+                sealed = self.seal(manifest)
+                outside = self.root / f"outside-{change}"
+                outside.mkdir()
+                target = outside / "retained.bin"
+                target.write_bytes(b"outside the allocation\x00\xff")
+                if change == "mode":
+                    path = checkout / "src/file.txt"
+                    path.chmod(0o755)
+                    changed = "src/file.txt"
+                elif change == "file-link":
+                    path = checkout / "src/file.txt"
+                    path.unlink()
+                    path.symlink_to(target)
+                    changed = "src/file.txt"
+                else:
+                    (checkout / "external").symlink_to(outside, target_is_directory=True)
+                    changed = "external"
+                self.git("worktree", "unlock", str(checkout))
+                proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)
+                self.assertFalse(proof["eligible"], proof)
+                self.assertEqual(proof["reasons"], ["unsealed-changes"])
+                self.assertEqual(proof["unsealedPaths"], [changed])
+                self.assertEqual(proof["locked"], "hey-my-buddy:" + manifest["workspaceId"])
+                self.assertEqual(target.read_bytes(), b"outside the allocation\x00\xff")
+
+    def test_resumed_cleanup_keeps_unsealed_index_content_without_a_gitfile(self):
+        manifest = self.prepare()
+        checkout = Path(manifest["path"])
+        sealed = self.seal(manifest)
+        git_dir = Path(workspace.inspect(str(checkout))["gitDir"])
+        initial_index = workspace._entries(checkout)
+        (checkout / "src/file.txt").write_bytes(b"staged only\x00\xff")
+        self.git("add", "src/file.txt", cwd=checkout)
+        staged_index = workspace._entries(checkout)
+        (checkout / "src/file.txt").write_text("base\n")
+        ordinary = workspace.cleanup_inspect(self.state, manifest, sealed=sealed)
+        self.git("worktree", "unlock", str(checkout))
+        (checkout / ".git").unlink()
+        (checkout / "docs/readme.md").unlink()
+        self.assertEqual(workspace._entries(git_dir), staged_index)
+        proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)
+        self.assertFalse(proof["eligible"], proof)
+        self.assertEqual(proof["reasons"], ["unsealed-changes"])
+        self.assertEqual(proof["unsealedPaths"], ordinary["unsealedPaths"])
+        self.assertEqual(workspace._entries(git_dir), staged_index)
+        self.assertEqual((checkout / "src/file.txt").read_text(), "base\n")
+        workspace._git(git_dir, "read-tree", manifest["inputTree"])
+        self.assertEqual(workspace._entries(git_dir), initial_index)
+        self.assertTrue(workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)["eligible"])
+        self.assertFalse(workspace.cleanup_remove(self.state, manifest, resume=True)["alreadyRemoved"])
+
+    def test_resumed_cleanup_keeps_an_unsealed_head_without_a_gitfile(self):
+        manifest = self.prepare()
+        checkout = Path(manifest["path"])
+        sealed = self.seal(manifest)
+        git_dir = Path(workspace.inspect(str(checkout))["gitDir"])
+        self.git("commit", "--allow-empty", "-qm", "not sealed", cwd=checkout)
+        unsealed_head = self.git("rev-parse", "HEAD", cwd=checkout)
+        ordinary = workspace.cleanup_inspect(self.state, manifest, sealed=sealed)
+        self.git("worktree", "unlock", str(checkout))
+        (checkout / ".git").unlink()
+        proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)
+        self.assertFalse(proof["eligible"], proof)
+        self.assertEqual(proof["reasons"], ["unsealed-changes"])
+        self.assertEqual(proof["unsealedPaths"], ordinary["unsealedPaths"])
+        self.assertEqual(workspace._git(git_dir, "rev-parse", "HEAD"), unsealed_head)
+        workspace._git(git_dir, "update-ref", "--no-deref", "HEAD", sealed["snapshot"]["headCommit"])
+        self.assertTrue(workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)["eligible"])
+        self.assertFalse(workspace.cleanup_remove(self.state, manifest, resume=True)["alreadyRemoved"])
+
+    def test_resumed_cleanup_restores_missing_binary_modes_links_and_parents(self):
+        payload = self.repo / "src" / "deep" / "payload.bin"
+        payload.parent.mkdir()
+        payload.write_bytes(b"retained executable\x00\xff")
+        payload.chmod(0o755)
+        link = self.repo / "src" / "deep" / "link"
+        link.symlink_to("payload.bin")
+        self.git("add", ".")
+        self.git("commit", "-qm", "retained links and binary")
+        manifest = self.prepare()
+        checkout = Path(manifest["path"])
+        sealed = self.seal(manifest)
+        (checkout / "src/deep/payload.bin").unlink()
+        (checkout / "src/deep/link").unlink()
+        (checkout / "src/deep").rmdir()
+        (checkout / ".git").unlink()
+        self.git("worktree", "unlock", str(checkout))
+        proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)
+        self.assertTrue(proof["eligible"], proof)
+        self.assertEqual((checkout / "src/deep/payload.bin").read_bytes(), b"retained executable\x00\xff")
+        self.assertEqual((checkout / "src/deep/link").readlink(), Path("payload.bin"))
+        if not workspace._WINDOWS:
+            self.assertEqual((checkout / "src/deep/payload.bin").stat().st_mode & 0o777, 0o755)
+        self.assertEqual(workspace.inspect(str(checkout))["checkoutId"], manifest["checkoutId"])
+        self.assertTrue(workspace.cleanup_remove(self.state, manifest, resume=True)["removed"])
+
+    def test_resumed_cleanup_never_overwrites_a_file_created_during_restoration(self):
+        manifest = self.prepare()
+        checkout = Path(manifest["path"])
+        sealed = self.seal(manifest)
+        (checkout / "src/file.txt").unlink()
+        (checkout / ".git").unlink()
+        self.git("worktree", "unlock", str(checkout))
+        materialize = workspace._materialize
+
+        def competing_write(root, entries):
+            self.assertEqual(set(entries), {"src/file.txt"})
+            (checkout / "src/file.txt").write_bytes(b"new unsealed bytes\x00\xff")
+            materialize(root, entries)
+
+        with patch.object(workspace, "_materialize", side_effect=competing_write):
+            self.assert_error("WORKSPACE_IO_ERROR", workspace.cleanup_inspect,
+                              self.state, manifest, sealed=sealed, resume=True)
+        self.assertEqual((checkout / "src/file.txt").read_bytes(), b"new unsealed bytes\x00\xff")
+        self.assertEqual(workspace.inspect(str(checkout))["checkoutId"], manifest["checkoutId"])
+        self.assertEqual(workspace._worktree_record(self.repo, checkout)["locked"],
+                         "hey-my-buddy:" + manifest["workspaceId"])
+        proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)
+        self.assertFalse(proof["eligible"], proof)
+        self.assertEqual(proof["unsealedPaths"], ["src/file.txt"])
+
 
 if __name__ == "__main__":
     unittest.main()
