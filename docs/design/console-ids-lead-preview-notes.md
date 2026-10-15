@@ -81,3 +81,25 @@ Lead 对 C 先运行 `npm --prefix apps/console run typecheck`，退出码 0，�
 额外以 ignored `tmp/copy-browser.config.mts` 与 `tmp/copy-browser.check.ts` 在真实 Chromium 中复核原生剪贴板：中英文、1440 与 390 宽度，宏任务标题、微任务检查器、详情的按钮都复制完整标识，悬停可读完整值，独立微任务在宏任务标题处复制 `run:preview-run-c1`；宏任务头部与检查器控件无重叠、页面无横向溢出，详情仍显示委派它的 Lead。8 个场景最终全部通过；首次脚本在 390 宽度仍选择隐藏的桌面 `.tl-label` 而有两项超时（6 项通过），改为窄屏实际使用的 `.tl-entry` 后只重跑这两项，2 项通过、退出码 0，属于临时检查脚本的入口错误，没有修改产品源码。原始结果分别在 `tmp/copy-browser.log` 与 `tmp/copy-browser-narrow.log`。
 
 最终交回：四项改动、夹具返修与重建资源都在本 Lead 检出；前端全量 1,119 项、浏览器全量 106 项、指定 Python 3 项通过，另有原生复制与窄屏 8 场景通过。名下共 3 项，A 为 Codex CLI `gpt-6.1-sol / high`（返修 0）、B 为 Codex CLI `gpt-6.1-sol / max`（返修 1）、C 为 DSH CLI `deepseek-flash / max`（返修 0），均经默认路由、固定产物审查与实际提交验收，已回收子检出。本次 Lead 的凭据、正常交付叫醒、失败叫醒、恢复、范围修订、累计产物整合和三次验收可用；最不顺的是 B 首回合约 39 分钟后失败，以及 Lead 验收前未先做 typecheck、误以为晚发现问题需要 Host 另批返修路径造成的额外回合，证据和纠正均已记录。
+
+## Host 再审返修（第七回合）
+
+Host 已核对第 1、3、4 项、整合与先前记录的全量检查，但复现第 2 项遗漏：工作流的命令执行 buddy 是 `{"adapter":"command"}`，`WorkflowPanel` 的记录细节仅以 `value.buddy` 是否非空决定显示，因此仍会写出 `undefined · undefined / undefined｜buddy 来源未记录`。此前 A 只处理执行列表与详情头部，Lead 的回归夹具没有经 WorkflowPanel 覆盖这个真实形态，先前“四项完成”的判断被 Host 纠正。Host 另指出标识 span 的原生 `title` 与 Tooltip 叠出两个提示。
+
+新增顺序微任务 D，以交回时封存的完整整合提交 `1adae637` 为基点，集中修改 `apps/console/src/console-data.ts` 中“这次执行有没有模型 buddy”的共享规则，让执行列表、详情头部、记录细节共同使用，补 WorkflowPanel 实际渲染命令记录细节的回归；同时删除 `CopyableIdentifier` 标识 span 的原生 `title` 并更新相应行为断言。写入范围限制为上述数据工具、三个消费组件、复制组件及其相关现有测试，不动 Python、浏览器测试、文档或打包资源；文件间无并行写入。D 只跑 typecheck 和明确列出的相关组件 / 数据工具测试，Lead 验收前先重跑 typecheck 与相关测试，整合后再跑前端全量、浏览器全量并重建打包资源。
+
+D 用第七回合执行凭据 `submit --params-file tmp/command-record-repair-submit.json` 提交，退出码 0，runId 为 `8b26486c-f55e-40b7-979b-44f57a80d720`，回执为 `executing` / `queued`、`awaiting-model-selection`，未指定 buddy；提示带完整环境规矩、三句交付和验收前 typecheck 要求。D 返修 0 次，等待交回；前三项验收状态保持。
+
+第八回合因 D 交付自动叫醒；D 路由为 ZCode CLI `bigmodel-api-2 / GLM-5.3 / max`，首份固定产物 `862e3a62-06d0-4402-97e4-b6ef9e73c3e7`、提交 `813d0121`，6 个文件均在授权范围。Lead 重跑 typecheck 退出 0，5 个指定测试文件 37 项通过，退出码 0；但逐项审查发现 `hasModelBuddy(task)` 仍只读详情任务 `spec.adapter`，WorkflowPanel 仍可能把接口返回的 `{adapter: command}` 当模型 buddy：新增回归额外修改了详情任务 spec，未覆盖 Host 只替换工作流 buddy 的原始复现。此处未因测试通过而验收，也未整合首份产物。
+
+Lead 用 `continue`（`commandId: command-record-rework-1`、`expectedRevision: 4`）打回，明确要求共享规则识别实际工作流 buddy 的适配器标记、WorkflowPanel 本身不另写判断，并从原夹具只替换接口返回 buddy 做回归；复制组件去原生 title 的修复保留。调用退出码 0，D 返修累计 1 次，等待下一份交付；检查仍限先 typecheck，再原五个定向测试文件。
+
+第九回合由 D 第二份交付叫醒，最终固定产物 `633d5297-d582-4b99-a7b5-4247d3f8c2f0`、累计输出提交 `b53f519d`，仍只有原先六份授权文件。`hasModelBuddy(task, buddy)` 统一判别基础设施适配器与实际记录的 buddy 形态：执行列表、详情头部经 `taskExecutor` 传 lineage 的 buddy，WorkflowPanel 记录细节传工作流自己的 buddy；裸 adapter 标记不会进入模型名字格式化，尚待分配的模型执行保留既有待确定语义。WorkflowPanel 回归保留原详情 spec，只把接口返回 buddy 改为 `{adapter: command}`，同时断言整栏消失、没有 undefined、真实模型 buddy 仍显示；复制组件只保留 Tooltip，测试明确原生 title 不存在。
+
+Lead 重跑 typecheck 退出 0，随后 5 个定向文件（`console-data.test.ts`、`WorkflowPanel.test.tsx`、`components/CopyableIdentifier.test.tsx`、`task-presentation.test.tsx`、`task-title.test.tsx`）37 项通过，退出码 0，累计固定差异的 `git diff --check` 通过；D 原样整合为 `895f7db4`，`apps/console` 树与已测产物一致。用本回合执行凭据绑定最终 artifactId 和实际目标提交 `895f7db4` 调用 `accept`，退出码 0，返回 `accepted`、`integration.state: verified`、`reclaim.removed: true`，整合标识为 `int-474335b2-ef34-4d6c-bf67-3d8868f4aec4`。D 由 ZCode CLI `GLM-5.3 / max` 完成，返修 1 次；四项名下微任务现已全部验收，继续整合后全量检查与资源重建。
+
+本次整合后的最终验证按顺序完成：`npm --prefix apps/console test`，81 文件 1,120 项通过，退出码 0，耗时 24.41 秒；`npm --prefix apps/console run test:browser`，106 项通过，退出码 0，耗时 16.3 秒（含命令自身的 typecheck 与构建）；`npm --prefix apps/console run build` 退出码 0，重新生成打包资源；最后仍按 Host 指定解释器、默认 4 进程运行 `tests/python/cli/test_host_preview.py` 的检查器，3 项通过，私有根清理、退出码 0。原始输出分别保留在 ignored `tmp/console-command-repair-full.log`、`tmp/console-command-repair-browser.log`、`tmp/console-command-repair-build.log`、`tmp/console-command-repair-python.log`，未跑 Python 完整检查。
+
+最终 `index.html` 引用脚本 `assets/index-1SHUT5Hj.js`，资源目录只有这一份脚本，引用的图标、样式与脚本均存在；先前中间构建的 `index-iWDO4HEY.js` 已随本次资源替换移除，不交付两份并存的脚本。命令执行的执行列表、详情头部和工作流记录细节现由同一规则决定是否显示模型 buddy，等待原因英文仍保持原状；复制标识只保留 Tooltip。四项源码改动及此次两处返修均已在本 Lead 检出整合，Host 的最终验收仍待进行，没有安装或发布。
+
+名下最终共 4 项：A（Codex CLI，`gpt-6.1-sol / high`）返修 0 次，B（Codex CLI，`gpt-6.1-sol / max`）返修 1 次，C（DSH CLI，`deepseek-flash / max`）返修 0 次，D（ZCode CLI，`GLM-5.3 / max`）返修 1 次，均已验收并回收检出。此次 Host 打回表明，检查次数不能替代覆盖真实输入形态；Lead 后续审查以原始复现和三处消费路径为准，D 首份交付即使 37 项测试通过也被打回，最终回归不再添加会掩盖问题的 spec 前提。

@@ -13,7 +13,7 @@ describe("copyable identifiers", () => {
     const user = userEvent.setup();
     const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
     render(<CopyableIdentifier value={id} />);
-    expect(screen.getByText("macro-79771ce9…91da").getAttribute("title")).toBe(id);
+    expect(screen.getByText("macro-79771ce9…91da").getAttribute("title")).toBeNull();
     const button = screen.getByRole("button", { name: `复制标识 ${id}` });
     await user.hover(button);
     expect((await screen.findByRole("tooltip")).textContent).toBe(id);

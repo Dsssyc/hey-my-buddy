@@ -204,6 +204,32 @@ describe("micro task workflow console (0.15.1 read-only)", () => {
     expect(screen.getByText("已验收")).toBeTruthy();
   });
 
+  it("hides the whole execution-buddy row for a command execution's record details and keeps a recorded model buddy", async () => {
+    const f = fixture();
+    // The board's buddy record for a command execution is the bare adapter
+    // marker (protocol buddy_constraints), which names no model; the detail's
+    // own spec carries no adapter to judge from.
+    const command = async <T,>(operation: string, _params: unknown, _csrfToken: string): Promise<T> => {
+      if (operation !== "workflow_get") throw new Error(`Unexpected mutation: ${operation}`);
+      return { ...structuredClone(f.workflow), buddy: { adapter: "command" } } as T;
+    };
+    const user = userEvent.setup();
+    const view = render(<WorkflowPanel {...f.props} api={{ ...f.props.api, command }} />);
+    await user.click(await screen.findByText("记录细节（微任务与回合）"));
+    const facts = view.container.querySelector(".record-facts")!;
+    expect(facts.textContent).toContain("输入提交");
+    expect(screen.queryByText("执行 buddy")).toBeNull();
+    expect(facts.textContent).not.toMatch(/undefined|buddy 来源未记录/);
+    view.unmount();
+
+    const model = fixture();
+    model.workflow.buddy = { harness: "codex", provider: "openai", model: "gpt-6", effort: "high" };
+    const second = render(<WorkflowPanel {...model.props} />);
+    await user.click(await screen.findByText("记录细节（微任务与回合）"));
+    expect(screen.getByText("执行 buddy")).toBeTruthy();
+    expect(second.container.querySelector(".record-facts")!.textContent).toContain("codex · gpt-6 / high");
+  });
+
   it("shows a recorded review rejection without an acceptance verdict", async () => {
     const f = fixture();
     f.props.task.reviewRejectedAt = "2026-09-26T07:25:00Z";
