@@ -79,7 +79,21 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
                              active=[{'runId': row[0], 'state': row[1]} for row in active[:20]], unresolvedAttempts=[r[0] for r in unresolved[:20]])
         if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)] or connection.execute('PRAGMA foreign_key_check').fetchall():
             raise BoardError('UPGRADE_INVALID_BOARD', 'Board integrity or foreign key checks failed')
-        return {**backup.database_snapshot(connection, event_head=event_head), 'schema': int(schema[0])}
+        snapshot = {**backup.database_snapshot(connection, event_head=event_head), 'schema': int(schema[0])}
+        if snapshot['schema'] == board_upgrade.BASE_SCHEMA_VERSION:
+            # Hash complete expected rows: only stop receipts' response_json may
+            # change. Other columns and every other command remain byte-exact.
+            cursor = connection.execute("SELECT * FROM commands WHERE kind='macro_task.stop'")
+            response_index = [column[0] for column in cursor.description].index('response_json')
+            updates = {}
+            for row in cursor:
+                expected = list(row)
+                expected[response_index] = board_upgrade.migrated_stop_response(row[response_index])
+                updates[row[0]] = expected
+            projected = backup.database_snapshot(connection, event_head=event_head,
+                                                 table_names={'commands'}, changes={'commands': (updates, {})})
+            snapshot['migratedCommandsFingerprint'] = projected['fingerprints']['commands']
+        return snapshot
 
 
 def _environment(state: Path, target: Path) -> dict:
@@ -284,10 +298,12 @@ def backup_readiness(state: Path) -> dict:
 
 def verify_migrated_snapshot(before: dict, after: dict) -> None:
     """Prove that the pending migration changed only its declared stored form."""
-    retained = set(before['tables']) - {'meta'}
+    retained = set(before['tables']) - {'meta', 'commands'}
     if (after['schema'] != SCHEMA_VERSION or after['eventHead'] != before['eventHead']
             or set(after['tables']) != set(before['tables']) | {'reminder_settings', 'attempt_reminders'}
             or after['tables']['meta'] != before['tables']['meta']
+            or after['tables']['commands'] != before['tables']['commands']
+            or after['fingerprints']['commands'] != before['migratedCommandsFingerprint']
             or after['tables']['reminder_settings'] != 1 or after['tables']['attempt_reminders'] != 0
             or any(after['tables'][name] != before['tables'][name]
                    or after['fingerprints'].get(name) != before['fingerprints'].get(name)
@@ -496,7 +512,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     backed_up = backup.create(BoardStore(state), runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=endpoint['contractVersion'], offline=True)
                 stored = backup.verify(Path(backed_up['path']))
                 if stored.get('databaseSnapshot') is not None:
-                    before = {**stored['databaseSnapshot'], 'schema': stored.get('schema'), 'runtimeSettings':runtime_settings}
+                    before = {**before, **stored['databaseSnapshot'], 'schema': stored.get('schema'), 'runtimeSettings':runtime_settings}
                     journal['before'] = before
                 journal.update(phase='backed-up', backup=backed_up)
                 write_journal(marker, journal)

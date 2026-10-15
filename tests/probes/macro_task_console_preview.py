@@ -1129,10 +1129,17 @@ def timeline_row(entry: dict, depth: int) -> dict:
 
 def macro_task_summary(group: str, matching: set[str]) -> dict:
     entries = [FIXTURES["runs"][run_id] for run_id in FIXTURES["groups"][group]]
-    counts = {"roots": 0, "helpers": 0, "accepted": 0, "active": 0, "host": 0, "review": 0, "ended": 0}
+    counts = {"roots": 0, "helpers": 0, "accepted": 0, "active": 0, "host": 0, "review": 0, "ended": 0,
+              "stoppableRoots": 0, "stoppableHelpers": 0, "delivered": 0, "awaitingHost": 0}
     for entry in entries:
         counts[entry["category"]] += 1
         counts["helpers" if entry["parentRunId"] else "roots"] += 1
+        if entry["state"] in ("executing", "waiting-helpers", "waiting-owned"):
+            counts["stoppableHelpers" if entry["kind"] == "helper" else "stoppableRoots"] += 1
+        if entry["state"] == "delivered":
+            counts["delivered"] += 1
+        elif entry["state"] == "awaiting-host":
+            counts["awaitingHost"] += 1
         # 0.15.1 Host correction: accepted counts accepted ROOTS only; helpers
         # count through their root's acceptance, and the denominator is roots.
         if entry["parentRunId"] is None and entry["acceptanceVerdict"] == "accepted":
@@ -1918,7 +1925,8 @@ REQUIRED_KEYS = {
     "MacroTaskSummary": {"macroTaskId", "kind", "title", "titleSource", "description", "project",
                          "sourceHostId", "currentHostIds", "createdAt", "lastActivityAt", "lastActivitySeq",
                          "state", "counts", "matchingRuns", "rootRunIds"},
-    "MacroTaskCounts": {"roots", "helpers", "accepted", "active", "host", "review", "ended"},
+    "MacroTaskCounts": {"roots", "helpers", "accepted", "active", "host", "review", "ended",
+                        "stoppableRoots", "stoppableHelpers", "delivered", "awaitingHost"},
     "TimelineSpan": {"spanId", "runId", "kind", "startAt", "endAt", "state", "attemptId", "turnId",
                      "turnIndex", "requestId", "buddy", "shutdownConfirmed", "uncertain",
                      "clockSkew"},

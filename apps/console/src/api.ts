@@ -272,14 +272,16 @@ export function validStorageApplyResult(value: unknown): value is StorageApplyRe
 
 /**
  * Strict shape checks for the 0.15.1 macroTask read projections: `description`
- * and `taskSummary` are nullable strings and `counts.accepted` is a number, so
+ * and `taskSummary` are nullable strings and scope counts are numbers, so
  * a malformed field refuses the read instead of reaching presentation.
  */
 function validMacroTaskSummary(value: unknown): boolean {
   const summary = value as MacroTaskSummary | null;
   return !!summary && typeof summary === "object"
     && (summary.description === null || typeof summary.description === "string")
-    && !!summary.counts && Number.isFinite(summary.counts.accepted);
+    && !!summary.counts && ["accepted", "stoppableRoots", "stoppableHelpers", "delivered", "awaitingHost"]
+      .every(key => Number.isSafeInteger(summary.counts[key as keyof typeof summary.counts])
+        && summary.counts[key as keyof typeof summary.counts] >= 0);
 }
 
 function validTimelineRows(rows: unknown): boolean {

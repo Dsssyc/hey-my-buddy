@@ -60,44 +60,60 @@ def collect(store) -> float | None:
     No active attempts means no deadline. Native activity, claims, results and
     settings changes already notify the store condition and re-arm this schedule.
     """
-    delay = None
-    changed = False
     now = store.now()
     instant = _seconds(now)
+    with store.db.read() as connection:
+        delay, due = _scan(store, connection, now, instant, record=False)
+    if not due:
+        return delay
+    # A result, native event or another scheduler may have changed the deadline
+    # after the read transaction. Recompute under the writer lock before insert.
     with store.db.write() as connection:
-        silence_seconds = connection.execute('SELECT silence_seconds FROM reminder_settings WHERE id=1').fetchone()[0]
-        attempts = connection.execute(
-            "SELECT a.*, t.expected_seconds FROM attempts a JOIN tasks t ON t.task_id=a.task_id"
-            " WHERE a.execution_state IN ('starting','executing','finalizing','uncertain')"
-            " AND a.result_json IS NULL AND t.active_attempt_id=a.attempt_id AND t.adapter!='decision'"
-        ).fetchall()
-        for attempt in attempts:
-            started_at = attempt['started_at']
-            started = _seconds(started_at)
-            elapsed = max(0.0, instant - started)
-            activity = store._activity_latest(connection, attempt['attempt_id'])
-            native_at = _native_at(connection, attempt['attempt_id'], activity)
-            silence_at = native_at or started_at
-            tool = (activity or {}).get('phase') == 'tool-running'
-            previous = connection.execute(
-                "SELECT COALESCE(MAX(expected_multiple),0) FROM attempt_reminders WHERE attempt_id=? AND kind='expected-duration'",
-                (attempt['attempt_id'],),
-            ).fetchone()[0]
-            due = []
-            for multiple in range(previous + 1, int(elapsed // attempt['expected_seconds']) + 1):
-                due.append(('expected-duration', multiple, None))
-            next_expected = started + (max(previous, int(elapsed // attempt['expected_seconds'])) + 1) * attempt['expected_seconds']
-            deadlines = [next_expected]
-            silent = connection.execute(
-                "SELECT 1 FROM attempt_reminders WHERE attempt_id=? AND kind='native-silence' AND silence_started_at=?",
-                (attempt['attempt_id'], silence_at),
-            ).fetchone()
-            if silent is None:
-                silence_deadline = _seconds(silence_at) + silence_seconds
-                if instant >= silence_deadline:
-                    due.append(('native-silence', None, silence_at))
-                else:
-                    deadlines.append(silence_deadline)
+        delay, changed = _scan(store, connection, now, instant, record=True)
+        head = store._head_of(connection) if changed else None
+    if changed:
+        store._notify(head)
+    return delay
+
+
+def _scan(store, connection, now: str, instant: float, *, record: bool) -> tuple[float | None, bool]:
+    delay = None
+    changed = False
+    silence_seconds = connection.execute('SELECT silence_seconds FROM reminder_settings WHERE id=1').fetchone()[0]
+    attempts = connection.execute(
+        "SELECT a.*, t.expected_seconds FROM attempts a JOIN tasks t ON t.task_id=a.task_id"
+        " WHERE a.execution_state IN ('starting','executing','finalizing','uncertain')"
+        " AND a.result_json IS NULL AND t.active_attempt_id=a.attempt_id AND t.adapter!='decision'"
+    ).fetchall()
+    for attempt in attempts:
+        started_at = attempt['started_at']
+        started = _seconds(started_at)
+        elapsed = max(0.0, instant - started)
+        activity = store._activity_latest(connection, attempt['attempt_id'])
+        native_at = _native_at(connection, attempt['attempt_id'], activity)
+        silence_at = native_at or started_at
+        tool = (activity or {}).get('phase') == 'tool-running'
+        previous = connection.execute(
+            "SELECT COALESCE(MAX(expected_multiple),0) FROM attempt_reminders WHERE attempt_id=? AND kind='expected-duration'",
+            (attempt['attempt_id'],),
+        ).fetchone()[0]
+        due = [('expected-duration', multiple, None)
+               for multiple in range(previous + 1, int(elapsed // attempt['expected_seconds']) + 1)]
+        next_expected = started + (max(previous, int(elapsed // attempt['expected_seconds'])) + 1) * attempt['expected_seconds']
+        deadlines = [next_expected]
+        silent = connection.execute(
+            "SELECT 1 FROM attempt_reminders WHERE attempt_id=? AND kind='native-silence' AND silence_started_at=?",
+            (attempt['attempt_id'], silence_at),
+        ).fetchone()
+        if silent is None:
+            silence_deadline = _seconds(silence_at) + silence_seconds
+            if instant >= silence_deadline:
+                due.append(('native-silence', None, silence_at))
+            else:
+                deadlines.append(silence_deadline)
+        if due:
+            changed = True
+        if record:
             for kind, multiple, silence in due:
                 cursor = connection.execute(
                     'INSERT INTO attempt_reminders(task_id,attempt_id,kind,expected_multiple,silence_started_at,'
@@ -109,13 +125,9 @@ def collect(store) -> float | None:
                 revision = connection.execute('SELECT revision FROM tasks WHERE task_id=?', (attempt['task_id'],)).fetchone()[0]
                 store._append_event(connection, 'attempt.reminder', task_id=attempt['task_id'],
                                     attempt_id=attempt['attempt_id'], revision=revision, payload=view(row))
-                changed = True
-            remaining = max(0.0, min(deadlines) - instant)
-            delay = remaining if delay is None else min(delay, remaining)
-        head = store._head_of(connection) if changed else None
-    if changed:
-        store._notify(head)
-    return delay
+        remaining = max(0.0, min(deadlines) - instant)
+        delay = remaining if delay is None else min(delay, remaining)
+    return delay, changed
 
 
 def consume(store, selector: dict) -> dict | None:

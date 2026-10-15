@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import type { MacroTaskFilter, MacroTaskSummary, TimelineRow } from "./macro-task-types";
@@ -14,7 +15,8 @@ import { RunDetailPane } from "./RunDetailPane";
 import type { DetailTarget } from "./RunDetailPane";
 import { useMacroTaskList } from "./use-macro-task-list";
 import { useMacroTaskTimeline } from "./use-macro-task-timeline";
-import { stopStatus, stoppableSummary, useMacroTaskStop } from "./macro-task-stop";
+import { stopScope, stopStatus, useMacroTaskStop } from "./macro-task-stop";
+import type { StopScope } from "./macro-task-stop";
 import type { AuthorityLatch } from "./console-session";
 import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
 import { displayTitle } from "./macro-task-display";
@@ -86,11 +88,13 @@ function TimelineDetailDivider({ min, max, value, timelineWidth, onChange, onRes
 }
 
 /** The macroTask stop's explicit confirmation: names the macroTask and its scope. */
-function StopDialog({ summary, onConfirm, onCancel }: {
+function StopDialog({ summary, scope, onConfirm, onCancel }: {
   summary: MacroTaskSummary;
+  scope: StopScope;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation("shell");
   const cancelRef = useRef<HTMLButtonElement>(null);
   const backdrop = useRef<HTMLDivElement>(null);
   useBackgroundInert(backdrop);
@@ -104,22 +108,22 @@ function StopDialog({ summary, onConfirm, onCancel }: {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onCancel]);
-  const roots = summary.counts.roots;
-  const helpers = summary.counts.helpers;
-  const unaccepted = roots - summary.counts.accepted;
   const title = displayTitle(summary.titleSource, summary.title).text;
-  const scope = summary.kind === "standalone"
-    ? `将停止这条历史独立微任务及其协助任务。`
-    : `将停止「${title}」中尚未验收的 ${unaccepted} 个微任务及其协助任务；已验收的 ${summary.counts.accepted} 个保留。`;
   return <div className="dialog-backdrop" ref={backdrop}>
-    <div className="dialog stop-dialog" role="dialog" aria-modal="true" aria-labelledby="stop-macro-task-title" aria-describedby="stop-macro-task-body">
-      <h2 id="stop-macro-task-title">停止宏任务</h2>
-      <p id="stop-macro-task-body">
-        {scope}{helpers ? `（涉及 ${helpers} 个协助任务）` : ""}
-      </p>
+    <div className="dialog stop-dialog" role="dialog" aria-modal="true" aria-labelledby="stop-macro-task-title" aria-describedby="stop-macro-task-name stop-macro-task-body stop-macro-task-counts">
+      <h2 id="stop-macro-task-title">{t("macroStop.title")}</h2>
+      <p id="stop-macro-task-name" className="stop-dialog-task-title" title={title}>{title}</p>
+      <p id="stop-macro-task-body">{t("macroStop.scope")}</p>
+      <ul id="stop-macro-task-counts" className="stop-dialog-counts">
+        <li>{t("macroStop.scopeRoots", { count: scope.roots })}</li>
+        <li>{t("macroStop.scopeHelpers", { count: scope.helpers })}</li>
+        <li>{t("macroStop.scopeDelivered", { count: scope.delivered })}</li>
+        <li>{t("macroStop.scopeAwaitingHost", { count: scope.awaitingHost })}</li>
+        <li>{t("macroStop.scopeAccepted", { count: summary.counts.accepted })}</li>
+      </ul>
       <div className="actions">
-        <button ref={cancelRef} type="button" className="button" onClick={onCancel}>取消</button>
-        <button type="button" className="button danger" onClick={onConfirm}>确认停止宏任务</button>
+        <button ref={cancelRef} type="button" className="button" onClick={onCancel}>{t("macroStop.cancel")}</button>
+        <button type="button" className="button danger" onClick={onConfirm}>{t("macroStop.confirm")}</button>
       </div>
     </div>
   </div>;
@@ -163,6 +167,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   authority?: AuthorityLatch; writesAvailable: boolean;
   listNavigation: ReactNode; listCollapsed: boolean; onCollapseList: () => void; onExpandList: () => void;
 }) {
+  const { t } = useTranslation("shell");
   const [filter, setFilter] = useState<MacroTaskFilter>("all");
   const [query, setQuery] = useState(""), [projectId, setProjectId] = useState(""), [hostId, setHostId] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
@@ -333,20 +338,21 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   let stopControl: ReactNode = null;
   if (selectedSummary) {
     const stopping = stopEntry?.phase === "stopping";
-    const showButton = stoppableSummary(selectedSummary);
+    const scope = stopScope(selectedSummary);
+    const stoppingAvailable = scope.roots + scope.helpers > 0;
     stopControl = <span className="stop-control">
-      {showButton && <button type="button" className="button small-button danger"
-        disabled={!stop.writable || stopping}
-        title={!stop.writable ? LOGIN_EXPIRED_ACTION_REFUSAL : stopping ? "停止请求已发出，等待回复。" : "请求取消该宏任务全部未验收微任务及协助任务（需确认）。"}
-        onClick={() => stop.requestStop(selectedSummary)}>停止宏任务</button>}
+      <button type="button" className="button small-button danger"
+        disabled={!stop.writable || stopping || !stoppingAvailable}
+        title={!stop.writable ? LOGIN_EXPIRED_ACTION_REFUSAL : stopping ? t("macroStop.pending") : !stoppingAvailable ? t("macroStop.noActive") : t("macroStop.actionHint")}
+        onClick={() => stop.requestStop(selectedSummary, scope)}>{t("macroStop.title")}</button>
       {stopState && <span className={`stop-status stop-${stopState.phase}`} role="status"
         title={stopState.detail}>{stopState.label}</span>}
       {stopState?.phase === "unknown" && stop.writable && !stopping
         && <button type="button" className="button small-button"
-          title="重试同一停止请求；不会重复取消，也不会扩大取消范围。"
-          onClick={() => stop.retryStop(selectedSummary)}>重试停止</button>}
+          title={t("macroStop.retryHint")}
+          onClick={() => stop.retryStop(selectedSummary)}>{t("macroStop.retry")}</button>}
       {stopState?.phase === "refused"
-        && <button type="button" className="button small-button" onClick={() => stop.dismissStop(selectedSummary.macroTaskId)}>知道了</button>}
+        && <button type="button" className="button small-button" onClick={() => stop.dismissStop(selectedSummary.macroTaskId)}>{t("macroStop.dismiss")}</button>}
     </span>;
   }
   // The same honest status line also appears in a docked detail's overview.
@@ -459,8 +465,8 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
           onApplyReorder={list.applyReorder} />
       </div>}
     </div>
-    {stop.confirming && <StopDialog summary={stop.confirming}
-      onConfirm={() => stop.confirmStop(stop.confirming!)}
+    {stop.confirming && <StopDialog summary={stop.confirming.summary} scope={stop.confirming.scope}
+      onConfirm={() => stop.confirmStop(stop.confirming!.summary)}
       onCancel={stop.cancelConfirm} />}
   </>;
 }

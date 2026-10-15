@@ -1,163 +1,112 @@
-import { describe, expect, it } from "vitest";
-import { stopStatus, stoppableSummary, type MacroTaskStopEntry } from "./macro-task-stop";
+import { afterEach, describe, expect, it } from "vitest";
+import i18n from "i18next";
+import "./i18n";
+import { stopScope, stopStatus, type MacroTaskStopEntry } from "./macro-task-stop";
 import { errorOfStopReply } from "./macro-task-stop-reply";
 import { macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
 import type { MacroTaskTimeline } from "./macro-task-types";
 
 const entry = (overrides: Partial<MacroTaskStopEntry> = {}): MacroTaskStopEntry => ({
   commandId: "cmd-1", phase: "acknowledged",
-  result: { macroTaskId: "macro-1", runIds: ["r4", "r6"], acceptedRunIds: ["r1"], concludedRunIds: [], results: [{ runId: "r4", result: "cancel-requested" }] },
-  error: "", ...overrides,
+  result: { macroTaskId: "macro-1", duplicate: false, results: [
+    { runId: "r1", state: "accepted", stopped: false },
+    { runId: "r4", state: "cancelled", stopped: true },
+    { runId: "r6", state: "delivered", stopped: false },
+  ] }, error: "", ...overrides,
 });
 
-/** A complete read whose r4/r6 trees match the given row overrides. */
-function read(overrides: Record<string, Partial<MacroTaskTimeline["rows"][number]>> = {}, extra: Partial<MacroTaskTimeline> = {}): MacroTaskTimeline {
+function read(overrides: Record<string, Partial<MacroTaskTimeline["rows"][number]>> = {}, extra: Partial<MacroTaskTimeline> = {}) {
   const timeline = macroTaskTimelineFixture();
-  const byId = new Map(timeline.rows.map(row => [row.runId, row]));
-  for (const [runId, partial] of Object.entries(overrides)) {
-    byId.set(runId, { ...byId.get(runId)!, ...partial });
-  }
-  timeline.rows = [...byId.values()];
+  timeline.rows = timeline.rows.map(row => ({ ...row, ...overrides[row.runId] }));
   return { ...timeline, ...extra };
 }
 
-describe("macroTask stop status (0.15.1 U4, Host-reviewed)", () => {
-  it("offers the stop action only while unaccepted work remains", () => {
-    expect(stoppableSummary(macroTaskSummary())).toBe(true);
-    expect(stoppableSummary(macroTaskSummary({ state: "ended",
-      counts: { roots: 2, helpers: 0, accepted: 2, active: 0, host: 0, review: 0, ended: 2 } }))).toBe(false);
-    expect(stoppableSummary(null)).toBe(false);
+afterEach(() => { void i18n.changeLanguage("zh"); });
+
+describe("macro task stop scope and evidence", () => {
+  it("counts exact active states across the group, including helpers under preserved roots", () => {
+    const summary = macroTaskSummary({ counts: { ...macroTaskSummary().counts,
+      stoppableRoots: 0, stoppableHelpers: 1, delivered: 2, awaitingHost: 1 } });
+    expect(stopScope(summary)).toEqual({ roots: 0, helpers: 1, delivered: 2, awaitingHost: 1 });
   });
 
-  it("an unconfirmed reply is unknown, never a failure or a stop claim", () => {
-    const status = stopStatus(entry({ phase: "unknown" }), read());
-    expect(status?.label).toBe("停止未确认");
-    expect(status?.detail).toContain("结果未知");
-    expect(status?.detail).toContain("重试同一请求");
+  it("does not mistake an acknowledgement or a preserved delivered row for a stop", () => {
+    expect(stopStatus(entry(), read())?.label).toBe("正在停止");
+    const stopped = read({ r4: { state: "cancelled", status: "cancelled", shutdownConfirmed: true } });
+    expect(stopStatus(entry(), stopped)).toEqual({ phase: "stopped", label: "已停止",
+      detail: "1 个微任务及 0 个协助任务已停止" });
   });
 
-  it("a definite refusal reports itself without touching the stop scope", () => {
-    const status = stopStatus(entry({ phase: "refused", error: "无权限" }), read());
-    expect(status?.label).toBe("停止请求未提交");
-    expect(status?.detail).toContain("无权限");
+  it("trusts the cancelled workflow state with confirmed shutdown even after a late completed receipt", () => {
+    const late = read({ r4: { state: "cancelled", status: "completed", shutdownConfirmed: true } });
+    expect(stopStatus(entry(), late)?.label).toBe("已停止");
+    const stale = read({ r4: { state: "executing", status: "cancelled", shutdownConfirmed: true } });
+    expect(stopStatus(entry(), stale)?.label).toBe("正在停止");
   });
 
-  it("shows 正在停止 while an affected run is still executing", () => {
-    const status = stopStatus(entry(), read()); // r4 runs unconfirmed in the fixture
-    expect(status?.label).toBe("正在停止");
-    expect(status?.detail).toMatch(/\d+ 项停止未确认/);
+  it("checks a stopped helper under a preserved parent without requiring the parent to cancel", () => {
+    const timeline = read();
+    timeline.rows.push({ ...timeline.rows[0]!, runId: "r1-h", rootRunId: "r1", parentRunId: "r1",
+      kind: "helper", depth: 1, state: "cancelled", status: "cancelled", shutdownConfirmed: true });
+    const helper = entry({ result: { macroTaskId: "macro-1", duplicate: false, results: [
+      { runId: "r1", state: "accepted", stopped: false },
+      { runId: "r1-h", state: "cancelled", stopped: true },
+    ] } });
+    expect(stopStatus(helper, timeline)?.detail).toBe("0 个微任务及 1 个协助任务已停止");
   });
 
-  it("regression: a cancelled root with a helper still executing stays 正在停止", () => {
-    const timeline = read({
-      r4: { state: "cancelled", status: "cancelled", shutdownConfirmed: true },
-      r6: { state: "cancelled", status: "cancelled", shutdownConfirmed: true },
-    });
-    timeline.rows.push({
-      ...timeline.rows[0]!, runId: "r4-h1", parentRunId: "r4", rootRunId: "r4", depth: 1, kind: "helper",
-      title: "仍在执行的协助任务", state: "executing", status: "running", shutdownConfirmed: false,
-    });
-    const status = stopStatus(entry(), timeline);
-    expect(status?.label).toBe("正在停止");
-    expect(status?.detail).toContain("1 项");
+  it("reports an acknowledged no-op when work ended before the stop reached the board", () => {
+    const result = { macroTaskId: "macro-1", duplicate: false, results: [
+      { runId: "r1", state: "accepted", stopped: false },
+      { runId: "r6", state: "delivered", stopped: false },
+    ] };
+    expect(stopStatus(entry({ result }), null)).toEqual({ phase: "acknowledged", label: "无需停止",
+      detail: "本次没有微任务需要停止；清单内状态已保留。" });
   });
 
-  it("regression: a filtered or truncated read never claims the whole group stopped", () => {
-    const allConfirmed = read({
-      r4: { state: "cancelled", status: "cancelled", shutdownConfirmed: true },
-      r6: { state: "cancelled", status: "cancelled", shutdownConfirmed: true },
-    });
-    const filtered = { ...allConfirmed, filtered: true, scopeComplete: false };
-    const status = stopStatus(entry(), filtered);
-    expect(status?.label).toBe("停止未确认");
-    expect(status?.detail).toContain("不完整");
-    const truncated = { ...allConfirmed, scopeComplete: false, truncated: { rows: true, spans: false, events: false } };
-    expect(stopStatus(entry(), truncated)?.label).toBe("停止未确认");
+  it("requires a complete timeline and confirmed shutdown", () => {
+    const cancelled = read({ r4: { state: "cancelled", status: "cancelled", shutdownConfirmed: false } });
+    expect(stopStatus(entry(), cancelled)?.label).toBe("停止未确认");
+    const confirmed = read({ r4: { state: "cancelled", status: "cancelled", shutdownConfirmed: true } });
+    expect(stopStatus(entry(), { ...confirmed, scopeComplete: false, truncated: { ...confirmed.truncated, rows: true } })?.label)
+      .toBe("停止未确认");
     expect(stopStatus(entry(), null)?.label).toBe("停止未确认");
   });
 
-  it("regression: an affected root that never read as cancelled stays 正在停止", () => {
-    // Both trees have confirmed shutdown, but r6 still reads as delivered.
-    const timeline = read({
-      r4: { state: "cancelled", status: "cancelled", shutdownConfirmed: true },
-      r6: { shutdownConfirmed: true },
-    });
-    const status = stopStatus(entry(), timeline);
-    expect(status?.label).toBe("正在停止");
+  it("keeps refusals and lost replies distinct", () => {
+    expect(stopStatus(entry({ phase: "refused", error: "无权限" }), null)?.detail).toBe("无权限");
+    expect(stopStatus(entry({ phase: "unknown" }), null)?.detail).toContain("可重试同一请求");
   });
 
-  it("shows 停止未确认 once terminal runs lack stop evidence, counting missing runs unverified", () => {
-    const timeline = read({
-      r4: { state: "cancelled", status: "cancelled", shutdownConfirmed: false },
-      r6: { state: "cancelled", status: "cancelled", shutdownConfirmed: true },
-    });
-    const missing = { ...timeline, rows: timeline.rows.filter(row => row.runId !== "r6"),
-      filtered: true, scopeComplete: false };
-    const status = stopStatus(entry(), missing);
-    expect(status?.label).toBe("停止未确认");
-    expect(status?.detail).toContain("2 项停止未确认");
+  it("accepts only the current exact result contract", () => {
+    const good = { macroTaskId: "macro-1", duplicate: false, results: [
+      { runId: "r1", state: "accepted", stopped: false },
+      { runId: "r4", state: "cancelled", stopped: true },
+    ] };
+    expect(errorOfStopReply("macro-1", good)).toEqual(good);
+    for (const bad of [null, { ...good, macroTaskId: "other" }, { ...good, duplicate: undefined },
+      { ...good, oldField: true },
+      { ...good, results: [{ runId: "r4", state: "cancelled", stopped: true, cancelled: true }] },
+      { ...good, results: [{ runId: "r4", state: "executing", stopped: true }] },
+      { ...good, results: [{ runId: "r4", state: "awaiting-host", stopped: true }] },
+      { ...good, results: [{ runId: "r4", state: "executing", stopped: false }] },
+      { ...good, results: [{ runId: "r4", state: "cancelled", stopped: "yes" }] },
+      { ...good, results: [{ runId: "r4", state: "cancelled", stopped: true },
+        { runId: "r4", state: "cancelled", stopped: true }] },
+    ]) expect(() => errorOfStopReply("macro-1", bad)).toThrow();
   });
 
-  it("settles on 已停止 only from a complete read with every root cancelled and confirmed", () => {
-    const timeline = read({
-      r4: { state: "cancelled", status: "cancelled", shutdownConfirmed: true },
-      r6: { state: "cancelled", status: "cancelled", shutdownConfirmed: true },
-    });
-    const status = stopStatus(entry(), timeline);
-    expect(status?.label).toBe("已停止");
-    // runIds mixes roots and helpers; the copy names the root count only.
-    expect(status?.detail).toBe("2 个微任务及协助任务已停止");
-  });
-
-  it("the stopped copy counts roots only, even when helpers share the reply scope", () => {
-    const timeline = read({
-      r4: { state: "cancelled", status: "cancelled", shutdownConfirmed: true },
-      r6: { state: "cancelled", status: "cancelled", shutdownConfirmed: true },
-    });
-    timeline.rows.push({
-      ...timeline.rows[0]!, runId: "r4-h1", parentRunId: "r4", rootRunId: "r4", depth: 1, kind: "helper",
-      title: "已停的协助任务", state: "cancelled", status: "cancelled", shutdownConfirmed: true,
-    });
-    const withHelper: MacroTaskStopEntry = { ...entry(), result: {
-      macroTaskId: "macro-1", runIds: ["r4", "r4-h1", "r6"], acceptedRunIds: [], concludedRunIds: [],
-      results: [
-        { runId: "r4", result: "cancel-requested" },
-        { runId: "r4-h1", result: "cancel-requested" },
-        { runId: "r6", result: "cancel-requested" },
-      ],
-    } };
-    const status = stopStatus(withHelper, timeline);
-    expect(status?.label).toBe("已停止");
-    expect(status?.detail).toBe("2 个微任务及协助任务已停止");
-  });
-
-  it("a malformed reply is an unknown outcome, never a confirmed stop", () => {
-    const good = { macroTaskId: "macro-1", runIds: ["r4"], acceptedRunIds: [], concludedRunIds: ["r-closed"], results: [{ runId: "r4", result: "cancel-requested" }] };
-    expect(errorOfStopReply("macro-1", structuredClone(good))).toEqual(good);
-    for (const malformed of [
-      { ...good, macroTaskId: "macro-other" }, { ...good, runIds: "r4" },
-      { ...good, acceptedRunIds: [7] },
-      { ...good, concludedRunIds: undefined }, { ...good, concludedRunIds: [7] },
-      { ...good, concludedRunIds: ["r-closed", "r-closed"] },
-      { ...good, concludedRunIds: ["r4"] },
-      { ...good, acceptedRunIds: ["r-closed"] }, { ...good, results: [{ runId: "", result: "x" }] },
-      null,
-      // Duplicate identifiers inside one list.
-      { ...good, runIds: ["r4", "r4"] },
-      { ...good, acceptedRunIds: ["r1", "r1"] },
-      { ...good, results: [{ runId: "r4", result: "x" }, { runId: "r4", result: "y" }] },
-      // The cancelled and retained scopes must stay disjoint.
-      { ...good, runIds: ["r4", "r1"], acceptedRunIds: ["r1"] },
-      // The per-root results must cover the cancellation scope exactly.
-      { ...good, results: [] },
-      { ...good, results: [{ runId: "r-other", result: "x" }] },
-      { ...good, runIds: ["r4", "r5"], results: [{ runId: "r4", result: "x" }] },
-    ]) {
-      expect(() => errorOfStopReply("macro-1", malformed)).toThrowError(/不完整|响应/);
-    }
-    // Helper ids in runIds stay valid when the results cover them exactly.
-    const helperReply = { macroTaskId: "macro-1", runIds: ["r4", "r4-h1"], acceptedRunIds: [], concludedRunIds: [],
-      results: [{ runId: "r4", result: "cancel-requested" }, { runId: "r4-h1", result: "cancel-requested" }] };
-    expect(errorOfStopReply("macro-1", helperReply)).toEqual(helperReply);
+  it("localizes stop status in English", async () => {
+    await i18n.changeLanguage("en");
+    const confirmed = read({ r4: { state: "cancelled", status: "cancelled", shutdownConfirmed: true } });
+    expect(stopStatus(entry(), confirmed)?.detail).toBe("Stopped 1 micro task; 0 helper tasks");
+    const two = entry({ result: { macroTaskId: "macro-1", duplicate: false, results: [
+      { runId: "r4", state: "cancelled", stopped: true },
+      { runId: "r7", state: "cancelled", stopped: true },
+    ] } });
+    const second = { ...confirmed, rows: [...confirmed.rows,
+      { ...confirmed.rows.find(row => row.runId === "r4")!, runId: "r7" }] };
+    expect(stopStatus(two, second)?.detail).toBe("Stopped 2 micro tasks; 0 helper tasks");
+    expect(stopStatus(entry(), read())?.detail).toBe("1 stop remains unconfirmed");
   });
 });

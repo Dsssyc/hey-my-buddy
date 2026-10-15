@@ -10,7 +10,7 @@ def for_run(connection, run_id: str) -> dict | None:
     # cancellation from an ancestor or a subsequent explicit cancel command.
     row = connection.execute(
         "SELECT payload_json,actor_role,actor_id FROM events WHERE task_id=?"
-        " AND kind IN ('workflow.cancelled','workflow.helper_cancelled')"
+        " AND kind IN ('workflow.cancelled','workflow.helper_cancelled','workflow.lead_task_cancelled')"
         " AND seq > COALESCE((SELECT MAX(seq) FROM events WHERE task_id=?"
         " AND kind IN ('workflow.continued','workflow.helper_resumed','workflow.auto_continued')),0)"
         " ORDER BY seq LIMIT 1", (run_id, run_id),
