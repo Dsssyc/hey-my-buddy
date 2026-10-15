@@ -7,6 +7,9 @@ Worker into a service-token Host.
 """
 from __future__ import annotations
 
+import contextlib
+import io
+import json
 import os
 from pathlib import Path
 import sys
@@ -37,7 +40,6 @@ HOST_SESSION_VARIABLES = {
     "OPENAI_BASE_URL": "https://gateway.example.invalid/v1",
     "CODEX_SESSION_ID": "codex-session",
     "CODEX_API_KEY": "codex-key",
-    "HMB_AGENT_CREDENTIAL": "attempt-token",
     "HMB_AGENT_CREDENTIAL_FILE": "/private/attempt.json",
     "HMB_TASK_ID": "run:host-session",
     "HMB_ATTEMPT_ID": "attempt:host-session",
@@ -84,11 +86,16 @@ class ServiceEnvironmentBuilderTests(unittest.TestCase):
             self.assertEqual(environment["HMB_RUNTIME"], str(Path(directory) / "selected"))
 
     def test_worker_cannot_start_a_fresh_supervisor_with_host_authority(self):
-        from hey_my_buddy.errors import BoardError
-        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": "scoped-worker"}, clear=True):
-            with self.assertRaises(BoardError) as caught:
-                cli._worker_command("worker-start", {}, Path(tempfile.gettempdir()) / "state")
-        self.assertEqual(caught.exception.code, "FORBIDDEN")
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-scoped-worker-") as temporary:
+            state = Path(temporary) / "state"
+            credential = Path(temporary) / "credential.json"
+            launcher.write_private(credential, {"token": "scoped-worker", "stateDir": str(state)})
+            output = io.StringIO()
+            with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(credential)}, clear=True), \
+                    contextlib.redirect_stdout(output):
+                code = cli.main(["worker-start", "{}"])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(output.getvalue())["error"]["code"], "FORBIDDEN")
 
     def test_the_builder_is_an_allowlist_not_the_host_session(self):
         with mock.patch.dict(os.environ, {**HOST_SESSION_VARIABLES, **SERVICE_KEPT_VARIABLES}, clear=True):
@@ -247,7 +254,7 @@ class ExplicitWorkerEnvironmentTests(unittest.TestCase):
                       "stable": True, "installed": False,
                       "runtime": {"runtimeDir": "/stable/runtime", "environment": "/stable/venv"}}
             with mock.patch.dict(os.environ, {**{key: value for key, value in HOST_SESSION_VARIABLES.items()
-                                                         if key not in {"HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE"}},
+                                                         if key != "HMB_AGENT_CREDENTIAL_FILE"},
                                              "PATH": "/usr/bin:/bin"}, clear=True), \
                     mock.patch.object(cli.runtime, "launch_target", return_value=target), \
                     mock.patch.object(cli.subprocess, "Popen") as spawn:

@@ -644,7 +644,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         context = self.context()
         context.turn = None
         context.agent_credential = "must-not-reach-native"
-        context.environment["HMB_AGENT_CREDENTIAL"] = "must-not-reach-native"
+        context.environment["HMB_AGENT_CREDENTIAL_FILE"] = "/private/must-not-reach-native.json"
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]), budget())
         handle = start_review("claude", context, request)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)

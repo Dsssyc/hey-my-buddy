@@ -39,7 +39,7 @@ class WorkerLaunchEnvironmentTests(unittest.TestCase):
             self.assertEqual(options["env"]["HMB_RUNTIME"], "/stable/runtime")
             self.assertNotIn("HMB_PYTHON", options["env"])
             for key in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "CLAUDECODE", "CLAUDE_CODE_OAUTH_TOKEN",
-                        "HMB_AGENT_CREDENTIAL"):
+                        "HMB_AGENT_CREDENTIAL_FILE"):
                 self.assertNotIn(key, options["env"])
             self.assertEqual(options["env"]["PATH"].split(os.pathsep)[0], "/stable/runtime/venv/bin")
             self.assertEqual(options["env"]["HMB_RUNTIME_IDENTITY"], target["identity"])

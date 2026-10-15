@@ -64,7 +64,7 @@ function resolveFixtures(): { directory: string; generated: boolean } {
   const directory = mkdtempSync(join(tmpdir(), "hey-my-buddy-preview-"));
   const previewEnvironment = { ...process.env };
   for (const key of ["HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
-    "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE",
+    "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL_FILE",
     "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"]) delete previewEnvironment[key];
   const result = spawnSync(python, [previewScript, "--emit-fixtures", directory], {
     cwd: repositoryRoot, encoding: "utf8", env: previewEnvironment,

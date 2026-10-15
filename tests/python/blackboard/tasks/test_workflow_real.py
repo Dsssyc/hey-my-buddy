@@ -45,7 +45,7 @@ GIT_ENV = {
 
 def private_environment(case):
     removed = {"HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
-               "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE",
+               "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL_FILE",
                "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"}
     environment = {key: value for key, value in os.environ.items() if key not in removed}
     environment.update(HMB_STATE_DIR=str(case.directory), HMB_RUNTIME_ROOT=str(case.directory / "runtime"),
