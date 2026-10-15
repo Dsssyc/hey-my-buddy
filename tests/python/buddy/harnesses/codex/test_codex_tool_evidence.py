@@ -319,7 +319,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         # Python binding the evidence carries.
         from hey_my_buddy.buddy.harnesses.run_contract import (
             PrivateStatePaths, RunBudget, RunBuddy, RunIdentity, RunRequest,
-            decode_run_request, encode_run_request,
+            RunRequest,
         )
         request = RunRequest(
             identity=RunIdentity(task_id="t", attempt_id="a", generation=0, invocation_id="inv"),
@@ -327,8 +327,8 @@ class CodexToolEventProjectionTests(unittest.TestCase):
             cwd="/fixture", private_state=PrivateStatePaths(invocation_root="/fixture/i", native_root="/fixture/n"),
             input_text="prompt", tool_scope="read", output_schema={},
             budget=RunBudget(timeout_seconds=8))
-        frame = json.loads(encode_run_request(request))
-        decoded = decode_run_request(json.dumps(frame))
+        frame = request.to_payload()
+        decoded = RunRequest.from_payload(frame)
         projector = CodexToolEventProjector({"harness": "codex", "taskId": decoded.identity.task_id,
                                               "attemptId": decoded.identity.attempt_id,
                                               "generation": decoded.identity.generation})
@@ -346,7 +346,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                 identity = dict(frame["identity"])
                 mutate(identity)
                 with self.assertRaises((ValueError, TypeError, BoardError)):
-                    decode_run_request(json.dumps({**frame, "identity": identity}))
+                    RunRequest.from_payload({**frame, "identity": identity})
         # The projector itself still refuses an incomplete binding, so a
         # caller that bypasses the frame validation cannot invent one.
         with self.assertRaises(BoardError):
@@ -415,7 +415,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
                                             capture_evidence=True)
         handle = start_router_preparation(ReviewPreparation("codex", self.adapter, request, context,
                                                             (None, self.cwd, "fixture-digest")))
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(30), "Codex fixture controller did not exit")
         return collect(handle), context
 

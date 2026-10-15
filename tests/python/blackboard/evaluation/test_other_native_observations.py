@@ -210,7 +210,7 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
     def execute(self, case: str, **kwargs):
         context = self.context(case, **kwargs)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
         return self.adapter.collect(handle, context)
 
@@ -487,7 +487,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
     def execute(self, case: str, **kwargs):
         context = self.context(case, **kwargs)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(30), "ZCode fixture controller did not exit")
         return context, self.adapter.collect(handle, context)
 

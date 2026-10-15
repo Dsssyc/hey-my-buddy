@@ -6,24 +6,24 @@ subprocess starts, as AGENTS.md requires.
 """
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
-from contextlib import nullcontext
+import time
 from pathlib import Path
 from unittest import mock
 
-from support import BoardTestCase
+from support import BoardTestCase, wait_for
 
 from hey_my_buddy.protocol import activity as activity_module
 from hey_my_buddy.protocol.activity import ActivityPublisher, is_newer, normalize_activity
 from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
-from hey_my_buddy.buddy.roles import live as role_live
+from hey_my_buddy.protocol.contracts import HarnessRunLive
 from hey_my_buddy.buddy.harnesses.registry import ExecutionContext, adapter as get_adapter
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.buddy.runtime.worker import Worker, _Renewal
+from hey_my_buddy.buddy.runtime.worker import Worker
+from hey_my_buddy.buddy.runtime.execution import Execution
 
 #: Inherited variables that would otherwise point a test subprocess at a production
 #: runtime, a Worker identity or an agent credential instead of this private root.
@@ -307,14 +307,8 @@ class ActivityProjection(BoardTestCase):
             self.assertIsNotNone(board.store._activity_latest(connection, attempt["attemptId"]))
 
 
-class WorkerActivityForwarding(BoardTestCase):
-    """Real Worker progress over private SQLite and a real bounded live channel.
-
-    The owned child is an explicit command fixture, not an installed harness.
-    Only the role binding is supplied: its channel uses the actual C-Two client,
-    strict wire DTOs and endpoint handler. Both SDK boundaries are replaced
-    by an in-process endpoint; this provides no cross-process/native receipt.
-    """
+class ExecutionActivityForwarding(BoardTestCase):
+    """Execution reads its own endpoint locally and forwards to authoritative state."""
 
     def live_attempt(self, *, lease_seconds: int = 15, argv=("/bin/sleep", "30"), expected_seconds: int = 120):
         board = self.board(lease_seconds=lease_seconds)
@@ -333,20 +327,8 @@ class WorkerActivityForwarding(BoardTestCase):
         nonce = "c" * 32
         claim = client.claim("w-forward", "claim-forward-1", nonce, worker_instance=worker.instance_id)["claim"]
         attempt = claim["attempt"]
-        worker.spool.ensure()
-        worker.spool.write_startup(
-            {
-                "workerId": "w-forward",
-                "instanceId": worker.instance_id,
-                "nonce": nonce,
-                "claimRequestId": "claim-forward-1",
-                "attemptId": attempt["attemptId"],
-                "taskId": task["taskId"],
-                "generation": attempt["generation"],
-                "createdAt": "2026-01-01T00:00:00.000Z",
-            }
-        )
-        directory = worker.attempt_directory(task["taskId"], attempt["attemptId"])
+        execution = Execution(claim, self.directory, "w-forward", nonce, client=client)
+        directory = execution.directory
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         context = ExecutionContext(
             task_id=task["taskId"],
@@ -363,116 +345,88 @@ class WorkerActivityForwarding(BoardTestCase):
         self.children = getattr(self, "children", [])
         self.children.append(handle.process)
         self.addCleanup(lambda: (implementation.cancel(handle), handle.wait(15)))
-        renewal = _Renewal(worker, claim, handle, implementation)
-        return board, client, worker, attempt, directory, renewal
+        control = execution.control
+        control.attach(handle, implementation)
+        self.addCleanup(lambda: (control.stop(), control.join(2)) if control.ident is not None else None)
+        return board, client, execution, attempt, directory, control
 
-    def bounded_channel(self, attempt):
-        # Reuse the existing test CRM; the fake SDK connection below reaches
-        # real named handlers, without implementing a second transport.
-        contract = getattr(type(self), "_test_contract", None)
-        if contract is None:
-            fixture = Path(__file__).resolve().parents[1] / "buddy/harnesses/fixtures/c_two_live_peer.py"
-            spec = importlib.util.spec_from_file_location("activity_c_two_live_peer", fixture)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            contract = type(self)._test_contract = module.TEST_CRM
+    def local_endpoint(self, attempt, control):
         identity = RunIdentity(task_id=attempt["taskId"], attempt_id=attempt["attemptId"],
                                generation=attempt["generation"], invocation_id="activity-invocation",
                                turn_id="activity-turn", input_sha256="f" * 64)
         endpoint = ctl.CTwoLiveEndpoint(identity, LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
-                                       contract, instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
-        channel = ctl.CTwoLiveChannel(identity, contract, name="Activity Fixture",
-                                     address="ipc://activity-fixture", instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
-        self.addCleanup(lambda: endpoint.close(reason="fixture-finished"))
-        self.addCleanup(lambda: channel.close(reason="fixture-finished"))
-        def connect(*args, timeout, **kwargs):
-            self.assertGreaterEqual(timeout, 0)
-            return nullcontext(endpoint)
-        def with_call_options(peer, *, timeout):
-            self.assertIs(peer, endpoint)
-            self.assertGreaterEqual(timeout, 0)
-            return peer
-        self.enterContext(mock.patch.object(ctl.cc, "connect", side_effect=connect))
-        self.enterContext(mock.patch.object(ctl.cc, "with_call_options", side_effect=with_call_options))
-        self.enterContext(mock.patch.object(role_live, "handle_live_binding",
-                                           return_value=(role_live.LIVE_BOUND, channel)))
-        return endpoint, channel
+            HarnessRunLive, instance_id="a" * 64, token="b" * 64,
+            state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        self.addCleanup(endpoint.close, reason="fixture-finished")
+        control.handle.live_endpoint = endpoint
+        return endpoint
 
     @staticmethod
     def activity_events(client):
         return [event for event in client.read_events(after=0)["events"] if event["kind"] == "attempt.activity"]
 
     def test_one_bound_channel_is_forwarded_once_and_updates_are_forwarded(self):
-        board, client, worker, attempt, directory, renewal = self.live_attempt()
-        endpoint, channel = self.bounded_channel(attempt)
+        board, client, execution, attempt, directory, control = self.live_attempt()
+        endpoint = self.local_endpoint(attempt, control)
         publisher = ActivityPublisher(endpoint.publish_activity, min_interval_seconds=0.0)
         first = {"phase": "waiting-model", "observedAt": "2026-01-01T00:00:00.000Z", "eventSeq": 1}
+        control.start()
         self.assertTrue(publisher.publish(first))
-        renewal._forward_activity()
-        self.assertEqual(client.get(runId=attempt["taskId"])["activity"], first)
-        renewal._forward_activity()
+        self.assertTrue(wait_for(lambda: client.get(runId=attempt["taskId"])["activity"] == first, 3))
+        time.sleep(0.4)
         self.assertEqual(len(self.activity_events(client)), 1, "a repeated live receipt is not published twice")
         self.assertEqual(
             [event for event in client.read_events(after=0)["events"] if event["kind"] == "attempt.progress"],
-            [], "forwarding native activity never fabricates a prose progress event")
+            [], "native activity never fabricates a prose progress event")
         second = {"phase": "tool-running", "observedAt": "2026-01-01T00:00:02.000Z", "eventSeq": 2,
                   "toolName": "write_file", "counts": {"toolCalls": 1}}
         self.assertTrue(publisher.publish(second))
-        renewal._forward_activity()
-        self.assertEqual(client.get(runId=attempt["taskId"])["activity"], second)
-        self.assertFalse(endpoint.publish_activity(first), "the endpoint also fences older source observations")
-        renewal._forward_activity()
+        self.assertTrue(wait_for(lambda: client.get(runId=attempt["taskId"])["activity"] == second, 3))
+        self.assertFalse(endpoint.publish_activity(first), "the endpoint fences older observations")
         self.assertEqual(len(self.activity_events(client)), 2)
-        self.assertIsNone(renewal.handle.process.poll(), "activity reads never stop the owned child")
+        self.assertIsNone(control.handle.process.poll(), "activity reads never stop the owned child")
 
     def test_unavailable_binding_is_retried_without_activity_or_heartbeat(self):
-        board, client, worker, attempt, directory, renewal = self.live_attempt()
-        endpoint, channel = self.bounded_channel(attempt)
-        with mock.patch.object(role_live, "handle_live_binding",
-                               return_value=(role_live.LIVE_UNAVAILABLE, None)) as binding:
-            renewal._forward_activity()
-            renewal._forward_activity()
-            self.assertEqual(binding.call_count, 2, "unavailable does not become a cached stop fact")
+        board, client, execution, attempt, directory, control = self.live_attempt()
+        endpoint = self.local_endpoint(attempt, control)
+        with mock.patch.object(endpoint, "current_activity", side_effect=BoardError("SERVICE_UNAVAILABLE", "fixture endpoint")) as observation:
+            control.start()
+            self.assertTrue(wait_for(lambda: observation.call_count >= 2, 3),
+                            "an unavailable observation is retried without inventing progress")
         self.assertIsNone(client.get(runId=attempt["taskId"])["activity"])
         self.assertEqual(self.activity_events(client), [])
-        self.assertIsNone(renewal.handle.process.poll())
-        # A failed source read stays an unavailable fact; it invents no activity.
+        self.assertIsNone(control.handle.process.poll())
         endpoint.close(reason="source-unavailable")
-        renewal._forward_activity()
+        time.sleep(0.4)
         self.assertEqual(self.activity_events(client), [])
         self.assertEqual(
             [event for event in client.read_events(after=0)["events"] if event["kind"] == "attempt.progress"], [])
-        self.assertIsNone(renewal.handle.process.poll(), "unknown/unavailable does not mean stopped")
+        self.assertIsNone(control.handle.process.poll(), "unknown availability does not mean stopped")
 
-    def test_rejected_progress_does_not_advance_the_worker_receipt(self):
-        board, client, worker, attempt, directory, renewal = self.live_attempt()
-        endpoint, channel = self.bounded_channel(attempt)
+    def test_rejected_progress_remains_pending_until_delivery_succeeds(self):
+        board, client, execution, attempt, directory, control = self.live_attempt()
+        endpoint = self.local_endpoint(attempt, control)
         payload = {"phase": "tool-running", "eventSeq": 1}
         endpoint.publish_activity(payload)
-        # Invalidate only this claim capability, exercising the real progress
-        # RPC and SQLite ownership fence instead of mocking progress failure.
-        renewal.nonce = "d" * 32
-        renewal._forward_activity()
-        self.assertIsNone(renewal._activity)
+        execution.nonce = "d" * 32
+        control.start()
+        self.assertTrue(wait_for(lambda: execution._hints.get("activity") == payload, 3))
         self.assertEqual(self.activity_events(client), [])
-        self.assertIsNone(renewal.handle.process.poll())
-        renewal.nonce = "c" * 32
-        renewal._forward_activity()
-        self.assertEqual(client.get(runId=attempt["taskId"])["activity"], payload)
+        self.assertIsNone(control.handle.process.poll())
+        execution.nonce = "c" * 32
+        self.assertTrue(wait_for(lambda: client.get(runId=attempt["taskId"])["activity"] == payload, 3))
         self.assertEqual(len(self.activity_events(client)), 1)
 
-    def test_replaced_generation_rejects_an_old_workers_live_receipt(self):
-        board, client, worker, attempt, directory, renewal = self.live_attempt()
-        endpoint, channel = self.bounded_channel(attempt)
+    def test_replaced_generation_rejects_an_old_executions_live_receipt(self):
+        board, client, execution, attempt, directory, control = self.live_attempt()
+        endpoint = self.local_endpoint(attempt, control)
         first = {"phase": "starting", "eventSeq": 1}
+        control.start()
         endpoint.publish_activity(first)
-        renewal._forward_activity()
-        self.assertEqual(client.get(runId=attempt["taskId"])["activity"], first)
-        # Shutdown evidence comes from this owned fixture handle before any
-        # retry is admitted; no native harness completion is claimed.
-        renewal.implementation.cancel(renewal.handle)
-        renewal.handle.wait(15)
-        self.assertIsNotNone(renewal.handle.process.poll())
+        self.assertTrue(wait_for(lambda: client.get(runId=attempt["taskId"])["activity"] == first, 3))
+        control.implementation.cancel(control.handle)
+        control.handle.wait(15)
+        self.assertIsNotNone(control.handle.process.poll())
         client.submit_result("w-forward", attempt["attemptId"], attempt["generation"], "c" * 32,
                              {"status": "failed", "result": {"status": "nonzero"}, "error": "fixture-stopped",
                               "shutdownConfirmed": True, "terminationReason": "harness-error"})
@@ -481,31 +435,30 @@ class WorkerActivityForwarding(BoardTestCase):
         replacement = client.claim("w-forward-2", "claim-forward-2", "e" * 32,
                                    worker_instance="instance-forward-2")["claim"]["attempt"]
         self.assertEqual(replacement["generation"], attempt["generation"] + 1)
-        endpoint.publish_activity({"phase": "tool-running", "eventSeq": 2})
-        renewal._forward_activity()
-        self.assertEqual(renewal._activity, first, "a stale generation cannot advance the worker receipt")
+        second = {"phase": "tool-running", "eventSeq": 2}
+        endpoint.publish_activity(second)
+        self.assertTrue(wait_for(lambda: execution._hints.get("activity") == second, 3))
         self.assertIsNone(client.get(runId=attempt["taskId"])["activity"])
         self.assertEqual(len(self.activity_events(client)), 1)
 
     def test_unextracted_command_never_reads_an_activity_sidecar(self):
-        board, client, worker, attempt, directory, renewal = self.live_attempt()
-        # A command has only its existing DB projection. A retired file's
-        # contents carry no live contract and must not be opened at all.
+        board, client, execution, attempt, directory, control = self.live_attempt()
         existing = {"phase": "unknown", "eventSeq": 1}
         client.progress("w-forward", attempt["attemptId"], attempt["generation"], "c" * 32,
                         data={"activity": existing})
         path = directory / "activity.json"
         path.write_text("retired activity file")
-        with mock.patch.object(role_live, "handle_live_binding",
-                               return_value=(role_live.LIVE_UNEXTRACTED, None)), \
-                mock.patch.object(os, "open", wraps=os.open) as opened:
-            renewal._forward_activity()
+        with mock.patch.object(os, "open", wraps=os.open) as opened:
+            control.start()
+            time.sleep(0.4)
+            control.stop()
+            control.join(2)
         activity_opens = [call for call in opened.call_args_list if Path(call.args[0]) == path]
-        self.assertEqual(activity_opens, [], "Worker must never read an activity sidecar, including command fallback")
+        self.assertEqual(activity_opens, [], "an unextracted command has no activity file fallback")
         self.assertEqual(client.get(runId=attempt["taskId"])["activity"], existing)
         self.assertEqual(len(self.activity_events(client)), 1)
-        self.assertIsNone(renewal._activity)
-        self.assertIsNone(renewal.handle.process.poll())
+        self.assertIsNone(control._activity)
+        self.assertIsNone(control.handle.process.poll())
 
 
 class ActivityPublisherTest(BoardTestCase):

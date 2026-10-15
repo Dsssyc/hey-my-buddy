@@ -726,7 +726,8 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     """
     from ..discovery import native_environment
     root = ensure_private_dir(native_root)
-    incoming = dict(os.environ)
+    from ..runtime_selection import environment_for
+    incoming = dict(environment_for())
     command = cli_command(incoming)
     environment = native_environment(incoming, command=command)
     private = ensure_private_dir(invocation_root)

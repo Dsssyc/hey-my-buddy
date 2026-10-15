@@ -33,7 +33,7 @@ from ...errors import BoardError
 from .service import BoardService, WaitAdmission, WaitService
 from ..store.store import BoardStore
 from ...protocol.transport import ServiceError
-from ...buddy.runtime.worker import RETIRE_REQUEST_NAME, ReceiptSpool
+from ...buddy.runtime.worker import RETIRE_REQUEST_NAME, WorkerState
 
 DRAIN_SECONDS_DEFAULT = 10
 LEASE_SWEEP_SECONDS = 15
@@ -295,10 +295,14 @@ class WorkerPool:
     # -- evidence ------------------------------------------------------------
     def _local_evidence(self, worker_id: str) -> dict:
         """Replayable local evidence: durable receipts and named startup intents."""
-        spool = ReceiptSpool(self.directory, worker_id)
-        receipts = spool.pending()
-        intent = spool.read_startup()
-        attempts = [intent["attemptId"]] if isinstance(intent, dict) and intent.get("attemptId") else []
+        spool = WorkerState(self.directory, worker_id)
+        intents = [intent for intent in spool.recovery_intents() if intent.get("attemptId")]
+        from ...buddy.runtime.receipts import read_receipt, receipt_directory
+        receipts = [receipt for intent in intents
+                    if (receipt := read_receipt(receipt_directory(
+                        self.directory, intent["privateAdapter"], intent["taskId"], intent["attemptId"])))
+                    is not None]
+        attempts = [intent["attemptId"] for intent in intents]
         return {
             "pendingReceipts": len(receipts),
             "startupIntents": attempts,

@@ -34,7 +34,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         # full provenance on the corrected call only.
         context = self.context("refusal-argument", timeout=40)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
@@ -47,7 +47,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         self.assertEqual(turn["provenance"]["settlement"], "session-closed")
         # Exactly one admitted native input; the refusal never restarted the turn.
         from hey_my_buddy.private_dirs import context_root
-        methods = (context_root(context, "zcode") / "native-logs" / "methods.jsonl").read_text()
+        methods = self.native_log(context, "methods.jsonl")
         self.assertEqual(methods.split().count("session/send"), 1)
 
     def test_pending_inquiry_refusal_then_checkpoint_answer_and_finish(self):
@@ -92,7 +92,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
     def test_forged_refusal_envelope_fails_the_whole_turn(self):
         context = self.context("refusal-forged", timeout=40)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "failed", outcome.to_report())
@@ -104,7 +104,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
     def test_a_refusal_signed_for_another_tool_fails_the_finish_call(self):
         context = self.context("refusal-wrong-tool", timeout=40)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "failed", outcome.to_report())
@@ -115,7 +115,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
     def test_refusal_shaped_prose_is_fatal_not_recovered(self):
         context = self.context("refusal-malformed", timeout=40)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "failed", outcome.to_report())
@@ -129,7 +129,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         # successful-marker shape, and the corrected retry settles ok.
         context = self.context("refusal-argument-false", timeout=40)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
@@ -144,7 +144,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         # turn instead of silently passing as an ordinary retryable tool error.
         context = self.context("refusal-forged-false", timeout=40)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "failed", outcome.to_report())

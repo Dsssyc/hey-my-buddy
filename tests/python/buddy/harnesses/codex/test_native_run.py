@@ -843,9 +843,7 @@ class WorkerSeamTests(CodexSeamCase):
         return sandbox, {"sandboxPolicy": policy, "approvalPolicy": "never"}
 
     def test_each_worker_level_reaches_native_start_and_controller_evidence(self):
-        import threading
-        from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result
-        from hey_my_buddy.buddy.roles import run_controller, run_execution
+        from hey_my_buddy.buddy.roles import inline_run, run_execution
         from hey_my_buddy.private_dirs import ensure_private_dir
 
         self.set_case("ok")
@@ -863,13 +861,14 @@ class WorkerSeamTests(CodexSeamCase):
                 request = request.model_copy(update={"identity": request.identity.model_copy(
                     update={"input_sha256": run_execution.input_hash(turn_input)})})
                 control = {"operation": "worker", "harness": "codex", "privateRoot": str(root),
-                           "inputFile": str(input_file), "outputFile": str(root / "turn-output.json"),
-                           "requestFile": str(root / "request.json"), "verdictFile": str(root / "verdict.json")}
+                           "inputFile": str(input_file), "outputFile": str(root / "turn-output.json")}
+                control.update(timeoutSeconds=30, live={"instanceId": "a" * 64, "token": "b" * 64},
+                               executionLiveFile=str(root / "execution-live.json"))
+                handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
                 with mock.patch.object(run_execution, "worker_request", return_value=(
                         request, self.worker_services(), lambda _facts: FEEDBACK_CONTINUE, None)):
-                    frame, code = run_controller.execute(control, threading.Event(),
-                                                         Path(os.environ["HMB_STATE_DIR"]))
-                result = decode_run_result(frame)
+                    result, _request, _verdict, code = inline_run.execute(
+                        control, handle, Path(os.environ["HMB_STATE_DIR"]))
                 self.assertEqual(code, 0, result.end.message)
                 sandbox, policy = self.expected_worker_policy(level)
                 self.assertEqual(result.effective_policy.tools.requested.value, policy)

@@ -262,13 +262,6 @@ def preflight_entries(state: Path):
             if _linked(worker) or not worker.is_dir():
                 yield 'rejected', worker, 'linked-path' if _linked(worker) else 'non-directory-path'
                 continue
-            receipts = worker / 'receipts'
-            if _linked(receipts) or receipts.exists() and not receipts.is_dir():
-                yield 'rejected', receipts, 'linked-path' if _linked(receipts) else 'non-directory-path'
-            elif receipts.exists():
-                for receipt in sorted(receipts.iterdir()):
-                    if receipt.name.endswith('.json'):
-                        yield from _single(receipt)
             for name in ('startup.json', 'orphaned.json'):
                 yield from _single(worker / name)
     for name in STATE_FILES:

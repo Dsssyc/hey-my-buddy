@@ -421,7 +421,8 @@ def _prepare(request: RunRequest, mode: str) -> _Preparation:
     """Preparation phase: private evidence roots and native environment."""
     invocation_root = ensure_private_dir(Path(request.private_state.invocation_root))
     native_root = ensure_private_dir(Path(request.private_state.native_root))
-    incoming = dict(os.environ)
+    from ..runtime_selection import environment_for
+    incoming = dict(environment_for())
     try:
         command = cli_command(incoming)
     except CodexUnavailable as error:

@@ -877,17 +877,14 @@ class DecisionSurfaceTests(DecisionTestCase):
 
 
 class DecisionWorkerProcessTests(DecisionTestCase):
-    def test_independent_worker_records_native_logs(self):
+    def test_in_process_execution_keeps_native_result_and_input_binding(self):
         board = self.board()
         self.seed(board)
         request = self.request(board, request_id="worker-pick")
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed", decision.get("reason"))
-        attempt_dir = self.directory / "attempts" / decision["runId"] / decision["attemptId"]
-        envelope = json.loads((attempt_dir / "runner.stdout.log").read_text())
-        self.assertEqual(set(envelope["rawAnswer"]), {"buddyId", "reason", "evidence"})
-        self.assertTrue(envelope["processState"]["shutdownConfirmed"])
+        self.assertEqual(set(decision["output"]["decision"]), {"buddyId", "reason", "evidence"})
         self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
         self.assertTrue(decision["inputVerification"]["unchanged"])
         harness, context, request_view = self.readonly_start.call_args.args

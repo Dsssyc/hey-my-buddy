@@ -6,6 +6,7 @@ queues a distinct frozen dispatch while the micro task remains pending.
 """
 import copy
 import json
+import signal
 import unittest
 import sys
 import time
@@ -14,7 +15,8 @@ from unittest.mock import patch
 
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence, decision
 from hey_my_buddy.buddy.runtime.command import CommandAdapter
-from hey_my_buddy.buddy.runtime.worker import Worker, _Renewal
+from hey_my_buddy.buddy.runtime.execution import Execution
+from hey_my_buddy.buddy.runtime.receipts import deliver_receipt
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
@@ -119,17 +121,35 @@ class FailoverTests(RouterDispatchTestCase):
         return response
 
     def test_worker_stops_router_at_its_budget_and_dispatches_the_next_router(self):
+        self._router_budget_stop(stop_delay=0)
+
+    def test_execution_waits_for_native_cleanup_beyond_ten_seconds(self):
+        self._router_budget_stop(stop_delay=11)
+
+    def _router_budget_stop(self, *, stop_delay):
         class SleepingRouter(CommandAdapter):
             name = "decision"
 
+            def argv(self):
+                return [sys.executable, "-c", (
+                    "import signal, time\n"
+                    f"def stop(*_): time.sleep({stop_delay}); raise SystemExit(0)\n"
+                    "signal.signal(signal.SIGTERM, stop)\n"
+                    "while True: time.sleep(.05)\n")]
+
             def prepare(self, context):
-                # A model-free real child stands in for the native Router call.
                 from pathlib import Path
                 Path(context.cwd).mkdir(parents=True, exist_ok=True)
-                super().prepare(replace(context, spec={**context.spec, "argv": [sys.executable, "-c", "import time; time.sleep(60)"]}))
+                super().prepare(replace(context, spec={**context.spec, "argv": self.argv()}))
 
             def start(self, context):
-                return super().start(replace(context, spec={**context.spec, "argv": [sys.executable, "-c", "import time; time.sleep(60)"]}))
+                return super().start(replace(context, spec={**context.spec, "argv": self.argv()}))
+
+            def cancel(self, handle):
+                # This fixture's native driver needs eleven seconds to finish its
+                # own stop protocol. Execution must collect only after it finishes.
+                handle.cancel_requested = True
+                handle.signal_group(signal.SIGTERM)
 
             def collect(self, handle, context):
                 outcome = super().collect(handle, context)
@@ -144,22 +164,24 @@ class FailoverTests(RouterDispatchTestCase):
             spec = first["task"]["spec"]
             self.assertEqual(spec["routerBudgetSeconds"], 1)
             self.assertNotIn("expectedSeconds", spec)
-            worker = Worker("w-route", self.directory, client=self.client, log=lambda _message: None)
-            worker.spool.write_startup({"nonce": first["nonce"], "attemptId": first["attempt"]["attemptId"]})
-            directory = self.directory / "budget-attempt"
-            renewal = _Renewal(worker, first, None, None)
-            holder = {'preflightRenewal': renewal}
-            renewal.start()
-            self.addCleanup(renewal.join, 5)
-            self.addCleanup(renewal.stop)
+            execution = Execution(first, self.directory, "w-route", first["nonce"], client=self.client)
+            directory = execution.directory
+            directory.mkdir(parents=True)
+            holder = {'preflightRenewal': execution.control}
+            execution.control.start()
+            self.addCleanup(execution.control.join, 5)
+            self.addCleanup(execution.control.stop)
             started = time.monotonic()
             with patch("hey_my_buddy.buddy.roles.controller.worker_executor", return_value=SleepingRouter()):
-                receipt = worker._execute_selected(first, first["task"], spec, first["attempt"], directory, holder)
-            self.assertLess(time.monotonic() - started, 15)
+                receipt = execution._execute_selected(first, first["task"], spec, first["attempt"], directory, holder)
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 20)
+            if stop_delay:
+                self.assertGreater(elapsed, 11)
             self.assertEqual(receipt["report"]["terminationReason"], "deadline")
             self.assertTrue(receipt["report"]["shutdownConfirmed"])
             self.assertFalse(holder["handle"].group_alive())
-            self.assertTrue(worker.deliver(receipt))
+            self.assertTrue(deliver_receipt(self.client, receipt, directory, nonce=execution.nonce))
             next_task = self.current_task(request["decisionId"])
             self.assertNotEqual(next_task, request["runId"])
             self.assertEqual(self.dispatch_of(next_task)["buddyId"], B)
@@ -184,17 +206,16 @@ class FailoverTests(RouterDispatchTestCase):
             def start(self, context):
                 return CommandAdapter().start(replace(context, spec={**context.spec, 'argv': [sys.executable, '-c', 'print("done")']}))
         request, first = self.start(review=True)
-        worker = Worker('w-route', self.directory, client=self.client, log=lambda _message: None)
-        worker.spool.write_startup({'nonce': first['nonce'], 'attemptId': first['attempt']['attemptId']})
-        renewal = _Renewal(worker, first, None, None)
-        renewal.start()
-        self.addCleanup(renewal.join, 5)
-        self.addCleanup(renewal.stop)
+        execution = Execution(first, self.directory, 'w-route', first['nonce'], client=self.client)
+        execution.directory.mkdir(parents=True)
+        execution.control.start()
+        self.addCleanup(execution.control.join, 5)
+        self.addCleanup(execution.control.stop)
         executor = PreparingRouter()
         with patch('hey_my_buddy.buddy.roles.controller.worker_executor', return_value=executor), \
-             patch.object(renewal, 'wait') as wait:
-            receipt = worker._execute_selected(first, first['task'], first['task']['spec'], first['attempt'],
-                                               self.directory / 'prepared-attempt', {'preflightRenewal': renewal})
+             patch.object(execution.control, 'wait') as wait:
+            receipt = execution._execute_selected(first, first['task'], first['task']['spec'], first['attempt'],
+                                                  execution.directory, {'preflightRenewal': execution.control})
         wait.assert_called_once_with(15)
         self.assertEqual(executor.budgets, [first['task']['spec']['routerBudgetSeconds']] * 2)
         self.assertEqual(receipt['report']['status'], 'ok')

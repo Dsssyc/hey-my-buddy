@@ -276,7 +276,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.assertTrue(native.available()[0])
         native.prepare(context)
         handle = native.start(context)
-        handle.process.wait(timeout=5)
+        handle.wait(timeout=5)
         outcome = native.collect(handle, context)
         self.assertEqual(outcome.status, 'ok')
         self.assertTrue(outcome.shutdown_confirmed)

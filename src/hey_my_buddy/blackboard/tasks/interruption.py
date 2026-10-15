@@ -59,9 +59,7 @@ def _snapshot(board, *, attempt_id: str | None = None, unobserved_only: bool = F
                 for row in rows]
 
 
-def _native_journal(board, attempt: dict, identity: dict) -> dict | None:
-    if attempt['adapter'] not in ('codex', 'dsh', 'zcode', 'claude', 'decision'):
-        return None
+def _native_journal(board, attempt: dict, identity: dict) -> dict:
     from ...private_dirs import attempt_root
     harness = attempt['model_harness'] if attempt['adapter'] == 'decision' else attempt['adapter']
     root = attempt_root(board.directory, harness, attempt['task_id'], attempt['attempt_id'])
@@ -72,8 +70,6 @@ def _native_journal(board, attempt: dict, identity: dict) -> dict | None:
 
 def _native_identities(board, attempt: dict, identity: dict) -> list[dict] | None:
     journal = _native_journal(board, attempt, identity)
-    if journal is None:
-        return []
     value = processes.read_native_process_journal(journal['path'], journal['binding'])
     if value is None or value['pending']:
         return None
@@ -152,11 +148,9 @@ def worker_recover(board, params: dict) -> dict:
             reserved = _reserve(board, attempt, record, kind)
             return {'settled': False, 'stopObserved': reserved is not None, 'evidence': reserved}
         observed = processes.inspect_process_identity(record)
-        journal = _native_journal(board, attempt, record) if observed in ('alive', 'identity-absent') else None
-        if observed == 'alive' or (observed == 'identity-absent' and journal is not None):
+        if observed in ('alive', 'identity-absent'):
             candidate = {'attemptId': attempt['attempt_id'], 'processIdentity': record}
-            if journal is not None:
-                candidate['nativeJournal'] = journal
+            candidate['nativeJournal'] = _native_journal(board, attempt, record)
             candidates.append(candidate)
     if attempt_id is not None:
         with board.db.read() as connection:

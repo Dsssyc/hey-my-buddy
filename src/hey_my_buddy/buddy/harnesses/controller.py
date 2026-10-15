@@ -1,8 +1,6 @@
-"""Mechanical launch and collection for the registered Python controllers.
+"""Mechanical launch and collection for the model-discovery process.
 
-Each caller supplies its command preparation, bounded result reader and
-explicit two-layer stop rule. The outer layer owns the controller process and
-log descriptors; it makes no role verdict and does not drive native protocols.
+The same module also guards retained native evidence used by structured roles.
 """
 from __future__ import annotations
 
@@ -21,8 +19,7 @@ from ...errors import BoardError
 from ...json_codec import decode_strict_json
 from ..roles.turn_io import guard_private_path
 
-#: The strict controller-result bound shared by the Codex, Claude and ZCode
-#: worker and discovery reads.
+#: The strict discovery result and retained native evidence bound.
 STRICT_RESULT_BYTES = 512 * 1024
 #: The Router channel's ordinary evidence bound, with its own private-path
 #: checks for retained request/result material.
@@ -135,18 +132,6 @@ def stop_confirmed(payload: dict | None, observe_outer: Callable[[], bool]) -> b
     native = payload.get("processState")
     return bool(isinstance(native, dict) and native.get("shutdownConfirmed") is True
                 and observe_outer())
-
-
-def router_stop_confirmed(payload: object, handle: ProcessHandle) -> bool:
-    """The old Router channel's two-layer stop, with its own outer coercion.
-
-    The receipt must still be exactly ``True``, and the outer observation must
-    also be exactly ``True`` (``handle.shutdown_confirmed() is True``): a
-    non-boolean outer value never counts as stopped and never reaches the
-    report as a truthy number or a ``None`` field.
-    """
-    return payload.get("processState", {}).get("shutdownConfirmed") is True \
-        and handle.shutdown_confirmed() is True
 
 
 @dataclass(frozen=True)

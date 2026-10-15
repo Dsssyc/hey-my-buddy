@@ -13,7 +13,7 @@ from unittest import mock
 from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext, NoToolStructuredRequest
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, adapter, run_seam
 from hey_my_buddy.buddy.harnesses import run_contract as rc
-from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request, decode_run_result, encode_run_result
+from hey_my_buddy.buddy.harnesses.run_contract import RunRequest, RunResult, canonical_json
 from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_preparation, worker_executor
 from hey_my_buddy.buddy.roles import run_controller, run_execution, structured_call, turn_io
 from hey_my_buddy.errors import BoardError
@@ -45,7 +45,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
     def project(self, *, policy=None, completion=None, native_identity=None, event_count=None, capture=True):
         fields = full_request(Path("/private/tmp")).to_payload()
         fields.update(toolScope="none", sessionServices=[], captureEvidence=capture)
-        request = decode_run_request(fields)
+        request = RunRequest.from_payload(fields)
         result = rc.RunResult(
             identity=request.identity, harness="zcode", end=rc.RunEnd(status="ok"),
             native_identity=native_identity, native_event_count=event_count,
@@ -88,7 +88,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
     def test_codex_policy_survives_without_capture_and_keeps_the_old_receipt_level(self):
         fields = full_request(Path("/private/tmp")).to_payload()
         fields.update(harness="codex", toolScope="none", sessionServices=[], captureEvidence=False)
-        request = decode_run_request(fields)
+        request = RunRequest.from_payload(fields)
         policy = {"sandbox": "read-only", "approvalPolicy": "never"}
         module = SimpleNamespace(native_evidence=lambda _result: {"nativePolicy": policy})
         with mock.patch.dict(RUN_SEAMS, {"codex": module}):
@@ -100,7 +100,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
                 if status == "error":
                     self.assertIs(payload["zeroToolVerified"], False)
             fields["toolScope"] = "read"
-            review = run_execution._review_result(result, decode_run_request(fields),
+            review = run_execution._review_result(result, RunRequest.from_payload(fields),
                                                    {"stopReason": None, "elapsedMs": 1})
             self.assertEqual(review["nativePolicy"], policy)
 
@@ -140,15 +140,15 @@ class FastRegisteredRunTests(FakeAppServerTests):
         request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA, WIRING_TIMEOUT,
                                           capture_evidence=capture_evidence)
         handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(WIRING_TIMEOUT + 10))
         return context, handle, structured_call.collect(handle)
 
     def test_fast_consumes_public_frames_and_corrects_on_the_registered_process(self):
         context, handle, outcome = self.invoke("correct", capture_evidence=True)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        request = decode_run_request(Path(handle.role_run_control["requestFile"]).read_bytes())
-        result = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes())
+        request = handle.request
+        result = handle.result
         self.assertEqual(result.identity, request.identity)
         self.assertEqual(result.identity, handle.role_run_identity)
         self.assertEqual(request.tool_scope, "none")
@@ -160,33 +160,15 @@ class FastRegisteredRunTests(FakeAppServerTests):
                                                          "toolAllowlist": [],
                                                          "streamEof": True})
         self.assertTrue(outcome.shutdown_confirmed)
-        self.assertEqual(handle.process.args[2], "hey_my_buddy.buddy.roles.run_controller")
+        self.assertFalse((context.directory / "role-run-control.json").exists())
         self.assertFalse((context.directory / "no-tool-control.json").exists())
 
-    def test_a_foreign_result_cannot_borrow_the_owned_run_identity(self):
-        _, handle, outcome = self.invoke()
-        self.assertEqual(outcome.status, "ok")
-        path = Path(handle.log_paths["stdout"])
-        fields = decode_run_result(path.read_bytes()).to_payload()
-        fields["identity"]["invocationId"] = "foreign-invocation"
-        path.write_text(encode_run_result(decode_run_result(fields)))
-        refused = structured_call.collect(handle)
-        self.assertEqual(refused.status, "failed")
-        self.assertEqual(refused.result["code"], "invalid-native-result")
-        self.assertFalse(refused.shutdown_confirmed)
-
-    def test_both_native_and_controller_groups_are_required_for_fast_stop(self):
+    def test_native_group_proof_is_required_for_fast_stop(self):
         _, handle, outcome = self.invoke()
         self.assertTrue(outcome.shutdown_confirmed)
-        path = Path(handle.log_paths["stdout"])
-        raw = path.read_bytes()
-        with mock.patch.object(handle, "shutdown_confirmed", return_value=False):
-            refused = structured_call.collect(handle)
-            self.assertFalse(refused.shutdown_confirmed)
-            self.assertEqual(refused.status, "failed")
-        fields = decode_run_result(raw).to_payload()
+        fields = handle.result.to_payload()
         fields["stopEvidence"]["native"]["groupState"] = "unknown"
-        path.write_text(encode_run_result(decode_run_result(fields)))
+        handle.result = RunResult.from_payload(fields)
         refused = structured_call.collect(handle)
         self.assertFalse(refused.shutdown_confirmed)
         self.assertEqual(refused.status, "failed")
@@ -228,20 +210,20 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         self.assertNotIn("turn", outcome.result)
         self.assertNotIn("workspaceSeal", outcome.result)
 
-    def test_worker_consumes_frames_without_publishing_private_service_credentials(self):
+    def test_worker_uses_in_process_result_without_publishing_private_service_credentials(self):
         context = self.context()
         context.agent_credential = "synthetic-attempt-secret"
         handle, outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        request_bytes = Path(handle.role_run_control["requestFile"]).read_bytes()
-        request = decode_run_request(request_bytes)
-        result = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes())
+        request = handle.request
+        request_bytes = canonical_json(request.to_payload()).encode()
+        result = handle.result
         self.assertEqual(request.identity, result.identity)
         self.assertEqual(request.tool_scope, "write")
         self.assertEqual(request.identity.input_sha256, turn_io.input_hash(context.turn_input))
         self.assertEqual(outcome.result["turn"]["outcome"], result.value.parsed.value)
         self.assertEqual(outcome.result["turn"]["provenance"]["nativeTurnId"], result.native_identity.turn_id)
-        self.assertEqual(handle.process.args[2], "hey_my_buddy.buddy.roles.run_controller")
+        self.assertFalse((context.directory / "role-run-control.json").exists())
         self.assertNotIn(b"synthetic-attempt-secret", request_bytes)
         self.assertNotIn("synthetic-attempt-secret", json.dumps(outcome.to_report()))
         service_names = request.session_services[0].tool_names
@@ -255,9 +237,9 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         fixture.chmod(0o755)
         context.environment["HMB_ZCODE_CLI"] = str(fixture)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(context.timeout_seconds + 10))
-        result = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes())
+        result = handle.result
         self.assertIsNotNone(result.usage)
         self.assertIsNotNone(result.last_assistant_message)
         ref = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
@@ -286,7 +268,7 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
     def test_a_changed_provenance_keeps_valid_inquiry_and_attention(self):
         context = self.context("attention")
         handle, original = self.execute(context)
-        result = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes())
+        result = handle.result
         reference = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
         path = Path(reference.location)
         path.write_bytes(path.read_bytes() + b" ")
@@ -303,7 +285,7 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
             with self.subTest(kind=kind):
                 context = self.context("attention", index=index)
                 handle, original = self.execute(context)
-                result = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes())
+                result = handle.result
                 reference = next(ref for ref in result.evidence_refs if ref.kind == kind)
                 path = Path(reference.location)
                 path.write_bytes(path.read_bytes() + b" ")
@@ -346,10 +328,9 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         # fact a native layer actually reports is "alive", beside "unknown".
         for state in ("unknown", "alive"):
             with self.subTest(nativeGroupState=state):
-                path = Path(handle.log_paths["stdout"])
-                fields = decode_run_result(path.read_bytes()).to_payload()
+                fields = handle.result.to_payload()
                 fields["stopEvidence"]["native"]["groupState"] = state
-                path.write_text(encode_run_result(decode_run_result(fields)))
+                handle.result = RunResult.from_payload(fields)
                 refused = self.adapter.collect(handle, context)
                 self.assertIs(refused.shutdown_confirmed, False,
                               "a native group that is not gone leaves the stop unconfirmed even when the outer layer confirms")
@@ -364,10 +345,9 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         self.assertIs(original.result["nativeSession"]["resumable"], True)
         for value, naming in ((False, "denied"), (None, "unknown")):
             with self.subTest(continuationCapability=naming):
-                path = Path(handle.log_paths["stdout"])
-                fields = decode_run_result(path.read_bytes()).to_payload()
+                fields = handle.result.to_payload()
                 fields["continuation"]["resumable"] = value
-                path.write_text(encode_run_result(decode_run_result(fields)))
+                handle.result = RunResult.from_payload(fields)
                 refused = self.adapter.collect(handle, context)
                 self.assertIs(refused.shutdown_confirmed, True,
                               "both stop layers stay confirmed; only the continuation capability went away")

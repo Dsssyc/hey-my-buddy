@@ -21,13 +21,14 @@ from unittest import mock
 
 # ``support`` puts the project's own ``src`` directory first on sys.path, so the
 # tests exercise this checkout rather than any installed copy of the package.
-from support import BoardTestCase, wait_for
+from support import BoardTestCase, run_claim_in_process, wait_for
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome, ProcessHandle
 from hey_my_buddy.private_dirs import attempt_root, ensure_private_dir
 from hey_my_buddy.blackboard.store.store import ATTEMPT_TRANSITIONS, TASK_TRANSITIONS
 from hey_my_buddy.buddy.runtime.worker import Worker
+from hey_my_buddy.buddy.runtime.execution import Execution
 
 
 class TestAtomicity(BoardTestCase):
@@ -331,8 +332,6 @@ class TestCrashWindows(BoardTestCase):
                 "harness": {"harness": native_harness, "available": True, "revision": 1, "command": ["mock"]}
             },
         )
-        worker = Worker(f"w-{adapter}", self.directory, client=client, log=lambda _message: None)
-        worker.spool.write_startup({"nonce": "a" * 32, "attemptId": attempt_id})
         claim = {
             "task": {"taskId": task_id, "spec": {
                 "adapter": adapter, "task": "inspect stop evidence", "cwd": str(self.workdir()), **({"routerBudgetSeconds": 60} if adapter == "decision" else {"expectedSeconds": 60}),
@@ -341,7 +340,9 @@ class TestCrashWindows(BoardTestCase):
             "decisionInput": {"routingMode": "fast", "buddy": {"harness": "codex"}}
             if adapter == "decision" else None,
         }
-        return worker, claim
+        execution = Execution(claim, self.directory, f"w-{adapter}", "a" * 32,
+                              client=client, log=lambda _message: None)
+        return execution, claim
 
     @staticmethod
     def _finished_fake_handle():
@@ -368,6 +369,8 @@ class TestCrashWindows(BoardTestCase):
         worker.spool.write_startup(
             {
                 "workerId": "w-pre",
+                "taskId": claim["claim"]["attempt"]["taskId"],
+                "privateAdapter": "command",
                 "nonce": "a" * 32,
                 "claimRequestId": "claim-crash-pre-1",
                 "attemptId": claim["claim"]["attempt"]["attemptId"],
@@ -386,97 +389,6 @@ class TestCrashWindows(BoardTestCase):
 
     # Real killed-Worker recovery is covered by buddy/runtime/test_repair_recovery.py.
 
-    def test_a_receipt_that_cannot_be_committed_is_replayed_never_re_executed(self):
-        """A daemon outage past the retry budget must not run the task twice."""
-        from hey_my_buddy.protocol.client import BoardClient
-
-        board = self.board()
-        online = {"value": False}
-        real_call = board.call
-
-        def flaky(operation: str, params: dict) -> dict:
-            if operation == "worker_result" and not online["value"]:
-                raise BoardError("SERVICE_UNAVAILABLE", "simulated daemon outage")
-            return real_call(operation, params)
-
-        client = BoardClient(self.directory, call=flaky)
-        cwd = self.workdir()
-        log = cwd / "executions.txt"
-        task = client.submit(
-            requestId="offline-1",
-            task="count executions",
-            cwd=str(cwd),
-            adapter="command",
-            argv=["/bin/sh", "-c", f"echo run >> {log}"],
-            expectedSeconds=60,
-        )["task"]
-        worker = Worker("w-offline", self.directory, client=client, retry_seconds=2, log=lambda _m: None)
-        worker.register()
-        self.assertEqual(worker.run_once(), "replay")
-        self.assertEqual(len(log.read_text().splitlines()), 1)
-        self.assertIsNotNone(worker.spool.read(worker.spool.read_startup()["attemptId"]))
-        # The next round may only replay the durable receipt.
-        self.assertEqual(worker.run_once(), "replay")
-        self.assertEqual(len(log.read_text().splitlines()), 1, "the task must not execute a second time")
-        online["value"] = True
-        self.assertEqual(worker.run_once(), "replayed")
-        self.assertEqual(len(log.read_text().splitlines()), 1, "replay must not execute anything")
-        self.assertEqual(client.get(runId=task["runId"])["status"], "completed")
-        self.assertIsNone(worker.spool.read_startup(), "the intent is cleared only after a durable commit")
-
-    def test_a_marker_write_failure_still_supervises_the_live_child(self):
-        """The live handle, never a missing marker, decides whether work stopped."""
-        from hey_my_buddy.buddy.runtime.command import CommandAdapter
-        import hey_my_buddy.buddy.runtime.worker as worker_module
-
-        board = self.board()
-        client = board.client()
-        cwd = self.workdir()
-        task = client.submit(
-            requestId="marker-fail",
-            task="long work",
-            cwd=str(cwd),
-            adapter="command",
-            argv=["/bin/sh", "-c", "sleep 30"],
-            expectedSeconds=60,
-        )["task"]
-        worker = Worker("w-marker", self.directory, client=client, log=lambda _m: None)
-        worker.register()
-        handles: list = []
-        original_start = CommandAdapter.start
-        original_fsync = worker_module.fsync_json
-
-        def capturing_start(self, context):
-            handle = original_start(self, context)
-            handles.append(handle)
-            return handle
-
-        def failing_marker(path, value):
-            if Path(path).name == "spawn.marker":
-                raise RuntimeError("injected marker write failure")
-            return original_fsync(path, value)
-
-        CommandAdapter.start = capturing_start
-        worker_module.fsync_json = failing_marker
-        try:
-            worker.run_once()
-        finally:
-            CommandAdapter.start = original_start
-            worker_module.fsync_json = original_fsync
-        self.assertEqual(len(handles), 1, "exactly one child was created")
-        attempt_id = client.get(runId=task["runId"])["selectedAttemptId"]
-        marker = self.directory / "attempts" / task["runId"] / attempt_id / "spawn.marker"
-        self.assertFalse(marker.exists(), "the marker write really did fail")
-        result = client.result(runId=task["runId"])
-        self.assertEqual(result["status"], "failed")
-        self.assertIn("worker failure", result["resultMeta"]["error"])
-        self.assertFalse(handles[0].group_alive(), "the live handle must be used to stop the child")
-        self.assertTrue(
-            result["resultMeta"]["shutdownConfirmed"],
-            "shutdown is confirmed from the owned handle, not inferred from the missing marker",
-        )
-        self.assertIsNone(result["result"], "no adapter outcome exists for a worker failure")
-
     def test_native_controller_exit_does_not_prove_native_stop_after_collect_failure(self):
         """A gone outer controller cannot release credentials for an unseen native child."""
         import hey_my_buddy.buddy.runtime.worker as worker_module
@@ -491,6 +403,7 @@ class TestCrashWindows(BoardTestCase):
                 credential = private_root / "agent-credential.json"
                 credential.write_text('{"token":"private-test-sentinel"}')
                 handle = self._finished_fake_handle()
+                handle.shutdown_confirmed = lambda: False
                 cancelled = []
 
                 def collect_failure(_handle, _context):
@@ -504,7 +417,7 @@ class TestCrashWindows(BoardTestCase):
                 )
                 with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
                         mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
-                    receipt = worker.execute(claim)
+                    receipt = worker.execute()
                 self.assertFalse(receipt["report"]["shutdownConfirmed"])
                 self.assertEqual(cancelled, [handle])
                 self.assertTrue(credential.exists(), "unknown native stop must retain credentials")
@@ -542,48 +455,10 @@ class TestCrashWindows(BoardTestCase):
         with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
                 mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}), \
                 mock.patch.object(worker, "receipt", side_effect=fail_first_receipt):
-            receipt = worker.execute(claim)
+            receipt = worker.execute()
         self.assertEqual(calls, 2)
         self.assertTrue(receipt["report"]["shutdownConfirmed"])
         self.assertFalse(credential.exists(), "native stop proof permits credential cleanup")
-
-    def test_native_collect_proof_survives_later_cleanup_failure(self):
-        """Cleanup errors retain stop proof and get another chance in the exception path."""
-        import hey_my_buddy.buddy.runtime.worker as worker_module
-
-        worker, claim = self._isolated_worker_claim("zcode")
-        private_root = ensure_private_dir(attempt_root(
-            self.directory, "zcode", claim["task"]["taskId"], claim["attempt"]["attemptId"]
-        ))
-        credential = private_root / "agent-credential.json"
-        credential.write_text('{"token":"private-test-sentinel"}')
-        handle = self._finished_fake_handle()
-        fake_adapter = SimpleNamespace(
-            name=claim["task"]["spec"]["adapter"],
-            available=lambda: (True, None), prepare=lambda _context: None,
-            start=lambda _context: handle,
-            collect=lambda _handle, _context: AdapterOutcome(
-                status="failed", result={"status": "native-error"}, shutdown_confirmed=True,
-            ),
-            cancel=lambda _handle: self.fail("proved stopped handle must not need cancellation"),
-        )
-        original_cleanup = worker._cleanup_attempt_credentials
-        calls = 0
-
-        def fail_first_cleanup(*args):
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                raise RuntimeError("injected cleanup failure")
-            return original_cleanup(*args)
-
-        with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
-                mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}), \
-                mock.patch.object(worker, "_cleanup_attempt_credentials", side_effect=fail_first_cleanup):
-            receipt = worker.execute(claim)
-        self.assertEqual(calls, 2)
-        self.assertTrue(receipt["report"]["shutdownConfirmed"])
-        self.assertFalse(credential.exists(), "exception cleanup removes the stopped attempt credential")
 
     def test_persistent_cleanup_error_cannot_erase_native_stop_or_prevent_receipt(self):
         import hey_my_buddy.buddy.runtime.worker as worker_module
@@ -604,7 +479,7 @@ class TestCrashWindows(BoardTestCase):
         with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
                 mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}), \
                 mock.patch.object(worker, "_cleanup_attempt_credentials", side_effect=RuntimeError("cleanup unavailable")):
-            receipt = worker.execute(claim)
+            receipt = worker.execute()
         self.assertTrue(receipt["report"]["shutdownConfirmed"])
         self.assertEqual(receipt["report"]["status"], "failed")
         self.assertTrue(credential.exists(), "cleanup failed, so credentials must remain for diagnosis")
@@ -629,7 +504,7 @@ class TestCrashWindows(BoardTestCase):
         )
         with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
                 mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
-            receipt = worker.execute(claim)
+            receipt = worker.execute()
         self.assertTrue(receipt["report"]["shutdownConfirmed"])
         self.assertEqual(receipt["report"]["result"]["evidenceRetention"], diagnostic)
 
@@ -665,7 +540,7 @@ class TestCrashWindows(BoardTestCase):
         )
         with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
                 mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
-            receipt = worker.execute(claim)
+            receipt = worker.execute()
         self.assertEqual(starts, 2, "the first confirmed pre-model failure must trigger one retry")
         self.assertFalse(receipt["report"]["shutdownConfirmed"])
         self.assertTrue(credential.exists(), "second start's uncertain child retains its credential")
@@ -696,7 +571,7 @@ class TestCrashWindows(BoardTestCase):
         )
         with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
                 mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
-            receipt = worker.execute(claim)
+            receipt = worker.execute()
         self.assertEqual(starts, 1, "unknown first start cannot safely launch a retry")
         self.assertFalse(receipt["report"]["shutdownConfirmed"])
         self.assertTrue(credential.exists(), "unknown stop retains the credential")
@@ -731,7 +606,7 @@ class TestCrashWindows(BoardTestCase):
         )
         with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
                 mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
-            receipt = worker.execute(claim)
+            receipt = worker.execute()
         self.assertEqual(prepared, 2)
         self.assertEqual(started, 1, "the second preparation must fail before another spawn")
         self.assertTrue(receipt["report"]["shutdownConfirmed"])
@@ -1156,6 +1031,10 @@ class TestDelivery(BoardTestCase):
 
 
 class TestExtensibility(BoardTestCase):
+    def setUp(self):
+        super().setUp()
+        self.enterContext(run_claim_in_process())
+
     """Group 7: built-in adapters plus a real external worker over the public API."""
 
     def test_capabilities_are_reported_honestly(self):

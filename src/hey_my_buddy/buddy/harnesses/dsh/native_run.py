@@ -622,7 +622,8 @@ def _launch_agent(*, cwd: str, launch_root: Path, invocation_root: Path,
     and expresses the existing tool scope. HOME and DSH_HOME are inherited;
     title generation and telemetry follow the user's native configuration.
     """
-    command = command_for("dsh", dict(os.environ))
+    from ..runtime_selection import environment_for
+    command = command_for("dsh", dict(environment_for()))
     argv = [*command, "--profile", "acp"]
     rows = [{"id": _SESSION_ROOT_ROW, "config": {"root": str(sessions_root)}},
             {"id": "storage-json", "config": {"root": str(sessions_root.parent / "storages")}},

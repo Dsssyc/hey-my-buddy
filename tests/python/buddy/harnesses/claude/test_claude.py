@@ -155,7 +155,8 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
 
     def execute(self, context):
         handle = self.executor.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.last_handle = handle
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
         return self.executor.collect(handle, context)
 
@@ -164,10 +165,10 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
 
     def control(self, context):
         """The role's private control binding of one attempt."""
-        return json.loads((context_root(context, "claude") / "role-run-control.json").read_text())
+        return self.last_handle.role_run_control
 
     def stored_request(self, context):
-        return json.loads((context_root(context, "claude") / "role-run-request.json").read_text())
+        return self.last_handle.request.to_payload()
 
     def wait_for_native_user_turn(self, timeout=10):
         """Block until the fixture has consumed the turn's user frame, bounded.
@@ -264,17 +265,6 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                          {"rateLimitType": "unknown", "resetsAt": "2026-09-26T12:00:00Z"})
         self.assertNotIn("SECRET-FRAGMENT", json.dumps(outcome.result))
 
-    def test_missing_controller_receipt_is_not_imported(self):
-        context = self.context()
-        handle = self.executor.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(20))
-        Path(handle.log_paths["stdout"]).write_text("")
-        outcome = self.executor.collect(handle, context)
-        self.assertEqual(outcome.status, "failed")
-        self.assertIn("no complete run result", outcome.error)
-        self.assertNotIn("turn", outcome.result)
-
     def test_permission_request_denial_becomes_controller_attention(self):
         outcome = self.execute(self.context("permission"))
         self.assertEqual(outcome.status, "ok", outcome.to_report())
@@ -308,7 +298,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
     def test_cancel_interrupts_the_native_child_before_stopping_the_group(self):
         context = self.context("hang", timeout=12)
         handle = self.executor.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.wait_for_native_user_turn()
         self.executor.cancel(handle, grace_seconds=8)
         self.assertIsNotNone(handle.wait(15))
@@ -324,7 +314,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
     def _force_stop_hanging_role(self, *, initiator):
         context = self.context("hang", timeout=None)
         handle = self.executor.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.wait_for_native_user_turn()
         controller.worker_stop(self.executor, handle, stop_initiator=initiator,
                                grace_deadline=time.monotonic() + 300 if initiator == "host" else None)
@@ -338,7 +328,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                          "forced-stop" if initiator == "host" else "console-stop")
         self.assertNotIn("turn", outcome.result)
         self.assertFalse((Path(handle.role_run_control["privateRoot"]) /
-                          run_execution._STOP_SUMMARY).exists(), "force stop must not launch a summary turn")
+                          "stop-summary").exists(), "force stop must not launch a summary turn")
         state = self.fixture_state()
         self.assertEqual(state["userTurns"], 1, "force stop must not send a second user turn")
         self.assertTrue(state["interrupted"], "the native child must receive its interrupt request")
@@ -359,7 +349,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
     def test_quota_event_while_interrupting_does_not_lose_the_stop_receipt(self):
         context = self.context("interrupt-quota", timeout=12)
         handle = self.executor.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=.2), handle.wait(15)) if not handle.finished else None)
         self.wait_for_native_user_turn()
         self.executor.cancel(handle, grace_seconds=8)
         self.assertIsNotNone(handle.wait(15))
@@ -373,7 +363,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
     def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):
         context = self.context(timeout=None)
         handle = self.executor.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertEqual(handle.deadline, math.inf)
         self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
         outcome = self.executor.collect(handle, context)
@@ -602,7 +592,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(stat.S_IMODE(context.credential_file().stat().st_mode), 0o600)
-        self.assertEqual(context.environment["HMB_AGENT_CREDENTIAL_FILE"], str(context.credential_file()))
+        self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", context.environment)
         self.assertNotIn("private-attempt-secret", json.dumps(outcome.to_report()))
         # Ordinary native Worker children do not receive launcher credentials or roots.
         state = self.fixture_state()
@@ -613,7 +603,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
     def test_preserved_final_activity_tracks_the_native_turn(self):
         context = self.context()
         handle = self.executor.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
         outcome = self.executor.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
@@ -625,8 +615,8 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         # success is claimed (live observation is the holder's C-Two binding,
         # exercised by the zcode live activity suite).
         self.assertFalse((context.directory / "activity.json").exists())
-        from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result
-        frame = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes().strip())
+        from hey_my_buddy.buddy.harnesses.run_contract import RunResult
+        frame = handle.result
         self.assertEqual(frame.identity.attempt_id, context.attempt_id)
         self.assertIsNotNone(frame.activity, "the run result carries no preserved activity")
         activity = frame.activity.value
@@ -647,7 +637,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         context.environment["HMB_AGENT_CREDENTIAL_FILE"] = "/private/must-not-reach-native.json"
         request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]), budget())
         handle = start_review("claude", context, request)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(20))
         result = collect(handle)
         self.assertEqual(result.status, "ok", result.result)

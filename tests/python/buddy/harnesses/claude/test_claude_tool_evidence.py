@@ -514,7 +514,7 @@ class RunnerReceiptTests(unittest.TestCase):
                                             {"timeoutSeconds": 20, "toolCalls": tool_calls})
         context = self.context(case)
         handle = start_review("claude", context, request)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(30), "the role-run controller did not exit")
         return context, collect(handle)
 

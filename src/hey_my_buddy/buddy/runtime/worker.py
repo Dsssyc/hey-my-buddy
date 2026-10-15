@@ -1,14 +1,13 @@
-"""Independent Python worker: owns processes, deadlines and durable local receipts.
+"""M1 scheduling Worker: owns an execution handle, its lease and stop forwarding.
 
-A worker is not part of the daemon. It runs in its own session with file-backed
-logs, keeps its child handles across daemon downtime, enforces its own deadline and
-retains an immutable completion receipt until the service confirms the result
-transaction.
+Native work and durable result delivery belong to the isolated execution. This
+process retains claim, launch identity and orphan recovery until M2 removes it.
 """
 from __future__ import annotations
 
 import json
 import os
+import signal
 import threading
 import time
 import uuid
@@ -16,19 +15,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from ...protocol import activity as activity_module
 from ...protocol.stop import WRAP_UP_INITIATORS
-from ..harnesses.registry import ExecutionContext, supported_capabilities
+from ..harnesses.registry import supported_capabilities
 from ..roles import controller as role_seam
 from ...protocol.client import BoardClient, new_nonce
 from ...blackboard.store.db import TERMINATION_REASONS
 from ...errors import BoardError
 
-DEFAULT_RETRY_SECONDS = 120
 RECOVERY_RETRY_SECONDS = 2.0
 IDLE_WAIT_TIMEOUT_MS = 2000
 PREFLIGHT_RETRY_SECONDS = 15.0
 PREFLIGHT_MAX_RETRY_SECONDS = 180.0
+EXECUTION_STOP_GRACE_SECONDS = 8.0
 
 
 def supervisor_start_stop_path(directory: Path) -> Path | None:
@@ -121,17 +119,15 @@ def classify_termination(outcome, *, timed_out: bool, cancel_requested: bool,
     return TERMINATION_HARNESS_ERROR
 
 
-class ReceiptSpool:
-    """Bounded, correlated, replayable transport receipts — never a second database."""
+class WorkerState:
+    """The scheduling process owns startup intent; results belong to executions."""
 
     def __init__(self, directory: Path, worker_id: str):
         self.directory = Path(directory) / "workers" / worker_id
-        self.receipts = self.directory / "receipts"
         self.startup_path = self.directory / "startup.json"
 
     def ensure(self) -> None:
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.receipts.mkdir(mode=0o700, exist_ok=True)
 
     # -- startup intent ------------------------------------------------------
     def read_startup(self) -> dict | None:
@@ -150,39 +146,16 @@ class ReceiptSpool:
     def clear_startup(self) -> None:
         self.startup_path.unlink(missing_ok=True)
 
-    # -- completion receipts -------------------------------------------------
-    def path(self, attempt_id: str) -> Path:
-        return self.receipts / f"{attempt_id}.json"
+    def recovery_intents(self) -> list[dict]:
+        intents = []
+        startup = self.read_startup()
+        if startup is not None:
+            intents.append(startup)
+        orphan = self.directory / "orphaned.json"
+        if orphan.exists():
+            intents.append(json.loads(orphan.read_text()))
+        return intents
 
-    def write(self, attempt_id: str, value: dict) -> Path:
-        self.ensure()
-        path = self.path(attempt_id)
-        fsync_json(path, value)
-        return path
-
-    def read(self, attempt_id: str) -> dict | None:
-        try:
-            value = json.loads(self.path(attempt_id).read_text())
-        except (OSError, ValueError):
-            return None
-        return value if isinstance(value, dict) else None
-
-    def pending(self) -> list[dict]:
-        self.ensure()
-        out = []
-        for path in sorted(self.receipts.glob("*.json")):
-            try:
-                value = json.loads(path.read_text())
-            except (OSError, ValueError):
-                continue
-            if isinstance(value, dict):
-                out.append(value)
-        return out
-
-    def drop(self, attempt_id: str) -> None:
-        # A receipt is deleted only after the service confirmed the result
-        # transaction; nothing here is cleared to let an upgrade proceed.
-        self.path(attempt_id).unlink(missing_ok=True)
 
 
 class Worker:
@@ -198,7 +171,6 @@ class Worker:
         adapters: tuple[str, ...] | None = None,
         extra_capabilities: tuple[str, ...] = (),
         stop: threading.Event | None = None,
-        retry_seconds: int = DEFAULT_RETRY_SECONDS,
         log: Callable[[str], None] | None = None,
     ):
         from ...protocol.rpc_config import configure_server, configure_client
@@ -219,8 +191,7 @@ class Worker:
         self.adapters = adapters
         self.extra_capabilities = tuple(extra_capabilities)
         self.stop = stop or threading.Event()
-        self.retry_seconds = retry_seconds
-        self.spool = ReceiptSpool(self.state_dir, worker_id)
+        self.spool = WorkerState(self.state_dir, worker_id)
         self._log = log or (lambda message: None)
         self._idle_cursor = 0
         self.stop_request_path = self.spool.directory / "stop.request"
@@ -250,7 +221,7 @@ class Worker:
         let a retire intent win.
         """
         pending: list[str] = []
-        if self.spool.pending():
+        if self.pending_receipts():
             pending.append("pending-receipts")
         intent = self.spool.read_startup()
         if isinstance(intent, dict) and intent.get("attemptId"):
@@ -378,7 +349,7 @@ class Worker:
         only time this worker runs without claiming: a scale-down can therefore
         never start an attempt it would have to abandon.
         """
-        for receipt in self.spool.pending():
+        for receipt in self.pending_receipts():
             self.log(f"replaying receipt for attempt {receipt.get('attemptId')} before retiring")
             self.deliver(receipt)
         intent = self.spool.read_startup()
@@ -392,7 +363,7 @@ class Worker:
 
     def reattach(self) -> None:
         """Reconcile anything this worker owned before it or the daemon restarted."""
-        for receipt in self.spool.pending():
+        for receipt in self.pending_receipts():
             self.log(f"replaying receipt for attempt {receipt.get('attemptId')}")
             self.deliver(receipt)
         intent = self.spool.read_startup()
@@ -433,26 +404,18 @@ class Worker:
             marker = json.loads(marker_path.read_text())
         except FileNotFoundError:
             return
-        records = []
-        previous_failure = marker_path.with_name('harness-prestart-failure.json')
-        if previous_failure.exists():
-            retired = json.loads(previous_failure.read_text())
-            if retired.get('processIdentity') is not None:
-                records.append(retired)
-        records.append(marker)
+        identity = marker["processIdentity"]
+        if worker_identity_alive(identity) is not False:
+            return
         try:
-            for record in records:
-                identity = record.get("processIdentity")
-                if identity is None or worker_identity_alive(identity) is not False:
-                    return
-                self.client.call("worker_progress", {
-                    "workerId": intent["workerId"],
-                    "attemptId": intent["attemptId"],
-                    "generation": intent["generation"],
-                    "nonce": intent["nonce"],
-                    "processIdentity": identity,
-                    "previousProcessStopped": record.get("previousProcessStopped") is True,
-                })
+            self.client.call("worker_progress", {
+                "workerId": intent["workerId"],
+                "attemptId": intent["attemptId"],
+                "generation": intent["generation"],
+                "nonce": intent["nonce"],
+                "processIdentity": identity,
+                "previousProcessStopped": marker["previousProcessStopped"],
+            })
             fsync_json(orphan_path, {**intent, "identityPublished": True})
         except BoardError as error:
             if error.code == "ATTEMPT_FINISHED":
@@ -599,7 +562,7 @@ class Worker:
     def run_once(self) -> str:
         # A durable receipt means this attempt already ran. Recovery may only replay
         # it: re-executing would spawn a second child for the same attempt.
-        pending = self.spool.pending()
+        pending = self.pending_receipts()
         if pending:
             return self.replay(pending)
         intent = self.startup_intent()
@@ -623,533 +586,234 @@ class Worker:
         # Persist the granted attempt identity before any process exists, so a
         # crash between claim and spawn is recoverable as "never started".
         self.spool.write_startup(
-            {**intent, "attemptId": attempt["attemptId"], "taskId": attempt["taskId"], "generation": generation}
+            {**intent, "attemptId": attempt["attemptId"], "taskId": attempt["taskId"], "generation": generation,
+             "privateAdapter": self._private_adapter(claim)}
         )
-        receipt = self.execute(claim)
-        delivered = self.deliver(receipt)
-        # The startup intent is cleared only once the result is durably committed
-        # or explicitly refused; a lost daemon keeps it (and the receipt) for replay,
-        # and the next round replays instead of executing again.
-        if delivered:
-            self.spool.clear_startup()
-            return "ran"
-        return "replay"
+        self.execute(claim)
+        if self.pending_receipts():
+            return "retry"
+        self.spool.clear_startup()
+        return "ran"
+
+    @staticmethod
+    def _private_adapter(claim):
+        from .execution import private_adapter
+        return private_adapter(claim)
+
+    def _receipt_directory(self, intent):
+        from .receipts import receipt_directory
+        return receipt_directory(self.state_dir, intent["privateAdapter"],
+                                 intent["taskId"], intent["attemptId"])
+
+    def _receipt_intent(self, receipt):
+        return next(intent for intent in self.spool.recovery_intents()
+                    if intent.get("attemptId") == receipt["attemptId"])
+
+    def _execution_gone(self, intent) -> bool:
+        from ...protocol.process_identity import inspect_process_identity
+        try:
+            marker = json.loads(self.spawn_marker(intent).read_text())
+        except FileNotFoundError:
+            return False
+        return inspect_process_identity(marker["processIdentity"]) in ("identity-absent", "boot-changed")
+
+    def pending_receipts(self):
+        from .receipts import read_receipt
+        receipts = []
+        for intent in self.spool.recovery_intents():
+            if intent.get("attemptId"):
+                receipt = read_receipt(self._receipt_directory(intent))
+                if receipt is not None:
+                    receipts.append(receipt)
+        return receipts
 
     def replay(self, pending: list[dict]) -> str:
-        """Re-submit durable receipts only. Never executes anything."""
-        delivered_all = True
         for receipt in pending:
-            if not self.deliver(receipt):
-                delivered_all = False
-        if delivered_all:
-            self.spool.clear_startup()
-            return "replayed"
-        return "replay"
+            intent = self._receipt_intent(receipt)
+            if not self._execution_gone(intent):
+                return "retry"
+            self.deliver(receipt)
+        self.spool.clear_startup()
+        return "replayed"
 
-    def execute(self, claim: dict) -> dict:
-        """Run one attempt and always return a durable receipt.
+    def _enforce_execution_deadline(self, handle):
+        """The supervising process bounds cancellation even if execution is frozen."""
+        from .execution import stop_execution
+        from .receipts import read_receipt
+        receipt = read_receipt(handle.execution_directory)
+        if receipt is not None and receipt["report"]["shutdownConfirmed"] is True:
+            # Native work is over. Service outage must not kill its result sender.
+            return
+        now = time.monotonic()
+        if not handle.force_stop_requested:
+            deadlines = [handle.grace_deadline] if handle.grace_deadline is not None else []
+            if handle.budget_path.exists():
+                budget = json.loads(handle.budget_path.read_text())
+                assert budget["binding"] == handle.execution_binding
+                deadlines.append(budget["deadline"])
+            if deadlines and now >= min(deadlines):
+                stop_execution(handle, initiator=handle.stop_initiator or "unknown", force=True)
+        if handle.force_stop_requested and now >= handle.force_stop_at + EXECUTION_STOP_GRACE_SECONDS:
+            # The native sessions remain in their journal for the reaping boundary.
+            handle.signal_group(signal.SIGKILL if os.name != "nt" else -1)
 
-        The whole body is guarded: if anything fails after the adapter was started,
-        the owned process group is terminated and a receipt is still written, so a
-        failure can never leave an orphaned child with no record.
-        """
-        started_at = time.monotonic()
+    def execute(self, claim: dict):
+        """Schedule one isolated execution; reap it before taking over native work."""
+        from .execution import launch_execution, stop_execution
+        from .receipts import DELIVERY, read_receipt, receipt_directory
         attempt = claim["attempt"]
-        task = claim["task"]
-        spec = task["spec"]
-        directory = self.state_dir / "attempts" / task["taskId"] / attempt["attemptId"]
+        directory = self.attempt_directory(attempt["taskId"], attempt["attemptId"])
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(directory, 0o700)
-        if self.spool.read(attempt["attemptId"]) is not None:
-            # A committed receipt already exists for this attempt: never execute twice.
-            self.log(f"attempt {attempt['attemptId']} already has a durable receipt; replaying only")
-            return self.spool.read(attempt["attemptId"])
-        # Written before the spawn. Its presence means the spawn boundary *may*
-        # have been crossed, so recovery must never infer "nothing started" from a
-        # missing marker; only the complete absence of this file is that proof.
-        fsync_json(
-            directory / "spawn.intent",
-            {
-                "attemptId": attempt["attemptId"],
-                "taskId": task["taskId"],
-                "generation": attempt["generation"],
-                "adapter": spec["adapter"],
-                "at": _now(),
-            },
-        )
-        # The holder records the live child handle the instant it exists. Recovery
-        # decisions are made from that handle — never from whether a marker file
-        # happened to be written, which can fail after a child is already running.
-        holder: dict = {"handle": None, "adapter": None, "started": False, "start_invoked": False}
+        private = receipt_directory(self.state_dir, self._private_adapter(claim),
+                                    attempt["taskId"], attempt["attemptId"])
+        if read_receipt(private) is not None or (private / DELIVERY).exists():
+            intent = {"taskId": attempt["taskId"], "attemptId": attempt["attemptId"]}
+            if not self._execution_gone(intent):
+                return None
+            return self._settle_execution(claim, None)
+        fsync_json(directory / "spawn.intent", {"attemptId": attempt["attemptId"],
+            "taskId": attempt["taskId"], "generation": attempt["generation"],
+            "adapter": claim["task"]["spec"]["adapter"], "at": _now()})
+        handle = None
+        renewal = _Renewal(self, claim, None)
         try:
-            return self._execute_guarded(claim, task, spec, attempt, directory, holder)
-        except BaseException as error:  # noqa: BLE001 - every failure becomes a receipt
-            handle = holder.get("handle")
-            implementation = holder.get("adapter")
-            shutdown_confirmed = holder.get("confirmed_stopped") is True
-            if not shutdown_confirmed and handle is not None and implementation is not None:
-                try:
-                    role_seam.worker_cancel(implementation, handle)
-                    handle.wait(timeout=15)
-                except Exception as cleanup_error:  # noqa: BLE001 - keep the honest default
-                    self.log(f"could not confirm this attempt's child stopped: {cleanup_error!r}")
-                # Command owns one group. For every harness adapter, including
-                # decision, the outer controller can stop
-                # while its separately owned native process survives.
-                if spec["adapter"] == "command":
-                    try:
-                        shutdown_confirmed = handle.shutdown_confirmed() is True
-                    except Exception as proof_error:  # noqa: BLE001 - an unreadable proof is unknown
-                        self.log(f"could not inspect the command's stop proof: {proof_error!r}")
-            elif not shutdown_confirmed and not holder.get("start_invoked"):
-                # Validation failed before start() could spawn anything.
-                shutdown_confirmed = True
-            if shutdown_confirmed:
-                self._release_controller_endpoint(holder)
-                try:
-                    self._cleanup_attempt_credentials(claim, spec, task, attempt)
-                except Exception as cleanup_error:
-                    self.log(f"private credential cleanup needs attention ({cleanup_error!r})")
-            self.log(
-                f"execution failed after the attempt started: {error!r} "
-                f"(shutdownConfirmed={shutdown_confirmed})"
-            )
-            return self.receipt(
-                claim,
-                {
-                    "status": "failed",
-                    "result": ({"status": "error", "code": error.code,
-                                "usage": {"elapsedMs": round((time.monotonic() - started_at) * 1000),
-                                          "toolCalls": None, "bytesRead": None}}
-                               if isinstance(error, BoardError) and not holder.get("started") else None),
-                    "error": f"worker failure: {error!r}",
-                    "exitCode": None,
-                    "signal": None,
-                    "shutdownConfirmed": shutdown_confirmed,
-                    "artifacts": [],
-                    "terminationReason": TERMINATION_HARNESS_ERROR,
-                },
-                directory,
-            )
-        finally:
+            handle = launch_execution(claim, self.state_dir, self.worker_id, self._nonce(),
+                                      lease_seconds=self.lease_seconds)
+            identity = handle.identity()
+            fsync_json(directory / "spawn.marker", {"attemptId": attempt["attemptId"],
+                "taskId": attempt["taskId"], "generation": attempt["generation"],
+                "adapter": claim["task"]["spec"]["adapter"], "processIdentity": identity,
+                "previousProcessStopped": False, "at": _now()})
             try:
-                self.live.unbind(claim)
+                self._record_process_identity(attempt, identity)
             except Exception as error:
-                self.log(f"live detach unavailable: {type(error).__name__}")
-            self._release_controller_endpoint(holder)
-
-    def _release_controller_endpoint(self, holder: dict) -> None:
-        # Revalidate and reap before deleting the request used for that binding.
-        handle = holder.get("handle")
-        if handle is not None and not holder.get("live_release_attempted"):
-            holder["live_release_attempted"] = True
-            try:
-                from ..roles.live import release_live_binding
-                cleanup = release_live_binding(handle)
-                if cleanup is not None:
-                    self.log(f"owned controller endpoint cleanup: {cleanup.outcome}; {cleanup.reason}")
-            except Exception as error:
-                self.log(f"owned endpoint cleanup not confirmed: {type(error).__name__}")
-
-    def _execute_guarded(
-        self, claim: dict, task: dict, spec: dict, attempt: dict, directory: Path, holder: dict
-    ) -> dict:
-        from ...blackboard.service.harness_health import HARNESSES
-        from ..harnesses.runtime_selection import bound, RECORD_FILE
-
-        name = spec['adapter']
-        review = name == 'decision' and (claim.get('decisionInput') or {}).get('routingMode', 'review') == 'review'
-        if name == 'decision':
-            name = (claim.get('decisionInput') or {}).get('buddy', {}).get('harness')
-        renewal = _Renewal(self, claim, None, None)
-        holder['preflightRenewal'] = renewal
-        renewal.start()
-        try:
-            if name not in HARNESSES:
-                return self._execute_selected(claim, task, spec, attempt, directory, holder)
-            history = []
-            record = None
-            for retry in (False, True):
-                unknown_reads = 0
-                def cancelled(view):
-                    return self._preflight_cancelled(claim, directory, record, view)
-                while True:
-                    if renewal.cancel_view is not None or self.stop_requested():
-                        return cancelled(renewal.cancel_view)
-                    command_id = f"harness-{attempt['attemptId']}-{int(retry)}"
-                    if unknown_reads:
-                        command_id += f"-unknown-{unknown_reads}"
-                    try:
-                        response = self.client.call('harness_prepare', {
-                            'workerId': self.worker_id, 'attemptId': attempt['attemptId'], 'generation': attempt['generation'],
-                            'nonce': self._nonce(), 'commandId': command_id, 'retry': retry and not unknown_reads,
-                            'healthRevision': record.get('revision') if record else None,
-                        })
-                    except BoardError as error:
-                        if error.code == 'ATTEMPT_FINISHED':
-                            view = renewal.cancel_view
-                            if view is None:
-                                try:
-                                    view = self.client.call('task_get', {'runId': attempt['taskId']})['task']
-                                except Exception:
-                                    raise error
-                            if view.get('cancelRequested'):
-                                return cancelled(view)
-                        if error.code not in ('SERVICE_UNAVAILABLE', 'SERVICE_START_TIMEOUT'):
-                            raise
-                        # The request may already be committed: replay its exact identity.
-                        renewal.wait(min(PREFLIGHT_MAX_RETRY_SECONDS,
-                                         PREFLIGHT_RETRY_SECONDS * 2 ** min(unknown_reads, 4)))
-                        continue
-                    record = response['harness']
-                    if record is None or (record.get('status') != 'unknown'
-                                          and (record.get('lastProbe') or {}).get('status') != 'unknown'):
-                        break
-                    unknown_reads += 1
-                    renewal.wait(min(PREFLIGHT_MAX_RETRY_SECONDS,
-                                     PREFLIGHT_RETRY_SECONDS * 2 ** min(unknown_reads - 1, 4)))
-                if renewal.cancel_view is not None or self.stop_requested():
-                    return cancelled(renewal.cancel_view)
-                history.append({'retry': retry, 'harness': record})
-                if record is None or not record.get('available'):
-                    if not retry:
-                        continue
-                    if review:
-                        return self._review_unavailable(claim, directory, history, 'router-unavailable')
-                    return self.receipt(claim, {'status': 'failed', 'result': {'harness': record, 'harnessAttempts': history},
-                        'error': 'HARNESS_UNAVAILABLE: ' + str((record or {}).get('remedy') or 'Run hey-my-buddy harnesses with refresh:true'),
-                        'exitCode': None, 'signal': None, 'shutdownConfirmed': True, 'artifacts': [],
-                        'terminationReason': TERMINATION_HARNESS_ERROR}, directory)
-                selection = directory / 'harness-selection.json'
-                fsync_json(selection, {name: record})
-                holder['harnessEnvironment'] = {RECORD_FILE: str(selection)}
-                holder['harnessHistory'] = history
-                holder['harnessRetry'] = retry
-                try:
-                    with bound([record]):
-                        return self._execute_selected(claim, task, spec, attempt, directory, holder)
-                except (OSError, BoardError) as error:
-                    if (isinstance(error, BoardError) and error.code == 'ATTEMPT_FINISHED'
-                            and (renewal.cancel_view is not None or self.stop_requested())):
-                        return cancelled(renewal.cancel_view)
-                    # A start() error with no returned handle may still follow spawn.
-                    # Retry only if start was never called or the previous child has
-                    # independently produced complete stop proof.
-                    if holder.get('start_invoked') and not holder.get('confirmed_stopped'):
-                        raise
-                    startup_failure = (isinstance(error, BoardError) and error.code in {'ADAPTER_UNAVAILABLE', 'HARNESS_UNAVAILABLE', 'HARNESS_PREMODEL_FAILED'})
-                    startup_failure = startup_failure or (isinstance(error, OSError) and error.filename in record.get('command', []))
-                    if retry and not holder.get('started') and startup_failure:
-                        self._harness_failed(attempt, record)
-                        if review:
-                            return self._review_unavailable(claim, directory, history, 'router-unavailable')
-                    if retry or holder.get('started') or not startup_failure:
-                        raise
-            raise AssertionError('unreachable harness retry')
+                self.log(f"execution identity publication pending ({error!r})")
+                renewal.unpublished_identity = (identity, False)
+            renewal.attach(handle)
+            renewal.start()
+            while handle.wait(timeout=0.25) is None:
+                if self.stop_requested() and not handle.cancel_requested:
+                    stop_execution(handle)
+                self._enforce_execution_deadline(handle)
+            if not handle.shutdown_confirmed():
+                handle.terminate(grace_seconds=0)
+            return self._settle_execution(claim, handle)
+        except BaseException as error:
+            self.log(f"execution launch or supervision failed ({error!r})")
+            if handle is not None:
+                stop_execution(handle, force=True)
+                if handle.wait(timeout=EXECUTION_STOP_GRACE_SECONDS) is None:
+                    handle.terminate(grace_seconds=0)
+            evidence = getattr(error, "owned_popen_evidence", None)
+            return self._settle_execution(claim, handle,
+                execution_stopped=evidence is not None and evidence.shutdown_confirmed)
         finally:
             renewal.stop()
-            renewal.join()
-            holder.pop('preflightRenewal', None)
+            if renewal.ident is not None:
+                renewal.join()
+            self.live.unbind(claim)
+            if handle is not None:
+                from ..roles.live import release_live_binding
+                release_live_binding(handle)
 
-    def _preflight_cancelled(self, claim, directory, record, view):
-        return self.receipt(claim, {'status': 'cancelled', 'result': {'harness': record} if record else None,
-            'error': None, 'exitCode': None, 'signal': None, 'shutdownConfirmed': True,
-            'artifacts': [], 'terminationReason': role_seam.stop_termination_reason(
-                shutdown_confirmed=True, stop_initiator=(view or {}).get('stopInitiator'))}, directory)
+    def _stop_native_survivors(self, intent, identity) -> bool:
+        """An absent execution transfers only its verified journal identities."""
+        from ...protocol.process_identity import (inspect_process_identity,
+            native_process_journal_path, read_native_process_journal, stop_orphan_process)
+        observation = inspect_process_identity(identity)
+        if observation == "boot-changed":
+            return True
+        if observation != "identity-absent":
+            return False
+        binding = {key: intent[key] for key in ("taskId", "attemptId", "generation")}
+        journal = read_native_process_journal(
+            native_process_journal_path(self._receipt_directory(intent), identity), binding)
+        if journal is None:
+            return False
+        # Pending creation keeps the complete tree unknown but does not abandon
+        # recorded survivors whose identities can already be verified.
+        evidence = [stop_orphan_process(native) for native in journal["identities"]]
+        return not journal["pending"] and all(
+            value in ("boot-changed", "identity-absent", "worker-stopped") for value in evidence)
 
-    def _review_unavailable(self, claim, directory, history, code):
-        from ...blackboard.routing.router import routing_facts
-        return self.receipt(claim, {'status': 'failed', 'result': {
-            'status': 'error', 'code': 'router-review-unavailable', 'reasonCode': code,
-            'reason': 'The review harness is unavailable',
-            'modelStarted': False, 'harnessAttempts': history,
-            'budget': (claim.get('decisionInput') or {}).get('budget'),
-            **routing_facts(claim.get('decisionInput') or {})},
-            'error': code, 'exitCode': None, 'signal': None, 'shutdownConfirmed': True,
-            'artifacts': [], 'terminationReason': TERMINATION_HARNESS_ERROR}, directory)
-
-    def _harness_failed(self, attempt, record):
-        self.client.call('harness_prepare', {'workerId': self.worker_id, 'attemptId': attempt['attemptId'],
-            'generation': attempt['generation'], 'nonce': self._nonce(), 'failedOnly': True,
-            'healthRevision': record['revision'], 'commandId': f"harness-failed-{attempt['attemptId']}"})
-
-    def _execute_selected(
-        self, claim: dict, task: dict, spec: dict, attempt: dict, directory: Path, holder: dict
-    ) -> dict:
-        from ...install import runtime
-
-        context = ExecutionContext(
-            task_id=task["taskId"],
-            attempt_id=attempt["attemptId"],
-            generation=attempt["generation"],
-            spec=spec,
-            directory=directory,
-            runtime=runtime.resolve_runtime(),
-            environment={**os.environ, "HMB_STATE_DIR": str(self.state_dir), **holder.get('harnessEnvironment', {})},
-            lease_seconds=self.lease_seconds,
-            decision_input=claim.get("decisionInput"),
-            # The service-owned turn identity and bounded context; the adapter stages
-            # them for the runner. The scoped credential is written to a private file
-            # and exported by path, never into the model-visible turn input.
-            turn=claim.get("turn") if isinstance(claim.get("turn"), dict) else None,
-            agent_credential=claim.get("agentCredential") or None,
-        )
-        implementation = role_seam.worker_executor(spec["adapter"])
-        renewal = holder['preflightRenewal']
-        preparation = role_seam.prepare_worker_run(implementation, context)
-        unknown_reads = 0
-        while preparation.error is not None and preparation.error.code == 'router-input-unknown':
-            self._wait_control_observation(claim, renewal, preparation.error.code, unknown_reads)
-            unknown_reads += 1
-            preparation = role_seam.prepare_worker_run(implementation, context)
-        if not preparation.available:
-            return self.receipt(
-                claim,
-                {
-                    "status": "failed",
-                    "result": None,
-                    "error": preparation.reason,
-                    "exitCode": None,
-                    "signal": None,
-                    "shutdownConfirmed": True,
-                    "artifacts": [],
-                    "terminationReason": TERMINATION_HARNESS_ERROR,
-                },
-                directory,
-            )
-        if preparation.error is not None:
-            error = preparation.error
-            if holder.get('harnessHistory') and error.code == 'HARNESS_UNAVAILABLE':
-                # The captured BoardError itself: the guarded harness retry above
-                # matches on this code, so the original object and code must reach it.
-                raise error
-            return self.receipt(
-                claim,
-                {
-                    "status": "failed",
-                    "result": {"status": "error", "code": error.code,
-                               "stopEvidence": {"shutdownConfirmed": True,
-                                                "native": {"shutdownConfirmed": True}}},
-                    "error": f"{error.code}: {error.message}",
-                    "exitCode": None,
-                    "signal": None,
-                    "shutdownConfirmed": True,
-                    "artifacts": [],
-                    "terminationReason": TERMINATION_HARNESS_ERROR,
-                },
-                directory,
-            )
-        started = time.monotonic()
-        holder["adapter"] = implementation
-        # A previous pre-model retry may have proved its own child stopped. That
-        # proof cannot cover this start(): it might spawn before raising a handle.
-        previous_process_stopped = holder.get("confirmed_stopped") is True
-        holder.pop("confirmed_stopped", None)
-        holder.pop("live_release_attempted", None)
-        holder.pop("handle", None)
-        holder["start_invoked"] = True
-        handle = role_seam.worker_start(implementation, context)
-        holder["handle"] = handle
-        holder["started"] = True
-        renewal.attach(handle, implementation)
-        # Capture while the owned handle is live. The marker is committed before
-        # its board write, so a replacement Worker can replay the exact identity
-        # if this process dies between those two durable boundaries.
-        process_identity = handle.identity()
-        fsync_json(directory / "spawn.marker", {
-            "attemptId": attempt["attemptId"],
-            "taskId": task["taskId"],
-            "generation": attempt["generation"],
-            "adapter": spec["adapter"],
-            "processIdentity": process_identity,
-            "previousProcessStopped": previous_process_stopped,
-            "at": _now(),
-        })
-        try:
-            # The first observation of the spawned process also ends a waiting reason of the preflight.
-            self._record_process_identity(attempt, process_identity,
-                                          previous_process_stopped=previous_process_stopped,
-                                          data={'waitingReason': None})
-        except Exception as error:  # a progress hint is never worth losing the child
-            self.log(f"process identity not yet published ({error!r}); the durable marker can be replayed")
-            renewal.unpublished_identity = (process_identity, previous_process_stopped)
-        timeout_seconds = context.timeout_seconds
-        deadline = started + timeout_seconds if timeout_seconds is not None else None
-        timed_out = False
-        while True:
-            if self.stop_requested() and not handle.cancel_requested:
-                self.log("stop requested; cancelling this owned process group")
-                role_seam.worker_stop(implementation, handle, stop_initiator="unknown", grace_deadline=None)
-            if handle.wait(timeout=0.25) is not None:
-                break
-            if (handle.grace_deadline is not None and time.monotonic() >= handle.grace_deadline
-                    and not handle.force_stop_requested):
-                handle.grace_expired = True
-                self.log("Host stop grace reached; forcing the owned run to stop")
-                role_seam.worker_cancel(implementation, handle)
-            if deadline is not None and time.monotonic() >= deadline:
-                timed_out = True
-                self.log("Router budget reached; cancelling this owned process group")
-                role_seam.worker_cancel(implementation, handle)
-                handle.wait(timeout=10)
-                break
-        unknown_reads = 0
-        while True:
-            try:
-                outcome = role_seam.worker_collect(implementation, handle, context)
-                break
-            except BoardError as error:
-                if error.code != 'router-input-unknown':
-                    raise
-                holder['confirmed_stopped'] = True
-                self._wait_control_observation(claim, renewal, error.code, unknown_reads)
-                unknown_reads += 1
-        holder["confirmed_stopped"] = outcome.shutdown_confirmed is True
-        # Virtual adapters project native results. Keep the controller's retention
-        # failure diagnostic in the final receipt even when that projection omits it.
-        retention_failure = getattr(handle, "evidence_retention_failure", None)
-        if isinstance(retention_failure, dict) and isinstance(outcome.result, dict):
-            outcome.result = {**outcome.result, "evidenceRetention": retention_failure}
-        if outcome.shutdown_confirmed:
-            self._release_controller_endpoint(holder)
-            self._cleanup_attempt_credentials(claim, spec, task, attempt)
-        if (holder.get('harnessHistory') and not timed_out
-                and not handle.cancel_requested and outcome.shutdown_confirmed and outcome.status == 'failed'
-                and isinstance(outcome.result, dict) and outcome.result.get('modelStarted') is False
-                and outcome.result.get('code') in {'harness-unavailable', 'invalid-native-result', 'invalid-protocol', 'transport-error', 'native-rpc-error', 'protocol-error', 'native-exit', 'connection-closed'}):
-            failure_path = directory / 'harness-prestart-failure.json'
-            if not failure_path.exists():
-                # A retry can replace spawn.marker. Preserve the stopped
-                # previous root for historical replay if its board write missed.
-                fsync_json(failure_path, {'code': outcome.result['code'], 'shutdownConfirmed': True,
-                                          'processIdentity': process_identity,
-                                          'previousProcessStopped': previous_process_stopped})
-            holder['started'] = False
-            holder['confirmed_stopped'] = True
-            holder.pop('handle', None)
-            raise BoardError('HARNESS_PREMODEL_FAILED', 'The native protocol failed before any model input was sent')
-        if timed_out:
-            outcome.status = "failed"
-            outcome.error = f"the Router budget of {timeout_seconds}s was reached before the adapter finished"
-            if isinstance(outcome.result, dict):
-                outcome.result = {**outcome.result, "status": "error", "code": "router-budget-exhausted"}
-        from .partial_outputs import enrich
-        enrich(context, outcome)
-        # The genuine reason this attempt stopped. It is recorded with the receipt,
-        # so a cancelled task, an expired deadline, a harness failure and a completed
-        # turn stay distinguishable even after a transport outage.
-        termination_reason = classify_termination(
-            outcome,
-            timed_out=timed_out,
-            cancel_requested=bool(handle.cancel_requested),
-            stop_initiator=handle.stop_initiator,
-            grace_expired=handle.grace_expired,
-        )
-        if termination_reason in (TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED, TERMINATION_FORCED_STOP,
-                                  TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP, TERMINATION_UNKNOWN_STOP):
-            outcome.status = "cancelled"
-        if "partialOutput" in outcome.result:
-            outcome.result["partialOutput"]["reason"] = termination_reason
-        report = outcome.to_report()
-        if holder.get('harnessHistory'):
-            report['result'] = {**(report.get('result') or {}), 'harnessAttempts': holder['harnessHistory']}
-        report["terminationReason"] = termination_reason
-        report["elapsedSeconds"] = round(time.monotonic() - started, 1)
-        report["logPaths"] = context.log_paths()
-        report["runtimeIdentity"] = context.runtime.get("identity")
-        return self.receipt(claim, report, directory)
-
-    def _wait_control_observation(self, claim, renewal, reason, retry):
-        attempt = claim['attempt']
-        try:
-            self.client.progress(self.worker_id, attempt['attemptId'], attempt['generation'], self._nonce(),
-                                 'A control observation is still unknown; it will be retried',
-                                 data={'waitingReason': reason})
-        except Exception as error:
-            self.log(f"waiting observation not recorded ({error!r}); the owned call remains pending")
-        renewal.wait(min(PREFLIGHT_MAX_RETRY_SECONDS, PREFLIGHT_RETRY_SECONDS * 2 ** min(retry, 4)))
-        if renewal.cancel_view is not None or self.stop_requested():
-            raise BoardError('ATTEMPT_FINISHED', 'Stop requested while waiting for a control observation')
-
-    def _cleanup_attempt_credentials(self, claim: dict, spec: dict, task: dict, attempt: dict) -> None:
-        from ...private_dirs import cleanup_attempt_credentials
-        private_adapter = spec["adapter"]
-        if private_adapter == "decision":
-            private_adapter = ((claim.get("decisionInput") or {}).get("buddy") or {}).get("harness")
-        if private_adapter in {"dsh", "zcode", "codex", "claude", "command"}:
-            try:
-                cleanup_attempt_credentials(self.state_dir, private_adapter, task["taskId"], attempt["attemptId"])
-            except (OSError, BoardError) as cleanup_error:
-                self.log(f"private credential cleanup needs attention ({cleanup_error!r})")
-
-    def _nonce(self) -> str:
-        intent = self.spool.read_startup() or {}
-        return intent.get("nonce", "")
-
-    def receipt(self, claim: dict, report: dict, directory: Path) -> dict:
-        intent = self.spool.read_startup() or {}
-        attempt = claim["attempt"]
-        receipt = {
-            "attemptId": attempt["attemptId"],
-            "taskId": attempt["taskId"],
-            "generation": attempt["generation"],
-            "workerId": self.worker_id,
-            "nonce": intent.get("nonce"),
-            "commandId": f"result:{attempt['attemptId']}",
-            "report": report,
-            "createdAt": _now(),
-        }
-        self.spool.write(attempt["attemptId"], receipt)
-        self.log(f"durable completion receipt written for attempt {attempt['attemptId']}")
+    def _handoff_receipt(self, receipt, intent, identity):
+        from .receipts import write_receipt
+        if receipt["report"]["shutdownConfirmed"] is not True:
+            receipt["report"]["shutdownConfirmed"] = self._stop_native_survivors(intent, identity)
+            if receipt["report"]["shutdownConfirmed"]:
+                from ...private_dirs import cleanup_attempt_credentials
+                try:
+                    cleanup_attempt_credentials(self.state_dir, intent["privateAdapter"],
+                                                intent["taskId"], intent["attemptId"])
+                except Exception as error:
+                    self.log(f"private credential cleanup failed: {error!r}")
+            write_receipt(self._receipt_directory(intent), receipt)
         return receipt
 
-    def deliver(self, receipt: dict) -> bool:
-        """Submit one receipt until the service confirms it, or the retry budget ends."""
-        deadline = time.monotonic() + self.retry_seconds
-        attempt_id = receipt["attemptId"]
-        while True:
+    def _settle_execution(self, claim, handle, *, execution_stopped=False):
+        """Only a reaped execution can hand its pending receipt back to its Worker."""
+        from .receipts import DELIVERY, read_receipt, write_receipt, deliver_receipt
+        attempt = claim["attempt"]
+        intent = {**attempt, "privateAdapter": self._private_adapter(claim), "nonce": self._nonce()}
+        directory = self._receipt_directory(intent)
+        if (directory / DELIVERY).exists():
+            return None
+        receipt = read_receipt(directory)
+        missing_receipt = receipt is None
+        if missing_receipt:
+            receipt = {"attemptId": attempt["attemptId"], "taskId": attempt["taskId"],
+                "generation": attempt["generation"], "workerId": self.worker_id,
+                "commandId": f"result:{attempt['attemptId']}", "createdAt": _now(),
+                "report": {"status": "failed", "result": None,
+                    "error": "execution exited without a durable result receipt",
+                    "exitCode": handle.process.returncode if handle is not None else None,
+                    "signal": None, "shutdownConfirmed": False, "artifacts": [],
+                    "terminationReason": TERMINATION_HARNESS_ERROR}}
+        if handle is not None:
+            identity = handle.identity()
+        else:
             try:
-                response = self.client.submit_result(
-                    receipt["workerId"],
-                    attempt_id,
-                    receipt["generation"],
-                    receipt["nonce"],
-                    {**receipt["report"], "commandId": receipt["commandId"]},
-                )
-            except BoardError as error:
-                if error.code in ("CONFLICT", "STALE_GENERATION", "UNAUTHORIZED", "ATTEMPT_FINISHED"):
-                    self.log(f"result for {attempt_id} not accepted ({error.code}); dropping the receipt")
-                    self.spool.drop(attempt_id)
-                    return False
-                self.log(f"result for {attempt_id} not committed yet ({error.code}); will retry")
-            except Exception as error:  # transport-level failure
-                self.log(f"board unreachable while committing {attempt_id} ({error!r}); will retry")
-            else:
-                self.log(f"result for {attempt_id} committed as {response.get('taskState')}")
-                self.spool.drop(attempt_id)
-                return True
-            if self.stop_requested() and time.monotonic() > deadline:
-                return False
-            if time.monotonic() >= deadline:
-                self.log(
-                    f"giving up on {attempt_id} after {self.retry_seconds}s; the receipt stays on disk and is "
-                    "replayed by the next supervisor start"
-                )
-                return False
-            time.sleep(1.0)
+                identity = json.loads(self.spawn_marker(intent).read_text())["processIdentity"]
+            except FileNotFoundError:
+                identity = None
+        if handle is not None:
+            execution_stopped = handle.shutdown_confirmed()
+        elif identity is not None:
+            execution_stopped = self._execution_gone(intent)
+        if not execution_stopped:
+            if missing_receipt:
+                write_receipt(directory, receipt)
+            self.log("execution group stop is unconfirmed; retaining its receipt without taking delivery ownership")
+            return receipt
+        if identity is not None:
+            self._handoff_receipt(receipt, intent, identity)
+        elif missing_receipt:
+            write_receipt(directory, receipt)
+        deliver_receipt(self.client, receipt, directory, nonce=intent["nonce"], log=self.log)
+        return receipt
+
+    def _nonce(self):
+        return (self.spool.read_startup() or {}).get("nonce", "")
+
+    def deliver(self, receipt):
+        from .receipts import deliver_receipt
+        intent = self._receipt_intent(receipt)
+        if not self._execution_gone(intent):
+            return False
+        identity = json.loads(self.spawn_marker(intent).read_text())["processIdentity"]
+        self._handoff_receipt(receipt, intent, identity)
+        return deliver_receipt(self.client, receipt, self._receipt_directory(intent), nonce=intent["nonce"], log=self.log)
 
 
 class _Renewal(threading.Thread):
     """Lease renewal and durable cancel-intent observation, independent of the daemon."""
 
-    def __init__(self, worker: Worker, claim: dict, handle, implementation):
+    def __init__(self, worker: Worker, claim: dict, handle):
         super().__init__(name="hey-my-buddy-worker-renewal", daemon=True)
         self.worker = worker
         self.claim = claim
         self.handle = handle
-        self.implementation = implementation
         self._done = threading.Event()
-        self._wake = threading.Event()
         self._binding_lock = threading.RLock()
         self.cancel_view: dict | None = None
         self.attempt = claim["attempt"]
@@ -1157,13 +821,6 @@ class _Renewal(threading.Thread):
         #: An identity (with its previous-process-stopped fact) whose first
         #: publication failed; each renewal retries it.
         self.unpublished_identity: tuple[dict, bool] | None = None
-        #: The last actual activity forwarded; repeated observations are coalesced.
-        self._activity: dict | None = None
-        #: The held controller's channel, retried until its actual readiness
-        #: verifies. An unextracted command has no live projection.
-        self._activity_channel: Any = None
-        self._activity_unextracted = False
-
     #: How often the durable cancel intent is checked with a read-only call. This is
     #: deliberately independent of the lease renewal period: a committed cancel must
     #: be observed in seconds, not after the next lease interval.
@@ -1172,15 +829,11 @@ class _Renewal(threading.Thread):
     def run(self) -> None:
         renew_interval = max(5.0, self.worker.lease_seconds / 3)
         next_renew = time.monotonic() + renew_interval
-        if self.handle is not None:
-            self._forward_activity()
         while not self._done.wait(self.CANCEL_POLL_SECONDS):
-            if self.worker.stop_requested():
-                self._wake.set()
             if self._cancel_observed():
                 return
             if self.handle is not None:
-                self._forward_activity()
+                self._refresh_live_binding()
             if time.monotonic() >= next_renew:
                 if not self._renew():
                     return
@@ -1201,23 +854,17 @@ class _Renewal(threading.Thread):
     def _request_cancel(self, view: dict) -> bool:
         with self._binding_lock:
             self.cancel_view = view
-            self._wake.set()
             if self.handle is None:
                 return False
             self._stop_handle(view)
         return False
 
-    def attach(self, handle, implementation) -> None:
+    def attach(self, handle) -> None:
         """Hand native ownership to the same renewal that supervised preparation."""
         with self._binding_lock:
             self.handle = handle
-            self.implementation = implementation
             if self.cancel_view is not None:
                 self._stop_handle(self.cancel_view)
-
-    def wait(self, seconds: float) -> None:
-        """Back off an unknown preflight; a stop fact wakes the owning thread."""
-        self._wake.wait(seconds)
 
     def _stop_handle(self, view: dict) -> None:
         initiator = view.get("stopInitiator") or "unknown"
@@ -1229,8 +876,8 @@ class _Renewal(threading.Thread):
                              - datetime.now(timezone.utc)).total_seconds()
                 deadline = time.monotonic() + max(0, remaining)
             self.worker.log(f"durable {initiator} stop intent observed")
-            role_seam.worker_stop(self.implementation, self.handle,
-                                  stop_initiator=initiator, grace_deadline=deadline)
+            from .execution import stop_execution
+            stop_execution(self.handle, initiator=initiator, grace_deadline=deadline)
         # During a summary turn keep the lease and keep observing a console
         # escalation. The original durable deadline is never extended.
 
@@ -1272,7 +919,7 @@ class _Renewal(threading.Thread):
         if response.get("uncertain") or response.get("reconciliationRequired"):
             return self._recover()
         if self.handle is not None:
-            self._refresh_live_binding()
+            self._refresh_live_binding(force=True)
         return True
 
     def _owns_live_child(self) -> bool:
@@ -1289,15 +936,11 @@ class _Renewal(threading.Thread):
         already produced its outcome and must never be re-entered.
         """
         attempt_id = self.attempt["attemptId"]
-        receipt = self.worker.spool.read(attempt_id)
+        from .receipts import read_receipt
+        receipt = read_receipt(self.worker._receipt_directory({**self.attempt, "privateAdapter": self.worker._private_adapter(self.claim)}))
         if receipt is not None:
-            # The child already produced a durable outcome. Replay that receipt; the
-            # execution state must never be reconciled back to executing when the
-            # attempt is in fact complete.
-            self.worker.log(f"attempt {attempt_id} already has a durable receipt; replaying it instead of reconciling")
-            if self.worker.deliver(receipt) or self.worker.spool.read(attempt_id) is None:
-                self._done.set()
-                return False
+            # A live execution delivers its own result even while the service
+            # is restarting. Only the reaping thread may recover a crashed sender.
             return True
         if not self._owns_live_child():
             # No handle means no evidence: the attempt stays explicitly uncertain
@@ -1335,83 +978,39 @@ class _Renewal(threading.Thread):
             f"reattached attempt {attempt_id} as {state}"
             + (f" (waiting reason cleared, was {queue_reason!r})" if response.get("restored") else "")
         )
-        self._refresh_live_binding()
+        self._refresh_live_binding(force=True)
         return True
 
-    def _refresh_live_binding(self) -> None:
+    def _refresh_live_binding(self, *, force=False) -> None:
         try:
-            self.worker.live.refresh(self.claim, self.handle, self.nonce)
+            from ..roles.live import handle_live_binding
+            previous = self.handle.role_run_identity
+            state, channel = handle_live_binding(self.handle, state_dir=self.worker.state_dir)
+            if state != "bound":
+                return
+            if previous != self.handle.role_run_identity:
+                self._live_rebind = True
+            if getattr(self, "_live_rebind", False):
+                # A failed withdrawal leaves a same-key fence in WorkerLiveRuntime.
+                # Retry that withdrawal on every tick, including after a service
+                # restart. A partial new attachment may also have closed its channel.
+                self.worker.live.unbind(self.claim)
+                channel.close(reason="execution-endpoint-rebind")
+                self.handle.role_live_channel = None
+                state, channel = handle_live_binding(self.handle, state_dir=self.worker.state_dir)
+                if state != "bound":
+                    return
+            if (force or getattr(self, "_live_rebind", False)
+                    or getattr(self, "_live_identity", None) != self.handle.role_run_identity):
+                if self.worker.live.bind(self.claim, self.handle, self.nonce):
+                    self._live_identity = self.handle.role_run_identity
+                    self._live_rebind = False
         except Exception:
             # Live loss is independent of lease and process supervision.
             pass
 
-    def _attempt_activity_binding(self) -> tuple[str, Any]:
-        """This attempt's live binding state over the registered role seam.
-
-        ``bound`` carries the channel whose stored public request verified
-        against the identity this worker received with the handle;
-        ``unextracted`` (cached as final) means the harness's registered run
-        module declares no live binding and contributes no live activity;
-        ``unavailable`` — a pending, unreadable or foreign request — is never
-        cached, so the next tick retries the binding and this tick reports no
-        update instead of reading around its own channel.
-        """
-        if self._activity_channel is not None:
-            return "bound", self._activity_channel
-        if self._activity_unextracted:
-            return "unextracted", None
-        from ..roles import live as role_live
-
-        state, channel = role_live.handle_live_binding(self.handle, state_dir=self.worker.state_dir)
-        if state == role_live.LIVE_BOUND:
-            try:
-                self.worker.live.bind(self.claim, self.handle, self.nonce)
-            except Exception:
-                pass
-            self._activity_channel = channel
-        elif state == role_live.LIVE_UNEXTRACTED:
-            self._activity_unextracted = True
-        return state, channel
-
-    def _forward_activity(self) -> None:
-        """Forward one changed, attempt-bound native activity receipt, never a heartbeat."""
-        state, channel = self._attempt_activity_binding()
-        if state == "bound":
-            try:
-                snapshot = channel.observe(after_seq=None, limit=1, timeout_ms=1500,
-                                           fields=("activity",))
-            except BoardError:
-                # A channel failure says nothing about the native process: the
-                # owned child keeps running and the next tick reads again.
-                return
-            payload = snapshot.activity.value if snapshot.activity is not None else None
-        elif state == "unextracted":
-            return
-        else:
-            # An extracted harness with an unbound channel: no update this
-            # tick, the binding retried next tick — never a stop and never a
-            # second reader beside the channel.
-            return
-        if payload is None or not activity_module.is_newer(payload, self._activity):
-            return
-        try:
-            # Structured activity only: no prose progress event is fabricated for a
-            # native observation that the service records as a projection.
-            self.worker.client.progress(
-                self.worker.worker_id,
-                self.attempt["attemptId"],
-                self.attempt["generation"],
-                self.nonce,
-                data={"activity": payload},
-            )
-        except Exception as error:  # a progress hint is never worth losing the child
-            self.worker.log(f"activity not recorded ({error!r}); the owned child keeps running")
-            return
-        self._activity = payload
-
     def stop(self) -> None:
         self._done.set()
-        self._wake.set()
 
 
 def _now() -> str:
@@ -1421,7 +1020,7 @@ def _now() -> str:
 
 
 __all__ = [
-    "ReceiptSpool",
+    "WorkerState",
     "RETIRE_REQUEST_NAME",
     "Worker",
     "classify_termination",

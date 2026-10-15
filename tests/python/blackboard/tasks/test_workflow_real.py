@@ -401,17 +401,15 @@ class RealAdapterTests(RealWorkspaceTestCase):
         manifest = self.manifest_for("adapter-2")
         executor = worker_executor("dsh")
         # The micro-task fake agent holds its turn open at the cooperative
-        # checkpoint, so a collection while it runs observes an unconfirmed
-        # stop: nothing is imported and nothing is sealed.
+        # checkpoint. Collection requires the same-process result to exist.
         holding = self._micro_task_record(2, submitted["runId"], "--wait-for-inquiry", "20")
         held = self._context(submitted["runId"], manifest, index=2, record=holding)
         handle = executor.start(held)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        running = executor.collect(handle, held)
-        self.assertTrue(handle.group_alive(), "the held run must still be alive at collection")
-        self.assertNotEqual(running.status, "ok")
-        self.assertNotIn("turn", running.result)
-        self.assertNotIn("workspaceSeal", running.result)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if not handle.finished else None)
+        with self.assertRaises(AssertionError):
+            executor.collect(handle, held)
+        self.assertFalse(handle.finished, "the held native run must still be active at collection")
+        self.assertFalse(held.turn_output_file().exists())
         handle.terminate()
         self.assertIsNotNone(handle.wait(30))
         # Once the run settles and shutdown is confirmed, the same shared
@@ -419,9 +417,9 @@ class RealAdapterTests(RealWorkspaceTestCase):
         settling = self._micro_task_record(3, submitted["runId"])
         settled = self._context(submitted["runId"], manifest, index=3, record=settling)
         finished = executor.start(settled)
-        self.addCleanup(lambda: finished.terminate(grace_seconds=0.2) if finished.group_alive() else None)
+        self.addCleanup(lambda: finished.terminate(grace_seconds=0.2) if not finished.finished else None)
         self.assertIsNotNone(finished.wait(75),
-                             "the role controller did not settle within its deadline")
+                             "the native run did not settle within its deadline")
         outcome = executor.collect(finished, settled)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)

@@ -1,12 +1,14 @@
 """Stop proof, atomic settlement, immutable identities and legacy conversion."""
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 from support import BoardTestCase, InProcessBoard
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.tasks import interruption
 from hey_my_buddy.cli.cli_views import task_brief
+from hey_my_buddy.protocol import process_identity as processes
 
 
 IDENTITY = {'bootId': 'macos:00000000-0000-0000-0000-000000000001', 'pid': 123, 'startedAt': 123250000,
@@ -28,7 +30,17 @@ class InterruptionRecoveryTests(BoardTestCase):
                  'generation': claim['attempt']['generation'], 'nonce': 'n' * 32}
         if identity:
             board.call('worker_progress', {**actor, 'processIdentity': IDENTITY})
+            journal = InterruptionRecoveryTests.journal(board, actor['attemptId'])
+            path = Path(journal['path'])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            processes.NativeProcessJournal(path, journal['binding'])
         return board, client, task, claim, actor
+
+    @staticmethod
+    def journal(board, attempt_id):
+        with board.store.db.read() as connection:
+            attempt = dict(board.store._attempt_row(connection, attempt_id))
+        return interruption._native_journal(board.store, attempt, IDENTITY)
 
     def test_identity_is_normalized_immutable_and_generation_authenticated(self):
         board, _, _, claim, actor = self.claimed()
@@ -129,7 +141,8 @@ class InterruptionRecoveryTests(BoardTestCase):
                     self.assertEqual(board.call('worker_recover', {'workerId': 'replacement'})['candidates'], [])
             with patch.object(interruption.processes, 'worker_identity_alive', return_value=False):
                 candidates = board.call('worker_recover', {'workerId': 'replacement'})['candidates']
-                self.assertEqual(candidates, [{'attemptId': actor['attemptId'], 'processIdentity': IDENTITY}])
+                self.assertEqual(candidates, [{'attemptId': actor['attemptId'], 'processIdentity': IDENTITY,
+                                               'nativeJournal': self.journal(board, actor['attemptId'])}])
                 refused = board.call('worker_recover', {'workerId': 'replacement', 'attemptId': actor['attemptId'], 'evidence': 'worker-stopped'})
                 self.assertFalse(refused['settled'])
         with patch.object(interruption.processes, 'inspect_process_identity', return_value='identity-absent'), \
@@ -179,7 +192,7 @@ class InterruptionRecoveryTests(BoardTestCase):
             board.store.reconcile_startup()
         self.assertFalse(board.call('task_get', {'runId': task['taskId']})['task']['shutdownConfirmed'])
 
-    def test_idle_worker_does_not_run_settlement_or_native_journal_scan(self):
+    def test_recovery_candidate_does_not_run_settlement_or_native_journal_scan(self):
         board, client, task, _, actor = self.claimed()
         with patch.object(interruption.processes, 'inspect_process_identity', return_value='unknown'):
             board.store.reconcile_startup()
@@ -189,7 +202,10 @@ class InterruptionRecoveryTests(BoardTestCase):
              patch.object(interruption.processes, 'worker_identity_alive', return_value=False), \
              patch.object(interruption.processes, 'inspect_process_identity', return_value='identity-absent'):
             for _ in range(4):
-                self.assertEqual(board.call('worker_recover', {'workerId': 'original'})['candidates'], [])
+                candidates = board.call('worker_recover', {'workerId': 'original'})['candidates']
+                self.assertEqual(candidates, [{'attemptId': actor['attemptId'],
+                                               'processIdentity': IDENTITY,
+                                               'nativeJournal': self.journal(board, actor['attemptId'])}])
             recover.assert_not_called()
             journal.assert_not_called()
             seal.assert_not_called()

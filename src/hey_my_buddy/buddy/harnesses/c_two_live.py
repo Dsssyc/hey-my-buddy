@@ -589,6 +589,11 @@ class CTwoLiveEndpoint:
                 normalized, "activity", maximum=MAX_LIVE_FRAME_BYTES // 2)
             return True
 
+    def current_activity(self) -> dict | None:
+        """Return the latest activity to this process's execution owner."""
+        with self._lock:
+            return self._activity.value if self._activity is not None else None
+
     def publish_inquiry_state(self, state: InquiryState) -> None:
         """Publish one question's newest facts; a change takes a fresh seq."""
         if not isinstance(state, InquiryState):

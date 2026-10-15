@@ -29,7 +29,8 @@ class StateBoundaryTests(unittest.TestCase):
         import inspect
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, CTwoLiveEndpoint
         from hey_my_buddy.buddy.roles.live import handle_live_binding
-        from hey_my_buddy.buddy.roles.run_controller import execute, _controller_live
+        from hey_my_buddy.buddy.roles.run_controller import execute
+        from hey_my_buddy.buddy.roles.inline_run import _inline_live
         from hey_my_buddy.buddy.runtime.live import WorkerLiveRuntime
         from hey_my_buddy.cli.blocking import await_run
         from hey_my_buddy.cli.console_cli import run
@@ -41,7 +42,7 @@ class StateBoundaryTests(unittest.TestCase):
                 (rpc_config.configure_server, "state_dir"), (rpc_config._apply, "state_dir"),
                 (CTwoLiveEndpoint, "state_dir"), (CTwoLiveChannel, "state_dir"),
                 (handle_live_binding, "state_dir"), (WorkerLiveRuntime, "state_dir"),
-                (execute, "state_dir"), (_controller_live, "state_dir"),
+                (execute, "state_dir"), (_inline_live, "state_dir"),
                 (await_run, "state_dir"), (run, "state_dir"), (discover, "directory")):
             with self.subTest(function=function):
                 parameter = inspect.signature(function).parameters[argument]

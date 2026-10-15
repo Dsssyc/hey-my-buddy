@@ -185,13 +185,11 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             self.assertEqual(native.get("sessionIdSource"), "validated-turn")
             self.assertFalse(native.get("sessionIdConflict"))
 
-            # This is the retained final native fact, not a claim that a live
-            # observer polled before the short fixture turn ended.
-            from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result
-            native_result = decode_run_result(Path(receipt["logPaths"]["stdout"]).read_bytes())
-            self.assertEqual(native_result.identity.task_id, run_id)
-            self.assertEqual(native_result.identity.attempt_id, turn["attemptId"])
-            activity = native_result.activity.value
+            # The execution publishes the final native activity before its
+            # result. No controller stdout/result frame exists in M1.
+            self.assertEqual(receipt["attemptId"], turn["attemptId"])
+            from hey_my_buddy.protocol.client import BoardClient
+            activity = BoardClient(self.directory, autostart=False).get(runId=run_id)["activity"]
             self.assertEqual(activity["phase"], "finishing")
             self.assertEqual(activity["nativeSessionId"], turn["sessionId"])
             self.assertEqual(activity["counts"], {"modelTurns": 1, "toolCalls": 1})

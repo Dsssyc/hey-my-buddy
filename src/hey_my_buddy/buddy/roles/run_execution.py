@@ -12,7 +12,10 @@ import shutil
 import secrets
 import sys
 import tempfile
+import threading
+import time
 import uuid
+from contextvars import copy_context
 from functools import partial
 from pathlib import Path
 
@@ -21,15 +24,13 @@ from ...json_codec import decode_strict_json
 from ...private_dirs import context_root, native_root, ensure_private_dir
 from ...protocol import usage
 from ...protocol.stop import WRAP_UP_INITIATORS
-from ..harnesses.base import AdapterOutcome, ExecutionContext, ProcessHandle
+from ..harnesses.base import AdapterOutcome, ExecutionContext
 from ..harnesses.controller import (
-    STRICT_RESULT_BYTES, collect_controller, launch_controller, read_strict_result,
-    signal_name, stop_confirmed,
+    STRICT_RESULT_BYTES, collect_controller, launch_controller, read_strict_result, signal_name, stop_confirmed,
 )
 from ..harnesses.run_contract import (
-    MAX_RUN_REQUEST_BYTES, MAX_RUN_RESULT_BYTES, PrivateStatePaths,
+    PrivateStatePaths,
     ResumeCheckpoint, RunBudget, RunBuddy, RunContinuation, RunIdentity, RunRequest, RunResult,
-    decode_run_request, decode_run_result,
 )
 from . import turn_io, worker_services
 from .run_observers import FastCorrection, ReviewObserver, worker_observer
@@ -38,13 +39,70 @@ from .structured_call import (
 )
 from .turn_io import input_hash, private_json, validate_outcome, guard_private_path, canonical_json
 
-_STRICT_RESULT_BYTES = STRICT_RESULT_BYTES
 WORKER_STOP_GRACE_SECONDS = 8.0
-_CONTROL = "role-run-control.json"
-_REQUEST = "role-run-request.json"
-_VERDICT = "role-run-verdict.json"
-_STOP_CONTROL = "role-stop-control.json"
-_STOP_SUMMARY = "role-stop-summary.json"
+_DISCOVERY_CONTROL = "discovery-control.json"
+_execution_live_file: Path | None = None
+
+
+def set_execution_live_file(path: Path) -> None:
+    """Set the private material path read by the separate Worker process."""
+    global _execution_live_file
+    _execution_live_file = path
+
+
+class InlineRunHandle:
+    """The held result and stop intent for a native run in this process."""
+
+    def __init__(self, control: dict, identity: RunIdentity, *, grace_seconds: float):
+        self.role_run_control = control
+        self.role_run_identity = identity
+        self.role_run_original_identity = identity
+        self.role_run_active_control = control
+        self.role_run_active_identity = identity
+        self.result: RunResult | None = None
+        self.request: RunRequest | None = None
+        self.verdict: dict | None = None
+        self.exit_code: int | None = None
+        self.log_paths: dict = {}
+        self.cancel_requested = False
+        self.force_stop_requested = False
+        self.wrap_up_started = False
+        self.stop_initiator: str | None = None
+        self.signalled_at: float | None = None
+        self.grace_deadline: float | None = None
+        self.grace_expired = False
+        self.stop_lock = threading.RLock()
+        self.cancelled = threading.Event()
+        self.force_cancelled = threading.Event()
+        self.done = threading.Event()
+        self.error: BaseException | None = None
+        self.deadline = (time.monotonic() + control["timeoutSeconds"] + grace_seconds
+                         if control["timeoutSeconds"] is not None else math.inf)
+        self.thread: threading.Thread | None = None
+        self.live_endpoint = None
+
+    @property
+    def pid(self) -> int:
+        return os.getpid()
+
+    @property
+    def finished(self) -> bool:
+        return self.done.is_set()
+
+    def wait(self, timeout: float | None) -> int | None:
+        self.done.wait(timeout)
+        return self.exit_code if self.done.is_set() else None
+
+    def terminate(self, *, grace_seconds: float = WORKER_STOP_GRACE_SECONDS) -> None:
+        self.cancel_requested = True
+        self.force_stop_requested = True
+        self.signalled_at = time.monotonic()
+        self.force_cancelled.set()
+        self.cancelled.set()
+
+    def shutdown_confirmed(self, settle_seconds: float = 0) -> bool:
+        return bool(self.done.is_set() and self.result is not None
+                    and self.result.stop_evidence.native.group_state == "gone")
 
 
 def _evidence(result, kind: str) -> dict | None:
@@ -308,7 +366,7 @@ def worker_request(control: dict, module):
         raise BoardError("INVALID_ARGUMENT", "the micro task input is not an object")
     identity = {key: turn_input[key] for key in ("taskId", "attemptId", "generation", "turnId")}
     delegation_authority = turn_input.get("context", {}).get("delegationAuthority") is True
-    credential_file = os.environ.get("HMB_AGENT_CREDENTIAL_FILE") if delegation_authority else None
+    credential_file = control.get("credentialFile") if delegation_authority else None
     if delegation_authority and not credential_file:
         raise BoardError("UNAUTHORIZED", "A Lead turn requires its attempt credential file")
     inquiry = control.get("inquiry") if isinstance(control.get("inquiry"), dict) else None
@@ -424,105 +482,61 @@ def review_request(control: dict, module):
 
 
 def _launch(control: dict, context: ExecutionContext, *, environment: dict,
-            identity: RunIdentity, grace_seconds: float = 0) -> ProcessHandle:
-    from ..harnesses.runtime_selection import controller_environment
-
-    root = ensure_private_dir(Path(control["privateRoot"]))
-    control.update(invocationId=identity.invocation_id, requestFile=str(root / _REQUEST),
-                   verdictFile=str(root / _VERDICT),
+            identity: RunIdentity, grace_seconds: float = 0) -> InlineRunHandle:
+    ensure_private_dir(Path(control["privateRoot"]))
+    control.update(invocationId=identity.invocation_id,
                    taskId=identity.task_id, attemptId=identity.attempt_id,
                    generation=identity.generation,
                    live={"instanceId": uuid.uuid4().hex + uuid.uuid4().hex,
-                         "token": secrets.token_hex(32), "readyFile": str(root / "live-ready.json")})
-    path = root / _CONTROL
-    private_json(path, control)
-    handle = launch_controller(
-        prepare=lambda: (
-            [sys.executable, "-m", "hey_my_buddy.buddy.roles.run_controller", "--control", str(path)],
-            control["cwd"], controller_environment(context.directory, environment,
-                                                  read_only=control["operation"] in ("fast", "review"))),
-        log_paths=context.log_paths(), timeout_seconds=control["timeoutSeconds"],
-        grace_seconds=grace_seconds)
-    if control["timeoutSeconds"] is None:
-        handle.deadline = math.inf
-    # These bindings are held by the process owner, independent of mutable
-    # control files and native evidence written during the run.
-    handle.role_run_control = decode_strict_json(canonical_json(control))
-    handle.role_run_identity = identity
+                         "token": secrets.token_hex(32)})
+    control["executionLiveFile"] = str(_execution_live_file or
+                                       context_root(context, control["harness"]) / "execution-live.json")
+    handle = InlineRunHandle(control, identity, grace_seconds=grace_seconds)
+    def run() -> None:
+        from .inline_run import execute
+        try:
+            handle.result, handle.request, handle.verdict, handle.exit_code = execute(
+                control, handle, Path(environment["HMB_STATE_DIR"]))
+            handle.role_run_active_identity = handle.request.identity
+        except BaseException as error:
+            handle.error = error
+            handle.exit_code = 1
+        finally:
+            handle.done.set()
+    caller_context = copy_context()
+    handle.thread = threading.Thread(target=lambda: caller_context.run(run),
+                                     name="hmb-inline-" + identity.invocation_id)
+    from ..harnesses import runtime_selection
+    caller_context.run(runtime_selection._environment.set, environment)
+    handle.thread.start()
     return handle
 
 
-def _read_frame(path: Path, maximum: int, decode):
-    with guard_private_path(path).open("rb") as stream:
-        return decode(stream.read(maximum + 1))
+def _read_run(handle: InlineRunHandle) -> RunResult:
+    assert handle.result is not None
+    return handle.result
 
 
-def _read_run(handle: ProcessHandle, path: Path) -> RunResult | None:
-    try:
-        result = _read_frame(path, MAX_RUN_RESULT_BYTES, decode_run_result)
-        if result.harness != handle.role_run_control["harness"]:
-            return None
-        handle.role_run_active_control = handle.role_run_control
-        handle.role_run_active_identity = handle.role_run_identity
-        if result.identity != handle.role_run_identity:
-            if handle.wrap_up_started is not True:
-                return None
-            descriptor = read_strict_result(Path(handle.role_run_control["privateRoot"]) / _STOP_SUMMARY)
-            if (not isinstance(descriptor, dict) or set(descriptor) != {"identity"}
-                    or descriptor["identity"] != result.identity.to_payload()):
-                return None
-            root = Path(handle.role_run_control["privateRoot"]) / "stop-summary"
-            control = {**handle.role_run_control, "privateRoot": str(root),
-                       "requestFile": str(root / _REQUEST), "verdictFile": str(root / _VERDICT)}
-            handle.role_run_active_control = control
-            handle.role_run_active_identity = result.identity
-        return result
-    except (OSError, ValueError, BoardError, RecursionError):
-        return None
+def _read_request(handle: InlineRunHandle) -> RunRequest:
+    assert handle.request is not None
+    return handle.request
 
 
-def _read_request(handle: ProcessHandle) -> RunRequest:
-    control = handle.role_run_active_control
-    request = _read_frame(Path(control["requestFile"]),
-                          MAX_RUN_REQUEST_BYTES, decode_run_request)
-    expected = handle.role_run_active_identity
-    if request.identity != expected or request.harness != handle.role_run_control["harness"]:
-        raise BoardError("INVALID_ARGUMENT", "The run request does not match its owned invocation")
-    return request
+def read_fast_result(handle: InlineRunHandle) -> dict:
+    return _read_structured_result(handle, _fast_result)
 
 
-def _role_stop(result: RunResult | None, handle: ProcessHandle) -> bool:
-    return bool(result is not None and result.stop_evidence.native.group_state == "gone"
-                and handle.shutdown_confirmed() is True)
+def read_review_result(handle: InlineRunHandle) -> dict:
+    return _read_structured_result(handle, _review_result)
 
 
-def read_fast_result(handle: ProcessHandle, path: Path) -> dict:
-    return _read_structured_result(handle, path, _fast_result,
-                                   (None, "no-tool-violation"))
+def _read_structured_result(handle, project):
+    result = _read_run(handle)
+    assert handle.verdict is not None
+    return project(result, _read_request(handle), handle.verdict)
 
 
-def read_review_result(handle: ProcessHandle, path: Path) -> dict:
-    return _read_structured_result(handle, path, _review_result, (None, "readonly-budget-exhausted"))
-
-
-def _read_structured_result(handle, path, project, allowed_reasons):
-    result = _read_run(handle, path)
-    if result is None:
-        return {"status": "error", "code": "invalid-native-result"}
-    try:
-        request = _read_request(handle)
-        verdict = read_strict_result(Path(handle.role_run_control["verdictFile"]))
-        if (not isinstance(verdict, dict) or set(verdict) != {"stopReason", "elapsedMs"}
-                or type(verdict.get("elapsedMs")) is not int or verdict["elapsedMs"] < 0
-                or verdict.get("stopReason") not in allowed_reasons):
-            raise BoardError("INVALID_ARGUMENT", "The structured role verdict is missing")
-        return project(result, request, verdict)
-    except (OSError, ValueError, BoardError, RecursionError):
-        return {**_base_result(result),
-                "status": "error", "code": "invalid-native-result"}
-
-
-def start_fast(module, name: str, context: ExecutionContext, request) -> ProcessHandle:
+def start_fast(module, name: str, context: ExecutionContext, request) -> InlineRunHandle:
     """Run the selected fast role with no turn, tools or blackboard authority."""
     native_environment = context.environment
     cwd = Path(request.cwd)
@@ -564,7 +578,7 @@ def start_fast(module, name: str, context: ExecutionContext, request) -> Process
     return handle
 
 
-def start_review(name: str, context: ExecutionContext, request) -> ProcessHandle:
+def start_review(name: str, context: ExecutionContext, request) -> InlineRunHandle:
     """Use the same process owner and run seam over the frozen review mirror."""
     from ..harnesses.registry import adapter
 
@@ -625,7 +639,7 @@ class WorkerRunExecutor:
                                   if self.description.native_resume else
                                   context_root(context, self.name) / (self.name + "-private"))
         inquiry = turn_io.inquiry_paths(context)
-        private_json(ensure_private_dir(context_root(context, self.name)) / _CONTROL, {
+        context.role_run_control = {
             "operation": "worker", "harness": self.name,
             "directory": str(context.directory.resolve()),
             "privateRoot": str(context_root(context, self.name)), "nativeRoot": str(root),
@@ -633,59 +647,53 @@ class WorkerRunExecutor:
             "inputFile": str(context.turn_input_file()), "outputFile": str(context.turn_output_file()),
             "taskFile": str(context.task_file()),
             "inquiry": {key: inquiry[key] for key in ("resultsPath",)},
+            "credentialFile": str(context.credential_file()) if context.agent_credential else None,
             "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
-        })
+        }
 
-    def start(self, context: ExecutionContext) -> ProcessHandle:
+    def start(self, context: ExecutionContext) -> InlineRunHandle:
         self.prepare(context)
-        control = read_strict_result(context_root(context, self.name) / _CONTROL)
+        control = context.role_run_control
+        invocation_id = uuid.uuid4().hex
+        control["privateRoot"] = str(ensure_private_dir(
+            context_root(context, self.name) / ("run-" + invocation_id)))
         identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
-                               generation=context.generation, invocation_id=uuid.uuid4().hex,
+                               generation=context.generation, invocation_id=invocation_id,
                                turn_id=context.turn_id, input_sha256=input_hash(context.turn_input))
         return _launch(control, context, environment=context.environment, identity=identity)
 
-    def collect(self, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:
-        collection = collect_controller(handle, read=lambda path: _read_run(handle, path), stop=_role_stop)
-        result, exit_code, shutdown = collection.payload, collection.exit_code, collection.stop_confirmed
-        payload = {"status": "invalid-result", "error": "the role controller produced no complete run result"}
+    def collect(self, handle: InlineRunHandle, context: ExecutionContext) -> AdapterOutcome:
+        result, exit_code, shutdown = _read_run(handle), handle.exit_code, handle.shutdown_confirmed() is True
+        payload = _base_result(result)
         verdict = None
-        wrap_up_result = result is not None and result.identity != handle.role_run_identity
-        if result is not None:
-            payload = _base_result(result)
-            try:
-                payload = _worker_facts(result, delegation_authority=(context.turn_input or {}).get(
-                    "context", {}).get("delegationAuthority") is True)
-                reports_invalid = _worker_reports(result, payload)
-                request = _read_request(handle)
-                if reports_invalid:
-                    raise BoardError("INVALID_ARGUMENT", "A native report could not be verified")
-                if shutdown:
-                    if result.end.status == "ok":
-                        for kind in ("turn-provenance", "native-turn-facts"):
-                            _evidence(result, kind)
-                    active_control = handle.role_run_active_control
-                    if (active_control is not handle.role_run_control
-                            and (request.continuation is None
-                                 or result.native_identity is None
-                                 or result.native_identity.session_id != request.continuation.previous_session_id)):
-                        raise BoardError("INVALID_ARGUMENT", "The summary run changed its native session")
-                    if result.end.status == "ok" or handle.cancel_requested or wrap_up_result:
-                        verdict = read_strict_result(Path(handle.role_run_control["verdictFile"]))
-                        if (not isinstance(verdict, dict) or type(verdict.get("wrapUpDelivered")) is not bool
-                                or type(verdict.get("graceExpired")) is not bool):
-                            verdict = None
-                            raise BoardError("INVALID_ARGUMENT", "The Worker role verdict is missing")
-                        error = verdict.get("workerError")
-                        if error is not None:
-                            if (not isinstance(error, dict) or set(error) != {"code", "message"}
-                                    or error["code"] not in ("invalid-result", "invalid-role-result")
-                                    or not isinstance(error["message"], str) or len(error["message"]) > 1024):
-                                raise BoardError("INVALID_ARGUMENT", "The Worker role error is invalid")
-                            raise BoardError(error["code"], error["message"])
-            except (OSError, ValueError, BoardError, RecursionError) as problem:
-                role_invalid = isinstance(problem, BoardError) and problem.code == "invalid-result"
-                payload.update(status="error", code="invalid-result" if role_invalid else "invalid-role-result",
-                               error=problem.message if role_invalid else "The run's role evidence could not be collected")
+        wrap_up_result = result.identity != handle.role_run_original_identity
+        try:
+            payload = _worker_facts(result, delegation_authority=(context.turn_input or {}).get(
+                "context", {}).get("delegationAuthority") is True)
+            reports_invalid = _worker_reports(result, payload)
+            request = _read_request(handle)
+            if reports_invalid:
+                raise BoardError("INVALID_ARGUMENT", "A native report could not be verified")
+            if shutdown:
+                if result.end.status == "ok":
+                    for kind in ("turn-provenance", "native-turn-facts"):
+                        _evidence(result, kind)
+                active_control = handle.role_run_active_control
+                if (active_control is not handle.role_run_control
+                        and (request.continuation is None
+                             or result.native_identity is None
+                             or result.native_identity.session_id != request.continuation.previous_session_id)):
+                    raise BoardError("INVALID_ARGUMENT", "The summary run changed its native session")
+                if result.end.status == "ok" or handle.cancel_requested or wrap_up_result:
+                    verdict = handle.verdict
+                    assert verdict is not None
+                    error = verdict.get("workerError")
+                    if error is not None:
+                        raise BoardError(error["code"], error["message"])
+        except (OSError, ValueError, BoardError, RecursionError) as problem:
+            role_invalid = isinstance(problem, BoardError) and problem.code == "invalid-result"
+            payload.update(status="error", code="invalid-result" if role_invalid else "invalid-role-result",
+                           error=problem.message if role_invalid else "The run's role evidence could not be collected")
         if verdict is not None:
             payload["wrapUpDelivered"] = verdict["wrapUpDelivered"]
             payload["graceExpired"] = verdict["graceExpired"]
@@ -721,7 +729,7 @@ class WorkerRunExecutor:
             error = ("a native interactive request was refused during this turn; a completed or waiting outcome "
                      "cannot stand in for the Host attention that request requires")
         original_completed = (result is not None and payload.get("status") == "ok"
-                              and result.identity == handle.role_run_identity and exit_code == 0 and shutdown
+                              and result.identity == handle.role_run_original_identity and exit_code == 0 and shutdown
                               and record is not None and error is None)
         if original_completed:
             status = "ok"
@@ -759,7 +767,7 @@ class WorkerRunExecutor:
                               exit_code=exit_code, signal=signal_name(exit_code), shutdown_confirmed=shutdown,
                               artifacts=_artifacts(context, handle) if shutdown else [])
 
-    def stop(self, handle: ProcessHandle, *, stop_initiator: str,
+    def stop(self, handle: InlineRunHandle, *, stop_initiator: str,
              grace_deadline: float | None) -> None:
         if (stop_initiator in WRAP_UP_INITIATORS and grace_deadline is not None
                 and self.description.interrupted_resume):
@@ -769,10 +777,10 @@ class WorkerRunExecutor:
             handle.force_stop_requested = True
             self.cancel(handle)
 
-    def cancel(self, handle: ProcessHandle, *, grace_seconds: float = WORKER_STOP_GRACE_SECONDS) -> None:
+    def cancel(self, handle: InlineRunHandle, *, grace_seconds: float = WORKER_STOP_GRACE_SECONDS) -> None:
         handle.terminate(grace_seconds=grace_seconds)
 
-def _artifacts(context: ExecutionContext, handle: ProcessHandle) -> list[dict]:
+def _artifacts(context: ExecutionContext, handle: InlineRunHandle) -> list[dict]:
     paths = [("task-specification", context.task_file()), ("turn-result", context.turn_output_file()),
              ("native-attention", context.directory / "attention.json"),
              *(("runner-" + key, Path(value)) for key, value in handle.log_paths.items() if key in ("stdout", "stderr"))]
@@ -793,7 +801,7 @@ def discover_models(name: str) -> dict:
             if module is None or not callable(getattr(module, "run_discovery", None)):
                 raise BoardError("CATALOG_UNAVAILABLE", "The harness has no registered discovery operation", harness=name)
             directory = Path(tempfile.mkdtemp(prefix="hey-my-buddy-" + name + "-catalog-"))
-            control = directory / _CONTROL
+            control = directory / _DISCOVERY_CONTROL
             private_json(control, {"operation": "discover", "harness": name,
                                    "privateRoot": str(directory), "nativeRoot": str(directory / "native"),
                                    "cwd": str(directory), "timeoutSeconds": 25})

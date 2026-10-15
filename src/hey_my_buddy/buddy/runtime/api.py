@@ -1,6 +1,6 @@
-"""Independent workers: process lifetime, deadlines and durable local receipts."""
+"""Scheduling Worker and supervisor, retained until ADR-031 M2."""
 
 from .supervisor import Supervisor
-from .worker import ReceiptSpool, Worker, fsync_json
+from .worker import WorkerState, Worker, fsync_json
 
-__all__ = ["ReceiptSpool", "Supervisor", "Worker", "fsync_json"]
+__all__ = ["WorkerState", "Supervisor", "Worker", "fsync_json"]

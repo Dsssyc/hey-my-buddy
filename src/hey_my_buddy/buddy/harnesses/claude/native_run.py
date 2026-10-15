@@ -287,7 +287,8 @@ def _prepare(request: RunRequest) -> _Preparation:
         raise ClaudeProtocolError("wrong-native-session",
                                   "a reconstructed claude turn must allocate a fresh session id")
     deadline = execution_deadline(request.budget.timeout_seconds)
-    incoming = dict(os.environ)
+    from ..runtime_selection import environment_for
+    incoming = dict(environment_for())
     command = cli_command(incoming)
     environment = native_environment(incoming)
     # Worker levels select their native sandbox posture for this turn. Calls

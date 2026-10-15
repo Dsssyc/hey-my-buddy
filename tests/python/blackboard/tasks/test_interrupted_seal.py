@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from support import BoardTestCase
 from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks import interruption, workflow, workspace
 from hey_my_buddy.errors import BoardError
@@ -69,6 +71,7 @@ class InterruptedSealTests(RealWorkspaceTestCase):
             ).fetchone()[0], "settled")
         self.assertEqual(board.store.resource_claims(), [])
 
+
     def test_outside_scope_opens_host_resolution_after_confirmed_stop(self):
         board, submitted, claim, checkout = self.claimed(scope=["src"])
         (checkout / "src" / "feature.py").write_text("value = 2\n")
@@ -123,3 +126,25 @@ class InterruptedSealTests(RealWorkspaceTestCase):
                                          " WHERE attempt_id=?", (attempt_id,)).fetchone()
         self.assertEqual(tuple(attempt), ("finished", 1))
         self.assertEqual(board.store.resource_claims(), [])
+
+
+class CommandJournalTests(BoardTestCase):
+    def test_stopped_command_controller_waits_for_its_recorded_child(self):
+        native = {**IDENTITY, "pid": 124, "startedAt": 123260000,
+                  "processGroupId": 124,
+                  "worker": {"bootId": IDENTITY["bootId"], "pid": IDENTITY["pid"],
+                             "startedAt": IDENTITY["startedAt"]}}
+        attempt = {"adapter": "command", "model_harness": None, "task_id": "task-command",
+                   "attempt_id": "attempt-command", "generation": 1}
+        board = SimpleNamespace(directory=self.directory)
+        journal = interruption._native_journal(board, attempt, IDENTITY)
+        path = Path(journal["path"])
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"binding": journal["binding"], "pending": [],
+                                    "identities": [native]}))
+        with patch.object(processes, "inspect_process_identity",
+                          side_effect=["identity-absent", "alive"]):
+            self.assertEqual(interruption._evidence(board, attempt, IDENTITY), "alive")
+        with patch.object(processes, "inspect_process_identity",
+                          side_effect=["identity-absent", "identity-absent"]):
+            self.assertEqual(interruption._evidence(board, attempt, IDENTITY), "identity-absent")

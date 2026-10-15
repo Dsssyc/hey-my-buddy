@@ -23,7 +23,7 @@ from unittest import mock
 
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
 from hey_my_buddy.buddy.harnesses import run_contract as rc
-from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result, encode_run_result
+from hey_my_buddy.buddy.harnesses.run_contract import RunResult
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.turn_io import private_json
 
@@ -36,7 +36,7 @@ class CheckpointOnlyResumableTests(ZcodeFixtureCase):
     def _run(self, case="ok"):
         context = self.context(case)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(context.timeout_seconds + 10),
                              "controller did not exit within its deadline and shutdown grace")
         return context, handle
@@ -65,8 +65,7 @@ class CheckpointOnlyResumableTests(ZcodeFixtureCase):
         checkpoint is the only continuation material left — every other fact
         stays exactly what the real run produced.
         """
-        path = Path(handle.log_paths["stdout"])
-        fields = decode_run_result(path.read_bytes()).to_payload()
+        fields = handle.result.to_payload()
         self.assertEqual(fields["end"]["nativeExitCode"], 0,
                          "the actual run must really have exited zero for a resumable checkpoint")
         self.assertEqual(fields["stopEvidence"]["native"]["groupState"], "gone")
@@ -75,13 +74,12 @@ class CheckpointOnlyResumableTests(ZcodeFixtureCase):
         refs = list(fields.get("evidenceRefs") or [])
         refs.append(self._checkpoint_ref(context, fields, checkpoint_status))
         fields["evidenceRefs"] = refs
-        path.write_text(encode_run_result(decode_run_result(fields)))
+        handle.result = RunResult.from_payload(fields)
         context.turn_output_file().unlink(missing_ok=True)
         return fields
 
     def _rewrite(self, handle, fields):
-        path = Path(handle.log_paths["stdout"])
-        path.write_text(encode_run_result(decode_run_result(fields)))
+        handle.result = RunResult.from_payload(fields)
 
     def test_a_legal_checkpoint_alone_is_resumable_when_every_layer_confirms(self):
         context, handle = self._run()

@@ -4,12 +4,15 @@ from __future__ import annotations
 import hashlib
 import json
 from unittest.mock import patch
+from support import run_claim_in_process
 
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.routing.decision import MAX_DECISION_TASK_BYTES
 from hey_my_buddy.errors import BoardError
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from hey_my_buddy.buddy.runtime.worker import Worker
+from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.buddy.roles.prompts import router_prompt
 from blackboard.routing.test_decision import (DecisionTestCase, CATALOG_BUDDY, BUDDY_ID, SECOND_BUDDY,
                              SECOND_BUDDY_ID, THIRD_BUDDY, THIRD_BUDDY_ID)
 from blackboard.tasks.test_workflow import BUDDY, NONCE, WorkflowTestCase
@@ -464,7 +467,8 @@ class TestWorkflowRouting(WorkflowTestCase):
         submitted = self.routed(board, requiredCapabilities=["effort:high"])
         worker = Worker("routing-worker", self.directory, client=board.client(), adapters=("decision",))
         worker.register()
-        self.assertEqual(worker.run_once(), "ran")
+        with run_claim_in_process():
+            self.assertEqual(worker.run_once(), "ran")
         selected = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(selected["routing"]["status"], "completed")
         self.assertEqual(selected["buddy"], {key: SECOND_BUDDY[key] for key in BUDDY})
@@ -479,10 +483,18 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(len(held), 1)
         control = held[0].role_run_control
         self.assertEqual(control["attemptId"], selected["routing"]["attemptId"])
-        self.assertEqual(control["fixture"]["document"], audit["input"])
+        self.assertEqual(held[0].request.identity.attempt_id, selected["routing"]["attemptId"])
+        harness, context, fixture_request = self.readonly_start.call_args.args
+        self.assertEqual(harness, audit["input"]["buddy"]["harness"])
+        self.assertEqual(context.decision_input, audit["input"])
+        expected_prompt = router_prompt(router.render_prompt(audit["input"]))
+        self.assertEqual(fixture_request.prompt, expected_prompt)
+        self.assertEqual(held[0].request.input_text, expected_prompt)
+        self.assertEqual(fixture_request.output_schema, audit["input"]["outputSchema"])
+        self.assertEqual(fixture_request.budget, audit["input"]["budget"])
         self.assertTrue(audit["inputVerification"]["unchanged"])
         self.assertTrue(audit["stopEvidence"]["shutdownConfirmed"])
-        self.assertEqual(worker.spool.pending(), [])
+        self.assertEqual(worker.pending_receipts(), [])
         self.assertTrue(self.routed(board, requiredCapabilities=["effort:high"])["duplicate"])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 1)

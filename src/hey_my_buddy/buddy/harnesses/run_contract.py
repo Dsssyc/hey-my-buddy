@@ -1,13 +1,12 @@
-"""The harness-internal run contract: frozen values, one codec, one protocol.
+"""The harness-internal run contract: frozen values and one run protocol.
 
 ADR-025 step 1-A draft (execution plan sections 3 and 5). One frozen
 :class:`RunRequest` goes in, one factual :class:`RunResult` comes out, and every
 harness implements the same :class:`HarnessRun` seam: ``run`` for one native
 run. The values are facts: unknown stays ``None``/``unknown``, an observed value
 is never filled in from a requested one, and a spawned process is never
-reported as a started model. The internal JSON uses ``formatVersion: 1`` with
-fixed key sets and the project's bounded JSON rules; packages that already have
-a canonical projection are validated against it once, at the decode boundary.
+reported as a started model. Payloads use ``formatVersion: 1`` with fixed key
+sets; packages with a canonical projection are validated at the boundary.
 The field set is a draft for the later ADR-025 steps to adjust through the
 Host; the ordinary (256 KiB) and strict (512 KiB) JSON allowed sets and read
 limits of the existing paths are untouched by this module. No role verdict,
@@ -25,7 +24,7 @@ from functools import partial
 from typing import Annotated, Any, Callable, Literal, Mapping, Optional, Protocol, runtime_checkable
 
 from ...errors import BoardError
-from ...json_codec import canonical_json, decode_bounded_frame
+from ...json_codec import canonical_json
 from ...protocol import activity as activity_protocol
 from ...protocol import tool_evidence as tool_evidence_protocol
 from ...protocol import usage as usage_protocol
@@ -70,15 +69,6 @@ SchemaStatus = Literal["valid", "invalid", "unknown"]
 GroupState = Literal["gone", "alive", "unknown"]
 ContinuationMode = Literal["native-session", "reconstructed-new-session"]
 
-#: Draft bounds of this internal format. They are new bounds for new frames; the
-#: existing per-path read limits (ordinary 256 KiB evidence, strict 512 KiB
-#: controller results) are separate and unchanged. The request bound holds a
-#: full role-assembled prompt: the board's task text allows 1 MiB
-#: (``protocol/schemas.MAX_TASK_BYTES``) and the role may add bounds of its own,
-#: plus schemas and service descriptions; the result bound holds the largest
-#: existing strict read (512 KiB) beside every bounded package.
-MAX_RUN_REQUEST_BYTES = 16 * 1024 * 1024
-MAX_RUN_RESULT_BYTES = 2 * 1024 * 1024
 #: The bounded fact-package size: it holds the old strict 512 KiB read range.
 #: The per-field and per-count bounds below (128 events, 512-char identifiers)
 #: keep a maximal legal tool-evidence package within it, so no package the old
@@ -87,9 +77,6 @@ MAX_PACKAGE_BYTES = 512 * 1024
 #: The role-assembled input text: the board's task text bound is 1 MiB and the
 #: roles add their own bounded material (hints, workspace facts, the answer
 #: schema for fast prompts), so the bound is the task bound plus that margin.
-#: The request frame bound above carries the worst-case JSON escaping of such
-#: a text (six bytes per control character) instead of truncating or rewriting
-#: a role prompt.
 MAX_INPUT_TEXT_BYTES = 2 * 1024 * 1024
 MAX_SCHEMA_BYTES = 65536
 #: The final value's raw text and its parsed form hold the old 512 KiB strict
@@ -642,34 +629,6 @@ class RunResult(InternalModel):
     evidence_refs: JsonTuple(EvidenceRef, max_items=MAX_EVIDENCE_REFS) = ()
 
 
-def encode_run_request(request: RunRequest) -> str:
-    """Canonical bounded JSON text of one run request."""
-    text = canonical_json(request.to_payload())
-    if len(text.encode()) > MAX_RUN_REQUEST_BYTES:
-        raise fail("the run request frame exceeds its byte bound", limit=MAX_RUN_REQUEST_BYTES)
-    return text
-
-
-def decode_run_request(value: str | bytes | Mapping) -> RunRequest:
-    """Validate and unfreeze one run request from its internal JSON form."""
-    return RunRequest.from_payload(
-        decode_bounded_frame(value, label="run request", maximum=MAX_RUN_REQUEST_BYTES))
-
-
-def encode_run_result(result: RunResult) -> str:
-    """Canonical bounded JSON text of one run result."""
-    text = canonical_json(result.to_payload())
-    if len(text.encode()) > MAX_RUN_RESULT_BYTES:
-        raise fail("the run result frame exceeds its byte bound", limit=MAX_RUN_RESULT_BYTES)
-    return text
-
-
-def decode_run_result(value: str | bytes | Mapping) -> RunResult:
-    """Validate and unfreeze one run result from its internal JSON form."""
-    return RunResult.from_payload(
-        decode_bounded_frame(value, label="run result", maximum=MAX_RUN_RESULT_BYTES))
-
-
 @runtime_checkable
 class HarnessRun(Protocol):
     """The one seam every harness implements (ADR-025 decision 1).
@@ -692,8 +651,7 @@ class HarnessRun(Protocol):
 __all__ = [
     "FEEDBACK_CONTINUE", "FEEDBACK_STOP",
     "FORMAT_VERSION",
-    "FrozenJson", "HARNESS_NAMES", "HarnessRun", "MAX_RUN_REQUEST_BYTES",
-    "MAX_RUN_RESULT_BYTES", "MAX_COUNT", "CheckedBuddy", "CheckedValue",
+    "FrozenJson", "HARNESS_NAMES", "HarnessRun", "MAX_COUNT", "CheckedBuddy", "CheckedValue",
     "CompletionEvidence", "ContinuationFacts", "EffectivePolicy", "EvidenceRef",
     "InterruptEvidence", "NativeIdentity", "NativeEvidence", "UnknownEvents", "PrivateStatePaths",
     "MAX_UNKNOWN_EVENT_TYPES", "MAX_UNCONFIRMED_ITEMS", "MAX_UNCONFIRMED_NAME_CHARS",
@@ -701,6 +659,5 @@ __all__ = [
     "ResumeCheckpoint", "RunBudget", "RunBuddy", "RunContinuation", "RunEnd", "RunFeedback", "RunIdentity",
     "WorkerPermission", "RunRequest", "RunResult", "RunValue", "SessionService", "StopEvidence",
     "StopLayer", "canonical_json",
-    "decode_run_request", "decode_run_result", "encode_run_request", "encode_run_result",
     "fold_unknown_events", "unknown_event_name",
 ]

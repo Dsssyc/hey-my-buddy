@@ -1,12 +1,10 @@
-"""The ADR-025 step 1-A run contract: frozen values, codec, payload packages.
+"""The ADR-025 run contract: frozen values and payload packages.
 
 Synthetic fixtures only: no harness or model is started. The Codex payload
 fixture carries exactly the field names the current controller writes, so the
 tool-evidence tests pin how much evidence an existing package honestly holds.
-The bounds of the new format are chosen to hold the old allowed sets, and the
-tests lock that: a 300k input, a 70k raw value and an empty-rooted incomplete
-tool-evidence package all pass, while the new frames refuse oversized and
-ill-typed forms explicitly.
+The bounds of the internal values hold the old allowed sets: a 300k input,
+a 70k raw value and an empty-rooted incomplete tool-evidence package pass.
 """
 from __future__ import annotations
 
@@ -20,7 +18,6 @@ from unittest import mock
 
 from pydantic import ValidationError
 
-from hey_my_buddy import json_codec
 from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.errors import BoardError
 
@@ -103,11 +100,11 @@ class NativeEvidenceContractTests(unittest.TestCase):
                 with self.subTest(field=field, blank=blank):
                     fields = {**request, "buddy": {**request["buddy"], field: blank}}
                     with self.assertRaises(BoardError):
-                        rc.decode_run_request(fields)
+                        rc.RunRequest.from_payload(fields)
             for mode in ("native-session", "reconstructed-new-session"):
                 with self.subTest(mode=mode, blank=blank):
                     with self.assertRaises(BoardError):
-                        rc.decode_run_request({**request, "continuation": {
+                        rc.RunRequest.from_payload({**request, "continuation": {
                             "mode": mode, "previousSessionId": blank}})
         configured = rc.RunBuddy(provider=" provider ", model="model", effort="off")
         self.assertEqual(configured.provider, " provider ")
@@ -119,7 +116,7 @@ class NativeEvidenceContractTests(unittest.TestCase):
         result = full_result().model_copy(update={
             "end": rc.RunEnd(status="unknown", reason_code="native-end-unread"),
             "native_evidence": evidence})
-        decoded = rc.decode_run_result(rc.encode_run_result(result))
+        decoded = rc.RunResult.from_payload(result.to_payload())
         self.assertEqual(decoded, result)
         self.assertEqual(decoded.native_evidence.to_payload(), {
             "unknownEvents": {"countsByType": {"future-event": 2}, "total": 2},
@@ -146,7 +143,7 @@ class NativeEvidenceContractTests(unittest.TestCase):
         fields = full_result().to_payload()
         for bad in malformed:
             with self.subTest(evidence=bad), self.assertRaises(BoardError):
-                rc.decode_run_result({**fields, "nativeEvidence": bad})
+                rc.RunResult.from_payload({**fields, "nativeEvidence": bad})
         maximum = rc.NativeEvidence(unknown_events={
             "countsByType": {str(i): rc.MAX_COUNT for i in range(64)}, "total": rc.MAX_COUNT},
             unconfirmed=["a" * 64] * 16)
@@ -162,7 +159,7 @@ class CodecRoundtripTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.zcode import native_run as zcode
 
         request = edited(full_request(Path("/private/tmp")), tool_scope="full")
-        self.assertEqual(rc.decode_run_request(rc.encode_run_request(request)).tool_scope, "full")
+        self.assertEqual(rc.RunRequest.from_payload(request.to_payload()).tool_scope, "full")
         for name, module in (("claude", claude), ("codex", codex), ("dsh", dsh), ("zcode", zcode)):
             with self.subTest(harness=name), mock.patch("subprocess.Popen",
                                                         side_effect=AssertionError("native launch")) as spawn:
@@ -177,7 +174,7 @@ class CodecRoundtripTests(unittest.TestCase):
     def test_worker_permission_roundtrips_and_keeps_native_scope_consistent(self):
         permission = rc.WorkerPermission(level="read", tool_scope="write", enforcement="convention")
         request = edited(full_request(Path("/private/tmp")), tool_scope="write", worker_permission=permission)
-        self.assertEqual(rc.decode_run_request(rc.encode_run_request(request)).worker_permission, permission)
+        self.assertEqual(rc.RunRequest.from_payload(request.to_payload()).worker_permission, permission)
         with self.assertRaises(BoardError):
             edited(request, tool_scope="read")
 
@@ -227,56 +224,41 @@ class CodecRoundtripTests(unittest.TestCase):
 
     def test_native_default_and_explicit_restrictions_stay_distinct_on_the_wire(self):
         request = full_request(Path("/private/tmp"))
-        self.assertIsNone(rc.decode_run_request(rc.encode_run_request(request)).network_allowed_domains)
-        restricted = rc.decode_run_request(request.to_payload() | {
+        self.assertIsNone(rc.RunRequest.from_payload(request.to_payload()).network_allowed_domains)
+        restricted = rc.RunRequest.from_payload(request.to_payload() | {
             "networkAllowedDomains": [], "additionalDeniedTools": ["mcp__*", "Agent"],
         })
-        again = rc.decode_run_request(rc.encode_run_request(restricted))
+        again = rc.RunRequest.from_payload(restricted.to_payload())
         self.assertEqual(again.network_allowed_domains, ())
         self.assertEqual(again.additional_denied_tools, ("mcp__*", "Agent"))
         for fields in ({"networkAllowedDomains": [False]},
                        {"additionalDeniedTools": [1]},
                        {"additionalDeniedTools": "Agent"}):
             with self.subTest(fields=fields), self.assertRaises(BoardError):
-                rc.decode_run_request(request.to_payload() | fields)
+                rc.RunRequest.from_payload(request.to_payload() | fields)
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-run-contract-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
-    def test_a_full_request_and_result_roundtrip_through_json(self):
+    def test_a_full_request_and_result_roundtrip_through_payloads(self):
         request = full_request(self.root)
-        for form in (rc.encode_run_request(request),
-                     rc.encode_run_request(request).encode(),
-                     request.to_payload()):
-            self.assertEqual(rc.decode_run_request(form), request)
+        self.assertEqual(rc.RunRequest.from_payload(request.to_payload()), request)
         result = full_result()
-        for form in (rc.encode_run_result(result),
-                     rc.encode_run_result(result).encode(),
-                     result.to_payload()):
-            self.assertEqual(rc.decode_run_result(form), result)
+        self.assertEqual(rc.RunResult.from_payload(result.to_payload()), result)
 
     def test_the_format_version_is_the_exact_integer(self):
-        text = rc.encode_run_request(full_request(self.root))
+        text = json.dumps(full_request(self.root).to_payload())
         for wrong in ("true", "1.0"):
             mutated = json.loads(text)
             mutated["formatVersion"] = json.loads(wrong)
             with self.assertRaises(BoardError, msg=wrong):
-                rc.decode_run_request(mutated)
+                rc.RunRequest.from_payload(mutated)
         result_payload = full_result().to_payload()
         result_payload["formatVersion"] = True
         with self.assertRaises(BoardError):
-            rc.decode_run_result(result_payload)
-
-    def test_the_frames_refuse_strict_json_violations(self):
-        text = rc.encode_run_request(full_request(self.root))
-        with self.assertRaises(BoardError):
-            rc.decode_run_request(text.replace('"off"', '"off", "effort": "off"'))
-        with self.assertRaises(BoardError):
-            rc.decode_run_request(text.replace('"off"', 'NaN'))
-        with self.assertRaises(BoardError):
-            rc.decode_run_request(b"\xff\xfe not utf-8")
+            rc.RunResult.from_payload(result_payload)
 
     def test_unknown_stays_unknown_in_a_minimal_result(self):
         result = rc.RunResult(identity=identity(), harness="codex", end=rc.RunEnd(status="cancelled"))
@@ -286,13 +268,13 @@ class CodecRoundtripTests(unittest.TestCase):
         self.assertIsNone(result.native_identity)
         self.assertEqual(result.stop_evidence.native.group_state, "unknown")
         self.assertIsNone(result.stop_evidence.interrupt.requested)
-        back = rc.decode_run_result(rc.encode_run_result(result))
+        back = rc.RunResult.from_payload(result.to_payload())
         self.assertIsNone(back.model_started)
         self.assertIsNone(back.harness_version)
         # An absent optional text is None/JSON null end to end; the legacy
         # receipts' literal "unknown" spelling is a role projection, not a
         # wire form of this format (UnknownableText is gone).
-        self.assertIn('"harnessVersion":null', rc.encode_run_result(result))
+        self.assertIsNone(result.to_payload()["harnessVersion"])
 
     def test_a_decoded_requested_block_roundtrips_without_an_observed_key(self):
         # The requested block survives decode unchanged; the legacy receipts'
@@ -303,11 +285,11 @@ class CodecRoundtripTests(unittest.TestCase):
                               buddy=rc.ResultBuddy(requested=request.buddy))
         self.assertNotIn("observed", result.buddy.to_payload())
         self.assertEqual(result.buddy.checked, rc.CheckedBuddy())
-        decoded = rc.decode_run_result(result.to_payload())
+        decoded = rc.RunResult.from_payload(result.to_payload())
         self.assertEqual(decoded.buddy.requested, request.buddy)
         self.assertEqual(decoded.buddy.checked, rc.CheckedBuddy())
         with self.assertRaises(BoardError, msg="observed"):
-            rc.decode_run_result({**result.to_payload(),
+            rc.RunResult.from_payload({**result.to_payload(),
                                   "buddy": {**result.buddy.to_payload(),
                                                     "observed": {"model": "fixture-model"}}})
 
@@ -321,28 +303,28 @@ class CodecRoundtripTests(unittest.TestCase):
                 identity=identity(), harness="codex", end=end,
                 stop_evidence=rc.StopEvidence(native=layer,
                                               interrupt=rc.InterruptEvidence()))
-            decoded = rc.decode_run_result(rc.encode_run_result(result))
+            decoded = rc.RunResult.from_payload(result.to_payload())
             self.assertEqual(decoded.end.native_exit_code, end.native_exit_code)
         with self.assertRaises(BoardError):
             rc.RunEnd(status="error", native_exit_code=2**33)
 
     def test_the_result_frame_enforces_its_fixed_key_set(self):
         payload = full_result().to_payload()
-        self.assertEqual(rc.decode_run_result(payload).identity, identity())
+        self.assertEqual(rc.RunResult.from_payload(payload).identity, identity())
         extra = dict(payload)
         extra["role"] = "worker"
         with self.assertRaises(BoardError):
-            rc.decode_run_result(extra)
+            rc.RunResult.from_payload(extra)
         missing = {key: value for key, value in payload.items() if key != "end"}
         with self.assertRaises(BoardError):
-            rc.decode_run_result(missing)
+            rc.RunResult.from_payload(missing)
         for broken in (None, "frame", [], 7):
             with self.assertRaises(BoardError, msg=repr(broken)):
-                rc.decode_run_result(broken)
+                rc.RunResult.from_payload(broken)
         wrong_version = dict(payload)
         wrong_version["formatVersion"] = 1.0
         with self.assertRaises(BoardError):
-            rc.decode_run_result(wrong_version)
+            rc.RunResult.from_payload(wrong_version)
 
     def test_every_nesting_level_keeps_the_closed_key_set(self):
         # Ordinary pydantic semantics since the step 2-B simplification: an
@@ -363,20 +345,20 @@ class CodecRoundtripTests(unittest.TestCase):
         # default-valued field may be omitted, a required field may not.
         for path in ("identity.turnId", "identity.inputSha256", "sessionServices.0.toolNames",
                      "captureEvidence", "continuation"):
-            decoded = rc.decode_run_request(without(json.loads(json.dumps(request)), path))
+            decoded = rc.RunRequest.from_payload(without(json.loads(json.dumps(request)), path))
             self.assertIsInstance(decoded, rc.RunRequest, path)
         for path in ("identity.taskId", "budget.timeoutSeconds", "outputSchema"):
             with self.assertRaises(BoardError, msg=path):
-                rc.decode_run_request(without(json.loads(json.dumps(request)), path))
+                rc.RunRequest.from_payload(without(json.loads(json.dumps(request)), path))
         result = full_result().to_payload()
         for path in ("stopEvidence.native.groupState", "buddy.checked.model",
                      "end.message", "completionEvidence.streamEnd"):
             self.assertIsInstance(
-                rc.decode_run_result(without(json.loads(json.dumps(result)), path)), rc.RunResult, path)
+                rc.RunResult.from_payload(without(json.loads(json.dumps(result)), path)), rc.RunResult, path)
         with self.assertRaises(BoardError):
-            rc.decode_run_request({**request, "identity": {**request["identity"], "extra": 1}})
+            rc.RunRequest.from_payload({**request, "identity": {**request["identity"], "extra": 1}})
         with self.assertRaises(BoardError):
-            rc.decode_run_result({**result, "end": {"status": "ok", "reasonCode": None,
+            rc.RunResult.from_payload({**result, "end": {"status": "ok", "reasonCode": None,
                                                     "nativeExitCode": 0, "extra": 1}})
         # The subset rule of the native identity keeps working: one key is
         # enough, an unknown key and an empty object are not.
@@ -389,7 +371,7 @@ class CodecRoundtripTests(unittest.TestCase):
         # The role-assembled input follows the board's 1 MiB task text bound, so
         # a 300,000-character non-turn prompt is a legal request.
         request = edited(full_request(self.root), input_text="x" * 300000)
-        decoded = rc.decode_run_request(rc.encode_run_request(request))
+        decoded = rc.RunRequest.from_payload(request.to_payload())
         self.assertEqual(len(decoded.input_text), 300000)
         with self.assertRaises(BoardError):
             edited(request, input_text="x" * (rc.MAX_INPUT_TEXT_BYTES + 1))
@@ -416,13 +398,11 @@ class CodecRoundtripTests(unittest.TestCase):
         self.assertGreater(len(json.dumps(package).encode()), 100000)
         payload = full_result().to_payload()
         payload["toolEvidence"] = package
-        self.assertEqual(len(rc.decode_run_result(payload).tool_evidence.value["events"]), 128)
-        # A Mapping frame is bounded exactly like the equivalent text frame.
+        self.assertEqual(len(rc.RunResult.from_payload(payload).tool_evidence.value["events"]), 128)
         payload = full_result().to_payload()
         payload["evidenceRefs"] = [{"kind": "blob", "location": "x" * 900000}]
         with self.assertRaises(BoardError):
-            rc.decode_run_result(payload)
-        self.assertGreater(len(json.dumps(payload)), rc.MAX_RUN_RESULT_BYTES - 8 * rc.MAX_RUN_REQUEST_BYTES)
+            rc.RunResult.from_payload(payload)
 
     def test_windows_absolute_paths_and_32bit_exit_codes_are_existing_values(self):
         paths = rc.PrivateStatePaths(invocation_root="C:\\private\\inv", native_root="C:/private/native")
@@ -431,69 +411,6 @@ class CodecRoundtripTests(unittest.TestCase):
         self.assertTrue(unc.invocation_root.startswith("\\\\"))
         with self.assertRaises(BoardError):
             rc.PrivateStatePaths(invocation_root="relative/inv", native_root="/tmp/native")
-
-
-class WholeFrameGateTests(unittest.TestCase):
-    """The whole-frame bound of the run request and result frames, refused
-    before the parser ever runs.
-
-    Each padded frame carries exactly the payload of a frame one padding
-    shorter that decodes fine — every field stays within its own bound and
-    only the raw JSON frame's byte count is invalid. A refusal message alone
-    proves nothing about the order: a decoder that parsed first and bounded
-    afterwards would refuse the same frames with the same message, so the
-    tests spy on the root package's real :func:`decode_strict_json` call
-    point — an over-limit refusal must reach it zero times, and the legal
-    control must be parsed by it exactly once. A legal canonical request
-    frame can never reach the 16 MiB bound (the worst legal escaping — a
-    2 MiB input of control characters at six bytes each, beside the bounded
-    schemas, services and references — stays below 14 MiB), so only
-    non-canonical padding or oversized raw transport bytes exercise the
-    bound there.
-    """
-
-    def padded_over(self, text: str, maximum: int) -> str:
-        """The same frame with one whitespace run between its first tokens."""
-        padding = maximum - len(text.encode()) + 1024
-        self.assertGreater(padding, 0)
-        return "{" + " " * padding + text[1:]
-
-    def assert_refused_before_parsing(self, decode, frame: object, parser, label: str):
-        with self.assertRaises(BoardError) as raised:
-            decode(frame)
-        self.assertIn("frame", raised.exception.message, label)
-        self.assertIn("byte bound", raised.exception.message, label)
-        parser.assert_not_called()
-
-    def test_an_over_limit_request_frame_is_refused_before_parsing(self):
-        request = full_request(Path("/tmp"))
-        text = rc.encode_run_request(request)
-        self.assertLess(len(text.encode()), rc.MAX_RUN_REQUEST_BYTES)
-        padded = self.padded_over(text, rc.MAX_RUN_REQUEST_BYTES)
-        self.assertGreater(len(padded.encode()), rc.MAX_RUN_REQUEST_BYTES)
-        with mock.patch.object(json_codec, "decode_strict_json",
-                               wraps=json_codec.decode_strict_json) as parser:
-            self.assert_refused_before_parsing(rc.decode_run_request, padded, parser, "text form")
-            # The same raw transport bytes hit the bound before any parsing too.
-            self.assert_refused_before_parsing(rc.decode_run_request, padded.encode(), parser,
-                                               "bytes form")
-            # Without the padding the very same payload is one legal frame.
-            self.assertEqual(rc.decode_run_request(text), request)
-            parser.assert_called_once_with(text)
-
-    def test_an_over_limit_result_frame_is_refused_before_parsing(self):
-        result = full_result()
-        text = rc.encode_run_result(result)
-        self.assertLess(len(text.encode()), rc.MAX_RUN_RESULT_BYTES)
-        padded = self.padded_over(text, rc.MAX_RUN_RESULT_BYTES)
-        self.assertGreater(len(padded.encode()), rc.MAX_RUN_RESULT_BYTES)
-        with mock.patch.object(json_codec, "decode_strict_json",
-                               wraps=json_codec.decode_strict_json) as parser:
-            self.assert_refused_before_parsing(rc.decode_run_result, padded, parser, "text form")
-            self.assert_refused_before_parsing(rc.decode_run_result, padded.encode(), parser,
-                                               "bytes form")
-            self.assertEqual(rc.decode_run_result(text), result)
-            parser.assert_called_once_with(text)
 
 
 class StrictScalarTypeTests(unittest.TestCase):
@@ -514,7 +431,7 @@ class StrictScalarTypeTests(unittest.TestCase):
         with self.assertRaises(BoardError, msg="budget.timeout_seconds"):
             edited(request, budget=rc.RunBudget(timeout_seconds=0))
         unbounded = edited(request, budget=rc.RunBudget(timeout_seconds=None))
-        self.assertIsNone(rc.decode_run_request(rc.encode_run_request(unbounded)).budget.timeout_seconds)
+        self.assertIsNone(rc.RunRequest.from_payload(unbounded.to_payload()).budget.timeout_seconds)
         with self.assertRaises(BoardError, msg="identity.generation"):
             rc.RunIdentity(task_id="task", attempt_id="attempt", generation=True,
                            invocation_id="invocation")
@@ -525,23 +442,23 @@ class StrictScalarTypeTests(unittest.TestCase):
         payload = full_request(Path("/tmp")).to_payload()
         payload["captureEvidence"] = 1
         with self.assertRaises(BoardError, msg="captureEvidence"):
-            rc.decode_run_request(payload)
+            rc.RunRequest.from_payload(payload)
         payload = full_request(Path("/tmp")).to_payload()
         payload["budget"]["timeoutSeconds"] = "60"
         with self.assertRaises(BoardError, msg="timeoutSeconds"):
-            rc.decode_run_request(payload)
+            rc.RunRequest.from_payload(payload)
         payload = full_request(Path("/tmp")).to_payload()
         payload["identity"]["generation"] = True
         with self.assertRaises(BoardError, msg="generation"):
-            rc.decode_run_request(payload)
+            rc.RunRequest.from_payload(payload)
         result_payload = full_result().to_payload()
         result_payload["modelStarted"] = 1
         with self.assertRaises(BoardError, msg="modelStarted"):
-            rc.decode_run_result(result_payload)
+            rc.RunResult.from_payload(result_payload)
         result_payload = full_result().to_payload()
         result_payload["end"]["nativeExitCode"] = "0"
         with self.assertRaises(BoardError, msg="nativeExitCode"):
-            rc.decode_run_result(result_payload)
+            rc.RunResult.from_payload(result_payload)
 
 
 class FreezingTests(unittest.TestCase):
@@ -616,11 +533,11 @@ class NonEmptyInputTests(unittest.TestCase):
         payload = full_request(Path("/tmp")).to_payload()
         payload["inputText"] = ""
         with self.assertRaises(BoardError):
-            rc.decode_run_request(payload)
+            rc.RunRequest.from_payload(payload)
 
     def test_a_nul_bearing_input_still_roundtrips(self):
         request = self.request(input_text="line one\x00line two")
-        back = rc.decode_run_request(rc.encode_run_request(request))
+        back = rc.RunRequest.from_payload(request.to_payload())
         self.assertEqual(back.input_text, "line one\x00line two")
 
     def test_a_correction_with_an_empty_input_is_refused_on_both_entries(self):
@@ -650,7 +567,7 @@ class NonEmptyInputTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             rc.RunResult(identity=identity(), harness="zcode",
                          end=rc.RunEnd(status="ok"), harness_version="v" * 81)
-        self.assertIn("v" * 80, rc.encode_run_result(result))
+        self.assertIn("v" * 80, json.dumps(result.to_payload()))
 
 
 class RunFeedbackTests(unittest.TestCase):
@@ -686,13 +603,13 @@ class InterfaceSurfaceTests(unittest.TestCase):
             mutated = dict(payload)
             mutated[forbidden] = "anything"
             with self.assertRaises(BoardError, msg=forbidden):
-                rc.decode_run_request(mutated)
+                rc.RunRequest.from_payload(mutated)
 
     def test_a_foreign_usage_package_is_refused_not_dropped(self):
         payload = full_result().to_payload()
         payload["usage"] = {"scope": "session", "inputTokens": 1}
         with self.assertRaises(BoardError):
-            rc.decode_run_result(payload)
+            rc.RunResult.from_payload(payload)
 
     def test_the_harness_run_protocol_declares_run(self):
         class Stub:
@@ -705,7 +622,7 @@ class InterfaceSurfaceTests(unittest.TestCase):
         package = PAYLOADS["codex"]["payloads"]["fastSuccess"]["toolEvidence"]
         result_payload = full_result().to_payload()
         result_payload["toolEvidence"] = package
-        self.assertEqual(rc.decode_run_result(result_payload).tool_evidence.value, package)
+        self.assertEqual(rc.RunResult.from_payload(result_payload).tool_evidence.value, package)
         # The existing collector publishes failure and unknown packages before
         # any native root was observed; the structure carries them, and whether
         # such a package can pass stays the role's and the board's judgment.
@@ -714,7 +631,7 @@ class InterfaceSurfaceTests(unittest.TestCase):
         incomplete["streamComplete"] = False
         payload = full_result().to_payload()
         payload["toolEvidence"] = incomplete
-        decoded = rc.decode_run_result(payload)
+        decoded = rc.RunResult.from_payload(payload)
         self.assertEqual(decoded.tool_evidence.value["nativeIdentity"], [])
         self.assertFalse(decoded.tool_evidence.value["streamComplete"])
         # The projection's own incomplete event facts — an empty identity and
@@ -726,7 +643,7 @@ class InterfaceSurfaceTests(unittest.TestCase):
                                   "category": "other", "phase": None})
         payload = full_result().to_payload()
         payload["toolEvidence"] = carried
-        decoded = rc.decode_run_result(payload)
+        decoded = rc.RunResult.from_payload(payload)
         self.assertIsNone(decoded.tool_evidence.value["events"][-1]["callId"])
         for mutation in ({"version": 2}, {"events": [{"nativeIdentity": {}, "callId": "c",
                                                       "toolName": "Read", "category": "navigate",
@@ -738,7 +655,7 @@ class InterfaceSurfaceTests(unittest.TestCase):
             payload = full_result().to_payload()
             payload["toolEvidence"] = broken
             with self.assertRaises(BoardError):
-                rc.decode_run_result(payload)
+                rc.RunResult.from_payload(payload)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.dsh import native_run
 from hey_my_buddy.buddy.harnesses.registry import adapter, require_permission
-from hey_my_buddy.buddy.harnesses.run_contract import RunContinuation, decode_run_result, encode_run_result
+from hey_my_buddy.buddy.harnesses.run_contract import RunContinuation, RunResult
 from hey_my_buddy.buddy.roles.run_observers import worker_observer
 from hey_my_buddy.errors import BoardError
 
@@ -28,7 +28,7 @@ class WorkerPermissionTests(NativeRunCase):
                 self.assertEqual(result.value.parsed.value["disposition"], "completed")
                 self.assertIsNone(result.value.raw)
                 self.assertEqual(result.effective_policy.tools.requested.value, {"permissionMode": mode})
-                saved = decode_run_result(encode_run_result(result))
+                saved = RunResult.from_payload(result.to_payload())
                 self.assertEqual(saved.effective_policy.tools.requested.value, {"permissionMode": mode})
                 self.assertEqual(native_run.native_evidence(result)["nativePolicy"], {"permissionMode": mode})
                 observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]

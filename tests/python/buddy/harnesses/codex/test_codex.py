@@ -66,7 +66,7 @@ class CodexAdapterTests(unittest.TestCase):
 
     def execute(self, context):
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
         return self.adapter.collect(handle, context)
 
@@ -102,14 +102,14 @@ class CodexAdapterTests(unittest.TestCase):
                                             {**budget(), **(budget_options or {})}, capture_evidence=capture)
         handle = start_router_preparation(ReviewPreparation("codex", CodexAdapter(), request, context,
                                                             (None, self.cwd, "fixture-digest")))
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(30), "Codex fixture controller did not exit")
         return collect(handle), context
 
     def test_completed_native_turn_has_structured_provenance_and_preserved_final_activity(self):
         context = self.context()
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
@@ -131,8 +131,8 @@ class CodexAdapterTests(unittest.TestCase):
         # claimed for the live channel (live observation is the holder's
         # C-Two binding, exercised by the zcode live activity suite).
         self.assertFalse((context.directory / "activity.json").exists())
-        from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result
-        frame = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes().strip())
+        from hey_my_buddy.buddy.harnesses.run_contract import RunResult
+        frame = handle.result
         self.assertEqual(frame.identity.attempt_id, context.attempt_id)
         self.assertIsNotNone(frame.activity, "the run result carries no preserved activity")
         self.assertEqual(frame.identity.task_id, "micro-task-1")
@@ -376,7 +376,7 @@ class CodexAdapterTests(unittest.TestCase):
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(stat.S_IMODE(context.credential_file().stat().st_mode), 0o600)
-        self.assertEqual(context.environment["HMB_AGENT_CREDENTIAL_FILE"], str(context.credential_file()))
+        self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", context.environment)
         self.assertNotIn("private-attempt-secret", json.dumps(outcome.to_report()))
 
     def test_invalid_final_or_failed_native_turn_cannot_be_imported(self):
@@ -415,7 +415,7 @@ class CodexAdapterTests(unittest.TestCase):
     def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):
         context = self.context("ok", timeout=None)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertEqual(handle.deadline, math.inf)
         self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
         outcome = self.adapter.collect(handle, context)
@@ -426,7 +426,7 @@ class CodexAdapterTests(unittest.TestCase):
     def test_absent_budget_still_honors_explicit_user_cancellation(self):
         context = self.context("hang", timeout=None)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertEqual(handle.deadline, math.inf)
         started = self.wait_native_turn_start()
         self.assertEqual(set(started), {"threadId", "turnId"})
@@ -442,14 +442,14 @@ class CodexAdapterTests(unittest.TestCase):
     def test_positive_timeout_keeps_a_finite_stamped_deadline(self):
         context = self.context(timeout=8)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertGreater(handle.deadline, time.monotonic())
         self.assertFalse(math.isinf(handle.deadline))
 
     def test_user_cancel_interrupts_the_owned_native_turn(self):
         context = self.context("hang", timeout=12)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.wait_native_turn_start()
         self.adapter.cancel(handle, grace_seconds=8)
         self.assertIsNotNone(handle.wait(10))
@@ -461,7 +461,7 @@ class CodexAdapterTests(unittest.TestCase):
     def test_host_wrap_up_resumes_same_native_session_for_structured_summary(self):
         context = self.context("wrap-up", timeout=None)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         started = self.wait_native_turn_start()
         controller.worker_stop(self.adapter, handle, stop_initiator="host",
                                grace_deadline=time.monotonic() + 10)
@@ -539,7 +539,7 @@ class CodexAdapterTests(unittest.TestCase):
         request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema(['legal']), budget())
         handle = start_router_preparation(ReviewPreparation("codex", CodexAdapter(), request, context,
                                                             (None, self.cwd, "fixture-digest")))
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(20))
         result = collect(handle)
         self.assertEqual(result.status, 'ok', result.result)

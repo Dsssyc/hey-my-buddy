@@ -33,7 +33,7 @@ class SharedTurnIOTests(ZcodeFixtureCase):
         self.assertEqual(hashlib.sha256(context.turn_input_file().read_bytes()).hexdigest(), turn_io.input_hash(context.turn_input))
         self.assertNotIn(context.agent_credential, context.turn_input_file().read_text())
         self.assertEqual(context.credential_file().stat().st_mode & 0o777, 0o600)
-        self.assertEqual(context.environment["HMB_AGENT_CREDENTIAL_FILE"], str(context.credential_file()))
+        self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", context.environment)
         self.assertEqual(json.loads(context.credential_file().read_text())["stateDir"],
                          context.environment["HMB_STATE_DIR"])
         from hey_my_buddy.private_dirs import context_root

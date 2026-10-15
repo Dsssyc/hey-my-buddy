@@ -18,7 +18,7 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses import run_contract as rc
-from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request
+from hey_my_buddy.buddy.harnesses.run_contract import RunRequest
 from hey_my_buddy.buddy.roles import run_execution
 from hey_my_buddy.buddy.roles.turn_io import private_json
 from hey_my_buddy.errors import BoardError
@@ -166,7 +166,7 @@ class CodexModelCheckProjectionTests(unittest.TestCase):
     def _request(self, tool_scope: str) -> rc.RunRequest:
         fields = full_request(Path(self.base)).to_payload()
         fields.update(harness="codex", toolScope=tool_scope, sessionServices=[])
-        return decode_run_request(fields)
+        return RunRequest.from_payload(fields)
 
     def _result(self, request: rc.RunRequest, *, with_ref: bool, status: str = "error") -> rc.RunResult:
         refs = []

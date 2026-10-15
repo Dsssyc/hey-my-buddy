@@ -17,6 +17,7 @@ import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 PYTHON_ROOT = (Path(__file__).resolve().parents[2] / "src")
 DELEGATE_ROOT = PYTHON_ROOT.parent
@@ -72,6 +73,24 @@ def write_catalog_fixture(directory: Path, payload: dict | None = None) -> Path:
     path.write_text(json.dumps(payload or FIXTURE_CATALOG))
     os.chmod(path, 0o600)
     return path
+
+
+@contextmanager
+def run_claim_in_process():
+    """Drive a claimed attempt against an in-process board without starting an RPC-only child."""
+    from hey_my_buddy.buddy.runtime.execution import Execution
+    from hey_my_buddy.buddy.runtime.worker import Worker
+
+    active = []
+
+    def execute(worker, claim):
+        execution = Execution(claim, worker.state_dir, worker.worker_id, worker._nonce(),
+                              client=worker.client, lease_seconds=worker.lease_seconds, log=worker._log)
+        active.append(execution)
+        execution.run()
+
+    with patch.object(Worker, "execute", execute):
+        yield active
 
 
 class FakeClock:

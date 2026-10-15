@@ -3,15 +3,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import json
-import threading
 import uuid
+from contextlib import nullcontext
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.claude import native_run
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS
-from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request, decode_run_result
-from hey_my_buddy.buddy.roles import run_controller, run_execution
+from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
+from hey_my_buddy.buddy.roles import inline_run, run_execution
 from hey_my_buddy.buddy.roles.run_observers import ReviewObserver
 from buddy.harnesses.claude.test_native_run import BUDDY, NativeRunCase, READ_SCHEMA, STREAM_FIXTURE
 
@@ -26,16 +25,19 @@ class RegisteredReviewTests(NativeRunCase):
             "invocationId": uuid.uuid4().hex, "privateRoot": str(root),
             "directory": str(root),
             "nativeRoot": str(root / "native"), "cwd": str(self.cwd), "timeoutSeconds": 10,
-            "requestFile": str(root / "request.json"), "verdictFile": str(root / "verdict.json"),
+            "executionLiveFile": str(root / "execution-live.json"),
+            "live": {"instanceId": "a" * 64, "token": "b" * 64},
             "canCorrect": False,
             "readOnlyRequest": {"prompt": "Choose", "outputSchema": READ_SCHEMA,
                                 "budget": {"toolCalls": tool_budget}, "captureEvidence": False},
         }
-        with mock.patch.dict(RUN_SEAMS, {"claude": native_run}):
-            frame, code = run_controller.execute(control, threading.Event(), state_dir=Path(os.environ["HMB_STATE_DIR"]))
-            result = decode_run_result(frame)
-            request = decode_run_request((root / "request.json").read_bytes())
-            verdict = json.loads((root / "verdict.json").read_bytes())
+        identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1,
+                               invocation_id=control["invocationId"])
+        handle = run_execution.InlineRunHandle(control, identity, grace_seconds=10)
+        with mock.patch.dict(RUN_SEAMS, {"claude": native_run}), \
+                mock.patch.object(inline_run, "_inline_live", return_value=nullcontext(None)):
+            result, request, verdict, code = inline_run.execute(
+                control, handle, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             payload = run_execution._review_result(result, request, verdict)
         return result, request, payload, code
 

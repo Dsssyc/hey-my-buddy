@@ -35,18 +35,17 @@ class PrivateDirectoryTests(BoardTestCase):
             private_dirs.remove_tree(alias, keep=frozenset({alias / 'attempts' / 'failed'}))
         self.assertTrue(failed.exists())
 
-    def test_role_control_cleanup_matches_exact_private_filenames(self):
+    def test_execution_start_cleanup_matches_exact_private_filename(self):
         state = self.directory.resolve()
         root = private_dirs.ensure_private_dir(private_dirs.attempt_root(state, 'zcode', 'microTask', 'attempt'))
-        names = ('role-run-control.json', 'role-run-request.json', 'role-run-verdict.json')
-        for name in names:
-            (root / name).write_text('private')
-        (root / 'role-run-results.json').write_text('retain unknown filename')
+        (root / 'execution-start.json').write_text('private')
+        (root / 'execution-live.json').write_text('private endpoint token')
+        (root / 'execution-started.json').write_text('retain unknown filename')
         removed = private_dirs.cleanup_attempt_credentials(state, 'zcode', 'microTask', 'attempt')
-        self.assertEqual(removed['count'], len(names))
-        for name in names:
-            self.assertFalse((root / name).exists())
-        self.assertEqual((root / 'role-run-results.json').read_text(), 'retain unknown filename')
+        self.assertEqual(removed['count'], 2)
+        self.assertFalse((root / 'execution-start.json').exists())
+        self.assertFalse((root / 'execution-live.json').exists())
+        self.assertEqual((root / 'execution-started.json').read_text(), 'retain unknown filename')
 
     def test_explicit_state_and_reparse_guard(self):
         context = SimpleNamespace(environment={'HMB_STATE_DIR': str(self.directory.resolve())},
@@ -109,6 +108,7 @@ class PrivateDirectoryTests(BoardTestCase):
         home = private_dirs.ensure_private_dir(root / 'native/codex-home')
         (home / 'auth.json').symlink_to(outside)
         (root / 'agent-credential.json').write_text('secret')
+        (root / 'execution-start.json').write_text('private startup claim and nonce')
         (root / 'diagnostic.json').write_text('retained')
         fallback = Path(tempfile.gettempdir()).resolve() / 'hey-my-buddy-inquiry' / 'fixture-attempt'
         fallback.mkdir(parents=True, exist_ok=True)
@@ -118,6 +118,7 @@ class PrivateDirectoryTests(BoardTestCase):
         self.assertGreaterEqual(result['count'], 4)
         self.assertFalse(fallback.exists())
         self.assertFalse((home / 'auth.json').is_symlink())
+        self.assertFalse((root / 'execution-start.json').exists())
         self.assertEqual(outside.read_text(), 'secret')
         self.assertEqual((root / 'diagnostic.json').read_text(), 'retained')
         unrelated = state / 'unrelated' / 'fixture-attempt'

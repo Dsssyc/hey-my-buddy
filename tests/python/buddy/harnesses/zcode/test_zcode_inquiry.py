@@ -98,6 +98,12 @@ class ZcodeFixtureCase(unittest.TestCase):
     def own_handle(self, handle):
         return self._fixture_type.own_handle(self, handle)
 
+    def release(self, context):
+        return self._fixture_type.release(self, context)
+
+    def native_log(self, context, name):
+        return self._fixture_type.native_log(self, context, name)
+
 
 class BridgeHarness:
     """An activated owner with its private journal and optional typed endpoint."""
@@ -1013,13 +1019,20 @@ class LiveActivityTests(ZcodeFixtureCase):
     """Actual controller/native fixture publication through the held C-Two endpoint."""
 
     def activity_channel(self, handle):
-        from hey_my_buddy.buddy.roles.live import handle_live_binding
+        from hey_my_buddy.buddy.harnesses.registry import live_binding
+        from hey_my_buddy.protocol.contracts import HarnessRunLive
+
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            _, channel = handle_live_binding(handle, state_dir=Path(self.environment["HMB_STATE_DIR"]))
-            if channel is not None:
-                self.assertEqual(channel._state_dir, Path(self.environment["HMB_STATE_DIR"]).resolve(),
-                                 "the role channel must use the fixture's private state root")
+            endpoint = handle.live_endpoint
+            if endpoint is not None:
+                descriptor = endpoint._descriptor
+                channel = live_binding(handle.role_run_control["harness"])(
+                    endpoint.identity, HarnessRunLive, name=descriptor.name,
+                    address=descriptor.address, instance_id=descriptor.instance_id,
+                    token=handle.role_run_control["live"]["token"],
+                    state_dir=Path(self.environment["HMB_STATE_DIR"]))
+                self.addCleanup(channel.close, reason="fixture-complete")
                 return channel
             time.sleep(0.05)
         self.fail("the held controller endpoint never became ready")
@@ -1034,7 +1047,7 @@ class LiveActivityTests(ZcodeFixtureCase):
         self.fail("no native streaming activity was published")
 
     def release_turn(self, context):
-        (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
+        self.release(context)
 
     def test_running_same_phase_native_events_refresh_the_published_observation(self):
         context = self.context("live-activity", timeout=30)
@@ -1107,7 +1120,7 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         context = self.context("attention", timeout=30)
         _, outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        responses = json.loads((context_root(context, "zcode") / "native-logs" / "interaction-responses.json").read_text())
+        responses = json.loads(self.native_log(context, "interaction-responses.json"))
         self.assertEqual(responses["permission"]["result"]["decision"], "deny")
         self.assertEqual(responses["userInput"]["result"]["action"], "decline")
         self.assertEqual(responses["unknown"]["error"]["code"], -32601)
@@ -1130,11 +1143,11 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
 
     def test_the_bridge_config_and_prompt_wire_the_cooperative_channel(self):
         context = self.context(timeout=20)
-        _, outcome = self.execute(context)
+        handle, outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        tree = json.loads((context_root(context, "zcode") / "finish-bridge.json").read_text())
+        tree = json.loads((Path(handle.request.private_state.invocation_root) / "finish-bridge.json").read_text())
         self.assertIn("attentionPath", tree)
-        control = json.loads((context_root(context, "zcode") / "role-run-control.json").read_text())
+        control = handle.role_run_control
         self.assertEqual(tree["inquiryJournalPath"], control["inquiry"]["resultsPath"])
         self.assertEqual(control["inquiry"]["resultsPath"], str(context.directory / "inquiry.results.jsonl"))
         self.assertEqual(tree["identity"], {"taskId": "micro-task-1", "attemptId": context.attempt_id,

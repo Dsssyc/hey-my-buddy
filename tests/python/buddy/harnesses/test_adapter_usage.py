@@ -65,7 +65,7 @@ class CodexUsageContractTests(unittest.TestCase):
 
     def execute(self, context: ExecutionContext):
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
         return self.adapter.collect(handle, context)
 
