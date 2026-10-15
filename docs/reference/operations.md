@@ -239,7 +239,7 @@ All authoritative state is local SQLite under `HMB_STATE_DIR` (default `~/.local
 | `HMB_NODE` | unset | development-only Node.js override for a ZCode JavaScript entry file; passed through only with `HMB_DEV_SOURCE=1` |
 | `HMB_ZCODE_CLI` | unset | development-only ZCode CLI override, passed through only with `HMB_DEV_SOURCE=1`; ordinary selection uses recorded harness discovery |
 | `HMB_CLAUDE_CLI` | unset | development-only Claude Code executable override, passed through only with `HMB_DEV_SOURCE=1`; ordinary discovery probes version and login without sending a user message |
-| `HMB_AGENT_CREDENTIAL` / `HMB_AGENT_CREDENTIAL_FILE` | set by the adapter | attempt-scoped CLI credential: restricted to its own run; Host operations are denied and it never falls back to the administrator token |
+| `HMB_AGENT_CREDENTIAL_FILE` | unset | path of an execution's private credential file, which also names its board; a Lead sets it on each launcher command to the path its role text names. The credential is restricted to its own run, a Lead's also to its owned micro tasks; Host operations are denied and it never falls back to the administrator token |
 | `HMB_TASK_ID`, `HMB_ATTEMPT_ID`, `HMB_TASK_FILE`, `HMB_LOG_DIR` | set for child processes | attribution and paths passed to `command` children |
 | `HMB_DEBUG` | unset | include exception detail in `INTERNAL_ERROR` |
 | `UV_BIN` | `uv` on `PATH` | uv binary used for runtime installs and by the bootstrap scripts |
