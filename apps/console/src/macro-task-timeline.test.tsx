@@ -6,8 +6,6 @@ import { MacroTaskTimeline } from "./MacroTaskTimeline";
 import type { MacroTaskTimelineProps } from "./MacroTaskTimeline";
 import { macroTaskTimelineFixture, OBSERVED_AT, LONG_TASK_LINE } from "./macro-task-fixtures";
 import { clockTime } from "./macro-task-display";
-import { spanFacts } from "./macro-task-display";
-import { buildInspectorCard } from "./inspector-card";
 import type { MacroTaskTimeline as MacroTaskTimelineData } from "./macro-task-types";
 import type { InspectorSelection } from "./inspector-card";
 import type { TimelineItem } from "./macro-task-display";
@@ -49,21 +47,29 @@ async function expandHostEvents(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("macroTask timeline rendering", () => {
-  it("labels a helper's wait span and inspector with its root Lead", () => {
+  it.each([
+    { rootLeadRunId: "lead-1", expected: "等待 Lead" },
+    { rootLeadRunId: null, expected: "等待 Host" },
+  ])("pins $expected in the inspector for a helper's wait span", ({ rootLeadRunId, expected }) => {
     const timeline = macroTaskTimelineFixture();
     const helper = timeline.rows.find(row => row.runId === "r3")!;
-    Object.assign(helper, { state: "awaiting-host", rootLeadRunId: "lead-1", leadOwnership: null });
+    Object.assign(helper, { state: "awaiting-host", rootLeadRunId, leadOwnership: null });
     const hostSpan = { ...timeline.spans.find(span => span.spanId === "s-r3-q")!, spanId: "s-helper-host",
       kind: "host" as const, state: "open", startAt: "2026-09-26T02:30:00Z", endAt: null };
     timeline.spans.push(hostSpan);
     timeline.totals.spans += 1;
-    const { container } = render(<MacroTaskTimeline {...baseProps(timeline)} />);
+    const { container } = render(<Harness timeline={timeline} />);
     const bar = container.querySelector<HTMLButtonElement>('[data-key="span:s-helper-host"]')!;
-    expect(bar.getAttribute("aria-label")).toContain("等待 Lead");
-    expect(bar.querySelector(".sp-text")?.textContent).toContain("等待 Lead");
-    const item = spanFacts(hostSpan, helper, Date.parse(timeline.observedAt)).item;
-    const card = buildInspectorCard({ type: "item", key: item.key }, timeline, new Map([[item.key, item]]))!;
-    expect(card.fields.find(field => field.label === "类型")?.value).toBe("等待 Lead");
+    expect(bar.getAttribute("aria-label")).toContain(expected);
+    expect(bar.querySelector(".sp-text")?.textContent).toContain(expected);
+    fireEvent.click(bar);
+    openInspector();
+    const card = container.querySelector(".inspector-card")!;
+    expect(card.querySelector(".inspector-card-head > strong")?.textContent).toBe(expected);
+    const type = [...card.querySelectorAll(".inspector-field")].find(field => field.querySelector("dt")?.textContent === "类型")!;
+    expect(type.querySelector("dd")?.textContent).toBe(expected);
+    fireEvent.click(item("span:s-r1-e")!);
+    expect(container.querySelector(".inspector-card-head > strong")?.textContent).toBe("执行片段 · 第 1 轮");
   });
 
   it("keeps routing failure, cancellation, abstention and unknown stop distinct", () => {

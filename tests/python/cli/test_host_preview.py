@@ -40,7 +40,7 @@ VITEST = CONSOLE / "node_modules" / "vitest" / "vitest.mjs"
 _INHERITED_KEYS = (
     "HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
     "HMB_WORKER_STATE", "HMB_WORKER_ID",
-    "HMB_AGENT_CREDENTIAL_FILE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
+    "HMB_AGENT_CREDENTIAL_FILE", "HMB_AGENT_CREDENTIAL_FD", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
 )
 
 
@@ -224,6 +224,76 @@ class PreviewFixtureTest(unittest.TestCase):
                             and item.get("verified") is False and item.get("final") is False
                             for item in fixture["artifacts"]),
                         "a quota failure must keep its sealed partial output")
+
+        # The emitted Lead timeline is consumed by the real parser as well as
+        # served to the browser; ownership must survive that projection.
+        self.assertTrue(outcomes["normal/timeline-macro-b.json"]["accepted"])
+        timeline = json.loads((fixtures / "normal/timeline-macro-b.json").read_text(encoding="utf-8"))
+        rows = {row["runId"]: row for row in timeline["rows"]}
+        task_rows = json.loads((fixtures / "normal/tasks.json").read_text(encoding="utf-8"))["runs"]
+        tasks = {task["runId"]: task for task in task_rows}
+        for run_id, row in rows.items():
+            for key in ("rootLeadRunId", "leadOwnership"):
+                self.assertIn(key, row, f"{run_id}: TimelineRow must carry {key}, including explicit nulls")
+                self.assertEqual(tasks[run_id]["lineage"][key], row[key], f"{run_id}: {key} projection drift")
+        self.assertEqual("failed", rows["preview-run-b2"]["state"])
+        self.assertEqual("preview-run-b1", rows["preview-run-b2"]["rootLeadRunId"])
+        lead, waiting, active = [json.loads((fixtures / f"normal/workflow-{run_id}.json").read_text(encoding="utf-8"))
+                                 for run_id in ("preview-run-b3", "preview-run-b4", "preview-run-b5")]
+        self.assertEqual("waiting-owned", rows[lead["runId"]]["state"])
+        self.assertEqual("waiting-owned", lead["state"])
+        self.assertEqual("completed", lead["task"]["status"])
+        self.assertEqual("awaiting-owned", lead["queueReason"])
+        self.assertEqual("awaiting-owned", lead["task"]["queueReason"])
+        self.assertIsNone(lead["task"]["activeAttemptId"])
+        self.assertTrue(lead["task"]["lineage"]["delegationAuthority"])
+        self.assertTrue(lead["shutdown"]["selfConfirmed"])
+        self.assertIsNone(lead["finalAttemptId"])
+        self.assertIsNone(lead["finalArtifactId"])
+        turn = lead["currentTurn"]
+        self.assertEqual("waiting", turn["disposition"])
+        self.assertEqual("returned", turn["state"])
+        self.assertEqual(2, turn["turnIndex"])
+        self.assertEqual(2, len(lead["turns"]))
+        self.assertEqual(1, lead["continuationCount"])
+        dispatch_turn = lead["turns"][-1]
+        self.assertLess(dispatch_turn["updatedAt"], waiting["updatedAt"])
+        self.assertLess(waiting["updatedAt"], turn["createdAt"])
+        for owned in (waiting, active):
+            row = rows[owned["runId"]]
+            self.assertEqual(lead["runId"], row["rootLeadRunId"])
+            self.assertEqual(lead["runId"], row["leadOwnership"]["leadRunId"])
+            self.assertEqual(dispatch_turn["turnId"], row["leadOwnership"]["leadTurnId"])
+            self.assertEqual(owned["createdAt"], row["leadOwnership"]["createdAt"])
+            self.assertLessEqual(dispatch_turn["createdAt"], owned["createdAt"])
+            self.assertLessEqual(owned["createdAt"], dispatch_turn["updatedAt"])
+            self.assertLess(owned["updatedAt"], turn["createdAt"])
+            self.assertIsNone(owned["hostId"])
+            self.assertIsNone(owned["task"]["lineage"]["sourceHostId"])
+            self.assertIsNone(owned["task"]["lineage"]["currentHostId"])
+            self.assertIsNone(row["parentRunId"], "Lead-owned work is an independent micro task")
+            self.assertEqual(owned["runId"], row["rootRunId"])
+            self.assertIsNone(owned["finalAttemptId"])
+            self.assertIsNone(owned["finalArtifactId"])
+        self.assertEqual("awaiting-host", waiting["state"])
+        self.assertEqual("assistance", waiting["currentTurn"]["disposition"])
+        self.assertTrue(waiting["awaitingHost"])
+        self.assertTrue(waiting["shutdown"]["selfConfirmed"])
+        self.assertEqual("open", waiting["activeRequest"]["state"])
+        wait_span = next(span for span in timeline["spans"]
+                         if span["runId"] == waiting["runId"] and span["kind"] == "host")
+        self.assertEqual(waiting["activeRequest"]["requestId"], wait_span["requestId"])
+        self.assertEqual(waiting["activeRequest"]["summary"], wait_span["summary"])
+        self.assertEqual(waiting["currentTurn"]["updatedAt"], wait_span["startAt"])
+        self.assertIsNone(wait_span["endAt"])
+        self.assertEqual("executing", active["state"])
+        self.assertEqual("queued", active["task"]["status"])
+        self.assertIsNone(active["task"]["selectedAttemptId"])
+        self.assertIsNone(active["task"]["activeAttemptId"])
+        self.assertIsNone(active["currentTurn"])
+        self.assertEqual([], active["turns"])
+        self.assertTrue(active["shutdown"]["selfConfirmed"])
+        self.assertFalse(active["task"]["resultAvailable"])
 
         # Per-execution usage: known values name the cache subset, and an unrecorded
         # execution stays unknown instead of reading as zero.

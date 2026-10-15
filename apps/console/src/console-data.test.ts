@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import i18n from "i18next";
+import { workflowOwnerText } from "./actor";
 import {
   MODEL_SERVICE_CONCURRENCY_DEFAULT,
   concurrencyEntryFor,
@@ -6,6 +8,7 @@ import {
   modelServices,
   preferredVariant,
   taskHost,
+  taskExecutor,
   taskProject,
 } from "./console-data";
 import type { Preference, Buddy, Task } from "./types";
@@ -15,7 +18,38 @@ const buddy = (buddyId: string, harness: string, provider: string, effort: strin
   enabled: true, capabilities: [], contextWindow: null, source: "fixture", description: "",
 });
 
+const taskFixture = (overrides: Partial<Task> = {}): Task => ({
+  runId: "run-1", task: "Run checks", status: "queued", owner: null, cwd: "~/project", revision: 1,
+  createdAt: "2026-10-15T00:00:00Z", acceptedAt: null, acceptanceVerdict: null,
+  reviewRejectedAt: null, reviewRejectionNote: null, ...overrides,
+});
+
+afterEach(async () => { await i18n.changeLanguage("zh"); });
+
 describe("console grouping and recorded attribution", () => {
+  it("has no buddy for command execution and retains pending model assignment", () => {
+    expect(taskExecutor(taskFixture({ spec: { adapter: "command" },
+      lineage: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: null,
+        rootLeadRunId: null, project: { id: "project", label: "project", path: "~/project" },
+        buddy: { harness: "codex", provider: "openai", model: "gpt-6", effort: "high" } } }))).toBeNull();
+    expect(taskExecutor(taskFixture({ spec: { adapter: "codex" } }))).toBe("执行 buddy 待确定");
+    expect(taskExecutor({ lineage: { buddy: { harness: "codex", model: "gpt-6", effort: "high" } } } as Task))
+      .toBe("codex · gpt-6 / high");
+  });
+
+  it("keeps the recorded delegator distinct from a later Host owner, including Lead-owned helper trees", async () => {
+    const task = { lineage: { sourceHostId: null, currentHostId: "host-after-takeover", rootLeadRunId: "root-lead",
+      leadOwnership: { leadRunId: "direct-lead" } } } as Task;
+    expect(taskHost(task)).toBe("Lead · direct-lead");
+    expect(workflowOwnerText(task)).toBe("host-after-takeover");
+    task.lineage!.leadOwnership = null;
+    expect(taskHost(task)).toBe("Lead · root-lead");
+    task.lineage!.sourceHostId = "original-host";
+    expect(taskHost(task)).toBe("original-host");
+    await i18n.changeLanguage("en");
+    expect(taskHost({} as Task)).toBe("Delegator not recorded");
+    expect(taskHost({ lineage: { rootLeadRunId: "lead-run" } } as Task)).toBe("Lead · lead-run");
+  });
   it("orders extended thinking levels by intensity in model service labels and variant tabs", () => {
     for (const harness of ["claude", "codex"]) {
       const levels = ["ultra", "max", "high", "medium", "xhigh", "low"];

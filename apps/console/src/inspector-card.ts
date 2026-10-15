@@ -183,7 +183,7 @@ export function buildInspectorCard(
       fields.push({ label: "类型", value: "排队" }, microTaskField(row), spanTimingValue(span, observedAtMs));
       fields.push({ label: "结果", value: span.endAt ? "已认领" : "仍在排队" });
     } else if (span.kind === "host") {
-      fields.push({ label: "类型", value: row.rootLeadRunId ? "等待 Lead" : "等待 Host" }, microTaskField(row), spanTimingValue(span, observedAtMs));
+      fields.push({ label: "类型", value: item.head }, microTaskField(row), spanTimingValue(span, observedAtMs));
       fields.push(span.summary
         ? { label: "结果", value: outcomeLabel(span, outcome), title: span.summary }
         : { label: "结果", value: outcomeLabel(span, outcome) });
@@ -223,7 +223,7 @@ export function buildInspectorCard(
     }
     return {
       key: selection.key,
-      head: span.turnIndex != null ? `${spanHead(span.kind)} · 第 ${span.turnIndex} 轮` : spanHead(span.kind),
+      head: span.turnIndex != null ? `${item.head} · 第 ${span.turnIndex} 轮` : item.head,
       fields,
       openItem: item,
       relatedEvents: relatedEventsForSpan(span, timeline.events)

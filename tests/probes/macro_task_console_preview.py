@@ -157,10 +157,11 @@ EMIT_SOURCE = "tests/probes/macro_task_console_preview.py"
 EMIT_SCENARIOS = ("normal", "readonly", "truncated", "error")
 EMIT_LAYOUT = {
     "normal": ("backup-preflight.json", "console.json", "macro-tasks.json", "runtime-version.json", "tasks.json",
-               "timeline-macro-a.json", "timeline-standalone.json",
+               "timeline-macro-a.json", "timeline-macro-b.json", "timeline-standalone.json",
                "workflow-preview-run-a1.json", "workflow-preview-run-a2.json",
                "workflow-preview-run-b1-h1.json", "workflow-preview-run-b1.json",
-               "workflow-preview-run-b2.json"),
+               "workflow-preview-run-b2.json", "workflow-preview-run-b3.json",
+               "workflow-preview-run-b4.json", "workflow-preview-run-b5.json"),
     "readonly": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "truncated": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "error": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
@@ -347,6 +348,13 @@ ACTIVE_REQUEST = {
     "neededWork": ["由 Host 确认合成预览范围"], "expectedArtifacts": [],
     "acceptance": "合成预览：仅检查渲染分支，不产生真实验收", "childTaskId": None,
 }
+LEAD_REQUEST = {
+    "requestId": "req-b4-1", "kind": "assistance", "routing": False, "state": "open",
+    "summary": "需要 Lead 决定路径样例的核对范围",
+    "attempted": "已核对合成路径样例，等待 Lead 处理差异",
+    "neededWork": ["由 Lead 确定后续核对范围"], "expectedArtifacts": [],
+    "acceptance": "合成预览：只展示等待 Lead 的请求", "childTaskId": None,
+}
 def routing(decision_id: str, task_id: str, status: str, selected: dict | None, reason: str,
             constraints: dict, *,
             user_outcome: str = "none",
@@ -386,7 +394,7 @@ ROUTING_A2_ABSTENTION = routing("preview-decision-a2-abstention", "preview-run-a
 def run(run_id: str, *, project: str, title: str, title_source: str, task_text: str, created: str,
         updated: str, state: str, status: str, category: str, buddy: dict | None,
         hosts: tuple[str | None, str | None] = (HOST_A, HOST_A), parent: str | None = None,
-        group: str | None = None, lead_owner: str | None = None,
+        group: str | None = None, lead_owner: tuple[str, str] | None = None,
         accepted: str | None = None, verdict: str | None = None, result: bool = False,
         result_summary: str | None = None, artifacts: list[dict] | None = None,
         integrations: list[dict] | None = None, routing: dict | None = None,
@@ -450,7 +458,7 @@ def integration(integration_id: str, artifact_id: str, attempt_id: str, host: st
 
 
 def build_runs() -> dict[str, dict]:
-    """The ten micro tasks and four internal routing rows."""
+    """The micro tasks, including a parked Lead, and four internal routing rows."""
     runs = [
         run("preview-run-a1", project="alpha", group=MACRO_A,
             title=long_title("工作目标时间轴：预览服务器合成夹具与只读接口验证 —— 这是一个刻意加长的委派标题，"
@@ -687,7 +695,7 @@ def build_runs() -> dict[str, dict]:
             markers=[marker(instant(3, 10), "dispatch", actor=host_actor(HOST_B)),
                      marker(instant(3, 25), "cancel", actor=host_actor(HOST_B), summary="cancelled")]),
         run("preview-run-b2", project="beta", group=MACRO_B, hosts=(None, None),
-            lead_owner="preview-run-b1",
+            lead_owner=("preview-run-b1", "turn-att-b1-2"),
             title="封存配额耗尽时的部分输出", title_source="title",
             task_text="排查执行器在配额耗尽后仍未封存部分输出的路径，并补齐封存记录。",
             created=instant(6, 5), updated=instant(6, 26), state="failed", status="failed",
@@ -716,6 +724,60 @@ def build_runs() -> dict[str, dict]:
                                        artifact_id="art-b2-partial", integration_id=None,
                                        actor={"role": "lead", "id": "preview-run-b1"},
                                        created_at=instant(6, 26), run_revision=3)),
+        # The assistance request wakes the Lead after its first waiting return.
+        # Its second input already includes that request; another owned micro
+        # task remains queued, with no later boundary to wake the parked Lead.
+        run("preview-run-b3", project="beta", group=MACRO_B, hosts=(HOST_B, HOST_B),
+            title="Lead 核对平台路径", title_source="title",
+            task_text="协调路径样例核对，等待名下微任务交回结果后继续。",
+            created=instant(7, 0), updated=instant(7, 35), state="waiting-owned", status="completed",
+            category="active", buddy=CFG_CODEX, delegation_authority=True, result=True, continuation_count=1,
+            result_summary="合成预览：已收到范围请求，等待另一条名下微任务执行",
+            spans=[
+                span("queue:att-b3-1", "queue", instant(7, 0), instant(7, 5), "claimed",
+                     attempt_id="att-b3-1"),
+                span("execution:att-b3-1", "execution", instant(7, 5), instant(7, 20), "finished",
+                     attempt_id="att-b3-1", buddy=CFG_CODEX, confirmed=True, generation=1,
+                     disposition="waiting", turn_index=1),
+                span("queue:att-b3-2", "queue", instant(7, 25), instant(7, 30), "claimed",
+                     attempt_id="att-b3-2"),
+                span("execution:att-b3-2", "execution", instant(7, 30), instant(7, 35), "finished",
+                     attempt_id="att-b3-2", buddy=CFG_CODEX, confirmed=True, generation=2,
+                     disposition="waiting", turn_index=2),
+            ],
+            attempts=[attempt("att-b3-1", 1, "finished", True, instant(7, 5), instant(7, 20), CFG_CODEX,
+                              disposition="waiting", result="等待名下的路径核对微任务。",
+                              usage=usage("codex-native", 8000, 3000, 1200)),
+                      attempt("att-b3-2", 2, "finished", True, instant(7, 30), instant(7, 35), CFG_CODEX,
+                              disposition="waiting", result="已收到范围请求，等待另一条名下微任务执行。",
+                              usage=usage("codex-native", 10000, 7000, 500))],
+            markers=[marker(instant(7, 0), "dispatch", actor=host_actor(HOST_B))]),
+        run("preview-run-b4", project="beta", group=MACRO_B, hosts=(None, None),
+            lead_owner=("preview-run-b3", "turn-att-b3-1"), title="确认路径样例范围", title_source="title",
+            task_text="核对合成路径样例，遇到范围差异时请求 Lead 决定。",
+            created=instant(7, 10), updated=instant(7, 25), state="awaiting-host", status="completed",
+            category="host", buddy=CFG_GLM, result=True, active_request=LEAD_REQUEST,
+            result_summary="合成预览：已交回范围请求，等待 Lead 决定",
+            spans=[
+                span("queue:att-b4-1", "queue", instant(7, 10), instant(7, 11), "claimed",
+                     attempt_id="att-b4-1"),
+                span("execution:att-b4-1", "execution", instant(7, 11), instant(7, 25), "finished",
+                     attempt_id="att-b4-1", buddy=CFG_GLM, confirmed=True, generation=1,
+                     disposition="assistance", turn_index=1),
+                span("host:req-b4-1", "host", instant(7, 25), None, "open", request_id="req-b4-1",
+                     request_kind="assistance", summary=LEAD_REQUEST["summary"]),
+            ],
+            attempts=[attempt("att-b4-1", 1, "finished", True, instant(7, 11), instant(7, 25), CFG_GLM,
+                              disposition="assistance", result=LEAD_REQUEST["summary"],
+                              usage=usage("zcode-native", 3000, 1000, 400))],
+            markers=[marker(instant(7, 10), "dispatch", actor={"role": "lead", "id": "preview-run-b3"})]),
+        run("preview-run-b5", project="beta", group=MACRO_B, hosts=(None, None),
+            lead_owner=("preview-run-b3", "turn-att-b3-1"), title="执行平台路径核对", title_source="title",
+            task_text="持续核对合成平台路径样例，完成后向 Lead 交回。",
+            created=instant(7, 12), updated=instant(7, 12), state="executing", status="queued",
+            category="active", buddy=CFG_FLASH,
+            spans=[span("queue:preview-run-b5", "queue", instant(7, 12), None, "queued")],
+            markers=[marker(instant(7, 12), "dispatch", actor={"role": "lead", "id": "preview-run-b3"})]),
         run(STANDALONE, project="beta", hosts=(HOST_B, HOST_B2),
             title="修复标题回退在 CRLF 输入下的显示", title_source="task",
             task_text="修复标题回退在 CRLF 输入下的显示，并补充回归测试。",
@@ -786,8 +848,8 @@ def build_runs() -> dict[str, dict]:
             "kind": entry["kind"], "sourceHostId": entry["sourceHostId"],
             "currentHostId": entry["currentHostId"], "parentRunId": entry["parentRunId"],
             "rootRunId": root,
-            "rootLeadRunId": entry["leadOwner"],
-            "leadOwnership": ({"leadRunId": entry["leadOwner"], "leadTurnId": "turn-att-b1-2",
+            "rootLeadRunId": entry["leadOwner"][0] if entry["leadOwner"] else None,
+            "leadOwnership": ({"leadRunId": entry["leadOwner"][0], "leadTurnId": entry["leadOwner"][1],
                                "createdAt": entry["createdAt"]} if entry["leadOwner"] else None),
             "delegationAuthority": entry["delegationAuthority"],
             "project": {"id": project["id"], "path": project["path"], "label": project["label"]},
@@ -894,7 +956,8 @@ def task_view(entry: dict) -> dict:
         "owner": None if entry["kind"] in ("micro-task", "helper") else "synthetic-worker-1", "adapter": adapter, "cwd": entry["cwd"], "task": entry["task"],
         "spec": spec, "inputFingerprint": digest(f"{entry['runId']}-fingerprint"), "fingerprintVersion": 3,
         "requiredCapabilities": [], "exclusiveResources": [], **duration,
-        "status": entry["status"], "state": entry["status"], "queueReason": None,
+        "status": entry["status"], "state": entry["status"],
+        "queueReason": "awaiting-owned" if entry["state"] == "waiting-owned" else None,
         "revision": entry["revision"],
         "selectedAttemptId": selected["attemptId"] if selected else None,
         "activeAttemptId": (selected["attemptId"] if selected and selected["state"] == "executing" else None),
@@ -949,6 +1012,8 @@ def wait_reason(entry: dict) -> str:
         return ("the current turn requested Host assistance"
                 if entry["activeRequest"] and entry["activeRequest"]["kind"] == "assistance"
                 else "the current turn returned and the Host decides the next turn")
+    if entry["state"] == "waiting-owned":
+        return "the Lead turn ended and is waiting for its owned micro tasks"
     if entry["state"] == "accepted":
         return "the final artifact was acknowledged"
     if entry["state"] == "cancelled":
@@ -994,7 +1059,8 @@ def workflow_view(entry: dict) -> dict:
         "runId": entry["runId"], "taskId": entry["runId"],
         "requestId": entry["requestId"], "title": entry["title"], "macroTaskId": entry["group"],
         "hostId": entry["currentHostId"], "ownerGeneration": 1, "revision": entry["revision"],
-        "state": entry["state"], "status": entry["status"], "queueReason": None,
+        "state": entry["state"], "status": entry["status"],
+        "queueReason": "awaiting-owned" if entry["state"] == "waiting-owned" else None,
         "awaitingHost": entry["state"] == "awaiting-host", "waitReason": wait_reason(entry),
         "continuationCount": entry["continuationCount"],
         # ADR-018: whether the Host may still re-choose the buddy, and
@@ -1022,7 +1088,9 @@ def workflow_view(entry: dict) -> dict:
         # A sealed partial output is never the run's final artifact.
         "finalArtifactId": next((item["artifactId"] for item in reversed(entry["artifacts"])
                                  if item["final"]), None),
-        "finalAttemptId": entry["attempts"][-1]["attemptId"] if entry["attempts"] else None,
+        "finalAttemptId": (entry["attempts"][-1]["attemptId"]
+                           if entry["resultAvailable"] and entry["attempts"]
+                           and entry["attempts"][-1]["disposition"] == "completed" else None),
         "task": task_view(entry),
     }
 
@@ -1042,6 +1110,8 @@ def timeline_row(entry: dict, depth: int) -> dict:
     buddy = entry["buddy"]
     return {
         "runId": entry["runId"], "parentRunId": entry["parentRunId"], "rootRunId": entry["rootRunId"],
+        "rootLeadRunId": entry["lineage"]["rootLeadRunId"],
+        "leadOwnership": entry["lineage"]["leadOwnership"],
         "title": entry["title"] or UNTITLED, "titleSource": entry["titleSource"],
         "taskSummary": task_first_line(entry["task"]),
         "summary": "合成记录：已提交输出，等待按记录核对。" if entry["status"] == "completed" else None,
@@ -1848,7 +1918,8 @@ REQUIRED_KEYS = {
     "TimelineSpan": {"spanId", "runId", "kind", "startAt", "endAt", "state", "attemptId", "turnId",
                      "turnIndex", "requestId", "buddy", "shutdownConfirmed", "uncertain",
                      "clockSkew"},
-    "TimelineRow": {"runId", "parentRunId", "rootRunId", "title", "titleSource", "taskSummary", "summary",
+    "TimelineRow": {"runId", "parentRunId", "rootRunId", "rootLeadRunId", "leadOwnership",
+                    "title", "titleSource", "taskSummary", "summary",
                     "createdAt", "state", "status", "category", "shutdownConfirmed", "depth", "kind",
                     "buddy", "acceptedAt", "acceptanceVerdict"},
     "TimelineEvent": {"seq", "runId", "kind", "at", "label", "summary", "actor", "attemptId",
@@ -1951,6 +2022,49 @@ def validate_fixtures() -> list[str]:
             or owned["lineage"]["leadOwnership"]["leadRunId"] != "preview-run-b1"
             or owned["markers"][0]["actor"] != {"role": "lead", "id": "preview-run-b1"}):
         problems.append("Lead-owned preview run must keep its nullable Host and explicit Lead actor")
+    for group in FIXTURES["groups"]:
+        for row in macro_task_timeline({"macroTaskId": group}, "normal")["rows"]:
+            lineage = FIXTURES["runs"][row["runId"]]["lineage"]
+            missing = REQUIRED_KEYS["TimelineRow"] - set(row)
+            if missing:
+                problems.append(f"{row['runId']}: TimelineRow missing {sorted(missing)}")
+            for key in ("rootLeadRunId", "leadOwnership"):
+                if key not in row or row[key] != lineage[key]:
+                    problems.append(f"{row['runId']}: timeline {key} differs from task lineage")
+    lead = workflow_get({"runId": "preview-run-b3"})
+    waiting = workflow_get({"runId": "preview-run-b4"})
+    active = workflow_get({"runId": "preview-run-b5"})
+    turn = lead["currentTurn"]
+    dispatch_turn = lead["turns"][-1]
+    if (lead["state"] != "waiting-owned" or lead["status"] != "completed"
+            or not lead["task"]["lineage"]["delegationAuthority"]
+            or lead["task"]["activeAttemptId"] is not None
+            or lead["task"]["queueReason"] != "awaiting-owned" or lead["queueReason"] != "awaiting-owned"
+            or turn["state"] != "returned" or turn["disposition"] != "waiting" or turn["turnIndex"] != 2
+            or lead["continuationCount"] != 1 or len(lead["turns"]) != 2
+            or not dispatch_turn["updatedAt"] < waiting["updatedAt"] < turn["createdAt"]
+            or not lead["shutdown"]["selfConfirmed"]
+            or lead["finalAttemptId"] is not None or lead["finalArtifactId"] is not None):
+        problems.append("preview-run-b3 must be a stopped, returned waiting Lead without a final delivery")
+    for view in (waiting, active):
+        lineage = view["task"]["lineage"]
+        ownership = lineage["leadOwnership"]
+        if (lineage["rootLeadRunId"] != lead["runId"] or ownership["leadRunId"] != lead["runId"]
+                or ownership["leadTurnId"] != dispatch_turn["turnId"]
+                or lineage["sourceHostId"] is not None or lineage["currentHostId"] is not None
+                or lineage["parentRunId"] is not None or lineage["rootRunId"] != view["runId"]
+                or not dispatch_turn["createdAt"] <= ownership["createdAt"] <= dispatch_turn["updatedAt"]
+                or view["updatedAt"] >= turn["createdAt"]):
+            problems.append(f"{view['runId']}: owned work must retain its creation turn and predate the parked Lead's input")
+    if (waiting["state"] != "awaiting-host" or not waiting["awaitingHost"]
+            or waiting["activeRequest"] != LEAD_REQUEST
+            or waiting["currentTurn"]["disposition"] != "assistance"
+            or not waiting["shutdown"]["selfConfirmed"]):
+        problems.append("preview-run-b4 must keep its open assistance request waiting for Lead")
+    if (active["state"] != "executing" or active["status"] != "queued"
+            or active["task"]["activeAttemptId"] is not None or active["currentTurn"] is not None
+            or active["task"]["selectedAttemptId"] is not None or active["task"]["resultAvailable"]):
+        problems.append("preview-run-b5 must keep the unclaimed owned micro task that allows the Lead to wait")
     if set(page) != REQUIRED_KEYS["MacroTaskPage"]:
         problems.append(f"MacroTaskPage: keys {sorted(set(page))}")
     if json.dumps(macro_task_page({}), sort_keys=True) != json.dumps(macro_task_page({}), sort_keys=True):
@@ -2215,7 +2329,8 @@ def validate_fixtures() -> list[str]:
             problems.append(f"{entry['path']}: every manifest entry must name its request")
         elif entry["kind"] == "macro-task-timeline":
             want = ({"macroTaskId": STANDALONE_GROUP}
-                    if entry["path"].endswith("timeline-standalone.json") else {"macroTaskId": MACRO_A})
+                    if entry["path"].endswith("timeline-standalone.json") else
+                    {"macroTaskId": MACRO_B if entry["path"].endswith("timeline-macro-b.json") else MACRO_A})
             if request != want:
                 problems.append(f"{entry['path']}: request must be {want}")
         elif entry["kind"] == "workflow-get":
@@ -2272,7 +2387,7 @@ def emit_fixture_files() -> list[dict]:
     timeline_endpoint = "GET /api/macro-tasks/<macroTaskId>/timeline"
     workflow_endpoint = "POST /api/command workflow_get"
     workflows = {"normal": ("preview-run-a1", "preview-run-a2", "preview-run-b1", "preview-run-b1-h1",
-                            "preview-run-b2"),
+                            "preview-run-b2", "preview-run-b3", "preview-run-b4", "preview-run-b5"),
                  "readonly": ("preview-run-a1",), "truncated": ("preview-run-a1",),
                  "error": ("preview-run-a1",)}
     for scenario in EMIT_SCENARIOS:
@@ -2304,6 +2419,9 @@ def emit_fixture_files() -> list[dict]:
             add(scenario, "timeline-macro-a.json", "macro-task-timeline", timeline_endpoint, 200, "accepted",
                 macro_task_timeline({"macroTaskId": MACRO_A}, scenario), request={"macroTaskId": MACRO_A})
         if scenario == "normal":
+            add(scenario, "timeline-macro-b.json", "macro-task-timeline", timeline_endpoint, 200,
+                "accepted", macro_task_timeline({"macroTaskId": MACRO_B}, scenario),
+                request={"macroTaskId": MACRO_B})
             add(scenario, "timeline-standalone.json", "macro-task-timeline", timeline_endpoint, 200,
                 "accepted", macro_task_timeline({"macroTaskId": STANDALONE_GROUP}, scenario),
                 request={"macroTaskId": STANDALONE_GROUP})

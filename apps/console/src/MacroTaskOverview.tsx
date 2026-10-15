@@ -9,6 +9,7 @@ import {
   macroTaskProgressText, relativeTime, rowStateInfo, titleLineTooltip,
 } from "./macro-task-display";
 import { macroTaskMetrics, rootRollups, type RunRollup } from "./macro-task-metrics";
+import { CopyableIdentifier } from "./components/CopyableIdentifier";
 
 /**
  * The detail overview's two rows (0.16 T4): 微任务摘要 and the Worker's own
@@ -282,6 +283,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, onBackToL
     <button type="button" className="button small-button narrow-back" onClick={onBackToList}>‹ 宏任务列表</button>
     <div className="macro-task-title-row">
       <h2 className="one-line-title" title={titleAttr}>{excerpt(title.text, 100)}</h2>
+      <CopyableIdentifier value={shown.macroTaskId} />
       {shown.description && <span className="macro-task-description" title={shown.description}>{shown.description}</span>}
       <span className="chip-row">
         {shown.kind === "standalone" && <Badge tone="neutral">历史独立微任务</Badge>}

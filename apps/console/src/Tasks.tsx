@@ -121,11 +121,13 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
           // workflow refresh merges it here), so an older row outside the snapshot
           // window agrees with the open detail; badges and filters keep the row.
           const rowTask = task && row.runId === task.runId ? task : row;
+          const executor = taskExecutor(row);
+          const assignment = executor ? `${taskHost(row)} → ${executor}` : taskHost(row);
           return <li key={row.runId} data-run-id={row.runId}>
           <button className={"task-row " + (selected === row.runId ? "selected" : "")} aria-pressed={selected === row.runId} onClick={() => selectTask(row.runId)}>
             <span className="row-between"><Status status={taskStatus(row)} /><time className="small muted" dateTime={row.createdAt}>{formatDate(row.createdAt)}</time></span>
             <strong className="task-title" title={titleTooltip(taskTitle(rowTask))}>{excerpt(taskTitle(rowTask).text, 100)}</strong>
-            <span className="small truncate" title={taskHost(row) + " → " + taskExecutor(row)}>{taskHost(row)} → {taskExecutor(row)}</span>
+            <span className="small truncate" title={assignment}>{assignment}</span>
             {row.lineage?.kind !== "micro-task" && <span className="small muted">{row.lineage?.kind === "helper" ? "协助任务" : row.lineage?.kind === "decision" ? "内部路由 / 整理" : "执行记录"}</span>}
           </button>
         </li>;

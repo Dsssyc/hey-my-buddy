@@ -1,5 +1,7 @@
 import type { ModelService, Preference, Buddy, Task } from "./types";
 import { catalogPending, effortText, buddyName } from "./buddy-name";
+import i18n from "i18next";
+import { actorText } from "./actor";
 
 export const modelServiceKey = (p: ModelService) => JSON.stringify([p.harness, p.provider, p.model]);
 
@@ -85,10 +87,14 @@ export function preferredVariant(modelService: ModelServiceGroup, preferences: P
 export function taskProject(task: Task) {
   return task.lineage?.project || { id: "unknown", label: "未记录项目", path: null };
 }
+/** Recorded source attribution survives takeover; current ownership is separate. */
 export function taskHost(task: Task) {
-  return task.lineage?.sourceHostId || "未记录委派方";
+  if (task.lineage?.sourceHostId) return task.lineage.sourceHostId;
+  const lead = task.lineage?.leadOwnership?.leadRunId ?? task.lineage?.rootLeadRunId;
+  return lead ? actorText({ role: "lead", id: lead }) : i18n.t("shell:actor.unrecordedDelegator");
 }
 export function taskExecutor(task: Task) {
+  if (task.spec?.adapter === "command") return null;
   const buddy = task.lineage?.buddy;
   return buddy ? `${buddy.harness} · ${buddy.model} / ${effortText(buddy.effort)}` : "执行 buddy 待确定";
 }

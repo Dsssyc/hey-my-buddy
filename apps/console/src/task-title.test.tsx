@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { TaskDetails } from "./TaskDetails";
+import userEvent from "@testing-library/user-event";
+import i18n from "i18next";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task } from "./types";
 import type { Workflow } from "./workflow-types";
@@ -51,6 +53,28 @@ function fixture(workflow: Workflow) {
 }
 
 describe("micro task title rule in components (0.16 T1)", () => {
+  it.each(["zh", "en"])("shows the original Lead independently of a later owner in %s", async language => {
+    await i18n.changeLanguage(language);
+    try {
+      const task: Task = { ...microTask, lineage: { ...microTask.lineage!, sourceHostId: null,
+        currentHostId: "host-takeover", rootLeadRunId: "lead-run",
+        leadOwnership: { leadRunId: "lead-run", leadTurnId: "lead-turn", createdAt: microTask.createdAt } },
+        workflow: { ...microTask.workflow!, hostId: "host-takeover" } };
+      const f = fixture(workflowValue(task));
+      const view = render(<TaskDetails {...f.props} task={task} />);
+      expect(view.container.querySelector(".assignment-line")!.textContent)
+        .toContain(language === "zh" ? "委派方：Lead · lead-run" : "Delegated by: Lead · lead-run");
+      const label = language === "zh" ? "原始委派方" : "Originally delegated by";
+      const original = await screen.findByText(label, { selector: "dt" });
+      expect(original.nextElementSibling!.textContent).toBe("Lead · lead-run");
+      const current = screen.getAllByText(language === "zh" ? "当前管理方" : "Current owner", { selector: "dt" });
+      expect(current.every(label => label.nextElementSibling!.textContent === "host-takeover")).toBe(true);
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("tab", { name: "执行记录" }));
+      await user.click(screen.getByText("来源与标识", { selector: "summary" }));
+      expect(original.closest("details")!.open).toBe(true);
+    } finally { await i18n.changeLanguage("zh"); }
+  });
   it("shows delegation authority beside the assigned buddy only when granted", () => {
     const f = fixture(workflowValue(microTask));
     const withAuthority = { ...microTask,

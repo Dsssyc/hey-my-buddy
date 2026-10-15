@@ -3,6 +3,7 @@ import type { MacroTaskTimeline } from "./macro-task-types";
 import type { TimelineItem } from "./macro-task-display";
 import { buildInspectorCard, type CardField, type CardLink, type InspectorCard, type InspectorSelection } from "./inspector-card";
 import type { FriendlyBuddy } from "./macro-task-display";
+import { CopyableIdentifier } from "./components/CopyableIdentifier";
 
 const MISSING_TITLE = "记录在当前范围外，无法打开";
 
@@ -62,6 +63,7 @@ function CardView({ card, truncatedEvents, openDisabled, openTitle, onOpen, onSe
   return <div className="inspector-card" aria-live="polite">
     <div className="inspector-card-head">
       <strong>{card.head}</strong>
+      {card.openItem && <CopyableIdentifier value={card.openItem.runId} />}
       <span className="inspector-actions">
         <button type="button" className="button small-button inspector-action"
           aria-disabled={openDisabled || undefined} title={openTitle}
