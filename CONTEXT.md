@@ -108,8 +108,12 @@ The blackboard's record of the models and reasoning efforts a harness reported i
 _Avoid_: model list (for the blackboard's record; the model list is what the harness itself returns)
 
 **Worker 运行时 / Worker runtime**:
-The hey-my-buddy-managed execution host that claims attempts, owns the processes executing them (a Worker or Router buddy's harness, or a plain command) and reports their stop evidence. Its liveness and state are not a buddy's.
+The hey-my-buddy-managed host that claims attempts and starts one execution process for each. Its liveness and state are not a buddy's.
 _Avoid_: Worker (for the process)
+
+**执行进程 / execution process**:
+The process that carries one attempt from start to result: it runs the Worker or Router buddy's harness or the plain command, owns the processes started for that run, keeps the attempt's result receipt and delivers it to the blackboard, and outlives a restart of the service. Its liveness and state are not a buddy's.
+_Avoid_: run controller, Worker (for this process)
 
 ### Work
 

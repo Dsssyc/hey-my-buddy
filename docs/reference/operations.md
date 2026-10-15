@@ -218,10 +218,10 @@ All authoritative state is local SQLite under `HMB_STATE_DIR` (default `~/.local
 - `control-daemon.lock`, `board-owner.lock` — lifetime ownership locks: one daemon per state directory;
 - `upgrade.json`, `upgrade-last.json`, `runtime-retention.json` — the install/upgrade journal, its last completed record and runtime-retention state;
 - `controls/<runId>.g<generation>.json`, `submissions/` — CLI-private Host control files and submission-recovery tokens (`0600`);
-- `workers/<workerId>/` — supervisor lock and status, cooperative stop/retirement requests, startup intent and the receipt spool;
+- `workers/<workerId>/` — supervisor lock and status, cooperative stop/retirement requests and startup intent;
 - `worker-pool.json` — exact daemon-managed worker IDs; similarly named custom workers are not inferred as members;
 - `attempts/<runId>/<attemptId>/` — declared ordinary evidence only: task/turn input/output, spawn and nonsecret controls, logs, activity, usage and inquiry journals;
-- `harnesses/<adapter>/micro-tasks/<taskHash>/native/` — micro task native state and continuation bindings; `attempts/<attemptId>/` beneath the same micro task holds run controls, logs, credentials and Router working directories;
+- `harnesses/<adapter>/micro-tasks/<taskHash>/native/` — micro task native state and continuation bindings; `attempts/<attemptId>/` beneath the same micro task holds the execution process's launch material, stop request and result receipt, the native process journal, run controls, credentials and Router working directories;
 - Router review mirrors live inside the selected harness's attempt-private directory and are removed after verified unchanged input and confirmed stop;
 - `worker.log`, `control.log`, `runtime-install.log`, `restart.resume.json`, `stop.request.json`.
 
