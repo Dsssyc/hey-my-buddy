@@ -570,9 +570,12 @@ class HelpExtractionRegressionTests(unittest.TestCase):
         # stay under ``helpers`` with their ordinary bounds.
         helpers = self.parameter("decide", "helpers")
         self.assertFalse([child for child in helpers.children if child.name == "spec"])
-        adapter = next(child for child in helpers.children if child.name == "adapter")
-        self.assertEqual(adapter.kind, "string")
-        self.assertIn("one of", " ".join(part for part in (adapter.default, adapter.bounds, adapter.expression) if part))
+        self.assertFalse([child for child in helpers.children if child.name in ("adapter", "argv")])
+        harness = next(child for child in helpers.children if child.name == "harness")
+        self.assertEqual(harness.kind, "string")
+        self.assertIn("one of", " ".join(part for part in (harness.default, harness.bounds, harness.expression) if part))
+        self.assertFalse([parameter for parameter in cli_help.method_help("submit").parameters
+                          if parameter.name in ("adapter", "argv")])
 
     def test_an_unknown_method_is_always_a_structured_error_with_candidates(self):
         for name, nearest in (("submt", "submit"), ("zzzzzz", None)):

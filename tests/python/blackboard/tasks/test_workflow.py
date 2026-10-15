@@ -38,7 +38,7 @@ class WorkflowTestCase(BoardTestCase):
                                                interrupted_resume=name in ("codex", "dsh"),
                                                native_resume_permission_change=name == "zcode",
                                                validate_turn_provenance=lambda record: None)
-                          for name in ("dsh", "zcode", "codex", "claude", "command", "external")}
+                          for name in ("dsh", "zcode", "codex", "claude")}
         self.enterContext(patch.object(workflow_module.WorkflowCoordinator, "_execution_adapter",
                                        side_effect=lambda name: self.executors[name]))
 
@@ -48,7 +48,7 @@ class WorkflowTestCase(BoardTestCase):
     # -- driven helpers -----------------------------------------------------
     def submit(self, board, *, request_id="req-1", host_id="host-1", task="do the thing", cwd=None, **extra):
         params = {
-            **(BUDDY if extra.get("adapter") not in ("command", "external") else {}),
+            **BUDDY,
             "requestId": request_id,
             "hostId": host_id,
             "task": task,
@@ -200,6 +200,59 @@ class WorkflowTestCase(BoardTestCase):
 
 
 class LifecycleTests(WorkflowTestCase):
+    def test_turn_buddy_uses_the_bound_execution_and_rejects_unknown_shapes(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board)
+        claimed = self.claim(board)['claim']
+        attempt_id = claimed['attempt']['attemptId']
+        turn_id = claimed['turn']['turnId']
+        original = claimed['turn']['input']
+        for adapter, frozen, valid in (
+            ('dsh', BUDDY, True),
+            ('command', {'adapter': 'command'}, True),
+            ('external', {'adapter': 'external'}, True),
+            ('dsh', None, False),
+            ('dsh', {key: value for key, value in BUDDY.items() if key != 'effort'}, False),
+            ('dsh', {**BUDDY, 'harness': 'codex'}, False),
+            ('dsh', {'adapter': 'command'}, False),
+            ('command', None, False),
+            ('command', {'adapter': 'external'}, False),
+            ('unknown', BUDDY, False),
+        ):
+            with self.subTest(adapter=adapter, buddy=frozen):
+                payload = {**original, 'context': {**original['context'], 'buddy': frozen}}
+                raw = json.dumps(payload)
+                with board.store.db.write() as connection:
+                    connection.execute('UPDATE attempts SET adapter=? WHERE attempt_id=?', (adapter, attempt_id))
+                    connection.execute('UPDATE workflow_turns SET input_json=? WHERE turn_id=?', (raw, turn_id))
+                if valid:
+                    view = board.call('workflow_get', {'runId': submitted['runId'], 'includeAudit': True})
+                    expected = BUDDY if adapter == 'dsh' else None
+                    self.assertEqual(view['currentTurn']['buddy'], expected)
+                    self.assertEqual(view['audit']['turns'][0]['buddy'], expected)
+                    self.assertEqual(view['audit']['turns'][0]['input'], payload)
+                else:
+                    with self.assertRaises(BoardError):
+                        board.call('workflow_get', {'runId': submitted['runId']})
+                with board.store.db.read() as connection:
+                    self.assertEqual(connection.execute('SELECT input_json FROM workflow_turns WHERE turn_id=?',
+                                                        (turn_id,)).fetchone()[0], raw)
+
+    def test_execution_record_fields_are_rejected_before_preparation(self):
+        board = self.board()
+        for fields in ({'adapter': 'command', 'argv': ['true']}, {'adapter': 'external'},
+                       {'adapter': None}, {'argv': ['true']}, {'argv': None}):
+            with self.subTest(fields=fields), self.assertRaises(BoardError) as caught:
+                self.submit(board, **fields)
+            self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+            self.assertIn('execution-submit', caught.exception.message)
+        self.catalog_validation.assert_not_called()
+        self.assertEqual(self.workspace.prepare_calls, [])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM tasks').fetchone()[0], 0)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_runs').fetchone()[0], 0)
+
     def test_outcome_truncation_is_stored_and_returned_with_the_turn(self):
         board = self.board()
         self.register(board)
@@ -225,29 +278,33 @@ class LifecycleTests(WorkflowTestCase):
         self.assertEqual(view["audit"]["turns"][0]["outcomeTruncated"], truncated)
         self.assertNotIn("outcomeTruncated", view["audit"]["turns"][0]["outcome"])
 
-    def test_host_command_execution_reads_have_no_native_quota_projection(self):
+    def test_unselected_buddy_reads_have_no_native_quota_projection(self):
         board = self.board()
-        self.register(board)
-        # The real read projection must not classify a command as a harness.
         with patch('hey_my_buddy.blackboard.evaluation.native_observations.latest_quota',
-                   side_effect=AssertionError('command has no native quota reader')):
-            submitted = self.submit(board, adapter='command', argv=['echo', 'fixture'])
+                   side_effect=AssertionError('an unselected buddy has no native quota reader')):
+            submitted = board.call('workflow_submit', {
+                'requestId': 'unselected', 'hostId': 'host-1', 'task': 'choose a buddy',
+                'cwd': str(self.workdir()), 'executionWorkspace': {'kind': 'existing', 'access': 'write'},
+            })
             run_id = submitted['runId']
+            self.assertIsNone(submitted['buddy'])
             self.assertEqual(submitted['quotaWarnings'], [])
-            claim = self.claim(board, run_id=run_id)
-            self.assertEqual(claim['claim']['task']['spec']['adapter'], 'command')
-            self.assertNotIn('account', claim['claim'])
-            self.finish_turn(board, claim)
             view = board.call('workflow_get', {'runId': run_id})
-            self.assertIsNone(view['currentTurn']['outcomeTruncated'])
-            self.assertEqual(view['buddy'], {'adapter': 'command'})
+            self.assertIsNone(view['buddy'])
             self.assertEqual(view['quotaWarnings'], [])
-            self.assertEqual(view['task']['adapter'], 'command')
-            self.assertTrue(board.call('task_result', {'runId': run_id})['resultDelivered'])
-            self.assertEqual(board.call('task_get', {'runId': run_id})['task']['adapter'], 'command')
+            self.assertNotIn('adapter', view)
+            self.assertEqual(view['task']['adapter'], 'unresolved')
+            with board.store.db.read() as connection:
+                self.assertIsNone(connection.execute(
+                    'SELECT buddy_json FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()[0])
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM events WHERE task_id=? AND kind IN "
+                    "('workflow.buddy_selected','workflow.execution_selected')", (run_id,)).fetchone()[0], 0)
+            self.assertIsNone(board.call('task_get', {'runId': run_id})['task']['lineage']['buddy'])
             rows = board.call('task_list', {})['tasks']
             row = next(item for item in rows if item['taskId'] == run_id)
-            self.assertEqual(row['adapter'], 'command')
+            self.assertIsNone(row['lineage']['buddy'])
+            self.assertEqual(row['adapter'], 'unresolved')
 
     def test_yield_approve_helper_continuation_and_acknowledgement(self):
         board = self.board(max_concurrent=1)
@@ -845,21 +902,20 @@ class WorkspaceTests(WorkflowTestCase):
 class IdempotencyTests(WorkflowTestCase):
     def test_pre_schema_21_submission_rejects_all_submission_paths_before_comparison(self):
         board = self.board()
-        first = self.submit(board, adapter="external")
+        first = self.submit(board)
         with board.store.db.read() as connection:
             spec = json.loads(connection.execute("SELECT micro_task_json FROM workflow_runs WHERE run_id=?",
                                                 (first["runId"],)).fetchone()[0])
-        ordinary = {"requestId": first["requestId"], **spec}
-        board.store.task_submit(ordinary, command_id="saved-submit-reply")
+        ordinary = {"requestId": first["requestId"], "adapter": "external", "task": spec["task"], "cwd": spec["cwd"]}
         with board.store.db.write() as connection:
             connection.execute("UPDATE workflow_runs SET request_fingerprint=NULL WHERE run_id=?", (first["runId"],))
         for changed in (False, True):
             task = "different input" if changed else "do the thing"
             with self.subTest(path="workflow", changed=changed), self.assertRaises(BoardError) as caught:
-                self.submit(board, adapter="external", task=task)
+                self.submit(board, task=task)
             self.assertEqual(caught.exception.code, "SUBMISSION_REPLAY_UNAVAILABLE")
             with self.subTest(path="ordinary task", changed=changed), self.assertRaises(BoardError) as caught:
-                board.store.task_submit({"requestId": first["requestId"], **spec, "task": task})
+                board.store.task_submit({**ordinary, "task": task})
             self.assertEqual(caught.exception.code, "SUBMISSION_REPLAY_UNAVAILABLE")
         with self.assertRaises(BoardError) as caught:
             board.store.task_submit(ordinary, command_id="saved-submit-reply")

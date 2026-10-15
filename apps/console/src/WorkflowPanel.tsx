@@ -7,7 +7,6 @@ import type { Snapshot, Task } from "./types";
 import type { IntegrationRecord } from "./workflow-types";
 import type { TimelineRow } from "./macro-task-types";
 import { useWorkflow } from "./use-workflow";
-import { hasModelBuddy } from "./console-data";
 import { RoutingPanel } from "./RoutingPanel";
 import { Status } from "./ui";
 import { displayWorkflowState, excerpt } from "./task-state";
@@ -130,7 +129,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
               <dt>接续次数</dt><dd>{value.continuationCount}</dd>
               <dt>已记录回合</dt><dd>{value.counts?.turns == null ? "未记录" : `共 ${value.counts.turns} 个回合`}</dd>
               <dt>接续方式</dt><dd>{value.currentTurn?.resumeMode === "native-session" ? "恢复原生会话" : value.currentTurn?.resumeMode === "reconstructed-new-session" ? "新会话，从持久上下文重建" : "首次执行"}</dd>
-              {hasModelBuddy(task, value.buddy) && value.buddy && <Fragment>
+              {value.buddy && <Fragment>
                 <dt>执行 buddy</dt><dd>{
                   `${value.buddy.harness} · ${value.buddy.model} / ${value.buddy.effort}`
                   + (lockText ? `｜${lockText}` : "｜buddy 来源未记录")

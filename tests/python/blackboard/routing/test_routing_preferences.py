@@ -143,16 +143,28 @@ class RetiredSubmissionInputTests(unittest.TestCase):
             empty = schemas.normalize_workflow_submit(self.submit_params(root))
             self.assertEqual(schemas.buddy_constraints(empty["spec"]), {})
 
-    def test_command_infrastructure_keeps_its_minimal_special_case(self):
+    def test_micro_task_submission_rejects_adapter_and_argv_at_both_entries(self):
         with tempfile.TemporaryDirectory() as root:
-            command = schemas.normalize_workflow_submit({**self.submit_params(root),
-                "adapter": "command", "argv": ["/usr/bin/true"]})
-            self.assertEqual(command["spec"]["adapter"], "command")
-            with self.assertRaises(BoardError) as raised:
-                schemas.normalize_workflow_submit({**self.submit_params(root),
-                    "adapter": "command", "argv": ["/usr/bin/true"], "model": "some-model"})
-            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-            self.assertIn("names no buddy", raised.exception.message)
+            helper = {"requestId": "helper", "task": "Check a dependency", "cwd": root,
+                      "executionWorkspace": {"kind": "existing", "access": "write"}}
+            for fields, field in (({"adapter": "command", "argv": ["/usr/bin/true"]}, "adapter"),
+                                  ({"adapter": "external"}, "adapter"),
+                                  ({"adapter": "dsh"}, "adapter"),
+                                  ({"adapter": None}, "adapter"),
+                                  ({"argv": ["/usr/bin/true"]}, "argv"),
+                                  ({"argv": None}, "argv")):
+                with self.subTest(fields=fields):
+                    with self.assertRaises(BoardError) as raised:
+                        schemas.normalize_workflow_submit({**self.submit_params(root), **fields})
+                    self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+                    self.assertIn("execution-submit", raised.exception.message)
+                    self.assertEqual(raised.exception.details["field"], field)
+                    with self.assertRaises(BoardError) as raised:
+                        schemas.normalize_helpers({"helpers": [{**helper, **fields}]},
+                                                  integrator={"role": "host", "id": "fixture-host"})
+                    self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+                    self.assertIn("execution-submit", raised.exception.message)
+                    self.assertEqual(raised.exception.details["field"], field)
 
 
 class DecisionCapabilityTests(unittest.TestCase):

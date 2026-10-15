@@ -89,6 +89,23 @@ class MicroTaskWorkerTestCase(BoardTestCase):
 
 
 class RealWorkerTurnTests(MicroTaskWorkerTestCase):
+    def test_execution_record_fields_are_rejected_by_micro_task_submission(self):
+        with self.daemon(env=self.env()):
+            for index, fields in enumerate(({'adapter': 'command', 'argv': ['true']},
+                                             {'adapter': 'external'}, {'argv': ['true']})):
+                with self.subTest(fields=fields):
+                    code, response = self.cli('submit', json.dumps({
+                        'requestId': f'execution-record-{index}', 'hostId': 'host-1', 'task': 'separate execution',
+                        'cwd': str(self.repo), 'executionWorkspace': {'kind': 'existing', 'access': 'write'},
+                        **fields,
+                    }), env=self.env())
+                    self.assertNotEqual(code, 0, response)
+                    self.assertEqual(response['error']['code'], 'INVALID_ARGUMENT')
+                    self.assertIn('execution-submit', response['error']['message'])
+            code, listing = self.cli('list', '{}', env=self.env())
+            self.assertEqual(code, 0, listing)
+            self.assertEqual(listing['runs'], [])
+
     def execution_diagnostics(self, run_id: str, view: dict) -> str:
         code, receipt = self.cli("result", json.dumps({"runId": run_id}), env=self.env())
         meta = receipt.get("resultMeta") or {}

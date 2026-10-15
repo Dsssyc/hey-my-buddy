@@ -750,8 +750,9 @@ class BoardService(_BaseResource):
     # -- micro-task workflow --------------------------------------------------
     def workflow_submit(self, request_json: str) -> str:
         def handler(params):
-            self._touch_harnesses(params, explicit=True)
-            return self.store.workflow.submit(params)
+            normalized = self.store.workflow.normalize_submission(params)
+            self._touch_harnesses(normalized["spec"], explicit=True)
+            return self.store.workflow.submit_normalized(params, normalized)
         return self._guard("workflow.submit", request_json, handler)
 
     def workflow_get(self, request_json: str) -> str:
@@ -759,10 +760,10 @@ class BoardService(_BaseResource):
 
     def workflow_decide(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            self._touch_harnesses(params, explicit=True)
-            return self.store.workflow.decide(
-                params, console_authority=workflow_module.console_authority_from_scope()
-            )
+            authority = workflow_module.console_authority_from_scope()
+            normalized = self.store.workflow.normalize_decision(params, console_authority=authority)
+            self._touch_harnesses({"helpers": normalized["helpers"]}, explicit=True)
+            return self.store.workflow.decide_normalized(params, normalized, console_authority=authority)
 
         return self._guard("workflow.decide", request_json, handler)
 

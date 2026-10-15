@@ -206,12 +206,10 @@ describe("micro task workflow console (0.15.1 read-only)", () => {
 
   it("hides the whole execution-buddy row for a command execution's record details and keeps a recorded model buddy", async () => {
     const f = fixture();
-    // The board's buddy record for a command execution is the bare adapter
-    // marker (protocol buddy_constraints), which names no model; the detail's
-    // own spec carries no adapter to judge from.
+    // A migrated command execution has no recorded model buddy.
     const command = async <T,>(operation: string, _params: unknown, _csrfToken: string): Promise<T> => {
       if (operation !== "workflow_get") throw new Error(`Unexpected mutation: ${operation}`);
-      return { ...structuredClone(f.workflow), buddy: { adapter: "command" } } as T;
+      return { ...structuredClone(f.workflow), buddy: null } as T;
     };
     const user = userEvent.setup();
     const view = render(<WorkflowPanel {...f.props} api={{ ...f.props.api, command }} />);

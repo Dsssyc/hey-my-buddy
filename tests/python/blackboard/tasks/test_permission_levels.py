@@ -69,7 +69,7 @@ class PermissionLevelsTests(WorkflowTestCase):
                 self.assertNotIn('enforcement', view)
                 self.assertNotIn('enforcement', micro_task_brief(view))
 
-    def test_command_and_external_keep_their_permission_gate_before_admission(self):
+    def test_command_and_external_are_rejected_before_permission_checks(self):
         board = self.board()
         for adapter in ('command', 'external'):
             with self.subTest(adapter=adapter):
@@ -78,8 +78,9 @@ class PermissionLevelsTests(WorkflowTestCase):
                     self.submit(board, request_id='full-' + adapter, adapter=adapter, **fields,
                                 executionWorkspace={'kind': 'existing', 'access': 'full',
                                                     'accessReason': 'Exercise the existing connector permission gate'})
-                self.assertEqual(rejected.exception.code, 'UNSUPPORTED_CAPABILITY')
-                self.assertEqual(rejected.exception.details['requiredCapability'], 'permission:full')
+                self.assertEqual(rejected.exception.code, 'INVALID_ARGUMENT')
+                self.assertEqual(rejected.exception.details['field'], 'adapter')
+                self.assertIn('execution-submit', rejected.exception.message)
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM tasks').fetchone()[0], 0)
 

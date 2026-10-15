@@ -97,10 +97,12 @@ class HarnessServiceTests(BoardTestCase):
 
 
     def test_submit_only_rescans_an_explicit_unavailable_harness(self):
-        with patch.object(self.board.workflow, 'submit', return_value={'admitted': True}), patch.object(self.service.harnesses, 'refresh') as refresh:
-            self.assertTrue(self.call('workflow_submit')['admitted'])
+        base = {'requestId': 'discovery-submit', 'hostId': 'host', 'task': 'fixture',
+                'cwd': str(self.directory), 'executionWorkspace': {'kind': 'existing', 'access': 'read'}}
+        with patch.object(self.board.workflow, 'submit_normalized', return_value={'admitted': True}), patch.object(self.service.harnesses, 'refresh') as refresh:
+            self.assertTrue(self.call('workflow_submit', **base)['admitted'])
             refresh.assert_not_called()
-            self.assertTrue(self.call('workflow_submit', harness='codex')['admitted'])
+            self.assertTrue(self.call('workflow_submit', **base, harness='codex', provider='openai', model='fixture', effort='high')['admitted'])
             refresh.assert_called_once_with('codex', force=True)
 
     def test_manual_path_write_uses_latest_value(self):
@@ -133,7 +135,8 @@ class HarnessServiceTests(BoardTestCase):
 
     def test_explicit_continuation_and_helper_also_refresh_unavailable_harness(self):
         with patch.object(self.board.workflow, 'continue_run', return_value={}), \
-             patch.object(self.board.workflow, 'decide', return_value={}), \
+             patch.object(self.board.workflow, 'normalize_decision', return_value={'helpers': [{'spec': {'harness': 'dsh'}}]}), \
+             patch.object(self.board.workflow, 'decide_normalized', return_value={}), \
              patch.object(self.service.harnesses, 'refresh') as refresh:
             self.call('workflow_continue', buddy={'harness': 'codex'})
             self.call('workflow_decide', helpers=[{'spec': {'harness': 'dsh'}}])

@@ -181,7 +181,8 @@ class RoutingModesTests(BoardTestCase):
         for payload in ({'routingMode': 'quick'}, {'routingMode': 'fast'}, {'routingMode': None},
                         {'allowRoutingFallback': 'false'}, {'allowRoutingFallback': True}):
             with self.assertRaises(BoardError) as raised:
-                schemas.normalize_workflow_spec({'requestId': 'test', 'task': 'x', 'cwd': '.', **payload})
+                schemas.normalize_workflow_submit({'requestId': 'test', 'hostId': 'host', 'task': 'x', 'cwd': '.',
+                                                   'executionWorkspace': {'kind': 'existing', 'access': 'read'}, **payload})
             self.assertEqual(raised.exception.code, 'INVALID_ARGUMENT')
             self.assertIn('retired Host routing input', raised.exception.message)
         with self.assertRaises(BoardError):

@@ -1,14 +1,24 @@
-"""Reminder delivery through the private board and the real no-model command Worker."""
+"""Reminder delivery through the private board and offline service Workers."""
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.tasks import reminders
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.protocol.client import BoardClient
+from hey_my_buddy.blackboard.tasks import workflow
+from mock_workspace import MockWorkspace
+from unittest.mock import patch
+
+
+DSH_FIXTURE = Path(__file__).resolve().parents[2] / "buddy/harnesses/dsh/fixtures/workflow_agent.py"
+DSH_BUDDY = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
 
 
 class ReminderBoardTests(BoardTestCase):
@@ -27,6 +37,18 @@ class ReminderBoardTests(BoardTestCase):
         run_id = submitted["task"]["runId"]
         claim = self.client.claim("command-worker", "reminder-claim", "a" * 64)
         return run_id, claim["claim"]["attempt"]
+
+    def claim_native(self, *, expected_seconds=100):
+        self.catalog_fixture()
+        with patch.object(workflow, "_workspace_module", MockWorkspace(self.directory)):
+            submitted = self.client.workflow_submit(
+                requestId="reminder-native", hostId="reminder-host", task="Observe native activity",
+                cwd=str(self.workdir()), executionWorkspace={"kind": "existing", "access": "read"},
+                expectedSeconds=expected_seconds, **DSH_BUDDY,
+            )
+        self.client.register_worker("native-worker", adapter="dsh", capabilities=["dsh"])
+        claim = self.client.claim("native-worker", "reminder-native-claim", "a" * 64)
+        return submitted["runId"], claim["claim"]["attempt"]
 
     def wait(self, run_id):
         return self.board_instance.call("task_wait", {
@@ -59,13 +81,13 @@ class ReminderBoardTests(BoardTestCase):
         self.assertEqual(self.wait(run_id)["reminder"]["expectedMultiple"], 3)
 
     def test_native_silence_records_tool_evidence_then_resets_after_native_event(self):
-        run_id, attempt = self.claim_command(expected_seconds=100)
+        run_id, attempt = self.claim_native()
         with self.board_instance.store.db.write() as connection:
             connection.execute("UPDATE reminder_settings SET silence_seconds=2 WHERE id=1")
         self.clock.advance(1)
         first_native_at = self.clock()
         self.client.progress(
-            "command-worker", attempt["attemptId"], attempt["generation"], "a" * 64,
+            "native-worker", attempt["attemptId"], attempt["generation"], "a" * 64,
             phase="tool-running",
             data={"activity": {"phase": "tool-running", "observedAt": first_native_at,
                                "lastNativeActivityAt": first_native_at, "lastToolActivityAt": first_native_at,
@@ -81,7 +103,7 @@ class ReminderBoardTests(BoardTestCase):
         self.clock.advance(1)
         second_native_at = self.clock()
         self.client.progress(
-            "command-worker", attempt["attemptId"], attempt["generation"], "a" * 64,
+            "native-worker", attempt["attemptId"], attempt["generation"], "a" * 64,
             phase="waiting-model",
             data={"activity": {"phase": "waiting-model", "observedAt": second_native_at,
                                "lastNativeActivityAt": second_native_at, "eventSeq": 2}},
@@ -95,6 +117,34 @@ class ReminderBoardTests(BoardTestCase):
 
 
 class ReminderPrivateServiceTests(BoardTestCase):
+    def prepare_native(self):
+        self.catalog_fixture()
+        self.repo = self.workdir("repo")
+        git_env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
+        for args in (("init", "-q", "-b", "main"), ("config", "user.email", "buddy@example.invalid"),
+                     ("config", "user.name", "Buddy Test")):
+            completed = subprocess.run(["git", *args], cwd=self.repo, env=git_env, capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+        (self.repo / "tracked.txt").write_text("base\n")
+        for args in (("add", "."), ("commit", "-q", "-m", "base")):
+            completed = subprocess.run(["git", *args], cwd=self.repo, env=git_env, capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def native_env(self):
+        return {"HMB_MAX_CONCURRENT": "1", "HMB_DSH_CLI": str(DSH_FIXTURE)}
+
+    def claim_native(self, client, request_id):
+        client.register_worker("manual-native-worker", adapter="dsh", capabilities=["dsh", "reminder-manual"])
+        code, submitted = self.cli("submit", json.dumps({
+            "requestId": request_id, "hostId": "reminder-host", "task": "Observe an offline DSH attempt",
+            "cwd": str(self.repo), "executionWorkspace": {"kind": "existing", "access": "read"},
+            "requiredCapabilities": ["reminder-manual"], "expectedSeconds": 100, **DSH_BUDDY,
+        }), env=self.native_env())
+        self.assertEqual(code, 0, submitted)
+        claim = client.claim("manual-native-worker", f"claim-{request_id}", "b" * 64,
+                             task_id=submitted["runId"])["claim"]["attempt"]
+        return submitted["runId"], claim
+
     def private_silence_threshold(self, seconds):
         store = BoardStore(self.directory)
         store.initialize()
@@ -106,6 +156,7 @@ class ReminderPrivateServiceTests(BoardTestCase):
         # A command Worker is a real process, and this daemon/CLI path has no
         # native harness or model credentials. The duration is short enough to
         # prove await wakes before the command's own completion.
+        self.private_silence_threshold(1)
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
             code, submitted = self.cli("execution-submit", json.dumps({
                 "requestId": "private-reminder-command", "task": "Sleep in a private Worker",
@@ -128,41 +179,38 @@ class ReminderPrivateServiceTests(BoardTestCase):
             code, status = self.cli("status", json.dumps({"runId": run_id}))
             self.assertEqual(code, 0, status)
             self.assertEqual(status["status"], "running")
+            attempt = BoardClient(self.directory).get(runId=run_id)["selectedAttempt"]
+            self.assertFalse(attempt["reminders"]["possiblyStuck"])
+            store = BoardStore(self.directory)
+            with store.db.read() as connection:
+                kinds = [row[0] for row in connection.execute(
+                    "SELECT kind FROM attempt_reminders WHERE attempt_id=?", (attempt["attemptId"],))]
+            store.db.close()
+            self.assertGreaterEqual(len(kinds), 2)
+            self.assertEqual(set(kinds), {"expected-duration"})
 
     def test_private_service_silence_is_once_per_native_activity_period(self):
         self.private_silence_threshold(1)
-        with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
-            code, submitted = self.cli("execution-submit", json.dumps({
-                "requestId": "private-silent-command", "task": "Sleep in a private Worker",
-                "cwd": str(self.workdir()), "adapter": "command", "argv": ["/bin/sleep", "4"],
-                "expectedSeconds": 100,
-            }))
-            self.assertEqual(code, 0, submitted)
-            selector = json.dumps({"runId": submitted["runId"], "waitSeconds": 5})
+        self.prepare_native()
+        with self.daemon(env=self.native_env()):
+            run_id, _ = self.claim_native(BoardClient(self.directory), "private-silent-dsh")
+            selector = json.dumps({"runId": run_id, "waitSeconds": 5})
             code, first = self.cli("await", selector, timeout=15)
             self.assertEqual(code, 0, first)
             self.assertEqual(first["outcome"], "native-silence")
             self.assertIsNone(first["reminder"]["lastNativeEventAt"])
             self.assertFalse(first["reminder"]["toolInProgress"])
-            code, next_wait = self.cli("await", json.dumps({"runId": submitted["runId"], "waitSeconds": 1}), timeout=15)
+            code, next_wait = self.cli("await", json.dumps({"runId": run_id, "waitSeconds": 1}), timeout=15)
             self.assertEqual(code, 0, next_wait)
             self.assertEqual(next_wait["outcome"], "wait-timeout")
             self.assertNotIn("reminder", next_wait)
 
     def test_private_service_silence_reports_a_native_tool_in_progress(self):
         self.private_silence_threshold(1)
-        with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
+        self.prepare_native()
+        with self.daemon(env=self.native_env()):
             client = BoardClient(self.directory)
-            client.register_worker("manual-native-worker", adapter="command",
-                                   capabilities=["command", "manual-native"])
-            code, submitted = self.cli("execution-submit", json.dumps({
-                "requestId": "private-native-command", "task": "Manual Worker activity",
-                "cwd": str(self.workdir()), "adapter": "command", "argv": ["/bin/true"],
-                "requiredCapabilities": ["manual-native"], "expectedSeconds": 100,
-            }))
-            self.assertEqual(code, 0, submitted)
-            claim = client.claim("manual-native-worker", "manual-native-claim", "b" * 64,
-                                 task_id=submitted["runId"])["claim"]["attempt"]
+            run_id, claim = self.claim_native(client, "private-native-tool-dsh")
             native_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
             client.progress(
                 "manual-native-worker", claim["attemptId"], claim["generation"], "b" * 64,
@@ -172,7 +220,7 @@ class ReminderPrivateServiceTests(BoardTestCase):
                     "eventSeq": 1, "toolName": "private-tool",
                 }},
             )
-            code, result = self.cli("await", json.dumps({"runId": submitted["runId"], "waitSeconds": 5}), timeout=15)
+            code, result = self.cli("await", json.dumps({"runId": run_id, "waitSeconds": 5}), timeout=15)
             self.assertEqual(code, 0, result)
             self.assertEqual(result["outcome"], "native-silence")
             self.assertEqual(result["reminder"]["lastNativeEventAt"], native_at)

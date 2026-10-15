@@ -271,3 +271,19 @@ class BackupTests(BoardTestCase):
             connection.execute("UPDATE workers SET value='changed'")
             self.assertEqual(backup.database_snapshot(connection, event_head=1), actual)
             self.assertNotEqual(backup.database_snapshot(connection)['fingerprints']['events'], historical['events'])
+
+    def test_snapshot_projects_sparse_update_insert_and_delete(self):
+        with sqlite3.connect(self.directory / 'projected.sqlite3') as connection:
+            connection.execute('CREATE TABLE events(seq INTEGER PRIMARY KEY,kind TEXT)')
+            connection.execute('CREATE TABLE commands(command_id TEXT PRIMARY KEY,response_json TEXT)')
+            connection.executemany('INSERT INTO commands VALUES(?,?)',
+                                   [('keep', 'old'), ('remove', 'old')])
+            projected = backup.database_snapshot(
+                connection, table_names={'commands'},
+                changes={'commands': ({'keep': ('keep', 'new')}, {'added': ('added', 'new')}, {'remove'})},
+            )
+            connection.execute("UPDATE commands SET response_json='new' WHERE command_id='keep'")
+            connection.execute("INSERT INTO commands VALUES('added','new')")
+            connection.execute("DELETE FROM commands WHERE command_id='remove'")
+            actual = backup.database_snapshot(connection, table_names={'commands'})
+            self.assertEqual(projected, actual)

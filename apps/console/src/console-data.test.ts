@@ -34,8 +34,8 @@ describe("console grouping and recorded attribution", () => {
         rootLeadRunId: null, project: { id: "project", label: "project", path: "~/project" },
         buddy: { harness: "codex", provider: "openai", model: "gpt-6", effort: "high" } } }))).toBeNull();
     expect(taskExecutor(taskFixture({ spec: { adapter: "external" } }))).toBeNull();
-    expect(hasModelBuddy(taskFixture(), { adapter: "command" })).toBe(false);
-    expect(hasModelBuddy(taskFixture(), null)).toBe(true);
+    expect(hasModelBuddy(taskFixture({ spec: { adapter: "command" } }))).toBe(false);
+    expect(hasModelBuddy(taskFixture())).toBe(true);
     expect(taskExecutor(taskFixture({ spec: { adapter: "codex" } }))).toBe("执行 buddy 待确定");
     expect(taskExecutor({ lineage: { buddy: { harness: "codex", model: "gpt-6", effort: "high" } } } as Task))
       .toBe("codex · gpt-6 / high");
