@@ -7,7 +7,7 @@ import os
 import shutil
 from unittest import mock
 
-from hey_my_buddy.install import skill_package, skill_install
+from hey_my_buddy.install import skill_package, skill_install, upgrade as upgrade_module
 from hey_my_buddy.errors import BoardError
 
 
@@ -101,9 +101,15 @@ class SkillPackageTests(unittest.TestCase):
             root = Path(temporary)
             state, home = root / 'state', root / 'skills'
             state.mkdir()
+            workers = state / 'workers'
+            workers.mkdir()
+            (workers / 'old.json').write_text('{}')
+            upgrade_module.write_journal(state / 'upgrade-last.json', {'phase': 'verified',
+                'legacyWorkerCleanup': True, 'verification': {'schemaVersion': 23}})
             (state / 'active-runtime.json').write_text('{}')
             source = root / 'source'
             active = root / 'runtime' / ('a' * 32)
+            real_cleanup = upgrade_module.remove_legacy_worker_state
             with mock.patch.dict(os.environ, {**self._upgrade_environment(root, state), 'HMB_AGENT_SKILLS_DIR': str(home)}, clear=True), \
                  mock.patch('hey_my_buddy.install.skill_install.packaged_skill', return_value=source), \
                  mock.patch('hey_my_buddy.install.skill_install._marker', return_value={'version': 'fixture', 'contract': 'fixture'}), \
@@ -115,8 +121,17 @@ class SkillPackageTests(unittest.TestCase):
                  mock.patch('hey_my_buddy.install.runtime.runtime_dir', return_value=active), \
                  mock.patch('hey_my_buddy.install.runtime.content_id', return_value=active.name), \
                  mock.patch('hey_my_buddy.install.runtime.materialize') as materialize, \
-                 mock.patch('hey_my_buddy.install.upgrade.upgrade') as upgrade:
+                 mock.patch('hey_my_buddy.install.upgrade.upgrade') as upgrade, \
+                 mock.patch('hey_my_buddy.install.upgrade.remove_legacy_worker_state', side_effect=OSError('denied')) as cleanup:
                 result = skill_install.install({})
+                self.assertIn('denied', result['legacyCleanupError'])
+                self.assertTrue(json.loads((state / 'upgrade-last.json').read_text())['legacyWorkerCleanup'])
+                # Retry the same complete generation after the obstruction is removed.
+                cleanup.side_effect = real_cleanup
+                result = skill_install.install({})
+                self.assertNotIn('legacyCleanupError', result)
+                self.assertFalse(workers.exists())
+                self.assertFalse(json.loads((state / 'upgrade-last.json').read_text())['legacyWorkerCleanup'])
             self.assertEqual(result['skill']['placement'], 'already-current')
             self.assertEqual(result['service']['action'], 'none')
             materialize.assert_not_called()

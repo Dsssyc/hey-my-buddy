@@ -341,9 +341,6 @@ def main(argv: list[str] | None = None) -> int:
             os.environ['HMB_STATE_DIR'] = str(scoped_state)
         if args and args[0] not in {'upgrade','install','backup-preflight','--help','-h'}:
             marker = state / 'upgrade.json'
-            if marker.exists() and json.loads(marker.read_text()).get('phase') == 'verified':
-                from .upgrade import upgrade
-                upgrade({})
             if marker.exists():
                 from hey_my_buddy.errors import BoardError
                 raise BoardError('UPGRADE_IN_PROGRESS', 'Upgrade verification or recovery is in progress; retry the same command and identity after it finishes')

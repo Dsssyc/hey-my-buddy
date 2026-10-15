@@ -1,4 +1,6 @@
 """A real private service reads the current fixture board and its history."""
+import json
+import sys
 from unittest import mock
 
 from support import BoardTestCase
@@ -10,9 +12,46 @@ from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.protocol.transport import _read_endpoint, _request
+from hey_my_buddy.install import upgrade
 
 
 class UpgradeServiceTests(BoardTestCase):
+    def test_cleanup_refusal_keeps_private_commands_usable_and_retries_at_startup(self):
+        protected = self.directory / 'retired-state'
+        protected.mkdir()
+        (protected / 'keep.txt').write_text('retained')
+        workers = self.directory / 'workers'
+        workers.symlink_to(protected, target_is_directory=True)
+        upgrade.write_journal(self.directory / 'upgrade-last.json', {'phase': 'verified',
+            'legacyWorkerCleanup': True, 'verification': {'schemaVersion': SCHEMA_VERSION}})
+        store = BoardStore(self.directory)
+        with self.daemon():
+            code, health = self.cli('health')
+            self.assertEqual(code, 0, health)
+            self.assertEqual(health['status'], 'ok')
+            code, submitted = self.cli('execution-submit', json.dumps({
+                'requestId': 'legacy-cleanup-command', 'task': 'Private command during cleanup',
+                'cwd': str(self.workdir()), 'adapter': 'command',
+                'argv': [sys.executable, '-c', 'pass'], 'expectedSeconds': 60,
+            }))
+            self.assertEqual(code, 0, submitted)
+            code, status = self.cli('status', json.dumps({'runId': submitted['runId']}))
+            self.assertEqual(code, 0, status)
+            with store.db.read() as connection:
+                issue = dict(connection.execute(
+                    "SELECT * FROM service_issues WHERE stage='legacy-worker-cleanup'").fetchone())
+            self.assertEqual(issue['code'], 'LEGACY_WORKER_CLEANUP_FAILED')
+            self.assertIn('Fix access to workers/', issue['message'])
+            self.assertFalse((self.directory / 'upgrade.json').exists())
+        workers.unlink()
+        with self.daemon():
+            with store.db.read() as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM service_issues WHERE stage='legacy-worker-cleanup'").fetchone()[0], 0)
+            self.assertFalse(json.loads((self.directory / 'upgrade-last.json').read_text())['legacyWorkerCleanup'])
+            self.assertEqual((protected / 'keep.txt').read_text(), 'retained')
+        store.db.close()
+
     def test_private_service_reads_settings_and_preserved_work(self):
         state = self.directory
         fixture = load_fixture(state)

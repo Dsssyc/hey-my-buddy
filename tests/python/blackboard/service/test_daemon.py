@@ -1,14 +1,54 @@
 """The daemon sizes admission without starting idle execution processes."""
 from __future__ import annotations
 
+import json
 import os
 from unittest.mock import Mock, patch
 
 from support import BoardTestCase
 from hey_my_buddy.blackboard.service.daemon import Daemon
+from hey_my_buddy.install import upgrade
 
 
 class DaemonAdmissionTests(BoardTestCase):
+    def test_legacy_cleanup_issue_does_not_fence_service_and_resolves_after_retry(self):
+        board = self.board()
+        daemon = Daemon(self.directory)
+        daemon.store = board.store
+        workers = self.directory / 'workers'
+        workers.mkdir()
+        (workers / 'old.json').write_text('{}')
+        upgrade.write_journal(self.directory / 'upgrade-last.json', {'phase': 'verified',
+            'legacyWorkerCleanup': True, 'verification': {'schemaVersion': 23}})
+        with patch.object(upgrade, 'remove_legacy_worker_state', side_effect=OSError('denied')):
+            daemon._cleanup_legacy_workers()
+            head = board.store.head()
+            daemon._cleanup_legacy_workers()
+            self.assertEqual(board.store.head(), head, 'An unchanged cleanup failure must be deduplicated')
+            with board.store.db.read() as connection:
+                issue = dict(connection.execute('SELECT * FROM service_issues').fetchone())
+            self.assertEqual(issue['stage'], 'legacy-worker-cleanup')
+            self.assertEqual(issue['code'], 'LEGACY_WORKER_CLEANUP_FAILED')
+            self.assertIn('denied', issue['message'])
+            self.assertEqual(board.call('health', {})['status'], 'ok')
+            self.assertEqual(board.call('task_list', {})['tasks'], [])
+            daemon.queue_workspace_cleanup('accepted-run')
+            with patch('hey_my_buddy.blackboard.tasks.storage.cleanup_accepted_workspace') as cleanup:
+                daemon._cleanup_accepted_workspaces()
+            cleanup.assert_called_once_with(board.store, 'accepted-run')
+        # A replacement service uses the same durable pending cleanup, independent
+        # of its in-memory queues or the completed upgrade journal.
+        replacement = Daemon(self.directory)
+        replacement.store = board.store
+        replacement._cleanup_legacy_workers()
+        self.assertFalse(workers.exists())
+        self.assertFalse(json.loads((self.directory / 'upgrade-last.json').read_text())['legacyWorkerCleanup'])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM service_issues').fetchone()[0], 0)
+            events = [(row['kind'], json.loads(row['payload_json'])) for row in connection.execute(
+                "SELECT kind,payload_json FROM events WHERE kind IN ('service.issue','service.issue_resolved')")]
+        self.assertEqual([kind for kind, _ in events], ['service.issue', 'service.issue_resolved'])
+
     def test_machine_ceiling_is_store_admission_only(self):
         with patch.dict(os.environ, {"HMB_MAX_CONCURRENT": "3"}):
             daemon = Daemon(self.directory / "state")

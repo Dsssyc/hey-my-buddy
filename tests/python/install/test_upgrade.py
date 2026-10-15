@@ -55,7 +55,7 @@ class UpgradeTests(BoardTestCase):
 
         with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
              mock.patch.object(upgrade, 'probe', return_value={'runtimeContentId': target.name}), \
-             mock.patch.object(upgrade, 'verify_started', return_value={'runtimeContentId': target.name}), \
+             mock.patch.object(upgrade, 'verify_started', return_value={'runtimeContentId': target.name, 'schemaVersion': 23}), \
              mock.patch.object(upgrade, 'write_active_runtime'), \
              mock.patch.object(upgrade, 'clear_journal', side_effect=refuse_clear):
             result = upgrade.recover(state, root)
@@ -64,7 +64,7 @@ class UpgradeTests(BoardTestCase):
         self.assertTrue(marker.exists())
         self.assertEqual(json.loads(marker.read_text())['phase'], 'verified')
 
-    def test_verified_cleanup_failure_keeps_retryable_journal_until_next_recovery(self):
+    def test_verified_cleanup_failure_releases_fence_and_retries_independently(self):
         state = self.directory / 'state'
         state.mkdir()
         workers = state / 'workers'
@@ -78,34 +78,62 @@ class UpgradeTests(BoardTestCase):
         real_cleanup = upgrade.remove_legacy_worker_state
         with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
              mock.patch.object(upgrade, 'probe', return_value={'runtimeContentId': target.name}), \
-             mock.patch.object(upgrade, 'verify_started', return_value={'runtimeContentId': target.name}), \
+             mock.patch.object(upgrade, 'verify_started', return_value={'runtimeContentId': target.name, 'schemaVersion': 23}), \
              mock.patch.object(upgrade, 'write_active_runtime'), \
              mock.patch.object(upgrade, 'remove_legacy_worker_state', side_effect=[OSError('denied'), None]) as cleanup:
             first = upgrade.recover(state, root)
-            self.assertEqual(first['legacyCleanupError'], 'denied')
-            self.assertTrue(marker.exists())
+            self.assertIn('denied', first['legacyCleanupError'])
+            self.assertIn('Fix access to workers/', first['legacyCleanupError'])
+            self.assertFalse(marker.exists())
+            self.assertTrue(json.loads((state / 'upgrade-last.json').read_text())['legacyWorkerCleanup'])
             self.assertTrue(workers.exists())
             cleanup.side_effect = real_cleanup
-            second = upgrade.recover(state, root)
-        self.assertTrue(second['upgraded'])
+            self.assertIsNone(upgrade.retry_legacy_worker_cleanup(state))
         self.assertFalse(marker.exists())
+        self.assertFalse(json.loads((state / 'upgrade-last.json').read_text())['legacyWorkerCleanup'])
         self.assertFalse(workers.exists())
 
-    def test_startup_retries_verified_cleanup_before_dispatching_command(self):
+    def test_pending_legacy_cleanup_does_not_intercept_regular_commands(self):
         state = self.directory / 'state'
         state.mkdir()
-        marker = state / 'upgrade.json'
-        upgrade.write_journal(marker, {'phase': 'verified'})
-        def recovered(_params):
-            marker.unlink()
-            return {'upgraded': True, 'recoveredJournal': True}
+        upgrade.write_journal(state / 'upgrade-last.json', {'phase': 'verified', 'legacyWorkerCleanup': True,
+                                                         'verification': {'schemaVersion': 23}})
         with mock.patch.dict(os.environ, {'HMB_STATE_DIR': str(state)}), \
-             mock.patch.object(upgrade, 'upgrade', side_effect=recovered) as retry, \
+             mock.patch.object(upgrade, 'upgrade') as retry, \
+             mock.patch.object(upgrade, 'retry_legacy_worker_cleanup') as cleanup, \
              mock.patch.object(launcher, 'selected_runtime', return_value=None), \
              mock.patch('hey_my_buddy.cli.main.main', return_value=0) as command:
-            self.assertEqual(launcher.main(['status', '{}']), 0)
-        retry.assert_called_once_with({})
-        command.assert_called_once()
+            for operation in ('health', 'status'):
+                self.assertEqual(launcher.main([operation, '{}']), 0)
+        retry.assert_not_called()
+        cleanup.assert_not_called()
+        self.assertEqual(command.call_count, 2)
+
+    def test_cleanup_intent_survives_a_full_disk_without_another_marker(self):
+        state = self.directory
+        workers = state / 'workers'
+        workers.mkdir()
+        upgrade.write_journal(state / 'upgrade-last.json', {'phase': 'verified',
+            'legacyWorkerCleanup': True, 'verification': {'schemaVersion': 23}})
+        with mock.patch.object(upgrade, 'write_journal', side_effect=OSError('disk full')):
+            failure = upgrade.retry_legacy_worker_cleanup(state)
+        self.assertIn('disk full', failure)
+        self.assertFalse(workers.exists())
+        self.assertTrue(json.loads((state / 'upgrade-last.json').read_text())['legacyWorkerCleanup'])
+        self.assertIsNone(upgrade.retry_legacy_worker_cleanup(state))
+        self.assertFalse(json.loads((state / 'upgrade-last.json').read_text())['legacyWorkerCleanup'])
+
+    def test_cleanup_cannot_delete_worker_state_after_rollback_or_before_schema_cutover(self):
+        workers = self.directory / 'workers'
+        workers.mkdir()
+        retained = workers / 'active.json'
+        retained.write_text('old runtime state')
+        for phase, schema in [('verified', 22), ('rolled-back', 23)]:
+            with self.subTest(phase=phase, schema=schema):
+                upgrade.write_journal(self.directory / 'upgrade-last.json', {'phase': phase,
+                    'legacyWorkerCleanup': True, 'verification': {'schemaVersion': schema}})
+                self.assertIsNone(upgrade.retry_legacy_worker_cleanup(self.directory))
+                self.assertEqual(retained.read_text(), 'old runtime state')
 
     def test_busy_upgrade_leaves_skill_launcher_runtime_and_service_unchanged(self):
         board = self.board()

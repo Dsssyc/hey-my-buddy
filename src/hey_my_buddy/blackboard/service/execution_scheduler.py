@@ -107,8 +107,6 @@ class ExecutionScheduler:
             if not self.service.control.get("stopping") and not self.service.control.get("restart_requested"):
                 try:
                     self._admit_available()
-                except BoardError as error:
-                    self._scheduler_issue("admission", error)
                 except Exception as error:
                     self._scheduler_issue("admission", error)
             self._wake.wait(self.TICK_SECONDS)
