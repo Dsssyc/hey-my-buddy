@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受：开发者于 2026-10-11 验收控制台返修时提出，实现方一直靠调整像素距离来微调时间轴等部件，很吃力，问有没有成熟的东西可以代替，并要求 Claude Code Host 主持完善前端。Host 读了源码、在浏览器里看了界面、比较了现成的时间轴组件之后给出建议，开发者同日逐项同意：时间轴仍然自己画，但换画法并改用现成的库；整个控制台统一到 Tailwind 与 shadcn；界面用语的改名与中英文 i18n 并入这条线；i18n 用 react-i18next，语言跟随浏览器；几何的检查改在真实的浏览器里做；长等待的画法先出静态稿由开发者挑；首次公开发版等新前端。实现在单独的分支上进行，尚未合入、尚未安装：打底一步已经完成，其余各步尚未开始；执行计划见 [console-frontend.md](../design/console-frontend.md)，每一步的核对见 [Host 的记录](../acceptance/console-frontend.md)。本文修改 [ADR-024](024-console-session-view.md) 第 6 条（Tailwind 与 shadcn 不再只限于会话视图），接手 [ADR-021](021-router-buddy-planes-and-routing-evidence.md) 展示线的 U6（界面用语）。开发者同日又放宽了范围：界面不必复刻原样，由 Host 重新设计（第 8 条）。[ADR-016](016-human-console-design.md) 里关于行为与安全的规则保持不变，关于呈现的规则由第 8 条取代。
+已接受：开发者于 2026-10-11 验收控制台返修时提出，实现方一直靠调整像素距离来微调时间轴等部件，很吃力，问有没有成熟的东西可以代替，并要求 Claude Code Host 主持完善前端。Host 读了源码、在浏览器里看了界面、比较了现成的时间轴组件之后给出建议，开发者同日逐项同意：时间轴仍然自己画，但换画法并改用现成的库；整个控制台统一到 Tailwind 与 shadcn；界面用语的改名与中英文 i18n 并入这条线；i18n 用 react-i18next，语言跟随浏览器；几何的检查改在真实的浏览器里做；长等待的画法先出静态稿由开发者挑；首次公开发版等新前端。打底一步与 Buddy 页的重做已合入（[ADR-030 执行计划](../design/adr030-execution-plan.md)的批次 0）并已安装，其余页面的重做尚未开始（待办“顺序”第 4 步）；执行计划见 [console-frontend.md](../design/console-frontend.md)，每一步的核对见 [Host 的记录](../acceptance/console-frontend.md)。本文修改 [ADR-024](024-console-session-view.md) 第 6 条（Tailwind 与 shadcn 不再只限于会话视图），接手 [ADR-021](021-router-buddy-planes-and-routing-evidence.md) 展示线的 U6（界面用语）。开发者同日又放宽了范围：界面不必复刻原样，由 Host 重新设计（第 8 条）。[ADR-016](016-human-console-design.md) 里关于行为与安全的规则保持不变，关于呈现的规则由第 8 条取代。
 
 ## 背景
 
