@@ -69,9 +69,9 @@ The desktop label column stays visible while the timeline scrolls horizontally. 
 
 ## Schema and verification
 
-Startup accepts schema 19 only. A schema-18 board written by the upgrade base goes through the explicit `upgrade` path, which archives it and creates a new board that carries only the settings ([operations](operations.md#archive-upgrade)); startup performs no conversion. The schema-11 offline preparation chain is retired. Other unsupported boards remain archives and have no conversion entrypoint in this source.
+Startup accepts schema 20 only, and an install accepts no other schema: the upgrades from schemas 18 and 19 have run on the daily board and are gone ([operations](operations.md#installation)); startup performs no conversion. The schema-11 offline preparation chain is retired. Other unsupported boards remain archives and have no conversion entrypoint in this source.
 
-The check suite upgrades the fixture board written by the upgrade base and compares the result with a new board that carries the same settings; the archive must hold the old board byte for byte.
+The check suite restores the fixture board written by the upgrade base, runs the pending upgrade when there is one, and compares the result with a new board that carries the same settings.
 
 ## 0.15.1 presentation and metadata
 
