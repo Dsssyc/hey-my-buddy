@@ -53,7 +53,7 @@ Cancelled micro task `get` and execution `result` views expose `cancellation: {a
 | Command | Parameters | Behavior |
 | --- | --- | --- |
 | `ping` | none | Authenticated process liveness: status, protocol/contract/schema versions, service id, PID and the stored persistence error; no integrity or runtime inspection. Internal client attachment uses this operation |
-| `health` | none | Protocol/contract/schema versions, service id, state dir, runtime identity and stability, model `capacity` (`totalLimit`, `totalActive`, `models` entries `{harness, provider, model, limit, active}`), `managedWorkerIds`, `unstartedWorkerIds`, `stoppedWorkerIds`, `surplusWorkerIds`, `surplusDraining`, `surplusRetained`, `waitCapacity`, `backupPreflight`, integrity and active work |
+| `health` | none | Protocol/contract/schema versions, service id, state dir, runtime identity and stability, model `capacity` (`totalLimit`, `totalActive`, `models` entries `{harness, provider, model, limit, active}`), `managedWorkerIds`, `workerSupervisors` (every Worker the pool manages, desired and surplus, with the state its supervisor publishes — `starting`, `running`, `restarting`, `retiring`, `retired`, `stopped`, or `unknown` when that file is missing or malformed — and the last error with its time), `unstartedWorkerIds`, `stoppedWorkerIds`, `surplusWorkerIds`, `surplusDraining`, `surplusRetained`, `waitCapacity`, `backupPreflight`, integrity and active work |
 | `harnesses` | optional `includeUnavailable`, `refresh`, `harness` | Connector reports under `adapters`, recorded `harnesses` health, `localCapabilities`, named operations, wait admission and the honest `limitations` map |
 | `backup-preflight` | none (CLI-local) | Read-only whitelist inventory of copied, skipped and refused entries; no service or runtime startup |
 | `runtime` | optional `destination` | Runtime identity, installed-runtime description and source-leak report |
@@ -192,7 +192,7 @@ Inquiry rules:
 
 | Command | Parameters | Behavior |
 | --- | --- | --- |
-| `workers` | optional `state`, `adapter`, `limit` 1–200 (default 50) | Registered workers with state, adapter, capabilities and current attempt |
+| `workers` | optional `state`, `adapter`, `limit` 1–200 (default 50) | Registered workers with state, adapter, capabilities and current attempt, each with its published `supervisor` facts, plus `workerSupervisors` as in `health`. A Worker that registers again starts its row afresh, so a settled predecessor never shows a live Worker as `lost` |
 | `worker-register` | `workerId`, optional `identity`, `adapter`, `capabilities`, `host`, `pid`, `state`, `commandId` | Registers or refreshes one worker; idempotent by `commandId` |
 | `worker-claim` | `workerId`, `claimRequestId`, `nonce` (≥16 chars); optional `taskId`/`runId`, `pid`, `identity`, `capabilities`, `adapter`, `workerInstance` | Atomically claims one queued task; returns the attempt, lease and unguessable capability. A replay with the same `claimRequestId` and nonce returns the identical attempt and generation |
 | `worker-reconcile` | `workerId`, `attemptId`, `generation`, `nonce`; optional `claimRequestId`, `pid`, `runtimeIdentity`, `workerInstance` | Reattaches the legitimate worker after daemon downtime; a replaced generation is `STALE_GENERATION` |

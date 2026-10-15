@@ -18,20 +18,20 @@ hey-my-buddy 让 Host buddy（拥有微任务的 agent）把边界明确的工�
 
 ## 安装
 
-hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.37.1（contract 0.37.1、schema 21），安装于 2026-10-15；当前源码是同一版本。skill 位于 `~/.agents/skills/hey-my-buddy`，Claude Code 通过 `~/.claude/skills/hey-my-buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。[原生沙盒审阅验收](docs/acceptance/native-sandbox-review-0.27.0.md)记录由固定原生探针拥有、不再解读模型输出的验证。[路由与验证验收](docs/acceptance/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同一宏任务内委派、Host 直接收尾、失败结论与清理、部分成果、更换 buddy 续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未发布。把它装到 0.36.0 的看板上时，在校验过的备份之后把这块看板就地转换到 schema 21（见[运行参考](docs/reference/operations.md#installation)）。
+hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.37.1（contract 0.37.1、schema 21），安装于 2026-10-15；当前源码是 0.38.0（contract 0.38.0、schema 21），尚未安装。skill 位于 `~/.agents/skills/hey-my-buddy`，Claude Code 通过 `~/.claude/skills/hey-my-buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。[原生沙盒审阅验收](docs/acceptance/native-sandbox-review-0.27.0.md)记录由固定原生探针拥有、不再解读模型输出的验证。[路由与验证验收](docs/acceptance/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同一宏任务内委派、Host 直接收尾、失败结论与清理、部分成果、更换 buddy 续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未发布。把它装到 0.36.0 的看板上时，在校验过的备份之后把这块看板就地转换到 schema 21（见[运行参考](docs/reference/operations.md#installation)）。
 
 在开发者确定发布渠道与确切版本之后，安装入口是一条固定版本的包命令：
 
 ```sh
 # 发布渠道与版本确定之后使用；目前不可用
-uvx hey-my-buddy@0.37.1 install
+uvx hey-my-buddy@0.38.0 install
 ```
 
 包名是否可用、是否发布到 PyPI 仍待开发者决定，本候选尚未发布到 PyPI。在正式发布之前，可以从冻结源码构建 wheel，并用绝对路径安装：
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from /absolute/path/hey_my_buddy-0.37.1-py3-none-any.whl hey-my-buddy install
+uvx --from /absolute/path/hey_my_buddy-0.38.0-py3-none-any.whl hey-my-buddy install
 ```
 
 机器上没有 `uv` 时，发布包里的 `install.sh`（macOS、Linux）或 `install.ps1`（Windows）会先准备固定版本的私有 `uv`，再调用同一个安装入口；它们不修改 `PATH`、shell 或 Host 设置，也不会安装全局 `hey-my-buddy` 命令。安装会先列出将写入的路径、物化版本化运行时；有排队或在跑的工作、未确认的停止时拒绝并列出阻塞项（`UPGRADE_NOT_IDLE`）；空闲后整体切换 skill、启动器、运行时与服务，并保留校验过的备份用于回滚。重跑完整同版本只补齐缺失内容、不重启服务；内容损坏时用同一条固定版本命令修复；同版本内容变化会报告 `updated`。sdist 保留来源提交，解包后构建 wheel 仍保留相同 `sourceCommit`。安装或升级日常服务都需要用户的单独授权。代码与脚本可移植到 Windows，但尚未在真机验证。
