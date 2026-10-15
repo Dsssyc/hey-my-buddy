@@ -62,13 +62,12 @@ def legacy_boot_evidence(started_at: str) -> bool:
     return datetime.fromisoformat(started_at.replace('Z', '+00:00')).timestamp() < boot - LEGACY_BOOT_MARGIN_SECONDS
 
 
-def _snapshot(board, *, legacy_only: bool = False, attempt_id: str | None = None, unobserved_only: bool = False) -> list[tuple[dict, dict | None, str | None]]:
+def _snapshot(board, *, attempt_id: str | None = None, unobserved_only: bool = False) -> list[tuple[dict, dict | None, str | None]]:
     with board.db.read() as connection:
         rows = connection.execute(
             "SELECT a.*,l.started_at AS legacy_started_at FROM attempts a"
             " LEFT JOIN attempt_legacy_starts l ON l.attempt_id=a.attempt_id"
             " WHERE a.execution_state='uncertain'" +
-            (' AND l.attempt_id IS NOT NULL' if legacy_only else '') +
             (' AND a.attempt_id=?' if attempt_id is not None else '') +
             (' AND NOT EXISTS(SELECT 1 FROM attempt_interruptions i WHERE i.attempt_id=a.attempt_id)'
              if unobserved_only else ''), (() if attempt_id is None else (attempt_id,))).fetchall()
@@ -119,9 +118,9 @@ def _evidence(board, attempt: dict, record: dict | None, legacy_start: str | Non
     return 'unknown'
 
 
-def recover(board, *, legacy_only: bool = False) -> int:
+def recover(board) -> int:
     settled = 0
-    for attempt, record, legacy_start in _snapshot(board, legacy_only=legacy_only):
+    for attempt, record, legacy_start in _snapshot(board):
         with board.db.read() as connection:
             pending = connection.execute('SELECT evidence_kind FROM attempt_interruptions WHERE attempt_id=?',
                                          (attempt['attempt_id'],)).fetchone()

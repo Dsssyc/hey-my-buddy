@@ -9,7 +9,6 @@ from unittest import mock
 from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import backup
-from hey_my_buddy.blackboard.store import upgrade as board_upgrade
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.errors import BoardError
@@ -21,7 +20,6 @@ class SameSchemaCutoverTests(BoardTestCase):
         super().setUp()
         self.state = self.directory / "state"
         load_fixture(self.state)
-        board_upgrade.migrate(self.state)
         (self.state / "console-settings.json").write_text('{"theme":"dark"}')
         old_backup = Path(backup.create(BoardStore(self.state))["path"])
         self.retained_archive = self.state / "archives" / "previous"

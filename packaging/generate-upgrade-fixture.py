@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate schema-19 upgrade stock using the frozen installed base source.
+"""Generate schema-20 upgrade stock using the frozen installed base source.
 
 No product installation, daemon, native harness or model is started. The base
 named service operations run in process; only native discovery is synthetic.
@@ -26,9 +26,9 @@ import tarfile
 import tempfile
 import uuid
 
-BASE = "4ca5344b2103c44d425e40d9144928be54f65f60"
-BASE_VERSION = "0.35.0"
-BASE_SCHEMA = 19
+BASE = "6b385e53bf24e462b7c1534efcd77698b2c4729a"
+BASE_VERSION = "0.36.0"
+BASE_SCHEMA = 20
 # An existing five-file repository commit keeps workspace capture bounded.
 # This is the workspace input, never the source used to create the database.
 WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
@@ -313,7 +313,7 @@ def populate(args):
             "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
             "boundary": "Base BoardService named operations in process; synthetic native discovery and worker result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before upgrade; this preparation is not migration or new native execution. Host conclusions are base history only; real host_seal is tested separately.",
-            "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 19; baseline only after return",
+            "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {BASE_SCHEMA}; baseline only after return",
             "schemaSha256": digest(json_text([list(row) for row in source_schema]).encode()),
             "sqlSha256": digest(sql_path.read_bytes()), "operationsSha256": digest((output / "operations.json").read_bytes()),
             "catalogSha256": digest((output / "catalog.json").read_bytes()),

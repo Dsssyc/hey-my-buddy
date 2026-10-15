@@ -3034,10 +3034,10 @@ class BoardStore:
         from ..tasks.interruption import record_identity
         record_identity(connection, attempt_id, record, previous_stopped=previous_stopped)
 
-    def recover_interrupted_attempts(self, *, legacy_only: bool = False) -> int:
+    def recover_interrupted_attempts(self) -> int:
         from ..tasks.interruption import recover
         with self._recovery_lock:
-            return recover(self, legacy_only=legacy_only)
+            return recover(self)
 
     def worker_recover(self, params: dict) -> dict:
         from ..tasks.interruption import worker_recover

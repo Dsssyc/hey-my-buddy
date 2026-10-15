@@ -16,7 +16,6 @@ import time
 import uuid
 
 from ..blackboard.store import backup
-from ..blackboard.store import upgrade as board_upgrade
 from .. import private_dirs
 from . import runtime
 from .launcher import write_active_runtime
@@ -59,8 +58,8 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if schema is None or str(schema[0]) not in (str(board_upgrade.BASE_SCHEMA_VERSION), str(SCHEMA_VERSION)):
-            raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade accepts schema {board_upgrade.BASE_SCHEMA_VERSION} or {SCHEMA_VERSION} only')
+        if schema is None or str(schema[0]) != str(SCHEMA_VERSION):
+            raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade accepts schema {SCHEMA_VERSION} only')
         # A micro-task Host boundary has no autonomous next turn. A recorded or
         # queued continuation still has work to prepare/claim, even if the run
         # currently reports a Host boundary. Routing and helper tasks are checked
@@ -74,17 +73,6 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
             " AND c.state IN ('recorded','queued'))))"
         ).fetchall()
         unresolved = connection.execute("SELECT attempt_id FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1").fetchall()
-        if schema[0] == str(board_upgrade.BASE_SCHEMA_VERSION):
-            from ..blackboard.tasks.interruption import legacy_boot_evidence
-            # Schema 19 cannot record the complete identity. The new source may
-            # admit its explicit conversion only for unknown executions that this
-            # boot itself proves ended; it never cancels live work to make it idle.
-            stock = connection.execute(
-                "SELECT attempt_id,task_id,COALESCE(started_at,created_at) FROM attempts"
-                " WHERE execution_state='uncertain'").fetchall()
-            proven = {row[0]: row[1] for row in stock if legacy_boot_evidence(row[2])}
-            unresolved = [row for row in unresolved if row[0] not in proven]
-            active = [row for row in active if row[0] not in proven.values()]
         if active or unresolved:
             raise BoardError('UPGRADE_NOT_IDLE', 'Upgrade requires idle work and confirmed shutdown; no task was cancelled',
                              active=[{'runId': row[0], 'state': row[1]} for row in active[:20]], unresolvedAttempts=[r[0] for r in unresolved[:20]])
@@ -498,17 +486,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     journal['before'] = before
                 journal.update(phase='backed-up', backup=backed_up)
                 write_journal(marker, journal)
-                if before['schema'] == board_upgrade.BASE_SCHEMA_VERSION:
-                    journal['phase'] = 'migrating'
-                    write_journal(marker, journal)
-                    board_upgrade.migrate(state)
-                    expected = idle_snapshot(state, event_head=before['eventHead'])
-                    expected['runtimeSettings'] = runtime_settings
-                    journal['expected'] = expected
-                    journal['phase'] = 'migrated'
-                    write_journal(marker, journal)
-                else:
-                    expected = before
+                expected = before
             active = target
             health = start(state, target)
             evidence = verify_started(state, target, health, expected)
