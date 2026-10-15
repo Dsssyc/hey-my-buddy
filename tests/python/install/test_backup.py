@@ -34,6 +34,18 @@ class BackupTests(BoardTestCase):
         self.assertEqual([p.name for p in current.parent.iterdir() if p.is_dir()], ['current'])
         self.assertEqual((current / 'state/controls/x.json').stat().st_mode & 0o777, 0o600)
 
+    def test_verify_refuses_consumed_upgrade_schema(self):
+        board = self.board()
+        current = Path(board.call('backup', {})['path'])
+        path = current / 'manifest.json'
+        manifest = json.loads(path.read_text())
+        manifest['schema'] = 20
+        path.write_text(json.dumps(manifest))
+        with self.assertRaises(BoardError) as caught:
+            backup.verify(current)
+        self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
+        self.assertEqual(caught.exception.message, 'Unsupported backup format or schema')
+
     def test_offline_archive_refuses_an_uncheckpointed_wal_without_publication(self):
         board = self.board()
         with board.store.db.connect() as writer:
