@@ -63,7 +63,10 @@ def render(method: str, response: Any, mode: str = OUTPUT_BRIEF) -> Any:
     projector = _PROJECTORS.get(method)
     if projector is None:
         return response
-    return projector(response)
+    projected = projector(response)
+    if 'waitingForHost' in response:
+        projected['waitingForHost'] = response['waitingForHost']
+    return projected
 
 
 # -- small helpers -----------------------------------------------------------

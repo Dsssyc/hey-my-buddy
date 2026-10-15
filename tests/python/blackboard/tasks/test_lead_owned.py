@@ -10,6 +10,27 @@ from hey_my_buddy.errors import BoardError
 
 
 class LeadOwnedTests(WorkflowTestCase):
+    def test_execution_credentials_never_receive_host_waiting_counts(self):
+        board = self.board()
+        self.register(board)
+        returned = self.submit(board)
+        self.finish_turn(board, self.claim(board))
+        self.assertEqual(board.call('workflow_get', {'runId': returned['runId']})['waitingForHost'],
+                         {'review': 1})
+        lead, claim = self.lead(board, worker='lead-worker')
+        child = self.owned(board, claim)
+        self.assertNotIn('waitingForHost', child)
+        self.assertNotIn('waitingForHost', board.call('workflow_get', {'runId': child['runId']}))
+        for operation, params in (
+            ('workflow_get', {'runId': lead['runId']}),
+            ('task_get', {'runId': lead['runId']}),
+            ('task_list', {}),
+            ('workflow_get', {'runId': child['runId']}),
+        ):
+            with self.subTest(operation=operation, params=params):
+                response = board.call(operation, {**params, 'credential': claim['agentCredential']})
+                self.assertNotIn('waitingForHost', response)
+
     def lead(self, board, name="lead", worker="w1", **extra):
         enable_fixture_buddy(board.store, BUDDY)
         submitted = self.submit(board, request_id=name, cwd=str(self.workdir(name)), access="full",
