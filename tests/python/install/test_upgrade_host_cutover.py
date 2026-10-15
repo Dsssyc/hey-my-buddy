@@ -261,10 +261,15 @@ class HostCutoverTests(RealWorkspaceTestCase):
                                 self.assertEqual(self.snapshot(), fenced_before)
                             release_wait.set()
                             waited = waiter.result(timeout=10)
-                            self.assertEqual(waited["outcome"], "unavailable")
+                            # task_wait already returned the durable Host boundary
+                            # before the fence. Only fetching its full result is
+                            # fenced; preserve the boundary and its next commands.
+                            self.assertEqual(waited["outcome"], "waiting-host")
                             self.assertEqual(waited["error"]["code"], "UPGRADE_IN_PROGRESS")
-                            self.assertEqual(waited["recovery"]["runId"], root["runId"])
-                            self.assertIn("await", waited["recovery"]["action"])
+                            self.assertEqual(waited["runId"], root["runId"])
+                            self.assertEqual(waited["request"]["requestId"], before["activeRequest"]["requestId"])
+                            self.assertFalse(waited["resultDelivered"])
+                            self.assertTrue(waited["nextCommands"])
 
                     with mock.patch.object(upgrade, "write_journal", side_effect=on_journal):
                         result = upgrade.upgrade({})

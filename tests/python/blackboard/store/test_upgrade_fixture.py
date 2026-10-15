@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from blackboard.store.upgrade_fixture import load_fixture, _git, _sha, _json
-from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy.blackboard.store import backup, upgrade as board_upgrade
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
@@ -125,6 +125,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         request_fingerprints = dict(old.execute('SELECT run_id,request_fingerprint FROM workflow_runs'))
         expected_preferences = [tuple(row) for row in old.execute(
             'SELECT buddy_id,mode,reason FROM evaluation_preferences ORDER BY buddy_id')]
+        retained_meta = dict(old.execute("SELECT key,value FROM meta WHERE key!='schema_version'"))
         old.close()
         history = {path.relative_to(state): path.read_bytes()
                    for path in (state / 'workspaces').rglob('*') if path.is_file()}
@@ -161,7 +162,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         after = upgrade.idle_snapshot(state, event_head=before['eventHead'])
         self.assertEqual(after['schema'], SCHEMA_VERSION)
         self.assertEqual(after['eventHead'], before['eventHead'])
-        self.assertEqual(after['fingerprints'], before['fingerprints'])
+        self.assertEqual({name: after['fingerprints'][name] for name in before['fingerprints'] if name != 'meta'},
+                         {name: value for name, value in before['fingerprints'].items() if name != 'meta'})
         self.assertEqual({relative: (state / relative).read_bytes() for relative in history}, history)
         self.assertEqual(backup.verify(Path(result['backup']['path']))['schema'], fixture['schemaVersion'])
 
@@ -177,6 +179,11 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertNotIn('attempt_legacy_starts', after['tables'])
             self.assertEqual(upgraded.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
                              str(SCHEMA_VERSION))
+            self.assertEqual(dict(upgraded.execute("SELECT key,value FROM meta WHERE key!='schema_version'")),
+                             retained_meta)
+            self.assertEqual(tuple(upgraded.execute(
+                'SELECT silence_seconds,revision FROM reminder_settings WHERE id=1').fetchone()), (900, 1))
+            self.assertEqual(upgraded.execute('SELECT COUNT(*) FROM attempt_reminders').fetchone()[0], 0)
             self.assertEqual(upgraded.execute('SELECT COUNT(*) FROM workflow_lead_tasks').fetchone()[0], 0)
             self.assertEqual({row[0] for row in upgraded.execute(
                 'SELECT delegation_authority FROM workflow_runs')}, {0})
@@ -200,6 +207,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         connection.execute('UPDATE workflow_runs SET request_fingerprint=NULL')
         connection.commit()
         connection.close()
+        board_upgrade.migrate(fixture['state'])
         store = BoardStore(fixture['state'])
         store.initialize()
         self.addCleanup(store.db.close)
@@ -213,7 +221,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                     self.assertEqual(caught.exception.code, 'SUBMISSION_REPLAY_UNAVAILABLE')
                     self.assertEqual(caught.exception.details['requestId'], params['requestId'])
         with store.db.read() as upgraded:
-            self.assertEqual(upgraded.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '21')
+            self.assertEqual(upgraded.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
             self.assertTrue(all(row[0] is None for row in upgraded.execute(
                 'SELECT request_fingerprint FROM workflow_runs')))
         repository = self.root / 'new-submission-repository'

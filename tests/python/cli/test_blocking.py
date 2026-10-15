@@ -1,9 +1,8 @@
-"""Fast isolated tests for the read-only CLI blocking wait (no service, no dsh, no model).
+"""Fast isolated tests for the CLI blocking wait (no service, no dsh, no model).
 
-``hey-my-buddy await`` is the only blocking CLI call. It must stay a pure reader: it may
-issue ``status``/``list``/``events``/``watch``/``wait``/``result``, and it must
-never start, resume, retry or cancel a run - not on timeout, not on disconnect and
-not while reconnecting after a transient service failure.
+``hey-my-buddy await`` is the only blocking CLI call. It may
+issue ``status``/``events``/``watch``/``wait``/``result`` and consume one reminder
+through ``wait``. It must never start, resume, retry or cancel a run.
 """
 import json
 import os
@@ -37,8 +36,8 @@ class VirtualClock:
 class FakeService:
     """Injectable stand-in for ``hey_my_buddy.protocol.transport.call_service``.
 
-    Only the read-only operations await may use are implemented; anything else is
-    an assertion failure, which is how "never starts or cancels" is enforced.
+    Only observation operations await may use are implemented; ``wait`` may
+    consume one reminder. Anything else fails the no-start/no-cancel contract.
     """
 
     READ_ONLY = frozenset({"status", "events", "watch", "wait", "result"})
@@ -619,6 +618,131 @@ class CompactMicroTaskEnvelopeTests(unittest.TestCase):
                            service=service, clock=clock, scoped=True)
         self.assertEqual(watched, ["owned"])
         self.assertEqual(result["outcome"], "cancelled")
+
+
+class ReminderReturnTests(unittest.TestCase):
+    def test_lost_reminder_reply_recovers_with_the_same_delivery_id(self):
+        clock = VirtualClock()
+        service = FakeService(clock)
+        service.run.update(workflowState="executing", attemptState="executing")
+        first_wait_id = None
+        original_call = service.__call__
+
+        def call(method, params, state_dir=None):
+            nonlocal first_wait_id
+            if method == "wait":
+                self.assertTrue(params["consumeReminders"])
+                service.calls.append(method)
+                if first_wait_id is None:
+                    first_wait_id = params["reminderWaitId"]
+                    raise ServiceError("SERVICE_UNAVAILABLE", "reply lost after durable consumption")
+                self.assertEqual(params["reminderWaitId"], first_wait_id)
+                return {**service.run, "reminder": {
+                    "reminderId": 10, "kind": "expected-duration", "elapsedSeconds": 1800.0,
+                    "lastNativeEventAt": None, "toolInProgress": False,
+                    "createdAt": "2026-01-01T00:30:00Z", "expectedMultiple": 1,
+                }}
+            return original_call(method, params, state_dir)
+
+        result = await_run({"runId": "run-fixture", "waitSeconds": 60},
+                           state_dir=Path(os.environ["HMB_STATE_DIR"]), service=call, clock=clock)
+        self.assertEqual(result["outcome"], "expected-duration")
+        self.assertEqual(result["reminder"]["reminderId"], 10)
+        self.assertEqual(result["reconnects"], 1)
+        self.assertEqual(service.calls, ["status", "wait", "status", "wait"])
+
+    def test_active_micro_task_with_unconfirmed_self_waits_for_a_reminder(self):
+        clock = VirtualClock()
+        service = FakeService(clock)
+        service.run.update(
+            workflowState="executing", attemptState="executing",
+            workflowShutdown={"selfConfirmed": False, "descendantsConfirmed": False,
+                              "unconfirmedRunIds": ["run-fixture"]},
+        )
+        original_call = service.__call__
+
+        def call(method, params, state_dir=None):
+            if method in ("events", "watch"):
+                self.fail("an active attempt must use task_wait so the reminder can wake await")
+            if method == "wait":
+                self.assertTrue(params["consumeReminders"])
+                service.calls.append(method)
+                clock.advance(1)
+                return {**service.run, "reminder": {
+                    "reminderId": 6, "kind": "native-silence", "elapsedSeconds": 901.0,
+                    "lastNativeEventAt": None, "toolInProgress": False,
+                    "createdAt": "2026-01-01T00:15:01Z", "expectedMultiple": None,
+                }}
+            return original_call(method, params, state_dir)
+
+        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60},
+                             state_dir=Path(os.environ["HMB_STATE_DIR"]), service=call, clock=clock)
+        self.assertEqual(envelope["outcome"], "native-silence")
+        self.assertEqual(envelope["waitedSeconds"], 1.0)
+        self.assertEqual(service.calls, ["status", "wait"])
+
+    def test_pending_reminders_return_once_per_await_before_any_blocking_wait(self):
+        clock = VirtualClock()
+        service = FakeService(clock)
+        service.run.update(workflowState="executing", attemptState="executing")
+        pending = [
+            {"reminderId": 7, "kind": "expected-duration", "elapsedSeconds": 12.0,
+             "lastNativeEventAt": None, "toolInProgress": False,
+             "createdAt": "2026-01-01T00:00:12Z", "expectedMultiple": 1},
+            {"reminderId": 8, "kind": "native-silence", "elapsedSeconds": 15.0,
+             "lastNativeEventAt": "2026-01-01T00:00:01Z", "toolInProgress": True,
+             "createdAt": "2026-01-01T00:00:15Z", "expectedMultiple": None},
+        ]
+        original_call = service.__call__
+
+        def call(method, params, state_dir=None):
+            if method == "wait" and pending:
+                self.assertGreater(params["timeoutMs"], 0)
+                self.assertTrue(params["consumeReminders"])
+                service.calls.append(method)
+                return {**service.run, "reminder": pending.pop(0)}
+            return original_call(method, params, state_dir)
+
+        first = await_run({"runId": "run-fixture", "waitSeconds": 60},
+                          state_dir=Path(os.environ["HMB_STATE_DIR"]), service=call, clock=clock)
+        second = await_run({"runId": "run-fixture", "waitSeconds": 60},
+                           state_dir=Path(os.environ["HMB_STATE_DIR"]), service=call, clock=clock)
+        self.assertEqual([first["outcome"], second["outcome"]], ["expected-duration", "native-silence"])
+        self.assertEqual([first["reminder"]["reminderId"], second["reminder"]["reminderId"]], [7, 8])
+        self.assertEqual(second["reminder"]["lastNativeEventAt"], "2026-01-01T00:00:01Z")
+        self.assertTrue(second["reminder"]["toolInProgress"])
+        for envelope in (first, second):
+            self.assertFalse(envelope["ok"])
+            self.assertFalse(envelope["microTaskComplete"])
+            self.assertFalse(envelope["timedOut"])
+            self.assertEqual(envelope["status"], "running")
+            self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
+            self.assertEqual(envelope["waitedSeconds"], 0.0)
+        self.assertEqual(service.calls, ["status", "wait", "status", "wait"])
+
+    def test_new_reminder_ends_a_blocking_wait_without_stopping_the_run(self):
+        clock = VirtualClock()
+        service = FakeService(clock)
+        service.run.update(workflowState="executing", attemptState="executing")
+        original_call = service.__call__
+
+        def call(method, params, state_dir=None):
+            if method == "wait" and params["timeoutMs"] > 0:
+                self.assertTrue(params["consumeReminders"])
+                service.calls.append(method)
+                clock.advance(2)
+                return {**service.run, "reminder": {
+                    "reminderId": 9, "kind": "expected-duration", "elapsedSeconds": 1800.0,
+                    "lastNativeEventAt": None, "toolInProgress": False,
+                    "createdAt": "2026-01-01T00:30:00Z", "expectedMultiple": 1,
+                }}
+            return original_call(method, params, state_dir)
+
+        result = await_run({"runId": "run-fixture", "waitSeconds": 60},
+                           state_dir=Path(os.environ["HMB_STATE_DIR"]), service=call, clock=clock)
+        self.assertEqual(result["outcome"], "expected-duration")
+        self.assertEqual(result["waitedSeconds"], 2.0)
+        self.assertEqual(service.calls, ["status", "wait"])
 
 
 if __name__ == "__main__":

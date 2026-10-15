@@ -1,4 +1,4 @@
-import type { RuntimeVersionInfo, VersionFacts, BackupPreflight, Configuration, ConsoleAccess, ConsoleSession, RoutingHealth, Snapshot, TaskPage, TaskQuery } from "./types";
+import type { RuntimeVersionInfo, VersionFacts, BackupPreflight, Configuration, ConsoleAccess, ConsoleSession, ReminderSettings, RoutingHealth, Snapshot, TaskPage, TaskQuery } from "./types";
 import type {
   MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskSummary, MacroTaskTimeline, TimelineRow,
 } from "./macro-task-types";
@@ -68,6 +68,16 @@ export function parseConsoleAccess(value: unknown): ConsoleAccess {
     throw new ApiError("INVALID_RESPONSE", "控制台访问设置无法识别，请刷新后重试。");
   }
   return access;
+}
+
+export function parseReminderSettings(value: unknown): ReminderSettings {
+  const settings = value as ReminderSettings | null;
+  if (!settings || !Number.isSafeInteger(settings.silenceSeconds) || settings.silenceSeconds < 1
+    || settings.silenceSeconds > 86400 || !Number.isSafeInteger(settings.revision) || settings.revision < 1
+    || typeof settings.updatedAt !== "string" || !Number.isFinite(Date.parse(settings.updatedAt))) {
+    throw new ApiError("INVALID_RESPONSE", "提醒设置无法识别，请刷新后重试。");
+  }
+  return settings;
 }
 
 
@@ -628,7 +638,8 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       if (sessionId !== null && session.id !== sessionId) clearConditionalCache();
       sessionId = session.id;
       return verifiedRead({ ...data, routingHealth: parseRoutingHealth(data.routingHealth), consoleSession: session,
-        ...(data.consoleAccess === undefined ? {} : { consoleAccess: parseConsoleAccess(data.consoleAccess) }) }, verifiedAtMs);
+        ...(data.consoleAccess === undefined ? {} : { consoleAccess: parseConsoleAccess(data.consoleAccess) }),
+        ...(data.reminderSettings === undefined ? {} : { reminderSettings: parseReminderSettings(data.reminderSettings) }) }, verifiedAtMs);
     },
     async command<T = unknown>(
       operation: string,

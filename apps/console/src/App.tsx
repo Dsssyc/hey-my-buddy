@@ -196,7 +196,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
           authority={authority} writesAvailable={writesAvailable} /> :
           key === "buddies" ? <BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
             <Settings api={api} csrfToken={snapshot.csrfToken} connectionError={connectionError}
-              access={snapshot.consoleAccess} refresh={refresh} writesAvailable={writesAvailable}
+              access={snapshot.consoleAccess} reminders={snapshot.reminderSettings} refresh={refresh} writesAvailable={writesAvailable}
               active={tab === "settings"}
               theme={theme.choice} onTheme={theme.setChoice} />}
       </section>)}

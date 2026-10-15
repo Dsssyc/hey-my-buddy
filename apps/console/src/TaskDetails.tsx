@@ -108,10 +108,17 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   // One execution's own recorded usage; unknown stays unknown (ADR-018 §22).
   const usage = tokenUsageView(task.tokenUsage ?? task.selectedAttempt?.tokenUsage);
   const quotaFailureLabel = task.quotaFailure?.code === "quota-exceeded" ? "额度耗尽" : task.quotaFailure?.code === "rate-limited" ? "原生服务限流" : null;
+  const reminders = task.activeAttemptId && task.activeAttemptId === task.selectedAttempt?.attemptId
+    ? task.selectedAttempt.reminders : null;
   return <>
     <header className="detail-header">
-      <div className="row-between">{!hideBackButton && <button className="button small-button mobile-back" onClick={() => selectTask(null)}>返回微任务列表</button>}
-        <span className="small muted truncate" title={project.path || project.label}>{project.label}</span><Status status={taskStatus(task)} /></div>
+      <div className="flex flex-wrap items-center gap-2">{!hideBackButton && <button className="button small-button mobile-back" onClick={() => selectTask(null)}>返回微任务列表</button>}
+        <span className="small muted min-w-0 flex-1 truncate" title={project.path || project.label}>{project.label}</span>
+        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
+          {reminders?.overdue && <span className="text-hand text-xs font-medium">{i18n.t("shell:reminders.overdue")}</span>}
+          {reminders?.possiblyStuck && <span className="text-hand text-xs font-medium">{i18n.t("shell:reminders.possiblyStuck")}</span>}
+          <Status status={taskStatus(task)} />
+        </div></div>
       {!task.workflow && quotaFailureLabel && <p className="error-message">执行原因：{quotaFailureLabel}</p>}
       <div className="flex flex-wrap items-center gap-x-2">
         <h2 className="detail-title" title={titleTooltip(title)}>

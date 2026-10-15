@@ -12,9 +12,10 @@ deadline, never to this wait. Reaching the window returns an honest
 ``wait-timeout`` envelope and the job keeps running, recovered by ``requestId`` or
 ``runId``.
 
-``await`` is read-only in the strict sense:
+``await`` never changes the durable work:
 
 * it never starts, resumes, retries or cancels anything, on timeout or otherwise;
+* for an active execution, it consumes one durable reminder when returning it;
 * a transient service failure is recovered by re-reading the SAME durable
   ``runId`` (bounded reconnects), never by replaying a submission;
 * stopping this wait (Ctrl-C, a closed terminal, a killed client, ``waitSeconds``
@@ -30,6 +31,7 @@ from pathlib import Path
 import shlex
 import threading
 import time
+import uuid
 from typing import Any, Callable
 
 from ..protocol.transport import ServiceError, _call_service
@@ -473,15 +475,28 @@ def _wait_until_terminal(
 ) -> dict:
     """Follow one existing durable run with bounded event waits.
 
-    Read-only: the only operations it may issue are ``status``, ``events``,
-    ``watch``, ``wait`` and ``result``. It never starts, resumes, retries or
-    cancels, so an abandoned or timed-out wait can only stop the wait itself.
+    It may consume a reminder, but never starts, resumes, retries or cancels
+    the durable run. An abandoned or timed-out wait only stops this CLI call.
     """
     reconnects = 0
     deadline = started + wait_seconds
+    reminder_wait_id = uuid.uuid4().hex
     while True:
         if stop is not None and stop.is_set():
             raise WaitAbandoned(request_id, run_id)
+        reminder = run.get("reminder")
+        if isinstance(reminder, dict):
+            envelope = _envelope(
+                run,
+                request_id=request_id,
+                outcome=reminder["kind"],
+                waited_seconds=clock() - started,
+                wait_seconds=wait_seconds,
+                recovery=_recovery(request_id, run_id, "A task reminder ended this wait. Inspect the task or await the same run again."),
+                reconnects=reconnects,
+            )
+            envelope.update(reminder=reminder, microTaskComplete=False)
+            return envelope
         workflow_state = run.get("workflowState")
         if workflow_state == "awaiting-host":
             return _host_boundary(
@@ -524,7 +539,8 @@ def _wait_until_terminal(
         timeout_ms = max(1, int(min(WAIT_SLICE_MS, remaining * 1000)))
         try:
             shutdown = run.get("workflowShutdown")
-            if isinstance(shutdown, dict) and shutdown.get("unconfirmedRunIds"):
+            if (isinstance(shutdown, dict) and shutdown.get("unconfirmedRunIds")
+                    and (scoped or run.get("attemptState") not in ("starting", "executing", "finalizing", "uncertain"))):
                 # Parent revision need not change when an owned descendant stops.
                 # A terminal task with unconfirmed shutdown can make task_wait
                 # return immediately. Use the durable event cursor instead, with
@@ -544,10 +560,12 @@ def _wait_until_terminal(
                     service("watch", {"runId": target, "after": head, "timeoutMs": timeout_ms}, state_dir)
                     run = service("status", {"runId": run_id}, state_dir)
             else:
-                run = service("wait", {"runId": run_id, "afterRevision": run.get("revision"), "timeoutMs": timeout_ms}, state_dir)
+                run = service("wait", {"runId": run_id, "afterRevision": run.get("revision"),
+                                       "timeoutMs": timeout_ms,
+                                       "consumeReminders": True, "reminderWaitId": reminder_wait_id}, state_dir)
         except ServiceError as failure:
-            # A wait is read-only: a transient failure re-attaches by reading the
-            # SAME durable runId. It never replays a submission or starts work.
+            # A transient failure re-attaches by reading the SAME durable runId.
+            # It never replays a submission or starts work.
             if reconnects >= MAX_RECONNECTS:
                 return _envelope(
                     run,

@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 from support import BoardTestCase, PYTHON_ROOT
 from blackboard.tasks.test_workflow import WorkflowTestCase
+from hey_my_buddy.errors import BoardError
 
 
 BUDDY_ID = "dsh:deepseek-official:deepseek-flash:off"
@@ -150,13 +151,40 @@ class ConsoleTestCase(BoardTestCase):
 
 
 class ConsoleSecurityTests(ConsoleTestCase):
+    def test_reminder_threshold_requires_console_authority_and_updates_the_snapshot(self):
+        board = self.board()
+        _stated, browser = self.open_console(board)
+        snapshot = browser.bootstrap()
+        self.assertEqual(snapshot["reminderSettings"]["silenceSeconds"], 900)
+        with self.assertRaises(BoardError) as refused:
+            board.call("reminder_settings_set", {"silenceSeconds": 1200})
+        self.assertEqual(refused.exception.code, "UNAUTHORIZED")
+        csrf = snapshot["csrfToken"]
+        status, _headers, body = browser.command("reminder_settings_set", {"silenceSeconds": 0}, csrf=csrf)
+        self.assertEqual(status, 400, body)
+        for invalid in ({"silenceSeconds": True}, {"silenceSeconds": 1200, "unexpected": 1}):
+            status, _headers, body = browser.command("reminder_settings_set", invalid, csrf=csrf)
+            self.assertEqual(status, 400, body)
+        status, _headers, body = browser.command("reminder_settings_set", {"silenceSeconds": 1200}, csrf=csrf)
+        self.assertEqual(status, 200, body)
+        changed = json.loads(body)["result"]
+        self.assertEqual((changed["silenceSeconds"], changed["revision"]), (1200, 2))
+        self.assertEqual(browser.bootstrap()["reminderSettings"], changed)
+        events = board.call("events_read", {"after": snapshot["eventCursor"]})["events"]
+        self.assertEqual([event["kind"] for event in events], ["reminder.settings_changed"])
+        status, _headers, body = browser.command("reminder_settings_set", {"silenceSeconds": 1200}, csrf=csrf)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)["result"], changed)
+        self.assertEqual(board.call("events_read", {"after": snapshot["eventCursor"]})["events"], events)
+
     def test_bootstrap_is_the_snapshot_object_and_sets_a_private_session(self):
         board = self.board()
         _stated, browser = self.open_console(board)
         status, headers, body = browser.get("/api/console")
         self.assertEqual(status, 200)
         snapshot = json.loads(body)
-        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "csrfToken", "eventCursor", "configuration", "configurationError", "buddies", "modelServiceConcurrency", "routingHealth", "unavailableBuddyCount", "modelServiceNotes", "preferences", "decisions", "tasks", "capabilities"]))
+        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "reminderSettings", "harnesses", "csrfToken", "eventCursor", "configuration", "configurationError", "buddies", "modelServiceConcurrency", "routingHealth", "unavailableBuddyCount", "modelServiceNotes", "preferences", "decisions", "tasks", "capabilities"]))
+        self.assertEqual(snapshot["reminderSettings"]["silenceSeconds"], 900)
         self.assertIsNone(snapshot['configurationError'])
         self.assertEqual(snapshot["routingHealth"], board.call("health", {})["routingHealth"])
         self.assertEqual(snapshot["routingHealth"]["sampleCount"], 0)

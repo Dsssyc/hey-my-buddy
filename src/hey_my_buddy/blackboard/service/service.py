@@ -44,6 +44,7 @@ CONTROL_OPERATIONS = (
     "service_control",
     "console",
     "console_snapshot",
+    "reminder_settings_set",
     "runtime_info",
     "backup",
     "storage_plan",
@@ -488,11 +489,42 @@ class BoardService(_BaseResource):
 
             snapshot["capabilities"]["consoleAssets"] = assets_ready()
             snapshot["routingHealth"] = self.decisions.health_summary()
+            snapshot["reminderSettings"] = self.reminder_settings_view()
             from ..store.backup import preflight
             snapshot["backupPreflight"] = preflight(self.store.directory)
             return snapshot
 
         return self._guard("console.snapshot", request_json, handler)
+
+    def reminder_settings_view(self) -> dict:
+        with self.store.db.read() as db:
+            row = db.execute("SELECT silence_seconds,updated_at,revision FROM reminder_settings WHERE id=1").fetchone()
+        return {"silenceSeconds": row["silence_seconds"], "updatedAt": row["updated_at"], "revision": row["revision"]}
+
+    def reminder_settings_set(self, request_json: str) -> str:
+        def handler(params: dict) -> dict:
+            schemas.reject_unknown(params, {"silenceSeconds"}, "reminder.settings.set")
+            scope = workflow_module.current_scope()
+            if scope is None or scope.get("kind") != workflow_module.CONSOLE_KIND:
+                raise BoardError("UNAUTHORIZED", "Reminder settings require an authenticated console session")
+            if "silenceSeconds" not in params:
+                raise BoardError("INVALID_ARGUMENT", "silenceSeconds is required")
+            seconds = schemas.optional_int(params, "silenceSeconds", 900, 1, 86400)
+            with self.store.db.write() as db:
+                row = db.execute("SELECT silence_seconds,updated_at,revision FROM reminder_settings WHERE id=1").fetchone()
+                if row["silence_seconds"] == seconds:
+                    return {"silenceSeconds": row["silence_seconds"], "updatedAt": row["updated_at"], "revision": row["revision"]}
+                now = self.store.now()
+                revision = row["revision"] + 1
+                db.execute("UPDATE reminder_settings SET silence_seconds=?,updated_at=?,revision=? WHERE id=1",
+                           (seconds, now, revision))
+                self.store._append_event(db, "reminder.settings_changed",
+                                         payload={"silenceSeconds": seconds, "revision": revision,
+                                                  "actor": {"role": "console", "id": scope["sessionId"]}})
+                head = self.store._head_of(db)
+            self.store._notify(head)
+            return {"silenceSeconds": seconds, "updatedAt": now, "revision": revision}
+        return self._guard("reminder.settings.set", request_json, handler)
 
     def user_policy_publish(self, request_json: str) -> str:
         return self._guard("user.policy.publish", request_json, self.evaluation.user_policy_publish)
@@ -853,7 +885,12 @@ class BoardService(_BaseResource):
         return self._guard("task.wait", request_json, self.store_task_wait)
 
     def store_task_wait(self, params: dict) -> dict:
-        schemas.reject_unknown(params, {"runId", "taskId", "afterRevision", "timeoutMs"}, "task.wait")
+        schemas.reject_unknown(params, {"runId", "taskId", "afterRevision", "timeoutMs", "consumeReminders", "reminderWaitId"}, "task.wait")
+        consume_reminders = schemas.optional_bool(params, "consumeReminders", False)
+        if consume_reminders:
+            schemas.required_string(params, "reminderWaitId", max_length=128)
+        elif "reminderWaitId" in params:
+            raise BoardError("INVALID_ARGUMENT", "reminderWaitId requires consumeReminders")
         timeout_ms = schemas.optional_int(params, "timeoutMs", 30000, 0, 30000)
         after_revision = params.get("afterRevision")
         if after_revision is not None and (
@@ -862,6 +899,13 @@ class BoardService(_BaseResource):
             raise BoardError("INVALID_ARGUMENT", "afterRevision must be a nonnegative integer")
         deadline = time.monotonic() + timeout_ms / 1000.0
         while True:
+            head = self.store.head()
+            if consume_reminders:
+                from ..tasks.reminders import consume
+                reminder = consume(self.store, params)
+                if reminder is not None:
+                    view = self.store.task_get({"runId": params.get("runId"), "taskId": params.get("taskId")})["task"]
+                    return {**view, "reminder": reminder}
             view = self.store.task_get({"runId": params.get("runId"), "taskId": params.get("taskId")})["task"]
             # Re-check after subscribing so a change between read and subscribe is
             # never lost; the recheck happens inside events_wait.
@@ -874,14 +918,12 @@ class BoardService(_BaseResource):
                 return view
             self.store.events_wait(
                 {
-                    "after": self.store.head(),
-                    "timeoutMs": int(min(1000, max(1, remaining * 1000))),
+                    "after": head,
+                    "timeoutMs": int(max(1, remaining * 1000)),
                     "taskId": view["taskId"],
                     "limit": 1,
                 }
             )
-            if time.monotonic() >= deadline:
-                return self.store.task_get({"runId": view["taskId"]})["task"]
 
     # -- workers ------------------------------------------------------------
     def worker_register(self, request_json: str) -> str:

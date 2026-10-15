@@ -189,7 +189,7 @@ MARKER_SUMMARY = {"dispatch": "synthetic dispatch · preview fixture",
 #: and macro_task_stop (console.md). Everything else is METHOD_NOT_FOUND.
 ALLOWED_OPERATIONS = (
     "selection_get", "selection_list", "buddy_list", "workflow_get", "user_policy_publish",
-    "model_catalog_refresh", "macro_task_stop", "capabilities",
+    "model_catalog_refresh", "macro_task_stop", "capabilities", "reminder_settings_set",
 )
 #: Operations the 0.15.1 read-only repair removed from the browser surface.
 REMOVED_OPERATIONS = (
@@ -934,6 +934,9 @@ def attempt_view(entry: dict, item: dict) -> dict:
         "startedAt": item["startedAt"], "finishedAt": item["finishedAt"], "createdAt": item["startedAt"],
         "updatedAt": item["finishedAt"] or item["startedAt"], "revision": 1,
         "tokenUsage": item["usage"],
+        **({"reminders": {"overdue": True, "possiblyStuck": True,
+                           "lastNativeEventAt": instant(9, 40), "toolInProgress": False}}
+           if entry["runId"] == "preview-run-a3" else {}),
         **({"result": item["result"]} if item["result"] is not None else {}),
     }
 
@@ -1495,6 +1498,7 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
         "csrfToken": SYNTHETIC_CSRF,
         "eventCursor": 7,
         "consoleAccess": {"requireLogin": False, "revision": 0, "sessions": []},
+        "reminderSettings": {"silenceSeconds": 900, "revision": 1, "updatedAt": instant(0, 0)},
         "consoleSession": {"id": SYNTHETIC_SESSION_ID, "canWrite": writable,
                            "reason": None if writable else "superseded"},
         "configuration": {"routerBuddyIds": [entry["buddyId"] for entry in routers],

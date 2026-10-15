@@ -256,6 +256,7 @@ export type AttemptReceipt = {
   graceDeadline?: string | null;
   /** Native usage of exactly this execution; null or absent means unknown. */
   tokenUsage?: TokenUsage | null;
+  reminders?: { overdue: boolean; possiblyStuck: boolean; lastNativeEventAt: string | null; toolInProgress: boolean };
 };
 /** Phases the frozen ADR-010 activity projection allows; nothing else claims progress. */
 export type ActivityPhase =
@@ -390,6 +391,7 @@ export type ConsoleAccess = {
   revision: number;
   sessions: { id: string; lastSeen: number; current: boolean }[];
 };
+export type ReminderSettings = { silenceSeconds: number; revision: number; updatedAt: string };
 export type BackupInventory = {
   count: number;
   paths: string[];
@@ -411,6 +413,7 @@ export type Snapshot = {
   /** Authenticated browser session; missing or malformed fails closed. */
   consoleSession: ConsoleSession;
   consoleAccess?: ConsoleAccess;
+  reminderSettings?: ReminderSettings;
   configuration: Configuration | null;
   configurationError?: { code: string; message: string } | null;
   buddies: Buddy[];
