@@ -991,7 +991,10 @@ class BoardStore:
         with self.db.read() as connection:
             row = self._task_row(connection, params)
             from ..tasks.fixes import view as fix_view
-            return {"task": {**self._decorate(connection, row), **fix_view(connection, row["task_id"])}}
+            view = {**self._decorate(connection, row), **fix_view(connection, row["task_id"])}
+            if "workflow" in view:
+                view["resumeRecovery"] = self.workflow._resume_recovery(connection, row["task_id"])
+            return {"task": view}
 
     def task_list(self, params: dict) -> dict:
         """Bounded task history with explicit filters and stable keyset paging.
@@ -2623,14 +2626,18 @@ class BoardStore:
             )
             if micro_task is not None:
                 response["workflow"] = micro_task
-            self.workflow.child_settled(
-                connection,
-                task=task_row,
-                attempt=attempt_row,
-                payload=payload,
-                task_state=task_state,
-                now=now,
-            )
+            if micro_task is not None and micro_task.get("autoContinued"):
+                task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (task["task_id"],)).fetchone()
+                response.update(task=self._decorate(connection, task_row), taskState=task_row["state"])
+            else:
+                self.workflow.child_settled(
+                    connection,
+                    task=task_row,
+                    attempt=attempt_row,
+                    payload=payload,
+                    task_state=task_state,
+                    now=now,
+                )
             self._store_receipt(
                 connection,
                 command_id,

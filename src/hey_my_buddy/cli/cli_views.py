@@ -114,7 +114,7 @@ def _nonzero(mapping: Any) -> dict:
 
 # -- micro task views -----------------------------------------------------
 
-_TURN_BRIEF = ("turnId", "turnIndex", "state", "disposition", "resumeMode", "outcomeTruncated")
+_TURN_BRIEF = ("turnId", "turnIndex", "state", "disposition", "resumeMode", "resumeReason", "resumeDetail", "outcomeTruncated")
 #: The routing basis keeps the frozen submission facts (hard constraints and the
 #: user exclusions that narrowed the candidate set) beside the choice itself, so
 #: a Host sees why a route had few candidates without a table read.
@@ -209,6 +209,7 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "revision",
                 "ownerGeneration",
                 "continuationCount",
+                "resumeRecovery",
                 "access",
                 "accessReason",
                 "buddy",
@@ -421,6 +422,7 @@ _TASK_BRIEF = (
     "artifactCount",
     "workflowState",
     "awaitingHost",
+    "resumeRecovery",
     "duplicate",
     "alreadyTerminal",
     "retry",

@@ -370,6 +370,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         _, refused = self.execute(self.context(index=2, previous=previous, effort="high"))
         self.assertEqual(refused.status, "failed", refused.to_report())
         self.assertEqual(refused.result.get("code"), "native-resume-unavailable")
+        self.assertIs(refused.result["modelStarted"], False)
         self.assertNotIn("turn", refused.result)
         _, reconstructed = self.execute(self.context(index=3, previous=previous, mode="reconstructed-new-session", effort="high"))
         self.assertEqual(reconstructed.status, "ok", reconstructed.to_report())
@@ -385,6 +386,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         _, outcome = self.execute(self.context(previous="sess-missing"))
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(outcome.result.get("code"), "native-resume-unavailable")
+        self.assertIs(outcome.result["modelStarted"], False)
 
     def test_bound_native_resume_rejects_missing_or_different_native_sessions(self):
         _, first = self.execute(self.context())

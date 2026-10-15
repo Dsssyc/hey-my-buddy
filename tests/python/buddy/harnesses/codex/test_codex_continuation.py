@@ -166,8 +166,10 @@ class CodexContinuationTests(WorkflowTestCase):
 
         self.finish_turn(board, second, runner_status="failed", exit_code=1, seal=False, result_mutator=refusal)
         failed = board.call("workflow_get", {"runId": failed["runId"]})
-        self.continue_run(board, failed, command_id="continue-2")
+        self.assertEqual(failed["state"], "executing")
+        self.assertEqual(failed["resumeRecovery"]["reason"], "native-resume-refused")
         third = self.claim(board, claim_request_id="c3")["claim"]["turn"]["input"]
         self.assertEqual(third["resumeMode"], "reconstructed-new-session")
+        self.assertEqual(third["context"]["resumeReason"], "native-resume-refused")
         self.assertNotIn("nativeResume", third["context"])
         self.assertEqual(third["context"]["lastAssistantMessage"], previous_message)

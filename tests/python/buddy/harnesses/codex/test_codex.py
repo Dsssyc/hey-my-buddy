@@ -259,6 +259,7 @@ class CodexAdapterTests(unittest.TestCase):
         path.write_text(json.dumps(binding))
         refused = self.execute(self.context(index=3, previous=first.result['sessionId']))
         self.assertEqual(refused.result['code'], 'native-resume-unavailable')
+        self.assertIs(refused.result['modelStarted'], False)
         rebuilt = self.execute(self.context(index=4, previous=first.result['sessionId'],
                                             mode='reconstructed-new-session'))
         self.assertEqual(rebuilt.status, 'ok', rebuilt.to_report())
@@ -308,6 +309,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertFalse(first.result["nativeSession"]["resumable"])
         second = self.execute(self.context(index=2, previous=first.result["sessionId"]))
         self.assertEqual(second.result["code"], "native-resume-unavailable")
+        self.assertIs(second.result["modelStarted"], False)
 
     def test_disconnect_retains_completed_message_without_inventing_native_completion(self):
         outcome = self.execute(self.context("disconnect-after-message"))
@@ -328,6 +330,7 @@ class CodexAdapterTests(unittest.TestCase):
         second = self.execute(self.context(index=2, previous=first.result["sessionId"]))
         self.assertEqual(second.status, "failed")
         self.assertEqual(second.result["code"], "native-resume-unavailable")
+        self.assertIs(second.result["modelStarted"], False)
 
     def test_native_resume_requires_matching_task_binding_and_history(self):
         first = self.execute(self.context())
@@ -339,6 +342,7 @@ class CodexAdapterTests(unittest.TestCase):
         changed = self.execute(self.context(index=3, previous=thread_id, effort="high"))
         self.assertEqual(changed.status, "failed")
         self.assertEqual(changed.result["code"], "native-resume-unavailable")
+        self.assertIs(changed.result["modelStarted"], False)
         reconstructed = self.execute(self.context(index=4, previous=thread_id, mode="reconstructed-new-session", effort="high"))
         self.assertEqual(reconstructed.status, "ok", reconstructed.to_report())
         self.assertNotEqual(reconstructed.result["turn"]["sessionId"], thread_id)
