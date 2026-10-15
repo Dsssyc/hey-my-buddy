@@ -5539,6 +5539,18 @@ class WorkflowCoordinator:
         moment = datetime.fromisoformat(self.now().replace("Z", "+00:00")) + timedelta(seconds=seconds)
         return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
+    @staticmethod
+    def _failed_attempt_ids(connection, micro_task_id: str) -> frozenset[str]:
+        """Only a successful, explicitly completed result permits evidence reclamation."""
+        failed = set()
+        for row in connection.execute(
+            'SELECT attempt_id, result_json FROM attempts WHERE task_id=?', (micro_task_id,)
+        ):
+            result = json.loads(row['result_json'] or '{}')
+            if result.get('status') != 'ok' or result.get('terminationReason') != 'completed':
+                failed.add(row['attempt_id'])
+        return frozenset(failed)
+
     def cleanup_apply(self, params: dict, *, console_authority: dict | None = None,
                       _lead_conclusion: bool = False) -> dict:
         """Apply one unexpired cleanup plan to exactly its registered checkout.
@@ -5599,6 +5611,8 @@ class WorkflowCoordinator:
                         private_micro_tasks.append(child['child_task_id'])
             for micro_task_id in list(private_micro_tasks):
                 private_micro_tasks.extend(task['task_id'] for task in self._routing_tasks(connection, micro_task_id))
+            failed_attempts = {micro_task_id: self._failed_attempt_ids(connection, micro_task_id)
+                               for micro_task_id in dict.fromkeys(private_micro_tasks)}
         path = Path(plan["path"])
         inspection = None
         if path.exists() or path.is_symlink():
@@ -5663,9 +5677,14 @@ class WorkflowCoordinator:
         if path.exists() or path.is_symlink():
             removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained, resume=resume)
         from ... import private_dirs
-        for micro_task_id in dict.fromkeys(private_micro_tasks):
+        for micro_task_id, attempt_ids in failed_attempts.items():
             for adapter in private_dirs.ADAPTERS:
-                private_dirs.remove_tree(private_dirs.micro_task_root(self.board.directory, adapter, micro_task_id))
+                for attempt_id in attempt_ids:
+                    private_dirs.cleanup_attempt_credentials(self.board.directory, adapter, micro_task_id, attempt_id)
+                private_dirs.remove_tree(
+                    private_dirs.micro_task_root(self.board.directory, adapter, micro_task_id),
+                    keep=frozenset(private_dirs.attempt_root(self.board.directory, adapter, micro_task_id, attempt_id)
+                                   for attempt_id in attempt_ids))
         with self.db.write() as connection:
             run_row = self._run_row(connection, run_id)
             plan = connection.execute(

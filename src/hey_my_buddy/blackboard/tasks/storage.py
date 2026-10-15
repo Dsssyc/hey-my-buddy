@@ -16,6 +16,7 @@ import uuid
 from ... import private_dirs
 from ...protocol import schemas
 from ..store.db import utc_now
+from . import host_conclusions
 from ...errors import BoardError
 from ...install.runtime import DEFAULT_RUNTIME_ROOT, is_ready, installation_lock
 
@@ -206,14 +207,20 @@ def _zcode_reasons(store, connection, run, task, now: float) -> list[str]:
     reasons = []
     if not all(shutdown.get(k) is True for k in ('selfConfirmed', 'descendantsConfirmed')):
         reasons.append('shutdown-unconfirmed')
-    if run['state'] != 'accepted' or task['acceptance_verdict'] != 'accepted':
+    if run['state'] == 'accepted' and task['acceptance_verdict'] == 'accepted':
+        finished_at = task['accepted_at']
+        unproven = 'acceptance-time-unproven'
+    elif run['state'] == 'concluded':
+        finished_at = host_conclusions.current(connection, run)['created_at']
+        unproven = 'conclusion-time-unproven'
+    else:
         return ['continuation-supported', *reasons]
     try:
-        accepted = datetime.fromisoformat(task['accepted_at'].replace('Z', '+00:00')).timestamp()
-        if now - accepted < GRACE_SECONDS:
+        finished = datetime.fromisoformat(finished_at.replace('Z', '+00:00')).timestamp()
+        if now - finished < GRACE_SECONDS:
             reasons.append('grace-period')
     except (ValueError, TypeError, AttributeError):
-        reasons.append('acceptance-time-unproven')
+        reasons.append(unproven)
     if connection.execute("SELECT 1 FROM workflow_continuations WHERE run_id=? AND state IN ('recorded','queued')", (run['run_id'],)).fetchone():
         reasons.append('pending-continuations')
     if connection.execute("SELECT 1 FROM workflow_requests WHERE run_id=? AND state='open'", (run['run_id'],)).fetchone():
@@ -439,9 +446,11 @@ def inspect(store, *, git_proof: bool = True) -> dict:
         for run in connection.execute('SELECT * FROM workflow_runs'):
             task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()
             reasons = _zcode_reasons(store, connection, run, task, now)
-            native_owners[hashlib.sha256(run['run_id'].encode()).hexdigest()] = (run['run_id'], reasons)
-            for routed in store.workflow._routing_tasks(connection, run['run_id']):
-                native_owners[hashlib.sha256(routed['task_id'].encode()).hexdigest()] = (run['run_id'], reasons)
+            micro_task_ids = [run['run_id'], *(routed['task_id'] for routed in
+                                             store.workflow._routing_tasks(connection, run['run_id']))]
+            for micro_task_id in micro_task_ids:
+                digest = hashlib.sha256(micro_task_id.encode()).hexdigest()
+                native_owners[digest] = (run['run_id'], reasons)
             manifest = json.loads(run['workspace_manifest_json'] or '{}')
             if not manifest:
                 continue
