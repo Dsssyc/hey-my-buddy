@@ -66,12 +66,10 @@ class FailoverTests(RouterDispatchTestCase):
         return {**self.answer(claim), "status": "error", "code": code, "decision": None}
 
     def report(self, claim, output, *, status="ok", shutdown=True, command=None):
-        params = {"workerId": "w-route", "attemptId": claim["attempt"]["attemptId"],
-                  "generation": claim["attempt"]["generation"], "nonce": claim["nonce"],
-                  "status": status, "shutdownConfirmed": shutdown, "result": output}
+        params = {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': claim['nonce'], 'status': status, 'shutdownConfirmed': shutdown, 'result': output}
         if command:
             params["commandId"] = command
-        return self.board_.call("worker_result", params)
+        return self.board_.call('execution_result', params)
 
     def current_task(self, decision_id):
         with self.board_.store.db.read() as db:
@@ -164,10 +162,10 @@ class FailoverTests(RouterDispatchTestCase):
             spec = first["task"]["spec"]
             self.assertEqual(spec["routerBudgetSeconds"], 1)
             self.assertNotIn("expectedSeconds", spec)
-            execution = Execution(first, self.directory, "w-route", first["nonce"], client=self.client)
+            execution = Execution(first, self.directory, first["nonce"], client=self.client)
             directory = execution.directory
             directory.mkdir(parents=True)
-            holder = {'preflightRenewal': execution.control}
+            holder = {'preflightControl': execution.control}
             execution.control.start()
             self.addCleanup(execution.control.join, 5)
             self.addCleanup(execution.control.stop)
@@ -206,7 +204,7 @@ class FailoverTests(RouterDispatchTestCase):
             def start(self, context):
                 return CommandAdapter().start(replace(context, spec={**context.spec, 'argv': [sys.executable, '-c', 'print("done")']}))
         request, first = self.start(review=True)
-        execution = Execution(first, self.directory, 'w-route', first['nonce'], client=self.client)
+        execution = Execution(first, self.directory, first['nonce'], client=self.client)
         execution.directory.mkdir(parents=True)
         execution.control.start()
         self.addCleanup(execution.control.join, 5)
@@ -215,7 +213,7 @@ class FailoverTests(RouterDispatchTestCase):
         with patch('hey_my_buddy.buddy.roles.controller.worker_executor', return_value=executor), \
              patch.object(execution.control, 'wait') as wait:
             receipt = execution._execute_selected(first, first['task'], first['task']['spec'], first['attempt'],
-                                                  execution.directory, {'preflightRenewal': execution.control})
+                                                  execution.directory, {'preflightControl': execution.control})
         wait.assert_called_once_with(15)
         self.assertEqual(executor.budgets, [first['task']['spec']['routerBudgetSeconds']] * 2)
         self.assertEqual(receipt['report']['status'], 'ok')
@@ -414,9 +412,7 @@ class FailoverTests(RouterDispatchTestCase):
 
     def test_release_real_never_spawned_proof_advances(self):
         request, first = self.start(review=True)
-        response = self.board_.call("worker_release", {"workerId": "w-route", "attemptId": first["attempt"]["attemptId"],
-            "generation": first["attempt"]["generation"], "nonce": first["nonce"], "reason": "local preflight refused",
-            "evidence": {"spawnIntentWritten": False}})
+        response = self.board_.store.release_execution(({'attemptId': first['attempt']['attemptId'], 'generation': first['attempt']['generation'], 'nonce': first['nonce'], 'reason': 'local preflight refused', 'evidence': {'spawnIntentWritten': False}})["attemptId"])
         self.assertNotEqual(self.current_task(request["decisionId"]), first["task"]["taskId"])
         self.assertEqual(self.outcomes()[0][1]["phase"], "preflight")
         self.assertEqual(self.outcomes()[0][1]["buddyId"], A)
@@ -424,11 +420,15 @@ class FailoverTests(RouterDispatchTestCase):
 
     def test_release_without_never_spawned_proof_cannot_advance(self):
         request, first = self.start()
-        self.board_.call("worker_release", {"workerId": "w-route", "attemptId": first["attempt"]["attemptId"],
-            "generation": first["attempt"]["generation"], "nonce": first["nonce"], "reason": "unknown spawn"})
+        # Identity acknowledgement is beyond the service's no-process-created
+        # release boundary; only actual process evidence may settle it now.
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE attempts SET identity_confirmed_at=? WHERE attempt_id=?",
+                       (self.board_.store.now(), first['attempt']['attemptId']))
+        with self.assertRaises(BoardError):
+            self.board_.store.release_execution(first['attempt']['attemptId'])
         self.assertEqual(len(self.tasks()), 1)
         self.assertEqual(self.outcomes(), [])
-        self.assertEqual(self.decision_row(request["decisionId"])["error"], "router-stop-unconfirmed")
 
     def test_next_dispatch_input_ceiling_is_request_boundary_not_unrun_router_failure(self):
         with self.board_.store.db.write() as db:
@@ -518,9 +518,7 @@ class FailoverTests(RouterDispatchTestCase):
         request, first = self.start(micro_task=True)
         with self.board_.store.db.write() as db:
             db.execute("UPDATE workflow_runs SET state='cancelled'")
-        self.board_.call("worker_release", {"workerId": "w-route", "attemptId": first["attempt"]["attemptId"],
-            "generation": first["attempt"]["generation"], "nonce": first["nonce"], "reason": "cancelled parent",
-            "evidence": {"spawnIntentWritten": False}})
+        self.board_.store.release_execution(({'attemptId': first['attempt']['attemptId'], 'generation': first['attempt']['generation'], 'nonce': first['nonce'], 'reason': 'cancelled parent', 'evidence': {'spawnIntentWritten': False}})["attemptId"])
         self.assertEqual(self.decision_row(request["decisionId"])["status"], "cancelled")
         self.assertEqual(self.outcomes(), [])
         self.assertEqual(len(self.tasks()), 1)
@@ -557,10 +555,7 @@ class FailoverTests(RouterDispatchTestCase):
         db.execute("INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
                    "fingerprint_version,adapter,cwd,expected_seconds,state,revision,created_at,updated_at)"
                    " VALUES(?,?,'host','{}','{}','digest',1,'dsh','/work',60,'running',1,?,?)", (task_id, task_id, T0, T0))
-        db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,execution_state,"
-                   "adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at)"
-                   " VALUES(?,?,1,'verifier',?,'executing','dsh','dsh',?,?,?,?,?)",
-                   (attempt_id, task_id, f"busy-claim-{number}", provider, model, T0, T0, T0))
+        db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES(?,?,1,'verifier','executing','dsh','dsh',?,?,?,?,?)", (attempt_id, task_id, provider, model, T0, T0, T0))
         if buddy_id:
             self.board_.store._append_event(db, "router.claimed", task_id=task_id, attempt_id=attempt_id,
                 payload={"buddyId": buddy_id, "plane": "work", "requestId": task_id, "routerIndex": 0,

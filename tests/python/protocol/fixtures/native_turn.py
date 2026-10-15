@@ -108,7 +108,7 @@ def micro_task_record(*, harness: str, task_id: str, attempt_id: str, generation
 
 def claim_record(claim: dict, *, outcome: dict, session_id: str | None = None,
                  prompt_sha256: str = "a" * 64) -> dict:
-    """One micro-task turn record for a ``worker_claim`` response's attempt."""
+    """One micro-task turn record for an admitted execution attempt."""
     attempt, turn = claim["attempt"], claim["turn"]
     turn_input = turn.get("input") or {}
     return micro_task_record(

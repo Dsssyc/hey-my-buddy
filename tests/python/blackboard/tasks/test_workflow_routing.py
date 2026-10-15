@@ -4,13 +4,12 @@ from __future__ import annotations
 import hashlib
 import json
 from unittest.mock import patch
-from support import run_claim_in_process
 
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.routing.decision import MAX_DECISION_TASK_BYTES
 from hey_my_buddy.errors import BoardError
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
-from hey_my_buddy.buddy.runtime.worker import Worker
+from admission import run_next
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.roles.prompts import router_prompt
 from blackboard.routing.test_decision import (DecisionTestCase, CATALOG_BUDDY, BUDDY_ID, SECOND_BUDDY,
@@ -42,21 +41,12 @@ class TestWorkflowRouting(WorkflowTestCase):
         return board.call("workflow_get", {"runId": view["runId"]})
 
     def router_claim(self, board, view, *, claim_id="router-1"):
-        board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
+        pass  # Admission is owned by the service.
         return self.claim(board, "router", run_id=view["routing"]["taskId"], claim_request_id=claim_id)
 
     def select(self, board, claim, *, buddy_id=BUDDY_ID, shutdown=True, status="ok"):
         owned = claim["claim"]
-        return board.call("worker_result", {
-            "workerId": "router", "attemptId": owned["attempt"]["attemptId"],
-            "generation": owned["attempt"]["generation"], "nonce": NONCE,
-            "status": status, "shutdownConfirmed": shutdown,
-            "result": {**claim_tool_receipt(owned), "status": "ok", "operation": "select",
-                       "stopEvidence": {"shutdownConfirmed": shutdown, "native": {"shutdownConfirmed": shutdown}},
-                       "usage": {"elapsedMs": 100, "toolCalls": 0},
-                       "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": owned["decisionInput"]["executionWorkspace"]["manifestSha256"]},
-                       "decision": self.valid_decision(owned["decisionInput"], buddy_id)},
-        })
+        return board.call('execution_result', {'attemptId': owned['attempt']['attemptId'], 'generation': owned['attempt']['generation'], 'nonce': NONCE, 'status': status, 'shutdownConfirmed': shutdown, 'result': {**claim_tool_receipt(owned), 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': shutdown, 'native': {'shutdownConfirmed': shutdown}}, 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': owned['decisionInput']['executionWorkspace']['manifestSha256']}, 'decision': self.valid_decision(owned['decisionInput'], buddy_id)}})
 
     def test_macro_task_description_never_enters_selector_or_worker(self):
         board = self.board()
@@ -321,7 +311,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(continued["counts"]["openRequests"], 0)
         # The helper's required capability is part of its authorization, so the
         # coding worker declares it before claiming the resolved helper.
-        board.call("worker_register", {"workerId": "w1", "capabilities": ["dsh", "command", "effort:high"]})
+        pass  # Admission is owned by the service.
         claimed = self.claim(board, run_id=helper_id, claim_request_id="helper")
         self.assertIsNotNone(claimed["claim"], claimed)
         self.assertEqual(claimed["claim"]["task"]["spec"]["effort"], "high")
@@ -356,7 +346,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         board = self.board()
         submitted = self.routed(board)
         configured = self.continue_run(board, submitted, buddy={**BUDDY, "harness": "zcode"}, reason="Host selected ZCode for native session continuity")
-        board.call("worker_register", {"workerId": "w1", "adapter": "zcode", "capabilities": ["zcode", "dsh"]})
+        pass  # Admission is owned by the service.
         first = self.claim(board)
         self.finish_turn(board, first, disposition="attention", session_id="native-123")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
@@ -373,7 +363,7 @@ class TestWorkflowRouting(WorkflowTestCase):
     def test_native_provenance_hook_cannot_bypass_common_identity_and_session_checks(self):
         board = self.board()
         parent = self.submit(board, harness="zcode")
-        board.call("worker_register", {"workerId": "w1", "adapter": "zcode", "capabilities": ["zcode"]})
+        pass  # Admission is owned by the service.
         first = self.claim(board)
         self.finish_turn(board, first, disposition="attention", session_id="fixed-session")
         view = board.call("workflow_get", {"runId": parent["runId"]})
@@ -393,7 +383,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         board = self.board()
         submitted = self.routed(board)
         self.continue_run(board, submitted, buddy={**BUDDY, 'harness': 'zcode'}, reason='Host native-session test')
-        board.call('worker_register', {'workerId': 'w1', 'adapter': 'zcode', 'capabilities': ['zcode']})
+        pass  # Admission is owned by the service.
         first = self.claim(board)
         self.finish_turn(board, first, disposition='attention', session_id='old-native')
         with board.store.db.write() as db:
@@ -411,7 +401,7 @@ class TestWorkflowRouting(WorkflowTestCase):
     def test_adapter_specific_provenance_can_refuse_an_otherwise_valid_turn(self):
         board = self.board()
         self.submit(board, harness="zcode")
-        board.call("worker_register", {"workerId": "w1", "adapter": "zcode", "capabilities": ["zcode"]})
+        pass  # Admission is owned by the service.
         claim = self.claim(board)
         self.executors["zcode"].validate_turn_provenance = lambda record: "native turn evidence is incomplete"
         result = self.finish_turn(board, claim)
@@ -433,9 +423,7 @@ class TestWorkflowRouting(WorkflowTestCase):
             self.assertIsNone(polled["claim"])
             self.assertEqual(polled["reason"], "capacity")
         self.assertEqual(self.catalog_validation.call_count, 1)
-        board.call("worker_result", {"workerId": "holder", "attemptId": held["attempt"]["attemptId"],
-                                     "generation": held["attempt"]["generation"], "nonce": NONCE,
-                                     "status": "ok", "result": {"finished": True}, "shutdownConfirmed": True})
+        board.call('execution_result', {'attemptId': held['attempt']['attemptId'], 'generation': held['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'result': {'finished': True}, 'shutdownConfirmed': True})
         first = self.claim(board, run_id=submitted["runId"], claim_request_id="first-coding-turn")
         self.finish_turn(board, first, disposition="attention")
         current = board.call("workflow_get", {"runId": submitted["runId"]})
@@ -465,10 +453,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         board = self.board(max_concurrent=1)
         self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY))
         submitted = self.routed(board, requiredCapabilities=["effort:high"])
-        worker = Worker("routing-worker", self.directory, client=board.client(), adapters=("decision",))
-        worker.register()
-        with run_claim_in_process():
-            self.assertEqual(worker.run_once(), "ran")
+        self.assertEqual(run_next(board.client()), "ran")
         selected = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(selected["routing"]["status"], "completed")
         self.assertEqual(selected["buddy"], {key: SECOND_BUDDY[key] for key in BUDDY})
@@ -494,12 +479,11 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(fixture_request.budget, audit["input"]["budget"])
         self.assertTrue(audit["inputVerification"]["unchanged"])
         self.assertTrue(audit["stopEvidence"]["shutdownConfirmed"])
-        self.assertEqual(worker.pending_receipts(), [])
         self.assertTrue(self.routed(board, requiredCapabilities=["effort:high"])["duplicate"])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 1)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 1)
-        board.call("worker_register", {"workerId": "w1", "capabilities": ["dsh", "command", "effort:high"]})
+        pass  # Admission is owned by the service.
         claimed = self.claim(board, run_id=submitted["runId"], claim_request_id="authorized-coding-turn")
         self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["buddy"], selected["buddy"])
 
@@ -526,10 +510,8 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertIsNone(decision["attemptId"])
         self.assertLess(len(json.dumps(decision["requested"])), 4096)
         self.assertNotIn(task, json.dumps(decision["requested"]))
-        worker = Worker("oversized-router", self.directory, client=board.client(), adapters=("decision",))
-        worker.register()
         with patch("hey_my_buddy.buddy.roles.router.DecisionAdapter.start") as start:
-            self.assertEqual(worker.run_once(), "idle")
+            self.assertEqual(run_next(board.client()), "idle")
         start.assert_not_called()
         replay = self.routed(board, task=task)
         self.assertTrue(replay["duplicate"])

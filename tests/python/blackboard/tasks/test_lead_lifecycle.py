@@ -199,12 +199,11 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.wait(board, claim)
         self.register(board, 'w2')
         owned = self.claim(board, 'w2', claim_request_id='claim-interrupted-owned', run_id=child['runId'])['claim']
-        board.call('worker_progress', {'workerId': 'w2', 'attemptId': owned['attempt']['attemptId'],
-                                     'generation': owned['attempt']['generation'], 'nonce': 'n' * 16,
-                                     'processIdentity': IDENTITY})
-        with patch('hey_my_buddy.protocol.process_identity.inspect_process_identity', return_value='boot-changed'):
+        board.call('execution_progress', {'attemptId': owned['attempt']['attemptId'], 'generation': owned['attempt']['generation'], 'nonce': 'n' * 16, 'processIdentity': IDENTITY})
+        with patch.object(self.workspace, '_validate_output_record', return_value=None, create=True), \
+             patch('hey_my_buddy.protocol.process_identity.inspect_process_identity', return_value='boot-changed'):
             board.store.reconcile_startup()
-            board.store.recover_interrupted_attempts()
+            board.store.recover_executions()
         view = self.current(board, child)
         self.assertEqual(view['currentTurn']['state'], 'interrupted')
         self.assertEqual(view['task']['interruptionEvidence']['kind'], 'boot-changed')
@@ -397,17 +396,13 @@ class LeadLifecycleTests(WorkflowTestCase):
             "submissionToken": "r" * 32, "credential": claim["agentCredential"],
         })
         route_id = child["routing"]["taskId"]
-        board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
         route_claim = self.claim(board, "router", claim_request_id="router-to-stop", run_id=route_id)["claim"]
         board.call("workflow_cancel", {"runId": child["runId"], "credential": claim["agentCredential"]})
         self.wait(board, claim)
         self.assertEqual(self.current(board, lead)["state"], "waiting-owned")
         self.assertEqual(self.wakeups(board, lead), [])
         attempt = route_claim["attempt"]
-        board.call("worker_result", {
-            "workerId": "router", "attemptId": attempt["attemptId"], "generation": attempt["generation"],
-            "nonce": "n" * 16, "status": "cancelled", "result": {"status": "cancelled"}, "shutdownConfirmed": True,
-        })
+        board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'cancelled', 'result': {'status': 'cancelled'}, 'shutdownConfirmed': True})
         self.assertEqual(self.current(board, lead)["state"], "executing")
         wakeups = self.wakeups(board, lead)
         self.assertEqual(len(wakeups), 1)

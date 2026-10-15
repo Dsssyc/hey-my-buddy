@@ -90,11 +90,7 @@ class RouterListHealthTestCase(BoardTestCase):
                     "fingerprint_version,adapter,cwd,router_budget_seconds,state,revision,created_at,updated_at)"
                     " VALUES(?,?,'host','{}','{}','digest',1,'decision','<private>',60,'completed',1,?,?)",
                     (task_id, task_id, at, at))
-                db.execute(
-                    "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,"
-                    "execution_state,adapter,result_json,shutdown_confirmed,started_at,created_at,updated_at)"
-                    " VALUES(?,?,0,'nonce',?, 'finished','decision',?,1,?,?,?)",
-                    (attempt_id, task_id, f"claim-{attempt_id}", canonical_json(receipt), at, at, at))
+                db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,shutdown_confirmed,started_at,created_at,updated_at) VALUES(?,?,0,'nonce','finished','decision',?,1,?,?,?)", (attempt_id, task_id, canonical_json(receipt), at, at, at))
         requested = {"kind": "select", "routerBuddyId": buddy_id,
                      "routingBasis": {"candidateCount": candidates}}
         with self.db.write() as db:
@@ -290,11 +286,7 @@ class CurrentRoleTests(RouterListHealthTestCase):
                 "fingerprint_version,adapter,cwd,router_budget_seconds,state,revision,created_at,updated_at)"
                 " VALUES('task-live','req-live','host','{}','{}','digest',1,'decision','<private>',60,"
                 "'running',1,?,?)", (T0, T0))
-            db.execute(
-                "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,"
-                "execution_state,adapter,result_json,shutdown_confirmed,created_at,updated_at)"
-                " VALUES('attempt-live','task-live',0,'nonce','claim-live','executing','decision',NULL,0,?,?)",
-                (T0, T0))
+            db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,shutdown_confirmed,created_at,updated_at) VALUES('attempt-live','task-live',0,'nonce','executing','decision',NULL,0,?,?)", (T0, T0))
             db.execute(
                 "INSERT INTO events(task_id,attempt_id,revision,kind,payload_json,created_at)"
                 " VALUES('task-live','attempt-live',NULL,'router.claimed',?,?)",

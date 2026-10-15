@@ -19,7 +19,7 @@ from support import BoardTestCase
 
 import hey_my_buddy.cli.main as cli
 import hey_my_buddy.protocol.transport as transport
-from hey_my_buddy.buddy.harnesses.registry import adapter as get_adapter, adapters, supported_capabilities
+from hey_my_buddy.buddy.harnesses.registry import adapter as get_adapter, adapters, local_capabilities
 from hey_my_buddy.console.server import CONSOLE_OPERATIONS
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS
@@ -54,7 +54,7 @@ class RetiredVerifierSurfaceTests(unittest.TestCase):
 
     def test_the_registry_has_no_review_check_executor_or_capability(self):
         self.assertNotIn("review-check", adapters())
-        self.assertNotIn("review-check", supported_capabilities())
+        self.assertNotIn("review-check", local_capabilities())
         with self.assertRaises(BoardError) as refused:
             get_adapter("review-check")
         self.assertEqual(refused.exception.code, "UNSUPPORTED_ADAPTER")

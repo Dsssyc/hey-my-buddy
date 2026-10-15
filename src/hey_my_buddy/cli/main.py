@@ -4,7 +4,7 @@ Everything the shared skill offers is one ``hey-my-buddy`` command: one method n
 object argument, one JSON object on stdout. The single micro task lifecycle owns
 the bare names (``submit``, ``get``, ``decide``, ``continue``, ``takeover``,
 ``cancel``, ``accept``, ``conclude``, ``reclaim``, ``await``, ``suggest``); ``execution-*`` names reach the
-ordinary task records that the command/external adapters and internal decision
+ordinary task records that the command adapter and internal decision
 infrastructure own. The current command surface is documented in
 ``docs/reference/cli.md``.
 
@@ -21,21 +21,17 @@ import os
 import re
 import secrets
 import stat
-import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 
 from . import cli_help, cli_views
-from ..install import runtime
-from ..install.entrypoints import ENTRY_MODULES
 from ..protocol import transport
 from ..errors import BoardError
 from ..home import control_file_path
-from ..install.launcher import agent_credential_document, credential_state_dir, service_environment, take_agent_credential_document
+from ..install.launcher import agent_credential_document, credential_state_dir, take_agent_credential_document
 from ..protocol.transport import METHOD_MAP, _call_service, get_state_dir
-from ..buddy.runtime.worker import RETIRE_REQUEST_NAME
 
 METHODS = [
     "ping",
@@ -70,7 +66,7 @@ METHODS = [
     # -- work macro tasks: read-only browsing of grouped micro tasks ----------
     "macro-task-list",
     "macro-task-timeline",
-    # -- execution records for command/external/decision infrastructure -----
+    # -- execution records for command/decision infrastructure -----
     "execution-submit",
     "execution-cancel",
     "execution-retry",
@@ -88,16 +84,6 @@ METHODS = [
     "messages",
     "message-get",
     "message-update",
-    "workers",
-    "worker-register",
-    "worker-claim",
-    "worker-reconcile",
-    "worker-renew",
-    "worker-progress",
-    "worker-result",
-    "worker-release",
-    "worker-start",
-    "worker-stop",
     "wait-capacity",
     "console",
     "console-snapshot",
@@ -110,8 +96,6 @@ METHODS = [
     "restart",
     "stop",
 ]
-
-LOCAL_METHODS = ("worker-start", "worker-stop")
 
 #: Bound on a ``--params-file`` file or a standard-input parameter document. It is
 #: the same 8 MiB the transport accepts for one request, so the CLI refuses an
@@ -169,14 +153,14 @@ examples:
       runId, use status/get for live state, and result only after a receipt exists.
       Cancel a micro task with cancel, or an execution record with execution-cancel.
 
-  Advanced execution records (command/external adapters and internal decision
+  Advanced execution records (command adapter and internal decision
   infrastructure only; the service refuses coding harnesses here):
   hey-my-buddy execution-submit '{"requestId":"probe-1","task":"...","cwd":"/abs/path","adapter":"command","argv":["/bin/echo","hi"],"expectedSeconds":1800}'
   hey-my-buddy execution-cancel '{"runId":"<runId>","reason":"..."}'
   hey-my-buddy execution-retry '{"runId":"<runId>","reason":"..."}'
   hey-my-buddy execution-acknowledge '{"runId":"<runId>","note":"...","verdict":"accepted"}'
       Explicit task operations, separate from the micro task lifecycle. execution-submit
-      requires requestId, task and an absolute cwd; use the command or external
+      requires requestId, task and an absolute cwd; use the command
       adapter. A micro-task run's execution record additionally needs its Host control.
 
   hey-my-buddy status '{"runId":"<runId>"}'   hey-my-buddy result '{"runId":"<runId>"}'   hey-my-buddy list '{"limit":20}'
@@ -189,16 +173,13 @@ examples:
       inquire is bounded read-only observation or one correlated question to a live
       agent whose adapter declares inquiry support.
 
-  hey-my-buddy workers   hey-my-buddy wait-capacity   hey-my-buddy message '{"runId":"<runId>","inquiryId":"q2","question":"status?"}'
+  hey-my-buddy wait-capacity   hey-my-buddy message '{"runId":"<runId>","inquiryId":"q2","question":"status?"}'
   hey-my-buddy message-get '{"runId":"<runId>","inquiryId":"q2"}'
-  hey-my-buddy worker-start '{"workerId":"local"}'   hey-my-buddy worker-stop '{"workerId":"local"}'
-      Board operations for external workers and operators. The local worker commands
-      start or cooperatively stop one independent Python worker supervisor.
 
   hey-my-buddy health   hey-my-buddy harnesses   hey-my-buddy runtime   hey-my-buddy console   hey-my-buddy restart   hey-my-buddy stop
       Service control. `hey-my-buddy stop` cancels queued work, durably requests cancellation
       for active attempts, drains for a bounded interval and lists unresolved attempts.
-      `hey-my-buddy restart` detaches the daemon while preserving every independent worker.
+      `hey-my-buddy restart` detaches the daemon while preserving active executions.
 
   hey-my-buddy console-snapshot '{}'   hey-my-buddy model-catalog-refresh '{"requestId":"first"}'
       Read the bounded evaluation snapshot, or explicitly discover the installed
@@ -229,81 +210,6 @@ def _abandoned(abandoned, commands: list[str]) -> dict:
             "action": "The wait was abandoned; the durable run keeps executing and is not cancelled. Inspect the same run and await it again.",
             "commands": commands,
         },
-    }
-
-
-def _worker_command(action: str, params: dict, state: Path, *, credential: str | None = None) -> dict:
-    if credential is not None:
-        raise BoardError("FORBIDDEN", "An attempt credential cannot manage service workers")
-    if action == "worker-start":
-        from ..install.upgrade import file_lock
-        state.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with file_lock(state / "control-start.lock"):
-            if (state / "upgrade.json").exists():
-                raise BoardError("UPGRADE_IN_PROGRESS", "Worker start is fenced during upgrade")
-            return _worker_command_unlocked(action, params, state)
-    return _worker_command_unlocked(action, params, state)
-
-
-def _worker_command_unlocked(action: str, params: dict, state_dir: Path) -> dict:
-    """Start or cooperatively stop one independent worker supervisor."""
-    worker_id = params.get("workerId") or "local"
-    if not isinstance(worker_id, str) or not worker_id.strip():
-        raise ValueError("workerId must be a nonempty string")
-    directory = state_dir / "workers" / worker_id
-    if action == "worker-stop":
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        request = directory / "stop.request"
-        request.write_text(json.dumps({"workerId": worker_id, "requestedBy": "cli"}))
-        os.chmod(request, 0o600)
-        return {
-            "workerId": worker_id,
-            "stopRequested": True,
-            "note": "The supervisor observes this durable request and stops cooperatively; no signal is sent to a process this CLI did not create.",
-        }
-    log_path = state_dir / "worker.log"
-    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    # Explicit workers have the same lifetime as daemon-started workers: select
-    # their runtime before spawning instead of inheriting this replaceable CLI.
-    target = runtime.launch_target(log_path=state_dir / "runtime-install.log")
-    # The supervisor is a service process: build its environment from the explicit
-    # allowlist instead of the CLI's Host session, then select the runtime.
-    environment = service_environment({
-        "HMB_STATE_DIR": str(state_dir),
-        "HMB_WORKER_ID": worker_id,
-        "HMB_RUNTIME_IDENTITY": target["identity"],
-    })
-    if target["pythonPath"]:
-        environment["PYTHONPATH"] = target["pythonPath"]
-    if target["stable"]:
-        environment["HMB_RUNTIME"] = target["runtime"]["runtimeDir"]
-        # The explicit interpreter selects its own venv; PATH makes it the first
-        # interpreter for tools that run in a delegated workspace.
-        environment["PATH"] = str(Path(target["python"]).parent) + os.pathsep + environment.get("PATH", os.defpath)
-    (directory).mkdir(mode=0o700, parents=True, exist_ok=True)
-    # A deliberate start is authoritative for this exact id: prior cooperative
-    # stop/retire intents are cleared before the new supervisor can observe them.
-    (directory / "stop.request").unlink(missing_ok=True)
-    (directory / RETIRE_REQUEST_NAME).unlink(missing_ok=True)
-    log_fd = os.open(log_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
-    try:
-        child = subprocess.Popen(
-            [target["python"], "-m", ENTRY_MODULES['hey_my_buddy']['supervisor'], "--worker-id", worker_id, "--state-dir", str(state_dir)],
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=log_fd,
-            stderr=log_fd,
-            start_new_session=True,
-            close_fds=True,
-        )
-    finally:
-        os.close(log_fd)
-    return {
-        "workerId": worker_id,
-        "supervisorPid": child.pid,
-        "logPath": str(log_path),
-        "stateDir": str(state_dir),
-        "note": "The supervisor runs in its own session with file-backed logs and does not depend on this CLI.",
     }
 
 
@@ -633,7 +539,7 @@ def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DO
             }
         )
     parser = argparse.ArgumentParser(
-        description="hey-my-buddy service: micro tasks, durable execution records, independent workers and routed harness execution",
+        description="hey-my-buddy service: micro tasks, durable execution records and routed harness execution",
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -647,7 +553,7 @@ def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DO
             credential_document = take_agent_credential_document()
         credential = _agent_credential(credential_document)
         scoped_state = credential_state_dir(credential_document)
-        state_dir = scoped_state or get_state_dir(params.get("stateDir") if args.method in LOCAL_METHODS else None)
+        state_dir = scoped_state or get_state_dir()
         # `output` is CLI-local: it selects the printed projection and never reaches RPC.
         # Console validates its own local options, so it keeps its complete response.
         mode = cli_views.OUTPUT_FULL if args.method == "console" else cli_views.pop_output_mode(params)
@@ -663,8 +569,6 @@ def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DO
         elif args.method == "paths":
             from ..install.skill_install import paths
             result = paths(params)
-        elif args.method in LOCAL_METHODS:
-            result = _worker_command(args.method, params, state_dir, credential=credential)
         elif args.method == "console":
             # Console keeps its one canonical JSON argument, but `browser` and `wait`
             # are CLI-local: console_cli validates and strips them, launches the

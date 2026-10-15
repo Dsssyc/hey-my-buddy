@@ -3,6 +3,7 @@
 The sealed publication fixtures exercise the production completion transaction.
 Only the local catalog and workspace seam are substituted for micro-task commands.
 """
+from admission import admit_board, admit_store
 import copy
 import json
 import unittest
@@ -620,16 +621,13 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         with self.board_.store.db.write() as db:
             router._write_settings(db, {**router.configuration(db), "routerBuddyIds": [A, B]})
         view = self.routed()
-        self.board_.call("worker_register", {"workerId": "w-route", "adapter": "decision", "capabilities": ["decision"]})
+        pass  # Admission is owned by the service.
         nonce = NONCE + "abstain"
-        claim = self.board_.call("worker_claim", {"workerId": "w-route", "claimRequestId": "router-abstain",
-            "nonce": nonce, "runId": view["routing"]["taskId"]})["claim"]
+        claim = admit_board(self.board_, {'workerId': 'w-route', 'claimRequestId': 'router-abstain', 'nonce': nonce, 'runId': view['routing']['taskId']})["claim"]
         answer = self.answer(claim, buddy_id=None)
         reason = "The frozen packet does not justify choosing a buddy"
         answer["decision"]["reason"] = reason
-        self.board_.call("worker_result", {"workerId": "w-route", "attemptId": claim["attempt"]["attemptId"],
-            "generation": claim["attempt"]["generation"], "nonce": nonce, "status": "ok",
-            "shutdownConfirmed": True, "result": answer})
+        self.board_.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'shutdownConfirmed': True, 'result': answer})
         current = self.board_.call("workflow_get", {"runId": view["runId"]})
         boundary = current["routing"]["routingBoundary"]
         self.assertEqual(boundary["kind"], "router-abstained")
@@ -647,18 +645,15 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         with self.board_.store.db.write() as db:
             router._write_settings(db, {**router.configuration(db), "routerBuddyIds": [A, B]})
         view = self.routed()
-        self.board_.call("worker_register", {"workerId": "w-route", "adapter": "decision", "capabilities": ["decision"]})
+        pass  # Admission is owned by the service.
         for ordinal in (0, 1):
             current = self.board_.call("workflow_get", {"runId": view["runId"]})
             nonce = NONCE + str(ordinal)
-            claim = self.board_.call("worker_claim", {"workerId": "w-route", "claimRequestId": "router-" + str(ordinal),
-                "nonce": nonce, "runId": current["routing"]["taskId"]})["claim"]
+            claim = admit_board(self.board_, {'workerId': 'w-route', 'claimRequestId': 'router-' + str(ordinal), 'nonce': nonce, 'runId': current['routing']['taskId']})["claim"]
             self.assertIsNotNone(claim)
             claim["nonce"] = nonce
             output = failover.FailoverTests.failure(self, claim)
-            self.board_.call("worker_result", {"workerId": "w-route", "attemptId": claim["attempt"]["attemptId"],
-                "generation": claim["attempt"]["generation"], "nonce": nonce, "status": "failed",
-                "shutdownConfirmed": True, "result": output})
+            self.board_.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': nonce, 'status': 'failed', 'shutdownConfirmed': True, 'result': output})
         view = self.board_.call("workflow_get", {"runId": view["runId"]})
         boundary = view["routing"]["routingBoundary"]
         self.assertEqual(boundary["kind"], "router-unavailable")

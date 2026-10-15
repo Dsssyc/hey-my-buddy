@@ -8,7 +8,7 @@ module stays stdlib-only so the launcher can load it before dependencies exist.
 ENTRY_MODULES = {
     'hey_my_buddy': {'client': 'hey_my_buddy.protocol.client',
                      'daemon': 'hey_my_buddy.blackboard.service.daemon',
-                     'supervisor': 'hey_my_buddy.buddy.runtime.supervisor',
+                     'execution': 'hey_my_buddy.buddy.runtime.execution',
                      'cli': 'hey_my_buddy.cli.main'},
 }
 
@@ -17,4 +17,4 @@ COORDINATED_ROLES = ('client', 'daemon', 'cli')
 
 #: Long-lived service roles the storage inventory observes. The role of the
 #: pattern that matches an observed ``-m`` module is the kind it reports.
-SERVICE_ROLES = ('daemon', 'supervisor')
+SERVICE_ROLES = ('daemon', 'execution')

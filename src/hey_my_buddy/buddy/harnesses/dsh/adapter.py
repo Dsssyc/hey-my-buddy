@@ -2,7 +2,7 @@
 
 The native execution body is :mod:`.native_run` through the shared run seam;
 this description carries only what the registry, the Router preparation and the
-Worker runtime consume: the declared capabilities, the local eligibility, the
+execution process consume: the declared capabilities, the local eligibility, the
 availability of the installed command (the service selection, or the same
 bounded discovery the run seam uses when nothing is bound), the turn provenance
 validator of the registered run, and discovery routed through the seam. The old
@@ -12,6 +12,7 @@ deleted without a compatibility layer (ADR-025 decisions 1 and 11).
 from __future__ import annotations
 
 from ....errors import BoardError
+from ....protocol.capabilities import adapter_capabilities
 from . import native_run
 
 
@@ -19,7 +20,6 @@ class DshAdapter:
     """Native availability and facts, with no inherited execution entries."""
 
     name = "dsh"
-    capabilities = ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session")
     native_resume = True
     interrupted_resume = True
     native_resume_permission_change = False
@@ -28,9 +28,9 @@ class DshAdapter:
     read_only_structured = False
     read_only_structured_resume = False
 
-    def __init__(self):
-        from ..registry import worker_permission_capabilities
-        self.capabilities = (*type(self).capabilities, *worker_permission_capabilities(self.name))
+    @property
+    def capabilities(self):
+        return adapter_capabilities(self.name)
 
     def local_read_only_check(self) -> dict:
         return {"eligible": False, "reasonCode": "readonly-worker-carrier-unimplemented",

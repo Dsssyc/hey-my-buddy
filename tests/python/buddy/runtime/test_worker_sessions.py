@@ -98,7 +98,14 @@ class WorkerSessionTests(unittest.TestCase):
                                               'HMB_CODEX_CLI': str(fixture.environment['HMB_CODEX_CLI'])}):
                 outcome = fixture.execute(fixture.context())
             self.assertTrue(outcome.shutdown_confirmed)
-            receipt = {'result': outcome.result, 'shutdownConfirmed': True}
+            from hey_my_buddy.buddy.runtime.execution import Execution
+            claim = {'task': {'taskId': 'micro-task-1', 'spec': {'adapter': 'codex'}},
+                     'attempt': {'taskId': 'micro-task-1', 'attemptId': 'attempt-1', 'generation': 1}}
+            execution = Execution(claim, self.state, 'n' * 32, client=mock.Mock())
+            execution.directory.mkdir(parents=True, mode=0o700)
+            receipt = execution.receipt(claim, outcome.to_report(), execution.directory)['report']
+            self.assertNotIn('workerId', json.dumps(receipt))
+            self.assertNotIn('nonce', json.dumps(receipt))
             row = {'harness': 'codex', 'task_id': 'micro-task-1', 'attempt_id': 'attempt-1',
                    'cwd': str(fixture.cwd), 'execution_state': 'finished', 'shutdown_confirmed': 1,
                    'result_json': json.dumps(receipt)}

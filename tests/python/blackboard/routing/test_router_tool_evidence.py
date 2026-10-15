@@ -8,6 +8,7 @@ to that frozen attempt before the single judge runs, judging by the toolPolicy
 the publication transaction grafts onto the frozen input document. The suite
 checks the pure wrapper and the real publication boundary.
 """
+from admission import admit_execution
 import json
 import uuid
 import unittest
@@ -61,9 +62,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
                 output = {**stopped_answer(claim), 'nativeIdentity': ROOT, 'toolEvidence': package,
                           'toolPolicy': {'systemSandbox': True}, 'zeroToolVerified': False,
                           'usage': {'elapsedMs': 100, 'toolCalls': 1 if category else 0}}
-                board.call('worker_result', {'workerId': 'router', 'attemptId': claim['attempt']['attemptId'],
-                           'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'ok',
-                           'shutdownConfirmed': True, 'result': output})
+                board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': output})
                 view = self.decision(board, requested['decisionId'])
                 self.assertEqual(view['status'], 'needs-host' if expected else 'completed')
                 self.assertEqual(view.get('error'), expected)
@@ -87,9 +86,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
                                            (claim['attempt']['attemptId'],))
                 else:
                     output['usage']['toolCalls'] = 1
-                board.call('worker_result', {'workerId': 'router', 'attemptId': claim['attempt']['attemptId'],
-                           'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'ok',
-                           'shutdownConfirmed': True, 'result': output})
+                board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': output})
                 view = self.decision(board, requested['decisionId'])
                 self.assertEqual(view['status'], 'needs-host')
                 self.assertEqual(view['error'], 'router-tool-evidence-unverified')
@@ -107,8 +104,8 @@ class RouterToolEvidenceTests(DecisionTestCase):
 
     def request_route(self, board, request_id, worker="router"):
         result = board.call("selection_request", {"requestId": request_id, "task": "choose"})
-        board.call("worker_register", {"workerId": worker, "adapter": "decision", "capabilities": ["decision"]})
-        claim = board.client().claim(worker, f"claim-{request_id}", NONCE, task_id=result["runId"])["claim"]
+        pass  # Admission is owned by the service.
+        claim = admit_execution(board.client(), NONCE, task_id=result["runId"])["claim"]
         return result, claim
 
     def frozen(self, board, decision_id):

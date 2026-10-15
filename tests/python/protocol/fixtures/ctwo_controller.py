@@ -1,11 +1,12 @@
-"""Owned, model-free processes for the service -> Worker -> execution proof.
+"""Owned, model-free processes for the service -> execution proof.
 
 The simulated native child commits the journal before the execution publishes
-facts. The actual WorkerRunExecutor starts the inline role; only native
+facts. The actual execution process starts the inline role; only native
 launch and collection are injected. No framing, process discovery or PID adoption.
 All material is retained. Cooperative teardown addresses saved Popen objects.
 """
 from __future__ import annotations
+from contextlib import nullcontext
 
 import argparse
 import json
@@ -19,8 +20,6 @@ import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import c_two as cc
-
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome, ProcessHandle
 from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
 from hey_my_buddy.buddy.harnesses.live import (
@@ -29,14 +28,11 @@ from hey_my_buddy.buddy.harnesses.live import (
 from hey_my_buddy.buddy.harnesses.run_contract import (
     RunEnd, RunResult, StopEvidence, StopLayer,
 )
-from hey_my_buddy.buddy.runtime.windows_process import owned_popen
+from hey_my_buddy.protocol.owned_process import owned_popen
 from hey_my_buddy.protocol.process_identity import native_process_journal_active
 from hey_my_buddy.buddy.roles import controller as role_seam, inline_run
 from hey_my_buddy.buddy.roles.run_execution import WorkerRunExecutor
-from hey_my_buddy.buddy.runtime.worker import Worker
 from hey_my_buddy.json_codec import canonical_json
-from hey_my_buddy.protocol.client import BoardClient
-from hey_my_buddy.protocol.contracts import HarnessRunLive
 from support import enable_fixture_buddy
 
 
@@ -132,10 +128,10 @@ def native(root):
 class OneSlowCallEndpoint(CTwoLiveEndpoint):
     """Exercise native SDK per-call expiry without a second transport."""
 
-    def observe(self, request_json):
-        if json.loads(request_json).get("afterSeq") == 999:
+    def observe_local(self, **arguments):
+        if arguments.get("after_seq") == 999:
             time.sleep(0.2)
-        return super().observe(request_json)
+        return super().observe_local(**arguments)
 
 
 def simulated_run(module, request, *, services, **options):
@@ -204,34 +200,16 @@ def execution(startup: Path):
         return runtime.main()
 
 
-class RecordingBoardClient(BoardClient):
-    def __init__(self, state):
-        super().__init__(state, autostart=False)
-        self.attachments = []
+def service(root):
+    from hey_my_buddy.blackboard.service.daemon import Daemon
+    from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
+    from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+    from hey_my_buddy.protocol import execution as launcher
 
-    def live_attach(self, attachment):
-        result = super().live_attach(attachment)
-        if result.get("attached"):
-            self.attachments.append(attachment)
-        return result
-
-
-def worker(root):
-    client = RecordingBoardClient(root / "state")
-    handles = []
-    instance = Worker("integration-worker", root / "state", client=client,
-                      adapters=("dsh",), log=lambda text: print(text, file=sys.stderr, flush=True))
-    descriptor = instance.live.start()
-    errors = []
-
-    def run():
-        try:
-            instance.run(max_iterations=1)
-        except BaseException as error:
-            errors.append(repr(error))
-
-    from hey_my_buddy.buddy.harnesses import controller as launcher
+    daemon = Daemon(root / "state")
+    original = daemon.service
     original_launch = launcher.launch_controller
+    handles = []
 
     def launch_fixture(*, prepare, **options):
         def prepared():
@@ -242,63 +220,43 @@ def worker(root):
         handles.append(handle)
         return handle
 
-    thread = threading.Thread(target=run)
-    with patch.object(launcher, "launch_controller", launch_fixture):
-        thread.start()
-        try:
-            for line in sys.stdin:
-                command = json.loads(line)
-                if command["op"] == "status":
-                    handle = handles[0] if handles else None
-                    cleanup = getattr(handle, "role_endpoint_cleanup", None)
-                    emit({"ok": True, "worker": descriptor.to_payload(),
-                        "execution": (getattr(handle, "role_live_descriptor", None).to_payload()
-                            if getattr(handle, "role_live_descriptor", None) else None),
-                        "executionPid": handle.pid if handle else None,
-                        "bound": bool(client.attachments), "running": thread.is_alive(),
-                        "reports": ([json.loads((Path(handle.log_paths["stderr"]).parent / "fixture-report.json").read_text())]
-                            if handle and (Path(handle.log_paths["stderr"]).parent / "fixture-report.json").exists() else []), "errors": errors,
-                        "cleanup": cleanup.to_payload() if cleanup else None})
-                elif command["op"] in ("finish", "kill-execution"):
-                    handle = handles[0]
-                    if command["op"] == "kill-execution":
-                        handle.process.kill()  # This saved Popen, never a discovered PID.
-                    else:
-                        for request in (root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/run-*/fixture-request.json"):
-                            request.with_name("finish.request").touch(mode=0o600)
-                    emit({"ok": True})
-                elif command["op"] == "stop":
-                    break
+    def control():
+        for line in sys.stdin:
+            command = json.loads(line)
+            if command["op"] == "status":
+                handle = handles[0] if handles else None
+                materials = list((root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/execution-live.json"))
+                material = json.loads(materials[0].read_text()) if materials else None
+                view = (daemon.store.task_get({"runId": handle.execution_binding["taskId"]})["task"]
+                        if handle else None)
+                bound = bool(view and daemon.store.live_registry.channel_for(view))
+                native_ready = bool(list((root / "state").glob(
+                    "harnesses/dsh/micro-tasks/*/attempts/*/run-*/fixture-request.json")))
+                emit({"ok": True, "execution": material["descriptor"] if material else None,
+                      "executionPid": handle.pid if handle else None,
+                      "running": handle is not None and handle.process.poll() is None,
+                      "bound": bound, "nativeReady": native_ready,
+                      "reports": [json.loads(path.read_text()) for path in
+                                  (root / "state").glob("attempts/*/*/fixture-report.json")],
+                      "errors": []})
+            elif command["op"] in ("finish", "kill-execution"):
+                if command["op"] == "kill-execution":
+                    handles[0].process.kill()  # Saved Popen, never a discovered PID.
                 else:
-                    raise ValueError("unknown private fixture operation")
-        finally:
-            try:
-                try:
                     for request in (root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/run-*/fixture-request.json"):
-                        request.with_name("finish.request").touch(mode=0o600, exist_ok=True)
-                finally:
-                    instance.stop.set()
-                    thread.join(15)
-                    if thread.is_alive():
-                        raise AssertionError("own Worker stop unconfirmed; retain task root")
-            finally:
-                instance.live.stop()
-    emit({"ok": True, "stopped": True})
-
-
-def service(root):
-    from hey_my_buddy.blackboard.service.daemon import Daemon
-    from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
-    from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
-
-    daemon = Daemon(root / "state")
-    original = daemon.service
+                        request.with_name("finish.request").touch(mode=0o600)
+                emit({"ok": True})
+            elif command["op"] == "stop":
+                emit({"ok": True})
+                return
+            else:
+                raise ValueError("unknown private fixture operation")
 
     def private_service():
         service = original()
         service.automatic_discovery = False
         enable_fixture_buddy(daemon.store, BUDDY)
-        # Discovery is synthetic; all service, task, lease and live RPCs are real.
+        # Discovery is synthetic; service, task and live RPCs are real.
         record = {"harness": "dsh", "available": True, "status": "ready", "revision": 0,
                   "command": [sys.executable], "version": "model-free-fixture"}
         with daemon.store.db.write() as db:
@@ -310,17 +268,25 @@ def service(root):
 
     description = DshAdapter()
     description.available = lambda: (True, None)
-    # A single explicitly owned Worker replaces the fixture's automatic pool.
-    with patch.object(daemon, "service", private_service), \
-         patch.object(daemon, "_start_pool", lambda: None), \
-         patch.object(daemon, "_reconcile_pool", lambda: None), \
+    thread = threading.Thread(target=control, daemon=True)
+    capture_failure = (patch.object(launcher, "capture_process_identity", side_effect=OSError("injected parent capture failure"))
+                       if os.environ.get("HMB_C2_PARENT_CAPTURE_FAILURE") else nullcontext())
+    with capture_failure, patch.object(daemon, "service", private_service), \
+         patch.object(launcher, "launch_controller", launch_fixture), \
          patch.object(WorkflowCoordinator, "_execution_adapter", staticmethod(lambda name: description)):
-        daemon.run()
+        thread.start()
+        try:
+            daemon.run()
+        finally:
+            for request in (root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/run-*/fixture-request.json"):
+                request.with_name("finish.request").touch(mode=0o600, exist_ok=True)
+            for handle in handles:
+                handle.process.wait(timeout=15)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("service", "worker", "execution", "native"))
+    parser.add_argument("mode", choices=("service", "execution", "native"))
     parser.add_argument("--root", type=Path)
     parser.add_argument("--startup", type=Path)
     args = parser.parse_args()

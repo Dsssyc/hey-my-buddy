@@ -1,4 +1,5 @@
 """Continuation admission and fixed handoffs with disposable real Git checkouts."""
+from admission import admit_board, admit_store
 import itertools
 import json
 import os
@@ -426,11 +427,17 @@ class PreparationTests(WorkflowTestCase):
         self.assertEqual((self.repo / "tracked.txt").read_text(), "base\n")
         self.assertEqual((Path(current["path"]) / "tracked.txt").read_text(), "sealed first output\n")
 
-    def test_claim_gate_cannot_fall_back_to_original_manifest(self):
-        board, run_id, _, _ = self.pending()
-        claim = board.store.worker_claim({"workerId": "w1", "claimRequestId": "without-prepare", "nonce": "n" * 16, "runId": run_id})
-        self.assertIsNone(claim["claim"])
-        self.assertEqual(claim["reason"], "awaiting-workspace-preparation")
+    def test_admission_prepares_the_current_continuation_manifest(self):
+        board, run_id, first, _ = self.pending()
+        claim = admit_board(board, {'nonce': 'n' * 16, 'runId': run_id})
+        self.assertIsNotNone(claim["claim"])
+        workspace = claim["claim"]["turn"]["input"]["executionWorkspace"]
+        previous = first["claim"]["turn"]["input"]["executionWorkspace"]
+        self.assertNotEqual(workspace["baseCommit"], previous["baseCommit"])
+        output = next(item for item in board.call("workflow_get", {"runId": run_id})["artifacts"]
+                      if item["kind"] == "output")
+        self.assertEqual(workspace["baseCommit"], output["outputCommit"])
+        self.assertEqual((Path(workspace["path"]) / "tracked.txt").read_text(), "sealed first output\n")
 
     def test_cancel_during_git_cannot_activate_prepared_files(self):
         self.preparation_race("cancel")

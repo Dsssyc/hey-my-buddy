@@ -42,9 +42,9 @@ class PrivateDirectoryTests(BoardTestCase):
         (root / 'execution-live.json').write_text('private endpoint token')
         (root / 'execution-started.json').write_text('retain unknown filename')
         removed = private_dirs.cleanup_attempt_credentials(state, 'zcode', 'microTask', 'attempt')
-        self.assertEqual(removed['count'], 2)
+        self.assertEqual(removed['count'], 1)
         self.assertFalse((root / 'execution-start.json').exists())
-        self.assertFalse((root / 'execution-live.json').exists())
+        self.assertTrue((root / 'execution-live.json').exists())
         self.assertEqual((root / 'execution-started.json').read_text(), 'retain unknown filename')
 
     def test_explicit_state_and_reparse_guard(self):

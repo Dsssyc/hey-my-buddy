@@ -2764,7 +2764,7 @@ class WorkflowCoordinator:
                 canonical_json(spec.get("exclusiveResources", [])),
                 spec["expectedSeconds"],
                 "queued",
-                blocker or "awaiting-worker",
+                blocker or "awaiting-execution",
                 now,
                 now,
             ),
@@ -3269,7 +3269,7 @@ class WorkflowCoordinator:
             self.board._transition_task(connection, task, "queued")
         connection.execute(
             "UPDATE tasks SET queue_reason=?, active_attempt_id=NULL, updated_at=? WHERE task_id=?",
-            (blocker or "awaiting-worker", now, task["task_id"]),
+            (blocker or "awaiting-execution", now, task["task_id"]),
         )
         updated = connection.execute(
             "UPDATE workflow_runs SET state='executing', active_request_id=NULL, final_artifact_id=NULL, final_attempt_id=NULL,"
@@ -6517,7 +6517,7 @@ class WorkflowCoordinator:
     def prepare_continuation_workspace(self, params: dict) -> None:
         """Resolve a pending continuation's workspace outside every transaction.
 
-        Called by the service before ``worker_claim`` so the exact canonical turn
+        Called by the service before execution admission so the exact canonical turn
         input already contains the resolved manifest; preparation is idempotent by
         the continuation identity, so concurrent workers cannot double-prepare.
         """

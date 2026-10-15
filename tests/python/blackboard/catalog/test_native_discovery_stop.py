@@ -14,8 +14,9 @@ from hey_my_buddy.buddy.harnesses.runtime_selection import bound
 from hey_my_buddy.buddy.harnesses.codex import native_run
 from hey_my_buddy.buddy.harnesses import controller, discovery, version
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-from hey_my_buddy.buddy.runtime.windows_process import owned_popen
+from hey_my_buddy.protocol.owned_process import owned_popen
 from hey_my_buddy.buddy.roles import run_execution
+from hey_my_buddy.protocol import process_controller
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 from buddy.harnesses.test_controller import (
@@ -73,8 +74,8 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
 
     def test_controller_log_emfile_without_spawn_preserves_stop_evidence(self):
         error = OSError(errno.EMFILE, 'fixture controller logs exhausted')
-        with patch.object(controller, 'open_logs', side_effect=error), \
-             patch.object(controller, 'owned_popen', wraps=controller.owned_popen) as spawn:
+        with patch.object(process_controller, 'open_logs', side_effect=error), \
+             patch.object(process_controller, 'owned_popen', wraps=process_controller.owned_popen) as spawn:
             with self.assertRaises(OSError) as caught:
                 self.controller_discovery()
         spawn.assert_not_called()
@@ -84,7 +85,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
     def test_controller_preparation_failure_preserves_stop_evidence(self):
         error = ValueError('fixture controller environment failed')
         with patch('hey_my_buddy.buddy.harnesses.runtime_selection.controller_environment', side_effect=error), \
-             patch.object(controller, 'owned_popen', wraps=controller.owned_popen) as spawn:
+             patch.object(process_controller, 'owned_popen', wraps=process_controller.owned_popen) as spawn:
             with self.assertRaises(ValueError) as caught:
                 self.controller_discovery()
         spawn.assert_not_called()
@@ -93,7 +94,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
 
     def test_controller_partial_log_open_failure_closes_fd_and_preserves_stop_evidence(self):
         with partial_log_open_failure() as state, \
-             patch.object(controller, 'owned_popen', wraps=controller.owned_popen) as spawn:
+             patch.object(process_controller, 'owned_popen', wraps=process_controller.owned_popen) as spawn:
             with self.assertRaises(OSError) as caught:
                 self.controller_discovery()
             spawn.assert_not_called()

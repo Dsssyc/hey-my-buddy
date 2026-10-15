@@ -54,11 +54,7 @@ class RoutingHealthTests(BoardTestCase):
                     " input_fingerprint,fingerprint_version,adapter,cwd,router_budget_seconds,state,"
                     " revision,created_at,updated_at) VALUES(?,?,?,?,?,?,1,'decision','<private-cwd>',60,?,1,?,?)",
                     (task_id, task_id, "fixture-host", encoded, encoded, sha256_text(encoded), task_state, now, now))
-                connection.execute(
-                    "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,"
-                    " execution_state,adapter,result_json,shutdown_confirmed,finished_at,created_at,updated_at)"
-                    " VALUES(?,?,1,'fixture-nonce','fixture-claim','finished','decision',?,1,?,?,?)",
-                    (attempt_id, task_id, canonical_json(receipt), now, now, now))
+                connection.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,shutdown_confirmed,finished_at,created_at,updated_at) VALUES(?,?,1,'fixture-nonce','finished','decision',?,1,?,?,?)", (attempt_id, task_id, canonical_json(receipt), now, now, now))
             connection.execute(
                 "INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,"
                 " task_id,attempt_id,generation,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",

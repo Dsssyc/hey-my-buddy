@@ -12,7 +12,6 @@ from pathlib import Path
 
 from ...errors import BoardError
 from ...json_codec import canonical_json, decode_strict_json
-from ...protocol.contracts import HarnessRunLive
 from ..harnesses.c_two_live import CTwoLiveEndpoint
 from ..harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
 from ..harnesses.registry import adapter, run_seam
@@ -23,28 +22,25 @@ from ..harnesses.run_contract import (
 from . import run_execution
 from .controller import run_harness
 from .prompts import wrap_up_prompt
-from .turn_io import _private_bytes, guard_private_path, private_json
+from .turn_io import _private_bytes, guard_private_path
 
 
 @contextmanager
 def _inline_live(control, request, services, state_dir: Path, handle):
-    material = control["live"]
     capabilities = (EXISTING_CAPABILITIES[request.harness] if getattr(services, "inquiry", None)
                     else LiveCapabilities(inquiry_delivery="unsupported"))
-    endpoint = CTwoLiveEndpoint(request.identity, capabilities, HarnessRunLive,
-                               instance_id=material["instanceId"], token=material["token"],
-                               state_dir=state_dir)
+    endpoint = CTwoLiveEndpoint(request.identity, capabilities, None, state_dir=state_dir)
+    server = run_execution.execution_live_server()
     try:
-        descriptor = endpoint.start()
-        private_json(Path(control["executionLiveFile"]), {
-            "identity": request.identity.to_payload(), "harness": request.harness,
-            "descriptor": descriptor.to_payload(), "token": material["token"],
-        })
+        if server is not None:
+            server.bind_native(endpoint)
         handle.live_endpoint = endpoint
         yield replace(services, live=endpoint) if services is not None else None
     finally:
         handle.live_endpoint = None
-        endpoint.stop()
+        if server is not None:
+            server.unbind_native(endpoint)
+        endpoint.close(reason="native-run-ended")
 
 
 def _stop_checkpoint(result: RunResult, request) -> ResumeCheckpoint | None:
@@ -86,9 +82,7 @@ def _summary_run(control, request, result, module, state_dir, deadline, handle):
     _private_bytes(task_path, wrap_up_prompt().encode(), exclusive=True)
     next_control = {**control, "privateRoot": str(root), "taskFile": str(task_path),
                     "invocationId": uuid.uuid4().hex,
-                    "timeoutSeconds": min(86400, math.ceil(remaining)),
-                    "live": {"instanceId": uuid.uuid4().hex + uuid.uuid4().hex,
-                             "token": os.urandom(32).hex()}}
+                    "timeoutSeconds": min(86400, math.ceil(remaining))}
     next_request, services, observer, error = run_execution.worker_request(next_control, module)
     if error is not None:
         return control, request, result, False, time.monotonic() >= deadline

@@ -45,11 +45,11 @@ class LivenessTests(BoardTestCase):
                 patch.object(board.store, "integrity", wraps=board.store.integrity) as integrity:
             for _ in range(3):
                 try:
-                    client.call("worker_list")
+                    client.call("task_list")
                 except BoardError as error:
-                    self.fail(f"healthy fixture must reach light ping and worker_list: {error.code}: {error}")
+                    self.fail(f"healthy fixture must reach light ping and task_list: {error.code}: {error}")
         self.assertEqual(integrity.call_count, 0, "routine reads must never run database integrity checks")
-        self.assertEqual(operations, ["ping", "worker_list"] * 3)
+        self.assertEqual(operations, ["ping", "task_list"] * 3)
 
     def test_explicit_health_still_checks_current_integrity(self):
         board = self.board()

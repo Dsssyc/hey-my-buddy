@@ -6,6 +6,7 @@ snapshot/buddy_list/health observation shapes and the routing quota check that
 happens before a selection reader is ever admitted.
 """
 from __future__ import annotations
+from admission import admit_execution
 
 import os
 import unittest
@@ -328,8 +329,8 @@ class RoutingQuotaTests(ModelServiceConcurrencyTestCase):
             self.assertIsNotNone(self.claim_micro_task(board, f"w-fill{index}", f"fill-{index}")["claim"])
         decision_id = self.request_selection(board, "route-1")
         client = board.client()
-        client.register_worker("w-dec", adapter="decision", capabilities=["decision"])
-        blocked = client.claim("w-dec", "claim-route-1", "n" * 32)
+        pass  # Admission is owned by the service.
+        blocked = admit_execution(client, "n" * 32)
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "model-capacity")
         # Nothing was claimed and no attempt exists.
@@ -350,9 +351,9 @@ class RoutingQuotaTests(ModelServiceConcurrencyTestCase):
         self.assertIsNotNone(claim_a)
         decision_id = self.request_selection(board, "route-2")
         client = board.client()
-        client.register_worker("w-dec", adapter="decision", capabilities=["decision"])
+        pass  # Admission is owned by the service.
         # MODEL_SERVICE_A still has one free slot: the routing task claims now.
-        claimed = client.claim("w-dec", "claim-route-2", "n" * 32)["claim"]
+        claimed = admit_execution(client, "n" * 32)["claim"]
         self.assertIsNotNone(claimed)
         with board.store.db.read() as connection:
             request_row = connection.execute(
@@ -376,8 +377,8 @@ class RoutingQuotaTests(ModelServiceConcurrencyTestCase):
         self.request_selection(board, "route-3")
         self.submit_micro_task(board, "route-3-business", model_service=MODEL_SERVICE_B)
         client = board.client()
-        client.register_worker("w-biz", adapter="dsh", capabilities=["dsh"])
-        claim = client.claim("w-biz", "claim-route-3", "n" * 32)["claim"]
+        pass  # Admission is owned by the service.
+        claim = admit_execution(client, "n" * 32)["claim"]
         self.assertIsNotNone(claim, "a blocked routing task hid runnable business work")
         self.assertEqual(claim["task"]["requestId"], "route-3-business")
 

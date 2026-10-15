@@ -15,28 +15,25 @@ from hey_my_buddy.protocol import process_identity as processes
 
 
 IDENTITY = {"bootId": "macos:00000000-0000-0000-0000-000000000001", "pid": 123,
-            "startedAt": 123250000, "processGroupId": 123, "jobName": None,
-            "worker": {"bootId": "macos:00000000-0000-0000-0000-000000000001", "pid": 122,
-                       "startedAt": 120500000}}
+            "startedAt": 123250000, "processGroupId": 123, "jobName": None}
 
 
 class InterruptedContinuationTests(WorkflowTestCase):
     def interrupted(self, board, claim):
         attempt = claim["claim"]["attempt"]
         attempt_id = attempt["attemptId"]
-        board.call("worker_progress", {
-            "workerId": "w1", "attemptId": attempt_id,
-            "generation": attempt["generation"], "nonce": NONCE,
-            "processIdentity": IDENTITY,
-        })
+        board.call('execution_progress', {'attemptId': attempt_id, 'generation': attempt['generation'], 'nonce': NONCE, 'processIdentity': IDENTITY})
         with board.store.db.read() as connection:
             stored = dict(board.store._attempt_row(connection, attempt_id))
-        journal = interruption._native_journal(board.store, stored, IDENTITY)
+        journal = {"path": processes.native_process_journal_path(
+            attempt_root(board.store.directory, stored["adapter"], stored["task_id"], attempt_id), IDENTITY),
+            "binding": {"taskId": stored["task_id"], "attemptId": attempt_id,
+                        "generation": stored["generation"]}}
         if journal is not None:
             journal_path = Path(journal["path"])
             journal_path.parent.mkdir(parents=True, exist_ok=True)
             processes.NativeProcessJournal(journal_path, journal["binding"])
-        with patch.object(interruption.processes, "worker_identity_alive", return_value=False), \
+        with patch.object(self.workspace, "_validate_output_record", return_value=None, create=True), \
              patch.object(interruption.processes, "inspect_process_identity", return_value="identity-absent"):
             summary = board.store.reconcile_startup()
         self.assertEqual(summary["interrupted"], 1)
@@ -68,7 +65,6 @@ class InterruptedContinuationTests(WorkflowTestCase):
     def test_codex_terminal_checkpoint_selects_native_before_next_turn(self):
         self.executors["codex"].native_resume = True
         board = self.board()
-        board.call("worker_register", {"workerId": "w1", "capabilities": ["codex"]})
         submitted = self.submit(board, harness="codex", provider="openai", model="fixture-model", effort="low")
         first = self.claim(board)
         document = first["claim"]["turn"]["input"]
@@ -108,7 +104,6 @@ class InterruptedContinuationTests(WorkflowTestCase):
     def test_incomplete_codex_record_reconstructs(self):
         self.executors["codex"].native_resume = True
         board = self.board()
-        board.call("worker_register", {"workerId": "w1", "capabilities": ["codex"]})
         submitted = self.submit(board, harness="codex", provider="openai", model="fixture-model", effort="low")
         first = self.claim(board)
         document = first["claim"]["turn"]["input"]
@@ -201,7 +196,6 @@ class InterruptedContinuationTests(WorkflowTestCase):
 
     def assert_interrupted_reconstructs(self, harness):
         board = self.board()
-        board.call("worker_register", {"workerId": "w1", "capabilities": [harness]})
         submitted = self.submit(board, harness=harness, provider="fixture", model="fixture", effort="high")
         first = self.claim(board)
         self.interrupted(board, first)

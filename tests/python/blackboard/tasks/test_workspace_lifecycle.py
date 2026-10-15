@@ -9,6 +9,7 @@ checkout after acceptance or a recorded conclusion, confirmed shutdown and the
 whole eligibility proof. No test touches an existing workspace.
 """
 from __future__ import annotations
+from admission import admit_board, admit_store
 
 import json
 import os
@@ -83,15 +84,13 @@ class LifecycleTestCase(RealWorkspaceTestCase):
 
     # -- micro-task helpers ----------------------------------------------------
     def register(self, board, worker_id=None):
-        return board.call("worker_register", {"workerId": worker_id or self.worker, "capabilities": ["dsh"]})
+        return None
 
     def control(self, view):
         return dict(self.controls[view["runId"]])
 
     def claim(self, board, run_id, *, request_id="claim-1", nonce="n" * 16):
-        return board.call("worker_claim", {
-            "workerId": self.worker, "claimRequestId": request_id, "nonce": nonce, "runId": run_id,
-        })
+        return admit_board(board, {'workerId': self.worker, 'claimRequestId': request_id, 'nonce': nonce, 'runId': run_id})
 
     def turn_record(self, claim, *, disposition="completed"):
         """A synthetic micro-task turn record in the current provenance format.
@@ -110,14 +109,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
     def finish_turn(self, board, claimed, seal, *, disposition="completed", nonce="n" * 16, worker_id=None):
         claim = claimed["claim"]
         attempt = claim["attempt"]
-        return board.call("worker_result", {
-            "workerId": worker_id or self.worker, "attemptId": attempt["attemptId"], "generation": attempt["generation"],
-            "nonce": nonce, "status": "ok", "terminationReason": "completed",
-            "result": {"status": "ok", "processState": {"shutdownConfirmed": True},
-                       "turn": self.turn_record(claim, disposition=disposition),
-                       "turnResultPath": "/tmp/turn-result.json", "workspaceSeal": seal},
-            "shutdownConfirmed": True, "exitCode": 0,
-        })
+        return board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': nonce, 'status': 'ok', 'terminationReason': 'completed', 'result': {'status': 'ok', 'processState': {'shutdownConfirmed': True}, 'turn': self.turn_record(claim, disposition=disposition), 'turnResultPath': '/tmp/turn-result.json', 'workspaceSeal': seal}, 'shutdownConfirmed': True, 'exitCode': 0})
 
     def view(self, board, run_id, **extra):
         return board.call("workflow_get", {"runId": run_id, **extra})
@@ -656,13 +648,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                   'workspaceSeal': seal, 'processState': {'shutdownConfirmed': True}}
         if import_failure:
             result['turn'] = {'invalid': 'not an importable turn'}
-        board.call('worker_result', {
-            'workerId': self.worker, 'attemptId': attempt['attemptId'], 'generation': attempt['generation'],
-            'nonce': 'n' * 16, 'status': 'ok' if import_failure else 'failed',
-            'terminationReason': 'completed' if import_failure else 'harness-error',
-            'shutdownConfirmed': True, 'exitCode': 1,
-            'result': result,
-        })
+        board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'ok' if import_failure else 'failed', 'terminationReason': 'completed' if import_failure else 'harness-error', 'shutdownConfirmed': True, 'exitCode': 1, 'result': result})
         receipt = board.call('task_result', {'runId': run_id})
         recorded = receipt['result']
         self.assertEqual(recorded['evidenceRefs'], refs)
@@ -783,11 +769,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             board.directory, 'dsh', helper_id, attempt['attemptId'])) / 'unknown-events.json'
         evidence.write_text('helper failure evidence')
         seal = workspace_module.seal(self.directory, helper_manifest, helper_id, attempt['attemptId'])
-        board.call('worker_result', {
-            'workerId': self.worker, 'attemptId': attempt['attemptId'], 'generation': attempt['generation'],
-            'nonce': 'n' * 16, 'status': 'failed', 'terminationReason': 'harness-error',
-            'shutdownConfirmed': True, 'exitCode': 1, 'result': {'status': 'invalid-result', 'workspaceSeal': seal},
-        })
+        board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'failed', 'terminationReason': 'harness-error', 'shutdownConfirmed': True, 'exitCode': 1, 'result': {'status': 'invalid-result', 'workspaceSeal': seal}})
         concluded = board.call('workflow_conclude', {
             'runId': run_id, 'targetRunId': helper_id, 'note': 'end the failed helper',
             **self.control(self.view(board, run_id)),
@@ -976,10 +958,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             "executionWorkspace": {"kind": "existing", "access": "read", "writeScope": []},
         })
         self.controls[existing["runId"]] = existing["control"]
-        existing_claim = board_existing.call("worker_claim", {
-            "workerId": "w-existing", "claimRequestId": "existing-claim", "nonce": "e" * 16,
-            "runId": existing["runId"],
-        })
+        existing_claim = admit_board(board_existing, {'workerId': 'w-existing', 'claimRequestId': 'existing-claim', 'nonce': 'e' * 16, 'runId': existing['runId']})
         existing_manifest = existing_claim["claim"]["turn"]["input"]["executionWorkspace"]
         existing_seal = workspace_module.seal(self.directory, existing_manifest, existing["runId"],
                                               existing_claim["claim"]["attempt"]["attemptId"])
@@ -1509,14 +1488,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         # A scope-only failure keeps the attempt's own native completed outcome.
         claim = claimed["claim"]
         seal_error = "WORKSPACE_SCOPE_VIOLATION: managed changes outside the declared write scope"
-        board.call("worker_result", {
-            "workerId": self.worker, "attemptId": claim["attempt"]["attemptId"],
-            "generation": claim["attempt"]["generation"], "nonce": "n" * 16, "status": "failed",
-            "result": {"status": "failed", "processState": {"shutdownConfirmed": True},
-                       "workspaceSealError": seal_error, "turnResultPath": "/tmp/turn-result.json",
-                       "turn": self.turn_record(claim, disposition="completed")},
-            "shutdownConfirmed": True, "exitCode": 1, "error": seal_error,
-        })
+        board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 16, 'status': 'failed', 'result': {'status': 'failed', 'processState': {'shutdownConfirmed': True}, 'workspaceSealError': seal_error, 'turnResultPath': '/tmp/turn-result.json', 'turn': self.turn_record(claim, disposition='completed')}, 'shutdownConfirmed': True, 'exitCode': 1, 'error': seal_error})
         view = self.view(board, submitted["runId"])
         conflict = view["workspaceConflicts"][0]
         self.assertEqual(conflict["state"], "open")
@@ -1568,14 +1540,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                                   claimed["claim"]["attempt"]["attemptId"])
         claim = claimed["claim"]
         seal_error = "WORKSPACE_SCOPE_VIOLATION: managed changes outside the declared write scope"
-        board.call("worker_result", {
-            "workerId": self.worker, "attemptId": claim["attempt"]["attemptId"],
-            "generation": claim["attempt"]["generation"], "nonce": "n" * 16, "status": "failed",
-            "result": {"status": "failed", "processState": {"shutdownConfirmed": True},
-                       "workspaceSealError": seal_error, "turnResultPath": "/tmp/turn-result.json",
-                       "turn": self.turn_record(claim, disposition="completed")},
-            "shutdownConfirmed": True, "exitCode": 1, "error": seal_error,
-        })
+        board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 16, 'status': 'failed', 'result': {'status': 'failed', 'processState': {'shutdownConfirmed': True}, 'workspaceSealError': seal_error, 'turnResultPath': '/tmp/turn-result.json', 'turn': self.turn_record(claim, disposition='completed')}, 'shutdownConfirmed': True, 'exitCode': 1, 'error': seal_error})
         view = self.view(board, submitted["runId"])
         conflict = view["workspaceConflicts"][0]
         adopted = board.store.workflow.workspace_resolve({
@@ -1792,12 +1757,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(raised.exception.code, "WORKSPACE_SCOPE_VIOLATION")
         attempt = helper_claim["claim"]["attempt"]
         seal_error = "WORKSPACE_SCOPE_VIOLATION: managed changes outside the declared write scope"
-        board.call("worker_result", {
-            "workerId": self.worker, "attemptId": attempt["attemptId"], "generation": attempt["generation"],
-            "nonce": "s" * 16, "status": "failed",
-            "result": {"status": "failed", "workspaceSealError": seal_error, "turnResultPath": "/tmp/turn-result.json"},
-            "shutdownConfirmed": True, "exitCode": 1, "error": seal_error,
-        })
+        board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 's' * 16, 'status': 'failed', 'result': {'status': 'failed', 'workspaceSealError': seal_error, 'turnResultPath': '/tmp/turn-result.json'}, 'shutdownConfirmed': True, 'exitCode': 1, 'error': seal_error})
         helper_view = self.view(board, helper_id)
         self.assertEqual(helper_view["state"], "awaiting-host")
         conflict = helper_view["workspaceConflicts"][0]

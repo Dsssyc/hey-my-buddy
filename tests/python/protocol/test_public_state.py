@@ -21,7 +21,6 @@ from support import (
     _child_environment,
     shutdown_private_rpc,
     stop_private_service,
-    stop_private_workers,
     write_catalog_fixture,
 )
 from protocol.test_transport_attach import MutationRecorder, snapshot
@@ -73,8 +72,7 @@ def cleanup_owned_case(state, modes, handles, evidence):
         attempt("restore:" + str(path), restore)
     if handles:
         service = attempt("stop_service", lambda: stop_private_service(state))
-        workers = attempt("stop_workers", lambda: stop_private_workers(state))
-        evidence["serviceAndWorkerLocksReleased"] = service and workers
+        evidence["serviceLockReleased"] = service
     for process, receipt in zip(handles, evidence["processes"]):
         def wait(process=process, receipt=receipt):
             receipt["waitExit"] = process.wait(timeout=20)
@@ -111,8 +109,8 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
     spawn = subprocess.Popen
 
     def collect_spawn(command, **kwargs):
-        # Reuse the catalog daemon with its Worker pool disabled; actual service
-        # operations and local RPC run unchanged. Keep explicit offline pins
+        # Reuse the catalog daemon; actual service operations and local RPC run
+        # unchanged. Keep explicit offline pins
         # after the production cold-start environment allowlist is applied.
         if "-m" in command and command[-1] == "hey_my_buddy.blackboard.service.daemon":
             command = prepare_daemon_spawn(command, kwargs, state)
@@ -475,7 +473,6 @@ class FixtureRepairTests(unittest.TestCase):
                 patch.object(transport, "_request", side_effect=request), \
                 patch.object(transport.cc, "local_endpoint_context", return_value=MagicMock(root=str(state / "ipc"))), \
                 patch(__name__ + ".stop_private_service", side_effect=stop), \
-                patch(__name__ + ".stop_private_workers") as workers, \
                 patch(__name__ + ".shutdown_private_rpc") as shutdown:
             with self.assertRaises(BoardError if target_fails else AssertionError) as caught:
                 run_case("readonly", work, substitutes_only=True)
@@ -484,7 +481,6 @@ class FixtureRepairTests(unittest.TestCase):
             else:
                 self.assertIn("Owned fixture cleanup failed", str(caught.exception))
             process.wait.assert_called_once_with(timeout=20)
-            workers.assert_called_once_with(state)
             shutdown.assert_called_once_with()
         evidence = json.loads((work / "evidence.json").read_text())
         self.assertEqual(evidence["processes"][0]["waitExit"], 0)
@@ -512,10 +508,8 @@ if __name__ == "__main__":
         print(json.dumps({"supportFile": sys.modules["support"].__file__, "state": str(state)}))
     elif len(sys.argv) > 1 and sys.argv[1] == "--daemon-fixture":
         from hey_my_buddy.blackboard.service.daemon import Daemon
-        # A transport-only fixture has no execution work. Reuse the real catalog
-        # daemon without starting or reconciling any Worker process.
-        with patch.object(Daemon, "_start_pool"), patch.object(Daemon, "_reconcile_pool"):
-            runpy.run_path(str(DAEMON_FIXTURE), run_name="__main__")
+        # A transport-only fixture has no execution work.
+        runpy.run_path(str(DAEMON_FIXTURE), run_name="__main__")
     elif len(sys.argv) > 1 and sys.argv[1] == "--case":
         run_case(sys.argv[2], Path(sys.argv[3]))
     else:

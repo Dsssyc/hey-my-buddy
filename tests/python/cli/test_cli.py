@@ -94,8 +94,7 @@ class MethodSurfaceTests(unittest.TestCase):
             with self.subTest(method=method):
                 self.assertEqual(transport.METHOD_MAP[method], target)
         # Await, the new-package upgrade coordinator and skill install are CLI-level helpers.
-        self.assertEqual(set(cli.METHODS), set(transport.METHOD_MAP) | set(cli.LOCAL_METHODS) | {"await", "upgrade", "install", "paths", "backup-preflight"})
-        self.assertEqual(cli.LOCAL_METHODS, ("worker-start", "worker-stop"))
+        self.assertEqual(set(cli.METHODS), set(transport.METHOD_MAP) | {"await", "upgrade", "install", "paths", "backup-preflight"})
 
     def test_capabilities_is_only_a_c_two_operation_not_a_cli_command(self):
         self.assertNotIn("capabilities", cli.METHODS)
@@ -162,20 +161,12 @@ class MethodSurfaceTests(unittest.TestCase):
                 self.assertNotIn(alias, transport.METHOD_MAP)
         # The CLI-local browser/wait booleans never turn console into a local method:
         # it still maps onto exactly one named C-Two lifecycle operation.
-        self.assertNotIn("console", cli.LOCAL_METHODS)
+        self.assertIn("console", transport.METHOD_MAP)
 
-    def test_worker_configuration_and_selection_operations_stay_distinct(self):
-        # The micro task lifecycle never absorbs the separate worker,
+    def test_execution_reporting_configuration_and_selection_operations_stay_distinct(self):
+        # The micro task lifecycle never absorbs execution reporting,
         # configuration or selection surfaces.
         for method, operation in (
-            ("workers", "worker_list"),
-            ("worker-register", "worker_register"),
-            ("worker-claim", "worker_claim"),
-            ("worker-reconcile", "worker_reconcile"),
-            ("worker-renew", "worker_renew"),
-            ("worker-progress", "worker_progress"),
-            ("worker-result", "worker_result"),
-            ("worker-release", "worker_release"),
             ("scope-amend", "workflow_scope_amend"),
             ("workspace-resolve", "workflow_workspace_resolve"),
             ("accept", "workflow_accept"),
@@ -189,9 +180,9 @@ class MethodSurfaceTests(unittest.TestCase):
             with self.subTest(method=method):
                 self.assertIn(method, cli.METHODS)
                 self.assertEqual(transport.METHOD_MAP[method], ("control", operation))
-        for local in ("worker-start", "worker-stop"):
-            self.assertIn(local, cli.LOCAL_METHODS)
-            self.assertNotIn(local, transport.METHOD_MAP)
+        for retired in ("workers", "worker-register", "worker-claim", "worker-reconcile", "worker-renew", "worker-release", "worker-start", "worker-stop", "worker-progress", "worker-result", "execution-progress", "execution-result"):
+            self.assertNotIn(retired, cli.METHODS)
+            self.assertNotIn(retired, transport.METHOD_MAP)
 
 
 class HelpTests(unittest.TestCase):

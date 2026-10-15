@@ -6,6 +6,7 @@ module and the DSH runner process are substituted, exactly like the contract's
 module boundary prescribes.
 """
 from __future__ import annotations
+from admission import admit_board, admit_store
 
 import json
 import os
@@ -62,13 +63,13 @@ class WorkflowTestCase(BoardTestCase):
         return response
 
     def register(self, board, worker_id="w1"):
-        return board.call("worker_register", {"workerId": worker_id, "capabilities": ["dsh", "command"]})
+        return None
 
     def claim(self, board, worker_id="w1", *, claim_request_id="c1", nonce=NONCE, run_id=None):
-        params = {"workerId": worker_id, "claimRequestId": claim_request_id, "nonce": nonce}
+        params = {'nonce': nonce}
         if run_id:
             params["runId"] = run_id
-        return board.call("worker_claim", params)
+        return admit_board(board, params)
 
     def turn_record(self, claim_response, *, disposition="completed", outcome=None, session_id="sess-1", **overrides):
         """A synthetic micro-task turn record in the current provenance format.
@@ -139,17 +140,8 @@ class WorkflowTestCase(BoardTestCase):
         if result_mutator is not None:
             result_mutator(result)
         return board.call(
-            "worker_result",
-            {
-                "workerId": worker_id,
-                "attemptId": attempt["attemptId"],
-                "generation": attempt["generation"],
-                "nonce": nonce,
-                "status": runner_status,
-                "result": result,
-                "shutdownConfirmed": shutdown,
-                "exitCode": exit_code,
-            },
+            'execution_result',
+            {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': nonce, 'status': runner_status, 'result': result, 'shutdownConfirmed': shutdown, 'exitCode': exit_code},
         )
 
     def control(self, view: dict) -> dict:
@@ -211,7 +203,7 @@ class LifecycleTests(WorkflowTestCase):
         for adapter, frozen, valid in (
             ('dsh', BUDDY, True),
             ('command', {'adapter': 'command'}, True),
-            ('external', {'adapter': 'external'}, True),
+
             ('dsh', None, False),
             ('dsh', {key: value for key, value in BUDDY.items() if key != 'effort'}, False),
             ('dsh', {**BUDDY, 'harness': 'codex'}, False),
@@ -714,7 +706,7 @@ class LifecycleTests(WorkflowTestCase):
             ("task_submit", {"requestId": "forged", "task": "x", "cwd": str(self.workdir("evil"))}),
             ("workflow_submit", {"requestId": "forged", "hostId": "host-1", "task": "x", "cwd": str(self.workdir("evil"))}),
             ("user_policy_publish", {"commandId": "forged", "expectedRevision": 0, "buddySettings": []}),
-            ("worker_list", {}),
+            ("execution_progress", {}),
         ):
             with self.assertRaises(BoardError) as raised:
                 board.call(operation, {**params, "credential": credential})
@@ -767,7 +759,7 @@ class LifecycleTests(WorkflowTestCase):
         self.assertEqual(cancelled["state"], "cancelled")
         # The caller-owned execution primitive remains independently cancellable.
         execution = board.call(
-            "task_submit", {"requestId": "execution-1", "adapter": "external", "task": "plain", "cwd": str(self.workdir("execution"))}
+            "task_submit", {"requestId": "execution-1", "adapter": "command", "argv": ["/bin/true"], "task": "plain", "cwd": str(self.workdir("execution"))}
         )
         plain = board.call("task_cancel", {"runId": execution["task"]["runId"]})
         self.assertEqual(plain["task"]["state"], "cancelled")
@@ -906,7 +898,7 @@ class IdempotencyTests(WorkflowTestCase):
         with board.store.db.read() as connection:
             spec = json.loads(connection.execute("SELECT micro_task_json FROM workflow_runs WHERE run_id=?",
                                                 (first["runId"],)).fetchone()[0])
-        ordinary = {"requestId": first["requestId"], "adapter": "external", "task": spec["task"], "cwd": spec["cwd"]}
+        ordinary = {"requestId": first["requestId"], "adapter": "command", "argv": ["/bin/true"], "task": spec["task"], "cwd": spec["cwd"]}
         with board.store.db.write() as connection:
             connection.execute("UPDATE workflow_runs SET request_fingerprint=NULL WHERE run_id=?", (first["runId"],))
         for changed in (False, True):

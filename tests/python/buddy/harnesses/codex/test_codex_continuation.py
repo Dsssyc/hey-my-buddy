@@ -19,7 +19,6 @@ class CodexContinuationTests(WorkflowTestCase):
         self.executors["codex"] = CodexAdapter()
         adapter = worker_executor("codex")
         board = self.board()
-        board.call("worker_register", {"workerId": "w1", "capabilities": ["codex"]})
         submitted = self.submit(board, harness="codex", provider="openai", model="fixture-model", effort="low")
 
         def execute(claim_response, case):
@@ -72,7 +71,6 @@ class CodexContinuationTests(WorkflowTestCase):
     def failed_run(self, *, native_status="completed", corrupt=False):
         self.executors["codex"] = CodexAdapter()
         board = self.board()
-        board.call("worker_register", {"workerId": "w1", "capabilities": ["codex"]})
         submitted = self.submit(board, harness="codex", provider="openai", model="fixture-model", effort="low")
         first = self.claim(board)
         document = first["claim"]["turn"]["input"]

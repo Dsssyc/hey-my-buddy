@@ -37,12 +37,6 @@ def install(testcase, *, path=None, **options):
         testcase.input_verify.reset_mock()
         return
     testcase._readonly_installed = True
-    from hey_my_buddy.buddy.runtime.execution import Execution
-    from hey_my_buddy.buddy.runtime.worker import Worker
-    testcase.enterContext(patch.object(Worker, "execute", autospec=True,
-        side_effect=lambda worker, claim: Execution(
-            claim, worker.state_dir, worker.worker_id, worker._nonce(),
-            client=worker.client, lease_seconds=worker.lease_seconds).run()))
     testcase.readonly_start = testcase.enterContext(patch(
         "hey_my_buddy.buddy.roles.run_execution.start_review", autospec=True,
         side_effect=lambda harness, context, request: start(

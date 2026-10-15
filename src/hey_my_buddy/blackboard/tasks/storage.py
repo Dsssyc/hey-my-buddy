@@ -81,6 +81,12 @@ def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
             continue
         match = re.search(r'--state-dir\s+(\S+)', command)
         observed_state = match.group(1) if match else None
+        if kind == 'execution':
+            startup = re.search(r'--startup\s+(.+execution-start\.json)$', command)
+            if startup:
+                path = Path(startup.group(1))
+                observed_state = next((str(parent.parent) for parent in path.parents
+                                       if parent.name == 'harnesses'), None)
         # Daemon argv can omit its state root. Control identity provides one exact
         # positive match, but no missing PID is interpreted as stopped.
         try:

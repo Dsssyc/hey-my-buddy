@@ -4,6 +4,7 @@ from unittest import mock
 from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy.blackboard.store.upgrade import upgrade_database
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router
@@ -15,6 +16,7 @@ class UpgradeServiceTests(BoardTestCase):
     def test_private_service_reads_settings_and_preserved_work(self):
         state = self.directory
         fixture = load_fixture(state)
+        upgrade_database(state)
         store = BoardStore(state)
         backup.create(store)
         store.db.close()

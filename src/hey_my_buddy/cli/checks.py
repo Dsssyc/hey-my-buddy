@@ -11,9 +11,9 @@ roots), 1 for failed tests regardless of teardown, 2 for usage errors, and 3 for
 passing tests with incomplete teardown (or retained sweep roots).
 
 The tests exercise *this checkout*: ``src`` and ``tests/python`` go first on
-``PYTHONPATH``, and inherited runtime, worker and agent-credential variables are
+``PYTHONPATH``, and inherited runtime and agent-credential variables are
 removed before each child starts.
-A Worker-pinned production runtime must never leak into a test subprocess, and
+a pinned production runtime must never leak into a test subprocess, and
 ``HMB_DEV_SOURCE=1`` alone cannot override one.
 
 Every child runs inside one private checks root: ``TMPDIR`` points into that root, so
@@ -23,7 +23,7 @@ test file — each with its own private state, runtime and temp directories belo
 checks root; ``--jobs 1`` (or
 ``HMB_CHECKS_JOBS=1``) runs those file subprocesses serially. After the
 suites finish, passing or failing, the runner asks any
-surviving hey-my-buddy daemon or supervisor below the private root to stop through its
+surviving hey-my-buddy daemon below the private root to stop through its
 cooperative surfaces, then waits until every observed survivor has been confirmed to
 exit and asserts a clean root: no held hey-my-buddy lifetime lock, no live process tied to
 the root, and no failed observation. A clean teardown removes the private root; an
@@ -54,16 +54,13 @@ import threading
 import time
 
 #: Inherited variables that would otherwise point a test subprocess at a production
-#: runtime, a Worker identity or an agent credential instead of its own private roots.
+#: runtime or an agent credential instead of its own private roots.
 SANITIZED_VARIABLES = (
     "HMB_CHECKS_TMPDIR",
-    "HMB_SUPERVISOR_START_ID",
     "HMB_STATE_DIR",
     "HMB_RUNTIME_ROOT",
     "HMB_RUNTIME",
     "HMB_RUNTIME_IDENTITY",
-    "HMB_WORKER_STATE",
-    "HMB_WORKER_ID",
     "HMB_AGENT_CREDENTIAL_FILE",
     "HMB_AGENT_CREDENTIAL_FD",
     "VIRTUAL_ENV",
@@ -72,9 +69,8 @@ SANITIZED_VARIABLES = (
     "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
 )
 
-#: A held lock with one of these names observes a live hey-my-buddy daemon or supervisor.
+#: A held lock with one of these names observes a live hey-my-buddy daemon.
 DAEMON_LOCK_NAMES = ("control-start.lock", "control-daemon.lock", "board-owner.lock")
-SUPERVISOR_LOCK_NAME = "supervisor.lock"
 EVIDENCE_FILE_NAME = "teardown-evidence.json"
 CREATOR_FILE_NAME = "creator.pid"
 
@@ -449,13 +445,11 @@ def lock_is_held(path: Path) -> bool:
 
 
 def held_locks(root: Path) -> dict[str, list[Path]]:
-    """Held daemon and supervisor lifetime locks below one private root."""
-    residue: dict[str, list[Path]] = {"daemon": [], "supervisor": []}
+    """Held daemon lifetime locks below one private root."""
+    residue: dict[str, list[Path]] = {"daemon": []}
     for path in sorted(root.rglob("*.lock")):
         if path.name in DAEMON_LOCK_NAMES:
             kind = "daemon"
-        elif path.name == SUPERVISOR_LOCK_NAME:
-            kind = "supervisor"
         else:
             continue
         if lock_is_held(path):
@@ -466,8 +460,8 @@ def held_locks(root: Path) -> dict[str, list[Path]]:
 def _root_prefixes(root: Path) -> tuple[str, ...]:
     """Both spellings of the private root path for argv matching.
 
-    hey-my-buddy resolves state directories, so a surviving supervisor's ``--state-dir``
-    argv carries the resolved form (macOS aliases ``/var`` through ``/private/var``),
+    hey-my-buddy resolves state directories, so a surviving process's argv may
+    carry the resolved form (macOS aliases ``/var`` through ``/private/var``),
     while this runner may hold the unresolved spelling of the same directory.
     """
     return tuple({str(root), str(root.resolve())})
@@ -646,22 +640,11 @@ def _request_daemon_stop(state_dir: Path) -> None:
 def request_cooperative_stop(root: Path, timeout: float = 30.0) -> list[str]:
     """Bounded drain: ask observed survivors to stop; never signal a process.
 
-    Waits until no hey-my-buddy lifetime lock under the root is held and no live process
-    names the root in its argv, so a supervisor whose lock file a racing cleanup
-    unlinked still receives its durable stop request and must be observed to exit
-    before the caller may treat the root as clean. Returns observation problems; an
+    Waits until no hey-my-buddy daemon lifetime lock under the root is held and no
+    live process names the root in its argv. An execution remains tied to the
+    private service, whose stop operation drains it. Returns observation problems; an
     empty list means the drain observed both channels clear.
     """
-    # A supervisor whose lock file was unlinked by a racing cleanup still owns its
-    # flock and keeps recreating its worker directory, so the durable stop request
-    # must also reach worker directories that show no held lock.
-    for workers_dir in root.rglob("workers"):
-        try:
-            candidates = [worker for worker in workers_dir.iterdir() if worker.is_dir()]
-        except OSError:
-            continue
-        for worker in candidates:
-            (worker / "stop.request").touch(mode=0o600, exist_ok=True)
     prefixes = _root_prefixes(root)
     requested: set[Path] = set()
     deadline = time.monotonic() + timeout
@@ -671,10 +654,8 @@ def request_cooperative_stop(root: Path, timeout: float = 30.0) -> list[str]:
             return ["ps process enumeration failed; residue status is unknown"]
         live = any(pid != os.getpid() and _argv_tied(argv, prefixes) for pid, argv in table)
         residue = held_locks(root)
-        if not live and not (residue["daemon"] or residue["supervisor"]):
+        if not live and not residue["daemon"]:
             return []
-        for path in residue["supervisor"]:
-            (path.parent / "stop.request").touch(mode=0o600, exist_ok=True)
         for path in residue["daemon"]:
             if path.parent not in requested:
                 requested.add(path.parent)
@@ -685,10 +666,6 @@ def request_cooperative_stop(root: Path, timeout: float = 30.0) -> list[str]:
 
 
 def _state_directory(path: Path) -> Path:
-    # Daemon locks sit at a state root; a supervisor lock sits at
-    # <state>/workers/<workerId>/supervisor.lock, three levels below it.
-    if path.name == SUPERVISOR_LOCK_NAME:
-        return path.parent.parent.parent
     return path.parent
 
 
@@ -714,7 +691,7 @@ def _write_evidence(root: Path, evidence: dict) -> Path:
 
 
 def teardown_private_root(root: Path, drain_seconds: float = 30.0) -> dict | None:
-    """Assert no child daemon or supervisor survives below one private root.
+    """Assert no child daemon or execution survives below one private root.
 
     Runs after every suite, passing or failing. A clean result requires all of: no
     held hey-my-buddy lifetime lock under the root, no live process observably tied to the
@@ -744,17 +721,15 @@ def teardown_private_root(root: Path, drain_seconds: float = 30.0) -> dict | Non
         "observation": {"problems": problems, "notes": notes},
     }
     directories = evidence.setdefault("stateDirectories", {})
-    for path in (*residue["daemon"], *residue["supervisor"]):
+    for path in residue["daemon"]:
         state = _state_directory(path)
         if str(state) in directories:
             continue
         directories[str(state)] = {
             "files": _directory_names(state),
-            "workerLogTail": _log_tail(state / "worker.log"),
             "controlLogTail": _log_tail(state / "control.log"),
         }
-    clean = (not problems and not processes
-             and not residue["daemon"] and not residue["supervisor"])
+    clean = not problems and not processes and not residue["daemon"]
     if clean:
         try:
             shutil.rmtree(root)
@@ -767,8 +742,6 @@ def teardown_private_root(root: Path, drain_seconds: float = 30.0) -> dict | Non
     findings = []
     if residue["daemon"]:
         findings.append(f"{len(residue['daemon'])} daemon lock(s)")
-    if residue["supervisor"]:
-        findings.append(f"{len(residue['supervisor'])} supervisor lock(s)")
     if processes:
         findings.append(f"{len(processes)} live process(es)")
     if problems:

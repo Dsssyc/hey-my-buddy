@@ -630,7 +630,7 @@ class ProcessInventoryServiceTests(BoardTestCase):
     Only the ``ps`` data source is replaced: the simulated listing is literal
     text spelled independently of the shared entry table, so a misspelling in
     that table cannot fake its own inputs. Every service line carries a
-    ``--state-dir`` outside the observed board and the board has no
+    ``--state-dir`` or ``--startup`` outside the observed board and the board has no
     ``control.json``, so open-file inspection is never reached.
     """
 
@@ -644,12 +644,12 @@ class ProcessInventoryServiceTests(BoardTestCase):
             f' 101 /usr/bin/python3 -P -m buddy.daemon --state-dir {foreign}',
             f' 102 /usr/bin/python3 -m buddy.worker.supervisor --worker-id old-0 --state-dir {foreign}',
             f' 103 {runtime}/venv/bin/python -P -m hey_my_buddy.blackboard.service.daemon --state-dir {foreign}',
-            f' 104 {runtime}/venv/bin/python -m hey_my_buddy.buddy.runtime.supervisor --worker-id new-1 --state-dir {foreign}',
+            f' 104 {runtime}/venv/bin/python -m hey_my_buddy.buddy.runtime.execution --startup {foreign}/harnesses/dsh/micro-tasks/t/attempts/a/execution-start.json',
             f' 201 /usr/bin/python3 -m buddy.daemonization --state-dir {foreign}',
             f' 202 /usr/bin/python3 -m xbuddy.daemon --state-dir {foreign}',
             f' 203 /usr/bin/python3 -m hey_my_buddy.buddy.runtime.supervisord --state-dir {foreign}',
             f' 204 /usr/bin/python3 -m hey_my_buddy.blackboard.service.daemonware --state-dir {foreign}',
-            f' 205 /usr/bin/python3 -m hey_my_buddy.buddy.runtime.supervisorish --state-dir {foreign}',
+            f' 205 /usr/bin/python3 -m hey_my_buddy.buddy.runtime.executionish --startup {foreign}/harnesses/dsh/attempts/a/execution-start.json',
             f' 206 /usr/bin/python3 -m buddy.client --state-dir {foreign}',
         ])
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.subprocess.check_output', return_value=listing) as ps, \
@@ -660,8 +660,22 @@ class ProcessInventoryServiceTests(BoardTestCase):
         self.assertTrue(known)
         self.assertEqual({row['pid']: row for row in orphans}, {
             103: {'pid': 103, 'kind': 'daemon', 'stateDir': str(foreign), 'runtimeDir': str(runtime)},
-            104: {'pid': 104, 'kind': 'supervisor', 'stateDir': str(foreign), 'runtimeDir': str(runtime)},
+            104: {'pid': 104, 'kind': 'execution', 'stateDir': str(foreign), 'runtimeDir': str(runtime)},
         })
         # Every simulated process stays observable, including the near misses.
         self.assertEqual(len(commands), 10)
         self.assertIn(f'/usr/bin/python3 -m buddy.daemonization --state-dir {foreign}', commands)
+
+    def test_execution_startup_path_with_spaces_identifies_its_board(self):
+        state = self.directory / 'observed board'
+        state.mkdir()
+        foreign = self.directory / 'another execution-start.json board'
+        foreign.mkdir()
+        listing = (f' 104 /usr/bin/python3 -m hey_my_buddy.buddy.runtime.execution '
+                   f'--startup {foreign}/harnesses/dsh/micro-tasks/t/attempts/a/execution-start.json')
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.subprocess.check_output', return_value=listing), \
+                mock.patch('hey_my_buddy.blackboard.tasks.storage.subprocess.run',
+                           side_effect=AssertionError('open-file inspection was reached')):
+            orphans, _, known = storage.process_inventory(state)
+        self.assertTrue(known)
+        self.assertEqual(orphans[0]['stateDir'], str(foreign))

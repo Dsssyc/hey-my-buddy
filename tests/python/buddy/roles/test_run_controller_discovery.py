@@ -13,6 +13,7 @@ from hey_my_buddy.buddy.roles import run_controller
 from hey_my_buddy.buddy.roles import run_execution
 from hey_my_buddy.buddy.harnesses.runtime_selection import bound
 from hey_my_buddy.buddy.harnesses import controller
+from hey_my_buddy.protocol import process_controller
 from hey_my_buddy.errors import BoardError
 from buddy.harnesses.test_controller import (
     NATIVE_STOPPED, NATIVE_UNKNOWN, controller_log_close_failure, partial_log_open_failure,
@@ -111,8 +112,8 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
 
     def test_emfile_before_spawn_keeps_confirmed_stop_through_role(self):
         error = OSError(errno.EMFILE, 'fixture controller logs exhausted')
-        with patch.object(controller, 'open_logs', side_effect=error), \
-             patch.object(controller, 'owned_popen', wraps=controller.owned_popen) as spawn:
+        with patch.object(process_controller, 'open_logs', side_effect=error), \
+             patch.object(process_controller, 'owned_popen', wraps=process_controller.owned_popen) as spawn:
             with self.assertRaises(OSError) as caught:
                 self.discover()
         spawn.assert_not_called()
@@ -131,7 +132,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
             return controller.launch_controller(**kwargs)
 
         with patch.object(run_execution, 'launch_controller', launch), \
-             patch.object(controller, 'owned_popen', wraps=controller.owned_popen) as spawn:
+             patch.object(process_controller, 'owned_popen', wraps=process_controller.owned_popen) as spawn:
             with self.assertRaises(ValueError) as caught:
                 self.discover()
         spawn.assert_not_called()
@@ -141,7 +142,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
 
     def test_partial_log_open_failure_closes_stdout_and_keeps_role_stop(self):
         with partial_log_open_failure() as state, \
-             patch.object(controller, 'owned_popen', wraps=controller.owned_popen) as spawn:
+             patch.object(process_controller, 'owned_popen', wraps=process_controller.owned_popen) as spawn:
             with self.assertRaises(OSError) as caught:
                 self.discover()
             spawn.assert_not_called()
@@ -203,21 +204,21 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
 
     def test_unregistered_controller_with_native_true_and_outer_unknown_keeps_role_unknown(self):
         error = ValueError('fixture handle registration failed')
-        with controller_log_close_failure(log=None, receipt=NATIVE_STOPPED) as state, \
-             patch.object(controller, 'ProcessHandle', side_effect=error):
-            with self.assertRaises(ValueError) as caught:
+        with controller_log_close_failure(log=None, receipt=NATIVE_STOPPED, observation_blocked=True) as state, \
+             patch.object(process_controller, 'ProcessHandle', side_effect=error):
+            with self.assertRaises(RuntimeError) as caught:
                 self.discover()
-            self.assertIs(caught.exception, error)
-            self.assertTrue(error.owned_popen_evidence.created)
-            self.assertIs(error.owned_popen_evidence.shutdown_confirmed, False)
-            self.assertIs(error.discovery_shutdown_confirmed, False)
-            self.assertIsNone(state['process'].poll())
-            self.assertEqual(state['observations'], 0)
+            self.assertIs(caught.exception.__cause__, error)
+            self.assertTrue(caught.exception.owned_popen_evidence.created)
+            self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, False)
+            self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
+            self.assertIsNotNone(state['process'].poll())
+            self.assertEqual(state['observations'], 1)
             self.assertEqual(len(list(self.root.glob('hey-my-buddy-codex-catalog-*'))), 1)
 
     def test_simulated_windows_creation_receipt_alone_never_confirms_native_stop(self):
         from buddy.runtime.test_windows_process import FakeAPI, FakeProcess
-        from hey_my_buddy.buddy.runtime import windows_process
+        from hey_my_buddy.protocol import owned_process as windows_process
 
         for stopped in (True, False):
             with self.subTest(outer_stopped=stopped):
@@ -235,7 +236,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
 
                 previous = set(self.root.glob('hey-my-buddy-codex-catalog-*'))
                 with patch.object(windows_process.subprocess, 'Popen', return_value=process), \
-                     patch.object(controller, 'owned_popen', spawn):
+                     patch.object(process_controller, 'owned_popen', spawn):
                     with self.assertRaises((OSError, RuntimeError)) as caught:
                         self.discover()
                 self.assertTrue(caught.exception.owned_popen_evidence.created)

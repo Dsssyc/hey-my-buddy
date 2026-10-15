@@ -469,7 +469,7 @@ class CodexAdapterTests(unittest.TestCase):
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertIs(outcome.result.get("wrapUpDelivered"), True, outcome.to_report())
-        from hey_my_buddy.buddy.runtime.worker import classify_termination
+        from hey_my_buddy.buddy.runtime.execution import classify_termination
         self.assertEqual(classify_termination(outcome, timed_out=False, cancel_requested=True,
                                               stop_initiator="host"), "wrap-up")
         self.assertTrue(outcome.shutdown_confirmed)

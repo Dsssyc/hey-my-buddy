@@ -1020,17 +1020,20 @@ class LiveActivityTests(ZcodeFixtureCase):
 
     def activity_channel(self, handle):
         from hey_my_buddy.buddy.harnesses.registry import live_binding
-        from hey_my_buddy.protocol.contracts import HarnessRunLive
+        from buddy.harnesses.live_contract import HarnessRunLive, register_test_endpoint
 
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             endpoint = handle.live_endpoint
             if endpoint is not None:
+                if endpoint._descriptor is None:
+                    register_test_endpoint(endpoint)
+                handle.test_live_endpoint = endpoint
                 descriptor = endpoint._descriptor
                 channel = live_binding(handle.role_run_control["harness"])(
                     endpoint.identity, HarnessRunLive, name=descriptor.name,
                     address=descriptor.address, instance_id=descriptor.instance_id,
-                    token=handle.role_run_control["live"]["token"],
+                    token=endpoint._token,
                     state_dir=Path(self.environment["HMB_STATE_DIR"]))
                 self.addCleanup(channel.close, reason="fixture-complete")
                 return channel

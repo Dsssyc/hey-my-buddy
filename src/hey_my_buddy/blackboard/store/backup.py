@@ -144,7 +144,7 @@ def _regular_files(root: Path, *, scope: str = ''):
     yield from visit(root)
 
 
-STATE_FILES = ('console-sessions.json', 'console-settings.json', 'worker-pool.json',
+STATE_FILES = ('console-sessions.json', 'console-settings.json',
                'runtime-retention.json', 'active-runtime.json', 'launch-settings.json')
 
 
@@ -254,16 +254,6 @@ def preflight_entries(state: Path):
                 yield from _single(journal)
             else:
                 yield 'rejected', journal, 'undeclared-journal-entry'
-    workers = state / 'workers'
-    if _linked(workers) or workers.exists() and not workers.is_dir():
-        yield 'rejected', workers, 'linked-path' if _linked(workers) else 'non-directory-path'
-    elif workers.exists():
-        for worker in sorted(workers.iterdir()):
-            if _linked(worker) or not worker.is_dir():
-                yield 'rejected', worker, 'linked-path' if _linked(worker) else 'non-directory-path'
-                continue
-            for name in ('startup.json', 'orphaned.json'):
-                yield from _single(worker / name)
     for name in STATE_FILES:
         yield from _single(state / name)
 
@@ -386,7 +376,7 @@ def _verify(directory: Path) -> dict:
     _guard(directory)
     with _open(directory / 'manifest.json', 'rb') as stream:
         manifest = json.load(stream)
-    if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
+    if manifest.get('format') != 1 or manifest.get('schema') not in (22, SCHEMA_VERSION):
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
     policy = manifest.get('attemptEvidencePolicy')
     if policy is not None and policy != attempt_evidence.POLICY:
@@ -426,7 +416,8 @@ def _verify(directory: Path) -> dict:
             schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if schema is None or int(schema[0]) != manifest['schema']:
                 raise BoardError('BACKUP_INVALID', 'Backup schema does not match its manifest')
-        Database(trial).initialize()
+        if manifest['schema'] == SCHEMA_VERSION:
+            Database(trial).initialize()
     return manifest
 
 

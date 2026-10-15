@@ -1,12 +1,13 @@
 """Board inquiry facts over a real Store/Actor/turn and registered C-Two seam.
 
-The narrow JournalOwner replaces the native owner and Worker/network forwarding,
+The narrow JournalOwner replaces the native owner and execution endpoint transport,
 not inquiry, actor validation, wire codecs, endpoint admission or projections.
 It commits a private journal before settling requests and publishes through the
 real DTO/journal layer. It is not an end-to-end or native receipt verification.
 The native InquiryBridge lifecycle remains a separate C1 boundary.
 """
 from __future__ import annotations
+from admission import admit_execution
 
 from contextlib import nullcontext
 import json
@@ -35,8 +36,24 @@ from hey_my_buddy.buddy.harnesses.live import (
     LiveCapabilities, LiveJournal, LiveObservation, LiveReply, LiveSnapshot, _journal_states,
 )
 from hey_my_buddy.buddy.roles.turn_io import input_hash
-from hey_my_buddy.protocol.contracts import WorkerRuntimeLive
 from hey_my_buddy.protocol.run_identity import RunIdentity
+from buddy.harnesses.live_contract import HarnessRunLive
+
+
+class ExecutionChannel:
+    """Service-owned endpoint returns payloads at the execution boundary."""
+    def __init__(self, native):
+        self.native = native
+        self.identity = native.identity
+
+    def request(self, request, **kwargs):
+        return self.native.request(request, **kwargs).to_payload()
+
+    def observe(self, **kwargs):
+        return self.native.observe(**kwargs).to_payload()
+
+    def close(self, *, reason):
+        self.native.close(reason=reason)
 
 
 class OwnerConnection:
@@ -48,7 +65,7 @@ class OwnerConnection:
     def _call(self, operation, text):
         self.owner.requests.append({"operation": operation, **json.loads(text)})
         if self.owner.disconnected:
-            raise ConnectionError("the fixture Worker endpoint is unavailable")
+            raise ConnectionError("the fixture execution endpoint is unavailable")
         # The owner publishes its source facts before the endpoint reads them;
         # the endpoint itself never opens a journal or drives a native process.
         self.owner.publish()
@@ -72,7 +89,7 @@ class JournalOwner:
     """A model-free owner fixture, with real durable writes and endpoint handoff.
 
     The production C1 reader checks source version/task/attempt/generation/turn.
-    Signed native receipts, lifecycle and Worker forwarding remain outside
+    Signed native receipts, lifecycle and execution transport remain outside
     this fixture; the endpoint checks the complete transport RunIdentity.
     """
 
@@ -91,7 +108,8 @@ class JournalOwner:
             "activity": [{"at": "2026-10-07T00:00:00.000Z", "kind": "tool_call", "toolName": "bash"}],
         }
         capabilities = LiveCapabilities(inquiry_delivery="cooperative-checkpoint")
-        self.endpoint = CTwoLiveEndpoint(identity, capabilities, WorkerRuntimeLive, token=self.token, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        self.endpoint = CTwoLiveEndpoint(identity, capabilities, HarnessRunLive,
+                                         token=self.token, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.lock = threading.RLock()
         self.stopping = threading.Event()
         self.errors = []
@@ -202,13 +220,10 @@ class JournalOwner:
 
 
 def attach_owner(case, board, client, task, adapter):
-    worker_id, worker_instance, nonce = "w-inquiry", "inquiry-worker-instance", "a" * 32
-    client.register_worker(worker_id, adapter=adapter, capabilities=[adapter, "inquiry"],
-                           identity=worker_instance)
-    claim = client.claim(worker_id, "claim-inquiry-1", nonce, worker_instance=worker_instance)["claim"]
+    nonce = "a" * 32
+    claim = admit_execution(client, nonce)["claim"]
     turn, attempt = claim["turn"], claim["attempt"]
     case.assertIsNotNone(turn)
-    case.assertEqual(attempt["workerInstance"], worker_instance)
     with board.store.db.read() as db:
         row = db.execute("SELECT input_json, input_sha256 FROM workflow_turns WHERE turn_id=?", (turn["turnId"],)).fetchone()
         case.assertIsNone(row["input_sha256"], "the running receipt-time digest is allowed to remain NULL")
@@ -233,18 +248,14 @@ def attach_owner(case, board, client, task, adapter):
     case.enterContext(mock.patch.object(ctl.cc, "with_call_options", side_effect=with_call_options))
     # Require BoardService's production initialization before injecting a factory.
     case.assertIsInstance(getattr(board.store, "live_registry", None), LiveRegistry)
-    board.store.live_registry = LiveRegistry(board.store, lambda frame: CTwoLiveChannel(
-        frame.identity, WorkerRuntimeLive, name=frame.name, address=frame.address,
-        instance_id=frame.instance_id, token=frame.live_token, state_dir=Path(os.environ["HMB_STATE_DIR"])))
-    attachment = {"workerId": worker_id, "workerInstance": worker_instance,
-                  "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": nonce,
-                  "identity": identity.to_payload(), "instanceId": owner.endpoint.instance_id,
-                  "name": "inquiry fixture", "address": "fixture://worker-live", "liveToken": owner.token}
+    board.store.live_registry = LiveRegistry()
+    channel = ExecutionChannel(CTwoLiveChannel(
+        identity, HarnessRunLive, name='inquiry fixture', address='fixture://execution-live',
+        instance_id=owner.endpoint.instance_id, token=owner.token, state_dir=Path(os.environ["HMB_STATE_DIR"])))
+    board.store.live_registry.bind(attempt['attemptId'], channel)
     case._turn_id = identity.turn_id
-    owner.attachment = attachment
-    case.assertTrue(board.call("worker_live_attach", attachment)["attached"])
     channel = board.store.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
-    case.assertEqual(channel.capabilities().inquiry_delivery, "cooperative-checkpoint")
+    case.assertEqual(channel.native.capabilities().inquiry_delivery, "cooperative-checkpoint")
     case.assertEqual(channel.identity, identity)
     return task, attempt, owner
 
@@ -319,8 +330,8 @@ class TestInquiry(BoardTestCase):
             self.assertNotIn("private-provider-key", json.dumps(result))
             self.assertNotIn("private-prompt", json.dumps(result))
             self.assertNotIn(bridge.token, json.dumps(result))
-            self.assertNotIn(bridge.attachment["nonce"], json.dumps(result))
-            self.assertNotIn(bridge.attachment["address"], json.dumps(result))
+            self.assertNotIn("a" * 32, json.dumps(result))
+            self.assertNotIn("fixture://execution-live", json.dumps(result))
         finally:
             bridge.close()
 
@@ -488,7 +499,7 @@ class TestInquiry(BoardTestCase):
         self.assertEqual(result["expectedSeconds"], 7)
         self.assertNotIn("deadline", result)
 
-    def test_worker_endpoint_loss_is_unavailable_not_shutdown(self):
+    def test_execution_endpoint_loss_is_unavailable_not_shutdown(self):
         board = self.board()
         client = board.client()
         task, _attempt, owner = self._attempt_directory(board, client)
@@ -506,7 +517,7 @@ class TestInquiry(BoardTestCase):
         board = self.board()
         client = board.client()
         task = client.submit(
-            requestId="ext-inq", task="do", cwd=str(self.workdir()), adapter="external"
+            requestId="ext-inq", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"]
         )["task"]
         result = board.call("inquiry_observe", {"runId": task["runId"]})
         self.assertFalse(result["bridge"]["enabled"])
@@ -607,32 +618,34 @@ class TestInquiry(BoardTestCase):
         self.assertEqual(board.call("inquiry_observe", {"runId": task["runId"]})["execution"]["attemptId"],
                          owner.identity.attempt_id)
 
-    def test_all_identity_components_and_endpoint_instance_are_refused_before_owner_commit(self):
+    def test_execution_endpoint_rejects_foreign_identity_and_token_before_owner_commit(self):
+        from types import SimpleNamespace
+        from hey_my_buddy.buddy.runtime.execution import _ExecutionLive
+
         board = self.board()
         client = board.client()
-        task, _attempt, owner = self._attempt_directory(board, client)
-        view = board.store.task_get({"runId": task["runId"]})["task"]
-        channel = board.store.live_registry.channel_for(view)
-        original = channel.identity
-        changed = (("taskId", "foreign-task"), ("attemptId", "foreign-attempt"),
-                   ("generation", original.generation + 1), ("invocationId", "foreign-invocation"),
-                   ("turnId", "foreign-turn"), ("inputSha256", "b" * 64))
-        for index, (key, value) in enumerate(changed):
+        task, attempt, owner = self._attempt_directory(board, client)
+        live = _ExecutionLive(SimpleNamespace(claim={
+            "task": {"taskId": task["runId"]}, "attempt": attempt,
+            "turn": {"turnId": owner.identity.turn_id},
+        }))
+        frame = {"identity": live.identity.to_payload(), "instanceId": live.instance_id,
+                 "token": live.token}
+        self.assertEqual(live._auth(json.dumps(frame), set()), frame)
+        for key, value in (("taskId", "foreign-task"), ("attemptId", "foreign-attempt"),
+                           ("generation", live.identity.generation + 1),
+                           ("invocationId", "foreign-invocation"), ("turnId", "foreign-turn")):
             with self.subTest(field=key):
-                channel._identity = RunIdentity.from_payload({**original.to_payload(), key: value})
-                result = board.call("inquiry_observe", {"runId": task["runId"],
-                                    "inquiryId": f"q-identity-{index}", "question": "probe"})
-                self.assertEqual(result["bridge"]["reason"], f"identity-mismatch:{key}")
-                self.assertFalse(result["bridge"]["observed"])
-                self.assertEqual(result["inquiry"]["state"], "queued")
-                self.assertFalse(result["execution"]["shutdownConfirmed"])
-        channel._identity = original
-        channel._instance_id = "b" * 64
-        result = board.call("inquiry_observe", {"runId": task["runId"],
-                            "inquiryId": "q-instance", "question": "probe"})
-        self.assertEqual(result["bridge"]["reason"], "instance-mismatch")
+                bad = {**frame, "identity": {**frame["identity"], key: value}}
+                with self.assertRaises(BoardError) as caught:
+                    live._auth(json.dumps(bad), set())
+                self.assertEqual(caught.exception.code, "LIVE_UNAVAILABLE")
+        for field, value in (("instanceId", "b" * 64), ("token", "b" * 64)):
+            with self.subTest(field=field):
+                with self.assertRaises(BoardError) as caught:
+                    live._auth(json.dumps({**frame, field: value}), set())
+                self.assertEqual(caught.exception.code, "LIVE_UNAVAILABLE")
         self.assertEqual(owner.entries, {})
-        self.assertFalse(Path(owner.journal_path).exists())
         self.assertEqual(client.get(runId=task["runId"])["state"], "running")
 
     def test_wait_for_an_unpublished_id_does_not_invent_an_answer_or_new_turn(self):
@@ -684,9 +697,7 @@ class TestInquiry(BoardTestCase):
         owner.append({"inquiryId": "q-foreign-attempt", "attemptId": "foreign-attempt", "state": "answered",
                       "answer": {"text": "foreign attempt history"}})
         owner.close()  # the fixture's only owned execution thread has really stopped
-        frame = owner.attachment
-        client.submit_result(frame["workerId"], attempt["attemptId"], attempt["generation"], frame["nonce"],
-                             {"status": "ok", "result": {"finalText": "fixture owner stopped"},
+        client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, {"status": "ok", "result": {"finalText": "fixture owner stopped"},
                               "shutdownConfirmed": True, "exitCode": 0})
         if concluded:
             closed = board.call("workflow_conclude", {"runId": task["runId"],
@@ -853,7 +864,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         task, _attempt, owner = self._live_attempt(board, client)
         client.post_question("q-early", "anyone there?", runId=task["runId"])
         channel = board.store.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
-        snapshot = channel.observe(inquiry_id="q-early", timeout_ms=1500)
+        snapshot = channel.native.observe(inquiry_id="q-early", timeout_ms=1500)
         self.assertTrue(snapshot.observed)
         self.assertEqual(snapshot.inquiries, ())
         self.assertEqual(client.get_message("q-early", runId=task["runId"])["state"], "queued")
@@ -884,9 +895,8 @@ class ZcodeLiveChannelTests(BoardTestCase):
         board = self.board()
         client = board.client()
         task, _attempt, owner = self._live_attempt(board, client)
-        frame = {key: value for key, value in owner.attachment.items()
-                 if key not in {"address", "name", "liveToken"}}
-        self.assertTrue(board.call("worker_live_detach", frame)["detached"])
+        channel = board.store.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
+        board.store.live_registry.unbind(owner.identity.attempt_id, channel)
         # A live source has an answer, but the service must not read it without
         # the holder's binding. There are no native request/credential files.
         owner.append({"inquiryId": "q-unbound", "state": "answered", "answer": {"text": "private answer"}})
@@ -899,32 +909,14 @@ class ZcodeLiveChannelTests(BoardTestCase):
         self.assertEqual(client.get_message("q-unbound", runId=task["runId"])["state"], "queued")
         self.assertIsNone(client.get_message("q-unbound", runId=task["runId"])["answer"])
 
-    def test_a_mismatched_actual_actor_cannot_attach_or_replace_a_held_binding(self):
+    def test_execution_channel_binding_is_scoped_to_the_selected_attempt(self):
         board = self.board()
         client = board.client()
         task, _attempt, owner = self._live_attempt(board, client)
-        original = board.store.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
-        for key, value in (("workerId", "foreign-worker"), ("workerInstance", "foreign-instance"),
-                           ("nonce", "b" * 32), ("generation", owner.identity.generation + 1)):
-            with self.subTest(field=key):
-                with self.assertRaises(BoardError):
-                    board.call("worker_live_attach", {**owner.attachment, key: value})
-                self.assertIs(board.store.live_registry.channel_for(
-                    board.store.task_get({"runId": task["runId"]})["task"]), original)
-        for key, value in (("taskId", "foreign-task"), ("turnId", "foreign-turn"), ("inputSha256", "b" * 64)):
-            with self.subTest(identity=key):
-                bad_identity = {**owner.identity.to_payload(), key: value}
-                with self.assertRaises(BoardError):
-                    board.call("worker_live_attach", {**owner.attachment, "identity": bad_identity})
-                self.assertIs(board.store.live_registry.channel_for(
-                    board.store.task_get({"runId": task["runId"]})["task"]), original)
-        detach = {key: value for key, value in owner.attachment.items()
-                  if key not in {"address", "name", "liveToken"}}
-        with self.assertRaises(BoardError) as error:
-            board.call("worker_live_detach", {**detach, "instanceId": "b" * 64})
-        self.assertEqual(error.exception.code, "CONFLICT")
-        self.assertIs(board.store.live_registry.channel_for(
-            board.store.task_get({"runId": task["runId"]})["task"]), original)
+        view = board.store.task_get({"runId": task["runId"]})["task"]
+        original = board.store.live_registry.channel_for(view)
+        board.store.live_registry.unbind("foreign-attempt", original)
+        self.assertIs(board.store.live_registry.channel_for(view), original)
         self.assertTrue(board.call("inquiry_observe", {"runId": task["runId"]})["bridge"]["observed"])
 
     def test_a_foreign_record_for_the_asked_id_surfaces_as_the_public_rejection(self):

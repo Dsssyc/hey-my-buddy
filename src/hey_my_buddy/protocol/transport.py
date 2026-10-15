@@ -35,7 +35,7 @@ PROTOCOL_VERSION = 2
 #: surface; the C-Two operation names never change here. ``await`` is a CLI-level
 #: read-only wait implemented on top of these in ``blocking.py`` and never appears
 #: here. The single micro task lifecycle keeps the bare names; the advanced
-#: ``execution-*`` names reach the ordinary task records that the command/external
+#: ``execution-*`` names reach the ordinary task records that the command
 #: adapters and the internal decision infrastructure own.
 METHOD_MAP: dict[str, tuple[str, str]] = {
     "accounts": ("control", "accounts"),
@@ -65,7 +65,7 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     # -- work macro tasks: read-only browsing of grouped micro tasks ----------
     "macro-task-list": ("control", "macro_task_list"),
     "macro-task-timeline": ("control", "macro_task_timeline"),
-    # -- execution records for command/external/decision infrastructure -----
+    # -- execution records for command/decision infrastructure -----
     "execution-submit": ("control", "task_submit"),
     "execution-cancel": ("control", "task_cancel"),
     "execution-retry": ("control", "task_retry"),
@@ -78,14 +78,6 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     "watch": ("wait", "events_wait"),
     "events": ("control", "events_read"),
     "inquire": ("control", "inquiry_observe"),
-    "workers": ("control", "worker_list"),
-    "worker-register": ("control", "worker_register"),
-    "worker-claim": ("control", "worker_claim"),
-    "worker-reconcile": ("control", "worker_reconcile"),
-    "worker-renew": ("control", "worker_renew"),
-    "worker-progress": ("control", "worker_progress"),
-    "worker-result": ("control", "worker_result"),
-    "worker-release": ("control", "worker_release"),
     "message": ("control", "message_post"),
     "messages": ("control", "message_list"),
     "message-get": ("control", "message_get"),
@@ -251,7 +243,7 @@ def _request(endpoint: dict, operation: str, params: dict, resource: str = "cont
 
 @contextmanager
 def _event_waiter(directory: Path):
-    """Keep the named wait resource attached across an idle Worker's timeouts."""
+    """Keep the named wait resource attached across bounded caller timeouts."""
     endpoint = _attach_read_only(directory)
     if endpoint is None:
         raise ServiceError("SERVICE_UNAVAILABLE", "No board service is running in this state directory")
@@ -365,7 +357,7 @@ def _cold_start_preflight(directory: Path) -> None:
 def _retire_stale_endpoint(directory: Path) -> None:
     """Called under the start lock; lifetime locks prove absence of a board owner.
 
-    This makes no assertion about Worker processes or stored PIDs. Their
+    This makes no assertion about execution processes or stored PIDs. Their
     reconciliation and unconfirmed-stop rules remain the new daemon's job.
     """
     if not (directory / 'control.json').exists():

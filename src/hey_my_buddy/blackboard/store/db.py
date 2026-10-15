@@ -1,6 +1,6 @@
 """Schema-versioned SQLite storage for the hey-my-buddy blackboard.
 
-One database file owns every authoritative fact: tasks, attempts, workers,
+One database file owns every authoritative fact: tasks, attempts,
 messages, artifacts, events, command receipts and resource claims. Connections are
 owned per thread, transactions are short, and no transaction ever spans RPC, a
 subprocess, an LLM call or an event wait.
@@ -19,10 +19,9 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
-CAPABILITY_VERSION = 1
 CONTROL_TOKEN_VERSION = 1
 AGENT_TOKEN_VERSION = 1
 
@@ -46,13 +45,7 @@ ACTIVE_ATTEMPT_STATES = frozenset({"starting", "executing", "finalizing", "uncer
 MESSAGE_STATES = ("queued", "claimed", "delivered", "answered", "discarded", "unavailable")
 TERMINAL_MESSAGE_STATES = frozenset({"answered", "discarded", "unavailable"})
 
-#: The observed outcome of one attempt. The stop initiator is recorded separately.
-TERMINATION_REASONS = (
-    "completed", "wrap-up", "grace-expired", "forced-stop", "console-stop",
-    "service-stop", "unknown-stop", "deadline", "harness-error", "transport-error", "interrupted",
-)
-
-WORKER_STATES = ("starting", "idle", "busy", "stopping", "lost")
+from ...protocol.stop import TERMINATION_REASONS  # noqa: F401 - shared receipt vocabulary
 
 CORE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -98,14 +91,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     attempt_id          TEXT PRIMARY KEY,
     task_id             TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
     generation          INTEGER NOT NULL,
-    worker_id           TEXT,
-    worker_identity     TEXT,
-    worker_instance     TEXT,
-    capability_version  INTEGER NOT NULL DEFAULT 1,
     nonce_verifier      TEXT NOT NULL,
-    claim_request_id    TEXT NOT NULL,
-    lease_expires_at    TEXT,
-    lease_seconds       INTEGER NOT NULL DEFAULT 120,
     execution_state     TEXT NOT NULL
         CHECK (execution_state IN ('starting','executing','finalizing','uncertain','finished')),
     ownership           TEXT NOT NULL DEFAULT 'owned' CHECK (ownership IN ('owned','uncertain')),
@@ -115,7 +101,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     -- Written once by the claim transaction that resolved it and never updated
     -- afterwards, so a historical or shutdown-uncertain attempt can never change
     -- which model service's concurrency slot it occupies. NULL for model-less work
-    -- (command/external) which counts only against the machine-wide ceiling.
+    -- (commands) which counts only against the machine-wide ceiling.
     model_harness       TEXT,
     model_provider      TEXT,
     model_model         TEXT,
@@ -127,6 +113,10 @@ CREATE TABLE IF NOT EXISTS attempts (
     cancel_requested_at TEXT,
     stop_initiator      TEXT CHECK (stop_initiator IN ('host','lead','console','service','unknown')),
     grace_deadline      TEXT,
+    force_reason        TEXT,
+    force_requested_at  TEXT,
+    identity_confirmed_at TEXT,
+    cleanup_pending     INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0,1)),
     exit_code           INTEGER,
     signal              TEXT,
     started_at          TEXT,
@@ -148,43 +138,46 @@ CREATE INDEX IF NOT EXISTS attempts_model_service_idx
     ON attempts(model_harness, model_provider, model_model) WHERE model_model IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS attempt_process_identities (
-    attempt_id          TEXT NOT NULL REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
-    ordinal             INTEGER NOT NULL CHECK (ordinal >= 0),
+    attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
     boot_id             TEXT NOT NULL,
     root_pid            INTEGER NOT NULL CHECK (root_pid > 0),
     root_started_at     INTEGER NOT NULL CHECK (root_started_at > 0),
     process_group_id    INTEGER CHECK (process_group_id > 0),
     job_name            TEXT,
-    worker_boot_id      TEXT NOT NULL,
-    worker_pid          INTEGER NOT NULL CHECK (worker_pid > 0),
-    worker_started_at   INTEGER NOT NULL CHECK (worker_started_at > 0),
-    PRIMARY KEY (attempt_id, ordinal),
     CHECK ((process_group_id IS NOT NULL AND job_name IS NULL)
         OR (process_group_id IS NULL AND job_name IS NOT NULL))
 );
 
 CREATE TABLE IF NOT EXISTS attempt_interruptions (
     attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
-    evidence_kind       TEXT NOT NULL CHECK (evidence_kind IN ('boot-changed','identity-absent','worker-stopped')),
+    evidence_kind       TEXT NOT NULL CHECK (evidence_kind IN ('boot-changed','identity-absent','orphan-stopped')),
     observed_at         TEXT NOT NULL,
     state               TEXT NOT NULL CHECK (state IN ('sealing','settled')),
     seal_error          TEXT
 );
 
-CREATE TABLE IF NOT EXISTS workers (
-    worker_id           TEXT PRIMARY KEY,
-    identity            TEXT NOT NULL,
-    adapter             TEXT NOT NULL,
-    capabilities        TEXT NOT NULL DEFAULT '[]',
-    host                TEXT,
-    pid                 INTEGER,
-    state               TEXT NOT NULL,
-    current_attempt_id  TEXT,
-    registered_at       TEXT NOT NULL,
-    last_seen_at        TEXT NOT NULL,
-    revision            INTEGER NOT NULL DEFAULT 1
+CREATE TABLE IF NOT EXISTS attempt_shutdown_evidence (
+    attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    evidence_kind       TEXT NOT NULL,
+    detail_json         TEXT NOT NULL,
+    observed_at         TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS workers_state_idx ON workers(state);
+
+CREATE TABLE IF NOT EXISTS execution_issues (
+    attempt_id          TEXT NOT NULL REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    stage               TEXT NOT NULL,
+    code                TEXT NOT NULL,
+    message             TEXT NOT NULL,
+    observed_at         TEXT NOT NULL,
+    PRIMARY KEY (attempt_id, stage)
+);
+
+CREATE TABLE IF NOT EXISTS service_issues (
+    stage               TEXT PRIMARY KEY,
+    code                TEXT NOT NULL,
+    message             TEXT NOT NULL,
+    observed_at         TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS messages (
     message_id      TEXT PRIMARY KEY,
@@ -1299,16 +1292,6 @@ class Database:
     def secret(self) -> bytes:
         return self._load_secret()
 
-    def capability(self, attempt_id: str, generation: int, nonce: str) -> str:
-        """Derive one attempt capability so a lost claim reply stays recoverable.
-
-        The value is deterministic in (service secret, attempt, generation, worker
-        nonce) and is never stored in plaintext: only the worker that fsynced its
-        nonce before claiming can ask for it again.
-        """
-        message = f"{CAPABILITY_VERSION}:{attempt_id}:{generation}:{nonce}".encode("utf-8")
-        return hmac.new(self.secret, message, hashlib.sha256).hexdigest()
-
     def nonce_verifier(self, nonce: str) -> str:
         return hmac.new(self.secret, f"nonce:{nonce}".encode("utf-8"), hashlib.sha256).hexdigest()
 
@@ -1329,12 +1312,3 @@ class Database:
 
     def agent_token_verifier(self, token: str) -> str:
         return hmac.new(self.secret, f"agent-token:{token}".encode("utf-8"), hashlib.sha256).hexdigest()
-
-    def verify_capability(self, attempt: sqlite3.Row | dict, capability: str, nonce: str | None = None) -> bool:
-        candidate = nonce if nonce is not None else ""
-        expected = self.capability(attempt["attempt_id"], attempt["generation"], candidate)
-        if hmac.compare_digest(expected, capability or ""):
-            return True
-        # A caller that cannot present the nonce is checked against the stored
-        # verifier for the same attempt, never against another attempt's value.
-        return False

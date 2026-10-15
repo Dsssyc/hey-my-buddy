@@ -68,11 +68,11 @@ SUMMARIES: dict[str, str] = {
     "suggest": "Record one bounded suggestion on the caller's own run.",
     "macro-task-list": "Bounded summaries of macro tasks and standalone micro tasks by latest activity.",
     "macro-task-timeline": "One work macro task's bounded timeline with spans and Host markers.",
-    "execution-submit": "Admit one ordinary execution record for the command/external adapters.",
+    "execution-submit": "Admit one ordinary command execution record.",
     "execution-cancel": "Cancel one ordinary execution: queued work now, durable intent for an active attempt.",
     "execution-retry": "Requeue an eligible failed, cancelled or reconciliation-needed task as a new generation.",
     "execution-acknowledge": "Record review of a persisted execution result.",
-    "status": "Task state, selected attempt, worker, artifacts and workflow summary.",
+    "status": "Task state, selected attempt, artifacts and workflow summary.",
     "list": "Bounded task history with filters, stable keyset paging and titles.",
     "result": "Task view plus the adapter outcome and commit metadata; NOT_READY before a result exists.",
     "artifacts": "Verified artifact records for a run, task or attempt.",
@@ -84,16 +84,6 @@ SUMMARIES: dict[str, str] = {
     "messages": "List retained messages for one task, or across tasks.",
     "message-get": "Read one inquiry and its recorded answer without resubmitting the question.",
     "message-update": "Record caller-provided delivery or answer evidence for an inquiry.",
-    "workers": "Registered worker state and current attempt, plus published supervisor facts for managed workers.",
-    "worker-register": "Register or refresh one worker; idempotent by commandId.",
-    "worker-claim": "Atomically claim one queued task and return its attempt, lease and capability.",
-    "worker-reconcile": "Reattach the legitimate worker after daemon downtime.",
-    "worker-renew": "Extend the attempt lease and report a durable cancel request.",
-    "worker-progress": "Append one bounded progress event to an attempt.",
-    "worker-result": "Commit a result, artifacts, state and completion event in one transaction.",
-    "worker-release": "Release an attempt that never started.",
-    "worker-start": "Start one detached worker supervisor in its own session.",
-    "worker-stop": "Write a cooperative durable stop request; never signals a process this CLI did not create.",
     "wait-capacity": "Wait admission counters.",
     "console": "Open, observe or close the private console; browser and wait are CLI-local.",
     "console-snapshot": "Read the bounded routing and configuration snapshot without a browser session.",
@@ -103,7 +93,7 @@ SUMMARIES: dict[str, str] = {
     "selection-list": "Read-only compact selection history.",
     "model-catalog-refresh": "Explicit native model metadata discovery; one observation per request and no model call.",
     "buddy-list": "Bounded active and unavailable buddy page.",
-    "restart": "Detach the daemon without cancelling owned work; independent workers survive.",
+    "restart": "Detach the daemon without cancelling active executions.",
     "stop": "Cancel queued tasks and request durable cancellation of active attempts, then drain.",
 }
 
@@ -114,13 +104,11 @@ LOCAL_ROOTS: dict[str, tuple[str, str]] = {
     "upgrade": ("install.skill_install", "install"),
     "paths": ("install.skill_install", "paths"),
     "backup-preflight": ("blackboard.store.backup", "preflight_command"),
-    "worker-start": ("cli.main", "_worker_command_unlocked"),
-    "worker-stop": ("cli.main", "_worker_command_unlocked"),
     "console": ("cli.console_cli", "run"),
 }
 
 #: Local methods whose validated dict is not the first parameter.
-LOCAL_POSITIONS: dict[str, int] = {"worker-start": 1, "worker-stop": 1}
+LOCAL_POSITIONS: dict[str, int] = {}
 
 #: Printed in place of a method summary a newly added method has not written yet: the
 #: index still lists every method instead of failing, and the test suite fails on it.

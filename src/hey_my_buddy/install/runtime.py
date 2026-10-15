@@ -1,7 +1,7 @@
-"""The stable, content-identified runtime the service and its workers execute from.
+"""The stable, content-identified runtime the service and its executions use.
 
 The Codex plugin cache may disappear on upgrade, so the default service, its
-workers and the harness adapters must run from a versioned runtime outside that
+execution processes and the harness adapters must run from a versioned runtime outside that
 cache. What a runtime contains is declared exactly once, in
 ``packaging/runtime-assets.json``:
 
@@ -596,7 +596,7 @@ def launch_target(*, log_path: Path | None = None) -> dict:
     """Interpreter and environment for a child that must survive the plugin cache.
 
     The default path installs the stable runtime on first use and then starts the
-    daemon, the workers and the adapters from that runtime's own interpreter and
+    daemon, the execution processes and the adapters from that runtime's own interpreter and
     installed package. ``HMB_DEV_SOURCE=1`` is the explicit development/test
     switch that runs from the checkout instead and reports ``stable=false``; it is
     never the default, so a plugin update cannot silently reintroduce the

@@ -43,7 +43,7 @@ from ....private_dirs import ensure_private_dir
 from ...roles.turn_io import private_json
 from ..version import VersionShutdownError, probe_version
 from ..base import BoundSessionServices, ProcessHandle
-from ...runtime.windows_process import owned_popen
+from ....protocol.owned_process import owned_popen
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ..native_support import (
     CancelFlag,

@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from ...errors import BoardError
+from ...protocol.capabilities import adapter_capabilities
 from ...private_dirs import context_root, ensure_private_dir
 from ...blackboard.routing import router
 from . import router_input
@@ -68,7 +69,7 @@ def prepare_router_review(document: dict, buddy: dict, native: Adapter,
 
 class DecisionAdapter(Adapter):
     name = "decision"
-    capabilities = ("decision",)
+    capabilities = adapter_capabilities("decision")
 
     def available(self) -> tuple[bool, str | None]:
         from ..harnesses.registry import adapters

@@ -17,6 +17,7 @@ import threading
 import time
 
 from ....errors import BoardError
+from ....protocol.capabilities import adapter_capabilities
 from .config import ClaudeUnavailable, cli_command
 from .native_run import validate_turn_provenance
 
@@ -31,7 +32,6 @@ class ClaudeAdapter:
     """Native availability and facts, with no inherited execution entries."""
 
     name = "claude"
-    capabilities = ("claude", "workspace", "cancel", "artifacts", "deadline")
     native_resume = False
     interrupted_resume = False
     native_resume_permission_change = False
@@ -41,9 +41,9 @@ class ClaudeAdapter:
     no_tool_structured = False
     system_sandbox_platforms = ("darwin", "linux")
 
-    def __init__(self):
-        from ..registry import worker_permission_capabilities
-        self.capabilities = (*type(self).capabilities, *worker_permission_capabilities(self.name))
+    @property
+    def capabilities(self):
+        return adapter_capabilities(self.name)
 
     def local_read_only_check(self) -> dict:
         from ..base import registered_read_only_check

@@ -1,4 +1,5 @@
 """Expected-duration facts for every execution and native-silence facts for harnesses."""
+from admission import admit_execution
 from contextlib import contextmanager
 from support import BoardTestCase, FakeClock
 import uuid
@@ -18,9 +19,8 @@ class ReminderFacts(BoardTestCase):
         self.task = self.client.submit(requestId='reminder', task='observe', cwd=str(self.workdir()),
                                        adapter=adapter, **({'argv': ['echo', 'test']} if adapter == 'command' else {}),
                                        expectedSeconds=expected)['task']
-        self.client.register_worker('w-reminder', adapter=adapter, capabilities=[adapter])
         self.nonce = 'n' * 32
-        self.attempt = self.client.claim('w-reminder', 'claim-reminder', self.nonce)['claim']['attempt']
+        self.attempt = admit_execution(self.client, self.nonce)['claim']['attempt']
 
     def claim_native(self, expected=100):
         from hey_my_buddy.blackboard.tasks import workflow
@@ -33,13 +33,11 @@ class ReminderFacts(BoardTestCase):
             harness='dsh', provider='deepseek-official', model='deepseek-flash', effort='off',
             executionWorkspace={'kind': 'existing', 'access': 'read'}, expectedSeconds=expected)
         self.task = submitted['task']
-        self.client.register_worker('w-reminder', adapter='dsh', capabilities=['dsh'])
         self.nonce = 'n' * 32
-        self.attempt = self.client.claim('w-reminder', 'claim-reminder', self.nonce)['claim']['attempt']
+        self.attempt = admit_execution(self.client, self.nonce)['claim']['attempt']
 
     def activity(self, sequence, phase='streaming-model', **extra):
-        return self.client.progress('w-reminder', self.attempt['attemptId'], self.attempt['generation'], self.nonce,
-                                    'native event', data={'activity': {'phase': phase, 'eventSeq': sequence,
+        return self.client.progress(self.attempt['attemptId'], self.attempt['generation'], self.nonce, 'native event', data={'activity': {'phase': phase, 'eventSeq': sequence,
                                                                      'lastNativeActivityAt': self.clock(), **extra}})
 
     def records(self):
@@ -93,9 +91,6 @@ class ReminderFacts(BoardTestCase):
     def test_command_attempt_has_duration_but_no_native_silence_deadline(self):
         self._assert_no_native_silence('command')
 
-    def test_external_attempt_has_duration_but_no_native_silence_deadline(self):
-        self._assert_no_native_silence('external')
-
     def test_due_reminder_is_rechecked_after_a_concurrent_completion(self):
         self.claim()
         self.clock.advance(10)
@@ -126,7 +121,7 @@ class ReminderFacts(BoardTestCase):
                          ('native-silence', native_at, True))
         self.assertTrue(self.client.get(runId=self.task['runId'])['selectedAttempt']['reminders']['possiblyStuck'])
         self.clock.advance(5)
-        self.client.renew('w-reminder', self.attempt['attemptId'], self.attempt['generation'], self.nonce)
+        self.client.progress(self.attempt['attemptId'], self.attempt['generation'], self.nonce)
         reminders.collect(self.store)
         self.assertNotIn('reminder', self.consume())
         self.assertEqual(len(self.records()), 1)
@@ -167,8 +162,7 @@ class ReminderFacts(BoardTestCase):
         with self.store.db.write() as db:
             db.execute('UPDATE reminder_settings SET silence_seconds=5 WHERE id=1')
         self.clock.advance(3)
-        self.client.progress('w-reminder', self.attempt['attemptId'], self.attempt['generation'], self.nonce,
-                             'prompt sent', data={'activity': {'phase': 'waiting-model', 'eventSeq': 0,
+        self.client.progress(self.attempt['attemptId'], self.attempt['generation'], self.nonce, 'prompt sent', data={'activity': {'phase': 'waiting-model', 'eventSeq': 0,
                                                               'observedAt': self.clock()}})
         self.assertEqual(reminders.collect(self.store), 2)
         self.clock.advance(2)
@@ -197,8 +191,7 @@ class ReminderFacts(BoardTestCase):
             activity = {'phase': 'tool-running', 'eventSeq': sequence}
             if observed:
                 activity['observedAt'] = native_at
-            self.client.progress('w-reminder', self.attempt['attemptId'], self.attempt['generation'], self.nonce,
-                                 'native event', data={'activity': activity})
+            self.client.progress(self.attempt['attemptId'], self.attempt['generation'], self.nonce, 'native event', data={'activity': activity})
             self.assertEqual(reminders.collect(self.store), 5)
             self.clock.advance(5)
             reminders.collect(self.store)

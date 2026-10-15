@@ -1,7 +1,7 @@
 """Durable OS identity and conservative recovery evidence for one execution.
 
 Only a matching boot, root PID plus creation time, and owned group or Job
-authorizes a replacement Worker to stop an orphan.  An uninspectable identity
+authorizes the service to stop an orphan after its execution has ended. An uninspectable identity
 remains unknown; a numeric PID or process-group ID alone is never authority.
 """
 from __future__ import annotations
@@ -240,12 +240,9 @@ class _SystemSource:
 def validate_process_identity(record: object) -> dict:
     """Validate the one stored form at the RPC/storage boundary."""
     if not isinstance(record, dict) or set(record) != {
-            "bootId", "pid", "startedAt", "processGroupId", "jobName", "worker"}:
+            "bootId", "pid", "startedAt", "processGroupId", "jobName"}:
         raise BoardError("INVALID_ARGUMENT", "process identity has an invalid shape")
-    worker = record["worker"]
-    if not isinstance(worker, dict) or set(worker) != {"bootId", "pid", "startedAt"}:
-        raise BoardError("INVALID_ARGUMENT", "Worker identity has an invalid shape")
-    for subject in (record, worker):
+    for subject in (record,):
         if not isinstance(subject["bootId"], str) or not subject["bootId"]:
             raise BoardError("INVALID_ARGUMENT", "boot identifier is required")
         try:
@@ -270,25 +267,20 @@ def validate_process_identity(record: object) -> dict:
                 raise ValueError("invalid Job name")
         except ValueError as error:
             raise BoardError("INVALID_ARGUMENT", "owned Job name is invalid") from error
-    if record["bootId"] != worker["bootId"]:
-        raise BoardError("INVALID_ARGUMENT", "execution and Worker must share a boot")
     return record
 
 
 def capture_process_identity(handle) -> dict:
-    """Capture the child and its creating Worker while both handles are held."""
+    """Capture the complete child identity while its creating handle is held."""
     boot = boot_id()
     pid = handle.pid
     child_start = handle.process_started_at
-    worker_pid = os.getpid()
-    worker_start = _creation_time(worker_pid)
-    if child_start is None or worker_start is None:
+    if child_start is None:
         raise OSError("process identity vanished before capture")
     job = handle.job
     record = {"bootId": boot, "pid": pid, "startedAt": child_start,
               "processGroupId": handle.pgid if job is None else None,
-              "jobName": job.name if job is not None else None,
-              "worker": {"bootId": boot, "pid": worker_pid, "startedAt": worker_start}}
+              "jobName": job.name if job is not None else None}
     if job is None:
         if handle.pgid is None:
             raise OSError("owned process group was not captured at spawn")
@@ -302,22 +294,6 @@ def capture_process_identity(handle) -> dict:
             if current_group != handle.pgid:
                 raise OSError("owned process group changed before identity capture")
     return record
-
-
-def worker_identity_alive(record: dict, *, source=None) -> bool | None:
-    """Return None if the original Worker's identity cannot be checked."""
-    source = source or _SystemSource()
-    worker = record["worker"]
-    try:
-        current_boot = source.boot_id()
-        if current_boot != worker["bootId"]:
-            return False
-        started = source.started_at(worker["pid"])
-        return started == worker["startedAt"] if started is not None else False
-    except Exception as error:
-        if not _observation_failure(error):
-            raise
-        return None
 
 
 def inspect_process_identity(record: dict, *, source=None) -> str:
@@ -358,10 +334,8 @@ def inspect_process_identity(record: dict, *, source=None) -> str:
 
 
 def stop_orphan_process(record: dict, *, source=None, settle_seconds: float = 2.0) -> str:
-    """Reverify all evidence immediately, stop the owned tree, then observe it gone."""
+    """Stop an orphan after the caller proved its execution has ended."""
     source = source or _SystemSource()
-    if worker_identity_alive(record, source=source) is not False:
-        return "unknown"
     observation = inspect_process_identity(record, source=source)
     if observation != "alive":
         return observation
@@ -380,11 +354,9 @@ def stop_orphan_process(record: dict, *, source=None, settle_seconds: float = 2.
     while True:
         observation = inspect_process_identity(record, source=source)
         if observation in ("boot-changed", "identity-absent"):
-            return "worker-stopped"
+            return "orphan-stopped"
         if time.monotonic() >= deadline:
             if record["jobName"] is not None or escalated or observation != "alive":
-                return "unknown"
-            if worker_identity_alive(record, source=source) is not False:
                 return "unknown"
             try:
                 # Recheck the complete root/group identity directly before escalation.

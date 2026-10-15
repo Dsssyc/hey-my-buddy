@@ -7,7 +7,7 @@ import time
 
 from ..base import ProcessHandle
 from .protocol import Connection, CodexProtocolError, quota_candidate_from_response
-from ...runtime.windows_process import owned_popen
+from ....protocol.owned_process import owned_popen
 from ....protocol.billing import codex_account, fact
 from ....blackboard.store.db import utc_now
 from ..discovery import native_environment

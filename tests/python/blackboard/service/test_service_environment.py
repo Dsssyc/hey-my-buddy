@@ -1,15 +1,10 @@
 """ADR-018 item 21: every service process starts from an explicit environment allowlist.
 
-The launcher, the cold-start path, the upgrade path, the daemon's supervisor pool and
-explicit worker start are checked directly. The CLI invocation path is the deliberate
-exception: it must keep a scoped Worker credential, because dropping it would turn a
-Worker into a service-token Host.
+The launcher, the cold-start path and the upgrade path are checked directly.
+The CLI invocation path keeps a scoped attempt credential.
 """
 from __future__ import annotations
 
-import contextlib
-import io
-import json
 import os
 from pathlib import Path
 import sys
@@ -17,8 +12,6 @@ import tempfile
 import unittest
 from unittest import mock
 
-from hey_my_buddy.cli import main as cli
-from hey_my_buddy.blackboard.service import daemon
 from hey_my_buddy.install import launcher, upgrade
 from hey_my_buddy.protocol import transport
 
@@ -44,7 +37,6 @@ HOST_SESSION_VARIABLES = {
     "HMB_TASK_ID": "run:host-session",
     "HMB_ATTEMPT_ID": "attempt:host-session",
     "HMB_HARNESS_RECORD_FILE": "/private/harness-selection.json",
-    "HMB_SUPERVISOR_START_ID": "host-session-start",
 }
 
 #: Values a service must keep: process basics, native account directories and the
@@ -77,25 +69,12 @@ def forbidden_environment(environment: dict, *, ignore: frozenset[str] = frozens
 class ServiceEnvironmentBuilderTests(unittest.TestCase):
     def test_upgrade_uses_its_selected_runtime_even_from_a_development_worker(self):
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-upgrade-env-") as directory:
-            with mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1", "HMB_WORKER_ID": "inherited",
+            with mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1",
                                               "HMB_RUNTIME": "/old"}, clear=True):
                 with mock.patch.object(upgrade.runtime, "read_ready", return_value={"sourceCommit": "f" * 40}):
                     environment = upgrade._environment(Path(directory), Path(directory) / "selected")
             self.assertNotIn("HMB_DEV_SOURCE", environment)
-            self.assertNotIn("HMB_WORKER_ID", environment)
             self.assertEqual(environment["HMB_RUNTIME"], str(Path(directory) / "selected"))
-
-    def test_worker_cannot_start_a_fresh_supervisor_with_host_authority(self):
-        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-scoped-worker-") as temporary:
-            state = Path(temporary) / "state"
-            credential = Path(temporary) / "credential.json"
-            launcher.write_private(credential, {"token": "scoped-worker", "stateDir": str(state)})
-            output = io.StringIO()
-            with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(credential)}, clear=True), \
-                    contextlib.redirect_stdout(output):
-                code = cli.main(["worker-start", "{}"])
-        self.assertEqual(code, 1)
-        self.assertEqual(json.loads(output.getvalue())["error"]["code"], "FORBIDDEN")
 
     def test_the_builder_is_an_allowlist_not_the_host_session(self):
         with mock.patch.dict(os.environ, {**HOST_SESSION_VARIABLES, **SERVICE_KEPT_VARIABLES}, clear=True):
@@ -148,12 +127,10 @@ class ServiceEnvironmentBuilderTests(unittest.TestCase):
         self.assertEqual(environment["HMB_STATE_DIR"], "/explicit")
         self.assertEqual(environment["PATH"], "/usr/bin")
 
-    def test_the_cli_invocation_path_still_preserves_a_scoped_worker_credential(self):
-        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": "/private/attempt.json",
-                                          "HMB_WORKER_ID": "local-2"}, clear=True):
+    def test_the_cli_invocation_path_preserves_attempt_credential(self):
+        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": "/private/attempt.json"}, clear=True):
             environment = launcher.runtime_environment(Path("/private/runtime") / ("a" * 32))
         self.assertEqual(environment["HMB_AGENT_CREDENTIAL_FILE"], "/private/attempt.json")
-        self.assertEqual(environment["HMB_WORKER_ID"], "local-2")
 
 
 class ColdStartEnvironmentTests(unittest.TestCase):
@@ -221,56 +198,6 @@ class UpgradeEnvironmentTests(unittest.TestCase):
         self.assertEqual(environment["HMB_WAIT_CAPACITY"], "32")
         self.assertNotIn("HMB_PYTHON", environment)
         self.assertEqual(environment["PATH"], "/usr/bin:/bin")
-
-
-class SupervisorEnvironmentTests(unittest.TestCase):
-    def test_daemon_spawned_supervisor_gets_the_allowlist_and_a_fresh_start_id(self):
-        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-service-supervisor-") as temporary:
-            state = Path(temporary)
-            target = {"python": sys.executable, "pythonPath": "/checkout/src", "identity": "source:fixture",
-                      "stable": False, "installed": False, "runtime": {"runtimeDir": "/unused"}}
-            handle = daemon.SupervisorHandle(state, "local")
-            with mock.patch.dict(os.environ, {**HOST_SESSION_VARIABLES, "HMB_DEV_SOURCE": "1"}, clear=True), \
-                    mock.patch.object(daemon.runtime, "launch_target", return_value=target), \
-                    mock.patch.object(daemon.threading, "Thread"), \
-                    mock.patch.object(daemon.subprocess, "Popen") as spawn:
-                self.assertTrue(handle.start(state, state / "worker.log"))
-            environment = spawn.call_args.kwargs["env"]
-            self.assertEqual(forbidden_environment(environment, ignore=frozenset({"HMB_SUPERVISOR_START_ID"})), set())
-            self.assertEqual(environment["HMB_WORKER_ID"], "local")
-            self.assertEqual(environment["HMB_STATE_DIR"], str(state))
-            self.assertEqual(environment["HMB_DEV_SOURCE"], "1")
-            self.assertEqual(environment["PYTHONPATH"], "/checkout/src")
-            self.assertNotIn("HMB_RUNTIME", environment)
-            self.assertNotEqual(environment["HMB_SUPERVISOR_START_ID"], "host-session-start")
-            self.assertTrue(environment["HMB_SUPERVISOR_START_ID"])
-
-
-class ExplicitWorkerEnvironmentTests(unittest.TestCase):
-    def test_explicit_worker_start_uses_the_allowlist_and_selects_its_own_runtime(self):
-        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-service-worker-") as temporary:
-            state = Path(temporary) / "state"
-            target = {"python": "/stable/venv/bin/python", "pythonPath": None, "identity": "runtime:fixed",
-                      "stable": True, "installed": False,
-                      "runtime": {"runtimeDir": "/stable/runtime", "environment": "/stable/venv"}}
-            with mock.patch.dict(os.environ, {**{key: value for key, value in HOST_SESSION_VARIABLES.items()
-                                                         if key != "HMB_AGENT_CREDENTIAL_FILE"},
-                                             "PATH": "/usr/bin:/bin"}, clear=True), \
-                    mock.patch.object(cli.runtime, "launch_target", return_value=target), \
-                    mock.patch.object(cli.subprocess, "Popen") as spawn:
-                spawn.return_value.pid = 123
-                result = cli._worker_command("worker-start", {"workerId": "extra", "stateDir": str(state)}, state.resolve())
-            environment = spawn.call_args.kwargs["env"]
-            self.assertEqual(result["supervisorPid"], 123)
-            self.assertEqual(forbidden_environment(environment), set())
-            self.assertEqual(environment["HMB_STATE_DIR"], str(state.resolve()))
-            self.assertEqual(environment["HMB_WORKER_ID"], "extra")
-            self.assertEqual(environment["HMB_RUNTIME"], "/stable/runtime")
-            self.assertEqual(environment["HMB_RUNTIME_IDENTITY"], "runtime:fixed")
-            self.assertNotIn("HMB_PYTHON", environment)
-            self.assertNotIn("PYTHONPATH", environment)
-            self.assertNotIn("VIRTUAL_ENV", environment)
-            self.assertEqual(environment["PATH"].split(os.pathsep)[0], "/stable/venv/bin")
 
 
 if __name__ == "__main__":

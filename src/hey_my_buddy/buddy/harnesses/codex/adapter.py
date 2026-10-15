@@ -1,6 +1,7 @@
 """Codex capability description; execution belongs to the registered run."""
 from __future__ import annotations
 
+from ....protocol.capabilities import adapter_capabilities
 from . import native_run
 from .config import CodexUnavailable, cli_command
 
@@ -9,7 +10,6 @@ class CodexAdapter:
     """Native availability and facts, with no inherited execution entries."""
 
     name = "codex"
-    capabilities = ("codex", "workspace", "cancel", "artifacts", "deadline", "native-session")
     native_resume = True
     interrupted_resume = True
     native_resume_permission_change = True
@@ -19,9 +19,9 @@ class CodexAdapter:
     read_only_structured_resume = True
     no_tool_structured = True
 
-    def __init__(self):
-        from ..registry import worker_permission_capabilities
-        self.capabilities = (*type(self).capabilities, *worker_permission_capabilities(self.name))
+    @property
+    def capabilities(self):
+        return adapter_capabilities(self.name)
 
     def local_read_only_check(self) -> dict:
         # Qualification confirms this project's registered mechanism exists;

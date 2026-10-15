@@ -10,7 +10,7 @@ from blackboard.tasks import test_workspace_lifecycle as lifecycle_fixtures
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks import workspace as git_workspace
-from hey_my_buddy.buddy.harnesses.registry import _WORKER_PERMISSIONS
+from hey_my_buddy.protocol.capabilities import WORKER_PERMISSIONS
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.cli.cli_views import micro_task_brief
 
@@ -24,11 +24,11 @@ class PermissionLevelsTests(WorkflowTestCase):
         return self.submit(board, harness='claude', provider='fixture', model='fixture', effort='high', **extra)
 
     def register_claude(self, board):
-        return board.call('worker_register', {'workerId': 'w1', 'capabilities': ['claude']})
+        return None
 
     def test_submit_and_continue_reject_missing_harness_permission_without_mutation(self):
-        self.enterContext(patch.dict(_WORKER_PERMISSIONS, {'dsh': {
-            level: declaration for level, declaration in _WORKER_PERMISSIONS['dsh'].items()
+        self.enterContext(patch.dict(WORKER_PERMISSIONS, {'dsh': {
+            level: declaration for level, declaration in WORKER_PERMISSIONS['dsh'].items()
             if level != 'full'}}))
         board = self.board()
         for access, reason in [('full', 'Need system writes')]:

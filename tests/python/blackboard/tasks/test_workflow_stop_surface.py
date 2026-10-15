@@ -28,10 +28,7 @@ class ReceiptStopTests(WorkflowTestCase):
         run = self.submit(board)
         claim = self.claim(board)["claim"]["attempt"]
         board.call("workflow_cancel", {"runId": run["runId"], "commandId": "cancel", **self.control(run)})
-        board.call("worker_release", {
-            "workerId": "w1", "attemptId": claim["attemptId"], "generation": claim["generation"],
-            "nonce": NONCE, "evidence": {"spawnIntentWritten": False}, "reason": "owner never spawned",
-        })
+        board.store.release_execution(({'attemptId': claim['attemptId'], 'generation': claim['generation'], 'nonce': NONCE, 'evidence': {'spawnIntentWritten': False}, 'reason': 'owner never spawned'})["attemptId"])
         view = board.call("workflow_get", {"runId": run["runId"], "includeAudit": True})
         self.assertEqual(view["state"], "cancelled")
         self.assertEqual(view["task"]["status"], "cancelled")
@@ -46,10 +43,7 @@ class ReceiptStopTests(WorkflowTestCase):
         run = board.call("task_submit", {"requestId": "execution", "task": "opaque data", "cwd": str(self.workdir()),
                                        "adapter": "command", "argv": ["true"]})
         attempt = self.claim(board)["claim"]["attempt"]
-        board.call("worker_result", {
-            "workerId": "w1", "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": NONCE,
-            "status": "ok", "shutdownConfirmed": True, "result": {"turn": {"outcome": {"disposition": "assistance"}}},
-        })
+        board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {'turn': {'outcome': {'disposition': 'assistance'}}}})
         view = board.call("task_get", {"runId": run["task"]["runId"]})["task"]
         self.assertEqual(view["status"], "completed")
         self.assertNotIn("workflow", view)
