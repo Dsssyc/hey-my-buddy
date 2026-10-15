@@ -86,6 +86,11 @@ HOST_A = "synthetic-host-alpha"
 HOST_B = "synthetic-host-beta"
 HOST_B2 = "synthetic-host-beta-2"
 
+
+def host_actor(identifier: str) -> dict[str, str]:
+    return {"role": "host", "id": identifier}
+
+
 FIXTURE_DAY = datetime(2026, 9, 27, tzinfo=timezone.utc)
 OBSERVED_AT = "2026-09-27T10:00:00.000Z"
 HEAD = 21
@@ -293,7 +298,7 @@ def patch_for(run_id: str, output_commit: str, paths: list[str]) -> dict:
 
 def host_conclusion(conclusion_id: str, *, attempt_id: str | None, execution_status: str, note: str,
                     evidence: list[str], artifact_id: str | None, integration_id: str | None,
-                    actor: str, created_at: str, owner_generation: int = 1,
+                    actor: dict[str, str], created_at: str, owner_generation: int = 1,
                     run_revision: int = 3) -> dict:
     """An ADR-018 Host conclusion: the recorded target outcome of a failed micro task."""
     return {"conclusionId": conclusion_id, "attemptId": attempt_id, "executionStatus": execution_status,
@@ -327,7 +332,7 @@ def span(span_id: str, kind: str, start: str, end: str | None, state: str, *, at
     return view
 
 
-def marker(at: str, kind: str, *, actor: str | None = None, summary: str | None = None,
+def marker(at: str, kind: str, *, actor: dict[str, str] | None = None, summary: str | None = None,
            **extra: Any) -> dict:
     return {"seq": 0, "runId": None, "kind": kind, "at": at, "label": MARKER_LABELS[kind],
             "summary": summary or MARKER_SUMMARY[kind], "actor": actor, "attemptId": None,
@@ -380,7 +385,8 @@ ROUTING_A2_ABSTENTION = routing("preview-decision-a2-abstention", "preview-run-a
 
 def run(run_id: str, *, project: str, title: str, title_source: str, task_text: str, created: str,
         updated: str, state: str, status: str, category: str, buddy: dict | None,
-        hosts: tuple[str, str] = (HOST_A, HOST_A), parent: str | None = None, group: str | None = None,
+        hosts: tuple[str | None, str | None] = (HOST_A, HOST_A), parent: str | None = None,
+        group: str | None = None, lead_owner: str | None = None,
         accepted: str | None = None, verdict: str | None = None, result: bool = False,
         result_summary: str | None = None, artifacts: list[dict] | None = None,
         integrations: list[dict] | None = None, routing: dict | None = None,
@@ -389,12 +395,14 @@ def run(run_id: str, *, project: str, title: str, title_source: str, task_text: 
         shutdown_confirmed: bool = True, micro_task: bool = True, adapter: str | None = None,
         continuation_count: int = 0, expected_seconds: int = 1800,
         router_budget_seconds: int | None = None, revision: int = 3,
-        buddy_locked: bool = False, conclusion: dict | None = None) -> dict:
+        buddy_locked: bool = False, delegation_authority: bool = False,
+        conclusion: dict | None = None) -> dict:
     return {
         "runId": run_id, "parentRunId": parent, "group": group, "project": project, "title": title,
         "titleSource": title_source, "task": task_text, "createdAt": created, "updatedAt": updated,
         "state": state, "status": status, "category": category, "buddy": buddy,
         "sourceHostId": hosts[0], "currentHostId": hosts[1], "acceptedAt": accepted,
+        "leadOwner": lead_owner,
         "acceptanceVerdict": verdict, "resultAvailable": result, "resultSummary": result_summary,
         "artifacts": artifacts or [], "integrations": integrations or [], "routing": routing,
         "activeRequest": active_request, "spans": spans or [], "markers": markers or [],
@@ -403,6 +411,7 @@ def run(run_id: str, *, project: str, title: str, title_source: str, task_text: 
         **({"routerBudgetSeconds": router_budget_seconds} if adapter == "decision"
            else {"expectedSeconds": expected_seconds}),
         "revision": revision, "buddyLocked": buddy_locked,
+        "delegationAuthority": delegation_authority,
         "hostConclusion": conclusion,
         "kind": "decision" if not micro_task else ("helper" if parent is not None else "micro-task"),
     }
@@ -436,7 +445,7 @@ def integration(integration_id: str, artifact_id: str, attempt_id: str, host: st
             "verification": {"verified": True, "notRequired": False,
                              "summary": "synthetic preview verification: fixture-only, no real repository",
                              "hostPaths": list(host_paths or [])},
-            "notRequired": False, "reason": "synthetic preview integration record", "actor": host,
+            "notRequired": False, "reason": "synthetic preview integration record", "actor": host_actor(host),
             "createdAt": None}
 
 
@@ -478,12 +487,12 @@ def build_runs() -> dict[str, dict]:
                         usage=usage("codex-native", 20000, 15000, 800)),
             ],
             markers=[
-                marker(instant(6, 0), "dispatch", actor=HOST_A),
-                marker(instant(6, 44), "decide", actor=HOST_A, request_id="req-a1-1", summary="approve"),
-                marker(instant(6, 45), "continue", actor=HOST_A, continuation_id="cont-a1-1"),
-                marker(instant(7, 3), "integrate", actor=HOST_A, artifact_id="art-a1",
+                marker(instant(6, 0), "dispatch", actor=host_actor(HOST_A)),
+                marker(instant(6, 44), "decide", actor=host_actor(HOST_A), request_id="req-a1-1", summary="approve"),
+                marker(instant(6, 45), "continue", actor=host_actor(HOST_A), continuation_id="cont-a1-1"),
+                marker(instant(7, 3), "integrate", actor=host_actor(HOST_A), artifact_id="art-a1",
                        integration_id="int-a1", summary="merge"),
-                marker(instant(7, 5), "accept", actor=HOST_A, artifact_id="art-a1", summary="accepted"),
+                marker(instant(7, 5), "accept", actor=host_actor(HOST_A), artifact_id="art-a1", summary="accepted"),
             ],
             artifacts=[artifact("art-a1", "att-a1-2", digest("a1-output")[:40], "/synthetic-preview/diffs/a1.diff",
                                 ["tests/probes/macro_task_console_preview.py"],
@@ -521,7 +530,7 @@ def build_runs() -> dict[str, dict]:
                         result="合成预览：重试后通过。",
                         usage=usage("zcode-native", 8000, 2000, 1200)),
             ],
-            markers=[marker(instant(6, 20), "dispatch", actor=HOST_A)],
+            markers=[marker(instant(6, 20), "dispatch", actor=host_actor(HOST_A))],
             artifacts=[artifact("art-a1h", "att-h1-2", digest("a1h-output")[:40],
                                 "/synthetic-preview/diffs/a1h.diff", ["tests/python/test_board_prepare.py"])]),
         run("preview-run-a1-h1-h1", project="alpha", group=MACRO_A, parent="preview-run-a1-h1",
@@ -540,7 +549,7 @@ def build_runs() -> dict[str, dict]:
             attempts=[attempt("att-h2-1", 1, "finished", False, instant(6, 57), instant(7, 2), CFG_CLAUDE,
                               result="合成预览：结果已收到，但停止未确认。",
                               usage=None)],
-            markers=[marker(instant(6, 56), "dispatch", actor=HOST_A)]),
+            markers=[marker(instant(6, 56), "dispatch", actor=host_actor(HOST_A))]),
         run("preview-run-a2", project="alpha", group=MACRO_A,
             title="核对 Host 等待片段与决定标记的渲染", title_source="title",
             task_text="核对等待 Host 的开放片段、决定标记与协助请求在时间轴和详情中的呈现。",
@@ -582,9 +591,9 @@ def build_runs() -> dict[str, dict]:
                         usage=usage("claude-native", 9500, 7000, 1100)),
             ],
             markers=[
-                marker(instant(8, 30), "dispatch", actor=HOST_A),
-                marker(instant(9, 0), "decide", actor=HOST_A, request_id="req-a2-1", summary="decline"),
-                marker(instant(9, 1), "continue", actor=HOST_A, continuation_id="cont-a2-1"),
+                marker(instant(8, 30), "dispatch", actor=host_actor(HOST_A)),
+                marker(instant(9, 0), "decide", actor=host_actor(HOST_A), request_id="req-a2-1", summary="decline"),
+                marker(instant(9, 1), "continue", actor=host_actor(HOST_A), continuation_id="cont-a2-1"),
             ]),
         run("preview-run-a3", project="alpha", group=MACRO_A,
             title="实现折叠区间的键盘焦点顺序", title_source="title",
@@ -603,13 +612,14 @@ def build_runs() -> dict[str, dict]:
             ],
             attempts=[attempt("att-a3-1", 1, "executing", False, instant(9, 39), None, CFG_CLAUDE,
                               usage=None)],
-            markers=[marker(instant(9, 35), "dispatch", actor=HOST_A)]),
+            markers=[marker(instant(9, 35), "dispatch", actor=host_actor(HOST_A))]),
         run("preview-run-b1", project="beta", group=MACRO_B, hosts=(HOST_B, HOST_B2),
             title=long_title("DSH 插件在 Windows 路径下的沙箱回归排查与修复记录，包含长标题截断检查："),
             title_source="title",
             task_text="排查 DSH 插件在 Windows 路径下的沙箱回归，修复后等待最终验收。",
             created=instant(3, 0), updated=instant(5, 35), state="delivered", status="completed",
             category="review", buddy=CFG_GLM, result=True, continuation_count=1,
+            delegation_authority=True,
             result_summary="合成预览：沙箱回归修复完成，等待验收",
             spans=[
                 span("queue:att-b1-1", "queue", instant(3, 0), instant(3, 4), "claimed",
@@ -632,10 +642,10 @@ def build_runs() -> dict[str, dict]:
                         usage=usage("zcode-native", 15000, 11000, 2200)),
             ],
             markers=[
-                marker(instant(3, 0), "dispatch", actor=HOST_B),
-                marker(instant(4, 1), "takeover", actor=HOST_B2),
-                marker(instant(5, 1), "continue", actor=HOST_B2, continuation_id="cont-b1-1"),
-                marker(instant(5, 35), "integrate", actor=HOST_B2, artifact_id="art-b1",
+                marker(instant(3, 0), "dispatch", actor=host_actor(HOST_B)),
+                marker(instant(4, 1), "takeover", actor=host_actor(HOST_B2)),
+                marker(instant(5, 1), "continue", actor=host_actor(HOST_B2), continuation_id="cont-b1-1"),
+                marker(instant(5, 35), "integrate", actor=host_actor(HOST_B2), artifact_id="art-b1",
                        integration_id="int-b1", summary="merge"),
             ],
             artifacts=[artifact("art-b1", "att-b1-2", digest("b1-output")[:40], "/synthetic-preview/diffs/b1.diff",
@@ -673,10 +683,11 @@ def build_runs() -> dict[str, dict]:
                                        note="synthetic preview cancellation: Host cancelled the helper",
                                        evidence=["att-b1h-1", "art-b1h-partial"],
                                        artifact_id="art-b1h-partial", integration_id=None,
-                                       actor=HOST_B, created_at=instant(3, 25), run_revision=3),
-            markers=[marker(instant(3, 10), "dispatch", actor=HOST_B),
-                     marker(instant(3, 25), "cancel", actor=HOST_B, summary="cancelled")]),
-        run("preview-run-b2", project="beta", group=MACRO_B, hosts=(HOST_B, HOST_B),
+                                       actor=host_actor(HOST_B), created_at=instant(3, 25), run_revision=3),
+            markers=[marker(instant(3, 10), "dispatch", actor=host_actor(HOST_B)),
+                     marker(instant(3, 25), "cancel", actor=host_actor(HOST_B), summary="cancelled")]),
+        run("preview-run-b2", project="beta", group=MACRO_B, hosts=(None, None),
+            lead_owner="preview-run-b1",
             title="封存配额耗尽时的部分输出", title_source="title",
             task_text="排查执行器在配额耗尽后仍未封存部分输出的路径，并补齐封存记录。",
             created=instant(6, 5), updated=instant(6, 26), state="failed", status="failed",
@@ -692,7 +703,7 @@ def build_runs() -> dict[str, dict]:
             attempts=[attempt("att-b2-1", 1, "finished", True, instant(6, 7), instant(6, 26), CFG_GLM,
                               error=QUOTA_ERROR, result=QUOTA_ERROR,
                               usage=usage("zcode-native", None, None, 4200))],
-            markers=[marker(instant(6, 5), "dispatch", actor=HOST_B)],
+            markers=[marker(instant(6, 5), "dispatch", actor={"role": "lead", "id": "preview-run-b1"})],
             artifacts=[artifact("art-b2-partial", "att-b2-1", digest("b2-partial-output")[:40],
                                 "/synthetic-preview/diffs/b2.partial.diff",
                                 ["harnesses/dsh/plugins/quota.js"],
@@ -703,7 +714,8 @@ def build_runs() -> dict[str, dict]:
                                        execution_status="failed", note=QUOTA_ERROR,
                                        evidence=["art-b2-partial", QUOTA_ERROR],
                                        artifact_id="art-b2-partial", integration_id=None,
-                                       actor=HOST_B, created_at=instant(6, 26), run_revision=3)),
+                                       actor={"role": "lead", "id": "preview-run-b1"},
+                                       created_at=instant(6, 26), run_revision=3)),
         run(STANDALONE, project="beta", hosts=(HOST_B, HOST_B2),
             title="修复标题回退在 CRLF 输入下的显示", title_source="task",
             task_text="修复标题回退在 CRLF 输入下的显示，并补充回归测试。",
@@ -720,9 +732,9 @@ def build_runs() -> dict[str, dict]:
             attempts=[attempt("att-c1-1", 1, "finished", True, instant(5, 4), instant(5, 20), CFG_FLASH,
                               result="合成预览：CRLF 标题回退修复完成。",
                               usage=usage("dsh-native", 5000, 1000, 700))],
-            markers=[marker(instant(5, 0), "dispatch", actor=HOST_B),
-                     marker(instant(5, 30), "takeover", actor=HOST_B2, summary="takeover"),
-                     marker(instant(5, 35), "accept", actor=HOST_B2, artifact_id="art-c1", summary="accepted")],
+            markers=[marker(instant(5, 0), "dispatch", actor=host_actor(HOST_B)),
+                     marker(instant(5, 30), "takeover", actor=host_actor(HOST_B2), summary="takeover"),
+                     marker(instant(5, 35), "accept", actor=host_actor(HOST_B2), artifact_id="art-c1", summary="accepted")],
             artifacts=[artifact("art-c1", "att-c1-1", digest("c1-output")[:40], "/synthetic-preview/diffs/c1.diff",
                                 ["apps/console/src/task-title.test.tsx"])],
             integrations=[integration("int-c1", "art-c1", "att-c1-1", HOST_B2)]),
@@ -740,8 +752,8 @@ def build_runs() -> dict[str, dict]:
             ],
             attempts=[attempt("att-c1h-1", 1, "finished", True, instant(5, 8), instant(5, 18), CFG_GLM,
                               result="合成预览：交付被记录为验收问题。", usage=None)],
-            markers=[marker(instant(5, 6), "dispatch", actor=HOST_B),
-                     marker(instant(5, 25), "reject", actor=HOST_B, artifact_id="art-c1h", summary="rejected")],
+            markers=[marker(instant(5, 6), "dispatch", actor=host_actor(HOST_B)),
+                     marker(instant(5, 25), "reject", actor=host_actor(HOST_B), artifact_id="art-c1h", summary="rejected")],
             artifacts=[artifact("art-c1h", "att-c1h-1", digest("c1h-output")[:40],
                                 "/synthetic-preview/diffs/c1h.diff", ["apps/console/src/task-title.ts"])]),
     ]
@@ -774,6 +786,10 @@ def build_runs() -> dict[str, dict]:
             "kind": entry["kind"], "sourceHostId": entry["sourceHostId"],
             "currentHostId": entry["currentHostId"], "parentRunId": entry["parentRunId"],
             "rootRunId": root,
+            "rootLeadRunId": entry["leadOwner"],
+            "leadOwnership": ({"leadRunId": entry["leadOwner"], "leadTurnId": "turn-att-b1-2",
+                               "createdAt": entry["createdAt"]} if entry["leadOwner"] else None),
+            "delegationAuthority": entry["delegationAuthority"],
             "project": {"id": project["id"], "path": project["path"], "label": project["label"]},
             "buddy": entry["buddy"] or (
                 {"harness": "decision", "provider": "decision", "model": "decision", "effort": "default"}
@@ -875,7 +891,7 @@ def task_view(entry: dict) -> dict:
                             "routerBudgetSeconds": entry["routing"]["budget"]["timeoutSeconds"]}
     view: dict[str, Any] = {
         "runId": entry["runId"], "taskId": entry["runId"], "requestId": entry["requestId"],
-        "owner": "synthetic-worker-1", "adapter": adapter, "cwd": entry["cwd"], "task": entry["task"],
+        "owner": None if entry["kind"] in ("micro-task", "helper") else "synthetic-worker-1", "adapter": adapter, "cwd": entry["cwd"], "task": entry["task"],
         "spec": spec, "inputFingerprint": digest(f"{entry['runId']}-fingerprint"), "fingerprintVersion": 3,
         "requiredCapabilities": [], "exclusiveResources": [], **duration,
         "status": entry["status"], "state": entry["status"], "queueReason": None,
@@ -910,7 +926,7 @@ def task_view(entry: dict) -> dict:
                      "resultMeta": {key: value for key, value in receipt.items() if key != "result"},
                      "attemptId": selected["attemptId"], "resultDelivered": True})
     if entry['state'] == 'cancelled' or entry['status'] == 'cancelled':
-        view['cancellation'] = {'actor': 'host:' + HOST_B, 'reason': 'Host 接手剩余工作'} if entry['runId'] == 'preview-run-b1-h1' else None
+        view['cancellation'] = {'actor': host_actor(HOST_B), 'reason': 'Host 接手剩余工作'} if entry['runId'] == 'preview-run-b1-h1' else None
     return view
 
 
@@ -1066,7 +1082,7 @@ def macro_task_summary(group: str, matching: set[str]) -> dict:
         "description": description,
         "summary": "合成记录：保留独立委派的结果摘要。" if kind == "standalone" else None,
         "project": PROJECTS[project], "sourceHostId": source_host,
-        "currentHostIds": sorted({entry["currentHostId"] for entry in entries}),
+        "currentHostIds": sorted({entry["currentHostId"] for entry in entries if entry["currentHostId"]}),
         "createdAt": created, "lastActivityAt": at, "lastActivitySeq": seq, "state": state,
         "counts": counts, "matchingRuns": len(matching), "rootRunIds": roots,
     }
@@ -1131,7 +1147,7 @@ def matches(entry: dict, applied: dict) -> bool:
     if applied.get("query"):
         buddy = entry["buddy"] or {}
         haystack = " ".join((entry["runId"], entry["title"], PROJECTS[entry["project"]]["path"],
-                             entry["sourceHostId"], entry["currentHostId"],
+                             entry["sourceHostId"] or "", entry["currentHostId"] or "",
                              buddy.get("harness", ""), buddy.get("model", ""))).casefold()
         if applied["query"].casefold() not in haystack:
             return False
@@ -1924,6 +1940,17 @@ def validate_fixtures() -> list[str]:
             ("TimelineEvent", timeline["events"][0], REQUIRED_KEYS["TimelineEvent"])):
         present = set(value)
         problems += [f"{name}: missing {key}" for key in sorted(keys - present)]
+    for _run_id, event in FIXTURES["markers"]:
+        actor = event["actor"]
+        if actor is not None and (not isinstance(actor, dict) or set(actor) != {"role", "id"}
+                                  or actor["role"] not in {"host", "lead", "console"}
+                                  or not isinstance(actor["id"], str) or not actor["id"]):
+            problems.append("TimelineEvent.actor must be a structured role and id or null")
+    owned = FIXTURES["runs"]["preview-run-b2"]
+    if (owned["sourceHostId"] is not None or owned["currentHostId"] is not None
+            or owned["lineage"]["leadOwnership"]["leadRunId"] != "preview-run-b1"
+            or owned["markers"][0]["actor"] != {"role": "lead", "id": "preview-run-b1"}):
+        problems.append("Lead-owned preview run must keep its nullable Host and explicit Lead actor")
     if set(page) != REQUIRED_KEYS["MacroTaskPage"]:
         problems.append(f"MacroTaskPage: keys {sorted(set(page))}")
     if json.dumps(macro_task_page({}), sort_keys=True) != json.dumps(macro_task_page({}), sort_keys=True):

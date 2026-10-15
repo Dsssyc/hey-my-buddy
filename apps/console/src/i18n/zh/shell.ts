@@ -1,5 +1,22 @@
 /** The frame around every page: top bar, connection state and the startup screen. */
 export default {
+  actor: {
+    currentOwner: "当前管理方",
+    unknownOrigin: "未记录发起者", microTask: "微任务 {{id}}",
+    events: {
+      dispatch: "{{time}} {{role}} 派发「{{title}}」", approved: "{{time}} {{role}} 批准了「{{title}}」的请求",
+      declined: "{{time}} {{role}} 拒绝了「{{title}}」的请求", decide: "{{time}} {{role}} 批准 / 拒绝了「{{title}}」的请求",
+      continue: "{{time}} {{role}} 让「{{title}}」继续", integrate: "{{time}} {{role}} 整合了「{{title}}」的产出",
+      accept: "{{time}} {{role}} 验收通过「{{title}}」", reject: "{{time}} {{role}} 对「{{title}}」提出验收问题",
+      stop: "{{time}} {{role}} 停止了「{{title}}」", console: "{{time}} 在控制台停止了「{{title}}」",
+      service: "{{time}} 服务停止了「{{title}}」", unknown: "{{time}} 停止了「{{title}}」（发起者未知）",
+      takeover: "{{time}} {{role}} 接管了「{{title}}」", other: "{{time}} {{role}} {{action}}「{{title}}」",
+    },
+    unrecorded: "未记录", identity: "{{role}} · {{id}}", recordedBy: "记录来源",
+    markerIdentity: "{{sentence}}，记录来源 {{actor}}", origin: "发起 {{role}}", reason: "停止理由",
+    roles: { host: "Host", lead: "Lead", console: "控制台", service: "服务", workflow: "黑板", bridge: "桥接" },
+    stop: { host: "Host 停止", lead: "Lead 停止", console: "在控制台停止", service: "服务停止", unknown: "停止（发起者未知）" },
+  },
   skipToContent: "跳至主要内容",
   nav: {
     label: "主要导航",

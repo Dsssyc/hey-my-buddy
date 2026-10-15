@@ -729,8 +729,6 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     incoming = dict(os.environ)
     command = cli_command(incoming)
     environment = native_environment(incoming, command=command)
-    from ..runtime_selection import worker_launcher_environment
-    environment.update(worker_launcher_environment(incoming))
     private = ensure_private_dir(invocation_root)
     if incoming.get("HMB_DEV_SOURCE") == "1" and "HMB_ZCODE_TEST_CASE" in incoming:
         environment["HMB_ZCODE_TEST_CASE"] = incoming["HMB_ZCODE_TEST_CASE"]

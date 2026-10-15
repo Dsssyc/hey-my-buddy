@@ -1,3 +1,5 @@
+import i18n from "i18next";
+import { actorRoleText } from "./actor";
 /**
  * Pure display vocabulary for the work macro task timeline. Everything here is
  * derived from recorded facts only: no cost or token claims, no invented
@@ -97,29 +99,26 @@ export function eventVocab(kind: string): { label: string; glyph: string } {
  * A decide marker keeps both verbs unless its raw event kind names one side.
  */
 export function eventSentence(event: TimelineEvent, row: TimelineRow | null): string {
-  const title = row ? displayTitle(row.titleSource, row.title).text : `微任务 ${event.runId}`;
+  const title = row ? displayTitle(row.titleSource, row.title).text : i18n.t("shell:actor.microTask", { id: event.runId });
   const time = clockTime(event.at);
+  const role = actorRoleText(event.actor?.role);
+  const sentence = (key: "dispatch" | "approved" | "declined" | "decide" | "continue" | "integrate" | "accept" | "reject" | "stop" | "console" | "service" | "unknown" | "takeover" | "other", actorRole = role) =>
+    i18n.t(`shell:actor.events.${key}`, { time, role: actorRole, title, action: event.label || eventVocab(event.kind).label });
   const raw = (event.eventKind ?? "").toLowerCase();
   switch (event.kind) {
-    case "dispatch": return `${time} Host 派发「${title}」`;
-    case "decide":
-      if (raw.includes("approved")) return `${time} Host 批准了「${title}」的请求`;
-      if (raw.includes("declined")) return `${time} Host 拒绝了「${title}」的请求`;
-      return `${time} Host 批准 / 拒绝了「${title}」的请求`;
-    case "continue": return `${time} Host 让「${title}」继续`;
-    case "integrate": return `${time} Host 整合了「${title}」的产出`;
-    case "accept": return `${time} Host 验收通过「${title}」`;
-    case "reject": return `${time} Host 对「${title}」提出验收问题`;
+    case "dispatch": return sentence("dispatch");
+    case "decide": return sentence(raw.includes("approved") ? "approved" : raw.includes("declined") ? "declined" : "decide");
+    case "continue": return sentence("continue");
+    case "integrate": return sentence("integrate");
+    case "accept": return sentence("accept");
+    case "reject": return sentence("reject");
     case "cancel": {
-      const initiator = event.stopInitiator;
-      if (initiator === "host") return `${time} Host 停止了「${title}」`;
-      if (initiator === "lead") return `${time} Lead 停止了「${title}」`;
-      if (initiator === "console") return `${time} 在控制台停止了「${title}」`;
-      if (initiator === "service") return `${time} 服务停止了「${title}」`;
-      return `${time} 停止了「${title}」（发起者未知）`;
+      const initiator = event.stopInitiator ?? event.actor?.role;
+      if (initiator === "host" || initiator === "lead") return sentence("stop", actorRoleText(initiator));
+      return sentence(initiator === "console" || initiator === "service" ? initiator : "unknown");
     }
-    case "takeover": return `${time} Host 接管了「${title}」`;
-    default: return `${time} Host ${event.label || eventVocab(event.kind).label}「${title}」`;
+    case "takeover": return sentence("takeover");
+    default: return sentence("other");
   }
 }
 

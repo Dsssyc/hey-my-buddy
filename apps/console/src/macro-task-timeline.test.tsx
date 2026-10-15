@@ -628,6 +628,8 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     await user.click(cluster);
     const popover = document.querySelector(".marker-popover") as HTMLElement;
     expect(popover).toBeTruthy();
+    expect(popover.textContent).toContain("Host · codex-desktop");
+    expect(popover.textContent).not.toContain("[object Object]");
     expect(cluster.getAttribute("aria-expanded")).toBe("true");
     // Nothing was selected or opened by opening the popover.
     expect(source.get()).toBeNull();

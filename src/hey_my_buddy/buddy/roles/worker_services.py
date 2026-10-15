@@ -133,7 +133,8 @@ INQUIRY_CHANNEL_ABSENT = "this turn has no mounted inquiry channel"
 
 
 def micro_task_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
-                    checkpoint_tool: str | None = None, answer_tool: str | None = None) -> str:
+                    checkpoint_tool: str | None = None, answer_tool: str | None = None,
+                    credential_file: str | None = None) -> str:
     """Bounded micro task root prompt: scope, inquiry channel, finish contract."""
     inquiry = (
         f"Host inquiries arrive cooperatively: call {checkpoint_tool} at natural work milestones and again just "
@@ -143,7 +144,7 @@ def micro_task_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
         f"does not block it. Checkpointing is voluntary and never on a timer, and no input is ever injected into "
         "your turn."
     ) if checkpoint_tool and answer_tool else ""
-    return worker_prompt(task_text, turn_input, delivery=(
+    return worker_prompt(task_text, turn_input, credential_file=credential_file, delivery=(
         "This is a Buddy root turn for a micro task. Complete the authorized task using the available coding tools and internal subagents. Follow the frozen Host input and its allocated workspace. Allocated workspaces share Git stash, branches and tags with the owner's repository: do not use git stash or create, switch, move or delete branches or tags; leave changes in the workspace or commit on the current detached HEAD.",
         f"Only the root may conclude this Buddy turn. After your work and internal subagents settle, obtain one successful receipt from {finish_tool} with the complete structured outcome. Include all six fields: disposition, summary, remaining, decisions, artifacts, request. Completed requires request: null. Use assistance for bounded help or attention for a Host decision. If a native permission or user-input request was refused, you must conclude with attention instead of completed. If a session tool refuses your call — including with a signed JSON refusal envelope naming the correction — correct the arguments and retry in this same turn. Plain final text is not a recorded outcome. After a successful finish receipt, do not start more tools; end the native turn.",
         *(("When you have handed off work to micro tasks you own and need their results, conclude this Lead turn with disposition waiting, request: null and a clear summary. The blackboard will start a later turn when an owned task needs your attention.",)

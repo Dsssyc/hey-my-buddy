@@ -1,3 +1,5 @@
+import i18n from "i18next";
+import { parseActor } from "./actor";
 import type { ActivityCounts, ActivityPhase, Task, TaskActivity } from "./types";
 import { formatDate } from "./ui";
 
@@ -146,27 +148,22 @@ function record(value: unknown): Record<string, unknown> | null {
 function cancellationDetails(task: Task): { label: string; actorRole: "Host" | "Lead" | null; actorId: string | null; reason: string | null } {
   const cancellation = record(task.cancellation);
   const initiator = task.selectedAttempt?.stopInitiator ?? task.stopInitiator;
-  const actor = cancellation?.actor;
+  const actor = parseActor(cancellation?.actor);
   const reason = cancellation?.reason;
   const safeReason = typeof reason === "string" && reason.trim() && reason.length <= 4000
     ? reason.trim() : null;
-  if (initiator === "console") return { label: "在控制台停止", actorRole: null, actorId: null, reason: safeReason };
-  if (initiator === "service") return { label: "服务停止", actorRole: null, actorId: null, reason: safeReason };
-  if (initiator === "unknown") return { label: "停止（发起者未知）", actorRole: null, actorId: null, reason: safeReason };
-  const actorPerson = typeof actor === "string" && actor.length <= 261
-    && /^(host|lead):[^\x00-\x1f\x7f]+$/.test(actor)
-    ? actor.slice(0, 4) as "host" | "lead" : null;
-  const person = initiator === "host" || initiator === "lead" ? initiator : actorPerson;
+  const stop = (role: "host" | "lead" | "console" | "service" | "unknown") => i18n.t(`shell:actor.stop.${role}`);
+  if (initiator === "console" || initiator === "service" || initiator === "unknown") {
+    return { label: stop(initiator), actorRole: null, actorId: null, reason: safeReason };
+  }
+  const person = initiator === "host" || initiator === "lead" ? initiator
+    : actor?.role === "host" || actor?.role === "lead" ? actor.role : null;
   if (person) {
-    const actorRole = person === "host" ? "Host" : "Lead";
-    const actorId = typeof actor === "string" && actorPerson === person ? actor.slice(5) : null;
-    return { label: `${actorRole} 停止`, actorRole, actorId, reason: safeReason };
+    return { label: stop(person), actorRole: person === "host" ? "Host" : "Lead",
+      actorId: actor?.role === person ? actor.id : null, reason: safeReason };
   }
-  if (typeof actor === "string" && /^console:[^\x00-\x1f\x7f]{1,128}$/.test(actor)) {
-    return { label: "在控制台停止", actorRole: null, actorId: null, reason: safeReason };
-  }
-  if (actor === "service-stop") return { label: "服务停止", actorRole: null, actorId: null, reason: safeReason };
-  return { label: "停止（发起者未知）", actorRole: null, actorId: null, reason: safeReason };
+  const role = actor?.role === "console" || actor?.role === "service" ? actor.role : "unknown";
+  return { label: stop(role), actorRole: null, actorId: null, reason: safeReason };
 }
 
 /**
@@ -255,8 +252,8 @@ export function TaskActivityView({ task }: { task: Task }) {
       )}
       {cancellation && <dl className="facts">
         {termination !== cancellation.label && <><dt>停止发起</dt><dd>{cancellation.label}</dd></>}
-        {cancellation.actorId && <><dt>发起 {cancellation.actorRole}</dt><dd className="mono wrap">{cancellation.actorId}</dd></>}
-        {cancellation.reason && <><dt>停止理由</dt><dd className="wrap">{cancellation.reason}</dd></>}
+        {cancellation.actorId && <><dt>{i18n.t("shell:actor.origin", { role: cancellation.actorRole })}</dt><dd className="mono wrap">{cancellation.actorId}</dd></>}
+        {cancellation.reason && <><dt>{i18n.t("shell:actor.reason")}</dt><dd className="wrap">{cancellation.reason}</dd></>}
       </dl>}
     </section>
   );

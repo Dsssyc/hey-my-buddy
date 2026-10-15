@@ -256,15 +256,14 @@ class LeadShutdownTests(WorkflowTestCase):
             view, _ = self.finish_owned(board, child, worker="w2", **finish)
             cases[name] = view
         cancelled = self.owned(board, claim, "cancelled")
-        board.call("workflow_cancel", {"runId": cancelled["runId"], **self.control(cancelled),
-                                       "credential": claim["agentCredential"]})
+        board.call("workflow_cancel", {"runId": cancelled["runId"], "credential": claim["agentCredential"]})
         cases["cancelled"] = cancelled
         accepted_child = self.owned(board, claim, "accepted")
         accepted_view, _ = self.finish_owned(board, accepted_child, worker="w2")
         board.call("workflow_accept", {"runId": accepted_child["runId"],
                                        "artifactId": accepted_view["finalArtifactId"],
                                        "note": "Reviewed owned output", "notRequired": "Fixture has no integration target",
-                                       **self.control(accepted_child), "credential": claim["agentCredential"]})
+                                       "credential": claim["agentCredential"]})
 
         with self.assertRaises(BoardError) as caught:
             self.conclude(board, lead, "Lead has no further work")

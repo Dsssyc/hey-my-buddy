@@ -16,6 +16,7 @@ import time
 import uuid
 
 from ..blackboard.store import backup
+from ..blackboard.store import upgrade as board_upgrade
 from .. import private_dirs
 from . import runtime
 from .launcher import write_active_runtime
@@ -58,8 +59,8 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if schema is None or str(schema[0]) != str(SCHEMA_VERSION):
-            raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade accepts schema {SCHEMA_VERSION} only')
+        if schema is None or str(schema[0]) not in (str(board_upgrade.BASE_SCHEMA_VERSION), str(SCHEMA_VERSION)):
+            raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade accepts schema {board_upgrade.BASE_SCHEMA_VERSION} or {SCHEMA_VERSION} only')
         # A micro-task Host boundary has no autonomous next turn. A recorded or
         # queued continuation still has work to prepare/claim, even if the run
         # currently reports a Host boundary. Routing and helper tasks are checked
@@ -392,7 +393,7 @@ def _finish_skill(journal: dict) -> None:
 def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Path | None = None) -> dict:
     from ..blackboard.store.store import BoardStore
     schemas.reject_unknown(params, set(), 'upgrade')
-    if os.environ.get('HMB_AGENT_CREDENTIAL') or os.environ.get('HMB_AGENT_CREDENTIAL_FILE'):
+    if os.environ.get('HMB_AGENT_CREDENTIAL_FILE'):
         raise BoardError('UNAUTHORIZED', 'A Worker cannot upgrade its owning service')
     state = get_state_dir().resolve()
     root = Path(os.environ.get('HMB_RUNTIME_ROOT') or runtime.DEFAULT_RUNTIME_ROOT).resolve()
@@ -486,7 +487,16 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     journal['before'] = before
                 journal.update(phase='backed-up', backup=backed_up)
                 write_journal(marker, journal)
-                expected = before
+                if before['schema'] == board_upgrade.BASE_SCHEMA_VERSION:
+                    journal['phase'] = 'migrating'
+                    write_journal(marker, journal)
+                    board_upgrade.migrate(state)
+                    expected = idle_snapshot(state, event_head=before['eventHead'])
+                    expected['runtimeSettings'] = runtime_settings
+                    journal.update(phase='migrated', expected=expected)
+                    write_journal(marker, journal)
+                else:
+                    expected = before
             active = target
             health = start(state, target)
             evidence = verify_started(state, target, health, expected)

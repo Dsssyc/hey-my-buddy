@@ -54,6 +54,14 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
     def control(self, view):
         return dict(self.controls[view["runId"]])
 
+    @staticmethod
+    def resolution_record(board, resolved):
+        with board.store.db.read() as connection:
+            row = connection.execute(
+                "SELECT manifest_json FROM workflow_artifacts WHERE artifact_id=?", (resolved["artifactId"],)
+            ).fetchone()
+        return json.loads(row["manifest_json"])
+
     def claim(self, board, run_id, *, request_id="claim-1", nonce="n" * 16, worker_id=None):
         return board.call("worker_claim", {
             "workerId": worker_id or self.worker, "claimRequestId": request_id, "nonce": nonce, "runId": run_id,
@@ -527,6 +535,9 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(resolved["delivery"]["kind"], "host-resolution")
         self.assertEqual(resolved["delivery"]["action"], "restore")
         self.assertEqual(resolved["delivery"]["turnId"], turn_id)
+        record = self.resolution_record(board, resolved)
+        self.assertEqual(record["version"], 2)
+        self.assertEqual(record["actor"], {"role": "host", "id": "host-1"})
         cumulative = resolved["artifact"]["cumulativePatch"]
         self.assertEqual(cumulative["baseCommit"], submitted["workspace"]["inputCommit"])
         self.assertEqual(cumulative["outputCommit"], resolved["outputCommit"])
@@ -585,6 +596,9 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(adopted["state"], "delivered")
         self.assertEqual(adopted["delivery"]["action"], "adopt")
         self.assertEqual(adopted["artifact"]["action"], "adopt")
+        record = self.resolution_record(board, adopted)
+        self.assertEqual(record["version"], 2)
+        self.assertEqual(record["actor"], {"role": "host", "id": "host-1"})
         cumulative = adopted["artifact"]["cumulativePatch"]
         self.assertEqual(cumulative["baseCommit"], submitted["workspace"]["inputCommit"])
         self.assertIn("outside.txt", cumulative["changedPaths"])
@@ -609,6 +623,9 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
                                  reason="discard this failed round")
         self.assertFalse(abandoned["delivered"])
         self.assertEqual(abandoned["resolutionState"], "abandoned")
+        record = self.resolution_record(board, abandoned)
+        self.assertEqual(record["version"], 2)
+        self.assertEqual(record["actor"], {"role": "host", "id": "host-1"})
         self.assertEqual(abandoned["state"], "awaiting-host")
         self.assertIsNone(abandoned["delivery"])
         self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 1\n")

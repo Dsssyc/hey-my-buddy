@@ -50,7 +50,7 @@ class StorageOrphanTests(WorkflowTestCase):
     def orphan(self, request_id='orphan-request'):
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write',
                   'base': {'kind': 'working-tree'}, 'includeUntracked': [],
-                  'writeScope': ['.'], 'integrator': 'host:host-1'}
+                  'writeScope': ['.'], 'integrator': {'role': 'host', 'id': 'host-1'}}
         manifest = workspace.prepare(self.directory, request_id, intent)
         checkout = Path(manifest['checkoutRoot'])
         planned = self.board_instance.call('storage_plan', {})
@@ -147,8 +147,8 @@ class StorageOrphanTests(WorkflowTestCase):
                         identity = state + '-' + str(index)
                         connection.execute('''INSERT INTO workflow_integrations
                             (integration_id,run_id,artifact_id,state,strategy,binding_sha256,target_kind,
-                             target_path,target_checkout_id,verification_json,actor,created_at)
-                            VALUES (?,?,? ,?,'patch',?,'checkout',?,?,?,'host-1',?)''',
+                             target_path,target_checkout_id,verification_json,actor_role,actor_id,created_at)
+                            VALUES (?,?,? ,?,'patch',?,'checkout',?,?,?,'host','host-1',?)''',
                             (identity, parent['runId'], 'private-artifact', state, identity,
                              value if kind == 'path' else '', value if kind == 'identity' else None,
                              json.dumps(value if kind == 'nested' else {}), '2026-01-01T00:00:00Z'))
@@ -174,8 +174,8 @@ class StorageOrphanTests(WorkflowTestCase):
                         identity = state + '-' + str(index)
                         connection.execute('''INSERT INTO workspace_cleanup_plans
                             (plan_id,run_id,workspace_id,checkout_id,path,kind,state,evidence_json,
-                             retention_json,actor,created_at,expires_at)
-                            VALUES (?,?,'other-workspace',?,?,'worktree',?,?,'{}','host-1',?,?)''',
+                             retention_json,actor_role,actor_id,created_at,expires_at)
+                            VALUES (?,?,'other-workspace',?,?,'worktree',?,?,'{}','host','host-1',?,?)''',
                             (identity, parent['runId'], value if kind == 'identity' else 'other-checkout',
                              value if kind == 'path' else '', state,
                              json.dumps(value if kind == 'nested' else {}),
@@ -196,8 +196,8 @@ class StorageOrphanTests(WorkflowTestCase):
         parent = self.submit(self.board_instance, request_id='other-run', cwd=str(self.repo), kind='existing')
         with self.board_instance.store.db.write() as connection:
             connection.execute('''INSERT INTO workflow_scope_versions
-                (run_id,scope_version,actor,write_scope_json,manifest_sha256,stopped_evidence_json,created_at)
-                VALUES (?,2,'host-1','[]',?,'{}',?)''',
+                (run_id,scope_version,actor_role,actor_id,write_scope_json,manifest_sha256,stopped_evidence_json,created_at)
+                VALUES (?,2,'host','host-1','[]',?,'{}',?)''',
                 (parent['runId'], manifest['manifestSha256'], '2026-01-01T00:00:00Z'))
             self.assertIn('workflow_scope_versions-reference', storage.allocation_references(connection, manifest))
         row = next(row for row in storage.inspect(self.board_instance.store)['candidates'] if row['path'] == str(checkout))

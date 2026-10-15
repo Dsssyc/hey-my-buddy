@@ -147,15 +147,6 @@ def read_native_process_journal(path: Path, binding: dict) -> dict | None:
         return None
 
 
-def boot_started_at() -> float:
-    import psutil
-
-    try:
-        return psutil.boot_time()
-    except psutil.Error as error:
-        raise OSError('boot time observation failed') from error
-
-
 def boot_id() -> str:
     """Read the OS's stable per-boot identifier, not its adjustable wall clock."""
     if sys.platform == "linux":

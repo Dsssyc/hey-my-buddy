@@ -58,7 +58,7 @@ class CliViewTests(RealWorkspaceTestCase):
         self.enterContext(mock.patch.object(transport, "_ensure_service", ensure_service))
         self.enterContext(mock.patch.object(transport, "_request", request))
         self.enterContext(mock.patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory)}))
-        for name in ("HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE"):
+        for name in ("HMB_AGENT_CREDENTIAL_FILE",):
             os.environ.pop(name, None)
 
     def turn_record(self, claim, *, disposition="completed"):

@@ -164,7 +164,7 @@ class WorkflowTestCase(BoardTestCase):
             "commandId": command_id,
             "expectedRevision": view["revision"],
             "decision": decision,
-            **self.control(view),
+            **({} if extra.get("credential") else self.control(view)),
             **extra,
         }
         return board.call("workflow_decide", params)
@@ -182,7 +182,8 @@ class WorkflowTestCase(BoardTestCase):
             "helperPolicy": helper_policy,
             **extra,
         }
-        params.update(self.control(view))
+        if not extra.get("credential"):
+            params.update(self.control(view))
         return board.call("workflow_continue", params)
 
     def accept_run(self, board, view, *, artifact_id=None, note="inspected the sealed diff", **extra):
@@ -192,7 +193,7 @@ class WorkflowTestCase(BoardTestCase):
             "artifactId": artifact_id or view["finalArtifactId"],
             "note": note,
             "notRequired": "this fixture is reviewed without a separate repository target",
-            **self.control(view),
+            **({} if extra.get("credential") else self.control(view)),
         }
         params.update(extra)
         return board.call("workflow_accept", params)
@@ -766,6 +767,8 @@ class WorkspaceTests(WorkflowTestCase):
         self.workspace.dirty = True
         replay = self.submit(board, request_id="req-1")
         self.assertTrue(replay["duplicate"])
+        self.assertIsNotNone(first["requestFingerprint"])
+        self.assertEqual(replay["requestFingerprint"], first["requestFingerprint"])
         self.assertEqual(replay["workspace"]["manifestSha256"], first["workspace"]["manifestSha256"])
         self.assertEqual(len(self.workspace.prepare_calls), before)
         with self.assertRaises(BoardError) as raised:
@@ -840,6 +843,34 @@ class WorkspaceTests(WorkflowTestCase):
 
 
 class IdempotencyTests(WorkflowTestCase):
+    def test_pre_schema_21_submission_rejects_all_submission_paths_before_comparison(self):
+        board = self.board()
+        first = self.submit(board, adapter="external")
+        with board.store.db.read() as connection:
+            spec = json.loads(connection.execute("SELECT micro_task_json FROM workflow_runs WHERE run_id=?",
+                                                (first["runId"],)).fetchone()[0])
+        ordinary = {"requestId": first["requestId"], **spec}
+        board.store.task_submit(ordinary, command_id="saved-submit-reply")
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE workflow_runs SET request_fingerprint=NULL WHERE run_id=?", (first["runId"],))
+        for changed in (False, True):
+            task = "different input" if changed else "do the thing"
+            with self.subTest(path="workflow", changed=changed), self.assertRaises(BoardError) as caught:
+                self.submit(board, adapter="external", task=task)
+            self.assertEqual(caught.exception.code, "SUBMISSION_REPLAY_UNAVAILABLE")
+            with self.subTest(path="ordinary task", changed=changed), self.assertRaises(BoardError) as caught:
+                board.store.task_submit({"requestId": first["requestId"], **spec, "task": task})
+            self.assertEqual(caught.exception.code, "SUBMISSION_REPLAY_UNAVAILABLE")
+        with self.assertRaises(BoardError) as caught:
+            board.store.task_submit(ordinary, command_id="saved-submit-reply")
+        self.assertEqual(caught.exception.code, "SUBMISSION_REPLAY_UNAVAILABLE")
+        with self.assertRaises(BoardError) as caught:
+            board.store.task_submit({"requestId": first["requestId"]},
+                                    micro_task={"spec": spec, "requestFingerprint": "different-digest"})
+        self.assertEqual(caught.exception.code, "SUBMISSION_REPLAY_UNAVAILABLE")
+        self.assertIsNone(board.call("workflow_get", {"runId": first["runId"]})["requestFingerprint"])
+        self.assertEqual(len(self.workspace.prepare_calls), 1)
+
     def test_changed_turn_identity_is_rejected(self):
         board = self.board()
         self.register(board)

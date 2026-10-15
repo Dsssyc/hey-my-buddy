@@ -105,7 +105,7 @@ class BatchedObjectTests(unittest.TestCase):
 
     def worktree_intent(self, repo, selected=()):
         return {"kind": "worktree", "cwd": str(repo), "access": "write", "base": {"kind": "working-tree"},
-                "writeScope": ["src"], "integrator": "host", "includeUntracked": list(selected)}
+                "writeScope": ["src"], "integrator": {"role": "host", "id": "host-1"}, "includeUntracked": list(selected)}
 
     def object_files(self, repo):
         return sorted(str(path.relative_to(repo)) for path in (repo / ".git" / "objects").rglob("*")

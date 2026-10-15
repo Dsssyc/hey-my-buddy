@@ -130,29 +130,29 @@ describe("bounded activity projection", () => {
 
   it("shows the durable Host or console actor and reason without changing a completed result", () => {
     const host = render(<TaskActivityView task={task({ status: "cancelled", terminationReason: "wrap-up",
-      stopInitiator: "host", cancellation: { actor: "host:codex-main", reason: "I will finish the remaining work" } })} />);
+      stopInitiator: "host", cancellation: { actor: { role: "host", id: "codex-main" }, reason: "I will finish the remaining work" } })} />);
     expect(host.container.textContent).toContain("Host 停止");
     expect(host.container.textContent).toContain("发起 Hostcodex-main");
     expect(host.container.textContent).toContain("停止理由I will finish the remaining work");
     host.unmount();
     const consoleStop = render(<TaskActivityView task={task({ status: "cancelled", terminationReason: "console-stop",
-      stopInitiator: "console", cancellation: { actor: "console:private-session", reason: "Stop objective" } })} />);
+      stopInitiator: "console", cancellation: { actor: { role: "console", id: "private-session" }, reason: "Stop objective" } })} />);
     expect(consoleStop.container.textContent).toContain("在控制台停止");
     expect(consoleStop.container.textContent).not.toContain("private-session");
     consoleStop.unmount();
     const serviceStop = render(<TaskActivityView task={task({ status: "cancelled", terminationReason: "service-stop",
-      stopInitiator: "service", cancellation: { actor: "service-stop", reason: null } })} />);
+      stopInitiator: "service", cancellation: { actor: { role: "service", id: "stop" }, reason: null } })} />);
     expect(serviceStop.container.textContent).toContain("服务停止");
     expect(serviceStop.container.textContent).not.toContain("发起者未知");
     serviceStop.unmount();
     const unknown = render(<TaskActivityView task={task({ status: "cancelled", terminationReason: "unknown-stop",
-      selectedAttempt: { stopInitiator: "unknown" }, cancellation: { actor: "host:old-actor", reason: null } })} />);
+      selectedAttempt: { stopInitiator: "unknown" }, cancellation: { actor: { role: "host", id: "old-actor" }, reason: null } })} />);
     expect(unknown.container.textContent).toContain("停止（发起者未知）");
     expect(unknown.container.textContent).not.toContain("old-actor");
     unknown.unmount();
     const completed = render(<TaskActivityView task={task({ status: "completed", terminationReason: "completed",
       workflow: { state: "cancelled", awaitingHost: false, hostId: "host", ownerGeneration: 1, revision: 1 },
-      cancellation: { actor: "host:codex-main", reason: "Stop goal" } })} />);
+      cancellation: { actor: { role: "host", id: "codex-main" }, reason: "Stop goal" } })} />);
     expect(completed.container.textContent).toContain("正常完成");
     expect(completed.container.textContent).toContain("停止发起Host 停止");
   });
@@ -160,7 +160,7 @@ describe("bounded activity projection", () => {
   it("shows a Lead stop and its bounded actor and reason from the selected attempt", () => {
     const lead = render(<TaskActivityView task={task({ status: "cancelled", terminationReason: "wrap-up",
       stopInitiator: "host", selectedAttempt: { stopInitiator: "lead" },
-      cancellation: { actor: "lead:review-lead", reason: "Please summarize the current work" } })} />);
+      cancellation: { actor: { role: "lead", id: "review-lead" }, reason: "Please summarize the current work" } })} />);
     expect(lead.container.textContent).toContain("Lead 收尾完成");
     expect(lead.container.textContent).toContain("停止发起Lead 停止");
     expect(lead.container.textContent).toContain("发起 Leadreview-lead");
@@ -169,11 +169,23 @@ describe("bounded activity projection", () => {
     lead.unmount();
 
     const mismatched = render(<TaskActivityView task={task({ status: "cancelled",
-      stopInitiator: "lead", cancellation: { actor: "host:old-owner", reason: null } })} />);
+      stopInitiator: "lead", cancellation: { actor: { role: "host", id: "old-owner" }, reason: null } })} />);
     expect(mismatched.container.textContent).toContain("Lead 停止");
     expect(mismatched.container.textContent).not.toContain("old-owner");
     expect(terminationText(task({ status: "cancelled",
-      cancellation: { actor: `lead:${"x".repeat(257)}`, reason: null } }))).toBe("停止（发起者未知）");
+      cancellation: { actor: { role: "lead", id: "x".repeat(257) }, reason: null } }))).toBe("停止（发起者未知）");
+  });
+});
+
+describe("structured cancellation attribution", () => {
+  it("identifies the role independently of the caller's name", () => {
+    const host = task({ status: "cancelled", cancellation: {
+      actor: { role: "host", id: "lead:literal-host" }, reason: "Review the remaining work",
+    } });
+    const rendered = render(<TaskActivityView task={host} />);
+    expect(terminationText(host)).toBe("Host 停止");
+    expect(rendered.container.textContent).toContain("发起 Hostlead:literal-host");
+    expect(rendered.container.textContent).not.toContain("Lead 停止");
   });
 });
 

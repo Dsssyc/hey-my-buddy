@@ -10,10 +10,14 @@ def _role_prompt(resource: str, sections: tuple[str, ...]) -> str:
     return text + "\n" + "\n\n".join(sections)
 
 
-def worker_prompt(task_text: str, turn_input: dict, *, delivery: tuple[str, ...]) -> str:
+def worker_prompt(task_text: str, turn_input: dict, *, delivery: tuple[str, ...],
+                  credential_file: str | None = None) -> str:
     """Shared Worker assembly; delivery describes its native completion channel."""
-    lead = ((resource_path("roles.lead").read_text(encoding="utf-8"),)
-            if turn_input.get("context", {}).get("delegationAuthority", False) else ())
+    lead = ()
+    if turn_input.get("context", {}).get("delegationAuthority") is True:
+        lead = (resource_path("roles.lead").read_text(encoding="utf-8"),)
+        if credential_file is not None:
+            lead += (f"Credential file path: {canonical_json(credential_file)}",)
     return _role_prompt("roles.worker", (*lead, *delivery, task_text, canonical_json(turn_input)))
 
 

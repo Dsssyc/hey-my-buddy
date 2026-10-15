@@ -478,7 +478,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
         integrations: [{ integrationId: "integration-1", runId: "delivered-task", artifactId: "artifact-1", attemptId: "attempt-1",
           state: "verified", strategy: "merge", target: null, sourceCommit: null, sourceTree: null, beforeCommit: null,
           afterCommit: null, beforeTree: null, afterTree: null, verification: {}, notRequired: false, reason: null,
-          actor: "Host", createdAt: "2026-09-25T10:00:00Z" }],
+          actor: { role: "host", id: "Host" }, createdAt: "2026-09-25T10:00:00Z" }],
         task: { runId: "delivered-task", revision: 3, status: "completed", shutdownConfirmed: true } })],
     ]);
     const records = [plain, failed, awaiting, delivered];

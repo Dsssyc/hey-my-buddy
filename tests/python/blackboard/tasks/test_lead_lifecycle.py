@@ -99,7 +99,7 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.accept_run(board, finished)
         concluded = self.owned(board, claim, "concluded")
         self.finish_owned(board, concluded)
-        board.call("workflow_conclude", {"runId": concluded["runId"], "note": "Not needed", **concluded["control"]})
+        board.call("workflow_conclude", {"runId": concluded["runId"], "note": "Not needed", **self.control(concluded)})
         self.finish_turn(board, {"claim": claim})
         self.assertEqual(self.current(board, lead)["state"], "delivered")
 
@@ -111,7 +111,7 @@ class LeadLifecycleTests(WorkflowTestCase):
                 child = self.owned(board, claim, "owned-" + disposition)
                 self.wait(board, claim)
                 if disposition == "cancelled":
-                    board.call("workflow_cancel", {"runId": child["runId"], **child["control"]})
+                    board.call("workflow_cancel", {"runId": child["runId"], **self.control(child)})
                 else:
                     self.finish_owned(board, child, runner_status="failed" if disposition == "failed" else "ok",
                                       disposition="completed" if disposition in ("failed", "uncertain") else disposition,
@@ -196,7 +196,7 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.assertEqual(facts[first["runId"]]["state"], "delivered")
         self.assertEqual(facts[second["runId"]]["state"], "awaiting-host")
         self.assertTrue(all(row["changedSincePreviousTurn"] for row in facts.values()))
-        self.assertTrue(all(row["controlFile"].endswith(row["runId"] + ".g1.json") for row in facts.values()))
+        self.assertTrue(all("controlFile" not in row for row in facts.values()))
         self.assertNotIn("controlToken", json.dumps(context))
         frozen = json.dumps(next_claim["turn"]["input"], sort_keys=True)
         self.finish_owned(board, third)
@@ -268,8 +268,7 @@ class LeadLifecycleTests(WorkflowTestCase):
         child = self.owned(board, claim)
         self.register(board, "w2")
         child_claim = self.claim(board, "w2", claim_request_id="stopping-child", run_id=child["runId"])
-        board.call("workflow_cancel", {"runId": child["runId"], **child["control"],
-                                        "credential": claim["agentCredential"]})
+        board.call("workflow_cancel", {"runId": child["runId"], "credential": claim["agentCredential"]})
         self.assertEqual(self.current(board, child)["task"]["state"], "cancelling")
         self.wait(board, claim)
         self.assertEqual(self.current(board, lead)["state"], "waiting-owned")
@@ -309,8 +308,7 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.wait(board, claim)
         claim = self.claim(board, claim_request_id="lead-stops-helper-tree", run_id=lead["runId"])["claim"]
         prior_wakeups = len(self.wakeups(board, lead))
-        board.call("workflow_cancel", {"runId": child["runId"], **child["control"],
-                                        "credential": claim["agentCredential"]})
+        board.call("workflow_cancel", {"runId": child["runId"], "credential": claim["agentCredential"]})
         self.assertFalse(self.current(board, child)["task"]["workflowShutdown"]["descendantsConfirmed"])
         self.wait(board, claim)
         self.assertEqual(self.current(board, lead)["state"], "waiting-owned")
@@ -339,8 +337,7 @@ class LeadLifecycleTests(WorkflowTestCase):
         route_id = child["routing"]["taskId"]
         board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
         route_claim = self.claim(board, "router", claim_request_id="router-to-stop", run_id=route_id)["claim"]
-        board.call("workflow_cancel", {"runId": child["runId"], **child["control"],
-                                        "credential": claim["agentCredential"]})
+        board.call("workflow_cancel", {"runId": child["runId"], "credential": claim["agentCredential"]})
         self.wait(board, claim)
         self.assertEqual(self.current(board, lead)["state"], "waiting-owned")
         self.assertEqual(self.wakeups(board, lead), [])
@@ -374,7 +371,7 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.assertEqual(context["ownedMicroTaskTotal"], workflow.MAX_CHILD_VIEW + 1)
         self.assertEqual(context["ownedMicroTasksTruncated"], 1)
         large_paths = {**context, "ownedMicroTasks": [
-            {**row, "controlFile": "/" + "a" * 4090} for row in context["ownedMicroTasks"]]}
+            {**row, "requestId": "a" * 4090} for row in context["ownedMicroTasks"]]}
         bounded = workflow._bound_context(large_paths)
         self.assertLessEqual(len(workflow.canonical_json(bounded).encode()), workflow.schemas.MAX_WORKFLOW_INPUT_BYTES)
         self.assertEqual(bounded["ownedMicroTasksTruncated"],

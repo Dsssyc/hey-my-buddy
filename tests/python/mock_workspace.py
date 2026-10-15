@@ -67,7 +67,7 @@ class MockWorkspace:
         base = intent.get("base") if isinstance(intent.get("base"), dict) else {}
         base_commit = base.get("ref") or "a" * 40
         manifest = {
-            "version": 1,
+            "version": 2,
             "workspaceId": f"ws-{request_id}",
             "kind": kind,
             "path": path,

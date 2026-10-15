@@ -156,7 +156,7 @@ def _legacy_plugins() -> list[str]:
 
 def install(params: dict) -> dict:
     schemas.reject_unknown(params, set(), "install")
-    if os.environ.get("HMB_AGENT_CREDENTIAL") or os.environ.get("HMB_AGENT_CREDENTIAL_FILE"):
+    if os.environ.get("HMB_AGENT_CREDENTIAL_FILE"):
         raise BoardError("UNAUTHORIZED", "A Worker cannot install the shared skill")
     home = agent_skills_home()
     state = get_state_dir()

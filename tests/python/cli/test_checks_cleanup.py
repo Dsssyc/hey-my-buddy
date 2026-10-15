@@ -80,7 +80,6 @@ class ChecksEnvironmentTests(unittest.TestCase):
             "HMB_RUNTIME_IDENTITY": "pinned",
             "HMB_WORKER_STATE": "/wrong-worker",
             "HMB_WORKER_ID": "wrong-worker",
-            "HMB_AGENT_CREDENTIAL": "secret",
             "HMB_AGENT_CREDENTIAL_FILE": "/secret-file",
             "VIRTUAL_ENV": "/wrong-venv",
             "UV_PROJECT_ENVIRONMENT": "/wrong-uv",

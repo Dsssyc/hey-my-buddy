@@ -297,7 +297,7 @@ def preflight_command(params: dict) -> dict:
     from ...protocol import schemas
     from ... import home
     schemas.reject_unknown(params, set(), 'backup-preflight')
-    if os.environ.get('HMB_AGENT_CREDENTIAL') or os.environ.get('HMB_AGENT_CREDENTIAL_FILE'):
+    if os.environ.get('HMB_AGENT_CREDENTIAL_FILE'):
         raise BoardError('UNAUTHORIZED', 'A Worker cannot inspect Host backup sources')
     state = Path(os.environ.get('HMB_STATE_DIR') or home.default_state_dir()).expanduser().absolute()
     return preflight(state)
@@ -405,7 +405,7 @@ def _verify(directory: Path) -> dict:
     _guard(directory)
     with _open(directory / 'manifest.json', 'rb') as stream:
         manifest = json.load(stream)
-    if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
+    if manifest.get('format') != 1 or manifest.get('schema') not in (20, SCHEMA_VERSION):
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
     policy = manifest.get('attemptEvidencePolicy')
     if policy is not None and policy != attempt_evidence.POLICY:
@@ -445,7 +445,8 @@ def _verify(directory: Path) -> dict:
             schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if schema is None or int(schema[0]) != manifest['schema']:
                 raise BoardError('BACKUP_INVALID', 'Backup schema does not match its manifest')
-        Database(trial).initialize()
+        if manifest['schema'] == SCHEMA_VERSION:
+            Database(trial).initialize()
     return manifest
 
 

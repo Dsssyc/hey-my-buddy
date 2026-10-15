@@ -1,4 +1,5 @@
 """Lead credentials extend the existing operation and target boundaries."""
+import json
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
@@ -24,7 +25,9 @@ class LeadOwnedTests(WorkflowTestCase):
             "executionWorkspace": {"kind": "existing", "access": "write"},
             "submissionToken": "s" * 32, "credential": lead_claim["agentCredential"], **extra,
         })
-        self.controls[result["runId"]] = result["control"]
+        self.assertNotIn("control", result)
+        board.service.register_console_authority("owned-fixture-console")
+        self.controls[result["runId"]] = {"consoleAuthority": "owned-fixture-console"}
         return result
 
     def finish_owned(self, board, child, worker="w2", **extra):
@@ -41,7 +44,7 @@ class LeadOwnedTests(WorkflowTestCase):
                      "createdAt": child["createdAt"]}
         self.assertEqual(child["leadOwnership"], ownership)
         self.assertFalse(child["delegationAuthority"])
-        self.assertEqual(child["hostId"], "lead:" + lead["runId"])
+        self.assertIsNone(child["hostId"])
         fetched = board.call("workflow_get", {"runId": child["runId"], "credential": claim["agentCredential"]})
         self.assertEqual(fetched["leadOwnership"], ownership)
         self.assertEqual(micro_task_brief(fetched)["leadOwnership"], ownership)
@@ -59,11 +62,14 @@ class LeadOwnedTests(WorkflowTestCase):
             self.assertIsNotNone(groups[lead["runId"]])
             self.assertEqual(groups[lead["runId"]], groups[child["runId"]])
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_children").fetchone()[0], 0)
-            self.assertEqual(db.execute("SELECT owner FROM tasks WHERE task_id=?", (child["runId"],)).fetchone()[0],
-                             "host:lead:" + lead["runId"])
+            self.assertEqual(tuple(db.execute(
+                "SELECT actor_role,actor_id FROM events WHERE kind='task.submitted' AND task_id=?",
+                (child["runId"],)).fetchone()), ("lead", lead["runId"]))
+            self.assertIsNone(db.execute("SELECT owner FROM tasks WHERE task_id=?", (child["runId"],)).fetchone()[0])
         replay = self.owned(board, claim)
         self.assertTrue(replay["duplicate"])
-        self.assertEqual(replay["control"], child["control"])
+        self.assertNotIn("control", replay)
+        self.assertFalse(replay["controlAvailable"])
 
     def test_routing_and_shared_field_validation_still_apply(self):
         board = self.board()
@@ -137,8 +143,7 @@ class LeadOwnedTests(WorkflowTestCase):
                         board.store.workflow.authorize_agent_operation(operation, dict(selector), scope)
                     self.assertEqual(caught.exception.code, "FORBIDDEN")
                 with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
-                    board.call(operation, {"runId": view["runId"], **self.controls.get(view["runId"], foreign["control"]),
-                                           "credential": claim["agentCredential"]})
+                    board.call(operation, {"runId": view["runId"],                                            "credential": claim["agentCredential"]})
                 self.assertEqual(caught.exception.code, "FORBIDDEN")
         for operation in workflow.LEAD_OPERATIONS - {"workflow_submit"}:
             with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
@@ -202,12 +207,12 @@ class LeadOwnedTests(WorkflowTestCase):
         ended = self.owned(board, claim, "concluded")
         ended_view, _ = self.finish_owned(board, ended)
         concluded = board.call("workflow_conclude", {"runId": ended["runId"], "note": "Observed outcome",
-                                                      **ended["control"], **cred})
+                                                      **cred})
         self.assertEqual(concluded["state"], "concluded")
         cancelled = self.owned(board, claim, "cancelled")
         running = self.claim(board, "w2", claim_request_id="cancel-running", run_id=cancelled["runId"])
         result = board.call("workflow_cancel", {"runId": cancelled["runId"], "reason": "Lead stopped owned work",
-                                               **cancelled["control"], **cred})
+                                               **cred})
         self.assertEqual(result["state"], "cancelled")
         attempt = board.call("task_get", {"runId": cancelled["runId"]})["task"]["selectedAttempt"]
         self.assertEqual(attempt["stopInitiator"], "lead")
@@ -242,8 +247,7 @@ class LeadOwnedTests(WorkflowTestCase):
         self.continue_run(board, current)
         replacement = self.claim(board, claim_request_id="lead-next", run_id=lead["runId"])["claim"]
         self.assertNotEqual(replacement["turn"]["turnId"], original["leadTurnId"])
-        result = board.call("workflow_cancel", {"runId": child["runId"], **child["control"],
-                                               "credential": replacement["agentCredential"]})
+        result = board.call("workflow_cancel", {"runId": child["runId"],                                                "credential": replacement["agentCredential"]})
         self.assertEqual(result["state"], "cancelled")
         self.assertEqual(result["leadOwnership"], original)
 
@@ -282,7 +286,7 @@ class LeadOwnedTests(WorkflowTestCase):
             finished, _ = self.finish_owned(board, helper)
             helpers.append(finished)
         first, second = helpers
-        control = {**owned["control"], "credential": claim["agentCredential"]}
+        control = {"credential": claim["agentCredential"]}
         accepted = board.call("workflow_accept", {"runId": owned["runId"], "targetRunId": first["runId"],
                                                   "artifactId": first["finalArtifactId"], "note": "Reviewed helper output",
                                                   "notRequired": "No separate integration target", **control})
@@ -311,7 +315,7 @@ class LeadOwnedTests(WorkflowTestCase):
                 "executionWorkspace": {"kind": "existing", "access": "write"},
             }], autoContinue=False)
             target = created["children"][0]["taskId"]
-            control = {"runId": owned["runId"], "targetRunId": target, **owned["control"], "credential": claim["agentCredential"]}
+            control = {"runId": owned["runId"], "targetRunId": target, "credential": claim["agentCredential"]}
             for operation, params in (("workflow_conclude", {"note": "Cannot conclude foreign help"}),
                                       ("workflow_accept", {"artifactId": "foreign-artifact", "note": "Cannot accept foreign help",
                                                            "notRequired": "No separate integration target"})):
@@ -346,3 +350,78 @@ class LeadOwnedTests(WorkflowTestCase):
         with board.store.db.read() as db:
             self.assertIsNone(db.execute("SELECT task_id FROM tasks WHERE request_id='revoked'").fetchone())
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_continuations").fetchone()[0], 0)
+
+    def test_owned_wake_filter_compares_role_and_identity(self):
+        from hey_my_buddy.blackboard.tasks.workflow import OWNED_WAKE_FILTER_SQL
+        board = self.board()
+        lead, claim = self.lead(board)
+        child = self.owned(board, claim)
+        with board.store.db.write() as db:
+            for role, identifier, expected in (("lead", lead["runId"], 0),
+                                                ("host", lead["runId"], 1),
+                                                ("host", "lead:" + lead["runId"], 1),
+                                                ("lead", "another-lead", 1)):
+                board.store._append_event(db, "workflow.cancelled", task_id=child["runId"],
+                                          payload={"actor": {"role": role, "id": identifier}})
+                row = db.execute("SELECT * FROM events ORDER BY seq DESC LIMIT 1").fetchone()
+                self.assertEqual((row["actor_role"], row["actor_id"]), (role, identifier))
+                self.assertNotIn("actor", json.loads(row["payload_json"]))
+                count = db.execute("SELECT COUNT(*) FROM events e JOIN workflow_lead_tasks l"
+                                   " ON l.owned_run_id=e.task_id WHERE e.seq=? AND " + OWNED_WAKE_FILTER_SQL,
+                                   (row["seq"],)).fetchone()[0]
+                self.assertEqual(count, expected)
+
+    def test_without_execution_credential_lead_named_host_is_host(self):
+        board = self.board()
+        lead, claim = self.lead(board)
+        host = self.submit(board, request_id="named-host", host_id="lead:" + lead["runId"],
+                           cwd=str(self.workdir("named-host")))
+        self.assertIsNone(host["leadOwnership"])
+        self.assertEqual(host["hostId"], "lead:" + lead["runId"])
+        stopped = board.call("workflow_cancel", {"runId": host["runId"], **host["control"]})
+        self.assertEqual(stopped["cancellation"]["actor"], {"role": "host", "id": host["hostId"]})
+        child = self.owned(board, claim)
+        stopped = board.call("workflow_cancel", {"runId": child["runId"], "credential": claim["agentCredential"]})
+        self.assertEqual(stopped["cancellation"]["actor"], {"role": "lead", "id": lead["runId"]})
+
+    def test_owned_mutations_never_accept_a_nameless_host_control(self):
+        board = self.board()
+        _lead, claim = self.lead(board)
+        child = self.owned(board, claim)
+        run_id = child["runId"]
+        leaked = {"hostId": None, "ownerGeneration": 1,
+                  "controlToken": board.store.db.control_token(run_id, 1)}
+        operations = (
+            ("workflow_cancel", {"reason": "uncredentialed stop"}),
+            ("workflow_continue", {"commandId": "uncredentialed-continue", "input": "continue", "expectedRevision": child["revision"]}),
+            ("workflow_accept", {"artifactId": "unreviewed-artifact", "note": "uncredentialed accept", "notRequired": "fixture"}),
+            ("workflow_takeover", {"commandId": "uncredentialed-takeover", "newHostId": "forged-host", "expectedOwnerGeneration": 1}),
+        )
+        for operation, params in operations:
+            for authority in ({}, leaked):
+                with self.subTest(operation=operation, authority=bool(authority)), self.assertRaises(BoardError) as caught:
+                    board.call(operation, {"runId": run_id, **params, **authority})
+                self.assertEqual(caught.exception.code, "UNAUTHORIZED")
+        self.assertEqual(board.call("workflow_get", {"runId": run_id})["state"], "executing")
+
+    def test_continuation_uses_current_owner_and_preserves_original_manifest(self):
+        board = self.board()
+        lead, claim = self.lead(board)
+        child = self.owned(board, claim)
+        run_id = child["runId"]
+        with board.store.db.read() as db:
+            original = db.execute("SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (run_id,)).fetchone()[0]
+            artifact = db.execute("SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='input'", (run_id,)).fetchone()[0]
+        self.assertEqual(json.loads(original)["integrator"], {"role": "lead", "id": lead["runId"]})
+        view, _ = self.finish_owned(board, child)
+        taken = board.call("workflow_takeover", {"runId": run_id, "commandId": "console-takeover",
+                                                "newHostId": "lead:ordinary-host", "expectedOwnerGeneration": 1,
+                                                **self.control(child)})
+        self.controls[run_id] = taken["control"]
+        self.continue_run(board, taken)
+        resumed = self.claim(board, "w2", claim_request_id="claim-current-owner", run_id=run_id)["claim"]
+        self.assertEqual(resumed["turn"]["input"]["executionWorkspace"]["integrator"],
+                         {"role": "host", "id": "lead:ordinary-host"})
+        with board.store.db.read() as db:
+            historical = db.execute("SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY created_at LIMIT 1", (run_id,)).fetchone()[0]
+        self.assertEqual(historical, artifact)

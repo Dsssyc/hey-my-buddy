@@ -1,4 +1,4 @@
-import type { Shutdown, Task, TokenUsage } from "./types";
+import type { Actor, Shutdown, Task, TokenUsage } from "./types";
 import type { RoutingMode } from "./types";
 
 export type BuddyIdentity = {
@@ -68,7 +68,7 @@ export type HostConclusion = {
   evidence: string[];
   artifactId: string | null;
   integrationId: string | null;
-  actor: string;
+  actor: Actor;
   createdAt: string;
   ownerGeneration: number;
   runRevision: number;
@@ -129,12 +129,12 @@ export type IntegrationRecord = {
   verification: { verified?: boolean; notRequired?: boolean; reason?: string; summary?: string } & Record<string, unknown>;
   notRequired: boolean;
   reason: string | null;
-  actor: string;
+  actor: Actor;
   createdAt: string;
 };
 export type Workflow = {
   runId: string;
-  hostId: string;
+  hostId: string | null;
   ownerGeneration: number;
   revision: number;
   state: string;

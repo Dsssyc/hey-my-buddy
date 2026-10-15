@@ -154,7 +154,7 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
         concluded = self.owned(board, claim, "concluded")
         self.finish_owned(board, concluded)
         board.call("workflow_conclude", {"runId": concluded["runId"], "note": "Reviewed and closed",
-                                         **concluded["control"]})
+                                         **self.control(concluded)})
         self.finish_turn(board, {"claim": claim})
         result = self.accept_run(board, self.view(board, lead))
         self.assertEqual(result["state"], "accepted")

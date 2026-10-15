@@ -242,10 +242,10 @@ class PrivateStateTestCase(BoardTestCase):
         self._set_private_environment()
 
     def _set_private_environment(self) -> None:
-        names = ("HMB_STATE_DIR", "HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE")
+        names = ("HMB_STATE_DIR", "HMB_AGENT_CREDENTIAL_FILE")
         previous = {name: os.environ.get(name) for name in names}
         os.environ["HMB_STATE_DIR"] = str(self.directory)
-        for name in ("HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE"):
+        for name in ("HMB_AGENT_CREDENTIAL_FILE",):
             os.environ.pop(name, None)
 
         def restore() -> None:
@@ -305,6 +305,37 @@ class ModelBuddiesCliTests(PrivateStateTestCase):
 
 
 class ControlFileTests(PrivateStateTestCase):
+    def test_exec_cli_consumes_transferred_document_without_rereading_source_file(self):
+        import tempfile
+        from hey_my_buddy.install import launcher
+        document = {"token": "scoped-token", "stateDir": str(self.directory)}
+        with tempfile.TemporaryFile(mode="w+b") as transfer:
+            transfer.write(json.dumps(document).encode())
+            transfer.seek(0)
+            descriptor = os.dup(transfer.fileno())
+            with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(self.directory / "absent.json"),
+                                           "HMB_AGENT_CREDENTIAL_FD": str(descriptor)}), \
+                    mock.patch.object(launcher, "read_private", side_effect=AssertionError("source file reread")), \
+                    mock.patch.object(cli, "_call_service", return_value={"ok": True}) as service:
+                code, result = self.run_cli("ping", "{}")
+                self.assertNotIn("HMB_AGENT_CREDENTIAL_FD", os.environ)
+        self.assertEqual(code, 0, result)
+        self.assertEqual(service.call_args.args[1]["credential"], "scoped-token")
+
+    def test_direct_cli_reads_credential_file_once(self):
+        from hey_my_buddy.install import launcher
+        credential_file = self.directory / "direct-credential.json"
+        credential_file.write_text(json.dumps({"token": "scoped-token", "stateDir": str(self.directory)}))
+        credential_file.chmod(0o600)
+        original_read = launcher.read_private
+        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(credential_file)}), \
+                mock.patch.object(launcher, "read_private", wraps=original_read) as read, \
+                mock.patch.object(cli, "_call_service", return_value={"ok": True}) as service:
+            code, result = self.run_cli("ping", "{}")
+        self.assertEqual(code, 0, result)
+        read.assert_called_once_with(credential_file)
+        self.assertEqual(service.call_args.args[1]["credential"], "scoped-token")
+
     def test_saved_control_is_private_and_generation_scoped(self):
         triple = {"hostId": "host-1", "ownerGeneration": 2, "controlToken": "token-2"}
         path = cli._save_control("run-1", triple, state_dir=self.directory)
@@ -365,15 +396,33 @@ class ControlFileTests(PrivateStateTestCase):
 
     def test_agent_credential_passes_explicit_control_file_for_service_authorization(self):
         path = cli._save_control("run-1", {"hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"}, state_dir=self.directory)
-        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": "scoped-token"}):
+        credential_file = self.directory / "control-credential.json"
+        credential_file.write_text(json.dumps({"token": "scoped-token", "stateDir": str(self.directory)}))
+        credential_file.chmod(0o600)
+        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(credential_file)}):
             self.assertEqual(cli._apply_control({"runId": "run-1", "controlFile": path}, "decide"),
                              {"runId": "run-1", "hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"})
             # A scoped caller may still pass the explicit triple through.
             self.assertEqual(cli._apply_control({"runId": "run-1"}, "get"), {"runId": "run-1"})
-        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": ""}):
+        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": ""}):
             with self.assertRaises(BoardError) as empty:
                 cli._agent_credential()
             self.assertEqual(empty.exception.code, "UNAUTHORIZED")
+
+    def test_control_file_refuses_null_host_id(self):
+        with self.assertRaises(BoardError) as missing:
+            cli._save_control("owned-run", {"hostId": None, "ownerGeneration": 1,
+                                            "controlToken": "lead-control"}, state_dir=self.directory)
+        self.assertEqual(missing.exception.code, "INVALID_ARGUMENT")
+        path = Path(cli._save_control("owned-run", {"hostId": "host-1", "ownerGeneration": 1,
+                                                      "controlToken": "host-control"}, state_dir=self.directory))
+        value = json.loads(path.read_text())
+        value["hostId"] = None
+        path.write_text(json.dumps(value))
+        path.chmod(0o600)
+        with self.assertRaises(BoardError) as invalid:
+            cli._read_control(str(path))
+        self.assertEqual(invalid.exception.code, "INVALID_ARGUMENT")
 
     def test_scrub_and_save_replaces_the_token_with_the_control_file(self):
         result = {
@@ -433,7 +482,7 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
         claim = self.claim(board)
         token = claim["claim"]["agentCredential"]
         credential_file = self.directory / "attempt-credential.json"
-        credential_file.write_text(json.dumps({"token": token}))
+        credential_file.write_text(json.dumps({"token": token, "stateDir": str(self.directory)}))
         credential_file.chmod(0o600)
 
         other_state = self.directory / "other-board"
@@ -463,10 +512,13 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
         self.use_board_transport(board)
         payload = json.loads(self.submit_payload("owned", cwd=str(self.workdir("owned"))))
         payload.pop("hostId")
-        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": credential}):
+        credential_file = self.directory / "lead-credential.json"
+        credential_file.write_text(json.dumps({"token": credential, "stateDir": str(self.directory)}))
+        credential_file.chmod(0o600)
+        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(credential_file)}):
             code, child = self.run_cli("submit", json.dumps({**payload, "output": "full"}))
             self.assertEqual(code, 0, child)
-            self.assertTrue(Path(child["controlFile"]).is_file())
+            self.assertNotIn("controlFile", child)
             self.assertNotIn("controlToken", json.dumps(child))
             self.register(board, "w2")
             child_claim = self.claim(board, "w2", claim_request_id="owned-claim", run_id=child["runId"])
@@ -484,7 +536,7 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
             self.assertTrue(all(params["credential"] == credential for _, params in calls))
             self.assertNotIn("list", [method for method, _ in calls])
             self.assertTrue(set(method for method, _ in calls) & {"wait", "watch"})
-            code, stopped = self.run_cli("cancel", json.dumps({"runId": child["runId"], "controlFile": child["controlFile"], "output": "full"}))
+            code, stopped = self.run_cli("cancel", json.dumps({"runId": child["runId"], "output": "full"}))
             self.assertEqual(code, 0, stopped)
             foreign = self.submit(board, request_id="foreign", cwd=str(self.workdir("foreign")))
             for selector in ({"runId": foreign["runId"]}, {"requestId": "foreign"}):
@@ -584,7 +636,10 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
     def test_invalid_scoped_submission_cannot_admit_work_despite_local_submission_capability(self):
         board = self.board()
         self.use_board_transport(board)
-        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": "not-a-real-credential"}):
+        credential_file = self.directory / "invalid-credential.json"
+        credential_file.write_text(json.dumps({"token": "not-a-real-credential", "stateDir": str(self.directory)}))
+        credential_file.chmod(0o600)
+        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(credential_file)}):
             code, refused = self.run_cli("submit", self.submit_payload("cli-req-4"))
         self.assertEqual(code, 1)
         self.assertEqual(refused["error"]["code"], "UNAUTHORIZED")

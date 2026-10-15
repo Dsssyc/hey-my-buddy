@@ -92,8 +92,11 @@ class SkillInstallTests(unittest.TestCase):
 
     def test_a_worker_credential_cannot_install(self):
         from hey_my_buddy.errors import BoardError
+        credential = self.base / "attempt-credential.json"
+        credential.write_text(json.dumps({"token": "attempt-token", "stateDir": self.environment["HMB_STATE_DIR"]}))
+        credential.chmod(0o600)
         with self.assertRaises(BoardError) as caught:
-            self.install(HMB_AGENT_CREDENTIAL="attempt-token")
+            self.install(HMB_AGENT_CREDENTIAL_FILE=str(credential))
         self.assertEqual(caught.exception.code, "UNAUTHORIZED")
         self.assertFalse(self.agents.exists())
 

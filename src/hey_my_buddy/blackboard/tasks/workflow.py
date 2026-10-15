@@ -134,7 +134,7 @@ OWNED_WAKE_EVENTS = frozenset({
 OWNED_WAKE_FILTER_SQL = (
     "(e.kind!='workflow.boundary_updated' OR json_extract(e.payload_json,'$.state')='awaiting-host')"
     " AND (e.kind NOT IN ('workflow.cancelled','workflow.helper_cancelled','workflow.lead_task_cancelled')"
-    " OR COALESCE(json_extract(e.payload_json,'$.actor'),'') != 'lead:' || l.lead_run_id)"
+    " OR COALESCE(e.actor_role,'') != 'lead' OR COALESCE(e.actor_id,'') != l.lead_run_id)"
 )
 
 #: Request-scoped authority resolved by the service for one operation call.
@@ -498,7 +498,7 @@ class WorkflowCoordinator:
                 runId=run_row["run_id"],
             )
         return {"scopeVersion": row["scope_version"], "writeScope": json.loads(row["write_scope_json"]),
-                "inputManifestSha256": row["manifest_sha256"], "actor": row["actor"], "reason": row["reason"],
+                "inputManifestSha256": row["manifest_sha256"], "actor": {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None, "reason": row["reason"],
                 "recorded": True, "updatedAt": row["created_at"]}
 
     def _open_conflict(self, connection, run_id: str):
@@ -545,7 +545,7 @@ class WorkflowCoordinator:
             "artifactId": row["artifact_id"],
             "outputCommit": row["output_commit"],
             "outputTree": row["output_tree"],
-            "actor": row["actor"],
+            "actor": {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None,
             "reason": row["reason"],
             "delivery": delivery,
             "createdAt": row["created_at"],
@@ -579,7 +579,7 @@ class WorkflowCoordinator:
             "verification": verification,
             "notRequired": row["state"] == "not-required",
             "reason": row["reason"],
-            "actor": row["actor"],
+            "actor": {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None,
             "createdAt": row["created_at"],
         }
 
@@ -858,10 +858,16 @@ class WorkflowCoordinator:
         return "the run is queued for its next turn"
 
     # -- authority -----------------------------------------------------------
-    def _authorize(self, connection, run_row, params: dict, *, console_authority: dict | None, action: str) -> tuple[str, str]:
-        """Validate control and return the actor label with its known origin."""
+    def _authorize(self, connection, run_row, params: dict, *, console_authority: dict | None, action: str) -> tuple[dict, str]:
+        """Resolve execution authority or validate Host control, returning its role and identity."""
         if console_authority is not None:
-            return f"console:{console_authority.get('sessionId', 'session')}", "console"
+            return {"role": "console", "id": console_authority.get("sessionId", "session")}, "console"
+        scope = current_scope()
+        if scope is not None and scope["kind"] == AGENT_KIND:
+            self._active_credential(connection, scope)
+            return {"role": "lead", "id": scope["runId"]}, "lead"
+        if run_row["host_id"] is None:
+            raise BoardError("UNAUTHORIZED", "A Lead-owned micro task requires an active execution credential or authenticated console")
         control = schemas.normalize_control(params)
         if control is None:
             raise BoardError(
@@ -887,11 +893,23 @@ class WorkflowCoordinator:
         expected = self.db.control_token_verifier(control["controlToken"])
         if not hmac.compare_digest(expected, run_row["control_verifier"]):
             raise BoardError("UNAUTHORIZED", "Invalid control capability for this run")
-        scope = current_scope()
-        if scope is not None and scope["kind"] == AGENT_KIND:
-            self._active_credential(connection, scope)
-            return f"lead:{scope['runId']}", "lead"
-        return f"host:{control['hostId']}", "host"
+        return {"role": "host", "id": control["hostId"]}, "host"
+
+    def _owner_actor(self, connection, run_row) -> dict:
+        """Current ownership comes from the controlling run and its Lead relation."""
+        row = connection.execute(
+            "WITH RECURSIVE owners(run_id) AS (SELECT ? UNION ALL "
+            "SELECT c.parent_run_id FROM workflow_children c JOIN owners o ON c.child_task_id=o.run_id) "
+            "SELECT r.host_id,l.lead_run_id FROM owners o JOIN workflow_runs r USING(run_id) "
+            "LEFT JOIN workflow_lead_tasks l ON l.owned_run_id=r.run_id "
+            "WHERE NOT EXISTS (SELECT 1 FROM workflow_children c WHERE c.child_task_id=r.run_id)",
+            (run_row["run_id"],),
+        ).fetchone()
+        if row["host_id"] is not None:
+            return {"role": "host", "id": row["host_id"]}
+        if row["lead_run_id"] is not None:
+            return {"role": "lead", "id": row["lead_run_id"]}
+        raise BoardError("STATE_INTEGRITY", "A micro task has no recorded current owner")
 
     def _expect_revision(self, run_row, expected: int | None) -> None:
         if expected is None:
@@ -1603,7 +1621,7 @@ class WorkflowCoordinator:
                                      payload={"leadRunId": lead["runId"], "leadTurnId": lead["turnId"]})
         if delegationAuthority:
             self.board._append_event(connection, "workflow.delegation_authority_granted", task_id=run_id,
-                                     payload={"actor": f"host:{hostId}", "buddy": buddy})
+                                     payload={"actor": {"role": "host", "id": hostId}, "buddy": buddy})
         if "macroTask" in presentation:
             self.board._append_event(
                 connection, "workflow.macro_task_created", task_id=run_id,
@@ -1622,9 +1640,9 @@ class WorkflowCoordinator:
             # The original authorization is recorded once as scope version 1; every
             # later amendment appends a new version instead of editing this one.
             connection.execute(
-                "INSERT INTO workflow_scope_versions(run_id, scope_version, actor, reason, write_scope_json,"
-                " manifest_sha256, stopped_evidence_json, created_at) VALUES(?,1,?,?,?,?,?,?)",
-                (run_id, f"host:{hostId}", "original submission", canonical_json(list(manifest.get("writeScope") or [])),
+                "INSERT INTO workflow_scope_versions(run_id, scope_version, actor_role, actor_id, reason, write_scope_json,"
+                " manifest_sha256, stopped_evidence_json, created_at) VALUES(?,1,?,?,?,?,?,?,?)",
+                (run_id, "lead" if lead else "host", lead["runId"] if lead else hostId, "original submission", canonical_json(list(manifest.get("writeScope") or [])),
                  manifest.get("manifestSha256"), canonical_json({"kind": "initial"}), now),
             )
             self._reserve(
@@ -1671,8 +1689,7 @@ class WorkflowCoordinator:
             for field in ("hostId", "owner", "macroTask", "macroTaskId", "macroTaskOf"):
                 if field in params:
                     raise BoardError("INVALID_ARGUMENT", f"A Lead submission derives {field} from its execution credential", field=field)
-            params = {**params, "hostId": f"lead:{lead['runId']}"}
-        normalized = schemas.normalize_workflow_submit(params)
+        normalized = schemas.normalize_workflow_submit(params, lead_run_id=lead["runId"] if lead else None)
         if lead is not None and normalized["delegationAuthority"]:
             raise BoardError("FORBIDDEN", "A Lead cannot grant delegationAuthority to an owned micro task")
         request_id = normalized["requestId"]
@@ -1703,6 +1720,7 @@ class WorkflowCoordinator:
                         requestId=request_id,
                         existingTaskId=existing["task_id"],
                     )
+                self._require_replayable_submission(run_row, request_id)
                 if existing["input_fingerprint"] != fingerprint:
                     raise BoardError(
                         "CONFLICT",
@@ -1733,8 +1751,7 @@ class WorkflowCoordinator:
             try:
                 store_params = {
                     "requestId": request_id,
-                    "owner": normalized["owner"] or f"host:{host_id}",
-                    **{key: spec[key] for key in schemas.SUBMIT_FIELDS | {"harness"} if key in spec},
+                                        **{key: spec[key] for key in schemas.SUBMIT_FIELDS | {"harness"} if key in spec},
                 }
                 task_id = str(uuid.uuid4())
                 try:
@@ -1764,6 +1781,8 @@ class WorkflowCoordinator:
                         with self.db.write() as connection:
                             task = connection.execute("SELECT * FROM tasks WHERE request_id=?", (request_id,)).fetchone()
                             run_row = self._run_optional(connection, task["task_id"]) if task is not None else None
+                            if run_row is not None:
+                                self._require_replayable_submission(run_row, request_id)
                             identical = (
                                 task is not None
                                 and run_row is not None
@@ -1854,6 +1873,16 @@ class WorkflowCoordinator:
             original_error.add_note("Submission cleanup receipt failed: " + str(record_error)[:2000])
         return facts
 
+    @staticmethod
+    def _require_replayable_submission(run_row, request_id: str) -> None:
+        if run_row["request_fingerprint"] is None:
+            raise BoardError(
+                "SUBMISSION_REPLAY_UNAVAILABLE",
+                "This submission predates schema 21 and cannot be replayed; use a new requestId",
+                requestId=request_id,
+                runId=run_row["run_id"],
+            )
+
     def _recovered_control(self, run_row, submission_token: str | None) -> dict | None:
         """Control for an idempotent replay, fenced by the private submission capability.
 
@@ -1862,7 +1891,7 @@ class WorkflowCoordinator:
         """
         import hmac
 
-        if not submission_token or not run_row["submission_verifier"]:
+        if run_row["host_id"] is None or not submission_token or not run_row["submission_verifier"]:
             return None
         if run_row["owner_generation"] != 1:
             return None
@@ -1879,6 +1908,8 @@ class WorkflowCoordinator:
         with self.db.read() as connection:
             run_row = self._run_row(connection, run_id)
             view = self.compact(connection, run_row)
+            if run_row["host_id"] is None:
+                return {**view, "duplicate": False}
             control = {
                 "hostId": run_row["host_id"],
                 "ownerGeneration": run_row["owner_generation"],
@@ -2099,8 +2130,8 @@ class WorkflowCoordinator:
         with self.db.read() as connection:
             owner = self._run_row(connection, run_id)
             self._authorize(connection, owner, params, console_authority=console_authority, action="A Host decision")
-            submitting_host = owner["host_id"]
-        helpers = schemas.normalize_helpers(params, host_id=submitting_host)
+            integrator = self._owner_actor(connection, owner)
+        helpers = schemas.normalize_helpers(params, integrator=integrator)
         request_key = {
             "runId": run_id,
             "requestId": request_id,
@@ -2186,7 +2217,7 @@ class WorkflowCoordinator:
                     )
                 elif decision == "approve":
                     children = self._create_helpers(connection, run_row, task, request_row, prepared, command_id, now,
-                                                    source_host_id=run_row["host_id"])
+                                                    source_host_id=run_row["host_id"], actor=actor)
                     connection.execute(
                         "UPDATE workflow_requests SET state='approved', decision_json=?, decision_command_id=?,"
                         " decided_at=?, updated_at=? WHERE request_id=?",
@@ -2501,7 +2532,7 @@ class WorkflowCoordinator:
 
     def _resolve_helper_attention(
         self, connection, parent_run, request_row, prepared: list[dict], *,
-        decision: str, reason: str, actor: str, command_id: str, now: str,
+        decision: str, reason: str, actor: dict, command_id: str, now: str,
     ) -> None:
         """Answer one exact proxy chain and resume its requesting leaf only."""
         chain = self._attention_chain(connection, parent_run, request_row)
@@ -2529,7 +2560,7 @@ class WorkflowCoordinator:
              input_text, len(input_text.encode()), reason or None, now),
         )
         extra = self._create_helpers(connection, child_run, child_task, source_request, prepared, command_id, now,
-                                     source_host_id=parent_run["host_id"]) if decision == "approve" and prepared else []
+                                     source_host_id=parent_run["host_id"], actor=actor) if decision == "approve" and prepared else []
         pending = self._open_boundary(connection, child_run)
         if extra or pending is not None or self._unfinished_helpers(connection, child_task_id):
             self._sync_boundary(connection, child_task_id, now, default_state="waiting-helpers")
@@ -2555,7 +2586,7 @@ class WorkflowCoordinator:
 
     def _create_helpers(
         self, connection, run_row, parent_task, request_row, prepared: list[dict], command_id: str, now: str,
-        *, source_host_id: str,
+        *, source_host_id: str | None, actor: dict,
     ) -> list[dict]:
         task_spec = json.loads(parent_task["spec_json"])
         children: list[dict] = []
@@ -2586,6 +2617,7 @@ class WorkflowCoordinator:
                 manifest=manifest,
                 now=now,
                 source_host_id=source_host_id,
+                actor=actor,
             )
             self._reserve(
                 connection,
@@ -2647,7 +2679,7 @@ class WorkflowCoordinator:
         return children
 
     def _admit_helper_task(
-        self, connection, *, helper_task_id, item, parent_task, task_spec, run_row, manifest, now, source_host_id
+        self, connection, *, helper_task_id, item, parent_task, task_spec, run_row, manifest, now, source_host_id, actor
     ) -> None:
         spec = item["spec"]
         fingerprint = schemas.spec_fingerprint(spec)
@@ -2671,7 +2703,7 @@ class WorkflowCoordinator:
             (
                 helper_task_id,
                 request_id,
-                f"helper:{run_row['run_id']}",
+                None,
                 canonical_json(spec),
                 canonical_json(spec),
                 fingerprint,
@@ -2714,9 +2746,9 @@ class WorkflowCoordinator:
         # with its admission so no creation path can exist without a real scope row.
         connection.execute("UPDATE workflow_runs SET macro_task_id=? WHERE run_id=?", (run_row["macro_task_id"], helper_task_id))
         connection.execute(
-            "INSERT INTO workflow_scope_versions(run_id, scope_version, actor, reason, write_scope_json,"
-            " manifest_sha256, stopped_evidence_json, created_at) VALUES(?,1,?,?,?,?,?,?)",
-            (helper_task_id, f"host:{run_row['host_id']}", "helper admission",
+            "INSERT INTO workflow_scope_versions(run_id, scope_version, actor_role, actor_id, reason, write_scope_json,"
+            " manifest_sha256, stopped_evidence_json, created_at) VALUES(?,1,?,?,?,?,?,?,?)",
+            (helper_task_id, actor["role"], actor["id"], "helper admission",
              canonical_json(list(manifest.get("writeScope") or [])), manifest.get("manifestSha256"),
              canonical_json({"kind": "helper", "parentRunId": run_row["run_id"]}), now),
         )
@@ -3125,7 +3157,7 @@ class WorkflowCoordinator:
         run_row,
         *,
         reason: str,
-        actor: str,
+        actor: dict,
         now: str,
         continuation_id: str | None = None,
     ) -> None:
@@ -3321,6 +3353,8 @@ class WorkflowCoordinator:
             raise BoardError("STALE_GENERATION", "The current Host no longer matches this takeover receipt")
         if console_authority is not None:
             return
+        if run_row["host_id"] is None:
+            raise BoardError("UNAUTHORIZED", "A Lead-owned micro task has no Host control capability")
         control = schemas.normalize_control(params)
         if control is None or control["ownerGeneration"] != expected_generation:
             raise BoardError(
@@ -3406,7 +3440,7 @@ class WorkflowCoordinator:
                     continue
                 task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (root["run_id"],)).fetchone()
                 results.append(self._cancel_in_transaction(
-                    connection, root, task, reason, f"console:{console_authority['sessionId']}", "console", now,
+                    connection, root, task, reason, {"role": "console", "id": console_authority["sessionId"]}, "console", now,
                 ))
             response = {"macroTaskId": identifier, "runIds": [r["runId"] for r in results],
                         "acceptedRunIds": accepted, "concludedRunIds": concluded, "results": results, "duplicate": False}
@@ -3460,7 +3494,7 @@ class WorkflowCoordinator:
                 if run_row["state"] in ("accepted", "concluded"):
                     raise BoardError("CONFLICT", "Closed Micro task still owns active work during service stop", runId=root_id)
                 task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (root_id,)).fetchone()
-                self._cancel_in_transaction(connection, run_row, task, reason, "service-stop", "service", now)
+                self._cancel_in_transaction(connection, run_row, task, reason, {"role": "service", "id": "stop"}, "service", now)
                 cancelled_roots.add(root_id)
             head = self.board._head_of(connection)
             counts = {"queued": 0, "active": 0}
@@ -3471,7 +3505,7 @@ class WorkflowCoordinator:
             self.board._notify(head)
         return counts, set(candidates)
 
-    def _cancel_in_transaction(self, connection, run_row, task, reason: str, actor: str, initiator: str, now: str) -> dict:
+    def _cancel_in_transaction(self, connection, run_row, task, reason: str, actor: dict, initiator: str, now: str) -> dict:
         run_id = run_row["run_id"]
         # Fence the root before descendants settle: a transferred checkout must
         # not be handed back to a micro task cancelled in this transaction.
@@ -3498,7 +3532,7 @@ class WorkflowCoordinator:
         }
 
     def _cancel_children(self, connection, run_id: str, reason: str, now: str, *,
-                         actor: str | None = None, initiator: str = "unknown", include_lead: bool = False) -> list[str]:
+                         actor: dict | None = None, initiator: str = "unknown", include_lead: bool = False) -> list[str]:
         """Fence the whole owned graph, including work behind settled helpers."""
         cancelled: list[str] = []
         rows = self._owned_children(connection, run_id, include_lead=include_lead)
@@ -3560,7 +3594,7 @@ class WorkflowCoordinator:
             raise BoardError("CONFLICT", "Model selection is still pending; wait or cancel its owning Micro task before continuing")
 
     def _cancel_routes(self, connection, run_id: str, reason: str, now: str, *,
-                       actor: str | None = None, initiator: str = "unknown") -> bool:
+                       actor: dict | None = None, initiator: str = "unknown") -> bool:
         fenced = False
         for link in connection.execute("SELECT * FROM workflow_routes WHERE run_id=?", (run_id,)).fetchall():
             decision = self.board.decisions._row(connection, link["decision_id"])
@@ -3655,7 +3689,7 @@ class WorkflowCoordinator:
             )
 
     def _cancel_owned_run(self, connection, task, now: str, *, explicit: bool = False,
-                          actor: str | None = None, initiator: str = "unknown") -> bool:
+                          actor: dict | None = None, initiator: str = "unknown") -> bool:
         run_id = task["task_id"]
         run_row = self._run_row(connection, run_id)
         cancel_micro_task = explicit or run_row["state"] not in ("delivered", "accepted", "concluded", "failed")
@@ -4022,7 +4056,7 @@ class WorkflowCoordinator:
         verification["summary"] = ""
         return verification
 
-    def _accept_record(self, connection, *, owner_run_id: str, run_row, task, actor: str, now: str,
+    def _accept_record(self, connection, *, owner_run_id: str, run_row, task, actor: dict, now: str,
                        artifact_id: str, note: str, command_id: str, request_key: dict,
                        verification: dict, not_required: str | None):
         """Record one acceptance, its integration binding and the events, in one transaction."""
@@ -4199,7 +4233,7 @@ class WorkflowCoordinator:
                 "INSERT INTO workflow_integrations(integration_id, run_id, artifact_id, attempt_id, state, strategy,"
                 " binding_sha256, target_kind, target_path, target_ref, target_repository_id, target_checkout_id,"
                 " source_commit, source_tree, before_commit, after_commit, before_tree, after_tree, verification_json,"
-                " reason, command_id, actor, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " reason, command_id, actor_role, actor_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     integration_id, run_id, artifact_id, artifact["attempt_id"],
                     "not-required" if not_required is not None else "verified",
@@ -4214,7 +4248,7 @@ class WorkflowCoordinator:
                     None if not_required is not None else verification.get("afterCommit"),
                     None if not_required is not None else verification.get("beforeTree"),
                     None if not_required is not None else verification.get("afterTree"),
-                    canonical_json(verification), not_required or "", command_id, actor, now,
+                    canonical_json(verification), not_required or "", command_id, actor["role"], actor["id"], now,
                 ),
             )
             self.board._append_event(
@@ -4561,7 +4595,7 @@ class WorkflowCoordinator:
         allowed = self._board_adopted_paths(run_row["run_id"], manifest)
         return manifest, allowed, task["selected_attempt_id"]
 
-    def _conclude_record(self, connection, *, run_row, task, actor: str, now: str, note: str,
+    def _conclude_record(self, connection, *, run_row, task, actor: dict, now: str, note: str,
                          command_id: str, request_key: dict, sealed_record: dict | None) -> dict:
         """Insert the conclusion row, the Host partial artifact and the events atomically."""
         run_id = run_row["run_id"]
@@ -4581,11 +4615,11 @@ class WorkflowCoordinator:
         identifier = "conclusion-" + str(uuid.uuid4())
         connection.execute(
             "INSERT INTO workflow_host_conclusions(conclusion_id,run_id,attempt_id,run_revision,owner_generation,"
-            "execution_status,note,evidence_json,artifact_id,integration_id,actor,command_id,created_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "execution_status,note,evidence_json,artifact_id,integration_id,actor_role,actor_id,command_id,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (identifier, run_id, attempt_id, run_row["revision"] + 1, run_row["owner_generation"], run_row["state"],
              note, canonical_json({"references": []}),
-             partial_artifact_id, None, actor, command_id, now),
+             partial_artifact_id, None, actor["role"], actor["id"], command_id, now),
         )
         if sealed_record is not None:
             self.board._append_event(
@@ -4676,7 +4710,7 @@ class WorkflowCoordinator:
                 return {"removed": False, "reasons": ["workspace-not-prepared"]}
             revision = self._run_row(connection, owner_run_id)["revision"]
         command = f"reclaim-{purpose}-" + uuid.uuid4().hex
-        control_triple = {key: control[key] for key in schemas.CONTROL_FIELDS if control.get(key) is not None}
+        control_triple = {key: control[key] for key in schemas.CONTROL_FIELDS if key in control}
         params = {"runId": owner_run_id, "targetRunId": run_id, "expectedRevision": revision,
                   "commandId": command, **control_triple}
         try:
@@ -4840,9 +4874,9 @@ class WorkflowCoordinator:
             scope = self._current_scope(connection, run_row)
             version = scope["scopeVersion"] + 1
             connection.execute(
-                "INSERT INTO workflow_scope_versions(run_id, scope_version, command_id, actor, reason, write_scope_json,"
-                " manifest_sha256, stopped_evidence_json, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (run_id, version, command_id, actor, reason, canonical_json(write_scope),
+                "INSERT INTO workflow_scope_versions(run_id, scope_version, command_id, actor_role, actor_id, reason, write_scope_json,"
+                " manifest_sha256, stopped_evidence_json, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (run_id, version, command_id, actor["role"], actor["id"], reason, canonical_json(write_scope),
                  scope["inputManifestSha256"], canonical_json(evidence), now),
             )
             self.board._append_event(
@@ -5124,11 +5158,11 @@ class WorkflowCoordinator:
                             "deliveredAt": now}
             connection.execute(
                 "UPDATE workflow_workspace_conflicts SET state=?, action=?, resolved_paths_json=?,"
-                " conflicting_paths_json=?, artifact_id=?, output_commit=?, output_tree=?, actor=?, reason=?,"
+                " conflicting_paths_json=?, artifact_id=?, output_commit=?, output_tree=?, actor_role=?, actor_id=?, reason=?,"
                 " command_id=?, delivery_json=?, updated_at=? WHERE conflict_id=? AND state='open'",
                 (result["state"], action, canonical_json(result["resolvedPaths"]),
                  canonical_json(result["remainingPaths"]), artifact_id, (record or {}).get("commit"),
-                 (record or {}).get("tree"), actor, reason, command_id,
+                 (record or {}).get("tree"), actor["role"], actor["id"], reason, command_id,
                  canonical_json(delivery) if delivery is not None else None, now, conflict_id),
             )
             closed_requests = []
@@ -5477,12 +5511,12 @@ class WorkflowCoordinator:
                         "targetRunId": run_id, "targetRevision": run_row["revision"]}
             connection.execute(
                 "INSERT INTO workspace_cleanup_plans(plan_id, run_id, workspace_id, checkout_id, repository_id, path,"
-                " kind, state, evidence_json, retention_json, reasons_json, command_id, actor, revision, created_at,"
-                " expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+                " kind, state, evidence_json, retention_json, reasons_json, command_id, actor_role, actor_id, revision, created_at,"
+                " expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
                 (plan_id, run_id, workspace["workspaceId"], workspace["checkoutId"], workspace["repositoryId"],
                  workspace["path"], workspace["kind"],
                  "blocked" if reasons else "planned", canonical_json(evidence), canonical_json(retention),
-                 canonical_json(reasons), command_id, actor, now, expires_at),
+                 canonical_json(reasons), command_id, actor["role"], actor["id"], now, expires_at),
             )
             self.board._append_event(
                 connection,
@@ -6376,7 +6410,7 @@ class WorkflowCoordinator:
             **({"accessReason": choice["accessReason"]} if choice["access"] == "full" else {}),
             "base": {"kind": "working-tree", **({"ref": sealed["commit"]} if sealed.get("commit") else {})},
             "includeUntracked": included,
-            "integrator": manifest.get("integrator") or "host",
+            "integrator": self._owner_actor(connection, run_row),
             "writeScope": scope["writeScope"] or manifest.get("writeScope") or ["."],
         }
 
@@ -6633,7 +6667,7 @@ class WorkflowCoordinator:
         )
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (lead["run_id"],)).fetchone()
         try:
-            self._requeue(connection, task, lead, reason="owned micro task needs its Lead", actor="workflow:auto",
+            self._requeue(connection, task, lead, reason="owned micro task needs its Lead", actor={"role": "workflow", "id": "auto"},
                           now=now, continuation_id=continuation_id)
         except BoardError as error:
             connection.execute("UPDATE workflow_continuations SET state='recorded' WHERE continuation_id=?",
@@ -6656,7 +6690,6 @@ class WorkflowCoordinator:
         ).fetchone()
 
     def _owned_turn_context(self, connection, run_id: str, previous) -> dict:
-        from ...home import control_file_path
         cursor = self.board._head_of(connection)
         previous_cursor = _turn_input_context(previous["input_json"])["ownedFactsCursor"] if previous else 0
         total = connection.execute("SELECT COUNT(*) FROM workflow_lead_tasks WHERE lead_run_id=?", (run_id,)).fetchone()[0]
@@ -6671,8 +6704,7 @@ class WorkflowCoordinator:
                   "activeRequestId": row["active_request_id"], "turnId": row["current_turn_id"],
                   "attemptId": row["current_attempt_id"] or row["final_attempt_id"],
                   "finalArtifactId": row["final_artifact_id"], "activitySeq": row["activity_seq"],
-                  "changedSincePreviousTurn": row["activity_seq"] > previous_cursor,
-                  "controlFile": str(control_file_path(self.board.directory, row["run_id"], row["owner_generation"]))}
+                  "changedSincePreviousTurn": row["activity_seq"] > previous_cursor}
                  for row in rows]
         return {"ownedMicroTasks": facts, "ownedMicroTaskTotal": total, "ownedFactsCursor": cursor,
                 "ownedMicroTasksTruncated": total - len(facts)}
@@ -7565,7 +7597,7 @@ class WorkflowCoordinator:
                     parent_task,
                     parent,
                     reason="authorized helpers settled",
-                    actor="workflow:auto",
+                    actor={"role": "workflow", "id": "auto"},
                     now=now,
                 )
                 self.board._append_event(

@@ -1,3 +1,4 @@
+import { parseActor } from "./actor";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -151,6 +152,7 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
       outcome.facts = { total: page.total, cursor: page.cursor, changed: page.changed };
     } else if (entry.kind === "macro-task-timeline") {
       const { timeline } = await api.macroTaskTimeline(entry.request?.macroTaskId ?? "", {});
+      for (const event of timeline.events) if (event.actor !== null) expect(parseActor(event.actor)).toEqual(event.actor);
       outcome.facts = {
         macroTaskId: timeline.macroTask.macroTaskId,
         rows: timeline.rows.length,
@@ -163,9 +165,13 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
       const runId = entry.request?.runId ?? "";
       const raw = await api.command<Workflow>("workflow_get", { runId }, "fixture-csrf");
       const workflow = parseWorkflowReply(raw, runId);
+      expect(workflow.hostId === null || typeof workflow.hostId === "string").toBe(true);
+      if (workflow.hostConclusion) expect(parseActor(workflow.hostConclusion.actor)).toEqual(workflow.hostConclusion.actor);
+      for (const record of workflow.integrations) expect(parseActor(record.actor)).toEqual(record.actor);
       const artifact = finalArtifact(workflow);
       outcome.facts = {
         runId: workflow.runId,
+        hostId: workflow.hostId,
         revision: workflow.revision,
         buddyLocked: workflow.buddyLocked ?? null,
         hostConclusion: hostConclusionView(workflow.hostConclusion),

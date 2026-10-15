@@ -79,7 +79,7 @@ function span(spanId: string, runId: string, kind: TimelineSpan["kind"], startAt
 }
 
 function event(seq: number, runId: string, kind: TimelineEvent["kind"], at: string, overrides: Partial<TimelineEvent> = {}): TimelineEvent {
-  return { seq, runId, kind, at, label: "", summary: "", actor: "codex-desktop",
+  return { seq, runId, kind, at, label: "", summary: "", actor: { role: "host", id: "codex-desktop" },
     attemptId: null, requestId: null, artifactId: null, ...overrides };
 }
 

@@ -1,3 +1,7 @@
+export const ACTOR_ROLES = ["host", "lead", "console", "service", "workflow", "bridge"] as const;
+export type ActorRole = (typeof ACTOR_ROLES)[number];
+export type Actor = { role: ActorRole; id: string };
+
 /** The five recorded states of one harness in the console snapshot. */
 export type HarnessStatus = "unknown" | "ready" | "missing" | "login-required" | "unhealthy";
 /** One location discovery tried, and why it was not chosen. */
@@ -196,7 +200,7 @@ export type Task = {
   delegationAuthority?: boolean;
   task: string;
   status: string;
-  owner: string;
+  owner: string | null;
   cwd: string;
   revision: number;
   createdAt: string;
@@ -214,7 +218,7 @@ export type Task = {
   stopInitiator?: "host" | "lead" | "console" | "service" | "unknown" | null;
   graceDeadline?: string | null;
   /** First durable cancellation event for this run, when recorded. */
-  cancellation?: { actor: string | null; reason: string | null } | null;
+  cancellation?: { actor: Actor | null; reason: string | null } | null;
   /** Selected attempt receipt; its `result.terminationReason` is the durable cause. */
   selectedAttempt?: AttemptReceipt | null;
   /** Native usage of the selected execution; null or absent means unknown. */
@@ -222,7 +226,7 @@ export type Task = {
   workflow?: {
     state: string;
     awaitingHost: boolean;
-    hostId: string;
+    hostId: string | null;
     ownerGeneration: number;
     revision: number;
     requestSummary?: string;

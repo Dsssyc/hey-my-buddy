@@ -1495,7 +1495,7 @@ class DecisionCoordinator:
             "task.cancelled",
             task_id=task["task_id"],
             revision=task["revision"] + 1,
-            payload={"reason": reason, "actor": "service", "phase": "queued"},
+            payload={"reason": reason, "actor": {"role": "service", "id": "service"}, "phase": "queued"},
         )
 
     def _adopt_sole_candidate(self, connection: sqlite3.Connection, row: sqlite3.Row, *, candidate: sqlite3.Row, request: dict, now: str) -> None:

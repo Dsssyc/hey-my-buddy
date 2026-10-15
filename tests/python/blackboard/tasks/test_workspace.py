@@ -71,10 +71,35 @@ class WorkspaceTests(unittest.TestCase):
 
     def intent(self, **updates):
         return {"kind": "worktree", "cwd": str(self.repo), "access": "write", "base": {"kind": "working-tree"},
-                "writeScope": ["src"], "integrator": "host", **updates}
+                "writeScope": ["src"], "integrator": {"role": "host", "id": "host-1"}, **updates}
 
     def prepare(self, request="request", **updates):
         return workspace.prepare(self.state, request, self.intent(**updates))
+
+    def test_integrator_is_a_structured_identity_for_new_workspaces(self):
+        for invalid in ("host:host-1", {}, {"role": "host"}, {"role": "worker", "id": "worker-1"},
+                        {"role": "lead", "id": " "}, {"role": "host", "id": "host-1", "extra": True}):
+            with self.subTest(integrator=invalid):
+                self.assert_error("INVALID_WORKSPACE", workspace._intent, self.intent(integrator=invalid))
+        manifest = self.prepare(integrator={"role": "lead", "id": "lead-1"})
+        self.assertEqual(manifest["version"], 2)
+        self.assertEqual(manifest["integrator"], {"role": "lead", "id": "lead-1"})
+        self.assertTrue(workspace.verify(manifest)["unchanged"])
+
+    def test_historical_hashed_manifest_remains_readable(self):
+        manifest = self.prepare()
+        historical = dict(manifest, version=1, integrator="host:host-1")
+        historical["manifestSha256"] = hashlib.sha256(workspace._json({
+            key: value for key, value in historical.items() if key != "manifestSha256"
+        })).hexdigest()
+        workspace._validate_manifest(historical)
+        self.assert_error("WORKSPACE_MANIFEST_CHANGED", workspace._validate_manifest,
+                          dict(historical, integrator="host:someone-else"))
+        invalid_current = dict(historical, version=2)
+        invalid_current["manifestSha256"] = hashlib.sha256(workspace._json({
+            key: value for key, value in invalid_current.items() if key != "manifestSha256"
+        })).hexdigest()
+        self.assert_error("INVALID_WORKSPACE", workspace._validate_manifest, invalid_current)
 
     def test_borrowed_setup_without_a_template_preserves_router_input_capture(self):
         from blackboard.routing.test_router import RouterInputTests

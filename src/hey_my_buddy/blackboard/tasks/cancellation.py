@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import json
-import re
-
-
-_ACTOR = re.compile(r"(?:host:[^\x00-\x1f\x7f]{1,256}|console:[^\x00-\x1f\x7f]{1,128})\Z")
 
 
 def for_run(connection, run_id: str) -> dict | None:
     # A helper cancelled by its owner has its own event. Never borrow a later
     # cancellation from an ancestor or a subsequent explicit cancel command.
     row = connection.execute(
-        "SELECT payload_json FROM events WHERE task_id=?"
+        "SELECT payload_json,actor_role,actor_id FROM events WHERE task_id=?"
         " AND kind IN ('workflow.cancelled','workflow.helper_cancelled')"
         " AND seq > COALESCE((SELECT MAX(seq) FROM events WHERE task_id=?"
         " AND kind IN ('workflow.continued','workflow.helper_resumed','workflow.auto_continued')),0)"
@@ -35,7 +31,5 @@ def for_run(connection, run_id: str) -> dict | None:
         value = value.strip()
         return value[:limit] if value else None
 
-    actor = bounded("actor", 261) if isinstance(payload.get('actor'), str) and len(payload['actor']) <= 261 else None
-    if actor != "service-stop" and (actor is None or _ACTOR.fullmatch(actor) is None):
-        actor = None
+    actor = {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None
     return {"actor": actor, "reason": bounded("reason", 4000)}

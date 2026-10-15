@@ -157,9 +157,12 @@ class BoardStore:
         payload: dict | None = None,
     ) -> int:
         at = self.now()
+        event_payload = dict(payload or {})
+        actor = event_payload.pop("actor", None)
         cursor = connection.execute(
-            "INSERT INTO events(task_id, attempt_id, revision, kind, payload_json, created_at) VALUES(?,?,?,?,?,?)",
-            (task_id, attempt_id, revision, kind, canonical_json(payload or {}), at),
+            "INSERT INTO events(task_id, attempt_id, revision, kind, payload_json, actor_role, actor_id, created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (task_id, attempt_id, revision, kind, canonical_json(event_payload),
+             actor["role"] if actor is not None else None, actor["id"] if actor is not None else None, at),
         )
         from ..tasks.macro_tasks import record_activity
         record_activity(connection, task_id, int(cursor.lastrowid), at)
@@ -246,13 +249,16 @@ class BoardStore:
         return time.monotonic()
 
     def _event_view(self, row: sqlite3.Row) -> dict:
+        payload = json.loads(row["payload_json"])
+        if row["actor_role"] is not None:
+            payload["actor"] = {"role": row["actor_role"], "id": row["actor_id"]}
         return {
             "seq": int(row["seq"]),
             "kind": row["kind"],
             "taskId": row["task_id"],
             "attemptId": row["attempt_id"],
             "revision": row["revision"],
-            "payload": json.loads(row["payload_json"]),
+            "payload": payload,
             "createdAt": row["created_at"],
         }
 
@@ -888,19 +894,21 @@ class BoardStore:
         if micro_task is None and spec["adapter"] in schemas.CODING_HARNESSES:
             raise BoardError("MICRO_TASK_REQUIRED", "Coding work requires submit (workflow_submit) so routing, ownership and turn evidence remain micro-task")
         request_id = schemas.required_string(params, "requestId", max_length=schemas.MAX_REQUEST_ID)
-        owner = schemas.optional_string(params, "owner") or "cli"
+        owner = None if micro_task is not None else schemas.optional_string(params, "owner") or "cli"
         fingerprint = schemas.spec_fingerprint(spec)
         request = {"requestId": request_id, "fingerprint": fingerprint}
 
         with self.db.write() as connection:
+            existing = connection.execute("SELECT * FROM tasks WHERE request_id = ?", (request_id,)).fetchone()
+            run = self.workflow._run_optional(connection, existing["task_id"]) if existing is not None else None
+            if run is not None:
+                self.workflow._require_replayable_submission(run, request_id)
             if command_id:
                 receipt = self._receipt(connection, command_id, "task.submit", request)
                 if receipt is not None:
                     return receipt
-            existing = connection.execute("SELECT * FROM tasks WHERE request_id = ?", (request_id,)).fetchone()
             if existing is not None:
                 if micro_task is not None:
-                    run = self.workflow._run_optional(connection, existing["task_id"])
                     if run is None or run["request_fingerprint"] != micro_task["requestFingerprint"]:
                         raise BoardError("CONFLICT", "requestId already belongs to a different micro-task request")
                 if existing["input_fingerprint"] == fingerprint:
@@ -959,7 +967,10 @@ class BoardStore:
                         "cwd": spec["cwd"],
                         "queueReason": blocker or "awaiting-worker",
                         "inputFingerprint": fingerprint,
-                        **({"microTask": {"sourceHostId": micro_task["hostId"]}} if micro_task is not None else {}),
+                        **({"microTask": {"sourceHostId": micro_task["hostId"]},
+                            "actor": ({"role": "lead", "id": micro_task["lead"]["runId"]}
+                                      if micro_task.get("lead") else {"role": "host", "id": micro_task["hostId"]})}
+                           if micro_task is not None else {}),
                     },
                 )
                 row = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
@@ -1119,7 +1130,7 @@ class BoardStore:
         )
         schemas.reject_untrusted_override(params)
         reason = schemas.optional_string(params, "reason") or "operator request"
-        actor = schemas.optional_string(params, "requestedBy") or "cli"
+        actor = {"role": "host", "id": schemas.optional_string(params, "requestedBy") or "cli"}
         request = {"selector": {k: params[k] for k in ("runId", "taskId", "requestId") if k in params}, "reason": reason}
         with self.db.write() as connection:
             if command_id:
@@ -1320,7 +1331,7 @@ class BoardStore:
         if verdict not in ("accepted", "rejected"):
             raise BoardError("INVALID_ARGUMENT", "verdict must be 'accepted' or 'rejected'")
         evidence = schemas.string_list(params, "evidence", limit=32)
-        actor = schemas.optional_string(params, "acknowledgedBy") or "cli"
+        actor = {"role": "host", "id": schemas.optional_string(params, "acknowledgedBy") or "cli"}
         request = {"selector": {k: params[k] for k in ("runId", "taskId", "requestId") if k in params}, "note": note, "verdict": verdict, "evidence": evidence}
         with self.db.write() as connection:
             if command_id:
@@ -2867,7 +2878,7 @@ class BoardStore:
         answer = params.get("answer")
         if answer is not None and not isinstance(answer, dict):
             raise BoardError("INVALID_ARGUMENT", "answer must be an object or null")
-        actor = schemas.optional_string(params, "actor") or "bridge"
+        actor = {"role": "bridge", "id": schemas.optional_string(params, "actor") or "bridge"}
         reason = params.get("reason")
         if reason is not None and not isinstance(reason, str):
             raise BoardError("INVALID_ARGUMENT", "reason must be a string or null")

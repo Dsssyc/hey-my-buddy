@@ -66,8 +66,13 @@ describe("0.16 Host event sentences and cluster glyphs (P1.7)", () => {
     shutdownConfirmed: true, depth: 0, kind: "micro-task", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
   });
   const event = (kind: string, at = "2026-09-26T05:20:00Z", extra: Partial<TimelineEvent> = {}): TimelineEvent => ({
-    seq: 1, runId: "r1", kind, at, label: "", summary: "", actor: null,
+    seq: 1, runId: "r1", kind, at, label: "", summary: "", actor: kind === "cancel" ? null : { role: "host", id: "host" },
     attemptId: null, requestId: null, artifactId: null, ...extra,
+  });
+
+  it("names the explicit Lead role and preserves a Host's Lead-like attribution", () => {
+    expect(eventSentence(event("accept", undefined, { actor: { role: "lead", id: "lead-run" } }), row("成果"))).toContain("Lead 验收通过");
+    expect(eventSentence(event("accept", undefined, { actor: { role: "host", id: "lead:literal-host" } }), row("成果"))).toContain("Host 验收通过");
   });
 
   it("writes one natural-language sentence per kind with the microTask's short title", () => {

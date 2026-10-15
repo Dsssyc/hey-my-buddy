@@ -147,11 +147,12 @@ describe("Host conclusion of a failed or cancelled micro task (ADR-018 §16)", (
     const view = hostConclusionView({
       conclusionId: "concl-1", attemptId: "att-1", executionStatus: "cancelled",
       note: "已把未完成的改动提取为提交", evidence: ["diff 已保存", "diff 已保存", "检出已保留"],
-      artifactId: "art-partial", integrationId: null, actor: "host-a", createdAt: "2026-09-29T09:00:00.000Z",
+      artifactId: "art-partial", integrationId: null, actor: { role: "host", id: "host-a" }, createdAt: "2026-09-29T09:00:00.000Z",
       ownerGeneration: 2, runRevision: 5,
     })!;
     expect(view.statusLabel).toBe("已取消");
     expect(view.cancelled).toBe(true);
+    expect(view.actor).toBe("Host · host-a");
     expect(view.failed).toBe(false);
     expect(view.note).toBe("已把未完成的改动提取为提交");
     expect(view.evidence).toEqual(["diff 已保存", "检出已保留"]);
@@ -166,7 +167,7 @@ describe("Host conclusion of a failed or cancelled micro task (ADR-018 §16)", (
   it("shows a failed conclusion as failed and keeps unknown fields unknown", () => {
     const view = hostConclusionView({
       conclusionId: "concl-2", attemptId: null, executionStatus: "failed", note: "",
-      evidence: ["额度耗尽"], artifactId: null, integrationId: "int-1", actor: "host-b",
+      evidence: ["额度耗尽"], artifactId: null, integrationId: "int-1", actor: { role: "host", id: "host-b" },
       createdAt: "2026-09-29T09:10:00.000Z", ownerGeneration: 1, runRevision: 3,
     })!;
     expect(view.failed).toBe(true);

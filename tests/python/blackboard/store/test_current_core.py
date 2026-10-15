@@ -22,6 +22,15 @@ from hey_my_buddy.blackboard.store.store import BoardStore
 
 
 class CurrentCoreTests(BoardTestCase):
+    def test_event_actor_roles_are_closed_to_production_roles(self):
+        board = self.board()
+        with board.store.db.write() as connection:
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute("INSERT INTO events(kind,payload_json,actor_role,actor_id,created_at) "
+                                   "VALUES('fixture','{}','worker','one','2026-01-01T00:00:00Z')")
+            connection.execute("INSERT INTO events(kind,payload_json,actor_role,actor_id,created_at) "
+                               "VALUES('fixture','{}','service','service','2026-01-01T00:00:00Z')")
+
     def old_database(self, directory, version, *, has_meta=True):
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / "board.sqlite3"
@@ -35,8 +44,8 @@ class CurrentCoreTests(BoardTestCase):
         return path
 
     def test_fresh_schema_has_only_current_fields_and_survives_reopen(self):
-        self.assertEqual(CONTRACT_VERSION, "0.36.0")
-        self.assertEqual(SCHEMA_VERSION, 20)
+        self.assertEqual(CONTRACT_VERSION, "0.37.0")
+        self.assertEqual(SCHEMA_VERSION, 21)
         board = self.board()
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
@@ -66,6 +75,7 @@ class CurrentCoreTests(BoardTestCase):
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES('schema_version', ?)"),
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES('created_at', ?)"),
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES(?, ?)"),
+            ("blackboard/store/upgrade.py", "UPDATE meta SET value=? WHERE key='schema_version'"),
         ]))
         board = self.board()
         with board.store.db.read() as connection:

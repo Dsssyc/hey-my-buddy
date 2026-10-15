@@ -41,10 +41,10 @@ class PrivateCliTestCase(BoardTestCase):
         self._set_private_environment()
 
     def _set_private_environment(self) -> None:
-        names = ("HMB_STATE_DIR", "HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE")
+        names = ("HMB_STATE_DIR", "HMB_AGENT_CREDENTIAL_FILE")
         previous = {name: os.environ.get(name) for name in names}
         os.environ["HMB_STATE_DIR"] = str(self.directory)
-        for name in ("HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE"):
+        for name in ("HMB_AGENT_CREDENTIAL_FILE",):
             os.environ.pop(name, None)
 
         def restore() -> None:
@@ -168,7 +168,10 @@ class ParameterDocumentTests(PrivateCliTestCase):
         captured: list = []
         self.use_capture_transport(captured)
         payload = {**command_payload("host-cli-4"), "cwd": str(self.workdir())}
-        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": "scoped-token"}):
+        credential_file = self.directory / "agent-credential.json"
+        credential_file.write_text(json.dumps({"token": "scoped-token", "stateDir": str(self.directory)}))
+        credential_file.chmod(0o600)
+        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(credential_file)}):
             code, _, _ = self.run_cli("execution-submit", "--params-file", str(self.write_params(payload)))
             self.assertEqual(code, 0)
             code, _, _ = self.run_cli("execution-submit", json.dumps(payload))

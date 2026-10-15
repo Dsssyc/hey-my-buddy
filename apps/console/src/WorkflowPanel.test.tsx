@@ -17,7 +17,7 @@ function verifiedIntegration(artifactId: string, overrides: Partial<IntegrationR
     sourceCommit: "source-commit", sourceTree: "source-tree",
     beforeCommit: "before-commit", afterCommit: "after-commit", beforeTree: "before-tree", afterTree: "after-tree",
     verification: { verified: true, summary: "目标仓库集成测试通过" },
-    notRequired: false, reason: "", actor: "host", createdAt: "2026-09-25",
+    notRequired: false, reason: "", actor: { role: "host", id: "host" }, createdAt: "2026-09-25",
     ...overrides,
   };
 }
