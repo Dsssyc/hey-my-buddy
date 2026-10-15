@@ -1118,6 +1118,8 @@ class DaemonPoolTests(CapacityTestCase):
             self.assertTrue(busy_surplus, f"a surplus worker must own an attempt: {attempts}")
             self.assertTrue(idle_surplus, f"a surplus worker must be idle: {attempts}")
             self.assertTrue(set(busy_surplus).issubset(health["surplusWorkerIds"]))
+            supervised = {row["workerId"] for row in health["workerSupervisors"]}
+            self.assertTrue({"local", *busy_surplus}.issubset(supervised))
             self.assertEqual(set(busy_surplus), set(retained), health)
             for busy in busy_surplus:
                 self.assertEqual(retained[busy]["attemptId"], attempts[busy])

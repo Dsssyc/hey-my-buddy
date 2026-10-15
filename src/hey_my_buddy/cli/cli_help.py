@@ -84,7 +84,7 @@ SUMMARIES: dict[str, str] = {
     "messages": "List retained messages for one task, or across tasks.",
     "message-get": "Read one inquiry and its recorded answer without resubmitting the question.",
     "message-update": "Record caller-provided delivery or answer evidence for an inquiry.",
-    "workers": "Registered workers with state, adapter and current attempt.",
+    "workers": "Registered worker state and current attempt, plus published supervisor facts for managed workers.",
     "worker-register": "Register or refresh one worker; idempotent by commandId.",
     "worker-claim": "Atomically claim one queued task and return its attempt, lease and capability.",
     "worker-reconcile": "Reattach the legitimate worker after daemon downtime.",

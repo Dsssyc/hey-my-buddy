@@ -70,6 +70,9 @@ class WorkerPoolSizingTests(BoardTestCase):
         smaller = WorkerPool(self.directory, prefix="local", total_limit=1)
         smaller._adopt_manifest()
         self.assertEqual(smaller.managed_ids(), ["local", "local-2"])
+        self.assertNotIn("managedWorkerIds", smaller.report())
+        self.assertEqual(smaller.report()["workerIds"], ["local"])
+        self.assertEqual(smaller.report()["supervisedWorkerIds"], ["local", "local-2"])
 
     def test_a_manifest_with_malformed_entries_drops_them_instead_of_using_them(self):
         path = self.directory / "worker-pool.json"

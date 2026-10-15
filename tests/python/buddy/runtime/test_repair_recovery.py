@@ -542,6 +542,15 @@ class RealDaemonRestart(RecoveryBase):
                 self.assertEqual(result["resultMeta"]["terminationReason"], "interrupted")
                 kind = result["result"]["interruptionEvidence"]["kind"]
                 self.assertEqual(kind, "identity-absent" if kill_child else "worker-stopped")
+                client = BoardClient(self.directory, autostart=False)
+                self.assertTrue(wait_for(lambda: any(
+                    row["workerId"] == f"crash-{suffix}" and row["pid"] == replacement.pid
+                    for row in client.workers()["workers"]), 20))
+                self.assertIsNone(replacement.poll(), "the replacement Worker must still be alive")
+                worker = next(row for row in client.workers()["workers"] if row["workerId"] == f"crash-{suffix}")
+                self.assertEqual(worker["state"], "idle")
+                self.assertIsNone(worker["currentAttemptId"])
+                self.assertEqual(worker["supervisor"]["state"], "running")
         finally:
             if replacement is not None and replacement.poll() is None:
                 replacement.terminate()

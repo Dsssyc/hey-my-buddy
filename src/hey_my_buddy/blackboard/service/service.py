@@ -26,6 +26,7 @@ from ..store.db import SCHEMA_VERSION, utc_now
 from ...errors import BoardError
 from ..evaluation.evaluation import EvaluationStore
 from ..store.store import BoardStore
+from .worker_status import supervisor_status
 
 PROTOCOL_VERSION = 2
 WAIT_CAPACITY_DEFAULT = 32
@@ -331,6 +332,7 @@ class BoardService(_BaseResource):
                 "routingHealth": self.decisions.health_summary(),
                 "backupPreflight": preflight(self.store.directory),
                 "managedWorkerIds": list(pool.get("workerIds") or []),
+                "workerSupervisors": self._worker_supervisors(),
                 "unstartedWorkerIds": list(pool.get("unstartedWorkerIds") or []),
                 "stoppedWorkerIds": list(pool.get("stoppedWorkerIds") or []),
                 "surplusWorkerIds": list(pool.get("surplusWorkerIds") or []),
@@ -931,7 +933,22 @@ class BoardService(_BaseResource):
         return self._guard("worker.release", request_json, self.store.worker_release)
 
     def worker_list(self, request_json: str) -> str:
-        return self._guard("worker.list", request_json, self.store.worker_list)
+        def handler(params: dict) -> dict:
+            result = self.store.worker_list(params)
+            supervisors = self._worker_supervisors()
+            statuses = {row["workerId"]: row["supervisor"] for row in supervisors}
+            for worker in result["workers"]:
+                worker_id = worker["workerId"]
+                worker["supervisor"] = (statuses[worker_id] if worker_id in statuses
+                                        else supervisor_status(self.store.directory, worker_id))
+            return {**result, "workerSupervisors": supervisors}
+
+        return self._guard("worker.list", request_json, handler)
+
+    def _worker_supervisors(self) -> list[dict]:
+        pool = self.control.get("worker_pool") or {}
+        return [{"workerId": worker_id, "supervisor": supervisor_status(self.store.directory, worker_id)}
+                for worker_id in pool.get("supervisedWorkerIds", [])]
 
     # -- messages -----------------------------------------------------------
     def message_post(self, request_json: str) -> str:
