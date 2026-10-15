@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { MacroTaskSummary, MacroTaskTimeline as MacroTaskTimelineData, TimelineEvent, TimelineRow, TimelineSpan } from "./macro-task-types";
 import { createTimelineLayout } from "./macro-task-timeline-layout";
@@ -146,6 +147,7 @@ function InspectorSeparator({ min, max, value, onChange, onReset }: {
  * inspector; Enter, double-click and the explicit 打开 controls open details.
  */
 export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
+  const { t } = useTranslation("shell");
   const { timeline, loading, error, stale, hidden, openedKey, openedRunId, selection, active = true } = props;
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
@@ -912,6 +914,10 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
                 // One line of ~40 characters for a task first-line fallback,
                 // with the 取自任务首行 note instead of the full text (U3).
                 const title = displayTitle(row.titleSource, row.title);
+                const fixedRow = row.fixes ? rowsById.get(row.fixes) : null;
+                const fixedTitle = fixedRow ? displayTitle(fixedRow.titleSource, fixedRow.title).text : row.fixes;
+                const fixesText = fixedTitle ? t("timelineFix.fixes", { title: fixedTitle }) : null;
+                const fixedByText = row.fixedBy?.length ? t("timelineFix.fixedBy", { count: row.fixedBy.length }) : null;
                 const unplaced = (spansByRun.get(row.runId) ?? []).filter(span => {
                   const facts = factsBySpan.get(span.spanId);
                   return !facts || facts.item.atMs === null || facts.endMs === null
@@ -940,7 +946,9 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
                     className={"tl-item tl-label" + (row.kind === "helper" ? " helper" : "") + (runSelected ? " selected-run" : "") + (runOpened ? " opened-run" : "")}
                     style={{ "--depth": row.depth } as CSSProperties}
                     data-key={label.key} data-x={-1} tabIndex={focusKey === label.key ? 0 : -1}
-                    title={titleLineTooltip(title)} aria-label={itemAria(label)}
+                    title={[titleLineTooltip(title), fixesText, fixedByText, fixesText && namer(row.buddy).title].filter(Boolean).join(" · ")}
+                    aria-label={[itemAria(label), fixesText, fixedByText, fixesText && namer(row.buddy).text].filter(Boolean).join(" · ")}
+                    data-fixes={row.fixes} data-fixed-by={row.fixedBy?.join(" ")}
                     onFocus={() => { setFocusKey(label.key); setFocusedKey(label.key); }}
                     onClick={() => props.onSelectRun(row.runId)}
                     onDoubleClick={() => props.onOpenRun(row.runId)}>
@@ -949,9 +957,14 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
                       <span className={"st " + state.glyphClass} aria-hidden="true">{state.glyph}</span>
                       {props.newRunIds.has(row.runId) && <span className="new-mark">新</span>}
                       <span className="lbl-name">{title.text}</span>
+                      {fixedByText && <span className="fix-target-mark" aria-hidden="true" title={fixedByText}><span className="fix-backlink">↩</span>{row.fixedBy!.length}</span>}
                       {runOpened && <span className="opened-mark">详情</span>}
                     </span>
-                    <span className="lbl-sub" title={namer(row.buddy).title}>{state.label} · {row.kind === "helper" ? "协助任务 · " : ""}{namer(row.buddy).text}</span>
+                    <span className="lbl-sub" title={fixesText ? `${fixesText} · ${namer(row.buddy).title}` : namer(row.buddy).title}>
+                      {fixesText
+                        ? <><span className="lbl-state">{state.label}</span><span className="fix-source" title={`${t("timelineFix.target")}: ${fixedTitle}`}><span className="fix-arrow" aria-hidden="true">↪</span><span className="fix-source-text">{fixesText}</span></span></>
+                        : <>{state.label} · {row.kind === "helper" ? "协助任务 · " : ""}{namer(row.buddy).text}</>}
+                    </span>
                     {unplaced > 0 && <span className="trunc-chip" title="片段时间缺失或异常，未定位">⚠ {unplaced} 段时间缺失</span>}
                   </button>
                   <div className="tl-track">

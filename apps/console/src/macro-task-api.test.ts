@@ -114,6 +114,22 @@ describe("work macro task reads", () => {
     }
   });
 
+  it("accepts valid fix links and rejects malformed optional row relations at the response boundary", async () => {
+    const good = macroTaskTimelineFixture();
+    good.rows[0]!.fixedBy = ["r2"];
+    good.rows[1]!.fixes = "r1";
+    const reader = createApi("/private", vi.fn(async () => new Response(JSON.stringify(good))) as typeof fetch);
+    const result = await reader.macroTaskTimeline("macro-1", {});
+    expect(result.timeline.rows[0]).toMatchObject({ fixedBy: ["r2"] });
+    expect(result.timeline.rows[1]).toMatchObject({ fixes: "r1" });
+    for (const relation of [{ fixes: "" }, { fixes: null }, { fixes: 4 },
+      { fixedBy: null }, { fixedBy: [] }, { fixedBy: ["r2", ""] }, { fixedBy: "r2" }]) {
+      const malformed = { ...good, rows: [{ ...good.rows[0], ...relation }, ...good.rows.slice(1)] };
+      const api = createApi("/private", vi.fn(async () => new Response(JSON.stringify(malformed))) as typeof fetch);
+      await expect(api.macroTaskTimeline("macro-1", {})).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    }
+  });
+
   it("surfaces the service error code for a refused read", async () => {
     const api = createApi("/private", vi.fn(async () => new Response(JSON.stringify(
       { ok: false, error: { code: "NOT_FOUND", message: "no such objective" } }), { status: 404 })) as typeof fetch);

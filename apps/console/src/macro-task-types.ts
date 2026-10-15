@@ -68,6 +68,10 @@ export type TimelineRow = {
   /** 0 for a root, +1 per helper level. Rows arrive in tree order. */
   depth: number;
   kind: "micro-task" | "helper";
+  /** The micro task this row repairs; absent when this is not a repair. */
+  fixes?: string;
+  /** Micro tasks that directly repair this row; absent when there are none. */
+  fixedBy?: string[];
   /** Lead owning this row's root tree, including helper descendants. */
   rootLeadRunId: string | null;
   /** Recorded owner of a Lead's own micro task, if any. */

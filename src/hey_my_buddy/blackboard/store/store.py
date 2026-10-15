@@ -990,7 +990,8 @@ class BoardStore:
         schemas.reject_unknown(params, {"runId", "taskId", "requestId"}, "task.get")
         with self.db.read() as connection:
             row = self._task_row(connection, params)
-            return {"task": self._decorate(connection, row)}
+            from ..tasks.fixes import view as fix_view
+            return {"task": {**self._decorate(connection, row), **fix_view(connection, row["task_id"])}}
 
     def task_list(self, params: dict) -> dict:
         """Bounded task history with explicit filters and stable keyset paging.

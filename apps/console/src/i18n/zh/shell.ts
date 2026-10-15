@@ -20,6 +20,11 @@ export default {
     stop: { host: "Host 停止", lead: "Lead 停止", console: "在控制台停止", service: "服务停止", unknown: "停止（发起者未知）" },
   },
   skipToContent: "跳至主要内容",
+  timelineFix: {
+    fixes: "修正 {{title}}",
+    fixedBy: "有 {{count}} 项修正",
+    target: "被修正的微任务",
+  },
   nav: {
     label: "主要导航",
     tasks: "任务",

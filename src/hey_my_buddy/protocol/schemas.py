@@ -98,7 +98,7 @@ TERMINAL_TASK_STATES = frozenset({"completed", "concluded", "failed", "cancelled
 #: every field one explicit helper specification accepts. The nested ``spec``
 #: spelling and ``inheritRoutingPreferences`` are retired duplicate writings
 #: (ADR-021 decisions 5 and 17).
-WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"harness", "hostId", "executionWorkspace", "submissionToken", "title", "macroTask", "macroTaskId", "macroTaskOf", "buddyLocked", "delegationAuthority"}
+WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"harness", "hostId", "executionWorkspace", "submissionToken", "title", "macroTask", "macroTaskId", "macroTaskOf", "buddyLocked", "delegationAuthority", "fixes"}
 WORKFLOW_HELPER_FIELDS = SUBMIT_FIELDS | {"harness", "executionWorkspace", "integrator", "role"}
 #: The retired duplicate and routing spellings ADR-021 decisions 5 and 17 remove;
 #: naming one is an explicit rejection, never a silent ignore.
@@ -464,7 +464,7 @@ def _spec_fields(params: dict) -> dict:
     return spec_params
 
 
-def workflow_request_fingerprint(spec: dict, execution_workspace: dict, host_id: str, *, presentation: dict | None = None, buddy_locked: bool = False, delegation_authority: bool = False) -> str:
+def workflow_request_fingerprint(spec: dict, execution_workspace: dict, host_id: str, *, presentation: dict | None = None, buddy_locked: bool = False, delegation_authority: bool = False, fixes: str | None = None) -> str:
     """The micro-task idempotency identity: micro task, execution workspace and Host.
 
     The task fingerprint stays the ordinary spec fingerprint; this one additionally
@@ -476,6 +476,8 @@ def workflow_request_fingerprint(spec: dict, execution_workspace: dict, host_id:
         request["buddyLocked"] = True
     if delegation_authority:
         request["delegationAuthority"] = True
+    if fixes is not None:
+        request["fixes"] = fixes
     if presentation:
         request["presentation"] = presentation
     return sha256_text("workflow-v1:" + canonical_json(request))
@@ -576,6 +578,7 @@ def normalize_workflow_submit(params: dict, *, lead_run_id: str | None = None) -
         "executionWorkspace": workspace_intent,
         "owner": spec_params.get("owner"),
         "presentation": normalize_presentation(params),
+        "fixes": required_string(params, "fixes", max_length=128, pattern=IDENTIFIER_PATTERN) if "fixes" in params else None,
         "buddyLocked": optional_bool(params, "buddyLocked", False),
         "delegationAuthority": delegation_authority,
     }

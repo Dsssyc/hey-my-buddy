@@ -17,7 +17,7 @@ import re
 import uuid
 from typing import Any
 
-from . import micro_task
+from . import fixes, micro_task
 from ..routing import router
 from ...protocol import schemas
 from ...errors import BoardError
@@ -120,10 +120,13 @@ def pending_root_count(store) -> int:
         return int(connection.execute(PENDING_ROOTS_SQL).fetchone()["pending"])
 
 
-def attach_macro_task(connection, presentation: dict, *, spec: dict, host_id: str, manifest: dict, now: str) -> str | None:
+def attach_macro_task(connection, presentation: dict, *, spec: dict, host_id: str, manifest: dict, now: str,
+                      fixed_run=None) -> str | None:
     """Run within the task's admission transaction; failed admission creates nothing."""
     project_id = manifest.get("repositoryId") or spec["cwd"]
     identifier = presentation.get("macroTaskId")
+    if fixed_run is not None and not any(key in presentation for key in ("macroTask", "macroTaskId", "macroTaskOf")):
+        identifier = fixed_run["macro_task_id"]
     if presentation.get("macroTaskOf") is not None:
         source = connection.execute("SELECT macro_task_id FROM workflow_runs WHERE run_id=?", (presentation["macroTaskOf"],)).fetchone()
         if source is None:
@@ -131,11 +134,14 @@ def attach_macro_task(connection, presentation: dict, *, spec: dict, host_id: st
         if source["macro_task_id"] is None:
             raise BoardError("MACRO_TASK_REQUIRED", "macroTaskOf must name a run belonging to a work macro task")
         identifier = source["macro_task_id"]
+    if fixed_run is not None and ("macroTask" in presentation or identifier != fixed_run["macro_task_id"]):
+        raise BoardError("CONFLICT", "A fix must belong to the fixed micro task's macro task")
     if identifier is not None:
         row = connection.execute("SELECT * FROM macro_tasks WHERE macro_task_id=?", (identifier,)).fetchone()
         if row is None:
             raise BoardError("NOT_FOUND", "Unknown macroTaskId")
-        if row["project_id"] != project_id or row["source_host_id"] != host_id:
+        # A fix has already proved current ownership, including after takeover.
+        if row["project_id"] != project_id or (fixed_run is None and row["source_host_id"] != host_id):
             raise BoardError("CONFLICT", "The macro task belongs to another source project or submitting Host")
         return identifier
     if "macroTask" not in presentation:
@@ -548,6 +554,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
     # task that claims to run without any attempt record is not proven stopped either.
     unproven = row["state"] in ("running", "cancelling", "reconciliation-needed") and attempts == 0
     return {
+        **fixes.view(connection, row["task_id"]),
         "runId": row["task_id"],
         "parentRunId": row["child_parent_run_id"],
         "rootRunId": row["root_run_id"],

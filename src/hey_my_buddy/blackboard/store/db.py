@@ -1048,6 +1048,15 @@ CREATE TABLE IF NOT EXISTS catalog_pending (
     PRIMARY KEY (harness, provider, model)
 );
 """
+FIX_SCHEMA = """
+CREATE TABLE IF NOT EXISTS workflow_fixes (
+    run_id TEXT NOT NULL PRIMARY KEY REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    fixed_run_id TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    created_at TEXT NOT NULL,
+    CHECK (run_id <> fixed_run_id)
+);
+CREATE INDEX IF NOT EXISTS workflow_fixes_target_idx ON workflow_fixes(fixed_run_id, created_at);
+"""
 REMINDER_SCHEMA = """
 CREATE TABLE IF NOT EXISTS reminder_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -1081,7 +1090,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_silence_idx
 """
 SCHEMA = "\n".join((CORE_SCHEMA, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
                     HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA,
-                    CATALOG_PENDING_SCHEMA, REMINDER_SCHEMA))
+                    CATALOG_PENDING_SCHEMA, REMINDER_SCHEMA, FIX_SCHEMA))
 
 
 def utc_now() -> str:
