@@ -4,7 +4,7 @@ How to install, run, recover and retire a hey-my-buddy installation. Command syn
 
 ## Installed state
 
-The recorded daily installation is [0.36.0/contract 0.36.0/schema 20](../acceptance/install-0.36.0.md); the current source is 0.37.0 (contract 0.37.0, schema 21) and is not installed yet; source preparation does not install anything, upgrade the daily board, publish a release or change user settings. The shared skill lives in `~/.agents/skills/hey-my-buddy`, with Claude Code reading the same directory through its link. Runtime, state and backup roots remain owned by `hey_my_buddy.home`.
+The recorded daily installation is [0.37.0/contract 0.37.0/schema 21](../acceptance/install-0.37.0.md), the same version as the current source; source preparation does not install anything, upgrade the daily board, publish a release or change user settings. The shared skill lives in `~/.agents/skills/hey-my-buddy`, with Claude Code reading the same directory through its link. Runtime, state and backup roots remain owned by `hey_my_buddy.home`.
 
 ## Installation
 
@@ -165,7 +165,7 @@ Backup, restore, relocation, storage and cleanup neither traverse links/reparse 
 
 The [installed runtime](../acceptance/install-0.34.1.md) is 0.34.1 with contract 0.34.1 and schema 18. It was installed on 2026-10-13 over an idle 0.34.0 service with one verified backup and no schema change; the schema 17 to 18 upgrade ran with [0.31.0](../acceptance/install-0.31.0.md) on 2026-10-12. The recorded runtime identity and the preserved configuration are installation facts, distinct from source acceptance.
 
-The current source is contract 0.37.0, schema 21 and C-Two 0.7.4; the daily installation is 0.36.0 with schema 20. The upgrade base is 0.36.0 (commit `6b385e53`, schema 20); the source carries one pending upgrade from 20 to 21, which records who acted as a role and an identifier, derives the owner of a Lead's micro tasks from their ownership record, clears the request fingerprints written before it (replaying such a request is refused with `SUBMISSION_REPLAY_UNAVAILABLE`) and drops the schema-19 legacy starts; it accepts no older board. `ping` is the lightweight attachment check; `health` performs explicit current diagnostics. Source changes do not switch an installed client, daemon or worker.
+The current source is contract 0.37.0, schema 21 and C-Two 0.7.4, the same as the daily installation. The upgrade base is 0.36.0 (commit `6b385e53`, schema 20); the source carries one upgrade from 20 to 21, already run on the daily board when 0.37.0 was installed, which records who acted as a role and an identifier, derives the owner of a Lead's micro tasks from their ownership record, clears the request fingerprints written before it (replaying such a request is refused with `SUBMISSION_REPLAY_UNAVAILABLE`) and drops the schema-19 legacy starts; it accepts no older board. `ping` is the lightweight attachment check; `health` performs explicit current diagnostics. Source changes do not switch an installed client, daemon or worker.
 
 hey-my-buddy installs Python dependencies with uv from a frozen lock (PyPI `c-two==0.7.4` and PyYAML; Python `>=3.12,<3.15`). The service and its workers execute from a **content-addressed stable runtime** outside the skill directory, so replacing the skill does not disturb a running service.
 
