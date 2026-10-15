@@ -131,6 +131,10 @@ What a Host buddy does when it hands a micro task to the blackboard for a Worker
 **协助任务 / helper**:
 A micro task explicitly authorized by the Host to help another micro task.
 
+**修正 / fix**:
+A micro task submitted to repair a defect found in another micro task after that one was accepted. It names the micro task it fixes; the fixed micro task stays accepted and counts as a defective delivery.
+_Avoid_: correction (a run's in-turn correction of a model's answer), reopening (acceptance is final)
+
 **执行回合 / turn**:
 One Worker buddy execution ending in a result, assistance request or attention boundary; a Lead's turn may also end waiting on its owned micro tasks.
 
