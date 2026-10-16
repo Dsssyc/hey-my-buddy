@@ -1,12 +1,30 @@
-<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg"><img src="docs/assets/logo-light.svg" alt="hey-my-buddy logo" width="88"></picture></p>
+<p align="right"><a href="README.md">English</a> · <strong>简体中文</strong></p>
 
-# hey-my-buddy
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+  <img alt="hey-my-buddy" src="docs/assets/banner-light.svg" width="100%">
+</picture>
 
-[English](README.md)
+<p align="center"><b>工作委派出去，责任留在自己手里。</b></p>
 
-hey-my-buddy 让 Host buddy（拥有微任务的 agent）把边界明确的工作交给运行在本地编码 harness 中的 Worker buddy，同时保留对微任务的责任。两者都是地位对等的 buddy，只通过共享黑板协作，区别在于角色。Host 可以亲自实现一部分，再把其他部分交给能力、成本或模型更适合的 Worker。目前接入的编码 harness 是 DeepSeek Harness（`dsh`）、ZCode（`zcode`）以及实验性的 Codex App Server（`codex`）；Claude Code harness（`claude`，[参考文档](docs/reference/claude-code.md)）作为 P1 harness 加入，已授权的实机探针验证了原生结果、取消和有界沙箱路径，随后又通过已安装服务完成了单独获准的只读微任务链路验收。
+<p align="center">
+  让你正在用的编码 agent（Host）把边界明确的任务委派给本机的其他编码 agent，并在验收之前核对每一份封存的结果。<br>
+  微任务、决定与结果都记在本地的黑板上，私有的控制台显示谁在做什么。
+</p>
 
-微任务、决定与结果保存在本地 SQLite 黑板中。编码任务有明确的 Git 工作区和固定输入、产物快照；私有 React/Vite 控制台可以查看任务、路由、共享 buddy、用户偏好和模型并发设置。
+<p align="center">
+  <a href="#如何协作">如何协作</a> ·
+  <a href="#安装">安装</a> ·
+  <a href="#控制台路由与模型">控制台</a> ·
+  <a href="#当前状态与限制">当前状态与限制</a> ·
+  <a href="#文档与开发">文档</a>
+</p>
+
+---
+
+Host buddy 拥有微任务并负责验收，Worker buddy 在本地的编码 harness 里执行其中边界明确的部分。两者都是地位对等的 buddy，只通过共享黑板协作，区别在于角色。Host 可以亲自实现一部分，再把其他部分交给能力、成本或模型更适合的 Worker。目前接入的编码 harness 是 DeepSeek Harness（`dsh`）、ZCode（`zcode`）以及实验性的 Codex App Server（`codex`）；Claude Code harness（`claude`，[参考文档](docs/reference/claude-code.md)）作为 P1 harness 加入，已授权的实机探针验证了原生结果、取消和有界沙箱路径，随后又通过已安装服务完成了单独获准的只读微任务链路验收。
+
+编码任务有明确的 Git 工作区和固定输入、产物快照。黑板是本地的 SQLite 数据库，私有的 React/Vite 控制台可以查看任务、路由、共享 buddy、用户偏好和模型并发设置。
 
 ## 如何协作
 

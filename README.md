@@ -1,12 +1,30 @@
-<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg"><img src="docs/assets/logo-light.svg" alt="hey-my-buddy logo" width="88"></picture></p>
+<p align="right"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
 
-# hey-my-buddy
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+  <img alt="hey-my-buddy" src="docs/assets/banner-light.svg" width="100%">
+</picture>
 
-[中文文档](README.zh-CN.md)
+<p align="center"><b>Delegate the work. Keep the responsibility.</b></p>
 
-hey-my-buddy lets a Host buddy, the agent that owns a micro task, delegate bounded work to Worker buddies running in local coding harnesses while keeping responsibility for the micro task. Both are buddies of equal standing that coordinate only through a shared blackboard; they differ in role. A Host can implement one part itself and hand other parts to a Worker whose harness, model or cost fits the work. The supported coding harnesses are DeepSeek Harness (`dsh`), ZCode (`zcode`) and the experimental Codex App Server (`codex`); a Claude Code harness (`claude`, [reference](docs/reference/claude-code.md)) joins them as a P1 harness with verified native outcome, cancellation and bounded sandbox paths, plus a separately approved read-only lifecycle test through the installed service.
+<p align="center">
+  Let the coding agent you work with, the Host, delegate bounded tasks to other coding agents on your machine, and check each sealed result before accepting it.<br>
+  Micro tasks, decisions and results live on a local blackboard; a private console shows who is doing what.
+</p>
 
-Micro tasks, decisions and results live in a local SQLite blackboard. Coding work gets explicit Git workspaces and fixed input/output snapshots; a private React/Vite console shows tasks, routing, shared buddies, preferences, and per-model concurrency.
+<p align="center">
+  <a href="#how-buddies-collaborate">How buddies collaborate</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#console-routing-and-models">Console</a> ·
+  <a href="#current-status-and-limits">Status and limits</a> ·
+  <a href="#documentation-and-development">Docs</a>
+</p>
+
+---
+
+The Host buddy owns a micro task and its acceptance; Worker buddies execute bounded parts of it in local coding harnesses. Both are buddies of equal standing that coordinate only through a shared blackboard; they differ in role. A Host can implement one part itself and hand other parts to a Worker whose harness, model or cost fits the work. The supported coding harnesses are DeepSeek Harness (`dsh`), ZCode (`zcode`) and the experimental Codex App Server (`codex`); a Claude Code harness (`claude`, [reference](docs/reference/claude-code.md)) joins them as a P1 harness with verified native outcome, cancellation and bounded sandbox paths, plus a separately approved read-only lifecycle test through the installed service.
+
+Coding work gets explicit Git workspaces and fixed input/output snapshots. The blackboard is a local SQLite database, and the private React/Vite console shows tasks, routing, shared buddies, preferences and per-model concurrency.
 
 ## How buddies collaborate
 
