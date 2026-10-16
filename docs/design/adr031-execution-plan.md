@@ -45,16 +45,14 @@ M5 之后，Host 跑一次完整检查，在日常看板的私有副本上把 22
 
 ## 进度
 
-- 开工前、M1、M2 与 M4 已验收（2026-10-16），见[验收记录](../acceptance/adr031.md)；M4 与 M3 不碰同一批文件，先做完了。M1 验收时发现的两件（被强行结束的执行记为停止原因；存储清点与运行时保留认执行进程）随 M2 做完；M2 验收时发现的两件（旧 Worker 目录清理失败挡住所有命令；满负载下偶发失败的测试）在 M2 第三回合做完。
+- 开工前、M1、M2、M3 与 M4 已验收（2026-10-16），见[验收记录](../acceptance/adr031.md)；M4 与 M3 不碰同一批文件，先做完了。M1 验收时发现的两件（被强行结束的执行记为停止原因；存储清点与运行时保留认执行进程）随 M2 做完；M2 验收时发现的两件（旧 Worker 目录清理失败挡住所有命令；满负载下偶发失败的测试）在 M2 第三回合做完。
 - 2026-10-16 读完 M2 要动的代码之后改了分步，开发者同意：删掉 Worker 之后，执行上的 Worker 归属、认领请求号、租约列与身份表里的 Worker 身份都没有人能如实填写，留到原来的 M4 再删，M2 就得写占位值，同一列的含义随写入时间而变；CLI 的 Worker 命令与 `health` 里 Worker 池的字段也随 Worker 一起去掉。原 M4 因此并进 M2，后面的编号前移。
 
 ## 后面几步要带上的（M2 验收时发现）
 
-- **服务的问题看不到。** M2 把调度器的错误与旧 Worker 目录清理失败记进 `service_issues`，但没有任何地方读它，`health` 与控制台都看不到，只在事件里留下记录。随 M3 在 `health` 里报出来。
-- **服务的问题有两种事件。** 调度器的错误记为 `service.scheduling_issue`，旧 Worker 目录清理失败记为 `service.issue`，存的是同一张表；只留一种。随上一条做。
-- **`executedBy` 只剩一个值。** `capabilities` 的报告里每个适配器的 `executedBy` 都是 `built-in-worker`，说法也是 Worker 时代的，这个字段已不带信息；`adapter()` 的错误信息同样说 built-in worker。删掉字段，错误信息改说执行进程。
-- **时间线里队列段的结束状态还叫 `claimed`。** 准入已经没有认领，时间线（`blackboard/tasks/macro_tasks.py`）与控制台（`macro-task-display.ts`、`macro-task-timeline-layout.ts` 与夹具）要一起改，`docs/reference/macro-tasks.md` 随之改。牵涉控制台，不放进 M3，M3 之后另起一个小的控制台微任务。
-- **留下的死代码与旧说明。** `protocol/client.py` 的 `new_nonce()` 已没有调用者；`tests/python/buddy/runtime/test_run.py` 的模块说明还说 worker supervisor。
+M2 验收时带给 M3 的几件（服务的问题看不到、两种事件、`executedBy`、`new_nonce()` 与 `test_run.py` 的旧说明）随 M3 做完。还剩一件：
+
+- **时间线里队列段的结束状态还叫 `claimed`。** 准入已经没有认领，时间线（`blackboard/tasks/macro_tasks.py`）与控制台（`macro-task-display.ts`、`macro-task-timeline-layout.ts` 与夹具）要一起改，`docs/reference/macro-tasks.md` 随之改。牵涉控制台，另起一个小的控制台微任务，经路由。
 
 ## 落在这块底座上的待办
 
