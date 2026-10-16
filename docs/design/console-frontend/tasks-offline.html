@@ -1,0 +1,75 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>tasks-offline.html</title>
+<link rel="stylesheet" href="base.css"><style>
+.strip{flex:none;display:flex;align-items:center;gap:10px;padding:0 24px;height:36px;background:var(--fail-wash);border-bottom:1px solid var(--line);font-size:14px;color:var(--ink)}
+.strip .w{color:var(--ink2);font-size:12px}.strip .btn{margin-left:auto;height:28px;padding:0 12px;border:1px solid var(--line2);border-radius:4px;display:inline-flex;align-items:center;background:var(--surface);font-size:12px}
+.clock.off{color:var(--bar-ink2)}
+</style>
+<style>
+.row .t .fx{font-weight:400;color:var(--ink3);margin-left:6px;font-size:12px}
+</style>
+<svg width="0" height="0" style="position:absolute"><defs>
+<symbol id="run" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.5" fill="var(--live)"/></symbol>
+<symbol id="hand" viewBox="0 0 12 12"><path d="M6 .8 11.2 6 6 11.2.8 6Z" fill="var(--hand-mark)"/></symbol>
+<symbol id="ok" viewBox="0 0 12 12"><path d="M2 6.4 4.8 9 10 3.2" fill="none" stroke="var(--past)" stroke-width="1.8"/></symbol>
+<symbol id="bad" viewBox="0 0 12 12"><path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" fill="none" stroke="var(--fail)" stroke-width="1.8"/></symbol>
+<symbol id="wait" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="none" stroke="var(--ink3)" stroke-width="1.5"/></symbol>
+</defs></svg>
+<div class="bar"><div class="brand"><svg width="22" height="22" viewBox="3 3 58 58"><polygon fill="#7CC79F" points="12,13 22,13 22,61 12,54"/><polygon fill="#7CC79F" points="22,32 30,28 30,38 22,42"/><polygon fill="#F1EFE8" points="42,3 52,10 52,51 42,51"/><polygon fill="#F1EFE8" points="34,26 42,22 42,32 34,36"/><polygon fill="#F0997B" points="30,28 34,26 34,36 30,38"/></svg>Hey my buddy</div>
+<div class="tabs"><div class="tab on">任务<span class="cnt num">4</span></div><div class="tab">Buddy</div><div class="tab">设置</div></div><div class="clock mono num">17:31:05</div></div>
+<div class="strip"><svg class="m"><use href="#bad"/></svg><span>连接中断</span><span class="w num">显示的是 17:29 读到的内容</span><span class="btn">重试连接</span></div><div class="body"><div class="list"><div class="lhead"><div class="h">宏任务<span class="fold"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1.5" y="2.5" width="11" height="9" rx="1"/><path d="M5.2 2.5v9"/></svg></span></div><div class="search">搜索标题、项目、Host 或编号</div>
+<div class="seg"><span class="on">全部<b class="num">12</b></span><span>进行中<b class="num">2</b></span><span class="y">等待 Host<b class="num">1</b></span><span class="y">等待验收<b class="num">3</b></span></div></div>
+<div class="grp"><span>hey-my-buddy</span><span class="num">3</span></div>
+<div class="row sel"><svg class="m"><use href="#hand"/></svg><span class="t">控制台前端重建</span><span class="w num">2 分钟前</span><span class="s"><span class="c num"><svg class="m"><use href="#hand"/></svg>3</span><span class="c num"><svg class="m"><use href="#run"/></svg>1</span><span class="c num"><svg class="m"><use href="#ok"/></svg>1</span></span></div>
+<div class="row"><svg class="m"><use href="#run"/></svg><span class="t">C-Two 0.7.4 接入</span><span class="w num">11 分钟前</span><span class="s"><span class="c num"><svg class="m"><use href="#run"/></svg>2</span><span class="c num"><svg class="m"><use href="#ok"/></svg>3</span></span></div>
+<div class="row"><svg class="m"><use href="#ok"/></svg><span class="t">跨边界引用清零</span><span class="w num">昨天</span><span class="s"><span class="c num"><svg class="m"><use href="#ok"/></svg>9</span></span></div>
+<div class="grp"><span>geo-buddy</span><span class="num">2</span></div>
+<div class="row"><svg class="m"><use href="#hand"/></svg><span class="t">栅格重采样方案比较</span><span class="w num">3 小时前</span><span class="s"><span class="c num"><svg class="m"><use href="#hand"/></svg>1</span><span class="c num"><svg class="m"><use href="#ok"/></svg>3</span></span></div>
+<div class="row"><svg class="m"><use href="#bad"/></svg><span class="t">坐标系转换的回归测试</span><span class="w num">10-09</span><span class="s"><span class="c num"><svg class="m"><use href="#bad"/></svg>1</span><span class="c num"><svg class="m"><use href="#ok"/></svg>2</span></span></div>
+</div>
+<div class="main"><div class="mh"><div><h1>控制台前端重建</h1><div class="kv2 num"><span><i>项目</i>hey-my-buddy</span><span><i>Host</i>claude-code</span><span><i>开始</i>14:00</span><span><i>历时</i>3 时 31 分</span></div></div>
+<div class="stats"><div class="st"><i class="num hand">3</i><em><svg class="m"><use href="#hand"/></svg>等待验收</em></div><div class="st"><i class="num live">1</i><em><svg class="m"><use href="#run"/></svg>进行中</em></div><div class="st"><i class="num">1</i><em><svg class="m"><use href="#ok"/></svg>已验收</em></div></div><span class="more">···</span></div>
+<div class="tl"><div class="tlh"><strong>时间轴</strong>
+<span class="lg"><svg width="18" height="10"><rect y="1" width="18" height="8" fill="var(--past-wash)" stroke="var(--line2)"/></svg>执行</span>
+<span class="lg"><svg width="18" height="10"><rect x=".75" y="1.75" width="16.5" height="6.5" fill="var(--hand-wash)" stroke="var(--hand-mark)" stroke-width="1.5"/></svg>静默</span>
+<span class="lg"><svg width="18" height="10"><line y1="5" x2="18" y2="5" stroke="var(--ink3)" stroke-width="1.5"/></svg>等待</span>
+<span class="lg"><svg width="18" height="10"><line y1="5" x2="18" y2="5" stroke="var(--hand-mark)" stroke-width="2" stroke-dasharray="4 3"/></svg>等待 Host</span></div>
+<svg viewBox="0 0 916 366" width="916" height="366">
+<g fill="var(--sunk)"><rect x="354" y="26" width="54" height="324"/><rect x="478" y="26" width="54" height="324"/></g>
+<g stroke="var(--line2)" stroke-dasharray="2 3"><line x1="354" y1="26" x2="354" y2="350"/><line x1="408" y1="26" x2="408" y2="350"/><line x1="478" y1="26" x2="478" y2="350"/><line x1="532" y1="26" x2="532" y2="350"/></g>
+<text class="q" x="214" y="14">14:00</text><text class="q" x="408" y="14">14:45</text><text class="q" x="532" y="14">17:04</text><text class="q" x="910" y="14" text-anchor="end" style="fill:var(--live)">现在 17:31</text>
+<g stroke="var(--line2)"><line x1="214" y1="26" x2="354" y2="26"/><line x1="408" y1="26" x2="478" y2="26"/><line x1="532" y1="26" x2="910" y2="26"/>
+<path d="M214 22v8M284 24v4M408 22v8M443 24v4M532 22v8M602 24v4M672 24v4M742 24v4M812 24v4M882 24v4M376 30l6-8M382 30l6-8M500 30l6-8M506 30l6-8"/></g>
+<g stroke="var(--line)"><line x1="0" y1="40" x2="916" y2="40"/><line x1="0" y1="102" x2="916" y2="102"/><line x1="0" y1="164" x2="916" y2="164"/><line x1="0" y1="226" x2="916" y2="226"/><line x1="0" y1="288" x2="916" y2="288"/><line x1="0" y1="350" x2="916" y2="350"/></g>
+<rect x="0" y="227" width="916" height="61" fill="var(--live-wash)" opacity=".55"/>
+<text class="k" x="0" y="66">打底：样式与组件<tspan class="q" dx="8" style="font-size:12px">↩ 1</tspan></text><text class="q" x="0" y="86">gpt-6.1-sol / high</text>
+<text class="k" x="0" y="128">设置页</text><text class="q" x="0" y="148">claude-sonnet-5-5 / high</text>
+<text class="k" x="0" y="190">Buddy 页：模型分区</text><text class="q" x="0" y="210">deepseek-flash / max</text>
+<text class="k" x="0" y="252">时间轴比例尺</text><text class="q" x="0" y="272">gpt-6.1-sol / high</text>
+<text class="k" x="0" y="314">标签的对比度<tspan dx="8" style="font-size:12px;fill:var(--ink3)">↪ 打底</tspan></text><text class="q" x="0" y="334">glm-5 / high</text>
+<!-- 打底：已验收 -->
+<rect x="214.5" y="60.5" width="55" height="21" fill="var(--past-wash)" stroke="var(--line2)"/><text x="221" y="76" style="fill:var(--ink)">4 分</text>
+<line x1="270" y1="71" x2="588" y2="71" stroke="var(--ink3)" stroke-width="1.5"/><path d="M583 71.5 586 74.5 592 67.5" fill="none" stroke="var(--past)" stroke-width="1.8"/><text x="598" y="76">已验收</text>
+<!-- 设置页：失败一次，等待验收 -->
+<rect x="242" y="122" width="112" height="22" fill="var(--fail)"/><text x="249" y="138" style="fill:var(--surface)">8 分 失败</text>
+<line x1="354" y1="133" x2="408" y2="133" stroke="var(--ink3)" stroke-width="1.5"/>
+<rect x="408.5" y="122.5" width="27" height="21" fill="var(--past-wash)" stroke="var(--line2)"/>
+<line x1="436" y1="133" x2="910" y2="133" stroke="var(--hand-mark)" stroke-width="2" stroke-dasharray="5 4"/><path d="M436 127.5 441.5 133 436 138.5 430.5 133Z" fill="var(--hand-mark)"/><text x="546" y="126" style="fill:var(--hand)">等待验收 2 时 43 分</text>
+<!-- Buddy 页：等待验收 -->
+<rect x="422.5" y="184.5" width="55" height="21" fill="var(--past-wash)" stroke="var(--line2)"/><text x="429" y="200" style="fill:var(--ink)">4 分</text>
+<line x1="478" y1="195" x2="910" y2="195" stroke="var(--hand-mark)" stroke-width="2" stroke-dasharray="5 4"/><path d="M478 189.5 483.5 195 478 200.5 472.5 195Z" fill="var(--hand-mark)"/><text x="546" y="188" style="fill:var(--hand)">等待验收 2 时 41 分</text>
+<!-- 时间轴比例尺：进行中，静默 19 分，超过预期 -->
+<line x1="532" y1="257" x2="560" y2="257" stroke="var(--ink3)" stroke-width="1.5"/><text x="532" y="241">排队 2 分</text>
+<rect x="560" y="246" width="84" height="22" fill="var(--live)"/><text x="567" y="262" style="fill:var(--surface)">进行中 25 分</text>
+<rect x="644.75" y="246.75" width="264.5" height="20.5" fill="var(--hand-wash)" stroke="var(--hand-mark)" stroke-width="1.5"/><text x="654" y="262" style="fill:var(--hand)">可能卡住 · 静默 19 分</text>
+<line x1="840" y1="241" x2="840" y2="273" stroke="var(--hand-mark)" stroke-width="2"/><text x="836" y="283" text-anchor="end">预期 20 分</text>
+<!-- 标签的对比度：修正打底；回合中一次问询；等待验收 -->
+<rect x="686.5" y="308.5" width="97" height="21" fill="var(--past-wash)" stroke="var(--line2)"/><text x="693" y="324" style="fill:var(--ink)">7 分</text>
+<path d="M742 313 747 319 742 325 737 319Z" fill="var(--surface)" stroke="var(--ink2)" stroke-width="1.3"/><text x="742" y="302" text-anchor="middle">问询</text>
+<line x1="784" y1="319" x2="910" y2="319" stroke="var(--hand-mark)" stroke-width="2" stroke-dasharray="5 4"/><path d="M784 313.5 789.5 319 784 324.5 778.5 319Z" fill="var(--hand-mark)"/><text x="796" y="312" style="fill:var(--hand)">等待验收 9 分</text>
+<line x1="910" y1="20" x2="910" y2="350" stroke="var(--live)" stroke-width="1.5"/>
+<text class="q" x="381" y="364" text-anchor="middle">35 分</text><text class="q" x="505" y="364" text-anchor="middle">2 时 14 分</text>
+</svg></div>
+<div class="insp"><div><h2><svg class="m"><use href="#run"/></svg>时间轴比例尺<span class="live" style="font-weight:400;font-size:12px">进行中</span><span class="hand" style="font-weight:400;font-size:12px">可能卡住</span></h2>
+<dl class="kv"><dt>Worker</dt><dd class="mono">codex / openai / gpt-6.1-sol / high</dd><dt>回合</dt><dd class="num">1</dd><dt>历时</dt><dd class="num">25 分<span style="color:var(--ink3)">　预期 20 分</span></dd><dt>最近上报</dt><dd class="num hand">17:12　静默 19 分</dd></dl></div>
+<p class="note"><b>当前</b><br>工具执行中：<span class="mono">npm --prefix apps/console test -- scale</span></p></div>
+</div></div></html>
