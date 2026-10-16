@@ -41,7 +41,7 @@ const ISO_INSTANT = /^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(\.\d{1
  * being guessed into an active tail.
  */
 const OPEN_SPAN_STATES = new Set([
-  "queued", "claimed", "pending", "starting", "executing", "finalizing", "uncertain",
+  "queued", "admitted", "pending", "starting", "executing", "finalizing", "uncertain",
   "running", "active", "open", "in-progress", "in_progress", "paused",
   "waiting", "waiting-host", "waiting_host", "awaiting-host", "awaiting_host",
   "cancelling", "canceling", "reconciliation-needed",

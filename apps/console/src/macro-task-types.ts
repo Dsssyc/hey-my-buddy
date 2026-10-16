@@ -86,7 +86,7 @@ export type TimelineSpan = {
   spanId: string; runId: string; kind: "queue" | "routing" | "execution" | "host";
   startAt: string | null; endAt: string | null;
   /**
-   * queue: queued (open) or claimed; execution/routing: the attempt's execution state
+   * queue: queued (open) or admitted; execution/routing: the attempt's execution state
    * (starting, executing, finalizing, uncertain, finished); host: the request state
    * (open, approved, declined, superseded, cancelled).
    */

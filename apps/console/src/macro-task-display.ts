@@ -29,12 +29,12 @@ export type SectionId = "overview" | "routing" | "assistance" | "artifacts" | "e
 const OPEN_EXECUTION_STATES = new Set(["starting", "executing", "finalizing", "running", "active"]);
 
 export type SpanOutcome =
-  | "open" | "claimed" | "resolved" | "running" | "failed"
+  | "open" | "admitted" | "resolved" | "running" | "failed"
   | "cancelled" | "unknown" | "finished" | "unplaced" | "abstention";
 
 export function spanOutcome(span: TimelineSpan): SpanOutcome {
   const state = typeof span.state === "string" ? span.state.trim().toLowerCase() : "";
-  if (span.kind === "queue") return state === "queued" && span.endAt == null ? "open" : "claimed";
+  if (span.kind === "queue") return state === "queued" && span.endAt == null ? "open" : "admitted";
   if (span.kind === "host") return state === "open" && span.endAt == null ? "open" : "resolved";
   // Unknown shutdown outranks a recorded failure disposition: an unconfirmed
   // stop is never labelled plain failed/cancelled, though the failure text stays.
@@ -51,7 +51,7 @@ export function spanOutcome(span: TimelineSpan): SpanOutcome {
 }
 
 export const OUTCOME_LABEL: Record<SpanOutcome, string> = {
-  open: "仍在等待", claimed: "已认领", resolved: "已决定", running: "执行中",
+  open: "仍在等待", admitted: "已开始", resolved: "已决定", running: "执行中",
   failed: "执行失败", cancelled: "已取消", unknown: "结束未确认", finished: "执行完成",
   unplaced: "时间缺失", abstention: "已放弃选择",
 };
@@ -67,7 +67,7 @@ export function outcomeLabel(span: TimelineSpan, outcome: SpanOutcome): string {
     if (outcome === "failed") return "路由失败";
     if (outcome === "finished") return "已完成";
   }
-  if (span.kind === "queue") return outcome === "open" ? "仍在排队" : "已认领";
+  if (span.kind === "queue") return outcome === "open" ? "仍在排队" : "已开始";
   if (span.kind === "host" && outcome === "resolved") {
     const state = typeof span.state === "string" ? span.state.trim().toLowerCase() : "";
     return HOST_STATE_LABEL[state] || span.state || "已决定";

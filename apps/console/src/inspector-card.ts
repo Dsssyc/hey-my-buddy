@@ -181,7 +181,7 @@ export function buildInspectorCard(
     const fields: CardField[] = [];
     if (span.kind === "queue") {
       fields.push({ label: "类型", value: "排队" }, microTaskField(row), spanTimingValue(span, observedAtMs));
-      fields.push({ label: "结果", value: span.endAt ? "已认领" : "仍在排队" });
+      fields.push({ label: "结果", value: span.endAt ? "已开始" : "仍在排队" });
     } else if (span.kind === "host") {
       fields.push({ label: "类型", value: item.head }, microTaskField(row), spanTimingValue(span, observedAtMs));
       fields.push(span.summary

@@ -469,7 +469,7 @@ def build_runs() -> dict[str, dict]:
             category="ended", buddy=CFG_CODEX, accepted=instant(7, 5), verdict="accepted",
             result=True, result_summary="合成预览：工作目标时间轴夹具的第一轮交付摘要",
             spans=[
-                span("queue:att-a1-1", "queue", instant(6, 0), instant(6, 2), "claimed",
+                span("queue:att-a1-1", "queue", instant(6, 0), instant(6, 2), "admitted",
                      attempt_id="att-a1-1"),
                 span("routing:att-router-a1", "routing", instant(6, 2), instant(6, 5), "finished",
                      attempt_id="att-router-a1", confirmed=True, decision_task="preview-run-a1-router",
@@ -480,7 +480,7 @@ def build_runs() -> dict[str, dict]:
                 span("host:req-a1-1", "host", instant(6, 40), instant(6, 44), "approved",
                      request_id="req-a1-1", request_kind="assistance",
                      summary="需要 Host 批准在隔离工作树外读取合成样例目录"),
-                span("queue:att-a1-2", "queue", instant(6, 45), instant(6, 46), "claimed",
+                span("queue:att-a1-2", "queue", instant(6, 45), instant(6, 46), "admitted",
                      attempt_id="att-a1-2"),
                 span("execution:att-a1-2", "execution", instant(6, 46), instant(7, 0), "finished",
                      attempt_id="att-a1-2", buddy=CFG_CODEX, confirmed=True, generation=2,
@@ -517,13 +517,13 @@ def build_runs() -> dict[str, dict]:
             category="review", buddy=CFG_GLM, result=True,
             result_summary="补充 schema 升级离线副本的验证测试",
             spans=[
-                span("queue:att-h1-1", "queue", instant(6, 20), instant(6, 24), "claimed",
+                span("queue:att-h1-1", "queue", instant(6, 20), instant(6, 24), "admitted",
                      attempt_id="att-h1-1"),
                 span("execution:att-h1-1", "execution", instant(6, 24), instant(6, 36), "finished",
                      attempt_id="att-h1-1", buddy=CFG_GLM, confirmed=True, generation=1,
                      disposition="completed", turn_index=1,
                      error="synthetic preview failure: test command timed out"),
-                span("queue:att-h1-2", "queue", instant(6, 36), instant(6, 38), "claimed",
+                span("queue:att-h1-2", "queue", instant(6, 36), instant(6, 38), "admitted",
                      attempt_id="att-h1-2"),
                 span("execution:att-h1-2", "execution", instant(6, 38), instant(6, 55), "finished",
                      attempt_id="att-h1-2", buddy=CFG_GLM, confirmed=True, generation=2,
@@ -548,7 +548,7 @@ def build_runs() -> dict[str, dict]:
             category="active", buddy=CFG_CLAUDE, result=True, shutdown_confirmed=False,
             result_summary="核对离线副本的跨平台路径边界",
             spans=[
-                span("queue:att-h2-1", "queue", instant(6, 56), instant(6, 57), "claimed",
+                span("queue:att-h2-1", "queue", instant(6, 56), instant(6, 57), "admitted",
                      attempt_id="att-h2-1"),
                 span("execution:att-h2-1", "execution", instant(6, 57), instant(7, 2), "finished",
                      attempt_id="att-h2-1", buddy=CFG_CLAUDE, confirmed=False, uncertain=True,
@@ -566,7 +566,7 @@ def build_runs() -> dict[str, dict]:
             result_summary="核对 Host 等待片段与决定标记的渲染", routing=ROUTING_A2_ABSTENTION,
             active_request=ACTIVE_REQUEST,
             spans=[
-                span("queue:att-a2-1", "queue", instant(8, 30), instant(8, 33), "claimed",
+                span("queue:att-a2-1", "queue", instant(8, 30), instant(8, 33), "admitted",
                      attempt_id="att-a2-1"),
                 span("routing:att-router-a2", "routing", instant(8, 33), instant(8, 36), "finished",
                      attempt_id="att-router-a2", confirmed=True, decision_task="preview-run-a2-router",
@@ -581,7 +581,7 @@ def build_runs() -> dict[str, dict]:
                 span("routing:att-router-a2-abstention", "routing", instant(9, 0), instant(9, 1), "finished",
                      attempt_id="att-router-a2-abstention", confirmed=True, disposition="abstention",
                      decision_task="preview-run-a2-router-abstention", routing_record=ROUTING_A2_ABSTENTION),
-                span("queue:att-a2-2", "queue", instant(9, 1), instant(9, 2), "claimed",
+                span("queue:att-a2-2", "queue", instant(9, 1), instant(9, 2), "admitted",
                      attempt_id="att-a2-2"),
                 span("execution:att-a2-2", "execution", instant(9, 2), instant(9, 20), "finished",
                      attempt_id="att-a2-2", buddy=CFG_CLAUDE, confirmed=True, generation=2,
@@ -609,7 +609,7 @@ def build_runs() -> dict[str, dict]:
             created=instant(9, 35), updated=instant(9, 39), state="executing", status="running",
             category="active", buddy=CFG_CLAUDE, shutdown_confirmed=False, routing=ROUTING_A3,
             spans=[
-                span("queue:att-a3-1", "queue", instant(9, 35), instant(9, 36), "claimed",
+                span("queue:att-a3-1", "queue", instant(9, 35), instant(9, 36), "admitted",
                      attempt_id="att-a3-1"),
                 span("routing:att-router-a3", "routing", instant(9, 36), instant(9, 39), "finished",
                      attempt_id="att-router-a3", confirmed=True, decision_task="preview-run-a3-router",
@@ -630,12 +630,12 @@ def build_runs() -> dict[str, dict]:
             delegation_authority=True,
             result_summary="合成预览：沙箱回归修复完成，等待验收",
             spans=[
-                span("queue:att-b1-1", "queue", instant(3, 0), instant(3, 4), "claimed",
+                span("queue:att-b1-1", "queue", instant(3, 0), instant(3, 4), "admitted",
                      attempt_id="att-b1-1"),
                 span("execution:att-b1-1", "execution", instant(3, 4), instant(3, 30), "finished",
                      attempt_id="att-b1-1", buddy=CFG_GLM, confirmed=True, generation=1,
                      disposition="completed", turn_index=1),
-                span("queue:att-b1-2", "queue", instant(5, 1), instant(5, 2), "claimed",
+                span("queue:att-b1-2", "queue", instant(5, 1), instant(5, 2), "admitted",
                      attempt_id="att-b1-2"),
                 span("execution:att-b1-2", "execution", instant(5, 2), instant(5, 30), "finished",
                      attempt_id="att-b1-2", buddy=CFG_GLM, confirmed=True, generation=2,
@@ -668,7 +668,7 @@ def build_runs() -> dict[str, dict]:
             category="ended", buddy=CFG_GLM, result=True,
             result_summary="整理 macOS 与 Windows 沙箱规则差异清单",
             spans=[
-                span("queue:att-b1h-1", "queue", instant(3, 10), instant(3, 11), "claimed",
+                span("queue:att-b1h-1", "queue", instant(3, 10), instant(3, 11), "admitted",
                      attempt_id="att-b1h-1"),
                 span("execution:att-b1h-1", "execution", instant(3, 11), instant(3, 25), "finished",
                      attempt_id="att-b1h-1", buddy=CFG_GLM, confirmed=True, generation=1,
@@ -702,7 +702,7 @@ def build_runs() -> dict[str, dict]:
             category="ended", buddy=CFG_GLM, result=True,
             result_summary="合成预览：执行器配额耗尽，仅保留封存的部分输出",
             spans=[
-                span("queue:att-b2-1", "queue", instant(6, 5), instant(6, 7), "claimed",
+                span("queue:att-b2-1", "queue", instant(6, 5), instant(6, 7), "admitted",
                      attempt_id="att-b2-1"),
                 span("execution:att-b2-1", "execution", instant(6, 7), instant(6, 26), "finished",
                      attempt_id="att-b2-1", buddy=CFG_GLM, confirmed=True, generation=1,
@@ -734,12 +734,12 @@ def build_runs() -> dict[str, dict]:
             category="active", buddy=CFG_CODEX, delegation_authority=True, result=True, continuation_count=1,
             result_summary="合成预览：已收到范围请求，等待另一条名下微任务执行",
             spans=[
-                span("queue:att-b3-1", "queue", instant(7, 0), instant(7, 5), "claimed",
+                span("queue:att-b3-1", "queue", instant(7, 0), instant(7, 5), "admitted",
                      attempt_id="att-b3-1"),
                 span("execution:att-b3-1", "execution", instant(7, 5), instant(7, 20), "finished",
                      attempt_id="att-b3-1", buddy=CFG_CODEX, confirmed=True, generation=1,
                      disposition="waiting", turn_index=1),
-                span("queue:att-b3-2", "queue", instant(7, 25), instant(7, 30), "claimed",
+                span("queue:att-b3-2", "queue", instant(7, 25), instant(7, 30), "admitted",
                      attempt_id="att-b3-2"),
                 span("execution:att-b3-2", "execution", instant(7, 30), instant(7, 35), "finished",
                      attempt_id="att-b3-2", buddy=CFG_CODEX, confirmed=True, generation=2,
@@ -759,7 +759,7 @@ def build_runs() -> dict[str, dict]:
             category="host", buddy=CFG_GLM, result=True, active_request=LEAD_REQUEST,
             result_summary="合成预览：已交回范围请求，等待 Lead 决定",
             spans=[
-                span("queue:att-b4-1", "queue", instant(7, 10), instant(7, 11), "claimed",
+                span("queue:att-b4-1", "queue", instant(7, 10), instant(7, 11), "admitted",
                      attempt_id="att-b4-1"),
                 span("execution:att-b4-1", "execution", instant(7, 11), instant(7, 25), "finished",
                      attempt_id="att-b4-1", buddy=CFG_GLM, confirmed=True, generation=1,
@@ -785,7 +785,7 @@ def build_runs() -> dict[str, dict]:
             category="ended", buddy=CFG_FLASH, accepted=instant(5, 35), verdict="accepted",
             result=True, result_summary="修复标题回退在 CRLF 输入下的显示",
             spans=[
-                span("queue:att-c1-1", "queue", instant(5, 0), instant(5, 4), "claimed",
+                span("queue:att-c1-1", "queue", instant(5, 0), instant(5, 4), "admitted",
                      attempt_id="att-c1-1"),
                 span("execution:att-c1-1", "execution", instant(5, 4), instant(5, 20), "finished",
                      attempt_id="att-c1-1", buddy=CFG_FLASH, confirmed=True, generation=1,
@@ -806,7 +806,7 @@ def build_runs() -> dict[str, dict]:
             category="review", buddy=CFG_GLM, verdict="rejected", result=True,
             result_summary="合成预览：交付被记录为验收问题。",
             spans=[
-                span("queue:att-c1h-1", "queue", instant(5, 6), instant(5, 8), "claimed",
+                span("queue:att-c1h-1", "queue", instant(5, 6), instant(5, 8), "admitted",
                      attempt_id="att-c1h-1"),
                 span("execution:att-c1h-1", "execution", instant(5, 8), instant(5, 18), "finished",
                      attempt_id="att-c1h-1", buddy=CFG_GLM, confirmed=True, generation=1,
@@ -1953,7 +1953,7 @@ REQUIRED_KEYS = {
 def occupied_intervals(group: str) -> list[tuple[datetime, datetime]]:
     """Fixture occupancy, mirroring the layout's readSpan/marker rules."""
     observed = datetime.fromisoformat(OBSERVED_AT.replace("Z", "+00:00"))
-    open_states = {"queued", "claimed", "pending", "starting", "executing", "finalizing", "uncertain",
+    open_states = {"queued", "admitted", "pending", "starting", "executing", "finalizing", "uncertain",
                    "running", "active", "open", "in-progress", "waiting", "waiting-host", "awaiting-host",
                    "cancelling", "reconciliation-needed"}
     parse = lambda value: datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None

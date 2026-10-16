@@ -204,7 +204,7 @@ describe("U2: unknown-tail text yields to overlapping spans on the same row", ()
     { name: "open Host wait at the recorded end", next: {}, overlaps: true },
     { name: "closed Host wait inside the tail", next: { state: "finished", startAt: at("01:20:00"), endAt: at("01:22:00") }, overlaps: true },
     { name: "later execution", next: { kind: "execution", state: "finished", startAt: at("01:20:00"), endAt: at("01:22:00"), shutdownConfirmed: true }, overlaps: true },
-    { name: "later queue", next: { kind: "queue", state: "claimed", startAt: at("01:20:00"), endAt: at("01:22:00") }, overlaps: true },
+    { name: "later queue", next: { kind: "queue", state: "admitted", startAt: at("01:20:00"), endAt: at("01:22:00") }, overlaps: true },
     { name: "later routing", next: { kind: "routing", state: "finished", startAt: at("01:20:00"), endAt: at("01:22:00") }, overlaps: true },
     { name: "span crossing the recorded end", next: { startAt: at("01:16:00"), endAt: at("01:20:00") }, overlaps: true },
     { name: "one millisecond past the tail start", next: { startAt: at("01:16:00"), endAt: at("01:18:00.001") }, overlaps: true },
