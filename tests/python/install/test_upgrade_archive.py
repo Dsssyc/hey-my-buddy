@@ -9,7 +9,6 @@ from unittest import mock
 from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import backup
-from hey_my_buddy.blackboard.store.upgrade import upgrade_database
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.errors import BoardError
@@ -21,13 +20,7 @@ class SameSchemaCutoverTests(BoardTestCase):
         super().setUp()
         self.state = self.directory / "state"
         load_fixture(self.state)
-        upgrade_database(self.state)
         (self.state / "console-settings.json").write_text('{"theme":"dark"}')
-        legacy = self.state / 'workers' / 'local'
-        legacy.mkdir(parents=True)
-        (legacy / 'startup.json').write_text('{"legacy":true}')
-        (legacy / 'supervisor.lock').write_text('')
-        (self.state / 'worker-pool.json').write_text('{"legacy":true}')
         store = BoardStore(self.state)
         old_backup = Path(backup.create(store)["path"])
         store.db.close()
@@ -36,8 +29,6 @@ class SameSchemaCutoverTests(BoardTestCase):
         self.archive_bytes = {path.relative_to(self.retained_archive): path.read_bytes()
                               for path in self.retained_archive.rglob("*") if path.is_file()}
         self.assertEqual(backup.verify(self.retained_archive)["schema"], SCHEMA_VERSION)
-        self.assertFalse(any('workers/' in path or 'worker-pool.json' in path
-                             for path in backup.verify(self.retained_archive)['files']))
         self.original_board = (self.state / "board.sqlite3").read_bytes()
         self.before = upgrade.idle_snapshot(self.state)
         self.history = {path.relative_to(self.state): path.read_bytes()
@@ -70,7 +61,7 @@ class SameSchemaCutoverTests(BoardTestCase):
                 ("runtime.read_ready", {"return_value": {"sourceCommit": "fixture-commit"}}),
                 ("runtime.materialize", {"return_value": {"runtimeDir": str(target)}}),
                 ("probe", {"return_value": health}),
-                ("detach", {"side_effect": lambda state, _target, **_options: upgrade.retire_workers(state)}),
+                ("detach", {"return_value": None}),
                 ("start", {"side_effect": start}),
                 ("command", {"return_value": {"leaks": []}}),
             ):
@@ -94,8 +85,6 @@ class SameSchemaCutoverTests(BoardTestCase):
         self.assertTrue(result["upgraded"], result)
         self.assertNotIn("archive", result)
         self.assertEqual(backup.verify(Path(result["backup"]["path"]))["schema"], SCHEMA_VERSION)
-        self.assertFalse((self.state / 'workers').exists())
-        self.assertFalse((self.state / 'worker-pool.json').exists())
         self.assert_history_preserved()
 
         second = self.runtime_root / ("c" * 32)
@@ -105,31 +94,11 @@ class SameSchemaCutoverTests(BoardTestCase):
         self.assert_history_preserved()
         self.assertEqual(self.started_runtimes, [first, second])
 
-    def test_retired_worker_cleanup_failure_keeps_the_verified_runtime_available(self):
-        target = self.runtime_root / ('b' * 32)
-        with mock.patch.object(upgrade, 'remove_legacy_worker_state', side_effect=OSError('denied')):
-            result = self.cutover(self.previous, target)
-        self.assertTrue(result['upgraded'], result)
-        self.assertIsNone(result['rollback'])
-        self.assertIn('denied', result['legacyCleanupError'])
-        self.assertFalse((self.state / 'upgrade.json').exists())
-        record = json.loads((self.state / 'upgrade-last.json').read_text())
-        self.assertEqual(record['phase'], 'verified')
-        self.assertTrue(record['legacyWorkerCleanup'])
-        self.assertEqual(self.started_runtimes, [target])
-        self.assert_history_preserved()
-        self.assertIsNone(upgrade.retry_legacy_worker_cleanup(self.state))
-        self.assertFalse((self.state / 'workers').exists())
-        self.assertFalse((self.state / 'worker-pool.json').exists())
-
     def test_failed_new_runtime_returns_to_previous_runtime_with_history(self):
         target = self.runtime_root / ("b" * 32)
         result = self.cutover(self.previous, target, fail_target=True)
         self.assertFalse(result["upgraded"], result)
         self.assertEqual(result["error"]["details"]["reason"]["code"], "INJECTED_START")
         self.assertEqual(result["rollback"]["runtimeContentId"], self.previous.name)
-        self.assertTrue((self.state / 'workers/local/startup.json').exists())
-        self.assertTrue((self.state / 'workers/local/retire.request').exists())
-        self.assertTrue((self.state / 'worker-pool.json').exists())
         self.assertEqual(self.started_runtimes, [target, self.previous])
         self.assert_history_preserved()

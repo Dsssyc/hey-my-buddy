@@ -1,4 +1,4 @@
-"""Portable schema-22 stock from the installed base's real named operations."""
+"""Portable schema-23 stock from the installed base's real named operations."""
 from __future__ import annotations
 
 from contextlib import ExitStack
@@ -13,7 +13,6 @@ from unittest import mock
 
 from blackboard.store.upgrade_fixture import load_fixture, _git, _sha, _json
 from hey_my_buddy.blackboard.store import backup
-from hey_my_buddy.blackboard.store.upgrade import upgrade_database
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
@@ -40,29 +39,6 @@ class UpgradeFixtureTests(unittest.TestCase):
         manifest = json.loads(row['workspace_manifest_json'])
         attempt = connection.execute('SELECT selected_attempt_id FROM tasks WHERE task_id=?', (run_id,)).fetchone()[0]
         return run_id, manifest, attempt
-
-    def assert_projected_delta(self, before, after, path=()):
-        """Every retained JSON difference must be one named service field conversion."""
-        if isinstance(before, dict):
-            self.assertIsInstance(after, dict, path)
-            self.assertFalse(after.keys() - before.keys(), path)
-            self.assertTrue(before.keys() - after.keys() <= {
-                'workerId', 'workerIdentity', 'workerInstance', 'leaseSeconds',
-                'leaseExpiresAt', 'claimRequestId', 'worker'}, path)
-            for key in before.keys() & after.keys():
-                self.assert_projected_delta(before[key], after[key], (*path, key))
-        elif isinstance(before, list):
-            self.assertIsInstance(after, list, path)
-            self.assertEqual(len(after), len(before), path)
-            for index, (old, new) in enumerate(zip(before, after)):
-                self.assert_projected_delta(old, new, (*path, index))
-        elif before != after:
-            self.assertIn((path[-1], before, after), {
-                ('queueReason', 'awaiting-worker', 'awaiting-execution'),
-                ('kind', 'worker-stopped', 'orphan-stopped'),
-                ('evidence', 'worker-stopped', 'orphan-stopped'),
-                ('releaseEvidence', 'spawnIntentWritten=false', 'processCreated=false'),
-            }, path)
 
     def insert_retained_native_selections(self, fixture, connection):
         selected = {}
@@ -107,7 +83,6 @@ class UpgradeFixtureTests(unittest.TestCase):
                                    (raw, hashlib.sha256(raw.encode()).hexdigest(), row['turn_id']))
         self.assertTrue(turns)
         connection.commit()
-        upgrade_database(fixture['state'])
         store = BoardStore(fixture['state'])
         store.initialize()
         self.addCleanup(store.db.close)
@@ -133,12 +108,12 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_public_operation_stock_retains_source_schema_and_history_hashes(self):
         fixture, connection = self.restored()
-        self.assertEqual(fixture['sourceCommit'], 'b9632dd9421b02fab170752175edabf683a8aeb1')
-        self.assertEqual(fixture['sourceVersion'], '0.39.0')
-        self.assertEqual(fixture['schemaVersion'], 22)
+        self.assertEqual(fixture['sourceCommit'], '9baa0524a884fb335f64446a7bad8f27522082b8')
+        self.assertEqual(fixture['sourceVersion'], '0.40.0')
+        self.assertEqual(fixture['schemaVersion'], 23)
         self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
         self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
-        self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '22')
+        self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '23')
         self.assertEqual({row[0] for row in connection.execute('SELECT key FROM meta')},
                          {'schema_version', 'created_at', 'capability_secret'})
         schema = [list(row) for row in connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
@@ -207,9 +182,10 @@ class UpgradeFixtureTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_fixture(first['state'])
 
-    def test_schema_upgrade_preserves_stock_and_matches_fresh_structure(self):
+    def test_contract_cutover_preserves_stock_and_matches_fresh_structure(self):
         fixture, old = self.restored()
         state = fixture['state']
+        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
         before = upgrade.idle_snapshot(state, exact=True)
         expected_settings = router.configuration(old)
         expected_runs = dict(old.execute('SELECT run_id,state FROM workflow_runs'))
@@ -255,8 +231,6 @@ class UpgradeFixtureTests(unittest.TestCase):
         after = upgrade.idle_snapshot(state, event_head=before['eventHead'], exact=True)
         self.assertEqual(after['schema'], SCHEMA_VERSION)
         self.assertEqual(after['eventHead'], before['eventHead'])
-        self.assertNotIn('workers', after['tables'])
-        self.assertEqual(after['tables']['attempts'], before['tables']['attempts'])
         self.assertEqual({relative: (state / relative).read_bytes() for relative in history}, history)
         self.assertEqual(backup.verify(Path(result['backup']['path']))['schema'], fixture['schemaVersion'])
 
@@ -264,90 +238,24 @@ class UpgradeFixtureTests(unittest.TestCase):
         fresh.initialize()
         with sqlite3.connect(state / 'board.sqlite3') as upgraded, fresh.read() as baseline:
             upgraded.row_factory = sqlite3.Row
-            replaced = {'meta', 'tasks', 'attempts', 'attempt_process_identities',
-                        'attempt_interruptions', 'commands', 'events', 'workers'}
-            new_tables = {'attempt_shutdown_evidence', 'execution_issues', 'service_issues'}
+            # The base schema equals the current schema, so a contract cutover
+            # keeps every stored row exactly as the base operations wrote it.
             for table, rows in stock.items():
-                if table in replaced:
-                    continue
                 with self.subTest(retained_table=table):
                     self.assertEqual([dict(item) for item in upgraded.execute(f'SELECT * FROM {table} ORDER BY rowid')], rows)
-            for table in new_tables:
-                with self.subTest(new_table=table):
-                    self.assertEqual(upgraded.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0], 0)
-            self.assertEqual(set(stock) - {'workers'} | new_tables,
+            self.assertEqual(set(stock),
                              {row[0] for row in upgraded.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")})
-            for table, key, changed in (
-                ('tasks', 'task_id', {'queue_reason'}),
-                ('attempts', 'attempt_id', {'result_json', 'result_command_id'}),
-                ('attempt_process_identities', 'attempt_id', set()),
-                ('attempt_interruptions', 'attempt_id', {'evidence_kind'}),
-                ('events', 'seq', {'payload_json'}),
-            ):
-                old_rows = {row[key]: row for row in stock[table]}
-                new_rows = {row[key]: dict(row) for row in upgraded.execute(f'SELECT * FROM {table}')}
-                self.assertEqual(set(new_rows), set(old_rows), table)
-                for identity, original in old_rows.items():
-                    for column in (original.keys() & new_rows[identity].keys()) - changed:
-                        with self.subTest(table=table, row=identity, column=column):
-                            self.assertEqual(new_rows[identity][column], original[column])
-            for original in stock['tasks']:
-                actual = upgraded.execute('SELECT queue_reason FROM tasks WHERE task_id=?',
-                                          (original['task_id'],)).fetchone()[0]
-                expected = ('awaiting-execution' if original['queue_reason'] == 'awaiting-worker'
-                            else original['queue_reason'])
-                self.assertEqual(actual, expected)
-            for original in stock['attempt_interruptions']:
-                actual = upgraded.execute('SELECT evidence_kind FROM attempt_interruptions WHERE attempt_id=?',
-                                          (original['attempt_id'],)).fetchone()[0]
-                expected = ('orphan-stopped' if original['evidence_kind'] == 'worker-stopped'
-                            else original['evidence_kind'])
-                self.assertEqual(actual, expected)
-            old_commands = {row['command_id']: row for row in stock['commands']
-                            if not (row['kind'].startswith('worker.') or row['kind'] == 'harness.prepare')}
-            new_commands = {row['command_id']: dict(row) for row in upgraded.execute('SELECT * FROM commands')}
-            self.assertEqual(set(new_commands), set(old_commands))
-            for identity, original in old_commands.items():
-                for column in original.keys() - {'response_json'}:
-                    self.assertEqual(new_commands[identity][column], original[column])
-                self.assert_projected_delta(json.loads(original['response_json']),
-                                            json.loads(new_commands[identity]['response_json']),
-                                            ('commands', identity))
-            for original in stock['events']:
-                current = upgraded.execute('SELECT payload_json FROM events WHERE seq=?',
-                                           (original['seq'],)).fetchone()[0]
-                self.assert_projected_delta(json.loads(original['payload_json']), json.loads(current),
-                                            ('events', original['seq']))
-            for original in stock['attempts']:
-                current = upgraded.execute('SELECT result_json,result_command_id FROM attempts WHERE attempt_id=?',
-                                           (original['attempt_id'],)).fetchone()
-                if original['result_json'] is not None:
-                    self.assert_projected_delta(json.loads(original['result_json']), json.loads(current[0]),
-                                                ('attempts', original['attempt_id']))
-                if original['result_command_id'] is not None:
-                    retired = next((row for row in stock['commands']
-                                    if row['command_id'] == original['result_command_id']), None)
-                    expected_id = None if retired and (retired['kind'].startswith('worker.')
-                                   or retired['kind'] == 'harness.prepare') else original['result_command_id']
-                    self.assertEqual(current[1], expected_id)
             source_schema = [tuple(row) for row in upgraded.execute(
                 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
             fresh_schema = [tuple(row) for row in baseline.execute(
                 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
             self.assertEqual(source_schema, fresh_schema)
-            self.assertNotIn('attempt_legacy_starts', after['tables'])
             self.assertEqual(upgraded.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
                              str(SCHEMA_VERSION))
             self.assertEqual(dict(upgraded.execute("SELECT key,value FROM meta WHERE key!='schema_version'")),
                              retained_meta)
             self.assertEqual(tuple(upgraded.execute(
                 'SELECT silence_seconds,revision FROM reminder_settings WHERE id=1').fetchone()), (900, 1))
-            self.assertEqual(upgraded.execute('SELECT COUNT(*) FROM attempt_reminders').fetchone()[0], 0)
-            self.assertEqual(upgraded.execute('SELECT COUNT(*) FROM workflow_lead_tasks').fetchone()[0], 0)
-            self.assertEqual(upgraded.execute('SELECT COUNT(*) FROM workflow_fixes').fetchone()[0], 0)
-            fix_columns = {row['name']: row for row in upgraded.execute('PRAGMA table_info(workflow_fixes)')}
-            self.assertEqual(set(fix_columns), {'run_id', 'fixed_run_id', 'created_at'})
-            self.assertEqual(fix_columns['run_id']['pk'], 1)
             for label, connection in (('migrated', upgraded), ('fresh', baseline)):
                 with self.subTest(schema=label):
                     columns = {row['name']: row for row in connection.execute('PRAGMA table_info(workflow_fixes)')}
@@ -371,128 +279,15 @@ class UpgradeFixtureTests(unittest.TestCase):
             fix_indexes = [row['name'] for row in upgraded.execute('PRAGMA index_list(workflow_fixes)')]
             self.assertIn(('fixed_run_id', 'created_at'), [tuple(row['name'] for row in upgraded.execute(
                 f'PRAGMA index_info({name})')) for name in fix_indexes])
-            self.assertEqual({row[0] for row in upgraded.execute(
-                'SELECT delegation_authority FROM workflow_runs')}, {0})
-            attempt_columns = {row[1] for row in upgraded.execute('PRAGMA table_info(attempts)')}
-            self.assertTrue({'stop_initiator', 'grace_deadline', 'force_reason',
-                             'force_requested_at', 'identity_confirmed_at'} <= attempt_columns)
-            self.assertTrue(all(row[0] == 0 for row in upgraded.execute('SELECT cleanup_pending FROM attempts')))
-            for column in ('force_reason', 'force_requested_at', 'identity_confirmed_at'):
-                self.assertTrue(all(row[0] is None for row in upgraded.execute(f'SELECT {column} FROM attempts')))
             self.assertEqual(router.configuration(upgraded), expected_settings)
             self.assertEqual(dict(upgraded.execute('SELECT run_id,state FROM workflow_runs')), expected_runs)
             self.assertEqual(dict(upgraded.execute('SELECT run_id,request_fingerprint FROM workflow_runs')),
                              request_fingerprints)
-            self.assertTrue(all(row['owner'] is None for row in upgraded.execute(
-                'SELECT t.owner FROM tasks t JOIN workflow_runs r ON r.run_id=t.task_id')))
             self.assertEqual([tuple(row) for row in upgraded.execute(
                 'SELECT buddy_id,mode,reason FROM evaluation_preferences ORDER BY buddy_id')],
                 expected_preferences)
             self.assertEqual(upgraded.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
             self.assertEqual(upgraded.execute('PRAGMA foreign_key_check').fetchall(), [])
-
-    def test_upgrade_converts_only_service_owned_fields_and_preserves_opaque_results(self):
-        fixture, connection = self.restored('opaque-upgrade')
-        attempt = connection.execute('SELECT attempt_id FROM attempts LIMIT 1').fetchone()[0]
-        opaque = {'status': 'ok', 'result': {'workerId': 'user-data', 'leaseSeconds': 7,
-                  'nested': ['worker-stopped', 'awaiting-worker'], 'processIdentity': {'worker': 'user-value'}},
-                  'shutdownConfirmed': True}
-        raw = json.dumps(opaque, ensure_ascii=False, separators=(',', ':'))
-        connection.execute('UPDATE attempts SET result_json=? WHERE attempt_id=?', (raw, attempt))
-        connection.execute("INSERT INTO attempt_interruptions VALUES(?,'worker-stopped',?,'settled',NULL)",
-                           (attempt, '2026-01-01T00:00:00Z'))
-        response = {'task': {'taskId': 'fixture', 'requestId': 'fixture', 'spec': {}, 'state': 'completed',
-                            'workerId': 'retired', 'queueReason': 'awaiting-worker',
-                            'interruptionEvidence': {'kind': 'worker-stopped'},
-                            'selectedAttempt': {'attemptId': attempt, 'generation': 1,
-                            'executionState': 'finished', 'ownership': 'owned', 'workerId': 'retired',
-                            'leaseSeconds': 120, 'result': opaque}},
-                    'workflow': {'runId': 'fixture', 'requestId': 'fixture', 'state': 'running',
-                                 'queueReason': 'awaiting-worker',
-                                 'task': {'runId': 'fixture', 'requestId': 'fixture', 'state': 'queued',
-                                          'queueReason': 'awaiting-worker',
-                                          'interruptionEvidence': {'kind': 'worker-stopped'}}}}
-        connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES(?,?,?,?,?)',
-                           ('projected-old-view', 'task.cancel', 'hash', json.dumps(response), '2026-01-01T00:00:00Z'))
-        recovery = {'attempt': {'attemptId': attempt, 'generation': 1, 'executionState': 'finished',
-                    'ownership': 'owned', 'result': {'status': 'failed', 'shutdownConfirmed': True,
-                    'terminationReason': 'interrupted', 'result': {
-                        'interruptionEvidence': {'kind': 'worker-stopped'},
-                        'modelOutput': {'kind': 'worker-stopped'}}}}}
-        flat = {'runId': 'flat-task', 'requestId': 'flat-request', 'state': 'failed',
-                'status': 'failed', 'shutdownConfirmed': True, 'terminationReason': 'interrupted',
-                'interruptionEvidence': {'kind': 'worker-stopped'}, 'result': {
-                    'interruptionEvidence': {'kind': 'worker-stopped'},
-                    'modelOutput': {'kind': 'worker-stopped'}}}
-        connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES(?,?,?,?,?)',
-                           ('flat-recovery-view', 'task.result', 'flat-hash', json.dumps(flat),
-                            '2026-01-01T00:00:00Z'))
-        connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES(?,?,?,?,?)',
-                           ('recovery-old-view', 'task.result', 'recovery-hash', json.dumps(recovery),
-                            '2026-01-01T00:00:00Z'))
-        connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES(?,?,?,?,?)',
-                           ('retired-result', 'worker.result', 'retired-hash', '{}', '2026-01-01T00:00:00Z'))
-        connection.execute('UPDATE attempts SET result_command_id=? WHERE attempt_id=?', ('retired-result', attempt))
-        connection.execute('INSERT INTO events(kind,payload_json,created_at) VALUES(?,?,?)',
-                           ('attempt.released', json.dumps({'releaseEvidence': 'spawnIntentWritten=false',
-                            'previousState': 'starting', 'reason': 'no process'}), '2026-01-01T00:00:00Z'))
-        connection.execute('INSERT INTO events(kind,payload_json,created_at) VALUES(?,?,?)',
-                           ('worker.registered', json.dumps({'workerId': 'history', 'message': 'worker-stopped'}),
-                            '2026-01-01T00:00:00Z'))
-        connection.execute('INSERT INTO events(kind,payload_json,created_at) VALUES(?,?,?)',
-                           ('workflow.summary', json.dumps({'task': {'runId': 'fixture', 'requestId': 'fixture',
-                              'queueReason': 'awaiting-worker', 'state': 'queued'},
-                              'modelOutput': {'queueReason': 'awaiting-worker'}}), '2026-01-01T00:00:00Z'))
-        connection.execute('INSERT INTO events(kind,payload_json,created_at) VALUES(?,?,?)',
-                           ('task.failed', json.dumps({'interruptionEvidence': {'kind': 'worker-stopped'},
-                                                      'message': 'worker-stopped'}), '2026-01-01T00:00:00Z'))
-        connection.commit()
-        upgrade_database(fixture['state'])
-        self.assertEqual(json.loads(connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?',
-                                                       (attempt,)).fetchone()[0]), opaque)
-        self.assertEqual(connection.execute('SELECT evidence_kind FROM attempt_interruptions WHERE attempt_id=?',
-                                            (attempt,)).fetchone()[0], 'orphan-stopped')
-        projected = json.loads(connection.execute("SELECT response_json FROM commands WHERE command_id='projected-old-view'").fetchone()[0])
-        self.assertNotIn('workerId', projected['task'])
-        self.assertEqual(projected['task']['queueReason'], 'awaiting-execution')
-        self.assertEqual(projected['task']['interruptionEvidence']['kind'], 'orphan-stopped')
-        released = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='attempt.released' ORDER BY seq DESC LIMIT 1").fetchone()[0])
-        self.assertEqual(released['releaseEvidence'], 'processCreated=false')
-        self.assertNotIn('leaseSeconds', projected['task']['selectedAttempt'])
-        self.assertEqual(projected['task']['selectedAttempt']['result'], opaque)
-        self.assertEqual(projected['workflow']['queueReason'], 'awaiting-execution')
-        self.assertEqual(projected['workflow']['task']['queueReason'], 'awaiting-execution')
-        self.assertEqual(projected['workflow']['task']['interruptionEvidence']['kind'], 'orphan-stopped')
-        recovered = json.loads(connection.execute("SELECT response_json FROM commands WHERE command_id='recovery-old-view'").fetchone()[0])
-        self.assertEqual(recovered['attempt']['result']['result']['interruptionEvidence']['kind'], 'orphan-stopped')
-        self.assertEqual(recovered['attempt']['result']['result']['modelOutput']['kind'], 'worker-stopped')
-        flat_current = json.loads(connection.execute("SELECT response_json FROM commands WHERE command_id='flat-recovery-view'").fetchone()[0])
-        self.assertEqual(flat_current['interruptionEvidence']['kind'], 'orphan-stopped')
-        self.assertEqual(flat_current['result']['interruptionEvidence']['kind'], 'orphan-stopped')
-        self.assertEqual(flat_current['result']['modelOutput']['kind'], 'worker-stopped')
-        self.assertIsNone(connection.execute('SELECT result_command_id FROM attempts WHERE attempt_id=?',
-                                             (attempt,)).fetchone()[0])
-        self.assertIsNone(connection.execute("SELECT 1 FROM commands WHERE command_id='retired-result'").fetchone())
-        history = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='worker.registered' ORDER BY seq DESC LIMIT 1").fetchone()[0])
-        self.assertEqual(history, {'workerId': 'history', 'message': 'worker-stopped'})
-        summary = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='workflow.summary' ORDER BY seq DESC LIMIT 1").fetchone()[0])
-        self.assertEqual(summary['task']['queueReason'], 'awaiting-execution')
-        self.assertEqual(summary['modelOutput']['queueReason'], 'awaiting-worker')
-        failed = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='task.failed' ORDER BY seq DESC LIMIT 1").fetchone()[0])
-        self.assertEqual(failed['interruptionEvidence']['kind'], 'orphan-stopped')
-        self.assertEqual(failed['message'], 'worker-stopped')
-
-    def test_upgrade_failure_rolls_back_every_table_replacement(self):
-        fixture, connection = self.restored('rollback-conversion')
-        connection.execute("INSERT INTO events(kind,payload_json,created_at) VALUES('task.failed','{broken','2026-01-01T00:00:00Z')")
-        connection.commit()
-        schema = [tuple(row) for row in connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
-        counts = connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0]
-        with self.assertRaises(BoardError):
-            upgrade_database(fixture['state'])
-        self.assertEqual([tuple(row) for row in connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')], schema)
-        self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], counts)
-        self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '22')
 
     def insert_stop_receipt(self, fixture, connection):
         response = {'macroTaskId': 'run:' + fixture['stableIds']['cancelled'],
@@ -511,7 +306,6 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_started_verification_preserves_command_fingerprints_and_rejects_tampering(self):
         fixture, connection = self.restored('started-stop')
         self.insert_stop_receipt(fixture, connection)
-        upgrade_database(fixture['state'])
         before = upgrade.idle_snapshot(fixture['state'], exact=True)
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
@@ -532,11 +326,11 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_unavailable_submission_digest_refuses_replay_and_new_submissions_replay(self):
         fixture, connection = self.restored()
-        # A NULL fingerprint is retained schema-22 stock from the consumed upgrade.
+        # A NULL fingerprint is retained stock from submissions that predate
+        # fingerprinting; the current reader still refuses their replay.
         connection.execute('UPDATE workflow_runs SET request_fingerprint=NULL')
         connection.commit()
         connection.close()
-        upgrade_database(fixture['state'])
         store = BoardStore(fixture['state'])
         store.initialize()
         self.addCleanup(store.db.close)

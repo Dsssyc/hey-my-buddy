@@ -339,7 +339,7 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
         if name == 'events':
             sql += ' WHERE seq<=?'; args = (event_head,)
         elif name == 'sqlite_sequence' and not exempt:
-            sql += " WHERE name NOT IN ('events','workers')"
+            sql += " WHERE name NOT IN ('events')"
         sql += ' ORDER BY encoded COLLATE BINARY'
         connection.create_function('hey_my_buddy_snapshot_row', -1, encode)
         try:
@@ -356,11 +356,11 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
             if wide:
                 connection.create_function('hey_my_buddy_snapshot_part', -1, None)
 
-    fingerprints = {name:fingerprint(name) for name in tables if name != 'workers'}
+    fingerprints = {name:fingerprint(name) for name in tables}
     result = {'tables':counts, 'fingerprints':fingerprints, 'eventHead':event_head}
     if exact:
         result['exemptFingerprints'] = {name:fingerprint(name, exempt=True)
-                                      for name in ('workers', 'sqlite_sequence') if name in tables}
+                                      for name in ('sqlite_sequence',) if name in tables}
     return result
 
 
@@ -376,7 +376,7 @@ def _verify(directory: Path) -> dict:
     _guard(directory)
     with _open(directory / 'manifest.json', 'rb') as stream:
         manifest = json.load(stream)
-    if manifest.get('format') != 1 or manifest.get('schema') not in (22, SCHEMA_VERSION):
+    if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
     policy = manifest.get('attemptEvidencePolicy')
     if policy is not None and policy != attempt_evidence.POLICY:

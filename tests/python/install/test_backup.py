@@ -288,13 +288,11 @@ class BackupTests(BoardTestCase):
             historical = {}
             names = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")]
             for name in names:
-                if name == 'workers':
-                    continue
                 sql = 'SELECT * FROM "' + name.replace('"', '""') + '"'
                 if name == 'events':
                     sql += ' WHERE seq<=1'
                 elif name == 'sqlite_sequence':
-                    sql += " WHERE name NOT IN ('events','workers')"
+                    sql += " WHERE name NOT IN ('events')"
                 rows = sorted(json.dumps(list(row), ensure_ascii=False, separators=(',', ':'),
                                          default=lambda value:value.hex()) for row in connection.execute(sql))
                 historical[name] = hashlib.sha256('\n'.join(rows).encode()).hexdigest()
@@ -305,5 +303,5 @@ class BackupTests(BoardTestCase):
             self.assertEqual(actual, {'tables': {name:connection.execute('SELECT COUNT(*) FROM "' + name + '"').fetchone()[0]
                                                for name in names}, 'fingerprints': historical, 'eventHead': 1})
             connection.execute("UPDATE workers SET value='changed'")
-            self.assertEqual(backup.database_snapshot(connection, event_head=1), actual)
+            self.assertNotEqual(backup.database_snapshot(connection, event_head=1), actual)
             self.assertNotEqual(backup.database_snapshot(connection)['fingerprints']['events'], historical['events'])
