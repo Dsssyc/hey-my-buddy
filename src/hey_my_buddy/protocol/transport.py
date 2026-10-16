@@ -139,6 +139,26 @@ def _private_directory(directory: Path) -> bool:
         return False
 
 
+def _private_primary_group(gid: int) -> bool:
+    """Only this user's same-named primary group can grant ancestor write access."""
+    import grp
+    import pwd
+
+    uid = os.geteuid()
+    try:
+        account = pwd.getpwuid(uid)
+        if account.pw_gid != gid:
+            return False
+        group = grp.getgrgid(gid)
+    except KeyError:
+        return False
+    return (
+        group.gr_name == account.pw_name
+        and all(member == account.pw_name for member in group.gr_mem)
+        and not any(other.pw_gid == gid and other.pw_uid != uid for other in pwd.getpwall())
+    )
+
+
 def _trusted_ancestors(directory: Path) -> bool:
     """True when no ancestor above the state directory can be swapped by another user."""
     if os.name == 'nt':
@@ -150,12 +170,14 @@ def _trusted_ancestors(directory: Path) -> bool:
             if stat.S_ISLNK(parent.st_mode):
                 if parent.st_uid not in (os.geteuid(), 0):
                     return False
-            elif (
-                not stat.S_ISDIR(parent.st_mode)
-                or parent.st_uid not in (os.geteuid(), 0)
-                or (parent.st_mode & 0o022 and not parent.st_mode & stat.S_ISVTX)
-            ):
-                return False
+            else:
+                if not stat.S_ISDIR(parent.st_mode) or parent.st_uid not in (os.geteuid(), 0):
+                    return False
+                if not parent.st_mode & stat.S_ISVTX:
+                    if parent.st_mode & 0o002:
+                        return False
+                    if parent.st_mode & 0o020 and not _private_primary_group(parent.st_gid):
+                        return False
             if current.parent == current:
                 return True
             current = current.parent

@@ -2,7 +2,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 import copy
-import importlib
 from importlib import metadata
 import json
 import os
@@ -58,15 +57,17 @@ class HostCutoverTests(WorkflowTestCase):
         site = environment / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
         for name in ("c_two", "fastdb4py", "numpy", "portalocker", "pydantic", "pydantic_core", "zstandard",
                      "typing_extensions", "typing_inspection", "annotated_types"):
-            module = importlib.import_module(name)
-            path = Path(module.__file__)
-            if path.name == "__init__.py":
-                shutil.copytree(path.parent, site / name, ignore=shutil.ignore_patterns("__pycache__"))
-            else:
-                shutil.copy2(path, site / path.name)
             distribution = metadata.distribution(name.replace("_", "-"))
-            metadata_dir = next(file.parts[0] for file in distribution.files if file.parts[0].endswith(".dist-info"))
-            shutil.copytree(distribution.locate_file(metadata_dir), site / metadata_dir)
+            # Copy the installed distribution, including sibling native libraries
+            # such as numpy.libs, rather than only its importable package.
+            for file in distribution.files:
+                # Installed command scripts live outside site-packages; this
+                # fixture only runs the libraries through its private Python.
+                if ".." in file.parts or "__pycache__" in file.parts:
+                    continue
+                destination = site / file
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(distribution.locate_file(file), destination)
         (site / "hey-my-buddy-fixture.pth").write_text(str(target / "src") + "\n")
         ready = {
             "format": runtime.RUNTIME_FORMAT, "state": "READY", "contentId": target.name,
