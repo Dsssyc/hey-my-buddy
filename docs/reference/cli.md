@@ -46,7 +46,7 @@ The projection only omits material the caller already supplied (the micro task p
 | `result` | The `status` view plus `attemptId`, `resultDelivered`, the verified execution `artifacts`, `resultMeta` without its duplicate artifact list, and the micro task result view (or the opaque infrastructure `result`) |
 
 Cancelled micro task `get` and execution `result` views expose `cancellation: {actor, reason}` in both brief and full output when their own durable cancellation event exists. A missing event or field stays unknown. A full `get` also carries the selected attempt's `task.terminationReason`, `task.stopInitiator` and `task.graceDeadline` ([architecture](architecture.md)), and for an interrupted execution `interruptionEvidence: {kind, legacyStartedAt}` in both brief and full output. A completion already recorded before micro task cancellation keeps its completed execution result.
-| `list` | `runs` rows with `runId`, `requestId`, `adapter`, `model`, `status`, `workflowState`, `awaitingHost`, `kind`, `parentRunId`, `currentHostId`, `createdAt` and a `title`; `total`, `cursor`, `nextCursor` |
+| `list` | `runs` rows with `runId`, `requestId`, `adapter`, `model`, `status`, `workflowState`, `awaitingHost`, `kind`, `parentRunId`, `currentHostId`, `createdAt` and a `title`; `total`, `cursor`, `nextCursor`. In full output each run's `lineage` names its kind (micro task, helper, routing calculation or command execution), a `project` that is null when none was recorded, and for a routing calculation the Router's buddy and `routingTask`, the micro task it routed with that micro task's macro task; these names are for readers only and never enter an execution's input |
 
 ## Service
 
