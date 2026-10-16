@@ -1,6 +1,6 @@
 # Architecture
 
-This page describes the current source: transport protocol 2 and schema 24. The upgrade base is schema 23, which the upgrade of [ADR-031](../decisions/031-one-process-per-execution.md) reached; the pending upgrade converts it to 24. Startup never migrates. Installation and native verification facts remain in [acceptance records](../acceptance/installed-0.20.0.md).
+This page describes the current source: transport protocol 2 and schema 24, which is also the upgrade base. Startup never migrates. Installation and native verification facts remain in [acceptance records](../acceptance/installed-0.20.0.md).
 
 ## Process topology
 
@@ -43,7 +43,7 @@ hey-my-buddy transports bounded JSON strings through C-Two 0.7.4's named Python 
 
 ## Data model
 
-One schema-versioned SQLite database (`board.sqlite3`, schema version 24) owns every authoritative fact in 57 tables. Startup accepts schema 24 only; install also accepts schema 23, the schema of the upgrade base 0.40.0, and converts it with the pending upgrade ([operations](operations.md#installation)). Events and the records of scopes, workspace conflicts, integrations, cleanup plans and Host conclusions store who acted as a role (`host`, `lead`, `console`, `service`, `workflow` or `bridge`) and an identifier.
+One schema-versioned SQLite database (`board.sqlite3`, schema version 24) owns every authoritative fact in 57 tables. Startup and install accept schema 24 only: it is the schema of the upgrade base 0.42.0, and no upgrade is pending ([operations](operations.md#installation)). Events and the records of scopes, workspace conflicts, integrations, cleanup plans and Host conclusions store who acted as a role (`host`, `lead`, `console`, `service`, `workflow` or `bridge`) and an identifier.
 
 | Group | Tables |
 | --- | --- |
