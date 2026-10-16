@@ -25,7 +25,7 @@ Read `health` for the Router list, mode and capacity; report failures with decis
 
 `hey-my-buddy console` opens loopback, login off; `{"browser":false}` returns its URL ([console](../../docs/reference/console.md)).
 
-Install on the user's word; a new middle version needs idle work and a clean `backup-preflight '{}'` ([operations](../../docs/reference/operations.md)).
+Install on the user's word; a new middle version needs idle work ([operations](../../docs/reference/operations.md)).
 
 ## Capabilities and authority
 
