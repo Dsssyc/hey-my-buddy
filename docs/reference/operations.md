@@ -4,7 +4,7 @@ How to install, run, recover and retire a hey-my-buddy installation. Command syn
 
 ## Installed state
 
-The recorded daily installation is [0.39.0/contract 0.39.0/schema 22](../acceptance/install-0.39.0.md); the current source has moved on to schema 23 with ADR-031, which is not installed; source preparation does not install anything, upgrade the daily board, publish a release or change user settings. The shared skill lives in `~/.agents/skills/hey-my-buddy`, with Claude Code reading the same directory through its link. Runtime, state and backup roots remain owned by `hey_my_buddy.home`.
+The recorded daily installation is [0.40.0/contract 0.40.0/schema 23](../acceptance/install-0.40.0.md), the same as the current source; source preparation does not install anything, upgrade the daily board, publish a release or change user settings. The shared skill lives in `~/.agents/skills/hey-my-buddy`, with Claude Code reading the same directory through its link. Runtime, state and backup roots remain owned by `hey_my_buddy.home`.
 
 ## Installation
 
@@ -163,9 +163,9 @@ Backup, restore, relocation, storage and cleanup neither traverse links/reparse 
 
 ## Runtime lifecycle
 
-The [installed runtime](../acceptance/install-0.39.0.md) is 0.39.0 with contract 0.39.0 and schema 22. It was installed on 2026-10-15 over an idle service, and the schema 21 to 22 upgrade ran with it. The recorded runtime identity and the preserved configuration are installation facts, distinct from source acceptance.
+The [installed runtime](../acceptance/install-0.40.0.md) is 0.40.0 with contract 0.40.0 and schema 23. It was installed on 2026-10-16 over an idle service, and the schema 22 to 23 upgrade of ADR-031 ran with it. The recorded runtime identity and the preserved configuration are installation facts, distinct from source acceptance.
 
-The current source is 0.40.0 (contract 0.40.0) and schema 23 with C-Two 0.7.4. The upgrade base is 0.39.0 (commit `b9632dd9`, schema 22), and the pending upgrade converts a schema 22 board to 23 ([ADR-031](../decisions/031-one-process-per-execution.md)): install accepts a schema 22 or 23 board, the service only 23. Request fingerprints cleared by the earlier upgrade to schema 21 stay empty, and replaying such a request is refused with `SUBMISSION_REPLAY_UNAVAILABLE`. `ping` is the lightweight attachment check; `health` performs explicit current diagnostics. Source changes do not switch an installed client, daemon or execution process.
+The current source is the installed 0.40.0 (contract 0.40.0, schema 23) with C-Two 0.7.4. Its upgrade from schema 22 to 23 ([ADR-031](../decisions/031-one-process-per-execution.md)) has run on the daily board; until the upgrade base moves to 0.40.0, install still accepts a schema 22 board and converts it, and the service accepts only 23. Request fingerprints cleared by the earlier upgrade to schema 21 stay empty, and replaying such a request is refused with `SUBMISSION_REPLAY_UNAVAILABLE`. `ping` is the lightweight attachment check; `health` performs explicit current diagnostics. Source changes do not switch an installed client, daemon or execution process.
 
 hey-my-buddy installs Python dependencies with uv from a frozen lock (PyPI `c-two==0.7.4` and PyYAML; Python `>=3.12,<3.15`). The service and its execution processes execute from a **content-addressed stable runtime** outside the skill directory, so replacing the skill does not disturb a running service.
 
