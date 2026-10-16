@@ -41,7 +41,7 @@ const initial = (): Snapshot => ({
   capabilities: { selection: false },
 });
 
-const emptyMacroTasks = () => ({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false });
+const emptyMacroTasks = () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false });
 
 afterEach(() => {
   cleanup();
@@ -81,7 +81,7 @@ describe("console interactions", () => {
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await user.click(await screen.findByLabelText("显示协助任务与内部执行"));
     await user.click(
       await screen.findByRole("button", { name: /未执行的测试任务/ }),
@@ -140,7 +140,7 @@ describe("console interactions", () => {
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await user.click(await screen.findByLabelText("显示协助任务与内部执行"));
     await user.click(
       await screen.findByRole("button", { name: /停止证据测试/ }),
@@ -163,7 +163,7 @@ describe("console interactions", () => {
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await screen.findByRole("heading", { name: "选择一项微任务" });
     await user.click(screen.getByRole("link", { name: /^Buddy/ }));
     await listed(1, 1);

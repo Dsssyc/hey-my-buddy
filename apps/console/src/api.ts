@@ -43,7 +43,7 @@ export function parseConsoleSession(value: unknown): ConsoleSession {
   if (!valid) {
     throw new ApiError(
       "INVALID_RESPONSE",
-      i18n.t("shell:error.session"),
+      i18n.t("common:error.session"),
     );
   }
   return session as ConsoleSession;
@@ -55,7 +55,7 @@ export function parseConsoleAccess(value: unknown): ConsoleAccess {
     || access.revision < 0 || !Array.isArray(access.sessions) || access.sessions.length > 64
     || access.sessions.some(session => !session || typeof session.id !== "string" || !/^[a-f0-9]{24}$/.test(session.id)
       || !Number.isFinite(session.lastSeen) || typeof session.current !== "boolean")) {
-    throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.access"));
+    throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.access"));
   }
   return access;
 }
@@ -65,7 +65,7 @@ export function parseReminderSettings(value: unknown): ReminderSettings {
   if (!settings || !Number.isSafeInteger(settings.silenceSeconds) || settings.silenceSeconds < 1
     || settings.silenceSeconds > 86400 || !Number.isSafeInteger(settings.revision) || settings.revision < 1
     || typeof settings.updatedAt !== "string" || !Number.isFinite(Date.parse(settings.updatedAt))) {
-    throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.reminders"));
+    throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.reminders"));
   }
   return settings;
 }
@@ -164,8 +164,8 @@ export function parseRoutingHealth(value: unknown): RoutingHealth | undefined {
 }
 
 export function errorText(error: unknown): string {
-  if (error instanceof ApiError) return i18n.exists(`shell:error.codes.${error.code}`) ? i18n.t(`shell:error.codes.${error.code}`) : error.message;
-  return error instanceof Error ? error.message : i18n.t("shell:error.failed");
+  if (error instanceof ApiError) return i18n.exists(`common:error.codes.${error.code}`) ? i18n.t(`common:error.codes.${error.code}`) : error.message;
+  return error instanceof Error ? error.message : i18n.t("common:error.failed");
 }
 
 export function uncertainResponse(error: unknown): boolean {
@@ -179,8 +179,8 @@ export function isAbortError(error: unknown): boolean {
 /** Server verification of the displayed read; missing evidence stays explicit. */
 export function readVerificationText(verifiedAtMs: number | null | undefined): string {
   return typeof verifiedAtMs === "number" && Number.isFinite(verifiedAtMs)
-    ? `${i18n.t("shell:snapshot.verified")} ${new Date(verifiedAtMs).toLocaleString(locale, { hour12: false })}`
-    : i18n.t("shell:snapshot.unverified");
+    ? `${i18n.t("common:snapshot.verified")} ${new Date(verifiedAtMs).toLocaleString(locale, { hour12: false })}`
+    : i18n.t("common:snapshot.unverified");
 }
 
 /* ---- 0.16.0 storage wire shapes (docs/reference/operations.md) ---- */
@@ -243,7 +243,7 @@ function validStoragePlan(value: unknown): value is StoragePlan {
 
 export function parseStoragePlan(value: unknown): StoragePlan {
   if (!validStoragePlan(value)) {
-    throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.storagePlan"));
+    throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.storagePlan"));
   }
   return value as StoragePlan;
 }
@@ -261,17 +261,37 @@ export function validStorageApplyResult(value: unknown): value is StorageApplyRe
 }
 
 /**
- * Strict shape checks for the 0.15.1 macroTask read projections: `description`
- * and `taskSummary` are nullable strings and scope counts are numbers, so
- * a malformed field refuses the read instead of reaching presentation.
+ * The real service's `_summary` projection is the read boundary. Nullable
+ * fields stay nullable rather than acquiring fixture-only defaults.
  */
 function validMacroTaskSummary(value: unknown): boolean {
   const summary = value as MacroTaskSummary | null;
-  return !!summary && typeof summary === "object"
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) return false;
+  const counts = summary.counts;
+  const project = summary.project;
+  return typeof summary.macroTaskId === "string" && summary.macroTaskId.length > 0
+    && (summary.kind === "macro-task" || summary.kind === "standalone")
+    && typeof summary.title === "string"
+    && ["macro-task", "title", "task", "none"].includes(summary.titleSource)
     && (summary.description === null || typeof summary.description === "string")
-    && !!summary.counts && ["accepted", "stoppableRoots", "stoppableHelpers", "delivered", "awaitingHost"]
-      .every(key => Number.isSafeInteger(summary.counts[key as keyof typeof summary.counts])
-        && summary.counts[key as keyof typeof summary.counts] >= 0);
+    && (summary.summary === null || typeof summary.summary === "string")
+    && (project === null || !!project && typeof project === "object" && !Array.isArray(project)
+      && typeof project.id === "string" && typeof project.label === "string"
+      && (project.path === null || typeof project.path === "string"))
+    && (summary.sourceHostId === null || typeof summary.sourceHostId === "string")
+    && Array.isArray(summary.currentHostIds) && summary.currentHostIds.every(id => typeof id === "string")
+    && (summary.createdAt === null || typeof summary.createdAt === "string")
+    && (summary.lastActivityAt === null || typeof summary.lastActivityAt === "string")
+    && Number.isSafeInteger(summary.lastActivitySeq) && summary.lastActivitySeq >= 0
+    && ["host", "active", "review", "ended"].includes(summary.state)
+    && !!counts && typeof counts === "object" && !Array.isArray(counts)
+    && ["roots", "helpers", "accepted", "failed", "active", "host", "review", "ended", "stoppableRoots",
+      "stoppableHelpers", "delivered", "awaitingHost"].every(key => {
+      const count = counts[key as keyof typeof counts];
+      return Number.isSafeInteger(count) && count >= 0;
+    })
+    && Number.isSafeInteger(summary.matchingRuns) && summary.matchingRuns >= 0
+    && Array.isArray(summary.rootRunIds) && summary.rootRunIds.every(id => typeof id === "string");
 }
 
 function validTimelineRows(rows: unknown): boolean {
@@ -411,7 +431,7 @@ export function parseRuntimeVersion(value: unknown): RuntimeVersionInfo {
     && (record.schemaVersion === null || Number.isSafeInteger(record.schemaVersion) && record.schemaVersion >= 0);
   if (!info || !facts(info.running) || !["source", "runtime"].includes(info.running.mode)
     || !(info.installed === null || facts(info.installed))) {
-    throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.version"));
+    throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.version"));
   }
   return info;
 }
@@ -441,13 +461,13 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       });
     } catch (error) {
       if (isAbortError(error)) throw error;
-      throw new ApiError("NETWORK", i18n.t("shell:error.network"));
+      throw new ApiError("NETWORK", i18n.t("common:error.network"));
     }
     let data: unknown;
     try {
       data = await response.json();
     } catch {
-      throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.unparsable"));
+      throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.unparsable"));
     }
     const body = data as {
       ok?: boolean;
@@ -456,7 +476,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     if (!response.ok || body?.ok === false) {
       throw new ApiError(
         body?.error?.code || `HTTP_${response.status}`,
-        body?.error?.message || i18n.t("shell:error.refused"),
+        body?.error?.message || i18n.t("common:error.refused"),
       );
     }
     return verifiedRead(data, responseVerifiedAtMs(response));
@@ -556,7 +576,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         response = await fetcher(url, { credentials: "same-origin", cache: "no-store", headers, signal });
       } catch (error) {
         if (isAbortError(error)) throw error;
-        throw new ApiError("NETWORK", i18n.t("shell:error.network"));
+        throw new ApiError("NETWORK", i18n.t("common:error.network"));
       }
       if (response.status === 304) {
         if (cached && cacheGeneration === atGeneration && !signal?.aborted) {
@@ -565,13 +585,13 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         // A 304 is only meaningful against a representation this instance still
         // holds under this session; without one the body cannot be reconstructed
         // and the read stays failed instead of guessing.
-        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.unparsable"));
+        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.unparsable"));
       }
       let data: unknown;
       try {
         data = await response.json();
       } catch {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.unparsable"));
+        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.unparsable"));
       }
       // The body has arrived: only now is the publication verdict decided. The
       // ticket was held through the body read, so this fresh check outranks any
@@ -585,7 +605,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         if (body?.ok === false && body?.error?.code === SESSION_EXPIRED_CODE) clearConditionalCache();
         throw new ApiError(
           body?.error?.code || `HTTP_${response.status}`,
-          body?.error?.message || i18n.t("shell:error.refused"),
+          body?.error?.message || i18n.t("common:error.refused"),
         );
       }
       if (stillCurrent && cacheGeneration === atGeneration && !signal?.aborted) {
@@ -618,7 +638,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       ) {
         throw new ApiError(
           "INVALID_RESPONSE",
-          i18n.t("shell:error.snapshot"),
+          i18n.t("common:error.snapshot"),
         );
       }
       // A valid session descriptor is required; a missing or malformed one is
@@ -645,7 +665,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         body: JSON.stringify({ operation, params }),
       })) as { ok: boolean; result: T };
       if (!data || data.ok !== true || !Object.hasOwn(data, "result")) {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.submit"));
+        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.submit"));
       }
       return verifiedRead(data.result, readVerifiedAt(data));
     },
@@ -661,21 +681,24 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const { data, verifiedAtMs } = await conditionalRead(`/tasks?${query}`, signal) as { data: TaskPage; verifiedAtMs: number | null };
       if (!data || !Array.isArray(data.runs) || !Number.isInteger(data.total)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")) {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.history"));
+        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.history"));
       }
       return verifiedRead(data, verifiedAtMs);
     },
     /** Read-only work macro task list for any logged-in session; no lease or model call. */
-    async macroTasks(params: MacroTaskQuery, signal?: AbortSignal): Promise<MacroTaskPage> {      const query = new URLSearchParams();
+    async macroTasks(params: MacroTaskQuery, signal?: AbortSignal): Promise<MacroTaskPage> {
+      const query = new URLSearchParams();
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== "") query.set(key, String(value));
       }
       const { data, verifiedAtMs } = await conditionalRead(`/macro-tasks?${query}`, signal) as { data: MacroTaskPage; verifiedAtMs: number | null };
-      if (!data || !Array.isArray(data.macroTasks) || !Number.isInteger(data.total)
+      if (!data || !Array.isArray(data.macroTasks) || !data.totals
+        || (["all", "active", "host", "review"] as const).some(name =>
+          !Number.isSafeInteger(data.totals[name]) || data.totals[name] < 0)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")
         || !Number.isInteger(data.cursor) || typeof data.changed !== "boolean"
         || !data.macroTasks.every(validMacroTaskSummary)) {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.macroTasks"));
+        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.macroTasks"));
       }
       return verifiedRead(data, verifiedAtMs);
     },
@@ -712,7 +735,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         || typeof data.truncated.spans !== "boolean" || typeof data.truncated.events !== "boolean"
         || !Number.isInteger(data.cursor) || typeof data.scopeComplete !== "boolean"
         || typeof data.filtered !== "boolean") {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.timeline"));
+        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.timeline"));
       }
       return { timeline: data, verifiedAtMs };
     },
@@ -739,7 +762,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const result = await command<StorageApplyResult>("storage_apply", { planId, commandId, confirm: true }, csrfToken);
       const mismatch = !validStorageApplyResult(result) || result.planId !== planId || result.complete !== true;
       if (mismatch) {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.cleanup"));
+        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.cleanup"));
       }
       return result;
     },
@@ -758,7 +781,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       );
       const rows = commandHarnesses(reply);
       if (!rows.length) {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.recheck"));
+        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.recheck"));
       }
       return rows;
     },
@@ -778,7 +801,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       );
       const row = harnessRow((reply as { harness?: unknown } | null)?.harness);
       if (!row || row.harness.toLowerCase() !== harness.trim().toLowerCase()) {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.pathSaved"));
+        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.pathSaved"));
       }
       return row;
     },
@@ -793,7 +816,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       body: JSON.stringify({ operation, params }),
     }) as { ok: boolean; result: T };
     if (!data || data.ok !== true || !Object.hasOwn(data, "result")) {
-      throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.submit"));
+      throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.submit"));
     }
     return data.result;
   }

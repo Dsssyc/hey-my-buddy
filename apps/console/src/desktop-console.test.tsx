@@ -81,7 +81,7 @@ function fixture(records: Task[] = []) {
   const api = { runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
       snapshot: vi.fn(async () => structuredClone(snapshot)), tasks, command,
     task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
-    macroTasks: vi.fn(async () => ({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
     macroTaskTimeline: vi.fn(async (macroTaskId: string) => ({ timeline: timelineOfRecords(macroTaskId, records), verifiedAtMs: null })) } as unknown as ConsoleApi;
   return { snapshot, records, api, tasks, command, workflows };
 }
@@ -198,7 +198,7 @@ describe("desktop console", () => {
     const f = fixture([root, other, helper]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await screen.findByRole("button", { name: /目标 alpha/ });
     expect(f.tasks.mock.calls[0][0]).toMatchObject({ rootsOnly: true });
     expect(screen.queryByRole("button", { name: /目标 helper/ })).toBeNull();
@@ -232,7 +232,7 @@ describe("desktop console", () => {
     const f = fixture([microTask("alpha"), microTask("alpine")]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await screen.findByRole("button", { name: /目标 alpine/ });
     expect(screen.getByText("已加载 2 个微任务")).toBeTruthy();
     await user.click(screen.getByLabelText("显示协助任务与内部执行"));
@@ -244,7 +244,7 @@ describe("desktop console", () => {
     const f = fixture([microTask("old")]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await screen.findByRole("button", { name: /目标 old/ });
     await user.selectOptions(screen.getByLabelText("项目筛选"), "source-project");
     await screen.findByRole("button", { name: /目标 old/ });
@@ -267,7 +267,7 @@ describe("desktop console", () => {
     const f = fixture();
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await waitFor(() => expect(f.tasks).toHaveBeenCalledTimes(1));
     await screen.findByRole("heading", { name: "没有匹配的微任务" });
     f.records.push(microTask("first"));
@@ -280,7 +280,7 @@ describe("desktop console", () => {
     const f = fixture([waiting("one"), waiting("two")]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await user.click(await screen.findByRole("button", { name: /目标 one/ }));
     const detail = await screen.findByRole("region", { name: "微任务详情" });
     await within(detail).findByRole("navigation", { name: "步骤" });
@@ -291,7 +291,7 @@ describe("desktop console", () => {
     expect(detail.querySelectorAll("input, textarea, select, form")).toHaveLength(0);
     expect(screen.queryByRole("button", { name: "提交接续输入" })).toBeNull();
     expect(screen.queryByRole("button", { name: "批准所列协助" })).toBeNull();
-    await user.click(screen.getAllByRole("button", { name: "切换到全部执行记录" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "记录" })[0]!);
     await user.click(screen.getByRole("button", { name: /目标 two/ }));
     expect((await screen.findAllByText(/协助 two/)).length).toBeGreaterThan(0);
     // Leaving the page and coming back leads to the same micro task, not to the first screen.
@@ -313,17 +313,17 @@ describe("desktop console", () => {
     f.workflows.set(record.runId, value);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await user.click(await screen.findByRole("button", { name: /目标 historical/ }));
     const detail = await screen.findByRole("region", { name: "微任务详情" });
     await within(detail).findByRole("navigation", { name: "步骤" });
     expect(within(detail).getByRole("heading", { name: /目标 historical/ })).toBeTruthy();
     expect(within(detail).getByText("原始委派方", { selector: "dt" }).nextElementSibling!.textContent).toBe("codex-source");
     // The list that found the record can lose it; the detail it opened stays, with its title and its source.
-    await user.click(screen.getAllByRole("button", { name: "切换到全部执行记录" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "记录" })[0]!);
     await user.type(screen.getByLabelText("搜索微任务"), "无匹配记录");
     await screen.findByRole("heading", { name: "没有匹配的微任务" });
-    await user.click(screen.getAllByRole("button", { name: "切换到宏任务" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "宏任务" })[0]!);
     const kept = await screen.findByRole("region", { name: "微任务详情" });
     expect(within(kept).getByRole("heading", { name: /目标 historical/ })).toBeTruthy();
     expect(within(kept).getByText("原始委派方", { selector: "dt" }).nextElementSibling!.textContent).toBe("codex-source");
@@ -336,7 +336,7 @@ describe("desktop console", () => {
     const f = fixture([first, second]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     // 0.16 T1: rows show the task intent, never the Worker summaries.
     expect(await screen.findByRole("button", { name: /目标 first-summary/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /目标 second-summary/ })).toBeTruthy();
@@ -368,18 +368,18 @@ describe("desktop console", () => {
     });
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await user.click(await screen.findByRole("button", { name: /目标 older/ }));
     const detail = await screen.findByRole("region", { name: "微任务详情" });
     // 0.16 T1: the newest returned summary never becomes the heading or the row title; it is the result of the turn.
     expect(await within(detail).findByRole("heading", { name: /目标 older/ })).toBeTruthy();
     expect(within(detail).getByRole("heading", { name: /目标 older/ }).textContent).not.toContain("历史记录的最新结论结果");
     await waitFor(() => expect(detail.textContent).toContain("历史记录的最新结论结果"));
-    await user.click(screen.getAllByRole("button", { name: "切换到全部执行记录" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "记录" })[0]!);
     const row = screen.getByRole("button", { name: /目标 older/ });
     expect(row.querySelector("strong.task-title")!.textContent).toContain("目标 older");
     // The raw task text keeps its place on the delegation step.
-    await user.click(screen.getAllByRole("button", { name: "切换到宏任务" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "宏任务" })[0]!);
     await user.click(within(await screen.findByRole("navigation", { name: "步骤" })).getByRole("button", { name: /^委派/ }));
     expect((await screen.findAllByText(/不该成为标题/)).length).toBeGreaterThan(0);
   });

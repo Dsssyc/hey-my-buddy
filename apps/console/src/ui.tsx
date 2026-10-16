@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
+import i18n from "i18next";
+import { locale } from "./i18n";
 
 /** The explanation keeps this distance from every viewport edge. */
 const HELP_MARGIN_PX = 8;
@@ -157,7 +159,7 @@ export function Empty({
   return (
     <div className="empty-state">
       <div className="empty-mark" aria-hidden="true">
-        ＋
+        {i18n.t("common:emptyMark")}
       </div>
       <h2>{title}</h2>
       {children != null && children !== "" && <p>{children}</p>}
@@ -167,11 +169,11 @@ export function Empty({
 }
 
 export function formatDate(value: string | number | null | undefined) {
-  if (!value) return "未记录";
+  if (!value) return i18n.t("common:unrecorded");
   const date = new Date(value);
   return Number.isNaN(date.getTime())
-    ? "未记录"
-    : new Intl.DateTimeFormat("zh-CN", {
+    ? i18n.t("common:unrecorded")
+    : new Intl.DateTimeFormat(locale, {
         month: "2-digit",
         day: "2-digit",
         hour: "2-digit",
@@ -183,28 +185,14 @@ export function formatDate(value: string | number | null | undefined) {
 export function display(value: unknown) {
   return typeof value === "string" || typeof value === "number"
     ? String(value)
-    : "未记录";
+    : i18n.t("common:unrecorded");
 }
 
 export const statusLabels: Record<string, string> = {
-  queued: "排队中",
-  running: "执行中",
-  cancelling: "正在取消",
-  completed: "执行完成",
-  cancelled: "已取消",
-  failed: "执行失败",
-  "reconciliation-needed": "等待核对",
-  "waiting-assistance": "等待协助",
-  "waiting-decision": "等待决定",
-  "waiting-host": "等待 Host",
-  "awaiting-host": "等待 Host",
-  "awaiting-lead": "等待 Lead",
-  "waiting-owned": "等待名下的微任务",
-  "waiting-helpers": "协助执行中",
-  executing: "执行中",
-  delivered: "等待验收",
-  accepted: "已验收", concluded: "已结束",
-  yielded: "回合已结束",
+  ...Object.fromEntries(["queued", "running", "cancelling", "completed", "cancelled", "failed",
+    "reconciliation-needed", "waiting-assistance", "waiting-decision", "waiting-host", "awaiting-host",
+    "awaiting-lead", "waiting-owned", "waiting-helpers", "executing", "delivered", "accepted",
+    "concluded", "yielded"].map(status => [status, i18n.t(`common:status.${status}`)])),
 };
 export function Status({ status }: { status: string }) {
   return (

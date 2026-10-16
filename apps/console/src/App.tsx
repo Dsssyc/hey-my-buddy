@@ -48,7 +48,7 @@ function BrandMark() {
 }
 
 export function App({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
-  const { t } = useTranslation("shell");
+  const { t } = useTranslation(["shell", "common"]);
   const [api] = useState(() => suppliedApi || createApi(window.location.pathname));
   const state = useConsole(api);
   return state.snapshot ? <Connected api={api} snapshot={state.snapshot} refresh={state.refresh} connectionError={state.error} /> :
@@ -69,7 +69,7 @@ export function App({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
 function SaveBar({ editor, mutationsAvailable, describedBy }: {
   editor: Editor; mutationsAvailable: boolean; describedBy?: string;
 }) {
-  const { t } = useTranslation("shell");
+  const { t } = useTranslation(["shell", "common"]);
   const label = editor.busy ? t("draft.saving")
     : editor.confirming ? t("draft.retry") : t("draft.save");
   return <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-2 border-t bg-card px-3 py-2.5 sm:px-6" role="region" aria-label={t("draft.label")}>
@@ -95,7 +95,7 @@ function Notice({ tone, role, children }: { tone: "fail" | "hand" | "plain"; rol
 function Connected({ api, snapshot, refresh, connectionError }: {
   api: ConsoleApi; snapshot: Snapshot; refresh: () => Promise<Snapshot | null>; connectionError: string;
 }) {
-  const { t } = useTranslation("shell");
+  const { t } = useTranslation(["shell", "common"]);
   const [tab, setTab] = useState<Tab>(currentTab);
   const [visited, setVisited] = useState(() => new Set<Tab>([currentTab()]));
   const theme = useTheme();
@@ -160,13 +160,13 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       </nav>
       <div className="ml-auto flex min-w-0 items-center gap-3 text-xs text-bar-ink2">
         {/* The bar shows the time alone; what it is the time of is said on hover and to a screen reader. */}
-        <p className={connectionError ? "truncate text-bar-fail" : "truncate"}>
-          {connectionError && <span className="max-sm:hidden">{t("connection.lost")} · </span>}
+        <p className={connectionError && tab !== "tasks" ? "truncate text-bar-fail" : "truncate"}>
+          {connectionError && tab !== "tasks" && <span className="max-sm:hidden">{t("connection.lost")} · </span>}
           {verifiedAt !== null
-            ? <Tooltip><TooltipTrigger asChild><span><span className="sr-only">{t("snapshot.verified")} </span>
+            ? <Tooltip><TooltipTrigger asChild><span><span className="sr-only">{t("common:snapshot.verified")} </span>
               <time className="font-mono tabular-nums" dateTime={new Date(verifiedAt).toISOString()}>{readTime(verifiedAt)}</time></span></TooltipTrigger>
-              <TooltipContent>{t("snapshot.verified")}</TooltipContent></Tooltip>
-            : t("snapshot.unverified")}
+              <TooltipContent>{t("common:snapshot.verified")}</TooltipContent></Tooltip>
+            : t("common:snapshot.unverified")}
         </p>
       </div>
     </header>
@@ -174,7 +174,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       <h1 className="sr-only">{t(`nav.${tab}`)}</h1>
       {/* What is said above a page: the lost connection and the state of a draft. */}
       <div className="flex shrink-0 flex-col empty:hidden">
-        {connectionError && <Notice tone="fail" role="alert">
+        {connectionError && tab !== "tasks" && <Notice tone="fail" role="alert">
           <span className="min-w-0 wrap-anywhere">{connectionError}</span>
           <Button variant="outline" size="sm" onClick={() => void refresh()}>{t("connection.retry")}</Button>
         </Notice>}
@@ -193,9 +193,9 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       {/* Stable positions preserve page selections, drafts and scroll offsets.
           https://react.dev/learn/preserving-and-resetting-state */}
       {tabs.map(key => visited.has(key) && <section key={key} hidden={tab !== key}
-        className={"min-h-0 min-w-0 flex-1 overflow-hidden" + (key === "buddies" ? "" : " p-2 sm:p-4")} aria-label={t(`nav.${key}`)}>
+        className={"min-h-0 min-w-0 flex-1 overflow-hidden" + (key === "settings" ? " p-2 sm:p-4" : "")} aria-label={t(`nav.${key}`)}>
         {key === "tasks" ? <MacroTasks snapshot={snapshot} api={api} refresh={refresh} active={tab === key}
-          authority={authority} writesAvailable={writesAvailable} onAddress={setTasksAddress} /> :
+          authority={authority} writesAvailable={writesAvailable} onAddress={setTasksAddress} connectionError={connectionError} verifiedAtMs={verifiedAt} /> :
           key === "buddies" ? <BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
             <Settings api={api} csrfToken={snapshot.csrfToken} connectionError={connectionError}
               access={snapshot.consoleAccess} reminders={snapshot.reminderSettings} refresh={refresh} writesAvailable={writesAvailable}

@@ -192,6 +192,10 @@ class CliViewTests(RealWorkspaceTestCase):
         row = next(entry for entry in listed["runs"] if entry["runId"] == run_id)
         self.assertTrue(row["title"])
         self.assertLessEqual(len(row["title"]), 120)
+        code, macros, _ = self.cli("macro-task-list", {})
+        self.assertEqual(code, 0, macros)
+        self.assertEqual(set(macros["totals"]), {"all", "active", "host", "review"})
+        self.assertNotIn("total", macros)
         code, status, _ = self.cli("status", {"runId": run_id})
         self.assertEqual(code, 0, status)
         for omitted in ("spec", "task", "selectedAttempt"):

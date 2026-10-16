@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { macroTaskMetrics, relatedEventsForRun, relatedEventsForSpan, rootRollups, runRollup, latestExecutionResult } from "./macro-task-metrics";
+import { macroTaskMetrics, relatedEventsForRun, relatedEventsForSpan, runRollup, latestExecutionResult } from "./macro-task-metrics";
 import { macroTaskTimelineFixture, macroTaskSummary } from "./macro-task-fixtures";
 import type { MacroTaskTimeline, TimelineEvent, TimelineSpan } from "./macro-task-types";
 
@@ -198,26 +198,18 @@ describe("related Host events by recorded identity", () => {
 });
 
 describe("per-micro-task rollups", () => {
-  it("orders root cards by recorded creation time, not by list order", () => {
-    const timeline = macroTaskTimelineFixture();
-    // r5 was created after r4 but appears earlier in the tree; creation order rules.
-    timeline.rows = [...timeline.rows];
-    const roots = rootRollups(timeline).map(rollup => rollup.row.runId);
-    expect(roots).toEqual(["r1", "r2", "r5", "r4", "r6"]);
-  });
-
   it("gathers rounds, helpers and pending requests for one run", () => {
     const timeline = macroTaskTimelineFixture();
-    const rollup = rootRollups(timeline).find(entry => entry.row.runId === "r2")!;
+    const rollup = runRollup(timeline.rows.find(row => row.runId === "r2")!, timeline);
     expect(rollup.executions.map(span => span.turnIndex)).toEqual([1, 2]);
     expect(rollup.helpers.map(row => row.runId)).toEqual(["r3"]);
     expect(rollup.pending).toEqual([]);
     expect(rollup.executionMs).not.toBeNull();
     // A run with an open host request reports it as pending.
-    const openWait = rootRollups({ ...timeline, spans: [...timeline.spans, {
+    const openWait = runRollup(timeline.rows.find(row => row.runId === "r2")!, { ...timeline, spans: [...timeline.spans, {
       ...timeline.spans[5]!, spanId: "s-r2-w2", runId: "r2", kind: "host", startAt: "2026-09-26T04:00:00Z", endAt: null,
       state: "open", requestId: "req-2", requestKind: "continue", summary: "等待续接决定",
-    }] as TimelineSpan[] }).find(entry => entry.row.runId === "r2")!;
+    }] as TimelineSpan[] });
     expect(openWait.pending.map(span => span.requestId)).toEqual(["req-2"]);
   });
 
@@ -236,7 +228,7 @@ describe("per-micro-task rollups", () => {
     const timeline = macroTaskTimelineFixture({
       truncated: { rows: true, spans: true, events: true }, scopeComplete: false, filtered: true,
     });
-    const rollup = rootRollups(timeline).find(entry => entry.row.runId === "r4")!;
+    const rollup = runRollup(timeline.rows.find(row => row.runId === "r4")!, timeline);
     const keys = rollup.limitations;
     expect(keys).toContain("scope");
     expect(keys).toContain("rows");

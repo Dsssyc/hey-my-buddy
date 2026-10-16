@@ -33,14 +33,9 @@ function CollapsibleContent({
 /** The mark of a disclosure: a thin chevron that points right when closed and turns down when open. */
 function Disclosure({ open, className }: { open: boolean; className?: string }) {
   return (
-    <ChevronRightIcon
-      data-slot="disclosure"
-      data-state={open ? "open" : "closed"}
-      size={16}
-      strokeWidth={1.5}
-      aria-hidden="true"
-      className={cn("shrink-0 text-ink2 transition-transform duration-200 motion-reduce:transition-none", open && "rotate-90", className)}
-    />
+    <ChevronRightIcon data-slot="disclosure" data-state={open ? "open" : "closed"}
+      size={16} strokeWidth={1.5} aria-hidden="true"
+      className={cn("shrink-0 text-ink2 transition-[transform,color] duration-[200ms,150ms] group-hover:text-foreground motion-reduce:transition-none", open && "rotate-90", className)} />
   )
 }
 

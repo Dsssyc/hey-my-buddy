@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { Button } from "@/components/ui/button";
 import { StateMark } from "@/components/ui/state-mark";
-import { formatClock, formatDuration, formatMoment } from "../i18n/format";
+import { formatClock, formatDuration, formatMomentMinutes } from "../i18n/format";
 import { taskTitle } from "../task-state";
 import type { TaskView, Workflow } from "./types";
 
@@ -29,8 +29,8 @@ function stateWord(view: TaskView, workflow: Workflow | null): Word {
 }
 
 /**
- * The head of the detail, in one line: the way back, what the micro task is and
- * in what state, when it began and how long it has gone on, and the one control
+ * The head of the detail: the way back, what the micro task is, when it began
+ * and how long it has gone on, and the one control
  * that reads it again. Reading is all it does; nothing here changes the board.
  */
 export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, error, busy, backTo, onBack, onRefresh }: {
@@ -46,27 +46,29 @@ export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, erro
   const start = Date.parse(view.task.createdAt);
   return <header data-slot="detail-header" className="shrink-0 border-b bg-card">
     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 px-4 py-3 sm:px-6">
-      <Button variant="outline" size="sm" onClick={onBack} className="mr-1.5"><ChevronLeft strokeWidth={1.5} aria-hidden="true" />{t(`back.${backTo}`)}</Button>
-      <div className="flex min-w-0 flex-1 items-center gap-2.5 max-[760px]:basis-[12rem]">
+      <Button variant="outline" size="sm" onClick={onBack} className="mr-1.5 max-[760px]:order-1"><ChevronLeft strokeWidth={1.5} aria-hidden="true" />{t(`back.${backTo}`)}</Button>
+      <div className="flex min-w-0 flex-1 items-center gap-2.5 max-[760px]:order-2 max-[760px]:basis-full">
         <StateMark kind={word.mark} />
         <Hint text={title.source === "task" ? t("title.fromTask", { title: title.fullText }) : title.source === "none" ? undefined : title.fullText}>
           <h2 tabIndex={0} className="min-w-0 truncate rounded-sm text-base font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{text}</h2>
         </Hint>
-        <span className={cn("shrink-0 text-xs", word.mark === "hand" ? "text-hand" : word.mark === "live" ? "text-live" : word.mark === "fail" ? "text-fail" : "text-ink2")}>{t(`state.${word.key}`)}</span>
-        {reminders.overdue && <span className="shrink-0 text-xs text-hand">{shell("reminders.overdue")}</span>}
-        {reminders.possiblyStuck && <span className="shrink-0 text-xs text-hand">{shell("reminders.possiblyStuck")}</span>}
       </div>
-      <div className="ml-auto flex shrink-0 items-center gap-x-4">
-        <dl className="flex gap-x-4 text-xs tabular-nums">
-          <div className="flex gap-1.5"><dt className="text-ink3">{t("header.started")}</dt><dd>{Number.isFinite(start) ? formatMoment(start, nowMs) : t("unrecorded")}</dd></div>
-          {Number.isFinite(start) && <div className="flex gap-1.5"><dt className="text-ink3">{t("header.elapsed")}</dt><dd>{formatDuration(Math.max(0, endMs - start))}</dd></div>}
+      <div className="ml-auto flex shrink-0 items-center gap-x-4 max-[760px]:order-3 max-[760px]:w-full max-[760px]:flex-wrap max-[760px]:gap-2">
+        <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums max-[760px]:basis-full">
+          <div className="flex gap-1.5"><dt className="text-ink3">{t("header.started")}</dt><dd>{formatMomentMinutes(start, nowMs)}</dd></div>
+          <div className="flex gap-1.5"><dt className="text-ink3">{t("header.elapsed")}</dt><dd>{formatDuration(Math.max(0, endMs - start))}</dd></div>
           {turns !== null && <div className="flex gap-1.5"><dt className="text-ink3">{t("header.turns")}</dt><dd>{turns}</dd></div>}
         </dl>
-        <Hint text={verifiedAtMs !== null ? t("refresh.verified", { time: formatClock(verifiedAtMs) }) : t("refresh.unverified")}>
-          <Button variant="outline" size="icon-sm" aria-label={t("refresh.label")} aria-busy={busy} aria-disabled={busy} onClick={onRefresh}>
-            <RefreshCw strokeWidth={1.5} aria-hidden="true" className={cn(busy && "animate-spin motion-reduce:animate-none")} />
-          </Button>
-        </Hint>
+        <div className="flex shrink-0 items-center gap-2 max-[760px]:ml-auto">
+          <span data-slot="detail-status" className={cn("text-xs whitespace-nowrap", word.mark === "hand" ? "text-hand" : word.mark === "live" ? "text-live" : word.mark === "fail" ? "text-fail" : "text-ink2")}>{t(`state.${word.key}`)}</span>
+          {reminders.overdue && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.overdue")}</span>}
+          {reminders.possiblyStuck && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.possiblyStuck")}</span>}
+          <Hint text={verifiedAtMs !== null ? t("refresh.verified", { time: formatClock(verifiedAtMs) }) : t("refresh.unverified")}>
+            <Button variant="outline" size="icon-sm" aria-label={t("refresh.label")} aria-busy={busy} aria-disabled={busy} onClick={onRefresh}>
+              <RefreshCw strokeWidth={1.5} aria-hidden="true" className={cn(busy && "animate-spin motion-reduce:animate-none")} />
+            </Button>
+          </Hint>
+        </div>
       </div>
     </div>
     {error && <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t bg-fail-wash px-4 py-2 text-fail sm:px-6">

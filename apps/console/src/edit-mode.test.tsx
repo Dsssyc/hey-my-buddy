@@ -87,7 +87,7 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
     command,
     task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
   return { api, command, operations, published,
     snapshot: () => state,

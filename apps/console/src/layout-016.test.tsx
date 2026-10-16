@@ -4,9 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MacroTaskTimeline } from "./MacroTaskTimeline";
 import type { MacroTaskTimelineProps } from "./MacroTaskTimeline";
-import { MacroTaskList } from "./MacroTaskList";
 import { Popover } from "./Popover";
-import { listFixture, macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { macroTaskTimelineFixture } from "./macro-task-fixtures";
 import type { MacroTaskTimeline as MacroTaskTimelineData } from "./macro-task-types";
 import type { InspectorSelection } from "./inspector-card";
 
@@ -331,8 +330,10 @@ describe("§9 the inspector drawer stays reachable", () => {
       disconnect() {}
     });
     let column = 700;
-    const sections: Record<string, number> = { "tl-head": 120, "micro-task-band": 28, "tl-toolbar": 40, "inspector-separator": 10 };
+    let headerHeight = 120;
+    const sections: Record<string, number> = { "tl-toolbar": 40, "inspector-separator": 10 };
     const sectionHeight = (element: HTMLElement) => {
+      if (element.dataset.slot === "macro-overview-header") return headerHeight;
       for (const [name, height] of Object.entries(sections)) if (element.classList.contains(name)) return height;
       return 0;
     };
@@ -345,8 +346,7 @@ describe("§9 the inspector drawer stays reachable", () => {
     render(<MacroTaskTimeline {...baseProps(macroTaskTimelineFixture())} />);
     await user.click(within(dock()).getByRole("button", { name: "展开检查器" }));
     const root = document.querySelector(".timeline-view")!;
-    // The card-band budget also observes the column; target the drawer's
-    // observer, which observes the timeline body as well as fixed sections.
+    // Target the drawer's observer, which observes the timeline body and fixed sections.
     const drawerObserver = observers.find(observer => observer.targets.includes(root)
       && observer.targets.some(target => target.matches(".timeline-body, .tl-body")))!;
     const resize = (height: number) => {
@@ -356,9 +356,9 @@ describe("§9 the inspector drawer stays reachable", () => {
     // Plenty of room: the 168px default.
     resize(700);
     expect(valueNow()).toBe(168);
-    // The reserved sections take 198px; 520 − 198 − 200 leaves 122px.
+    // The reserved sections take 170px; 520 − 170 − 200 leaves 150px.
     resize(520);
-    expect(valueNow()).toBe(122);
+    expect(valueNow()).toBe(150);
     expect(dock().className).not.toContain("collapsed");
     // An explicitly opened drawer retains a usable body in a short column.
     resize(450);
@@ -370,55 +370,9 @@ describe("§9 the inspector drawer stays reachable", () => {
     expect(valueNow()).toBe(80);
     fireEvent.keyDown(separator(), { key: "Enter" });
     expect(valueNow()).toBe(168);
-    // The header grows (for example the band expands): the drawer yields.
-    sections["micro-task-band"] = 200;
+    // A taller header makes the drawer yield.
+    headerHeight = 300;
     resize(700);
-    expect(valueNow()).toBe(700 - 370 - 200);
-  });
-});
-
-describe("§10/§11 the list filter popup", () => {
-  const rows = listFixture();
-  const listProps = (overrides: Record<string, unknown> = {}) => ({
-    rows, total: rows.length, loading: false, error: "", nextCursor: null, reorder: null,
-    filter: "all" as const, query: "", projectId: "", hostId: "",
-    choices: { projects: [{ id: "p1", label: "hey-my-buddy", path: null }], hosts: ["codex-desktop"] },
-    selected: null, rail: false, active: true,
-    onFilterChange: vi.fn(), onQueryChange: vi.fn(), onProjectChange: vi.fn(), onHostChange: vi.fn(),
-    onSelect: vi.fn(), onRefresh: vi.fn(), onRetry: vi.fn(), onMore: vi.fn(), onApplyReorder: vi.fn(),
-    ...overrides,
-  });
-
-  it("focuses the 项目 select when opened from the keyboard", async () => {
-    const user = userEvent.setup();
-    render(<MacroTaskList {...listProps()} />);
-    const button = screen.getByRole("button", { name: "筛选" });
-    button.focus();
-    await user.keyboard("{Enter}");
-    const dialog = screen.getByRole("dialog", { name: "筛选" });
-    expect(button.getAttribute("aria-controls")).toBe(dialog.id);
-    // The first dropdown, not the status buttons or any informational text.
-    const [project] = within(dialog).getAllByRole("combobox");
-    expect(project!.closest("label")!.textContent).toMatch(/^项目/);
-    await waitFor(() => expect(document.activeElement).toBe(project));
-  });
-
-  it("closes when the rail hides the list or the view is inactive, and does not reopen on return", async () => {
-    const user = userEvent.setup();
-    const view = render(<MacroTaskList {...listProps()} />);
-    await user.click(screen.getByRole("button", { name: "筛选" }));
-    expect(screen.getByRole("dialog", { name: "筛选" })).toBeTruthy();
-    view.rerender(<MacroTaskList {...listProps({ rail: true })} />);
-    expect(screen.queryByRole("dialog", { name: "筛选" })).toBeNull();
-    view.rerender(<MacroTaskList {...listProps({ rail: false })} />);
-    expect(screen.queryByRole("dialog", { name: "筛选" })).toBeNull();
-    expect(screen.getByRole("button", { name: "筛选" }).getAttribute("aria-expanded")).toBe("false");
-
-    await user.click(screen.getByRole("button", { name: "筛选" }));
-    expect(screen.getByRole("dialog", { name: "筛选" })).toBeTruthy();
-    view.rerender(<MacroTaskList {...listProps({ active: false })} />);
-    expect(screen.queryByRole("dialog", { name: "筛选" })).toBeNull();
-    view.rerender(<MacroTaskList {...listProps({ active: true })} />);
-    expect(screen.queryByRole("dialog", { name: "筛选" })).toBeNull();
+    expect(valueNow()).toBe(700 - 350 - 200);
   });
 });

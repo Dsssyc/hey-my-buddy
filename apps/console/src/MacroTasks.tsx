@@ -1,3 +1,6 @@
+import { cn } from "cn";
+import { Button } from "./components/ui/button";
+import { Collapsible, CollapsibleContent } from "./components/ui/collapsible";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -5,10 +8,15 @@ import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import type { MacroTaskFilter, MacroTaskSummary } from "./macro-task-types";
 import type { TimelineItem } from "./macro-task-display";
-import { CATEGORY_LABEL, categoryTone } from "./macro-task-display";
+
 import type { InspectorSelection } from "./inspector-card";
 import { Tasks } from "./Tasks";
-import { SplitView } from "./SplitView";
+import { ListFold } from "./MacroTaskList";
+import { Hint } from "./components/hint";
+import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "./components/ui/dialog";
+import { StateMark } from "./components/ui/state-mark";
+import { formatClockMinutes, formatNumber } from "./i18n/format";
 import { MacroTaskList } from "./MacroTaskList";
 import { MacroTaskTimeline } from "./MacroTaskTimeline";
 import { TaskDetail } from "./task-detail/TaskDetail";
@@ -20,10 +28,18 @@ import { useMacroTaskTimeline } from "./use-macro-task-timeline";
 import { stopScope, stopStatus, useMacroTaskStop } from "./macro-task-stop";
 import type { StopScope } from "./macro-task-stop";
 import type { AuthorityLatch } from "./console-session";
-import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
+
 import { displayTitle } from "./macro-task-display";
-import { useBackgroundInert } from "./modal";
+
 import { useViewPreference } from "./view-preferences";
+
+function ConnectionStrip({ error, verifiedAtMs, retry }: { error: string; verifiedAtMs: number | null; retry: () => void }) {
+  const { t } = useTranslation("tasks");
+  return <div data-slot="macro-offline" className="flex min-h-9 shrink-0 flex-wrap items-center gap-x-2.5 gap-y-1 border-b bg-fail-wash px-4 py-1 text-sm sm:px-6" role="alert"><StateMark kind="fail"/><Hint text={error}><span tabIndex={0}>{t("offline")}</span></Hint>
+    {verifiedAtMs !== null && <span className="text-xs text-ink2 tabular-nums">{t("lastRead", { time: formatClockMinutes(verifiedAtMs) })}</span>}
+    <Button variant="outline" size="sm" className="ml-auto" onClick={retry}>{t("retry")}</Button>
+  </div>;
+}
 
 /** The macroTask stop's explicit confirmation: names the macroTask and its scope. */
 function StopDialog({ summary, scope, onConfirm, onCancel }: {
@@ -32,39 +48,27 @@ function StopDialog({ summary, scope, onConfirm, onCancel }: {
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  const { t } = useTranslation("shell");
+  const { t } = useTranslation(["shell", "tasks"]);
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const backdrop = useRef<HTMLDivElement>(null);
-  useBackgroundInert(backdrop);
-  useEffect(() => { cancelRef.current?.focus(); }, []);
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      onCancel();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onCancel]);
-  const title = displayTitle(summary.titleSource, summary.title).text;
-  return <div className="dialog-backdrop" ref={backdrop}>
-    <div className="dialog stop-dialog" role="dialog" aria-modal="true" aria-labelledby="stop-macro-task-title" aria-describedby="stop-macro-task-name stop-macro-task-body stop-macro-task-counts">
-      <h2 id="stop-macro-task-title">{t("macroStop.title")}</h2>
-      <p id="stop-macro-task-name" className="stop-dialog-task-title" title={title}>{title}</p>
-      <p id="stop-macro-task-body">{t("macroStop.scope")}</p>
-      <ul id="stop-macro-task-counts" className="stop-dialog-counts">
+  const title = summary.titleSource === "none" ? t("tasks:unnamed") : displayTitle(summary.titleSource, summary.title).text;
+  return <Dialog open onOpenChange={open => { if (!open) onCancel(); }}>
+    <DialogContent className="rounded-none text-sm" onOpenAutoFocus={event => { event.preventDefault(); cancelRef.current?.focus(); }} aria-describedby="stop-macro-task-name stop-macro-task-body stop-macro-task-counts">
+      <DialogTitle>{t("macroStop.title")}</DialogTitle>
+      <Hint text={title}><p id="stop-macro-task-name" tabIndex={0} className="truncate text-sm font-medium">{title}</p></Hint>
+      <DialogDescription id="stop-macro-task-body">{t("macroStop.scope")}</DialogDescription>
+      <ul id="stop-macro-task-counts" className="grid gap-1 text-sm tabular-nums">
         <li>{t("macroStop.scopeRoots", { count: scope.roots })}</li>
         <li>{t("macroStop.scopeHelpers", { count: scope.helpers })}</li>
         <li>{t("macroStop.scopeDelivered", { count: scope.delivered })}</li>
         <li>{t("macroStop.scopeAwaitingHost", { count: scope.awaitingHost })}</li>
         <li>{t("macroStop.scopeAccepted", { count: summary.counts.accepted })}</li>
       </ul>
-      <div className="actions">
-        <button ref={cancelRef} type="button" className="button" onClick={onCancel}>{t("macroStop.cancel")}</button>
-        <button type="button" className="button danger" onClick={onConfirm}>{t("macroStop.confirm")}</button>
+      <div data-slot="stop-dialog-actions" className="flex justify-end gap-2">
+        <Button ref={cancelRef} variant="outline" onClick={onCancel}>{t("macroStop.cancel")}</Button>
+        <Button variant="destructive" onClick={onConfirm}>{t("macroStop.confirm")}</Button>
       </div>
-    </div>
-  </div>;
+    </DialogContent>
+  </Dialog>;
 }
 
 /**
@@ -79,14 +83,16 @@ function StopDialog({ summary, scope, onConfirm, onCancel }: {
  * browser's history, and choosing a step of a micro task only replaces the one
  * it is on.
  */
-export function MacroTasks({ snapshot, api, refresh, active = true, authority, writesAvailable = true, onAddress }: {
+export function MacroTasks({ snapshot, api, refresh, active = true, authority, writesAvailable = true, onAddress, connectionError = "", verifiedAtMs = null }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active?: boolean;
   authority?: AuthorityLatch; writesAvailable?: boolean;
   /** Told where the page is, so that the link back to the tasks leads to the same place. */
   onAddress?: (hash: string) => void;
+  connectionError?: string; verifiedAtMs?: number | null;
 }) {
+  const { t } = useTranslation("tasks");
   const [view, setView] = useState<"macroTasks" | "records">("macroTasks");
-  const [listCollapsed, setListCollapsed] = useViewPreference("micro-task-list-collapsed");
+  const [listCollapsed, setListCollapsed] = useViewPreference("macro-task-list-collapsed");
   const [location, setLocation] = useState<TasksLocation>(() => tasksLocation(window.location.hash) ?? TASKS_ROOT);
   // The timeline item the open detail came from; it names the step the detail opens on.
   const [origin, setOrigin] = useState<string | null>(null);
@@ -113,45 +119,58 @@ export function MacroTasks({ snapshot, api, refresh, active = true, authority, w
     window.addEventListener("popstate", changed);
     return () => { window.removeEventListener("hashchange", changed); window.removeEventListener("popstate", changed); };
   }, []);
-  const destination = view === "macroTasks" ? "全部执行记录" : "宏任务";
-  const listNavigation = <button type="button" className="button small-button history-view-toggle"
-    title={`切换到${destination}`} aria-label={`切换到${destination}`}
-    onClick={() => setView(current => current === "macroTasks" ? "records" : "macroTasks")}>
-    <span aria-hidden="true">⇄</span>
-  </button>;
-  return <div className="history-switch">
-    <div className="history-view" hidden={view !== "macroTasks"}>
+  const listNavigation = () => <div data-slot="macro-list-navigation" className="flex items-center gap-3.5" role="group" aria-label={t("list")}>
+    <button type="button" className={cn("h-7 text-base hover:text-foreground transition-colors duration-150 motion-reduce:transition-none", view === "macroTasks" ? "font-semibold text-foreground" : "font-normal text-ink2")} aria-pressed={view === "macroTasks"} onClick={() => setView("macroTasks")}>{t("macro")}</button>
+    <button type="button" className={cn("h-7 text-base hover:text-foreground transition-colors duration-150 motion-reduce:transition-none", view === "records" ? "font-semibold text-foreground" : "font-normal text-ink2")} aria-pressed={view === "records"} onClick={() => setView("records")}>{t("records")}</button>
+  </div>;
+  return <div className="flex h-full min-h-0 flex-col">
+    {view === "records" && connectionError && <ConnectionStrip error={connectionError} verifiedAtMs={verifiedAtMs} retry={() => { void refresh(); }}/>}
+    <div className="min-h-0 flex-1 overflow-hidden" hidden={view !== "macroTasks"}>
       <MacroTasksWorkspace snapshot={snapshot} api={api} refresh={refresh}
-        active={active && view === "macroTasks"} authority={authority} writesAvailable={writesAvailable}
+        active={active && view === "macroTasks"} authority={authority} writesAvailable={writesAvailable} connectionError={connectionError} verifiedAtMs={verifiedAtMs}
         location={location} origin={origin} go={go}
         listNavigation={listNavigation} listCollapsed={listCollapsed}
         onCollapseList={() => setListCollapsed(true)} onExpandList={() => setListCollapsed(false)} />
     </div>
-    <div className="history-view" hidden={view !== "records"}>
+    <div className="min-h-0 flex-1 overflow-hidden" hidden={view !== "records"}>
       <Tasks snapshot={snapshot} api={api} refresh={refresh} active={active && view === "records"}
         onOpenMicroTask={(macroTaskId, runId) => go({ macroTaskId, runId, step: null }, "push")}
-        listNavigation={listNavigation} listCollapsed={listCollapsed}
+        listNavigation={listNavigation()} listCollapsed={listCollapsed}
         onCollapseList={() => setListCollapsed(true)} onExpandList={() => setListCollapsed(false)} />
     </div>
   </div>;
 }
 
-function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writesAvailable, location, origin, go, listNavigation, listCollapsed, onCollapseList, onExpandList }: {
+function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writesAvailable, location, origin, go, listNavigation, listCollapsed, onCollapseList, onExpandList, connectionError, verifiedAtMs }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active: boolean;
-  authority?: AuthorityLatch; writesAvailable: boolean;
+  authority?: AuthorityLatch; writesAvailable: boolean; connectionError: string; verifiedAtMs: number | null;
   location: TasksLocation; origin: string | null;
   go: (next: TasksLocation, how: "push" | "replace", from?: string | null) => void;
-  listNavigation: ReactNode; listCollapsed: boolean; onCollapseList: () => void; onExpandList: () => void;
+  listNavigation: () => ReactNode; listCollapsed: boolean; onCollapseList: () => void; onExpandList: () => void;
 }) {
-  const { t } = useTranslation("shell");
+  const { t } = useTranslation(["tasks", "shell"]);
   const [filter, setFilter] = useState<MacroTaskFilter>("all");
-  const [query, setQuery] = useState(""), [projectId, setProjectId] = useState(""), [hostId, setHostId] = useState("");
+  const [query, setQuery] = useState("");
   const selected = location.macroTaskId;
+  const [showNarrowList, setShowNarrowList] = useState(!selected);
+  const [menuOpen, setMenuOpen] = useState(false);
+  useEffect(() => setMenuOpen(false), [active, selected]);
   const detailRunId = selected ? location.runId : null;
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const media = window.matchMedia("(max-width: 760px)");
+    const changed = () => setNarrow(media.matches);
+    changed(); media.addEventListener("change", changed);
+    return () => media.removeEventListener("change", changed);
+  }, []);
   // The pinned inspector selection, kept per macroTask so switching back restores it.
   const [selectionByMacroTask, setSelectionByMacroTask] = useState<Map<string, InspectorSelection>>(() => new Map());
-  const list = useMacroTaskList(api, { query, projectId, hostId, filter }, active);
+  const list = useMacroTaskList(api, { query, filter }, active);
   const timeline = useMacroTaskTimeline(api, selected, active);
+  useEffect(() => {
+    if (active && !selected && list.rows.length) go({ macroTaskId: list.rows[0].macroTaskId, runId: null, step: null }, "replace");
+  }, [active, selected, list.rows]);
   const detailClient = useMemo(() => createTaskDetailClient(api, snapshot.csrfToken), [api, snapshot.csrfToken]);
   // The list row is freshest, but a list refresh must never unmount an open
   // detail: the timeline read's summary covers the gap, and a snapshot of the
@@ -166,25 +185,6 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   }, [listedSummary, selected]);
   const selectedSummary = listedSummary
     ?? (summarySnapshot?.macroTaskId === selected ? summarySnapshot : null);
-  const choices = useMemo(() => ({
-    projects: [...new Map(list.rows.map(row => [row.project.id, row.project])).values()],
-    hosts: [...new Set(list.rows.map(row => row.sourceHostId).filter((id): id is string => !!id))].sort(),
-  }), [list.rows]);
-
-  // The viewport picks the layout: at 760px or below the list gives way to the
-  // macro task that is chosen, and the detail's two columns stack.
-  const railButtonRef = useRef<HTMLButtonElement>(null);
-  const [narrowViewport, setNarrowViewport] = useState(false);
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
-    const query = window.matchMedia("(max-width: 760px)");
-    const update = () => setNarrowViewport(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-  const railActive = listCollapsed;
-
   // MacroTask-level stop: the one retained write, with its explicit
   // confirmation and a retained command identity. Nothing here locks browsing.
   const reload = async () => {
@@ -208,7 +208,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   }
   const selection = selected ? selectionByMacroTask.get(selected) ?? null : null;
 
-  const selectMacroTask = (macroTaskId: string | null) => go({ macroTaskId, runId: null, step: null }, "push");
+  const selectMacroTask = (macroTaskId: string) => { setShowNarrowList(false); go({ macroTaskId, runId: null, step: null }, "push"); };
   const openRun = (runId: string, from: string | null = null) => {
     // Opening from a row or a card names no span: the detail opens on its own first choice.
     setSelection({ type: "run", runId });
@@ -226,43 +226,28 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   }
   const backToTimeline = () => go({ macroTaskId: selected, runId: null, step: null }, "push");
 
-  // The header's stop control: one macro-task-level action, its honest status,
-  // and the replay entry for a lost reply. Read-only sessions see the reason.
   let stopControl: ReactNode = null;
   if (selectedSummary) {
     const stopping = stopEntry?.phase === "stopping";
     const scope = stopScope(selectedSummary);
-    const stoppingAvailable = scope.roots + scope.helpers > 0;
-    stopControl = <span className="stop-control">
-      <button type="button" className="button small-button danger"
-        disabled={!stop.writable || stopping || !stoppingAvailable}
-        title={!stop.writable ? LOGIN_EXPIRED_ACTION_REFUSAL : stopping ? t("macroStop.pending") : !stoppingAvailable ? t("macroStop.noActive") : t("macroStop.actionHint")}
-        onClick={() => stop.requestStop(selectedSummary, scope)}>{t("macroStop.title")}</button>
-      {stopState && <span className={`stop-status stop-${stopState.phase}`} role="status"
-        title={stopState.detail}>{stopState.label}</span>}
-      {stopState?.phase === "unknown" && stop.writable && !stopping
-        && <button type="button" className="button small-button"
-          title={t("macroStop.retryHint")}
-          onClick={() => stop.retryStop(selectedSummary)}>{t("macroStop.retry")}</button>}
-      {stopState?.phase === "refused"
-        && <button type="button" className="button small-button" onClick={() => stop.dismissStop(selectedSummary.macroTaskId)}>{t("macroStop.dismiss")}</button>}
-    </span>;
+    const reason = !stop.writable ? t("readonly") : stopping ? t("stopping") : scope.roots + scope.helpers === 0 ? t("shell:macroStop.noActive") : undefined;
+    stopControl = <div data-slot="macro-stop-menu" className="flex items-center gap-2">
+      {stopState && <Hint text={stopState.detail}><span data-slot="macro-stop-state" className={cn("text-xs", stopState.phase === "refused" ? "text-fail" : stopState.phase === "stopping" || stopState.phase === "in-progress" ? "text-live" : stopState.phase === "stopped" || stopState.phase === "acknowledged" ? "text-past" : "text-hand")} role="status">{stopState.label}</span></Hint>}
+      {stopState?.phase === "unknown" && stop.writable && !stopping && <Hint text={t("shell:macroStop.retryHint")}><Button variant="outline" size="sm" onClick={() => stop.retryStop(selectedSummary)}>{t("shell:macroStop.retry")}</Button></Hint>}
+      {stopState?.phase === "refused" && <Button variant="outline" size="sm" onClick={() => stop.dismissStop(selectedSummary.macroTaskId)}>{t("shell:macroStop.dismiss")}</Button>}
+      <Popover open={menuOpen && active} onOpenChange={setMenuOpen}><PopoverTrigger asChild><Button data-slot="macro-menu-button" variant="outline" size="icon" aria-label={t("more")}>⋯</Button></PopoverTrigger>
+        <PopoverContent align="end" className="w-40 rounded-none p-1">
+          <Hint text={reason}><Button data-slot="macro-stop-action" variant="ghost" className="w-full justify-start" aria-label={t("shell:macroStop.title")} aria-disabled={!!reason} onClick={() => { if (!reason) { setMenuOpen(false); stop.requestStop(selectedSummary, scope); } }}>{t("stop")}</Button></Hint>
+        </PopoverContent>
+      </Popover>
+    </div>;
   }
-
   const listPane = <MacroTaskList
-    rows={list.rows} total={list.total} loading={list.loading} error={list.error} verifiedAtMs={list.verifiedAtMs}
-    nextCursor={list.nextCursor} reorder={list.reorder}
-    filter={filter} query={query} projectId={projectId} hostId={hostId} choices={choices}
-    selected={selected}
-    active={active}
-    visible={active && !railActive && !(narrowViewport && !!selected)}
-    rail={railActive} railButtonRef={railButtonRef}
-    listNavigation={listNavigation}
-    onCollapse={onCollapseList}
-    onToggleRail={onExpandList}
-    onFilterChange={setFilter} onQueryChange={setQuery} onProjectChange={setProjectId} onHostChange={setHostId}
-    onSelect={selectMacroTask} onRetry={list.retry} onMore={list.more}
-    onApplyReorder={list.applyReorder} />;
+    rows={list.rows} totals={list.totals} loading={list.loading} error={list.error}
+    nextCursor={list.nextCursor} reorder={list.reorder} filter={filter} query={query} selected={selected}
+    active={active} visible={active && !listCollapsed && (!narrow || showNarrowList)} listNavigation={listNavigation()} onCollapse={onCollapseList}
+    onFilterChange={setFilter} onQueryChange={setQuery} onSelect={selectMacroTask}
+    onMore={list.more} onApplyReorder={list.applyReorder} />;
 
   // The detail takes the place of the timeline, under the macro task's own header.
   const detail = detailRunId ? <TaskDetail key={detailRunId} client={detailClient} runId={detailRunId}
@@ -287,6 +272,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     openedRunId={detailRunId}
     selection={selection}
     headerActions={stopControl}
+    listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
     buddies={snapshot.buddies}
     onSelectItem={selectItem}
     onOpenItem={openItem}
@@ -294,25 +280,30 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     onOpenRun={runId => openRun(runId)}
     onClearSelection={() => setSelection(null)}
     onRetry={() => void timeline.retry()}
-    onBackToList={() => selectMacroTask(null)} /> : null;
+    onBackToList={() => { setShowNarrowList(true); if (listCollapsed) onExpandList(); }} /> : null;
 
-  const detailPane = <aside className="panel detail-panel" aria-label="宏任务详情">
-    {selected && <div className="panel-toolbar list-mobile-navigation">
-      {listNavigation}<h2>宏任务</h2>
-      <button type="button" className="button small-button" title={listCollapsed ? "展开宏任务列表" : "收起宏任务列表"}
-        aria-label={listCollapsed ? "展开宏任务列表" : "收起宏任务列表"}
-        onClick={listCollapsed ? onExpandList : onCollapseList}>{listCollapsed ? "展开列表" : "收起列表"}</button>
-    </div>}
+  const disconnected = !!connectionError || !!list.error;
+  const lastRead = list.verifiedAtMs ?? verifiedAtMs;
+  const empty = !list.loading && !list.error && list.totals.all === 0 && !query && filter === "all";
+  const detailPane = <aside data-slot="macro-detail" className={cn("col-start-2 flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-card", !listCollapsed && showNarrowList && !empty && "max-[760px]:hidden")} aria-label={t("detail")}>
     {selected
-      ? <div className="right-stage"><div className="right-stage-pane">{timelinePane}</div></div>
-      : <div className="detail-placeholder">
-        <h2>选择一个宏任务</h2>
-
-      </div>}
+      ? <div className="flex min-h-0 flex-1 flex-col"><div className="flex min-h-0 min-w-0 flex-1 flex-col [container-type:inline-size]">{timelinePane}</div></div>
+      : <>
+        {listCollapsed && <div className="flex gap-3 px-4 py-3.5"><ListFold label={t("expand")} onClick={onExpandList}/>{listNavigation()}</div>}
+        <div data-slot="macro-first-use" className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-card px-6 pt-6 pb-26 text-center">{empty && <svg width="40" height="40" viewBox="3 3 58 58" className="fill-ink3 opacity-35" aria-hidden="true"><polygon points="12,13 22,13 22,61 12,54"/><polygon points="22,32 30,28 30,38 22,42"/><polygon points="42,3 52,10 52,51 42,51"/><polygon points="34,26 42,22 42,32 34,36"/><polygon points="30,28 34,26 34,36 30,38"/></svg>}<h2 className="text-base font-semibold">{t(empty ? "emptyTitle" : "choose")}</h2>
+          {empty && <><p className="text-sm text-ink2">{t("emptyBody")}</p><div className="mt-4.5 flex flex-wrap justify-center gap-4.5 border-t pt-3.5 text-xs text-ink3 tabular-nums"><span>{t("harnesses", { n: formatNumber((snapshot.harnesses ?? []).filter(h => h.status === "ready").length) })}</span><span>{t("buddies", { n: formatNumber(snapshot.buddies.filter(b => b.enabled).length) })}</span><a href="#buddies" className="text-live underline">{t("buddy")}</a></div></>}
+        </div>
+      </>}
   </aside>;
   return <>
-    <div className="workspace-wrap">
-      <SplitView selected={!!selected} rail={railActive} list={listPane} detail={detailPane} />
+    <div className="flex h-full min-h-0 flex-col">
+      {disconnected && <ConnectionStrip error={connectionError || list.error} verifiedAtMs={lastRead} retry={() => { if (connectionError) void refresh(); else list.retry(); }}/>}
+      <Collapsible open={!listCollapsed} onOpenChange={open => open ? onExpandList() : onCollapseList()} asChild>
+        <div data-slot="macro-workspace" className={cn("grid min-h-0 flex-1 transition-[grid-template-columns] duration-200 motion-reduce:transition-none max-[760px]:flex max-[760px]:flex-col", listCollapsed ? "grid-cols-[0px_minmax(0,1fr)]" : "grid-cols-[316px_minmax(0,1fr)]")}>
+          <CollapsibleContent data-slot="macro-sidebar" className={cn("h-full min-h-0 min-w-0 w-full", !showNarrowList && !empty && "max-[760px]:hidden", empty && "max-[760px]:h-auto max-[760px]:shrink-0")}>{listPane}</CollapsibleContent>
+          {detailPane}
+        </div>
+      </Collapsible>
     </div>
     {stop.confirming && <StopDialog summary={stop.confirming.summary} scope={stop.confirming.scope}
       onConfirm={() => stop.confirmStop(stop.confirming!.summary)}

@@ -1,16 +1,24 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import enBuddies from "./en/buddies";
+import enCommon from "./en/common";
+import enMacroHeader from "./en/macroHeader";
 import enShell from "./en/shell";
 import enTaskDetail from "./en/taskDetail";
+import { tasks as enTasks } from "./en/tasks";
 import zhBuddies from "./zh/buddies";
+import zhCommon from "./zh/common";
+import zhMacroHeader from "./zh/macroHeader";
 import zhShell from "./zh/shell";
 import zhTaskDetail from "./zh/taskDetail";
+import { tasks as zhTasks } from "./zh/tasks";
 
 /** One namespace per page, so that pages can be written independently. */
 const resources = {
-  zh: { shell: zhShell, buddies: zhBuddies, taskDetail: zhTaskDetail },
-  en: { shell: enShell, buddies: enBuddies, taskDetail: enTaskDetail },
+  zh: { shell: zhShell, buddies: zhBuddies, taskDetail: zhTaskDetail, tasks: zhTasks,
+    macroHeader: zhMacroHeader, common: zhCommon },
+  en: { shell: enShell, buddies: enBuddies, taskDetail: enTaskDetail, tasks: enTasks,
+    macroHeader: enMacroHeader, common: enCommon },
 };
 type Language = keyof typeof resources;
 

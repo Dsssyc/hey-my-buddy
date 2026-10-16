@@ -135,7 +135,7 @@ function fixture(options: {
   });
   const api = { runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
     snapshot, tasks, command, task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
-    macroTasks: vi.fn(async () => ({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
     macroTaskTimeline: vi.fn(async (macroTaskId: string) => ({ timeline: timelineOfRecords(macroTaskId, records), verifiedAtMs: null })) } as unknown as ConsoleApi;
   return { api, command, operations, published, snapshot, tasks,
     state: () => state,
@@ -316,7 +316,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(f.published).toHaveLength(0);
     // Navigation keeps working and no control reacquires authority.
     await user.click(screen.getByRole("link", { name: "任务" }));
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     expect(screen.getByRole("heading", { name: "选择一项微任务" })).toBeTruthy();
     expect(f.operations).toEqual([]);
     // Refreshing again never regains rights without a new login.
@@ -354,7 +354,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect((await screen.findAllByText(/暂时不能发现模型/)).length).toBeGreaterThan(0);
     // Browsing and the read-only detail keep working.
     await user.click(screen.getByRole("link", { name: "任务" }));
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await user.click(await screen.findByRole("button", { name: /只读普通任务/ }));
     await screen.findByRole("heading", { name: /只读普通任务/ });
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
@@ -493,7 +493,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     const first = fixture({ records, workflows });
     const user = userEvent.setup();
     render(<App suppliedApi={first.api} />);
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await screen.findByRole("button", { name: /普通待执行任务/ });
     await user.click(screen.getByRole("button", { name: /普通待执行任务/ }));
     await screen.findByRole("heading", { name: /普通待执行任务/ });
@@ -507,7 +507,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(window.location.hash).toMatch(/^#tasks\/run%3Amicro-task-awaiting\/micro-task-awaiting/);
     await within(detail).findByRole("navigation", { name: "步骤" });
     noControls(detail);
-    await user.click(screen.getAllByRole("button", { name: "切换到全部执行记录" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "记录" })[0]!);
     await user.click(await screen.findByRole("button", { name: /已交付目标/ }));
     await waitFor(() => expect(window.location.hash).toMatch(/^#tasks\/run%3Adelivered-task\/delivered-task/));
     const delivery = await screen.findByRole("region", { name: "微任务详情" });
@@ -523,12 +523,12 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     // writes to a micro task (0.15.1 U4).
     const writer = fixture({ records, workflows });
     render(<App suppliedApi={writer.api} />);
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await user.click(await screen.findByRole("button", { name: /待协助目标/ }));
     const writerDetail = await screen.findByRole("region", { name: "微任务详情" });
     await within(writerDetail).findByRole("navigation", { name: "步骤" });
     noControls(writerDetail);
-    await user.click(screen.getAllByRole("button", { name: "切换到全部执行记录" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "记录" })[0]!);
     await user.click(screen.getByRole("button", { name: /可重试任务/ }));
     await screen.findByRole("heading", { name: /可重试任务/ });
     expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
@@ -544,13 +544,13 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     const f = fixture({ records: [awaiting], workflows });
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await user.click(await screen.findByRole("button", { name: /可浏览任务/ }));
     const detail = await screen.findByRole("region", { name: "微任务详情" });
     await within(detail).findByRole("navigation", { name: "步骤" });
     expect(await within(detail).findByText("协助 browse-task")).toBeTruthy();
     // Filters and searches stay usable without any write attempt.
-    await user.click(screen.getAllByRole("button", { name: "切换到全部执行记录" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "记录" })[0]!);
     await user.type(screen.getByLabelText("搜索微任务"), "可浏览");
     await waitFor(() => expect(f.tasks).toHaveBeenLastCalledWith(expect.objectContaining({ query: "可浏览" }), expect.any(AbortSignal)));
     await user.click(screen.getByRole("link", { name: /Buddy/ }));
@@ -572,7 +572,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     const f = fixture({ records: [host, root, helper] });
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await user.click(screen.getByRole("checkbox", { name: "显示协助任务与内部执行" }));
     await screen.findByRole("button", { name: /Lead 协助任务/ });
     const helperRow = screen.getByRole("button", { name: /Lead 协助任务/ });
@@ -602,7 +602,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await user.type(note(), "断线草稿");
 
     await user.click(screen.getByRole("link", { name: /任务/ }));
-    await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
+    await user.click(await screen.findByRole("button", { name: "记录" }));
     await user.click(await screen.findByRole("button", { name: /断线可取消任务/ }));
     await screen.findByRole("heading", { name: /断线可取消任务/ });
     // The browser never offered task control in the first place (0.15.1 U4).
@@ -614,7 +614,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     // The authenticated poll now fails; the detail stays readable and empty of
     // write controls, and no mutation is dispatched from either session state.
     await readSnapshotOnForeground(f.api.snapshot);
-    expect(await screen.findByText("连接中断 ·")).toBeTruthy();
+    expect(await screen.findByText("连接中断")).toBeTruthy();
     expect(within(detail).queryByRole("group", { name: "用户决定" })).toBeNull();
     expect(within(detail).queryByRole("group", { name: "手工接续" })).toBeNull();
     // A failed poll is not a new-window takeover.

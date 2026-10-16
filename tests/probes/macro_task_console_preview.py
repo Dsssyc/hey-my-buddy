@@ -1251,7 +1251,7 @@ def timeline_row(entry: dict, depth: int) -> dict:
 
 def macro_task_summary(group: str, matching: set[str]) -> dict:
     entries = [FIXTURES["runs"][run_id] for run_id in FIXTURES["groups"][group]]
-    counts = {"roots": 0, "helpers": 0, "accepted": 0, "active": 0, "host": 0, "review": 0, "ended": 0,
+    counts = {"roots": 0, "helpers": 0, "accepted": 0, "failed": 0, "active": 0, "host": 0, "review": 0, "ended": 0,
               "stoppableRoots": 0, "stoppableHelpers": 0, "delivered": 0, "awaitingHost": 0}
     for entry in entries:
         counts[entry["category"]] += 1
@@ -1266,6 +1266,9 @@ def macro_task_summary(group: str, matching: set[str]) -> dict:
         # count through their root's acceptance, and the denominator is roots.
         if entry["parentRunId"] is None and entry["acceptanceVerdict"] == "accepted":
             counts["accepted"] += 1
+        if entry["parentRunId"] is None and (entry["state"] == "failed" or
+                                              (entry["hostConclusion"] or {}).get("executionStatus") == "failed"):
+            counts["failed"] += 1
     state = next((name for name in ("host", "active", "review") if counts[name]), "ended")
     if group.startswith("macro-"):
         meta = MACRO_TASKS[group]
@@ -1372,13 +1375,17 @@ def group_matching(group: str, applied: dict) -> set[str]:
 def macro_task_page(params: dict) -> dict:
     limit = parse_limit(params, 50, 100)
     applied = applied_filters(params)
+    base_scope = {key: value for key, value in applied.items() if key != "filter"}
+    totals = {name: sum(bool(group_matching(group, {**base_scope, "filter": name}))
+                        for group in FIXTURES["groups"])
+              for name in ("all", "active", "host", "review")}
     rows = [(FIXTURES["group_activity"][group][0], group)
             for group in FIXTURES["groups"] if group_matching(group, applied)]
     rows.sort(key=lambda item: (item[0], item[1]), reverse=True)
     return {
         "macroTasks": [macro_task_summary(group, group_matching(group, applied))
                        for _seq, group in rows[:limit]],
-        "total": len(rows), "nextCursor": None, "cursor": FIXTURES["head"], "changed": False,
+        "totals": totals, "nextCursor": None, "cursor": FIXTURES["head"], "changed": False,
     }
 
 
@@ -2080,11 +2087,11 @@ def resolve_asset(root: Path, relative: str) -> Path | None:
 # Self checks                                                                   #
 # --------------------------------------------------------------------------- #
 REQUIRED_KEYS = {
-    "MacroTaskPage": {"macroTasks", "total", "nextCursor", "cursor", "changed"},
-    "MacroTaskSummary": {"macroTaskId", "kind", "title", "titleSource", "description", "project",
+    "MacroTaskPage": {"macroTasks", "totals", "nextCursor", "cursor", "changed"},
+    "MacroTaskSummary": {"macroTaskId", "kind", "title", "titleSource", "description", "summary", "project",
                          "sourceHostId", "currentHostIds", "createdAt", "lastActivityAt", "lastActivitySeq",
                          "state", "counts", "matchingRuns", "rootRunIds"},
-    "MacroTaskCounts": {"roots", "helpers", "accepted", "active", "host", "review", "ended",
+    "MacroTaskCounts": {"roots", "helpers", "accepted", "failed", "active", "host", "review", "ended",
                         "stoppableRoots", "stoppableHelpers", "delivered", "awaitingHost"},
     "TimelineSpan": {"spanId", "runId", "kind", "startAt", "endAt", "state", "attemptId", "turnId",
                      "turnIndex", "requestId", "buddy", "shutdownConfirmed", "uncertain",
@@ -2247,6 +2254,11 @@ def validate_fixtures() -> list[str]:
         problems.append("preview-run-b5 must keep the unclaimed owned micro task that allows the Lead to wait")
     if set(page) != REQUIRED_KEYS["MacroTaskPage"]:
         problems.append(f"MacroTaskPage: keys {sorted(set(page))}")
+    expected_totals = {name: sum(bool(group_matching(group, {"filter": name}))
+                                 for group in FIXTURES["groups"])
+                       for name in ("all", "active", "host", "review")}
+    if page["totals"] != expected_totals or macro_task_page({"filter": "host"})["totals"] != expected_totals:
+        problems.append("macro task totals must count each category across the same scope regardless of selected filter")
     if json.dumps(macro_task_page({}), sort_keys=True) != json.dumps(macro_task_page({}), sort_keys=True):
         problems.append("macro task list is not stable across reads")
     if json.dumps(macro_task_timeline({"macroTaskId": MACRO_B}, "normal"), sort_keys=True) != json.dumps(
@@ -2270,14 +2282,21 @@ def validate_fixtures() -> list[str]:
     if any(item["description"] is not None and item["kind"] == "standalone"
            for item in page["macroTasks"]):
         problems.append("standalone groups must not carry a description")
-    if not all(isinstance(item["counts"]["accepted"], int) for item in page["macroTasks"]):
-        problems.append("counts.accepted must be present on every summary")
+    if not all(isinstance(item["counts"][key], int) for item in page["macroTasks"]
+               for key in ("accepted", "failed")):
+        problems.append("root outcome counts must be present on every summary")
     accepted_a = sum(1 for run_id in FIXTURES["groups"][MACRO_A]
                      if FIXTURES["runs"][run_id]["parentRunId"] is None
                      and FIXTURES["runs"][run_id]["acceptanceVerdict"] == "accepted")
     for item in page["macroTasks"]:
         if item["counts"]["accepted"] > item["counts"]["roots"]:
             problems.append(f"{item['macroTaskId']}: accepted exceeds roots")
+        expected_failed = sum(1 for run_id in FIXTURES["groups"][item["macroTaskId"]]
+                              if FIXTURES["runs"][run_id]["parentRunId"] is None
+                              and (FIXTURES["runs"][run_id]["state"] == "failed" or
+                                   (FIXTURES["runs"][run_id]["hostConclusion"] or {}).get("executionStatus") == "failed"))
+        if item["counts"]["failed"] != expected_failed:
+            problems.append(f"{item['macroTaskId']}: failed does not match failed root turns")
     if summary_a["counts"]["accepted"] != accepted_a:
         problems.append("counts.accepted does not match the accepted members")
     if not all(row["taskSummary"] == task_first_line(FIXTURES["runs"][row["runId"]]["task"])

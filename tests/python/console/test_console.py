@@ -961,6 +961,8 @@ class ConsoleMacroTaskTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(headers["cache-control"], "private, max-age=0, must-revalidate")
         page = json.loads(body)
         self.assertEqual(page, json.loads(json.dumps(board.call("macro_task_list", {"limit": 5, "filter": "all"}))))
+        self.assertEqual(page["totals"], {"all": 2, "active": 2, "host": 0, "review": 0})
+        self.assertNotIn("total", page)
         self.assertEqual({item["macroTaskId"] for item in page["macroTasks"]},
                          {first["macroTaskId"], f"run:{loose['runId']}"})
         status, _headers, body = browser.get(f"/api/macro-tasks/{first['macroTaskId']}/timeline?limit=10")

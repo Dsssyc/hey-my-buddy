@@ -131,7 +131,7 @@ describe("a route", () => {
       excluded: [{ buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" }, reason: "提交时排除低推理强度" }], preferences: [] };
     const f = open({ step: 2, replies: { routing: [routing({ source: "no-candidate", routerBuddy: null, routingMode: null })], bases: { "decision-1": bounds } } });
     await ready();
-    expect(pane().textContent).toContain("没有合法候选");
+    await waitFor(() => expect(pane().textContent).toContain("没有合法候选"));
     expect(pane().textContent).not.toContain("模型选择");
     expect(band().textContent).toContain("未调用 Router");
     await waitFor(() => expect(f.reads.basis).toHaveBeenCalledExactlyOnceWith("decision-1"));
@@ -279,7 +279,7 @@ describe("the inquiries", () => {
 });
 
 describe("the head", () => {
-  it("is one row: the way back, the mark with the title, the word, the figures and the control that reads again", async () => {
+  it("keeps the mark with the title and the state beside the refresh control", async () => {
     open();
     await ready();
     const row1 = head().firstElementChild as HTMLElement;
@@ -288,9 +288,11 @@ describe("the head", () => {
     const titled = children[1] as HTMLElement;
     expect(titled.querySelector("h2")!.textContent).toBe("微任务详情");
     expect(titled.firstElementChild!.getAttribute("data-slot")).toBe("state-mark");
-    expect(titled.textContent).toContain("等待验收");
+    expect(titled.textContent).not.toContain("等待验收");
     const right = children[2] as HTMLElement;
     expect(right.textContent).toMatch(/开始.*历时.*回合/);
+    expect(within(right).getByText("等待验收")).toBeTruthy();
+    expect(right.querySelector("[data-slot=detail-status]")?.parentElement?.querySelector("button[aria-label=重新读取]")).toBeTruthy();
     expect(within(right).getByRole("button", { name: "重新读取" })).toBeTruthy();
     expect(children).toHaveLength(3);
   });

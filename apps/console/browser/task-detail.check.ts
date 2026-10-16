@@ -45,18 +45,27 @@ async function expectDetailWhole(page: Page, { skipTitle = false } = {}) {
   expect(sideways, "the pane scrolls sideways").toBeLessThanOrEqual(0);
 }
 
-/** The head is one line, and the control that reads again stays with the figures: on a narrow screen they wrap together. */
+/** The title takes its own line on narrow screens; status stays beside refresh. */
 async function expectOneLineHead(page: Page, refresh: string, narrow: boolean) {
   const header = detail(page).locator("[data-slot=detail-header]");
-  const [back, title, figures, again] = await Promise.all([
+  const [back, title, figures, status, again, mark] = await Promise.all([
     header.getByRole("button").first().boundingBox(), header.locator("h2").boundingBox(), header.locator("dl").boundingBox(),
-    header.getByRole("button", { name: refresh }).boundingBox(),
+    header.locator("[data-slot=detail-status]").boundingBox(), header.getByRole("button", { name: refresh }).boundingBox(),
+    header.locator("[data-slot=state-mark]").first().boundingBox(),
   ]);
   const centre = (box: { y: number; height: number }) => box.y + box.height / 2;
-  expect(Math.abs(centre(again!) - centre(figures!)), "the control to read again is on the line of the figures").toBeLessThan(10);
-  expect(again!.x, "the control to read again is at the right end").toBeGreaterThan(figures!.x);
-  expect(Math.abs(centre(back!) - centre(title!)), "the way back and the title share a line").toBeLessThan(10);
-  if (!narrow) expect(Math.abs(centre(title!) - centre(figures!)), "wide, the head is one line").toBeLessThan(10);
+  expect(Math.abs(centre(status!) - centre(again!)), "the state stays beside refresh").toBeLessThan(10);
+  expect(Math.abs(centre(mark!) - centre(title!)), "the mark stays beside the title").toBeLessThan(10);
+  if (narrow) {
+    expect(title!.y, "the title has its own line").toBeGreaterThan(back!.y + back!.height);
+    expect(figures!.y, "facts follow the title").toBeGreaterThan(title!.y);
+    expect(status!.y, "state and refresh follow the facts").toBeGreaterThanOrEqual(figures!.y + figures!.height);
+  } else {
+    expect(Math.abs(centre(again!) - centre(figures!)), "wide, refresh shares the facts line").toBeLessThan(10);
+    expect(again!.x, "wide, refresh is at the right end").toBeGreaterThan(figures!.x);
+    expect(Math.abs(centre(back!) - centre(title!)), "wide, the way back and title share a line").toBeLessThan(10);
+    expect(Math.abs(centre(title!) - centre(figures!)), "wide, the head is one line").toBeLessThan(10);
+  }
 }
 
 /** A change of address inside the page, as a reader makes it: the page does not reload. */
@@ -82,7 +91,7 @@ for (const { locale, back, refresh, turn, route, delegate, acceptance, running, 
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}/preview-run-a1/7$`));
         await expect(rail(page).locator("[aria-current=step]")).toContainText(turn(2));
         // The macro task's own header stays, and the timeline gives way to the detail.
-        await expect(page.getByRole("heading", { name: /工作目标时间轴|Objective|宏任务时间轴/ }).first()).toBeVisible();
+        await expect(page.locator("[data-slot=macro-overview-header] h2")).toBeVisible();
         await expect(page.locator(".tl-grid, .tl-list").first()).toBeHidden();
         await page.goBack();
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}$`));
