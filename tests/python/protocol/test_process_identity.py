@@ -91,6 +91,28 @@ class ProcessIdentityTests(unittest.TestCase):
             self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "unknown")
         self.assertEqual(source.signals, [])
 
+    def test_hard_stop_reverifies_identity_including_reuse_and_observation_failure(self):
+        for failure in ("reused", "group-unreadable", "boot-changed", "absent"):
+            source = Source()
+            if failure == "reused":
+                source.start += 1
+            elif failure == "group-unreadable":
+                source.group_alive = mock.Mock(side_effect=PermissionError)
+            elif failure == "boot-changed":
+                source.boot = "linux:00000000-0000-4000-8000-000000000002"
+            else:
+                source.start, source.group = None, False
+            with self.subTest(failure=failure):
+                identity.kill_verified_process_group(RECORD, source=source)
+                self.assertEqual(source.signals, [])
+        source = Source()
+        identity.kill_verified_process_group(RECORD, source=source)
+        self.assertEqual(source.signals, [(301, signal.SIGKILL)])
+        source = Source()
+        source.boot = WINDOWS_RECORD["bootId"]
+        identity.kill_verified_process_group(WINDOWS_RECORD, source=source)
+        self.assertEqual(source.signals, [("job", WINDOWS_RECORD["jobName"])])
+
     def test_windows_job_presence_absence_and_reverified_stop(self):
         source = Source()
         source.boot = WINDOWS_RECORD["bootId"]

@@ -1,17 +1,12 @@
 """Client for one execution to report progress and results to the board."""
 from __future__ import annotations
 
-import secrets
 import uuid
 from pathlib import Path
 from typing import Any, Callable
 
 from . import transport
 from ..errors import BoardError
-
-def new_nonce() -> str:
-    return secrets.token_hex(32)
-
 
 def new_command_id(prefix: str = "cmd") -> str:
     return f"{prefix}-{uuid.uuid4()}"
@@ -204,4 +199,4 @@ class BoardClient:
         return self.call("workflow_suggest", {"runId": run_id, "body": body})
 
 
-__all__ = ["BoardClient", "BoardError", "new_command_id", "new_nonce"]
+__all__ = ["BoardClient", "BoardError", "new_command_id"]

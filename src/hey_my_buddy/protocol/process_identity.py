@@ -333,6 +333,20 @@ def inspect_process_identity(record: dict, *, source=None) -> str:
         return "unknown"
 
 
+def kill_verified_process_group(record: dict, *, source=None) -> None:
+    """Request a hard stop only while the complete recorded identity is alive.
+
+    Sending a signal is not shutdown evidence; the observer must establish absence.
+    """
+    source = source or _SystemSource()
+    if inspect_process_identity(record, source=source) != "alive":
+        return
+    if record["jobName"] is not None:
+        source.stop_job(record["jobName"])
+    else:
+        source.signal_group(record["processGroupId"], signal.SIGKILL)
+
+
 def stop_orphan_process(record: dict, *, source=None, settle_seconds: float = 2.0) -> str:
     """Stop an orphan after the caller proved its execution has ended."""
     source = source or _SystemSource()

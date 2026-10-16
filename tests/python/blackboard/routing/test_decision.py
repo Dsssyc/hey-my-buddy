@@ -682,7 +682,7 @@ class DecisionFailureTests(DecisionTestCase):
         task = board.call("task_get", {"runId": request["runId"]})["task"]
         self.assertFalse(task["shutdownConfirmed"])
 
-    def test_restart_fences_a_running_decision_and_a_late_result_never_publishes(self):
+    def test_restart_keeps_a_running_decision_and_a_reconnected_answer_publishes(self):
         board = self.board()
         self.seed(board)
         first = self.request(board, request_id="pick-restart")
@@ -694,12 +694,11 @@ class DecisionFailureTests(DecisionTestCase):
         fsync_json(board.directory / 'attempts' / first['runId'] / claim['attempt']['attemptId'] / 'spawn.intent',
                    {'taskId': first['runId'], 'attemptId': claim['attempt']['attemptId'], 'generation': 1})
 
-        # A fresh store over the same state directory is exactly what a daemon restart
-        # does: in-flight attempts become uncertain and the decision is fenced.
+        # Startup retains the request while the scheduler reconnects its execution.
         restarted = self.board()
         decision = self.decision(restarted, first["decisionId"])
-        self.assertEqual(decision["status"], "failed")
-        self.assertIn("restarted", decision["reason"])
+        self.assertEqual(decision["status"], "running")
+        restarted.store.execution_connection(claim["attempt"]["attemptId"], connected=True)
 
         envelope = {
             **claim_tool_receipt(claim),
@@ -711,17 +710,48 @@ class DecisionFailureTests(DecisionTestCase):
             "usage": {"elapsedMs": 100, "toolCalls": 0, "bytesRead": 0},
             "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
             "inputVerification": {"unchanged": True, "manifestSha256": None, "snapshotSha256": "fixture-digest"},
-            "decision": self.valid_decision(claim["decisionInput"], BUDDY_ID, reason="too late"),
+            "decision": self.valid_decision(claim["decisionInput"], BUDDY_ID, reason="survived restart"),
         }
         restarted.client().submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, {"status": "ok", "result": envelope, "shutdownConfirmed": True, "exitCode": 0})
         late = self.decision(restarted, first["decisionId"])
-        self.assertEqual(late["status"], "failed")
-        self.assertIsNone(late["buddyId"])
-        self.assertIsNone(late["output"])
+        self.assertEqual(late["status"], "completed")
+        self.assertEqual(late["buddyId"], BUDDY_ID)
+        self.assertIsNotNone(late["output"])
         with restarted.store.db.read() as connection:
             receipt = json.loads(connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
                                                     (claim["attempt"]["attemptId"],)).fetchone()[0])
-        self.assertEqual(receipt["result"]["decision"]["reason"], "too late")
+        self.assertEqual(receipt["result"]["decision"]["reason"], "survived restart")
+
+    def test_unreachable_router_is_fenced_only_when_identity_proves_interruption(self):
+        board = self.board()
+        self.seed(board)
+        first = self.request(board, request_id="interrupted-router")
+        claim = admit_execution(board.client(), "n" * 32, task_id=first["runId"])["claim"]
+        attempt = claim["attempt"]
+        identity = {"bootId": "macos:00000000-0000-0000-0000-000000000001", "pid": 123,
+                    "startedAt": 123250000, "processGroupId": 123, "jobName": None}
+        from hey_my_buddy.protocol.execution import fsync_json
+        evidence = board.directory / "attempts" / first["runId"] / attempt["attemptId"]
+        binding = {"taskId": first["runId"], "attemptId": attempt["attemptId"], "generation": attempt["generation"]}
+        fsync_json(evidence / "spawn.intent", binding)
+        fsync_json(evidence / "spawn.marker", {**binding, "processIdentity": identity})
+        with patch("hey_my_buddy.protocol.process_identity.inspect_process_identity", return_value="alive"):
+            restarted = self.board()
+        self.assertEqual(self.decision(restarted, first["decisionId"])["status"], "running")
+        self.assertEqual(restarted.store.capacity_report()["totalActive"], 1)
+        with patch("hey_my_buddy.protocol.process_identity.inspect_process_identity", return_value="identity-absent"), \
+                patch.object(restarted.store.workflow, "seal_interrupted_turn", side_effect=OSError("seal unavailable")):
+            self.assertEqual(restarted.store.recover_executions(), [])
+        self.assertEqual(self.decision(restarted, first["decisionId"])["status"], "running")
+        self.assertEqual(restarted.store.capacity_report()["totalActive"], 1)
+        with patch("hey_my_buddy.protocol.process_identity.inspect_process_identity", return_value="identity-absent"):
+            restarted.store.recover_executions()
+        decision = self.decision(restarted, first["decisionId"])
+        self.assertEqual(decision["status"], "failed")
+        self.assertIsNone(decision["output"])
+        task = restarted.client().get(runId=first["runId"])
+        self.assertTrue(task["shutdownConfirmed"])
+        self.assertEqual(task["terminationReason"], "interrupted")
 
     def test_a_lost_reply_replays_without_re_executing_or_republishing(self):
         board = self.board()

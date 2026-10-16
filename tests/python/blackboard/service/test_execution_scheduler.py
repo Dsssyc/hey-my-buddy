@@ -9,11 +9,75 @@ import time
 import unittest
 from unittest.mock import Mock, call, patch
 
-from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler
+from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler, _RecoveredExecution
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.run_identity import RunIdentity
 
 
 class ExecutionObservationTests(unittest.TestCase):
+    def recovered(self, root):
+        claim = {"attempt": {"attemptId": "attempt", "generation": 1}, "task": {"taskId": "task"}}
+        location = _RecoveredExecution(Path(root), {"taskId": "task", "attemptId": "attempt", "generation": 1},
+            RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="execution"))
+        return claim, location
+
+    def test_unavailable_endpoint_keeps_work_unknown_without_creating_a_stop(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Mock(directory=Path(root))
+            store.execution_identity_confirmed.return_value = True
+            store.task_get.return_value = {"task": {"cancelRequested": False}}
+            scheduler = ExecutionScheduler(Mock(store=store))
+            claim, location = self.recovered(root)
+            scheduler._stopping.wait = lambda _delay: scheduler._stopping.set()
+            with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint", return_value=None), \
+                    patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity", return_value="alive"), \
+                    patch("hey_my_buddy.blackboard.service.execution_scheduler.kill_verified_process_group") as kill:
+                scheduler._observe(claim, location, {"pid": 1})
+            store.execution_connection.assert_called_once_with("attempt", connected=False)
+            self.assertEqual(store.record_execution_issue.call_args.args[2].code, "EXECUTION_UNKNOWN")
+            store.record_execution_deadline.assert_not_called()
+            store.recover_executions.assert_not_called()
+            kill.assert_not_called()
+
+    def test_failed_stop_delivery_still_enforces_the_durable_external_deadline(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Mock(directory=Path(root))
+            store.task_get.return_value = {"task": {"cancelRequested": True, "stopInitiator": "service",
+                "selectedAttempt": {"forceRequestedAt": (datetime.now(timezone.utc) - timedelta(seconds=9)).isoformat(),
+                                    "forceReason": "service-stop"}}}
+            scheduler = ExecutionScheduler(Mock(store=store))
+            claim, location = self.recovered(root)
+            client = Mock()
+            client.stop.side_effect = BoardError("LIVE_UNAVAILABLE", "frozen endpoint")
+            with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint", return_value=client), \
+                    patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity", return_value="alive"), \
+                    patch("hey_my_buddy.blackboard.service.execution_scheduler.kill_verified_process_group",
+                          side_effect=lambda _identity: scheduler._stopping.set()) as kill:
+                scheduler._observe(claim, location, {"pid": 1})
+            kill.assert_called_once_with({"pid": 1})
+            client.wait.assert_not_called()
+            store.live_registry.bind.assert_not_called()
+            store.recover_executions.assert_not_called()
+
+    def test_unknown_process_identity_prevents_connection_and_signalling_after_deadline(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Mock(directory=Path(root))
+            store.task_get.return_value = {"task": {"cancelRequested": True, "stopInitiator": "service",
+                "selectedAttempt": {"forceRequestedAt": (datetime.now(timezone.utc) - timedelta(seconds=9)).isoformat(),
+                                    "forceReason": "service-stop"}}}
+            scheduler = ExecutionScheduler(Mock(store=store))
+            scheduler._stopping.wait = lambda _delay: scheduler._stopping.set()
+            claim, location = self.recovered(root)
+            with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint") as read, \
+                    patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity", return_value="unknown"), \
+                    patch("hey_my_buddy.protocol.process_identity.inspect_process_identity", return_value="unknown"), \
+                    patch("hey_my_buddy.protocol.process_identity._SystemSource.signal_group") as send:
+                scheduler._observe(claim, location, {"pid": 1})
+            read.assert_not_called()
+            send.assert_not_called()
+            store.recover_executions.assert_not_called()
+            store.execution_connection.assert_called_once_with("attempt", connected=False)
+
     def test_failed_creation_releases_attempt_and_next_admission_runs(self):
         with tempfile.TemporaryDirectory() as root:
             first = {"attempt": {"attemptId": "attempt-1"}, "task": {"taskId": "task-1"}}
@@ -122,9 +186,9 @@ class ExecutionObservationTests(unittest.TestCase):
                 "attempt-1", process_identity={"pid": 1},
                 stopped_evidence={"kind": "identity-absent"})
             handle.signal_group.assert_not_called()
-            self.assertEqual(store.live_registry.unbind.call_count, 2)
+            self.assertEqual(store.live_registry.unbind.call_count, 1)
 
-    def test_identity_mismatch_is_refused_only_for_a_service_owned_handle(self):
+    def test_identity_report_checks_captured_identity_or_live_process_after_restart(self):
         service = Mock()
         scheduler = ExecutionScheduler(service)
         handle = Mock()
@@ -132,7 +196,10 @@ class ExecutionObservationTests(unittest.TestCase):
             scheduler._handles["owned"] = (handle, {"pid": 1})
         self.assertFalse(scheduler.verify_identity("owned", {"pid": 2}))
         self.assertTrue(scheduler.verify_identity("owned", {"pid": 1}))
-        self.assertTrue(scheduler.verify_identity("restarted", {"pid": 2}))
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity",
+                   side_effect=["alive", "unknown"]):
+            self.assertTrue(scheduler.verify_identity("restarted", {"pid": 2}))
+            self.assertFalse(scheduler.verify_identity("unverified", {"pid": 2}))
 
     def test_router_budget_is_durable_before_forced_stop(self):
         with tempfile.TemporaryDirectory() as root:
@@ -182,12 +249,14 @@ class ExecutionObservationTests(unittest.TestCase):
     def test_confirmed_receipt_prevents_force_kill(self):
         handle = Mock()
         with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_receipt",
-                   return_value={"report": {"shutdownConfirmed": True}}):
+                   return_value={"report": {"shutdownConfirmed": True}}), patch(
+                   "hey_my_buddy.blackboard.service.execution_scheduler.kill_verified_process_group") as kill:
             ExecutionScheduler._force_if_required(handle, {"pid": 1})
-        handle.signal_group.assert_not_called()
+        kill.assert_not_called()
 
     def test_conflict_is_retried_and_other_admission_errors_are_recorded(self):
         store = Mock()
+        store.execution_observations.return_value = []
         service = Mock(store=store, control={})
         scheduler = ExecutionScheduler(service)
         scheduler.TICK_SECONDS = .01
@@ -209,8 +278,8 @@ class ExecutionObservationTests(unittest.TestCase):
         finally:
             scheduler.stop()
         self.assertGreaterEqual(service.admit_execution.call_count, 3)
-        store.record_scheduler_issue.assert_called_once()
-        stage, error = store.record_scheduler_issue.call_args.args
+        store.record_service_issue.assert_called_once()
+        stage, error = store.record_service_issue.call_args.args
         self.assertEqual(stage, "admission")
         self.assertEqual(error.code, "INVALID_ARGUMENT")
 
@@ -251,10 +320,14 @@ class ExecutionObservationTests(unittest.TestCase):
             with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint",
                        side_effect=error), patch(
                        "hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity",
-                       return_value="identity-absent"):
+                       side_effect=["alive", "identity-absent"]):
                 scheduler._observe({"attempt": {"attemptId": "attempt"}, "task": {"taskId": "task"}},
                                    handle, {"pid": 1})
-            store.record_execution_issue.assert_called_once_with("attempt", "endpoint", error)
+            store.record_execution_issue.assert_called_once()
+            args = store.record_execution_issue.call_args.args
+            self.assertEqual(args[:2], ("attempt", "connection"))
+            self.assertEqual(args[2].code, "EXECUTION_UNKNOWN")
+            store.record_execution_deadline.assert_not_called()
             store.recover_executions.assert_called_once_with(
                 "attempt", process_identity={"pid": 1}, stopped_evidence={"kind": "identity-absent"})
             self.assertNotIn("attempt", scheduler._handles)
@@ -289,7 +362,44 @@ class ExecutionObservationTests(unittest.TestCase):
         failure = BoardError("LIVE_UNAVAILABLE", "stop channel disconnected")
         clients["attempt-0"].stop.side_effect = failure
         scheduler.send_pending_stops()
-        store.record_execution_issue.assert_called_once_with("attempt-0", "service-stop", failure)
+        store.record_execution_issue.assert_called_once()
+        args = store.record_execution_issue.call_args.args
+        self.assertEqual(args[:2], ("attempt-0", "connection"))
+        self.assertEqual(args[2].code, "EXECUTION_UNKNOWN")
+
+    def test_zero_drain_authenticates_stop_before_the_first_long_call_completes(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Mock(directory=Path(root))
+            store.task_get.return_value = {"task": {"cancelRequested": True, "stopInitiator": "service"}}
+            store.record_execution_deadline.return_value = {
+                "forceRequestedAt": datetime.now(timezone.utc).isoformat(), "forceReason": "service-stop"}
+            scheduler = ExecutionScheduler(Mock(store=store))
+            _claim, location = self.recovered(root)
+            scheduler._handles["attempt"] = (location, {"pid": 1})
+            client = Mock()
+            with patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity", return_value="alive"), \
+                    patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint", return_value=client):
+                scheduler.send_pending_stops()
+            client.stop.assert_called_once_with(initiator="service", grace_deadline=None, force=True)
+            client.close.assert_called_once()
+            store.live_registry.bind.assert_not_called()
+
+    def test_unreadable_stop_endpoint_still_persists_the_external_stop_deadline(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Mock(directory=Path(root))
+            store.task_get.return_value = {"task": {"cancelRequested": True, "stopInitiator": "service"}}
+            store.record_execution_deadline.return_value = {
+                "forceRequestedAt": datetime.now(timezone.utc).isoformat(), "forceReason": "service-stop"}
+            scheduler = ExecutionScheduler(Mock(store=store))
+            _claim, location = self.recovered(root)
+            scheduler._handles["attempt"] = (location, {"pid": 1})
+            with patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity", return_value="alive"), \
+                    patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint",
+                          side_effect=PermissionError("unreadable material")):
+                scheduler.send_pending_stops()
+            store.record_execution_deadline.assert_called_once_with("attempt", "service-stop")
+            store.execution_connection.assert_called_once_with("attempt", connected=False)
+            store.recover_executions.assert_not_called()
 
     def test_invalid_budget_is_visible_and_does_not_prevent_stop_delivery(self):
         for material in ('{not json', '{"binding":{},"deadline":1}', '{"binding":{},"deadline":"bad"}'):

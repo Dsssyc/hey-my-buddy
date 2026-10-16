@@ -61,9 +61,9 @@ ATTEMPT_TRANSITIONS: dict[str, frozenset[str]] = {
 ACTIVE_ATTEMPT_STATES_SQL = tuple(sorted(ACTIVE_ATTEMPT_STATES))
 MAX_EVENT_PAGE = 200
 
-#: The one stale waiting reason a service restart writes. It is cleared only when
-#: M3 will reconnect live executions; progress alone never removes this state.
+#: Connection observations, never execution progress, clear these waiting reasons.
 UNCERTAIN_QUEUE_REASON = "attempt-uncertain-after-restart"
+UNKNOWN_QUEUE_REASON = "execution-connection-unknown"
 
 
 def _overlaps(left: str, right: str) -> bool:
@@ -2221,6 +2221,10 @@ class BoardStore:
             # Completion-to-decision publication happens *inside this transaction*: a
             # recommendation, its retained proposal and the evaluation revision it may
             # publish commit with the attempt result, never as a side effect of a read.
+            if recovered and connection.execute(
+                    "SELECT 1 FROM attempt_interruptions WHERE attempt_id=?", (attempt_id_param,)).fetchone() is not None:
+                self.decisions.fence_attempt(connection, attempt=attempt_row,
+                    reason="the execution ended before result delivery", now=now)
             decision = self.decisions.complete(
                 connection,
                 task=task_row,
@@ -2315,11 +2319,14 @@ class BoardStore:
             head = self._head_of(connection)
         self._notify(head)
 
-    def record_scheduler_issue(self, stage: str, error) -> None:
+    def record_service_issue(self, stage: str, error) -> None:
         self._record_runtime_issue(stage, error)
 
-    def record_service_issue(self, stage: str, error) -> None:
-        self._record_runtime_issue(stage, error, event_kind="service.issue")
+    def service_issues(self) -> list[dict]:
+        with self.db.read() as connection:
+            return [{"stage": row["stage"], "code": row["code"], "message": row["message"],
+                     "observedAt": row["observed_at"]}
+                    for row in connection.execute("SELECT * FROM service_issues ORDER BY stage")]
 
     def clear_service_issue(self, stage: str) -> None:
         with self.db.write() as connection:
@@ -2342,19 +2349,21 @@ class BoardStore:
             head = self._head_of(connection)
         self._notify(head)
 
-    def _record_runtime_issue(self, stage: str, error, *, attempt_id: str | None = None,
-                              event_kind: str | None = None) -> None:
+    def _record_runtime_issue(self, stage: str, error, *, attempt_id: str | None = None) -> None:
         code = error.code if isinstance(error, BoardError) else type(error).__name__
         message = (error.message if isinstance(error, BoardError) else str(error))[:4000]
         table = "execution_issues" if attempt_id is not None else "service_issues"
         selector = "attempt_id=? AND stage=?" if attempt_id is not None else "stage=?"
         keys = (attempt_id, stage) if attempt_id is not None else (stage,)
         with self.db.write() as connection:
+            attempt = self._attempt_row(connection, attempt_id) if attempt_id is not None else None
+            if attempt is not None and stage == "connection" and attempt["execution_state"] == "finished":
+                return
             previous = connection.execute(f"SELECT code,message FROM {table} WHERE {selector}", keys).fetchone()
             if previous is not None and (previous["code"], previous["message"]) == (code, message):
                 return
             now = self.now()
-            task_id = self._attempt_row(connection, attempt_id)["task_id"] if attempt_id is not None else None
+            task_id = attempt["task_id"] if attempt is not None else None
             if attempt_id is not None:
                 connection.execute("INSERT INTO execution_issues VALUES(?,?,?,?,?) ON CONFLICT(attempt_id,stage)"
                     " DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at",
@@ -2363,7 +2372,7 @@ class BoardStore:
                 connection.execute("INSERT INTO service_issues VALUES(?,?,?,?) ON CONFLICT(stage)"
                     " DO UPDATE SET code=excluded.code,message=excluded.message,observed_at=excluded.observed_at",
                     (stage, code, message, now))
-            self._append_event(connection, event_kind or ("execution.issue" if attempt_id is not None else "service.scheduling_issue"),
+            self._append_event(connection, "execution.issue" if attempt_id is not None else "service.issue",
                 task_id=task_id, attempt_id=attempt_id, payload={"stage": stage, "code": code, "message": message})
             head = self._head_of(connection)
         self._notify(head)
@@ -2739,13 +2748,54 @@ class BoardStore:
                     record_identity(connection, attempt_id, process_identity)
             return recover(self, attempt_id=attempt_id, stopped_evidence=stopped_evidence)
 
+    def execution_identity_confirmed(self, attempt_id: str) -> bool:
+        with self.db.read() as connection:
+            return self._attempt_row(connection, attempt_id)["identity_confirmed_at"] is not None
+
+    def execution_observations(self) -> list[dict]:
+        """Immutable bindings needed to observe pre-existing executions, without credentials."""
+        with self.db.read() as connection:
+            return [{"attempt": self._attempt_view(row, include_result=False),
+                     "task": {"taskId": row["task_id"], "spec": {"adapter": row["adapter"]}},
+                     "harness": row["model_harness"], "turnId": row["turn_id"],
+                     "processIdentity": self._process_identity(connection, row["attempt_id"])}
+                    for row in connection.execute(
+                        "SELECT a.*,t.turn_id FROM attempts a LEFT JOIN workflow_turns t ON t.attempt_id=a.attempt_id"
+                        " WHERE a.execution_state!='finished' ORDER BY a.created_at,a.attempt_id")]
+
+    def execution_connection(self, attempt_id: str, *, connected: bool) -> None:
+        """Project an authenticated long call, or the absence of one, without settling work."""
+        with self.db.write() as connection:
+            attempt = self._attempt_row(connection, attempt_id)
+            if attempt["execution_state"] == "finished" or attempt["result_json"] is not None:
+                return
+            self._require_effective_attempt(connection, attempt)
+            state, ownership = ("executing", "owned") if connected else ("uncertain", "uncertain")
+            if (connected and attempt["execution_state"] != "uncertain"
+                    or (attempt["execution_state"], attempt["ownership"]) == (state, ownership)):
+                return
+            now = self.now()
+            self._transition_attempt(connection, attempt, state)
+            connection.execute("UPDATE attempts SET ownership=? WHERE attempt_id=?", (ownership, attempt_id))
+            connection.execute("UPDATE resource_claims SET state=? WHERE attempt_id=? AND state IN ('held','retained')",
+                               ("held" if connected else "retained", attempt_id))
+            if connected:
+                connection.execute("UPDATE tasks SET queue_reason=NULL,updated_at=? WHERE task_id=?"
+                                   " AND queue_reason IN (?,?)",
+                                   (now, attempt["task_id"], UNCERTAIN_QUEUE_REASON, UNKNOWN_QUEUE_REASON))
+            else:
+                connection.execute("UPDATE tasks SET queue_reason=?,updated_at=? WHERE task_id=?",
+                                   (UNKNOWN_QUEUE_REASON, now, attempt["task_id"]))
+            self._append_event(connection, "execution.connected" if connected else "execution.unknown",
+                               task_id=attempt["task_id"], attempt_id=attempt_id, payload={})
+            head = self._head_of(connection)
+        self._notify(head)
+
     def reconcile_startup(self) -> dict:
         """Make pre-restart in-flight attempts uncertain.
 
-        A restarted service never infers "stopped" from an expired lease or a
-        missing PID: it marks possible external work uncertain and keeps its
-        resource claims. The execution may still submit its result with its nonce. Reconnecting a live
-        execution is the next recovery milestone.
+        It keeps resource claims until the scheduler authenticates a new long call
+        or identity recovery proves shutdown. The execution may still submit its result.
         """
         summary = {"uncertain": 0, "retained": 0}
         with self.db.write() as connection:
@@ -2777,15 +2827,6 @@ class BoardStore:
                         "reason": "service restarted while this attempt owned possible external work; "
                         "its resource claims are retained until the execution reconnects or recovery proves shutdown"
                     },
-                )
-                # A decision whose helper this service no longer supervises may not
-                # become a current recommendation: it is fenced as stale and its
-                # admission or writer grant is released.
-                self.decisions.fence_attempt(
-                    connection,
-                    attempt=attempt,
-                    reason="the service restarted while this decision was running",
-                    now=now,
                 )
             summary["retained"] = int(
                 connection.execute(

@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -214,10 +215,17 @@ class ReminderPrivateServiceTests(BoardTestCase):
             try:
                 self.assertTrue(wait_for(lambda: (BoardClient(self.directory).get(runId=run_id).get("activity") or {}).get(
                     "phase") == "tool-running", timeout=60))
-                code, result = self.cli("await", json.dumps({"runId": run_id, "waitSeconds": 30}),
-                                        env=env, timeout=60)
-                self.assertEqual(code, 0, result)
-                self.assertEqual(result["outcome"], "native-silence")
+                # A slow native startup can already have produced a valid silence
+                # reminder without tool evidence. Consume it before checking the
+                # distinct silence window opened by the gated native tool event.
+                deadline = time.monotonic() + 60
+                while True:
+                    code, result = self.cli("await", json.dumps({"runId": run_id, "waitSeconds": 30}),
+                                            env=env, timeout=60)
+                    self.assertEqual(code, 0, result)
+                    self.assertEqual(result["outcome"], "native-silence")
+                    if result["reminder"]["toolInProgress"] or time.monotonic() >= deadline:
+                        break
                 self.assertTrue(result["reminder"]["toolInProgress"])
                 self.assertIsNotNone(result["reminder"]["lastNativeEventAt"])
             finally:
