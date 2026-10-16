@@ -53,7 +53,7 @@ M5 之后，Host 跑一次完整检查，在日常看板的私有副本上把 22
 - **服务的问题看不到。** M2 把调度器的错误与旧 Worker 目录清理失败记进 `service_issues`，但没有任何地方读它，`health` 与控制台都看不到，只在事件里留下记录。随 M3 在 `health` 里报出来。
 - **服务的问题有两种事件。** 调度器的错误记为 `service.scheduling_issue`，旧 Worker 目录清理失败记为 `service.issue`，存的是同一张表；只留一种。随上一条做。
 - **`executedBy` 只剩一个值。** `capabilities` 的报告里每个适配器的 `executedBy` 都是 `built-in-worker`，说法也是 Worker 时代的，这个字段已不带信息；`adapter()` 的错误信息同样说 built-in worker。删掉字段，错误信息改说执行进程。
-- **时间线里队列段的结束状态还叫 `claimed`。** 准入已经没有认领，时间线（`blackboard/tasks/macro_tasks.py`）与控制台的说法一起改；`docs/reference/macro-tasks.md` 随之改。
+- **时间线里队列段的结束状态还叫 `claimed`。** 准入已经没有认领，时间线（`blackboard/tasks/macro_tasks.py`）与控制台（`macro-task-display.ts`、`macro-task-timeline-layout.ts` 与夹具）要一起改，`docs/reference/macro-tasks.md` 随之改。牵涉控制台，不放进 M3，M3 之后另起一个小的控制台微任务。
 - **留下的死代码与旧说明。** `protocol/client.py` 的 `new_nonce()` 已没有调用者；`tests/python/buddy/runtime/test_run.py` 的模块说明还说 worker supervisor。
 
 ## 落在这块底座上的待办
