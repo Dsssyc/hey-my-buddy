@@ -1,4 +1,4 @@
-"""Portable schema-23 stock from the installed base's real named operations."""
+"""Portable schema-24 stock from the installed base's real named operations."""
 from __future__ import annotations
 
 from contextlib import ExitStack
@@ -16,7 +16,6 @@ from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
-from hey_my_buddy.blackboard.store.upgrade import UPGRADE_BASE_SCHEMA, upgrade_schema_23_to_24
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.errors import BoardError
@@ -84,7 +83,6 @@ class UpgradeFixtureTests(unittest.TestCase):
                                    (raw, hashlib.sha256(raw.encode()).hexdigest(), row['turn_id']))
         self.assertTrue(turns)
         connection.commit()
-        upgrade_schema_23_to_24(fixture['state'])
         store = BoardStore(fixture['state'])
         store.initialize()
         self.addCleanup(store.db.close)
@@ -110,12 +108,12 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_public_operation_stock_retains_source_schema_and_history_hashes(self):
         fixture, connection = self.restored()
-        self.assertEqual(fixture['sourceCommit'], '9baa0524a884fb335f64446a7bad8f27522082b8')
-        self.assertEqual(fixture['sourceVersion'], '0.40.0')
-        self.assertEqual(fixture['schemaVersion'], 23)
+        self.assertEqual(fixture['sourceCommit'], '90bd0148230fe1b030cc65e325026dea0cdfb8b9')
+        self.assertEqual(fixture['sourceVersion'], '0.42.0')
+        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
         self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
         self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
-        self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '23')
+        self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
         self.assertEqual({row[0] for row in connection.execute('SELECT key FROM meta')},
                          {'schema_version', 'created_at', 'capability_secret'})
         schema = [list(row) for row in connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
@@ -184,50 +182,10 @@ class UpgradeFixtureTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_fixture(first['state'])
 
-    def test_authoritative_allocation_references_survive_receipt_and_state_conversion(self):
-        from hey_my_buddy.blackboard.tasks import storage
-
-        fixture, old = self.restored()
-        allocations = []
-        for row in old.execute('SELECT workspace_manifest_json FROM workflow_runs'):
-            manifest = json.loads(row[0])
-            allocations.append(manifest)
-        retained = {}
-        for manifest in allocations:
-            rows = ((table, row) for table, row in storage._workspace_reference_rows(old)
-                    if table not in ('commands', 'events'))
-            protected = storage._allocation_reference_reasons(rows, manifest, None)
-            self.assertIn('workflow_runs-reference', protected)
-            self.assertIn('workflow_artifacts-reference', protected)
-            retained[manifest['workspaceId']] = set(protected)
-        old.close()
-        upgrade_schema_23_to_24(fixture['state'])
-        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as current:
-            current.row_factory = sqlite3.Row
-            for manifest in allocations:
-                reasons = set(storage.allocation_references(current, manifest))
-                reasons.discard('commands-reference')
-                reasons.discard('events-reference')
-                self.assertEqual(reasons, retained[manifest['workspaceId']])
-
     def test_contract_cutover_preserves_stock_and_matches_fresh_structure(self):
-        from hey_my_buddy.blackboard.tasks.command_receipts import stored_response
-
         fixture, old = self.restored()
         state = fixture['state']
-        self.assertEqual(fixture['schemaVersion'], UPGRADE_BASE_SCHEMA)
-        run_id, _, attempt_id = self.sample(fixture, old)
-        old.executemany('INSERT INTO events(task_id,attempt_id,kind,payload_json,created_at) VALUES(?,?,?,?,?)', [
-            (run_id, attempt_id, 'attempt.activity', '{"phase":"first"}', '2026-01-01T00:00:01Z'),
-            (run_id, attempt_id, 'attempt.activity', '{"phase":"last"}', '2026-01-01T00:00:02Z'),
-            (None, None, 'harness.checked', '{"harness":"codex","status":"first"}', '2026-01-01T00:00:01Z'),
-            (None, None, 'harness.checked', '{"harness":"codex","status":"last"}', '2026-01-01T00:00:02Z'),
-            (None, None, 'harness.probe_unknown', '{"harness":"codex","status":"first"}', '2026-01-01T00:00:01Z'),
-            (None, None, 'harness.probe_unknown', '{"harness":"codex","status":"last"}', '2026-01-01T00:00:02Z'),
-            (None, None, 'harness.account_observed', '{"harness":"codex","status":"first"}', '2026-01-01T00:00:01Z'),
-            (None, None, 'harness.account_observed', '{"harness":"codex","status":"last"}', '2026-01-01T00:00:02Z'),
-        ])
-        old.commit()
+        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
         before = upgrade.idle_snapshot(state, exact=True)
         expected_settings = router.configuration(old)
         expected_runs = dict(old.execute('SELECT run_id,state FROM workflow_runs'))
@@ -237,31 +195,6 @@ class UpgradeFixtureTests(unittest.TestCase):
         retained_meta = dict(old.execute("SELECT key,value FROM meta WHERE key!='schema_version'"))
         stock = {row[0]: [dict(item) for item in old.execute(f'SELECT * FROM {row[0]} ORDER BY rowid')]
                  for row in old.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
-        retained_events = {}
-        for row in stock['events']:
-            if row['kind'] == 'attempt.activity':
-                retained_events[('activity', row['attempt_id'])] = row['seq']
-            elif row['kind'] in ('harness.checked', 'harness.probe_unknown', 'harness.account_observed'):
-                retained_events[(row['kind'], json.loads(row['payload_json'])['harness'])] = row['seq']
-        stock['events'] = [row for row in stock['events'] if row['kind'] not in
-                           ('attempt.activity', 'harness.checked', 'harness.probe_unknown', 'harness.account_observed')
-                           or row['seq'] in retained_events.values()]
-        self.assertTrue(any(row['kind'] == 'attempt.activity' for row in stock['events']))
-        for kind in ('harness.checked', 'harness.probe_unknown', 'harness.account_observed'):
-            self.assertEqual(sum(row['kind'] == kind and json.loads(row['payload_json'])['harness'] == 'codex'
-                                 for row in stock['events']), 1)
-        stock['commands'] = [row for row in stock['commands'] if row['kind'] != 'execution.result']
-        for row in stock['commands']:
-            original = json.loads(row['response_json'])
-            response = stored_response(row['kind'], original)
-            if response != original:
-                row['response_json'] = _json(response)
-        self.assertIn('result_command_id', stock['attempts'][0])
-        for row in stock['attempts']:
-            del row['result_command_id']
-        for row in stock['meta']:
-            if row['key'] == 'schema_version':
-                row['value'] = str(SCHEMA_VERSION)
         old.close()
         history = {path.relative_to(state): path.read_bytes()
                    for path in (state / 'workspaces').rglob('*') if path.is_file()}
@@ -305,8 +238,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         fresh.initialize()
         with sqlite3.connect(state / 'board.sqlite3') as upgraded, fresh.read() as baseline:
             upgraded.row_factory = sqlite3.Row
-            # Only the explicit command, event, attempt-column and schema-version
-            # conversions differ from the released base's stored rows.
+            # The installed base already has the current schema; every stored
+            # row must survive the contract cutover without conversion.
             for table, rows in stock.items():
                 with self.subTest(retained_table=table):
                     self.assertEqual([dict(item) for item in upgraded.execute(f'SELECT * FROM {table} ORDER BY rowid')], rows)
@@ -317,16 +250,13 @@ class UpgradeFixtureTests(unittest.TestCase):
             fresh_schema = [tuple(row) for row in baseline.execute(
                 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
             self.assertEqual(source_schema, fresh_schema)
-            for connection in (upgraded, baseline):
-                self.assertNotIn('result_command_id',
-                                 {row['name'] for row in connection.execute('PRAGMA table_info(attempts)')})
             self.assertEqual(upgraded.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
                              str(SCHEMA_VERSION))
             self.assertEqual(dict(upgraded.execute("SELECT key,value FROM meta WHERE key!='schema_version'")),
                              retained_meta)
             self.assertEqual(tuple(upgraded.execute(
                 'SELECT silence_seconds,revision FROM reminder_settings WHERE id=1').fetchone()), (900, 1))
-            for label, connection in (('migrated', upgraded), ('fresh', baseline)):
+            for label, connection in (('upgraded', upgraded), ('fresh', baseline)):
                 with self.subTest(schema=label):
                     columns = {row['name']: row for row in connection.execute('PRAGMA table_info(workflow_fixes)')}
                     self.assertEqual(columns['run_id']['notnull'], 1)
@@ -359,30 +289,6 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual(upgraded.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
             self.assertEqual(upgraded.execute('PRAGMA foreign_key_check').fetchall(), [])
 
-    def test_failed_conversion_rolls_back_all_receipts_and_schema(self):
-        from hey_my_buddy.blackboard.tasks.command_receipts import stored_response
-
-        fixture, connection = self.restored('failed-conversion')
-        before = backup.database_snapshot(connection, exact=True)
-        converted = 0
-
-        def interrupt(kind, response):
-            nonlocal converted
-            if converted:
-                raise RuntimeError('injected conversion interruption')
-            result = stored_response(kind, response)
-            if result != response:
-                converted += 1
-            return result
-
-        with mock.patch('hey_my_buddy.blackboard.tasks.command_receipts.stored_response', side_effect=interrupt):
-            with self.assertRaisesRegex(RuntimeError, 'injected conversion interruption'):
-                upgrade_schema_23_to_24(fixture['state'])
-        self.assertEqual(converted, 1)
-        self.assertEqual(backup.database_snapshot(connection, exact=True), before)
-        self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
-                         str(UPGRADE_BASE_SCHEMA))
-
     def insert_stop_receipt(self, fixture, connection):
         response = {'macroTaskId': 'run:' + fixture['stableIds']['cancelled'],
                     'results': [{'runId': fixture['stableIds']['cancelled'], 'state': 'cancelled', 'stopped': True},
@@ -402,7 +308,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.insert_stop_receipt(fixture, connection)
         before = upgrade.idle_snapshot(fixture['state'], exact=True)
         target = self.root / 'runtimes' / ('b' * 32)
-        health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': UPGRADE_BASE_SCHEMA}
+        health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
         with mock.patch.object(upgrade, 'command', return_value={'leaks': []}):
             self.assertTrue(upgrade.verify_started(fixture['state'], target, health, before)['retainedDataFingerprints'])
         for command_id in ('install-stop-fixture', 'retained-command'):
@@ -425,7 +331,6 @@ class UpgradeFixtureTests(unittest.TestCase):
         connection.execute('UPDATE workflow_runs SET request_fingerprint=NULL')
         connection.commit()
         connection.close()
-        upgrade_schema_23_to_24(fixture['state'])
         store = BoardStore(fixture['state'])
         store.initialize()
         self.addCleanup(store.db.close)
