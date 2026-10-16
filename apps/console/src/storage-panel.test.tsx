@@ -41,7 +41,7 @@ function plan(overrides: Partial<StoragePlan> = {}): StoragePlan {
     ],
     orphanProcesses: [
       { pid: 4321, kind: "daemon", stateDir: "/tmp/private-state-a", runtimeDir: "/runtime/root/76c43f9" },
-      { pid: 8764, kind: "supervisor", stateDir: null, runtimeDir: "/runtime/root/ea4554c" },
+      { pid: 8764, kind: "execution", stateDir: null, runtimeDir: "/runtime/root/ea4554c" },
     ],
     ...overrides,
   };

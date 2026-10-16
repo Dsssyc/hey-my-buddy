@@ -72,8 +72,8 @@ describe("bounded activity projection", () => {
     expect(parseActivity({ phase: "almost-done", observedAt: "2026-09-25T10:00:00Z" })).toMatchObject({ phase: "unknown" });
   });
 
-  it("classifies heartbeat, native and tool evidence distinctly", () => {
-    expect(activityEvidence({ phase: "starting", observedAt: "2026-09-25T10:00:00Z" })).toBe("heartbeat");
+  it("classifies phase, native and tool evidence distinctly", () => {
+    expect(activityEvidence({ phase: "starting", observedAt: "2026-09-25T10:00:00Z" })).toBe("phase");
     expect(activityEvidence({ phase: "streaming-model", lastNativeActivityAt: "2026-09-25T10:00:00Z" })).toBe("native");
     expect(activityEvidence({ phase: "tool-running", toolName: "bash" })).toBe("tool");
     expect(activityEvidence({ phase: "unknown" })).toBe("unknown");
@@ -190,13 +190,13 @@ describe("structured cancellation attribution", () => {
 });
 
 describe("activity rendering", () => {
-  it("reports a bare supervisor heartbeat without claiming native progress", () => {
+  it("reports a bare phase-only record without claiming native progress", () => {
     const { container } = render(<TaskActivityView task={task({
       activity: { phase: "waiting-model", observedAt: "2026-09-25T10:00:00Z", eventSeq: 7 },
     })} />);
     const view = screen.getByRole("region", { name: "执行活动（只读）" });
     expect(view.textContent).toContain(phaseLabels["waiting-model"]);
-    expect(view.textContent).toContain("仅监管心跳");
+    expect(view.textContent).toContain("仅有阶段");
     expect(view.textContent).toContain("进展未知");
     expect(view.textContent).not.toMatch(/\d+\s*%/);
   });

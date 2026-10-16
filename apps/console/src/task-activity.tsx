@@ -95,24 +95,24 @@ export function parseActivity(value: unknown): TaskActivity | null {
   };
 }
 
-export type ActivityEvidence = "tool" | "native" | "heartbeat" | "unknown";
+export type ActivityEvidence = "tool" | "native" | "phase" | "unknown";
 
 /**
- * What actually backs this projection. A supervisor heartbeat or a renew reply
- * is not native progress, and an idle native session list is not proof that a
- * process stopped.
+ * What actually backs this projection. A record with only the phase the
+ * execution process reported carries no native fact and does not mean the
+ * model made progress.
  */
 export function activityEvidence(activity: TaskActivity): ActivityEvidence {
   if (activity.toolName || activity.lastToolActivityAt) return "tool";
   if (activity.lastNativeActivityAt || activity.nativeSessionId) return "native";
-  if (activity.observedAt || activity.eventSeq != null) return "heartbeat";
+  if (activity.observedAt || activity.eventSeq != null) return "phase";
   return "unknown";
 }
 
 export const evidenceLabels: Record<ActivityEvidence, string> = {
   tool: "收到工具活动",
   native: "收到原生活动",
-  heartbeat: "仅监管心跳",
+  phase: "仅有阶段",
   unknown: "未知",
 };
 
@@ -202,7 +202,7 @@ export function terminationText(task: Task): string | null {
 /**
  * Bounded, read-only activity for one micro task. It reports only what the
  * worker recorded: no percentage, no synthesized completion estimate, and no
- * claim that a heartbeat proves model progress.
+ * claim that a phase-only report means the model made progress.
  */
 export function TaskActivityView({ task }: { task: Task }) {
   const activity = parseActivity(task.activity);
@@ -232,8 +232,8 @@ export function TaskActivityView({ task }: { task: Task }) {
             <dt>已记录计数</dt><dd>{countsText(activity)}</dd>
           </dl>
           <p className="small muted">
-            {evidence === "heartbeat"
-              ? "仅有监管心跳 · 进展未知"
+            {evidence === "phase"
+              ? "仅有阶段 · 进展未知"
               : evidence === "tool"
                 ? "工具执行中"
                 : evidence === "native"
