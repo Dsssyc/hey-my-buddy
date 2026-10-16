@@ -4,11 +4,12 @@ import { useTranslation } from "react-i18next";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 
-export function CopyableIdentifier({ value }: { value: string }) {
-  return <Identifier key={value} value={value} />;
+/** An identifier, shortened where it is long, that copies whole. The hint says more of it on hover and focus. */
+export function CopyableIdentifier({ value, hint }: { value: string; hint?: string }) {
+  return <Identifier key={value} value={value} hint={hint} />;
 }
 
-function Identifier({ value }: { value: string }) {
+function Identifier({ value, hint }: { value: string; hint?: string }) {
   const { t } = useTranslation("shell");
   const [open, setOpen] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: "copied" | "failed" } | null>(null);
@@ -36,7 +37,7 @@ function Identifier({ value }: { value: string }) {
         {feedback?.kind === "copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
       </Button>
     </TooltipTrigger>
-    <TooltipContent className="break-all">{message || value}</TooltipContent>
+    <TooltipContent className="break-all">{message || (hint ? `${value} · ${hint}` : value)}</TooltipContent>
     <span className="sr-only" aria-live="polite" role={message ? "status" : undefined}>{message}</span>
   </Tooltip></TooltipProvider>;
 }

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
-import type { MacroTaskFilter, MacroTaskSummary, TimelineRow } from "./macro-task-types";
+import type { MacroTaskFilter, MacroTaskSummary } from "./macro-task-types";
 import type { TimelineItem } from "./macro-task-display";
 import { CATEGORY_LABEL, categoryTone } from "./macro-task-display";
 import type { InspectorSelection } from "./inspector-card";
@@ -11,8 +11,10 @@ import { Tasks } from "./Tasks";
 import { SplitView } from "./SplitView";
 import { MacroTaskList } from "./MacroTaskList";
 import { MacroTaskTimeline } from "./MacroTaskTimeline";
-import { RunDetailPane } from "./RunDetailPane";
-import type { DetailTarget } from "./RunDetailPane";
+import { TaskDetail } from "./task-detail/TaskDetail";
+import { createTaskDetailClient } from "./task-detail/client";
+import { TASKS_ROOT, tasksHash, tasksLocation } from "./task-detail/location";
+import type { TasksLocation } from "./task-detail/location";
 import { useMacroTaskList } from "./use-macro-task-list";
 import { useMacroTaskTimeline } from "./use-macro-task-timeline";
 import { stopScope, stopStatus, useMacroTaskStop } from "./macro-task-stop";
@@ -22,70 +24,6 @@ import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
 import { displayTitle } from "./macro-task-display";
 import { useBackgroundInert } from "./modal";
 import { useViewPreference } from "./view-preferences";
-
-/* 0.15.1 U1 geometry (docs/design/objective-browser-0.15.1.md §1–2): the
-   viewport picks the layout; above 760px an open detail collapses the list to
-   a 48px rail and docks the detail beside the timeline. D = detail column,
-   R = measured right-column width. */
-const DIVIDER_PX = 10;
-const DETAIL_MIN_PX = 360;
-const DETAIL_DEFAULT_MAX_PX = 600;
-const DETAIL_HARD_MAX_PX = 720;
-const TIMELINE_MIN_PX = 320;
-
-const clamp = (value: number, min: number, max: number) => Math.round(Math.max(min, Math.min(value, max)));
-
-function detailDefault(rightWidth: number): number {
-  return clamp(Math.round(rightWidth * 0.4), DETAIL_MIN_PX, DETAIL_DEFAULT_MAX_PX);
-}
-function detailMax(rightWidth: number): number {
-  return Math.max(DETAIL_MIN_PX, Math.min(DETAIL_HARD_MAX_PX, rightWidth - DIVIDER_PX - TIMELINE_MIN_PX));
-}
-
-/**
- * The timeline|detail separator (§2): pointer drag with live clamping,
- * keyboard ←/→ 20px (Shift 80px), Home/End to the bounds, Enter or a
- * double-click back to the viewport default. The remembered width lives in
- * page memory only.
- */
-function TimelineDetailDivider({ min, max, value, timelineWidth, onChange, onReset }: {
-  min: number; max: number; value: number; timelineWidth: number;
-  onChange: (value: number) => void;
-  onReset: () => void;
-}) {
-  const root = useRef<HTMLDivElement>(null);
-  const dragging = useRef(false);
-  const container = () => root.current?.parentElement;
-  const move = (clientX: number) => {
-    const rect = container()?.getBoundingClientRect();
-    if (!rect) return;
-    onChange(clamp(rect.right - clientX - DIVIDER_PX / 2, min, max));
-  };
-  const step = (event: { key: string; shiftKey: boolean }) => {
-    const delta = event.shiftKey ? 80 : 20;
-    if (event.key === "ArrowLeft") return clamp(value + delta, min, max); // 详情加宽
-    if (event.key === "ArrowRight") return clamp(value - delta, min, max);
-    return null;
-  };
-  return <div ref={root} className="dock-divider vertical" role="separator" id="timeline-detail-separator"
-    aria-orientation="vertical" aria-controls="timeline-detail-column"
-    aria-label="调整时间轴与详情宽度"
-    aria-valuemin={min} aria-valuemax={max} aria-valuenow={value}
-    aria-valuetext={`详情 ${value} 像素，时间轴 ${timelineWidth} 像素`}
-    tabIndex={0}
-    onKeyDown={event => {
-      if (event.key === "Home") { event.preventDefault(); onChange(min); return; }
-      if (event.key === "End") { event.preventDefault(); onChange(max); return; }
-      if (event.key === "Enter") { event.preventDefault(); onReset(); return; }
-      const next = step(event);
-      if (next !== null) { event.preventDefault(); onChange(next); }
-    }}
-    onDoubleClick={onReset}
-    onPointerDown={event => { dragging.current = true; event.currentTarget.setPointerCapture(event.pointerId); }}
-    onPointerMove={event => { if (dragging.current) move(event.clientX); }}
-    onPointerUp={() => { dragging.current = false; }}
-    onLostPointerCapture={() => { dragging.current = false; }} />;
-}
 
 /** The macroTask stop's explicit confirmation: names the macroTask and its scope. */
 function StopDialog({ summary, scope, onConfirm, onCancel }: {
@@ -134,13 +72,47 @@ function StopDialog({ summary, scope, onConfirm, onCancel }: {
  * as work macroTasks; the clearly labelled secondary switch keeps the
  * raw task history (command and external records included) reachable
  * instead of silently removing it.
+ *
+ * Where the page is (a macro task, one of its micro tasks, a step of it) is the
+ * address, and the address is the only place it lives: choosing a macro task,
+ * opening a micro task and going back to the timeline each add a step to the
+ * browser's history, and choosing a step of a micro task only replaces the one
+ * it is on.
  */
-export function MacroTasks({ snapshot, api, refresh, active = true, authority, writesAvailable = true }: {
+export function MacroTasks({ snapshot, api, refresh, active = true, authority, writesAvailable = true, onAddress }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active?: boolean;
   authority?: AuthorityLatch; writesAvailable?: boolean;
+  /** Told where the page is, so that the link back to the tasks leads to the same place. */
+  onAddress?: (hash: string) => void;
 }) {
   const [view, setView] = useState<"macroTasks" | "records">("macroTasks");
   const [listCollapsed, setListCollapsed] = useViewPreference("micro-task-list-collapsed");
+  const [location, setLocation] = useState<TasksLocation>(() => tasksLocation(window.location.hash) ?? TASKS_ROOT);
+  // The timeline item the open detail came from; it names the step the detail opens on.
+  const [origin, setOrigin] = useState<string | null>(null);
+  function go(next: TasksLocation, how: "push" | "replace", from: string | null = null) {
+    const hash = tasksHash(next);
+    if (window.location.hash !== hash) (how === "push" ? window.history.pushState : window.history.replaceState).call(window.history, null, "", hash);
+    setOrigin(from);
+    setLocation(next);
+    onAddress?.(hash);
+    if (next.macroTaskId) setView("macroTasks");
+  }
+  useEffect(() => {
+    onAddress?.(tasksHash(location));
+    const changed = () => {
+      const next = tasksLocation(window.location.hash);
+      if (!next) return;
+      setOrigin(null);
+      setLocation(next);
+      onAddress?.(tasksHash(next));
+      if (next.macroTaskId) setView("macroTasks");
+    };
+    // A step back or forward through the history, and a hand-written address, both land here.
+    window.addEventListener("hashchange", changed);
+    window.addEventListener("popstate", changed);
+    return () => { window.removeEventListener("hashchange", changed); window.removeEventListener("popstate", changed); };
+  }, []);
   const destination = view === "macroTasks" ? "全部执行记录" : "宏任务";
   const listNavigation = <button type="button" className="button small-button history-view-toggle"
     title={`切换到${destination}`} aria-label={`切换到${destination}`}
@@ -151,31 +123,36 @@ export function MacroTasks({ snapshot, api, refresh, active = true, authority, w
     <div className="history-view" hidden={view !== "macroTasks"}>
       <MacroTasksWorkspace snapshot={snapshot} api={api} refresh={refresh}
         active={active && view === "macroTasks"} authority={authority} writesAvailable={writesAvailable}
+        location={location} origin={origin} go={go}
         listNavigation={listNavigation} listCollapsed={listCollapsed}
         onCollapseList={() => setListCollapsed(true)} onExpandList={() => setListCollapsed(false)} />
     </div>
     <div className="history-view" hidden={view !== "records"}>
       <Tasks snapshot={snapshot} api={api} refresh={refresh} active={active && view === "records"}
+        onOpenMicroTask={(macroTaskId, runId) => go({ macroTaskId, runId, step: null }, "push")}
         listNavigation={listNavigation} listCollapsed={listCollapsed}
         onCollapseList={() => setListCollapsed(true)} onExpandList={() => setListCollapsed(false)} />
     </div>
   </div>;
 }
 
-function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writesAvailable, listNavigation, listCollapsed, onCollapseList, onExpandList }: {
+function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writesAvailable, location, origin, go, listNavigation, listCollapsed, onCollapseList, onExpandList }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active: boolean;
   authority?: AuthorityLatch; writesAvailable: boolean;
+  location: TasksLocation; origin: string | null;
+  go: (next: TasksLocation, how: "push" | "replace", from?: string | null) => void;
   listNavigation: ReactNode; listCollapsed: boolean; onCollapseList: () => void; onExpandList: () => void;
 }) {
   const { t } = useTranslation("shell");
   const [filter, setFilter] = useState<MacroTaskFilter>("all");
   const [query, setQuery] = useState(""), [projectId, setProjectId] = useState(""), [hostId, setHostId] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
-  const [detail, setDetail] = useState<DetailTarget | null>(null);
+  const selected = location.macroTaskId;
+  const detailRunId = selected ? location.runId : null;
   // The pinned inspector selection, kept per macroTask so switching back restores it.
   const [selectionByMacroTask, setSelectionByMacroTask] = useState<Map<string, InspectorSelection>>(() => new Map());
   const list = useMacroTaskList(api, { query, projectId, hostId, filter }, active);
   const timeline = useMacroTaskTimeline(api, selected, active);
+  const detailClient = useMemo(() => createTaskDetailClient(api, snapshot.csrfToken), [api, snapshot.csrfToken]);
   // The list row is freshest, but a list refresh must never unmount an open
   // detail: the timeline read's summary covers the gap, and a snapshot of the
   // last seen summary covers the moments before the timeline read lands.
@@ -194,12 +171,9 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     hosts: [...new Set(list.rows.map(row => row.sourceHostId).filter((id): id is string => !!id))].sort(),
   }), [list.rows]);
 
-  // The viewport (never the pane) picks the layout (§1). Above 760px an open
-  // detail docks beside the timeline and the list collapses to the rail; at
-  // 760px or below the detail layers over the chronological view.
-  const paneRef = useRef<HTMLElement>(null);
+  // The viewport picks the layout: at 760px or below the list gives way to the
+  // macro task that is chosen, and the detail's two columns stack.
   const railButtonRef = useRef<HTMLButtonElement>(null);
-  const [paneWidth, setPaneWidth] = useState<number | null>(null);
   const [narrowViewport, setNarrowViewport] = useState(false);
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
@@ -209,36 +183,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
   }, []);
-  useEffect(() => {
-    const element = paneRef.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      if (element.clientWidth > 0) setPaneWidth(element.clientWidth);
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  const detailOpen = !!detail;
-  // The observed detail pane already excludes the list rail.
-  const rightWidth = Math.max(paneWidth ?? 0, 0);
-  const [detailWidth, setDetailWidth] = useState<number | null>(null);
-  const maxDetail = detailMax(rightWidth > 0 ? rightWidth : 800);
-  const dockDetailWidth = clamp(detailWidth ?? detailDefault(rightWidth > 0 ? rightWidth : 800), DETAIL_MIN_PX, maxDetail);
-
-  // Opening a detail above 760px collapses the list to the expandable rail;
-  // closing it restores the full list. The drawer itself is a transient
-  // overlay that never changes the right-column geometry.
-  const [listRail, setListRail] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const autoRailActive = listRail && !narrowViewport;
-  const railActive = listCollapsed || autoRailActive;
-  const wasDocking = useRef(false);
-  useEffect(() => {
-    const docking = detailOpen && !narrowViewport;
-    if (docking && !wasDocking.current) { setListRail(true); setDrawerOpen(false); }
-    if (!docking && wasDocking.current) { setListRail(false); setDrawerOpen(false); }
-    wasDocking.current = docking;
-  }, [detailOpen, narrowViewport]);
+  const railActive = listCollapsed;
 
   // MacroTask-level stop: the one retained write, with its explicit
   // confirmation and a retained command identity. Nothing here locks browsing.
@@ -263,18 +208,12 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   }
   const selection = selected ? selectionByMacroTask.get(selected) ?? null : null;
 
-  function selectMacroTask(macroTaskId: string | null) {
-    if (drawerOpen) {
-      // Inside the drawer: the same macroTask only closes the drawer; another
-      // macroTask also closes the detail and restores the full list (§1).
-      setDrawerOpen(false);
-      railButtonRef.current?.focus();
-      if (macroTaskId === selected) return;
-      setListRail(false);
-    }
-    setSelected(macroTaskId);
-    setDetail(null);
-  }
+  const selectMacroTask = (macroTaskId: string | null) => go({ macroTaskId, runId: null, step: null }, "push");
+  const openRun = (runId: string, from: string | null = null) => {
+    // Opening from a row or a card names no span: the detail opens on its own first choice.
+    setSelection({ type: "run", runId });
+    go({ macroTaskId: selected, runId, step: null }, "push", from);
+  };
   function selectItem(item: TimelineItem) {
     setSelection({ type: "item", key: item.key });
   }
@@ -283,55 +222,9 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   }
   function openItem(item: TimelineItem) {
     setSelection({ type: "item", key: item.key });
-    setDetail(previous => ({ runId: item.runId, section: item.section, locator: item.locator, key: item.key,
-      decisionId: item.section === "routing" ? item.decisionId ?? null : undefined,
-      openRevision: (previous?.openRevision ?? 0) + 1 }));
+    go({ macroTaskId: selected, runId: item.runId, step: null }, "push", item.key);
   }
-  function openRun(runId: string) {
-    // Opening from a row/card carries no span fact: the detail shows no
-    // 来自时间轴 label then (0.16 T4).
-    setSelection({ type: "run", runId });
-    setDetail({ runId, section: "overview", key: `row:${runId}` });
-  }
-  function backToTimeline() {
-    setDetail(null);
-  }
-  function navigateRun(runId: string) {
-    setDetail({ runId });
-  }
-
-  // Esc closes the transient drawer first, then the detail, while this tab
-  // owns the page and the keystroke did not start inside a field or a dialog.
-  useEffect(() => {
-    if ((!detail && !drawerOpen) || !active) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      const target = event.target as HTMLElement | null;
-      if (target?.closest("input, textarea, select")) return;
-      if (document.querySelector(".dialog-backdrop")) return;
-      event.preventDefault();
-      if (drawerOpen) {
-        setDrawerOpen(false);
-        railButtonRef.current?.focus();
-        return;
-      }
-      if (narrowViewport && detail) setDetail(null);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [detail, drawerOpen, narrowViewport, active]);
-  // Clicking outside the expanded drawer closes it and restores focus (§1).
-  useEffect(() => {
-    if (!drawerOpen) return;
-    const onClick = (event: MouseEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest(".list-drawer, .rail-panel")) return;
-      setDrawerOpen(false);
-      railButtonRef.current?.focus();
-    };
-    document.addEventListener("mousedown", onClick);
-    return () => document.removeEventListener("mousedown", onClick);
-  }, [drawerOpen]);
+  const backToTimeline = () => go({ macroTaskId: selected, runId: null, step: null }, "push");
 
   // The header's stop control: one macro-task-level action, its honest status,
   // and the replay entry for a lost reply. Read-only sessions see the reason.
@@ -355,12 +248,6 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
         && <button type="button" className="button small-button" onClick={() => stop.dismissStop(selectedSummary.macroTaskId)}>{t("macroStop.dismiss")}</button>}
     </span>;
   }
-  // The same honest status line also appears in a docked detail's overview.
-  const stopStatusNode = stopState
-    ? <p className={`stop-status stop-${stopState.phase} detail-stop-status`} role="status" title={stopState.detail}>
-      {stopState.label}：{stopState.detail}
-    </p>
-    : null;
 
   const listPane = <MacroTaskList
     rows={list.rows} total={list.total} loading={list.loading} error={list.error} verifiedAtMs={list.verifiedAtMs}
@@ -371,18 +258,19 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     visible={active && !railActive && !(narrowViewport && !!selected)}
     rail={railActive} railButtonRef={railButtonRef}
     listNavigation={listNavigation}
-    onCollapse={() => { onCollapseList(); setDrawerOpen(false); }}
-    onToggleRail={() => {
-      if (listCollapsed) onExpandList();
-      if (!autoRailActive) return;
-      setDrawerOpen(current => {
-        if (current) railButtonRef.current?.focus();
-        return !current;
-      });
-    }}
+    onCollapse={onCollapseList}
+    onToggleRail={onExpandList}
     onFilterChange={setFilter} onQueryChange={setQuery} onProjectChange={setProjectId} onHostChange={setHostId}
     onSelect={selectMacroTask} onRetry={list.retry} onMore={list.more}
     onApplyReorder={list.applyReorder} />;
+
+  // The detail takes the place of the timeline, under the macro task's own header.
+  const detail = detailRunId ? <TaskDetail key={detailRunId} client={detailClient} runId={detailRunId}
+    timeline={timeline.timeline} timelineLoading={timeline.loading && !timeline.timeline}
+    nowMs={timeline.displayObservedAt ? Date.parse(timeline.displayObservedAt) : Date.now()}
+    step={location.step} origin={origin} active={active}
+    onStep={step => go({ macroTaskId: selected, runId: detailRunId, step }, "replace", origin)}
+    onBack={backToTimeline} onOpenRun={runId => openRun(runId)} /> : null;
 
   const timelinePane = selected ? <MacroTaskTimeline
     active={active}
@@ -393,39 +281,22 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     error={timeline.error}
     stale={timeline.stale}
     newRunIds={timeline.newRunIds}
-    hidden={detailOpen && narrowViewport}
-    openedKey={detail?.key ?? null}
-    openedRunId={detail?.runId ?? null}
+    hidden={!!detail}
+    detail={detail}
+    openedKey={origin}
+    openedRunId={detailRunId}
     selection={selection}
     headerActions={stopControl}
     buddies={snapshot.buddies}
     onSelectItem={selectItem}
     onOpenItem={openItem}
     onSelectRun={selectRun}
-    onOpenRun={openRun}
+    onOpenRun={runId => openRun(runId)}
     onClearSelection={() => setSelection(null)}
     onRetry={() => void timeline.retry()}
     onBackToList={() => selectMacroTask(null)} /> : null;
 
-  // The detail's fixed three-row overview comes from the timeline's own row
-  // read when the run is in scope; the raw fallback lives in WorkflowPanel.
-  const detailRow = detail ? timeline.timeline?.rows.find(row => row.runId === detail.runId) ?? null : null;
-  const detailNode = detail && selectedSummary ? <RunDetailPane
-    macroTaskTitle={selectedSummary.title}
-    target={detail}
-    snapshot={snapshot} api={api} refresh={reload} active={active}
-    mode={narrowViewport ? "layer" : "dock"}
-    onBack={backToTimeline} onNavigate={navigateRun}
-    stopStatusNode={stopStatusNode} overviewRow={detailRow}
-    rowTitleFor={runId => timeline.timeline?.rows.find(row => row.runId === runId)?.title ?? null} /> : null;
-
-  // One persistent wrapper so crossing the layer/dock threshold reconciles
-  // instead of remounting: the timeline keeps its scroll and focus.
-  const stageStyle = detailOpen && !narrowViewport
-    ? ({ "--dock-detail-width": `${dockDetailWidth}px` } as CSSProperties)
-    : undefined;
-  const detailPane = <aside className={"panel detail-panel" + (detailOpen && !narrowViewport ? " docked" : "")}
-    ref={paneRef} aria-label="宏任务详情">
+  const detailPane = <aside className="panel detail-panel" aria-label="宏任务详情">
     {selected && <div className="panel-toolbar list-mobile-navigation">
       {listNavigation}<h2>宏任务</h2>
       <button type="button" className="button small-button" title={listCollapsed ? "展开宏任务列表" : "收起宏任务列表"}
@@ -433,14 +304,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
         onClick={listCollapsed ? onExpandList : onCollapseList}>{listCollapsed ? "展开列表" : "收起列表"}</button>
     </div>}
     {selected
-      ? <div className={detailOpen && !narrowViewport ? "right-dock side" : "right-stage"} style={stageStyle}>
-        <div key="timeline" className="right-stage-pane">{timelinePane}</div>
-        {detailOpen && !narrowViewport && <TimelineDetailDivider key="divider"
-          min={DETAIL_MIN_PX} max={maxDetail} value={dockDetailWidth}
-          timelineWidth={Math.max(0, rightWidth - DIVIDER_PX - dockDetailWidth)}
-          onChange={setDetailWidth} onReset={() => setDetailWidth(null)} />}
-        {detailNode && <div key="detail" id="timeline-detail-column" className="right-stage-pane detail-stage">{detailNode}</div>}
-      </div>
+      ? <div className="right-stage"><div className="right-stage-pane">{timelinePane}</div></div>
       : <div className="detail-placeholder">
         <h2>选择一个宏任务</h2>
 
@@ -449,21 +313,6 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   return <>
     <div className="workspace-wrap">
       <SplitView selected={!!selected} rail={railActive} list={listPane} detail={detailPane} />
-      {railActive && drawerOpen && <div className="list-drawer" role="dialog" aria-label="宏任务列表（抽屉）">
-        <MacroTaskList
-          rows={list.rows} total={list.total} loading={list.loading} error={list.error} verifiedAtMs={list.verifiedAtMs}
-          nextCursor={list.nextCursor} reorder={list.reorder}
-          filter={filter} query={query} projectId={projectId} hostId={hostId} choices={choices}
-          selected={selected}
-          active={active}
-          visible={active && drawerOpen}
-          rail={false}
-          listNavigation={listNavigation}
-          onCollapse={() => { onCollapseList(); setDrawerOpen(false); }}
-          onFilterChange={setFilter} onQueryChange={setQuery} onProjectChange={setProjectId} onHostChange={setHostId}
-          onSelect={selectMacroTask} onRetry={list.retry} onMore={list.more}
-          onApplyReorder={list.applyReorder} />
-      </div>}
     </div>
     {stop.confirming && <StopDialog summary={stop.confirming.summary} scope={stop.confirming.scope}
       onConfirm={() => stop.confirmStop(stop.confirming!.summary)}

@@ -3,8 +3,8 @@ import { parseReadOnlyStructured } from "../api";
 import { parseHarnessAccount } from "../harness-account";
 import { formatShortDateTime } from "../i18n/format";
 import type { HarnessAccount } from "../harness-account";
-import { quotaView } from "../host-workflow";
-import type { QuotaWindowView } from "../host-workflow";
+import { quotaView } from "../quota";
+import type { QuotaWindowView } from "../quota";
 import zh from "../i18n/zh/buddies-harness";
 import type { HarnessCandidate, HarnessHealth, QuotaRoutingRecord } from "../types";
 

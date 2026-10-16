@@ -1,9 +1,10 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import i18n from "i18next";
 import { MacroTaskOverview } from "./MacroTaskOverview";
-import { TaskDetails } from "./TaskDetails";
+import { TaskDetail } from "./task-detail/TaskDetail";
+import { createTaskDetailClient } from "./task-detail/client";
 import { Tasks } from "./Tasks";
 import { TimelineInspector } from "./TimelineInspector";
 import { macroTaskTimelineFixture } from "./macro-task-fixtures";
@@ -17,7 +18,7 @@ const runId = "79771ce9-890b-4cab-867b-4e05c68791da";
 const snapshot = { csrfToken: "fixture", eventCursor: 0, buddies: [] } as unknown as Snapshot;
 function commandTask(): Task {
   return { runId, task: "Run checks", status: "cancelled", owner: null, cwd: "~/project", revision: 1,
-    createdAt: "2026-10-15T00:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
+    createdAt: "2026-10-15T00:00:00Z", updatedAt: "2026-10-15T00:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     spec: { adapter: "command", argv: ["npm", "test"] },
     activity: { phase: "waiting-host", waitingReason: "the run was cancelled" },
     lineage: { kind: "execution", sourceHostId: null, currentHostId: null, rootRunId: null, rootLeadRunId: null, parentRunId: null,
@@ -44,9 +45,9 @@ describe("task identifiers and recorded attribution", () => {
     const user = userEvent.setup();
     const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
     const task = commandTask();
-    render(<TaskDetails task={task} snapshot={snapshot} api={apiFor(task)} refresh={vi.fn()} selectTask={vi.fn()}
-      active={false} onTaskUpdate={vi.fn()} />);
-    await user.click(screen.getByRole("button", { name: `复制标识 ${runId}` }));
+    render(<TaskDetail client={createTaskDetailClient(apiFor(task), "fixture")} runId={runId} timeline={null} timelineLoading={false}
+      nowMs={Date.parse("2026-10-15T01:00:00Z")} step={1} origin={null} active backTo="records" onStep={vi.fn()} onBack={vi.fn()} onOpenRun={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: `复制标识 ${runId}` }));
     expect(write).toHaveBeenCalledWith(runId);
   });
 
@@ -75,17 +76,23 @@ describe("task identifiers and recorded attribution", () => {
     expect(props.onSelectRun).not.toHaveBeenCalled();
   });
 
-  it("omits a command's buddy in the execution list and details without translating its waiting reason", async () => {
+  it("omits a command's buddy in the execution list and details, and does not show the blackboard's waiting sentence", async () => {
     const user = userEvent.setup();
     const task = commandTask();
-    const view = render(<Tasks snapshot={snapshot} api={apiFor(task)} refresh={vi.fn()} />);
+    const view = render(<Tasks snapshot={snapshot} api={apiFor(task)} refresh={vi.fn()} onOpenMicroTask={vi.fn()} />);
     const row = await screen.findByRole("button", { name: /Run checks/ });
     expect(within(row).getByText("未记录委派方").getAttribute("title")).toBe("未记录委派方");
     expect(row.textContent).not.toMatch(/undefined|buddy|→/);
     await user.click(row);
-    const header = view.container.querySelector(".assignment-line")!;
-    expect(header.textContent).toBe("委派方：未记录委派方");
-    expect(view.container.querySelector(".detail-panel")!.textContent).not.toMatch(/undefined|执行 buddy 待确定/);
-    expect(screen.getByText(/the run was cancelled/)).toBeTruthy();
+    const band = await waitFor(() => {
+      const found = view.container.querySelector("[data-slot=detail-band]");
+      if (!found) throw new Error("no band yet");
+      return found;
+    });
+    // The band of a command names the command, not a buddy.
+    expect(band.textContent).toContain("命令执行");
+    expect(view.container.querySelector(".detail-panel")!.textContent).not.toMatch(/undefined|执行 buddy 待确定|Worker/);
+    // The sentence the blackboard gives for why it waits is English and belongs to the board: the detail does not show it.
+    expect(screen.queryByText(/the run was cancelled/)).toBeNull();
   });
 });

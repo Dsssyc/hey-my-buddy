@@ -2,13 +2,15 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import enBuddies from "./en/buddies";
 import enShell from "./en/shell";
+import enTaskDetail from "./en/taskDetail";
 import zhBuddies from "./zh/buddies";
 import zhShell from "./zh/shell";
+import zhTaskDetail from "./zh/taskDetail";
 
 /** One namespace per page, so that pages can be written independently. */
 const resources = {
-  zh: { shell: zhShell, buddies: zhBuddies },
-  en: { shell: enShell, buddies: enBuddies },
+  zh: { shell: zhShell, buddies: zhBuddies, taskDetail: zhTaskDetail },
+  en: { shell: enShell, buddies: enBuddies, taskDetail: enTaskDetail },
 };
 type Language = keyof typeof resources;
 

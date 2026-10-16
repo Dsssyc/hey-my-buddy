@@ -80,7 +80,9 @@ export type MacroTaskTimelineProps = {
   error: string;
   stale: boolean;
   newRunIds: ReadonlySet<string>;
+  /** The timeline gives way to the detail of a micro task; the macro task's own header stays. */
   hidden: boolean;
+  detail?: ReactNode;
   active?: boolean;
   /** The micro task whose detail is currently open (accent marker on its row). */
   openedKey: string | null;
@@ -995,10 +997,11 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
         </div>
         : null;
 
-  return <div className="timeline-view" ref={rootRef} hidden={hidden}>
+  return <div className={"timeline-view" + (hidden ? " [&>:not(.tl-head,[data-slot=task-detail])]:hidden" : "")} ref={rootRef}>
     <MacroTaskOverview summary={props.summary} timeline={timeline} loading={loading} stale={stale}
       compact={compactViewport || narrowViewport}
       onBackToList={props.onBackToList} headerActions={props.headerActions} />
+    {props.detail}
     {timeline && <MicroTaskStrip timeline={timeline} selectedRunId={selectedRunId}
       collapsed={cardsActuallyCollapsed}
       onToggleCollapsed={() => setCardsCollapsed(!cardsActuallyCollapsed)}

@@ -1,36 +1,36 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { ConsoleApi } from "./api";
-import { errorText, readVerificationText } from "./api";
+import { readVerificationText } from "./api";
 import type { Snapshot, Task, TaskQuery } from "./types";
 import { Empty, formatDate, Status } from "./ui";
 import { excerpt, needsReview, taskStatus, taskTitle, titleTooltip } from "./task-state";
-import { TaskDetails } from "./TaskDetails";
+import { TaskDetail } from "./task-detail/TaskDetail";
+import { createTaskDetailClient } from "./task-detail/client";
+import { macroTaskKey } from "./task-detail/location";
 import { taskExecutor, taskHost, taskProject } from "./console-data";
 import { SplitView } from "./SplitView";
 import { useTaskHistory } from "./use-task-history";
 
-export function Tasks({ snapshot, api, refresh, active = true, listNavigation, listCollapsed = false, onCollapseList, onExpandList }: {
+/**
+ * Every record the board keeps, in the order it was written. A micro task with a
+ * collaboration record opens in its macro task, at its own address; a run
+ * without one, a command or a Router's calculation, is shown here, as one step.
+ */
+export function Tasks({ snapshot, api, active = true, onOpenMicroTask, listNavigation, listCollapsed = false, onCollapseList, onExpandList }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active?: boolean;
+  onOpenMicroTask: (macroTaskId: string, runId: string) => void;
   listNavigation?: ReactNode; listCollapsed?: boolean; onCollapseList?: () => void; onExpandList?: () => void;
 }) {
   const [filter, setFilter] = useState<TaskQuery["filter"]>("all"), [query, setQuery] = useState("");
   const [projectId, setProjectId] = useState(""), [hostId, setHostId] = useState(""), [internal, setInternal] = useState(false);
-  const [selected, setSelected] = useState<string | null>(null), [remote, setRemote] = useState<Task | null>(null);
-  const [detailError, setDetailError] = useState("");
+  const [selected, setSelected] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   // The records view reads only its own paginated route: the loaded pages are
   // the rows, the first-page poll keeps them current, and the snapshot never
   // contributes rows to this list.
   const history = useTaskHistory(api, { rootsOnly: !internal, query, projectId, hostId, filter }, active);
   const tasks = history.runs;
-  const listed = tasks.find(t => t.runId === selected);
-  const saved = remote?.runId === selected ? remote : undefined;
-  const task = saved && (!listed || saved.revision > listed.revision || saved.revision === listed.revision && (saved.workflow?.revision || 0) >= (listed.workflow?.revision || 0)) ? saved : listed;
-  const updateSelected = useCallback((next: Task) => setRemote(previous =>
-    previous?.runId === next.runId && (previous.revision > next.revision
-      || (previous.workflow?.revision ?? 0) > (next.workflow?.revision ?? 0)
-      || previous.revision === next.revision && previous.workflow?.revision === next.workflow?.revision) ? previous : next), []);
   const scroll = useRef<HTMLDivElement>(null);
   const scrollIntent = useRef(false);
   const anchor = useRef<{ runId: string; top: number } | null>(null);
@@ -55,19 +55,11 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
   // New matching records the loaded history has not seen: detected by the
   // view's own first-page poll, never by merging snapshot rows.
   const newRecords = history.newIds.size;
-  useEffect(() => {
-    if (!selected || task || !active) return;
-    let current = true; const controller = new AbortController(); setDetailError("");
-    api.task(selected, controller.signal).then(value => {
-      if (!value || typeof value !== "object" || !("runId" in value) || value.runId !== selected || !("task" in value)) throw new Error("微任务详情不完整。");
-      if (current) setRemote(value as Task);
-    }).catch(error => { if (current) setDetailError(errorText(error)); });
-    return () => { current = false; controller.abort(); };
-  }, [api, selected, active, !!task]);
   function selectTask(id: string | null) {
-    const next = tasks.find(t => t.runId === id);
-    setRemote(next || null);
-    setSelected(id); setDetailError("");
+    const row = tasks.find(candidate => candidate.runId === id);
+    const macroTaskId = row?.workflow ? macroTaskKey(row) : null;
+    if (id && macroTaskId) onOpenMicroTask(macroTaskId, id);
+    else setSelected(id);
   }
   function loadMore() {
     if (history.loading || !history.nextCursor || !scroll.current) return;
@@ -83,7 +75,7 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
     if (row) scroll.current.scrollTop += row.getBoundingClientRect().top - saved.top;
     anchor.current = null;
   }, [history.runs.length, history.loading]);
-  const reload = async () => { const result = await refresh(); history.reset(); return result; };
+  const detailClient = useMemo(() => createTaskDetailClient(api, snapshot.csrfToken), [api, snapshot.csrfToken]);
   const list = <>
     {listCollapsed && <section className="panel list-panel rail-panel" aria-label="全部执行记录列表（已收起）">
       {listNavigation}
@@ -117,16 +109,12 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
         })}><span>{collapsed.has(id) ? "▸" : "▾"} {group.project.label}</span>
           <span className="small">已加载 {group.runs.length} {internal ? "条执行记录" : "个微任务"}</span></button>
         {!collapsed.has(id) && <ul className="task-list">{group.runs.map(row => {
-          // The selected row shows the title from the freshest read (the bounded
-          // workflow refresh merges it here), so an older row outside the snapshot
-          // window agrees with the open detail; badges and filters keep the row.
-          const rowTask = task && row.runId === task.runId ? task : row;
           const executor = taskExecutor(row);
           const assignment = executor ? `${taskHost(row)} → ${executor}` : taskHost(row);
           return <li key={row.runId} data-run-id={row.runId}>
           <button className={"task-row " + (selected === row.runId ? "selected" : "")} aria-pressed={selected === row.runId} onClick={() => selectTask(row.runId)}>
             <span className="row-between"><Status status={taskStatus(row)} /><time className="small muted" dateTime={row.createdAt}>{formatDate(row.createdAt)}</time></span>
-            <strong className="task-title" title={titleTooltip(taskTitle(rowTask))}>{excerpt(taskTitle(rowTask).text, 100)}</strong>
+            <strong className="task-title" title={titleTooltip(taskTitle(row))}>{excerpt(taskTitle(row).text, 100)}</strong>
             <span className="small truncate" title={assignment}>{assignment}</span>
             {row.lineage?.kind !== "micro-task" && <span className="small muted">{row.lineage?.kind === "helper" ? "协助任务" : row.lineage?.kind === "decision" ? "内部路由 / 整理" : "执行记录"}</span>}
           </button>
@@ -144,8 +132,10 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
       <button type="button" className="button small-button" onClick={listCollapsed ? onExpandList : onCollapseList}
         aria-label={listCollapsed ? "展开全部执行记录列表" : "收起全部执行记录列表"} title={listCollapsed ? "展开全部执行记录列表" : "收起全部执行记录列表"}>{listCollapsed ? "展开列表" : "收起列表"}</button>
     </div>}
-    {task ? <TaskDetails key={task.runId} task={task} snapshot={snapshot} api={api} refresh={reload} selectTask={selectTask} active={active} onTaskUpdate={updateSelected} /> :
-      <div className="detail-placeholder"><h2>{selected ? "正在读取微任务…" : "选择一项微任务"}</h2>{detailError && <p>{detailError}</p>}</div>}
+    {selected ? <TaskDetail key={selected} client={detailClient} runId={selected} timeline={null} timelineLoading={false}
+      nowMs={null} step={1} origin={null} active={active} backTo="records" listed={history.runs.find(run => run.runId === selected)?.revision ?? null} onStep={() => undefined}
+      onBack={() => setSelected(null)} onOpenRun={selectTask} /> :
+      <div className="detail-placeholder"><h2>选择一项微任务</h2></div>}
   </aside>;
   return <>
     <SplitView selected={!!selected} rail={listCollapsed} list={list} detail={detail} />

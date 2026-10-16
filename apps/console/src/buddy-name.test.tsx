@@ -2,10 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
-import { RoutingPanel } from "./RoutingPanel";
 import type { ConsoleApi } from "./api";
 import type { Buddy, Snapshot } from "./types";
-import type { Workflow } from "./workflow-types";
 import { catalogue, chip, listed, modelButton, pane } from "./buddies/page.testing";
 import {
   effortText,
@@ -161,70 +159,5 @@ describe("the catalogue's names", () => {
     expect(within(catalogue()).queryByText(/DeepSeek-V41-Flash/)).toBeNull();
     await user.click(modelButton("dsh / deepseek-official / deepseek-v4-pro"));
     expect(within(pane("dsh / deepseek-official / deepseek-v4-pro")).getByRole("group", { name: "max" })).toBeTruthy();
-  });
-});
-
-describe("read-only routing panel (0.15.1 U4)", () => {
-  it("shows the recorded buddy and routing facts without any retry form", () => {
-    const workflow: Workflow = {
-            runId: "parent",
-      hostId: "host-a",
-      ownerGeneration: 2,
-      revision: 7,
-      state: "waiting-host",
-      awaitingHost: true,
-      waitReason: "routing",
-      continuationCount: 0,
-      buddy: {
-        harness: "dsh",
-        provider: "deepseek-official",
-        model: "deepseek-flash",
-        effort: "off",
-      },
-      routing: { status: "needs-host", reason: "缺少执行 buddy" },
-      shutdown: {
-        selfConfirmed: true,
-        descendantsConfirmed: true,
-        unconfirmedRunIds: [],
-        unconfirmedCount: 0,
-        truncated: false,
-      },
-      workspace: {
-        path: "/repo",
-        kind: "existing",
-        access: "write",
-        inputCommit: "commit-a",
-        manifestSha256: "manifest-a",
-      },
-      currentTurn: null,
-      activeRequest: null,
-      children: [],
-      artifacts: [],
-      integrations: [],
-      finalArtifactId: null,
-      finalAttemptId: null,
-      task: {
-        runId: "parent",
-        task: "完成状态内核",
-        status: "waiting-host",
-        owner: "host-a",
-        cwd: "/repo",
-        revision: 4,
-        createdAt: "2026-09-22",
-        acceptedAt: null,
-        acceptanceVerdict: null,
-      },
-    };
-    render(<RoutingPanel value={workflow} />);
-    expect(
-      screen.getByText("dsh / deepseek-official / deepseek-flash / off"),
-    ).toBeTruthy();
-    expect(screen.getByText("needs-host")).toBeTruthy();
-    expect(
-      screen.getByText(/路由需要 Host 补充 buddy/),
-    ).toBeTruthy();
-    expect(screen.queryByLabelText("填入已启用 buddy")).toBeNull();
-    expect(screen.queryByRole("button", { name: "使用此 buddy 接续" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "重试同一目标的路由" })).toBeNull();
   });
 });

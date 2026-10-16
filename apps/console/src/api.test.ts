@@ -1,5 +1,6 @@
+import i18n from "i18next";
 import { describe, expect, it, vi } from "vitest";
-import { createApi, parseRoutingHealth, readVerificationText, validRoutingConfiguration } from "./api";
+import { ApiError, createApi, errorText, parseRoutingHealth, readVerificationText, validRoutingConfiguration } from "./api";
 import { macroTaskTimelineFixture, OBSERVED_AT } from "./macro-task-fixtures";
 
 describe("L4 ordered Router list configuration", () => {
@@ -646,5 +647,22 @@ describe("on-demand running and installed version facts", () => {
     }
     const api = createApi("", vi.fn(async () => new Response(JSON.stringify({ error: { code: "CONSOLE_SESSION_EXPIRED", message: "expired" } }), { status: 401 })) as typeof fetch);
     await expect(api.runtimeVersion()).rejects.toMatchObject({ code: "CONSOLE_SESSION_EXPIRED" });
+  });
+});
+
+describe("what the data layer says when a read fails", () => {
+  it("says it in the language of the page, for a code it knows and for a failure it makes itself", async () => {
+    const failure = new ApiError("CONFLICT", "board words");
+    const unreadable = createApi("", vi.fn(async () => { throw new TypeError("offline"); }) as typeof fetch);
+    expect(errorText(failure)).toBe("记录冲突；请刷新核对后重试。");
+    await expect(unreadable.tasks({})).rejects.toMatchObject({ message: "无法连接本地黑板；请刷新重试。" });
+    await i18n.changeLanguage("en");
+    try {
+      expect(errorText(failure)).toBe("The records conflict; refresh, check them and try again.");
+      await expect(unreadable.tasks({})).rejects.toMatchObject({ message: "Cannot reach the local blackboard; refresh and retry." });
+      // A code the console has no words for keeps what the board said.
+      expect(errorText(new ApiError("OTHER_CODE", "board words"))).toBe("board words");
+      expect(errorText("plain")).toBe("The request failed; try again later.");
+    } finally { await i18n.changeLanguage("zh"); }
   });
 });

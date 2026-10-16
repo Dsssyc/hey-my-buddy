@@ -6,7 +6,7 @@ import type { Task, TaskPage, TaskQuery } from "./types";
 import { useTaskHistory } from "./use-task-history";
 
 const task = (runId: string, revision = 1): Task => ({ runId, revision, task: runId, status: "queued", owner: "host",
-  cwd: "/allocated/checkout", createdAt: "2026-09-24T12:00:00Z", acceptedAt: null, acceptanceVerdict: null,
+  cwd: "/allocated/checkout", createdAt: "2026-09-24T12:00:00Z", updatedAt: "2026-09-24T12:00:00Z", acceptedAt: null, acceptanceVerdict: null,
   reviewRejectedAt: null, reviewRejectionNote: null });
 /** Rows in the route's real stable order: createdAt strictly descending with position. */
 const descendingRow = (runId: string, position: number): Task => ({

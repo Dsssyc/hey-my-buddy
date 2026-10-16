@@ -144,6 +144,7 @@ CONSOLE_OPERATIONS = (
     "model_catalog_refresh",
     "buddy_list",
     "workflow_get",
+    "message_list",
     "macro_task_stop",
     "storage_plan",
     "storage_apply",

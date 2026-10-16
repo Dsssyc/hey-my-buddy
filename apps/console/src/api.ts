@@ -1,3 +1,5 @@
+import i18n from "i18next";
+import { locale } from "./i18n";
 import type { RuntimeVersionInfo, VersionFacts, Configuration, ConsoleAccess, ConsoleSession, ReminderSettings, RoutingHealth, Snapshot, TaskPage, TaskQuery } from "./types";
 import type {
   MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskSummary, MacroTaskTimeline, TimelineRow,
@@ -12,18 +14,6 @@ export class ApiError extends Error {
     this.name = "ApiError";
   }
 }
-
-const messages: Record<string, string> = {
-  REVISION_CONFLICT: "记录已更新；请刷新核对后重试。",
-  CONFLICT: "记录冲突；请刷新核对后重试。",
-  FORBIDDEN: "无操作权限；请重新打开控制台。",
-  STALE_GENERATION: "操作资格已失效；请刷新核对负责人。",
-  SHUTDOWN_UNCONFIRMED: "停止未确认；请稍后核对再重试。",
-  STORAGE_INCOMPLETE: "清理未完成；请重试同一请求。",
-  PLAN_EXPIRED: "计划已过期；请重新检查。",
-  CONSOLE_SESSION_EXPIRED: "登录已失效；请运行 hey-my-buddy console 重新登录。",
-  CONSOLE_ENTRY_EXPIRED: "入口已过期；请重新打开控制台。",
-};
 
 /**
  * The one identity-loss refusal the board still issues: an HTTP 401
@@ -53,7 +43,7 @@ export function parseConsoleSession(value: unknown): ConsoleSession {
   if (!valid) {
     throw new ApiError(
       "INVALID_RESPONSE",
-      "会话信息无法识别；请检查服务版本或重新登录。",
+      i18n.t("shell:error.session"),
     );
   }
   return session as ConsoleSession;
@@ -65,7 +55,7 @@ export function parseConsoleAccess(value: unknown): ConsoleAccess {
     || access.revision < 0 || !Array.isArray(access.sessions) || access.sessions.length > 64
     || access.sessions.some(session => !session || typeof session.id !== "string" || !/^[a-f0-9]{24}$/.test(session.id)
       || !Number.isFinite(session.lastSeen) || typeof session.current !== "boolean")) {
-    throw new ApiError("INVALID_RESPONSE", "控制台访问设置无法识别，请刷新后重试。");
+    throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.access"));
   }
   return access;
 }
@@ -75,7 +65,7 @@ export function parseReminderSettings(value: unknown): ReminderSettings {
   if (!settings || !Number.isSafeInteger(settings.silenceSeconds) || settings.silenceSeconds < 1
     || settings.silenceSeconds > 86400 || !Number.isSafeInteger(settings.revision) || settings.revision < 1
     || typeof settings.updatedAt !== "string" || !Number.isFinite(Date.parse(settings.updatedAt))) {
-    throw new ApiError("INVALID_RESPONSE", "提醒设置无法识别，请刷新后重试。");
+    throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.reminders"));
   }
   return settings;
 }
@@ -174,8 +164,8 @@ export function parseRoutingHealth(value: unknown): RoutingHealth | undefined {
 }
 
 export function errorText(error: unknown): string {
-  if (error instanceof ApiError) return messages[error.code] || error.message;
-  return error instanceof Error ? error.message : "请求失败，请稍后重试。";
+  if (error instanceof ApiError) return i18n.exists(`shell:error.codes.${error.code}`) ? i18n.t(`shell:error.codes.${error.code}`) : error.message;
+  return error instanceof Error ? error.message : i18n.t("shell:error.failed");
 }
 
 export function uncertainResponse(error: unknown): boolean {
@@ -189,8 +179,8 @@ export function isAbortError(error: unknown): boolean {
 /** Server verification of the displayed read; missing evidence stays explicit. */
 export function readVerificationText(verifiedAtMs: number | null | undefined): string {
   return typeof verifiedAtMs === "number" && Number.isFinite(verifiedAtMs)
-    ? `核对时间 ${new Date(verifiedAtMs).toLocaleString("zh-CN", { hour12: false })}`
-    : "核对时间未记录";
+    ? `${i18n.t("shell:snapshot.verified")} ${new Date(verifiedAtMs).toLocaleString(locale, { hour12: false })}`
+    : i18n.t("shell:snapshot.unverified");
 }
 
 /* ---- 0.16.0 storage wire shapes (docs/reference/operations.md) ---- */
@@ -253,7 +243,7 @@ function validStoragePlan(value: unknown): value is StoragePlan {
 
 export function parseStoragePlan(value: unknown): StoragePlan {
   if (!validStoragePlan(value)) {
-    throw new ApiError("INVALID_RESPONSE", "存储计划响应不完整，请检查服务版本。");
+    throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.storagePlan"));
   }
   return value as StoragePlan;
 }
@@ -299,7 +289,7 @@ function validTimelineRows(rows: unknown): boolean {
 
 export type { HarnessStatus, HarnessCandidate, HarnessHealth } from "./types";
 import type { HarnessHealth, QuotaRetryWindow, QuotaRoutingRecord } from "./types";
-import { parseQuota } from "./host-workflow";
+import { parseQuota } from "./quota";
 
 /** The supported harnesses, in the Buddy page's fixed display order. */
 export const HARNESS_ORDER = ["dsh", "zcode", "codex", "claude"] as const;
@@ -421,7 +411,7 @@ export function parseRuntimeVersion(value: unknown): RuntimeVersionInfo {
     && (record.schemaVersion === null || Number.isSafeInteger(record.schemaVersion) && record.schemaVersion >= 0);
   if (!info || !facts(info.running) || !["source", "runtime"].includes(info.running.mode)
     || !(info.installed === null || facts(info.installed))) {
-    throw new ApiError("INVALID_RESPONSE", "版本信息无法识别，请检查服务版本。");
+    throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.version"));
   }
   return info;
 }
@@ -451,13 +441,13 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       });
     } catch (error) {
       if (isAbortError(error)) throw error;
-      throw new ApiError("NETWORK", "无法连接本地黑板；请刷新重试。");
+      throw new ApiError("NETWORK", i18n.t("shell:error.network"));
     }
     let data: unknown;
     try {
       data = await response.json();
     } catch {
-      throw new ApiError("INVALID_RESPONSE", "本地服务返回了无法解析的响应。");
+      throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.unparsable"));
     }
     const body = data as {
       ok?: boolean;
@@ -466,7 +456,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     if (!response.ok || body?.ok === false) {
       throw new ApiError(
         body?.error?.code || `HTTP_${response.status}`,
-        body?.error?.message || "请求未成功。",
+        body?.error?.message || i18n.t("shell:error.refused"),
       );
     }
     return verifiedRead(data, responseVerifiedAtMs(response));
@@ -566,7 +556,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         response = await fetcher(url, { credentials: "same-origin", cache: "no-store", headers, signal });
       } catch (error) {
         if (isAbortError(error)) throw error;
-        throw new ApiError("NETWORK", "无法连接本地黑板；请刷新重试。");
+        throw new ApiError("NETWORK", i18n.t("shell:error.network"));
       }
       if (response.status === 304) {
         if (cached && cacheGeneration === atGeneration && !signal?.aborted) {
@@ -575,13 +565,13 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         // A 304 is only meaningful against a representation this instance still
         // holds under this session; without one the body cannot be reconstructed
         // and the read stays failed instead of guessing.
-        throw new ApiError("INVALID_RESPONSE", "本地服务返回了无法解析的响应。");
+        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.unparsable"));
       }
       let data: unknown;
       try {
         data = await response.json();
       } catch {
-        throw new ApiError("INVALID_RESPONSE", "本地服务返回了无法解析的响应。");
+        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.unparsable"));
       }
       // The body has arrived: only now is the publication verdict decided. The
       // ticket was held through the body read, so this fresh check outranks any
@@ -595,7 +585,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         if (body?.ok === false && body?.error?.code === SESSION_EXPIRED_CODE) clearConditionalCache();
         throw new ApiError(
           body?.error?.code || `HTTP_${response.status}`,
-          body?.error?.message || "请求未成功。",
+          body?.error?.message || i18n.t("shell:error.refused"),
         );
       }
       if (stillCurrent && cacheGeneration === atGeneration && !signal?.aborted) {
@@ -628,7 +618,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       ) {
         throw new ApiError(
           "INVALID_RESPONSE",
-          "控制台数据不完整；请检查服务版本。",
+          i18n.t("shell:error.snapshot"),
         );
       }
       // A valid session descriptor is required; a missing or malformed one is
@@ -655,7 +645,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         body: JSON.stringify({ operation, params }),
       })) as { ok: boolean; result: T };
       if (!data || data.ok !== true || !Object.hasOwn(data, "result")) {
-        throw new ApiError("INVALID_RESPONSE", "提交结果未知；请核对后重试。");
+        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.submit"));
       }
       return verifiedRead(data.result, readVerifiedAt(data));
     },
@@ -671,7 +661,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const { data, verifiedAtMs } = await conditionalRead(`/tasks?${query}`, signal) as { data: TaskPage; verifiedAtMs: number | null };
       if (!data || !Array.isArray(data.runs) || !Number.isInteger(data.total)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")) {
-        throw new ApiError("INVALID_RESPONSE", "微任务历史不完整；请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.history"));
       }
       return verifiedRead(data, verifiedAtMs);
     },
@@ -685,7 +675,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         || !(data.nextCursor === null || typeof data.nextCursor === "string")
         || !Number.isInteger(data.cursor) || typeof data.changed !== "boolean"
         || !data.macroTasks.every(validMacroTaskSummary)) {
-        throw new ApiError("INVALID_RESPONSE", "宏任务列表不完整；请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.macroTasks"));
       }
       return verifiedRead(data, verifiedAtMs);
     },
@@ -722,7 +712,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         || typeof data.truncated.spans !== "boolean" || typeof data.truncated.events !== "boolean"
         || !Number.isInteger(data.cursor) || typeof data.scopeComplete !== "boolean"
         || typeof data.filtered !== "boolean") {
-        throw new ApiError("INVALID_RESPONSE", "宏任务时间轴不完整；请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.timeline"));
       }
       return { timeline: data, verifiedAtMs };
     },
@@ -749,7 +739,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const result = await command<StorageApplyResult>("storage_apply", { planId, commandId, confirm: true }, csrfToken);
       const mismatch = !validStorageApplyResult(result) || result.planId !== planId || result.complete !== true;
       if (mismatch) {
-        throw new ApiError("INVALID_RESPONSE", "清理结果未知；请重试同一请求。");
+        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.cleanup"));
       }
       return result;
     },
@@ -768,7 +758,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       );
       const rows = commandHarnesses(reply);
       if (!rows.length) {
-        throw new ApiError("INVALID_RESPONSE", "重新检测结果不完整；请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.recheck"));
       }
       return rows;
     },
@@ -788,7 +778,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       );
       const row = harnessRow((reply as { harness?: unknown } | null)?.harness);
       if (!row || row.harness.toLowerCase() !== harness.trim().toLowerCase()) {
-        throw new ApiError("INVALID_RESPONSE", "路径保存结果未知；请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.pathSaved"));
       }
       return row;
     },
@@ -803,7 +793,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       body: JSON.stringify({ operation, params }),
     }) as { ok: boolean; result: T };
     if (!data || data.ok !== true || !Object.hasOwn(data, "result")) {
-      throw new ApiError("INVALID_RESPONSE", "提交结果未知；请核对后重试。");
+      throw new ApiError("INVALID_RESPONSE", i18n.t("shell:error.submit"));
     }
     return data.result;
   }
