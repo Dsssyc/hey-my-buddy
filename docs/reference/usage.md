@@ -4,7 +4,7 @@ This page is the practical path from install to reviewed result. Read [cli.md](c
 
 ## The common path
 
-For coding work, use the micro task lifecycle. Its normal path is one logical `runId`: `submit` → `await` → a `waiting-host` decision or continuation → `accept` of the final artifact. The advanced `execution-*` commands serve the `command` and `external` adapters and internal decision infrastructure; they are not a hidden path to uncoding micro tasks.
+For coding work, use the micro task lifecycle. Its normal path is one logical `runId`: `submit` → `await` → a `waiting-host` decision or continuation → `accept` of the final artifact. The advanced `execution-*` commands serve the `command` adapter and the internal decision infrastructure; they are not a hidden path to uncoding micro tasks.
 
 ### 1. Install once
 
@@ -130,7 +130,7 @@ A workspace conflict is settled first with `workspace-resolve` or `scope-amend`,
 
 ## Non-coding execution records
 
-The `command` and `external` adapters use the advanced `execution-*` records; they have no micro task request queue or Host control file, and use execution-level result review rather than micro task artifact acceptance. Coding adapters are refused here with `MICRO_TASK_REQUIRED`.
+The `command` adapter uses the advanced `execution-*` records; they have no micro task request queue or Host control file, and use execution-level result review rather than micro task artifact acceptance. Coding adapters are refused here with `MICRO_TASK_REQUIRED`.
 
 **`command` adapter.** One explicit `argv` process, never a shell:
 
@@ -140,7 +140,7 @@ The `command` and `external` adapters use the advanced `execution-*` records; th
 
 **`external` adapter.** No local process: the caller's own agent claims the task through the public client and submits the result itself. A runnable example, worker identity and receipt rules are in [workers.md](workers.md#a-runnable-external-worker).
 
-Inspect and review these records with `status`, `result`, `artifacts`, `wait`, then `execution-acknowledge`. The Worker runtime owns the child handle, enforces the deadline and reports confirmed shutdown; `execution-retry` requires that confirmed stop before it can requeue a new generation.
+Inspect and review these records with `status`, `result`, `artifacts`, `wait`, then `execution-acknowledge`. The execution process owns the child handle and reports confirmed shutdown, and the service enforces the stop deadlines; `execution-retry` requires that confirmed stop before it can requeue a new generation.
 
 ## Progress and questions while it runs
 
@@ -149,9 +149,9 @@ Inspect and review these records with `status`, `result`, `artifacts`, `wait`, t
 "$HMB" inquire '{"runId":"<runId>","inquiryId":"q-1","question":"What are you waiting on?","waitMs":20000}'
 ```
 
-The no-question form is bounded observation: execution state from the durable record, an explicitly estimated deadline, recent activity and the bounded native-activity projection on the task view (`phase`, last native/tool activity times, event sequence, tool name, waiting reason and honest counters). It is not a percentage and not a guaranteed ETA, and fields the bridge could not observe are named in `live.unavailable` rather than reported as zero. An empty runner log, a static session list, a missing PID or an expired lease never proves the process stopped; only real shutdown evidence does.
+The no-question form is bounded observation: execution state from the durable record, an explicitly estimated deadline, recent activity and the bounded native-activity projection on the task view (`phase`, last native/tool activity times, event sequence, tool name, waiting reason and honest counters). It is not a percentage and not a guaranteed ETA, and fields the bridge could not observe are named in `live.unavailable` rather than reported as zero. An empty runner log, a static session list, a missing PID never proves the process stopped; only real shutdown evidence does.
 
-A question goes to the run's own live agent only when its harness declares `inquiry`. DSH answers through its correlated reply tool; plain assistant text is not an answer. ZCode supports cooperative inquiry: the question waits for the root's next tool checkpoint or finish attempt, and only a signed answer matched to the native root turn counts. `live.deliveryMode` reports `cooperative-checkpoint`; an unanswered question becomes unavailable when the turn ends, without native input or a new turn. `command`, `external` and `codex` mount no inquiry bridge. Questions and answers are bounded at 4000 UTF-8 bytes and 32 inquiry identities per task. Repeating the same ID and text reads its recorded state; changed text conflicts. See [CLI](cli.md#messages-and-inquiry) for the full contract.
+A question goes to the run's own live agent only when its harness declares `inquiry`. DSH answers through its correlated reply tool; plain assistant text is not an answer. ZCode supports cooperative inquiry: the question waits for the root's next tool checkpoint or finish attempt, and only a signed answer matched to the native root turn counts. `live.deliveryMode` reports `cooperative-checkpoint`; an unanswered question becomes unavailable when the turn ends, without native input or a new turn. `command` and `codex` mount no inquiry bridge. Questions and answers are bounded at 4000 UTF-8 bytes and 32 inquiry identities per task. Repeating the same ID and text reads its recorded state; changed text conflicts. See [CLI](cli.md#messages-and-inquiry) for the full contract.
 
 Ask when the user asks or when you need the answer to report honestly; do not build a polling loop. `wait` and `watch` are short bounded waits (at most 30 s) for nearby changes on a service that must already be running; they never cold-start a service and are not a substitute for the durable `await`.
 
@@ -194,7 +194,7 @@ If the App heartbeat tool is unavailable or registration fails, keep waiting in 
 
 ## More than one task at a time
 
-Capacity and cwd/exclusive-resource conflicts queue with a `queueReason` instead of failing. The daemon starts a worker pool for one machine-wide concurrent-attempt ceiling — `HMB_MAX_CONCURRENT`, default 8, clamped 1–32 — shared by routing and execution; the reserved decision lane and its separate limit are removed. On top of the ceiling, each model service (an exact harness/provider/model) has a user-set concurrency limit (default 2; effort variants and the routing decisions using that model share the counter), edited on its model card in the console. `health.capacity` reports the total limit, total active and per-model occupancy. One worker runs one attempt at a time; parallel editors require separate worktrees. Await independent tasks by their own `runId`. Unconfirmed shutdown still occupies its slot.
+Capacity and cwd/exclusive-resource conflicts queue with a `queueReason` instead of failing. The service admits work within one machine-wide concurrent-attempt ceiling — `HMB_MAX_CONCURRENT`, default 8, clamped 1–32 — shared by routing and execution; the reserved decision lane and its separate limit are removed. On top of the ceiling, each model service (an exact harness/provider/model) has a user-set concurrency limit (default 2; effort variants and the routing decisions using that model share the counter), edited on its model card in the console. `health.capacity` reports the total limit, total active and per-model occupancy. Each attempt runs in its own execution process; parallel editors require separate worktrees. Await independent tasks by their own `runId`. Unconfirmed shutdown still occupies its slot.
 
 Before waiting on a running micro task, submit the micro tasks that are independent of it; the queue holds whatever exceeds capacity, so nothing is lost by submitting early. Two micro tasks are independent when neither needs the other's result and they do not change the same files or the same stored form. A name, a format or another convention that two of them must share is written into both task texts first: the board makes submission safe, not the compatibility of what comes back. Each micro task is still verified and accepted on its own. When several finish together, integrate them and run the project's checks on the integrated result before accepting any of them, because a change that passes alone can break what another one relies on; an accepted micro task cannot be continued, and its repair is a new micro task.
 
