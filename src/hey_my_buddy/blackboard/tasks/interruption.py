@@ -227,7 +227,7 @@ def _recover_one(board, attempt, identity, stopped_evidence):
             'taskId': attempt['task_id'], 'attemptId': attempt['attempt_id'], 'generation': attempt['generation']})
         if receipt is not None:
             response = board.execution_result({**receipt['report'], 'attemptId': attempt['attempt_id'],
-                'generation': attempt['generation'], 'commandId': receipt['commandId']}, recovered=True,
+                'generation': attempt['generation']}, recovered=True,
                 stop_evidence={**(stopped_evidence or {}), 'kind': observed, 'native': 'receipt'})
             if not response['attempt']['shutdownConfirmed']:
                 confirmed, kind = _stop_native(board, attempt, identity, observed)
@@ -251,7 +251,7 @@ def _recover_one(board, attempt, identity, stopped_evidence):
                   'terminationReason': reason if confirmed or not stopped else None,
                   'logPaths': json.loads(attempt['log_paths']), 'runtimeIdentity': attempt['runtime_identity']}
         return board.execution_result({**report, 'attemptId': attempt['attempt_id'],
-            'generation': attempt['generation'], 'commandId': f"interrupted:{attempt['attempt_id']}"}, recovered=True,
+            'generation': attempt['generation']}, recovered=True,
             stop_evidence={**(stopped_evidence or {}), 'kind': kind, 'execution': observed})
     finally:
         _cleanup_dead_material(board, attempt, identity, observed)

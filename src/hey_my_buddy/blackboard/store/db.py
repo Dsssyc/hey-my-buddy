@@ -19,7 +19,7 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CONTROL_TOKEN_VERSION = 1
@@ -107,7 +107,6 @@ CREATE TABLE IF NOT EXISTS attempts (
     model_model         TEXT,
     log_paths           TEXT NOT NULL DEFAULT '{}',
     result_json         TEXT,
-    result_command_id   TEXT,
     error               TEXT,
     shutdown_confirmed  INTEGER NOT NULL DEFAULT 0,
     cancel_requested_at TEXT,

@@ -45,13 +45,15 @@ class CurrentCoreTests(BoardTestCase):
         return path
 
     def test_fresh_schema_has_only_current_fields_and_survives_reopen(self):
-        self.assertEqual(CONTRACT_VERSION, "0.41.0")
-        self.assertEqual(SCHEMA_VERSION, 23)
+        self.assertEqual(CONTRACT_VERSION, "0.42.0")
+        self.assertEqual(SCHEMA_VERSION, 24)
         board = self.board()
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(tasks)")}
+            attempt_columns = {row["name"] for row in connection.execute("PRAGMA table_info(attempts)")}
         self.assertTrue({"input_fingerprint", "fingerprint_version", "selected_attempt_id"}.issubset(columns))
+        self.assertNotIn("result_command_id", attempt_columns)
         self.assertFalse(any(name.startswith("legacy") for name in columns))
         request = {"requestId": "same-current-input", "task": "current task", "cwd": str(self.workdir()), "adapter": "command", "argv": ["/bin/true"]}
         first = board.call("task_submit", request)
@@ -76,6 +78,7 @@ class CurrentCoreTests(BoardTestCase):
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES('schema_version', ?)"),
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES('created_at', ?)"),
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES(?, ?)"),
+            ("blackboard/store/upgrade.py", "UPDATE meta SET value='24' WHERE key='schema_version'"),
         ]))
         board = self.board()
         with board.store.db.read() as connection:

@@ -165,10 +165,21 @@ class BoardStore:
             (task_id, attempt_id, revision, kind, canonical_json(event_payload),
              actor["role"] if actor is not None else None, actor["id"] if actor is not None else None, at),
         )
+        seq = int(cursor.lastrowid)
+        if kind == "attempt.activity":
+            connection.execute(
+                "DELETE FROM events WHERE task_id=? AND kind=? AND attempt_id=? AND seq<?",
+                (task_id, kind, attempt_id, seq),
+            )
+        elif kind in ("harness.checked", "harness.probe_unknown", "harness.account_observed"):
+            connection.execute(
+                "DELETE FROM events WHERE task_id IS NULL AND kind=? AND json_extract(payload_json,'$.harness')=? AND seq<?",
+                (kind, event_payload["harness"], seq),
+            )
         from ..tasks.macro_tasks import record_activity
-        record_activity(connection, task_id, int(cursor.lastrowid), at)
-        self.workflow.owned_event(connection, task_id=task_id, kind=kind, seq=int(cursor.lastrowid), now=at)
-        return int(cursor.lastrowid)
+        record_activity(connection, task_id, seq, at)
+        self.workflow.owned_event(connection, task_id=task_id, kind=kind, seq=seq, now=at)
+        return seq
 
     def head(self) -> int:
         return self._head
@@ -291,7 +302,9 @@ class BoardStore:
                 "This commandId already belongs to a different request; use a new commandId",
                 commandId=command_id,
             )
-        return json.loads(row["response_json"])
+        from ..tasks.command_receipts import replay_response
+
+        return replay_response(self.workflow, connection, kind, json.loads(row["response_json"]))
 
     def _store_receipt(
         self,
@@ -305,6 +318,8 @@ class BoardStore:
         attempt_id: str | None = None,
         subject: str | None = None,
     ) -> None:
+        from ..tasks.command_receipts import stored_response
+
         connection.execute(
             "INSERT OR REPLACE INTO commands(command_id, task_id, attempt_id, kind, request_hash, response_json,"
             " subject, created_at) VALUES(?,?,?,?,?,?,?,?)",
@@ -314,7 +329,7 @@ class BoardStore:
                 attempt_id,
                 kind,
                 sha256_text(canonical_json(request)),
-                canonical_json(response),
+                canonical_json(stored_response(kind, response)),
                 subject,
                 self.now(),
             ),
@@ -1901,7 +1916,6 @@ class BoardStore:
                 "attemptId",
                 "generation",
                 "nonce",
-                "commandId",
                 "status",
                 "result",
                 "error",
@@ -1950,7 +1964,6 @@ class BoardStore:
             raise BoardError("INVALID_ARGUMENT", "wrap-up requires a cancelled result",
                              field="terminationReason")
         error_text = schemas.optional_string(params, "error", max_length=4000)
-        command_id = schemas.optional_string(params, "commandId", max_length=128) or f"result:{params.get('attemptId')}"
         attempt_id_param = schemas.required_string(params, "attemptId", max_length=128)
         log_paths = params.get("logPaths")
         if log_paths is not None and not isinstance(log_paths, dict):
@@ -1996,7 +2009,7 @@ class BoardStore:
             "terminationReason": termination_reason,
         }
         return self._commit_execution_result(
-            params, request=request, command_id=command_id, recovered=recovered, seal_stash=seal_stash,
+            params, request=request, recovered=recovered, seal_stash=seal_stash,
             completion_evidence=stop_evidence)
 
     def confirm_execution_shutdown(self, attempt_id: str, evidence: dict) -> dict:
@@ -2013,10 +2026,10 @@ class BoardStore:
             "attemptId", "status", "result", "artifacts", "shutdownConfirmed", "exitCode", "signal",
             "error", "logPaths", "runtimeIdentity", "terminationReason")}
         return self._commit_execution_result(
-            params, request=request, command_id=attempt["result_command_id"], recovered=True,
+            params, request=request, recovered=True,
             seal_stash=self.workflow.collect_result_stash_facts(params), shutdown_evidence=evidence)
 
-    def _commit_execution_result(self, params: dict, *, request: dict, command_id: str,
+    def _commit_execution_result(self, params: dict, *, request: dict,
                                  recovered: bool, seal_stash, shutdown_evidence: dict | None = None,
                                  completion_evidence: dict | None = None) -> dict:
         status, result = request["status"], request["result"]
@@ -2050,7 +2063,6 @@ class BoardStore:
                 if known_console_stop is None:
                     raise BoardError("INVALID_ARGUMENT", "console-stop requires a durable console stop",
                                      field="terminationReason")
-            subject = ("recovery:" + attempt_id_param) if recovered else self._subject(params["nonce"], attempt_id_param)
             if attempt["result_json"] is not None and shutdown_evidence is None:
                 previous = json.loads(attempt["result_json"])
                 # A later service proof changes only shutdownConfirmed. An exact
@@ -2085,10 +2097,6 @@ class BoardStore:
                 previous = json.loads(attempt["result_json"])
                 if not self._same_result(previous, {**request, "shutdownConfirmed": False}):
                     raise BoardError("CONFLICT", "Shutdown proof may not change the committed result")
-            else:
-                receipt = self._receipt(connection, command_id, "execution.result", request, subject)
-                if receipt is not None:
-                    return receipt
             now = self.now()
             for artifact in verified_artifacts:
                 connection.execute(
@@ -2161,12 +2169,11 @@ class BoardStore:
             else:
                 task_state = "failed"
             connection.execute(
-                "UPDATE attempts SET result_json=?, result_command_id=?, error=?, exit_code=?, signal=?,"
+                "UPDATE attempts SET result_json=?, error=?, exit_code=?, signal=?,"
                 " shutdown_confirmed=?, runtime_identity=COALESCE(?, runtime_identity), log_paths=COALESCE(?, log_paths),"
                 " stop_initiator=COALESCE(stop_initiator,?),finished_at=?, updated_at=?, revision=revision+1 WHERE attempt_id=?",
                 (
                     canonical_json(payload),
-                    command_id,
                     error_text,
                     exit_code,
                     signal_name,
@@ -2275,11 +2282,6 @@ class BoardStore:
             if recovered and shutdown_confirmed:
                 connection.execute("UPDATE attempt_interruptions SET state='settled',seal_error=NULL WHERE attempt_id=?",
                                    (attempt_id_param,))
-            if shutdown_evidence is None:
-                self._store_receipt(
-                    connection, command_id, "execution.result", request, response,
-                    task_id=attempt["task_id"], attempt_id=attempt["attempt_id"], subject=subject)
-
             head = self._head_of(connection)
         self._notify(head)
         return response

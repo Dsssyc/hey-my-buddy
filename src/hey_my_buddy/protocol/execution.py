@@ -152,10 +152,9 @@ def read_execution_receipt(directory: Path, *, binding: dict | None = None) -> d
         value = _private_json(Path(directory) / RECEIPT, 1024 * 1024)
     except FileNotFoundError:
         return None
-    if set(value) != {"commandId", "attemptId", "generation", "taskId", "report", "createdAt"}:
+    if set(value) != {"attemptId", "generation", "taskId", "report", "createdAt"}:
         raise BoardError("INVALID_ARGUMENT", "Execution receipt has an invalid shape")
-    if (not isinstance(value["commandId"], str) or not 0 < len(value["commandId"]) <= 128
-            or not isinstance(value["taskId"], str) or not value["taskId"]
+    if (not isinstance(value["taskId"], str) or not value["taskId"]
             or not isinstance(value["attemptId"], str) or not value["attemptId"]
             or type(value["generation"]) is not int or value["generation"] <= 0
             or not isinstance(value["report"], dict)

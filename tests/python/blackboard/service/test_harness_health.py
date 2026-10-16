@@ -39,6 +39,31 @@ class HarnessHealthTests(BoardTestCase):
         self.native.assert_called_once()
         self.assertEqual(len(self.refreshed), 1)
 
+    def test_periodic_health_observations_replace_only_the_same_harness_and_kind(self):
+        import json
+
+        self.health.refresh('codex', force=True)
+        before = self.board.events_read({'after': 0})['head']
+        self.discovered = {**self.discovered, 'version': '2.0'}
+        self.health.refresh('codex', force=True)
+        # Another harness has its own retained observation.
+        self.discovered = {**self.discovered, 'harness': 'dsh', 'command': ['/native/dsh']}
+        self.health.refresh('dsh', force=True)
+        for reason in ('slow-first', 'slow-latest'):
+            self.discovered = {'harness': 'codex', 'status': 'unknown', 'reasonCode': reason}
+            self.health.refresh('codex', force=True)
+        events = self.board.events_read({'after': 0})['events']
+        checked = [row for row in events if row['kind'] == 'harness.checked']
+        self.assertEqual({row['payload']['harness'] for row in checked}, {'codex', 'dsh'})
+        self.assertEqual(len(checked), 2)
+        self.assertEqual(next(row['payload']['version'] for row in checked
+                              if row['payload']['harness'] == 'codex'), '2.0')
+        unknown = [row for row in events if row['kind'] == 'harness.probe_unknown']
+        self.assertEqual(len(unknown), 1)
+        self.assertEqual(unknown[0]['payload']['reasonCode'], 'slow-latest')
+        self.assertGreater(unknown[0]['seq'], before)
+        self.assertEqual(self.health.get('codex')['lastProbe']['reasonCode'], 'slow-latest')
+
     def test_slow_scan_preserves_ready_health_and_next_scan_can_succeed(self):
         first = self.health.refresh('codex', force=True)
         self.discovered = {'harness': 'codex', 'status': 'unknown', 'reasonCode': 'scan-timeout'}
@@ -839,6 +864,19 @@ class NativeAccountReadFailureTests(BoardTestCase):
         import json
         with self.board.db.read() as db:
             return [json.loads(row[0]) for row in db.execute('SELECT payload_json FROM events WHERE kind=?', (kind,))]
+
+    def test_account_observations_keep_the_latest_read_and_advance_the_cursor(self):
+        with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)):
+            self.health.refresh('codex', force=True)
+            previous = self.board.events_read({'after': 0})['head']
+            with self.board.db.write() as db:
+                db.execute("UPDATE harness_account_reads SET checked_at='2000' WHERE harness='codex'")
+            self.health.refresh('codex', force=True)
+        events = self.board.events_read({'after': previous})['events']
+        account = [row for row in events if row['kind'] == 'harness.account_observed']
+        self.assertEqual(len(account), 1)
+        self.assertGreater(account[0]['seq'], previous)
+        self.assertEqual(len(self.events('harness.account_observed')), 1)
 
     def test_unconfirmed_account_stop_stays_unavailable_until_a_real_successful_read(self):
         from hey_my_buddy.errors import BoardError

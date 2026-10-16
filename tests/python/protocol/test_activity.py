@@ -203,7 +203,66 @@ class ActivityProjection(BoardTestCase):
         events = [
             event for event in client.read_events(after=0)["events"] if event["kind"] == "attempt.activity"
         ]
-        self.assertEqual(len(events), 2, "only advancing receipts append an event")
+        self.assertEqual(len(events), 1, "advancing receipts replace this attempt's previous activity")
+        self.assertEqual(events[0]["payload"]["activity"], newer)
+
+    def test_replacement_preserves_forward_cursors_and_rolls_back_with_the_projection(self):
+        board = self.board()
+        client, task, claim, nonce = self.claimed_attempt(board)
+        attempt = claim["attempt"]
+        first = {"phase": "waiting-model", "eventSeq": 1}
+        second = {"phase": "tool-running", "eventSeq": 2, "toolName": "read_file"}
+        client.progress(attempt["attemptId"], attempt["generation"], nonce, data={"activity": first})
+        page = client.read_events(after=0)
+        original = page["events"][-1]
+        old_cursor = page["cursor"]
+        self.assertEqual(original["kind"], "attempt.activity")
+
+        append = board.store._append_event
+        def fail_after_append(*args, **kwargs):
+            append(*args, **kwargs)
+            raise BoardError("FIXTURE_FAILURE", "Roll back the replacement")
+        with mock.patch.object(board.store, "_append_event", side_effect=fail_after_append):
+            with self.assertRaises(BoardError):
+                client.progress(attempt["attemptId"], attempt["generation"], nonce, data={"activity": second})
+        self.assertEqual(client.get(runId=task["runId"])["activity"], first)
+        self.assertEqual(client.read_events(after=0)["events"][-1], original)
+        self.assertEqual(board.store.head(), old_cursor)
+
+        client.progress(attempt["attemptId"], attempt["generation"], nonce, data={"activity": second})
+        following = board.store.events_wait({"after": old_cursor, "taskId": task["runId"], "timeoutMs": 0})
+        self.assertEqual(len(following["events"]), 1)
+        self.assertGreater(following["cursor"], old_cursor)
+        self.assertEqual(following["head"], board.store.head())
+        self.assertEqual(following["events"][0]["payload"]["activity"], second)
+        self.assertFalse(following["timedOut"])
+        all_events = client.read_events(after=0)["events"]
+        self.assertNotIn(old_cursor, [event["seq"] for event in all_events])
+        self.assertEqual(client.get(runId=task["runId"])["activity"], second)
+
+    def test_replacement_deletes_use_the_existing_task_index(self):
+        board = self.board()
+        client, task, claim, nonce = self.claimed_attempt(board)
+        attempt = claim["attempt"]
+        statements = []
+        with board.store.db.read() as connection:
+            connection.set_trace_callback(statements.append)
+        try:
+            client.progress(attempt["attemptId"], attempt["generation"], nonce,
+                            data={"activity": {"phase": "waiting-model", "eventSeq": 1}})
+            with board.store.db.write() as connection:
+                for kind in ("harness.checked", "harness.probe_unknown", "harness.account_observed"):
+                    board.store._append_event(connection, kind, payload={"harness": "codex"})
+        finally:
+            with board.store.db.read() as connection:
+                connection.set_trace_callback(None)
+        deletes = [statement for statement in statements if statement.startswith("DELETE FROM events")]
+        self.assertEqual(len(deletes), 4)
+        with board.store.db.read() as connection:
+            for statement in deletes:
+                with self.subTest(sql=statement):
+                    plan = [row[3] for row in connection.execute("EXPLAIN QUERY PLAN " + statement)]
+                    self.assertTrue(any("USING INDEX events_task_idx" in detail for detail in plan), plan)
 
     def test_invalid_or_tampered_activity_is_rejected(self):
         board = self.board()
@@ -273,6 +332,12 @@ class ActivityProjection(BoardTestCase):
         # The old projection stays readable for the attempt that produced it.
         with board.store.db.read() as connection:
             self.assertIsNotNone(board.store._activity_latest(connection, attempt["attemptId"]))
+        for event_seq in (1, 2):
+            client.progress(second["attemptId"], second["generation"], "b" * 32,
+                            data={"activity": {"phase": "waiting-model", "eventSeq": event_seq}})
+        events = [event for event in client.read_events(after=0)["events"] if event["kind"] == "attempt.activity"]
+        self.assertEqual({event["attemptId"] for event in events}, {attempt["attemptId"], second["attemptId"]})
+        self.assertEqual(len(events), 2, "replacement belongs to one attempt, including across retries")
 
 
 class ExecutionActivityForwarding(BoardTestCase):
@@ -349,7 +414,8 @@ class ExecutionActivityForwarding(BoardTestCase):
         self.assertTrue(publisher.publish(second))
         self.assertTrue(wait_for(lambda: client.get(runId=attempt["taskId"])["activity"] == second, 3))
         self.assertFalse(endpoint.publish_activity(first), "the endpoint fences older observations")
-        self.assertEqual(len(self.activity_events(client)), 2)
+        self.assertEqual(len(self.activity_events(client)), 1)
+        self.assertEqual(self.activity_events(client)[0]["payload"]["activity"], second)
         self.assertIsNone(control.handle.process.poll(), "activity reads never stop the owned child")
 
     def test_unavailable_binding_is_retried_without_activity_or_heartbeat(self):

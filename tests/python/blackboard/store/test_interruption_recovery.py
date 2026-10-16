@@ -173,7 +173,7 @@ class InterruptionRecoveryTests(BoardTestCase):
             attempt = dict(board.store._attempt_row(connection, actor['attemptId']))
         root = interruption._directory(board.store, attempt)
         receipt = {'taskId': task['taskId'], 'attemptId': actor['attemptId'], 'generation': actor['generation'],
-                   'commandId': 'receipt-first', 'createdAt': board.store.now(),
+                   'createdAt': board.store.now(),
                    'report': {'status': 'ok', 'result': {'finalText': 'durable'}, 'shutdownConfirmed': True}}
         fsync_json(root / RECEIPT, receipt)
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
@@ -183,8 +183,7 @@ class InterruptionRecoveryTests(BoardTestCase):
             journal.assert_not_called()
         self.assertEqual(client.result(runId=task['taskId'])['result'], {'finalText': 'durable'})
         with board.store.db.read() as connection:
-            self.assertEqual(connection.execute("SELECT kind FROM commands WHERE command_id='receipt-first'").fetchone()[0],
-                             'execution.result')
+            self.assertIsNone(connection.execute("SELECT kind FROM commands WHERE kind='execution.result'").fetchone())
         self.assertEqual(board.store.recover_executions(), [])
 
     def test_no_receipt_preserves_the_persisted_stop_reason(self):
@@ -282,19 +281,18 @@ class InterruptionRecoveryTests(BoardTestCase):
     def test_committed_unconfirmed_receipt_left_on_disk_is_not_resubmitted(self):
         board, client, task, _, actor = self.claimed()
         report = {'status': 'ok', 'result': {'native': 'receipt survives commit'}, 'shutdownConfirmed': False}
-        command_id = 'result:' + actor['attemptId']
-        board.call('execution_result', {**actor, **report, 'commandId': command_id})
+        board.call('execution_result', {**actor, **report})
         original = client.result(runId=task['taskId'])['selectedAttempt']['result']
         with board.store.db.read() as db:
             attempt = dict(board.store._attempt_row(db, actor['attemptId']))
-            command = dict(db.execute('SELECT * FROM commands WHERE command_id=?', (command_id,)).fetchone())
+            self.assertIsNone(db.execute("SELECT * FROM commands WHERE kind='execution.result'").fetchone())
         fsync_json(interruption._directory(board.store, attempt) / RECEIPT, {
             'taskId': task['taskId'], 'attemptId': actor['attemptId'], 'generation': actor['generation'],
-            'commandId': command_id, 'createdAt': board.store.now(), 'report': report})
+            'createdAt': board.store.now(), 'report': report})
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
             self.assert_idempotently_confirmed(board, client, task, actor, original, state='completed')
         with board.store.db.read() as db:
-            self.assertEqual(dict(db.execute('SELECT * FROM commands WHERE command_id=?', (command_id,)).fetchone()), command)
+            self.assertIsNone(db.execute("SELECT * FROM commands WHERE kind='execution.result'").fetchone())
 
     def test_bad_receipt_is_visible_once_and_does_not_block_startup_or_later_attempts(self):
         cases = (
@@ -318,7 +316,7 @@ class InterruptionRecoveryTests(BoardTestCase):
                     attempt = dict(board.store._attempt_row(db, actor['attemptId']))
                     later = dict(board.store._attempt_row(db, good_actor['attemptId']))
                 envelope = {'taskId': task['taskId'], 'attemptId': actor['attemptId'], 'generation': 1,
-                            'commandId': 'bad-receipt', 'createdAt': board.store.now(),
+                            'createdAt': board.store.now(),
                             'report': {'status': 'ok', 'result': {'native': name}, 'shutdownConfirmed': True}}
                 if name == 'shape':
                     envelope = bad
@@ -332,7 +330,7 @@ class InterruptionRecoveryTests(BoardTestCase):
                     path.write_text(bad)
                 fsync_json(interruption._directory(board.store, later) / RECEIPT, {
                     'taskId': good_task['taskId'], 'attemptId': good_actor['attemptId'], 'generation': 1,
-                    'commandId': 'good-receipt', 'createdAt': board.store.now(),
+                    'createdAt': board.store.now(),
                     'report': {'status': 'ok', 'result': {'native': 'later'}, 'shutdownConfirmed': True}})
                 with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
                     self.assertEqual(board.store.reconcile_startup()['interrupted'], 1)

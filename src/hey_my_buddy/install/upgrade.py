@@ -20,6 +20,7 @@ from .launcher import write_active_runtime
 from ..protocol import schemas
 from ..protocol.contracts import CONTRACT_VERSION
 from ..blackboard.store.db import SCHEMA_VERSION, utc_now
+from ..blackboard.store.upgrade import UPGRADE_BASE_SCHEMA, upgrade_schema_23_to_24
 from ..errors import BoardError
 from ..protocol.transport import get_state_dir
 
@@ -59,9 +60,9 @@ def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = F
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if schema is None or int(schema[0]) != SCHEMA_VERSION:
+        if schema is None or int(schema[0]) not in (UPGRADE_BASE_SCHEMA, SCHEMA_VERSION):
             raise BoardError('UNSUPPORTED_SCHEMA',
-                             f'Upgrade accepts schema {SCHEMA_VERSION} only')
+                             f'Upgrade accepts schema {UPGRADE_BASE_SCHEMA} or {SCHEMA_VERSION} only')
         # A micro-task Host boundary has no autonomous next turn. A recorded or
         # queued continuation still has work to prepare/claim, even if the run
         # currently reports a Host boundary. Routing and helper tasks are checked
@@ -416,7 +417,6 @@ def retain_runtimes(state: Path, target: Path, previous: Path) -> dict:
 
 
 def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Path | None = None) -> dict:
-    from ..blackboard.store.store import BoardStore
     schemas.reject_unknown(params, set(), 'upgrade')
     if os.environ.get('HMB_AGENT_CREDENTIAL_FILE'):
         raise BoardError('UNAUTHORIZED', 'A Worker cannot upgrade its owning service')
@@ -500,13 +500,15 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     before = idle_snapshot(state, exact=True)
                     before['runtimeSettings'] = runtime_settings
                     journal['before'] = before
-                    backed_up = backup.create(BoardStore(state), runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
+                    backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
                     stored = backup.verify(Path(backed_up['path']))
                     if stored.get('databaseSnapshot') is not None:
                         before = {**before, **stored['databaseSnapshot'], 'schema': stored.get('schema'), 'runtimeSettings':runtime_settings}
                         journal['before'] = before
                     journal.update(phase='backed-up', backup=backed_up)
                     write_journal(marker, journal)
+                    if before['schema'] == UPGRADE_BASE_SCHEMA:
+                        upgrade_schema_23_to_24(state)
                     expected = idle_snapshot(state, event_head=before['eventHead'])
                 else:
                     expected = before

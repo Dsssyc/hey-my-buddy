@@ -37,6 +37,7 @@ from ...protocol import schemas
 from ...protocol.stop import WRAP_UP_INITIATORS
 from . import fixes as task_fixes
 from . import host_conclusions
+from .command_receipts import CANCELLATION_NOTE
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
 
@@ -3586,10 +3587,7 @@ class WorkflowCoordinator:
         run_row = self._run_row(connection, run_id)
         return {
             **self.compact(connection, run_row, task), "cancelled": True, "duplicate": False,
-            "note": (
-                "Cancellation is durable. An active execution becomes cancelling and its worker stops the owned "
-                "process group; this response never claims that a surviving process is already stopped."
-            ),
+            "note": CANCELLATION_NOTE,
         }
 
     def _cancel_children(self, connection, run_id: str, reason: str, now: str, *,

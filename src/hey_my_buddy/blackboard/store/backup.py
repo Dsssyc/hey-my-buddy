@@ -17,6 +17,7 @@ import tempfile
 import time
 
 from .db import SCHEMA_VERSION, Database, utc_now
+from .upgrade import UPGRADE_BASE_SCHEMA
 from ...protocol.contracts import CONTRACT_VERSION
 from ...errors import BoardError
 from ... import private_dirs
@@ -235,7 +236,7 @@ def _verify(directory: Path) -> dict:
     _guard(directory)
     with _open(directory / 'manifest.json', 'rb') as stream:
         manifest = json.load(stream)
-    if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
+    if manifest.get('format') != 1 or manifest.get('schema') not in (UPGRADE_BASE_SCHEMA, SCHEMA_VERSION):
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
     allowed = {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)}
     if 'board.sqlite3.gz' not in manifest['files'] or set(manifest['files']) - allowed:
@@ -403,11 +404,11 @@ def recover(state: Path) -> Path:
         os.close(lock)
 
 
-def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | None = None, contract_version: str = CONTRACT_VERSION) -> dict:
+def create(state: Path, *, runtime_identity: dict | None = None, plugin_commit: str | None = None, contract_version: str = CONTRACT_VERSION) -> dict:
     started = time.monotonic()
-    if _linked_component(store.directory):
+    if _linked_component(state):
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup state path cannot contain links', path='.')
-    state = store.directory.resolve()
+    state = state.resolve()
     wal = state / 'board.sqlite3-wal'
     if wal.exists() and wal.stat().st_size:
         raise BoardError('BACKUP_INVALID', 'Exact stopped-board archive requires a checkpointed WAL')
