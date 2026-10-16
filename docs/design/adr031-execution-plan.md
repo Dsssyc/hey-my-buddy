@@ -50,9 +50,7 @@ M5 之后，Host 跑一次完整检查，在日常看板的私有副本上把 22
 
 ## 后面几步要带上的（M2 验收时发现）
 
-M2 验收时带给 M3 的几件（服务的问题看不到、两种事件、`executedBy`、`new_nonce()` 与 `test_run.py` 的旧说明）随 M3 做完。还剩一件：
-
-- **时间线里队列段的结束状态还叫 `claimed`。** 准入已经没有认领，时间线（`blackboard/tasks/macro_tasks.py`）与控制台（`macro-task-display.ts`、`macro-task-timeline-layout.ts` 与夹具）要一起改，`docs/reference/macro-tasks.md` 随之改。牵涉控制台，另起一个小的控制台微任务，经路由。
+M2 验收时带给 M3 的几件（服务的问题看不到、两种事件、`executedBy`、`new_nonce()` 与 `test_run.py` 的旧说明）随 M3 做完。最后一件，时间线里队列段的结束状态 `claimed`，另起一个小的控制台微任务改成了 `admitted`（“已开始”），2026-10-16 验收（[验收记录](../acceptance/adr031.md)）。
 
 ## 落在这块底座上的待办
 
