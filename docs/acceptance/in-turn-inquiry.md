@@ -1,6 +1,6 @@
 # Codex CLI 与 Claude Code CLI 的回合内问询：验收记录
 
-2026-10-16，整合 Host。依据是[研究笔记](../research/2026-10-16-codex-claude-in-turn-questions.md)与 [ADR-031 执行计划](../design/adr031-execution-plan.md)里的同名待办。微任务“问询：Codex 与 Claude Code”（Codex CLI，`gpt-6.1-sol / high`，三个回合：实现约 20 分钟，返修一回合被 Host 停下，换了做法之后约 15 分钟），基点 `c605b127`，产物 `f6cb9560`，合并为 `7d23c296`。源码版本 0.42.1，契约仍是 0.42.0，尚未安装。
+2026-10-16，整合 Host。依据是[研究笔记](../research/2026-10-16-codex-claude-in-turn-questions.md)与 [ADR-031 执行计划](../design/adr031-execution-plan.md)里的同名待办。微任务“问询：Codex 与 Claude Code”（Codex CLI，`gpt-6.1-sol / high`，三个回合：实现约 20 分钟，返修一回合被 Host 停下，换了做法之后约 15 分钟），基点 `c605b127`，产物 `f6cb9560`，合并为 `7d23c296`。版本 0.42.1，契约仍是 0.42.0，同日装上（[安装记录](install-0.42.1.md)）。
 
 ## 做成了什么
 
