@@ -138,6 +138,10 @@ _Avoid_: correction (a run's in-turn correction of a model's answer), reopening 
 **执行回合 / turn**:
 One Worker buddy execution ending in a result, assistance request or attention boundary; a Lead's turn may also end waiting on its owned micro tasks.
 
+**问询 / inquiry**:
+A question the micro task's Host or Lead puts to its running turn through the blackboard, together with the answer correlated with it. It changes neither the turn's task nor its authority, and it is not a continuation.
+_Avoid_: 询问, 消息 (the stored record is a message; the act is an inquiry)
+
 **封存 / seal**:
 The fixed artifact the blackboard makes of a checkout's content when a turn ends; acceptance judges it, never the Worker's own report.
 _Avoid_: 第 N 封 (say 第 N 回合的封存), 快照
