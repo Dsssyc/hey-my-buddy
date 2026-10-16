@@ -28,7 +28,7 @@ export default {
     exclude: "不参与路由",
   },
   unsaved: "未保存",
-  loginExpired: "登录已失效，操作未提交；请重新登录。",
+  loginExpired: "浏览器授权已失效，操作未提交；请重新授权。",
   models: {
     search: "搜索 buddy",
     enabledOnly: "只看已启用",
@@ -92,7 +92,7 @@ export default {
     range: "需要 {{min}}–{{max}} 的整数",
     note: "备注",
     locked: {
-      session: "登录已失效，重新登录后可以修改",
+      session: "浏览器授权已失效，重新授权后可以修改",
       saving: "正在保存或等待核对，暂时不能修改",
       retired: "已不可用，不能启用",
       pinBuddy: "这个 buddy 不可用或未启用，不能固定",

@@ -1,6 +1,13 @@
+import i18n from "i18next";
 import { describe, expect, it, vi } from "vitest";
-import { createApi, parseRoutingHealth, readVerificationText, validRoutingConfiguration } from "./api";
+import { ApiError, createApi, errorText, parseRoutingHealth, readVerificationText, validRoutingConfiguration } from "./api";
 import { macroTaskTimelineFixture, OBSERVED_AT } from "./macro-task-fixtures";
+
+function recordRow(runId: string) {
+  return { runId, revision: 1, task: runId, status: "completed", createdAt: "2026-10-17T00:00:00Z", updatedAt: "2001-01-01T00:00:00Z",
+    lineage: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: null, rootLeadRunId: null, project: null, buddy: null, routingTask: null } };
+}
+
 
 describe("L4 ordered Router list configuration", () => {
   const current = { routerBuddyIds: [], routerRetryIntervalSeconds: 600,
@@ -162,7 +169,7 @@ describe("microTask history reads", () => {
 describe("local read verification evidence", () => {
   const early = "Fri, 09 Oct 2026 18:00:00 GMT";
   const later = "Fri, 09 Oct 2026 18:05:00 GMT";
-  const page = { runs: [{ runId: "raw", updatedAt: "2001-01-01T00:00:00Z" }], total: 1, nextCursor: null };
+  const page = { runs: [recordRow("raw")], total: 1, nextCursor: null };
   const response = (body: unknown, date?: string, etag = '"read"') => new Response(JSON.stringify(body), {
     headers: { ETag: etag, ...(date === undefined ? {} : { Date: date }) },
   });
@@ -284,7 +291,7 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
   });
 
   it("caches per full URL, so different filters and pages revalidate separately", async () => {
-    const page = (runs: string[]) => ({ runs: runs.map(runId => ({ runId })), total: runs.length, nextCursor: null });
+    const page = (runs: string[]) => ({ runs: runs.map(recordRow), total: runs.length, nextCursor: null });
     const fetcher = queued([
       () => jsonResponse(page(["a"]), '"roots-1"'),
       () => jsonResponse(page(["b"]), '"all-1"'),
@@ -401,8 +408,8 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
   });
 
   it("answers a 304 with the representation this request validated, not the cache's newer body", async () => {
-    const body1 = { runs: [{ runId: "one" }], total: 1, nextCursor: null };
-    const body2 = { runs: [{ runId: "two" }], total: 1, nextCursor: null };
+    const body1 = { runs: [recordRow("one")], total: 1, nextCursor: null };
+    const body2 = { runs: [recordRow("two")], total: 1, nextCursor: null };
     let release304: ((value: Response) => void) | undefined;
     const reply304 = new Promise<Response>(resolve => { release304 = resolve; });
     const fetcher = vi.fn<typeof fetch>()
@@ -441,9 +448,9 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     // ABA guard: the per-URL slot is released on completion, but tickets come
     // from one global counter — a third request's freshly issued slot must
     // not match an older read's late reply.
-    const first = { runs: [{ runId: "first" }], total: 1, nextCursor: null };
-    const second = { runs: [{ runId: "second" }], total: 1, nextCursor: null };
-    const third = { runs: [{ runId: "third" }], total: 1, nextCursor: null };
+    const first = { runs: [recordRow("first")], total: 1, nextCursor: null };
+    const second = { runs: [recordRow("second")], total: 1, nextCursor: null };
+    const third = { runs: [recordRow("third")], total: 1, nextCursor: null };
     let releaseSlow: ((value: Response) => void) | undefined;
     const slowReply = new Promise<Response>(resolve => { releaseSlow = resolve; });
     let releaseThird: ((value: Response) => void) | undefined;
@@ -473,7 +480,7 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     // The ticket is held through the body read and the publication verdict is
     // evaluated when the body actually arrives: a header that lands early and
     // a body that lands late must not smuggle an older etag into the cache.
-    const older = { runs: [{ runId: "old" }], total: 1, nextCursor: null };
+    const older = { runs: [recordRow("old")], total: 1, nextCursor: null };
     const newer = { runs: [], total: 2, nextCursor: null };
     let finishBody: ((value: unknown) => void) | undefined;
     const delayed = jsonResponse(older, '"older-body"');
@@ -602,6 +609,13 @@ describe("storage wire shapes (0.16, operations.md 3b0a2e6)", () => {
       { ...planEnvelope, candidates: null },
       { ...planEnvelope, orphanProcesses: {} },
       { ...planEnvelope, planId: "" },
+      { ...planEnvelope, createdAt: "unrecorded" },
+      { ...planEnvelope, expiresAt: "never" },
+      { ...planEnvelope, categories: [{ ...planEnvelope.categories[0], count: -1 }] },
+      { ...planEnvelope, categories: [{ ...planEnvelope.categories[0], reasons: [null] }] },
+      { ...planEnvelope, categories: [...planEnvelope.categories, ...planEnvelope.categories] },
+      { ...planEnvelope, candidates: [{ id: "c", category: "zcode", path: "/p", bytes: 1, eligible: true, reasons: [3] }] },
+      { ...planEnvelope, orphanProcesses: [{ pid: 12, kind: "execution", stateDir: false, runtimeDir: null }] },
       { ...planEnvelope, categories: [{ id: "zcode", bytes: "1", reclaimableBytes: 0, count: 0, eligibleCount: 0, reasons: [] }] },
     ]) {
       await expect(commandApi(broken).storagePlan("csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
@@ -622,6 +636,8 @@ describe("storage wire shapes (0.16, operations.md 3b0a2e6)", () => {
     await expect(commandApi(numeric).storageApply("plan-9", "cmd-1", "csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     const mismatch = { planId: "plan-other", removedBytes: 0, removed: [], skipped: [], complete: true };
     await expect(commandApi(mismatch).storageApply("plan-9", "cmd-1", "csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    const badReasons = { planId: "plan-9", removedBytes: 0, removed: [], skipped: [{ id: "c", path: "/p", reasons: [null] }], complete: true };
+    await expect(commandApi(badReasons).storageApply("plan-9", "cmd-1", "csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     const unfinished = { planId: "plan-9", removedBytes: 4, removed: [{ id: "c1", path: "/p/one", bytes: 4 }], skipped: [], complete: false };
     await expect(commandApi(unfinished).storageApply("plan-9", "cmd-1", "csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
   });
@@ -640,11 +656,29 @@ describe("on-demand running and installed version facts", () => {
     for (const broken of [null, {}, { running: { ...facts, mode: "unknown" }, installed: null },
       { ...version, running: { ...version.running, softwareVersion: "" } },
       { ...version, running: { ...version.running, sourceCommit: undefined } },
+      { ...version, running: { ...version.running, installedAt: "not-a-date" } },
       { ...version, installed: { ...facts, schemaVersion: "15" } }]) {
       const api = createApi("", vi.fn(async () => new Response(JSON.stringify(broken))) as typeof fetch);
       await expect(api.runtimeVersion()).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
     }
     const api = createApi("", vi.fn(async () => new Response(JSON.stringify({ error: { code: "CONSOLE_SESSION_EXPIRED", message: "expired" } }), { status: 401 })) as typeof fetch);
     await expect(api.runtimeVersion()).rejects.toMatchObject({ code: "CONSOLE_SESSION_EXPIRED" });
+  });
+});
+
+describe("what the data layer says when a read fails", () => {
+  it("says it in the language of the page, for a code it knows and for a failure it makes itself", async () => {
+    const failure = new ApiError("CONFLICT", "board words");
+    const unreadable = createApi("", vi.fn(async () => { throw new TypeError("offline"); }) as typeof fetch);
+    expect(errorText(failure)).toBe("记录冲突；请刷新核对后重试。");
+    await expect(unreadable.tasks({})).rejects.toMatchObject({ message: "无法连接本地黑板；请刷新重试。" });
+    await i18n.changeLanguage("en");
+    try {
+      expect(errorText(failure)).toBe("The records conflict; refresh, check them and try again.");
+      await expect(unreadable.tasks({})).rejects.toMatchObject({ message: "Cannot reach the local blackboard; refresh and retry." });
+      // A code the console has no words for keeps what the board said.
+      expect(errorText(new ApiError("OTHER_CODE", "board words"))).toBe("board words");
+      expect(errorText("plain")).toBe("The request failed; try again later.");
+    } finally { await i18n.changeLanguage("zh"); }
   });
 });

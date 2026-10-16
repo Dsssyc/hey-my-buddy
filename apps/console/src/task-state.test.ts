@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "./types";
-import { excerpt, needsReview, taskStatus, taskTitle, titleTooltip } from "./task-state";
+import { excerpt, needsReview, taskStatus, taskTitle } from "./task-state";
 
 const task = (overrides: Partial<Task> = {}): Task => ({
   runId: "run-1", task: "第一行标题\n第二行", status: "queued", owner: "host", cwd: "/repo",
@@ -45,6 +45,16 @@ describe("micro task title rule (0.16 T1)", () => {
     expect(title.source).toBe("title");
   });
 
+  it("uses the routed micro task's title and its recorded source, never the Router prompt", () => {
+    const route = { runId: "micro", title: "Scale calculation", titleSource: "title" as const, macroTaskId: null, macroTaskTitle: null };
+    const record = task({ task: "Choose the execution buddy", lineage: { kind: "decision", sourceHostId: null, currentHostId: null,
+      rootRunId: "micro", rootLeadRunId: null, parentRunId: "micro", project: null, buddy: null, routingTask: route } });
+    expect(taskTitle(record)).toMatchObject({ text: "Scale calculation", source: "title" });
+    expect(taskTitle({ ...record, lineage: { ...record.lineage!, routingTask: { ...route, titleSource: "first-line" } } })).toMatchObject({ source: "task" });
+    expect(taskTitle({ ...record, lineage: { ...record.lineage!, routingTask: { ...route, title: null, titleSource: null } } })).toMatchObject({ source: "none" });
+    expect(taskTitle({ ...record, lineage: { ...record.lineage!, routingTask: null } })).toMatchObject({ text: "Choose the execution buddy", source: "task" });
+  });
+
   it("never uses the Worker resultSummary as a title", () => {
     const title = taskTitle(task({ workflow: { state: "delivered", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 3, resultSummary: "已验证的整合结果" } }));
     expect(title.text).toBe("第一行标题");
@@ -66,9 +76,9 @@ describe("micro task title rule (0.16 T1)", () => {
     expect(title.text.endsWith("…")).toBe(true);
     // Host-revised 0.16: the shared tooltip keeps the COMPLETE first line.
     expect(title.fullText).toBe(long);
-    expect(titleTooltip(title)).toBe(long);
+    expect(title.fullText).toBe(long);
     const explicit = taskTitle(task({ workflow: { state: "delivered", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 1, title: "完整显式标题" } }));
-    expect(titleTooltip(explicit)).toBe("完整显式标题");
+    expect(explicit.fullText).toBe("完整显式标题");
   });
 
   it("normalizes whitespace in an explicit title to single spaces", () => {
@@ -83,11 +93,11 @@ describe("micro task title rule (0.16 T1)", () => {
     expect(taskTitle(task({ task: "", workflow: undefined })).text).toBe("未命名微任务");
   });
 
-  it("treats empty, whitespace and malformed non-string titles as absent", () => {
-    const workflow = (title: unknown) => ({
+  it("treats empty and whitespace titles as absent", () => {
+    const workflow = (title: string | null | undefined) => ({
       state: "delivered", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 2, title,
     }) as Task["workflow"];
-    for (const broken of ["", "  \r\n\t ", null, undefined, 7, false, { text: "对象" }, ["数组"]]) {
+    for (const broken of ["", "  \r\n\t ", null, undefined]) {
       expect(taskTitle(task({ workflow: workflow(broken) })).text).toBe("第一行标题");
       expect(taskTitle(task({ workflow: workflow(broken) })).source).toBe("task");
     }

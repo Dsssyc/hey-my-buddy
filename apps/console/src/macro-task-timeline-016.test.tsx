@@ -264,22 +264,3 @@ describe("0.16 P2.1: the inspector dock", () => {
     expect(cssRule(source, ".inspector-actions")).toMatch(/align-items:\s*center/);
   });
 });
-
-describe("0.16 P2.1: the microTask band", () => {
-  it("collapses to one toggle row and back, keeping selection working", async () => {
-    const timeline = macroTaskTimelineFixture();
-    const user = userEvent.setup();
-    const onSelectRun = vi.fn();
-    const { container } = render(<MacroTaskTimeline {...baseProps(timeline, { onSelectRun })} />);
-    const toggle = screen.getByRole("button", { name: /微任务（5）/ });
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(container.querySelectorAll(".micro-task-card").length).toBe(4);
-    await user.click(toggle);
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(container.querySelectorAll(".micro-task-card").length).toBe(0);
-    await user.click(toggle);
-    const firstCard = container.querySelectorAll<HTMLButtonElement>(".micro-task-card")[0]!;
-    await user.click(firstCard);
-    expect(onSelectRun).toHaveBeenCalledWith(expect.any(String));
-  });
-});

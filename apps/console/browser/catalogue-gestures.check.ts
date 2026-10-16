@@ -130,11 +130,11 @@ for (const { locale, account, settings, fold } of languages) {
         }));
       };
       const closing = await chevron.evaluate(motion, id) as { state: string; name: string; duration: string; height: string; running: string[] };
-      expect(closing).toMatchObject({ state: "closed", name: "collapsible-up", duration: "0.2s", running: ["collapsible-up"] });
+      expect(closing).toMatchObject({ state: "closed", name: "disclosure-up", duration: "0.2s", running: ["disclosure-up"] });
       expect(parseFloat(closing.height)).toBeGreaterThan(0);
       await expect(section.locator("[data-slot=model-row]")).toHaveCount(0);
       const opened = await chevron.evaluate(motion, id) as { state: string; name: string; duration: string; running: string[] };
-      expect(opened).toMatchObject({ state: "open", name: "collapsible-down", duration: "0.2s", running: ["collapsible-down"] });
+      expect(opened).toMatchObject({ state: "open", name: "disclosure-down", duration: "0.2s", running: ["disclosure-down"] });
       // The account block and a model's drawer are the same Collapsible.
       await head(page, "Codex").getByRole("button", { name: `Codex ${account}`, exact: true }).click();
       const block = page.getByRole("group", { name: `Codex ${settings}`, exact: true });

@@ -1,3 +1,6 @@
+import i18n from "i18next";
+import { recordSummary } from "./record-metadata";
+import { locale } from "./i18n";
 import type { RuntimeVersionInfo, VersionFacts, Configuration, ConsoleAccess, ConsoleSession, ReminderSettings, RoutingHealth, Snapshot, TaskPage, TaskQuery } from "./types";
 import type {
   MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskSummary, MacroTaskTimeline, TimelineRow,
@@ -6,24 +9,13 @@ import type {
 export class ApiError extends Error {
   constructor(
     public code: string,
-    message: string,
+    message: string | (() => string),
   ) {
-    super(message);
+    super(typeof message === "function" ? message() : message);
+    if (typeof message === "function") Object.defineProperty(this, "message", { get: message, configurable: true });
     this.name = "ApiError";
   }
 }
-
-const messages: Record<string, string> = {
-  REVISION_CONFLICT: "记录已更新；请刷新核对后重试。",
-  CONFLICT: "记录冲突；请刷新核对后重试。",
-  FORBIDDEN: "无操作权限；请重新打开控制台。",
-  STALE_GENERATION: "操作资格已失效；请刷新核对负责人。",
-  SHUTDOWN_UNCONFIRMED: "停止未确认；请稍后核对再重试。",
-  STORAGE_INCOMPLETE: "清理未完成；请重试同一请求。",
-  PLAN_EXPIRED: "计划已过期；请重新检查。",
-  CONSOLE_SESSION_EXPIRED: "登录已失效；请运行 hey-my-buddy console 重新登录。",
-  CONSOLE_ENTRY_EXPIRED: "入口已过期；请重新打开控制台。",
-};
 
 /**
  * The one identity-loss refusal the board still issues: an HTTP 401
@@ -53,7 +45,7 @@ export function parseConsoleSession(value: unknown): ConsoleSession {
   if (!valid) {
     throw new ApiError(
       "INVALID_RESPONSE",
-      "会话信息无法识别；请检查服务版本或重新登录。",
+      () => i18n.t("common:error.session"),
     );
   }
   return session as ConsoleSession;
@@ -65,7 +57,7 @@ export function parseConsoleAccess(value: unknown): ConsoleAccess {
     || access.revision < 0 || !Array.isArray(access.sessions) || access.sessions.length > 64
     || access.sessions.some(session => !session || typeof session.id !== "string" || !/^[a-f0-9]{24}$/.test(session.id)
       || !Number.isFinite(session.lastSeen) || typeof session.current !== "boolean")) {
-    throw new ApiError("INVALID_RESPONSE", "控制台访问设置无法识别，请刷新后重试。");
+    throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.access"));
   }
   return access;
 }
@@ -75,7 +67,7 @@ export function parseReminderSettings(value: unknown): ReminderSettings {
   if (!settings || !Number.isSafeInteger(settings.silenceSeconds) || settings.silenceSeconds < 1
     || settings.silenceSeconds > 86400 || !Number.isSafeInteger(settings.revision) || settings.revision < 1
     || typeof settings.updatedAt !== "string" || !Number.isFinite(Date.parse(settings.updatedAt))) {
-    throw new ApiError("INVALID_RESPONSE", "提醒设置无法识别，请刷新后重试。");
+    throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.reminders"));
   }
   return settings;
 }
@@ -174,8 +166,8 @@ export function parseRoutingHealth(value: unknown): RoutingHealth | undefined {
 }
 
 export function errorText(error: unknown): string {
-  if (error instanceof ApiError) return messages[error.code] || error.message;
-  return error instanceof Error ? error.message : "请求失败，请稍后重试。";
+  if (error instanceof ApiError) return i18n.exists(`common:error.codes.${error.code}`) ? i18n.t(`common:error.codes.${error.code}`) : error.message;
+  return error instanceof Error ? error.message : i18n.t("common:error.failed");
 }
 
 export function uncertainResponse(error: unknown): boolean {
@@ -189,8 +181,8 @@ export function isAbortError(error: unknown): boolean {
 /** Server verification of the displayed read; missing evidence stays explicit. */
 export function readVerificationText(verifiedAtMs: number | null | undefined): string {
   return typeof verifiedAtMs === "number" && Number.isFinite(verifiedAtMs)
-    ? `核对时间 ${new Date(verifiedAtMs).toLocaleString("zh-CN", { hour12: false })}`
-    : "核对时间未记录";
+    ? `${i18n.t("common:snapshot.verified")} ${new Date(verifiedAtMs).toLocaleString(locale, { hour12: false })}`
+    : i18n.t("common:snapshot.unverified");
 }
 
 /* ---- 0.16.0 storage wire shapes (docs/reference/operations.md) ---- */
@@ -237,51 +229,77 @@ export type StorageApplyResult = {
   complete: boolean;
 };
 
-/** Strict shape checks for the storage plan reply; anything malformed is refused. */
+/** The storage read boundary rejects malformed candidates and process evidence too. */
+function storageObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+const storageCount = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+const storageReasons = (value: unknown): value is string[] => Array.isArray(value) && value.every(code => typeof code === "string");
+const storageString = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+
 function validStoragePlan(value: unknown): value is StoragePlan {
-  const plan = value as StoragePlan | null;
-  if (!plan || typeof plan !== "object") return false;
-  if (typeof plan.planId !== "string" || !plan.planId) return false;
-  if (typeof plan.createdAt !== "string" || typeof plan.expiresAt !== "string") return false;
-  if (!Array.isArray(plan.categories) || !Array.isArray(plan.candidates) || !Array.isArray(plan.orphanProcesses)) return false;
-  return plan.categories.every(category =>
-    !!category && typeof category === "object" && typeof category.id === "string"
-    && Number.isFinite(category.bytes) && Number.isFinite(category.reclaimableBytes)
-    && Number.isFinite(category.count) && Number.isFinite(category.eligibleCount)
-    && Array.isArray(category.reasons));
+  if (!storageObject(value) || !storageString(value.planId)) return false;
+  if (typeof value.createdAt !== "string" || !Number.isFinite(Date.parse(value.createdAt))
+    || typeof value.expiresAt !== "string" || !Number.isFinite(Date.parse(value.expiresAt))) return false;
+  if (!Array.isArray(value.categories) || !Array.isArray(value.candidates) || !Array.isArray(value.orphanProcesses)) return false;
+  return value.categories.every(category => storageObject(category) && storageString(category.id)
+    && typeof category.label === "string" && storageCount(category.bytes) && storageCount(category.reclaimableBytes)
+    && storageCount(category.count) && storageCount(category.eligibleCount) && storageReasons(category.reasons))
+    && new Set(value.categories.map(category => category.id)).size === value.categories.length
+    && value.candidates.every(row => storageObject(row) && storageString(row.id) && storageString(row.category)
+      && typeof row.path === "string" && storageCount(row.bytes) && typeof row.eligible === "boolean" && storageReasons(row.reasons))
+    && value.orphanProcesses.every(row => storageObject(row) && storageCount(row.pid) && row.pid > 0
+      && typeof row.kind === "string" && (row.stateDir === null || typeof row.stateDir === "string")
+      && (row.runtimeDir === null || typeof row.runtimeDir === "string"));
 }
 
 export function parseStoragePlan(value: unknown): StoragePlan {
   if (!validStoragePlan(value)) {
-    throw new ApiError("INVALID_RESPONSE", "存储计划响应不完整，请检查服务版本。");
+    throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.storagePlan"));
   }
-  return value as StoragePlan;
+  return value;
 }
 
 export function validStorageApplyResult(value: unknown): value is StorageApplyResult {
-  const result = value as StorageApplyResult | null;
-  return !!result && typeof result === "object" && typeof result.planId === "string"
-    && Number.isFinite(result.removedBytes)
-    && Array.isArray(result.removed) && result.removed.every(row =>
-      !!row && typeof row === "object" && typeof row.id === "string"
-      && typeof row.path === "string" && Number.isFinite(row.bytes))
-    && Array.isArray(result.skipped) && result.skipped.every(row =>
-      !!row && typeof row === "object" && typeof row.id === "string"
-      && typeof row.path === "string" && Array.isArray(row.reasons));
+  return storageObject(value) && storageString(value.planId) && storageCount(value.removedBytes) && value.complete === true
+    && Array.isArray(value.removed) && value.removed.every(row => storageObject(row) && storageString(row.id)
+      && typeof row.path === "string" && storageCount(row.bytes))
+    && Array.isArray(value.skipped) && value.skipped.every(row => storageObject(row) && storageString(row.id)
+      && typeof row.path === "string" && storageReasons(row.reasons));
 }
 
 /**
- * Strict shape checks for the 0.15.1 macroTask read projections: `description`
- * and `taskSummary` are nullable strings and scope counts are numbers, so
- * a malformed field refuses the read instead of reaching presentation.
+ * The real service's `_summary` projection is the read boundary. Nullable
+ * fields stay nullable rather than acquiring fixture-only defaults.
  */
 function validMacroTaskSummary(value: unknown): boolean {
   const summary = value as MacroTaskSummary | null;
-  return !!summary && typeof summary === "object"
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) return false;
+  const counts = summary.counts;
+  const project = summary.project;
+  return typeof summary.macroTaskId === "string" && summary.macroTaskId.length > 0
+    && (summary.kind === "macro-task" || summary.kind === "standalone")
+    && typeof summary.title === "string"
+    && ["macro-task", "title", "task", "none"].includes(summary.titleSource)
     && (summary.description === null || typeof summary.description === "string")
-    && !!summary.counts && ["accepted", "stoppableRoots", "stoppableHelpers", "delivered", "awaitingHost"]
-      .every(key => Number.isSafeInteger(summary.counts[key as keyof typeof summary.counts])
-        && summary.counts[key as keyof typeof summary.counts] >= 0);
+    && (summary.summary === null || typeof summary.summary === "string")
+    && (project === null || !!project && typeof project === "object" && !Array.isArray(project)
+      && typeof project.id === "string" && typeof project.label === "string"
+      && (project.path === null || typeof project.path === "string"))
+    && (summary.sourceHostId === null || typeof summary.sourceHostId === "string")
+    && Array.isArray(summary.currentHostIds) && summary.currentHostIds.every(id => typeof id === "string")
+    && (summary.createdAt === null || typeof summary.createdAt === "string")
+    && (summary.lastActivityAt === null || typeof summary.lastActivityAt === "string")
+    && Number.isSafeInteger(summary.lastActivitySeq) && summary.lastActivitySeq >= 0
+    && ["host", "active", "review", "ended"].includes(summary.state)
+    && !!counts && typeof counts === "object" && !Array.isArray(counts)
+    && ["roots", "helpers", "accepted", "failed", "active", "host", "review", "ended", "stoppableRoots",
+      "stoppableHelpers", "delivered", "awaitingHost"].every(key => {
+      const count = counts[key as keyof typeof counts];
+      return Number.isSafeInteger(count) && count >= 0;
+    })
+    && Number.isSafeInteger(summary.matchingRuns) && summary.matchingRuns >= 0
+    && Array.isArray(summary.rootRunIds) && summary.rootRunIds.every(id => typeof id === "string");
 }
 
 function validTimelineRows(rows: unknown): boolean {
@@ -299,7 +317,7 @@ function validTimelineRows(rows: unknown): boolean {
 
 export type { HarnessStatus, HarnessCandidate, HarnessHealth } from "./types";
 import type { HarnessHealth, QuotaRetryWindow, QuotaRoutingRecord } from "./types";
-import { parseQuota } from "./host-workflow";
+import { parseQuota } from "./quota";
 
 /** The supported harnesses, in the Buddy page's fixed display order. */
 export const HARNESS_ORDER = ["dsh", "zcode", "codex", "claude"] as const;
@@ -418,10 +436,11 @@ export function parseRuntimeVersion(value: unknown): RuntimeVersionInfo {
   const facts = (record: VersionFacts | null) => !!record && typeof record === "object" && !Array.isArray(record)
     && (["softwareVersion", "contractVersion", "sourceCommit", "installedAt"] as const).every(key =>
       record[key] === null || typeof record[key] === "string" && !!record[key].trim())
+    && (record.installedAt === null || Number.isFinite(Date.parse(record.installedAt)))
     && (record.schemaVersion === null || Number.isSafeInteger(record.schemaVersion) && record.schemaVersion >= 0);
   if (!info || !facts(info.running) || !["source", "runtime"].includes(info.running.mode)
     || !(info.installed === null || facts(info.installed))) {
-    throw new ApiError("INVALID_RESPONSE", "版本信息无法识别，请检查服务版本。");
+    throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.version"));
   }
   return info;
 }
@@ -451,13 +470,13 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       });
     } catch (error) {
       if (isAbortError(error)) throw error;
-      throw new ApiError("NETWORK", "无法连接本地黑板；请刷新重试。");
+      throw new ApiError("NETWORK", () => i18n.t("common:error.network"));
     }
     let data: unknown;
     try {
       data = await response.json();
     } catch {
-      throw new ApiError("INVALID_RESPONSE", "本地服务返回了无法解析的响应。");
+      throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.unparsable"));
     }
     const body = data as {
       ok?: boolean;
@@ -466,7 +485,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     if (!response.ok || body?.ok === false) {
       throw new ApiError(
         body?.error?.code || `HTTP_${response.status}`,
-        body?.error?.message || "请求未成功。",
+        body?.error?.message || (() => i18n.t("common:error.refused")),
       );
     }
     return verifiedRead(data, responseVerifiedAtMs(response));
@@ -566,7 +585,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         response = await fetcher(url, { credentials: "same-origin", cache: "no-store", headers, signal });
       } catch (error) {
         if (isAbortError(error)) throw error;
-        throw new ApiError("NETWORK", "无法连接本地黑板；请刷新重试。");
+        throw new ApiError("NETWORK", () => i18n.t("common:error.network"));
       }
       if (response.status === 304) {
         if (cached && cacheGeneration === atGeneration && !signal?.aborted) {
@@ -575,13 +594,13 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         // A 304 is only meaningful against a representation this instance still
         // holds under this session; without one the body cannot be reconstructed
         // and the read stays failed instead of guessing.
-        throw new ApiError("INVALID_RESPONSE", "本地服务返回了无法解析的响应。");
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.unparsable"));
       }
       let data: unknown;
       try {
         data = await response.json();
       } catch {
-        throw new ApiError("INVALID_RESPONSE", "本地服务返回了无法解析的响应。");
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.unparsable"));
       }
       // The body has arrived: only now is the publication verdict decided. The
       // ticket was held through the body read, so this fresh check outranks any
@@ -595,7 +614,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         if (body?.ok === false && body?.error?.code === SESSION_EXPIRED_CODE) clearConditionalCache();
         throw new ApiError(
           body?.error?.code || `HTTP_${response.status}`,
-          body?.error?.message || "请求未成功。",
+          body?.error?.message || (() => i18n.t("common:error.refused")),
         );
       }
       if (stillCurrent && cacheGeneration === atGeneration && !signal?.aborted) {
@@ -628,7 +647,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       ) {
         throw new ApiError(
           "INVALID_RESPONSE",
-          "控制台数据不完整；请检查服务版本。",
+          () => i18n.t("common:error.snapshot"),
         );
       }
       // A valid session descriptor is required; a missing or malformed one is
@@ -655,7 +674,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         body: JSON.stringify({ operation, params }),
       })) as { ok: boolean; result: T };
       if (!data || data.ok !== true || !Object.hasOwn(data, "result")) {
-        throw new ApiError("INVALID_RESPONSE", "提交结果未知；请核对后重试。");
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.submit"));
       }
       return verifiedRead(data.result, readVerifiedAt(data));
     },
@@ -669,23 +688,26 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         if (value !== undefined && value !== "") query.set(key, String(value));
       }
       const { data, verifiedAtMs } = await conditionalRead(`/tasks?${query}`, signal) as { data: TaskPage; verifiedAtMs: number | null };
-      if (!data || !Array.isArray(data.runs) || !Number.isInteger(data.total)
+      if (!data || !Array.isArray(data.runs) || !data.runs.every(recordSummary) || !Number.isInteger(data.total)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")) {
-        throw new ApiError("INVALID_RESPONSE", "微任务历史不完整；请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.history"));
       }
       return verifiedRead(data, verifiedAtMs);
     },
     /** Read-only work macro task list for any logged-in session; no lease or model call. */
-    async macroTasks(params: MacroTaskQuery, signal?: AbortSignal): Promise<MacroTaskPage> {      const query = new URLSearchParams();
+    async macroTasks(params: MacroTaskQuery, signal?: AbortSignal): Promise<MacroTaskPage> {
+      const query = new URLSearchParams();
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== "") query.set(key, String(value));
       }
       const { data, verifiedAtMs } = await conditionalRead(`/macro-tasks?${query}`, signal) as { data: MacroTaskPage; verifiedAtMs: number | null };
-      if (!data || !Array.isArray(data.macroTasks) || !Number.isInteger(data.total)
+      if (!data || !Array.isArray(data.macroTasks) || !data.totals
+        || (["all", "active", "host", "review"] as const).some(name =>
+          !Number.isSafeInteger(data.totals[name]) || data.totals[name] < 0)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")
         || !Number.isInteger(data.cursor) || typeof data.changed !== "boolean"
         || !data.macroTasks.every(validMacroTaskSummary)) {
-        throw new ApiError("INVALID_RESPONSE", "宏任务列表不完整；请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.macroTasks"));
       }
       return verifiedRead(data, verifiedAtMs);
     },
@@ -722,7 +744,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         || typeof data.truncated.spans !== "boolean" || typeof data.truncated.events !== "boolean"
         || !Number.isInteger(data.cursor) || typeof data.scopeComplete !== "boolean"
         || typeof data.filtered !== "boolean") {
-        throw new ApiError("INVALID_RESPONSE", "宏任务时间轴不完整；请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.timeline"));
       }
       return { timeline: data, verifiedAtMs };
     },
@@ -749,7 +771,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const result = await command<StorageApplyResult>("storage_apply", { planId, commandId, confirm: true }, csrfToken);
       const mismatch = !validStorageApplyResult(result) || result.planId !== planId || result.complete !== true;
       if (mismatch) {
-        throw new ApiError("INVALID_RESPONSE", "清理结果未知；请重试同一请求。");
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.cleanup"));
       }
       return result;
     },
@@ -768,7 +790,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       );
       const rows = commandHarnesses(reply);
       if (!rows.length) {
-        throw new ApiError("INVALID_RESPONSE", "重新检测结果不完整；请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.recheck"));
       }
       return rows;
     },
@@ -788,7 +810,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       );
       const row = harnessRow((reply as { harness?: unknown } | null)?.harness);
       if (!row || row.harness.toLowerCase() !== harness.trim().toLowerCase()) {
-        throw new ApiError("INVALID_RESPONSE", "路径保存结果未知；请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.pathSaved"));
       }
       return row;
     },
@@ -803,7 +825,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       body: JSON.stringify({ operation, params }),
     }) as { ok: boolean; result: T };
     if (!data || data.ok !== true || !Object.hasOwn(data, "result")) {
-      throw new ApiError("INVALID_RESPONSE", "提交结果未知；请核对后重试。");
+      throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.submit"));
     }
     return data.result;
   }

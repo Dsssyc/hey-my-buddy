@@ -4,7 +4,7 @@ export type Theme = "light" | "dark";
 /** The user's display choice; `system` follows the operating system setting. */
 export type ThemeChoice = Theme | "system";
 
-/** The only value this console persists: a display preference, never a credential. */
+/** A browser display preference, separate from the language choice. */
 export const THEME_STORAGE_KEY = "hey-my-buddy.console.theme";
 
 const DARK_QUERY = "(prefers-color-scheme: dark)";

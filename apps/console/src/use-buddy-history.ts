@@ -1,6 +1,8 @@
+import { useCopyState } from "./i18n/use-copy-state";
+import i18n from "i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
-import { errorText } from "./api";
+import { ApiError, errorText } from "./api";
 import { modelServiceKey } from "./console-data";
 import type { ModelService, BuddyPage, Snapshot } from "./types";
 
@@ -28,7 +30,7 @@ export function parseBuddyPage(value: unknown): BuddyPage {
     && optionalList(page.modelServiceNotes)
     && Array.isArray(page.modelServiceConcurrency)
     && (page.nextCursor === null || typeof page.nextCursor === "string");
-  if (!valid) throw new Error("buddy 历史响应不完整，请检查服务版本。");
+  if (!valid) throw new ApiError("INVALID_RESPONSE", () => i18n.t("console:theBuddyHistoryReplyIsIncompleteCheck"));
   return page;
 }
 
@@ -132,7 +134,7 @@ export function useBuddyHistory(
   });
   const [wanted, setWanted] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useCopyState();
   const csrf = useRef(csrfToken);
   csrf.current = csrfToken;
   const alive = useRef(true);
@@ -170,7 +172,7 @@ export function useBuddyHistory(
           : { sourceKey: source, key, page: next };
       });
     } catch (failure) {
-      if (alive.current && request === sequence.current) setError(errorText(failure));
+      if (alive.current && request === sequence.current) setError(() => errorText(failure));
     } finally {
       if (alive.current && request === sequence.current) setLoading(false);
     }

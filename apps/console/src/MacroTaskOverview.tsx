@@ -1,319 +1,109 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
-import type { MacroTaskSummary, MacroTaskTimeline as MacroTaskTimelineData } from "./macro-task-types";
-import { Badge } from "./ui";
-import { Popover, popoverButtonProps } from "./Popover";
-import { excerpt } from "./task-state";
-import {
-  TASK_SOURCE_NOTE, categoryTone, clockTime, displayTitle, durationText,
-  macroTaskProgressText, relativeTime, rowStateInfo, titleLineTooltip,
-} from "./macro-task-display";
-import { macroTaskMetrics, rootRollups, type RunRollup } from "./macro-task-metrics";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import type { MacroTaskSummary, MacroTaskTimeline } from "./macro-task-types";
+import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
+import { TooltipProvider } from "./components/ui/tooltip";
+import { Button } from "./components/ui/button";
+import { Hint } from "./components/hint";
+import { displayTitle } from "./macro-task-display";
+import { macroTaskMetrics } from "./macro-task-metrics";
+import { formatDuration, formatDurationMinutes, formatList, formatMoment, formatMomentMinutes, formatNumber } from "./i18n/format";
+import { StateMark } from "./components/ui/state-mark";
 import { CopyableIdentifier } from "./components/CopyableIdentifier";
 
-/**
- * The detail overview's two rows (0.16 T4): 微任务摘要 and the Worker's own
- * result line. The intent title is the detail heading's job and never repeats
- * here.
- */
-export function MicroTaskDetailRows({ taskSummary, resultSummary }: {
-  taskSummary: string | null | undefined;
-  resultSummary: string | null | undefined;
-}) {
-  return <div className="card-rows detail-rows">
-    <span className="card-row">
-      <span className="card-row-label">微任务摘要</span>
-      <span className="card-row-text" title={taskSummary ?? undefined}>{taskSummary ?? "未记录任务原文"}</span>
-    </span>
-    <span className="card-row">
-      <span className="card-row-label">结果</span>
-      <span className="card-row-text" title={resultSummary ?? undefined}>{resultSummary ? `结果：${resultSummary}` : "结果未知"}</span>
-      {resultSummary && <span className="worker-note">Worker 自述</span>}
-    </span>
-  </div>;
-}
+type Count = { key: "host" | "review" | "active" | "accepted" | "failed" | "ended"; mark: "hand" | "live" | "done" | "fail" | "idle"; value: number };
 
-/**
- * The micro task card (0.16 T3): a bold two-line intent title, the status at
- * the top right, one single-line result with a small Worker 自述 label, and a
- * weak meta row only when it has content. The card's minimum height covers two
- * title lines plus the result line, so one-line titles never make the strip
- * jump. No visible index; screen readers get “第 n 个微任务，共 m 个”.
- */
-function MicroTaskCard({ rollup, index, total, selected, tabbable, onFocus, onSelect, onOpen }: {
-  rollup: RunRollup; index: number; total: number; selected: boolean; tabbable: boolean;
-  onFocus: () => void; onSelect: (runId: string) => void; onOpen: (runId: string) => void;
-}) {
-  const state = rowStateInfo(rollup.row);
-  const title = displayTitle(rollup.row.titleSource, rollup.row.title);
-  const summary = rollup.row.summary;
-  const meta: string[] = [];
-  if (title.fromTask) meta.push(TASK_SOURCE_NOTE);
-  if (rollup.helpers.length) meta.push(`协助 ${rollup.helpers.length}`);
-  return <button type="button" className={"micro-task-card" + (selected ? " selected" : "")}
-    aria-pressed={selected} tabIndex={tabbable ? 0 : -1}
-    aria-label={`第 ${index + 1} 个微任务，共 ${total} 个：${title.text}，${state.label}（单击选中，双击打开详情）`}
-    onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(rollup.row.runId); } }}
-    title={titleLineTooltip(title)} onFocus={onFocus}
-    onClick={() => onSelect(rollup.row.runId)}
-    onDoubleClick={() => onOpen(rollup.row.runId)}>
-    <span className="micro-task-card-top">
-      <span className="micro-task-card-title">{title.text}</span>
-      <span className="micro-task-card-state">
-        <span className={"st " + state.glyphClass} aria-hidden="true">{state.glyph}</span>
-        {state.label}
-      </span>
-    </span>
-    <span className="micro-task-card-result">
-      <span className="micro-task-card-result-text" title={summary ?? undefined}>{summary ? `结果：${summary}` : "结果未知"}</span>
-      {summary && <span className="worker-note">Worker 自述</span>}
-    </span>
-    {meta.length > 0 && <span className="micro-task-card-meta">{meta.join(" · ")}</span>}
-  </button>;
-}
-
-/**
- * The single-root macroTask keeps one compact card: the same T3 layout plus an
- * explicit 打开详情 action below the status. The full fact set lives in the
- * micro task detail and the pinned inspector, not here.
- */
-function SingleMicroTaskCard({ rollup, onOpen }: {
-  rollup: RunRollup; onOpen: (runId: string) => void;
-}) {
-  const state = rowStateInfo(rollup.row);
-  const title = displayTitle(rollup.row.titleSource, rollup.row.title);
-  const summary = rollup.row.summary;
-  const meta: string[] = [];
-  if (title.fromTask) meta.push(TASK_SOURCE_NOTE);
-  if (rollup.helpers.length) meta.push(`协助 ${rollup.helpers.length}`);
-  return <div className="micro-task-card single expanded">
-    <div className="micro-task-card-top">
-      <span className="micro-task-card-title">{title.text}</span>
-      <span className="micro-task-card-state">
-        <span className={"st " + state.glyphClass} aria-hidden="true">{state.glyph}</span>
-        {state.label}
-        <button type="button" className="button small-button" onClick={() => onOpen(rollup.row.runId)}>打开详情</button>
-      </span>
-    </div>
-    <div className="micro-task-card-result">
-      <span className="micro-task-card-result-text" title={summary ?? undefined}>{summary ? `结果：${summary}` : "结果未知"}</span>
-      {summary && <span className="worker-note">Worker 自述</span>}
-    </div>
-    {meta.length > 0 && <div className="micro-task-card-meta">{meta.join(" · ")}</div>}
-  </div>;
-}
-
-/**
- * The collapsible micro-task-card band (0.16 P2.1): “▾ 微任务（n）” toggles the
- * whole strip; collapsed it is one 28px row. Cards wrap into at most two rows
- * until the user reveals the full set.
- */
-export function MicroTaskStrip({ timeline, selectedRunId, collapsed, onToggleCollapsed, onSelectRun, onOpenRun }: {
-  timeline: MacroTaskTimelineData;
-  selectedRunId: string | null;
-  collapsed: boolean;
-  onToggleCollapsed: () => void;
-  onSelectRun: (runId: string) => void;
-  onOpenRun: (runId: string) => void;
-}) {
-  const roots = useMemo(() => rootRollups(timeline), [timeline]);
-  const [cardFocus, setCardFocus] = useState(0);
-  const bandRoot = useRef<HTMLDivElement>(null);
-  const stripRoot = useRef<HTMLDivElement>(null);
-  const [stripWidth, setStripWidth] = useState(800);
-  const [singleColumn, setSingleColumn] = useState(false);
-  const [showAll, setShowAll] = useState(false);
-  useEffect(() => { setShowAll(false); setCardFocus(0); }, [timeline.macroTask.macroTaskId]);
-  const stripId = "micro-task-strip-region";
-  // The strip has 20px inline padding on each side and 8px between cards.
-  const cardsPerRow = singleColumn ? 1 : Math.max(1, Math.floor((stripWidth - 40 + 8) / 270));
-  const firstTwoRows = cardsPerRow * 2;
-  const selectedIndex = roots.findIndex(rollup => rollup.row.runId === selectedRunId);
-  useEffect(() => {
-    if (selectedIndex >= firstTwoRows) setShowAll(true);
-  }, [selectedRunId, timeline.macroTask.macroTaskId, firstTwoRows]);
-  const visibleCount = showAll ? roots.length : Math.min(roots.length, firstTwoRows);
-  const hiddenIndices = [selectedIndex, cardFocus].filter((index, position, indices) =>
-    index >= visibleCount && index < roots.length && indices.indexOf(index) === position);
-  useEffect(() => {
-    const band = bandRoot.current;
-    const strip = stripRoot.current;
-    if (!band) return;
-    if (!strip) {
-      band.style.minHeight = "";
-      band.style.maxHeight = "";
-      return;
-    }
-    const panel = band.closest<HTMLElement>(".timeline-view");
-    const fixedSections = () => panel ? [...panel.children].filter((child): child is HTMLElement => child instanceof HTMLElement
-      && child !== band && !child.matches(".timeline-body, .tl-body")) : [];
-    const controls = [...band.children].filter((child): child is HTMLElement => child instanceof HTMLElement && child !== strip);
-    const px = (value: string) => Number.parseFloat(value) || 0;
-    const outerHeight = (element: HTMLElement) => {
-      const style = getComputedStyle(element);
-      return element.offsetHeight + px(style.marginTop) + px(style.marginBottom);
-    };
-    let observer: ResizeObserver | null = null;
-    const measure = () => {
-      if (strip.clientWidth > 0) setStripWidth(strip.clientWidth);
-      const stripStyle = getComputedStyle(strip);
-      const column = stripStyle.flexDirection === "column";
-      setSingleColumn(column);
-      // A height-bounded column must not wrap into hidden horizontal columns.
-      strip.style.flexWrap = column ? "nowrap" : "wrap";
-      if (!panel || panel.clientHeight <= 0) return; // retain geometry while hidden
-      // The separator and warning banner can appear after the first render.
-      const fixed = fixedSections();
-      for (const element of fixed) observer?.observe(element);
-      const body = panel.querySelector<HTMLElement>(":scope > .timeline-body, :scope > .tl-body");
-      const timelineMinimum = body ? px(getComputedStyle(body).minHeight) || 120 : 120;
-      const bandStyle = getComputedStyle(band);
-      const minimum = controls.reduce((sum, element) => sum + outerHeight(element), 0)
-        + px(stripStyle.minHeight) + px(bandStyle.borderTopWidth) + px(bandStyle.borderBottomWidth);
-      const available = panel.clientHeight - fixed.reduce((sum, element) => sum + outerHeight(element), 0) - timelineMinimum;
-      // Respect both the available column and a modest share of it. If even
-      // the controls plus a usable scrollport cannot fit, the column's normal
-      // overflow fallback keeps every section reachable instead of clipping.
-      band.style.minHeight = `${minimum}px`;
-      band.style.maxHeight = `${Math.max(minimum, Math.min(panel.clientHeight * 0.4, available))}px`;
-    };
-    measure();
-    observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
-    for (const element of [strip, band, ...(panel ? [panel] : []), ...fixedSections(), ...controls]) observer?.observe(element);
-    window.addEventListener("resize", measure);
-    return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
-  }, [collapsed, timeline.macroTask.macroTaskId, roots.length, showAll, hiddenIndices.join(","),
-    timeline.filtered, timeline.truncated.rows, timeline.truncated.spans, timeline.truncated.events]);
-  useEffect(() => {
-    if (collapsed || selectedRunId === null) return;
-    const frame = requestAnimationFrame(() => stripRoot.current?.querySelector<HTMLButtonElement>(".micro-task-card.selected")
-      ?.scrollIntoView?.({ block: "nearest", inline: "nearest" }));
-    return () => cancelAnimationFrame(frame);
-  }, [collapsed, selectedRunId, showAll]);
-  if (!roots.length) return null;
-  function focusCard(index: number) {
-    const card = stripRoot.current?.querySelectorAll<HTMLButtonElement>(".micro-task-card")[index];
-    card?.focus({ preventScroll: true });
-    card?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }
-  function revealCard(index: number) {
-    setCardFocus(index);
-    setShowAll(true);
-    requestAnimationFrame(() => focusCard(index));
-  }
-  function onStripKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (!(event.target as HTMLElement).closest(".micro-task-card")) return;
-    let next = Math.min(cardFocus, roots.length - 1);
-    if (event.key === "ArrowRight") next = Math.min(next + 1, roots.length - 1);
-    else if (event.key === "ArrowLeft") next = Math.max(next - 1, 0);
-    else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = roots.length - 1;
-    else return;
-    event.preventDefault();
-    setCardFocus(next);
-    if (next >= visibleCount) {
-      setShowAll(true);
-      requestAnimationFrame(() => focusCard(next));
-    } else focusCard(next);
-  }
-  return <div ref={bandRoot} className={"micro-task-band" + (collapsed ? " collapsed" : "")}>
-    <div className="micro-task-band-head">
-    <button type="button" className="micro-task-band-toggle" aria-expanded={!collapsed} aria-controls={stripId}
-      onClick={onToggleCollapsed}>
-      <span aria-hidden="true">{collapsed ? "▸" : "▾"}</span> 微任务（{roots.length}）
-    </button>
-    {!collapsed && roots.length > firstTwoRows && <button type="button" className="button small-button micro-task-show-all"
-      aria-expanded={showAll} aria-controls={stripId}
-      onClick={() => {
-        if (showAll && stripRoot.current) stripRoot.current.scrollTop = 0;
-        setShowAll(value => !value);
-      }}>{showAll ? "收起" : `展开全部 ${roots.length} 个`}</button>}
-    </div>
-    {!collapsed && (roots.length === 1
-      ? <div ref={stripRoot} className="micro-task-strip single-root"><SingleMicroTaskCard rollup={roots[0]!} onOpen={onOpenRun} /></div>
-      : <div className="micro-task-strip" id={stripId} ref={stripRoot} role="group"
-        aria-label="微任务卡（按创建顺序）" onKeyDown={onStripKeyDown}>
-        {roots.slice(0, visibleCount).map((rollup, index) => <MicroTaskCard key={rollup.row.runId} rollup={rollup} index={index} total={roots.length}
-          selected={selectedRunId === rollup.row.runId} tabbable={index === Math.min(cardFocus, visibleCount - 1)}
-          onFocus={() => setCardFocus(index)} onSelect={onSelectRun} onOpen={onOpenRun} />)}
-        {(timeline.truncated.rows || timeline.filtered) && <span className="muted strip-bound">
-          显示 {timeline.rows.filter(row => row.parentRunId === null).length} / {timeline.totals.rows} 个微任务{timeline.truncated.rows ? " · 已截断" : ""}
-        </span>}
-      </div>)}
-    {!collapsed && hiddenIndices.length > 0 && <div className="micro-task-current">
-      {hiddenIndices.map(hiddenIndex => <button key={hiddenIndex} type="button" className="button small-button micro-task-hidden-current"
-          onClick={() => revealCard(hiddenIndex)}>
-          {selectedIndex === hiddenIndex ? "已选中" : "键盘位置"}：第 {hiddenIndex + 1} 个 · {displayTitle(roots[hiddenIndex]!.row.titleSource, roots[hiddenIndex]!.row.title).text} · 返回卡片
-        </button>)}
-    </div>}
-  </div>;
-}
-
-/**
- * The overview header (0.16 P2.1): title/description, the one status line
- * (status badge · acceptance progress · latest activity) and the
- * always-collapsed 时间统计 disclosure. Durations stay plain
- * sentences with their honest caveats.
- */
-export function MacroTaskOverview({ summary, timeline, loading, stale, onBackToList, headerActions, compact }: {
+/** One macro task's title, context, state counts and expandable recorded facts. */
+export function MacroTaskOverview({ summary, timeline, loading, stale, active = true, nowMs, onBackToList, listToggle, headerActions }: {
   summary: MacroTaskSummary | null;
-  timeline: MacroTaskTimelineData | null;
+  timeline: MacroTaskTimeline | null;
   loading: boolean;
   stale: boolean;
+  active?: boolean;
+  nowMs?: number;
   onBackToList: () => void;
-  /** MacroTask-level actions (停止宏任务 and its honest status). */
+  listToggle?: ReactNode;
   headerActions?: ReactNode;
-  /** Compact form at viewport heights of 800px or less (P2.1). */
-  compact?: boolean;
 }) {
-  const statsButton = useRef<HTMLButtonElement>(null);
+  const { t, i18n: { language } } = useTranslation("macroHeader");
   const [statsOpen, setStatsOpen] = useState(false);
-  const statsId = useId();
+  const statsContent = useRef<HTMLDivElement>(null);
   const shown = timeline?.macroTask ?? summary;
-  useEffect(() => setStatsOpen(false), [shown?.macroTaskId]);
-  const metrics = useMemo(() => (timeline ? macroTaskMetrics(timeline) : null), [timeline]);
-
+  useEffect(() => setStatsOpen(false), [active, shown?.macroTaskId]);
+  const metrics = useMemo(() => timeline ? macroTaskMetrics(timeline) : null, [timeline, language]);
   if (!shown) return null;
+
   const title = displayTitle(shown.titleSource, shown.title);
-  const titleAttr = titleLineTooltip(title);
+  const titleText = shown.titleSource === "none" ? t("unnamed") : title.text;
+  const titleHint = shown.titleSource === "task" ? t("titleFromTask", { title: title.fullText }) : shown.titleSource === "none" ? undefined : title.fullText;
+  const created = shown.createdAt === null ? null : Date.parse(shown.createdAt);
+  const observed = nowMs ?? (timeline ? Date.parse(timeline.observedAt) : Date.now());
+  const lastActivity = shown.lastActivityAt === null ? null : Date.parse(shown.lastActivityAt);
+  const clock = observed;
+  const end = shown.counts.active || shown.counts.host || shown.counts.review ? clock : lastActivity;
+  const elapsed = created === null || end === null ? t("unrecorded") : formatDurationMinutes(end - created);
   const cumulative = metrics && metrics.sumMs !== null && metrics.unionMs !== null && metrics.sumMs !== metrics.unionMs
     ? metrics.sumMs : null;
+  const counts: Count[] = [
+    { key: "host", mark: "hand", value: shown.counts.host },
+    { key: "review", mark: "hand", value: shown.counts.review },
+    { key: "active", mark: "live", value: shown.counts.active },
+    { key: "accepted", mark: "done", value: shown.counts.accepted },
+    { key: "failed", mark: "fail", value: shown.counts.failed },
+    { key: "ended", mark: "idle", value: shown.counts.ended - shown.counts.accepted - shown.counts.failed },
+  ];
+  const startText = created === null ? t("unrecorded") : formatMomentMinutes(created, clock);
 
-  return <header className={"detail-header tl-head" + (compact ? " compact" : "")}>
-    <button type="button" className="button small-button narrow-back" onClick={onBackToList}>‹ 宏任务列表</button>
-    <div className="macro-task-title-row">
-      <h2 className="one-line-title" title={titleAttr}>{excerpt(title.text, 100)}</h2>
-      <CopyableIdentifier value={shown.macroTaskId} />
-      {shown.description && <span className="macro-task-description" title={shown.description}>{shown.description}</span>}
-      <span className="chip-row">
-        {shown.kind === "standalone" && <Badge tone="neutral">历史独立微任务</Badge>}
-        {headerActions}
-      </span>
-    </div>
-    <div className="macro-task-vitals">
-      <Badge tone={categoryTone(shown.state)}>{macroTaskProgressText(shown)}</Badge>
-      <span title={shown.lastActivityAt}>最近活动 {clockTime(shown.lastActivityAt)}（{relativeTime(shown.lastActivityAt, Date.now())}）</span>
-    <button key={shown.macroTaskId} ref={statsButton} type="button" className="time-stats button small-button" aria-haspopup="dialog"
-      {...popoverButtonProps(statsId, statsOpen)} onClick={() => setStatsOpen(value => !value)}>时间统计</button>
-    {statsOpen && <Popover key={shown.macroTaskId} id={statsId} anchor={statsButton.current} label="时间统计"
-      boundary={statsButton.current?.closest<HTMLElement>(".timeline-view") ?? statsButton.current?.closest<HTMLElement>(".panel")}
-      returnFocusOnDismiss onClose={() => setStatsOpen(false)} width="34em" className="time-stats-popover">
-      <div className="time-stats-body">
-        {!timeline
-          ? <p className="small muted">{loading ? "时间统计：读取中" : "时间统计：未记录"}</p>
-          : <>
-            <p className="time-stat">从开始到最近一次活动：{metrics?.totalSpanMs !== null && metrics?.totalSpanMs !== undefined ? durationText(metrics.totalSpanMs) ?? "未记录" : "未记录"}</p>
-            <p className="time-stat">其间至少有一项在运行的时间：{metrics?.unionMs != null ? durationText(metrics.unionMs) ?? "未记录" : "未记录"}</p>
-            {cumulative !== null && <p className="time-stat">回合累计：{durationText(cumulative)}</p>}
-            {metrics!.runningCount > 0 && <p className="small muted">运行中 {metrics!.runningCount} 回合 · 截至 {clockTime(timeline.observedAt)}</p>}
-            {metrics!.unknownEndCount > 0 && <p className="small muted">结束未确认 {metrics!.unknownEndCount} 回合 · 未计入</p>}
-            {metrics!.limitations.length > 0 && <p className="small metric-warn" tabIndex={0}
-              title={metrics!.limitations.map(entry => entry.label).join("；")}>统计范围不完整：{metrics!.limitations.map(entry => entry.label).join("；")}</p>}
-            {stale && <p className="small muted">数据截至 {timeline.observedAt}</p>}
-          </>}
-        <p className="small muted record-source">来源 Host {shown.sourceHostId || "未记录"} · 当前 Host {shown.currentHostIds.length ? shown.currentHostIds.join("、") : "未记录"}</p>
+  return <header data-slot="macro-overview-header" className="flex shrink-0 flex-col gap-2.5 border-b bg-card px-4 py-3 sm:px-6 min-[761px]:flex-row min-[761px]:items-start min-[761px]:gap-6 min-[761px]:pt-4.5 min-[761px]:pb-4">
+    <div className="flex min-w-0 flex-1 items-start gap-3 max-[760px]:block">
+      {listToggle}
+      <Button type="button" variant="ghost" size="sm" onClick={onBackToList} className="mb-1 -ml-2 hidden max-[760px]:inline-flex">
+        {t("back")}
+      </Button>
+      <div className="min-w-0 flex-1">
+        <TooltipProvider><Hint text={titleHint}>
+          <h2 tabIndex={0} className="min-w-0 truncate rounded-sm text-lg leading-[1.45] font-semibold tracking-[-0.01em] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{titleText}</h2>
+        </Hint></TooltipProvider>
+        <dl data-slot="macro-overview-facts" className="mt-1.5 flex flex-wrap gap-x-5 gap-y-0.5 text-xs leading-5 tabular-nums">
+          <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("project")}</dt><dd className="min-w-0 wrap-anywhere text-ink2">{shown.project?.label ?? t("unrecorded")}</dd></div>
+          <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("host")}</dt><dd className="min-w-0 wrap-anywhere text-ink2">{shown.sourceHostId ?? t("unrecorded")}</dd></div>
+          <div className="flex gap-1.5"><dt className="shrink-0 text-ink3">{t("started")}</dt><dd className="text-ink2">{startText}</dd></div>
+          <div className="flex gap-1.5"><dt className="shrink-0 text-ink3">{t("elapsed")}</dt><dd><Popover key={shown.macroTaskId} open={active && statsOpen} onOpenChange={setStatsOpen}>
+            <PopoverTrigger asChild><button type="button" className="inline-flex h-7 cursor-pointer items-center border-b border-dotted border-ink3 text-left text-ink2 transition-colors duration-150 hover:border-ink hover:text-ink focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-reduce:transition-none" aria-label={t("statsTitle")}>{elapsed}</button></PopoverTrigger>
+            <PopoverContent ref={statsContent} align="start" aria-label={t("statsTitle")} className="w-[34rem] max-w-[calc(100vw-2rem)] rounded-none"
+              onOpenAutoFocus={event => { event.preventDefault(); statsContent.current?.focus(); }}>
+              <div data-slot="time-stats-body" className="grid gap-2 wrap-anywhere text-sm">
+                {shown.kind === "standalone" && <p>{t("standalone")}</p>}
+                {shown.description && <p>{shown.description}</p>}
+                <CopyableIdentifier value={shown.macroTaskId} />
+                <h3 className="font-semibold">{t("statsTitle")}</h3>
+                {!timeline
+                  ? <p className="text-xs text-ink2">{loading ? t("statsLoading") : t("statsMissing")}</p>
+                  : <>
+                    <p className="text-xs">{t("span")}{metrics?.totalSpanMs != null ? formatDuration(metrics.totalSpanMs) : t("unrecorded")}</p>
+                    <p className="text-xs">{t("execution")}{metrics?.unionMs != null ? formatDuration(metrics.unionMs) : t("unrecorded")}</p>
+                    {cumulative !== null && <p className="text-xs">{t("cumulative")}{formatDuration(cumulative)}</p>}
+                    {metrics!.runningCount > 0 && <p className="text-xs text-ink2">{t("running", { count: metrics!.runningCount, time: formatMoment(Date.parse(timeline.observedAt), clock) })}</p>}
+                    {metrics!.unknownEndCount > 0 && <p className="text-xs text-ink2">{t("unknownEnd", { count: metrics!.unknownEndCount })}</p>}
+                    {metrics!.limitations.length > 0 && <p data-slot="time-stats-limitations" className="text-xs text-ink2">{t("limitations")}{formatList(metrics!.limitations.map(entry => t(`limitation.${entry.key}`)))}</p>}
+                    {stale && <p className="text-xs text-ink2">{t("stale", { time: formatMoment(Date.parse(timeline.observedAt), clock) })}</p>}
+                  </>}
+                <p className="mt-2 text-xs text-ink2">{t("sourceHost", { host: shown.sourceHostId || t("unrecorded") })} · {t("currentHost", { host: shown.currentHostIds.length ? formatList(shown.currentHostIds) : t("unrecorded") })}</p>
+              </div>
+            </PopoverContent>
+          </Popover></dd></div>
+        </dl>
       </div>
-    </Popover>}
+    </div>
+    <div className="flex min-w-0 shrink-0 items-start gap-4 max-[760px]:w-full max-[760px]:items-center min-[761px]:gap-10">
+      <dl data-slot="macro-overview-counts" className="flex flex-wrap gap-x-4 gap-y-1.5 max-[760px]:min-w-0 max-[760px]:flex-1 min-[761px]:gap-x-5">
+        {counts.filter(count => count.value > 0).map(count => <div key={count.key} data-slot={`macro-overview-count-${count.key}`} className="flex flex-col items-end gap-0.5 whitespace-nowrap max-[760px]:flex-row max-[760px]:items-center max-[760px]:gap-1.5">
+          <dd className={`text-lg font-semibold leading-tight tabular-nums max-[760px]:text-sm ${count.mark === "hand" ? "text-hand" : count.mark === "live" ? "text-live" : count.mark === "fail" ? "text-fail" : "text-ink"}`}>{formatNumber(count.value)}</dd>
+          <dt className="flex items-center gap-1.5 text-xs text-ink2"><StateMark kind={count.mark} />{t(count.key === "host" ? "hostWait" : count.key)}</dt>
+        </div>)}
+      </dl>
+      {headerActions}
     </div>
   </header>;
 }

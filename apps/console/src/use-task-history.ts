@@ -1,3 +1,4 @@
+import { useCopyState } from "./i18n/use-copy-state";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
@@ -11,13 +12,6 @@ function oldestVerification(left: number | null, right: number | null): number |
 
 /** The poll window of the records view's own first page; never a snapshot page. */
 const POLL_LIMIT = 50;
-/**
- * The view's memory of rows it has itself read, bounded like the old snapshot
- * window. Only the filter dropdowns read it, so choices survive a scope
- * change while the displayed rows reload; the list itself never renders it.
- */
-const KNOWN_LIMIT = 100;
-
 type FailedRead = { kind: "first" | "append" | "poll"; scope: string; before?: string };
 
 /**
@@ -33,22 +27,10 @@ function atOrPastFloor(row: Task, floor: Task): boolean {
   return rowId <= floorId;
 }
 
-function mergeKnown(previous: Task[], rows: Task[]): Task[] {
-  if (!rows.length) return previous;
-  // Newest reads first: once the bounded memory is full, the facts a fresh
-  // page brought must not be the entries that get dropped — otherwise new
-  // projects and hosts would never reach the filter choices.
-  const byId = new Map<string, Task>();
-  for (const row of rows) byId.set(row.runId, row);
-  for (const row of previous) if (!byId.has(row.runId)) byId.set(row.runId, row);
-  return [...byId.values()].slice(0, KNOWN_LIMIT);
-}
-
 export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolean) {
   const [page, setPage] = useState<TaskPage>({ runs: [], total: 0, nextCursor: null });
   const [newIds, setNewIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [known, setKnown] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(active), [error, setError] = useState("");
+  const [loading, setLoading] = useState(active), [error, setError] = useCopyState();
   const [verifiedAtMs, setVerifiedAtMs] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [revision, setRevision] = useState(0);
@@ -89,7 +71,6 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
       clearReadFailure(append ? "append" : "first");
       const checked = api.readVerifiedAt?.(next) ?? null;
       setVerifiedAtMs(previous => append ? oldestVerification(previous, checked) : checked);
-      setKnown(previous => mergeKnown(previous, next.runs));
       setPage(previous => {
         const rows = append ? [...previous.runs] : [];
         const known = new Map(rows.map((t, i) => [t.runId, i]));
@@ -106,7 +87,7 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
     } catch (failure) {
       if (version === generation.current && readScope === current.current.scope && !controller.signal.aborted && !isAbortError(failure)) {
         failedRead.current = { kind: append ? "append" : "first", scope: readScope, ...(append ? { before: cursor! } : {}) };
-        setError(errorText(failure));
+        setError(() => errorText(failure));
       }
       if (strict && !isAbortError(failure)) throw failure;
     } finally {
@@ -151,9 +132,8 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
       }));
       };
       // The first page publishes immediately — in-place refresh, live total,
-      // choices memory and the 回到最新 notice — so a continuation walk can
+      // the 回到最新 notice — so a continuation walk can
       // never delay what the page shows.
-      setKnown(previous => mergeKnown(previous, next.runs));
       const firstFresh = next.runs.filter(row => !loaded.has(row.runId));
       if (firstFresh.length) setNewIds(previous => new Set([...previous, ...firstFresh.map(row => row.runId)]));
       const floor = pageRef.current.runs[pageRef.current.runs.length - 1];
@@ -207,12 +187,11 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
       }
       const walkedFresh = [...updates.values()].filter(row => !loaded.has(row.runId));
       if (walkedFresh.length) setNewIds(previous => new Set([...previous, ...walkedFresh.map(row => row.runId)]));
-      setKnown(previous => mergeKnown(previous, [...updates.values()]));
       if (proven) evictProven();
     } catch (failure) {
       if (version === generation.current && readScope === current.current.scope && !controller.signal.aborted && !isAbortError(failure)) {
         failedRead.current = { kind: "poll", scope: readScope };
-        setError(errorText(failure));
+        setError(() => errorText(failure));
       }
       if (strict && !isAbortError(failure)) throw failure;
     } finally {
@@ -297,7 +276,7 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
     } catch (failure) {
       if (scope === generation.current && readScope === current.current.scope && !isAbortError(failure)) {
         failedRead.current = { kind, scope: readScope };
-        setError(errorText(failure));
+        setError(() => errorText(failure));
       }
     } finally { setRefreshing(false); }
   };
@@ -307,6 +286,6 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
     if (failed.kind === "poll") return pollLatest();
     return fetchPage(failed.kind === "append", false, failed.before);
   };
-  return { ...page, newIds, known, loading, error, verifiedAtMs, refreshing, refresh, more: () => fetchPage(true), retry,
+  return { ...page, newIds, loading, error, verifiedAtMs, refreshing, refresh, more: () => fetchPage(true), retry,
     reset: () => setRevision(n => n + 1) };
 }

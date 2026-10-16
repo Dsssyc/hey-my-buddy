@@ -1,3 +1,4 @@
+import i18n from "i18next";
 import type { Lineage, Task } from "./types";
 
 /** Where a micro task title came from; the Worker result summary is never one. */
@@ -17,12 +18,7 @@ function normalizeDisplay(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-export const TASK_TITLE_SOURCE_LABEL: Record<TitleSource, string> = {
-  title: "Host 标题",
-  task: "任务首行",
-  none: "未命名微任务",
-};
-export const UNTITLED_MICRO_TASK = "未命名微任务";
+export const UNTITLED_MICRO_TASK = () => i18n.t("console:unnamedMicroTask");
 /** Task-first-line titles cap at roughly this many characters (0.16 0.1). */
 const TASK_LINE_CHARS = 40;
 /** Suffix pointing readers to the detail view for the full task text. */
@@ -46,22 +42,16 @@ export type TaskTitle = {
  * raw task text stays available in the detail view.
  */
 export function taskTitle(task: Task): TaskTitle {
-  const explicit = normalizeDisplay(typeof task.workflow?.title === "string" ? task.workflow.title : "");
-  if (explicit) return { text: explicit, fullText: explicit, source: "title" };
-  const firstLine = typeof task.task === "string"
-    ? normalizeDisplay(task.task.trim().split("\n", 1)[0] ?? "")
-    : "";
+  const routed = task.lineage?.routingTask;
+  const explicit = normalizeDisplay(routed ? routed.title ?? "" : task.workflow?.title ?? "");
+  if (explicit) {
+    const source = routed?.titleSource === "first-line" ? "task" : "title";
+    return { text: source === "task" ? excerpt(explicit, TASK_LINE_CHARS) : explicit, fullText: explicit, source };
+  }
+  if (routed) return { text: UNTITLED_MICRO_TASK(), fullText: UNTITLED_MICRO_TASK(), source: "none" };
+  const firstLine = normalizeDisplay(task.task.trim().split("\n", 1)[0]);
   if (firstLine) return { text: excerpt(firstLine, TASK_LINE_CHARS), fullText: firstLine, source: "task" };
-  return { text: UNTITLED_MICRO_TASK, fullText: UNTITLED_MICRO_TASK, source: "none" };
-}
-
-/**
- * The shared title tooltip: the complete title text, plus the pointer to the
- * detail view for a task first-line source. Display stays short; the tooltip
- * is the only place the full first line appears outside details.
- */
-export function titleTooltip(title: TaskTitle): string {
-  return title.fullText;
+  return { text: UNTITLED_MICRO_TASK(), fullText: UNTITLED_MICRO_TASK(), source: "none" };
 }
 
 export function needsReview(task: Task): boolean {
@@ -109,7 +99,7 @@ export function resultText(value: unknown): string {
   const task = record(value);
   const attempt = record(task?.selectedAttempt);
   const receipt = record(attempt?.result);
-  if (!receipt) return "交付结果未记录";
+  if (!receipt) return i18n.t("console:deliveryResultNotRecorded");
   const output = record(receipt.result);
   for (const text of [output?.finalText, output?.stdout, receipt.error]) {
     if (typeof text === "string" && text.trim()) return text;

@@ -378,8 +378,9 @@ class BoardStore:
 
     # -- views ---------------------------------------------------------------
     @staticmethod
-    def _task_view(row: sqlite3.Row) -> dict:
-        spec = json.loads(row["spec_json"])
+    def _task_view(row: sqlite3.Row, *, execution_spec: dict | None = None) -> dict:
+        """Mechanical task facts; execution callers supply their admitted specification."""
+        spec = json.loads(row["spec_json"]) if execution_spec is None else execution_spec
         view = {
             "runId": row["task_id"],
             "taskId": row["task_id"],
@@ -1101,7 +1102,7 @@ class BoardStore:
                 micro_task.encode_cursor(page[-1]["created_at"], page[-1]["task_id"]) if page and has_more else None
             )
             head = self._head_of(connection)
-        return {"runs": tasks, "tasks": tasks, "total": int(total), "cursor": head, "nextCursor": next_cursor}
+        return {"runs": tasks, "total": int(total), "cursor": head, "nextCursor": next_cursor}
 
     def task_result(self, params: dict) -> dict:
         schemas.reject_unknown(params, {"runId", "taskId", "requestId"}, "task.result")
@@ -1721,10 +1722,11 @@ class BoardStore:
             )
             task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (chosen["task_id"],)).fetchone()
             attempt_row = connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
+            # Execution inputs start from mechanical facts, never the decorated read view.
             response = {
                 "claim": {
                     "attempt": self._attempt_view(attempt_row, include_result=False),
-                    "task": self._decorate(connection, task_row),
+                    "task": self._task_view(task_row, execution_spec=spec),
                 },
                 "reason": None,
             }
@@ -1734,12 +1736,6 @@ class BoardStore:
                 # attempt directory by the decision adapter; adapters never see the
                 # database, and no credential is part of this document.
                 response["claim"]["decisionInput"] = chosen_input
-            # Only the execution projection travels to a Worker. The original
-            # partial request remains immutable in tasks/spec and workflow audit.
-            response["claim"]["task"]["spec"] = spec
-            # Display grouping does not travel to a Worker or its native context.
-            for key in ("title", "macroTaskId"):
-                response["claim"]["task"].get("workflow", {}).pop(key, None)
             turn_claim = self.workflow.begin_turn(
                 connection, task=chosen, attempt_id=attempt_id, generation=generation, spec=spec, now=now,
                 stash_facts=stash_facts,

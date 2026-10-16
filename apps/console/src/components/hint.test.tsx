@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { Hint } from "./hint";
 import { Button } from "./ui/button";
+import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 import { TooltipProvider } from "./ui/tooltip";
 
 afterEach(cleanup);
@@ -38,6 +39,23 @@ describe("Hint", () => {
     expect(screen.getByRole("button", { name: "Check" }).getAttribute("data-slot")).toBe("button");
     rerender(page("Busy"));
     expect(screen.getByRole("button", { name: "Check" }).getAttribute("data-slot")).toBe("button");
+  });
+
+  it("preserves a tab's selected state while its explanation opens and closes", async () => {
+    const user = userEvent.setup();
+    render(<TooltipProvider><Tabs defaultValue="host"><TabsList variant="line">
+      <Hint text="Waiting for Host"><TabsTrigger value="host">Host</TabsTrigger></Hint>
+      <TabsTrigger value="all">All</TabsTrigger>
+    </TabsList></Tabs></TooltipProvider>);
+    const host = screen.getByRole("tab", { name: "Host" });
+    expect(host.getAttribute("aria-selected")).toBe("true");
+    expect(host.getAttribute("data-state")).toBe("active");
+    await user.hover(host);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Waiting for Host");
+    expect(host.getAttribute("data-state")).toBe("active");
+    await user.click(screen.getByRole("tab", { name: "All" }));
+    expect(host.getAttribute("aria-selected")).toBe("false");
+    expect(host.getAttribute("data-state")).toBe("inactive");
   });
 
   it("shows the text on hover only while there is some", async () => {

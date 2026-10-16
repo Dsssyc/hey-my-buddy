@@ -1,3 +1,4 @@
+import i18n from "i18next";
 import type {
   Draft,
   ModelServiceNote,
@@ -365,27 +366,27 @@ export type RebaseOutcome = {
 };
 
 const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
-  enabled: "启用状态",
-  preference: "推理强度偏好",
-  modelServiceNote: "模型服务备注",
-  configuration: "Router 列表",
-  defaultRoutingMode: "默认路由模式",
-  routingBudget: "路由预算",
-  routerRetryIntervalSeconds: "重试间隔",
-  modelServiceConcurrency: "并发上限",
+  get enabled() { return i18n.t("console:enabledState"); },
+  get preference() { return i18n.t("console:reasoningEffortPreference"); },
+  get modelServiceNote() { return i18n.t("console:modelServiceNote"); },
+  get configuration() { return i18n.t("console:routerList"); },
+  get defaultRoutingMode() { return i18n.t("console:defaultRoutingMode"); },
+  get routingBudget() { return i18n.t("console:routingBudget"); },
+  get routerRetryIntervalSeconds() { return i18n.t("console:retryInterval"); },
+  get modelServiceConcurrency() { return i18n.t("console:concurrencyLimit"); },
 };
 
 const modelServiceText = (modelService: ModelService) => `${modelService.harness}/${modelService.provider}/${modelService.model}`;
 
 function conflictSubject(field: RebaseConflict["field"], buddyId: string): string {
-  if (field === "configuration") return buddyId ? `Router 列表（${buddyId}）` : "Router 列表";
-  if (field === "defaultRoutingMode") return "默认路由模式";
-  if (field === "routingBudget") return "路由预算";
-  if (field === "routerRetryIntervalSeconds") return "重试间隔";
+  if (field === "configuration") return buddyId ? i18n.t("console:routerListForBuddy", { v0: buddyId }) : i18n.t("console:routerList");
+  if (field === "defaultRoutingMode") return i18n.t("console:defaultRoutingMode");
+  if (field === "routingBudget") return i18n.t("console:routingBudget");
+  if (field === "routerRetryIntervalSeconds") return i18n.t("console:retryInterval");
   if (field === "modelServiceNote" || field === "modelServiceConcurrency") {
-    return `模型服务 ${buddyId} 的${FIELD_NAMES[field]}`;
+    return i18n.t("console:forModelService", { v0: buddyId, v1: FIELD_NAMES[field] });
   }
-  return `buddy ${buddyId} 的${FIELD_NAMES[field]}`;
+  return i18n.t("console:forBuddy", { v0: buddyId, v1: FIELD_NAMES[field] });
 }
 
 /** Replay a local edit on the latest content; policy patches are last-write-wins. */
@@ -423,8 +424,8 @@ export function rebaseDraft(
       field,
       buddyId,
       message: kind === "unread"
-        ? `${subject} 尚待读取最新版本；草稿已保留，读取后将自动核对。`
-        : `${subject} 已被其他人更改${detail}；草稿已保留，请重新加载核对。`,
+        ? i18n.t("console:isWaitingForTheLatestVersionYour", { v0: subject })
+        : i18n.t("console:someoneElseChangedYourDraftIsRetained", { v0: subject, v1: detail }),
     });
   };
   const freshBuddies = new Map(nextBaseline.buddies.map((p) => [p.buddyId, p]));
@@ -483,7 +484,7 @@ export function rebaseDraft(
       Object.assign(mergedRouting, { [field]: wanted });
     }
   } else if (configurationChanged(baseline, draft)) {
-    fail("changed", "configuration", "", "（设置需升级）");
+    fail("changed", "configuration", "", i18n.t("console:settingsNeedUpgrading"));
   }
 
   // Model service concurrency limits: the key is the exact harness/provider/model
@@ -491,7 +492,7 @@ export function rebaseDraft(
   const mergedConcurrency = new Map<string, ModelServiceConcurrencySetting>();
   for (const entry of draft.modelServiceConcurrency) {
     if (concurrencyLimit(entry.limit) === null) {
-      fail("changed", "modelServiceConcurrency", modelServiceText(entry), "（请先修正草稿中的无效值）");
+      fail("changed", "modelServiceConcurrency", modelServiceText(entry), i18n.t("console:correctTheInvalidDraftValuesFirst"));
     }
   }
   for (const change of modelServiceConcurrencyChanges(baseline, draft)) {

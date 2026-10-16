@@ -1,7 +1,7 @@
 import i18n from "i18next";
 import { describe, expect, it } from "vitest";
 import type { HarnessAccount } from "../harness-account";
-import { quotaView } from "../host-workflow";
+import { quotaView } from "../quota";
 import type { HarnessHealth, HarnessQuota, QuotaRoutingRecord } from "../types";
 import {
   absolutePath, harnessDetailsView, harnessPath, harnessSummary, harnessTime, recoveryText, retryProviders, statusText,

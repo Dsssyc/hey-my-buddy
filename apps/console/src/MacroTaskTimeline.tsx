@@ -1,3 +1,4 @@
+import i18n from "i18next";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
@@ -11,7 +12,7 @@ import {
   eventItem, toMs, buddyPalette, acceptanceWaitMs, acceptanceWaitText, titleLineTooltip,
 } from "./macro-task-display";
 import { MacroTaskChronology } from "./MacroTaskChronology";
-import { MicroTaskStrip, MacroTaskOverview } from "./MacroTaskOverview";
+import { MacroTaskOverview } from "./MacroTaskOverview";
 import { TimelineInspector } from "./TimelineInspector";
 import { MarkerPopover, type MarkerClusterView } from "./MarkerPopover";
 import { Popover } from "./Popover";
@@ -80,7 +81,9 @@ export type MacroTaskTimelineProps = {
   error: string;
   stale: boolean;
   newRunIds: ReadonlySet<string>;
+  /** The timeline gives way to the detail of a micro task; the macro task's own header stays. */
   hidden: boolean;
+  detail?: ReactNode;
   active?: boolean;
   /** The micro task whose detail is currently open (accent marker on its row). */
   openedKey: string | null;
@@ -89,6 +92,7 @@ export type MacroTaskTimelineProps = {
   selection: InspectorSelection | null;
   /** MacroTask-level actions rendered in the overview header (停止宏任务, U4). */
   headerActions?: ReactNode;
+  listToggle?: ReactNode;
   /** Snapshot buddies for friendly buddy names (0.16 0.3). */
   buddies?: readonly FriendlyBuddy[] | null;
   onSelectItem: (item: TimelineItem) => void;
@@ -106,6 +110,7 @@ function InspectorSeparator({ min, max, value, onChange, onReset }: {
   onChange: (value: number) => void;
   onReset: () => void;
 }) {
+  useTranslation("console");
   const dragging = useRef(false);
   const container = () => document.querySelector<HTMLElement>(".timeline-view");
   const move = (clientY: number) => {
@@ -119,7 +124,7 @@ function InspectorSeparator({ min, max, value, onChange, onReset }: {
     return null;
   };
   return <div className="dock-divider horizontal inspector-separator" role="separator"
-    aria-orientation="horizontal" aria-label="调整检查器高度"
+    aria-orientation="horizontal" aria-label={i18n.t("console:resizeInspector")}
     aria-valuemin={min} aria-valuemax={max} aria-valuenow={value}
     tabIndex={0}
     onKeyDown={event => {
@@ -147,7 +152,7 @@ function InspectorSeparator({ min, max, value, onChange, onReset }: {
  * inspector; Enter, double-click and the explicit 打开 controls open details.
  */
 export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
-  const { t } = useTranslation("shell");
+  const { t, i18n: { language } } = useTranslation("shell");
   const { timeline, loading, error, stale, hidden, openedKey, openedRunId, selection, active = true } = props;
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
@@ -155,7 +160,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
   const [legendOpen, setLegendOpen] = useState(false);
   const legendButtonRef = useRef<HTMLButtonElement>(null);
   const [openCluster, setOpenCluster] = useState<string | null>(null);
-  const [clusterNotice, setClusterNotice] = useState<string | null>(null);
+  const [clusterNotice, setClusterNotice] = useState(false);
   useEffect(() => { if (hidden || !active) { setOpenCluster(null); setLegendOpen(false); } }, [hidden, active]);
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -186,8 +191,6 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
 
   // The micro task band (P2.1): default follows the viewport height, and the
   // user's toggle then applies to every macroTask for this page session.
-  const [cardsCollapsed, setCardsCollapsed] = useState<boolean | null>(null);
-  const cardsActuallyCollapsed = cardsCollapsed ?? (compactViewport || narrowViewport);
 
   // The Host event row is collapsible and defaults collapsed; the choice is
   // remembered per macroTask for this page session (P1.7).
@@ -365,7 +368,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
       paletteCache.current.set(canvasKey, slots);
     }
     return buddyPalette(spansByRun, slots, props.buddies);
-  }, [spansByRun, canvasKey, props.buddies]);
+  }, [spansByRun, canvasKey, props.buddies, language]);
   const namer = useMemo(() => buddyNamer(props.buddies), [props.buddies]);
 
   const factsBySpan = useMemo(() => {
@@ -377,7 +380,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
       }
     }
     return map;
-  }, [timeline, spansByRun, observedAtMs, props.buddies]);
+  }, [timeline, spansByRun, observedAtMs, props.buddies, language]);
 
   const itemsByKey = useMemo(() => {
     const map = new Map<string, TimelineItem>();
@@ -397,7 +400,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
       }
     }
     return map;
-  }, [factsBySpan, timeline, rowsById]);
+  }, [factsBySpan, timeline, rowsById, language]);
   // Preserve the selected facts even when the drawer is folded and a later
   // filtered read omits that record. Opening the drawer can still show the
   // last recorded card with its missing-record warning.
@@ -429,7 +432,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
       items: group.map(entry => eventItem(entry.event, rowsById)),
       head: eventClusterLabel(group.map(entry => entry.event)),
     }));
-  }, [timeline, scaled, rowsById]);
+  }, [timeline, scaled, rowsById, language]);
 
   // A refresh that changes an open popover's membership closes it with a
   // notice instead of silently showing a different set of events.
@@ -440,7 +443,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
     clusterMembership.current = membership;
     if (openCluster !== null && previous.get(openCluster) !== undefined && previous.get(openCluster) !== membership.get(openCluster)) {
       setOpenCluster(null);
-      setClusterNotice("事件分组已随刷新更新");
+      setClusterNotice(true);
     }
   }, [clusters, openCluster]);
 
@@ -452,7 +455,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
   const chronology = useMemo(() => {
     if (!timeline || !layout) return [];
     return buildChronology(timeline, factsBySpan, layout.gaps, canFold);
-  }, [timeline, layout, factsBySpan, canFold]);
+  }, [timeline, layout, factsBySpan, canFold, language]);
 
   // Roving tabindex: one stop inside the canvas, defaulting to the first
   // micro task row's first execution span, then a rendered marker cluster,
@@ -465,7 +468,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
     let candidate: TimelineItem | null = null;
     for (const row of rows) {
       const spans = spansByRun.get(row.runId) ?? [];
-      const execution = spans.map(span => factsBySpan.get(span.spanId)).find(facts => facts && facts.item.atMs !== null && facts.item.head === "执行片段");
+      const execution = spans.map(span => factsBySpan.get(span.spanId)).find(facts => facts && facts.item.atMs !== null && facts.item.head === i18n.t("console:executionSpan"));
       if (execution) { candidate = execution.item; break; }
     }
     candidate = candidate ?? [...factsBySpan.values()].find(facts => facts.item.atMs !== null)?.item ?? null;
@@ -514,7 +517,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
   }
 
   function itemAria(item: TimelineItem): string {
-    return item.ariaLabel ?? `${item.head}，${item.parts.join("，")}`;
+    return item.ariaLabel ?? i18n.t("console:sentenceJoin", { v0: item.head, v1: item.parts.join(i18n.t("console:comma")) });
   }
 
   /** The screen-x of a time instant inside the scroll viewport, or null when off-canvas. */
@@ -627,7 +630,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
       event.preventDefault();
       const cluster = clusters.find(candidate => candidate.key === key);
       if (cluster && cluster.items.length > 1) {
-        setClusterNotice(null);
+        setClusterNotice(false);
         setOpenCluster(current => (current === key ? null : key));
         return;
       }
@@ -709,10 +712,10 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
   const openClusterView = openCluster ? clusters.find(cluster => cluster.key === openCluster) ?? null : null;
 
   const truncation: string[] = [];
-  if (timeline?.filtered) truncation.push(`已按筛选显示 ${timeline.rows.length} / ${timeline.totals.allRows} 个微任务`);
-  if (timeline?.truncated.rows) truncation.push(`微任务行已截断：显示 ${timeline.rows.length} / ${timeline.totals.rows} 个`);
-  if (timeline?.truncated.spans) truncation.push(`执行片段已截断：显示 ${timeline.spans.length} / ${timeline.totals.spans} 段`);
-  if (timeline?.truncated.events) truncation.push(`Host 事件已截断：显示 ${timeline.events.length} / ${timeline.totals.events} 条`);
+  if (timeline?.filtered) truncation.push(i18n.t("console:filteredToMicroTasks", { v0: timeline.rows.length, v1: timeline.totals.allRows }));
+  if (timeline?.truncated.rows) truncation.push(i18n.t("console:microTaskRowsTruncatedShowing", { v0: timeline.rows.length, v1: timeline.totals.rows }));
+  if (timeline?.truncated.spans) truncation.push(i18n.t("console:executionSpansTruncatedShowing", { v0: timeline.spans.length, v1: timeline.totals.spans }));
+  if (timeline?.truncated.events) truncation.push(i18n.t("console:hostEventsTruncatedShowing", { v0: timeline.events.length, v1: timeline.totals.events }));
   const missingEvents = timeline && timeline.truncated.events ? Math.max(0, timeline.totals.events - timeline.events.length) : 0;
 
   function itemHandlers(key: string) {
@@ -777,18 +780,18 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
       </button>;
     }
     if (span.kind === "host") {
-      const waitLabel = row.rootLeadRunId ? "等待 Lead" : "等待 Host";
+      const waitLabel = row.rootLeadRunId ? i18n.t("console:waitingForLead") : i18n.t("console:waitingForHost");
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
-        <span className="sp-text" style={{ width: `${widthPxSpan}px` }}>{textPx >= 110 ? `${waitLabel} · ${durationShort((facts.endMs ?? observedAtMs ?? 0) - facts.startMs!)}` : textPx >= 64 ? waitLabel : textPx >= 34 ? "等待" : ""}</span>
+        <span className="sp-text" style={{ width: `${widthPxSpan}px` }}>{textPx >= 110 ? `${waitLabel} · ${durationShort((facts.endMs ?? observedAtMs ?? 0) - facts.startMs!)}` : textPx >= 64 ? waitLabel : textPx >= 34 ? i18n.t("console:waiting") : ""}</span>
       </button>;
     }
     // The bar label uses the friendly name (0.16 0.3); the raw identity stays
     // in the aria label and tooltip.
     const shortModel = namer(span.buddy).text;
     const label = textPx >= 150
-      ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}${facts.outcome !== "finished" ? " · " + outcomeLabel(span, facts.outcome) : ""}`
-      : textPx >= 72 ? `第${span.turnIndex ?? "?"}轮` : textPx >= 30 ? String(span.turnIndex ?? "·") : "";
+      ? i18n.t("console:turnWithBuddyState", { v0: span.turnIndex ?? "?", v1: shortModel, v2: facts.outcome !== "finished" ? " · " + outcomeLabel(span, facts.outcome) : "" })
+      : textPx >= 72 ? i18n.t("console:turnCompact", { v0: span.turnIndex ?? "?" }) : textPx >= 30 ? String(span.turnIndex ?? "·") : "";
     if (facts.outcome === "unknown" && facts.recordedEndMs !== null) {
       // Solid to the last recorded instant, dotted tail reserved through the
       // observation instant by the Host layout.
@@ -808,9 +811,9 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
         <span className="solid" style={{ width: `${solidWidthPx}px` }} aria-hidden="true" />
-        <span className="sp-text sp-solid-text" style={{ width: `${solidWidthPx}px` }}>{solidWidthPx - TERMINAL_TEXT_INSET_PX + PIXEL_EPSILON >= 72 ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}` : ""}</span>
+        <span className="sp-text sp-solid-text" style={{ width: `${solidWidthPx}px` }}>{solidWidthPx - TERMINAL_TEXT_INSET_PX + PIXEL_EPSILON >= 72 ? i18n.t("console:turnWithBuddy", { v0: span.turnIndex ?? "?", v1: shortModel }) : ""}</span>
         <i className="end-mark warn" style={{ left: `${solidWidthPx - 7.5}px`, right: "auto" }} aria-hidden="true">?</i>
-        <span className="sp-text sp-tail" style={{ left: `${tailLeftPx}px`, width: `${tailWidthPx}px` }}>{tailWidthPx - SPAN_TEXT_INSET_PX + PIXEL_EPSILON >= 50 && !tailOverlaps ? "结束未确认" : ""}</span>
+        <span className="sp-text sp-tail" style={{ left: `${tailLeftPx}px`, width: `${tailWidthPx}px` }}>{tailWidthPx - SPAN_TEXT_INSET_PX + PIXEL_EPSILON >= 50 && !tailOverlaps ? i18n.t("console:stopUnconfirmed") : ""}</span>
       </button>;
     }
     const endMark = facts.outcome === "failed" ? <i className="end-mark bad" style={endStyle} aria-hidden="true">✕</i>
@@ -827,23 +830,23 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
 
   const body = loading && !timeline
     ? <div className="tl-body">
-      <p className="tl-state" role="status">正在读取时间轴…</p>
+      <p className="tl-state" role="status">{i18n.t("console:readingTimeline")}</p>
       <div className="skeleton" style={{ width: "60%" }} />
       <div className="skeleton" style={{ width: "45%", marginLeft: "30%" }} />
       <div className="skeleton" style={{ width: "35%", marginLeft: "52%" }} />
     </div>
     : error && !timeline
-      ? <div className="tl-body"><div className="tl-state" role="alert">读取时间轴失败：{error}
-        <div style={{ marginTop: 12 }}><button className="button small-button" onClick={props.onRetry}>重试读取</button></div></div></div>
+      ? <div className="tl-body"><div className="tl-state" role="alert">{i18n.t("console:couldNotReadTimeline")}{error}
+        <div style={{ marginTop: 12 }}><button className="button small-button" onClick={props.onRetry}>{i18n.t("console:retry")}</button></div></div></div>
       : timeline && scaled
         ? <div className={"timeline-body" + (asList ? " as-list" : "")}>
           <div ref={scrollRef} className="tl-scroll"
             onScroll={() => { if (openCluster !== null) requestClusterClose(false); }}
             onKeyDown={onCanvasKeyDown}>
-            <div ref={gridRef} className="tl-grid" role="group" aria-label="宏任务时间轴"
+            <div ref={gridRef} className="tl-grid" role="group" aria-label={i18n.t("console:macroTaskTimeline")}
               style={{ width: `calc(var(--label-w) + ${widthPx + TRACK_END_PX}px)`, "--track-end": `${TRACK_END_PX}px` } as CSSProperties}>
               <div className="tl-row axis">
-                <div className="tl-label">微任务 / 时间</div>
+                <div className="tl-label">{i18n.t("console:microTaskTime")}</div>
                 <div className="tl-track">
                   {ticks.map(tick => <span key={tick.at} className="tick" style={{ left: `${tick.left}%` }}>{tick.label}</span>)}
                   {eligibleGaps.map(gap => <span key={gap.id} className="idle-block" tabIndex={0} data-gap-id={gap.id}
@@ -852,7 +855,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
                     title={idleReadout(gap)}>
                     <span aria-hidden="true">//</span>
                   </span>)}
-                  {nowVisible && nowLeft !== null && <span className="now-chip">现在 {clockTime(observedAtMs!)}</span>}
+                  {nowVisible && nowLeft !== null && <span className="now-chip">{i18n.t("console:now")}{clockTime(observedAtMs!)}</span>}
                 </div>
               </div>
               <div className={"tl-row markers" + (hostEventsOpen ? "" : " collapsed")} data-nav="">
@@ -860,9 +863,9 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
                   aria-expanded={hostEventsOpen} aria-controls={hostEventsTrackId}
                   onClick={() => setHostEventsOpenByMacroTask(previous =>
                     new Map(previous).set(canvasKey ?? "", !hostEventsOpen))}>
-                  <span>{hostEventsOpen ? "▾" : "▸"} Host 事件{timeline.events.length ? `（${timeline.events.length}）` : ""}</span>
-                  {missingEvents > 0 && <span className="trunc-chip">‹ {missingEvents} 条事件未返回</span>}
-                  {clusterNotice && <span className="trunc-chip">{clusterNotice}</span>}
+                  <span>{hostEventsOpen ? "▾" : "▸"} {i18n.t("console:hostEvents")}{timeline.events.length ? i18n.t("console:parenthesized", { v0: timeline.events.length }) : ""}</span>
+                  {missingEvents > 0 && <span className="trunc-chip">‹ {missingEvents} {i18n.t("console:eventsNotReturned")}</span>}
+                  {clusterNotice && <span className="trunc-chip">{i18n.t("console:eventGroupsUpdatedAfterRefresh")}</span>}
                 </button>
                 {hostEventsOpen && <div className="tl-track" id={hostEventsTrackId}>
                   {clusters.map(cluster => {
@@ -889,7 +892,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
                           props.onSelectItem(single);
                           return;
                         }
-                        setClusterNotice(null);
+                        setClusterNotice(false);
                         setOpenCluster(current => (current === cluster.key ? null : cluster.key));
                       }}
                       onDoubleClick={() => {
@@ -955,17 +958,17 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
                     <span className="lbl-title">
                       {row.kind === "helper" && <span aria-hidden="true" className="muted">↳</span>}
                       <span className={"st " + state.glyphClass} aria-hidden="true">{state.glyph}</span>
-                      {props.newRunIds.has(row.runId) && <span className="new-mark">新</span>}
+                      {props.newRunIds.has(row.runId) && <span className="new-mark">{i18n.t("console:new")}</span>}
                       <span className="lbl-name">{title.text}</span>
                       {fixedByText && <span className="fix-target-mark" aria-hidden="true" title={fixedByText}><span className="fix-backlink">↩</span>{row.fixedBy!.length}</span>}
-                      {runOpened && <span className="opened-mark">详情</span>}
+                      {runOpened && <span className="opened-mark">{i18n.t("console:details")}</span>}
                     </span>
                     <span className="lbl-sub" title={fixesText ? `${fixesText} · ${namer(row.buddy).title}` : namer(row.buddy).title}>
                       {fixesText
                         ? <><span className="lbl-state">{state.label}</span><span className="fix-source" title={`${t("timelineFix.target")}: ${fixedTitle}`}><span className="fix-arrow" aria-hidden="true">↪</span><span className="fix-source-text">{fixesText}</span></span></>
-                        : <>{state.label} · {row.kind === "helper" ? "协助任务 · " : ""}{namer(row.buddy).text}</>}
+                        : <>{state.label} · {row.kind === "helper" ? i18n.t("console:helperPrefix") : ""}{namer(row.buddy).text}</>}
                     </span>
-                    {unplaced > 0 && <span className="trunc-chip" title="片段时间缺失或异常，未定位">⚠ {unplaced} 段时间缺失</span>}
+                    {unplaced > 0 && <span className="trunc-chip" title={i18n.t("console:spanTimeIsMissingOrInvalidCannot")}>⚠ {unplaced} {i18n.t("console:spansWithoutTimes")}</span>}
                   </button>
                   <div className="tl-track">
                     {waitLine && <span className="accept-wait-line" style={{ left: `${waitLine.from}%`, width: `${Math.max(waitLine.to - waitLine.from, 0)}%` }}
@@ -995,62 +998,56 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
         </div>
         : null;
 
-  return <div className="timeline-view" ref={rootRef} hidden={hidden}>
-    <MacroTaskOverview summary={props.summary} timeline={timeline} loading={loading} stale={stale}
-      compact={compactViewport || narrowViewport}
-      onBackToList={props.onBackToList} headerActions={props.headerActions} />
-    {timeline && <MicroTaskStrip timeline={timeline} selectedRunId={selectedRunId}
-      collapsed={cardsActuallyCollapsed}
-      onToggleCollapsed={() => setCardsCollapsed(!cardsActuallyCollapsed)}
-      onSelectRun={props.onSelectRun} onOpenRun={props.onOpenRun} />}
+  return <div className={"timeline-view" + (hidden ? " [&>:not([data-slot=macro-overview-header],[data-slot=task-detail])]:hidden" : "")} ref={rootRef}>
+    <MacroTaskOverview active={active} nowMs={props.displayObservedAt ? Date.parse(props.displayObservedAt) : undefined} summary={props.summary} timeline={timeline} loading={loading} stale={stale}
+      onBackToList={props.onBackToList} headerActions={props.headerActions} listToggle={props.listToggle} />
+    {props.detail}
     <div className="tl-toolbar">
       <button ref={legendButtonRef} type="button" className="button small-button" aria-expanded={legendOpen}
-        aria-controls="timeline-legend-popover" title="图例" onClick={() => setLegendOpen(current => !current)}>图例</button>
+        aria-controls="timeline-legend-popover" title={i18n.t("console:legend")} onClick={() => setLegendOpen(current => !current)}>{i18n.t("console:legend")}</button>
       {legendOpen && !hidden && active && <Popover anchor={legendButtonRef.current} id="timeline-legend-popover"
-        label="时间轴图例" className="timeline-legend-popover" onClose={() => setLegendOpen(false)}>
-      <div className="legend" aria-label="执行 buddy 图例">
-        <span className="legend-title">执行 buddy</span>
+        label={i18n.t("console:timelineLegend")} className="timeline-legend-popover" onClose={() => setLegendOpen(false)}>
+      <div className="legend" aria-label={i18n.t("console:executionBuddyLegend")}>
+        <span className="legend-title">{i18n.t("console:executionBuddies")}</span>
         {palette.length ? palette.map(entry => <span key={entry.key} className="legend-item" title={entry.rawTitle ?? entry.label}>
           <span className={"swatch" + (entry.striped ? " striped" : "")} style={{ "--c": `var(--cfg-${entry.color})` } as CSSProperties} />{entry.label}
         </span>) : <span className="legend-item">—</span>}
       </div>
-      <div className="legend" aria-label="状态图例">
-        <span className="legend-item"><span className="swatch queue" />排队</span>
-        <span className="legend-item"><span className="swatch routing fast" />快速路由</span>
-        <span className="legend-item"><span className="swatch routing review" />审阅路由</span>
-        <span className="legend-item"><span className="swatch wait" />等待 Host</span>
-        <span className="legend-item"><span className="glyph ok" aria-hidden="true">▸</span>执行中</span>
-        <span className="legend-item"><span className="glyph bad" aria-hidden="true">✕</span>失败</span>
-        <span className="legend-item"><span className="glyph" aria-hidden="true">⊘</span>已取消</span>
-        <span className="legend-item"><span className="glyph warn" aria-hidden="true">?</span>结束未确认</span>
+      <div className="legend" aria-label={i18n.t("console:stateLegend")}>
+        <span className="legend-item"><span className="swatch queue" />{i18n.t("console:queue")}</span>
+        <span className="legend-item"><span className="swatch routing fast" />{i18n.t("console:fastRouting")}</span>
+        <span className="legend-item"><span className="swatch routing review" />{i18n.t("console:reviewRouting")}</span>
+        <span className="legend-item"><span className="swatch wait" />{i18n.t("console:waitingForHost")}</span>
+        <span className="legend-item"><span className="glyph ok" aria-hidden="true">▸</span>{i18n.t("console:executing")}</span>
+        <span className="legend-item"><span className="glyph bad" aria-hidden="true">✕</span>{i18n.t("console:failed")}</span>
+        <span className="legend-item"><span className="glyph" aria-hidden="true">⊘</span>{i18n.t("console:cancelled")}</span>
+        <span className="legend-item"><span className="glyph warn" aria-hidden="true">?</span>{i18n.t("console:stopUnconfirmed")}</span>
       </div>
       </Popover>}
       <div className="tl-tools">
-        {!asList && <div className="tl-zoom" role="group" aria-label="时间轴缩放">
-          <button type="button" className="button small-button" aria-label="缩小" disabled={zoomAtFit}
-            title={zoomAtFit ? "已是适应窗口的最小刻度" : "缩小时间轴（键盘 -）"} onClick={zoomOut}>−</button>
-          <button type="button" className="button small-button" aria-label="放大" disabled={zoomAtMax}
-            title={zoomAtMax ? "已达最大刻度" : "放大时间轴（键盘 +）"} onClick={zoomIn}>+</button>
+        {!asList && <div className="tl-zoom" role="group" aria-label={i18n.t("console:timelineZoom")}>
+          <button type="button" className="button small-button" aria-label={i18n.t("console:zoomOut")} disabled={zoomAtFit}
+            title={zoomAtFit ? i18n.t("console:alreadyAtTheMinimumScaleThatFits") : i18n.t("console:zoomOutTimelineKeyboard")} onClick={zoomOut}>−</button>
+          <button type="button" className="button small-button" aria-label={i18n.t("console:zoomIn")} disabled={zoomAtMax}
+            title={zoomAtMax ? i18n.t("console:maximumScaleReached") : i18n.t("console:zoomInTimelineKeyboard")} onClick={zoomIn}>+</button>
           <button type="button" className="button small-button" aria-pressed={zoomAtFit}
-            title="缩放到有活动的时间段（键盘 0）" onClick={() => changeZoom(null)}>适应窗口</button>
+            title={i18n.t("console:fitPeriodsWithActivityKeyboard0")} onClick={() => changeZoom(null)}>{i18n.t("console:fitWindow")}</button>
         </div>}
         {stale && timeline && <span className="refresh-state stale" role="alert"
-          title={`最近一次读取失败；显示的是 ${timeline.observedAt} 的数据`}>
-          读取失败 · 显示 {clockTime(timeline.observedAt)} 的数据
-        </span>}
-        {stale && <button type="button" className="button small-button" onClick={props.onRetry}>重试读取</button>}
+          title={i18n.t("console:latestReadFailedShowingDataFrom", { v0: timeline.observedAt })}>
+          {i18n.t("console:readFailedShowing")}{clockTime(timeline.observedAt)} {i18n.t("console:data")}</span>}
+        {stale && <button type="button" className="button small-button" onClick={props.onRetry}>{i18n.t("console:retry")}</button>}
         {/* The view switch stays the toolbar's last control, at the far right. */}
-        <div className="timeline-view-switch" role="group" aria-label="时间轴视图">
+        <div className="timeline-view-switch" role="group" aria-label={i18n.t("console:timelineView")}>
           <button ref={listToggleRef} type="button" className="button small-button list-toggle" aria-pressed={!asList}
-            onClick={() => { setAsList(false); setLegendOpen(false); }}>时间轴</button>
+            onClick={() => { setAsList(false); setLegendOpen(false); }}>{i18n.t("console:timeline")}</button>
           <button type="button" className="button small-button list-toggle" aria-pressed={asList}
-            onClick={() => { setAsList(true); setLegendOpen(false); }}>列表</button>
+            onClick={() => { setAsList(true); setLegendOpen(false); }}>{i18n.t("console:list")}</button>
         </div>
       </div>
     </div>
     {timeline && truncation.length > 0 && <div className="banner trunc-banner" role="status">
-      时间轴记录不完整：{truncation.join("；")}。可调整筛选或打开微任务详情。
-    </div>}
+      {i18n.t("console:timelineRecordsAreIncomplete")}{truncation.join(i18n.t("console:semicolon"))}{i18n.t("console:adjustFiltersOrOpenMicroTaskDetails")}</div>}
     {body}
     {!drawerActuallyCollapsed && <InspectorSeparator min={DRAWER_MIN_PX} max={drawerMax} value={drawerValue}
       onChange={value => { setDrawerCollapsed(false); setDrawerHeight(value); }}
@@ -1058,12 +1055,12 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
     <div className={"inspector-dock" + (drawerActuallyCollapsed ? " collapsed" : "")} style={{ height: `${drawerValue}px` }}>
       <div className="inspector-dock-head">
         <span className="inspector-dock-title">{selectedCard
-          ? [selectedCard.head, selectedCard.fields.find(field => field.label === "微任务")?.value,
-            selectedCard.fields.find(field => field.label === "时间")?.value].filter(Boolean).join(" · ")
-          : selection ? "选中记录 · 当前读取范围外" : "检查器"}</span>
+          ? [selectedCard.head, selectedCard.fields.find(field => field.label === i18n.t("console:microTask"))?.value,
+            selectedCard.fields.find(field => field.label === i18n.t("console:time"))?.value].filter(Boolean).join(" · ")
+          : selection ? i18n.t("console:selectedRecordOutsideTheCurrentRead") : i18n.t("console:inspector")}</span>
         <button type="button" className="icon-button inspector-dock-toggle"
-          aria-label={drawerActuallyCollapsed ? "展开检查器" : "收起检查器"}
-          title={drawerActuallyCollapsed ? "展开检查器" : "收起检查器"}
+          aria-label={drawerActuallyCollapsed ? i18n.t("console:expandInspector") : i18n.t("console:collapseInspector")}
+          title={drawerActuallyCollapsed ? i18n.t("console:expandInspector") : i18n.t("console:collapseInspector")}
           aria-expanded={!drawerActuallyCollapsed}
           onClick={() => setDrawerCollapsed(!drawerActuallyCollapsed)}>{drawerActuallyCollapsed ? "▴" : "▾"}</button>
       </div>

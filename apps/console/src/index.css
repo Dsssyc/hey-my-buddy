@@ -67,3 +67,18 @@
     @apply bg-background font-sans text-sm text-foreground antialiased;
   }
 }
+
+/* Shared disclosure motion has its own keyframes, so the animation library's
+   height-only frames cannot replace the opacity interpolation at build time. */
+@theme inline {
+  --animate-collapsible-down: disclosure-down var(--tw-animation-duration, .2s) ease-out;
+  --animate-collapsible-up: disclosure-up var(--tw-animation-duration, .2s) ease-out;
+  @keyframes disclosure-down {
+    from { height: 0; opacity: 0; }
+    to { height: var(--radix-collapsible-content-height); opacity: 1; }
+  }
+  @keyframes disclosure-up {
+    from { height: var(--radix-collapsible-content-height); opacity: 1; }
+    to { height: 0; opacity: 0; }
+  }
+}

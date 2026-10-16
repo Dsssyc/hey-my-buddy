@@ -294,17 +294,26 @@ def macro_task_list(store, params: dict) -> dict:
     schemas.reject_unknown(params, LIST_PARAMETERS, "macro_task.list")
     limit = schemas.optional_int(params, "limit", LIST_DEFAULT_LIMIT, 1, LIST_MAX_LIMIT)
     applied, clauses, values = _filters(params)
+    common_clauses, common_values = micro_task.history_where(
+        project_id=applied.get("projectId"), host_id=applied.get("hostId"),
+        query=applied.get("query"),
+    )
     before_value = schemas.optional_string(params, "before", max_length=512)
     before = _decode_cursor(before_value, applied) if before_value is not None else None
-    match = " AND ".join(["micro_task_run_id IS NOT NULL", *clauses])
+    base_match = " AND ".join(["micro_task_run_id IS NOT NULL", *common_clauses])
+    selected_filter = micro_task.FILTER_SQL[applied.get("filter", "all")]
+    selected_match = (
+        f"CASE WHEN base_matching=1 AND {selected_filter} THEN 1 ELSE 0 END"
+        if selected_filter else "base_matching"
+    )
     from . import macro_task_summary_cache as memo
 
     # The materialized relation carries only scalars consumed by the summary and
     # the SQL matching flag. In particular no t.* / result / manifest / outcome
     # body is copied merely to notice a change. One relation serves matching,
-    # total, order, page membership and the per-group dependency marker.
+    # all four totals, order, page membership and the per-group dependency marker.
     narrow = ",".join(f"h.{column}" for column in memo.MEMBER_COLUMNS)
-    page_values = list(values)
+    page_values = []
     page_where = ""
     if before is not None:
         seq, group_id, _issued_head = before
@@ -312,25 +321,37 @@ def macro_task_list(store, params: dict) -> dict:
         page_values.extend([seq, seq, group_id])
     groups_sql = f"""
 WITH members AS MATERIALIZED (
-    SELECT {narrow}, COALESCE(root.macro_task_id, 'run:' || h.root_run_id) AS group_id,
-           h.matching
-      FROM (SELECT h.*, CASE WHEN {match} THEN 1 ELSE 0 END AS matching
-              FROM ({memo.THIN_HISTORY_SQL}) h) h
-      JOIN workflow_runs root ON root.run_id=h.root_run_id
+    SELECT base.*, {selected_match} AS matching
+      FROM (SELECT {narrow}, COALESCE(root.macro_task_id, 'run:' || h.root_run_id) AS group_id,
+                   h.base_matching
+              FROM (SELECT h.*, CASE WHEN {base_match} THEN 1 ELSE 0 END AS base_matching
+                      FROM ({memo.THIN_HISTORY_SQL}) h) h
+              JOIN workflow_runs root ON root.run_id=h.root_run_id) base
 ),
-matched AS (SELECT group_id FROM members WHERE matching=1 GROUP BY group_id),
+matched AS (
+    SELECT group_id, MAX(base_matching) AS all_match, MAX(matching) AS selected_match,
+           MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['active']} THEN 1 ELSE 0 END) AS active_match,
+           MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['host']} THEN 1 ELSE 0 END) AS host_match,
+           MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['review']} THEN 1 ELSE 0 END) AS review_match
+      FROM members GROUP BY group_id
+),
 groups AS (
     SELECT matched.group_id, COALESCE(o.activity_seq, root.activity_seq) AS activity_seq
       FROM matched
       LEFT JOIN macro_tasks o ON o.macro_task_id=matched.group_id
       LEFT JOIN workflow_runs root ON o.macro_task_id IS NULL
         AND matched.group_id LIKE 'run:%' AND root.run_id=substr(matched.group_id,5)
+     WHERE matched.selected_match=1
 ),
 page AS (SELECT * FROM groups {page_where}
           ORDER BY activity_seq DESC, group_id DESC LIMIT ?),
-stats AS (SELECT COUNT(*) AS total, COALESCE(MAX(activity_seq),0) AS latest FROM groups)
-SELECT stats.total,stats.latest,page.group_id AS page_group_id,page.activity_seq,members.*
-  FROM stats LEFT JOIN page ON 1=1 LEFT JOIN members ON members.group_id=page.group_id
+stats AS (SELECT COALESCE(SUM(all_match),0) AS all_total,
+                COALESCE(SUM(active_match),0) AS active_total,
+                COALESCE(SUM(host_match),0) AS host_total,
+                COALESCE(SUM(review_match),0) AS review_total FROM matched),
+latest AS (SELECT COALESCE(MAX(activity_seq),0) AS latest FROM groups)
+SELECT stats.*,latest.latest,page.group_id AS page_group_id,page.activity_seq,members.*
+  FROM stats CROSS JOIN latest LEFT JOIN page ON 1=1 LEFT JOIN members ON members.group_id=page.group_id
  ORDER BY page.activity_seq DESC,page.group_id DESC,members.task_id
 """
     cache = memo.for_store(store)
@@ -339,8 +360,8 @@ SELECT stats.total,stats.latest,page.group_id AS page_group_id,page.activity_seq
     # below (including a cache miss's _summary) remain from this one snapshot.
     with cache.lock, store.db.read() as connection:
         head = _head(connection)
-        rows = connection.execute(groups_sql, [*page_values, limit + 1]).fetchall()
-        total = int(rows[0]["total"])
+        rows = connection.execute(groups_sql, [*common_values, *page_values, limit + 1]).fetchall()
+        totals = {name: int(rows[0][f"{name}_total"]) for name in ("all", "active", "host", "review")}
         changed = before is not None and int(rows[0]["latest"]) > before[2]
         groups = {}
         for row in rows:
@@ -361,7 +382,7 @@ SELECT stats.total,stats.latest,page.group_id AS page_group_id,page.activity_seq
             _encode_cursor(int(groups[page[-1]][0]["activity_seq"] or 0), page[-1], applied, issued_head)
             if len(groups) > limit else None
         )
-    return {"macroTasks": summaries, "total": total, "nextCursor": next_cursor, "cursor": head, "changed": changed}
+    return {"macroTasks": summaries, "totals": totals, "nextCursor": next_cursor, "cursor": head, "changed": changed}
 
 
 def _members(connection, group_id: str) -> list:
@@ -377,7 +398,13 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
         + " AND ".join(["micro_task_run_id IS NOT NULL", *clauses]),
         [group_id, *values],
     ).fetchone()["count"]
+    failed_conclusions = {row["run_id"] for row in connection.execute(
+        "SELECT run_id FROM workflow_host_conclusions WHERE execution_status='failed' AND run_id IN "
+        "(SELECT run_id FROM workflow_runs WHERE macro_task_id=? UNION SELECT ?)",
+        (group_id, group_id.removeprefix("run:")),
+    )}
     counts = {"roots": 0, "helpers": 0, "active": 0, "host": 0, "review": 0, "ended": 0, "accepted": 0,
+              "failed": 0,
               "stoppableRoots": 0, "stoppableHelpers": 0, "delivered": 0, "awaitingHost": 0}
     from .workflow import IN_PROGRESS_STATES
     for row in members:
@@ -387,6 +414,9 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
         counts["awaitingHost"] += int(row["run_state"] == "awaiting-host")
         counts[_state(row)] += 1
         counts["accepted"] += int(row["child_parent_run_id"] is None and row["run_state"] == "accepted")
+        counts["failed"] += int(row["child_parent_run_id"] is None and (
+            row["run_state"] == "failed" or row["task_id"] in failed_conclusions
+        ))
         counts["helpers" if row["child_parent_run_id"] is not None else "roots"] += 1
     state = next((name for name in ("host", "active", "review") if counts[name]), "ended")
     if group_id.startswith("macro-"):
@@ -395,7 +425,7 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
         repository_path = next((row["project_repository_path"] for row in members
                                 if row["project_repository_path"]), None)
         project = {"id": macro_task["project_id"], "path": macro_task["project_path"],
-                   "label": micro_task.project_label(macro_task["project_path"], repository_path, "未记录项目")}
+                   "label": micro_task.project_label(macro_task["project_path"], repository_path)}
         source_host, created_at = macro_task["source_host_id"], macro_task["created_at"]
         activity_seq, activity_at = macro_task["activity_seq"], macro_task["activity_at"]
         roots = [row["task_id"] for row in members if row["child_parent_run_id"] is None]

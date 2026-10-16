@@ -490,8 +490,7 @@ class ConsoleTaskHistoryTests(ConsoleTestCase, WorkflowTestCase):
         self.assertNotIn("access-control-allow-origin", headers)
         self.assertIn("Max-Age=34560000", headers["set-cookie"])
         payload = json.loads(body)
-        self.assertEqual(sorted(payload), sorted(["runs", "tasks", "total", "cursor", "nextCursor"]))
-        self.assertEqual(payload["runs"], payload["tasks"])
+        self.assertEqual(sorted(payload), sorted(["runs", "total", "cursor", "nextCursor"]))
         self.assertEqual(payload["total"], 1)
         self.assertEqual(payload["runs"][0]["runId"], created["runId"])
         self.assertIn("lineage", payload["runs"][0])
@@ -887,6 +886,62 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
         self.assertEqual(status, 400, data)
         self.assertEqual(json.loads(data)["error"]["code"], "INVALID_ARGUMENT")
 
+    def test_message_list_reads_the_inquiries_of_one_run_over_the_console_boundary(self):
+        board = self.board()
+        run = board.call(
+            "task_submit",
+            {
+                "requestId": "console-inquiry",
+                "task": "ordinary",
+                "cwd": str(self.workdir()),
+                "adapter": "command",
+                "argv": ["true"],
+            },
+        )["task"]["runId"]
+        posted = board.call("message_post", {"runId": run, "inquiryId": "ask-1", "question": "Status?"})["message"]
+        _stated, browser = self.open_console(board)
+        csrf = browser.bootstrap()["csrfToken"]
+
+        status, _headers, data = browser.command("message_list", {"runId": run, "limit": 200}, csrf=csrf)
+        self.assertEqual(status, 200, data)
+        messages = json.loads(data)["result"]["messages"]
+        self.assertEqual([message["messageId"] for message in messages], [posted["messageId"]])
+        self.assertEqual(messages[0]["question"], "Status?")
+        status, _headers, data = browser.command("message_list", {"runId": run, "limit": 201}, csrf=csrf)
+        self.assertEqual(status, 400, data)
+        self.assertEqual(json.loads(data)["error"]["code"], "INVALID_ARGUMENT")
+        # The browser reads inquiries but cannot post or answer them.
+        for operation in ("message_post", "message_update"):
+            status, _headers, data = browser.command(operation, {"runId": run, "inquiryId": "ask-2", "question": "?"}, csrf=csrf)
+            self.assertEqual(status, 404, data)
+            self.assertEqual(json.loads(data)["error"]["code"], "METHOD_NOT_FOUND")
+
+    def test_a_browser_cannot_bring_its_own_console_authority_to_a_read(self):
+        board = self.board()
+        _stated, browser = self.open_console(board)
+        csrf = browser.bootstrap()["csrfToken"]
+        for operation in ("message_list", "workflow_get"):
+            status, _headers, data = browser.command(
+                operation, {"runId": "unknown", "consoleAuthority": {"sessionId": "forged"}}, csrf=csrf
+            )
+            self.assertEqual(status, 400, data)
+            self.assertEqual(json.loads(data)["error"]["code"], "INVALID_ARGUMENT")
+            self.assertIn("consoleAuthority", json.loads(data)["error"]["message"])
+
+    def test_the_preview_answers_only_what_the_real_console_allows(self) -> None:
+        from hey_my_buddy.console.console_sessions import READ_OPERATIONS
+        from hey_my_buddy.console.server import CONSOLE_OPERATIONS
+
+        probes = Path(__file__).resolve().parents[3] / "tests" / "probes"
+        sys.path.insert(0, str(probes))
+        try:
+            import macro_task_console_preview as preview
+        finally:
+            sys.path.remove(str(probes))
+        self.assertTrue(set(preview.ALLOWED_OPERATIONS) <= set(CONSOLE_OPERATIONS))
+        self.assertEqual(set(preview.READ_OPERATIONS), set(READ_OPERATIONS) & set(preview.ALLOWED_OPERATIONS))
+        self.assertIn("message_list", preview.ALLOWED_OPERATIONS)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -905,6 +960,8 @@ class ConsoleMacroTaskTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(headers["cache-control"], "private, max-age=0, must-revalidate")
         page = json.loads(body)
         self.assertEqual(page, json.loads(json.dumps(board.call("macro_task_list", {"limit": 5, "filter": "all"}))))
+        self.assertEqual(page["totals"], {"all": 2, "active": 2, "host": 0, "review": 0})
+        self.assertNotIn("total", page)
         self.assertEqual({item["macroTaskId"] for item in page["macroTasks"]},
                          {first["macroTaskId"], f"run:{loose['runId']}"})
         status, _headers, body = browser.get(f"/api/macro-tasks/{first['macroTaskId']}/timeline?limit=10")

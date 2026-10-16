@@ -1,3 +1,4 @@
+import i18n from "i18next";
 /**
  * Pure derived metrics for the work macro task overview (0.15 C5/C6).
  *
@@ -26,15 +27,15 @@ export type MetricLimitation = {
 };
 
 export const LIMITATION_LABEL: Record<MetricLimitation["key"], string> = {
-  scope: "读取范围不完整",
-  rows: "微任务行已截断",
-  spans: "执行片段已截断",
-  events: "Host 事件已截断",
-  "missing-time": "片段缺少时间",
-  reversed: "片段时间异常",
-  "clock-skew": "片段存在时钟偏差",
-  "unconfirmed-end": "结束未确认 · 未计入",
-  running: "运行中 · 计至读取时刻",
+  get scope() { return i18n.t("console:incompleteReadScope"); },
+  get rows() { return i18n.t("console:microTaskRowsTruncated"); },
+  get spans() { return i18n.t("console:executionSpansTruncated"); },
+  get events() { return i18n.t("console:hostEventsTruncated"); },
+  get "missing-time"() { return i18n.t("console:spanTimeMissing"); },
+  get reversed() { return i18n.t("console:invalidSpanTime"); },
+  get "clock-skew"() { return i18n.t("console:clockSkewInSpan"); },
+  get "unconfirmed-end"() { return i18n.t("console:stopUnconfirmedExcluded"); },
+  get running() { return i18n.t("console:runningCountedUntilReadTime"); },
 };
 
 /** Scope-level limitation keys: the read itself cannot prove absence. */
@@ -277,14 +278,6 @@ export function runRollup(row: TimelineRow, timeline: MacroTaskTimeline): RunRol
   return { row, executions, pending, helpers, executionMs: ms, limitations: [...new Set([...scope, ...limitations])] };
 }
 
-/** Root micro tasks in recorded creation order — the overview card order. */
-export function rootRollups(timeline: MacroTaskTimeline): RunRollup[] {
-  const roots = timeline.rows.filter(row => row.parentRunId === null);
-  const withOrder = roots.map(row => ({ row, createdAtMs: parseTimelineInstant(row.createdAt) ?? Number.POSITIVE_INFINITY }));
-  withOrder.sort((left, right) => left.createdAtMs - right.createdAtMs || left.row.runId.localeCompare(right.row.runId));
-  return withOrder.map(entry => runRollup(entry.row, timeline));
-}
-
 /**
  * Honest text of one micro task's latest execution result; null only when no
  * execution was recorded at all. Ordering prefers recorded turn indices, then
@@ -296,11 +289,11 @@ export function latestExecutionResult(rollup: RunRollup): { span: TimelineSpan; 
   if (!executions.length) return null;
   const labelFor = (span: TimelineSpan): string => {
     const outcome = spanOutcome(span);
-    if (outcome === "unknown") return "结束未确认";
-    if (span.resultStatus === "ok") return "成功";
-    if (span.resultStatus === "failed") return "失败";
-    if (span.resultStatus === "cancelled") return "已取消";
-    return "未记录";
+    if (outcome === "unknown") return i18n.t("console:stopUnconfirmed");
+    if (span.resultStatus === "ok") return i18n.t("console:succeeded");
+    if (span.resultStatus === "failed") return i18n.t("console:failed");
+    if (span.resultStatus === "cancelled") return i18n.t("console:cancelled");
+    return i18n.t("console:notRecorded");
   };
   if (executions.every(span => span.turnIndex !== null && span.turnIndex !== undefined)) {
     const latest = executions.reduce((best, span) => (span.turnIndex! > best.turnIndex! ? span : best));
@@ -314,5 +307,5 @@ export function latestExecutionResult(rollup: RunRollup): { span: TimelineSpan; 
   }
   // Some executions carry neither turn order nor usable time: which one is
   // latest is unknown, so no older outcome may speak for the run.
-  return { span: executions[executions.length - 1]!, label: "未记录" };
+  return { span: executions[executions.length - 1]!, label: i18n.t("console:notRecorded") };
 }

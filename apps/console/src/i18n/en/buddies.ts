@@ -27,7 +27,7 @@ export default {
     exclude: "Left out of routing",
   },
   unsaved: "Unsaved",
-  loginExpired: "The login has expired and nothing was submitted; log in again.",
+  loginExpired: "Browser authorization has expired and nothing was submitted; authorize this browser again.",
   models: {
     search: "Search buddies",
     enabledOnly: "Enabled only",
@@ -91,7 +91,7 @@ export default {
     range: "An integer from {{min}} to {{max}} is needed",
     note: "Note",
     locked: {
-      session: "The login has expired; log in again to change this",
+      session: "Browser authorization has expired; authorize this browser again to change this",
       saving: "A save is in progress or awaits checking; changes are paused",
       retired: "No longer available, so it cannot be enabled",
       pinBuddy: "This buddy is unavailable or not enabled, so it cannot be pinned",

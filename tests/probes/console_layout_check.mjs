@@ -18,17 +18,6 @@ try {
   const page = await context.newPage();
   page.on('pageerror', error => errors.push(String(error)));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  // Enough realistic session rows to exercise settings overflow even on a tall
-  // display. Only a synthetic response is extended, never a board response.
-  await page.route('**/api/console', async route => {
-    const response = await route.fetch();
-    assert.equal(response.headers()['x-hey-my-buddy-preview'], 'synthetic-fixture-data');
-    const snapshot = await response.json();
-    snapshot.consoleAccess = { requireLogin: true, revision: 2, sessions: Array.from({ length: 16 }, (_, i) => ({
-      id: i.toString(16).padStart(24, '0'), lastSeen: 1_790_582_400 + i, current: i === 0,
-    })) };
-    await route.fulfill({ response, json: snapshot });
-  });
   for (const [width, height] of [[1280, 720], [1440, 900], [390, 720]]) {
     await page.setViewportSize({ width, height });
     const response = await page.goto(new URL(`?layout=${width}#buddy`, base).href);
@@ -47,18 +36,7 @@ try {
     assert.ok(modelHeight >= 420, `model region collapsed at ${width}: ${modelHeight}`);
     await checkLayout('buddy', width, height);
     await page.screenshot({ path: `${output}/buddy-${width}.png` });
-    await page.getByRole('link', { name: '设置', exact: true }).click();
-    await page.getByRole('button', { name: '退出当前登录' }).waitFor();
-    const settings = page.locator('.settings-page');
-    await settings.hover({ position: { x: 10, y: 10 } });
-    await page.mouse.wheel(0, 4000);
-    await page.waitForFunction(() => document.querySelector('.settings-page').scrollTop > 0);
-    const cards = await settings.locator(':scope > .panel').evaluateAll(elements => elements.map(e => ({
-      client: e.clientHeight, scroll: e.scrollHeight, height: e.getBoundingClientRect().height,
-    })));
-    assert.ok(cards.every(card => card.scroll <= card.client + 1), `settings card clipped at ${width}: ${JSON.stringify(cards)}`);
-    await checkLayout('settings', width, height);
-    await page.screenshot({ path: `${output}/settings-${width}.png` });
+
   }
   async function checkLayout(view, width, height) {
     const facts = await page.evaluate(selector => {
@@ -66,7 +44,7 @@ try {
       return { clientWidth: e.clientWidth, scrollWidth: e.scrollWidth, clientHeight: e.clientHeight,
         scrollHeight: e.scrollHeight, scrollTop: e.scrollTop, overflowY: getComputedStyle(e).overflowY,
         documentWidth: document.documentElement.scrollWidth, viewportWidth: innerWidth };
-    }, view === 'buddy' ? '.buddy-page' : '.settings-page');
+    }, '.buddy-page');
     assert.equal(facts.overflowY, 'auto');
     assert.ok(facts.scrollTop > 0 && facts.scrollHeight > facts.clientHeight, `${view} did not scroll`);
     assert.ok(facts.scrollWidth <= facts.clientWidth + 1, `${view} overflowed horizontally`);

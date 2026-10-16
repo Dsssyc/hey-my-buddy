@@ -133,7 +133,7 @@ describe("the catalogue in English", () => {
     const user = userEvent.setup();
     const catalog = await openCatalog(world(false));
     await user.click(within(catalog).getByRole("button", { name: "Discover models" }));
-    expect(await within(catalog).findByText(/login has expired/i)).toBeTruthy();
+    expect(await within(catalog).findByText(/authorization has expired/i)).toBeTruthy();
     await user.click(within(catalog).getByRole("button", { name: "Check all" }));
     for (const summary of [...catalog.querySelectorAll<HTMLElement>("[data-slot=account-summary]")]) await user.click(summary);
     await user.click(catalog.querySelector<HTMLElement>("[data-slot=model-row] > button")!);

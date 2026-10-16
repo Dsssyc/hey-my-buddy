@@ -58,7 +58,7 @@ function fixture(state: Snapshot = snapshot(), replies: Record<string, Reply> = 
   const api = {
     snapshot: vi.fn(async () => structuredClone(state)), command, task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
   return { api, command, published };
 }
@@ -212,7 +212,7 @@ describe("a session that cannot write", () => {
     const lock = levelSwitch("medium");
     expect(lock.getAttribute("aria-checked")).toBe("true");
     expect(lock.getAttribute("aria-disabled")).toBe("true");
-    expect(lock.getAttribute("aria-description")).toBe("登录已失效，重新登录后可以修改");
+    expect(lock.getAttribute("aria-description")).toBe("浏览器授权已失效，重新授权后可以修改");
     await user.click(lock);
     expect(levelSwitch("medium").getAttribute("aria-checked")).toBe("true");
     expect(within(levelPreference("medium")).getAllByRole("radio").every(radio => radio.getAttribute("aria-disabled") === "true")).toBe(true);

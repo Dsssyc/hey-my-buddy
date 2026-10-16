@@ -9,12 +9,12 @@ const summary = (macroTaskId: string, lastActivitySeq: number, overrides: Partia
   macroTaskId, kind: "macro-task", title: macroTaskId, titleSource: "macro-task", description: null, summary: null,
   project: { id: "p1", label: "项目一", path: "/p1" }, sourceHostId: "host-a", currentHostIds: [],
   createdAt: "2026-09-26T01:00:00Z", lastActivityAt: "2026-09-26T01:00:00Z", lastActivitySeq,
-  state: "active", counts: { roots: 1, helpers: 0, accepted: 0, active: 1, host: 0, review: 0, ended: 0,
+  state: "active", counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 1, host: 0, review: 0, ended: 0,
     stoppableRoots: 1, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 },
   matchingRuns: 1, rootRunIds: [macroTaskId], ...overrides,
 });
 const page = (macroTasks: MacroTaskSummary[], nextCursor: string | null = null, changed = false): MacroTaskPage =>
-  ({ macroTasks, total: macroTasks.length, nextCursor, cursor: 10, changed });
+  ({ macroTasks, totals: { all: macroTasks.length, active: macroTasks.length, host: 0, review: 0 }, nextCursor, cursor: 10, changed });
 const query: MacroTaskQuery = { query: "", projectId: "p1", hostId: "", filter: "all" };
 
 function harness(readVerifiedAt?: (value: unknown) => number | null, active = true, strict = false) {
@@ -45,7 +45,7 @@ describe("work macro task list hook", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
     await act(async () => f.requests[1]!.resolve(page([summary("new", 10), summary("second", 9), summary("first", 3)])));
     expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["first", "second"]);
-    expect(f.result.current.total).toBe(3);
+    expect(f.result.current.totals.all).toBe(3);
     expect(f.result.current.reorder).toEqual({ count: 2 });
   });
 
@@ -57,7 +57,7 @@ describe("work macro task list hook", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
     await act(async () => f.requests[1]!.resolve(page([summary("busy", 9), summary("kept", 4)])));
     expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["kept", "busy"]);
-    expect(f.result.current.total).toBe(2);
+    expect(f.result.current.totals.all).toBe(2);
     expect(f.result.current.reorder).toEqual({ count: 1 });
   });
 
@@ -100,19 +100,20 @@ describe("work macro task list hook", () => {
     await act(async () => f.requests[1]!.resolve(page([summary("first", 3), summary("second", 2, { state: "ended" })])));
     expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["first", "second"]);
     expect(f.result.current.rows[1]!.state).toBe("ended");
-    expect(f.result.current.total).toBe(2);
+    expect(f.result.current.totals.all).toBe(2);
     expect(f.result.current.reorder).toBeNull();
   });
 
-  it("updates the reported total even when an incomplete poll defers its order", async () => {
+  it("updates all reported totals even when an incomplete poll defers its order", async () => {
     const f = harness();
     await startRead();
     await act(async () => f.requests[0]!.resolve(page([summary("first", 3), summary("second", 2)], "more-exists")));
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    await act(async () => f.requests[1]!.resolve(({ ...page([summary("second", 2, { state: "ended" })], "more-exists"), total: 7 })));
+    await act(async () => f.requests[1]!.resolve(({ ...page([summary("second", 2, { state: "ended" })], "more-exists"),
+      totals: { all: 7, active: 3, host: 2, review: 1 } })));
     expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["first", "second"]);
     expect(f.result.current.rows[1]!.state).toBe("ended");
-    expect(f.result.current.total).toBe(7);
+    expect(f.result.current.totals).toEqual({ all: 7, active: 3, host: 2, review: 1 });
   });
 
   it("defers a real reorder behind the notice instead of moving a reader's rows", async () => {
@@ -259,7 +260,7 @@ describe("work macro task list hook", () => {
   });
 
   it("D2-O00 allows the initial mount debounce when the document hides before cleanup", async () => {
-    const macroTasks = vi.fn(async () => ({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false }));
+    const macroTasks = vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false }));
     const api = { macroTasks } as unknown as ConsoleApi;
     renderHook(({ query }: { query: MacroTaskQuery }) => useMacroTaskList(api, query, true), { initialProps: { query } });
     // The document hides before the visibilitychange cleanup lands; the
@@ -271,7 +272,7 @@ describe("work macro task list hook", () => {
   });
 
   it("gates the scope-change debounce when the document hides before cleanup", async () => {
-    const macroTasks = vi.fn(async () => ({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false }));
+    const macroTasks = vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false }));
     const api = { macroTasks } as unknown as ConsoleApi;
     const hook = renderHook(({ query }: { query: MacroTaskQuery }) => useMacroTaskList(api, query, true), { initialProps: { query } });
     await startRead();

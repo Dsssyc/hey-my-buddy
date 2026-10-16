@@ -163,7 +163,7 @@ function fixture(options: Options = {}) {
     command,
     task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
+    macroTasks: vi.fn(async () => ({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 0, changed: false })),
     storagePlan: vi.fn(async (csrfToken: string) => command("storage_plan", {}, csrfToken)),
     storageApply: vi.fn(),
     runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: "0.29.0", contractVersion: "fixture", schemaVersion: 15, sourceCommit: null, installedAt: null }, installed: null })),
@@ -382,22 +382,22 @@ describe("the settings page", () => {
     render(<App suppliedApi={f.api} />);
     await user.click(await screen.findByRole("link", { name: "设置" }));
     const themes = screen.getByRole("radiogroup", { name: "主题" });
-    const settings = screen.getByRole("heading", { name: "显示" }).closest(".settings-panel")!;
-    expect(settings.classList.contains("panel")).toBe(true);
-    expect(screen.getByRole("region", { name: "存储" }).classList.contains("panel")).toBe(true);
-    expect(within(themes).getAllByRole("radio").map(radio => radio.closest("label")!.textContent))
+    const settings = screen.getByRole("heading", { name: "主题" }).closest("[data-slot=settings-page]")!;
+    expect(settings.querySelectorAll("[data-slot=settings-section]")).toHaveLength(6);
+    expect(screen.getByRole("region", { name: "存储" }).getAttribute("data-slot")).toBe("settings-section");
+    expect(within(themes).getAllByRole("radio").map(radio => radio.textContent))
       .toEqual(["浅色", "深色", "跟随系统"]);
     const storage = screen.getByRole("region", { name: "存储" });
     expect(within(storage).getByRole("heading", { name: "存储" })).toBeTruthy();
     const overview = within(storage).getByRole("group", { name: "占用概览" });
-    expect(overview.textContent).toContain("总占用尚未检查");
+    expect(overview.textContent).toContain("占用尚未检查");
     expect(overview.textContent).toContain("可回收尚未检查");
     // The panel keeps its explicit check: mounting the page calls nothing.
     expect(f.command).not.toHaveBeenCalled();
     await user.click(within(storage).getByRole("button", { name: "检查占用" }));
     await waitFor(() => expect(f.operations).toEqual(["storage_plan"]));
     expect(within(storage).getByRole("table")).toBeTruthy();
-    expect(overview.textContent).toContain("总占用977 KB");
+    expect(overview.textContent).toContain("占用977 KB");
     expect(overview.textContent).toContain("可回收977 KB");
     // No buddy settings leak into the system settings page.
     expect(screen.queryByRole("checkbox", { name: "只看已启用" })).toBeNull();

@@ -11,6 +11,8 @@ for (const { locale, tabs, pending } of languages) for (const width of [1440, 39
     test.use({ locale, viewport: { width, height: 844 } });
 
     test("keeps every item whole and apart", async ({ page }) => {
+      // A read made today shows its clock time alone; the preview's reads are of 2026-09-27.
+      await page.clock.setFixedTime(new Date("2026-09-27T10:00:00.000Z"));
       await open(page, "#tasks");
       const bar = page.getByRole("banner").first();
       const links = bar.getByRole("navigation").getByRole("link");
@@ -30,7 +32,8 @@ for (const { locale, tabs, pending } of languages) for (const width of [1440, 39
       await expect(hint).toHaveText(pending);
       await expectWholeAndApart(page.locator("body"), page.locator("[data-slot=tooltip-content]"));
       // The hint waits for the pointer to travel, so that it can be reached and read.
-      await page.mouse.move(0, 400, { steps: 4 });
+      // Leave through the empty top-bar padding: list rows may have their own hints.
+      await page.mouse.move(width - 1, 1, { steps: 4 });
       await expect(hint).toHaveCount(0);
       await tasks.focus();
       await expect(hint).toHaveText(pending);
@@ -52,30 +55,16 @@ for (const theme of ["light", "dark"]) test(`the top bar is dark and readable in
   }
 });
 
-for (const { locale, label, heading } of [
-  { locale: "zh-CN", label: "静默提醒阈值（分钟）", heading: "执行提醒" },
-  { locale: "en-US", label: "Silence threshold (minutes)", heading: "Execution reminders" },
-]) test.describe(`reminder settings in ${locale}`, () => {
-  test.use({ locale, viewport: { width: 320, height: 640 } });
-  test("remain readable at narrow width", async ({ page }) => {
-    await open(page, "#settings");
-    const panel = page.getByRole("region", { name: heading });
-    await expect(panel.getByRole("spinbutton", { name: label })).toHaveValue("15");
-    await expectTextUncut(panel.locator("h2, label, button"));
-    await expectNoSidewaysScroll(page);
-  });
-});
-
 test.describe("an active micro task's reminder status at narrow width", () => {
   test.use({ locale: "zh-CN", viewport: { width: 320, height: 640 } });
   test("keeps both reminder labels visible beside execution state", async ({ page }) => {
     await open(page, "#tasks");
     await page.locator('[data-macro-task-id="macro-11111111-1111-4111-8111-111111111111"] button').click();
     await page.locator('.tl-list [data-key="span:execution:att-a3-1"]').press("Enter");
-    const header = page.locator(".detail-header");
-    await expect(header.getByText("已超过预期")).toBeVisible();
-    await expect(header.getByText("可能卡住")).toBeVisible();
-    await expectTextUncut(header.locator(".text-hand"));
+    const title = page.locator("[data-slot=detail-pane] h3").first().locator("..");
+    await expect(title.getByText("已超过预期")).toBeVisible();
+    await expect(title.getByText("可能卡住")).toBeVisible();
+    await expectTextUncut(title.locator(".text-hand"));
     await expectNoSidewaysScroll(page);
   });
 });

@@ -142,6 +142,8 @@ def dependencies(connection, members):
              " FROM workflow_runs WHERE run_id IN ({}) ORDER BY run_id"),
             ("turn", "SELECT run_id,turn_id,turn_index,state,attempt_id,generation,disposition"
              " FROM workflow_turns WHERE run_id IN ({}) ORDER BY run_id,turn_index"),
+            ("conclusion", "SELECT run_id,conclusion_id,execution_status"
+             " FROM workflow_host_conclusions WHERE run_id IN ({}) ORDER BY run_id"),
             ("request", "SELECT run_id,request_id,turn_id,attempt_id,child_task_id,kind,state,expected_revision,decided_at"
              " FROM workflow_requests WHERE run_id IN ({}) ORDER BY run_id,request_id"),
             ("child", "SELECT child_task_id,parent_run_id,request_id,state,role,integrator,auto_continue"

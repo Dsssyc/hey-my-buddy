@@ -19,6 +19,9 @@ export default {
     roles: { host: "Host", lead: "Lead", console: "控制台", service: "服务", workflow: "黑板", bridge: "桥接" },
     stop: { host: "Host 停止", lead: "Lead 停止", console: "在控制台停止", service: "服务停止", unknown: "停止（发起者未知）" },
   },
+  /** A length of time: the number comes first, then the unit. */
+  duration: { hour: "{{n}} 时", minute: "{{n}} 分", second: "{{n}} 秒" },
+  relative: { second: "{{n}} 秒前", minute: "{{n}} 分钟前", hour: "{{n}} 小时前", day: "{{n}} 天前" },
   skipToContent: "跳至主要内容",
   timelineFix: {
     fixes: "修正 {{title}}",
@@ -33,23 +36,11 @@ export default {
     pendingHost: "等待 Host 决定的微任务",
     unsaved: "有未保存的修改",
   },
-  snapshot: {
-    verified: "核对时间",
-    unverified: "核对时间未记录",
-  },
   connection: {
     lost: "连接中断",
     retry: "重试连接",
   },
   reminders: {
-    title: "执行提醒",
-    silenceMinutes: "静默提醒阈值（分钟）",
-    range: "请输入 1 至 1440 的整数分钟；默认 15 分钟。",
-    currentSeconds: "当前保存值为 {{count}} 秒；请输入整数分钟才能修改。",
-    unavailable: "提醒设置暂不可用，请刷新工作台。",
-    save: "保存",
-    saving: "正在保存…",
-    saved: "提醒设置已保存。",
     overdue: "已超过预期",
     possiblyStuck: "可能卡住",
   },
@@ -85,7 +76,7 @@ export default {
     unresolvedNote: "保存结果未知，可能已生效；请核对后重试。",
     unavailable: {
       connection: "连接中断；请重试连接，草稿已保留。",
-      login: "登录已失效；请运行 hey-my-buddy console 重新登录，草稿已保留。",
+      login: "浏览器授权已失效；请运行 hey-my-buddy console 重新授权，草稿已保留。",
     },
     reload: "重新读取设置",
   },

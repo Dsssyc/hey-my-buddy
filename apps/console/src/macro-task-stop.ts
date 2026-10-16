@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import i18n from "i18next";
 import "./i18n";
 import type { ConsoleApi } from "./api";
@@ -25,7 +26,7 @@ export type MacroTaskStopEntry = {
   phase: MacroTaskStopPhase;
   /** The server reply once acknowledged; drives the refresh-based status. */
   result: MacroTaskStopResult | null;
-  error: string;
+  error: string | (() => string);
 };
 
 export type MacroTaskStopStatus = {
@@ -58,7 +59,7 @@ export function stopStatus(entry: MacroTaskStopEntry | undefined, timeline: Macr
     i18n.t(`shell:macroStop.${key}`, options);
   if (!entry) return null;
   if (entry.phase === "refused") {
-    return { phase: "refused", label: t("refused"), detail: entry.error || t("refusedDetail") };
+    return { phase: "refused", label: t("refused"), detail: (typeof entry.error === "function" ? entry.error() : entry.error) || t("refusedDetail") };
   }
   if (entry.phase === "unknown") {
     return {
@@ -110,6 +111,7 @@ export function stopStatus(entry: MacroTaskStopEntry | undefined, timeline: Macr
 }
 
 export function useMacroTaskStop(api: ConsoleApi, snapshot: Snapshot, writesAvailable: boolean, authority: AuthorityLatch | undefined, refresh: () => Promise<unknown>) {
+  useTranslation("shell");
   const [entries, setEntries] = useState<Map<string, MacroTaskStopEntry>>(() => new Map());
   const [confirming, setConfirming] = useState<{ summary: MacroTaskSummary; scope: StopScope } | null>(null);
   // One in-flight stop per macroTask: a second confirmation of the SAME
@@ -149,16 +151,16 @@ export function useMacroTaskStop(api: ConsoleApi, snapshot: Snapshot, writesAvai
       }
     } catch (reason) {
       if (uncertainResponse(reason)) {
-        patch(summary.macroTaskId, { phase: "unknown", error: errorText(reason) });
+        patch(summary.macroTaskId, { phase: "unknown", error: () => errorText(reason) });
       } else if (isSessionExpiredRefusal(reason) && replay) {
         // A replay that is definitely refused proves only that THIS request
         // was denied; the earlier unknown attempt stays unknown.
         patch(macroTaskId, {
           phase: "unknown",
-          error: `${errorText(reason)} ${i18n.t("shell:macroStop.replayUnknown")}`,
+          error: () => `${errorText(reason)} ${i18n.t("shell:macroStop.replayUnknown")}`,
         });
       } else {
-        patch(summary.macroTaskId, { phase: "refused", error: errorText(reason) });
+        patch(summary.macroTaskId, { phase: "refused", error: () => errorText(reason) });
       }
     } finally {
       inFlight.current.delete(macroTaskId);

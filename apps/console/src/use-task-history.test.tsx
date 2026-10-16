@@ -6,7 +6,7 @@ import type { Task, TaskPage, TaskQuery } from "./types";
 import { useTaskHistory } from "./use-task-history";
 
 const task = (runId: string, revision = 1): Task => ({ runId, revision, task: runId, status: "queued", owner: "host",
-  cwd: "/allocated/checkout", createdAt: "2026-09-24T12:00:00Z", acceptedAt: null, acceptanceVerdict: null,
+  cwd: "/allocated/checkout", createdAt: "2026-09-24T12:00:00Z", updatedAt: "2026-09-24T12:00:00Z", acceptedAt: null, acceptanceVerdict: null,
   reviewRejectedAt: null, reviewRejectionNote: null });
 /** Rows in the route's real stable order: createdAt strictly descending with position. */
 const descendingRow = (runId: string, position: number): Task => ({
@@ -125,16 +125,6 @@ describe("microTask history", () => {
     expect(f.requests[3].signal?.aborted).toBe(true);
   });
 
-  it("keeps the filter choices from its own reads while a scope change reloads the rows", async () => {
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0].resolve(page([{ ...task("kept"), cwd: "/p", lineage: { kind: "micro-task", sourceHostId: "host-a", currentHostId: "host-a", parentRunId: null, rootRunId: "kept", rootLeadRunId: null, project: { id: "project-a", label: "A", path: "/a" }, buddy: null } }], "next")));
-    expect(f.result.current.known.map(t => t.runId)).toEqual(["kept"]);
-    // A scope change clears the displayed rows; the choices memory survives.
-    f.rerender({ query: { ...query, filter: "host" }, active: true });
-    expect(f.result.current.runs).toEqual([]);
-    expect(f.result.current.known.map(t => t.runId)).toEqual(["kept"]);
-  });
 
   it("polls its own first page, refreshing loaded rows and collecting unseen records for 回到最新", async () => {
     const f = harness();
@@ -405,24 +395,6 @@ describe("microTask history", () => {
     f.unmount();
   });
 
-  it("keeps newly read projects in the bounded choices memory after it filled", async () => {
-    const filler = Array.from({ length: 100 }, (_, index) => task(`fill-${String(index).padStart(3, "0")}`));
-    const f = harness();
-    await startRead();
-    await act(async () => f.requests[0].resolve(page(filler)));
-    expect(f.result.current.known).toHaveLength(100);
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    const newcomer = { ...task("new-project"), cwd: "/new-project",
-      lineage: { kind: "micro-task" as const, sourceHostId: "new-host", currentHostId: "new-host",
-        parentRunId: null, rootRunId: "new-project", rootLeadRunId: null,
-        project: { id: "project-new", label: "New", path: "/new-project" }, buddy: null } };
-    // A complete poll page: the whole loaded window is covered in one read.
-    await act(async () => f.requests[1].resolve(page([newcomer])));
-    // The bounded memory must keep the new read's project and host for the
-    // filter dropdowns; a full memory must evict its oldest facts, not them.
-    expect(f.result.current.known.some(t => t.runId === "new-project")).toBe(true);
-    f.unmount();
-  });
 
   it("stops the records poll while the page is hidden and polls once immediately on return", async () => {
     const f = harness();
@@ -494,7 +466,7 @@ describe("U09 local records refresh", () => {
     await act(async () => f.requests[1].resolve(page([task("wrong-row")], "wrong-cursor")));
     expect(f.result.current.runs).toEqual([]);
     expect(f.result.current.newIds.size).toBe(0);
-    expect(f.result.current.known.some(row => row.runId === "wrong-row")).toBe(false);
+    expect(f.result.current.runs.some(row => row.runId === "wrong-row")).toBe(false);
     expect(f.result.current.nextCursor).toBeNull();
     expect(f.result.current.loading).toBe(true);
     await act(async () => f.requests[2].resolve(page([task("new-scope")], "new-cursor")));

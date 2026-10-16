@@ -1,13 +1,19 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as baseRender, screen, waitFor, within } from "@testing-library/react";
+import type { RenderOptions } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "./components/ui/tooltip";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MacroTasks } from "./MacroTasks";
 import type { ConsoleApi } from "./api";
 import { ApiError } from "./api";
 import type { Snapshot, Task } from "./types";
-import type { Workflow } from "./workflow-types";
 import { macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
 import type { MacroTaskStopResult, MacroTaskTimeline } from "./macro-task-types";
+
+function render(ui: ReactElement, options?: RenderOptions) {
+  return baseRender(ui, { wrapper: TooltipProvider, ...options });
+}
 
 function snapshotFixture(): Snapshot {
   return {
@@ -22,26 +28,24 @@ function snapshotFixture(): Snapshot {
 
 function taskFixture(runId: string): Task {
   const base: Task = { runId, task: `目标 ${runId}`, status: "completed", owner: "fixture", cwd: `/worktrees/${runId}`,
-    revision: 1, createdAt: "2026-09-26T01:12:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
+    revision: 1, createdAt: "2026-09-26T01:12:00Z", updatedAt: "2026-09-26T01:12:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     resultAvailable: true, shutdownConfirmed: true,
     lineage: { kind: runId === "r3" ? "helper" : "micro-task", sourceHostId: "codex-desktop", currentHostId: "codex-desktop",
       parentRunId: runId === "r3" ? "r2" : null, rootRunId: runId === "r3" ? "r2" : runId, rootLeadRunId: null,
       project: { id: "p1", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" },
-      buddy: { harness: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" } } };
-  if (runId === "r2") {
-    base.workflow = { state: "awaiting-host", awaitingHost: true, hostId: "codex-desktop", ownerGeneration: 2, revision: 1 };
-  }
+      buddy: { harness: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" }, routingTask: null } };
+  // Every micro task of the macro task has a collaboration record; r2 waits for its Host.
+  base.workflow = { state: runId === "r2" ? "awaiting-host" : "delivered", awaitingHost: runId === "r2", hostId: "codex-desktop", ownerGeneration: 2, revision: 1, macroTaskId: "macro-1" };
   return base;
 }
 
-function workflowFixture(task: Task): Workflow {
-  return { runId: task.runId, hostId: "codex-desktop", ownerGeneration: 2, revision: 1,
-    state: "awaiting-host", awaitingHost: true, waitReason: "等待 Host 决定", continuationCount: 0,
-    shutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false },
-    workspace: { path: task.cwd, kind: "worktree", access: "write", inputCommit: "input", manifestSha256: "hash" },
-    currentTurn: null, activeRequest: null,
-    children: task.runId === "r2" ? [{ taskId: "r3", role: "helper", state: "completed", requestId: "req-helper" }] : [],
-    artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null, task };
+/** The compact collaboration record as `workflow_get` sends it. */
+function workflowFixture(task: Task) {
+  return { runId: task.runId, hostId: "codex-desktop", revision: 1, state: task.workflow!.state, buddy: null, buddyLocked: false, delegationAuthority: false,
+    routing: null, turns: [], currentTurn: null, activeRequest: null, requests: [], counts: { turns: 0, openRequests: 0 },
+    children: task.runId === "r2" ? [{ taskId: "r3", role: "helper", state: "succeeded" }] : [],
+    artifacts: [], integrations: [], finalArtifactId: null, hostConclusion: null, shutdown: null, workspace: { path: task.cwd },
+    task: { lineage: task.lineage } };
 }
 
 type Pending = { promise: Promise<unknown>; resolve: (value: unknown) => void };
@@ -60,16 +64,16 @@ function harness(options: StopOptions = {}) {
   const listed = options.secondStoppable
     ? [timeline.macroTask, macroTaskSummary({ macroTaskId: "macro-2", title: "另一个进行中的目标",
         lastActivitySeq: 30, lastActivityAt: "2026-09-26T07:40:00Z", state: "active",
-        counts: { roots: 2, helpers: 0, accepted: 0, active: 1, host: 0, review: 1, ended: 0,
+        counts: { roots: 2, helpers: 0, accepted: 0, failed: 0, active: 1, host: 0, review: 1, ended: 0,
           stoppableRoots: 1, stoppableHelpers: 0, delivered: 1, awaitingHost: 0 } })]
     : options.secondMacroTask
     ? [timeline.macroTask, macroTaskSummary({ macroTaskId: "run:3f0e", kind: "standalone",
         title: "修复标题回退在 CRLF 输入下的显示", titleSource: "task", description: null, lastActivitySeq: 20,
         lastActivityAt: "2026-09-25T10:22:00Z", state: "ended",
-        counts: { roots: 1, helpers: 0, accepted: 0, active: 0, host: 0, review: 0, ended: 1,
+        counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 0, host: 0, review: 0, ended: 1,
           stoppableRoots: 0, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 } })]
     : [timeline.macroTask];
-  const tasks = new Map(["r1", "r2", "r3", "r4"].map(id => [id, taskFixture(id)]));
+  const tasks = new Map(["r1", "r2", "r3", "r4", "r7"].map(id => [id, taskFixture(id)]));
   let stopAttempts = 0;
   const stopReply: MacroTaskStopResult = {
     macroTaskId: "macro-1", duplicate: false,
@@ -82,11 +86,12 @@ function harness(options: StopOptions = {}) {
     if (operation === "workflow_get") {
       const task = tasks.get(String(params.runId));
       if (!task) throw new Error(`Unknown run: ${String(params.runId)}`);
-      return workflowFixture(task);
+      return params.includeAudit
+        ? { ...workflowFixture(task), audit: { turns: [], continuations: [], requests: [], hostConclusions: [] },
+          routingHistory: { entries: [{ decisionId: "decision-r2-first", status: "completed", source: "model-selection", selectedBuddy: null, routerBuddy: null, routingMode: "fast", reason: "第一轮的路由依据" }], nextCursor: null, total: 1 } }
+        : workflowFixture(task);
     }
-    if (operation === "selection_get") return { decision: {
-      decisionId: params.decisionId, status: "completed", kind: "select", task: "路由合成数据", buddyId: null, reason: "第一轮的路由依据", evidence: [], createdAt: "2026-09-26T01:21:00Z",
-    } };
+    if (operation === "message_list") return { messages: [], cursor: 41 };
     if (operation === "macro_task_stop") {
       stopAttempts += 1;
       if (options.stopError) throw options.stopError;
@@ -100,7 +105,7 @@ function harness(options: StopOptions = {}) {
     command,
     task: vi.fn(async (runId: string) => structuredClone(tasks.get(runId) ?? taskFixture(runId))),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
-    macroTasks: vi.fn(async () => ({ macroTasks: listed, total: listed.length, nextCursor: null, cursor: 41, changed: false })),
+    macroTasks: vi.fn(async () => ({ macroTasks: listed, totals: { all: listed.length, active: listed.length, host: 0, review: 0 }, nextCursor: null, cursor: 41, changed: false })),
     macroTaskTimeline: timelineReader,
   } as unknown as ConsoleApi;
   const refresh = vi.fn(async () => structuredClone(snapshot));
@@ -108,6 +113,17 @@ function harness(options: StopOptions = {}) {
   const view = render(<MacroTasks snapshot={snapshot} api={api} refresh={refresh}
     active writesAvailable={options.writesAvailable ?? true} />);
   return { ...view, api, refresh, tasks, timeline, user, listed, stopAttempts: () => stopAttempts };
+}
+
+async function openStopMenu(f: ReturnType<typeof harness>) {
+  const existing = screen.queryByRole("button", { name: "停止宏任务" });
+  if (existing) return existing;
+  await f.user.click(screen.getByRole("button", { name: "更多" }));
+  return screen.findByRole("button", { name: "停止宏任务" });
+}
+
+async function requestStop(f: ReturnType<typeof harness>) {
+  await f.user.click(await openStopMenu(f));
 }
 
 const stopCalls = (f: ReturnType<typeof harness>) =>
@@ -125,8 +141,7 @@ const openMacroTask = async (f: ReturnType<typeof harness>) => {
 const openSpan = async (f: ReturnType<typeof harness>, key: string) => {
   const surface = window.matchMedia?.("(max-width: 760px)").matches ? ".tl-list" : ".tl-scroll";
   await f.user.dblClick(document.querySelector(`${surface} [data-key="span:${key}"]`) as HTMLButtonElement);
-  await screen.findByRole("complementary", { name: "宏任务详情" });
-  await waitFor(() => expect(document.querySelector(".locator")).toBeTruthy());
+  await screen.findByRole("navigation", { name: "步骤" });
 };
 
 /** jsdom ships no matchMedia: stub the ≤760px viewport decision per test. */
@@ -134,41 +149,61 @@ function stubViewport(narrow: boolean) {
   window.matchMedia = vi.fn().mockImplementation(() => ({ matches: narrow, addEventListener: () => {}, removeEventListener: () => {} })) as unknown as typeof window.matchMedia;
 }
 
-afterEach(() => { cleanup(); delete (window as { matchMedia?: unknown }).matchMedia; });
+afterEach(() => { cleanup(); delete (window as { matchMedia?: unknown }).matchMedia; window.history.replaceState(null, "", "#"); });
 
-describe("macroTask detail navigation (layer mode, ≤760px viewport)", () => {
-  it("opens the read-only detail with the locator bar and preselected section", async () => {
-    stubViewport(true);
+const detailOf = () => screen.getByRole("region", { name: "微任务详情" });
+const railOf = () => screen.getByRole("navigation", { name: "步骤" });
+const selectedStep = () => within(railOf()).getByRole("button", { current: "step" }).textContent!;
+const hashNow = () => window.location.hash;
+/** A step back or forward through the browser's history. */
+const traverse = async (direction: "back" | "forward") => {
+  await act(async () => { window.history[direction](); await new Promise(resolve => setTimeout(resolve, 20)); });
+};
+
+describe("the detail of a micro task in its macro task", () => {
+  it("opens at an address of its own, on the step the span belongs to, under the macro task's own header", async () => {
+    stubViewport(false);
     const f = harness();
     await openMacroTask(f);
-    await openSpan(f, "s-r2-e1");
-    const locator = document.querySelector(".locator") as HTMLElement;
-    expect(within(locator).getByRole("button", { name: "返回时间轴" })).toBeTruthy();
-    // T4: the breadcrumb splits into two separately truncated crumbs.
-    expect(within(locator).getAllByText("宏任务时间轴：设计、接口与实现").length).toBeGreaterThan(0);
-    // T4: the span fact states only the round and time, never the title.
-    expect(within(locator).getByText(/来自时间轴：第 1 轮 /)).toBeTruthy();
-    // The timeline stays mounted (hidden) while the detail is open.
-    expect(document.querySelector(".tl-grid")).toBeTruthy();
-    expect(document.querySelector(".timeline-view")!.hasAttribute("hidden")).toBe(true);
-    await waitFor(() => expect(within(document.querySelector(".run-view")!).getByRole("tab", { name: "执行记录" })
-      .getAttribute("aria-selected")).toBe("true"));
+    await openSpan(f, "s-r2-r");
+    expect(hashNow()).toBe("#tasks/macro-1/r2/2");
+    expect(selectedStep()).toContain("路由");
     expect(f.api.task).toHaveBeenCalledWith("r2", expect.any(AbortSignal));
-    // The micro task detail carries no Host write form anymore (U4).
-    expect(document.querySelector(".workflow-controls")).toBeNull();
+    expect(f.api.command).toHaveBeenCalledWith("workflow_get", { runId: "r2" }, "csrf");
+    expect(f.api.command).toHaveBeenCalledWith("message_list", { runId: "r2", limit: 200 }, "csrf");
+    // The macro task's header stays, and so does the timeline, mounted under the detail.
+    expect(screen.getByRole("heading", { name: "宏任务时间轴：设计、接口与实现" })).toBeTruthy();
+    expect(document.querySelector(".tl-grid")).toBeTruthy();
+    expect(document.querySelector(".timeline-view")!.className).toContain("hidden");
+    expect(detailOf().closest(".timeline-view")).toBeTruthy();
   });
 
-  it("returns to the timeline by button and by Escape, restoring focus, outline and fixed idle blocks", async () => {
+  it("opens from a row of the timeline on its first choice, and from a marker on the step of that marker", async () => {
+    stubViewport(false);
+    const f = harness();
+    await openMacroTask(f);
+    await f.user.dblClick(document.querySelector('[data-key="row:r1"]') as HTMLButtonElement);
+    await screen.findByRole("navigation", { name: "步骤" });
+    expect(hashNow()).toMatch(/^#tasks\/macro-1\/r1\/\d+$/);
+    expect(selectedStep()).toContain("回合 1");
+    await f.user.click(within(detailOf()).getByRole("button", { name: "时间轴" }));
+    await f.user.dblClick(document.querySelector('[data-key="span:s-r2-w"]') as HTMLButtonElement);
+    await screen.findByRole("navigation", { name: "步骤" });
+    expect(selectedStep()).toContain("决定");
+  });
+
+  it("returns to the timeline by button and by Escape, restoring focus, outline and the fixed idle blocks", async () => {
     stubViewport(true);
     const f = harness();
     await openMacroTask(f);
-    // The fixed idle blocks survive the detail round-trip.
     const idleCount = document.querySelectorAll(".idle-block").length;
     expect(idleCount).toBeGreaterThan(0);
     await openSpan(f, "s-r1-e");
     const span = document.querySelector('.tl-list [data-key="span:s-r1-e"]') as HTMLButtonElement;
-    await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "返回时间轴" }));
-    await waitFor(() => expect(document.querySelector(".timeline-view")!.hasAttribute("hidden")).toBe(false));
+    await f.user.click(within(detailOf()).getByRole("button", { name: "时间轴" }));
+    await waitFor(() => expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull());
+    expect(hashNow()).toBe("#tasks/macro-1");
+    expect(document.querySelector(".timeline-view")!.className).not.toContain("hidden");
     expect(document.activeElement).toBe(span);
     // Opening pinned the selection, so the outline survives the return.
     expect(span.className).toContain("selected");
@@ -176,8 +211,61 @@ describe("macroTask detail navigation (layer mode, ≤760px viewport)", () => {
     // Reopen and return with Escape while focus is outside any field.
     await openSpan(f, "s-r1-e");
     fireEvent.keyDown(document.body, { key: "Escape" });
-    await waitFor(() => expect(document.querySelector(".timeline-view")!.hasAttribute("hidden")).toBe(false));
-    expect(document.querySelector(".run-view")).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull());
+    expect(hashNow()).toBe("#tasks/macro-1");
+  });
+
+  it("goes back and forward through the browser's history: each opening and each return is a step, choosing a step is not", async () => {
+    stubViewport(false);
+    const f = harness();
+    await openMacroTask(f);
+    const length = window.history.length;
+    await openSpan(f, "s-r2-e1");
+    expect(window.history.length).toBe(length + 1);
+    expect(hashNow()).toBe("#tasks/macro-1/r2/3");
+    await f.user.click(within(railOf()).getByRole("button", { name: /^委派/ }));
+    expect(hashNow()).toBe("#tasks/macro-1/r2/1");
+    expect(window.history.length).toBe(length + 1);
+    await traverse("back");
+    await waitFor(() => expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull());
+    expect(hashNow()).toBe("#tasks/macro-1");
+    expect(document.querySelector(".tl-grid")).toBeTruthy();
+    await traverse("forward");
+    await screen.findByRole("navigation", { name: "步骤" });
+    expect(hashNow()).toBe("#tasks/macro-1/r2/1");
+    expect(selectedStep()).toContain("委派");
+  });
+
+  it("opens from an address on load: the macro task, the micro task and the step", async () => {
+    stubViewport(false);
+    window.history.replaceState(null, "", "#tasks/macro-1/r2/3");
+    const f = harness();
+    await screen.findByRole("navigation", { name: "步骤" });
+    expect(f.api.macroTaskTimeline).toHaveBeenCalledWith("macro-1", expect.anything(), expect.anything());
+    expect(selectedStep()).toContain("回合 1");
+    expect(hashNow()).toBe("#tasks/macro-1/r2/3");
+    // A step that does not exist is replaced by the first choice, a micro task that is not read is a failure with the way back.
+    cleanup();
+    window.history.replaceState(null, "", "#tasks/macro-1/r2/90");
+    harness();
+    await screen.findByRole("navigation", { name: "步骤" });
+    await waitFor(() => expect(hashNow()).not.toBe("#tasks/macro-1/r2/90"));
+    expect(hashNow()).toMatch(/^#tasks\/macro-1\/r2\/\d+$/);
+  });
+
+  it("says a micro task whose read fails so, with the way back, and lists the delegation alone for a row the timeline lacks", async () => {
+    stubViewport(false);
+    window.history.replaceState(null, "", "#tasks/macro-1/r-gone");
+    const f = harness();
+    expect((await screen.findByRole("alert")).textContent).toContain("Unknown run: r-gone");
+    await f.user.click(within(detailOf()).getByRole("button", { name: "时间轴" }));
+    expect(hashNow()).toBe("#tasks/macro-1");
+    cleanup();
+    window.history.replaceState(null, "", "#tasks/macro-1/r7");
+    harness();
+    await screen.findByRole("navigation", { name: "步骤" });
+    expect(within(railOf()).getAllByRole("button")).toHaveLength(1);
+    expect(railOf().textContent).toContain("没有这个微任务的一行");
   });
 
   it("keeps the detail mounted while a list refresh temporarily drops the selected row", async () => {
@@ -185,14 +273,13 @@ describe("macroTask detail navigation (layer mode, ≤760px viewport)", () => {
     const f = harness();
     await openMacroTask(f);
     await openSpan(f, "s-r1-q");
-    await screen.findByRole("heading", { name: "执行记录" });
     // The next list read returns an empty page (a refresh or filter gap); the
     // timeline's own summary keeps the detail alive.
-    (f.api.macroTasks as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ macroTasks: [], total: 0, nextCursor: null, cursor: 41, changed: false });
+    (f.api.macroTasks as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 41, changed: false });
     // The existing bounded periodic read is the trigger; there is no shell broadcast.
     await waitFor(() => expect(f.api.macroTasks).toHaveBeenCalledTimes(2), { timeout: 4500 });
-    expect(document.querySelector(".run-view")).toBeTruthy();
-    expect(document.querySelector(".locator")).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "步骤" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "宏任务时间轴：设计、接口与实现" })).toBeTruthy();
   });
 
   it("ignores Escape while the tab is not the active page", async () => {
@@ -200,84 +287,71 @@ describe("macroTask detail navigation (layer mode, ≤760px viewport)", () => {
     const f = harness();
     await openMacroTask(f);
     await openSpan(f, "s-r1-q");
-    await screen.findByRole("heading", { name: "执行记录" });
     const snapshot = snapshotFixture();
     f.rerender(<MacroTasks snapshot={snapshot} api={f.api} refresh={f.refresh} active={false} />);
     fireEvent.keyDown(document.body, { key: "Escape" });
-    expect(document.querySelector(".run-view")).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "步骤" })).toBeTruthy();
     f.rerender(<MacroTasks snapshot={snapshot} api={f.api} refresh={f.refresh} active />);
     fireEvent.keyDown(document.body, { key: "Escape" });
-    await waitFor(() => expect(document.querySelector(".run-view")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull());
   });
 
-  it("keeps the macroTask context when the detail navigates to a helper", async () => {
-    stubViewport(true);
+  it("keeps the macro task when the detail goes to a helper, each at its own address", async () => {
+    stubViewport(false);
     const f = harness();
     await openMacroTask(f);
     await openSpan(f, "s-r2-e1");
-    await f.user.click(await screen.findByRole("tab", { name: "协作与待办" }));
-    await f.user.click(await screen.findByRole("button", { name: "r3" }));
+    await f.user.click(within(railOf()).getByRole("button", { name: /^委派/ }));
+    await f.user.click(within(detailOf()).getByRole("button", { name: "补充 schema 升级离线副本的验证测试" }));
     await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("r3", expect.any(AbortSignal)));
-    const crumbs = document.querySelector(".locator .crumbs") as HTMLElement;
-    expect(crumbs.textContent).toContain("补充 schema 升级离线副本的验证测试");
-    await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "返回时间轴" }));
-    await waitFor(() => expect(document.querySelector(".timeline-view")!.hasAttribute("hidden")).toBe(false));
+    await waitFor(() => expect(hashNow()).toMatch(/^#tasks\/macro-1\/r3\/\d+$/));
+    expect(screen.getByRole("heading", { name: "宏任务时间轴：设计、接口与实现" })).toBeTruthy();
+    await f.user.click(within(detailOf()).getByRole("button", { name: "时间轴" }));
+    expect(hashNow()).toBe("#tasks/macro-1");
     expect(document.querySelector(".tl-grid")).toBeTruthy();
   });
 
-  it("keeps every read working in a read-only session with the stop action disabled", async () => {
+  it("keeps every read working in a read-only session with the stop action disabled, and asks the board for reads alone", async () => {
     stubViewport(true);
     const f = harness({ writesAvailable: false });
     await openMacroTask(f);
     // The macro-task-level stop is the only write; a read-only session cannot use it.
-    const stop = screen.getByRole("button", { name: "停止宏任务" });
-    expect(stop).toHaveProperty("disabled", true);
-    expect(stop.getAttribute("title")).toContain("登录已失效");
+    const stop = await openStopMenu(f);
+    expect(stop.getAttribute("aria-disabled")).toBe("true");
+    expect(stop.getAttribute("aria-description")).toBe("当前会话只读");
+    stop.focus();
+    expect(document.activeElement).toBe(stop);
     await openSpan(f, "s-r1-q");
-    await screen.findByRole("heading", { name: "执行记录" });
-    expect(f.api.command).not.toHaveBeenCalled();
+    await waitFor(() => expect(f.api.command).toHaveBeenCalled());
+    const operations = new Set((f.api.command as ReturnType<typeof vi.fn>).mock.calls.map(([operation]) => operation));
+    expect([...operations].every(operation => ["workflow_get", "message_list"].includes(operation))).toBe(true);
+    expect(detailOf().querySelectorAll("input, textarea, select, form")).toHaveLength(0);
   });
 
-  it("opens the routed microTask and locates the exact decision in its routing tab", async () => {
-    stubViewport(true);
-    const f = harness();
-    await openMacroTask(f);
-    await openSpan(f, "s-r2-r");
-    await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("r2", expect.any(AbortSignal)));
-    expect(f.api.task).not.toHaveBeenCalledWith("run-d02b");
-    expect(screen.getByRole("tab", { name: "路由依据" }).getAttribute("aria-selected")).toBe("true");
-    await screen.findByText("第一轮的路由依据");
-    const rationale = screen.getByRole("region", { name: "所选路由决定" });
-    expect(rationale.getAttribute("data-decision-id")).toBe("decision-r2-first");
-    expect(document.activeElement).toBe(rationale);
-    expect(f.api.command).toHaveBeenCalledWith("selection_get", { decisionId: "decision-r2-first", includeAudit: true }, "csrf");
-  });
-
-  it("reopening the same routing span restores its exact decision and tab after browsing", async () => {
+  it("reopens the same routing span on the same step after browsing elsewhere", async () => {
     stubViewport(false);
     const f = harness();
     await openMacroTask(f);
     await openSpan(f, "s-r2-r");
-    await screen.findByText("第一轮的路由依据");
-    await f.user.click(screen.getByRole("button", { name: "返回当前 buddy" }));
-    expect(screen.queryByRole("region", { name: "所选路由决定" })).toBeNull();
-    await f.user.click(screen.getByRole("tab", { name: "概览" }));
+    expect(selectedStep()).toContain("路由");
+    await f.user.click(within(railOf()).getByRole("button", { name: /^委派/ }));
+    await f.user.click(within(detailOf()).getByRole("button", { name: "时间轴" }));
     await openSpan(f, "s-r2-r");
-    await screen.findByText("第一轮的路由依据");
-    expect(screen.getByRole("tab", { name: "路由依据" }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("region", { name: "所选路由决定" }).getAttribute("data-decision-id")).toBe("decision-r2-first");
+    expect(selectedStep()).toContain("路由");
+    expect(hashNow()).toBe("#tasks/macro-1/r2/2");
   });
 
-  it("single clicks never open a detail; the inspector pins instead", async () => {
+  it("never opens a detail by a single click: the inspector pins instead", async () => {
     stubViewport(true);
     const f = harness();
     await openMacroTask(f);
     await f.user.click(document.querySelector('[data-key="span:s-r2-e1"]') as HTMLButtonElement);
-    expect(document.querySelector(".run-view")).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull();
+    expect(hashNow()).toBe("#tasks/macro-1");
     const inspector = document.querySelector(".inspector-dock-title") as HTMLElement;
     expect(inspector.textContent).toContain("执行片段");
     await f.user.click(document.querySelector('[data-key="row:r1"]') as HTMLButtonElement);
-    expect(document.querySelector(".run-view")).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull();
     expect(document.querySelector(".inspector-dock-title")!.textContent).toContain("整项微任务");
   });
 });
@@ -289,9 +363,11 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     Object.assign(f.timeline.macroTask.counts, { stoppableRoots: 0, stoppableHelpers: 0,
       delivered: 2, awaitingHost: 1 });
     await openMacroTask(f);
-    const stop = screen.getByRole("button", { name: "停止宏任务" });
-    expect(stop).toHaveProperty("disabled", true);
-    expect(stop.getAttribute("title")).toContain("没有进行中的");
+    const stop = await openStopMenu(f);
+    expect(stop.getAttribute("aria-disabled")).toBe("true");
+    expect(stop.getAttribute("aria-description")).toContain("没有进行中的");
+    stop.focus();
+    expect(document.activeElement).toBe(stop);
   });
 
   it("offers stop for an active helper below a preserved parent", async () => {
@@ -300,8 +376,8 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     Object.assign(f.timeline.macroTask.counts, { stoppableRoots: 0, stoppableHelpers: 1,
       delivered: 1, awaitingHost: 1 });
     await openMacroTask(f);
-    const stop = screen.getByRole("button", { name: "停止宏任务" });
-    expect(stop).toHaveProperty("disabled", false);
+    const stop = await openStopMenu(f);
+    expect(stop.getAttribute("aria-disabled")).toBe("false");
     await f.user.click(stop);
     expect((await screen.findByRole("dialog", { name: "停止宏任务" })).textContent)
       .toContain("停止 0 个微任务停止 1 个协助任务");
@@ -311,12 +387,13 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     stubViewport(true);
     const f = harness();
     await openMacroTask(f);
-    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await requestStop(f);
     const dialog = await screen.findByRole("dialog", { name: "停止宏任务" });
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
     // The confirmation names the macroTask and the honest scope.
     expect(dialog.textContent).toContain("宏任务时间轴：设计、接口与实现");
-    expect(dialog.querySelector(".stop-dialog-task-title")?.getAttribute("title")).toBe("宏任务时间轴：设计、接口与实现");
-    expect(dialog.querySelector(".stop-dialog-task-title")?.textContent).toBe("宏任务时间轴：设计、接口与实现");
+    expect(dialog.querySelector("#stop-macro-task-name")?.getAttribute("title")).toBeNull();
+    expect(dialog.querySelector("#stop-macro-task-name")?.textContent).toBe("宏任务时间轴：设计、接口与实现");
     expect(dialog.textContent).toContain("停止 1 个微任务");
     expect(dialog.textContent).toContain("停止 0 个协助任务");
     expect(dialog.textContent).toContain("保留 1 个已交付微任务");
@@ -328,7 +405,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(f.api.command).not.toHaveBeenCalled();
     // Confirm dispatches macro_task_stop with a fresh command identity.
-    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await requestStop(f);
     await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     await waitFor(() => expect(f.api.command).toHaveBeenCalledWith("macro_task_stop",
       expect.objectContaining({ macroTaskId: "macro-1" }), "csrf"));
@@ -341,10 +418,11 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     const title = "核对范围很长的宏任务标题：".repeat(12);
     const f = harness({ title });
     await openMacroTask(f);
-    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await requestStop(f);
     const dialog = await screen.findByRole("dialog", { name: "停止宏任务" });
-    expect(dialog.querySelector(".stop-dialog-task-title")?.getAttribute("title")).toBe(title);
-    expect(dialog.getAttribute("aria-describedby")?.split(" ")).toContain("stop-macro-task-name");
+    expect(dialog.querySelector("#stop-macro-task-name")?.textContent).toBe(title);
+    expect(dialog.querySelector("#stop-macro-task-name")?.getAttribute("title")).toBeNull();
+    expect(dialog.getAttribute("aria-describedby")?.split(" ")).toContain("stop-macro-task-body");
     expect(dialog.querySelector("#stop-macro-task-body")?.textContent).not.toContain(title);
   });
 
@@ -367,7 +445,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     });
     stubViewport(true);
     await openMacroTask(f);
-    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await requestStop(f);
     await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     await waitFor(() => expect(f.stopAttempts()).toBe(1));
     const status = await screen.findByText("正在停止");
@@ -382,6 +460,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     let attempts = 0;
     (f.api.command as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (operation: string) => {
       if (operation === "workflow_get") return workflowFixture(f.tasks.get("r2") ?? taskFixture("r2"));
+      if (operation === "message_list") return { messages: [], cursor: 41 };
       if (operation === "macro_task_stop") {
         attempts += 1;
         throw attempts === 1 ? new ApiError("NETWORK", "lost reply") : new ApiError("CONSOLE_SESSION_EXPIRED", "login expired");
@@ -389,7 +468,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
       throw new Error(`Unexpected command: ${operation}`);
     });
     await openMacroTask(f);
-    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await requestStop(f);
     await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     await waitFor(() => expect(attempts).toBe(1));
     expect((await screen.findByText("停止未确认")).textContent).toContain("停止未确认");
@@ -412,6 +491,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     });
     (f.api.command as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (operation: string, params: Record<string, unknown>) => {
       if (operation === "workflow_get") return workflowFixture(f.tasks.get(String(params.runId)) ?? taskFixture(String(params.runId)));
+      if (operation === "message_list") return { messages: [], cursor: 41 };
       if (operation === "macro_task_stop") {
         refreshShouldFail = true;
         return stopReplyFor("macro-1");
@@ -419,7 +499,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
       throw new Error(`Unexpected command: ${operation}`);
     });
     await openMacroTask(f);
-    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await requestStop(f);
     await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     // The reply arrived (cancellation intent known); the refresh failed after
     // it — the status must derive from the live rows, never claim a refusal.
@@ -440,16 +520,17 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
         return stopReplyFor("macro-1");
       }
       if (operation === "workflow_get") return workflowFixture(f.tasks.get(String(params.runId)) ?? taskFixture(String(params.runId)));
+      if (operation === "message_list") return { messages: [], cursor: 41 };
       throw new Error(`Unexpected command: ${operation}`);
     });
     await openMacroTask(f);
-    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await requestStop(f);
     await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     const status = await screen.findByText("停止未确认", { exact: false });
     expect(status.textContent).toContain("停止未确认");
     // Navigation stays free while the reply is unknown: no lock note anywhere.
     expect(document.querySelector(".lock-note")).toBeNull();
-    await f.user.click(screen.getByRole("button", { name: "‹ 宏任务列表" }));
+    await f.user.click(screen.getByRole("button", { name: "‹ 宏任务" }));
     await waitFor(() => expect(screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ })).toBeTruthy());
     await f.user.click(screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
     // Replay keeps the exact command identity; the server deduplicates it.
@@ -482,15 +563,15 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
       ({ timeline: { ...f.timeline, macroTask: summaries.get(macroTaskId) ?? f.timeline.macroTask }, verifiedAtMs: null }));
     await openMacroTask(f);
     // Confirm the first macroTask's stop; its reply stays pending.
-    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await requestStop(f);
     await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     await waitFor(() => expect(stopCalls(f).length).toBe(1));
     expect((await screen.findByText("正在停止")).textContent).toBe("正在停止");
     // Navigate to the second macroTask and stop it while the first is pending.
-    await f.user.click(screen.getByRole("button", { name: "‹ 宏任务列表" }));
+    await f.user.click(screen.getByRole("button", { name: "‹ 宏任务" }));
     await f.user.click(screen.getByRole("button", { name: /另一个进行中的目标/ }));
-    await screen.findByText(/0 \/ 2 个微任务已验收/);
-    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await screen.findByRole("heading", { name: "另一个进行中的目标" });
+    await requestStop(f);
     await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     await waitFor(() => expect(stopCalls(f).length).toBe(2));
     // Both dispatches carry their own macroTask and a distinct command identity.
@@ -522,7 +603,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     await openMacroTask(f);
     // A brand-new request whose writer vanishes between dialog and confirm
     // becomes a plain refusal that was never dispatched.
-    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await requestStop(f);
     const dialog = await screen.findByRole("dialog", { name: "停止宏任务" });
     const snapshot = snapshotFixture();
     f.rerender(<MacroTasks snapshot={{ ...snapshot, consoleSession: { id: "session-a", canWrite: false, reason: null } }}
@@ -533,7 +614,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     // Writer back: confirming mints a FRESH identity (the refusal's empty one
     // is never reused) and the lost reply keeps the entry unknown.
     f.rerender(<MacroTasks snapshot={snapshot} api={f.api} refresh={f.refresh} active writesAvailable />);
-    await f.user.click(await screen.findByRole("button", { name: "停止宏任务" }));
+    await requestStop(f);
     await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     await waitFor(() => expect(stopCalls(f).length).toBe(1));
     expect(typeof (stopCalls(f)[0]![1] as { commandId: string }).commandId).toBe("string");
@@ -541,7 +622,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     expect(await screen.findByText("停止未确认")).toBeTruthy();
     // Losing the writer again with the dialog open must NOT overwrite the
     // unknown entry: its identity survives for the same-macroTask replay.
-    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await requestStop(f);
     const secondDialog = await screen.findByRole("dialog", { name: "停止宏任务" });
     f.rerender(<MacroTasks snapshot={{ ...snapshot, consoleSession: { id: "session-a", canWrite: false, reason: null } }}
       api={f.api} refresh={f.refresh} active writesAvailable={false} />);
@@ -574,7 +655,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
       throw new Error(`Unexpected command: ${operation}`);
     });
     await openMacroTask(f);
-    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await requestStop(f);
     await f.user.click(within(await screen.findByRole("dialog", { name: "停止宏任务" })).getByRole("button", { name: "确认停止宏任务" }));
     // The malformed reply is refused client-side as an unknown outcome.
     await waitFor(() => expect(attempts).toBe(1));
@@ -587,121 +668,3 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     expect(stopCalls(f)[1]![1]).toEqual(stopCalls(f)[0]![1]);
     expect(await screen.findByText("正在停止")).toBeTruthy();
   });
-
-describe("macroTask detail docking (0.15.1 U1)", () => {
-  it("docks the detail beside a visible timeline and collapses the list to the rail", async () => {
-    stubViewport(false);
-    const f = harness();
-    await openMacroTask(f);
-    await openSpan(f, "s-r2-e1");
-    // The viewport (not the pane) picks the layout: side dock whenever a
-    // detail is open above 760px; there is no stacked mode anymore.
-    const dock = document.querySelector(".right-dock.side") as HTMLElement;
-    expect(dock).toBeTruthy();
-    expect(dock.closest(".detail-panel")?.classList.contains("docked")).toBe(true);
-    expect(document.querySelector(".timeline-view")!.hasAttribute("hidden")).toBe(false);
-    // The adjustable separator follows §2 and names both column widths.
-    const separator = document.getElementById("timeline-detail-separator") as HTMLElement;
-    expect(separator.getAttribute("role")).toBe("separator");
-    expect(separator.getAttribute("aria-controls")).toBe("timeline-detail-column");
-    expect(separator.getAttribute("aria-valuetext")).toMatch(/详情 \d+ 像素，时间轴 \d+ 像素/);
-    // Opening the detail collapsed the macroTask list into the 48px rail.
-    await waitFor(() => expect(document.querySelector(".workspace-grid.list-rail")).toBeTruthy());
-    const rail = document.querySelector(".rail-panel") as HTMLElement;
-    expect(rail.querySelector(".rail-expand")).toBeTruthy();
-    expect(rail.querySelector(".rail-state")).toBeNull();
-    // Clicking another item in the timeline only changes the inspector.
-    await f.user.click(document.querySelector('[data-key="span:s-r1-e"]') as HTMLButtonElement);
-    expect(f.api.task).toHaveBeenCalledTimes(1); // still r2's detail
-    expect(document.querySelector(".inspector-dock-title")!.textContent).toContain("设计宏任务时间轴视图与交互规范");
-    // Selection survives closing the detail, which also restores the full list.
-    await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "关闭详情" }));
-    expect(document.querySelector(".run-view")).toBeNull();
-    expect(document.querySelector('[data-key="span:s-r1-e"]')!.className).toContain("selected");
-    await waitFor(() => expect(document.querySelector(".workspace-grid.list-rail")).toBeNull());
-    expect(document.querySelector(".panel-toolbar")).toBeTruthy();
-  });
-
-  it("the rail drawer overlays without moving the right column and switches macroTasks freely", async () => {
-    stubViewport(false);
-    const f = harness({ secondMacroTask: true });
-    await openMacroTask(f);
-    await openSpan(f, "s-r2-e1");
-    await waitFor(() => expect(document.querySelector(".rail-panel")).toBeTruthy());
-    // Expand into the overlay drawer: the dock geometry stays untouched.
-    const dock = document.querySelector(".right-dock.side") as HTMLElement;
-    const detailWidth = dock.style.getPropertyValue("--dock-detail-width");
-    await f.user.click(document.querySelector(".rail-expand") as HTMLButtonElement);
-    const drawer = document.querySelector(".list-drawer") as HTMLElement;
-    expect(drawer).toBeTruthy();
-    expect(drawer.querySelector(".list-filters")).toBeTruthy();
-    expect((document.querySelector(".right-dock.side") as HTMLElement).style.getPropertyValue("--dock-detail-width")).toBe(detailWidth);
-    // Selecting the SAME macroTask only closes the drawer.
-    await f.user.click(within(drawer).getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
-    await waitFor(() => expect(document.querySelector(".list-drawer")).toBeNull());
-    expect(document.querySelector(".run-view")).toBeTruthy();
-    expect(document.querySelector(".workspace-grid.list-rail")).toBeTruthy();
-    // Selecting ANOTHER macroTask closes the detail and restores the list.
-    await f.user.click(document.querySelector(".rail-expand") as HTMLButtonElement);
-    const drawerAgain = await waitFor(() => {
-      const node = document.querySelector(".list-drawer") as HTMLElement | null;
-      if (!node) throw new Error("drawer not open");
-      return node;
-    });
-    // The unarchived micro task is folded by default; expand it inside the drawer.
-    await f.user.click(within(drawerAgain).getByRole("button", { name: /历史独立微任务（1）/ }));
-    await f.user.click(within(drawerAgain).getAllByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ })[0]!);
-    await waitFor(() => expect(document.querySelector(".run-view")).toBeNull());
-    await waitFor(() => expect(document.querySelector(".workspace-grid.list-rail")).toBeNull());
-    expect((f.api.command as ReturnType<typeof vi.fn>).mock.calls.every(([operation]) => operation !== "workflow_cancel")).toBe(true);
-  });
-
-  it("keeps the detail docked across pane resizes, only clamping the width; keyboard adjusts the separator", async () => {
-    stubViewport(false);
-    const observers: Array<{ callback: ResizeObserverCallback }> = [];
-    vi.stubGlobal("ResizeObserver", class {
-      callback: ResizeObserverCallback;
-      observe = vi.fn(() => { this.callback([], {} as ResizeObserver); });
-      disconnect = vi.fn(); unobserve = vi.fn();
-      constructor(callback: ResizeObserverCallback) { this.callback = callback; observers.push(this); }
-    });
-    let paneWidth = 1300;
-    const widthOriginal = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
-    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get() { return paneWidth; } });
-    try {
-      const f = harness();
-      await openMacroTask(f);
-      await f.user.dblClick(document.querySelector('[data-key="span:s-r2-e1"]') as HTMLButtonElement);
-      await waitFor(() => expect(document.querySelector(".right-dock.side")).toBeTruthy());
-      // Pin a selection while docked; it survives pane changes.
-      await f.user.click(document.querySelector('[data-key="span:s-r1-e"]') as HTMLButtonElement);
-      const separator = () => document.getElementById("timeline-detail-separator") as HTMLElement;
-      const before = Number(separator().getAttribute("aria-valuenow"));
-      // Keyboard: ArrowLeft widens the detail by 20px, Shift by 80px.
-      fireEvent.keyDown(separator(), { key: "ArrowLeft" });
-      await waitFor(() => expect(Number(separator().getAttribute("aria-valuenow"))).toBe(before + 20));
-      fireEvent.keyDown(separator(), { key: "ArrowLeft", shiftKey: true });
-      await waitFor(() => expect(Number(separator().getAttribute("aria-valuenow"))).toBe(before + 100));
-      // A pane change only re-clamps; the dock never becomes stacked.
-      paneWidth = 900;
-      actResize(observers);
-      await waitFor(() => expect(document.querySelector(".right-dock.side")).toBeTruthy());
-      expect(document.querySelector(".right-dock.stack")).toBeNull();
-      expect(document.querySelector('[data-key="span:s-r1-e"]')!.className).toContain("selected");
-      const clamped = Number(separator().getAttribute("aria-valuenow"));
-      expect(clamped).toBeLessThanOrEqual(Number(separator().getAttribute("aria-valuemax")));
-      expect(clamped).toBeGreaterThanOrEqual(Number(separator().getAttribute("aria-valuemin")));
-      // Enter resets to the viewport default formula.
-      fireEvent.keyDown(separator(), { key: "Enter" });
-      await waitFor(() => expect(Number(separator().getAttribute("aria-valuenow"))).toBe(Math.max(360, Math.min(600, Math.round((900 - 48) * 0.4)))));
-    } finally {
-      if (widthOriginal) Object.defineProperty(HTMLElement.prototype, "clientWidth", widthOriginal);
-      else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
-      vi.unstubAllGlobals();
-    }
-  });
-});
-
-function actResize(observers: Array<{ callback: ResizeObserverCallback }>) {
-  for (const observer of observers) observer.callback([], {} as ResizeObserver);
-}

@@ -1,3 +1,4 @@
+import { useCopyState } from "./i18n/use-copy-state";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
@@ -6,7 +7,7 @@ import type { Snapshot } from "./types";
 
 export function useConsole(api: ConsoleApi) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useCopyState();
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const mounted = useRef(false),
     sequence = useRef(0);
@@ -29,7 +30,7 @@ export function useConsole(api: ConsoleApi) {
           request === sequence.current &&
           !isAbortError(failure)
         )
-          setError(errorText(failure));
+          setError(() => errorText(failure));
         if (strict && !isAbortError(failure)) throw failure;
         return null;
       }

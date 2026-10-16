@@ -79,7 +79,7 @@ class MicroTaskFixTests(WorkflowTestCase):
         self.assertEqual(task_brief(original_task)["fixedBy"], [first["runId"], second["runId"]])
         self.assertEqual(task_brief(first_task)["fixes"], original["runId"])
         listed = board.call("task_list", {})
-        self.assertTrue(all("fixes" not in row and "fixedBy" not in row for row in listed["tasks"]))
+        self.assertTrue(all("fixes" not in row and "fixedBy" not in row for row in listed["runs"]))
         self.assertTrue(all("fixes" not in row and "fixedBy" not in row for row in list_brief(listed)["runs"]))
         timeline = board.call("macro_task_timeline", {"macroTaskId": original["macroTaskId"]})
         rows = {row["runId"]: row for row in timeline["rows"]}
