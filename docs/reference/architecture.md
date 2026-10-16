@@ -1,6 +1,6 @@
 # Architecture
 
-This page describes the current source: transport protocol 2 and schema 23, which the upgrade of [ADR-031](../decisions/031-one-process-per-execution.md) reached and which is also the upgrade base. Startup never migrates. Installation and native verification facts remain in [acceptance records](../acceptance/installed-0.20.0.md).
+This page describes the current source: transport protocol 2 and schema 24. The upgrade base is schema 23, which the upgrade of [ADR-031](../decisions/031-one-process-per-execution.md) reached; the pending upgrade converts it to 24. Startup never migrates. Installation and native verification facts remain in [acceptance records](../acceptance/installed-0.20.0.md).
 
 ## Process topology
 
@@ -9,7 +9,7 @@ Codex skill / CLI / private console
                   |  named C-Two RPC (private token)
         Python blackboard daemon  <-- only writer of authoritative state
           state machine + transactions + events + execution scheduler
-                  |  SQLite WAL (board.sqlite3, schema 23)
+                  |  SQLite WAL (board.sqlite3, schema 24)
         tasks / attempts / messages / artifacts
         events / command receipts / resource claims
         execution identities / shutdown evidence / execution and service issues
@@ -43,7 +43,7 @@ hey-my-buddy transports bounded JSON strings through C-Two 0.7.4's named Python 
 
 ## Data model
 
-One schema-versioned SQLite database (`board.sqlite3`, schema version 23) owns every authoritative fact in 57 tables. Startup and install accept schema 23 only: it is the schema of the upgrade base 0.40.0, and no upgrade is pending ([operations](operations.md#installation)). Events and the records of scopes, workspace conflicts, integrations, cleanup plans and Host conclusions store who acted as a role (`host`, `lead`, `console`, `service`, `workflow` or `bridge`) and an identifier.
+One schema-versioned SQLite database (`board.sqlite3`, schema version 24) owns every authoritative fact in 57 tables. Startup accepts schema 24 only; install also accepts schema 23, the schema of the upgrade base 0.40.0, and converts it with the pending upgrade ([operations](operations.md#installation)). Events and the records of scopes, workspace conflicts, integrations, cleanup plans and Host conclusions store who acted as a role (`host`, `lead`, `console`, `service`, `workflow` or `bridge`) and an identifier.
 
 | Group | Tables |
 | --- | --- |
@@ -72,8 +72,8 @@ Admission happens inside the service: a pass that finds nothing to start writes 
 - `requestId` is the idempotency key. The request is normalized to a canonical specification (canonical realpath cwd, validated fields, defaults) and fingerprinted (version 2). The same `requestId` with an identical fingerprint recovers the existing task; changed input is a `CONFLICT`, including after completion or restart. A micro task additionally compares a request fingerprint covering the execution workspace and Host.
 - `runId` equals `taskId` and selects exactly one task. Read and wait operations never launch a replacement.
 - An attempt is identified by `(attempt_id, generation, nonce)`. The service generates the nonce at admission; only a verifier is persisted, and the nonce reaches only the execution's private startup material.
-- Command receipts are bound to the nonce verifier and attempt; replaying a `commandId` with a different request or from another caller is an error, not a state change. Execution results are replayed idempotently; a conflicting replay fails.
-- Micro task mutations use stable `commandId` receipts plus owner generation and expected revision; a replay returns the recorded response and a changed payload under the same command ID is a `CONFLICT`.
+- Command receipts are bound to the nonce verifier and attempt; replaying a `commandId` with a different request or from another caller is an error, not a state change. Execution results carry no command receipt: the attempt is their identity, an identical report is answered as already committed and a different one fails.
+- Micro task mutations use stable `commandId` receipts plus owner generation and expected revision; a receipt keeps only what identifies the committed operation (its run, request, continuation, integration, plan or the like), so a replay returns that operation's current view, and a changed payload under the same command ID is a `CONFLICT`.
 
 ## Admission, routing and resources
 
