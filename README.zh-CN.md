@@ -1,12 +1,30 @@
-<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg"><img src="docs/assets/logo-light.svg" alt="hey-my-buddy logo" width="88"></picture></p>
+<p align="right"><a href="README.md">English</a> · <strong>简体中文</strong></p>
 
-# hey-my-buddy
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+  <img alt="hey-my-buddy" src="docs/assets/banner-light.svg" width="100%">
+</picture>
 
-[English](README.md)
+<p align="center"><b>工作委派出去，责任留在自己手里。</b></p>
 
-hey-my-buddy 让 Host buddy（拥有微任务的 agent）把边界明确的工作交给运行在本地编码 harness 中的 Worker buddy，同时保留对微任务的责任。两者都是地位对等的 buddy，只通过共享黑板协作，区别在于角色。Host 可以亲自实现一部分，再把其他部分交给能力、成本或模型更适合的 Worker。目前接入的编码 harness 是 DeepSeek Harness（`dsh`）、ZCode（`zcode`）以及实验性的 Codex App Server（`codex`）；Claude Code harness（`claude`，[参考文档](docs/reference/claude-code.md)）作为 P1 harness 加入，已授权的实机探针验证了原生结果、取消和有界沙箱路径，随后又通过已安装服务完成了单独获准的只读微任务链路验收。
+<p align="center">
+  让你正在用的编码 agent（Host）把边界明确的任务委派给本机的其他编码 agent，并在验收之前核对每一份封存的结果。<br>
+  微任务、决定与结果都记在本地的黑板上，私有的控制台显示谁在做什么。
+</p>
 
-微任务、决定与结果保存在本地 SQLite 黑板中。编码任务有明确的 Git 工作区和固定输入、产物快照；私有 React/Vite 控制台可以查看任务、路由、共享 buddy、用户偏好和模型并发设置。
+<p align="center">
+  <a href="#如何协作">如何协作</a> ·
+  <a href="#安装">安装</a> ·
+  <a href="#控制台路由与模型">控制台</a> ·
+  <a href="#当前状态与限制">当前状态与限制</a> ·
+  <a href="#文档与开发">文档</a>
+</p>
+
+---
+
+Host buddy 拥有微任务并负责验收，Worker buddy 在本地的编码 harness 里执行其中边界明确的部分。两者都是地位对等的 buddy，只通过共享黑板协作，区别在于角色。Host 可以亲自实现一部分，再把其他部分交给能力、成本或模型更适合的 Worker。目前接入的编码 harness 是 DeepSeek Harness（`dsh`）、ZCode（`zcode`）以及实验性的 Codex App Server（`codex`）；Claude Code harness（`claude`，[参考文档](docs/reference/claude-code.md)）作为 P1 harness 加入，已授权的实机探针验证了原生结果、取消和有界沙箱路径，随后又通过已安装服务完成了单独获准的只读微任务链路验收。
+
+编码任务有明确的 Git 工作区和固定输入、产物快照。黑板是本地的 SQLite 数据库，私有的 React/Vite 控制台可以查看任务、路由、共享 buddy、用户偏好和模型并发设置。
 
 ## 如何协作
 
@@ -18,20 +36,20 @@ hey-my-buddy 让 Host buddy（拥有微任务的 agent）把边界明确的工�
 
 ## 安装
 
-hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.42.1（contract 0.42.0、schema 24），安装于 2026-10-16。它让 Host 能在 Codex 与 Claude Code 正在跑的回合里提问。当前源码是 0.42.2，contract 与 schema 不变，尚未安装；在 Linux 上，状态目录的上层目录组可写而这个组是用户自己的私有组时，它信任这个目录（[验收记录](docs/acceptance/linux-portability.md)）。0.42.0 把看板从 schema 23 升级到 24：每条命令只留下标识这次提交的内容，执行心跳这类周期性状态只留最新的一条。skill 位于 `~/.agents/skills/hey-my-buddy`，Claude Code 通过 `~/.claude/skills/hey-my-buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。[原生沙盒审阅验收](docs/acceptance/native-sandbox-review-0.27.0.md)记录由固定原生探针拥有、不再解读模型输出的验证。[路由与验证验收](docs/acceptance/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同一宏任务内委派、Host 直接收尾、失败结论与清理、部分成果、更换 buddy 续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未发布。改了中间号的安装在切换之前先做校验过的备份（见[运行参考](docs/reference/operations.md#installation)）。
+hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.42.1（contract 0.42.0、schema 24），安装于 2026-10-16。它让 Host 能在 Codex 与 Claude Code 正在跑的回合里提问，但只要有 Host 在这个回合里等待过一次微任务，问题就再也送不到。当前源码是 0.43.0（contract 0.43.0、schema 24），尚未安装：等待不再弄丢传送这些问题的通道；它改用 C-Two 0.7.5，不再加载 NumPy 与 FastDB；旧的执行进程连不上新的服务，所以它的安装要等看板空闲（[验收记录](docs/acceptance/live-channel-0.43.0.md)）。在 Linux 上，状态目录的上层目录组可写而这个组是用户自己的私有组时，它信任这个目录（[验收记录](docs/acceptance/linux-portability.md)）。0.42.0 把看板从 schema 23 升级到 24：每条命令只留下标识这次提交的内容，执行心跳这类周期性状态只留最新的一条。skill 位于 `~/.agents/skills/hey-my-buddy`，Claude Code 通过 `~/.claude/skills/hey-my-buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。[原生沙盒审阅验收](docs/acceptance/native-sandbox-review-0.27.0.md)记录由固定原生探针拥有、不再解读模型输出的验证。[路由与验证验收](docs/acceptance/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同一宏任务内委派、Host 直接收尾、失败结论与清理、部分成果、更换 buddy 续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未发布。改了中间号的安装在切换之前先做校验过的备份（见[运行参考](docs/reference/operations.md#installation)）。
 
 在开发者确定发布渠道与确切版本之后，安装入口是一条固定版本的包命令：
 
 ```sh
 # 发布渠道与版本确定之后使用；目前不可用
-uvx hey-my-buddy@0.42.2 install
+uvx hey-my-buddy@0.43.0 install
 ```
 
 包名是否可用、是否发布到 PyPI 仍待开发者决定，本候选尚未发布到 PyPI。在正式发布之前，可以从冻结源码构建 wheel，并用绝对路径安装：
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from /absolute/path/hey_my_buddy-0.42.2-py3-none-any.whl hey-my-buddy install
+uvx --from /absolute/path/hey_my_buddy-0.43.0-py3-none-any.whl hey-my-buddy install
 ```
 
 机器上没有 `uv` 时，发布包里的 `install.sh`（macOS、Linux）或 `install.ps1`（Windows）会先准备固定版本的私有 `uv`，再调用同一个安装入口；它们不修改 `PATH`、shell 或 Host 设置，也不会安装全局 `hey-my-buddy` 命令。安装会先列出将写入的路径、物化版本化运行时。只改末位的版本不打断在跑的工作：服务换到新运行时上重启，接回在跑的执行。改了中间号的版本，有排队或在跑的工作、未确认的停止时拒绝并列出阻塞项（`UPGRADE_NOT_IDLE`），空闲后切换，并做校验过的备份。两种都是 skill、启动器、运行时与服务整体切换，失败时回滚。重跑完整同版本只补齐缺失内容、不重启服务；内容损坏时用同一条固定版本命令修复；同版本内容变化会报告 `updated`。sdist 保留来源提交，解包后构建 wheel 仍保留相同 `sourceCommit`。安装或升级日常服务都需要用户的单独授权。代码与脚本可移植到 Windows，但尚未在真机验证。

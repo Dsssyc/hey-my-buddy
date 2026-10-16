@@ -53,6 +53,10 @@ _Avoid_: decision Buddy, selector (for the buddy)
 **路由边界 / routing bounds**:
 The legal candidates a Router may choose from: the published, enabled and available buddies that satisfy the micro task's required capabilities and the user's pins and exclusions. The blackboard checks a Router's choice against these bounds only, never its judgment.
 
+**路由计算 / routing calculation**:
+One run of the Router buddy that chooses the Worker buddy for one micro task within its routing bounds. The blackboard records it as an execution of its own, with a state, usage and a detail. When the bounds leave a single candidate or the Host names the buddy, no routing calculation runs.
+_Avoid_: 内部路由, 决策任务 (a decision is the Host's), 路由 alone (routing is the micro task's step, which may need no Router)
+
 **用户 / user**:
 The person on whose behalf buddies work: the source of their authority, the owner of shared settings and the holder of the global view. User authority is not a buddy role.
 _Avoid_: 用户 or user for the developer of this project

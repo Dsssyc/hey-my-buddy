@@ -1,4 +1,5 @@
 """Host reads use cached health; explicit selection owns the bounded refresh."""
+from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
 import json
 from unittest.mock import Mock, patch
 
@@ -37,7 +38,8 @@ class HarnessServiceTests(BoardTestCase):
         super().setUp()
         self.board = BoardStore(self.directory / 'state')
         self.board.initialize()
-        self.service = BoardService(self.board, token='host', control={}, on_stop=lambda p: {}, on_restart=lambda p: {}, automatic_discovery=True)
+        self.live_registry = LiveRegistry()
+        self.service = BoardService(self.board, live_registry=self.live_registry, token='host', control={}, on_stop=lambda p: {}, on_restart=lambda p: {}, automatic_discovery=True)
         self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)))
         self.service.harnesses.kick = Mock()
         self.service.harnesses.catalog_refresh = Mock()

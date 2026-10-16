@@ -11,6 +11,7 @@ import threading
 import time
 
 from ...errors import BoardError
+from .live_registry import LiveRegistry
 from ...protocol.execution import BUDGET, execution_directory, launch_execution, read_execution_endpoint, read_execution_receipt
 from ...protocol.process_identity import inspect_process_identity, boot_id, kill_verified_process_group
 from ...protocol.run_identity import RunIdentity
@@ -36,8 +37,9 @@ class ExecutionScheduler:
     TICK_SECONDS = 2.0
     STOP_GRACE_SECONDS = 8.0
 
-    def __init__(self, service):
+    def __init__(self, service, *, live_registry: LiveRegistry):
         self.service = service
+        self.live_registry = live_registry
         self.store = service.store
         self._wake = threading.Event()
         self._stopping = threading.Event()
@@ -308,14 +310,14 @@ class ExecutionScheduler:
                                 if connecting:
                                     self.store.execution_connection(attempt_id, connected=True)
                                     self.store.clear_execution_issue(attempt_id, "connection")
-                                    self.store.live_registry.bind(attempt_id, client)
+                                    self.live_registry.bind(attempt_id, client)
                                     with self._lock:
                                         self._clients[attempt_id] = client
                         except BoardError as error:
                             if error.code != "LIVE_UNAVAILABLE":
                                 raise
                             self._unknown(attempt_id, error)
-                            self.store.live_registry.unbind(attempt_id, client)
+                            self.live_registry.unbind(attempt_id, client)
                             with self._lock:
                                 self._clients.pop(attempt_id, None)
                             client = None
@@ -329,7 +331,7 @@ class ExecutionScheduler:
                     else:
                         self._issue(attempt_id, "observation", error)
                     if client is not None:
-                        self.store.live_registry.unbind(attempt_id, client)
+                        self.live_registry.unbind(attempt_id, client)
                         with self._lock:
                             self._clients.pop(attempt_id, None)
                         client = None
@@ -349,7 +351,7 @@ class ExecutionScheduler:
                     delay = min(delay * 2, self.TICK_SECONDS)
         finally:
             if client is not None:
-                self.store.live_registry.unbind(attempt_id, client)
+                self.live_registry.unbind(attempt_id, client)
             with self._lock:
                 self._clients.pop(attempt_id, None)
                 if settled:

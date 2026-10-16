@@ -1,12 +1,30 @@
-<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg"><img src="docs/assets/logo-light.svg" alt="hey-my-buddy logo" width="88"></picture></p>
+<p align="right"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
 
-# hey-my-buddy
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+  <img alt="hey-my-buddy" src="docs/assets/banner-light.svg" width="100%">
+</picture>
 
-[中文文档](README.zh-CN.md)
+<p align="center"><b>Delegate the work. Keep the responsibility.</b></p>
 
-hey-my-buddy lets a Host buddy, the agent that owns a micro task, delegate bounded work to Worker buddies running in local coding harnesses while keeping responsibility for the micro task. Both are buddies of equal standing that coordinate only through a shared blackboard; they differ in role. A Host can implement one part itself and hand other parts to a Worker whose harness, model or cost fits the work. The supported coding harnesses are DeepSeek Harness (`dsh`), ZCode (`zcode`) and the experimental Codex App Server (`codex`); a Claude Code harness (`claude`, [reference](docs/reference/claude-code.md)) joins them as a P1 harness with verified native outcome, cancellation and bounded sandbox paths, plus a separately approved read-only lifecycle test through the installed service.
+<p align="center">
+  Let the coding agent you work with, the Host, delegate bounded tasks to other coding agents on your machine, and check each sealed result before accepting it.<br>
+  Micro tasks, decisions and results live on a local blackboard; a private console shows who is doing what.
+</p>
 
-Micro tasks, decisions and results live in a local SQLite blackboard. Coding work gets explicit Git workspaces and fixed input/output snapshots; a private React/Vite console shows tasks, routing, shared buddies, preferences, and per-model concurrency.
+<p align="center">
+  <a href="#how-buddies-collaborate">How buddies collaborate</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#console-routing-and-models">Console</a> ·
+  <a href="#current-status-and-limits">Status and limits</a> ·
+  <a href="#documentation-and-development">Docs</a>
+</p>
+
+---
+
+The Host buddy owns a micro task and its acceptance; Worker buddies execute bounded parts of it in local coding harnesses. Both are buddies of equal standing that coordinate only through a shared blackboard; they differ in role. A Host can implement one part itself and hand other parts to a Worker whose harness, model or cost fits the work. The supported coding harnesses are DeepSeek Harness (`dsh`), ZCode (`zcode`) and the experimental Codex App Server (`codex`); a Claude Code harness (`claude`, [reference](docs/reference/claude-code.md)) joins them as a P1 harness with verified native outcome, cancellation and bounded sandbox paths, plus a separately approved read-only lifecycle test through the installed service.
+
+Coding work gets explicit Git workspaces and fixed input/output snapshots. The blackboard is a local SQLite database, and the private React/Vite console shows tasks, routing, shared buddies, preferences and per-model concurrency.
 
 ## How buddies collaborate
 
@@ -18,20 +36,20 @@ Use it for scoped implementation, testing, reproducible investigations, document
 
 ## Install
 
-hey-my-buddy is one shared Agent Skill, `hey-my-buddy`, that carries its own CLI, plus one local service per state directory. The verified daily installation is 0.42.1 (contract 0.42.0, schema 24), installed on 2026-10-16. It takes Host questions inside running Codex and Claude Code turns. The current source is 0.42.2 with the same contract and schema and is not installed yet; on Linux it trusts a group-writable parent directory of the state directory when the group is the user's own private group ([acceptance](docs/acceptance/linux-portability.md)). The upgrade of 0.42.0 from schema 23 to 24 keeps for each command only what identifies the committed operation and for periodic state such as activity heartbeats only the latest record. The skill is placed in `~/.agents/skills/hey-my-buddy`, Claude Code reaches the same directory through the `~/.claude/skills/hey-my-buddy` link, and the retired Codex plugin is no longer used. Source and daily installation are separate facts. The [native sandbox review acceptance](docs/acceptance/native-sandbox-review-0.27.0.md) records probe-owned verification that no longer reads model output. The [routing validation acceptance](docs/acceptance/routing-validation-0.25.0.md) covers retained review diagnostics and bounded quota recovery. It implements ADR-018 Host workflows: file/stdin packets, method help, macro task reuse, direct Host completion, failure conclusions and cleanup, partial output, buddy changes on continuation, cumulative patches and native usage/quota observations. The [Host-workflow acceptance](docs/acceptance/host-workflow-0.21.0.md) records the checks and remaining limits. It is not published. An install that moves the middle number takes a verified backup before it switches ([operations](docs/reference/operations.md#installation)).
+hey-my-buddy is one shared Agent Skill, `hey-my-buddy`, that carries its own CLI, plus one local service per state directory. The verified daily installation is 0.42.1 (contract 0.42.0, schema 24), installed on 2026-10-16. It takes Host questions inside running Codex and Claude Code turns, but a question stops arriving once any Host has waited on a micro task during that turn. The current source is 0.43.0 (contract 0.43.0, schema 24) and is not installed yet: waits no longer drop the channels that carry those questions, and it moves to C-Two 0.7.5, which loads neither NumPy nor FastDB; because older execution processes cannot talk to the new service, its install waits for an idle board ([acceptance](docs/acceptance/live-channel-0.43.0.md)). On Linux it trusts a group-writable parent directory of the state directory when the group is the user's own private group ([acceptance](docs/acceptance/linux-portability.md)). The upgrade of 0.42.0 from schema 23 to 24 keeps for each command only what identifies the committed operation and for periodic state such as activity heartbeats only the latest record. The skill is placed in `~/.agents/skills/hey-my-buddy`, Claude Code reaches the same directory through the `~/.claude/skills/hey-my-buddy` link, and the retired Codex plugin is no longer used. Source and daily installation are separate facts. The [native sandbox review acceptance](docs/acceptance/native-sandbox-review-0.27.0.md) records probe-owned verification that no longer reads model output. The [routing validation acceptance](docs/acceptance/routing-validation-0.25.0.md) covers retained review diagnostics and bounded quota recovery. It implements ADR-018 Host workflows: file/stdin packets, method help, macro task reuse, direct Host completion, failure conclusions and cleanup, partial output, buddy changes on continuation, cumulative patches and native usage/quota observations. The [Host-workflow acceptance](docs/acceptance/host-workflow-0.21.0.md) records the checks and remaining limits. It is not published. An install that moves the middle number takes a verified backup before it switches ([operations](docs/reference/operations.md#installation)).
 
 Once the developer decides the release channel and the exact version, the install entry is one fixed-version package command:
 
 ```sh
 # After the release channel and version are decided; not available today
-uvx hey-my-buddy@0.42.2 install
+uvx hey-my-buddy@0.43.0 install
 ```
 
 The package name's availability and whether it is published on PyPI are still the developer's decisions, and this candidate has not been published there. Until a release exists, build the wheel from the frozen source and install from its absolute path:
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from /absolute/path/hey_my_buddy-0.42.2-py3-none-any.whl hey-my-buddy install
+uvx --from /absolute/path/hey_my_buddy-0.43.0-py3-none-any.whl hey-my-buddy install
 ```
 
 On a machine without `uv`, the release's `install.sh` (macOS, Linux) or `install.ps1` (Windows) prepares a fixed private `uv` and then calls the same entry; they never change `PATH`, shell or Host settings and never install a global `hey-my-buddy` command. An install prints the paths it will write and materializes the versioned runtime. A version that moves only the last number keeps running work: the service restarts on the new runtime and takes the running executions over. A version that moves the middle number refuses while work is queued or running or a stop is unconfirmed (`UPGRADE_NOT_IDLE`, listing the blockers) and switches with a verified backup. Either way the whole generation — skill, launcher, runtime and service — switches together, and a failure rolls back. Rerunning the same complete version repairs what is missing without restarting the service, and damaged content is repaired by rerunning the same fixed-version command; changed content at the same version reports `updated`. Source archives retain their original commit when later built into wheels. Installing or upgrading the daily service needs the user's separate authorization. The code and scripts are portable to Windows, but no real Windows machine has been validated yet.

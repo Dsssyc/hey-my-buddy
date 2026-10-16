@@ -521,7 +521,7 @@ class ReconnectedRouterContractTests(RouterDispatchTestCase):
         handle = self.recovered_handle(claim)
         handle.budget_path.write_text(json.dumps({"binding": handle.execution_binding,
                                                   "deadline": time.monotonic() - 1}))
-        scheduler = ExecutionScheduler(self.board_.service)
+        scheduler = ExecutionScheduler(self.board_.service, live_registry=self.board_.live_registry)
         client = Mock()
         view = self.client.get(runId=claim["task"]["taskId"])
         sent, forced_at = scheduler._apply_stop(view, claim, handle, client, None, None)
@@ -581,7 +581,7 @@ class ReconnectedWrapUpTests(WorkflowTestCase):
             task_id=binding["taskId"], attempt_id=binding["attemptId"],
             generation=binding["generation"], invocation_id="execution",
             turn_id=claim["turn"]["turnId"]))
-        scheduler = ExecutionScheduler(board.service)
+        scheduler = ExecutionScheduler(board.service, live_registry=board.live_registry)
         for channel in (Mock(), Mock()):
             view = board.client().get(runId=run["runId"])
             sent, forced_at = scheduler._apply_stop(view, claim, handle, channel, None, None)

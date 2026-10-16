@@ -24,6 +24,7 @@ from ..store.db import SCHEMA_VERSION, utc_now
 from ...errors import BoardError
 from .service import BoardService, WaitAdmission, WaitService
 from .execution_scheduler import ExecutionScheduler
+from .live_registry import LiveRegistry
 from ..store.store import BoardStore
 from ...protocol.transport import ServiceError
 
@@ -61,6 +62,7 @@ class Daemon:
         self.store = BoardStore(
             self.directory, max_concurrent=_env_int("HMB_MAX_CONCURRENT", scheduling.TOTAL_CONCURRENCY_DEFAULT)
         )
+        self.live_registry = LiveRegistry()
         self.control = {
             "service_id": self.service_id,
             "contract_version": CONTRACT_VERSION,
@@ -111,7 +113,7 @@ class Daemon:
 
     def service(self) -> BoardService:
         return BoardService(
-            self.store, token=self.token, control=self.control,
+            self.store, live_registry=self.live_registry, token=self.token, control=self.control,
             on_stop=self.on_stop, on_restart=self.on_restart,
             console_factory=self.on_console,
             on_accepted=self.queue_workspace_cleanup,
@@ -129,7 +131,7 @@ class Daemon:
             self.store.initialize()
             service = self.service()
             self.harnesses = service.harnesses
-            self.scheduler = ExecutionScheduler(service)
+            self.scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
             service.execution_scheduler = self.scheduler
             self.store.on_change = self.scheduler.wake
             self.console = Console(self.store, service)
@@ -265,7 +267,7 @@ class Daemon:
             self._maintenance.join()
         if getattr(self, 'harnesses', None) is not None:
             self.harnesses.close()
-        self.store.live_registry.close()
+        self.live_registry.close()
         try:
             cc.shutdown()
         except Exception:

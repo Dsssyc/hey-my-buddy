@@ -55,11 +55,10 @@ class HostCutoverTests(WorkflowTestCase):
         configuration.write_text("\n".join(line for line in configuration.read_text().splitlines()
                                            if not line.startswith("command =")) + "\n")
         site = environment / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-        for name in ("c_two", "fastdb4py", "numpy", "portalocker", "pydantic", "pydantic_core", "zstandard",
+        for name in ("c_two", "portalocker", "pydantic", "pydantic_core", "zstandard",
                      "typing_extensions", "typing_inspection", "annotated_types"):
             distribution = metadata.distribution(name.replace("_", "-"))
-            # Copy the installed distribution, including sibling native libraries
-            # such as numpy.libs, rather than only its importable package.
+            # Copy distribution metadata and native libraries with the package.
             for file in distribution.files:
                 # Installed command scripts live outside site-packages; this
                 # fixture only runs the libraries through its private Python.
