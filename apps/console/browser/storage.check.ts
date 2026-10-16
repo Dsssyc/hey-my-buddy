@@ -19,10 +19,12 @@ for (const width of [1440, 390]) test.describe(`the upgrade rollback archive at 
     await open(page, "#settings");
     const storage = page.getByRole("region", { name: "存储", exact: true });
     await storage.getByRole("button", { name: "检查占用", exact: true }).click();
-    const row = storage.getByRole("row").filter({ hasText: "上次升级之前的看板" });
-    await expect(row.getByRole("rowheader")).toHaveText("上次升级之前的看板");
-    await expect(row.getByRole("cell").nth(0)).toHaveText("5.0 MB");
-    await expect(row.getByRole("cell").nth(1)).toHaveText("—");
+    const row = storage.getByRole("row").filter({ hasText: "备份" });
+    await expect(row.getByRole("rowheader")).toHaveText("备份");
+    await expect(row.getByRole("cell").nth(1)).toHaveText("5.0 MB");
+    await expect(row.getByRole("cell").nth(2)).toHaveText("0 B");
     await expectTextUncut(row.locator("th, td, button"));
+    await row.getByRole("cell").nth(2).getByText("0 B").hover();
+    await expect(page.getByRole("tooltip")).toContainText("上次升级之前的看板受保护");
   });
 });

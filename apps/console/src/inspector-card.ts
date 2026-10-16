@@ -16,7 +16,7 @@ import { recordedRoutingMode } from "./routing-display";
 import {
   clockTime, buddyLabel, buddyRawLabel, displayTitle, durationText, outcomeLabel,
   rowLabelItem, rowStateInfo, settleItem, spanHead, spanOutcome, toMs,
-  acceptanceWaitText, titleLineTooltip, type FriendlyBuddy,
+  acceptanceWaitText, eventItem, spanFacts, titleLineTooltip, type FriendlyBuddy,
 } from "./macro-task-display";
 import { latestExecutionResult, relatedEventsForRun, relatedEventsForSpan, runRollup, hasScopeLimitations, type RunRollup } from "./macro-task-metrics";
 
@@ -50,14 +50,16 @@ export type InspectorCard = {
   openItem: TimelineItem | null;
   /** Host events matched by non-empty record identity. */
   relatedEvents: RelatedEvent[];
+  /** Rebuild copy from retained facts when the selected record leaves a later read. */
+  refreshCopy?: () => InspectorCard;
 };
 
-const UNRECORDED = "未记录";
+const UNRECORDED = () => i18n.t("console:notRecorded");
 
 function microTaskField(row: TimelineRow): CardField {
   const title = displayTitle(row.titleSource, row.title);
   return {
-    label: "微任务",
+    label: i18n.t("console:microTask"),
     value: title.text,
     title: titleLineTooltip(title),
     link: { kind: "run", runId: row.runId, label: title.text },
@@ -68,21 +70,21 @@ function spanTimingValue(span: TimelineSpan, observedAtMs: number | null): CardF
   const startMs = toMs(span.startAt);
   const endMs = toMs(span.endAt);
   if (span.clockSkew === true || (startMs !== null && endMs !== null && endMs < startMs)) {
-    return { label: "时间", value: "时间异常，未计算时长", tone: "warn" };
+    return { label: i18n.t("console:time"), value: i18n.t("console:invalidTimeDurationNotCalculated"), tone: "warn" };
   }
-  if (startMs === null) return { label: "时间", value: "时间未记录" };
+  if (startMs === null) return { label: i18n.t("console:time"), value: i18n.t("console:timeNotRecorded") };
   if (endMs === null) {
     const outcome = spanOutcome(span);
     if (outcome === "running") {
-      return { label: "时间", value: observedAtMs !== null ? `${clockTime(startMs)} 起 · 进行中（截至 ${clockTime(observedAtMs)}）` : `${clockTime(startMs)} 起 · 进行中` };
+      return { label: i18n.t("console:time"), value: observedAtMs !== null ? i18n.t("console:sinceRunningAsOf", { v0: clockTime(startMs), v1: clockTime(observedAtMs) }) : i18n.t("console:sinceRunning", { v0: clockTime(startMs) }) };
     }
     if (outcome === "open") {
-      return { label: "时间", value: `${clockTime(startMs)} 起 · 仍在等待` };
+      return { label: i18n.t("console:time"), value: i18n.t("console:sinceStillWaiting", { v0: clockTime(startMs) }) };
     }
-    return { label: "时间", value: `${clockTime(startMs)} 起 · 结束时间缺失`, tone: "warn" };
+    return { label: i18n.t("console:time"), value: i18n.t("console:sinceEndTimeMissing", { v0: clockTime(startMs) }), tone: "warn" };
   }
   const duration = durationText(endMs - startMs);
-  return { label: "时间", value: `${clockTime(startMs)}–${clockTime(endMs)}${duration ? ` · ${duration}` : ""}` };
+  return { label: i18n.t("console:time"), value: `${clockTime(startMs)}–${clockTime(endMs)}${duration ? ` · ${duration}` : ""}` };
 }
 
 function errorFirstLine(span: TimelineSpan): string | null {
@@ -93,13 +95,13 @@ function errorFirstLine(span: TimelineSpan): string | null {
 function spanResultValue(span: TimelineSpan, outcome: SpanOutcome): CardField {
   const error = errorFirstLine(span);
   if (outcome === "unknown") {
-    return { label: "结果", value: `结束未确认${error ? ` · ${error}` : ""}`, tone: "warn", title: span.error };
+    return { label: i18n.t("console:result"), value: i18n.t("console:stopUnconfirmedDetail", { v0: error ? ` · ${error}` : "" }), tone: "warn", title: span.error };
   }
-  if (span.resultStatus === "ok") return { label: "结果", value: "执行完成" };
-  if (span.resultStatus === "failed") return { label: "结果", value: `执行失败${error ? ` · ${error}` : ""}`, tone: "warn", title: span.error };
-  if (span.resultStatus === "cancelled") return { label: "结果", value: "已取消" };
-  if (outcome === "running") return { label: "结果", value: "执行中" };
-  return { label: "结果", value: outcomeLabel(span, outcome) };
+  if (span.resultStatus === "ok") return { label: i18n.t("console:result"), value: i18n.t("console:executionCompleted") };
+  if (span.resultStatus === "failed") return { label: i18n.t("console:result"), value: i18n.t("console:executionFailedDetail", { v0: error ? ` · ${error}` : "" }), tone: "warn", title: span.error };
+  if (span.resultStatus === "cancelled") return { label: i18n.t("console:result"), value: i18n.t("console:cancelled") };
+  if (outcome === "running") return { label: i18n.t("console:result"), value: i18n.t("console:executing") };
+  return { label: i18n.t("console:result"), value: outcomeLabel(span, outcome) };
 }
 
 function rollupFields(rollup: RunRollup, buddies?: readonly FriendlyBuddy[] | null): CardField[] {
@@ -107,13 +109,13 @@ function rollupFields(rollup: RunRollup, buddies?: readonly FriendlyBuddy[] | nu
   const scopeLimited = hasScopeLimitations(rollup.limitations);
   const state = rowStateInfo(row);
   const fields: CardField[] = [
-    { label: "类型", value: row.kind === "helper" ? "协助任务" : "微任务" },
+    { label: i18n.t("console:type"), value: row.kind === "helper" ? i18n.t("console:helper") : i18n.t("console:microTask") },
     microTaskField(row),
   ];
   const rounds = rollup.executions.length;
   fields.push({
-    label: "回合",
-    value: rounds ? `共 ${rounds} 轮` : scopeLimited ? "已记录范围内没有执行片段" : "没有已记录的执行片段",
+    label: i18n.t("console:turn"),
+    value: rounds ? i18n.t("console:turnsInTotal", { v0: rounds }) : scopeLimited ? i18n.t("console:noExecutionSpansInTheRecordedScope") : i18n.t("console:noRecordedExecutionSpans"),
     tone: rounds ? undefined : "muted",
   });
   fields.push({ label: "buddy", value: buddyLabel(row.buddy, buddies), title: buddyRawLabel(row.buddy) });
@@ -124,15 +126,15 @@ function rollupFields(rollup: RunRollup, buddies?: readonly FriendlyBuddy[] | nu
   const timeValue = allStarts.length
     ? ends.length || pending.length
       ? `${clockTime(Math.min(...allStarts))}–${clockTime(Math.max(...ends, ...pending))}`
-      : `${clockTime(Math.min(...allStarts))} 起`
-    : "未记录";
-  fields.push({ label: "时间", value: timeValue });
+      : i18n.t("console:since", { v0: clockTime(Math.min(...allStarts)) })
+    : i18n.t("console:notRecorded");
+  fields.push({ label: i18n.t("console:time"), value: timeValue });
   const latest = latestExecutionResult(rollup);
-  const resultHead = latest ? `${state.label} · ${latest.label}` : `${scopeLimited ? "执行情况未知（读取不完整）" : "未执行"} · ${state.label}`;
+  const resultHead = latest ? `${state.label} · ${latest.label}` : i18n.t("console:joined", { v0: scopeLimited ? i18n.t("console:executionUnknownIncompleteRead") : i18n.t("console:notExecuted"), v1: state.label });
   const summary = row.summary;
   fields.push(summary
-    ? { label: "结果", value: `${resultHead} · 结果：${summary}`, title: summary }
-    : { label: "结果", value: `${resultHead} · 结果：暂无` });
+    ? { label: i18n.t("console:result"), value: i18n.t("console:resultSummary", { v0: resultHead, v1: summary }), title: summary }
+    : { label: i18n.t("console:result"), value: i18n.t("console:noResultSummary", { v0: resultHead }) });
   return fields;
 }
 
@@ -140,7 +142,7 @@ function rollupFields(rollup: RunRollup, buddies?: readonly FriendlyBuddy[] | nu
  * Builds the fixed card for one selection from the current read, or null when
  * the selection cannot be resolved (truncated, filtered or not yet loaded).
  */
-export function buildInspectorCard(
+function inspectorCard(
   selection: InspectorSelection,
   timeline: MacroTaskTimeline,
   itemsByKey: ReadonlyMap<string, TimelineItem>,
@@ -161,7 +163,7 @@ export function buildInspectorCard(
     const rollup = runRollup(row, timeline);
     return {
       key: `run:${selection.runId}`,
-      head: "整项微任务",
+      head: i18n.t("console:wholeMicroTask"),
       fields: rollupFields(rollup, buddies),
       openItem: itemsByKey.get(rowLabelItem(row).key) ?? rowLabelItem(row),
       relatedEvents: relatedEventsForRun(selection.runId, timeline.events)
@@ -180,39 +182,39 @@ export function buildInspectorCard(
     const outcome = spanOutcome(span);
     const fields: CardField[] = [];
     if (span.kind === "queue") {
-      fields.push({ label: "类型", value: "排队" }, microTaskField(row), spanTimingValue(span, observedAtMs));
-      fields.push({ label: "结果", value: span.endAt ? "已开始" : "仍在排队" });
+      fields.push({ label: i18n.t("console:type"), value: i18n.t("console:queue") }, microTaskField(row), spanTimingValue(span, observedAtMs));
+      fields.push({ label: i18n.t("console:result"), value: span.endAt ? i18n.t("console:started") : i18n.t("console:stillQueued") });
     } else if (span.kind === "host") {
-      fields.push({ label: "类型", value: item.head }, microTaskField(row), spanTimingValue(span, observedAtMs));
+      fields.push({ label: i18n.t("console:type"), value: item.head }, microTaskField(row), spanTimingValue(span, observedAtMs));
       fields.push(span.summary
-        ? { label: "结果", value: outcomeLabel(span, outcome), title: span.summary }
-        : { label: "结果", value: outcomeLabel(span, outcome) });
+        ? { label: i18n.t("console:result"), value: outcomeLabel(span, outcome), title: span.summary }
+        : { label: i18n.t("console:result"), value: outcomeLabel(span, outcome) });
     } else if (span.kind === "routing") {
       const routing = span.routing;
       const preference = (value: string | null | undefined) => ({
-        matched: "符合偏好", alternative: "偏离偏好", none: "没有偏好",
-      }[value ?? ""] ?? (value || UNRECORDED));
+        matched: i18n.t("console:matchesPreference"), alternative: i18n.t("console:differsFromPreference"), none: i18n.t("console:noPreference"),
+      }[value ?? ""] ?? (value || UNRECORDED()));
       const userPreference = routing?.policyCheck?.userPreference;
       const deviated = userPreference === "alternative";
-      const reason = routing?.reason?.trim() || UNRECORDED;
+      const reason = routing?.reason?.trim() || UNRECORDED();
       const amount = (value: number | null | undefined, unit: string) =>
-        value != null && Number.isFinite(value) && value >= 0 ? `${value} ${unit}` : UNRECORDED;
-      fields.push({ label: "类型", value: "路由" }, microTaskField(row));
-      fields.push({ label: "实际模式", value: recordedRoutingMode(routing?.routingMode) });
-      fields.push({ label: "选中的 buddy", value: routing?.selectedBuddy ? buddyLabel(routing.selectedBuddy, buddies) : UNRECORDED });
-      fields.push({ label: "理由", value: reason });
-      fields.push({ label: "偏好结果", value: routing?.policyCheck
-        ? `用户：${preference(userPreference)}${deviated ? `；偏离理由：${reason}` : ""}`
-        : UNRECORDED });
-      fields.push(spanTimingValue(span, observedAtMs), { label: "结果", value: outcomeLabel(span, outcome) });
-      fields.push({ label: "用时（elapsedMs）", value: amount(routing?.usage?.elapsedMs, "ms") },
-        { label: "工具调用（toolCalls）", value: amount(routing?.usage?.toolCalls, "次") },
-        { label: "读取量（bytesRead）", value: amount(routing?.usage?.bytesRead, "bytes") });
+        value != null && Number.isFinite(value) && value >= 0 ? `${value} ${unit}` : UNRECORDED();
+      fields.push({ label: i18n.t("console:type"), value: i18n.t("console:routing") }, microTaskField(row));
+      fields.push({ label: i18n.t("console:actualMode"), value: recordedRoutingMode(routing?.routingMode) });
+      fields.push({ label: i18n.t("console:selectedBuddy"), value: routing?.selectedBuddy ? buddyLabel(routing.selectedBuddy, buddies) : UNRECORDED() });
+      fields.push({ label: i18n.t("console:reason"), value: reason });
+      fields.push({ label: i18n.t("console:preferenceResult"), value: routing?.policyCheck
+        ? i18n.t("console:user", { v0: preference(userPreference), v1: deviated ? i18n.t("console:reasonForDeviation", { v0: reason }) : "" })
+        : UNRECORDED() });
+      fields.push(spanTimingValue(span, observedAtMs), { label: i18n.t("console:result"), value: outcomeLabel(span, outcome) });
+      fields.push({ label: i18n.t("console:elapsedTimeElapsedms"), value: amount(routing?.usage?.elapsedMs, "ms") },
+        { label: i18n.t("console:toolCallsToolcalls"), value: amount(routing?.usage?.toolCalls, i18n.t("console:calls")) },
+        { label: i18n.t("console:bytesReadBytesread"), value: amount(routing?.usage?.bytesRead, "bytes") });
     } else {
-      fields.push({ label: "类型", value: spanHead(span.kind) }, microTaskField(row));
+      fields.push({ label: i18n.t("console:type"), value: spanHead(span.kind) }, microTaskField(row));
       fields.push({
-        label: "回合",
-        value: span.turnIndex !== null && span.turnIndex !== undefined ? `第 ${span.turnIndex} 轮` : UNRECORDED,
+        label: i18n.t("console:turn"),
+        value: span.turnIndex !== null && span.turnIndex !== undefined ? i18n.t("console:turnNumber", { v0: span.turnIndex }) : UNRECORDED(),
       });
       fields.push({
         label: "buddy",
@@ -223,7 +225,7 @@ export function buildInspectorCard(
     }
     return {
       key: selection.key,
-      head: span.turnIndex != null ? `${item.head} · 第 ${span.turnIndex} 轮` : item.head,
+      head: span.turnIndex != null ? i18n.t("console:itemTurn", { v0: item.head, v1: span.turnIndex }) : item.head,
       fields,
       openItem: item,
       relatedEvents: relatedEventsForSpan(span, timeline.events)
@@ -238,15 +240,15 @@ export function buildInspectorCard(
     if (!event) return null;
     const row = rowsById.get(event.runId);
     const fields: CardField[] = [
-      { label: "类型", value: `Host 事件 · ${event.label || event.kind}` },
+      { label: i18n.t("console:type"), value: i18n.t("console:hostEventType", { v0: event.label || event.kind }) },
       ...(row ? [microTaskField(row)] : []),
-      { label: "时间", value: clockTime(event.at) },
-      { label: "结果", value: event.summary || UNRECORDED, title: event.summary || undefined },
+      { label: i18n.t("console:time"), value: clockTime(event.at) },
+      { label: i18n.t("console:result"), value: event.summary || UNRECORDED(), title: event.summary || undefined },
     ];
     if (event.actor) fields.push({ label: i18n.t("shell:actor.recordedBy"), value: actorText(event.actor), tone: "muted" });
     return {
       key: selection.key,
-      head: `Host 事件：${event.label || event.kind}`,
+      head: i18n.t("console:hostEventHeading", { v0: event.label || event.kind }),
       fields,
       openItem: item,
       relatedEvents: [],
@@ -259,19 +261,19 @@ export function buildInspectorCard(
     if (!row) return null;
     const rejected = !row.acceptedAt && !!row.reviewRejectedAt;
     const fields: CardField[] = [
-      { label: "类型", value: rejected ? "验收问题" : "验收" },
+      { label: i18n.t("console:type"), value: rejected ? i18n.t("console:acceptanceIssue") : i18n.t("console:acceptance") },
       microTaskField(row),
     ];
     const wait = acceptanceWaitText(row, spansByRun.get(runId) ?? []);
     fields.push({
-      label: "时间",
+      label: i18n.t("console:time"),
       value: wait ? `${clockTime(row.acceptedAt ?? row.reviewRejectedAt)} · ${wait}` : clockTime(row.acceptedAt ?? row.reviewRejectedAt),
       title: wait ?? undefined,
     });
-    fields.push({ label: "结果", value: rejected ? "验收问题" : "已验收" });
+    fields.push({ label: i18n.t("console:result"), value: rejected ? i18n.t("console:acceptanceIssue") : i18n.t("console:accepted") });
     return {
       key: selection.key,
-      head: rejected ? "验收问题" : "已验收",
+      head: rejected ? i18n.t("console:acceptanceIssue") : i18n.t("console:accepted"),
       fields,
       openItem: itemsByKey.get(settleItem(row)?.key ?? "") ?? item,
       relatedEvents: [],
@@ -285,11 +287,43 @@ export function buildInspectorCard(
   const rollup = runRollup(row, timeline);
   return {
     key: selection.key,
-    head: "整项微任务",
+    head: i18n.t("console:wholeMicroTask"),
     fields: rollupFields(rollup, buddies),
     openItem: itemsByKey.get(rowLabelItem(row).key) ?? item,
     relatedEvents: relatedEventsForRun(runId, timeline.events)
       .map(event => ({ item: itemsByKey.get(`event:${event.seq}`) ?? null, event }))
       .filter((entry): entry is RelatedEvent => entry.item !== null),
   };
+}
+
+/** Retain the bounded facts with a cached card so language changes preserve its evidence. */
+export function buildInspectorCard(
+  selection: InspectorSelection,
+  timeline: MacroTaskTimeline,
+  itemsByKey: ReadonlyMap<string, TimelineItem>,
+  buddies?: readonly FriendlyBuddy[] | null,
+): InspectorCard | null {
+  const card = inspectorCard(selection, timeline, itemsByKey, buddies);
+  if (!card) return null;
+  return { ...card, refreshCopy: () => {
+    const items = new Map<string, TimelineItem>();
+    const rows = new Map(timeline.rows.map(row => [row.runId, row]));
+    for (const row of timeline.rows) {
+      const label = rowLabelItem(row);
+      items.set(label.key, label);
+      const settlement = settleItem(row);
+      if (settlement) items.set(settlement.key, settlement);
+    }
+    for (const span of timeline.spans) {
+      const row = rows.get(span.runId);
+      if (!row) continue;
+      const { item } = spanFacts(span, row, toMs(timeline.observedAt), buddies);
+      items.set(item.key, item);
+    }
+    for (const event of timeline.events) {
+      const item = eventItem(event, rows);
+      items.set(item.key, item);
+    }
+    return inspectorCard(selection, timeline, items, buddies)!;
+  } };
 }

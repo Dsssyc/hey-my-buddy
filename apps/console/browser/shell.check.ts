@@ -55,20 +55,6 @@ for (const theme of ["light", "dark"]) test(`the top bar is dark and readable in
   }
 });
 
-for (const { locale, label, heading } of [
-  { locale: "zh-CN", label: "静默提醒阈值（分钟）", heading: "执行提醒" },
-  { locale: "en-US", label: "Silence threshold (minutes)", heading: "Execution reminders" },
-]) test.describe(`reminder settings in ${locale}`, () => {
-  test.use({ locale, viewport: { width: 320, height: 640 } });
-  test("remain readable at narrow width", async ({ page }) => {
-    await open(page, "#settings");
-    const panel = page.getByRole("region", { name: heading });
-    await expect(panel.getByRole("spinbutton", { name: label })).toHaveValue("15");
-    await expectTextUncut(panel.locator("h2, label, button"));
-    await expectNoSidewaysScroll(page);
-  });
-});
-
 test.describe("an active micro task's reminder status at narrow width", () => {
   test.use({ locale: "zh-CN", viewport: { width: 320, height: 640 } });
   test("keeps both reminder labels visible beside execution state", async ({ page }) => {

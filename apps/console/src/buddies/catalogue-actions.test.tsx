@@ -353,10 +353,10 @@ describe("a session that cannot write", () => {
     for (const button of buttons) {
       expect(button.getAttribute("aria-disabled")).toBe("true");
       expect(button.hasAttribute("disabled")).toBe(false);
-      expect(button.getAttribute("aria-description")).toBe(LOGIN_EXPIRED_ACTION_REFUSAL);
+      expect(button.getAttribute("aria-description")).toBe(LOGIN_EXPIRED_ACTION_REFUSAL());
     }
     await user.click(buttons[0]);
-    expect(await screen.findByText(LOGIN_EXPIRED_ACTION_REFUSAL)).toBeTruthy();
+    expect(await screen.findByText(LOGIN_EXPIRED_ACTION_REFUSAL())).toBeTruthy();
     await user.click(buttons[1]);
     expect(f.command).not.toHaveBeenCalled();
     // The dialogs open to be read, and their actions are inert too.

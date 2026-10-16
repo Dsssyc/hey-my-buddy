@@ -31,9 +31,6 @@ input[type="checkbox"] { width: 16px; height: 16px; padding: 0; accent-color: va
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; }
 .row-between > * { min-width: 0; }
 .row-between time { flex-shrink: 0; }
-.segmented { display: flex; flex-wrap: wrap; gap: 4px; }
-.segmented button { padding: 5px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.segmented button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
 .button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 7px 12px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--ink); background: var(--surface); font-size: 12px; font-weight: 550; }
 .button:hover:not(:disabled) { background: var(--subtle); border-color: var(--muted); }
 .button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
@@ -58,11 +55,6 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .workflow-controls legend { font-weight: 600; font-size: 13px; padding: 0 4px; }
 .workflow-controls > .button { margin-top: 12px; }
 .workflow-controls .check-field { margin: 14px 0; }
-.settings-page { width: 100%; max-width: 960px; height: 100%; margin-inline: auto; display: grid; grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; align-content: start; gap: 16px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
-.settings-panel { padding: 20px; }
-.access-sessions { margin-top: 12px; }
-.access-sessions li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding-block: 10px; border-top: 1px solid var(--line); }
-.settings-panel .panel-heading p { color: var(--muted); margin-top: 8px; font-size: 13px; }
 .panel-heading { margin-bottom: 16px; }
 .detail-placeholder, .empty-state { padding: 32px 24px; color: var(--muted); }
 .detail-placeholder { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 12px; }
@@ -78,10 +70,7 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .truncate { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mono { font-family: ui-monospace, monospace; font-size: 11px; }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-@media (max-width: 760px) {
-  .settings-panel { padding: 16px; }
-}
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; scroll-behavior: auto !important; } }
 
 /* ---- Work macroTask timeline (right pane, layer one) ---- */
 .timeline-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -429,32 +418,6 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
    the full wording lives in the button's name and tooltip. */
 .shared-popover:focus:not(:focus-visible) { outline: none; }
 
-/* The storage panel (0.16). */
-.storage-panel { padding: 20px; }
-.storage-overview { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 16px; }
-.storage-overview > div { flex: 1 1 160px; display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--subtle); }
-.storage-overview span { color: var(--muted); font-size: 11px; }
-.storage-overview strong { color: var(--ink); font-size: 16px; font-weight: 600; }
-.storage-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.storage-table th, .storage-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); font-weight: 400; }
-.storage-table thead th { color: var(--faint); font-size: 11px; }
-.storage-table tbody th { font-weight: 550; }
-.storage-table td[title], .storage-table th[title] { cursor: default; }
-.storage-total th, .storage-total td { border-top: 1px solid var(--line-strong); font-weight: 600; }
-.storage-reasons-toggle { border: 0; padding: 0; background: none; color: var(--accent); font-size: 11px; white-space: nowrap; }
-.storage-reasons-toggle:hover { text-decoration: underline; }
-.storage-reasons ul { list-style: disc; padding-left: 18px; font-size: 11px; color: var(--muted); margin: 4px 0; }
-.storage-orphans { margin-top: 14px; }
-.storage-orphans h3 { font-size: 13px; margin-bottom: 4px; }
-.storage-orphans ul { display: grid; gap: 4px; margin-top: 6px; }
-.storage-orphans li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 11px; padding: 4px 0; border-bottom: 1px solid var(--line); }
-.storage-orphan-path { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
-.storage-result-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
-.storage-outcome { margin-top: 10px; font-size: 12px; }
-.storage-outcome p { margin: 2px 0; }
-.storage-skipped { list-style: disc; padding-left: 18px; font-size: 11px; color: var(--muted); margin: 4px 0; }
-.storage-actions { margin-top: 12px; }
-
 /* `?` tooltips: explanations appear on hover or focus, Escape hides them. The
    explanation is portalled to the body and positioned fixed (see Help), so a
    container's overflow can never clip it and the script keeps it inside the
@@ -463,16 +426,9 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .help .help-button { min-width: 20px; min-height: 20px; padding: 0; font-size: 11px; background: var(--surface); }
 .help-tip { position: fixed; z-index: 40; inline-size: max-content; max-inline-size: min(26em, calc(100vw - 16px)); padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 12px; line-height: 1.6; font-weight: 400; white-space: normal; overflow-wrap: anywhere; box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 16%, transparent); pointer-events: none; }
 
-/* Segmented radio groups (preference, budget, theme). */
-.segment { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); font-size: 12px; cursor: pointer; }
-.segment input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
-.segment:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
-.segment.checked { border-color: var(--accent); background: var(--accent-wash); color: var(--accent); font-weight: 600; }
-.segment:has(input:disabled) { cursor: not-allowed; opacity: .6; }
 
 /* Buddy 配置: the active section owns the remaining shell height. */
 .buddy-section-page { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
-.buddy-section-page .segment { min-height: 32px; }
 .buddy-section { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
 .router-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 
@@ -523,9 +479,6 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 
 /* The bottom save bar replaces the old global edit switch. */
 
-.theme-choice { display: flex; flex-wrap: wrap; gap: 6px; }
-.settings-page .panel-heading h2 { font-size: 16px; font-weight: 600; }
-.settings-page .segment { min-height: 36px; justify-content: center; }
 @media (max-width: 760px) {
   .harness-status-line > .button, .harness-row-actions { margin-left: 0; }
   .harness-facts > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }

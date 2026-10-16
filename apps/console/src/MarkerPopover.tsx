@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import i18n from "i18next";
 import { actorText } from "./actor";
 import { useEffect, useRef } from "react";
@@ -36,6 +37,7 @@ export function MarkerPopover({ cluster, anchor, rowsById, selectedEventKey, onS
   /** Ask the owner to close; Esc returns focus to the anchor through the shared popover. */
   requestClose: (focusMarker: boolean) => void;
 }) {
+  useTranslation("console");
   const root = useRef<HTMLDivElement>(null);
 
   // Focus enters the popover itself so keyboard navigation starts without
@@ -73,7 +75,7 @@ export function MarkerPopover({ cluster, anchor, rowsById, selectedEventKey, onS
   }
 
   return <Popover id={`popover-${cluster.key}`} anchor={anchor}
-    label={`Host 事件 ${cluster.events.length} 条`}
+    label={i18n.t("console:hostEvents2", { v0: cluster.events.length })}
     onClose={() => requestClose(false)}
     className="marker-popover" width="min(320px, calc(100vw - 16px))">
     <div ref={root} className="marker-popover-rows">
@@ -100,8 +102,8 @@ export function MarkerPopover({ cluster, anchor, rowsById, selectedEventKey, onS
             {actor && <span className="muted">{actor}</span>}
             {event.summary && <span className="marker-popover-summary muted">{event.summary}</span>}
           </button>
-          <button type="button" className="button small-button" aria-label={`打开 ${item.head}`}
-            onClick={() => onOpen(item)}>打开</button>
+          <button type="button" className="button small-button" aria-label={i18n.t("console:openItem", { v0: item.head })}
+            onClick={() => onOpen(item)}>{i18n.t("console:open")}</button>
         </div>;
       })}
     </div>

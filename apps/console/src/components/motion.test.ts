@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
  * or on a state carries a transition of 100 to 150ms and switches it off under
  * `motion-reduce`, and what opens and closes does so through the Collapsible.
  */
-const views = import.meta.glob<string>(["../App.tsx", "../MacroTaskList.tsx", "../MacroTaskOverview.tsx", "../MacroTasks.tsx", "../Records.tsx", "../buddies/*.tsx", "../task-detail/*.tsx"], { query: "?raw", import: "default", eager: true });
+const views = import.meta.glob<string>(["../App.tsx", "../Settings.tsx", "../settings/*.tsx", "../MacroTaskList.tsx", "../MacroTaskOverview.tsx", "../MacroTasks.tsx", "../Records.tsx", "../buddies/*.tsx", "../task-detail/*.tsx"], { query: "?raw", import: "default", eager: true });
 const shared = import.meta.glob<string>(["./ui/*.tsx"], { query: "?raw", import: "default", eager: true });
 const support = /\.(test|testing|fixtures)\.tsx?$/;
 const changes = /\b(?:hover|aria-pressed|aria-checked|aria-expanded|aria-selected):(?:[a-z-]+:)*(?:bg|text|border|ring|opacity)-/;

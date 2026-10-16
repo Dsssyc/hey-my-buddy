@@ -1,3 +1,5 @@
+import { useCopyState } from "./i18n/use-copy-state";
+import i18n from "i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
@@ -14,7 +16,7 @@ import type { MacroTaskTimeline } from "./macro-task-types";
  */
 export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null, active: boolean) {
   const [data, setData] = useState<MacroTaskTimeline | null>(null);
-  const [loading, setLoading] = useState(false), [error, setError] = useState("");
+  const [loading, setLoading] = useState(false), [error, setError] = useCopyState();
   const [newRunIds, setNewRunIds] = useState<ReadonlySet<string>>(() => new Set<string>());
   /**
    * The display clock: the server's verification time of the most recent
@@ -46,7 +48,7 @@ export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null
       const { timeline: next, verifiedAtMs } = await api.macroTaskTimeline(macroTaskId, { limit: 200 }, controller.signal);
       if (version !== generation.current || controller.signal.aborted) return;
       if (next.macroTask.macroTaskId !== macroTaskId) {
-        setError("返回的宏任务标识与请求不符，未采用该数据。");
+        setError(() => i18n.t("console:theReturnedMacroTaskIdDoesNot"));
         return;
       }
       setError("");
@@ -84,7 +86,7 @@ export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null
       setData(merged);
       setNewRunIds(new Set(appended));
     } catch (failure) {
-      if (version === generation.current && !controller.signal.aborted && !isAbortError(failure)) setError(errorText(failure));
+      if (version === generation.current && !controller.signal.aborted && !isAbortError(failure)) setError(() => errorText(failure));
       if (strict && !isAbortError(failure)) throw failure;
     } finally {
       if (version === generation.current) pending.current = false;

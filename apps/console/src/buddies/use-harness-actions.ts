@@ -1,3 +1,5 @@
+import i18n from "i18next";
+import { useCopyState } from "../i18n/use-copy-state";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { errorText, snapshotHarnesses } from "../api";
@@ -6,6 +8,8 @@ import { harnessName } from "../buddy-display";
 import type { HarnessHealth, Snapshot } from "../types";
 import { harnessPath, statusText } from "./harness";
 import { openQuotaRetry } from "./harness-retry";
+
+const liveT = i18n.getFixedT(null, "buddies");
 
 /** One explicit action; kept so that a failed attempt can be retried as it was. */
 type Action =
@@ -24,7 +28,7 @@ export function useHarnessActions({ snapshot, api, refresh, mutationsAvailable, 
   const [replies, setReplies] = useState<Record<string, HarnessHealth>>({});
   /** Whether an action is under way; only one is at a time. */
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(""), [note, setNote] = useState("");
+  const [error, setError] = useCopyState(), [note, setNote] = useCopyState();
   const [retry, setRetry] = useState<Action | null>(null);
   const [refused, setRefused] = useState(false);
 
@@ -45,21 +49,23 @@ export function useHarnessActions({ snapshot, api, refresh, mutationsAvailable, 
       if (action.kind === "check") {
         const checked = await api.harnessRefresh(snapshot.csrfToken, action.harness);
         setReplies(previous => ({ ...previous, ...Object.fromEntries(checked.map(row => [row.harness, row])) }));
-        setNote(action.harness
-          ? t("harness.done.checked", { name: harnessName(action.harness), status: statusText(checked.find(row => row.harness === action.harness)?.status ?? "unknown", t) })
-          : t("harness.done.checkedAll", { ready: checked.filter(row => row.status === "ready").length, n: checked.length }));
+        setNote(() => action.harness
+          ? liveT("harness.done.checked", { name: harnessName(action.harness), status: statusText(checked.find(row => row.harness === action.harness)?.status ?? "unknown", liveT) })
+          : liveT("harness.done.checkedAll", { ready: checked.filter(row => row.status === "ready").length, n: checked.length }));
       } else if (action.kind === "set") {
         const updated = await api.harnessSet(action.harness, action.path, snapshot.csrfToken);
         setReplies(previous => ({ ...previous, [updated.harness]: updated }));
-        const status = { name: harnessName(updated.harness), status: statusText(updated.status, t) };
-        setNote(action.path ? t("harness.done.saved", { path: harnessPath(updated) ?? action.path, ...status }) : t("harness.done.restored", status));
+        setNote(() => {
+          const status = { name: harnessName(updated.harness), status: statusText(updated.status, liveT) };
+          return action.path ? liveT("harness.done.saved", { path: harnessPath(updated) ?? action.path, ...status }) : liveT("harness.done.restored", status);
+        });
       } else {
-        const outcome = await openQuotaRetry(api, snapshot.csrfToken, action.harness, action.provider, t);
-        setNote(t(`harness.quota.done.${outcome}`, { provider: action.provider }));
+        const outcome = await openQuotaRetry(api, snapshot.csrfToken, action.harness, action.provider);
+        setNote(() => liveT(`harness.quota.done.${outcome}`, { provider: action.provider }));
       }
       await reloadSnapshot();
     } catch (failure) {
-      setError(errorText(failure));
+      setError(() => errorText(failure));
       setRetry(action);
     } finally {
       setBusy(false);

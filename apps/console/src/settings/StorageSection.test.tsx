@@ -1,10 +1,14 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, type ConsoleApi, type StorageApplyResult, type StoragePlan } from "./api";
-import { StoragePanel } from "./StoragePanel";
+import { ApiError, type ConsoleApi, type StorageApplyResult, type StoragePlan } from "../api";
+import type { ReactElement } from "react";
+import { TooltipProvider } from "../components/ui/tooltip";
+import { StorageSection } from "./StorageSection";
 
-afterEach(() => cleanup());
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
+
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 /** A contract-typed plan fixture mirroring operations.md's wire shape. */
 function plan(overrides: Partial<StoragePlan> = {}): StoragePlan {
@@ -72,14 +76,14 @@ function fixture(script: Script = {}) {
 
 async function checkUsage(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "检查占用" }));
-  await screen.findByRole("button", { name: "重新检查" });
+  await screen.findByRole("table");
 }
 
 describe("storage panel (0.16 wire-shape contract)", () => {
   it("does not auto-check on mount and checks only on the explicit button", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
+    render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
     expect(f.command).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "检查占用" })).toBeTruthy();
     await checkUsage(user);
@@ -87,22 +91,23 @@ describe("storage panel (0.16 wire-shape contract)", () => {
   });
 
   it("renders the fixed-order category table with formatted bytes and exact tooltips", async () => {
-    const f = fixture();
+    const f = fixture({ planValue: plan({ categories: [...plan().categories].reverse() }) });
     const user = userEvent.setup();
-    render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
+    render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
     const table = screen.getByRole("table");
-    const rows = [...table.querySelectorAll<HTMLElement>("tbody tr")];
+    const rows = [...table.querySelectorAll<HTMLElement>("tbody tr")].filter(row => row.querySelector("th"));
     expect(rows.map(row => row.querySelector("th")!.textContent)).toEqual([
-      "ZCode 私有主目录", "受管检出", "运行时", "上次升级之前的看板", "看板与记录", "合计",
+      "ZCode 旧私有主目录", "受管检出", "运行时", "备份", "看板与记录",
     ]);
     expect(within(rows[0]!).getByText("3.3 GB")).toBeTruthy();
     expect(within(rows[0]!).getByText("2.7 GB")).toBeTruthy();
-    expect(rows[0]!.querySelector('[title="3,500,000,000 字节"]')).toBeTruthy();
+    expect(rows[0]!.querySelector('[aria-description="3,500,000,000 字节"]')).toBeTruthy();
+    expect(within(rows[0]!).getByText("71")).toBeTruthy();
     // Structurally protected categories show — with their own tooltip.
-    expect(within(rows[3]!).getByText("—")).toBeTruthy();
-    expect(within(rows[4]!).getByText("—")).toBeTruthy();
-    expect(rows[4]!.querySelector('[title="看板、记录及上次升级之前的看板受保护"]')).toBeTruthy();
+    expect(within(rows[3]!).getByText("0 B")).toBeTruthy();
+    expect(within(rows[4]!).getByText("0 B")).toBeTruthy();
+    expect(rows[4]!.querySelector('[aria-description="看板、记录及上次升级之前的看板受保护"]')).toBeTruthy();
   });
 
   it("keeps unknown category and reason codes visible instead of dropping them", async () => {
@@ -110,24 +115,26 @@ describe("storage panel (0.16 wire-shape contract)", () => {
       { id: "future-thing", label: "", bytes: 5, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["never-seen-code"] }] });
     const f = fixture({ planValue: custom });
     const user = userEvent.setup();
-    render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
+    render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
     expect(screen.getByText("future-thing")).toBeTruthy();
-    await user.click(screen.getAllByRole("button", { name: /为何保留 ▸/ })[0]!);
+    expect(within(screen.getByText("future-thing").closest("tr")!).getByText("1")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "ZCode 旧私有主目录：为何保留" }));
     expect(screen.getByText("仍可能续接")).toBeTruthy();
     expect(screen.getByText("宽限期未满")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: /为何保留 ▾/ }));
-    await user.click([...screen.getAllByRole("button", { name: /为何保留 ▸/ })].at(-1)!);
+    await user.click(screen.getByRole("button", { name: "ZCode 旧私有主目录：为何保留" }));
+    await user.click(screen.getByRole("button", { name: "future-thing：为何保留" }));
+    expect(within(screen.getByRole("table")).getByText("5 B")).toBeTruthy();
     expect(screen.getByText("never-seen-code")).toBeTruthy();
   });
 
   it("lists orphan processes without any stop control", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
+    render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
-    const orphans = screen.getByRole("heading", { name: /游离进程（2）/ }).closest<HTMLElement>(".storage-orphans")!;
-    expect(orphans.textContent).toContain("清理不会停止这些进程。");
+    const orphans = screen.getByRole("heading", { name: /游离进程（2）/ }).closest<HTMLElement>('[data-slot="storage-orphans"]')!;
+    expect(within(orphans).getByRole("heading").getAttribute("aria-description")).toBe("清理不会停止这些进程。");
     expect(orphans.textContent).toContain("服务");
     expect(orphans.textContent).toContain("执行进程");
     expect(orphans.textContent).toContain("pid 4321");
@@ -137,32 +144,37 @@ describe("storage panel (0.16 wire-shape contract)", () => {
   it("requires the modal confirmation; cancel is the initial focus and Esc cancels", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    const view = render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
+    const view = render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
-    const clean = screen.getByRole("button", { name: /清理可回收数据（5\.8 GB）/ }) as HTMLButtonElement;
-    expect(clean.className).toContain("danger");
+    const clean = screen.getByRole("button", { name: "回收…" }) as HTMLButtonElement;
+    expect(clean.getAttribute("aria-description")).toContain("5.8 GB");
     await user.click(clean);
     const dialog = screen.getByRole("dialog", { name: "清理可回收数据" });
     expect(dialog.getAttribute("aria-modal")).toBe("true");
     // The panel behind the modal is inert; the dialog itself stays usable.
-    const panelResult = view.container.querySelector<HTMLElement>(".storage-result")!;
-    expect(panelResult.hasAttribute("inert")).toBe(true);
+    const panelResult = view.container.firstElementChild as HTMLElement;
+    expect(panelResult.closest('[aria-hidden="true"]')).toBeTruthy();
     expect(dialog.hasAttribute("inert")).toBe(false);
-    expect(dialog.textContent).toContain("ZCode 私有主目录：2.7 GB");
+    expect(dialog.textContent).toContain("ZCode 旧私有主目录：2.7 GB");
     expect(dialog.textContent).toContain("看板、记录和上次升级之前的看板不会删除。");
     expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "确认清理" }));
+    await user.tab();
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
     fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "回收…" })));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    await waitFor(() => expect(panelResult.hasAttribute("inert")).toBe(false));
+    await waitFor(() => expect(panelResult.closest('[aria-hidden="true"]')).toBeNull());
     expect(f.command.mock.calls.filter(([operation]) => operation === "storage_apply")).toHaveLength(0);
   });
 
   it("confirms the exact plan with one command identity and reports skips", async () => {
     const f = fixture();
     const user = userEvent.setup();
-    render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
+    render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
-    await user.click(screen.getByRole("button", { name: /清理可回收数据/ }));
+    await user.click(screen.getByRole("button", { name: "回收…" }));
     await user.click(screen.getByRole("button", { name: "确认清理" }));
     expect(await screen.findByText(/已回收 2\.5 GB（2 项）/)).toBeTruthy();
     expect(screen.getByText("跳过 1 项 · 数据已变化")).toBeTruthy();
@@ -180,9 +192,9 @@ describe("storage panel (0.16 wire-shape contract)", () => {
   it("shows an unknown apply result with 重试同一请求 reusing the command identity", async () => {
     const first = fixture({ apply: "lost" });
     const user = userEvent.setup();
-    render(<StoragePanel api={first.api} csrfToken="csrf" connectionError="" />);
+    render(<StorageSection api={first.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
-    await user.click(screen.getByRole("button", { name: /清理可回收数据/ }));
+    await user.click(screen.getByRole("button", { name: "回收…" }));
     await user.click(screen.getByRole("button", { name: "确认清理" }));
     expect(await screen.findByText("清理结果未知，可能已执行")).toBeTruthy();
     const firstCommandId = (first.calls.find(call => call.operation === "storage_apply")!.params as { commandId: string }).commandId;
@@ -215,39 +227,40 @@ describe("storage panel (0.16 wire-shape contract)", () => {
       storageApply: async (planId: string, commandId: string) => command("storage_apply", { planId, commandId, confirm: true }),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
-    render(<StoragePanel api={api} csrfToken="csrf" connectionError="" />);
+    render(<StorageSection api={api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
     refused = true;
-    await user.click(screen.getByRole("button", { name: "重新检查" }));
+    await user.click(screen.getByRole("button", { name: "检查占用" }));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("记录冲突");
-    expect(screen.getByText("ZCode 私有主目录")).toBeTruthy();
+    expect(screen.getByText("ZCode 旧私有主目录")).toBeTruthy();
   });
 
   it("disables actions with a reason while the connection is interrupted", () => {
     const f = fixture();
-    render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="与本地黑板的连接已中断" />);
+    render(<StorageSection api={f.api} csrfToken="csrf" connectionError="与本地黑板的连接已中断" />);
     const check = screen.getByRole("button", { name: "检查占用" }) as HTMLButtonElement;
-    expect(check.disabled).toBe(true);
-    expect(check.getAttribute("title")).toContain("连接已中断");
+    expect(check.disabled).toBe(false);
+    expect(check.getAttribute("aria-disabled")).toBe("true");
+    expect(check.getAttribute("aria-description")).toContain("连接已中断");
     expect(f.command).not.toHaveBeenCalled();
   });
 
   it("resumes an interrupted STORAGE_INCOMPLETE apply with the same identity and blocks a fresh plan", async () => {
     const f = fixture({ apply: "incomplete" });
     const user = userEvent.setup();
-    render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
+    render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
-    await user.click(screen.getByRole("button", { name: /清理可回收数据/ }));
+    await user.click(screen.getByRole("button", { name: "回收…" }));
     await user.click(screen.getByRole("button", { name: "确认清理" }));
     // Neither a failure nor a claim that nothing ran.
     expect(await screen.findByText("清理未完成 · 已开始删除")).toBeTruthy();
     const retry = screen.getByRole("button", { name: "重试同一请求" }) as HTMLButtonElement;
-    expect(retry.disabled).toBe(false);
+    expect(retry.getAttribute("aria-disabled")).toBe("false");
     // A fresh plan would discard the unresolved operation, so re-checking is refused.
-    const recheck = screen.getByRole("button", { name: "重新检查" }) as HTMLButtonElement;
-    expect(recheck.disabled).toBe(true);
-    expect(recheck.getAttribute("title")).toContain("请先重试同一请求");
+    const recheck = screen.getByRole("button", { name: "检查占用" }) as HTMLButtonElement;
+    expect(recheck.getAttribute("aria-disabled")).toBe("true");
+    expect(recheck.getAttribute("aria-description")).toContain("请先重试同一请求");
     expect(f.calls.filter(call => call.operation === "storage_plan")).toHaveLength(1);
     // The retry replays the same planId/commandId and then completes.
     f.command.mockImplementation(async (operation: string) => operation === "storage_plan" ? plan() : applyResult());
@@ -261,23 +274,23 @@ describe("storage panel (0.16 wire-shape contract)", () => {
   it("keeps the unresolved identity retryable after plan expiry instead of disabling it", async () => {
     // First dispatch loses its reply; by the time the user retries, the plan's
     // 15-minute window has passed. The durable receipt still replays.
-    const soon = plan({ expiresAt: new Date(Date.now() + 200).toISOString() });
+    const soon = plan({ expiresAt: new Date(Date.now() + 1000).toISOString() });
     const f = fixture({ apply: "lost", planValue: soon });
     const user = userEvent.setup();
-    render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
+    render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
-    await user.click(screen.getByRole("button", { name: /清理可回收数据/ }));
+    await user.click(screen.getByRole("button", { name: "回收…" }));
     await user.click(screen.getByRole("button", { name: "确认清理" }));
     expect(await screen.findByText("清理结果未知，可能已执行")).toBeTruthy();
     const firstCommandId = (f.calls.find(call => call.operation === "storage_apply")!.params as { commandId: string }).commandId;
-    await new Promise(resolve => setTimeout(resolve, 400));
+    await new Promise(resolve => setTimeout(resolve, 1100));
     // The plan's window has passed, but the recovery retry stays enabled —
     // the durable receipt replays regardless of plan expiry.
     const retry = screen.getByRole("button", { name: "重试同一请求" }) as HTMLButtonElement;
-    expect(retry.disabled).toBe(false);
-    expect(retry.getAttribute("title")).toContain("重试同一请求可继续或核对清理");
-    const recheck = screen.getByRole("button", { name: "重新检查" }) as HTMLButtonElement;
-    expect(recheck.disabled).toBe(true);
+    expect(retry.getAttribute("aria-disabled")).toBe("false");
+    expect(retry.getAttribute("aria-description")).toContain("重试同一请求可继续或核对清理");
+    const recheck = screen.getByRole("button", { name: "检查占用" }) as HTMLButtonElement;
+    expect(recheck.getAttribute("aria-disabled")).toBe("true");
     f.command.mockImplementation(async (operation: string) => operation === "storage_plan" ? plan() : applyResult());
     await user.click(retry);
     expect(await screen.findByText(/已回收/)).toBeTruthy();
@@ -289,19 +302,64 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     const expiredPlan = plan({ expiresAt: new Date(Date.now() - 60_000).toISOString() });
     const f = fixture({ planValue: expiredPlan });
     const user = userEvent.setup();
-    render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
+    render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
     expect(screen.getByText("计划已过期 · 请重新检查")).toBeTruthy();
-    const clean = screen.getByRole("button", { name: /清理可回收数据/ }) as HTMLButtonElement;
-    expect(clean.disabled).toBe(true);
-    expect(clean.getAttribute("title")).toContain("计划已过期");
+    const clean = screen.getByRole("button", { name: "回收…" }) as HTMLButtonElement;
+    expect(clean.disabled).toBe(false);
+    expect(clean.getAttribute("aria-disabled")).toBe("true");
+    expect(clean.getAttribute("aria-description")).toContain("计划已过期");
     // A second, live plan in another window stays usable (multi-window).
     const live = plan();
     const g = fixture({ planValue: live });
-    render(<StoragePanel api={g.api} csrfToken="csrf" connectionError="" />);
+    render(<StorageSection api={g.api} csrfToken="csrf" connectionError="" />);
     const panel2 = screen.getAllByRole("region", { name: "存储" })[1]!;
     await user.click(within(panel2).getByRole("button", { name: "检查占用" }));
-    const clean2 = await within(panel2).findByRole("button", { name: /清理可回收数据/ }) as HTMLButtonElement;
-    expect(clean2.disabled).toBe(false);
+    const clean2 = await within(panel2).findByRole("button", { name: "回收…" }) as HTMLButtonElement;
+    expect(clean2.getAttribute("aria-disabled")).toBe("false");
   });
+
+  it("keeps unavailable controls focusable and refuses their clicks", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    render(<StorageSection api={f.api} csrfToken="csrf" connectionError="offline" />);
+    const check = screen.getByRole("button", { name: "检查占用" });
+    await user.tab();
+    expect(document.activeElement).toBe(check);
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("button", { name: "回收…" }));
+    expect(f.command).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("refuses confirmation if the connection is interrupted while its dialog is open", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    const view = render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
+    await checkUsage(user);
+    await user.click(screen.getByRole("button", { name: "回收…" }));
+    view.rerender(<StorageSection api={f.api} csrfToken="csrf" connectionError="offline" />);
+    const confirm = within(screen.getByRole("dialog")).getByRole("button", { name: "确认清理" });
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    expect(confirm.getAttribute("aria-description")).toBe("offline");
+    await user.click(confirm);
+    expect(f.calls.filter(call => call.operation === "storage_apply")).toHaveLength(0);
+  });
+
+  it("checks the exact expiry at dispatch even before a display timer can run", async () => {
+    const expiresAt = Date.now() + 60_000;
+    const f = fixture({ planValue: plan({ expiresAt: new Date(expiresAt).toISOString() }) });
+    const user = userEvent.setup();
+    render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
+    await checkUsage(user);
+    await user.click(screen.getByRole("button", { name: "回收…" }));
+    vi.spyOn(Date, "now").mockReturnValue(expiresAt);
+    await user.click(screen.getByRole("button", { name: "确认清理" }));
+    expect(f.calls.filter(call => call.operation === "storage_apply")).toHaveLength(0);
+    expect(await screen.findByText("计划已过期；请关闭并重新检查")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "确认清理" }).getAttribute("aria-disabled")).toBe("true");
+  });
+
+
+
 });

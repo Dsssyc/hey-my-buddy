@@ -530,7 +530,7 @@ describe("what leaves the roles view out of use", () => {
     const f = fixture(snapshot({ routers: [MEDIUM_ID, FLASH_ID], canWrite: false, routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
     const user = userEvent.setup();
     await openRoles(f);
-    const reason = "登录已失效，重新登录后可以修改";
+    const reason = "浏览器授权已失效，重新授权后可以修改";
     for (const control of [addButton(), moveDown(MEDIUM), moveUp(FLASH), remove(MEDIUM), intervalInput()]) {
       expect(control.getAttribute("aria-disabled")).toBe("true");
       expect(control.getAttribute("aria-description")).toBe(reason);

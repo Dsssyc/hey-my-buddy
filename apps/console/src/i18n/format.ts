@@ -2,16 +2,29 @@ import i18n from "i18next";
 import { locale } from "./index";
 
 // Clock times use 24 hours in every language: they are read against a timeline.
-const clock = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
-const dateTime = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium", hourCycle: "h23" });
-const list = new Intl.ListFormat(locale, { type: "conjunction" });
-const minuteClock = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-const whole = new Intl.NumberFormat(locale);
-const tenth = new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+function makeFormatters() {
+  return {
+    clock: new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }),
+    dateTime: new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium", hourCycle: "h23" }),
+    list: new Intl.ListFormat(locale, { type: "conjunction" }),
+    minuteClock: new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }),
+    whole: new Intl.NumberFormat(locale),
+    tenth: new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }),
+  };
+}
+let formattingLocale = locale;
+let currentFormatters = makeFormatters();
+function formatters() {
+  if (formattingLocale !== locale) {
+    formattingLocale = locale;
+    currentFormatters = makeFormatters();
+  }
+  return currentFormatters;
+}
 
 /** 18:06:41 */
 export function formatClock(ms: number): string {
-  return clock.format(ms);
+  return formatters().clock.format(ms);
 }
 
 /** 09-27 06:05, in digits and local time: for rows and fields that have room for no more. */
@@ -23,17 +36,17 @@ export function formatShortDateTime(ms: number): string {
 
 /** Several names as the language lists them: "Codex and DSH", "Codex和DSH". */
 export function formatList(names: string[]): string {
-  return list.format(names);
+  return formatters().list.format(names);
 }
 
 /** A full local date and time, with the month written out where the locale's numeric order is ambiguous. */
 export function formatDateTime(ms: number): string {
-  return dateTime.format(ms);
+  return formatters().dateTime.format(ms);
 }
 
 /** 18:06 */
 export function formatClockMinutes(ms: number): string {
-  return minuteClock.format(ms);
+  return formatters().minuteClock.format(ms);
 }
 
 /** A local instant without seconds, with enough date context to distinguish older days. */
@@ -47,12 +60,12 @@ export function formatMomentMinutes(ms: number, nowMs: number): string {
 
 /** 12,000 */
 export function formatNumber(value: number): string {
-  return whole.format(value);
+  return formatters().whole.format(value);
 }
 
 /** 23.4k: a count of tokens in the room of a few characters; below a thousand it is written whole. */
 export function formatCompact(value: number): string {
-  return value < 1000 ? whole.format(value) : `${tenth.format(value / 1000)}k`;
+  return value < 1000 ? formatters().whole.format(value) : `${formatters().tenth.format(value / 1000)}k`;
 }
 
 /**
@@ -63,7 +76,7 @@ export function formatDuration(ms: number, fine = false): string {
   const total = Math.max(0, Math.round(ms / 1000));
   const [h, m, s] = [Math.floor(total / 3600), Math.floor(total / 60) % 60, total % 60];
   const part = (unit: "hour" | "minute" | "second", n: number, padded = false) =>
-    i18n.t(`shell:duration.${unit}`, { n: padded ? String(n).padStart(2, "0") : whole.format(n) });
+    i18n.t(`shell:duration.${unit}`, { n: padded ? String(n).padStart(2, "0") : formatters().whole.format(n) });
   if (h > 0) return fine ? `${part("hour", h)} ${part("minute", m, true)} ${part("second", s, true)}` : m ? `${part("hour", h)} ${part("minute", m)}` : part("hour", h);
   if (m > 0) return fine ? `${part("minute", m)} ${part("second", s, true)}` : total < 600 && s ? `${part("minute", m)} ${part("second", s)}` : part("minute", m);
   return part("second", s);
@@ -83,7 +96,7 @@ export function formatRelative(ms: number, nowMs: number): string {
   const seconds = Math.max(0, Math.round((nowMs - ms) / 1000));
   const [unit, n] = seconds < 60 ? ["second", seconds] as const : seconds < 3600 ? ["minute", Math.round(seconds / 60)] as const
     : seconds < 86400 ? ["hour", Math.round(seconds / 3600)] as const : ["day", Math.round(seconds / 86400)] as const;
-  return i18n.t(`shell:relative.${unit}`, { n: whole.format(n) });
+  return i18n.t(`shell:relative.${unit}`, { n: formatters().whole.format(n) });
 }
 
 /**
@@ -101,5 +114,5 @@ export function formatMoment(ms: number, nowMs: number): string {
 
 /** Calendar date for a records group, in the active locale. */
 export function formatCalendarDate(ms: number): string {
-  return new Intl.DateTimeFormat(i18n.language, { year: "numeric", month: "2-digit", day: "2-digit" }).format(ms);
+  return new Intl.DateTimeFormat(locale, { year: "numeric", month: "2-digit", day: "2-digit" }).format(ms);
 }

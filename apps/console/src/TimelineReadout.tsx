@@ -1,15 +1,18 @@
+import { useTranslation } from "react-i18next";
+import i18n from "i18next";
 import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
+import { locale } from "./i18n";
 import { Popover } from "./Popover";
 import type { TimelineGap, TimelineLayout } from "./macro-task-timeline-layout";
 import { clockTime, durationShort } from "./macro-task-display";
 
 /** Idle intervals show both complete local instants, including the date across long breaks. */
 export function idleReadout(gap: TimelineGap): string {
-  const instant = (ms: number) => new Date(ms).toLocaleString("zh-CN", {
+  const instant = (ms: number) => new Date(ms).toLocaleString(locale, {
     year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
   });
-  return `空闲 ${durationShort(gap.endMs - gap.startMs)} · ${instant(gap.startMs)}–${instant(gap.endMs)}`;
+  return i18n.t("console:idleRange", { v0: durationShort(gap.endMs - gap.startMs), v1: instant(gap.startMs), v2: instant(gap.endMs) });
 }
 
 /** Native pointer updates touch only these two nodes, never React timeline/row state. */
@@ -18,6 +21,7 @@ export function TimelineReadout({ gridRef, scrollRef, scale }: {
   scrollRef: RefObject<HTMLDivElement | null>;
   scale: TimelineLayout & { widthPx: number };
 }) {
+  useTranslation("console");
   const [focusedIdle, setFocusedIdle] = useState<{ anchor: HTMLElement; gap: TimelineGap } | null>(null);
   const suppressedFocus = useRef<HTMLElement | null>(null);
   const focusedGap = scale.gaps.find(gap => gap.id === focusedIdle?.gap.id && gap.collapsed);
@@ -95,7 +99,7 @@ export function TimelineReadout({ gridRef, scrollRef, scale }: {
   return <>
     <div ref={lineRef} className="timeline-readout-line" hidden />
     <output ref={textRef} className="timeline-readout" hidden />
-    {focusedIdle && focusedGap && <Popover anchor={focusedIdle.anchor} label="空闲区间" width="28em"
+    {focusedIdle && focusedGap && <Popover anchor={focusedIdle.anchor} label={i18n.t("console:idlePeriod")} width="28em"
       boundary={scrollRef.current?.closest<HTMLElement>(".timeline-view")}
       onClose={() => {
         // Escape returns to the anchor synchronously after onClose. That focus

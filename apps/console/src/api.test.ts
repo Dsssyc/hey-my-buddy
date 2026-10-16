@@ -609,6 +609,13 @@ describe("storage wire shapes (0.16, operations.md 3b0a2e6)", () => {
       { ...planEnvelope, candidates: null },
       { ...planEnvelope, orphanProcesses: {} },
       { ...planEnvelope, planId: "" },
+      { ...planEnvelope, createdAt: "unrecorded" },
+      { ...planEnvelope, expiresAt: "never" },
+      { ...planEnvelope, categories: [{ ...planEnvelope.categories[0], count: -1 }] },
+      { ...planEnvelope, categories: [{ ...planEnvelope.categories[0], reasons: [null] }] },
+      { ...planEnvelope, categories: [...planEnvelope.categories, ...planEnvelope.categories] },
+      { ...planEnvelope, candidates: [{ id: "c", category: "zcode", path: "/p", bytes: 1, eligible: true, reasons: [3] }] },
+      { ...planEnvelope, orphanProcesses: [{ pid: 12, kind: "execution", stateDir: false, runtimeDir: null }] },
       { ...planEnvelope, categories: [{ id: "zcode", bytes: "1", reclaimableBytes: 0, count: 0, eligibleCount: 0, reasons: [] }] },
     ]) {
       await expect(commandApi(broken).storagePlan("csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
@@ -629,6 +636,8 @@ describe("storage wire shapes (0.16, operations.md 3b0a2e6)", () => {
     await expect(commandApi(numeric).storageApply("plan-9", "cmd-1", "csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     const mismatch = { planId: "plan-other", removedBytes: 0, removed: [], skipped: [], complete: true };
     await expect(commandApi(mismatch).storageApply("plan-9", "cmd-1", "csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    const badReasons = { planId: "plan-9", removedBytes: 0, removed: [], skipped: [{ id: "c", path: "/p", reasons: [null] }], complete: true };
+    await expect(commandApi(badReasons).storageApply("plan-9", "cmd-1", "csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     const unfinished = { planId: "plan-9", removedBytes: 4, removed: [{ id: "c1", path: "/p/one", bytes: 4 }], skipped: [], complete: false };
     await expect(commandApi(unfinished).storageApply("plan-9", "cmd-1", "csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
   });
@@ -647,6 +656,7 @@ describe("on-demand running and installed version facts", () => {
     for (const broken of [null, {}, { running: { ...facts, mode: "unknown" }, installed: null },
       { ...version, running: { ...version.running, softwareVersion: "" } },
       { ...version, running: { ...version.running, sourceCommit: undefined } },
+      { ...version, running: { ...version.running, installedAt: "not-a-date" } },
       { ...version, installed: { ...facts, schemaVersion: "15" } }]) {
       const api = createApi("", vi.fn(async () => new Response(JSON.stringify(broken))) as typeof fetch);
       await expect(api.runtimeVersion()).rejects.toMatchObject({ code: "INVALID_RESPONSE" });

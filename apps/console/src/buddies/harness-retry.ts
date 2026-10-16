@@ -1,6 +1,8 @@
-import type { TFunction } from "i18next";
+import i18n from "i18next";
 import type { ConsoleApi } from "../api";
 import { ApiError } from "../api";
+
+const liveT = i18n.getFixedT(null, "buddies");
 
 /**
  * The minimal quota recovery entry (ADR-019 second stage). One persisted
@@ -27,7 +29,7 @@ type Reply = { duplicate?: boolean; quota?: { opened?: (string | null)[]; alread
  * replayed as the same request and never opens a second window.
  */
 export async function openQuotaRetry(
-  api: ConsoleApi, csrfToken: string, harness: string, provider: string, t: TFunction<"buddies">,
+  api: ConsoleApi, csrfToken: string, harness: string, provider: string,
 ): Promise<RetryOutcome> {
   const intentKey = `hey-my-buddy-quota-redetect:${harness}:${provider}`;
   let requestId: string;
@@ -36,11 +38,11 @@ export async function openQuotaRetry(
     requestId = retained && /^[A-Za-z0-9_-]{1,128}$/.test(retained) ? retained : crypto.randomUUID();
     sessionStorage.setItem(intentKey, requestId);
   } catch {
-    throw new ApiError("REQUEST_STORAGE_UNAVAILABLE", t("harness.quota.storageUnavailable"));
+    throw new ApiError("REQUEST_STORAGE_UNAVAILABLE", () => liveT("harness.quota.storageUnavailable"));
   }
   const reply = await api.command<Reply>("quota_redetect", { harness, provider, requestId }, csrfToken);
   if (!reply?.quota || !Array.isArray(reply.quota.opened) || !Array.isArray(reply.quota.alreadyOpen)) {
-    throw new ApiError("INVALID_RESPONSE", t("harness.quota.unknownResult"));
+    throw new ApiError("INVALID_RESPONSE", () => liveT("harness.quota.unknownResult"));
   }
   sessionStorage.removeItem(intentKey);
   if (reply.duplicate) return "duplicate";

@@ -12,8 +12,8 @@ import { listed, note, selectModel } from "./buddies/page.testing";
 import { timelineOfRecords } from "./task-detail/task-detail.fixtures";
 
 const bannerNotice = /新窗口已取得写权限，此页面现在是只读/;
-const actionRefusal = /登录已失效/;
-const saveRefusal = /登录已失效/;
+const actionRefusal = /浏览器授权已失效/;
+const saveRefusal = /浏览器授权已失效/;
 
 /** Two model services and three execution buddies, all available. */
 function catalog(): Buddy[] {
@@ -263,8 +263,8 @@ describe("console session descriptor validation", () => {
 
   it("maps the 401 CONSOLE_SESSION_EXPIRED refusal to login-expired copy (0.16)", () => {
     const expired = errorText(new ApiError("CONSOLE_SESSION_EXPIRED", "server raw text"));
-    expect(expired).toContain("登录已失效");
-    expect(expired).toContain("请运行 hey-my-buddy console 重新登录");
+    expect(expired).toContain("浏览器授权已失效");
+    expect(expired).toContain("请运行 hey-my-buddy console 重新授权");
     expect(expired).not.toContain("server raw text");
     expect(expired).not.toContain("新窗口");
     // The retired single-writer code no longer exists anywhere in the client.
@@ -343,7 +343,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     // banner and no single-writer copy anywhere.
     f.expireSession();
     await readSnapshotOnForeground(f.api.snapshot);
-    expect(await screen.findByText(/登录已失效/)).toBeTruthy();
+    expect(await screen.findByText(/浏览器授权已失效/)).toBeTruthy();
     expect(screen.queryByText(bannerNotice)).toBeNull();
     // Discovery and saving stay disabled with no edit switch to gate them.
     const discover = screen.getByRole("button", { name: "发现模型" });

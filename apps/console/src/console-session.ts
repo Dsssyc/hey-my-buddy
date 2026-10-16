@@ -1,3 +1,4 @@
+import i18n from "i18next";
 import type { Snapshot } from "./types";
 
 /**
@@ -43,29 +44,24 @@ export type AuthorityLatch = ReturnType<typeof createAuthorityLatch>;
  * whole origin, so re-logging-in from any window restores this page's polling
  * without a reload; drafts stay right here.
  */
-export const LOGIN_EXPIRED_BANNER =
-  "登录已失效：在终端运行 hey-my-buddy console 重新登录后，本页会自动恢复。草稿保留在本页。";
+export const LOGIN_EXPIRED_BANNER = () => i18n.t("console:yourLoginExpiredRunHeyMyBuddy");
 
 /** Copy for a mutation control an unauthenticated page cannot use. */
-export const LOGIN_EXPIRED_ACTION_REFUSAL =
-  "登录已失效，操作未提交；请重新登录。";
+export const LOGIN_EXPIRED_ACTION_REFUSAL = () => i18n.t("console:yourLoginExpiredTheActionWasNot");
 
 /** Copy for the save path; the draft stays local and is never discarded. */
-export const LOGIN_EXPIRED_SAVE_REFUSAL =
-  "登录已失效；请重新登录后保存，草稿已保留。";
+export const LOGIN_EXPIRED_SAVE_REFUSAL = () => i18n.t("console:yourLoginExpiredLogInAgainBefore");
 
 /**
  * Copy when a save reply was lost: the result is unknown — it may have
  * committed — so the draft and its submission identity both stay retained for
  * inspection/replay. Never described as failure or rollback.
  */
-export const UNRESOLVED_SAVE_NOTE =
-  "保存结果未知，可能已生效；请核对后重试。";
+export const UNRESOLVED_SAVE_NOTE = () => i18n.t("console:theSaveResultIsUnknownAndMay");
 
 /**
  * Copy for a page whose writes are paused because the authenticated poll failed
  * (network loss or an unreadable snapshot). A failed poll alone says nothing
  * about login validity, so it never borrows the login-expired wording.
  */
-export const CONNECTION_WRITE_PAUSED =
-  "连接中断，无法提交；请刷新重试，草稿已保留。";
+export const CONNECTION_WRITE_PAUSED = () => i18n.t("console:disconnectedCannotSubmitRefreshAndRetryYour");

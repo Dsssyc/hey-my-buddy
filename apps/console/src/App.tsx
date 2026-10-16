@@ -1,3 +1,4 @@
+import i18n from "i18next";
 import { cn } from "cn";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
@@ -15,6 +16,7 @@ import { useConsole } from "./use-console";
 import { useEditor } from "./use-editor";
 import type { Editor } from "./use-editor";
 import { useTheme } from "./theme";
+import { getLanguageChoice, setLanguageChoice } from "./i18n";
 import { createAuthorityLatch } from "./console-session";
 import { formatClock, formatDateTime } from "./i18n/format";
 import { MacroTasks } from "./MacroTasks";
@@ -110,8 +112,8 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   const writesAvailable = !connectionError && sessionWritable;
   const mutationsAvailable = writesAvailable;
   const unavailableReason = connectionError
-    ? t("draft.unavailable.connection")
-    : !sessionWritable ? t("draft.unavailable.login") : "";
+    ? () => i18n.t("shell:draft.unavailable.connection")
+    : !sessionWritable ? () => i18n.t("shell:draft.unavailable.login") : "";
   const editor = useEditor(api, snapshot, refresh, mutationsAvailable, unavailableReason, authority);
   function select(key: Tab) {
     setTab(key);
@@ -193,14 +195,14 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       {/* Stable positions preserve page selections, drafts and scroll offsets.
           https://react.dev/learn/preserving-and-resetting-state */}
       {tabs.map(key => visited.has(key) && <section key={key} hidden={tab !== key}
-        className={"min-h-0 min-w-0 flex-1 overflow-hidden" + (key === "settings" ? " p-2 sm:p-4" : "")} aria-label={t(`nav.${key}`)}>
+        className="min-h-0 min-w-0 flex-1 overflow-hidden" aria-label={t(`nav.${key}`)}>
         {key === "tasks" ? <MacroTasks snapshot={snapshot} api={api} refresh={refresh} active={tab === key}
           authority={authority} writesAvailable={writesAvailable} onAddress={setTasksAddress} connectionError={connectionError} verifiedAtMs={verifiedAt} /> :
           key === "buddies" ? <BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
             <Settings api={api} csrfToken={snapshot.csrfToken} connectionError={connectionError}
               access={snapshot.consoleAccess} reminders={snapshot.reminderSettings} refresh={refresh} writesAvailable={writesAvailable}
               active={tab === "settings"}
-              theme={theme.choice} onTheme={theme.setChoice} />}
+              theme={theme.choice} onTheme={theme.setChoice} language={getLanguageChoice()} onLanguage={setLanguageChoice} />}
       </section>)}
       {draftTab && editor.mode && <SaveBar editor={editor} mutationsAvailable={mutationsAvailable}
         describedBy={saveRefusal ? "editor-save-reason" : undefined} />}

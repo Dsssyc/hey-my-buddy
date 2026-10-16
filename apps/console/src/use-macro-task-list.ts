@@ -1,3 +1,4 @@
+import { useCopyState } from "./i18n/use-copy-state";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
@@ -21,7 +22,7 @@ function byActivity(left: MacroTaskSummary, right: MacroTaskSummary): number {
 export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active: boolean) {
   const [page, setPage] = useState<PageState>({ rows: [], totals: emptyTotals(), nextCursor: null });
   const [latest, setLatest] = useState<Map<string, MacroTaskSummary>>(() => new Map());
-  const [loading, setLoading] = useState(active), [error, setError] = useState("");
+  const [loading, setLoading] = useState(active), [error, setError] = useCopyState();
   const [reorder, setReorder] = useState<{ count: number | null } | null>(null);
   const [verifiedAtMs, setVerifiedAtMs] = useState<number | null>(null);
   const [revision, setRevision] = useState(0);
@@ -133,7 +134,7 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
         else setReorder(null);
       }
     } catch (failure) {
-      if (version === generation.current && !controller.signal.aborted && !isAbortError(failure)) setError(errorText(failure));
+      if (version === generation.current && !controller.signal.aborted && !isAbortError(failure)) setError(() => errorText(failure));
       if (strict && !isAbortError(failure)) throw failure;
     } finally {
       if (version === generation.current) { pending.current = false; if (mode !== "poll") setLoading(false); }

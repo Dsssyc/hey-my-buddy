@@ -1,3 +1,4 @@
+import { useCopyState } from "./i18n/use-copy-state";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
@@ -29,7 +30,7 @@ function atOrPastFloor(row: Task, floor: Task): boolean {
 export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolean) {
   const [page, setPage] = useState<TaskPage>({ runs: [], total: 0, nextCursor: null });
   const [newIds, setNewIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [loading, setLoading] = useState(active), [error, setError] = useState("");
+  const [loading, setLoading] = useState(active), [error, setError] = useCopyState();
   const [verifiedAtMs, setVerifiedAtMs] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [revision, setRevision] = useState(0);
@@ -86,7 +87,7 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
     } catch (failure) {
       if (version === generation.current && readScope === current.current.scope && !controller.signal.aborted && !isAbortError(failure)) {
         failedRead.current = { kind: append ? "append" : "first", scope: readScope, ...(append ? { before: cursor! } : {}) };
-        setError(errorText(failure));
+        setError(() => errorText(failure));
       }
       if (strict && !isAbortError(failure)) throw failure;
     } finally {
@@ -190,7 +191,7 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
     } catch (failure) {
       if (version === generation.current && readScope === current.current.scope && !controller.signal.aborted && !isAbortError(failure)) {
         failedRead.current = { kind: "poll", scope: readScope };
-        setError(errorText(failure));
+        setError(() => errorText(failure));
       }
       if (strict && !isAbortError(failure)) throw failure;
     } finally {
@@ -275,7 +276,7 @@ export function useTaskHistory(api: ConsoleApi, query: TaskQuery, active: boolea
     } catch (failure) {
       if (scope === generation.current && readScope === current.current.scope && !isAbortError(failure)) {
         failedRead.current = { kind, scope: readScope };
-        setError(errorText(failure));
+        setError(() => errorText(failure));
       }
     } finally { setRefreshing(false); }
   };

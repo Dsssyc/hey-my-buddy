@@ -1,5 +1,6 @@
 import i18n from "i18next";
 import { actorRoleText } from "./actor";
+import { locale } from "./i18n";
 /**
  * Pure display vocabulary for the work macro task timeline. Everything here is
  * derived from recorded facts only: no cost or token claims, no invented
@@ -51,32 +52,32 @@ export function spanOutcome(span: TimelineSpan): SpanOutcome {
 }
 
 export const OUTCOME_LABEL: Record<SpanOutcome, string> = {
-  open: "仍在等待", admitted: "已开始", resolved: "已决定", running: "执行中",
-  failed: "执行失败", cancelled: "已取消", unknown: "结束未确认", finished: "执行完成",
-  unplaced: "时间缺失", abstention: "已放弃选择",
+  get open() { return i18n.t("console:stillWaiting"); }, get admitted() { return i18n.t("console:started"); }, get resolved() { return i18n.t("console:decided"); }, get running() { return i18n.t("console:executing"); },
+  get failed() { return i18n.t("console:executionFailed"); }, get cancelled() { return i18n.t("console:cancelled"); }, get unknown() { return i18n.t("console:stopUnconfirmed"); }, get finished() { return i18n.t("console:executionCompleted"); },
+  get unplaced() { return i18n.t("console:timeMissing"); }, get abstention() { return i18n.t("console:abstained"); },
 };
 
 /** Host-request decision labels use the recorded request state, not a guess. */
 const HOST_STATE_LABEL: Record<string, string> = {
-  approved: "已批准", declined: "已拒绝", superseded: "已被取代", cancelled: "已取消",
+  get approved() { return i18n.t("console:approved"); }, get declined() { return i18n.t("console:declined"); }, get superseded() { return i18n.t("console:superseded"); }, get cancelled() { return i18n.t("console:cancelled"); },
 };
 
 export function outcomeLabel(span: TimelineSpan, outcome: SpanOutcome): string {
   if (span.kind === "routing") {
-    if (outcome === "running") return "路由中";
-    if (outcome === "failed") return "路由失败";
-    if (outcome === "finished") return "已完成";
+    if (outcome === "running") return i18n.t("console:routingInProgress");
+    if (outcome === "failed") return i18n.t("console:routingFailed");
+    if (outcome === "finished") return i18n.t("console:completed");
   }
-  if (span.kind === "queue") return outcome === "open" ? "仍在排队" : "已开始";
+  if (span.kind === "queue") return outcome === "open" ? i18n.t("console:stillQueued") : i18n.t("console:started");
   if (span.kind === "host" && outcome === "resolved") {
     const state = typeof span.state === "string" ? span.state.trim().toLowerCase() : "";
-    return HOST_STATE_LABEL[state] || span.state || "已决定";
+    return HOST_STATE_LABEL[state] || span.state || i18n.t("console:decided");
   }
   return OUTCOME_LABEL[outcome];
 }
 
 export function spanHead(kind: TimelineSpan["kind"]): string {
-  return kind === "queue" ? "排队" : kind === "routing" ? "路由" : kind === "host" ? "等待 Host" : "执行片段";
+  return kind === "queue" ? i18n.t("console:queue") : kind === "routing" ? i18n.t("console:routing") : kind === "host" ? i18n.t("console:waitingForHost") : i18n.t("console:executionSpan");
 }
 
 export const SPAN_SECTION: Record<TimelineSpan["kind"], SectionId> = {
@@ -84,10 +85,10 @@ export const SPAN_SECTION: Record<TimelineSpan["kind"], SectionId> = {
 };
 
 const EVENT_VOCAB: Record<string, { label: string; glyph: string }> = {
-  dispatch: { label: "派发", glyph: "▶" }, decide: { label: "决定", glyph: "◆" },
-  continue: { label: "续接", glyph: "↻" }, integrate: { label: "整合", glyph: "⊕" },
-  accept: { label: "验收", glyph: "✓" }, reject: { label: "验收问题", glyph: "!" },
-  cancel: { label: "取消", glyph: "✕" }, takeover: { label: "接管", glyph: "⇄" },
+  dispatch: { get label() { return i18n.t("console:dispatch"); }, glyph: "▶" }, decide: { get label() { return i18n.t("console:decide"); }, glyph: "◆" },
+  continue: { get label() { return i18n.t("console:continue"); }, glyph: "↻" }, integrate: { get label() { return i18n.t("console:integrate"); }, glyph: "⊕" },
+  accept: { get label() { return i18n.t("console:acceptance"); }, glyph: "✓" }, reject: { get label() { return i18n.t("console:acceptanceIssue"); }, glyph: "!" },
+  cancel: { get label() { return i18n.t("console:cancel"); }, glyph: "✕" }, takeover: { get label() { return i18n.t("console:takeOver"); }, glyph: "⇄" },
 };
 
 export function eventVocab(kind: string): { label: string; glyph: string } {
@@ -128,7 +129,7 @@ export function eventClusterLabel(events: readonly TimelineEvent[]): string {
   for (const event of events) byKind.set(event.kind, (byKind.get(event.kind) ?? 0) + 1);
   const parts = [...byKind.entries()].map(([kind, count]) =>
     count > 1 ? `${eventVocab(kind).label} ${count}` : eventVocab(kind).label);
-  return `Host 事件 ${events.length} 条：${parts.join("、")}，按 Enter 列出`;
+  return i18n.t("console:hostEventsPressEnterToListThem", { v0: events.length, v1: parts.join(i18n.t("console:listSeparator")) });
 }
 
 /** The marker chip of one cluster: the shared glyph with a small count, or ≡ for mixed kinds. */
@@ -152,7 +153,7 @@ export function eventSection(kind: string): SectionId {
 
 /** Timeline categories are disjoint and already priority-ordered by the service. */
 export const CATEGORY_LABEL: Record<MacroTaskCategory, string> = {
-  host: "等待 Host", active: "进行中", review: "等待验收", ended: "已结束",
+  get host() { return i18n.t("console:waitingForHost"); }, get active() { return i18n.t("console:running"); }, get review() { return i18n.t("console:awaitingAcceptance"); }, get ended() { return i18n.t("console:ended"); },
 };
 
 /**
@@ -163,14 +164,14 @@ export const CATEGORY_LABEL: Record<MacroTaskCategory, string> = {
 export function macroTaskStateLabel(summary: MacroTaskSummary): string {
   if (summary.state === "ended"
     && summary.counts.roots > 0 && summary.counts.accepted === summary.counts.roots) {
-    return "已完成";
+    return i18n.t("console:completed");
   }
   return CATEGORY_LABEL[summary.state];
 }
 
 /** The header progress sentence: “{状态} · x / y 个微任务已验收”. */
 export function macroTaskProgressText(summary: MacroTaskSummary): string {
-  return `${macroTaskStateLabel(summary)} · ${summary.counts.accepted} / ${summary.counts.roots} 个微任务已验收`;
+  return i18n.t("console:microTasksAccepted", { v0: macroTaskStateLabel(summary), v1: summary.counts.accepted, v2: summary.counts.roots });
 }
 
 export function categoryTone(category: MacroTaskCategory): "green" | "amber" | "neutral" {
@@ -179,10 +180,10 @@ export function categoryTone(category: MacroTaskCategory): "green" | "amber" | "
 
 /** Fixed-order count chips; zero entries are omitted by the caller. */
 export const COUNT_ORDER: readonly { key: keyof MacroTaskSummary["counts"]; glyph: string; label: string }[] = [
-  { key: "active", glyph: "●", label: "进行中" },
-  { key: "host", glyph: "◆", label: "等待 Host" },
-  { key: "review", glyph: "✓", label: "等待验收" },
-  { key: "ended", glyph: "■", label: "已结束" },
+  { key: "active", glyph: "●", get label() { return i18n.t("console:running"); } },
+  { key: "host", glyph: "◆", get label() { return i18n.t("console:waitingForHost"); } },
+  { key: "review", glyph: "✓", get label() { return i18n.t("console:awaitingAcceptance"); } },
+  { key: "ended", glyph: "■", get label() { return i18n.t("console:ended"); } },
 ];
 
 export function totalMicroTasks(counts: MacroTaskSummary["counts"]): number {
@@ -202,18 +203,18 @@ const ROW_STATE_STYLE: Record<string, { tone: "green" | "amber" | "red" | "neutr
 };
 
 const STATE_LABELS: Record<string, string> = {
-  queued: "排队中", running: "执行中", cancelling: "正在取消", completed: "执行完成",
-  cancelled: "已取消", failed: "执行失败", "reconciliation-needed": "等待核对",
-  executing: "执行中", "awaiting-host": "等待 Host", "waiting-helpers": "协助执行中",
-  "waiting-owned": "等待名下的微任务",
-  delivered: "等待验收", accepted: "已验收", concluded: "已结束",
+  get queued() { return i18n.t("console:queued"); }, get running() { return i18n.t("console:executing"); }, get cancelling() { return i18n.t("console:cancelling"); }, get completed() { return i18n.t("console:executionCompleted"); },
+  get cancelled() { return i18n.t("console:cancelled"); }, get failed() { return i18n.t("console:executionFailed"); }, get "reconciliation-needed"() { return i18n.t("console:awaitingReconciliation"); },
+  get executing() { return i18n.t("console:executing"); }, get "awaiting-host"() { return i18n.t("console:waitingForHost"); }, get "waiting-helpers"() { return i18n.t("console:helpersRunning"); },
+  get "waiting-owned"() { return i18n.t("console:waitingForOwnedMicroTasks"); },
+  get delivered() { return i18n.t("console:awaitingAcceptance"); }, get accepted() { return i18n.t("console:accepted"); }, get concluded() { return i18n.t("console:ended"); },
 };
 
 export function rowStateInfo(row: TimelineRow): { label: string; tone: "green" | "amber" | "red" | "neutral"; glyph: string; glyphClass: string } {
   const key = row.state || row.status;
   const style = ROW_STATE_STYLE[key];
   return {
-    label: key === "awaiting-host" && row.rootLeadRunId ? "等待 Lead" : STATE_LABELS[key] || key || "未知",
+    label: key === "awaiting-host" && row.rootLeadRunId ? i18n.t("console:waitingForLead") : STATE_LABELS[key] || key || i18n.t("console:unknown"),
     tone: style?.tone ?? "neutral",
     glyph: style?.glyph ?? "■",
     glyphClass: style?.glyphClass ?? "muted",
@@ -222,7 +223,7 @@ export function rowStateInfo(row: TimelineRow): { label: string; tone: "green" |
 
 /** `title` is always the intent under 0.15; the nullable `summary` is a separate result line. */
 export const TITLE_SOURCE_LABEL: Record<string, string> = {
-  "macro-task": "宏任务标题", title: "Host 标题", task: "原始任务首行", none: "未命名微任务",
+  get "macro-task"() { return i18n.t("console:macroTaskTitle"); }, get title() { return i18n.t("console:hostTitle"); }, get task() { return i18n.t("console:originalTaskFirstLine"); }, get none() { return i18n.t("console:unnamedMicroTask"); },
 };
 
 /* ---- one-line title presentation (0.15.1 U3) ---- */
@@ -230,7 +231,7 @@ export const TITLE_SOURCE_LABEL: Record<string, string> = {
 /** `titleSource: task` labels cap at roughly this many characters on one line. */
 export const TASK_TITLE_CHARS = 40;
 /** Annotation shown wherever a task-first-line title is displayed. */
-export const TASK_SOURCE_NOTE = "任务首行";
+export const TASK_SOURCE_NOTE = () => i18n.t("console:taskFirstLine");
 
 export type TitleLine = {
   /** The text lists, labels and cards show; single line. */
@@ -291,7 +292,7 @@ export function buddyNamer(buddies?: readonly FriendlyBuddy[] | null): (buddy: T
     if (!byTuple.has(key)) byTuple.set(key, buddy);
   }
   return (buddy) => {
-    if (!buddy) return { text: "buddy 未记录", title: "buddy 未记录" };
+    if (!buddy) return { text: i18n.t("console:buddyNotRecorded"), title: i18n.t("console:buddyNotRecorded") };
     const raw = [buddy.harness, buddy.provider, buddy.model, buddy.effort]
       .map(part => (part ?? "").trim()).filter(Boolean).join(" / ");
     const matched = byTuple.get(JSON.stringify([buddy.harness ?? "", buddy.provider ?? "", buddy.model ?? ""]));
@@ -299,7 +300,7 @@ export function buddyNamer(buddies?: readonly FriendlyBuddy[] | null): (buddy: T
       ? buddyDisplayName(matched)
       : KNOWN_MODEL_NAMES[(buddy.model ?? "").trim()] ?? (buddy.model ?? "").trim();
     const effort = effortDisplay(buddy.effort);
-    const text = name && effort ? `${name} · ${effort}` : name || effort || "buddy 未记录";
+    const text = name && effort ? `${name} · ${effort}` : name || effort || i18n.t("console:buddyNotRecorded");
     return { text, title: raw || text };
   };
 }
@@ -380,9 +381,9 @@ export function paletteIndex(palette: BuddyStyle[], buddy: TimelineBuddy | null 
 /* ---- time and duration formatting (display only) ---- */
 
 function format(value: string | number | null | undefined, options: Intl.DateTimeFormatOptions): string {
-  if (value === null || value === undefined || value === "") return "未记录";
+  if (value === null || value === undefined || value === "") return i18n.t("console:notRecorded");
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "未记录" : new Intl.DateTimeFormat("zh-CN", options).format(date);
+  return Number.isNaN(date.getTime()) ? i18n.t("console:notRecorded") : new Intl.DateTimeFormat(locale, options).format(date);
 }
 
 export function clockTime(value: string | number | null | undefined): string {
@@ -394,40 +395,40 @@ export function clockSeconds(value: string | number | null | undefined): string 
 }
 
 export function dayClock(value: string | number | null | undefined): string {
-  if (value === null || value === undefined || value === "") return "未记录";
+  if (value === null || value === undefined || value === "") return i18n.t("console:notRecorded");
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "未记录";
+  if (Number.isNaN(date.getTime())) return i18n.t("console:notRecorded");
   const pad = (part: number) => String(part).padStart(2, "0");
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 export function relativeTime(value: string | null | undefined, nowMs: number): string {
-  if (!value) return "未记录";
+  if (!value) return i18n.t("console:notRecorded");
   const at = new Date(value).getTime();
-  if (Number.isNaN(at)) return "未记录";
+  if (Number.isNaN(at)) return i18n.t("console:notRecorded");
   const seconds = Math.max(0, Math.round((nowMs - at) / 1000));
-  if (seconds < 45) return "刚刚";
-  if (seconds < 3600) return `${Math.round(seconds / 60)} 分钟前`;
-  if (seconds < 86400) return `${Math.round(seconds / 3600)} 小时前`;
-  if (seconds < 7 * 86400) return `${Math.round(seconds / 86400)} 天前`;
+  if (seconds < 45) return i18n.t("console:justNow");
+  if (seconds < 3600) return i18n.t("console:minAgo", { v0: Math.round(seconds / 60) });
+  if (seconds < 86400) return i18n.t("console:hrAgo", { v0: Math.round(seconds / 3600) });
+  if (seconds < 7 * 86400) return i18n.t("console:daysAgo", { v0: Math.round(seconds / 86400) });
   return dayClock(at);
 }
 
 export function durationText(ms: number | null): string | null {
   if (ms === null || !Number.isFinite(ms) || ms < 0) return null;
   const minutes = Math.round(ms / 60000);
-  if (minutes < 1) return "不到 1 分钟";
-  if (minutes < 60) return `${minutes} 分钟`;
+  if (minutes < 1) return i18n.t("console:lessThan1Min");
+  if (minutes < 60) return i18n.t("console:min", { v0: minutes });
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
-  return rest ? `${hours} 小时 ${rest} 分` : `${hours} 小时`;
+  return rest ? i18n.t("console:hrMin", { v0: hours, v1: rest }) : i18n.t("console:hr", { v0: hours });
 }
 
 export function durationShort(ms: number): string {
   const minutes = Math.round(ms / 60000);
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
-  return `${hours ? `${hours} 时 ` : ""}${rest} 分`;
+  return i18n.t("console:compactDuration", { v0: hours ? i18n.t("console:hoursPrefix", { v0: hours }) : "", v1: rest });
 }
 
 /** Placement uses the layout module's strict parser; display formatting may stay permissive. */
@@ -436,12 +437,12 @@ export function toMs(value: string | number | null | undefined): number | null {
 }
 
 export function rangeText(startMs: number | null, endMs: number | null): string {
-  if (startMs === null) return "时间未记录";
-  if (endMs === null) return `${clockTime(startMs)} 至 现在`;
+  if (startMs === null) return i18n.t("console:timeNotRecorded");
+  if (endMs === null) return i18n.t("console:toNow", { v0: clockTime(startMs) });
   const sameDay = new Date(startMs).toDateString() === new Date(endMs).toDateString();
   const start = sameDay ? clockTime(startMs) : dayClock(startMs);
   const end = sameDay ? clockTime(endMs) : dayClock(endMs);
-  return `${start} 至 ${end}`;
+  return i18n.t("console:to", { v0: start, v1: end });
 }
 
 /* ---- item facts shared by the canvas, the list and the inspector ---- */
@@ -492,31 +493,31 @@ export function spanFacts(
 ): { item: TimelineItem; startMs: number | null; endMs: number | null; recordedEndMs: number | null; outcome: SpanOutcome } {
   const outcome = spanOutcome(span);
   const { startMs, recordedEndMs, endMs } = spanPlacement(span, observedAtMs);
-  const head = span.kind === "host" && row.rootLeadRunId ? "等待 Lead" : spanHead(span.kind);
+  const head = span.kind === "host" && row.rootLeadRunId ? i18n.t("console:waitingForLead") : spanHead(span.kind);
   const parts: string[] = [displayTitle(row.titleSource, row.title).text];
   if (span.kind === "execution" || span.kind === "routing") {
-    if (span.turnIndex !== null && span.turnIndex !== undefined) parts.push(`第 ${span.turnIndex} 轮`);
+    if (span.turnIndex !== null && span.turnIndex !== undefined) parts.push(i18n.t("console:turnNumber", { v0: span.turnIndex }));
   }
   if (span.kind === "execution" && span.buddy) parts.push(buddyLabel(span.buddy));
   if (span.kind === "host" && span.summary) parts.push(span.summary);
   // A terminal span without a recorded end never borrows "now": it says the
   // end time is missing, exactly like a missing start.
-  parts.push(startMs === null ? "时间未记录" : endMs === null ? `${clockTime(startMs)} 至 结束时间缺失` : rangeText(startMs, endMs));
+  parts.push(startMs === null ? i18n.t("console:timeNotRecorded") : endMs === null ? i18n.t("console:toMissingEndTime", { v0: clockTime(startMs) }) : rangeText(startMs, endMs));
   const duration = durationText(endMs !== null && startMs !== null ? endMs - startMs : null);
   if (duration) parts.push(duration);
   parts.push(outcomeLabel(span, outcome));
   if (typeof span.error === "string" && span.error.trim()) parts.push(span.error.trim());
   // The detail locator states only the recorded fact — round and time — never
   // the micro task title, which the detail already shows once (0.16 T4).
-  const roundPrefix = span.turnIndex != null ? `第 ${span.turnIndex} 轮` : spanHead(span.kind);
-  const timeFact = startMs === null ? "时间未记录"
-    : endMs === null ? `${clockTime(startMs)} 起 · 结束时间缺失`
+  const roundPrefix = span.turnIndex != null ? i18n.t("console:turnNumber", { v0: span.turnIndex }) : spanHead(span.kind);
+  const timeFact = startMs === null ? i18n.t("console:timeNotRecorded")
+    : endMs === null ? i18n.t("console:sinceEndTimeMissing", { v0: clockTime(startMs) })
       : `${clockTime(startMs)}–${clockTime(endMs)}`;
   const locator = span.kind === "host"
-    ? (startMs === null ? `${head} · 时间未记录`
-      : endMs === null ? `${head} ${clockTime(startMs)} 起` : `${head} ${clockTime(startMs)}–${clockTime(endMs)}`)
+    ? (startMs === null ? i18n.t("console:itemTimeNotRecorded", { v0: head })
+      : endMs === null ? i18n.t("console:itemSince", { v0: head, v1: clockTime(startMs) }) : `${head} ${clockTime(startMs)}–${clockTime(endMs)}`)
     : span.kind === "queue"
-      ? (startMs === null ? "排队 · 时间未记录" : endMs === null ? `排队 ${clockTime(startMs)} 起` : `排队 ${clockTime(startMs)}–${clockTime(endMs)}`)
+      ? (startMs === null ? i18n.t("console:queueTimeNotRecorded") : endMs === null ? i18n.t("console:queuedSince", { v0: clockTime(startMs) }) : i18n.t("console:queueRange", { v0: clockTime(startMs), v1: clockTime(endMs) }))
       : `${roundPrefix} ${timeFact}`;
   return {
     item: {
@@ -539,14 +540,14 @@ export function spanFacts(
 export function rowLabelItem(row: TimelineRow): TimelineItem {
   const state = rowStateInfo(row);
   const level = row.depth + 1;
-  const hierarchy = row.kind === "helper" ? `层级 ${level}，协助任务，` : "";
+  const hierarchy = row.kind === "helper" ? i18n.t("console:levelHelper", { v0: level }) : "";
   const title = displayTitle(row.titleSource, row.title);
   return {
     key: `row:${row.runId}`,
     runId: row.runId,
     section: "overview",
-    head: "微任务",
-    parts: [title.text, `${hierarchy}${state.label}`, `标题来源：${TITLE_SOURCE_LABEL[row.titleSource] || row.titleSource}`],
+    head: i18n.t("console:microTask"),
+    parts: [title.text, `${hierarchy}${state.label}`, i18n.t("console:titleSource", { v0: TITLE_SOURCE_LABEL[row.titleSource] || row.titleSource })],
     locator: "",
     atMs: null,
   };
@@ -585,8 +586,8 @@ export function acceptanceWaitText(row: TimelineRow, spans: readonly TimelineSpa
   const wait = acceptanceWaitMs(row, spans);
   if (wait === null) return null;
   return !row.acceptedAt && row.reviewRejectedAt
-    ? `等待验收结论 ${durationText(wait) ?? ""}`.trim()
-    : `等待验收 ${durationText(wait) ?? ""}`.trim();
+    ? i18n.t("console:waitingForAcceptanceDecision", { v0: durationText(wait) ?? "" }).trim()
+    : i18n.t("console:waitingForAcceptance", { v0: durationText(wait) ?? "" }).trim();
 }
 
 export function settleItem(row: TimelineRow): TimelineItem | null {
@@ -598,9 +599,9 @@ export function settleItem(row: TimelineRow): TimelineItem | null {
     key: `settle:${row.runId}`,
     runId: row.runId,
     section: "artifacts",
-    head: rejected ? "验收问题" : "已验收",
-    parts: [rejected ? "验收问题" : "已验收", row.title, dayClock(settledAt)],
-    locator: `${rejected ? "验收问题" : "已验收"} · ${clockTime(settledAt)}`,
+    head: rejected ? i18n.t("console:acceptanceIssue") : i18n.t("console:accepted"),
+    parts: [rejected ? i18n.t("console:acceptanceIssue") : i18n.t("console:accepted"), row.title, dayClock(settledAt)],
+    locator: i18n.t("console:joined", { v0: rejected ? i18n.t("console:acceptanceIssue") : i18n.t("console:accepted"), v1: clockTime(settledAt) }),
     atMs: at,
   };
 }
@@ -608,12 +609,12 @@ export function settleItem(row: TimelineRow): TimelineItem | null {
 export function eventItem(event: TimelineEvent, rowsById: Map<string, TimelineRow>): TimelineItem {
   const vocab = eventVocab(event.kind);
   const row = rowsById.get(event.runId);
-  const title = row ? displayTitle(row.titleSource, row.title).text : `微任务 ${event.runId}`;
+  const title = row ? displayTitle(row.titleSource, row.title).text : i18n.t("console:microTaskWithId", { v0: event.runId });
   return {
     key: `event:${event.seq}`,
     runId: event.runId,
     section: eventSection(event.kind),
-    head: `Host 事件：${event.label || vocab.label}`,
+    head: i18n.t("console:hostEventHeading", { v0: event.label || vocab.label }),
     parts: [title, dayClock(event.at), ...(event.summary ? [event.summary] : [])],
     locator: `Host ${event.label || vocab.label} ${clockTime(event.at)}`,
     atMs: toMs(event.at),
@@ -689,5 +690,5 @@ export function buildChronology(
 /** Describe the selected target, never the Router's own configuration. */
 export function routingSpanLabel(span: TimelineSpan, buddies?: readonly FriendlyBuddy[] | null): string {
   const selected = span.routing?.selectedBuddy;
-  return `${recordedRoutingMode(span.routing?.routingMode)}路由 · 已选 ${selected ? buddyLabel(selected, buddies) : "未记录"} · ${outcomeLabel(span, spanOutcome(span))}`;
+  return i18n.t("console:routingSelected", { v0: recordedRoutingMode(span.routing?.routingMode), v1: selected ? buddyLabel(selected, buddies) : i18n.t("console:notRecorded"), v2: outcomeLabel(span, spanOutcome(span)) });
 }
