@@ -90,7 +90,7 @@ Codex Host 为每个运行中的微任务派生一个只做监控的原生子代
 
 日常安装是 [0.36.0/contract 0.36.0/schema 20](docs/acceptance/install-0.36.0.md)。安装时在校验过的备份之后把 0.35.0 的看板就地转换，新服务把一次断电留下的两个未知的执行结算为被中断。
 
-日常运行时支持 macOS 与 Linux、本地单用户 SQLite 状态；Windows 的代码与脚本可移植，但未在真机验证。ZCode 支持活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 使用实验性的 App Server，未声明 inquiry。0.19.0 源码在 macOS 的 Codex CLI 0.157.0 上验证了 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算；Linux/Windows 与其他 harness 仍未验证。安装不会修改用户的 Router 设置。Claude P1 读取用户原生的提供方、账户与设置，每次接续都重建会话，未声明 inquiry。其[参考文档](docs/reference/claude-code.md)记录已验证的原生路径、日常安装的只读微任务链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
+日常运行时支持 macOS 与 Linux、本地单用户 SQLite 状态；Windows 的代码与脚本可移植，但未在真机验证。ZCode 支持活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 与 Claude Code 把 Host 的问题送进正在跑的回合：模型在下一次决策时读到，用它的问询工具作答；问题不开启也不延长回合，回合结束之后才到的问题会被拒绝。Codex 使用实验性的 App Server。0.19.0 源码在 macOS 的 Codex CLI 0.157.0 上验证了 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算；Linux/Windows 与其他 harness 仍未验证。安装不会修改用户的 Router 设置。Claude P1 读取用户原生的提供方、账户与设置，每次接续都重建会话。其[参考文档](docs/reference/claude-code.md)记录已验证的原生路径、日常安装的只读微任务链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
 
 ## 文档与开发
 
