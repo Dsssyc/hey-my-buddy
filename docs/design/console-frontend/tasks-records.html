@@ -1,0 +1,58 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>tasks-records.html</title>
+<link rel="stylesheet" href="base.css">
+<style>
+.lhead .h .rc-v{font-weight:400;color:var(--ink3);margin-left:18px}
+.lhead .h .rc-v:first-child{margin-left:0}
+.lhead .h .rc-v.rc-on{font-weight:600;color:var(--ink)}
+.rc-new{display:flex;align-items:baseline;gap:6px;margin-top:12px;padding:8px 16px;border-top:1px solid var(--line);font-size:12px;color:var(--ink2)}
+.rc-new .rc-go{margin-left:auto;color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+.row .s{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .s .rc-k{color:var(--ink)}
+.rc-more{border-top:1px solid var(--line);padding:12px 16px;font-size:12px;color:var(--ink2);text-align:center}
+.dh h2 .rc-k{font-weight:400;color:var(--ink2);margin-right:8px}
+.dh .back,.g{font-size:14px}
+.rc-pane{flex:1;display:flex;flex-direction:column;background:var(--surface);min-height:0;overflow:hidden}
+.rc-pane .thr{padding-top:14px}
+.rc-pane .sec label{font-size:12px;color:var(--ink3)}
+.rc-pane .g{grid-template-columns:72px 1fr}
+.rc-pane .g i{font-style:normal;color:var(--ink3);font-size:12px}
+.rc-link{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+</style>
+<svg width="0" height="0" style="position:absolute"><defs>
+<symbol id="run" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.5" fill="var(--live)"/></symbol>
+<symbol id="hand" viewBox="0 0 12 12"><path d="M6 .8 11.2 6 6 11.2.8 6Z" fill="var(--hand-mark)"/></symbol>
+<symbol id="ok" viewBox="0 0 12 12"><path d="M2 6.4 4.8 9 10 3.2" fill="none" stroke="var(--past)" stroke-width="1.8"/></symbol>
+<symbol id="bad" viewBox="0 0 12 12"><path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" fill="none" stroke="var(--fail)" stroke-width="1.8"/></symbol>
+<symbol id="wait" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="none" stroke="var(--ink3)" stroke-width="1.5"/></symbol>
+<symbol id="i-think" viewBox="0 0 12 12"><circle cx="2.6" cy="6" r="1" fill="currentColor"/><circle cx="6" cy="6" r="1" fill="currentColor"/><circle cx="9.4" cy="6" r="1" fill="currentColor"/></symbol>
+</defs></svg>
+<div class="bar"><div class="brand"><svg width="22" height="22" viewBox="3 3 58 58"><polygon fill="#7CC79F" points="12,13 22,13 22,61 12,54"/><polygon fill="#7CC79F" points="22,32 30,28 30,38 22,42"/><polygon fill="#F1EFE8" points="42,3 52,10 52,51 42,51"/><polygon fill="#F1EFE8" points="34,26 42,22 42,32 34,36"/><polygon fill="#F0997B" points="30,28 34,26 34,36 30,38"/></svg>Hey my buddy</div>
+<div class="tabs"><div class="tab on">任务<span class="cnt num">4</span></div><div class="tab">Buddy</div><div class="tab">设置</div></div><div class="clock mono num">17:31:05</div></div>
+<div class="body"><div class="list"><div class="lhead"><div class="h"><span class="rc-v">宏任务</span><span class="rc-v rc-on">记录</span><span class="fold"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1.5" y="2.5" width="11" height="9" rx="1"/><path d="M5.2 2.5v9"/></svg></span></div><div class="search">搜索标题、项目、Host 或编号</div></div>
+<div class="rc-new"><span>新记录</span><b class="num">2</b><span class="rc-go">回到最新</span></div>
+<div class="grp"><span>今天</span></div>
+<div class="row sel"><svg class="m"><use href="#wait"/></svg><span class="t">时间轴比例尺</span><span class="w num">17:04</span><span class="s"><span class="rc-k">路由计算</span> · hey-my-buddy · gpt-6-luna / high</span></div>
+<div class="row"><svg class="m"><use href="#run"/></svg><span class="t">时间轴比例尺</span><span class="w num">17:04</span><span class="s">hey-my-buddy · gpt-6.1-sol / high</span></div>
+<div class="row"><svg class="m"><use href="#wait"/></svg><span class="t">标签的对比度</span><span class="w num">16:52</span><span class="s"><span class="rc-k">路由计算</span> · hey-my-buddy · gpt-6-luna / high</span></div>
+<div class="row"><svg class="m"><use href="#hand"/></svg><span class="t">标签的对比度</span><span class="w num">16:52</span><span class="s">hey-my-buddy · glm-5 / high</span></div>
+<div class="row"><svg class="m"><use href="#hand"/></svg><span class="t">核对 Windows 路径的样例</span><span class="w num">15:40</span><span class="s"><span class="rc-k">协助任务</span> · geo-buddy · deepseek-flash / max</span></div>
+<div class="row"><svg class="m"><use href="#wait"/></svg><span class="t">统计本周封存产物的大小</span><span class="w num">14:30</span><span class="s"><span class="rc-k">命令执行</span> · hey-my-buddy · deepseek-flash / max</span></div>
+<div class="row"><svg class="m"><use href="#ok"/></svg><span class="t">打底：样式与组件</span><span class="w num">14:00</span><span class="s">hey-my-buddy · gpt-6.1-sol / high</span></div>
+<div class="grp"><span>昨天</span></div>
+<div class="row"><svg class="m"><use href="#bad"/></svg><span class="t">坐标系转换的回归测试</span><span class="w num">22:10</span><span class="s"><span class="rc-k">路由计算</span> · geo-buddy · gpt-6-luna / high</span></div>
+<div class="row"><svg class="m"><use href="#ok"/></svg><span class="t">跨边界引用清零</span><span class="w num">20:36</span><span class="s">hey-my-buddy · claude-opus-5-5 / high</span></div>
+<div class="rc-more">更早</div>
+</div>
+<div class="main">
+<div class="dh"><span class="back">‹ 记录</span><svg class="m"><use href="#wait"/></svg><h2><span class="rc-k">路由计算</span>时间轴比例尺</h2><span class="s12" style="color:var(--ink2)">已结束</span>
+<div class="kv2 num"><span><i>开始</i>17:04:18</span><span><i>历时</i>14 秒</span></div><span class="ib">↻</span></div>
+<div class="rc-pane">
+<div class="bh"><span class="role">Router</span><span class="mono">codex / openai / gpt-6-luna / high</span><span class="r">快速</span><span class="l2 num">输入 2.1k　输出 0.2k</span><span></span></div>
+<div class="thr" style="--t:24px;--b:132px">
+<div class="n"><svg><use href="#i-think"/></svg><i>推理</i><em class="num">3 秒</em></div>
+<div class="n end"><div><b>选择</b><span class="mono" style="font-size:12px">codex / openai / gpt-6.1-sol / high</span><p style="margin-top:4px">改动集中在比例尺与刻度，需要先读懂现有的布局代码；近期同类的微任务里这个 buddy 一次通过。</p></div></div>
+</div>
+<div class="sec"><label>来源</label><div class="g"><i>微任务</i><span><span class="rc-link">时间轴比例尺</span></span><i>宏任务</i><span>控制台前端重建</span><i>Host</i><span>claude-code</span><i>编号</i><span class="mono">7c41e2a9</span></div></div>
+<div class="fill"></div>
+</div></div>
+</div></html>
