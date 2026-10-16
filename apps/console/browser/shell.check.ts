@@ -32,7 +32,8 @@ for (const { locale, tabs, pending } of languages) for (const width of [1440, 39
       await expect(hint).toHaveText(pending);
       await expectWholeAndApart(page.locator("body"), page.locator("[data-slot=tooltip-content]"));
       // The hint waits for the pointer to travel, so that it can be reached and read.
-      await page.mouse.move(0, 400, { steps: 4 });
+      // Leave through the empty top-bar padding: list rows may have their own hints.
+      await page.mouse.move(width - 1, 1, { steps: 4 });
       await expect(hint).toHaveCount(0);
       await tasks.focus();
       await expect(hint).toHaveText(pending);

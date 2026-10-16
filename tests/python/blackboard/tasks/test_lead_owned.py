@@ -70,7 +70,7 @@ class LeadOwnedTests(WorkflowTestCase):
         self.assertEqual(fetched["leadOwnership"], ownership)
         self.assertEqual(micro_task_brief(fetched)["leadOwnership"], ownership)
         listed = board.call("task_list", {})
-        row = next(row for row in listed["tasks"] if row["runId"] == child["runId"])
+        row = next(row for row in listed["runs"] if row["runId"] == child["runId"])
         self.assertEqual(row["lineage"]["leadOwnership"], ownership)
         self.assertEqual(row["lineage"]["sourceHostId"], child["hostId"])
         self.assertEqual(task_brief(row)["leadOwnership"], ownership)
@@ -172,7 +172,7 @@ class LeadOwnedTests(WorkflowTestCase):
             self.assertEqual(caught.exception.code, "FORBIDDEN")
         listing = board.call("task_list", {"credential": claim["agentCredential"]})
         self.assertEqual(listing["total"], 1)
-        self.assertEqual([row["runId"] for row in listing["tasks"]], [owned["runId"]])
+        self.assertEqual([row["runId"] for row in listing["runs"]], [owned["runId"]])
         filtered = board.call("task_list", {"credential": claim["agentCredential"], "hostId": "host-1"})
         self.assertEqual(filtered["total"], 0)
         for operation in ("workflow_takeover", "macro_task_stop", "task_submit", "task_cancel", "user_policy_publish", "selection_request", "service_control"):

@@ -269,15 +269,15 @@ def digest(tag: str) -> str:
 # Fixture records (the payloads themselves, not a board simulation)            #
 # --------------------------------------------------------------------------- #
 def attempt(attempt_id: str, turn_index: int, state: str, confirmed: bool, started: str,
-            finished: str | None, buddy: dict, *, error: str | None = None,
-            result: str | None = None, disposition: str = "completed",
+            finished: str | None, buddy: dict | None, *, error: str | None = None,
+            result: str | dict | None = None, disposition: str = "completed",
             usage: dict | None = None) -> dict:
     # `result` is the stored worker receipt: {"status", "result", "shutdownConfirmed"},
     # exactly what store.task_result unpacks; the adapter payload nests under `result`.
     # `usage` is the ADR-018 per-attempt token usage: null when the record is
     # unknown, never a synthetic zero.
     receipt = None if result is None else {"status": "failed" if error else "ok",
-                                           "result": {"finalText": result}, "shutdownConfirmed": confirmed,
+                                           "result": result if isinstance(result, dict) else {"finalText": result}, "shutdownConfirmed": confirmed,
                                            "terminationReason": "harness-error" if error else "completed"}
     return {"attemptId": attempt_id, "turnId": f"turn-{attempt_id}", "turnIndex": turn_index,
             "generation": turn_index, "state": state, "shutdownConfirmed": confirmed,
@@ -402,7 +402,31 @@ ROUTING_A2_ABSTENTION = routing("preview-decision-a2-abstention", "preview-run-a
                                {"harness": "claude"}, elapsed_ms=60000, tool_calls=2, bytes_read=16384)
 
 
-def run(run_id: str, *, project: str, title: str, title_source: str, task_text: str, created: str,
+def decision_result(record: dict) -> dict:
+    """The structured result of DecisionAdapter.collect, not a Worker finalText."""
+    selected = record["selectedBuddy"]
+    ok = record["status"] in ("completed", "abstention")
+    return {
+        "operation": "select", "status": "ok" if ok else "error",
+        "requested": record["constraints"], "resolved": None, "observed": None,
+        "modelStarted": record["routingMode"] != "fast", "nativeIdentity": None,
+        "usage": record["usage"], "toolEvidence": [], "harnessVersion": "synthetic-preview",
+        "nativeEvidence": None, "nativeFailure": None, "correctionCount": 0,
+        "budget": record["budget"], "inputVerification": None,
+        "routerBuddyIds": ["synthetic-preview-router"], "routerIdentities": [],
+        "routerBuddyId": "synthetic-preview-router", "routerBuddy": CFG_CODEX,
+        "routerIndex": 0, "routingMode": record["routingMode"],
+        "routingBudget": record["budget"], "routerRetryIntervalSeconds": None,
+        "routerProblem": None, "zeroToolVerified": record["routingMode"] == "fast",
+        "stopEvidence": {"shutdownConfirmed": True, "native": "stopped",
+                         "nativeInterruptRequested": False, "nativeInterruptAcknowledged": False},
+        **({"decision": {"buddyId": "synthetic-preview-flash" if selected else None,
+                         "reason": record["reason"], "evidence": []}} if ok else
+           {"code": "router-out-of-bounds" if record["status"] == "failed" else "cancelled"}),
+    }
+
+
+def run(run_id: str, *, project: str | None, title: str, title_source: str, task_text: str, created: str,
         updated: str, state: str, status: str, category: str, buddy: dict | None,
         hosts: tuple[str | None, str | None] = (HOST_A, HOST_A), parent: str | None = None,
         group: str | None = None, lead_owner: tuple[str, str] | None = None,
@@ -434,7 +458,8 @@ def run(run_id: str, *, project: str, title: str, title_source: str, task_text: 
         "delegationAuthority": delegation_authority,
         "hostConclusion": conclusion, "messages": messages or [], "continuations": continuations or [],
         "activity": activity,
-        "kind": "decision" if not micro_task else ("helper" if parent is not None else "micro-task"),
+        "kind": ("decision" if adapter == "decision" else "execution") if not micro_task else (
+            "helper" if parent is not None else "micro-task"),
     }
 
 
@@ -904,16 +929,32 @@ def build_runs() -> dict[str, dict]:
         router = record["taskId"]
         owner_entry = next(entry for entry in runs if entry["runId"] == owner)
         recorded_span = next(item for item in owner_entry["spans"] if item.get("decisionId") == record["decisionId"])
-        runs.append(run(router, project="alpha", parent=owner, title=f"内部路由计算：{record['status']}",
-                        title_source="task", task_text="为合成预览夹具选择执行配置。",
+        runs.append(run(router, project="alpha", parent=owner, title="", title_source="none",
+                        task_text="Choose the execution buddy for this synthetic task.",
                         created=recorded_span["startAt"], updated=recorded_span["endAt"],
                         state="cancelled" if record["status"] == "cancelled" else "accepted",
                         status=record["status"] if record["status"] in ("failed", "cancelled") else "completed",
-                        category="ended", buddy=None, micro_task=False, routing=record,
+                        category="ended", buddy=CFG_CODEX, micro_task=False, routing=record,
                         adapter="decision", router_budget_seconds=record["budget"]["timeoutSeconds"] + 10,
+                        accepted=recorded_span["endAt"], result=True,
+                        attempts=[attempt(f"att-{router}", 1, "finished", True,
+                                          recorded_span["startAt"], recorded_span["endAt"], CFG_CODEX,
+                                          error=("router-out-of-bounds" if record["status"] == "failed" else None),
+                                          result=decision_result(record), disposition=record["status"],
+                                          usage=usage("synthetic-preview", 2100, 400, 200))],
                         revision=1))
         runs[-1]["decisionId"] = record["decisionId"]
         runs[-1]["requestId"] = f"request-{router}"
+    # An ordinary `execution-submit` command record has no collaboration row.
+    # The board may also have no project attribution for such a record.
+    runs.append(run("preview-command-c1", project=None, title="", title_source="none",
+                    task_text="printf 'synthetic preview command'", created=instant(-20, 10),
+                    updated=instant(-20, 11), state="accepted", status="completed",
+                    category="ended", buddy=None, micro_task=False, adapter="command",
+                    accepted=instant(-20, 11), result=True,
+                    attempts=[attempt("att-command-c1", 1, "finished", True,
+                                      instant(-20, 10, 5), instant(-20, 10, 8), None,
+                                      result="synthetic preview command")]))
     by_id = {entry["runId"]: entry for entry in runs}
     for entry in runs:
         root = entry["runId"]
@@ -922,19 +963,24 @@ def build_runs() -> dict[str, dict]:
         entry["rootRunId"] = root
         entry["requestId"] = entry.get("requestId") or f"request-{entry['runId']}"
         entry["cwd"] = f"/synthetic-preview/checkouts/{entry['runId']}"
-        project = PROJECTS[entry["project"]]
+        project = PROJECTS[entry["project"]] if entry["project"] else None
+        routing_owner = by_id[entry["parentRunId"]] if entry["adapter"] == "decision" else None
         entry["lineage"] = {
-            "kind": entry["kind"], "sourceHostId": entry["sourceHostId"],
-            "currentHostId": entry["currentHostId"], "parentRunId": entry["parentRunId"],
-            "rootRunId": root,
+            "kind": entry["kind"], "sourceHostId": entry["sourceHostId"] if entry["kind"] != "execution" else None,
+            "currentHostId": entry["currentHostId"] if entry["kind"] != "execution" else None,
+            "parentRunId": entry["parentRunId"],
+            "rootRunId": root if entry["kind"] != "execution" else None,
             "rootLeadRunId": entry["leadOwner"][0] if entry["leadOwner"] else None,
             "leadOwnership": ({"leadRunId": entry["leadOwner"][0], "leadTurnId": entry["leadOwner"][1],
                                "createdAt": entry["createdAt"]} if entry["leadOwner"] else None),
             "delegationAuthority": entry["delegationAuthority"],
-            "project": {"id": project["id"], "path": project["path"], "label": project["label"]},
-            "buddy": entry["buddy"] or (
-                {"harness": "decision", "provider": "decision", "model": "decision", "effort": "default"}
-                if entry["adapter"] == "decision" else None),
+            "project": ({"id": project["id"], "path": project["path"], "label": project["label"]}
+                        if project else None),
+            "buddy": entry["buddy"],
+            "routingTask": ({"runId": routing_owner["runId"], "title": routing_owner["title"],
+                             "titleSource": "title", "macroTaskId": routing_owner["group"],
+                             "macroTaskTitle": (MACRO_TASKS[routing_owner["group"]]["title"]
+                                                if routing_owner["group"] else None)} if routing_owner else None),
         }
         for item in entry["artifacts"]:
             item["sourceTaskId"] = entry["runId"]
@@ -957,7 +1003,7 @@ def build_runs() -> dict[str, dict]:
         activity[run_id] = (item["seq"], item["at"])
     groups: dict[str, list[str]] = {}
     for entry in runs:
-        if entry["kind"] == "decision":
+        if entry["kind"] in ("decision", "execution"):
             continue
         group = entry["group"] or (f"run:{by_id[entry['parentRunId']]['rootRunId']}"
                                    if entry["parentRunId"] else f"run:{entry['runId']}")
@@ -968,7 +1014,6 @@ def build_runs() -> dict[str, dict]:
             "group_activity": group_activity, "head": len(sequence), "markers": sequence}
 
 
-FIXTURES = build_runs()
 MACRO_TASKS = {
     MACRO_A: {"title": long_title("工作目标时间轴：设计、接口与合成预览夹具的实现与核对（含超长标题与折叠区间）："),
             "description": "按用户认可的第 X 节设计工作目标时间轴。本目标覆盖只读接口、前端呈现与合成预览夹具的自检。",
@@ -978,14 +1023,16 @@ MACRO_TASKS = {
 }
 
 
+FIXTURES = build_runs()
+
 # --------------------------------------------------------------------------- #
 # Thin projections: fixture record -> console DTO                              #
 # --------------------------------------------------------------------------- #
 def shutdown_view(entry: dict) -> dict:
     """Recorded stop evidence over the micro task helper lineage.
 
-    Routing rows are internal decision records with no attempt of their own in
-    this fixture, so only micro task helpers are aggregated.
+    Only micro task helpers belong to the collaboration shutdown tree;
+    routing attempts retain their own execution evidence.
     """
     unconfirmed: list[str] = []
     stack = [entry]
@@ -1030,6 +1077,8 @@ def task_view(entry: dict) -> dict:
                 else {"expectedSeconds": entry["expectedSeconds"]})
     spec: dict[str, Any] = {"task": entry["task"], "adapter": adapter, "cwd": entry["cwd"],
                             "workspace": True, **duration}
+    if adapter == "command":
+        spec["argv"] = ["/bin/printf", "synthetic preview command"]
     if entry["group"]:
         spec["macroTaskId"] = entry["group"]
     if entry["adapter"] == "decision" and entry.get("decisionId"):
@@ -1345,13 +1394,15 @@ def applied_filters(params: dict) -> dict:
 
 def matches(entry: dict, applied: dict) -> bool:
     """The fixture member predicate: project/host/query and the shared filters."""
-    if applied.get("projectId") and PROJECTS[entry["project"]]["id"] != applied["projectId"]:
+    if applied.get("projectId") and (entry["project"] is None or
+                                     PROJECTS[entry["project"]]["id"] != applied["projectId"]):
         return False
     if applied.get("hostId") and applied["hostId"] not in (entry["sourceHostId"], entry["currentHostId"]):
         return False
     if applied.get("query"):
         buddy = entry["buddy"] or {}
-        haystack = " ".join((entry["runId"], entry["title"], PROJECTS[entry["project"]]["path"],
+        project_path = PROJECTS[entry["project"]]["path"] if entry["project"] else ""
+        haystack = " ".join((entry["runId"], entry["title"], project_path,
                              entry["sourceHostId"] or "", entry["currentHostId"] or "",
                              buddy.get("harness", ""), buddy.get("model", ""))).casefold()
         if applied["query"].casefold() not in haystack:
@@ -1457,7 +1508,7 @@ def task_page(params: dict) -> dict:
         entries = [entry for entry in entries if entry["parentRunId"] is None]
     entries.sort(key=lambda entry: (entry["createdAt"], entry["runId"]), reverse=True)
     views = [task_view(entry) for entry in entries[:limit]]
-    return {"runs": views, "tasks": views, "total": len(entries), "cursor": FIXTURES["head"],
+    return {"runs": views, "total": len(entries), "cursor": FIXTURES["head"],
             "nextCursor": None}
 
 

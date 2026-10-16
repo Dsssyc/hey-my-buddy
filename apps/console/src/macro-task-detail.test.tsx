@@ -33,7 +33,7 @@ function taskFixture(runId: string): Task {
     lineage: { kind: runId === "r3" ? "helper" : "micro-task", sourceHostId: "codex-desktop", currentHostId: "codex-desktop",
       parentRunId: runId === "r3" ? "r2" : null, rootRunId: runId === "r3" ? "r2" : runId, rootLeadRunId: null,
       project: { id: "p1", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" },
-      buddy: { harness: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" } } };
+      buddy: { harness: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" }, routingTask: null } };
   // Every micro task of the macro task has a collaboration record; r2 waits for its Host.
   base.workflow = { state: runId === "r2" ? "awaiting-host" : "delivered", awaitingHost: runId === "r2", hostId: "codex-desktop", ownerGeneration: 2, revision: 1, macroTaskId: "macro-1" };
   return base;

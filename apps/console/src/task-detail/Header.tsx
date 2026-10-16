@@ -2,20 +2,21 @@ import { cn } from "cn";
 import { ChevronLeft, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
+import { useTextClipped } from "@/components/use-text-clipped";
 import { Button } from "@/components/ui/button";
 import { StateMark } from "@/components/ui/state-mark";
-import { formatClock, formatDuration, formatMomentMinutes } from "../i18n/format";
+import { formatClock, formatDuration, formatMoment, formatMomentMinutes } from "../i18n/format";
 import { taskTitle } from "../task-state";
+import type { Task } from "../types";
 import type { TaskView, Workflow } from "./types";
 
-type Word = { key: "running" | "queued" | "host" | "lead" | "review" | "accepted" | "done" | "ended" | "failed"; mark: "live" | "hand" | "done" | "fail" | "idle" };
+export type StateWord = { key: "running" | "queued" | "host" | "lead" | "review" | "accepted" | "done" | "ended" | "failed"; mark: "live" | "hand" | "done" | "fail" | "idle" };
 
 /** The one word a micro task's state has, and the mark that goes with it. */
-function stateWord(view: TaskView, workflow: Workflow | null): Word {
-  const { task } = view;
+export function stateWord(task: Task, lead: boolean, workflowState: string | null = task.workflow?.state ?? null): StateWord {
   if (task.status === "queued") return { key: "queued", mark: "idle" };
-  switch (workflow?.state) {
-    case "awaiting-host": return { key: view.lead ? "lead" : "host", mark: "hand" };
+  switch (workflowState) {
+    case "awaiting-host": return { key: lead ? "lead" : "host", mark: "hand" };
     case "delivered": return { key: "review", mark: "hand" };
     case "accepted": return { key: "accepted", mark: "done" };
     case "failed": return { key: "failed", mark: "fail" };
@@ -40,23 +41,29 @@ export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, erro
   const { t } = useTranslation("taskDetail");
   const shell = useTranslation("shell").t;
   const title = taskTitle(view.task);
-  const text = title.source === "none" ? t("untitled") : title.text;
-  const word = stateWord(view, workflow);
+  const record = view.record;
+  const recordKind = record ? t(record === "calculation" ? "step.calculation" : "record.command") : "";
+  const text = title.source === "none" ? t(record ? "record.untitled" : "untitled") : title.text;
+  const word = stateWord(view.task, view.lead, workflow?.state ?? null);
   const reminders = view.attempt ?? { overdue: false, possiblyStuck: false };
-  const start = Date.parse(view.task.createdAt);
+  const start = Date.parse(record ? view.attempt?.startedAt ?? "" : view.task.createdAt);
+  const finish = Date.parse(view.attempt?.finishedAt ?? "");
+  const [titleRef, clipped] = useTextClipped<HTMLHeadingElement>(`${recordKind}${text}`);
+  const titleHint = title.source === "task" ? t("title.fromTask", { title: title.fullText }) : clipped && title.source !== "none" ? title.fullText : undefined;
   return <header data-slot="detail-header" className="shrink-0 border-b bg-card">
     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 px-4 py-3 sm:px-6">
       <Button variant="outline" size="sm" onClick={onBack} className="mr-1.5 max-[760px]:order-1"><ChevronLeft strokeWidth={1.5} aria-hidden="true" />{t(`back.${backTo}`)}</Button>
       <div className="flex min-w-0 flex-1 items-center gap-2.5 max-[760px]:order-2 max-[760px]:basis-full">
         <StateMark kind={word.mark} />
-        <Hint text={title.source === "task" ? t("title.fromTask", { title: title.fullText }) : title.source === "none" ? undefined : title.fullText}>
-          <h2 tabIndex={0} className="min-w-0 truncate rounded-sm text-base font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{text}</h2>
+        <Hint text={titleHint}>
+          <h2 ref={titleRef} tabIndex={0} className="min-w-0 truncate rounded-sm text-base font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{record && <span className="mr-2 font-normal text-ink2">{recordKind}</span>}{text}</h2>
         </Hint>
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-x-4 max-[760px]:order-3 max-[760px]:w-full max-[760px]:flex-wrap max-[760px]:gap-2">
         <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums max-[760px]:basis-full">
-          <div className="flex gap-1.5"><dt className="text-ink3">{t("header.started")}</dt><dd>{formatMomentMinutes(start, nowMs)}</dd></div>
-          <div className="flex gap-1.5"><dt className="text-ink3">{t("header.elapsed")}</dt><dd>{formatDuration(Math.max(0, endMs - start))}</dd></div>
+          <div className="flex gap-1.5"><dt className="text-ink3">{t("header.started")}</dt><dd>{Number.isFinite(start) ? record ? formatMoment(start, nowMs) : formatMomentMinutes(start, nowMs) : t("unrecorded")}</dd></div>
+          {record && <div className="flex gap-1.5"><dt className="text-ink3">{t("header.ended")}</dt><dd>{Number.isFinite(finish) ? formatMoment(finish, nowMs) : t("unrecorded")}</dd></div>}
+          <div className="flex gap-1.5"><dt className="text-ink3">{t("header.elapsed")}</dt><dd>{Number.isFinite(start) ? formatDuration(Math.max(0, (record && Number.isFinite(finish) ? finish : endMs) - start), !!record) : t("unrecorded")}</dd></div>
           {turns !== null && <div className="flex gap-1.5"><dt className="text-ink3">{t("header.turns")}</dt><dd>{turns}</dd></div>}
         </dl>
         <div className="flex shrink-0 items-center gap-2 max-[760px]:ml-auto">

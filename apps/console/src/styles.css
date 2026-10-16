@@ -23,27 +23,11 @@ input[type="checkbox"] { width: 16px; height: 16px; padding: 0; accent-color: va
 .dialog-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 20px; background: var(--overlay); }
 .dialog { width: min(440px, 100%); display: grid; gap: 14px; padding: 20px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--ink); }
 .dialog p { color: var(--muted); font-size: 13px; }
-.workspace-grid { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(260px, var(--list-width, 330px)) 10px minmax(0, 1fr); }
 .panel { min-width: 0; min-height: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-.list-panel, .detail-panel { display: flex; flex-direction: column; height: 100%; }
-.pane-divider { cursor: col-resize; touch-action: none; position: relative; }
-.pane-divider::after { content: ""; position: absolute; top: 42%; bottom: 42%; left: 4px; width: 2px; border-radius: 2px; background: var(--line-strong); }
-.pane-divider:hover::after { background: var(--accent); }
 .panel-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .panel-toolbar h2 { font-size: 14px; }
-.list-filters { flex-shrink: 0; display: grid; gap: 9px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .search { display: block; min-width: 0; }
-.search input, .filter-pair select { font-size: 12px; }
-.filter-pair { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.filter-pair > label { flex: 1 1 110px; min-width: 0; }
 .check-field { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-.list-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-gutter: auto; }
-.group-heading { display: flex; width: 100%; align-items: center; justify-content: space-between; border: 0; border-block: 1px solid var(--line); background: var(--subtle); padding: 7px 12px; font-size: 11px; font-weight: 600; color: var(--muted); text-align: left; overflow-wrap: anywhere; }
-.group-heading > span:first-child { min-width: 0; }
-.task-row { display: flex; flex-direction: column; gap: 5px; width: 100%; padding: 12px 14px; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: var(--surface); color: var(--ink); }
-.task-row:hover { background: var(--subtle); }
-.task-row.selected { background: var(--accent-wash); box-shadow: inset 3px 0 var(--accent); }
-.task-title { font-size: 13px; font-weight: 550; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; }
 .row-between > * { min-width: 0; }
 .row-between time { flex-shrink: 0; }
@@ -88,33 +72,16 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .empty-mark { font-size: 24px; }
 .banner { display: flex; flex-shrink: 0; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; border-radius: 4px; font-size: 12px; }
 /* Read-only handoff notice: prominent, but neither a failure nor a write state. */
-.error-message, .list-error { color: var(--danger); font-size: 12px; margin: 8px 0; overflow-wrap: anywhere; }
-.list-error { padding: 0 12px; }
+.error-message { color: var(--danger); font-size: 12px; margin: 8px 0; overflow-wrap: anywhere; }
 .success-message { color: var(--accent); font-size: 12px; margin: 8px 0; }
-.load-more, .new-records { display: block; width: 100%; border: 0; padding: 12px; font-size: 12px; color: var(--accent); background: var(--accent-wash); flex-shrink: 0; }
-.loading-row { padding: 16px; color: var(--muted); font-size: 12px; text-align: center; }
 .small { font-size: 11px; } .muted { color: var(--muted); } .wrap { overflow-wrap: anywhere; }
 .truncate { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mono { font-family: ui-monospace, monospace; font-size: 11px; }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (max-width: 760px) {
-  .workspace-grid { display: block; }
-  .pane-divider { display: none; }
-  .workspace-grid:not(.has-selection) > .detail-panel, .workspace-grid.has-selection > .list-panel { display: none; }
   .settings-panel { padding: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
-
-/* ---- Work macroTasks: secondary history switch and left list ---- */
-.history-switch { height: 100%; min-height: 0; display: flex; flex-direction: column; }
-.history-view-toggle { flex: 0 0 auto; }
-.list-collapse { margin-left: auto; }
-.local-read-state { flex: 0 0 auto; margin: 0; padding: 4px 14px; font-size: 11px; }
-.list-panel[hidden], .rail-panel[hidden] { display: none !important; }
-.list-mobile-navigation { display: none; }
-.list-title-toolbar { flex-wrap: wrap; justify-content: flex-start; gap: 6px; }
-.list-title-toolbar h2 { flex: 1 1 auto; }
-.history-view { flex: 1; min-height: 0; overflow: hidden; }
 
 /* ---- Work macroTask timeline (right pane, layer one) ---- */
 .timeline-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -307,7 +274,6 @@ button.tl-label:hover { background: var(--subtle); }
   .tl-scroll { --label-w: 240px; }
 }
 @media (max-width: 760px) {
-  .list-mobile-navigation { display: flex; flex-shrink: 0; }
   .tl-toolbar { padding-inline: 14px; }
   .trunc-banner { margin-inline: 14px; }
   .tl-tools .list-toggle { display: none; }
@@ -374,24 +340,9 @@ button.tl-label:hover { background: var(--subtle); }
 .dock-divider { position: relative; touch-action: none; }
 .dock-divider:hover::after, .dock-divider:focus-visible::after { background: var(--accent); }
 
-/* ---- 0.15.1 U1: the 48px list rail and its overlay drawer ---- */
-.workspace-grid.list-rail { grid-template-columns: 48px minmax(0, 1fr); }
-.workspace-grid.list-rail > .pane-divider { display: none; }
-.rail-panel { padding: 0; border-right: 1px solid var(--line); }
-.rail-panel > .history-view-toggle { margin: 8px auto 0; }
-@media (max-width: 760px) {
-  .workspace-grid.list-rail { display: grid; }
-  .workspace-grid.list-rail.has-selection > .rail-panel { display: flex; }
-}
-.rail-expand { display: flex; align-items: center; justify-content: center; width: 100%; flex: 1 1 auto; padding: 14px 0; border: 0; background: transparent; color: var(--muted); font-size: 11px; letter-spacing: .14em; }
-.rail-expand:hover { background: var(--subtle); color: var(--accent); }
-.rail-text { writing-mode: vertical-rl; }
-
-
 /* ---- 0.16 T4: the detail overview's two-row block ---- */
 
 /* ---- 0.15.1 U3: one-line task-first-line titles ---- */
-.task-title.single-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; -webkit-line-clamp: unset; }
 .title-source-note { margin-left: 6px; padding: 0 4px; border-radius: 3px; background: var(--subtle); color: var(--muted); font-size: 10px; font-weight: 500; }
 .tl-entry .e-title.single-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; -webkit-line-clamp: unset; }
 h2 .title-source-note { font-size: 10px; font-weight: 500; vertical-align: middle; }
@@ -413,8 +364,6 @@ h2 .title-source-note { font-size: 10px; font-weight: 500; vertical-align: middl
 
 /* Keep all five detail tabs visible in the 360px dock. */
 /* Fallback provenance stays visible independently of the clipped title. */
-.task-title.single-line { display: flex; align-items: center; }
-.task-title.single-line .macro-task-list-title-text { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .title-source-note { flex: 0 0 auto; white-space: nowrap; }
 
 /* ---- 0.16 human presentation ---- */
@@ -433,7 +382,6 @@ h2 .title-source-note { font-size: 10px; font-weight: 500; vertical-align: middl
 /* P1.4: the left list's two-line entries and filter popover. */
 .list-filter-row { display: flex; gap: 8px; align-items: center; }
 .list-filter-row .search { flex: 1 1 0; }
-.group-heading .group-count { font-size: 10px; color: var(--faint); font-weight: 500; }
 
 /* P1.6: the inspector's structured six-field grid. */
 .inspector-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 6px 14px; margin: 4px 0 0; }

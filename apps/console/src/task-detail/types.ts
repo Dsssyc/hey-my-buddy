@@ -255,6 +255,10 @@ export type TaskView = {
   lead: boolean;
   /** No collaboration record: a command a Host ran, or a Router's own calculation. */
   record: "record" | "calculation" | null;
+  /** The decision attached to a Router calculation, when its task spec names one. */
+  decisionId: string | null;
+  /** The decision's compact read, after the task and decision have both been checked. */
+  routing: RoutingEntry | null;
 };
 
 /** What every pane of one micro task's detail draws from. */

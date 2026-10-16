@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MacroTasks } from "./MacroTasks";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task, TaskQuery } from "./types";
+import { task as detailTask, workflow as detailWorkflow, audit as detailAudit } from "./task-detail/task-detail.fixtures";
 import { macroTaskTimelineFixture } from "./macro-task-fixtures";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -27,7 +28,7 @@ function snapshotFixture(): Snapshot {
 
 const rawRecord = (): Task => ({ runId: "cmd-9", task: "外部命令记录", status: "completed", owner: "fixture",
   cwd: "/worktrees/cmd-9", revision: 1, createdAt: "2026-09-26T05:00:00Z", updatedAt: "2026-09-26T05:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
-  lineage: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: "cmd-9", rootLeadRunId: null,
+  lineage: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: "cmd-9", rootLeadRunId: null, routingTask: null,
     project: { id: "px", label: "外部", path: null }, buddy: null } });
 
 function harness(paged = false) {
@@ -35,8 +36,15 @@ function harness(paged = false) {
   const timeline = macroTaskTimelineFixture();
   const api = {
     snapshot: vi.fn(async () => structuredClone(snapshot)),
-    command: vi.fn(),
-    task: vi.fn(async (runId: string) => ({ ...rawRecord(), runId })),
+    command: vi.fn(async (operation: string, params: { runId: string; includeAudit?: boolean }) => {
+      if (operation === "message_list") return { messages: [] };
+      if (operation === "workflow_get") return { ...detailWorkflow({ runId: params.runId }),
+        ...(params.includeAudit ? { audit: detailAudit(), routingHistory: { entries: [], nextCursor: null, total: 0 } } : {}) };
+      throw new Error(`Unexpected operation: ${operation}`);
+    }),
+    task: vi.fn(async (runId: string) => runId === "cmd-9" ? rawRecord() : detailTask({ runId,
+      lineage: { ...detailTask().lineage!, rootRunId: runId },
+      workflow: { ...detailTask().workflow!, macroTaskId: timeline.macroTask.macroTaskId } })),
     tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : [rawRecord()], total: 1, nextCursor: null })),
     macroTasks: vi.fn(async () => ({ macroTasks: [timeline.macroTask], totals: { all: 1, active: 1, host: 0, review: 0 }, nextCursor: paged ? "older" : null, cursor: 41, changed: false })),
     macroTaskTimeline: vi.fn(async () => ({ timeline, verifiedAtMs: null })),
@@ -59,7 +67,7 @@ async function openDetail(f: ReturnType<typeof harness>) {
   if (!document.querySelector(".timeline-view")) await f.user.click(await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
   await waitFor(() => expect(document.querySelector('[data-key="span:s-r1-e"]')).toBeTruthy());
   await f.user.dblClick(document.querySelector('[data-key="span:s-r1-e"]') as HTMLElement);
-  await screen.findByRole("navigation", { name: "步骤" });
+  await screen.findByRole("region", { name: "微任务详情" });
 }
 
 describe("macro task and record navigation", () => {
@@ -73,24 +81,23 @@ describe("macro task and record navigation", () => {
     records.focus();
     await f.user.keyboard("{Enter}");
     expect(screen.getByRole("button", { name: "记录" }).getAttribute("aria-pressed")).toBe("true");
-    await f.user.click(screen.getByLabelText("显示协助任务与内部执行"));
     expect(await screen.findByRole("button", { name: /外部命令记录/ })).toBeTruthy();
     screen.getByRole("button", { name: "宏任务" }).focus();
     await f.user.keyboard(" ");
     expect(macroTaskRow()).toBeTruthy();
-    expect(screen.getByLabelText("显示协助任务与内部执行").closest("[hidden]")).toBeTruthy();
+    expect(document.querySelector("[data-slot=records-list]")!.closest("[hidden]")).toBeTruthy();
   });
 
   it("removes the whole list column when collapsed and retains its query and pagination after expansion", async () => {
     const f = harness(true);
     await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
-    await f.user.type(screen.getByLabelText("搜索标题、项目、Host 或编号"), "设计");
+    await f.user.type(within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目、Host 或编号"), "设计");
     await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));
     expect(localStorage.getItem(preference)).toBe("true");
     expect(screen.queryByRole("region", { name: "宏任务列表" })).toBeNull();
     expect(document.querySelector('[data-slot="macro-sidebar"] [data-slot="macro-list"]')).toBeNull();
     await f.user.click(screen.getByRole("button", { name: "展开宏任务列表" }));
-    expect(screen.getByLabelText("搜索标题、项目、Host 或编号")).toHaveProperty("value", "设计");
+    expect(within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目、Host 或编号")).toHaveProperty("value", "设计");
     await f.user.click(await screen.findByRole("button", { name: "更早" }));
     expect(f.api.macroTasks).toHaveBeenCalledWith(expect.objectContaining({ before: "older", limit: 50 }), expect.any(AbortSignal));
     await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));

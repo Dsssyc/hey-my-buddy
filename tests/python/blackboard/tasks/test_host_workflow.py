@@ -317,7 +317,7 @@ class HostCompletionTests(WorkflowTestCase):
                         "note": "Too late", "notRequired": "No target", **self.control(concluded)})
                 with self.assertRaises(BoardError):
                     board.call("workflow_conclude", {**params, "note": "Different"})
-                self.assertEqual(board.call("task_list", {"filter": "review"})["tasks"], [])
+                self.assertEqual(board.call("task_list", {"filter": "review"})["runs"], [])
                 summary = next(item for item in board.call("macro_task_list", {})["macroTasks"]
                                if item["macroTaskId"] == submitted["macroTaskId"])
                 self.assertEqual(summary["counts"]["review"], 0)

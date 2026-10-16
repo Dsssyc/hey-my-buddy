@@ -1,4 +1,5 @@
 import i18n from "i18next";
+import { recordMetadata } from "../record-metadata";
 import { ApiError } from "../api";
 import { parseActor } from "../actor";
 import type { ActivityPhase, Actor, RoutingMode, Task, TokenUsage } from "../types";
@@ -313,6 +314,13 @@ function parseRoutingEntry(value: unknown): RoutingEntry {
   };
 }
 
+/** A compact decision read attached to one calculation task. */
+export function parseSelection(value: unknown, decisionId: string): RoutingEntry {
+  const decision = rec(rec(value, "decision").decision, "decision");
+  if (decision.decisionId !== decisionId) refuse("decision.decisionId");
+  return parseRoutingEntry(decision);
+}
+
 /** One page of the routing decisions of a micro task, newest first. */
 type RoutingPage = { entries: RoutingEntry[]; nextCursor: number | null };
 
@@ -469,12 +477,9 @@ export function parseTask(value: unknown, runId: string): TaskView {
   if (task.runId !== runId) refuse("task.runId");
   for (const key of ["task", "status", "cwd", "createdAt", "updatedAt"]) str(task[key], `task.${key}`);
   for (const key of ["acceptedAt", "reviewRejectedAt", "reviewRejectionNote", "activeAttemptId", "terminationReason"]) strOrNull(task[key], `task.${key}`);
+  if (!recordMetadata(task.lineage)) refuse("task.lineage");
   const lineage = rec(task.lineage, "task.lineage");
   const kind = oneOf(lineage.kind, LINEAGE_KINDS, "task.lineage.kind");
-  for (const key of ["sourceHostId", "currentHostId", "parentRunId", "rootRunId", "rootLeadRunId"]) strOrNull(lineage[key], `task.lineage.${key}`);
-  const project = rec(lineage.project, "task.lineage.project");
-  str(project.id, "task.lineage.project"); str(project.label, "task.lineage.project"); strOrNull(project.path, "task.lineage.project");
-  parseBuddy(lineage.buddy, "task.lineage.buddy");
   const ownership = recOrNull(lineage.leadOwnership, "task.lineage.leadOwnership");
   if (ownership) str(ownership.leadRunId, "task.lineage.leadOwnership");
   const workflow = recOrNull(task.workflow, "task.workflow");
@@ -482,9 +487,12 @@ export function parseTask(value: unknown, runId: string): TaskView {
     str(workflow.state, "task.workflow.state");
     for (const key of ["hostId", "title", "macroTaskId"]) strOrNull(workflow[key], `task.workflow.${key}`);
   }
+  const decision = kind === "decision" ? recOrNull(rec(task.spec, "task.spec").decision, "task.spec.decision") : null;
   return {
     task: task as unknown as Task, updatedAt: task.updatedAt as string, attempt: parseAttempt(task),
     lead: (lineage.rootLeadRunId ?? null) !== null,
     record: workflow ? null : kind === "decision" ? "calculation" : "record",
+    decisionId: decision ? str(decision.decisionId, "task.spec.decision.decisionId") : null,
+    routing: null,
   };
 }

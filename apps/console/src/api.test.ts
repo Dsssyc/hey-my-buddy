@@ -3,6 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiError, createApi, errorText, parseRoutingHealth, readVerificationText, validRoutingConfiguration } from "./api";
 import { macroTaskTimelineFixture, OBSERVED_AT } from "./macro-task-fixtures";
 
+function recordRow(runId: string) {
+  return { runId, revision: 1, task: runId, status: "completed", createdAt: "2026-10-17T00:00:00Z", updatedAt: "2001-01-01T00:00:00Z",
+    lineage: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: null, rootLeadRunId: null, project: null, buddy: null, routingTask: null } };
+}
+
+
 describe("L4 ordered Router list configuration", () => {
   const current = { routerBuddyIds: [], routerRetryIntervalSeconds: 600,
     defaultRoutingMode: "fast", routingBudget: "brief" };
@@ -163,7 +169,7 @@ describe("microTask history reads", () => {
 describe("local read verification evidence", () => {
   const early = "Fri, 09 Oct 2026 18:00:00 GMT";
   const later = "Fri, 09 Oct 2026 18:05:00 GMT";
-  const page = { runs: [{ runId: "raw", updatedAt: "2001-01-01T00:00:00Z" }], total: 1, nextCursor: null };
+  const page = { runs: [recordRow("raw")], total: 1, nextCursor: null };
   const response = (body: unknown, date?: string, etag = '"read"') => new Response(JSON.stringify(body), {
     headers: { ETag: etag, ...(date === undefined ? {} : { Date: date }) },
   });
@@ -285,7 +291,7 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
   });
 
   it("caches per full URL, so different filters and pages revalidate separately", async () => {
-    const page = (runs: string[]) => ({ runs: runs.map(runId => ({ runId })), total: runs.length, nextCursor: null });
+    const page = (runs: string[]) => ({ runs: runs.map(recordRow), total: runs.length, nextCursor: null });
     const fetcher = queued([
       () => jsonResponse(page(["a"]), '"roots-1"'),
       () => jsonResponse(page(["b"]), '"all-1"'),
@@ -402,8 +408,8 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
   });
 
   it("answers a 304 with the representation this request validated, not the cache's newer body", async () => {
-    const body1 = { runs: [{ runId: "one" }], total: 1, nextCursor: null };
-    const body2 = { runs: [{ runId: "two" }], total: 1, nextCursor: null };
+    const body1 = { runs: [recordRow("one")], total: 1, nextCursor: null };
+    const body2 = { runs: [recordRow("two")], total: 1, nextCursor: null };
     let release304: ((value: Response) => void) | undefined;
     const reply304 = new Promise<Response>(resolve => { release304 = resolve; });
     const fetcher = vi.fn<typeof fetch>()
@@ -442,9 +448,9 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     // ABA guard: the per-URL slot is released on completion, but tickets come
     // from one global counter — a third request's freshly issued slot must
     // not match an older read's late reply.
-    const first = { runs: [{ runId: "first" }], total: 1, nextCursor: null };
-    const second = { runs: [{ runId: "second" }], total: 1, nextCursor: null };
-    const third = { runs: [{ runId: "third" }], total: 1, nextCursor: null };
+    const first = { runs: [recordRow("first")], total: 1, nextCursor: null };
+    const second = { runs: [recordRow("second")], total: 1, nextCursor: null };
+    const third = { runs: [recordRow("third")], total: 1, nextCursor: null };
     let releaseSlow: ((value: Response) => void) | undefined;
     const slowReply = new Promise<Response>(resolve => { releaseSlow = resolve; });
     let releaseThird: ((value: Response) => void) | undefined;
@@ -474,7 +480,7 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     // The ticket is held through the body read and the publication verdict is
     // evaluated when the body actually arrives: a header that lands early and
     // a body that lands late must not smuggle an older etag into the cache.
-    const older = { runs: [{ runId: "old" }], total: 1, nextCursor: null };
+    const older = { runs: [recordRow("old")], total: 1, nextCursor: null };
     const newer = { runs: [], total: 2, nextCursor: null };
     let finishBody: ((value: unknown) => void) | undefined;
     const delayed = jsonResponse(older, '"older-body"');

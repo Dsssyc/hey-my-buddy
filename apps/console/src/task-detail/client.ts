@@ -1,5 +1,5 @@
 import type { ConsoleApi } from "../api";
-import { parseAudit, parseBasis, parseInquiries, parseRoutingPage, parseTask, parseWorkflow } from "./parse";
+import { parseAudit, parseBasis, parseInquiries, parseRoutingPage, parseSelection, parseTask, parseWorkflow } from "./parse";
 import type { Audit, Basis, Inquiries, RoutingEntry, TaskView, Workflow } from "./types";
 
 /** How many inquiries one read asks for; as many back means earlier ones may not be listed. */
@@ -25,7 +25,13 @@ export function createTaskDetailClient(api: ConsoleApi, csrfToken: string): Task
   return {
     async task(runId, signal) {
       const reply = await api.task(runId, signal);
-      return { value: parseTask(reply, runId), verifiedAtMs: verified(reply) };
+      const value = parseTask(reply, runId);
+      if (value.record !== "calculation" || value.decisionId === null) return { value, verifiedAtMs: verified(reply) };
+      const selection = await api.command("selection_get", { decisionId: value.decisionId }, csrfToken);
+      const taskAt = verified(reply);
+      const selectionAt = verified(selection);
+      return { value: { ...value, routing: parseSelection(selection, value.decisionId) },
+        verifiedAtMs: taskAt === null || selectionAt === null ? null : Math.min(taskAt, selectionAt) };
     },
     async workflow(runId) {
       const reply = await api.command("workflow_get", { runId }, csrfToken);

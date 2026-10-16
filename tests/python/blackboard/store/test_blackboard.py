@@ -1091,6 +1091,7 @@ class TestTaskHistory(BoardTestCase):
         "rootRunId",
         "project",
         "buddy",
+        "routingTask",
         "delegationAuthority",
         "leadOwnership",
         "rootLeadRunId",
@@ -1109,8 +1110,7 @@ class TestTaskHistory(BoardTestCase):
         board = self.board()
         created = self.submit_one(board, "hist-1")
         listing = board.call("task_list", {"limit": 10})
-        self.assertEqual(sorted(listing), sorted(["runs", "tasks", "total", "cursor", "nextCursor"]))
-        self.assertEqual(listing["runs"], listing["tasks"])
+        self.assertEqual(sorted(listing), sorted(["runs", "total", "cursor", "nextCursor"]))
         self.assertEqual(listing["total"], 1)
         self.assertEqual(listing["cursor"], board.store.head())
         self.assertIsNone(listing["nextCursor"])
@@ -1122,6 +1122,7 @@ class TestTaskHistory(BoardTestCase):
         self.assertIsNone(metadata["parentRunId"])
         self.assertIsNone(metadata["rootRunId"])
         self.assertIsNone(metadata["buddy"])
+        self.assertIsNone(metadata["routingTask"])
         self.assertFalse(metadata["delegationAuthority"])
         self.assertIsNone(metadata["leadOwnership"])
         self.assertIsNone(metadata["rootLeadRunId"])

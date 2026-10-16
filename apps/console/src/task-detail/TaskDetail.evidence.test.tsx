@@ -498,6 +498,12 @@ describe("what a turn says of its session, its usage and its buddy's origin", ()
 });
 
 describe("the delegation", () => {
+  it("names a missing project in the console language", async () => {
+    open({ step: 1, replies: { task: task({ lineage: { ...task().lineage, project: null } }) } });
+    await ready();
+    expect(pane().textContent).toContain("未记录项目");
+  });
+
   it("says the delegator is not recorded when it is not, and shows the title, not the result, in the head", async () => {
     open({ step: 1, replies: { task: task({ lineage: { ...task().lineage, sourceHostId: null, currentHostId: null } }) } });
     await ready();
@@ -520,10 +526,10 @@ describe("a run with no collaboration record", () => {
       nativeSession: { sessionId: "native-session-123456", storageScope: "harness-user-store", nativeAppVisibility: "listed-in-native-app", resumable: true } } } },
     quotaFailure: { code: "quota-exceeded" }, ...overrides });
 
-  it("is written as a turn is: who delegated it, its native session, a native limit, and how it ended", async () => {
+  it("records its Host provenance, native session, native limit and ending", async () => {
     open({ replies: { task: record() }, timeline: null });
     await ready();
-    expect(pane().textContent).toContain("原始委派方");
+    expect(pane().textContent).toContain("Host");
     expect(pane().textContent).toContain("codex-desktop");
     expect(pane().textContent).toContain("Harness 错误");
     expect(pane().textContent).toContain("额度耗尽");

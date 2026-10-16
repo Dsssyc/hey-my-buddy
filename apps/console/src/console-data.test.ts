@@ -5,11 +5,9 @@ import {
   MODEL_SERVICE_CONCURRENCY_DEFAULT,
   concurrencyEntryFor,
   concurrencyLimit,
-  hasModelBuddy,
   modelServices,
   preferredVariant,
   taskHost,
-  taskExecutor,
   taskProject,
 } from "./console-data";
 import type { Preference, Buddy, Task } from "./types";
@@ -19,28 +17,9 @@ const buddy = (buddyId: string, harness: string, provider: string, effort: strin
   enabled: true, capabilities: [], contextWindow: null, source: "fixture", description: "",
 });
 
-const taskFixture = (overrides: Partial<Task> = {}): Task => ({
-  runId: "run-1", task: "Run checks", status: "queued", owner: null, cwd: "~/project", revision: 1,
-  createdAt: "2026-10-15T00:00:00Z", acceptedAt: null, acceptanceVerdict: null,
-  reviewRejectedAt: null, reviewRejectionNote: null, ...overrides,
-});
-
 afterEach(async () => { await i18n.changeLanguage("zh"); });
 
 describe("console grouping and recorded attribution", () => {
-  it("has no model buddy for the command and external adapters and retains pending model assignment", () => {
-    expect(taskExecutor(taskFixture({ spec: { adapter: "command" },
-      lineage: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: null,
-        rootLeadRunId: null, project: { id: "project", label: "project", path: "~/project" },
-        buddy: { harness: "codex", provider: "openai", model: "gpt-6", effort: "high" } } }))).toBeNull();
-    expect(taskExecutor(taskFixture({ spec: { adapter: "external" } }))).toBeNull();
-    expect(hasModelBuddy(taskFixture({ spec: { adapter: "command" } }))).toBe(false);
-    expect(hasModelBuddy(taskFixture())).toBe(true);
-    expect(taskExecutor(taskFixture({ spec: { adapter: "codex" } }))).toBe("执行 buddy 待确定");
-    expect(taskExecutor({ lineage: { buddy: { harness: "codex", model: "gpt-6", effort: "high" } } } as Task))
-      .toBe("codex · gpt-6 / high");
-  });
-
   it("keeps the recorded delegator distinct from a later Host owner, including Lead-owned helper trees", async () => {
     const task = { lineage: { sourceHostId: null, currentHostId: "host-after-takeover", rootLeadRunId: "root-lead",
       leadOwnership: { leadRunId: "direct-lead" } } } as Task;
@@ -106,10 +85,11 @@ describe("console grouping and recorded attribution", () => {
 
   it("uses backend source metadata and never guesses a project or Host from execution cwd or owner", () => {
     const task = { runId: "micro-task", cwd: "/runtime/worktrees/generated", owner: "worker:guess" } as Task;
-    expect(taskProject(task)).toMatchObject({ id: "unknown", label: "未记录项目", path: null });
+    expect(taskProject(task)).toBeNull();
     expect(taskHost(task)).toBe("未记录委派方");
     task.lineage = { kind: "helper", sourceHostId: "codex-original", currentHostId: "codex-new",
-      parentRunId: "parent", rootRunId: "root", rootLeadRunId: null, project: { id: "repo-id", path: "/source/project", label: "Project" }, buddy: null };
+      parentRunId: "parent", rootRunId: "root", rootLeadRunId: null, routingTask: null,
+      project: { id: "repo-id", path: "/source/project", label: "Project" }, buddy: null };
     expect(taskProject(task)).toEqual(task.lineage.project);
     expect(taskHost(task)).toBe("codex-original");
   });

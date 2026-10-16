@@ -85,20 +85,11 @@ export function preferredVariant(modelService: ModelServiceGroup, preferences: P
     || pool.find(p => p.enabled) || pool[0];
 }
 export function taskProject(task: Task) {
-  return task.lineage?.project || { id: "unknown", label: "未记录项目", path: null };
+  return task.lineage?.project ?? null;
 }
 /** Recorded source attribution survives takeover; current ownership is separate. */
 export function taskHost(task: Task) {
   if (task.lineage?.sourceHostId) return task.lineage.sourceHostId;
   const lead = task.lineage?.leadOwnership?.leadRunId ?? task.lineage?.rootLeadRunId;
   return lead ? actorText({ role: "lead", id: lead }) : i18n.t("shell:actor.unrecordedDelegator");
-}
-/** Legacy command and external records have no model buddy. */
-export function hasModelBuddy(task: Task) {
-  return task.spec?.adapter !== "command" && task.spec?.adapter !== "external";
-}
-export function taskExecutor(task: Task) {
-  const buddy = task.lineage?.buddy;
-  if (!hasModelBuddy(task)) return null;
-  return buddy ? `${buddy.harness} · ${buddy.model} / ${effortText(buddy.effort)}` : "执行 buddy 待确定";
 }

@@ -82,7 +82,6 @@ describe("console interactions", () => {
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
     await user.click(await screen.findByRole("button", { name: "记录" }));
-    await user.click(await screen.findByLabelText("显示协助任务与内部执行"));
     await user.click(
       await screen.findByRole("button", { name: /未执行的测试任务/ }),
     );
@@ -91,10 +90,8 @@ describe("console interactions", () => {
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "记录验收" })).toBeNull();
     expect(api.command).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "等待验收" }));
-    expect(
-      await screen.findByRole("heading", { name: "没有匹配的微任务" }),
-    ).toBeTruthy();
+    await user.click(within(screen.getByRole("region", { name: "记录详情" })).getByRole("button", { name: "记录" }));
+    expect(await screen.findByText("选择一条记录。")).toBeTruthy();
   });
 
   it("renders the persisted worker receipt and refuses retry when a process may survive", async () => {
@@ -108,7 +105,7 @@ describe("console interactions", () => {
         cwd: "/fixture",
         revision: 3,
         createdAt: "2026-09-22T00:00:00Z", updatedAt: "2026-09-22T00:01:00Z",
-        lineage: { kind: "execution", sourceHostId: "fixture", currentHostId: "fixture", parentRunId: null, rootRunId: "stop-evidence", rootLeadRunId: null,
+        lineage: { kind: "execution", sourceHostId: "fixture", currentHostId: "fixture", parentRunId: null, rootRunId: "stop-evidence", rootLeadRunId: null, routingTask: null,
           project: { id: "fixture", label: "fixture", path: "/fixture" }, buddy: null },
         acceptedAt: null,
         acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
@@ -141,7 +138,6 @@ describe("console interactions", () => {
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
     await user.click(await screen.findByRole("button", { name: "记录" }));
-    await user.click(await screen.findByLabelText("显示协助任务与内部执行"));
     await user.click(
       await screen.findByRole("button", { name: /停止证据测试/ }),
     );
@@ -164,7 +160,7 @@ describe("console interactions", () => {
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
     await user.click(await screen.findByRole("button", { name: "记录" }));
-    await screen.findByRole("heading", { name: "选择一项微任务" });
+    await screen.findByText("选择一条记录。");
     await user.click(screen.getByRole("link", { name: /^Buddy/ }));
     await listed(1, 1);
     // There is no global edit switch: controls are directly editable, and no

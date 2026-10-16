@@ -17,11 +17,6 @@ function normalizeDisplay(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-export const TASK_TITLE_SOURCE_LABEL: Record<TitleSource, string> = {
-  title: "Host 标题",
-  task: "任务首行",
-  none: "未命名微任务",
-};
 export const UNTITLED_MICRO_TASK = "未命名微任务";
 /** Task-first-line titles cap at roughly this many characters (0.16 0.1). */
 const TASK_LINE_CHARS = 40;
@@ -46,22 +41,16 @@ export type TaskTitle = {
  * raw task text stays available in the detail view.
  */
 export function taskTitle(task: Task): TaskTitle {
-  const explicit = normalizeDisplay(typeof task.workflow?.title === "string" ? task.workflow.title : "");
-  if (explicit) return { text: explicit, fullText: explicit, source: "title" };
-  const firstLine = typeof task.task === "string"
-    ? normalizeDisplay(task.task.trim().split("\n", 1)[0] ?? "")
-    : "";
+  const routed = task.lineage?.routingTask;
+  const explicit = normalizeDisplay(routed ? routed.title ?? "" : task.workflow?.title ?? "");
+  if (explicit) {
+    const source = routed?.titleSource === "first-line" ? "task" : "title";
+    return { text: source === "task" ? excerpt(explicit, TASK_LINE_CHARS) : explicit, fullText: explicit, source };
+  }
+  if (routed) return { text: UNTITLED_MICRO_TASK, fullText: UNTITLED_MICRO_TASK, source: "none" };
+  const firstLine = normalizeDisplay(task.task.trim().split("\n", 1)[0]);
   if (firstLine) return { text: excerpt(firstLine, TASK_LINE_CHARS), fullText: firstLine, source: "task" };
   return { text: UNTITLED_MICRO_TASK, fullText: UNTITLED_MICRO_TASK, source: "none" };
-}
-
-/**
- * The shared title tooltip: the complete title text, plus the pointer to the
- * detail view for a task first-line source. Display stays short; the tooltip
- * is the only place the full first line appears outside details.
- */
-export function titleTooltip(title: TaskTitle): string {
-  return title.fullText;
 }
 
 export function needsReview(task: Task): boolean {

@@ -2,7 +2,8 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConsoleApi } from "./api";
-import { Tasks } from "./Tasks";
+import { useState } from "react";
+import { Records } from "./Records";
 import { TaskDetail } from "./task-detail/TaskDetail";
 import { createTaskDetailClient } from "./task-detail/client";
 import type { Snapshot, Task } from "./types";
@@ -16,7 +17,7 @@ const task = (runId = "command-1", extra: Partial<Task> = {}): Task => ({
   runId, task: `原始任务 ${runId}`, status: "completed", owner: "host", cwd: "~/project",
   revision: 1, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-09T00:00:00Z",
   acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
-  lineage: { kind: "execution", sourceHostId: "host", currentHostId: "host", parentRunId: null, rootRunId: runId, rootLeadRunId: null,
+  lineage: { kind: "execution", sourceHostId: "host", currentHostId: "host", parentRunId: null, rootRunId: runId, rootLeadRunId: null, routingTask: null,
     project: { id: "project", path: "~/project", label: "project" }, buddy: null },
   selectedAttempt: attempt(`att-${runId}`, { result: { stdout: `结果 ${runId}` } }), ...extra,
 });
@@ -110,77 +111,78 @@ describe("opened micro task local refresh", () => {
   });
 });
 
+function RecordHarness({ api, onOpenMicroTask = vi.fn() }: { api: ConsoleApi; onOpenMicroTask?: (macroTaskId: string, runId: string) => void }) {
+  const [selected, setSelected] = useState<string | null>(null);
+  return <Records snapshot={snapshot} api={api} active selected={selected} onSelect={setSelected}
+    onOpenMicroTask={onOpenMicroTask} onCollapseList={vi.fn()} onExpandList={vi.fn()} />;
+}
+
 describe("the list of records and the open detail", () => {
-  it("refreshes a selected raw command list at a newer revision, and reads its detail again for that revision, once", async () => {
+  it("polls its first page, refreshes a selected command row and reads no unrelated APIs", async () => {
     const f = fixture(); const user = userEvent.setup();
     const original = task(); const next = { ...original, revision: 2, task: "更新后的原始命令" };
-    let listReads = 0;
     const lists = f.api.tasks as ReturnType<typeof vi.fn>;
-    lists.mockImplementation(async (query: { rootsOnly?: boolean }) => {
-      if (query.rootsOnly) return { runs: [], total: 0, nextCursor: null };
-      ++listReads;
-      return { runs: [listReads === 1 ? original : next], total: 1, nextCursor: null };
-    });
+    lists.mockResolvedValueOnce({ runs: [original], total: 1, nextCursor: null })
+      .mockResolvedValue({ runs: [next], total: 1, nextCursor: null });
     (f.api.task as ReturnType<typeof vi.fn>).mockResolvedValue(original);
-    render(<Tasks snapshot={snapshot} api={f.api} refresh={f.refresh} active onOpenMicroTask={vi.fn()} />);
-    await screen.findByText("没有匹配的微任务");
-    await user.click(screen.getByRole("checkbox", { name: "显示协助任务与内部执行" }));
+    render(<RecordHarness api={f.api} />);
     await user.click(await screen.findByRole("button", { name: /原始任务 command-1/ }));
     await screen.findByText("结果 command-1");
     const before = (f.api.task as ReturnType<typeof vi.fn>).mock.calls.length;
-    const pagesBefore = lists.mock.calls.length;
-    await user.click(screen.getByRole("button", { name: "刷新全部执行记录" }));
-    await waitFor(() => expect(lists).toHaveBeenCalledTimes(pagesBefore + 1));
+    await waitFor(() => expect(lists.mock.calls.length).toBeGreaterThan(1), { timeout: 4500 });
     expect(lists.mock.calls.at(-1)?.[0]).toMatchObject({ rootsOnly: false, limit: 50 });
-    // The row follows the list, and the detail follows the row: it reads the task again for the new revision, and no more.
-    await screen.findByText("更新后的原始命令", { selector: ".task-title" });
+    await screen.findByText("更新后的原始命令", { selector: "[data-slot=record-title]" });
     await waitFor(() => expect(f.api.task).toHaveBeenCalledTimes(before + 1));
-    expect(f.api.command).not.toHaveBeenCalled(); expect(f.refresh).not.toHaveBeenCalled();
-    expect(document.querySelector(".task-row.selected")?.getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByText("结果 command-1")).toBeTruthy();
-  });
+    expect(document.querySelector("[data-slot=record-entry][aria-pressed=true]")).toBeTruthy();
+    for (const name of ["command", "snapshot", "macroTasks", "macroTaskTimeline"] as const) expect(f.api[name]).not.toHaveBeenCalled();
+    expect(f.refresh).not.toHaveBeenCalled();
+  }, 7000);
 
-  it.each([null, "older-page"])("retries the list's failed first page with cursor %s while retaining command selection and scroll", async cursor => {
+  it("retains a selected command and scroll when a poll fails, then retries the same first page", async () => {
     const f = fixture(); const user = userEvent.setup();
     const original = task(); const fresh = task("command-1", { revision: 2, task: "重试后的原始命令" });
     const lists = f.api.tasks as ReturnType<typeof vi.fn>;
-    lists.mockResolvedValueOnce({ runs: [original], total: 1, nextCursor: cursor })
+    lists.mockResolvedValueOnce({ runs: [original], total: 1, nextCursor: "older-page" })
       .mockRejectedValueOnce(new Error("列表本地刷新失败"))
-      .mockResolvedValueOnce({ runs: [fresh], total: 1, nextCursor: "server-first-cursor" });
+      .mockResolvedValue({ runs: [fresh], total: 1, nextCursor: "server-first-cursor" });
     (f.api.task as ReturnType<typeof vi.fn>).mockResolvedValue(original);
-    const view = render(<Tasks snapshot={snapshot} api={f.api} refresh={f.refresh} active onOpenMicroTask={vi.fn()} />);
+    render(<RecordHarness api={f.api} />);
     await user.click(await screen.findByRole("button", { name: /原始任务 command-1/ }));
     await screen.findByText("结果 command-1");
-    const body = view.container.querySelector(".list-scroll")!; body.scrollTop = 87;
-    const detailReads = (f.api.task as ReturnType<typeof vi.fn>).mock.calls.length;
-    await user.click(screen.getByRole("button", { name: "刷新全部执行记录" }));
-    expect((await screen.findByRole("alert")).textContent).toContain("列表本地刷新失败");
+    const body = screen.getByLabelText("记录条目"); body.scrollTop = 87;
+    expect((await screen.findByRole("alert", {}, { timeout: 4500 })).textContent).toContain("读取失败");
     expect(body.scrollTop).toBe(87);
     expect(screen.getByText("结果 command-1")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "重试读取" }));
-    await waitFor(() => expect(lists).toHaveBeenCalledTimes(3));
-    await screen.findByText("重试后的原始命令", { selector: ".task-title" });
-    expect(lists.mock.calls[2][0]).toEqual(lists.mock.calls[1][0]);
-    expect(lists.mock.calls[2][0]).not.toHaveProperty("before");
+    await user.click(screen.getByRole("button", { name: "重试连接" }));
+    await screen.findByText("重试后的原始命令", { selector: "[data-slot=record-title]" });
+    expect(lists.mock.calls.at(-1)?.[0]).toMatchObject({ rootsOnly: false, limit: 50 });
+    expect(lists.mock.calls.at(-1)?.[0]).not.toHaveProperty("before");
     expect(body.scrollTop).toBe(87);
-    expect(document.querySelector(".task-row.selected")?.getAttribute("aria-pressed")).toBe("true");
-    expect(screen.queryByRole("button", { name: "加载更早记录" }) !== null).toBe(cursor !== null);
-    await waitFor(() => expect(f.api.task).toHaveBeenCalledTimes(detailReads + 1));
-    for (const name of ["command", "snapshot", "macroTasks", "macroTaskTimeline"] as const) expect(f.api[name]).not.toHaveBeenCalled();
+    expect(document.querySelector("[data-slot=record-entry][aria-pressed=true]")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "更早" })).toBeTruthy();
     expect(f.refresh).not.toHaveBeenCalled();
+  }, 7000);
+
+  it("distinguishes an empty history from a search with no matches", async () => {
+    const f = fixture(); const user = userEvent.setup();
+    (f.api.tasks as ReturnType<typeof vi.fn>).mockResolvedValue({ runs: [], total: 0, nextCursor: null });
+    render(<RecordHarness api={f.api} />);
+    expect(await screen.findByText("还没有记录。")).toBeTruthy();
+    await user.type(screen.getByLabelText("搜索标题、项目、Host 或编号"), "不存在");
+    expect(await screen.findByText("没有匹配的记录。")).toBeTruthy();
   });
 
-  it("opens a micro task with a collaboration record at its address in its macro task, and a command here", async () => {
+  it("opens micro tasks in their macro task and command executions in the records detail", async () => {
     const f = fixture(); const user = userEvent.setup();
     const micro = task("micro-1", { workflow: { state: "delivered", awaitingHost: false, hostId: "host", ownerGeneration: 1, revision: 1, macroTaskId: "macro-7" },
-      lineage: { kind: "micro-task", sourceHostId: "host", currentHostId: "host", parentRunId: null, rootRunId: "micro-1", rootLeadRunId: null,
+      lineage: { kind: "micro-task", sourceHostId: "host", currentHostId: "host", parentRunId: null, rootRunId: "micro-1", rootLeadRunId: null, routingTask: null,
         project: { id: "project", path: "~/project", label: "project" }, buddy: null } });
     const standalone = task("micro-2", { workflow: { state: "delivered", awaitingHost: false, hostId: "host", ownerGeneration: 1, revision: 1 },
       lineage: { ...micro.lineage!, rootRunId: "micro-2" } });
     (f.api.tasks as ReturnType<typeof vi.fn>).mockResolvedValue({ runs: [micro, standalone, task("command-9")], total: 3, nextCursor: null });
     (f.api.task as ReturnType<typeof vi.fn>).mockImplementation(async (runId: string) => task(runId));
     const open = vi.fn();
-    render(<Tasks snapshot={snapshot} api={f.api} refresh={f.refresh} active onOpenMicroTask={open} />);
+    render(<RecordHarness api={f.api} onOpenMicroTask={open} />);
     await user.click(await screen.findByRole("button", { name: /原始任务 micro-1/ }));
     expect(open).toHaveBeenLastCalledWith("macro-7", "micro-1");
     await user.click(screen.getByRole("button", { name: /原始任务 micro-2/ }));

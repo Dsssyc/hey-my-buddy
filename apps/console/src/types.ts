@@ -180,7 +180,8 @@ export type Lineage = {
   currentHostId: string | null;
   parentRunId: string | null;
   rootRunId: string | null;
-  project: { id: string; path: string | null; label: string };
+  project: { id: string; path: string | null; label: string } | null;
+  routingTask?: { runId: string; title: string | null; titleSource: "title" | "first-line" | null; macroTaskId: string | null; macroTaskTitle: string | null } | null;
   buddy: { harness: string; provider: string; model: string; effort: string } | null;
   delegationAuthority?: boolean;
   /** Lead owning this micro task's root tree, including helper descendants. */
