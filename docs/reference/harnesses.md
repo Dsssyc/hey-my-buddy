@@ -24,7 +24,7 @@ The Worker obtains its selected command through the named `harness_prepare` oper
 
 `hey-my-buddy harness set codex /absolute/path/to/codex` sets a user-selected path and detects it; `hey-my-buddy harness set codex --auto` clears the setting. The JSON form is `hey-my-buddy harness-set '{"harness":"codex","path":"/absolute/path/to/codex"}'`; a null path restores automatic discovery. An attempt-scoped model credential cannot change this setting. The authenticated Buddy page offers the same detection and advanced path controls, including failed detection and login guidance.
 
-The package's guarded `upgrade` archives an idle schema 18 board after verified backup and under exclusive owner locks, then creates a schema 19 board carrying its settings. The previous board and work history remain in the archive; the new board has no work history. Startup neither migrates nor populates health records, preserving cutover verification. The upgrade fence also blocks health/catalog publication and manual refresh. Source implementation, private verification, paid Router probes, actual installation and Windows native validation must be reported separately.
+Startup neither migrates nor populates health records, preserving cutover verification. An installation's fence also blocks health/catalog publication and manual refresh. Source implementation, private verification, paid Router probes, actual installation and Windows native validation must be reported separately.
 
 A saved manual path is an explicit first-tier override, as ordered by ADR-017; it stays selected while healthy until the user restores automatic discovery. Native-version changes retain their ordinary health and session-binding effects. Review admission has no per-version paid certificate.
 

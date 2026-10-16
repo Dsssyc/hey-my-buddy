@@ -34,7 +34,7 @@ uv build --wheel --out-dir dist
 uvx --from /absolute/path/hey_my_buddy-0.39.0-py3-none-any.whl hey-my-buddy install
 ```
 
-机器上没有 `uv` 时，发布包里的 `install.sh`（macOS、Linux）或 `install.ps1`（Windows）会先准备固定版本的私有 `uv`，再调用同一个安装入口；它们不修改 `PATH`、shell 或 Host 设置，也不会安装全局 `hey-my-buddy` 命令。安装会先列出将写入的路径、物化版本化运行时；有排队或在跑的工作、未确认的停止时拒绝并列出阻塞项（`UPGRADE_NOT_IDLE`）；空闲后整体切换 skill、启动器、运行时与服务，并保留校验过的备份用于回滚。重跑完整同版本只补齐缺失内容、不重启服务；内容损坏时用同一条固定版本命令修复；同版本内容变化会报告 `updated`。sdist 保留来源提交，解包后构建 wheel 仍保留相同 `sourceCommit`。安装或升级日常服务都需要用户的单独授权。代码与脚本可移植到 Windows，但尚未在真机验证。
+机器上没有 `uv` 时，发布包里的 `install.sh`（macOS、Linux）或 `install.ps1`（Windows）会先准备固定版本的私有 `uv`，再调用同一个安装入口；它们不修改 `PATH`、shell 或 Host 设置，也不会安装全局 `hey-my-buddy` 命令。安装会先列出将写入的路径、物化版本化运行时。只改末位的版本不打断在跑的工作：服务换到新运行时上重启，接回在跑的执行。改了中间号的版本，有排队或在跑的工作、未确认的停止时拒绝并列出阻塞项（`UPGRADE_NOT_IDLE`），空闲后切换，并做校验过的备份。两种都是 skill、启动器、运行时与服务整体切换，失败时回滚。重跑完整同版本只补齐缺失内容、不重启服务；内容损坏时用同一条固定版本命令修复；同版本内容变化会报告 `updated`。sdist 保留来源提交，解包后构建 wheel 仍保留相同 `sourceCommit`。安装或升级日常服务都需要用户的单独授权。代码与脚本可移植到 Windows，但尚未在真机验证。
 
 ### 可直接交给安装 agent 的提示
 
@@ -104,4 +104,4 @@ Codex Host 为每个运行中的微任务派生一个只做监控的原生子代
 
 B 批源码加入原生计费标注和额度耗尽的候选过滤。取消显示记录中的发起者与理由，控制台说明已精简。[源码与原生检查记录](docs/acceptance/worker-accounts-phase1-0.23.0.md)与日常安装分别记录。
 
-0.24.0 源码将 attempt 证据与 harness 私有状态分区。请求安装授权前，用新包的 `hey-my-buddy backup-preflight '{}'` 查看将复制、跳过和拒绝的路径；它不启动服务、不写数据。安装器在停机前检查该清单。凭据与原生私有目录不进入备份。详情见[操作文档](docs/reference/operations.md#backup-upgrade-and-storage-contract)。
+0.24.0 源码将 attempt 证据与 harness 私有状态分区。改了中间号的安装，请求授权前用新包的 `hey-my-buddy backup-preflight '{}'` 查看将复制、跳过和拒绝的路径；它不启动服务、不写数据。这种安装在停机前检查该清单。凭据与原生私有目录不进入备份。详情见[操作文档](docs/reference/operations.md#backup-upgrade-and-storage-contract)。

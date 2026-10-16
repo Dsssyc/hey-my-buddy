@@ -61,6 +61,8 @@
 
 ## 安装与存储
 
+**`test_backup.py` 为一个删掉的参数留着测试。** ADR-031 的 M5 删掉了 `backup` 的 `upgradeToken`，同时加了 `test_backup_has_no_upgrade_token_parameter`，断言它被当作未知参数拒绝。这是在为已删的东西留测试，未知参数的拒绝别处已经测着。2026-10-16 验收 M5 时看到，随下一批动备份时删掉。
+
 **命令执行的 buddy 一栏存的不是 buddy。**（2026-10-15 做完并随 0.39.0 安装：开发者定下微任务不再接受命令与外部执行，见 ADR-007 末段与[C 组验收记录](../acceptance/step3-group-c.md)的 C6。） 2026-10-15 验收 Lead 第二次试跑时查到：`workflow_runs.buddy_json` 对模型执行存 harness、provider、model 与 effort，对命令执行与外部执行存 `{"adapter": "command"}` 这样的适配器约束（`protocol/schemas.py` 的 `buddy_constraints`），工作流视图的 `buddy` 也就有两种形状，读的一方要靠有没有 `adapter` 键来分辨。按 `AGENTS.md` 的存储规矩，适配器该有自己的字段，命令执行的 buddy 为空。这改存储形式与 Host 面对的契约，单独做一批，排在下一次改存储形式时。
 
 **失败的执行留下的原生证据，在微任务验收、回收检出时一并删掉了。**（2026-10-15 做完，随 0.38.0 安装；[验收记录](../acceptance/reliability-batch-a.md)。留下一处：借用同一检出的协助任务以失败或取消结束、上级已经结束时，存储回收仍把它当作还能续做，它留下的证据删不掉；随下一次动存储回收时改） 2026-10-15 查上面那次 Codex 回合时发现：看板上的结果还指着 `state/harnesses/codex/micro-tasks/<…>/attempts/<…>/` 下的 `unknown-events.json`、`thread-notifications.json` 等文件，可那个微任务被 Lead 验收、回收之后，这些文件已经不在了，只剩结果里的一句结论，没法细查。要定的是：失败回合的原生证据留到什么时候（例如留到宏任务结束，或由存储回收列进计划），以及结果里的引用在文件删掉之后怎样如实显示。
@@ -85,7 +87,7 @@
 
 - **运行时的版本改从原生会话里取，不再另起进程。** 开发者于 2026-10-11 同意记为单独的一批。现状：DSH 的版本取自它与原生进程的握手；Claude Code、Codex、ZCode 在每次执行开始时另起一个 `--version` 进程，ADR-021 L18 的第三轮把这三处的规则统一了（版本只供诊断，取不到记为未知），做法仍是两种。更彻底的一致是四个都从这次执行本来就有的原生会话里取版本（ADR-023：复用 harness 已经在跑的执行路径），这样为取版本另起的进程连同它的停止证据都不再需要。依据（2026-10-11 用产品自己的目录读取实测，不发任何回合）：Claude Code 留存的真实事件流里有 `claude_code_version`；Codex 0.162.1 的 `initialize` 答复有 `userAgent`，版本号在其中，没有单独的字段；ZCode 的 `runtime/capabilities` 与 `session/create` 的答复里只有协议的版本（`protocol.version` 为 1），没有产品的版本。所以 ZCode 从握手里取不到，开发者“握手里应该都有”的估计对它不成立。这一批开头要定的是：ZCode 是保留另起的探测，还是四个都改用检测时已经记下的那个可执行文件的版本。另一条事实：DSH 握手里报的版本是 `0.0.1`（2026-10-11 实测），不是它的发行版本号，所以“握手里的版本”对 DSH 也不等于用户认得的那个版本。
 
-- **升级交接的测试里收集了子进程却没有使用。** `tests/python/install/test_upgrade_host_cutover.py` 的 `self.children`，2026-10-13 验收时看到，下一批动到安装与升级的测试时删掉。
+- **升级交接的测试里收集了子进程却没有使用。**（早已删掉：2026-10-16 写 ADR-031 M5 的说明时核对，基点里已经没有） `tests/python/install/test_upgrade_host_cutover.py` 的 `self.children`，2026-10-13 验收时看到，下一批动到安装与升级的测试时删掉。
 
 - **Codex 的一个回合出了两条最终回答，整回合判失败。**（2026-10-15 做完，随 0.38.0 安装；[验收记录](../acceptance/reliability-batch-a.md)） 2026-10-15 Lead 第二次试跑里，名下的预览微任务第一回合（`codex / openai / gpt-6.1-sol / max`，Codex CLI 0.162.1）跑了约 40 分钟、49 次工具调用，Codex 正常退出（退出码 0），产品却以 `invalid-result`“multiple native final messages completed”判失败：`buddy/harnesses/codex/protocol.py` 见到同一回合里第二条 `phase` 为 `final_answer` 的 `agentMessage` 就报错。Lead 用 `continue` 续了一回合才交回。同日 Host 读了这个回合在用户 Codex 目录里的原生会话记录（只看消息的种类、时间与长度），查明：第一条最终回答 680,985 字符，结果 JSON 写到一半，后面接了约 68 万个空白字符，没有闭合，是结构化输出下的生成失控；16 秒后 Codex 在同一回合里又给出第二条，1,027 字符，是合法的结果；产品见到第二条就报错并中止了回合，把一个已经自行恢复的回合变成了失败。日常看板记下的 19 个 Codex Worker 会话、48 个回合里只有这一次。开发者没有给 Codex 配过任何钩子。由此不再付费复现，按 ADR-030 改：取回合完成前最后一条最终回答，被取代的记成事实（[执行计划](reliability-and-step3-plan.md)的 A1）。
 
