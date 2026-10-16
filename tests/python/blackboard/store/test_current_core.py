@@ -45,7 +45,7 @@ class CurrentCoreTests(BoardTestCase):
         return path
 
     def test_fresh_schema_has_only_current_fields_and_survives_reopen(self):
-        self.assertEqual(CONTRACT_VERSION, "0.42.0")
+        self.assertEqual(CONTRACT_VERSION, "0.43.0")
         self.assertEqual(SCHEMA_VERSION, 24)
         board = self.board()
         with board.store.db.read() as connection:
@@ -155,6 +155,42 @@ class CurrentCoreTests(BoardTestCase):
         with self.assertRaises(BoardError) as caught:
             board.call("workflow_get", {"runId": "current-run", "taskId": "silently-ignored-target"})
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+
+    def test_result_settles_only_its_queued_questions_and_replay_adds_no_events(self):
+        for status, confirmed in (("ok", True), ("failed", True), ("cancelled", True)):
+            with self.subTest(status=status, shutdownConfirmed=confirmed):
+                board = self.board()
+                client = board.client()
+                task = client.submit(requestId=f"inquiry-end-{status}-{confirmed}", task="return data",
+                    cwd=str(self.workdir(f"{status}-{confirmed}")), adapter="command", argv=["true"])["task"]
+                claim = admit_execution(client, "n" * 32, task_id=task["taskId"])["claim"]
+                attempt = claim["attempt"]
+                other = client.submit(requestId=f"other-{status}-{confirmed}", task="still running",
+                    cwd=str(self.workdir(f"other-{status}-{confirmed}")), adapter="command", argv=["true"])["task"]
+                other_attempt = admit_execution(client, "o" * 32, task_id=other["taskId"])["claim"]["attempt"]
+                client.post_question("q-other", "Still there?", runId=other["taskId"])
+                for inquiry_id in ("q-pending", "q-delivered", "q-answered"):
+                    client.post_question(inquiry_id, "Status?", runId=task["taskId"])
+                client.update_message("q-delivered", state="delivered", runId=task["taskId"])
+                client.update_message("q-answered", answer={"text": "Still working"}, runId=task["taskId"])
+                report = {"status": status, "shutdownConfirmed": confirmed}
+                client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, report)
+                pending = client.get_message("q-pending", runId=task["taskId"])
+                self.assertEqual(pending["state"], "unavailable")
+                self.assertIn("attempt ended", pending["reason"])
+                self.assertEqual(client.get_message("q-delivered", runId=task["taskId"])["state"], "delivered")
+                self.assertEqual(client.get_message("q-answered", runId=task["taskId"])["answer"]["text"], "Still working")
+                events = client.read_events(taskId=task["taskId"])
+                unavailable = [e for e in events["events"] if e["kind"] == "message.updated"
+                               and e["payload"].get("state") == "unavailable"]
+                self.assertEqual(len(unavailable), 1)
+                self.assertEqual(unavailable[0]["attemptId"], attempt["attemptId"])
+                head = board.store.head()
+                client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, report)
+                self.assertEqual(board.store.head(), head)
+                self.assertEqual(client.get_message("q-other", runId=other["taskId"])["state"], "queued")
+                client.submit_result(other_attempt["attemptId"], other_attempt["generation"], "o" * 32,
+                                     {"status": "ok", "shutdownConfirmed": True})
 
     def test_current_receipt_keeps_result_opaque_and_refuses_flat_old_format(self):
         board = self.board()

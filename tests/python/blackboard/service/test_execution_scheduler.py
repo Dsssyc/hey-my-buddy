@@ -11,10 +11,14 @@ from unittest.mock import Mock, call, patch
 
 from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler, _RecoveredExecution
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
 from hey_my_buddy.protocol.run_identity import RunIdentity
 
 
 class ExecutionObservationTests(unittest.TestCase):
+    def setUp(self):
+        self.live_registry = Mock(spec=LiveRegistry)
+
     def recovered(self, root):
         claim = {"attempt": {"attemptId": "attempt", "generation": 1}, "task": {"taskId": "task"}}
         location = _RecoveredExecution(Path(root), {"taskId": "task", "attemptId": "attempt", "generation": 1},
@@ -26,7 +30,7 @@ class ExecutionObservationTests(unittest.TestCase):
             store = Mock(directory=Path(root))
             store.execution_identity_confirmed.return_value = True
             store.task_get.return_value = {"task": {"cancelRequested": False}}
-            scheduler = ExecutionScheduler(Mock(store=store))
+            scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
             claim, location = self.recovered(root)
             scheduler._stopping.wait = lambda _delay: scheduler._stopping.set()
             with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint", return_value=None), \
@@ -45,7 +49,7 @@ class ExecutionObservationTests(unittest.TestCase):
             store.task_get.return_value = {"task": {"cancelRequested": True, "stopInitiator": "service",
                 "selectedAttempt": {"forceRequestedAt": (datetime.now(timezone.utc) - timedelta(seconds=9)).isoformat(),
                                     "forceReason": "service-stop"}}}
-            scheduler = ExecutionScheduler(Mock(store=store))
+            scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
             claim, location = self.recovered(root)
             client = Mock()
             client.stop.side_effect = BoardError("LIVE_UNAVAILABLE", "frozen endpoint")
@@ -56,7 +60,7 @@ class ExecutionObservationTests(unittest.TestCase):
                 scheduler._observe(claim, location, {"pid": 1})
             kill.assert_called_once_with({"pid": 1})
             client.wait.assert_not_called()
-            store.live_registry.bind.assert_not_called()
+            self.live_registry.bind.assert_not_called()
             store.recover_executions.assert_not_called()
 
     def test_unknown_process_identity_prevents_connection_and_signalling_after_deadline(self):
@@ -65,7 +69,7 @@ class ExecutionObservationTests(unittest.TestCase):
             store.task_get.return_value = {"task": {"cancelRequested": True, "stopInitiator": "service",
                 "selectedAttempt": {"forceRequestedAt": (datetime.now(timezone.utc) - timedelta(seconds=9)).isoformat(),
                                     "forceReason": "service-stop"}}}
-            scheduler = ExecutionScheduler(Mock(store=store))
+            scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
             scheduler._stopping.wait = lambda _delay: scheduler._stopping.set()
             claim, location = self.recovered(root)
             with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint") as read, \
@@ -86,7 +90,7 @@ class ExecutionObservationTests(unittest.TestCase):
             service = Mock(store=store, control={})
             service.admit_execution.side_effect = [
                 {"claim": first}, {"claim": second}, {"claim": None}]
-            scheduler = ExecutionScheduler(service)
+            scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
             creation_error = OSError("Popen did not create a child")
             creation_error.execution_handle = None
             creation_error.spawn_created = False
@@ -105,7 +109,7 @@ class ExecutionObservationTests(unittest.TestCase):
 
     def test_failed_parent_capture_is_closed_by_a_verified_child_report(self):
         store = Mock()
-        scheduler = ExecutionScheduler(Mock(store=store))
+        scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
         handle = Mock(pid=123, process_started_at=456, pgid=123, job=None)
         identity = {"bootId": "test-boot", "pid": 123, "startedAt": 456,
                     "processGroupId": 123, "jobName": None}
@@ -122,7 +126,7 @@ class ExecutionObservationTests(unittest.TestCase):
 
     def test_missing_identity_uses_reaped_creator_and_empty_group(self):
         store = Mock()
-        scheduler = ExecutionScheduler(Mock(store=store))
+        scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
         handle = Mock()
         handle.process.poll.return_value = 1
         handle.group_alive.return_value = False
@@ -142,7 +146,7 @@ class ExecutionObservationTests(unittest.TestCase):
             store = Mock(directory=Path(root))
             store.task_get.return_value = {"task": {"cancelRequested": False, "selectedAttempt": {
                 "attemptId": "attempt-1", "executionState": "finished"}}}
-            scheduler = ExecutionScheduler(Mock(store=store))
+            scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
             scheduler.TICK_SECONDS = 0
             handle = Mock()
             handle.process.poll.return_value = 1
@@ -167,7 +171,7 @@ class ExecutionObservationTests(unittest.TestCase):
             store.task_get.return_value = {"task": {"cancelRequested": False, "selectedAttempt": {
                 "attemptId": "attempt-1", "executionState": "finished"}}}
             service = Mock(store=store)
-            scheduler = ExecutionScheduler(service)
+            scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
             client = Mock()
             client.wait.side_effect = BoardError("LIVE_UNAVAILABLE", "connection lost")
             handle = Mock()
@@ -186,11 +190,11 @@ class ExecutionObservationTests(unittest.TestCase):
                 "attempt-1", process_identity={"pid": 1},
                 stopped_evidence={"kind": "identity-absent"})
             handle.signal_group.assert_not_called()
-            self.assertEqual(store.live_registry.unbind.call_count, 1)
+            self.assertEqual(self.live_registry.unbind.call_count, 1)
 
     def test_identity_report_checks_captured_identity_or_live_process_after_restart(self):
         service = Mock()
-        scheduler = ExecutionScheduler(service)
+        scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
         handle = Mock()
         with scheduler._lock:
             scheduler._handles["owned"] = (handle, {"pid": 1})
@@ -204,7 +208,7 @@ class ExecutionObservationTests(unittest.TestCase):
     def test_router_budget_is_durable_before_forced_stop(self):
         with tempfile.TemporaryDirectory() as root:
             service = Mock()
-            scheduler = ExecutionScheduler(service)
+            scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
             handle = Mock()
             handle.execution_binding = {"taskId": "task", "attemptId": "attempt", "generation": 1}
             handle.budget_path = Path(root) / "execution-budget.json"
@@ -223,7 +227,7 @@ class ExecutionObservationTests(unittest.TestCase):
 
     def test_grace_is_sent_before_force_and_persisted_only_at_expiry(self):
         store = Mock()
-        scheduler = ExecutionScheduler(Mock(store=store))
+        scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
         handle = Mock()
         handle.budget_path.exists.return_value = False
         client = Mock()
@@ -258,7 +262,7 @@ class ExecutionObservationTests(unittest.TestCase):
         store = Mock()
         store.execution_observations.return_value = []
         service = Mock(store=store, control={})
-        scheduler = ExecutionScheduler(service)
+        scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
         scheduler.TICK_SECONDS = .01
         outcomes = iter([
             BoardError("CONFLICT", "temporarily busy"),
@@ -288,7 +292,7 @@ class ExecutionObservationTests(unittest.TestCase):
             store = Mock(directory=Path(root))
             store.task_get.return_value = {"task": {"cancelRequested": True, "stopInitiator": "service"}}
             service = Mock(store=store)
-            scheduler = ExecutionScheduler(service)
+            scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
             handle = Mock()
             handle.process.poll.return_value = None
             handle.execution_directory = Path(root)
@@ -312,7 +316,7 @@ class ExecutionObservationTests(unittest.TestCase):
             store = Mock(directory=Path(root))
             store.task_get.return_value = {"task": {"selectedAttempt": {
                 "attemptId": "attempt", "executionState": "finished"}}}
-            scheduler = ExecutionScheduler(Mock(store=store))
+            scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
             handle = Mock()
             handle.execution_directory = Path(root)
             handle.budget_path = Path(root) / "budget.json"
@@ -333,7 +337,7 @@ class ExecutionObservationTests(unittest.TestCase):
             self.assertNotIn("attempt", scheduler._handles)
 
     def test_force_age_comes_from_persisted_request(self):
-        scheduler = ExecutionScheduler(Mock())
+        scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)
         old = (datetime.now(timezone.utc) - timedelta(seconds=9)).isoformat()
         forced_at = scheduler._force_requested_at({"selectedAttempt": {"forceRequestedAt": old}})
         self.assertGreaterEqual(time.monotonic() - forced_at, 8)
@@ -344,7 +348,7 @@ class ExecutionObservationTests(unittest.TestCase):
             "cancelRequested": True, "stopInitiator": "service", "graceDeadline": None}}
         store.record_execution_deadline.return_value = {
             "forceRequestedAt": datetime.now(timezone.utc).isoformat(), "forceReason": "service-stop"}
-        scheduler = ExecutionScheduler(Mock(store=store))
+        scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
         clients = {}
         for index in range(2):
             attempt = f"attempt-{index}"
@@ -373,7 +377,7 @@ class ExecutionObservationTests(unittest.TestCase):
             store.task_get.return_value = {"task": {"cancelRequested": True, "stopInitiator": "service"}}
             store.record_execution_deadline.return_value = {
                 "forceRequestedAt": datetime.now(timezone.utc).isoformat(), "forceReason": "service-stop"}
-            scheduler = ExecutionScheduler(Mock(store=store))
+            scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
             _claim, location = self.recovered(root)
             scheduler._handles["attempt"] = (location, {"pid": 1})
             client = Mock()
@@ -382,7 +386,7 @@ class ExecutionObservationTests(unittest.TestCase):
                 scheduler.send_pending_stops()
             client.stop.assert_called_once_with(initiator="service", grace_deadline=None, force=True)
             client.close.assert_called_once()
-            store.live_registry.bind.assert_not_called()
+            self.live_registry.bind.assert_not_called()
 
     def test_unreadable_stop_endpoint_still_persists_the_external_stop_deadline(self):
         with tempfile.TemporaryDirectory() as root:
@@ -390,7 +394,7 @@ class ExecutionObservationTests(unittest.TestCase):
             store.task_get.return_value = {"task": {"cancelRequested": True, "stopInitiator": "service"}}
             store.record_execution_deadline.return_value = {
                 "forceRequestedAt": datetime.now(timezone.utc).isoformat(), "forceReason": "service-stop"}
-            scheduler = ExecutionScheduler(Mock(store=store))
+            scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
             _claim, location = self.recovered(root)
             scheduler._handles["attempt"] = (location, {"pid": 1})
             with patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity", return_value="alive"), \
@@ -407,7 +411,7 @@ class ExecutionObservationTests(unittest.TestCase):
                 store = Mock()
                 store.record_execution_deadline.return_value = {
                     "forceRequestedAt": datetime.now(timezone.utc).isoformat(), "forceReason": "forced-stop"}
-                scheduler = ExecutionScheduler(Mock(store=store))
+                scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
                 handle = Mock(execution_binding={"taskId": "task", "attemptId": "attempt", "generation": 1})
                 handle.budget_path = Path(root) / "budget.json"
                 handle.budget_path.write_text(material)
@@ -432,7 +436,7 @@ class ExecutionObservationTests(unittest.TestCase):
             service = Mock(store=store, control={})
             service.admit_execution.return_value = {"claim": {
                 "task": {"taskId": "task"}, "attempt": {"attemptId": "attempt"}}}
-            scheduler = ExecutionScheduler(service)
+            scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
             error = OSError("ownership failed after suspended child creation")
             error.spawn_created = True
             error.execution_handle = None

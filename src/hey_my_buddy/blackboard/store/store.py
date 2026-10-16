@@ -209,6 +209,47 @@ class BoardStore:
         cursor = events[-1]["seq"] if events else after
         return {"events": events, "cursor": cursor, "head": int(head_row["head"]), "truncated": len(events) == limit}
 
+    def task_wait(self, params: dict) -> dict:
+        schemas.reject_unknown(params, {"runId", "taskId", "afterRevision", "timeoutMs", "consumeReminders", "reminderWaitId"}, "task.wait")
+        consume_reminders = schemas.optional_bool(params, "consumeReminders", False)
+        if consume_reminders:
+            schemas.required_string(params, "reminderWaitId", max_length=128)
+        elif "reminderWaitId" in params:
+            raise BoardError("INVALID_ARGUMENT", "reminderWaitId requires consumeReminders")
+        timeout_ms = schemas.optional_int(params, "timeoutMs", 30000, 0, 30000)
+        after_revision = params.get("afterRevision")
+        if after_revision is not None and (
+            isinstance(after_revision, bool) or not isinstance(after_revision, int) or after_revision < 0
+        ):
+            raise BoardError("INVALID_ARGUMENT", "afterRevision must be a nonnegative integer")
+        deadline = self._monotonic() + timeout_ms / 1000.0
+        while True:
+            head = self.head()
+            if consume_reminders:
+                from ..tasks.reminders import consume
+                reminder = consume(self, params)
+                if reminder is not None:
+                    view = self.task_get({"runId": params.get("runId"), "taskId": params.get("taskId")})["task"]
+                    return {**view, "reminder": reminder}
+            view = self.task_get({"runId": params.get("runId"), "taskId": params.get("taskId")})["task"]
+            # Re-check after subscribing so a change between read and subscribe is
+            # never lost; the recheck happens inside events_wait.
+            if view["resultAvailable"] or timeout_ms == 0 or (
+                after_revision is not None and view["revision"] > after_revision
+            ):
+                return view
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                return view
+            self.events_wait(
+                {
+                    "after": head,
+                    "timeoutMs": int(max(1, remaining * 1000)),
+                    "taskId": view["taskId"],
+                    "limit": 1,
+                }
+            )
+
     def events_wait(self, params: dict, *, stop: threading.Event | None = None) -> dict:
         """Bounded event wait with a check/subscribe/recheck sequence.
 
@@ -1414,6 +1455,22 @@ class BoardStore:
         )
         if cursor.rowcount != 1:
             raise BoardError("REVISION_CONFLICT", "The attempt changed concurrently; re-read it and retry")
+        if state == "finished" and attempt["execution_state"] != "finished":
+            queued_questions = connection.execute(
+                "SELECT message_id,inquiry_id FROM messages WHERE attempt_id=? AND state='queued'",
+                (attempt["attempt_id"],),
+            ).fetchall()
+            if queued_questions:
+                task = connection.execute("SELECT revision FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
+                for question in queued_questions:
+                    connection.execute(
+                        "UPDATE messages SET state='unavailable',reason=?,updated_at=?,revision=revision+1 WHERE message_id=?",
+                        ("the attempt ended before this question could be delivered", now, question["message_id"]),
+                    )
+                    self._append_event(connection, "message.updated", task_id=attempt["task_id"],
+                        attempt_id=attempt["attempt_id"], revision=task["revision"],
+                        payload={"inquiryId": question["inquiry_id"], "state": "unavailable",
+                                 "actor": {"role": "service", "id": "attempt-finished"}})
 
     # -- service admission ---------------------------------------------------
     def admit_execution(self, nonce: str, task_id: str | None = None) -> dict:

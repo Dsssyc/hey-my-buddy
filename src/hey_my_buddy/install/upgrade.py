@@ -23,7 +23,9 @@ from ..blackboard.store.db import SCHEMA_VERSION, utc_now
 from ..errors import BoardError
 from ..protocol.transport import get_state_dir
 
-OWNER_LOCK_TIMEOUT_SECONDS = 60
+# A private C-Two 0.7.5 restart with one frozen execution released ownership
+# in 5.5 seconds. Allow the seven-second observer join plus bounded client close.
+OWNER_LOCK_TIMEOUT_SECONDS = 15
 
 
 def write_journal(path: Path, value: dict) -> None:
@@ -173,8 +175,7 @@ def detach(state: Path, target: Path, *, contract_changed: bool = True) -> None:
         # A lost restart reply is not a stop receipt. The ownership locks below
         # must still be acquired before inspecting or restoring any state.
         pass
-    # Live observers can take 7 seconds to leave before C-Two's 30-second
-    # shutdown budget starts. Preserve ownership proof throughout that drain.
+    # The old daemon must release both ownership locks before cutover proceeds.
     with file_lock(state / 'control-daemon.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS), \
          file_lock(state / 'board-owner.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS):
         # Reject work admitted in the small window before an old-version daemon

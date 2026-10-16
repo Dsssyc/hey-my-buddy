@@ -59,7 +59,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         for acknowledgement in ('during-missing-read', 'after-first-wait'):
             with self.subTest(acknowledgement=acknowledgement):
                 board, client, task, claim, actor = self.claimed(identity=False)
-                scheduler = ExecutionScheduler(board.service)
+                scheduler = ExecutionScheduler(board.service, live_registry=board.live_registry)
                 binding = {'taskId': task['taskId'], 'attemptId': actor['attemptId'], 'generation': 1}
                 with board.store.db.read() as db:
                     directory = interruption._directory(board.store, board.store._attempt_row(db, actor['attemptId']))
@@ -391,7 +391,7 @@ class InterruptionRecoveryTests(BoardTestCase):
                                              'generation': 1, 'processIdentity': IDENTITY})
         with patch.object(processes, 'inspect_process_identity', return_value='alive'):
             board.store.reconcile_startup()
-        scheduler = ExecutionScheduler(board.service)
+        scheduler = ExecutionScheduler(board.service, live_registry=board.live_registry)
         with patch.object(scheduler, '_start_observer') as observe:
             scheduler._resume_executions()
             scheduler._resume_executions()

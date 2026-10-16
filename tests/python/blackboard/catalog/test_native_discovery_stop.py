@@ -1,4 +1,5 @@
 """Native discovery retains actual process creation and shutdown evidence."""
+from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
 import errno
 import json
 import os
@@ -29,7 +30,8 @@ class NativeDiscoveryFixture:
         super().setUp()
         self.board = BoardStore(self.directory / 'native-stop')
         self.board.initialize()
-        self.service = BoardService(self.board, token='host', control={},
+        self.live_registry = LiveRegistry()
+        self.service = BoardService(self.board, live_registry=self.live_registry, token='host', control={},
                                     on_stop=lambda p: {}, on_restart=lambda p: {}, automatic_discovery=False)
         self.addCleanup(self.service.harnesses.close)
         self.record = self.service.harnesses.get('codex')

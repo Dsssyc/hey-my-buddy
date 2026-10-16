@@ -12,7 +12,7 @@ class DaemonAdmissionTests(BoardTestCase):
     def test_scheduling_issues_share_the_service_issue_event_and_health_view(self):
         board = self.board()
         from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler
-        scheduler = ExecutionScheduler(Mock(store=board.store))
+        scheduler = ExecutionScheduler(Mock(store=board.store), live_registry=board.live_registry)
         scheduler._scheduler_issue('admission', OSError('temporarily unavailable'))
         head = board.store.head()
         scheduler._scheduler_issue('admission', OSError('temporarily unavailable'))

@@ -28,6 +28,7 @@ from hey_my_buddy.console.server import Console  # noqa: E402
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator  # noqa: E402
 from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore  # noqa: E402
 from hey_my_buddy.blackboard.service.service import BoardService, WaitAdmission, WaitService, dispatch_local  # noqa: E402
+from hey_my_buddy.blackboard.service.live_registry import LiveRegistry  # noqa: E402
 from hey_my_buddy.blackboard.store.store import BoardStore  # noqa: E402
 
 #: A discovery document with the same shape the installed-harness helper emits. Tests
@@ -283,8 +284,10 @@ class InProcessBoard:
         self.restarted: list[dict] = []
         self.evaluation = self.store.evaluation
         self.console: Console | None = None
+        self.live_registry = LiveRegistry()
         self.service = BoardService(
             self.store,
+            live_registry=self.live_registry,
             token="test-token",
             control=self.control,
             on_stop=lambda params: self.stopped.append(params) or {"action": "stop", "stopped": True},
@@ -326,6 +329,7 @@ class InProcessBoard:
         return BoardClient(self.directory, call=self.call, **kwargs)
 
     def close(self) -> None:
+        self.live_registry.close()
         if self.console is not None:
             self.console.close()
         self.store.db.close()

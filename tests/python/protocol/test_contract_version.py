@@ -18,12 +18,12 @@ RESOURCE_NAMES = ("BuddyControl", "BuddyWait", "ExecutionLive")
 
 
 def contract_signature_digest(source: str) -> str:
-    """Hash only the declared wire surface, in resource and method order."""
+    """Hash declared signatures, using syntax stable across supported Python versions."""
     classes = {node.name: node for node in ast.parse(source).body if isinstance(node, ast.ClassDef)}
     signatures = [
         [name, [
-            [method.name, ast.dump(method.args, include_attributes=False),
-             ast.dump(method.returns, include_attributes=False)]
+            [method.name, ast.unparse(method.args),
+             ast.unparse(method.returns)]
             for method in classes[name].body if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
         ]]
         for name in RESOURCE_NAMES
