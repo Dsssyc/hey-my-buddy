@@ -17,8 +17,8 @@ class UpgradeServiceTests(BoardTestCase):
         state = self.directory
         fixture = load_fixture(state)
         store = BoardStore(state)
-        backup.create(store)
         store.db.close()
+        backup.create(store)
         Database(state).initialize()
         with mock.patch.object(CodexAdapter, "local_read_only_check", return_value={
             "eligible": True, "reasonCode": None, "reason": None,

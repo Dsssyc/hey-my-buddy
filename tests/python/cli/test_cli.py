@@ -94,7 +94,7 @@ class MethodSurfaceTests(unittest.TestCase):
             with self.subTest(method=method):
                 self.assertEqual(transport.METHOD_MAP[method], target)
         # Await, the new-package upgrade coordinator and skill install are CLI-level helpers.
-        self.assertEqual(set(cli.METHODS), set(transport.METHOD_MAP) | {"await", "upgrade", "install", "paths", "backup-preflight"})
+        self.assertEqual(set(cli.METHODS), set(transport.METHOD_MAP) | {"await", "upgrade", "install", "paths"})
 
     def test_capabilities_is_only_a_c_two_operation_not_a_cli_command(self):
         self.assertNotIn("capabilities", cli.METHODS)

@@ -45,7 +45,6 @@ CONTROL_OPERATIONS = (
     "console_snapshot",
     "reminder_settings_set",
     "runtime_info",
-    "backup",
     "storage_plan",
     "storage_apply",
     "worker_sessions",
@@ -318,7 +317,6 @@ class BoardService(_BaseResource):
 
     def health(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            from ..store.backup import preflight
             schemas.reject_unknown(params, set(), "health")
             identity = runtime.resolve_runtime()
             return {
@@ -340,7 +338,6 @@ class BoardService(_BaseResource):
                 "maxConcurrent": self.store.max_concurrent,
                 "capacity": self.store.capacity_report(),
                 "routingHealth": self.decisions.health_summary(),
-                "backupPreflight": preflight(self.store.directory),
                 "waitCapacity": self.control.get("wait_capacity"),
                 "rpcProfile": self.control.get("rpc_profile"),
                 "persistenceError": self.store.persistence_error,
@@ -418,13 +415,6 @@ class BoardService(_BaseResource):
         from ..tasks import storage
         return self._guard("storage.apply", request_json, lambda params: storage.apply(self.store, params))
 
-    def backup(self, request_json: str) -> str:
-        def handler(params: dict) -> dict:
-            from ..store import backup
-            schemas.reject_unknown(params, set(), "backup")
-            return backup.create(self.store, runtime_identity=runtime.resolve_runtime(), plugin_commit=backup.source_commit())
-        return self._guard("backup", request_json, handler)
-
     def runtime_info(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
             schemas.reject_unknown(params, {"destination"}, "runtime.info")
@@ -483,8 +473,6 @@ class BoardService(_BaseResource):
             snapshot["capabilities"]["consoleAssets"] = assets_ready()
             snapshot["routingHealth"] = self.decisions.health_summary()
             snapshot["reminderSettings"] = self.reminder_settings_view()
-            from ..store.backup import preflight
-            snapshot["backupPreflight"] = preflight(self.store.directory)
             return snapshot
 
         return self._guard("console.snapshot", request_json, handler)

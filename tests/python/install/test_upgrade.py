@@ -1,6 +1,10 @@
 """Private upgrade refusal, admission fence and backup restoration."""
+from contextlib import closing
 import json
 import os
+import stat
+import sqlite3
+import unittest
 from pathlib import Path
 from unittest import mock
 from hey_my_buddy.blackboard.store import backup
@@ -176,7 +180,7 @@ class UpgradeTests(BoardTestCase):
         self.assertFalse((state / 'upgrade.json').exists())
         self.assertEqual(json.loads((state / 'control.json').read_text()), endpoint)
 
-    def _assert_fence_rejects_new_path(self, relative: str, *, linked: bool):
+    def test_fenced_upgrade_rejects_new_linked_state_file_and_rolls_back(self):
         board = self.board()
         state = board.directory.resolve()
         root = self.directory / 'runtimes'
@@ -190,6 +194,13 @@ class UpgradeTests(BoardTestCase):
         inserted = False
         sentinel = self.directory / 'outside-sentinel'
         sentinel.write_text('keep outside')
+        relative = 'console-settings.json'
+        evidence = state / 'attempts/run/attempt/result.json'
+        evidence.parent.mkdir(parents=True)
+        evidence.write_text('retained evidence')
+        checkout = state / 'workspaces/checkout/keep.txt'
+        checkout.parent.mkdir(parents=True)
+        checkout.write_text('retained checkout')
 
         def fenced_write(path, value):
             nonlocal inserted
@@ -197,12 +208,9 @@ class UpgradeTests(BoardTestCase):
             if path == state / 'upgrade.json' and not inserted:
                 inserted = True
                 candidate = state / relative
-                candidate.parent.mkdir(parents=True, exist_ok=True)
-                if linked:
-                    candidate.symlink_to(sentinel)
-                else:
-                    candidate.write_text('new undeclared content')
+                candidate.symlink_to(sentinel)
 
+        board.store.db.close()
         with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT': str(root)}), \
              mock.patch('hey_my_buddy.install.upgrade.get_state_dir', return_value=state), \
              mock.patch('hey_my_buddy.install.upgrade.runtime.is_ready', return_value=True), \
@@ -211,24 +219,20 @@ class UpgradeTests(BoardTestCase):
              mock.patch('hey_my_buddy.install.upgrade.runtime.materialize', return_value={'runtimeDir': str(target)}), \
              mock.patch('hey_my_buddy.install.upgrade.write_journal', side_effect=fenced_write), \
              mock.patch('hey_my_buddy.install.upgrade.detach') as detach, \
-             mock.patch('hey_my_buddy.install.upgrade.start', return_value=health) as start, \
-             mock.patch('hey_my_buddy.install.upgrade.backup.create') as create:
+             mock.patch('hey_my_buddy.install.upgrade.start', return_value=health) as start:
             result = upgrade.upgrade({})
         self.assertTrue(inserted)
-        self.assertEqual(result['error']['code'], 'BACKUP_PREFLIGHT_FAILED', result)
-        self.assertIn(relative, result['error']['details']['rejected']['paths'])
-        detach.assert_not_called()
-        start.assert_not_called()
-        create.assert_not_called()
+        self.assertEqual(result['error']['code'], 'UPGRADE_ROLLED_BACK', result)
+        self.assertEqual(result['error']['details']['reason']['code'], 'BACKUP_UNSAFE_PATH')
+        self.assertEqual(result['error']['details']['reason']['details']['path'], str(state / relative))
+        detach.assert_called()
+        start.assert_called()
         self.assertFalse((state / 'upgrade.json').exists())
         self.assertEqual(json.loads((state / 'control.json').read_text()), endpoint)
         self.assertEqual(sentinel.read_text(), 'keep outside')
-
-    def test_fenced_upgrade_refuses_new_linked_evidence_before_detach(self):
-        self._assert_fence_rejects_new_path('controls/new.json', linked=True)
-
-    def test_fenced_upgrade_refuses_new_unknown_content_before_detach(self):
-        self._assert_fence_rejects_new_path('attempts/unknown.txt', linked=False)
+        self.assertEqual(evidence.read_text(), 'retained evidence')
+        self.assertEqual(checkout.read_text(), 'retained checkout')
+        self.assertFalse((state / 'backups/current').exists())
 
     def test_transaction_admission_rechecks_a_fence_after_rpc_entry(self):
         board = self.board()
@@ -257,34 +261,46 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(caught.exception.code,'UPGRADE_IN_PROGRESS')
         self.assertEqual(board.store.count_tasks(),0)
 
-    def test_restore_verified_backup_preserves_regenerable_directories(self):
+    def test_restore_verified_backup_replays_only_saved_state_files(self):
         board=self.board()
-        control=board.directory/'controls/x.json';control.parent.mkdir();control.write_text('{"original":true}')
+        settings=board.directory/'console-settings.json';settings.write_text('{"original":true}')
+        missing=board.directory/'launch-settings.json'
         native=board.directory/'harnesses/zcode/retained';native.mkdir(parents=True);(native/'sessions.sqlite').write_bytes(b'native')
         home=board.directory/'attempts/run/attempt/native/codex-home';home.mkdir(parents=True)
         secret=self.directory/'private-auth.json';secret.write_text('private credential')
         (home/'auth.json').symlink_to(secret)
         (home.parent.parent/'personal-provider.json').write_text('private provider key')
+        board.store.db.close()
         current=Path(backup.create(board.store)['path'])
-        control.write_text('{"changed":true}')
-        with board.store.db.write() as connection:
+        settings.write_text('{"changed":true}')
+        missing.write_text('{"createdAfterBackup":true}')
+        evidence=board.directory/'attempts/run/attempt/result.json'
+        evidence.write_text('post-backup evidence')
+        checkout=board.directory/'workspaces/checkout/keep.txt'
+        checkout.parent.mkdir(parents=True)
+        checkout.write_text('post-backup checkout')
+        with closing(sqlite3.connect(board.directory / 'board.sqlite3')) as connection, connection:
             connection.execute("INSERT INTO meta(key,value) VALUES('post-backup','changed')")
         (board.directory / '.restore.sqlite3').write_bytes(b'partial earlier restore')
         upgrade.restore(board.directory,current)
         self.assertFalse((board.directory / '.restore.sqlite3').exists())
-        self.assertEqual(json.loads(control.read_text()),{'original':True})
+        self.assertEqual(json.loads(settings.read_text()),{'original':True})
+        self.assertEqual(json.loads(missing.read_text()),{'createdAfterBackup':True})
+        self.assertEqual(evidence.read_text(),'post-backup evidence')
+        self.assertEqual(checkout.read_text(),'post-backup checkout')
         self.assertEqual((native/'sessions.sqlite').read_bytes(),b'native')
         self.assertTrue((home/'auth.json').is_symlink())
         self.assertEqual(secret.read_text(),'private credential')
         self.assertFalse((current/'state/attempts/run/attempt/native/codex-home').exists())
         self.assertFalse((current/'state/attempts/run/attempt/personal-provider.json').exists())
-        with board.store.db.read() as connection:
+        with closing(sqlite3.connect(board.directory / 'board.sqlite3')) as connection:
             self.assertIsNone(connection.execute("SELECT value FROM meta WHERE key='post-backup'").fetchone())
         upgrade.idle_snapshot(board.directory)
 
     def test_restore_rejects_linked_snapshot_without_truncating_target(self):
         board = self.board()
         state = board.directory
+        board.store.db.close()
         current = Path(backup.create(board.store)['path'])
         sentinel = self.directory / 'outside-sentinel'
         sentinel.write_bytes(b'keep outside')
@@ -298,6 +314,7 @@ class UpgradeTests(BoardTestCase):
     def test_restore_rejects_reparse_snapshot_without_changing_sentinel(self):
         board = self.board()
         state = board.directory.resolve()
+        board.store.db.close()
         current = Path(backup.create(board.store)['path'])
         snapshot = state / '.restore.sqlite3'
         snapshot.write_bytes(b'keep reparse sentinel')
@@ -311,6 +328,7 @@ class UpgradeTests(BoardTestCase):
     def test_restore_rejects_linked_intermediate_parent_before_recovery(self):
         board = self.board()
         state = board.directory
+        board.store.db.close()
         current = Path(backup.create(board.store)['path'])
         alias = self.directory / 'linked-state-parent'
         alias.symlink_to(state, target_is_directory=True)
@@ -322,6 +340,7 @@ class UpgradeTests(BoardTestCase):
 
     def test_restore_rejects_linked_backup_parent_before_verification(self):
         board = self.board()
+        board.store.db.close()
         current = Path(backup.create(board.store)['path'])
         alias = self.directory / 'linked-backup-parent'
         alias.symlink_to(current.parent, target_is_directory=True)
@@ -334,9 +353,9 @@ class UpgradeTests(BoardTestCase):
     def test_restore_rejects_linked_state_destination_without_touching_target(self):
         board = self.board()
         state = board.directory
-        control = state / 'controls/x.json'
-        control.parent.mkdir()
+        control = state / 'console-settings.json'
         control.write_text('{"backedUp":true}')
+        board.store.db.close()
         current = Path(backup.create(board.store)['path'])
         sentinel = self.directory / 'outside-sentinel'
         sentinel.write_bytes(b'keep outside')
@@ -347,6 +366,42 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(caught.exception.code, 'UPGRADE_UNSAFE')
         self.assertEqual(sentinel.read_bytes(), b'keep outside')
         self.assertTrue(control.is_symlink())
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'requires POSIX FIFOs')
+    def test_restore_refuses_special_existing_targets_before_changing_board(self):
+        board = self.board()
+        state = board.directory
+        settings = state / 'console-settings.json'
+        settings.write_text('{"backedUp":true}')
+        board.store.db.close()
+        current = Path(backup.create(board.store)['path'])
+        board_bytes = (state / 'board.sqlite3').read_bytes()
+        evidence = state / 'attempts/run/attempt/result.json'
+        evidence.parent.mkdir(parents=True)
+        evidence.write_text('retained evidence')
+        checkout = state / 'workspaces/checkout/keep.txt'
+        checkout.parent.mkdir(parents=True)
+        checkout.write_text('retained checkout')
+        for name in ('board.sqlite3', 'board.sqlite3-wal', 'board.sqlite3-shm',
+                     'console-settings.json', '.restore.sqlite3'):
+            with self.subTest(path=name):
+                target = state / name
+                original = target.read_bytes() if target.exists() else None
+                target.unlink(missing_ok=True)
+                os.mkfifo(target)
+                try:
+                    with self.assertRaises(BoardError) as caught:
+                        upgrade.restore(state, current)
+                    self.assertEqual(caught.exception.code, 'UPGRADE_UNSAFE')
+                    self.assertTrue(stat.S_ISFIFO(target.lstat().st_mode))
+                    if name != 'board.sqlite3':
+                        self.assertEqual((state / 'board.sqlite3').read_bytes(), board_bytes)
+                    self.assertEqual(evidence.read_text(), 'retained evidence')
+                    self.assertEqual(checkout.read_text(), 'retained checkout')
+                finally:
+                    target.unlink()
+                    if original is not None:
+                        target.write_bytes(original)
 
     def test_startup_timeout_never_signals_a_daemon_or_cancels_work(self):
         board=self.board()

@@ -1,4 +1,4 @@
-"""Real mock-controller executions preserve only declared attempt evidence."""
+"""Real mock-controller executions keep attempt artifacts in private directories."""
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
@@ -12,8 +12,6 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from hey_my_buddy.protocol import attempt_evidence
-from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses import controller
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS
@@ -218,11 +216,6 @@ class PrivateAdapterInvariants(unittest.TestCase):
         for path in context.directory.rglob("*"):
             if path.is_file():
                 self.assertFalse(path.is_symlink(), path)
-                self.assertTrue(attempt_evidence.is_evidence(path.relative_to(context.directory)), path)
-        report = backup.preflight(Path(context.environment["HMB_STATE_DIR"]))
-        self.assertTrue(report["ok"], report)
-        self.assertEqual(report["skipped"]["count"], 0, report)
-        self.assertEqual(report["rejected"]["count"], 0, report)
 
     def test_micro_task_mock_codex_zcode_claude_and_native_continuation(self):
         for kind, harness in ((codex_tests.CodexAdapterTests, "codex"), (zcode_tests.ZcodeFixtureCase, "zcode"),
@@ -249,7 +242,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     self.assertTrue(any(native_root(state, harness, context.task_id).glob("*.json")))
                 self.assert_partition(context)
 
-    def test_mock_dsh_fast_router_and_command_leave_only_evidence(self):
+    def test_mock_dsh_fast_router_and_command_use_private_attempt_directories(self):
         fixture = self.fixture(dsh_tests.DshNoToolTests)
         state = Path(fixture.environment["HMB_STATE_DIR"])
         evidence = state / "attempts/task/attempt-1"

@@ -163,11 +163,6 @@ class PreviewFixtureTest(unittest.TestCase):
         tasks_page = outcomes["normal/tasks.json"]["facts"]
         self.assertTrue(tasks_page["runs"] > 0)
         self.assertTrue(tasks_page["nextCursor"] is None or isinstance(tasks_page["nextCursor"], str))
-        preflight = outcomes["normal/backup-preflight.json"]["facts"]
-        self.assertEqual("attempt-evidence", preflight["policy"])
-        self.assertTrue(preflight["needsAttention"])
-        self.assertEqual(1, preflight["skipped"])
-        self.assertEqual(0, preflight["rejected"])
         version = outcomes["normal/runtime-version.json"]["facts"]
         self.assertEqual({"mode": "runtime", "softwareVersion": "0.0.0", "installed": True}, version)
 

@@ -146,7 +146,7 @@ class SkillPackageTests(unittest.TestCase):
             recovery.assert_called_once_with({})
             place.assert_not_called()
 
-    def test_same_contract_install_skips_idle_and_backup_preflight(self):
+    def test_same_contract_install_skips_idle_and_backup(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source, target = self._upgrade_pair(root)
@@ -160,7 +160,7 @@ class SkillPackageTests(unittest.TestCase):
             with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
                  mock.patch.object(skill_install, 'packaged_skill', return_value=source), \
                  mock.patch.object(upgrade_module, 'idle_snapshot', side_effect=AssertionError('idle checked')), \
-                 mock.patch.object(upgrade_module, 'backup_readiness', side_effect=AssertionError('backup checked')), \
+                 mock.patch.object(upgrade_module.backup, 'create', side_effect=AssertionError('backup created')), \
                  mock.patch.object(upgrade_module, 'preflight', wraps=upgrade_module.preflight) as preflight, \
                  mock.patch.object(upgrade_module, 'upgrade', return_value={'upgraded': True}) as cutover:
                 result = skill_install.install({})
@@ -182,7 +182,7 @@ class SkillPackageTests(unittest.TestCase):
                 connection.execute("INSERT INTO meta VALUES('schema_version',?)", (str(SCHEMA_VERSION),))
             with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
                  mock.patch.object(upgrade_module, 'idle_snapshot', side_effect=AssertionError('idle checked')), \
-                 mock.patch.object(upgrade_module, 'backup_readiness', side_effect=AssertionError('backup checked')), \
+                 mock.patch.object(upgrade_module.backup, 'create', side_effect=AssertionError('backup created')), \
                  mock.patch('hey_my_buddy.install.launcher.selected_runtime', side_effect=AssertionError('source inspected')):
                 upgrade_module.install_preflight(state)
 
@@ -198,7 +198,7 @@ class SkillPackageTests(unittest.TestCase):
             before = (state / 'board.sqlite3').read_bytes()
             with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
                  mock.patch.object(upgrade_module, 'idle_snapshot', side_effect=AssertionError('idle checked')), \
-                 mock.patch.object(upgrade_module, 'backup_readiness', side_effect=AssertionError('backup checked')):
+                 mock.patch.object(upgrade_module.backup, 'create', side_effect=AssertionError('backup created')):
                 with self.assertRaises(BoardError) as caught:
                     skill_install.install({})
             self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')

@@ -18,9 +18,10 @@ class WindowsBackupTests(BoardTestCase):
 
     def _board(self):
         board = self.board()
-        marker = board.directory / 'controls/version.json'
-        marker.parent.mkdir(exist_ok=True)
-        marker.write_text(json.dumps('old'))
+        board.store.db.close()
+        marker = board.directory / 'console-settings.json'
+        marker.write_text(json.dumps({'generation': 'old'}))
+        marker.chmod(0o600)
         root = board.directory / 'backups'
         if root.exists():
             shutil.rmtree(root)
@@ -28,7 +29,7 @@ class WindowsBackupTests(BoardTestCase):
 
     @staticmethod
     def _generation(root):
-        return json.loads((root / 'current/state/controls/version.json').read_text())
+        return json.loads((root / 'current/state/console-settings.json').read_text())['generation']
 
     def _assert_settled(self, root, expected):
         self.assertEqual(self._generation(root), expected)
@@ -37,10 +38,10 @@ class WindowsBackupTests(BoardTestCase):
 
     def test_first_and_repeated_publication(self):
         board, marker, root = self._board()
-        board.call('backup', {})
+        backup.create(board.store)
         self._assert_settled(root, 'old')
-        marker.write_text(json.dumps('new'))
-        board.call('backup', {})
+        marker.write_text(json.dumps({'generation': 'new'}))
+        backup.create(board.store)
         self._assert_settled(root, 'new')
 
     def test_every_publication_rename_boundary_recovers(self):
@@ -55,8 +56,8 @@ class WindowsBackupTests(BoardTestCase):
                     with self.subTest(repeated=repeated, rename=(source, target), timing=timing):
                         board, marker, root = self._board()
                         if repeated:
-                            board.call('backup', {})
-                            marker.write_text(json.dumps('new'))
+                            backup.create(board.store)
+                            marker.write_text(json.dumps({'generation': 'new'}))
                         real_rename = backup._rename
                         fired = False
 
@@ -76,7 +77,7 @@ class WindowsBackupTests(BoardTestCase):
                         if not repeated and source == '.publish.tmp' and timing == 'error_before':
                             # No journal was committed. The next backup can
                             # safely rebuild the first generation.
-                            board.call('backup', {})
+                            backup.create(board.store)
                         else:
                             backup.recover(board.directory)
                         expected = 'new' if source == '.incoming' and after else 'old'
@@ -86,11 +87,11 @@ class WindowsBackupTests(BoardTestCase):
 
     def test_bad_candidate_and_interrupted_rollback_keep_old(self):
         board, marker, root = self._board()
-        board.call('backup', {})
-        marker.write_text(json.dumps('new'))
+        backup.create(board.store)
+        marker.write_text(json.dumps({'generation': 'new'}))
         with mock.patch.object(backup, 'verify', side_effect=BoardError('BACKUP_INVALID', 'candidate rejected')):
             with self.assertRaises(BoardError):
-                board.call('backup', {})
+                backup.create(board.store)
         self._assert_settled(root, 'old')
 
         for source, target in (('current', '.incoming'), ('.previous', 'current')):
@@ -98,7 +99,7 @@ class WindowsBackupTests(BoardTestCase):
                 with self.subTest(rename=(source, target), after=after):
                     previous = root / '.previous'
                     shutil.copytree(root / 'current', previous)
-                    (root / 'current/state/controls/version.json').write_text('corrupt')
+                    (root / 'current/state/console-settings.json').write_text('corrupt')
                     (root / '.publish.json').write_text(json.dumps({'format': 1, 'hadCurrent': True}))
                     real_rename = backup._rename
                     fired = False
@@ -121,8 +122,8 @@ class WindowsBackupTests(BoardTestCase):
 
     def test_bad_candidate_after_old_rename_restores_old(self):
         board, marker, root = self._board()
-        board.call('backup', {})
-        marker.write_text(json.dumps('new'))
+        backup.create(board.store)
+        marker.write_text(json.dumps({'generation': 'new'}))
         real_rename = backup._rename
 
         def stop_after_old(left, right):
@@ -132,15 +133,15 @@ class WindowsBackupTests(BoardTestCase):
 
         with mock.patch.object(backup, '_rename', side_effect=stop_after_old):
             with self.assertRaises(KeyboardInterrupt):
-                board.call('backup', {})
-        (root / '.incoming/state/controls/version.json').write_text('corrupt')
+                backup.create(board.store)
+        (root / '.incoming/state/console-settings.json').write_text('corrupt')
         backup.verify(root / 'current')  # The read API must recover before use.
         self._assert_settled(root, 'old')
 
     def test_next_backup_recovers_before_building_its_candidate(self):
         board, marker, root = self._board()
-        board.call('backup', {})
-        marker.write_text(json.dumps('new'))
+        backup.create(board.store)
+        marker.write_text(json.dumps({'generation': 'new'}))
         real_rename = backup._rename
 
         def stop_after_old(left, right):
@@ -150,16 +151,16 @@ class WindowsBackupTests(BoardTestCase):
 
         with mock.patch.object(backup, '_rename', side_effect=stop_after_old):
             with self.assertRaises(KeyboardInterrupt):
-                board.call('backup', {})
-        board.call('backup', {})
+                backup.create(board.store)
+        backup.create(board.store)
         self._assert_settled(root, 'new')
 
     def test_interrupted_old_generation_retirement_keeps_new(self):
         for after in (False, True):
             with self.subTest(after=after):
                 board, marker, root = self._board()
-                board.call('backup', {})
-                marker.write_text(json.dumps('new'))
+                backup.create(board.store)
+                marker.write_text(json.dumps({'generation': 'new'}))
                 real_remove = shutil.rmtree
                 fired = False
 
@@ -174,14 +175,14 @@ class WindowsBackupTests(BoardTestCase):
 
                 with mock.patch.object(backup.shutil, 'rmtree', side_effect=interrupted):
                     with self.assertRaises(KeyboardInterrupt):
-                        board.call('backup', {})
+                        backup.create(board.store)
                 self.assertTrue(fired)
                 backup.recover(board.directory)
                 self._assert_settled(root, 'new')
 
     def test_reject_links_and_forged_journal_paths(self):
         board, _, root = self._board()
-        board.call('backup', {})
+        backup.create(board.store)
         outside = self.workdir('outside')
         for name in ('.incoming', '.previous', '.publish.json', '.publish.tmp'):
             with self.subTest(link=name):

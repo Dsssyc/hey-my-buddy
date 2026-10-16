@@ -1,27 +1,10 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, type ConsoleApi, type StorageApplyResult, type StoragePlan } from "./api";
-import type { BackupPreflight } from "./types";
 import { StoragePanel } from "./StoragePanel";
 
 afterEach(() => cleanup());
-
-/** A contract-typed backup preflight fixture; the same wire shape the snapshot used to carry. */
-function preflight(overrides: Partial<BackupPreflight> = {}): BackupPreflight {
-  const inventory = (count: number, entries: { path: string; reason: string }[]) =>
-    ({ count, paths: entries.map(entry => entry.path), entries });
-  return {
-    policy: "attempt-evidence",
-    ok: true,
-    needsAttention: false,
-    copied: inventory(4, []),
-    skipped: inventory(0, []),
-    rejected: inventory(0, []),
-    ...overrides,
-  };
-}
 
 /** A contract-typed plan fixture mirroring operations.md's wire shape. */
 function plan(overrides: Partial<StoragePlan> = {}): StoragePlan {
@@ -60,7 +43,6 @@ type Script = {
   plan?: "ok" | "refused" | "lost";
   apply?: "ok" | "refused" | "lost" | "incomplete";
   planValue?: StoragePlan;
-  preflight?: "ok" | "attention" | "blocked" | "refused";
 };
 
 function fixture(script: Script = {}) {
@@ -80,27 +62,12 @@ function fixture(script: Script = {}) {
     }
     throw new Error(`unexpected ${operation}`);
   });
-  const backupPreflight = vi.fn(async (_signal?: AbortSignal, { refresh = false }: { refresh?: boolean } = {}) => {
-    if (script.preflight === "refused") throw new ApiError("FORBIDDEN", "refused");
-    if (script.preflight === "blocked") {
-      // The route's own domain-negative assessment: HTTP 200, ok:false with
-      // per-class reasons — data the panel shows, never a read failure.
-      return preflight({ ok: false, needsAttention: true,
-        skipped: { count: 2, paths: ["/private/state/a", "/private/state/b"],
-          entries: [{ path: "/private/state/a", reason: "not-evidence-directory" },
-            { path: "/private/state/b", reason: "not-evidence-file" }] },
-        rejected: { count: 1, paths: ["/private/state/odd"], entries: [{ path: "/private/state/odd", reason: "linked-path" }] } });
-    }
-    return preflight({ needsAttention: script.preflight === "attention", rejected: script.preflight === "attention"
-      ? { count: 1, paths: ["/private/state/odd"], entries: [{ path: "/private/state/odd", reason: "linked-path" }] } : undefined });
-  });
   const api = {
     command,
     storagePlan: async () => command("storage_plan", {}),
     storageApply: async (planId: string, commandId: string) => command("storage_apply", { planId, commandId, confirm: true }),
-    backupPreflight,
   } as unknown as ConsoleApi;
-  return { api, calls, command, backupPreflight };
+  return { api, calls, command };
 }
 
 async function checkUsage(user: ReturnType<typeof userEvent.setup>) {
@@ -127,7 +94,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     const table = screen.getByRole("table");
     const rows = [...table.querySelectorAll<HTMLElement>("tbody tr")];
     expect(rows.map(row => row.querySelector("th")!.textContent)).toEqual([
-      "ZCode 私有主目录", "受管检出", "运行时", "备份", "看板与记录", "合计",
+      "ZCode 私有主目录", "受管检出", "运行时", "上次升级之前的看板", "看板与记录", "合计",
     ]);
     expect(within(rows[0]!).getByText("3.3 GB")).toBeTruthy();
     expect(within(rows[0]!).getByText("2.7 GB")).toBeTruthy();
@@ -135,7 +102,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     // Structurally protected categories show — with their own tooltip.
     expect(within(rows[3]!).getByText("—")).toBeTruthy();
     expect(within(rows[4]!).getByText("—")).toBeTruthy();
-    expect(rows[4]!.querySelector('[title="看板、记录及当前备份受保护"]')).toBeTruthy();
+    expect(rows[4]!.querySelector('[title="看板、记录及上次升级之前的看板受保护"]')).toBeTruthy();
   });
 
   it("keeps unknown category and reason codes visible instead of dropping them", async () => {
@@ -182,7 +149,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     expect(panelResult.hasAttribute("inert")).toBe(true);
     expect(dialog.hasAttribute("inert")).toBe(false);
     expect(dialog.textContent).toContain("ZCode 私有主目录：2.7 GB");
-    expect(dialog.textContent).toContain("看板、记录和当前备份不会删除。");
+    expect(dialog.textContent).toContain("看板、记录和上次升级之前的看板不会删除。");
     expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -336,106 +303,5 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     await user.click(within(panel2).getByRole("button", { name: "检查占用" }));
     const clean2 = await within(panel2).findByRole("button", { name: /清理可回收数据/ }) as HTMLButtonElement;
     expect(clean2.disabled).toBe(false);
-  });
-});
-
-describe("storage panel on-demand backup preflight", () => {
-  it("reads the preflight once when the panel opens, never while closed, and once per reopen", async () => {
-    const f = fixture();
-    const view = render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" active={false} />);
-    expect(f.backupPreflight).not.toHaveBeenCalled();
-    view.rerender(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" active={true} />);
-    await waitFor(() => expect(f.backupPreflight).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByText("备份预检正常")).toBeTruthy());
-    // Staying open does not poll; closing stops reading.
-    view.rerender(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" active={false} />);
-    view.rerender(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" active={true} />);
-    await waitFor(() => expect(f.backupPreflight).toHaveBeenCalledTimes(2));
-  });
-
-  it("shows the attention banner from the read report and refuses to claim a clean state when the read failed", async () => {
-    const f = fixture({ preflight: "attention" });
-    const attention = render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
-    await screen.findByRole("status", { name: "备份预检提醒" });
-    expect(screen.getByText(/备份预检需要处理/)).toBeTruthy();
-    expect(f.backupPreflight).toHaveBeenCalledTimes(1);
-    attention.unmount();
-
-    const refused = fixture({ preflight: "refused" });
-    render(<StoragePanel api={refused.api} csrfToken="csrf" connectionError="" />);
-    await waitFor(() => expect(screen.getByText(/备份预检读取失败/)).toBeTruthy());
-    expect(screen.queryByRole("status", { name: "备份预检提醒" })).toBeNull();
-  });
-
-  it("shows a legal domain-negative report as reasons, never as a read failure", async () => {
-    const f = fixture({ preflight: "blocked" });
-    render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
-    // The blocked assessment is domain data: the attention banner names the
-    // skip/refuse counts and the paths, the status line never claims a read
-    // failure.
-    await screen.findByRole("status", { name: "备份预检提醒" });
-    expect(screen.getByText(/将跳过 2 项，拒绝 1 项/)).toBeTruthy();
-    expect(screen.getByText("/private/state/odd")).toBeTruthy();
-    expect(screen.queryByText(/备份预检读取失败/)).toBeNull();
-    expect(screen.queryByText("备份预检尚未读取")).toBeNull();
-    // The 重新读取 action stays available for a fresh check.
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "重新读取备份预检" }));
-    await waitFor(() => expect(f.backupPreflight).toHaveBeenCalledTimes(2));
-    expect(screen.getByRole("status", { name: "备份预检提醒" })).toBeTruthy();
-  });
-
-  it("re-reads only on the explicit 重新读取备份预检 action, passing the refresh option", async () => {
-    const f = fixture();
-    const user = userEvent.setup();
-    render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
-    await waitFor(() => expect(f.backupPreflight).toHaveBeenCalledTimes(1));
-    expect(f.backupPreflight.mock.calls[0][1]).toEqual({ refresh: false });
-    await user.click(screen.getByRole("button", { name: "重新读取备份预检" }));
-    await waitFor(() => expect(f.backupPreflight).toHaveBeenCalledTimes(2));
-    expect(f.backupPreflight.mock.calls[1][1]).toEqual({ refresh: true });
-  });
-});
-
-describe("storage panel preflight in-flight lifecycle", () => {
-  it("does not publish a preflight that was still in flight when the panel closed, and reads fresh on reopen", async () => {
-    let release: ((value: BackupPreflight) => void) | undefined;
-    const gate = new Promise<BackupPreflight>(resolve => { release = resolve; });
-    const replies: Promise<BackupPreflight>[] = [];
-    const calls: { signal?: AbortSignal }[] = [];
-    const backupPreflight = vi.fn((signal?: AbortSignal) => {
-      calls.push({ signal });
-      return replies.shift()!.then(report => {
-        if (signal?.aborted) { const aborted = new Error("aborted"); aborted.name = "AbortError"; throw aborted; }
-        return report;
-      });
-    });
-    const api = { backupPreflight } as unknown as ConsoleApi;
-    replies.push(gate);
-    const view = render(<StoragePanel api={api} csrfToken="csrf" connectionError="" active={true} />);
-    await waitFor(() => expect(calls.length).toBe(1));
-    view.rerender(<StoragePanel api={api} csrfToken="csrf" connectionError="" active={false} />);
-    release!(preflight({ needsAttention: true, rejected: { count: 1, paths: ["/p"], entries: [{ path: "/p", reason: "linked-path" }] } }));
-    await act(async () => { await Promise.resolve(); });
-    // The late reply belongs to a closed panel: no banner, no report, no error.
-    expect(screen.queryByRole("status", { name: "备份预检提醒" })).toBeNull();
-    expect(screen.getByText("备份预检尚未读取")).toBeTruthy();
-    // Reopening starts a fresh read whose own reply is the one that shows.
-    replies.push(Promise.resolve(preflight()));
-    view.rerender(<StoragePanel api={api} csrfToken="csrf" connectionError="" active={true} />);
-    await waitFor(() => expect(calls.length).toBe(2));
-    await waitFor(() => expect(screen.getByText("备份预检正常")).toBeTruthy());
-    view.unmount();
-  });
-
-  it("stays bounded under a development StrictMode double effect (no production claim)", async () => {
-    const f = fixture();
-    render(<StrictMode><StoragePanel api={f.api} csrfToken="csrf" connectionError="" active={true} /></StrictMode>);
-    await waitFor(() => expect(f.backupPreflight.mock.calls.length).toBeGreaterThanOrEqual(1));
-    await waitFor(() => expect(screen.getByText("备份预检正常")).toBeTruthy());
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
-    // Bounded: a double-mounted effect reads at most twice, then settles.
-    expect(f.backupPreflight.mock.calls.length).toBeLessThanOrEqual(2);
-    expect(screen.queryByRole("status", { name: "备份预检提醒" })).toBeNull();
   });
 });

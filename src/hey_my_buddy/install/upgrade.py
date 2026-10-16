@@ -88,9 +88,7 @@ def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = F
 def preflight(state: Path, *, contract_changed: bool) -> dict:
     """The contract boundary decides whether the board must stop changing."""
     if contract_changed:
-        before = idle_snapshot(state)
-        backup_readiness(state)
-        return before
+        return idle_snapshot(state)
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     if schema is None or int(schema[0]) != SCHEMA_VERSION:
@@ -136,7 +134,7 @@ def _environment(state: Path, target: Path) -> dict:
 
 
 def command(state: Path, target: Path, method: str, params: dict | None = None) -> dict:
-    operations = {'health':'health', 'runtime':'runtime_info', 'restart':'service_control', 'backup':'backup'}
+    operations = {'health':'health', 'runtime':'runtime_info', 'restart':'service_control'}
     payload = dict(params or {})
     if method == 'restart':
         payload['action'] = 'restart'
@@ -216,12 +214,19 @@ def start(state: Path, target: Path) -> dict:
     raise BoardError('UPGRADE_SHUTDOWN_UNCONFIRMED', 'Replacement startup is unconfirmed; journal retained, no process was signalled')
 
 
-def _restore_guard(path: Path) -> None:
+def _restore_guard(path: Path, *, regular: bool = False) -> None:
     if '..' in path.parts:
         raise BoardError('UPGRADE_UNSAFE', 'Restore path contains a parent traversal', path=str(path))
     component = private_dirs.linked_component(path)
     if component is not None:
         raise BoardError('UPGRADE_UNSAFE', 'Restore path contains a link or reparse point', path=str(component))
+    if regular:
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            return
+        if not stat.S_ISREG(metadata.st_mode):
+            raise BoardError('UPGRADE_UNSAFE', 'Restore path is not an ordinary file', path=str(path))
 
 
 def restore(state: Path, current: Path) -> None:
@@ -234,27 +239,27 @@ def restore(state: Path, current: Path) -> None:
     board = state / 'board.sqlite3'
     sidecars = tuple(state / ('board.sqlite3' + suffix) for suffix in ('-wal', '-shm'))
     compressed = current / 'board.sqlite3.gz'
-    for path in (state, current, snapshot, board, *sidecars, compressed):
+    for path in (state, current):
         _restore_guard(path)
+    for path in (snapshot, board, *sidecars, compressed):
+        _restore_guard(path, regular=True)
     backup.recover(state)
     backup.verify(current)
     sources = list(backup._regular_files(current / 'state'))
     destinations = [(source, state / source.relative_to(current / 'state')) for source in sources]
     for source, destination in destinations:
         _restore_guard(source)
-        _restore_guard(destination)
+        _restore_guard(destination, regular=True)
 
     # A crashed earlier restore may have left an ordinary partial snapshot.
     # Remove only that ordinary entry; O_EXCL prevents a raced replacement from
     # being opened for truncation.
     try:
-        old_snapshot = snapshot.lstat()
+        snapshot.lstat()
     except FileNotFoundError:
         pass
     else:
-        _restore_guard(snapshot)
-        if not stat.S_ISREG(old_snapshot.st_mode):
-            raise BoardError('UPGRADE_UNSAFE', 'Restore snapshot is not an ordinary file', path=str(snapshot))
+        _restore_guard(snapshot, regular=True)
         snapshot.unlink()
     try:
         with os.fdopen(private_dirs.open_regular_fd(compressed, os.O_RDONLY), 'rb') as compressed_file, \
@@ -264,37 +269,29 @@ def restore(state: Path, current: Path) -> None:
             destination.flush()
             os.fsync(destination.fileno())
         for sidecar in sidecars:
-            _restore_guard(sidecar)
+            _restore_guard(sidecar, regular=True)
             sidecar.unlink(missing_ok=True)
-        _restore_guard(snapshot)
-        _restore_guard(board)
+        _restore_guard(snapshot, regular=True)
+        _restore_guard(board, regular=True)
         os.replace(snapshot, board)
     finally:
         if private_dirs.linked_component(snapshot) is None:
             snapshot.unlink(missing_ok=True)
     for source, destination in destinations:
         _restore_guard(source)
-        _restore_guard(destination)
+        _restore_guard(destination, regular=True)
         temporary = destination.with_name('.restore-' + destination.name)
-        _restore_guard(temporary)
+        _restore_guard(temporary, regular=True)
         try:
             temporary.unlink(missing_ok=True)
             backup._private_copy(source, temporary)
-            _restore_guard(temporary)
-            _restore_guard(destination)
+            _restore_guard(temporary, regular=True)
+            _restore_guard(destination, regular=True)
             os.replace(temporary, destination)
         finally:
             if private_dirs.linked_component(temporary) is None:
                 temporary.unlink(missing_ok=True)
     backup.sync_dir(state)
-
-
-def backup_readiness(state: Path) -> dict:
-    report = backup.preflight(state)
-    if not report['ok']:
-        raise BoardError('BACKUP_PREFLIGHT_FAILED', 'Backup inventory contains unsafe paths',
-                         rejected=report['rejected'])
-    return report
 
 
 def verify_started(state: Path, target: Path, health: dict, before: dict, *, contract_changed: bool = True) -> dict:
@@ -496,16 +493,14 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 before['runtimeSettings'] = runtime_settings
                 journal['before'] = before
                 write_journal(marker, journal)
-                backup_readiness(state)
             detach(state, previous, contract_changed=contract_changed)
             detached = True
             with file_lock(state / 'control-daemon.lock'), file_lock(state / 'board-owner.lock'):
                 if contract_changed:
                     before = idle_snapshot(state, exact=True)
                     before['runtimeSettings'] = runtime_settings
-                    backup_readiness(state)
                     journal['before'] = before
-                    backed_up = backup.create(BoardStore(state), runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version, offline=True)
+                    backed_up = backup.create(BoardStore(state), runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
                     stored = backup.verify(Path(backed_up['path']))
                     if stored.get('databaseSnapshot') is not None:
                         before = {**before, **stored['databaseSnapshot'], 'schema': stored.get('schema'), 'runtimeSettings':runtime_settings}
@@ -551,7 +546,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                         journal.update(phase='not-switched', failure=reason)
                         write_journal(state / 'upgrade-last.json', journal)
                         clear_journal(marker)
-                        error = failure.payload() if isinstance(failure, BoardError) and failure.code in ('UPGRADE_NOT_IDLE', 'BACKUP_PREFLIGHT_FAILED') else {'code':'UPGRADE_NOT_SWITCHED','message':'Upgrade could not detach; the previous service remains available'}
+                        error = failure.payload() if isinstance(failure, BoardError) and failure.code == 'UPGRADE_NOT_IDLE' else {'code':'UPGRADE_NOT_SWITCHED','message':'Upgrade could not detach; the previous service remains available'}
                         error.setdefault('details', {})['reason'] = reason
                         return {'upgraded':False, 'error':error}
                 endpoint_now = json.loads((state / 'control.json').read_text()) if (state / 'control.json').exists() else None
@@ -570,7 +565,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 journal.update(phase='rolled-back', rollback=evidence, failure=reason)
                 write_journal(state / 'upgrade-last.json', journal)
                 clear_journal(marker)
-                error = failure.payload() if backed_up is None and isinstance(failure, BoardError) and failure.code in ('UPGRADE_NOT_IDLE', 'BACKUP_PREFLIGHT_FAILED') else {'code':'UPGRADE_ROLLED_BACK','message':('Upgrade failed; the previous runtime and backup were restored' if contract_changed else 'Installation failed; the previous runtime was restored')}
+                error = failure.payload() if backed_up is None and isinstance(failure, BoardError) and failure.code == 'UPGRADE_NOT_IDLE' else {'code':'UPGRADE_ROLLED_BACK','message':('Upgrade failed; the previous runtime and backup were restored' if contract_changed else 'Installation failed; the previous runtime was restored')}
                 error.setdefault('details', {})['reason'] = reason
                 return {'upgraded':False, 'error':error,
                         **({'backup':backed_up} if backed_up is not None else {}), 'rollback':evidence}

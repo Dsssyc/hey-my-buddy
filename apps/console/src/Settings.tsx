@@ -23,7 +23,7 @@ export function Settings({ api, csrfToken, connectionError = "", writesAvailable
   refresh?: () => Promise<unknown>;
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
-  /** True while the page is the visible tab; a hidden panel never reads the backup preflight. */
+  /** True while the page is the visible tab; the version view reads on entry. */
   active?: boolean;
 }) {
   return <div className="settings-page">
@@ -42,6 +42,6 @@ export function Settings({ api, csrfToken, connectionError = "", writesAvailable
     <ReminderSettings api={api} csrfToken={csrfToken} settings={reminders} refresh={refresh} unavailable={!!connectionError || !writesAvailable} />
     <ConsoleAccessSettings api={api} csrfToken={csrfToken} access={access} refresh={refresh} unavailable={!!connectionError || !writesAvailable} />
     <RuntimeVersion api={api} active={active} />
-    <StoragePanel api={api} csrfToken={csrfToken} connectionError={connectionError} active={active} />
+    <StoragePanel api={api} csrfToken={csrfToken} connectionError={connectionError} />
   </div>;
 }

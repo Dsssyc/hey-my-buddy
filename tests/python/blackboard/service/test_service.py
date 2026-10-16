@@ -158,16 +158,15 @@ class ConsoleSnapshotContractTests(BoardTestCase):
 
     The console's periodic HTTP read moved to the slim projection in
     ``hey_my_buddy.console.reads``; callers of the operation itself (C-Two,
-    CLI, probes) still get the task page and the backup preflight that were
-    always part of this contract.
+    CLI, probes) still get the task page that was part of this contract.
     """
 
-    def test_operation_keeps_tasks_and_preflight(self):
+    def test_operation_keeps_tasks(self):
         board = self.board()
         snapshot = board.call("console_snapshot", {})
         self.assertIn("runs", snapshot["tasks"])
         self.assertIn("total", snapshot["tasks"])
-        self.assertIn("backupPreflight", snapshot)
+        self.assertNotIn("backupPreflight", snapshot)
         self.assertIn("harnesses", snapshot)
         self.assertIn("routingHealth", snapshot)
         self.assertTrue(snapshot["capabilities"]["consoleAssets"] is False or

@@ -1,12 +1,11 @@
-"""Conditional console reads over real HTTP: 304, gzip, on-demand preflight.
+"""Conditional console reads over real HTTP: 304 and gzip.
 
 R01–R03 of docs/acceptance/console-reads-and-checkouts.md: an unchanged board
 answers 304 with an empty body and without re-running the projection, the
 serialization or the macro-task summary; every injected change source returns
 new content; authentication always precedes the 304 decision; the periodic
-snapshot carries no full task rows and never walks evidence directories; gzip
-and identity negotiate correctly. Removing the cache, the compression or the
-preflight split must fail these tests, not just slow them down.
+snapshot carries no full task rows; gzip and identity negotiate correctly.
+Removing the cache or the compression must fail these tests.
 """
 from __future__ import annotations
 
@@ -21,7 +20,6 @@ from unittest import mock
 from console.test_console import Browser, ConsoleTestCase
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
-from hey_my_buddy.blackboard.store import backup
 
 
 class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
@@ -124,15 +122,11 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(status, 304)
         self.assertEqual(body, b"")
 
-    # -- R02: slim snapshot, on-demand preflight ------------------------------
-    def test_periodic_snapshot_is_slim_and_never_walks_evidence(self):
+    # -- R02: slim snapshot ----------------------------------------------------
+    def test_periodic_snapshot_is_slim(self):
         board = self.board()
-        (board.directory / "attempts" / "run-1" / "attempt-1").mkdir(parents=True)
-        (board.directory / "attempts" / "run-1" / "attempt-1" / "evidence.json").write_text("{}")
         browser = self.open(board)
-        with mock.patch.object(backup, "preflight", wraps=backup.preflight) as preflight:
-            first, replays = self.polls(browser, count=2)
-            self.assertEqual(preflight.call_count, 0)
+        first, replays = self.polls(browser, count=2)
         snapshot = json.loads(first[2])
         self.assertNotIn("backupPreflight", snapshot)
         self.assertNotIn("runs", snapshot["tasks"])
@@ -140,28 +134,9 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         for _status, _headers, body in replays:
             self.assertEqual(body, b"")
 
-    def test_backup_preflight_is_computed_on_demand_only(self):
-        board = self.board()
-        (board.directory / "attempts" / "run-1" / "attempt-1").mkdir(parents=True)
-        (board.directory / "attempts" / "run-1" / "attempt-1" / "evidence.json").write_text("{}")
-        expected = backup.preflight(board.directory)
-        browser = self.open(board)
-        with mock.patch.object(backup, "preflight", wraps=backup.preflight) as preflight:
-            status, headers, body = browser.get("/api/backup-preflight")
-            self.assertEqual(status, 200, body[:300])
-            self.assertEqual(preflight.call_count, 1)
-            self.assertEqual(json.loads(body), expected)
-            etag = headers["etag"]
-            status, _, replay_body = browser.get(
-                "/api/backup-preflight", headers={"If-None-Match": etag}
-            )
-            self.assertEqual(status, 304)
-            self.assertEqual(replay_body, b"")
-            # The report is still recomputed per explicit read; only the
-            # transfer is conditional.
-            status, _headers, _body = browser.get("/api/backup-preflight")
-            self.assertEqual(status, 200)
-            self.assertEqual(preflight.call_count, 3)
+    def test_removed_backup_preflight_route_is_unavailable(self):
+        status, _headers, body = self.open(self.board()).get("/api/backup-preflight")
+        self.assertEqual(status, 404, body[:300])
 
     def test_pending_count_counts_distinct_roots_awaiting_their_host(self):
         board = self.board()
@@ -244,20 +219,6 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         )
         self.assertEqual(status, 304)
         self.assertEqual(body, b"")
-        # The on-demand preflight follows the same per-coding rule.
-        _status, preflight_identity, _body = browser.get(
-            "/api/backup-preflight", headers={"Accept-Encoding": "identity"}
-        )
-        _status, preflight_gzip, _gzipped = browser.get(
-            "/api/backup-preflight", headers={"Accept-Encoding": "gzip"}
-        )
-        self.assertNotEqual(preflight_identity["etag"], preflight_gzip["etag"])
-        status, _headers, _body = browser.get(
-            "/api/backup-preflight",
-            headers={"If-None-Match": preflight_gzip["etag"], "Accept-Encoding": "gzip"},
-        )
-        self.assertEqual(status, 304)
-
     def test_idle_polling_keeps_borrowing_the_health_scan(self):
         """A cache hit must not starve the 180-second harness scan (R01).
 

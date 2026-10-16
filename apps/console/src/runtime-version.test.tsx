@@ -10,7 +10,7 @@ import type { RuntimeVersionInfo } from "./types";
 const facts = { softwareVersion: "0.29.0", contractVersion: "0.fixture", schemaVersion: 15, sourceCommit: "installed-commit", installedAt: "2026-10-09T00:00:00Z" };
 const runtime: RuntimeVersionInfo = { running: { ...facts, mode: "runtime" }, installed: facts };
 function apiFor(info: RuntimeVersionInfo = runtime) {
-  return { runtimeVersion: vi.fn(async () => info), command: vi.fn(), backupPreflight: vi.fn(async () => ({ ok: true, policy: "fixture", copied: { count: 0, paths: [], entries: [] }, skipped: { count: 0, paths: [], entries: [] }, rejected: { count: 0, paths: [], entries: [] } })) } as unknown as ConsoleApi;
+  return { runtimeVersion: vi.fn(async () => info), command: vi.fn() } as unknown as ConsoleApi;
 }
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 it("does not read hidden settings and reads once when shown across refreshes and hide/show", async () => {
@@ -18,7 +18,6 @@ it("does not read hidden settings and reads once when shown across refreshes and
   const props = { api, csrfToken: "csrf", theme: "light" as const, onTheme: vi.fn() };
   const view = render(<StrictMode><Settings {...props} active={false} /></StrictMode>);
   expect(api.runtimeVersion).not.toHaveBeenCalled();
-  expect(api.backupPreflight).not.toHaveBeenCalled();
   view.rerender(<StrictMode><Settings {...props} active /></StrictMode>);
   await screen.findByText("正在运行（已安装运行时）");
   expect(api.runtimeVersion).toHaveBeenCalledTimes(1);
@@ -71,7 +70,6 @@ it("reports read failures without retrying on subsequent settings renders", asyn
   view.rerender(<RuntimeVersion api={api} active />);
   await waitFor(() => expect(api.runtimeVersion).toHaveBeenCalledTimes(1));
   expect(api.command).not.toHaveBeenCalled();
-  expect(api.backupPreflight).not.toHaveBeenCalled();
 });
 it("reuses a pending read after hiding and ignores replies after unmount", async () => {
   let resolve!: (info: RuntimeVersionInfo) => void;

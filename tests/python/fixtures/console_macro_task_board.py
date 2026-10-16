@@ -9,7 +9,7 @@ No daemon, Worker process, harness, account discovery or model is launched.
 Full scale follows the published *scale*, not an unpublished historical fixture:
 60 macros, 360 micro-task runs (including 10 helpers), 40 plain commands, 130
 pending roots, 100 private SQL-injected 1,900,000-byte execution results and
-4,000 declared evidence files. Smoke retains every relationship at small scale.
+4,000 synthetic attempt files. Smoke retains every relationship at small scale.
 Only execution-result payloads bypass public admission limits; their short,
 valid turn outcomes and all relational identities remain intact.
 
@@ -320,25 +320,16 @@ class SyntheticBoard:
                 connection.execute("UPDATE attempts SET result_json=? WHERE attempt_id=?", (payload, attempt))
 
     def _evidence(self):
-        from hey_my_buddy.protocol.attempt_evidence import FILES, is_evidence
         with self.board.store.db.read() as connection:
             attempts = list(connection.execute("SELECT task_id,attempt_id FROM attempts ORDER BY rowid"))
         paths = [self.state / "attempts" / row["task_id"] / row["attempt_id"] for row in attempts]
-        count = sum(1 for path in paths for file in path.rglob("*") if file.is_file() and is_evidence(file.relative_to(path)))
-        for name in sorted(FILES):
-            for path in paths:
-                if count >= self.recipe.evidence_files:
-                    return
-                file = path / name
-                if file.exists():
-                    continue
-                path.mkdir(parents=True, exist_ok=True)
-                file.write_text(json.dumps({"synthetic": True, "seed": self.seed, "ordinal": count}))
-                count += 1
-        raise ValueError("Recipe requests more evidence than admitted attempts can contain")
+        for count in range(self.recipe.evidence_files):
+            path = paths[count % len(paths)]
+            file = path / f"synthetic-{count:05d}.json"
+            path.mkdir(parents=True, exist_ok=True)
+            file.write_text(json.dumps({"synthetic": True, "seed": self.seed, "ordinal": count}))
 
     def facts(self):
-        from hey_my_buddy.protocol.attempt_evidence import is_evidence
         from hey_my_buddy.blackboard.tasks.macro_tasks import pending_root_count
         with self.board.store.db.read() as connection:
             tables = ("tasks", "workflow_runs", "macro_tasks", "attempts", "workflow_turns", "workflow_requests",
@@ -354,7 +345,6 @@ class SyntheticBoard:
             states = dict(connection.execute("SELECT state,COUNT(*) FROM workflow_runs GROUP BY state"))
             evidence = [self.state / "attempts" / row[0] / row[1] for row in connection.execute("SELECT task_id,attempt_id FROM attempts")]
         files = [file for path in evidence for file in path.rglob("*") if file.is_file()]
-        declared = [file for path in evidence for file in path.rglob("*") if file.is_file() and is_evidence(file.relative_to(path))]
         db_path = self.board.store.db.path
         return {"synthetic": True, "recipeVersion": 1, "seed": self.seed, "recipe": asdict(self.recipe),
                 "schemaVersion": int(schema), "counts": counts, "workflowStates": states, "eventKinds": event_kinds,
@@ -363,7 +353,6 @@ class SyntheticBoard:
                 "largeResultBytes": lengths, "largeResultTotalBytes": sum(lengths),
                 "maxDisplaySummaryCharacters": max(len(outcome["summary"]) for outcome in outcomes),
                 "attemptFiles": len(files), "attemptFileBytes": sum(file.stat().st_size for file in files),
-                "declaredEvidenceFiles": len(declared), "declaredEvidenceBytes": sum(file.stat().st_size for file in declared),
                 "databaseBytes": db_path.stat().st_size,
                 "databaseSidecarBytes": {suffix: Path(str(db_path) + suffix).stat().st_size if Path(str(db_path) + suffix).exists() else 0 for suffix in ("-wal", "-shm")},
                 "foreignKeyViolations": fk, "integrityCheck": integrity,

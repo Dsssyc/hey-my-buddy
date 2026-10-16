@@ -45,7 +45,6 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     "harness-set": ("control", "harness_set"),
     "quota-redetect": ("control", "quota_redetect"),
     "runtime": ("control", "runtime_info"),
-    "backup": ("control", "backup"),
     "storage-plan": ("control", "storage_plan"),
     "storage-apply": ("control", "storage_apply"),
     "worker-sessions": ("control", "worker_sessions"),

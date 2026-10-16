@@ -1,4 +1,4 @@
-import type { RuntimeVersionInfo, VersionFacts, BackupPreflight, Configuration, ConsoleAccess, ConsoleSession, ReminderSettings, RoutingHealth, Snapshot, TaskPage, TaskQuery } from "./types";
+import type { RuntimeVersionInfo, VersionFacts, Configuration, ConsoleAccess, ConsoleSession, ReminderSettings, RoutingHealth, Snapshot, TaskPage, TaskQuery } from "./types";
 import type {
   MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskSummary, MacroTaskTimeline, TimelineRow,
 } from "./macro-task-types";
@@ -552,14 +552,14 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     return Number.isFinite(parsed) ? parsed : null;
   }
 
-  async function conditionalRead(path: string, signal?: AbortSignal, { refresh = false, domainNegativeReport = false }: { refresh?: boolean; domainNegativeReport?: boolean } = {}): Promise<{ data: unknown; verifiedAtMs: number | null }> {
+  async function conditionalRead(path: string, signal?: AbortSignal): Promise<{ data: unknown; verifiedAtMs: number | null }> {
     const url = `${base}/api${path}`;
     const cached = conditionalCache.get(url);
     const atGeneration = cacheGeneration;
     const ticket = ++ticketSource;
     outstanding.set(url, ticket);
     const headers: Record<string, string> = {};
-    if (cached && !refresh) headers["If-None-Match"] = cached.etag;
+    if (cached) headers["If-None-Match"] = cached.etag;
     try {
       let response: Response;
       try {
@@ -591,14 +591,8 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         ok?: boolean;
         error?: { code?: string; message?: string };
       };
-      // The refusal envelope is exactly `{ok:false, error:{code,message}}`.
-      // Routes whose own DTO legitimately carries a top-level negative
-      // assessment (backup-preflight's ok:false with per-class reasons and no
-      // error object) are domain data, not failures — enabled per route so
-      // every other route's ok:false keeps refusing as before.
-      const envelopeError = body?.ok === false && body?.error !== undefined;
-      if (!response.ok || (body?.ok === false && (envelopeError || !domainNegativeReport))) {
-        if (envelopeError && body?.error?.code === SESSION_EXPIRED_CODE) clearConditionalCache();
+      if (!response.ok || body?.ok === false) {
+        if (body?.ok === false && body?.error?.code === SESSION_EXPIRED_CODE) clearConditionalCache();
         throw new ApiError(
           body?.error?.code || `HTTP_${response.status}`,
           body?.error?.message || "请求未成功。",
@@ -735,32 +729,6 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     /** Version facts are read once by visible settings, independent of snapshots. */
     async runtimeVersion(signal?: AbortSignal): Promise<RuntimeVersionInfo> {
       return parseRuntimeVersion(await request("/runtime-version", { signal }));
-    },
-    /**
-     * The on-demand backup preflight (`GET /api/backup-preflight`): the same
-     * report the periodic snapshot used to carry, computed only when the
-     * storage panel asks for it — never from the 3-second reads. `refresh`
-     * names an explicit re-check: it omits If-None-Match so the server's fresh
-     * walk is actually transferred instead of answered by a 304. The report
-     * itself is recomputed server-side on every read either way.
-     */
-    async backupPreflight(signal?: AbortSignal, { refresh = false }: { refresh?: boolean } = {}): Promise<BackupPreflight> {
-      // This route's report legitimately carries a negative assessment
-      // (ok:false with per-class reasons) as domain data; only a real refusal
-      // envelope (with an error object) is a failure.
-      const { data: report } = await conditionalRead("/backup-preflight", signal, { refresh, domainNegativeReport: true }) as { data: BackupPreflight | null };
-      const inventory = (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value)
-        && Number.isSafeInteger((value as { count?: unknown }).count) && (value as { count: number }).count >= 0
-        && Array.isArray((value as { paths?: unknown }).paths) && (value as { paths: unknown[] }).paths.every(p => typeof p === "string")
-        && Array.isArray((value as { entries?: unknown }).entries) && (value as { entries: unknown[] }).entries.every(entry =>
-          !!entry && typeof entry === "object" && typeof (entry as { path?: unknown }).path === "string"
-          && typeof (entry as { reason?: unknown }).reason === "string");
-      if (!report || typeof report.policy !== "string" || typeof report.ok !== "boolean"
-        || typeof report.needsAttention !== "boolean"
-        || !inventory(report.copied) || !inventory(report.skipped) || !inventory(report.rejected)) {
-        throw new ApiError("INVALID_RESPONSE", "备份预检响应不完整，请检查服务版本。");
-      }
-      return report;
     },
     /**
      * `storage_plan` (0.16.0): a private, expiring reclamation plan. It scans

@@ -81,7 +81,6 @@ class InstallWithoutUpgradeTests(BoardTestCase):
              mock.patch.object(launcher, "entry_modules", side_effect=fixture_modules), \
              mock.patch.object(launcher, "service_environment", side_effect=fixture_service_environment), \
              mock.patch.object(upgrade.runtime, "materialize", return_value={"runtimeDir": str(target)}), \
-             mock.patch.object(upgrade, "backup_readiness", side_effect=AssertionError("backup preflight")), \
              mock.patch.object(upgrade.backup, "create", side_effect=AssertionError("upgrade backup")):
             yield
 
@@ -157,8 +156,6 @@ class InstallWithoutUpgradeTests(BoardTestCase):
                     attached = wait_for(lambda: self.running(run_id), timeout=30)
                     self.assertIsNotNone(attached, self.client().get(runId=run_id))
                     self.assertEqual(attached["selectedAttempt"]["attemptId"], original["attemptId"])
-                    online_backup = self.client().call("backup", {})
-                    self.assertTrue(Path(online_backup["path"]).exists(), online_backup)
                     third = self.private_runtime("patch-three", 3)
                     with mock.patch.object(upgrade.runtime, "materialize", return_value={"runtimeDir": str(third)}):
                         second_install = upgrade.upgrade({})

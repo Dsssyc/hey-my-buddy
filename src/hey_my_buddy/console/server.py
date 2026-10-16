@@ -33,7 +33,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..errors import BoardError
 from .console_sessions import BrowserSession, ConsoleSessions, ENTRY_SECONDS, COOKIE_SECONDS, READ_OPERATIONS
-from .read_cache import ReadCache, encoding_unacceptable, select_encoding, uncached_read
+from .read_cache import ReadCache, encoding_unacceptable, select_encoding
 from . import reads
 from ..blackboard.service.service import call_operation
 
@@ -781,8 +781,6 @@ class Console:
                     return self._console_read()
                 if relative == "/api/tasks":
                     return self._task_history()
-                if relative == "/api/backup-preflight":
-                    return self._backup_preflight()
                 if relative == "/api/runtime-version":
                     return self._runtime_version()
                 if relative == "/api/macro-tasks":
@@ -864,28 +862,6 @@ class Console:
                 except Exception:  # noqa: BLE001 - no private paths or traceback cross the boundary
                     return self._error(500, "INTERNAL_ERROR", "The runtime version could not be read")
                 self._json(200, report)
-
-            def _backup_preflight(self) -> None:
-                """The original backup preflight, computed only on this explicit read.
-
-                Opening the storage panel or asking for the report pays the walk
-                here; the periodic snapshot never does. The report is still
-                recomputed per explicit read — only the transfer is conditional,
-                under the same per-representation validators as the cache.
-                """
-                coding = self._negotiated_coding()
-                if coding is None:
-                    return
-                try:
-                    report = reads.backup_preflight(console.store)
-                except Exception:  # noqa: BLE001 - no traceback crosses the boundary
-                    return self._error(500, "INTERNAL_ERROR", "The backup preflight could not be read")
-                outcome = uncached_read(
-                    json.dumps(report, ensure_ascii=False).encode(),
-                    if_none_match=self.headers.get("If-None-Match"),
-                    coding=coding,
-                )
-                self._send_read(outcome, coding)
 
             def _task_history(self) -> None:
                 """Read-only task history over the same named ``task_list`` operation.

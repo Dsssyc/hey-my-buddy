@@ -25,7 +25,7 @@ _RUNTIME_ID = r'[0-9a-f]{32}'
 _INSTALL_LOCK = re.compile(r'\.(' + _RUNTIME_ID + r')\.install\.lock')
 _BUILD_DIRECTORY = re.compile(r'\.(' + _RUNTIME_ID + r')\.build-.+')
 LABELS = {'harnesses':'Harness 私有会话', 'zcode':'ZCode 旧私有主目录', 'workspaces':'受管检出',
-          'runtimes':'运行时', 'backup':'备份', 'durable':'看板与记录'}
+          'runtimes':'运行时', 'backup':'上次升级之前的看板', 'durable':'看板与记录'}
 
 
 def tree_info(path: Path) -> tuple[int, str, bool]:
