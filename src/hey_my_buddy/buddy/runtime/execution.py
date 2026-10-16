@@ -425,7 +425,7 @@ class Execution:
                                     raise error
                             if view.get('cancelRequested'):
                                 return cancelled(view)
-                        if error.code not in ('SERVICE_UNAVAILABLE', 'SERVICE_START_TIMEOUT'):
+                        if error.code not in RETRYABLE:
                             raise
                         # The request may already be committed: replay its exact identity.
                         control.wait(min(PREFLIGHT_MAX_RETRY_SECONDS,

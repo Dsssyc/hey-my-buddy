@@ -3,7 +3,7 @@
 The canonical copy lives in ``~/.agents/skills/hey-my-buddy`` (read by Codex); Claude Code
 reaches it through ``~/.claude/skills/hey-my-buddy``, a symbolic link to that directory. A
 second Host running the same version finds the marker and only repairs the link.
-The new package coordinates the skill swap and idle service cutover under one
+The new package coordinates the skill swap and service cutover under one
 upgrade journal; the old installed launcher never chooses the candidate code.
 """
 from __future__ import annotations
@@ -165,9 +165,8 @@ def install(params: dict) -> dict:
     from ..protocol.contracts import CONTRACT_VERSION
     print(json.dumps({'contractVersion': CONTRACT_VERSION, 'action': 'install-plan', 'writePaths': planned_paths}), file=sys.stderr, flush=True)
     if (state / 'board.sqlite3').exists() and not (state / 'upgrade.json').exists():
-        from .upgrade import idle_snapshot, backup_readiness
-        idle_snapshot(state)
-        backup_readiness(state)
+        from .upgrade import install_preflight
+        install_preflight(state)
     home.mkdir(parents=True, exist_ok=True)
     target = home / SKILL
     lock = os.open(home / f".{SKILL}-install.lock", os.O_CREAT | os.O_RDWR, 0o600)
@@ -177,12 +176,11 @@ def install(params: dict) -> dict:
         if (state / 'upgrade.json').exists():
             from .upgrade import upgrade
             upgrade({})  # Recover the recorded generation before starting another install.
+            if (state / 'board.sqlite3').exists():
+                from .upgrade import install_preflight
+                install_preflight(state)
         from .upgrade import retry_legacy_worker_cleanup
         legacy_cleanup_error = retry_legacy_worker_cleanup(state)
-        if (state / 'board.sqlite3').exists():
-            from .upgrade import idle_snapshot, backup_readiness
-            idle_snapshot(state)
-            backup_readiness(state)
         _check_claude_link(target)
         source = packaged_skill()
         if source is None:
@@ -209,9 +207,6 @@ def install(params: dict) -> dict:
                         'diagnostics': {'skillInstalled': True, 'claudeLink': claude['status'], 'runtimeMaterialized': True,
                                         'launcher': str(target / 'scripts/hey-my-buddy')}}
         if pointer.exists() and not (state / "control.json").exists():
-            if (state / "board.sqlite3").exists():
-                from .upgrade import idle_snapshot
-                idle_snapshot(state)
             from .launcher import selected_runtime
             from .upgrade import start
             old_dev = os.environ.pop("HMB_DEV_SOURCE", None)

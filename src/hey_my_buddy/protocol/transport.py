@@ -384,19 +384,34 @@ def ensure_service(state_dir: str | Path | None = None, *, resource: str = "cont
 
 
 def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
-    endpoint = _attach_read_only(directory)
-    if endpoint:
-        return endpoint
-    if resource == "wait":
-        # A wait may never cold-start a service: waiting on nothing would be a lie.
-        raise ServiceError("SERVICE_UNAVAILABLE", "No board service is running in this state directory")
-    _cold_start_preflight(directory)
-    lock_fd = os.open(directory / "control-start.lock", os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        locking.lock(lock_fd)
+    upgrading = (directory / "upgrade.json").exists()
+    if upgrading:
+        # An installer holds this existing lock until verification and recovery
+        # finish. Do not probe writes or IPC while its journal is present.
+        try:
+            lock_fd = os.open(directory / "control-start.lock", os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except OSError:
+            _refuse_upgrade_cold_start(directory)
+            raise
+    else:
         endpoint = _attach_read_only(directory)
         if endpoint:
             return endpoint
+        if resource == "wait":
+            # A wait may never cold-start a service: waiting on nothing would be a lie.
+            raise ServiceError("SERVICE_UNAVAILABLE", "No board service is running in this state directory")
+        _cold_start_preflight(directory)
+        lock_fd = os.open(directory / "control-start.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        locking.lock(lock_fd)
+        _refuse_upgrade_cold_start(directory)
+        endpoint = _attach_read_only(directory)
+        if endpoint:
+            return endpoint
+        if resource == "wait":
+            raise ServiceError("SERVICE_UNAVAILABLE", "No board service is running in this state directory")
+        if upgrading:
+            _cold_start_preflight(directory)
         _retire_stale_endpoint(directory)
         from ..install import runtime
 
@@ -453,6 +468,14 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
     finally:
         locking.unlock(lock_fd)
         os.close(lock_fd)
+
+
+def _refuse_upgrade_cold_start(directory: Path) -> None:
+    if (directory / "upgrade.json").exists():
+        raise ServiceError(
+            "UPGRADE_IN_PROGRESS",
+            "Installation verification or recovery is in progress; rerun install to recover an interrupted installation, then retry the same command and identity",
+        )
 
 
 def call_service(method: str, params: dict | None = None, state_dir: str | Path | None = None) -> dict:

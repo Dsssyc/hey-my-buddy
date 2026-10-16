@@ -44,7 +44,7 @@ class UpgradeTests(BoardTestCase):
         state.mkdir()
         root = self.directory / 'runtimes'
         previous, target = root / ('a' * 32), root / ('b' * 32)
-        journal = {'phase': 'verified', 'previous': str(previous), 'target': str(target), 'before': {}}
+        journal = {'phase': 'verified', 'contractChanged': True, 'previous': str(previous), 'target': str(target), 'before': {}}
         marker = state / 'upgrade.json'
         upgrade.write_journal(marker, journal)
 
@@ -73,7 +73,7 @@ class UpgradeTests(BoardTestCase):
         root = self.directory / 'runtimes'
         previous, target = root / ('a' * 32), root / ('b' * 32)
         marker = state / 'upgrade.json'
-        upgrade.write_journal(marker, {'phase': 'verified', 'previous': str(previous),
+        upgrade.write_journal(marker, {'phase': 'verified', 'contractChanged': True, 'previous': str(previous),
                                        'target': str(target), 'before': {}})
         real_cleanup = upgrade.remove_legacy_worker_state
         with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
@@ -148,13 +148,14 @@ class UpgradeTests(BoardTestCase):
         source = self.directory / 'new-skill'
         source.mkdir()
         (source / 'SKILL.md').write_text('new skill')
-        control = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'existing', 'pid': 123}
+        control = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'existing', 'pid': 123,
+                   'contractVersion': '0.19.0'}
         (state / 'control.json').write_text(json.dumps(control))
         active = state / 'active-runtime.json'
         active.write_text(json.dumps({'runtimeDir': str(previous)}))
         before = [(skill / 'SKILL.md').read_bytes(), (skill / 'scripts/hey-my-buddy').read_bytes(),
                   active.read_bytes(), (state / 'control.json').read_bytes()]
-        health = {'serviceId': 'existing', 'pid': 123, 'maxConcurrent': 1, 'waitCapacity': 32}
+        health = {'serviceId': 'existing', 'pid': 123, 'maxConcurrent': 1, 'waitCapacity': 32, 'contractVersion': '0.19.0'}
         busy = BoardError('UPGRADE_NOT_IDLE', 'running work', active=[{'runId': 'busy', 'state': 'running'}])
         with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT': str(root)}), \
                 mock.patch('hey_my_buddy.install.upgrade.get_state_dir', return_value=state), \
@@ -217,7 +218,7 @@ class UpgradeTests(BoardTestCase):
         root = self.directory / 'runtimes'
         previous, target = root / ('a' * 32), root / ('b' * 32)
         previous.mkdir(parents=True)
-        endpoint = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'old', 'pid': 123}
+        endpoint = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'old', 'pid': 123, 'contractVersion': '0.19.0'}
         (state / 'control.json').write_text(json.dumps(endpoint))
         health = {**endpoint, 'maxConcurrent': 1, 'waitCapacity': 32}
         before = upgrade.idle_snapshot(state)

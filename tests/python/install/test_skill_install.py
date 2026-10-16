@@ -1,14 +1,18 @@
 """The shared package carries all platform launcher entrypoints."""
 from pathlib import Path
+from contextlib import closing
 import tempfile
 import unittest
 import json
 import os
 import shutil
+import sqlite3
 from unittest import mock
 
 from hey_my_buddy.install import skill_package, skill_install, upgrade as upgrade_module
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
+from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -156,6 +160,65 @@ class SkillPackageTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
             recovery.assert_called_once_with({})
             place.assert_not_called()
+
+    def test_same_contract_install_skips_idle_and_backup_preflight(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, target = self._upgrade_pair(root)
+            state = self._upgrade_state(root)
+            (state / 'control.json').write_text(json.dumps({'contractVersion': CONTRACT_VERSION}))
+            (state / 'control.json').chmod(0o600)
+            with closing(sqlite3.connect(state / 'board.sqlite3')) as connection, connection:
+                connection.execute('CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)')
+                connection.execute("INSERT INTO meta VALUES('schema_version',?)", (str(SCHEMA_VERSION),))
+            (target / 'SKILL.md').write_text('changed generation')
+            with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
+                 mock.patch.object(skill_install, 'packaged_skill', return_value=source), \
+                 mock.patch.object(upgrade_module, 'idle_snapshot', side_effect=AssertionError('idle checked')), \
+                 mock.patch.object(upgrade_module, 'backup_readiness', side_effect=AssertionError('backup checked')), \
+                 mock.patch.object(upgrade_module, 'preflight', wraps=upgrade_module.preflight) as preflight, \
+                 mock.patch.object(upgrade_module, 'upgrade', return_value={'upgraded': True}) as cutover:
+                result = skill_install.install({})
+            self.assertEqual(result['service']['action'], 'upgrade')
+            cutover.assert_called_once_with({}, skill_source=source, skill_target=target)
+            preflight.assert_called_once_with(state, contract_changed=False)
+
+    def test_offline_preflight_uses_the_installed_skill_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _source, _target = self._upgrade_pair(root)
+            state = root / 'state'
+            state.mkdir()
+            # A pointer is not a contract declaration; reading its package is
+            # unnecessary when the installed skill already records the contract.
+            (state / 'active-runtime.json').write_text('{}')
+            with closing(sqlite3.connect(state / 'board.sqlite3')) as connection, connection:
+                connection.execute('CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)')
+                connection.execute("INSERT INTO meta VALUES('schema_version',?)", (str(SCHEMA_VERSION),))
+            with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
+                 mock.patch.object(upgrade_module, 'idle_snapshot', side_effect=AssertionError('idle checked')), \
+                 mock.patch.object(upgrade_module, 'backup_readiness', side_effect=AssertionError('backup checked')), \
+                 mock.patch('hey_my_buddy.install.launcher.selected_runtime', side_effect=AssertionError('source inspected')):
+                upgrade_module.install_preflight(state)
+
+    def test_same_contract_schema_mismatch_refuses_before_install_lock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = self._upgrade_state(root)
+            (state / 'control.json').write_text(json.dumps({'contractVersion': CONTRACT_VERSION}))
+            (state / 'control.json').chmod(0o600)
+            with closing(sqlite3.connect(state / 'board.sqlite3')) as connection, connection:
+                connection.execute('CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)')
+                connection.execute("INSERT INTO meta VALUES('schema_version',?)", (str(SCHEMA_VERSION - 1),))
+            before = (state / 'board.sqlite3').read_bytes()
+            with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
+                 mock.patch.object(upgrade_module, 'idle_snapshot', side_effect=AssertionError('idle checked')), \
+                 mock.patch.object(upgrade_module, 'backup_readiness', side_effect=AssertionError('backup checked')):
+                with self.assertRaises(BoardError) as caught:
+                    skill_install.install({})
+            self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
+            self.assertFalse((root / 'agents').exists())
+            self.assertEqual((state / 'board.sqlite3').read_bytes(), before)
 
 
 if __name__ == '__main__':
