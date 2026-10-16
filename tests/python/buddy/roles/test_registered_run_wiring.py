@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
 import threading
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -42,6 +44,22 @@ class RegisteredDescriptionTests(unittest.TestCase):
 
 
 class NativeEvidenceProjectionTests(unittest.TestCase):
+    def test_inquiry_tool_failure_keeps_original_error_in_the_result(self):
+        failure = {"records": [{"toolCallId": "answer-call", "toolName": "answer_inquiry",
+                                "error": "MCP tool call requires approval, but approval policy is never"}],
+                   "dropped": 0}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "inquiry-tool-failures.json"
+            raw = canonical_json(failure).encode()
+            path.write_bytes(raw)
+            request = full_request(Path(directory))
+            result = RunResult(identity=request.identity, harness="codex", end=rc.RunEnd(status="ok"),
+                               evidence_refs=(rc.EvidenceRef(kind="inquiry-tool-failures", location=str(path),
+                                                            size_bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest()),))
+            payload = {}
+            self.assertFalse(run_execution._worker_reports(result, payload))
+            self.assertEqual(payload["inquiryToolFailures"], failure)
+
     def project(self, *, policy=None, completion=None, native_identity=None, event_count=None, capture=True):
         fields = full_request(Path("/private/tmp")).to_payload()
         fields.update(toolScope="none", sessionServices=[], captureEvidence=capture)

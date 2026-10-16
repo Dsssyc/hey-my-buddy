@@ -8,6 +8,7 @@ The native InquiryBridge lifecycle remains a separate C1 boundary.
 """
 from __future__ import annotations
 from admission import admit_execution
+from protocol.fixtures import native_turn
 
 from contextlib import nullcontext
 import json
@@ -223,6 +224,7 @@ def attach_owner(case, board, client, task, adapter):
     nonce = "a" * 32
     claim = admit_execution(client, nonce)["claim"]
     turn, attempt = claim["turn"], claim["attempt"]
+    case._claim = claim
     case.assertIsNotNone(turn)
     with board.store.db.read() as db:
         row = db.execute("SELECT input_json, input_sha256 FROM workflow_turns WHERE turn_id=?", (turn["turnId"],)).fetchone()
@@ -534,6 +536,9 @@ class TestInquiry(BoardTestCase):
         self.assertTrue(observe_capable("dsh"))
         self.assertTrue(inquiry_capable("zcode"))
         self.assertTrue(observe_capable("zcode"))
+        for name in ("codex", "claude"):
+            self.assertTrue(inquiry_capable(name))
+            self.assertTrue(observe_capable(name))
         for name in ("command", "external", "not-an-adapter"):
             with self.subTest(adapter=name):
                 self.assertFalse(inquiry_capable(name))
@@ -663,6 +668,16 @@ class TestInquiry(BoardTestCase):
             self.assertEqual(db.execute("SELECT count(*) FROM attempts WHERE task_id=?", (task["runId"],)).fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT count(*) FROM workflow_turns WHERE run_id=?", (task["runId"],)).fetchone()[0], 1)
 
+    def test_question_refused_after_root_end_cannot_remain_queued(self):
+        board = self.board()
+        task, _attempt, owner = self._attempt_directory(board, board.client())
+        owner.refusal = "agent-not-running"
+        result = board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-ended",
+                                               "question": "Did the root end?"})
+        self.assertEqual(result["inquiry"]["state"], "unavailable")
+        self.assertEqual(owner.entries, {})
+        self.assertEqual(board.client().get(runId=task["runId"])["state"], "running")
+
     def test_unreadable_and_oversized_live_journals_publish_only_their_availability(self):
         board = self.board()
         task, _attempt, owner = self._attempt_directory(board, board.client())
@@ -722,6 +737,79 @@ class TestInquiry(BoardTestCase):
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM attempts WHERE task_id=?", (task["runId"],)).fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT count(*) FROM workflow_turns WHERE run_id=?", (task["runId"],)).fetchone()[0], 1)
+
+    def test_run_observation_imports_all_existing_live_questions_only(self):
+        board = self.board()
+        client = board.client()
+        task, _attempt, owner = self._attempt_directory(board, client)
+        for question_id, state in (("q-delivered", "delivered"), ("q-answered", "answered"),
+                                   ("q-foreign", "answered")):
+            client.post_question(question_id, "status?", runId=task["runId"])
+            if question_id == "q-foreign":
+                # The endpoint retains this prior projection; the latest source
+                # rejection must fence it for both run-only and targeted reads.
+                owner.append({"inquiryId": question_id, "state": "answered",
+                              "answer": {"text": "stale answer"}})
+            owner.append({"inquiryId": question_id, "state": state,
+                          **({"taskId": "another-task"} if question_id == "q-foreign" else {}),
+                          **({"answer": {"text": "native answer"}} if state == "answered" else {})})
+        owner.append({"inquiryId": "q-orphan", "state": "answered", "answer": {"text": "orphan"}})
+        result = board.call("inquiry_observe", {"runId": task["runId"]})
+        self.assertTrue(result["bridge"]["observed"])
+        self.assertEqual(client.get_message("q-delivered", runId=task["runId"])["state"], "delivered")
+        self.assertEqual(client.get_message("q-answered", runId=task["runId"])["answer"]["text"], "native answer")
+        self.assertEqual(client.get_message("q-foreign", runId=task["runId"])["state"], "queued")
+        rejected = board.call("inquiry_observe", {"runId": task["runId"],
+                              "inquiryId": "q-foreign", "question": "status?"})
+        self.assertIn("another task", rejected["bridge"]["journalRejected"])
+        self.assertNotIn("journalImported", rejected["bridge"])
+        self.assertEqual(client.get_message("q-foreign", runId=task["runId"])["state"], "queued")
+        with self.assertRaises(BoardError) as error:
+            client.get_message("q-orphan", runId=task["runId"])
+        self.assertEqual(error.exception.code, "NOT_FOUND")
+
+    def test_finished_attempt_at_host_boundary_imports_unavailable_history(self):
+        for repeat_id in (False, True):
+            with self.subTest(repeat_id=repeat_id):
+                board = self.board()
+                client = board.client()
+                task = self._submit(client, self.workdir(f"ended-{repeat_id}"), request_id=f"inq-ended-{repeat_id}")
+                task, attempt, owner = attach_owner(self, board, client, task, "dsh")
+                client.post_question("q-ended", "status?", runId=task["runId"])
+                reason = "the native root turn ended before this inquiry was answered: " + "x" * 245
+                owner.append({"inquiryId": "q-ended", "state": "unavailable", "reason": reason,
+                              "limitation": "generic bridge delivery description"})
+                owner.close()
+                outcome = {"disposition": "attention", "summary": "Host review needed", "remaining": ["review"],
+                           "artifacts": [], "decisions": [], "request": {
+                               "summary": "review", "attempted": "bounded work", "neededWork": ["review"],
+                               "expectedArtifacts": ["reviewed work"], "acceptance": "Host accepts"}}
+                record = native_turn.claim_record(self._claim, outcome=outcome)
+                client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32,
+                                     {"status": "ok", "result": {"turn": record},
+                                      "shutdownConfirmed": True, "exitCode": 0})
+                view = client.get(runId=task["runId"])
+                self.assertEqual(view["state"], "queued")
+                self.assertEqual(view["selectedAttempt"]["executionState"], "finished")
+                self.assertEqual(board.call("workflow_get", {"runId": task["runId"]})["state"], "awaiting-host")
+                before = len(owner.requests)
+                result = board.call("inquiry_observe", {"runId": task["runId"],
+                    **({"inquiryId": "q-ended", "question": "status?"} if repeat_id else {})})
+                self.assertTrue(result["journal"]["available"])
+                message = client.get_message("q-ended", runId=task["runId"])
+                self.assertEqual(message["state"], "unavailable")
+                self.assertEqual(message["reason"], reason)
+                self.assertEqual(len(owner.requests), before)
+
+    def test_message_reason_keeps_the_full_live_bound(self):
+        board = self.board()
+        client = board.client()
+        task, _attempt, _owner = self._attempt_directory(board, client)
+        client.post_question("q-reason", "status?", runId=task["runId"])
+        reason = "x" * 400
+        board.store.message_update({"runId": task["runId"], "inquiryId": "q-reason",
+                                    "state": "unavailable", "reason": reason + "overflow"})
+        self.assertEqual(client.get_message("q-reason", runId=task["runId"])["reason"], reason)
 
     def test_an_observation_source_loss_removes_stale_public_facts_without_stopping(self):
         board = self.board()
@@ -971,9 +1059,10 @@ class ZcodeLiveChannelTests(BoardTestCase):
                                     "at": "2026-10-06T00:00:00Z", "truncated": False}})
         journal = Path(bridge.journal_path)
         journal.write_text("".join(json.dumps(row) + "\n" for row in rows))
-        result = board.call("inquiry_observe", {
-            "runId": task["runId"], "inquiryId": "q31", "question": "status of the last one?",
-        })
+        client.post_question("q0", "first", runId=task["runId"])
+        client.post_question("q31", "last", runId=task["runId"])
+        result = board.call("inquiry_observe", {"runId": task["runId"]})
+        self.assertEqual(client.get_message("q0", runId=task["runId"])["state"], "answered")
         self.assertEqual(result["journal"], {"available": True, "reason": None, "entries": 32})
         message = client.get_message("q31", runId=task["runId"])
         self.assertEqual(message["state"], "answered")
@@ -1004,7 +1093,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         self.assertEqual(message["state"], "discarded")
         self.assertEqual(message["reason"], "withdrawn by the asking side; it no longer blocks turn completion")
 
-    def test_a_settled_question_keeps_the_limitation_preferred_reason(self):
+    def test_a_settled_question_keeps_the_specific_reason(self):
         board = self.board()
         client = board.client()
         task, _attempt, bridge = self._live_attempt(board, client)
@@ -1015,10 +1104,9 @@ class ZcodeLiveChannelTests(BoardTestCase):
         result = board.call("inquiry_observe", params)
         message = client.get_message("q-close", runId=task["runId"])
         self.assertEqual(message["state"], "unavailable")
-        # The direct reader preferred the record's limitation over its reason;
-        # the channel's projection keeps that selection verbatim, bounded by
-        # the message store's own reason length exactly as before.
-        self.assertEqual(message["reason"], "cooperative fixture limitation")
+        # The specific lifecycle reason survives the projection instead of
+        # the generic explanation of how this bridge delivers inquiries.
+        self.assertEqual(message["reason"], "the owned turn ended")
 
     def test_an_empty_existing_journal_is_available_not_exceeds(self):
         board = self.board()

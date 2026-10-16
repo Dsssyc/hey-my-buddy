@@ -281,7 +281,8 @@ def _review_result(result, request: RunRequest, verdict: dict) -> dict:
 def _worker_reports(result, payload: dict) -> bool:
     """Keep each validated report even when another report or delivery fails."""
     invalid = False
-    for kind, key in (("inquiry-report", "inquiry"), ("attention-report", "nativeAttention"),
+    for kind, key in (("inquiry-report", "inquiry"), ("inquiry-tool-failures", "inquiryToolFailures"),
+                      ("attention-report", "nativeAttention"),
                       ("quota-snapshot", "quota"), ("native-checkpoint", "nativeCheckpoint"),
                       ("native-observations", None), ("native-turn-facts", None)):
         try:
@@ -352,6 +353,9 @@ def worker_delivery(result, *, delegation_authority: bool = False) -> tuple[dict
         facts = _evidence(result, "native-turn-facts")
         if not isinstance(facts, dict):
             raise BoardError("invalid-result", "The native run has no correlated completion facts")
+        inquiry = _evidence(result, "inquiry-report")
+        if inquiry is not None:
+            facts = {**facts, "unansweredDeliveredInquiries": inquiry.get("unansweredDelivered", 0)}
         return format.delivery(result, facts)
     provenance = _evidence(result, "turn-provenance")
     outcome = result.value.parsed.value if result.value is not None and result.value.parsed else None
@@ -399,7 +403,16 @@ def worker_request(control: dict, module):
     else:
         format = format.for_turn(turn_input)
         prompt, schema, scope = format.prompt(task_text, turn_input, credential_file=credential_file), format.schema, permission.tool_scope
-        services = _native_services(control, module, scope)
+        inquiry_services = None
+        if inquiry is not None:
+            inquiry_services = module.prepare_inquiry_services(
+                invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
+                attention_path=attention_path, inquiry=inquiry, answer_schema=worker_services.ANSWER_SCHEMA)
+            prompt += ("\nHost questions may arrive as inputs during this running turn. Answer each with "
+                       f"{inquiry_services.answer_tool}, using its exact "
+                       "inquiryId and answer text. Assistant prose does not count as an answer. "
+                       "Questions never open a new turn or extend this turn's deadline.\n")
+        services = _native_services(control, module, scope, inquiry=inquiry_services)
         descriptions = ()
     mode = turn_input.get("resumeMode")
     previous = turn_input.get("previousSessionId")
@@ -431,13 +444,13 @@ def worker_request(control: dict, module):
     return request, services, worker_observer, error
 
 
-def _native_services(control: dict, module, tool_scope: str):
+def _native_services(control: dict, module, tool_scope: str, *, inquiry=None):
     """Supply only the registered factory's actual inputs, without workflow authority."""
     factory = getattr(module, "prepare_run_services", None)
     if factory is None:
         return None
     import inspect
-    values = dict(tool_scope=tool_scope)
+    values = dict(tool_scope=tool_scope, inquiry=inquiry)
     # These are this project's registered factories, not vendor qualification.
     parameters = inspect.signature(factory).parameters
     return factory(**{key: value for key, value in values.items() if key in parameters})

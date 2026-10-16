@@ -38,11 +38,14 @@ def respond(message: dict, configuration: dict) -> dict | None:
         result = {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
                   "serverInfo": {"name": "hey-my-buddy", "version": "1"}}
     elif method == "tools/list":
-        result = {"tools": worker_services.session_tools(
-            delegation_authority=configuration.get("delegationAuthority") is True)}
+        tools = worker_services.session_tools(delegation_authority=configuration.get("delegationAuthority") is True)
+        if "toolNames" in configuration:
+            tools = [tool for tool in tools if tool["name"] in configuration["toolNames"]]
+        result = {"tools": tools}
     elif method == "tools/call":
         params = message.get("params") or {}
-        result = worker_services.call_session_tool(params.get("name"), params.get("arguments"), configuration)
+        result = (worker_services.call_session_tool(params.get("name"), params.get("arguments"), configuration)
+                  if "toolNames" not in configuration or params.get("name") in configuration["toolNames"] else None)
         if result is None:
             result = {"isError": True, "content": [{"type": "text", "text": "unknown finish tool"}]}
     elif method != "ping":

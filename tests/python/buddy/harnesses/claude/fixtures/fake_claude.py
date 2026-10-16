@@ -2,6 +2,7 @@
 """Private Claude Code CLI fixture. No model, no shared Claude state, no network."""
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -279,13 +280,95 @@ def run_turn(case):
             "status": "allowed", "rateLimitType": "five_hour", "resetsAt": None,
             "utilization": {"fiveHourPctUsed": 12}}})
     send({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}]}})
+    if case in ("inquiry-answer", "inquiry-wrong-call", "inquiry-child", "inquiry-text-only",
+                "inquiry-unanswered", "inquiry-tool-error", "inquiry-tool-error-retry",
+                "inquiry-forged-refusal", "inquiry-signed-refusal", "inquiry-late-input",
+                "inquiry-answered-duplicate-init"):
+        while True:
+            frame = json.loads(sys.stdin.readline())
+            if frame.get("type") == "user":
+                break
+            if frame.get("type") == "control_request":
+                handle_control(frame, case)
+        text = frame["message"]["content"][0]["text"]
+        write_state({"inquiryInput": text})
+        if case == "inquiry-late-input":
+            # The stream reader can buffer both frames before the driver sees
+            # the result. EOF alone would let this next query keep working.
+            frames = [result_frame(case, session_id), init,
+                      {"type": "control_request", "request_id": "unadmitted-permission",
+                       "request": {"subtype": "can_use_tool", "tool_name": "Bash",
+                                   "tool_use_id": "unadmitted-tool", "input": {"command": "touch forbidden"}}},
+                      {"type": "assistant", "session_id": session_id,
+                       "message": {"role": "assistant", "content": [{"type": "tool_use",
+                           "id": "unadmitted-tool", "name": "Bash", "input": {"command": "touch forbidden"}}]}},
+                      {"type": "user", "session_id": session_id,
+                       "message": {"role": "user", "content": [{"type": "tool_result",
+                           "tool_use_id": "unadmitted-tool", "content": "unadmitted result"}]}}]
+            sys.stdout.write("".join(json.dumps(item) + "\n" for item in frames))
+            sys.stdout.flush()
+            time.sleep(0.5)
+            Path("unadmitted-followup-write.txt").write_text("unadmitted native work")
+            write_state({"unadmittedFollowupRan": True})
+            sys.exit(0)
+        if case not in ("inquiry-text-only", "inquiry-unanswered"):
+            mounted = json.loads(Path(argv_value("--mcp-config")).read_text())["mcpServers"]
+            server_name, server = next(iter(mounted.items()))
+            config_path = server["args"][-1]
+            configuration = json.loads(Path(config_path).read_text())
+            journal = [json.loads(line) for line in Path(configuration["inquiryJournalPath"]).read_text().splitlines()]
+            question = next(item for item in journal if item.get("state") == "queued")
+            answer = {"inquiryId": question["inquiryId"], "answer": "42"}
+            if case in ("inquiry-signed-refusal", "inquiry-forged-refusal"):
+                answer["inquiryId"] = "unknown-inquiry"
+            call = {"id": 1, "method": "tools/call", "params": {
+                "name": "hey_my_buddy_answer_inquiry", "arguments": answer}}
+            completed = subprocess.run([server["command"], *server["args"]],
+                                       input=json.dumps(call) + "\n", text=True, capture_output=True,
+                                       env={**os.environ, **server["env"]}, check=True)
+            response = json.loads(completed.stdout)["result"]
+            signed_response = response
+            if case in ("inquiry-tool-error", "inquiry-tool-error-retry"):
+                response = {"content": [{"type": "text", "text": "fixture inquiry transport error: retry permitted"}],
+                            "isError": True}
+            elif case == "inquiry-forged-refusal":
+                value = json.loads(response["content"][0]["text"])
+                value["signature"] = "0" * 64
+                response = {"content": [{"type": "text", "text": json.dumps(value)}], "isError": True}
+            tool_name = f"mcp__{server_name}__hey_my_buddy_answer_inquiry"
+            send({"type": "assistant", "session_id": session_id, "message": {"role": "assistant",
+                  "content": [{"type": "tool_use", "id": "toolu_inquiry_1", "name": tool_name,
+                               "input": answer}]}})
+            send({"type": "user", "session_id": session_id,
+                  **({"parent_tool_use_id": "toolu_child"} if case == "inquiry-child" else {}),
+                  "message": {"role": "user", "content": [{"type": "tool_result",
+                    "tool_use_id": "toolu_wrong" if case == "inquiry-wrong-call" else "toolu_inquiry_1",
+                    "content": response["content"], "is_error": response.get("isError", False)}]}})
+            if case == "inquiry-tool-error-retry":
+                send({"type": "assistant", "session_id": session_id, "message": {"role": "assistant",
+                      "content": [{"type": "tool_use", "id": "toolu_inquiry_2", "name": tool_name,
+                                   "input": answer}]}})
+                send({"type": "user", "session_id": session_id,
+                      "message": {"role": "user", "content": [{"type": "tool_result",
+                        "tool_use_id": "toolu_inquiry_2", "content": signed_response["content"], "is_error": False}]}})
+            if case in ("inquiry-tool-error", "inquiry-tool-error-retry", "inquiry-signed-refusal"):
+                send({"type": "assistant", "message": {"role": "assistant",
+                      "content": [{"type": "text", "text": "continuing the root turn after the tool error"}]}})
+                write_state({"continuedAfterInquiryError": True})
+        else:
+            send({"type": "assistant", "message": {"role": "assistant",
+                  "content": [{"type": "text", "text": "The answer is 42"}]}})
     if case == "no-result":
         # Exit without a result frame: the controller must see the stream close.
         sys.exit(0)
     result = result_frame(case, "00000000-0000-4000-8000-000000000000" if case == "wrong-session" else session_id)
     frames = result if isinstance(result, list) else [result]
-    for frame in frames:
-        send(frame)
+    if case == "inquiry-answered-duplicate-init":
+        sys.stdout.write("".join(json.dumps(item) + "\n" for item in [*frames, init]))
+        sys.stdout.flush()
+    else:
+        for frame in frames:
+            send(frame)
     if case == "duplicate-result":
         send(dict(frames[-1]))
     # A -p CLI exits after its final result; the controller drains to this EOF.

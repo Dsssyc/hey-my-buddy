@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Private Codex App Server fixture. No model or shared Codex state is touched."""
 import json
+import hashlib
 import os
 import sys
 import time
@@ -147,12 +148,14 @@ def main():
             for segment in reversed(key.split(".")):
                 patch = {segment: patch}
             merge(native_config, patch)
+    initialization = None
     for raw in sys.stdin:
         req = json.loads(raw)
         if "id" not in req:
             continue
         method, params, ident = req["method"], req.get("params") or {}, req["id"]
         if method == "initialize":
+            initialization = params
             send({"id": ident, "result": {"userAgent": "fixture"}})
         elif method == 'config/read':
             configured = dict(native_config)
@@ -216,7 +219,7 @@ def main():
             thread_id = f"thread-{state['next']}"
             state["next"] += 1
             state["threads"][thread_id] = {"cwd": params["cwd"], "turns": [],
-                                         'model': params['model'], 'home': os.environ.get('HOME'), 'start': params, 'argv': sys.argv,
+                                         'model': params['model'], 'home': os.environ.get('HOME'), 'start': params, 'argv': sys.argv, 'initialize': initialization,
                                          'codexHome': os.environ.get('CODEX_HOME'),
                                          'sqliteHome': os.environ.get('CODEX_SQLITE_HOME')}
             write_state(state)
@@ -304,6 +307,43 @@ def main():
                 continue
             send({"id": ident, "result": {"turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "inProgress", "items": []}}})
+            if case in ("inquiry-active", "inquiry-unanswered", "inquiry-invalid-retry"):
+                state['threads'][thread_id]['turnStart'] = {"threadId": thread_id, "turnId": turn_id}
+                write_state(state)
+                steer = json.loads(sys.stdin.readline())
+                if steer.get("method") != "turn/steer" or steer["params"].get("expectedTurnId") != turn_id:
+                    raise RuntimeError("expected active-turn inquiry steer")
+                state = read_state()
+                state['threads'][thread_id]['steer'] = steer['params']
+                write_state(state)
+                send({"id": steer["id"], "result": {"turnId": turn_id}})
+                if case != "inquiry-unanswered":
+                    prompt = steer['params']['input'][0]['text']
+                    inquiry_id = json.loads(prompt.splitlines()[-1])['inquiryId']
+                    tools = state['threads'][thread_id]['start']['dynamicTools']
+                    if len(tools) != 1 or tools[0]['name'] != 'hey_my_buddy_answer_inquiry':
+                        raise RuntimeError("expected one inquiry client tool")
+                    calls = []
+                    if case == "inquiry-invalid-retry":
+                        calls.extend([
+                            {"threadId": "child-thread"}, {"turnId": "old-turn"},
+                            {"arguments": {"inquiryId": inquiry_id, "answer": "42", "extra": True}},
+                            {"arguments": {"inquiryId": "unknown", "answer": "42"}},
+                        ])
+                    calls.append({})
+                    if case == "inquiry-invalid-retry":
+                        calls.append({})  # already answered
+                    for index, overrides in enumerate(calls):
+                        call_params = {"threadId": thread_id, "turnId": turn_id,
+                                       "callId": f"inquiry-call-{index}", "tool": tools[0]['name'],
+                                       "arguments": {"inquiryId": inquiry_id, "answer": "42"}, **overrides}
+                        send({"id": f"client-tool-{index}", "method": "item/tool/call", "params": call_params})
+                        reply = json.loads(sys.stdin.readline())
+                        if reply.get('id') != f"client-tool-{index}":
+                            raise RuntimeError("uncorrelated client tool reply")
+                        state = read_state()
+                        state['threads'][thread_id].setdefault('clientReplies', []).append(reply)
+                        write_state(state)
             send_usage(case, thread_id, turn_id, turn_index)
             if case.startswith("protocol-"):
                 for method, protocol_item in item_frames(case.removeprefix("protocol-")):

@@ -2595,7 +2595,7 @@ class BoardStore:
             if state is not None and not terminal:
                 candidate["state"] = state
             if reason is not None:
-                candidate["reason"] = reason[:200]
+                candidate["reason"] = reason[:400]
             if delivery is not None:
                 bounded = dict(candidate["delivery"] or {})
                 for key in ("messageId", "agentStatusAtInject", "injectedAt", "insertedAt", "claimedAt", "deliveredAt", "observedAt", "observedAgentStatus"):

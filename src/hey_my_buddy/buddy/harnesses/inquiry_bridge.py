@@ -1,9 +1,9 @@
-"""Owner of cooperative inquiries inside one admitted native turn.
+"""Owner of correlated inquiries inside one admitted native turn.
 
 C-Two RPCs enqueue requests; this owner alone commits questions under the
-journal lock and fsync barrier before settling them. Only verified native tool
-receipts move a question to delivered or answered. Local runs retain the same
-journal and MCP tools without mounting another transport.
+journal lock and fsync barrier before settling them. A native input acceptance
+or verified checkpoint receipt proves delivery; a verified MCP answer receipt or
+a bound root client-tool request proves an answer. Local runs retain the same journal.
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def _now() -> str:
 
 
 class InquiryBridge:
-    """Owner-private cooperative inquiry bridge for one micro task root turn.
+    """Owner-private inquiry bridge for one micro task root turn.
 
     The journal is attempt-private transport evidence. A committed question keeps
     its identity, question hash and delivery record across state changes, so a
@@ -59,10 +59,14 @@ class InquiryBridge:
 
     def __init__(self, *, identity: dict, journal_path: str,
                  error_factory, event_metadata, limitation: str, attention_path: str | None = None,
-                 live: CTwoLiveEndpoint | None = None):
+                 live: CTwoLiveEndpoint | None = None,
+                 delivery_mode: str = "cooperative-checkpoint",
+                 checkpoint_tool: str | None = "hey_my_buddy_checkpoint"):
         self.error_factory = error_factory
         self.event_metadata = event_metadata
         self.limitation = limitation
+        self.delivery_mode = delivery_mode
+        self.checkpoint_tool = checkpoint_tool
         self.identity = identity
         self.journal_path = Path(journal_path)
         self.attention_path = Path(attention_path) if attention_path else None
@@ -130,7 +134,7 @@ class InquiryBridge:
                                   error_code=result["error"])
             self.live.settle_request(request.request_id, reply)
 
-    def close(self) -> None:
+    def close(self, *, reason: str = "the micro task root turn ended before this inquiry was answered") -> None:
         """Terminalize the answer window before stopping the owner consumer.
 
         This is no evidence of native process shutdown. The controller owns the
@@ -146,7 +150,7 @@ class InquiryBridge:
                 if entry.get("state") in ANSWERABLE_STATES:
                     self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "unavailable",
                                    "unavailableAt": _now(),
-                                   "reason": "the micro task root turn ended before this inquiry was answered",
+                                   "reason": reason,
                                    "limitation": self.limitation})
             self._publish()
             self._stop.set()
@@ -160,6 +164,29 @@ class InquiryBridge:
             self.agent_status = "running"
             self.bridge_started_at = _now()
             self._publish()
+
+    def deactivate(self) -> None:
+        """Close admission between native turns without ending this execution."""
+        with self.lock:
+            self.active = False
+            self.agent_status = "finishing"
+            self._publish()
+
+    def pending_inquiries(self) -> list[dict]:
+        """The native pump alone sends these committed questions in its active turn."""
+        with self.lock:
+            if not self.active or self.closed:
+                return []
+            return [dict(entry) for entry in self.entries.values() if entry.get("state") == "queued"]
+
+    def deliver_native(self, inquiry_id: str, native_correlation: dict) -> None:
+        """Commit delivery after the native carrier accepted the active-turn input."""
+        with self.lock:
+            entry = self.entries[inquiry_id]
+            if entry["state"] == "queued":
+                self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "delivered",
+                               "deliveredAt": _now(), "via": "native:in-turn",
+                               "nativeCorrelation": native_correlation})
 
     # -- journal -------------------------------------------------------------
     def _load_journal(self) -> None:
@@ -321,6 +348,24 @@ class InquiryBridge:
                                       "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": tool_call_id,
                                       "at": _now()}})
 
+    def answer_native(self, inquiry_id: str, answer: str, tool_call_id: str) -> str | None:
+        """Apply an already validated root client-tool call under the state lock."""
+        with self.lock:
+            if not self.active or self.closed:
+                return "the root turn is no longer running"
+            entry = self.entries.get(inquiry_id)
+            if entry is None:
+                return "unknown inquiryId"
+            if entry.get("state") != "delivered":
+                return "the inquiry must be delivered and still unanswered"
+            if not self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "answered",
+                                  "answeredAt": _now(),
+                                  "answer": {"text": answer, "bytes": len(answer.encode()), "truncated": False,
+                                             "via": "tool:hey_my_buddy_answer_inquiry",
+                                             "toolCallId": tool_call_id, "at": _now()}}):
+                return "the answer could not be recorded durably"
+            return None
+
     # -- observation ---------------------------------------------------------
     def note_event(self, message: dict, phase: str) -> None:
         """Keep a bounded, metadata-only live view of the native turn."""
@@ -358,18 +403,19 @@ class InquiryBridge:
             "lastEvent": last_event,
             "activity": activity,
             "activityDropped": self.activity_dropped,
-            "replyTool": {"name": "hey_my_buddy_answer_inquiry", "checkpointTool": "hey_my_buddy_checkpoint",
-                          "delivery": "cooperative-checkpoint"},
+            "replyTool": {"name": "hey_my_buddy_answer_inquiry",
+                          **({"checkpointTool": self.checkpoint_tool} if self.checkpoint_tool is not None else {}),
+                          "delivery": self.delivery_mode},
             "attention": attention,
             "unavailable": ["nativeReasoning", "toolArguments", "toolOutput", "providerCredentials", "immediateDelivery"],
             "journal": {"enabled": True, "truncated": self.truncated, "entries": len(entries)},
             "capability": "inquiry",
             "supported": True,
-            "deliveryMode": "cooperative-checkpoint",
+            "deliveryMode": self.delivery_mode,
             "limitation": self.limitation,
             "limits": {"maxQuestionBytes": MAX_QUESTION_BYTES, "maxAnswerBytes": MAX_ANSWER_BYTES,
                        "maxInquiriesPerRun": MAX_INQUIRIES,
-                       "inquiry": "cooperative-checkpoint", "deliveryMode": "cooperative-checkpoint",
+                       "inquiry": self.delivery_mode, "deliveryMode": self.delivery_mode,
                        "requestedDelivery": None, "startsNewTurn": False, "extendsDeadline": False},
             "error": self.error,
         }
@@ -385,8 +431,8 @@ class InquiryBridge:
             "error": self.error,
             "capability": "inquiry",
             "supported": True,
-            "inquiry": "cooperative-checkpoint",
-            "deliveryMode": "cooperative-checkpoint",
+            "inquiry": self.delivery_mode,
+            "deliveryMode": self.delivery_mode,
             "limitation": self.limitation,
             "requested": len(entries),
             "queued": counts["queued"],
@@ -394,6 +440,8 @@ class InquiryBridge:
             "answered": counts["answered"],
             "discarded": counts["discarded"],
             "refused": counts["unavailable"],
+            "unansweredDelivered": sum(1 for entry in entries if entry.get("deliveredAt")
+                                       and entry.get("state") not in ("answered", "discarded")),
             "journalEntries": len(entries),
             "requestedDelivery": None,
             "startsNewTurn": False,
@@ -451,11 +499,11 @@ class InquiryBridge:
         self.live.publish_observation(observation)
 
     def _ask(self, request: dict, response) -> dict:
-        """Queue one question for cooperative delivery at the next checkpoint.
+        """Queue one question for this run's declared native delivery path.
 
-        No native command is ever sent: the question waits in this bridge until
-        the root calls ``hey_my_buddy_checkpoint`` inside the one admitted turn (see
-        the supplied limitation). The first question is journaled once with
+        This owner only commits the question: the native pump sends it during
+        the active turn, or the root picks it up at its cooperative checkpoint.
+        The first question is journaled once with
         its committed text, question hash and delivery record; an identical
         replay returns the current committed state as a duplicate and a changed
         question under the same id is a conflict. Before the turn is admitted
@@ -467,7 +515,9 @@ class InquiryBridge:
                 or not isinstance(question, str) or not question.strip() or len(question.encode()) > MAX_QUESTION_BYTES):
             return response(False, error="bad-request")
         with self.lock:
-            if not self.active or self.closed:
+            if self.closed or (not self.active and self.agent_status == "finishing"):
+                return response(False, error="agent-not-running")
+            if not self.active:
                 return response(False, error="not-ready")
             digest = hashlib.sha256(question.encode()).hexdigest()
             existing = self.entries.get(inquiry_id)
@@ -477,7 +527,7 @@ class InquiryBridge:
                 return response(True, value=self._question_value(inquiry_id, existing, duplicate=True))
             if len(self.entries) >= MAX_INQUIRIES:
                 return response(False, error="too-many")
-            delivery = {"requestedDelivery": None, "admittedDelivery": "cooperative-checkpoint",
+            delivery = {"requestedDelivery": None, "admittedDelivery": self.delivery_mode,
                         "startsNewTurn": False, "extendsDeadline": False, "supported": True, "at": _now()}
             if not self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "queued",
                                   "question": question, "questionSha256": digest, "askedAt": _now(),

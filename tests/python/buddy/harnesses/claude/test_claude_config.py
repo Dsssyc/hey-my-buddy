@@ -45,6 +45,18 @@ FOCUSED_CLEARED_VARIABLES = (
 
 
 class ClaudeConfigTests(unittest.TestCase):
+    def test_session_mcp_uses_native_mount_and_tool_permission(self):
+        tools = ("mcp__attempt__hey_my_buddy_checkpoint", "mcp__attempt__hey_my_buddy_answer_inquiry")
+        args = execution_args(session_id="session", model="model", effort="default",
+                              settings_path="settings.json", read_only=True, output_schema={},
+                              mcp_config_path="inquiry-mcp.json", inquiry_tools=tools)
+        self.assertEqual(flag_value(args, "--mcp-config"), "inquiry-mcp.json")
+        self.assertEqual(flag_value(args, "--allowedTools"), ",".join(tools))
+        self.assertIn("ToolSearch", flag_value(args, "--tools").split(","))
+        self.assertNotIn(tools[0], flag_value(args, "--tools").split(","))
+        self.assertNotIn("--strict-mcp-config", args)
+        self.assertNotIn("--setting-sources", args)
+
     def test_native_provider_label_keeps_anthropic_identity_and_other_names(self):
         self.assertEqual(provider_from_account({"apiProvider": "firstParty"}), "anthropic")
         for provider in ("anthropic", "bedrock", "vertex", "foundry", "custom-gateway"):

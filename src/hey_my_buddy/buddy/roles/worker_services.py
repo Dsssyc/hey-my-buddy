@@ -96,7 +96,7 @@ ANSWER_SCHEMA = {
     "required": ["inquiryId", "answer"],
     "properties": {
         "inquiryId": {"type": "string", "minLength": 1, "maxLength": 128,
-                      "description": "The inquiryId exactly as exposed by hey_my_buddy_checkpoint."},
+                      "description": "The inquiryId exactly as delivered in this turn."},
         "answer": {"type": "string", "minLength": 1, "maxLength": 10000,
                    "description": "The bounded answer text for that inquiry; at most 4000 UTF-8 bytes are accepted."},
     },
@@ -119,7 +119,7 @@ CHECKPOINT_DESCRIPTION = (
     "hey_my_buddy_answer_inquiry using its exact inquiryId."
 )
 ANSWER_DESCRIPTION = (
-    "Answer one Host inquiry exposed by hey_my_buddy_checkpoint, using its exact inquiryId and a bounded answer. "
+    "Answer one Host inquiry delivered in this turn or exposed by hey_my_buddy_checkpoint, using its exact inquiryId and a bounded answer. "
     "Returns a signed tentative receipt; the recorded answer only becomes authoritative after the owning "
     "controller verifies it against this root turn's own tool evidence. A first accepted answer for an "
     "inquiry cannot be replaced."

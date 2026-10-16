@@ -132,7 +132,7 @@ class CapabilityTests(unittest.TestCase):
     def test_each_harness_declares_its_existing_facilities_only(self):
             # DSH moved off the retired Node realtime channel with step four: its
             # questions now arrive at the session's cooperative checkpoint too.
-        expected = {"codex": "unsupported", "claude": "unsupported",
+        expected = {"codex": "realtime", "claude": "realtime",
                     "zcode": "cooperative-checkpoint", "dsh": "cooperative-checkpoint"}
         for harness, delivery in expected.items():
             capabilities = lv.EXISTING_CAPABILITIES[harness]
@@ -253,7 +253,7 @@ class RequestBindingTests(LiveSeamCase):
         self.assertIsNone(self.endpoint.consume_request(0), "owner publication is the delivery fact")
 
     def test_unsupported_facilities_answer_unsupported(self):
-        unsupported = ctl.CTwoLiveEndpoint(identity(), lv.EXISTING_CAPABILITIES["codex"],
+        unsupported = ctl.CTwoLiveEndpoint(identity(), lv.LiveCapabilities(inquiry_delivery="unsupported"),
                                            TEST_CRM, instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.peer.endpoint = unsupported
         reply = self.channel.request(inquiry_request(), timeout_ms=1500)

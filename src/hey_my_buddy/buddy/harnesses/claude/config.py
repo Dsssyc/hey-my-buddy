@@ -134,7 +134,8 @@ def discovery_args() -> list[str]:
 
 
 def execution_args(*, session_id: str, model: str, effort: str, settings_path: str, read_only: bool,
-                   output_schema: dict, additional_denied_tools=(), full_access: bool = False) -> list[str]:
+                   output_schema: dict, additional_denied_tools=(), full_access: bool = False,
+                   mcp_config_path: str | None = None, inquiry_tools=()) -> list[str]:
     """The native permission invocation; user configuration sources stay enabled.
 
     ``output_schema`` is the run's own ending contract and is always explicit:
@@ -145,7 +146,8 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
     """
     args = [*base_args(),
             "--no-session-persistence",
-            "--tools", ",".join(READONLY_TOOLS if read_only else WRITABLE_TOOLS),
+            "--tools", ",".join([*(READONLY_TOOLS if read_only else WRITABLE_TOOLS),
+                                 *(("ToolSearch",) if mcp_config_path else ())]),
             "--permission-prompt-tool", "stdio",
             "--settings", settings_path,
             "--session-id", session_id,
@@ -167,6 +169,8 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
         args += ["--permission-mode", "bypassPermissions" if full_access else "acceptEdits"]
     if effort != DEFAULT_EFFORT:
         args += ["--effort", effort]
+    if mcp_config_path is not None:
+        args += ["--mcp-config", mcp_config_path, "--allowedTools", ",".join(inquiry_tools)]
     if additional_denied_tools:
         values = list(additional_denied_tools)
         if "--disallowedTools" in args:

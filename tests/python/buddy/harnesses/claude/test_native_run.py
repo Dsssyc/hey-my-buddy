@@ -10,6 +10,7 @@ always shared, and the legacy adapter path is exercised by its own suites.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -19,6 +20,8 @@ from pathlib import Path
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.claude import native_run
+from hey_my_buddy.buddy.harnesses.in_turn_inquiry import prepare_inquiry_services
+from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge, _owner_response
 from hey_my_buddy.buddy.harnesses.claude.native_run import run, run_discovery
 from hey_my_buddy.buddy.harnesses.run_contract import (
     FEEDBACK_CONTINUE,
@@ -113,6 +116,138 @@ class NativeRunCase(unittest.TestCase):
 
     def fixture_state(self) -> dict:
         return json.loads(self.state_path.read_text())
+
+
+class NativeInquiryTests(NativeRunCase):
+    def test_child_lifecycle_does_not_change_the_root_inquiry_window(self):
+        request = self.request()
+        bridge = mock.Mock()
+        collector = native_run._TurnCollector(request, native_run.ActivityPublisher(None),
+                                               lambda _facts: FEEDBACK_CONTINUE, bridge=bridge)
+        collector.evidence = native_run.TurnEvidence("root-session", request.cwd)
+        collector.observe({"type": "system", "subtype": "init", "session_id": "root-session",
+                           "cwd": request.cwd, "model": request.buddy.model})
+        collector.observe({"type": "result", "parent_tool_use_id": "child-call", "session_id": "child-session"})
+        collector.observe({"type": "system", "subtype": "init", "parent_tool_use_id": "child-call",
+                           "session_id": "child-session"})
+        bridge.activate.assert_called_once_with("root-session")
+        bridge.deactivate.assert_not_called()
+
+    def execute_inquiry(self, case: str, *, expected_status="ok"):
+        self.fixture_case(case)
+        request = self.request()
+        identity = {"taskId": request.identity.task_id, "attemptId": request.identity.attempt_id,
+                    "generation": request.identity.generation, "turnId": request.identity.turn_id}
+        inquiry = prepare_inquiry_services(
+            invocation_root=Path(request.private_state.invocation_root), identity=identity,
+            input_sha256=hashlib.sha256(request.input_text.encode()).hexdigest(),
+            attention_path=self.base / "attention.json",
+            inquiry={"resultsPath": str(self.base / f"inquiry-{request.identity.attempt_id}.jsonl")})
+        original_activate = InquiryBridge.activate
+
+        def activate(bridge, session_id):
+            self.bridge = bridge
+            original_activate(bridge, session_id)
+            queued = bridge._ask({"inquiryId": "q1", "question": "What is 6 times 7?"}, _owner_response)
+            self.assertTrue(queued["ok"], queued)
+
+        with mock.patch.object(InquiryBridge, "activate", activate):
+            result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                         services=native_run.RunServices(inquiry=inquiry), cancelled=lambda: False)
+        report_ref = next(ref for ref in result.evidence_refs if ref.kind == "inquiry-report")
+        if result.end.status != expected_status:
+            stderr = next((ref for ref in result.evidence_refs if ref.kind == "native-stderr"), None)
+            self.fail(Path(stderr.location).read_text() if stderr else result.end.message)
+        return result, json.loads(Path(report_ref.location).read_text())
+
+    def test_root_signed_answer_binds_to_running_turn(self):
+        result, report = self.execute_inquiry("inquiry-answer")
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(report["answered"], 1)
+        self.assertEqual(report["unansweredDelivered"], 0)
+        self.assertIn("Host inquiry q1", self.fixture_state()["inquiryInput"])
+        self.assertIsNotNone(flag_value(self.fixture_state()["argv"], "--mcp-config"))
+
+    def test_foreign_call_and_child_result_do_not_answer(self):
+        for case in ("inquiry-wrong-call", "inquiry-child"):
+            with self.subTest(case=case):
+                result, report = self.execute_inquiry(case)
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                self.assertEqual(report["answered"], 0)
+                self.assertEqual(report["unansweredDelivered"], 1)
+
+    def test_assistant_text_and_unanswered_delivery_do_not_answer(self):
+        result, report = self.execute_inquiry("inquiry-text-only")
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(report["answered"], 0)
+        self.assertEqual(report["unansweredDelivered"], 1)
+        from hey_my_buddy.buddy.roles.run_execution import worker_delivery
+        outcome, provenance, _truncated = worker_delivery(result)
+        self.assertEqual(outcome["disposition"], "attention")
+        self.assertIsNone(native_run.validate_turn_provenance({
+            "sessionId": result.native_identity.session_id, "provenance": provenance,
+            "outcome": outcome, "resumeMode": "initial", "previousSessionId": None}))
+
+    def test_closed_bridge_refuses_question_after_end(self):
+        result, report = self.execute_inquiry("inquiry-unanswered")
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(report["unansweredDelivered"], 1)
+        late = self.bridge._ask({"inquiryId": "q2", "question": "Too late?"}, _owner_response)
+        self.assertEqual(late["error"], "agent-not-running")
+
+    def test_ordinary_tool_error_keeps_turn_alive_and_retains_native_error(self):
+        for case, answered in (("inquiry-tool-error", 0), ("inquiry-tool-error-retry", 1)):
+            with self.subTest(case=case):
+                result, report = self.execute_inquiry(case)
+                self.assertTrue(self.fixture_state()["continuedAfterInquiryError"])
+                self.assertEqual(report["answered"], answered)
+                self.assertEqual(report["unansweredDelivered"], 1 - answered)
+                reference = next(ref for ref in result.evidence_refs if ref.kind == "inquiry-tool-failures")
+                failures = json.loads(Path(reference.location).read_text())
+                self.assertEqual(failures["records"][0]["error"], "fixture inquiry transport error: retry permitted")
+                self.assertEqual(failures["records"][0]["toolCallId"], "toolu_inquiry_1")
+                self.assertEqual(failures["dropped"], 0)
+
+    def test_signed_refusal_continues_but_forged_refusal_fails(self):
+        result, report = self.execute_inquiry("inquiry-signed-refusal")
+        self.assertTrue(self.fixture_state()["continuedAfterInquiryError"])
+        self.assertEqual(report["answered"], 0)
+        result, _report = self.execute_inquiry("inquiry-forged-refusal", expected_status="error")
+        self.assertEqual(result.end.reason_code, "invalid-tool-refusal")
+
+    def test_late_input_cannot_run_an_unadmitted_followup_turn(self):
+        with mock.patch.object(native_run, "_native_request_response", wraps=native_run._native_request_response) as response:
+            result, report = self.execute_inquiry("inquiry-late-input")
+        response.assert_not_called()
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(report["answered"], 0)
+        self.assertEqual(report["unansweredDelivered"], 1)
+        self.assertEqual(self.bridge.entries["q1"]["state"], "unavailable")
+        self.assertIn("before reading", self.bridge.entries["q1"]["reason"])
+        self.assertFalse((self.cwd / "unadmitted-followup-write.txt").exists())
+        self.assertFalse(self.fixture_state().get("unadmittedFollowupRan", False))
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        reference = next(ref for ref in result.evidence_refs if ref.kind == "native-observations")
+        observations = json.loads(Path(reference.location).read_text())
+        self.assertTrue(observations["stoppedAtRootResult"])
+        self.assertTrue(observations["unadmittedFollowupInit"])
+        self.assertEqual(observations["unadmittedFollowupMessages"], 2)
+        self.assertEqual(observations["postRootControlRequests"], 1)
+        self.assertEqual(result.value.parsed.value["outcome"]["summary"], "fixture work completed")
+
+    def test_answered_inquiry_does_not_hide_unrelated_duplicate_init(self):
+        result, report = self.execute_inquiry("inquiry-answered-duplicate-init", expected_status="error")
+        self.assertEqual(report["answered"], 1)
+        self.assertEqual(result.end.reason_code, "invalid-protocol")
+
+    def test_failure_evidence_is_bounded(self):
+        collector = native_run._TurnCollector(self.request(), native_run.ActivityPublisher(None),
+                                               lambda _facts: FEEDBACK_CONTINUE)
+        for number in range(12):
+            collector._retain_inquiry_failure(str(number), "tool", "错" * 2000)
+        self.assertEqual(len(collector.inquiry_tool_failures), 8)
+        self.assertEqual(collector.inquiry_tool_failures_dropped, 4)
+        self.assertLessEqual(len(collector.inquiry_tool_failures[0]["error"].encode()), 4000)
 
 
 class Batch4FactsTests(NativeRunCase):
