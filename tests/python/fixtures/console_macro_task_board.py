@@ -490,7 +490,7 @@ class HandlerProbe:
                    gzipBodyBytes=len(body) if encoding == "gzip" else None,
                    bodySha256=hashlib.sha256(body).hexdigest(), rawSha256=hashlib.sha256(raw).hexdigest(),
                    responseHeaders=response_headers, returnedMacros=len(parsed["macroTasks"]) if parsed else 0,
-                   totalMacros=parsed["total"] if parsed else None)
+                   totalMacros=parsed["totals"]["all"] if parsed else None)
         return row, parsed
 
 
