@@ -2,7 +2,7 @@
 
 ## Contract status
 
-The source contract is 0.44.0/schema 24. [ADR-020](../decisions/020-loopback-console-access.md), accepted from the developer’s 2026-09-29 decision, makes loopback access login-free by default. Source checks, browser verification and installation are recorded independently in acceptance records.
+The source contract is 0.45.0/schema 24. [ADR-020](../decisions/020-loopback-console-access.md), accepted from the developer’s 2026-09-29 decision, makes loopback access login-free by default. Source checks, browser verification and installation are recorded independently in acceptance records.
 
 ## Entry and lifetime
 

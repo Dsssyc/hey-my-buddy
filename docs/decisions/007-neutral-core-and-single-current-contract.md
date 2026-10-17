@@ -18,6 +18,8 @@ Execution records and worker primitives remain current infrastructure for intern
 
 **Applied on 2026-10-15 (developer's decision).** A micro task's submission and its helper specifications no longer accept `adapter` or `argv`. Micro tasks had inherited the whole field set of execution records in 0.6, so a command or an external execution could be submitted as a micro task, but its result carries no structured turn and such a micro task could never be delivered; nothing used it. Command and external executions exist only as execution records submitted with `execution-submit`; a micro task always runs a buddy through a harness, and its buddy column holds only buddies.
 
+**Applied on 2026-10-17 (developer's decision).** Hosts delegate only through micro tasks. `execution-submit` and the control operation `task_submit` behind it are removed, so no Host-facing method or operation admits an execution record and the 2026-10-15 path for command executions is closed. The `command` adapter stays as the execution layer's own model-free test execution: the check suite writes a queued command execution into its private board through the store, and the service's scheduler picks it up; product code adds no caller. Records already on a board stay readable with `status`, `result` and `list`. The contract moves to 0.45.0.
+
 The developer chose to retain the old daily board intact as an archive and start the new release from clean state. Do not reinterpret old records at runtime or delete the archive. Switch the daily installation only after all owned implementation/acceptance work has concluded with real shutdown evidence.
 
 ## Routing

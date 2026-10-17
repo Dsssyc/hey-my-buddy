@@ -128,19 +128,9 @@ If a deliverable fails acceptance, send the concrete findings back through `cont
 
 A workspace conflict is settled first with `workspace-resolve` or `scope-amend`, as described in the [workspace lifecycle reference](workspace-lifecycle.md), which owns the complete example and field list.
 
-## Non-coding execution records
+## Execution records
 
-The `command` adapter uses the advanced `execution-*` records; they have no micro task request queue or Host control file, and use execution-level result review rather than micro task artifact acceptance. Coding adapters are refused here with `MICRO_TASK_REQUIRED`.
-
-**`command` adapter.** One explicit `argv` process, never a shell:
-
-```sh
-"$HMB" execution-submit '{"requestId":"echo-1","task":"print a greeting","cwd":"/abs/path","adapter":"command","argv":["/bin/echo","hi"]}'
-```
-
-**`external` adapter.** No local process: the caller's own agent claims the task through the public client and submits the result itself. A runnable example, worker identity and receipt rules are in [workers.md](workers.md#a-runnable-external-worker).
-
-Inspect and review these records with `status`, `result`, `artifacts`, `wait`, then `execution-acknowledge`. The execution process owns the child handle and reports confirmed shutdown, and the service enforces the stop deadlines; `execution-retry` requires that confirmed stop before it can requeue a new generation.
+Every micro task turn and every routing calculation runs as an execution record. A Host reads them with `status`, `result` and `list` and acts on the micro task, never on its records. No method admits an execution record: the `command` adapter is the check suite's own model-free test execution ([ADR-007](../decisions/007-neutral-core-and-single-current-contract.md)).
 
 ## Progress and questions while it runs
 
@@ -184,7 +174,7 @@ Each Host waits in its own way, and each way is owned by one per-Host guide: [Co
 
 `submit` is not reserved for background work: it starts the default flow, whose current Host turn retains a [Codex monitor](host-codex.md) or a Claude Code [background `await`](host-claude-code.md). When the user explicitly wants the work to outlive the turn:
 
-1. `submit` the micro task (or `execution-submit` a non-coding record) and capture the `runId` (and `controlFile` for a micro task).
+1. `submit` the micro task and capture its `runId` and `controlFile`.
 2. Register an official App heartbeat automation on the original task before ending the turn; its prompt calls this same CLI to read the result, verify the artifacts and record the micro task acceptance or execution acknowledgement.
 3. Reuse a matching heartbeat instead of creating duplicates. Keep failures and required intervention visible; after reviewing the terminal outcome (including failure), record the review and remove the heartbeat. Report unresolved shutdown honestly.
 
