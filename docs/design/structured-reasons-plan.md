@@ -281,7 +281,7 @@
 
 每个 Python 微任务用 `uv run --frozen python -m hey_my_buddy.cli.checks <对应 tests/python 文件或目录>`：1 覆盖 harness/catalog/health/store 升级，2 覆盖 tasks/workflow/结论/CLI/store 升级，3 覆盖 routing/释放/路由关注/store 升级，4 覆盖 inquiry/store/protocol，5 覆盖 console/tasks/CLI/protocol。源码中不存在的候选测试路径由实施者在相同 owning 测试目录新增，不直接起测试进程。共享文件串行落地，Host 最后跑完整 Python 检查；控制台跑 `npm --prefix apps/console test` 与 `npm --prefix apps/console run test:browser`。实现验证不在本计划回合运行。
 
-增加三类有实际用途的检查：一是服务源码守卫，在 `src/hey_my_buddy` 的 Python 服务/协议/harness 源码中排除注释及 `buddy/roles/texts/` 后不留中文；SQL 注释也按注释处理，`console/assets/` 的前端构建译文不算服务源码，英文诊断不受该守卫限制。升级转换器必须匹配的旧中文常量用 Unicode 转义写源码，保持匹配值不变，不额外豁免 upgrade.py。二是静态检查源码构造/有限映射的每个原因代码均已登记，动态代码只从已声明的有限外部代码映射进入，不用“动态”免检。三是升级用例覆盖多层拼接、截断模板（关系行取参数）、模板 reason 已被 Host 作为内容提交的续接、归属失败回滚、明确黑板但不可还原转 history、决策副本删除、原始文档/内容/指纹与命令重放保全；样板升级后与新建 25 同构。
+增加三类有实际用途的检查：一是服务源码守卫，在 `src/hey_my_buddy` 的 Python 服务/协议/harness 源码中排除注释及 `buddy/roles/texts/` 后不留中文；SQL 注释也按注释处理，`console/assets/` 的前端构建译文不算服务源码，英文诊断不受该守卫限制。升级转换器必须匹配的旧中文句子照原文写在 `blackboard/store/upgrade.py` 里，守卫明确豁免这一个文件并写明理由：这些是旧输出的样子，不是服务的输出；这一次升级被消耗之后，转换器连同这些句子一起删除，豁免随之取消。不用 Unicode 转义绕过守卫（Host 2026-10-17 审第 2 版时改）。二是静态检查源码构造/有限映射的每个原因代码均已登记，动态代码只从已声明的有限外部代码映射进入，不用“动态”免检。三是升级用例覆盖多层拼接、截断模板（关系行取参数）、模板 reason 已被 Host 作为内容提交的续接、归属失败回滚、明确黑板但不可还原转 history、决策副本删除、原始文档/内容/指纹与命令重放保全；样板升级后与新建 25 同构。
 
 Host 在日常规模的私有 24 副本上演练升级，先用现有样板/复制流程做身份与路径重绑定，不能让副本指到日常工作区或原生会话。记录总耗时、事务开始到提交耗时、每张受影响表的前后行数、转换数/history 数、FK/完整性结果与内容/摘要保全；出现归属不明即失败，修转换器重演，不带未知分支安装。Host 在 `docs/acceptance/` 记录实测；本计划不虚构计数或时长，文档更新也由 Host 负责。
 
