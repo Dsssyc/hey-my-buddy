@@ -12,8 +12,8 @@ const at = (minutes: number) => new Date(Date.UTC(2026, 9, 17, 8, minutes)).toIS
 const scale = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, 800);
 const base = macroTaskTimelineFixture();
 const execution = (extra: Partial<TimelineSpan> = {}): TimelineSpan => ({ ...base.spans.find(span => span.kind === "execution")!, spanId: "e", startAt: at(5), endAt: at(15), resultStatus: "ok", state: "finished", uncertain: false, shutdownConfirmed: true, expectedSeconds: 600, reminders: null, inquiries: [], ...extra });
-function track(spans: TimelineSpan[], extra: { state?: string; events?: TimelineEvent[]; width?: number; tabKey?: string; onOpen?: (runId: string, key: string) => void; onEvent?: (event: TimelineEvent | null) => void } = {}) {
-  return render(<Track row={{ ...base.rows[0]!, state: extra.state ?? "accepted", acceptedAt: null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} ongoing buddies={[]} onOpen={extra.onOpen ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onEvent={extra.onEvent ?? vi.fn()} selected={false} tabKey={extra.tabKey}/>);
+function track(spans: TimelineSpan[], extra: { state?: string; events?: TimelineEvent[]; width?: number; tabKey?: string; onOpen?: (runId: string, key: string) => void; onSelect?: (runId: string, key?: string) => void } = {}) {
+  return render(<Track row={{ ...base.rows[0]!, state: extra.state ?? "accepted", acceptedAt: null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} ongoing buddies={[]} onOpen={extra.onOpen ?? vi.fn()} onSelect={extra.onSelect ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onMarker={vi.fn()} modelColors={new Map([[execution().buddy?.model ?? "", "var(--model-1)"]])} selected={false} tabKey={extra.tabKey}/>);
 }
 const slot = (name: string) => document.querySelector(`[data-slot=${name}]`);
 
@@ -25,16 +25,16 @@ describe("measured timeline labels", () => {
     expect(fitLabel(["full", "short"], { left: 0, right: 30 }, [], width)).toBeNull();
   });
   it("keeps labels clear of marks and previously placed text", () => {
-    const first = fitLabel(["full", "short"], { left: 0, right: 200 }, [{ left: 0, right: 40 }, { left: 100, right: 120 }], text => text === "full" ? 100 : 35)!;
-    const next = fitLabel(["next"], { left: 0, right: 200 }, [first, { left: 0, right: 40 }, { left: 100, right: 120 }], () => 35)!;
-    expect(first.left).toBe(44); expect(first.right).toBe(79); expect(next.left).toBeGreaterThanOrEqual(first.right + 4);
+    const first = fitLabel(["full", "short"], { left: 0, right: 200 }, [{ kind: "obstacle", left: 0, right: 40 }, { kind: "obstacle", left: 100, right: 120 }], text => text === "full" ? 100 : 35)!;
+    const next = fitLabel(["next"], { left: 0, right: 200 }, [first, { kind: "obstacle", left: 0, right: 40 }, { kind: "obstacle", left: 100, right: 120 }], () => 35)!;
+    expect(first.left).toBe(44); expect(first.right).toBe(79); expect(next.left).toBeGreaterThanOrEqual(first.right + 12);
   });
 });
 
 describe("timeline drawings follow recorded facts", () => {
   it("uses pale settled execution, solid live/failure and a distinct unconfirmed end", () => {
     track([execution()]);
-    expect(slot("execution-bar")?.getAttribute("class")).toContain("fill-past-wash");
+    expect((slot("execution-bar") as SVGElement).style.fill).toBe("var(--model-1)");
     cleanup(); track([execution({ endAt: null, state: "executing", shutdownConfirmed: false, resultStatus: undefined })]);
     expect(slot("execution-bar")?.getAttribute("class")).toContain("fill-live");
     cleanup(); track([execution({ resultStatus: "failed" })]);
@@ -132,15 +132,22 @@ describe("timeline drawings follow recorded facts", () => {
     expect(document.activeElement).toBe(cluster);
     await user.keyboard("{Enter}");
     await user.keyboard("{ArrowDown}{Enter}");
-    expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "span:e");
+    expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "inquiry:q");
   });
-  it("opens a single inquiry directly at its containing span", async () => {
+  it("selects a single inquiry without opening, then opens it with a double click or Enter", async () => {
     const onOpen = vi.fn();
-    track([execution({ inquiries: [{ inquiryId: "q", createdAt: at(20), author: "host-1", state: "answered" }] })], { onOpen, tabKey: "inquiry:q" });
+    const onSelect = vi.fn();
+    track([execution({ inquiries: [{ inquiryId: "q", createdAt: at(20), author: "host-1", state: "answered" }] })], { onOpen, onSelect, tabKey: "inquiry:q" });
     const inquiry = document.querySelector<SVGGElement>('[data-key="inquiry:q"]')!;
     expect(inquiry.getAttribute("tabindex")).toBe("0");
     await userEvent.setup().click(inquiry);
-    expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "span:e");
+    expect(onSelect).toHaveBeenCalledWith(base.rows[0]!.runId, "inquiry:q");
+    expect(onOpen).not.toHaveBeenCalled();
+    await userEvent.setup().dblClick(inquiry);
+    expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "inquiry:q");
+    inquiry.focus();
+    await userEvent.setup().keyboard("{Enter}");
+    expect(onOpen).toHaveBeenCalledTimes(2);
   });
   it("keeps isolated events direct and groups marks within 16 pixels", async () => {
     const onOpen = vi.fn();
@@ -148,7 +155,7 @@ describe("timeline drawings follow recorded facts", () => {
     track([], { events, onOpen, width: 400 });
     expect(document.querySelectorAll('[data-slot=event-cluster]')).toHaveLength(1);
     expect(document.querySelectorAll('[data-slot=event-mark]')).toHaveLength(1);
-    await userEvent.setup().click(document.querySelector('[data-key="event:2"]')!);
+    await userEvent.setup().dblClick(document.querySelector('[data-key="event:2"]')!);
     expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "event:2");
   });
   it("hides ticks and breaks from screen readers", () => {
@@ -165,4 +172,50 @@ describe("timeline drawings follow recorded facts", () => {
     render(<Axis scale={folded} ongoing nowMs={Date.parse(at(138))}/>);
     expect(slot("gap-label")?.textContent).toBe("2 时 14 分");
   });
+});
+
+it("draws minute readouts and adds seconds only above thirty pixels per minute", () => {
+  const fine = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, 1600, 40);
+  const view = render(<Axis scale={scale} ongoing nowMs={Date.parse(at(40))} pointerX={40}/>);
+  expect(slot("pointer-clock")?.textContent).toMatch(/^\d{2}:\d{2}$/);
+  view.rerender(<Axis scale={fine} ongoing nowMs={Date.parse(at(40))} pointerX={40}/>);
+  expect(slot("pointer-clock")?.textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+});
+
+it("draws acceptance and failed conclusions as circles with separate glyphs", () => {
+  track([], { state: "failed", events: [{ ...base.events[0]!, kind: "accept", at: at(5) }, { ...base.events[0]!, seq: 99, kind: "conclude", at: at(35) }] });
+  for (const name of ["accept-mark", "failed-conclusion-mark"]) {
+    expect(slot(name)?.querySelector("circle")).toBeTruthy();
+    expect(slot(name)?.querySelector("path")).toBeTruthy();
+  }
+});
+
+it("leaves twelve pixels after an inquiry label, or omits a short waiting duration", () => {
+  const inquiry = fitLabel(["Inquiry"], { left: 0, right: 100 }, [], () => 40)!;
+  const tight = fitLabel(["36 min"], { left: 42, right: 80 }, [inquiry], () => 30);
+  expect(tight).toBeNull();
+  const room = fitLabel(["36 min"], { left: 42, right: 100 }, [inquiry], () => 30)!;
+  expect(room.left - inquiry.right).toBeGreaterThanOrEqual(12);
+});
+
+it("does not put a clock inside a compressed interval", () => {
+  const folded = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [{ startMs: Date.parse(at(0)), endMs: Date.parse(at(2)) }, { startMs: Date.parse(at(38)), endMs: Date.parse(at(40)) }], instants: [], canFold: true, nowAtEnd: true }, 800);
+  const gap = folded.breaks[0]!;
+  render(<Axis scale={folded} ongoing nowMs={Date.parse(at(40))} pointerX={(gap.startX + gap.endX) / 2}/>);
+  expect(slot("pointer-clock")).toBeNull();
+});
+
+it("keeps labels four pixels from shapes while keeping twelve pixels between labels", () => {
+  const obstacle = { kind: "obstacle" as const, left: 0, right: 20 };
+  const text = fitLabel(["15 min"], { left: 0, right: 60 }, [obstacle], () => 35)!;
+  expect(text.left - obstacle.right).toBe(4);
+  const next = fitLabel(["Accepted"], { left: text.right, right: 100 }, [obstacle, text], () => 20)!;
+  expect(next.left - text.right).toBe(12);
+});
+
+it("merges mixed shape and label clearances before finding free space", () => {
+  const occupied = [{ kind: "obstacle" as const, left: 100, right: 110 }, { kind: "label" as const, left: 105, right: 130 }];
+  expect(fitLabel(["too wide"], { left: 0, right: 200 }, occupied, () => 95)).toBeNull();
+  const label = fitLabel(["fits"], { left: 0, right: 200 }, occupied, () => 90)!;
+  expect(occupied[1]!.left - label.right).toBeGreaterThanOrEqual(12);
 });

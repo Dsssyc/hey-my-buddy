@@ -692,3 +692,34 @@ describe("the detail is only read", () => {
     expect(pane().querySelector("[data-slot=detail-band]")!.textContent).not.toContain(OPUS.model);
   });
 });
+
+it("opens and highlights the exact inquiry in its turn, then scrolls it into view", async () => {
+  const found = timeline();
+  const containing = found.spans.find(item => item.attemptId === "att-1" && item.kind === "execution")!;
+  containing.inquiries = [{ inquiryId: "inq-1", createdAt: at("10:20"), author: "host", state: "delivered" }];
+  found.spans.unshift({ ...containing, spanId: "another-task-question", runId: "another-task" });
+  const scroll = vi.fn();
+  const original = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = scroll;
+  try {
+    open({ origin: "inquiry:inq-1", timeline: found, replies: { inquiries: { items: [inquiry({ messageId: "different-message-id", inquiryId: "inq-1" })], more: false } } });
+    await ready();
+    await waitFor(() => expect(document.querySelector('[data-inquiry-id="inq-1"]')?.getAttribute("data-highlighted")).toBe("true"));
+    expect(selected().textContent).toContain("回合 1");
+    expect(scroll).toHaveBeenCalledWith(expect.objectContaining({ block: "center" }));
+  } finally { HTMLElement.prototype.scrollIntoView = original; }
+});
+
+it("can close the detail while its first read is pending or has failed", async () => {
+  const reads = client();
+  vi.mocked(reads.task).mockImplementation(() => new Promise(() => {}));
+  const pending = open({ client: reads });
+  await pending.user.click(screen.getByRole("button", { name: "收起详情" }));
+  expect(pending.onBack).toHaveBeenCalledOnce();
+  cleanup();
+  vi.mocked(reads.task).mockRejectedValue(new Error("missing task"));
+  const failed = open({ client: reads });
+  await screen.findByRole("heading", { name: "读取微任务失败" });
+  await failed.user.click(screen.getByRole("button", { name: "收起详情" }));
+  expect(failed.onBack).toHaveBeenCalledOnce();
+});

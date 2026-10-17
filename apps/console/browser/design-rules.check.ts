@@ -9,7 +9,6 @@ const views = [
   { name: "detail", hash: `#tasks/${macro}/preview-run-a3/3`, ready: "[data-slot=task-detail]" },
   { name: "buddies", hash: "#buddies", ready: "[data-slot=catalogue-controls]" },
   { name: "settings", hash: "#settings", ready: "[data-slot=settings-page]" },
-  { name: "list", hash: `#tasks/${macro}`, ready: "[data-slot=timeline-tracks]" },
   { name: "drawer", hash: "#buddies", ready: "[data-slot=catalogue-controls]" },
   { name: "dialog", hash: `#tasks/${macro}`, ready: "[data-slot=timeline-tracks]" },
 ];
@@ -22,7 +21,6 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const)
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await open(page, view.hash);
       await page.locator(view.ready).first().waitFor();
-      if (view.name === "list") await page.getByRole("radio", { name: "清单", exact: true }).click();
       if (view.name === "drawer") await page.getByRole("button", { name: "codex / openai / gpt-5-codex", exact: true }).click();
       if (view.name === "dialog") {
         await page.getByRole("button", { name: "更多", exact: true }).click();

@@ -222,6 +222,7 @@ describe("light and dark themes", () => {
         ...["ink", "ink2", "ink3", "live", "hand", "fail", "past"].flatMap(ink => ["paper", "surface", "sunk", "live-wash"].map(ground => [ink, ground])),
         ["ink", "hand-wash"], ["ink2", "hand-wash"], ["ink3", "hand-wash"], ["hand", "hand-wash"],
         ["ink", "fail-wash"], ["ink2", "fail-wash"], ["ink3", "fail-wash"], ["fail", "fail-wash"],
+        ...[1, 2, 3, 4, 5, 6].map(index => ["ink", `model-${index}`]),
         ["surface", "ink"], ["surface", "fail"],
         ["bar-ink", "bar"], ["bar-ink2", "bar"], ["bar-hand", "bar"], ["bar-fail", "bar"], ["bar", "bar-hand"],
       ];

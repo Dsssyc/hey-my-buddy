@@ -365,7 +365,7 @@ function parseInquiry(value: unknown): Inquiry {
   const delivery = recOrNull(message.delivery, "message.delivery");
   const answer = recOrNull(message.answer, "message.answer");
   return {
-    messageId: str(message.messageId, "message.messageId"), attemptId: strOrNull(message.attemptId, "message.attemptId"),
+    messageId: str(message.messageId, "message.messageId"), inquiryId: str(message.inquiryId, "message.inquiryId"), attemptId: strOrNull(message.attemptId, "message.attemptId"),
     question: str(message.question, "message.question"), author: str(message.author, "message.author"),
     createdAt: str(message.createdAt, "message.createdAt"), state: oneOf(message.state, INQUIRY_STATES, "message.state"),
     reason: strOrNull(message.reason, "message.reason"),

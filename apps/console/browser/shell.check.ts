@@ -46,7 +46,7 @@ for (const theme of ["light", "dark"]) test(`the top bar is dark and readable in
   await open(page, "#tasks");
   await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
   const bar = page.getByRole("banner").first();
-  expect(await bar.evaluate(node => getComputedStyle(node).backgroundColor)).toBe(theme === "light" ? "rgb(31, 42, 36)" : "rgb(12, 15, 14)");
+  expect(await bar.evaluate(node => getComputedStyle(node).backgroundColor)).toBe(theme === "light" ? "rgb(31, 42, 36)" : "rgb(11, 12, 13)");
   // A mark is a dot without text; what is measured is whatever carries words.
   const texts = bar.locator("nav a, nav a > span:not(.sr-only):not([aria-hidden]), time");
   expect(await texts.count()).toBeGreaterThanOrEqual(5);

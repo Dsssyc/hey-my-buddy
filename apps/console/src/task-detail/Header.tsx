@@ -1,5 +1,5 @@
 import { cn } from "cn";
-import { RefreshCw } from "lucide-react";
+import { ArrowLeft, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { useTextClipped } from "@/components/use-text-clipped";
@@ -9,6 +9,11 @@ import { formatClock, formatDuration, formatMomentMinutes } from "../i18n/format
 import { taskTitle } from "../task-state";
 import type { Task } from "../types";
 import type { TaskView, Workflow } from "./types";
+
+export function DetailBack({ onBack }: { onBack: () => void }) {
+  const { t } = useTranslation("taskDetail");
+  return <Button variant="ghost" size="icon-sm" aria-label={t("back")} onClick={onBack}><ArrowLeft aria-hidden="true" strokeWidth={1.5}/></Button>;
+}
 
 export type StateWord = { key: "running" | "queued" | "host" | "lead" | "review" | "accepted" | "done" | "ended" | "failed"; mark: "live" | "hand" | "done" | "fail" | "idle" };
 
@@ -34,9 +39,9 @@ export function stateWord(task: Task, lead: boolean, workflowState: string | nul
  * and how long it has gone on, and the one control
  * that reads it again. Reading is all it does; nothing here changes the board.
  */
-export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, error, busy, onRefresh }: {
+export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, error, busy, onRefresh, onBack }: {
   view: TaskView; workflow: Workflow | null; turns: number | null; endMs: number; nowMs: number;
-  verifiedAtMs: number | null; error: string; busy: boolean; onRefresh: () => void;
+  verifiedAtMs: number | null; error: string; busy: boolean; onRefresh: () => void; onBack: () => void;
 }) {
   const { t } = useTranslation("taskDetail");
   const shell = useTranslation("shell").t;
@@ -50,7 +55,7 @@ export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, erro
   return <header data-slot="detail-header" className="shrink-0 border-b bg-card">
     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 px-4 py-3 sm:px-6">
       <div className="flex min-w-0 flex-1 items-center gap-2.5 @max-[650px]:order-1 @max-[650px]:basis-full">
-        <StateMark kind={word.mark} />
+        <DetailBack onBack={onBack}/>
         <Hint text={titleHint}>
           <h2 ref={titleRef} tabIndex={0} className="min-w-0 truncate rounded-sm text-base font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{text}</h2>
         </Hint>

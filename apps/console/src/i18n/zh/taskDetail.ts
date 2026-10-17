@@ -1,5 +1,6 @@
 /** The detail of a micro task, organised by turn: its steps on the left, the chosen step on the right. */
 export default {
+  back: "收起详情",
   label: "微任务详情",
   loading: "正在读取微任务…",
   failed: "读取微任务失败",

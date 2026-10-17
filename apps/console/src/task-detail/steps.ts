@@ -177,6 +177,10 @@ export function buildSteps(timeline: MacroTaskTimeline | null, runId: string, no
 export function stepForItem(result: Steps, key: string, timeline: MacroTaskTimeline | null): number | null {
   const direct = result.steps.findIndex(step => step.key === key);
   if (direct >= 0) return direct;
+  if (key.startsWith("inquiry:")) {
+    const step = result.steps.findIndex(step => step.span?.inquiries?.some(inquiry => `inquiry:${inquiry.inquiryId}` === key));
+    return step >= 0 ? step : null;
+  }
   if (key.startsWith("settle:")) return result.steps.findIndex(step => step.kind === "acceptance");
   if (key.startsWith("event:")) {
     const event = timeline?.events.find(candidate => `event:${candidate.seq}` === key);

@@ -31,7 +31,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
       await segment.hover();
       await expect(page.locator('[data-slot=timeline-status]')).toContainText(locale === "zh-CN" ? "回合" : "Turn");
       if (shots && locale === "zh-CN" && theme === "light" && width === 1440) await page.screenshot({ path: `${shots}/segment-readout.png` });
-      await selected.click();
+      await selected.dblclick();
       await expect(page.locator('[data-slot=task-detail]')).toBeVisible();
       await expect(page.locator('[data-slot=detail-rail]')).toBeVisible();
       await settle(page);
@@ -41,7 +41,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
       expect(after!.x).toBeCloseTo(before!.x, 0);
       if (width > 760) expect(after!.y).toBeCloseTo(before!.y, 0);
       const selectedColor = await row(page, waiting).evaluate(node => getComputedStyle(node).backgroundColor);
-      expect(selectedColor).toBe(theme === "light" ? "rgb(220, 237, 226)" : "rgb(36, 59, 46)");
+      expect(selectedColor).toBe(theme === "light" ? "rgb(220, 237, 226)" : "rgb(29, 59, 43)");
       await row(page, waiting).hover();
       expect(await row(page, waiting).evaluate(node => getComputedStyle(node).backgroundColor)).toBe(selectedColor);
       await expectWholeAndApart(page.locator('[data-slot=timeline-detail-stage]'), page.locator('[data-slot=task-detail]'));
@@ -56,7 +56,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
         await names(page).evaluate(node => { node.scrollTop = 0; });
       }
       if (shots && locale === "zh-CN" && width !== 800) await page.screenshot({ path: `${shots}/detail-${theme}-${width}.png` });
-      await row(page, waiting).click();
+      await page.locator('[data-slot=detail-header]').getByRole("button", { name: locale === "zh-CN" ? "收起详情" : "Close detail" }).click();
       await expect(page).toHaveURL(new RegExp(`#tasks/${macro}$`));
       await expect(row(page, waiting)).toBeFocused();
     });
@@ -82,7 +82,7 @@ for (const reducedMotion of ["reduce", "no-preference"] as const) test.describe(
     }
     const pulse = row(page, "preview-run-a3").locator('[data-slot=row-state] > span');
     if (await pulse.count()) expect(await pulse.evaluate(node => getComputedStyle(node).animationName)).toBe(reducedMotion === "reduce" ? "none" : "ping");
-    await row(page, waiting).click();
+    await row(page, waiting).dblclick();
     await settle(page);
     await expect(stage).toHaveCSS("opacity", "1");
     await expect(stage).toHaveCSS("translate", "0px");
@@ -155,7 +155,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) test.d
     const readout = await page.locator('[data-slot=timeline-status]').innerText();
     await expect(page.getByRole("button", { name: readout, exact: true })).toBeFocused();
     await expect(fragment(keys[0]).locator('[data-slot=fragment-focus]')).toHaveCSS("opacity", "1");
-    await page.screenshot({ path: "../../tmp/f2-integration-shots/fragment-focus.png" });
+    await page.screenshot({ path: "../../tmp/polish-shots/fragment-focus.png" });
     await page.keyboard.press("ArrowLeft");
     await expect(selected).toBeFocused();
     await page.keyboard.press("End"); await expect(fragment(keys.at(-1)!)).toBeFocused();

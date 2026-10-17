@@ -8,17 +8,16 @@ import { MacroTaskOverview } from "../MacroTaskOverview";
 import { buddyLabel, clockTime, rowStateInfo } from "../macro-task-display";
 import { formatDuration } from "../i18n/format";
 import type { FriendlyBuddy } from "../macro-task-display";
-import type { MacroTaskSummary, MacroTaskTimeline, TimelineEvent, TimelineRow, TimelineSpan } from "../macro-task-types";
+import type { MacroTaskSummary, MacroTaskTimeline, TimelineRow, TimelineSpan } from "../macro-task-types";
 import { parseTimelineInstant as instant } from "./instant";
 import { timelineScaleInput } from "./scale";
 import { useTimelineZoom } from "./useTimelineZoom";
-import { ChronologicalList } from "./ChronologicalList";
-import { useViewPreference } from "../view-preferences";
-import { Segmented, SegmentedItem } from "../components/ui/segmented";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { Minus, Plus, ScanLine } from "lucide-react";
 import { RowName } from "./RowName";
-import { Axis, Track, spanReadout, eventReadout } from "./Tracks";
+import { markerAt } from "./MarkerCluster";
+import type { TimelineMarker } from "./MarkerCluster";
+import { Axis, Track, spanReadout, markerReadout } from "./Tracks";
 
 export type TaskWorkProps = {
   summary: MacroTaskSummary | null; timeline: MacroTaskTimeline | null; displayObservedAt: string | null;
@@ -33,9 +32,9 @@ export type TaskWorkProps = {
 export function TaskWork(props: TaskWorkProps) {
   const { t } = useTranslation("tasks");
   const { timeline, openedRunId, displayObservedAt } = props;
-  const [listView, setListView] = useViewPreference("timeline.chronological");
   const lastPointerAt = useRef<number | null>(null);
   const [focusKey, setFocusKey] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState(openedRunId);
   useEffect(() => { if (openedRunId !== null) setSelectedRunId(openedRunId); }, [openedRunId]);
   const [shownRunId, setShownRunId] = useState(openedRunId);
@@ -50,7 +49,7 @@ export function TaskWork(props: TaskWorkProps) {
   const [focusedRow, setFocusedRow] = useState<TimelineRow | null>(null);
   const [focusedSpan, setFocusedSpan] = useState<TimelineSpan | null>(null);
   const [pointerX, setPointerX] = useState<number | null>(null);
-  const [activeEvent, setActiveEvent] = useState<TimelineEvent | null>(null);
+  const [activeMarker, setActiveMarker] = useState<TimelineMarker | null>(null);
   const [hoveredSpan, setHoveredSpan] = useState<TimelineSpan | null>(null);
   const [narrow, setNarrow] = useState(false);
   useEffect(() => {
@@ -70,9 +69,25 @@ export function TaskWork(props: TaskWorkProps) {
   const nowMs = instant(displayObservedAt ?? timeline?.observedAt) ?? 0;
   const displayed = useMemo(() => timeline ? { ...timeline, observedAt: displayObservedAt ?? timeline.observedAt } : null, [timeline, displayObservedAt]);
   const input = useMemo(() => displayed ? timelineScaleInput(displayed) : null, [displayed]);
-  const selectedAt = selectedRunId ? Math.min(...(timeline?.spans.filter(span => span.runId === selectedRunId).map(span => instant(span.startAt)).filter((at): at is number => at !== null) ?? []), ...(timeline?.events.filter(event => event.runId === selectedRunId).map(event => instant(event.at)).filter((at): at is number => at !== null) ?? [])) : null;
+  const selectedEvent = timeline?.events.find(event => event.runId === selectedRunId && `event:${event.seq}` === selectedKey);
+  const inquirySpan = timeline?.spans.find(span => span.runId === selectedRunId && span.inquiries?.some(inquiry => `inquiry:${inquiry.inquiryId}` === selectedKey));
+  const selectedInquiry = inquirySpan?.inquiries?.find(inquiry => `inquiry:${inquiry.inquiryId}` === selectedKey);
+  const selectedMarker: TimelineMarker | null = selectedEvent ? { kind: "event", event: selectedEvent, x: 0 }
+    : selectedInquiry && inquirySpan ? { kind: "inquiry", inquiry: selectedInquiry, span: inquirySpan, x: 0 } : null;
+  const selectedSpan = inquirySpan ?? timeline?.spans.find(span => `span:${span.spanId}` === selectedKey);
+  const selectedAt = selectedMarker ? instant(markerAt(selectedMarker)) : selectedSpan ? instant(selectedSpan.startAt) : selectedRunId ? Math.min(...(timeline?.spans.filter(span => span.runId === selectedRunId).map(span => instant(span.startAt)).filter((at): at is number => at !== null) ?? []), ...(timeline?.events.filter(event => event.runId === selectedRunId).map(event => instant(event.at)).filter((at): at is number => at !== null) ?? [])) : null;
+  const modelColors = useMemo(() => {
+    const colors = new Map<string, string>();
+    const executions = (timeline?.spans ?? []).filter(span => span.kind === "execution" && instant(span.startAt) !== null)
+      .sort((a, b) => instant(a.startAt)! - instant(b.startAt)!);
+    for (const span of executions) {
+      const model = span.buddy?.model;
+      if (model && !colors.has(model)) colors.set(model, `var(--model-${colors.size % 6 + 1})`);
+    }
+    return colors;
+  }, [timeline]);
   const { scale, change: zoom, atMinimum, atMaximum } = useTimelineZoom(input, width, timeline?.macroTask.macroTaskId, trackRef, selectedAt !== null && Number.isFinite(selectedAt) ? selectedAt : null, lastPointerAt, nowMs);
-  useEffect(() => { setSelectedRunId(openedRunId); lastPointerAt.current = null; setPointerX(null); }, [timeline?.macroTask.macroTaskId]);
+  useEffect(() => { setSelectedRunId(openedRunId); setSelectedKey(null); lastPointerAt.current = null; setPointerX(null); }, [timeline?.macroTask.macroTaskId]);
   useEffect(() => {
     const element = trackRef.current;
     if (!element || typeof ResizeObserver === "undefined") return;
@@ -111,30 +126,41 @@ export function TaskWork(props: TaskWorkProps) {
     const start = wait ? instant(wait.startAt) : lastEnd || null;
     return [rowStateInfo(row).label, start !== null ? t("openWait", { duration: formatDuration(Math.max(0, nowMs - start)) }) : null, t("turnCount", { n: turns }), buddyLabel(row.buddy, props.buddies)].filter(Boolean).join(" · ");
   };
-  const activeSpan = hoveredSpan ?? (hoveredRow ? null : focusedSpan);
-  const activeRow = hoveredRow ?? focusedRow;
+  const activeSpan = hoveredSpan ?? (hoveredRow ? null : focusedSpan ?? selectedSpan);
+  const activeRow = hoveredRow ?? focusedRow ?? rows.find(row => row.runId === selectedRunId);
   const pointerGap = scale?.breaks.find(gap => pointerX !== null && pointerX >= gap.startX && pointerX <= gap.endX);
-  const pointerLine = pointerX !== null && scale ? pointerGap ? t("drawing.gap", { start: clockTime(pointerGap.startMs), end: clockTime(pointerGap.endMs), duration: formatDuration(pointerGap.endMs - pointerGap.startMs) }) : t("drawing.pointer", { at: clockTime(scale.toTime(pointerX)) }) : null;
-  const facts = activeEvent ? eventReadout(activeEvent) : activeSpan ? t("segment", { label: spanReadout(activeSpan, nowMs, props.buddies, rows.find(row => row.runId === activeSpan.runId)) }) : activeRow ? rowLine(activeRow)
+  const pointerLine = pointerGap ? t("drawing.gap", { start: clockTime(pointerGap.startMs), end: clockTime(pointerGap.endMs), duration: formatDuration(pointerGap.endMs - pointerGap.startMs) }) : null;
+  const marker = activeMarker ?? (!hoveredRow && !hoveredSpan && !focusedRow && !focusedSpan ? selectedMarker : null);
+  const facts = marker ? markerReadout(marker) : activeSpan ? t("segment", { label: spanReadout(activeSpan, nowMs, props.buddies, rows.find(row => row.runId === activeSpan.runId)) }) : activeRow ? rowLine(activeRow)
     : input?.domain ? t("range", { start: clockTime(input.domain.startMs), end: clockTime(input.domain.endMs), n: rows.length }) : t("noTime");
-  const readout = [pointerLine, facts].filter(Boolean).join(" · ");
+  const readout = pointerLine ?? facts;
   const incomplete = timeline && (timeline.filtered || !timeline.scopeComplete || Object.values(timeline.truncated).some(Boolean));
+  const select = (runId: string, key?: string) => {
+    setSelectedRunId(runId); setSelectedKey(key ?? null);
+    setPointerX(null); setHoveredSpan(null); setFocusedSpan(null); setHoveredRow(null); setFocusedRow(null); setActiveMarker(null);
+    if (open && runId !== openedRunId) props.onOpen(runId, key);
+  };
   const renderName = (row: TimelineRow) => <Collapsible key={row.runId} open={openedRunId === row.runId} className={cn("min-w-0", open && openedRunId !== row.runId && "max-[760px]:hidden")}>
     <RowName ref={element => { if (element) rowsRef.current.set(row.runId, element); else rowsRef.current.delete(row.runId); }}
       row={row} tabIndex={tabKey === `row:${row.runId}` ? 0 : -1} selected={selectedRunId === row.runId} open={openedRunId === row.runId} fresh={props.newRunIds.has(row.runId)} buddies={props.buddies}
-      onClick={() => openedRunId === row.runId ? props.onClose() : props.onOpen(row.runId)}
-      onEnter={() => { setPointerX(null); setActiveEvent(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={() => { setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveEvent(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>
-    <CollapsibleContent className="border-l-2 border-live bg-sunk">
+      onClick={() => select(row.runId)} onOpen={() => props.onOpen(row.runId)}
+      onEnter={() => { setPointerX(null); setActiveMarker(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={() => { setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>
+    <CollapsibleContent className="bg-sunk">
       {(openedRunId ?? shownRunId) === row.runId && <div ref={setRailTarget} data-slot="task-steps-drawer"/>}
     </CollapsibleContent>
   </Collapsible>;
-  return <section ref={rootRef} data-slot="task-work" onFocusCapture={event => {
+  return <section ref={rootRef} data-slot="task-work" onKeyDownCapture={event => {
+    // A title tooltip must not consume the detail's close gesture first.
+    if (open && event.key === "Escape" && !(event.target as Element).closest("input, textarea, select, [role=dialog]")) {
+      event.preventDefault(); props.onClose();
+    }
+  }} onFocusCapture={event => {
     const key = (event.target as Element).closest("[data-key]")?.getAttribute("data-key");
-    if (key) { setFocusKey(key); setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveEvent(null); }
+    if (key) { setFocusKey(key); setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); }
   }} onBlurCapture={event => {
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusKey(null);
   }} onKeyDown={event => {
-    if (!open && !listView && ["+", "=", "-", "0"].includes(event.key) && !(event.target as Element).closest("input, textarea, select, [role=dialog]")) {
+    if (!open && ["+", "=", "-", "0"].includes(event.key) && !(event.target as Element).closest("input, textarea, select, [role=dialog]")) {
       event.preventDefault(); zoom(event.key === "0" ? 0 : event.key === "-" ? -1 : 1); return;
     }
     if (!(event.target as Element).closest("[data-slot=task-names], [data-slot=timeline-tracks], [data-slot=timeline-detail-stage]")) return;
@@ -161,9 +187,9 @@ export function TaskWork(props: TaskWorkProps) {
     {props.stale && !props.error && <p role="status" className="border-b bg-hand-wash px-4 py-2 text-xs text-hand">{t("staleTimeline")}</p>}
     {!timeline && props.loading ? <div role="status" className="flex flex-1 animate-pulse items-center justify-center motion-reduce:animate-none">{t("loading")}</div>
       : timeline && rows.length === 0 && !open ? <p className="p-6 text-sm text-ink2">{t("noMicroTasks")}</p> : <>
-        <div className="grid min-h-9 shrink-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-5 gap-y-2 px-4 py-2 text-xs text-ink2 sm:px-6 @min-[720px]:grid-cols-[auto_minmax(0,1fr)_auto]"><Segmented aria-label={t("timelineView")} value={listView ? "list" : "timeline"} onValueChange={value => setListView(value === "list")} className="h-7 text-xs"><SegmentedItem value="timeline" className="py-0">{t("timeline")}</SegmentedItem><SegmentedItem value="list" className="py-0">{t("chronological")}</SegmentedItem></Segmented>
-          <div data-slot="timeline-legend" aria-hidden={open} className={cn("col-span-2 row-start-2 flex flex-wrap gap-4 @min-[720px]:col-span-1 @min-[720px]:col-start-2 @min-[720px]:row-start-1", open && "invisible")}><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-line2 bg-past-wash"/>{t("execution")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t border-ink3"/>{t("wait")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t-2 border-dashed border-hand-mark"/>{t("waiting")}</span><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-hand-mark bg-hand-wash"/>{t("drawing.silentLegend")}</span></div>
-          {!open && !listView && <div className="col-start-2 row-start-1 flex shrink-0 justify-self-end gap-1 @min-[720px]:col-start-3" data-slot="timeline-zoom">{([[-1, Minus, "zoomOut", atMinimum], [1, Plus, "zoomIn", atMaximum], [0, ScanLine, "zoomFit", atMinimum]] as const).map(([direction, Icon, label, unavailable]) => <Tooltip key={label}><TooltipTrigger asChild><Button variant="ghost" size="icon-sm" aria-label={t(label)} aria-disabled={unavailable} onClick={() => zoom(direction)}><Icon aria-hidden="true"/></Button></TooltipTrigger><TooltipContent>{t(label)}</TooltipContent></Tooltip>)}</div>}
+        <div className="grid min-h-9 shrink-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-5 gap-y-2 px-4 py-2 text-xs text-ink2 sm:px-6 @min-[720px]:grid-cols-[auto_minmax(0,1fr)_auto]"><span className="flex h-7 items-center text-sm font-medium text-ink">{t("timeline")}</span>
+          <div data-slot="timeline-legend" aria-hidden={open} className={cn("col-span-2 row-start-2 flex flex-wrap gap-4 @min-[720px]:col-span-1 @min-[720px]:col-start-2 @min-[720px]:row-start-1", open && "invisible")}><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-line2 bg-past-wash"/>{t("execution")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t border-ink3"/>{t("wait")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t-2 border-dashed border-hand-mark"/>{t("waiting")}</span><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-hand-mark bg-hand-wash"/>{t("drawing.silentLegend")}</span><span className="flex items-center gap-1.5"><i className="size-2 rotate-45 border border-ink2"/>{t("drawing.inquiry")}</span><span className="flex items-center gap-1.5"><i className="size-1.5 rounded-full bg-past"/>{t("drawing.eventLegend")}</span><span className="flex items-center gap-1.5"><i className="flex size-4 items-center justify-center rounded-full border border-past">2</i>{t("drawing.clusterLegend")}</span><span className="flex items-center gap-1.5"><i className="h-3 w-4 bg-[repeating-linear-gradient(135deg,var(--sunk)_0_3px,var(--idle-stripe)_3px_4px)]"/>{t("drawing.idleLegend")}</span></div>
+          {!open && <div className="col-start-2 row-start-1 flex shrink-0 justify-self-end gap-1 @min-[720px]:col-start-3" data-slot="timeline-zoom">{([[-1, Minus, "zoomOut", atMinimum], [1, Plus, "zoomIn", atMaximum], [0, ScanLine, "zoomFit", atMinimum]] as const).map(([direction, Icon, label, unavailable]) => <Tooltip key={label}><TooltipTrigger asChild><Button variant="ghost" size="icon-sm" aria-label={t(label)} aria-disabled={unavailable} onClick={() => zoom(direction)}><Icon aria-hidden="true"/></Button></TooltipTrigger><TooltipContent>{t(label)}</TooltipContent></Tooltip>)}</div>}
         </div>
         <div role="region" aria-label={t("timeline")} className="relative grid min-h-0 min-w-0 flex-1 grid-cols-[272px_minmax(0,1fr)] max-[760px]:flex max-[760px]:flex-col">
           <div ref={namesRef} data-slot="task-names" className={cn("min-h-0 min-w-0 overflow-x-hidden overflow-y-auto bg-background pl-6 max-[760px]:px-4", open ? "max-[760px]:max-h-[38dvh] max-[760px]:shrink-0" : "max-[760px]:hidden")}
@@ -173,7 +199,7 @@ export function TaskWork(props: TaskWorkProps) {
             {open && !rows.some(row => row.runId === openedRunId) && <><Button variant="ghost" size="sm" onClick={props.onClose}>{t("closeDetail")}</Button><div ref={setRailTarget} data-slot="task-steps-drawer"/></>}
           </div>
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-            <div ref={trackRef} data-slot="timeline-tracks" aria-hidden={open || listView} inert={open || listView} className={cn("absolute inset-0 overflow-x-auto overflow-y-auto px-4 transition-[opacity,translate] duration-200 motion-reduce:transition-none", open || listView ? "pointer-events-none translate-x-6 opacity-0" : "translate-x-0 opacity-100")}
+            <div ref={trackRef} data-slot="timeline-tracks" aria-hidden={open} inert={open} className={cn("absolute inset-0 overflow-x-auto overflow-y-auto px-4 transition-[opacity,translate] duration-200 motion-reduce:transition-none", open ? "pointer-events-none translate-x-6 opacity-0" : "translate-x-0 opacity-100")}
               onScroll={event => { if (!open && namesRef.current) namesRef.current.scrollTop = event.currentTarget.scrollTop; }}>
               {scale && input && <div data-slot="timeline-canvas" data-ppm={scale.pixelsPerMinute} className="relative min-h-full" style={{ width: scale.widthPx + 16 }} onPointerMove={event => {
                 const target = (event.target as Element).closest("svg");
@@ -182,17 +208,14 @@ export function TaskWork(props: TaskWorkProps) {
                 setPointerX(x); lastPointerAt.current = scale.toTime(x);
                 const runId = target.closest("[data-slot=timeline-row]")?.getAttribute("data-run-id");
                 setHoveredRow(rows.find(row => row.runId === runId) ?? null);
-              }} onPointerLeave={() => { setPointerX(null); setHoveredSpan(null); setHoveredRow(null); setActiveEvent(null); }}>{narrow && <svg aria-hidden="true" data-slot="timeline-break-columns" viewBox={`-8 0 ${scale.widthPx + 16} 1`} preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full">{scale.breaks.map(gap => <rect key={gap.startMs} x={gap.startX} width={gap.endX - gap.startX} height={1} className="fill-sunk"/>)}</svg>}<div className="sticky top-0 z-10 bg-card"><Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs}/></div>
-                {rows.map(row => <div key={row.runId} data-slot="timeline-row" data-run-id={row.runId} className="relative">
+              }} onPointerLeave={() => { setPointerX(null); setHoveredSpan(null); setHoveredRow(null); setActiveMarker(null); }}>{narrow && <svg aria-hidden="true" data-slot="timeline-break-columns" viewBox={`-8 0 ${scale.widthPx + 16} 1`} preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full">{scale.breaks.map(gap => <rect key={gap.startMs} x={gap.startX} width={gap.endX - gap.startX} height={1} className="fill-sunk"/>)}</svg>}<div className="sticky top-0 z-10 bg-card"><Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs} pointerX={pointerX} pointerBounds={{ left: Math.max(0, (trackRef.current?.scrollLeft ?? 0) - 24), right: Math.min(scale.widthPx, (trackRef.current?.scrollLeft ?? 0) + width - 24) }}/></div>
+                {rows.map(row => <div key={row.runId} data-slot="timeline-row" data-run-id={row.runId} onClick={event => { if (!(event.target as Element).closest("[data-key]")) select(row.runId); }} onDoubleClick={event => { if (!(event.target as Element).closest("[data-key]")) props.onOpen(row.runId); }} className={cn("relative transition-colors duration-150 motion-reduce:transition-none", selectedRunId === row.runId && "bg-live-wash")}>
                   {narrow && !open && <div className="sticky left-0 z-10" style={{ width: Math.max(1, width - 32) }}>{renderName(row)}</div>}
-                  <Track boundary={trackRef.current} tabKey={tabKey} selected={selectedRunId === row.runId} row={row} spans={spansByRow.get(row.runId) ?? []} events={timeline!.events.filter(event => event.runId === row.runId)} onEvent={event => { setActiveEvent(event); if (event) setHoveredSpan(null); }} scale={scale} nowMs={nowMs} ongoing={input.nowAtEnd} buddies={props.buddies}
-                    onOpen={props.onOpen} onFocusSpan={span => { setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveEvent(null); setFocusedSpan(span); }} onHover={span => { setActiveEvent(null); setHoveredSpan(span); if (span) setHoveredRow(null); }}/>
+                  <Track boundary={trackRef.current} tabKey={tabKey} selected={selectedRunId === row.runId} row={row} spans={spansByRow.get(row.runId) ?? []} events={timeline!.events.filter(event => event.runId === row.runId)} onMarker={marker => { setActiveMarker(marker); if (marker) setHoveredSpan(null); }} modelColors={modelColors} scale={scale} nowMs={nowMs} ongoing={input.nowAtEnd} buddies={props.buddies}
+                    onOpen={props.onOpen} onSelect={select} onFocusSpan={span => { setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); setFocusedSpan(span); }} onHover={span => { setActiveMarker(null); setHoveredSpan(span); if (span) setHoveredRow(null); }}/>
                 </div>)}
-                {pointerX !== null && <svg data-slot="timeline-pointer" aria-hidden="true" viewBox={`-8 0 ${scale.widthPx + 16} 1`} preserveAspectRatio="none" className="pointer-events-none absolute inset-0 z-20 h-full w-full"><line x1={pointerX} x2={pointerX} y2={1} className="stroke-ink3" vectorEffect="non-scaling-stroke"/></svg>}
+                {pointerX !== null && <svg data-slot="timeline-pointer" aria-hidden="true" viewBox={`-8 0 ${scale.widthPx + 16} 1`} preserveAspectRatio="none" className="pointer-events-none absolute inset-x-0 top-[22px] bottom-0 z-20 h-[calc(100%-22px)] w-full"><line x1={pointerX} x2={pointerX} y2={1} className="stroke-ink3" vectorEffect="non-scaling-stroke"/></svg>}
               </div>}
-            </div>
-            <div data-slot="timeline-list-stage" aria-hidden={open || !listView} inert={open || !listView} className={cn("absolute inset-0 flex min-h-0 min-w-0 flex-col bg-card transition-[opacity,translate] duration-200 motion-reduce:transition-none", !open && listView ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-6 opacity-0")}>
-              {timeline && scale && listView && <ChronologicalList timeline={timeline} scale={scale} nowMs={nowMs} onOpen={props.onOpen}/>}
             </div>
             <div data-slot="timeline-detail-stage" aria-hidden={!open} inert={!open} className={cn("absolute inset-0 flex min-h-0 min-w-0 flex-col border-t border-l bg-card transition-[opacity,translate] duration-200 motion-reduce:transition-none max-[760px]:border-l-0", open ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-6 opacity-0")}>
               {(openedRunId ?? shownRunId) !== null && props.detail((openedRunId ?? shownRunId)!, railTarget, !open)}
