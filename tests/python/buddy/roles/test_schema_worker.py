@@ -271,7 +271,9 @@ class SchemaWorkerTests(NativeRunCase):
         self.assertFalse((root / "output.json").exists())
 
     def test_discovery_errors_need_explicit_boolean_native_stop_evidence(self):
-        control = {"operation": "discover", "harness": "claude", "cwd": str(self.cwd),
+        control = {"operation": "discover", "specification": {
+                       "seam": "run_discovery", "resultKey": "catalog", "unknownResult": {}},
+                   "arguments": {}, "harness": "claude", "cwd": str(self.cwd),
                    "privateRoot": str(self.base), "nativeRoot": str(self.base / "native"), "timeoutSeconds": 1}
         for stopped in (None, False, True, "true"):
             with self.subTest(stopped=stopped):

@@ -1981,6 +1981,8 @@ def run_delete_sessions(*, session_ids: list[str], cwd: str, invocation_root: Pa
                     raise
                 sessions[session_id] = "already-gone"
             else:
+                if not connection.last_result_readable:
+                    raise CodexProtocolError("invalid-protocol", "Codex returned a non-object deletion result")
                 sessions[session_id] = "deleted"
     return sessions
 

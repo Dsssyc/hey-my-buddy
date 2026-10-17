@@ -27,7 +27,9 @@ class ControllerDiscoveryStopTests(unittest.TestCase):
             error.discovery_shutdown_confirmed = stopped
         def read(**kwargs):
             raise error
-        control = {'operation': 'discover', 'harness': 'zcode', 'cwd': '/fixture',
+        control = {'operation': 'discover', 'specification': {
+                       'seam': 'run_discovery', 'resultKey': 'catalog', 'unknownResult': {}},
+                   'arguments': {}, 'harness': 'zcode', 'cwd': '/fixture',
                    'privateRoot': '/fixture', 'nativeRoot': '/fixture/native', 'timeoutSeconds': 1}
         with patch.object(run_controller, 'run_seam', return_value=SimpleNamespace(run_discovery=read)):
             frame, code = run_controller.execute(control, threading.Event(), Path('/fixture/state'))
