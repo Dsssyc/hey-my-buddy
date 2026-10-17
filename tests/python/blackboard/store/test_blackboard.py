@@ -1007,7 +1007,7 @@ class TestPackaging(BoardTestCase):
         self.assertTrue(actual["executable"].startswith(str(runtime_dir)), actual)
         self.assertTrue(os.path.realpath(actual["prefix"]).startswith(root), actual)
         self.assertTrue(os.path.realpath(actual["package"]).startswith(root), actual)
-        self.assertEqual(set(actual["resources"]), {"console.assets", "roles.worker", "roles.router", "roles.lead", "roles.wrap_up"})
+        self.assertEqual(set(actual["resources"]), {"console.assets", "reasons.codes", "roles.worker", "roles.router", "roles.lead", "roles.wrap_up"})
         for name, value in actual["resources"].items():
             self.assertTrue(os.path.realpath(value).startswith(root), actual)
             self.assertTrue(Path(value).exists(), name)
