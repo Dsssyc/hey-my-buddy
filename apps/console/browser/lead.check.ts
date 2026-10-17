@@ -164,7 +164,9 @@ for (const { locale, language, tasks } of [
       await expectReadableStart(row(page, LEAD).locator(":scope > span:last-child > span"), zh ? "等待名下的微任务" : "Waiting for owned micro tasks");
       await expectReadableStart(row(page, WAITING).locator(":scope > span:last-child > span"), zh ? "等待 Lead" : "Waiting for Lead");
       await page.getByRole("button", { name: zh ? "知道了" : "Dismiss", exact: true }).click();
-      await expect(status).toHaveCount(0);
+      // Dismissing this browser's refusal leaves the earlier recorded Lead stop visible.
+      await expect(status).toHaveText(zh ? "正在停止" : "Stopping");
+      await expect(status).toHaveAttribute("aria-description", zh ? "仍有 1 项停止未确认" : "Stops unconfirmed 1");
       await more.click();
       await expect(stop).toBeEnabled();
       await expectNoSidewaysScroll(page);

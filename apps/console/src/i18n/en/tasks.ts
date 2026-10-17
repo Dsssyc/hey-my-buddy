@@ -5,11 +5,12 @@ export const tasks = {
     eventLegend: "Event", clusterLegend: "Clustered markers", idleLegend: "Idle",
     eventCluster: "{{count}} markers",
     stopUnconfirmed: "Stop unconfirmed",
+    stoppedBy: "Stopped by {{actor}}",
     running: "Running {{duration}}", failed: "{{duration}} failed", queue: "Queued {{duration}}",
     expected: "Expected {{duration}}", silent: "Possibly stuck · silent {{duration}}", silence: "Silent {{duration}}", silentLegend: "Possibly stuck",
     waiting: "{{kind}} {{duration}}", inquiry: "Inquiry", inquiryReadout: "Inquiry · {{author}} · {{at}} · {{state}}",
     gap: "Idle {{start}}–{{end}} · {{duration}}", routingMode: "Routing · {{mode}}",
-    events: { dispatch: "Dispatched", decide: "Decision", continue: "Continuation", integrate: "Integration", accept: "Accepted", reject: "Rejected", conclude: "Conclusion", cancel: "Cancelled", takeover: "Takeover" },
+    events: { dispatch: "Dispatched", decide: "Decision", continue: "Continuation", integrate: "Integration", accept: "Accepted", reject: "Rejected", conclude: "Conclusion", takeover: "Takeover" },
   },
 
   waiting: "Waiting on someone", failed: "Failed",

@@ -1,6 +1,6 @@
 import { cn } from "cn";
 import { ChevronRight } from "lucide-react";
-import { forwardRef } from "react";
+import { forwardRef, type FocusEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { StateMark } from "../components/ui/state-mark";
@@ -10,16 +10,16 @@ import type { TimelineRow } from "../macro-task-types";
 
 /** A row keeps the same name, measure and disclosure in both views. */
 export const RowName = forwardRef<HTMLButtonElement, {
-  row: TimelineRow; tabIndex: number; open: boolean; selected: boolean; fresh: boolean; buddies?: readonly FriendlyBuddy[] | null;
-  onClick: () => void; onOpen: () => void; onEnter: () => void; onLeave: () => void; onFocus: () => void; onBlur: () => void;
-}>(function RowName({ row, tabIndex, open, selected, fresh, buddies, onClick, onOpen, onEnter, onLeave, onFocus, onBlur }, ref) {
+  row: TimelineRow; rows: readonly TimelineRow[]; tabIndex: number; open: boolean; selected: boolean; fresh: boolean; buddies?: readonly FriendlyBuddy[] | null;
+  onClick: () => void; onOpen: () => void; onEnter: () => void; onLeave: () => void; onFocus: (event: FocusEvent<HTMLButtonElement>) => void; onBlur: () => void;
+}>(function RowName({ row, rows, tabIndex, open, selected, fresh, buddies, onClick, onOpen, onEnter, onLeave, onFocus, onBlur }, ref) {
   const { t } = useTranslation("tasks");
-  const state = rowStateInfo(row);
+  const state = rowStateInfo(row, rows);
   const title = displayTitle(row.titleSource, row.title);
   const repairTitle = row.fixes ? displayTitle(row.fixesTitleSource!, row.fixesTitle!).fullText : null;
   const repair = row.fixes ? t("fixes", { title: repairTitle }) : null;
-  const tone = row.status === "queued" ? null : row.category === "host" || row.state === "delivered" || row.state === "reconciliation-needed" ? "hand"
-    : row.category === "active" ? "live" : row.state === "failed" || row.status === "failed" || row.acceptanceVerdict === "failed" ? "fail" : "past";
+  const tone = row.status === "queued" ? null : state.tone === "amber" || row.category === "host" || row.state === "delivered" ? "hand"
+    : state.tone === "green" || row.category === "active" ? "live" : row.state === "failed" || row.status === "failed" || row.acceptanceVerdict === "failed" ? "fail" : "past";
   const mark = tone === "live" ? "live" : null;
   const button = <button ref={ref} type="button" data-key={`row:${row.runId}`} data-slot="timeline-row-name" data-run-id={row.runId} data-fixes={row.fixes}
     tabIndex={tabIndex} aria-expanded={open} aria-label={[title.fullText, repair, state.label].filter(Boolean).join(" · ")} onClick={onClick} onDoubleClick={onOpen} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(); } }}
@@ -45,5 +45,5 @@ export const RowName = forwardRef<HTMLButtonElement, {
     </span>
     <span className="block w-full truncate text-xs text-ink3"><span className={cn("mr-1.5", tone === "hand" && "text-hand", mark === "live" && "text-live")}>{state.label}</span>{buddyLabel(row.buddy, buddies)}</span>
   </button>;
-  return row.fixes ? <Tooltip><TooltipTrigger asChild>{button}</TooltipTrigger><TooltipContent side="right" align="start" className="wrap-anywhere text-left">{repairTitle}</TooltipContent></Tooltip> : button;
+  return row.fixes ? <Tooltip><TooltipTrigger asChild onFocus={event => { if (!event.currentTarget.matches(":focus-visible")) event.preventDefault(); }}>{button}</TooltipTrigger><TooltipContent side="right" align="start" className="wrap-anywhere text-left">{repairTitle}</TooltipContent></Tooltip> : button;
 });

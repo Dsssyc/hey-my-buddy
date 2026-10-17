@@ -558,12 +558,13 @@ describe("a Host's decision", () => {
     await ready();
     const names = within(rail()).getAllByRole("button").map(button => button.textContent);
     expect(names.some(name => name!.startsWith("接管"))).toBe(true);
-    expect(names.some(name => name!.startsWith("取消"))).toBe(true);
+    expect(names.some(name => name!.startsWith("Host 停止"))).toBe(true);
     expect(names.some(name => name!.startsWith("换手"))).toBe(true);
     await userEvent.setup().click(step(/^换手/));
     expect(pane().textContent).toContain("gpt-6.1-sol");
     expect(pane().textContent).toContain("claude-opus-5-5");
-    await userEvent.setup().click(step(/^取消/));
+    await userEvent.setup().click(step(/^Host 停止/));
+    expect(within(pane()).getByRole("heading", { level: 3, name: "Host 停止" })).toBeTruthy();
     expect(pane().textContent).toContain("Host 停止");
     expect(pane().textContent).toContain("不再需要");
   });

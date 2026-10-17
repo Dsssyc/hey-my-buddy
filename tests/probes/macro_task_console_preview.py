@@ -165,7 +165,8 @@ EMIT_LAYOUT = {
                "workflow-preview-run-a1.json", "workflow-preview-run-a2.json",
                "workflow-preview-run-b1-h1.json", "workflow-preview-run-b1.json",
                "workflow-preview-run-b2.json", "workflow-preview-run-b3.json",
-               "workflow-preview-run-b4.json", "workflow-preview-run-b5.json"),
+               "workflow-preview-run-b4.json", "workflow-preview-run-b5.json",
+               "workflow-preview-run-b6.json", "workflow-preview-run-b7.json", "workflow-preview-run-b8.json"),
     "readonly": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "truncated": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "error": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
@@ -271,19 +272,24 @@ def digest(tag: str) -> str:
 def attempt(attempt_id: str, turn_index: int, state: str, confirmed: bool, started: str,
             finished: str | None, buddy: dict | None, *, error: str | None = None,
             result: str | dict | None = None, disposition: str = "completed",
-            usage: dict | None = None, expected_seconds: int = 1800) -> dict:
+            usage: dict | None = None, expected_seconds: int = 1800,
+            stop_initiator: str | None = None, cancel_requested_at: str | None = None,
+            grace_deadline: str | None = None, result_status: str | None = None,
+            termination_reason: str | None = None) -> dict:
     # `result` is the stored worker receipt: {"status", "result", "shutdownConfirmed"},
     # exactly what store.task_result unpacks; the adapter payload nests under `result`.
     # `usage` is the ADR-018 per-attempt token usage: null when the record is
     # unknown, never a synthetic zero.
-    receipt = None if result is None else {"status": "failed" if error else "ok",
+    receipt = None if result is None else {"status": result_status or ("failed" if error else "ok"),
                                            "result": result if isinstance(result, dict) else {"finalText": result}, "shutdownConfirmed": confirmed,
-                                           "terminationReason": "harness-error" if error else "completed"}
+                                           "terminationReason": termination_reason or ("harness-error" if error else "completed")}
     return {"attemptId": attempt_id, "turnId": f"turn-{attempt_id}", "turnIndex": turn_index,
             "generation": turn_index, "state": state, "shutdownConfirmed": confirmed,
             "startedAt": started, "finishedAt": finished, "buddy": buddy,
             "error": error, "result": receipt, "disposition": disposition, "usage": usage,
             "expectedSeconds": expected_seconds,
+            "stopInitiator": stop_initiator, "cancelRequestedAt": cancel_requested_at,
+            "graceDeadline": grace_deadline,
             "uncertain": state == "uncertain" or (state == "finished" and not confirmed)}
 
 
@@ -441,7 +447,8 @@ def run(run_id: str, *, project: str | None, title: str, title_source: str, task
         router_budget_seconds: int | None = None, revision: int = 3,
         buddy_locked: bool = False, delegation_authority: bool = False,
         conclusion: dict | None = None, messages: list[dict] | None = None,
-        continuations: list[dict] | None = None, activity: dict | None = None) -> dict:
+        continuations: list[dict] | None = None, activity: dict | None = None,
+        cancellation: dict | None = None) -> dict:
     return {
         "runId": run_id, "parentRunId": parent, "group": group, "project": project, "title": title,
         "titleSource": title_source, "task": task_text, "createdAt": created, "updatedAt": updated,
@@ -459,6 +466,7 @@ def run(run_id: str, *, project: str | None, title: str, title_source: str, task
         "delegationAuthority": delegation_authority,
         "hostConclusion": conclusion, "messages": messages or [], "continuations": continuations or [],
         "activity": activity,
+        "cancellation": cancellation,
         "kind": ("decision" if adapter == "decision" else "execution") if not micro_task else (
             "helper" if parent is not None else "micro-task"),
     }
@@ -782,7 +790,10 @@ def build_runs() -> dict[str, dict]:
             attempts=[attempt("att-b1h-1", 1, "finished", True, instant(3, 11), instant(3, 25), CFG_GLM,
                               error="synthetic preview cancellation: Host cancelled the helper",
                               result="synthetic preview cancellation: Host cancelled the helper",
-                              usage=usage("zcode-native", 2500, 1500, 300))],
+                              usage=usage("zcode-native", 2500, 1500, 300),
+                              stop_initiator="host", cancel_requested_at=instant(3, 24, 30),
+                              grace_deadline=instant(3, 25, 15), result_status="cancelled", termination_reason="wrap-up")],
+            cancellation={"actor": host_actor(HOST_B), "reason": "Host 接手剩余工作"},
             artifacts=[artifact("art-b1h-partial", "att-b1h-1", digest("b1h-partial-output")[:40],
                                 "/synthetic-preview/diffs/b1h.partial.diff",
                                 ["harnesses/dsh/plugins/sandbox-rules.md"],
@@ -797,7 +808,7 @@ def build_runs() -> dict[str, dict]:
                                        artifact_id="art-b1h-partial", integration_id=None,
                                        actor=host_actor(HOST_B), created_at=instant(3, 25), run_revision=3),
             markers=[marker(instant(3, 10), "dispatch", actor=host_actor(HOST_B)),
-                     marker(instant(3, 25), "cancel", actor=host_actor(HOST_B), summary="cancelled"),
+                     marker(instant(3, 24, 30), "cancel", actor=host_actor(HOST_B), stopInitiator="host", summary="cancelled"),
                      marker(instant(3, 26), "conclude", actor=host_actor(HOST_B), summary="cancelled")]),
         run("preview-run-b2", project="beta", group=MACRO_B, hosts=(None, None),
             lead_owner=("preview-run-b1", "turn-att-b1-2"),
@@ -862,7 +873,7 @@ def build_runs() -> dict[str, dict]:
             lead_owner=("preview-run-b3", "turn-att-b3-1"), title="确认路径样例范围", title_source="title",
             task_text="核对合成路径样例，遇到范围差异时请求 Lead 决定。",
             created=instant(7, 10), updated=instant(7, 25), state="awaiting-host", status="completed",
-            category="host", buddy=CFG_GLM, result=True, active_request=LEAD_REQUEST,
+            category="active", buddy=CFG_GLM, result=True, active_request=LEAD_REQUEST,
             result_summary="合成预览：已交回范围请求，等待 Lead 决定",
             spans=[
                 span("queue:att-b4-1", "queue", instant(7, 10), instant(7, 11), "admitted",
@@ -884,6 +895,56 @@ def build_runs() -> dict[str, dict]:
             category="active", buddy=CFG_FLASH,
             spans=[span("queue:preview-run-b5", "queue", instant(7, 12), None, "queued")],
             markers=[marker(instant(7, 12), "dispatch", actor={"role": "lead", "id": "preview-run-b3"})]),
+        run("preview-run-b6", project="beta", group=MACRO_B, hosts=(None, None),
+            lead_owner=("preview-run-b3", "turn-att-b3-1"), title="停止重复的路径核对", title_source="title",
+            task_text="核对重复的路径样例，Lead 确认范围重复后停止。",
+            created=instant(7, 13), updated=instant(7, 19), state="cancelled", status="cancelled",
+            category="ended", buddy=CFG_GLM, result=True,
+            result_summary="合成预览：已按 Lead 的请求收尾并确认停止",
+            cancellation={"actor": {"role": "lead", "id": "preview-run-b3"}, "reason": "路径样例与已有核对重复"},
+            spans=[span("execution:att-b6-1", "execution", instant(7, 14), instant(7, 19), "finished",
+                        attempt_id="att-b6-1", buddy=CFG_GLM, confirmed=True, generation=1,
+                        turn_index=1, result_status="cancelled")],
+            attempts=[attempt("att-b6-1", 1, "finished", True, instant(7, 14), instant(7, 19), CFG_GLM,
+                              result="合成预览：已收尾。", result_status="cancelled", termination_reason="wrap-up",
+                              usage=usage("zcode-native", 1800, 500, 200),
+                              stop_initiator="lead", cancel_requested_at=instant(7, 18, 30), grace_deadline=instant(7, 19, 15))],
+            markers=[marker(instant(7, 13), "dispatch", actor={"role": "lead", "id": "preview-run-b3"}),
+                     marker(instant(7, 18, 30), "cancel", actor={"role": "lead", "id": "preview-run-b3"},
+                            stopInitiator="lead", summary="路径样例与已有核对重复")]),
+        # Lead stopped its owned run first. Host then stopped the Lead; its own
+        # process is confirmed gone while the owned execution is still wrapping up.
+        run("preview-run-b7", project="beta", group=MACRO_B, hosts=(HOST_B, HOST_B),
+            title="Lead 停止平台核对", title_source="title", task_text="协调另一批平台核对并停止名下的微任务。",
+            created=instant(9, 44), updated=instant(9, 59, 50), state="cancelled", status="cancelled",
+            category="ended", buddy=CFG_CODEX, delegation_authority=True, result=True,
+            cancellation={"actor": host_actor(HOST_B), "reason": "停止本批平台核对"},
+            spans=[span("execution:att-b7-1", "execution", instant(9, 45), instant(9, 59, 50), "finished",
+                        attempt_id="att-b7-1", buddy=CFG_CODEX, confirmed=True, generation=1,
+                        turn_index=1, result_status="cancelled")],
+            attempts=[attempt("att-b7-1", 1, "finished", True, instant(9, 45), instant(9, 59, 50), CFG_CODEX,
+                              result="合成预览：已请求停止名下微任务，自身已收尾。", result_status="cancelled",
+                              usage=usage("codex-native", 3500, 1200, 400),
+                              termination_reason="wrap-up", stop_initiator="host",
+                              cancel_requested_at=instant(9, 59, 40), grace_deadline=instant(10, 0, 25))],
+            markers=[marker(instant(9, 44), "dispatch", actor=host_actor(HOST_B)),
+                     marker(instant(9, 59, 40), "cancel", actor=host_actor(HOST_B),
+                            stopInitiator="host", summary="停止本批平台核对")]),
+        run("preview-run-b8", project="beta", group=MACRO_B, hosts=(None, None),
+            lead_owner=("preview-run-b7", "turn-att-b7-1"), title="等待平台核对停止", title_source="title",
+            task_text="核对平台样例，停止后须交回真实的进程退出证据。",
+            created=instant(9, 46), updated=instant(9, 59, 40), state="cancelled", status="cancelling",
+            category="active", buddy=CFG_GLM, shutdown_confirmed=False,
+            cancellation={"actor": {"role": "lead", "id": "preview-run-b7"}, "reason": "Lead 停止这条平台核对"},
+            spans=[span("execution:att-b8-1", "execution", instant(9, 47), None, "executing",
+                        attempt_id="att-b8-1", buddy=CFG_GLM, confirmed=False, generation=1, turn_index=1)],
+            attempts=[attempt("att-b8-1", 1, "executing", False, instant(9, 47), None, CFG_GLM,
+                              usage=usage("zcode-native", None, None, None),
+                              stop_initiator="lead", cancel_requested_at=instant(9, 59, 30),
+                              grace_deadline=instant(10, 0, 15))],
+            markers=[marker(instant(9, 46), "dispatch", actor={"role": "lead", "id": "preview-run-b7"}),
+                     marker(instant(9, 59, 30), "cancel", actor={"role": "lead", "id": "preview-run-b7"},
+                            stopInitiator="lead", summary="Lead 停止这条平台核对")]),
         run(STANDALONE, project="beta", hosts=(HOST_B, HOST_B2),
             title="修复标题回退在 CRLF 输入下的显示", title_source="task",
             task_text="修复标题回退在 CRLF 输入下的显示，并补充回归测试。",
@@ -1031,11 +1092,7 @@ FIXTURES = build_runs()
 # Thin projections: fixture record -> console DTO                              #
 # --------------------------------------------------------------------------- #
 def shutdown_view(entry: dict) -> dict:
-    """Recorded stop evidence over the micro task helper lineage.
-
-    Only micro task helpers belong to the collaboration shutdown tree;
-    routing attempts retain their own execution evidence.
-    """
+    """Recorded stop evidence over helpers and Lead-owned micro tasks, excluding routing."""
     unconfirmed: list[str] = []
     stack = [entry]
     while stack:
@@ -1043,7 +1100,9 @@ def shutdown_view(entry: dict) -> dict:
         if not current["shutdownConfirmed"]:
             unconfirmed.append(current["runId"])
         stack.extend(child for child in FIXTURES["runs"].values()
-                     if child["kind"] in ("micro-task", "helper") and child["parentRunId"] == current["runId"])
+                     if child["kind"] in ("micro-task", "helper")
+                     and (child["parentRunId"] == current["runId"]
+                          or child["leadOwner"] is not None and child["leadOwner"][0] == current["runId"]))
     own = entry["shutdownConfirmed"]
     return {"selfConfirmed": own, "descendantsConfirmed": unconfirmed == ([] if own else [entry["runId"]]),
             "unconfirmedRunIds": unconfirmed[:32], "unconfirmedCount": len(unconfirmed), "truncated": False}
@@ -1051,7 +1110,6 @@ def shutdown_view(entry: dict) -> dict:
 
 def attempt_view(entry: dict, item: dict) -> dict:
     buddy = item["buddy"]
-    cancelled = entry["status"] == "cancelled"
     return {
         "attemptId": item["attemptId"], "taskId": entry["runId"], "generation": item["generation"],
         "workerId": "synthetic-worker-1", "workerIdentity": "synthetic preview worker (fixture)",
@@ -1059,7 +1117,8 @@ def attempt_view(entry: dict, item: dict) -> dict:
         "executionState": item["state"], "ownership": "owned",
         "runtimeIdentity": None, "leaseExpiresAt": None, "leaseSeconds": 900, "logPaths": {},
         "resultAvailable": item["result"] is not None, "shutdownConfirmed": item["shutdownConfirmed"],
-        "cancelRequested": cancelled, "cancelRequestedAt": entry["updatedAt"] if cancelled else None,
+        "cancelRequested": item["cancelRequestedAt"] is not None, "cancelRequestedAt": item["cancelRequestedAt"],
+        "stopInitiator": item["stopInitiator"], "graceDeadline": item["graceDeadline"],
         "exitCode": 0 if item["state"] == "finished" else None, "signal": None, "error": item["error"],
         "startedAt": item["startedAt"], "finishedAt": item["finishedAt"], "createdAt": item["startedAt"],
         "updatedAt": item["finishedAt"] or item["startedAt"], "revision": 1,
@@ -1099,6 +1158,9 @@ def task_view(entry: dict) -> dict:
         "createdAt": entry["createdAt"], "updatedAt": entry["updatedAt"], "acceptedAt": entry["acceptedAt"],
         "acceptanceNote": None, "acceptanceVerdict": entry["acceptanceVerdict"],
         "resultAvailable": receipt is not None, "shutdownConfirmed": entry["shutdownConfirmed"],
+        "cancellation": entry["cancellation"],
+        "stopInitiator": selected["stopInitiator"] if selected else None,
+        "graceDeadline": selected["graceDeadline"] if selected else None,
         "activity": entry["activity"], "lineage": entry["lineage"], "artifacts": entry["artifacts"],
         "artifactCount": len(entry["artifacts"]), "inquiries": {},
         # ADR-018: the selected attempt's per-attempt usage, also inside
@@ -1116,15 +1178,13 @@ def task_view(entry: dict) -> dict:
         view["attemptState"] = selected["state"]
         view["workerId"] = "synthetic-worker-1"
         view["logPaths"] = {}
-        view["cancelRequested"] = entry["status"] == "cancelled"
+        view["cancelRequested"] = selected["cancelRequestedAt"] is not None
     if receipt is not None:
         # The route merges `task_result`: the adapter payload at `result` and the
         # receipt's remaining fields at `resultMeta`.
         view.update({"result": receipt["result"],
                      "resultMeta": {key: value for key, value in receipt.items() if key != "result"},
                      "attemptId": selected["attemptId"], "resultDelivered": True})
-    if entry['state'] == 'cancelled' or entry['status'] == 'cancelled':
-        view['cancellation'] = {'actor': host_actor(HOST_B), 'reason': 'Host 接手剩余工作'} if entry['runId'] == 'preview-run-b1-h1' else None
     return view
 
 
@@ -1257,6 +1317,7 @@ def workflow_view(entry: dict) -> dict:
                                  if item["final"]), None),
         "finalAttemptId": (entry["attempts"][-1]["attemptId"]
                            if entry["resultAvailable"] and entry["attempts"]
+                           and entry["state"] != "cancelled"
                            and entry["attempts"][-1]["disposition"] == "completed" else None),
         "task": task_view(entry),
     }
@@ -2664,7 +2725,8 @@ def emit_fixture_files() -> list[dict]:
     timeline_endpoint = "GET /api/macro-tasks/<macroTaskId>/timeline"
     workflow_endpoint = "POST /api/command workflow_get"
     workflows = {"normal": ("preview-run-a1", "preview-run-a2", "preview-run-b1", "preview-run-b1-h1",
-                            "preview-run-b2", "preview-run-b3", "preview-run-b4", "preview-run-b5"),
+                            "preview-run-b2", "preview-run-b3", "preview-run-b4", "preview-run-b5",
+                            "preview-run-b6", "preview-run-b7", "preview-run-b8"),
                  "readonly": ("preview-run-a1",), "truncated": ("preview-run-a1",),
                  "error": ("preview-run-a1",)}
     for scenario in EMIT_SCENARIOS:

@@ -1,4 +1,8 @@
 import { test as base, expect, type Locator, type Page } from "@playwright/test";
+import { fileURLToPath } from "node:url";
+
+/** All browser captures stay in this checkout, regardless of the runner's cwd. */
+export const screenshots = fileURLToPath(new URL("../../../tmp/step4-small-shots", import.meta.url));
 
 /**
  * Every check also fails on a page error or an error in the browser console,

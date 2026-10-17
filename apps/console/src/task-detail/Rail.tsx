@@ -2,6 +2,7 @@ import { cn } from "cn";
 import { useTranslation } from "react-i18next";
 import { StateMark } from "@/components/ui/state-mark";
 import { actorRoleText } from "../actor";
+import { eventName } from "../macro-task-display";
 import { formatClockMinutes, formatDuration } from "../i18n/format";
 import type { Step, Steps, Wait } from "./steps";
 import { modelEffort } from "./names";
@@ -41,7 +42,7 @@ function Entry({ step, selected, index, last, onSelect, buddyName, lead, reminde
 }) {
   const { t } = useTranslation("taskDetail");
   const shell = useTranslation("shell").t;
-  const name = step.kind === "turn" ? t("step.turn", { n: step.turnIndex }) : t(`step.${step.kind}`);
+  const name = step.kind === "turn" ? t("step.turn", { n: step.turnIndex }) : step.kind === "cancel" ? eventName(step.events[0]!) : t(`step.${step.kind}`);
   const owner = step.events[0]?.actor;
   const small = step.kind === "handoff" ? [modelEffort(step.from), modelEffort(step.to)].filter(Boolean).join(" → ")
     : buddyName(step) ?? (owner ? `${actorRoleText(owner.role)} · ${owner.id}` : null);

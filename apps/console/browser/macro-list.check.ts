@@ -2,10 +2,10 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { expectNoSidewaysScroll, open, settle, test } from "./preview";
+import { screenshots as shots, expectNoSidewaysScroll, open, settle, test } from "./preview";
 
 const A = "macro-11111111-1111-4111-8111-111111111111";
-const shots = process.env.HMB_LIST_SHOTS;
+const B = "macro-22222222-2222-4222-8222-222222222222";
 
 const words = [
   { locale: "zh-CN", list: "宏任务列表", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", search: "搜索标题、项目、Host 或编号", noMatch: "没有匹配的宏任务", empty: "还没有宏任务", offline: "连接中断", retry: "重试连接", collapse: "收起宏任务列表", expand: "展开宏任务列表", more: "更多", stop: "停止宏任务", time: "时间统计", update: "有新的活动，按最近活动排序" },
@@ -13,7 +13,6 @@ const words = [
 ] as const;
 
 async function photograph(page: Page, name: string, locale: string, width: number, theme: string) {
-  if (!shots) return;
   await settle(page);
   await mkdir(shots, { recursive: true });
   await page.screenshot({ path: join(shots, `actual-${name}-${locale}-${width}-${theme}.png`), animations: "disabled" });
@@ -47,7 +46,6 @@ async function photographMidMotion(page: Page, name: string, scope = "[data-slot
   const contentSlot = name.startsWith("mid-group-") ? "collapsible-content" : name.startsWith("mid-list-") ? "macro-sidebar" : null;
   if (contentSlot) {
     const sample = motion.samples.find(item => item.slot === contentSlot);
-    if (shots) console.log(`${name} midpoint: ${JSON.stringify(sample)}`);
     expect(sample, `${name} animates ${contentSlot}`).toBeDefined();
     expect(sample!.height, `${name} has an intermediate height`).toBeGreaterThan(0);
     expect(Number.isFinite(sample!.naturalHeight), `${name} has a measured full height`).toBe(true);
@@ -64,10 +62,8 @@ async function photographMidMotion(page: Page, name: string, scope = "[data-slot
     expect(edges.sidebarRight, `${name} sidebar stays within its grid column`).toBeLessThanOrEqual(edges.detailLeft + 1);
   }
   await expectNoSidewaysScroll(page);
-  if (shots) {
-    await mkdir(shots, { recursive: true });
-    await page.screenshot({ path: join(shots, `actual-${name}-en-US-1280-light.png`), animations: "allow" });
-  }
+  await mkdir(shots, { recursive: true });
+  await page.screenshot({ path: join(shots, `actual-${name}-en-US-1280-light.png`), animations: "allow" });
   await page.evaluate(() => document.getAnimations().filter(animation => animation.playState === "paused").forEach(animation => animation.play()));
   await settle(page);
 }
@@ -164,7 +160,8 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
     test("groups, filters, search, fold, menu and time statistics stay usable", async ({ page }) => {
       await themeBeforeLoad(page, theme);
       await open(page, "#tasks");
-      await expect(page).toHaveURL(new RegExp(`#tasks/${A}$`));
+      // The Lead stop at 09:59 makes B the preview's most recent macro task.
+      await expect(page).toHaveURL(new RegExp(`#tasks/${B}$`));
       const list = page.locator("[data-slot=macro-list]");
       await expect(list).toBeVisible();
       await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(2);
@@ -198,7 +195,7 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await list.locator("[data-slot=macro-group-heading]").last().click();
       await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(3);
       await list.locator("[data-slot=macro-group-heading]").last().click();
-      await list.locator("[data-macro-task-id]").first().locator("[data-slot=macro-entry]").click();
+      await list.locator(`[data-macro-task-id="${A}"] [data-slot=macro-entry]`).click();
       await expect(page).toHaveURL(new RegExp(`#tasks/${A}$`));
       await assertHeaderGeometry(page);
       await photograph(page, "detail", w.locale, width, theme);

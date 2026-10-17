@@ -29,6 +29,13 @@ describe("recorded row state", () => {
     expect(rowStateInfo({ state: "awaiting-host", rootLeadRunId: "lead-1" } as TimelineRow).label).toBe("等待 Lead");
     expect(rowStateInfo({ state: "waiting-owned" } as TimelineRow).label).toBe("等待名下的微任务");
   });
+  it("keeps a cancelled Lead stopping while its owned execution has no stop evidence", () => {
+    const lead = { runId: "lead", state: "cancelled", status: "cancelled", shutdownConfirmed: true } as TimelineRow;
+    const owned = { runId: "owned", rootLeadRunId: lead.runId, state: "cancelled", status: "cancelling", shutdownConfirmed: false } as TimelineRow;
+    expect(rowStateInfo(owned, [lead, owned]).label).toBe("正在停止");
+    expect(rowStateInfo(lead, [lead, owned]).label).toBe("正在停止");
+    expect(rowStateInfo(lead, [lead, { ...owned, status: "cancelled", shutdownConfirmed: true }]).label).toBe("已取消");
+  });
 });
 
 describe("0.16 acceptance wait (P1.8)", () => {

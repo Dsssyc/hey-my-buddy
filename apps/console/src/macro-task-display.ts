@@ -2,7 +2,14 @@ import i18n from "i18next";
 import { locale } from "./i18n";
 import { parseTimelineInstant } from "./timeline/instant";
 import { excerpt } from "./task-state";
-import type { TimelineBuddy, TimelineRow, TimelineSpan } from "./macro-task-types";
+import { actorRoleText } from "./actor";
+import type { TimelineBuddy, TimelineEvent, TimelineRow, TimelineSpan } from "./macro-task-types";
+
+/** The same recorded event has one name on the timeline and in its detail. */
+export function eventName(event: TimelineEvent): string {
+  return event.kind === "cancel" ? i18n.t("tasks:drawing.stoppedBy", { actor: actorRoleText(event.actor?.role) })
+    : i18n.t(`tasks:drawing.events.${event.kind}`);
+}
 
 /** Recorded execution states that keep a null-ended span visually open. */
 const OPEN_EXECUTION_STATES = new Set(["starting", "executing", "finalizing", "running", "active"]);
@@ -62,6 +69,7 @@ const ROW_STATE_STYLE: Record<string, { tone: "green" | "amber" | "red" | "neutr
   delivered: { tone: "neutral", glyph: "✓", glyphClass: "muted" },
   accepted: { tone: "neutral", glyph: "✓", glyphClass: "ok" },
   cancelled: { tone: "neutral", glyph: "⊘", glyphClass: "muted" },
+  cancelling: { tone: "green", glyph: "▸", glyphClass: "running" },
   failed: { tone: "red", glyph: "✕", glyphClass: "bad" },
   "reconciliation-needed": { tone: "amber", glyph: "?", glyphClass: "warn" },
 };
@@ -74,11 +82,12 @@ const STATE_LABELS: Record<string, string> = {
   get delivered() { return i18n.t("console:awaitingAcceptance"); }, get accepted() { return i18n.t("console:accepted"); }, get concluded() { return i18n.t("console:ended"); },
 };
 
-export function rowStateInfo(row: TimelineRow): { label: string; tone: "green" | "amber" | "red" | "neutral"; glyph: string; glyphClass: string } {
-  const key = row.state || row.status;
+export function rowStateInfo(row: TimelineRow, rows: readonly TimelineRow[] = []): { label: string; tone: "green" | "amber" | "red" | "neutral"; glyph: string; glyphClass: string } {
+  const key = row.status === "cancelling" || row.state === "cancelled" && rows.some(owned => owned.rootLeadRunId === row.runId && !owned.shutdownConfirmed)
+    ? "cancelling" : row.state || row.status;
   const style = ROW_STATE_STYLE[key];
   return {
-    label: key === "awaiting-host" && row.rootLeadRunId ? i18n.t("console:waitingForLead") : STATE_LABELS[key] || key || i18n.t("console:unknown"),
+    label: key === "cancelling" ? i18n.t("tasks:stopping") : key === "awaiting-host" && row.rootLeadRunId ? i18n.t("console:waitingForLead") : STATE_LABELS[key] || key || i18n.t("console:unknown"),
     tone: style?.tone ?? "neutral",
     glyph: style?.glyph ?? "■",
     glyphClass: style?.glyphClass ?? "muted",
