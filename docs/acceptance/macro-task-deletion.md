@@ -103,3 +103,19 @@
 - **未验证：** Windows 上在持有锁文件的情况下改名记录目录，没有验证；日常规模副本上的删除演练在微任务 5 接通之后、安装之前做。
 - **仍待开发者定：** Codex CLI 不可用时删除停在“删除中”，还是删完并列出留下的会话（B3）。
 - **消耗：** 三个回合输入 2,880 万，其中命中缓存 2,844 万，输出 9.7 万。
+
+## 微任务 5：控制台后端与契约
+
+- **微任务：** “删除宏任务5：控制台后端与契约”（run `cb02e138`，经路由，Router 选了 Codex CLI 的 `gpt-6.1-sol / max`，两个回合）。
+- **基点与合并：** 基点 `7cb01e5e`。第一回合 `9e8c21d4`，合并后 `buddy/roles/test_registered_run_wiring.py` 失败：它还按旧的形状给控制进程传控制文件，带着删掉的 `specification`。这个文件在写入范围里，实现方没有跑到，打回；第二回合 `b8236ef6` 只改了这一处。合并在 `socu/batch2` 上（`1b9ac34a`、`84bcac73`）。
+- **做了什么：**
+  - 两个命名的 C-Two 操作 `macro_task_deletion_preview {macroTaskId}` 与 `macro_task_delete {macroTaskId, microTaskCount, confirm: true}`，照 `macro_task_stop` 登记在服务的操作列表、`BuddyControl` 与控制台的 `CONSOLE_OPERATIONS`；只有控制台会话能用，服务 token 与 Host 的 controlToken 回 `UNAUTHORIZED`，Worker 的凭据在服务的操作白名单上就回 `FORBIDDEN`；CLI 与 skill 没有入口；
+  - 编号只收 `macro-` 或 `run:`，校验从引擎内部挪到了请求的边界；
+  - HTTP 状态：未了结、共享、忙、存储忙、删除中为 409，已删除为 410；
+  - 删除的回复改用有结构的原因：阻塞项、跳过项与删除未完成各带一个 `reason`，新登记 22 个 `macro-task-deletion.*` 代码，只有 `physical-failed` 带 `errorCode`；阻塞项的 `resolution` 由原因决定，删掉；
+  - 修了微任务 4 留下的回归：操作表只有一份（`run_controller.NATIVE_OPERATIONS`），两边按操作名查；控制文件只带操作名与参数，未知的操作名在调用任何 seam 之前回 `INVALID_ARGUMENT`，控制文件里的未知字段同样拒绝；
+  - 版本 0.46.0：`pyproject.toml`、`uv.lock`、`CONTRACT_VERSION` 与签名摘要。
+- **核对：** 差异读过；合并后 blackboard、`buddy/roles`、Codex 适配器、console、protocol 与 cli 共 196 个文件 2,946 项，第一回合只有上面那一个文件失败；第二回合之后引用运行控制器的全部文件与 `buddy/roles` 共 19 个文件 214 项通过。
+- **顺带项：** `run_execution._native_operation` 按 `allowUnknown` 在通用路径里拼出模型发现专用的“未知”结果，还带着字符串原因；与原因1留下的那一条（`native-metadata-wait-expired`）一起改，结果由 `discover_models` 自己给出。控制台的合成预览还不认这两个操作，批次三做删除入口时一起补上。
+- **还没做：** 日常规模的私有副本演练（计划第 11 节），在批次二的升级定稿之后、安装之前与升级演练一起做。
+- **消耗：** 两个回合输入 734 万，其中命中缓存 711 万，输出 4.0 万。
