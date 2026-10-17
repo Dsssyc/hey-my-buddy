@@ -8,6 +8,7 @@ since ADR-021 decision 18, so no DSH listing or native archive exists.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 
 from ...errors import BoardError
@@ -30,18 +31,29 @@ def _completed_codex_turn(result: dict, row) -> dict | None:
     return turn
 
 
-def _inventory(store, task_ids: set[str] | None = None) -> list[dict]:
+def _inventory(store, task_ids: set[str] | None = None, *, connection=None) -> list[dict]:
     if task_ids is not None and not task_ids:
         return []
+    with store.db.read() if connection is None else nullcontext(connection) as snapshot:
+        rows = _session_receipts(snapshot,task_ids)
+    return _created_sessions(rows)
+
+
+def _session_receipts(connection, task_ids: set[str] | None = None, *, session_ids=None) -> list[dict]:
+    """Read bound native identities within the caller's existing snapshot."""
     rows = []
-    selected = sorted(task_ids) if task_ids is not None else []
-    task_filter = " AND a.task_id IN (" + ",".join("?" for _ in selected) + ")" if selected else ""
-    with store.db.read() as db:
-        attempts = db.execute(
-            "SELECT a.attempt_id,a.task_id,a.execution_state,a.shutdown_confirmed,a.result_json "
-            "FROM attempts a WHERE a.adapter='codex' AND a.result_json IS NOT NULL" + task_filter
-            + " ORDER BY a.attempt_id", selected
-        ).fetchall()
+    task_filter = " AND a.task_id IN (SELECT value FROM json_each(?))" if task_ids is not None else ""
+    args = [json.dumps(sorted(task_ids))] if task_ids is not None else []
+    if session_ids is not None:
+        valid = "CASE WHEN json_valid(a.result_json) THEN a.result_json END"
+        task_filter += (f" AND (json_extract({valid},'$.result.nativeSession.sessionId') IN (SELECT value FROM json_each(?))"
+                        f" OR json_extract({valid},'$.result.turn.sessionId') IN (SELECT value FROM json_each(?)))")
+        args.extend([json.dumps(sorted(session_ids))] * 2)
+    attempts = connection.execute(
+        "SELECT a.attempt_id,a.task_id,a.execution_state,a.shutdown_confirmed,a.result_json "
+        "FROM attempts a WHERE a.adapter='codex' AND a.result_json IS NOT NULL" + task_filter
+        + " ORDER BY a.attempt_id", args
+    ).fetchall()
     for row in attempts:
         try:
             receipt = json.loads(row['result_json'])
@@ -58,10 +70,6 @@ def _inventory(store, task_ids: set[str] | None = None) -> list[dict]:
                 continue
             session_id = native.get('sessionId')
             if not isinstance(session_id, str) or not session_id or not native.get('captured'):
-                continue
-            # A stored native thread identity plus an own stopped attempt is
-            # provenance. Never infer ownership from an app title or path.
-            if row['execution_state'] != 'finished' or not row['shutdown_confirmed']:
                 continue
             if native.get('storageOwner') not in {'harness-user-store', 'hey-my-buddy-micro-task'}:
                 continue
@@ -82,26 +90,52 @@ def _inventory(store, task_ids: set[str] | None = None) -> list[dict]:
                          'nativeAppVisibility': native.get('nativeAppVisibility')})
         except (TypeError, ValueError, KeyError):
             continue
-    created = {(row['taskId'], row['sessionId']) for row in rows
-               if row['resumeMode'] in {'initial', 'reconstructed-new-session'}}
+    return rows
+
+
+def _created_sessions(rows):
+    rows = [row for row in rows if row['executionState'] == 'finished' and row['shutdownConfirmed']]
+    created = {(row['taskId'],row['sessionId']) for row in rows
+               if row['resumeMode'] in {'initial','reconstructed-new-session'}}
     threads = {}
     for row in rows:
-        key = (row['taskId'], row['sessionId'])
+        key = (row['taskId'],row['sessionId'])
         if key not in created:
             continue
         if key not in threads:
-            threads[key] = {**row, 'attemptIds': []}
+            threads[key] = {**row,'attemptIds':[]}
         threads[key]['attemptIds'].append(row['attemptId'])
     return list(threads.values())
 
 
-def deletable_sessions(store, task_ids: set[str]) -> list[dict]:
+def session_references(connection, session_ids: set[str]) -> list[dict]:
+    """Exact user-store references, including interrupted turns without a receipt.
+
+    Preparing a native continuation writes previous_session_id before its
+    execution returns a result receipt. That pending continuation retains the
+    thread even if its execution has not produced a native receipt yet.
+    """
+    if not session_ids:
+        return []
+    references = [row for row in _session_receipts(connection,session_ids=session_ids)
+                  if row['storageOwner'] == 'harness-user-store']
+    ids = json.dumps(sorted(session_ids))
+    for row in connection.execute(
+            'SELECT t.run_id,t.previous_session_id FROM workflow_turns t'
+            ' JOIN attempts a ON a.attempt_id=t.attempt_id'
+            " WHERE a.adapter='codex' AND a.result_json IS NULL AND t.resume_mode='native-session'"
+            ' AND t.previous_session_id IN (SELECT value FROM json_each(?))',(ids,)):
+        references.append({'taskId':row['run_id'],'harness':'codex','sessionId':row['previous_session_id']})
+    return references
+
+
+def deletable_sessions(store, task_ids: set[str], *, connection=None) -> list[dict]:
     """Proven created sessions in the harness user store for execution task IDs.
 
     Return the inventory records, including task/attempt bindings. Private-root
     sessions are removed with their root by the deletion engine.
     """
-    return [row for row in _inventory(store, task_ids) if row['storageOwner'] == 'harness-user-store']
+    return [row for row in _inventory(store, task_ids, connection=connection) if row['storageOwner'] == 'harness-user-store']
 
 
 def handle(store, params: dict) -> dict:

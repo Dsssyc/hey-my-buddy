@@ -136,6 +136,7 @@ class WindowsFileAPI:
             "inspect": (FILE_READ_ATTRIBUTES, OPEN_EXISTING),
             "create": (GENERIC_WRITE, CREATE_NEW),
             "lock": (GENERIC_READ | GENERIC_WRITE, OPEN_ALWAYS),
+            "lock-existing": (GENERIC_READ | GENERIC_WRITE, OPEN_EXISTING),
             "delete": (DELETE | FILE_READ_ATTRIBUTES, OPEN_EXISTING),
         }[action]
         return self._open(path, access, disposition)
@@ -337,9 +338,9 @@ def symlink(path, target, *, api=None):
         api.symlink(target, path, directory=directory)
 
 
-def lock_fd(path, *, api=None):
+def lock_fd(path, *, create=True, api=None):
     with parent(path, api=api) as (api, path):
-        handle, _ = _open_checked(api, path, action="lock")
+        handle, _ = _open_checked(api, path, action="lock" if create else "lock-existing")
         try:
             return api.fd(handle, os.O_RDWR)
         except BaseException:

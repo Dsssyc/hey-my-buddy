@@ -15,7 +15,6 @@ or stream content is decoded as UTF-8 and parsed directly, never through a shell
 that method actually validates (see :mod:`hey_my_buddy.cli.cli_help`).
 """
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -29,7 +28,7 @@ from pathlib import Path
 from . import cli_help, cli_views
 from ..protocol import transport
 from ..errors import BoardError
-from ..home import control_file_path
+from ..home import control_file_path, submission_file_path
 from ..install.launcher import agent_credential_document, credential_state_dir, take_agent_credential_document
 from ..protocol.transport import METHOD_MAP, _call_service, get_state_dir
 
@@ -374,8 +373,8 @@ def _submission_token(request_id: object, params: dict, state_dir: Path) -> str:
     directory = state_dir / "submissions"
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory.chmod(0o700)
-    name = hashlib.sha256(request_id.encode("utf-8")).hexdigest()[:32]
-    path = directory / f"{name}.json"
+    path = submission_file_path(state_dir, request_id)
+    name = path.stem
     token = secrets.token_hex(32)
     payload = json.dumps({"requestId": request_id, "submissionToken": token}, sort_keys=True).encode("utf-8")
     # Write the complete record first, then publish it atomically with a hard link:

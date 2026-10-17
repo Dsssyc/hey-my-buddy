@@ -1,8 +1,11 @@
 """Workflow receipt identities replay against an advancing private board."""
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 from pathlib import Path
+import shutil
+from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from blackboard.tasks import test_scope_recovery as scope_fixtures
@@ -11,6 +14,7 @@ from blackboard.tasks.test_workflow_real import RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks.command_receipts import replay_response, stored_response
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.blackboard.tasks import workspace as workspace_module
+from hey_my_buddy.blackboard.tasks import macro_task_deletion
 from hey_my_buddy.errors import BoardError
 
 
@@ -31,6 +35,66 @@ def replay(board, kind, response):
 
 
 class WorkflowReceiptTests(WorkflowTestCase):
+    def test_deleted_decision_and_cancel_replay_before_run_lookup(self):
+        board = self.board()
+        submitted = self.submit(board, request_id="delete-replay", macroTask={"title": "Disposable"})
+        self.finish_turn(board, self.claim(board), disposition="attention")
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        decision_params = {
+            "runId": submitted["runId"], "requestId": view["activeRequest"]["requestId"],
+            "commandId": "deleted-decision", "expectedRevision": view["revision"],
+            "decision": "decline", "autoContinue": False, **self.control(view),
+        }
+        board.call("workflow_decide", decision_params)
+        cancel_params = {"runId": submitted["runId"], "commandId": "deleted-cancel",
+                         "reason": "Close disposable work", **self.control(view)}
+        cancelled = board.call("workflow_cancel", cancel_params)
+        board.call("workflow_conclude", {"runId": submitted["runId"],
+                                         "note": "Reviewed the failure", **self.control(cancelled)})
+        with ExitStack() as stack:
+            for stage in ("_delete_sessions", "_delete_workspaces",
+                          "_delete_private_roots", "_delete_cli_files"):
+                stack.enter_context(patch.object(macro_task_deletion, stage, return_value=[]))
+            macro_task_deletion.delete(board.store, submitted["macroTaskId"], 1)
+        expected = {"commandId": "deleted-decision", "deleted": True}
+        self.assertEqual(board.call("workflow_decide", {**decision_params, "expectedRevision": 999}), expected)
+        self.assertEqual(board.call("workflow_cancel", {**cancel_params, "reason": "Different reason"}),
+                         {"commandId": "deleted-cancel", "deleted": True})
+
+    def test_deleted_receipt_checks_identity_without_loading_response(self):
+        board = self.board()
+        params = {"requestId": "deleted-command", "adapter": "command", "task": "Record a command",
+                  "cwd": str(self.workdir()), "argv": ["/bin/true"]}
+        board.store.task_submit(params, command_id="deleted-command-id")
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO macro_task_deletions"
+                " (deletion_id,target_kind,target_id,state,started_at,deleted_at,micro_task_count)"
+                " VALUES('deletion-1','macro-task','macro-old','deleted',?,?,1)",
+                (board.store.now(), board.store.now()),
+            )
+            connection.execute(
+                "UPDATE commands SET response_json='{}',deletion_id='deletion-1' WHERE command_id='deleted-command-id'"
+            )
+        self.assertEqual(board.store.task_submit(params, command_id="deleted-command-id"),
+                         {"commandId": "deleted-command-id", "deleted": True})
+        self.assertEqual(board.store.task_submit({**params, "task": "Different input"}, command_id="deleted-command-id"),
+                         {"commandId": "deleted-command-id", "deleted": True})
+        with board.store.db.read() as connection:
+            with self.assertRaises(BoardError) as caught:
+                board.store._receipt(connection, "deleted-command-id", "task.retry", {})
+        self.assertEqual(caught.exception.code, "CONFLICT")
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE commands SET subject='owner-identity' WHERE command_id='deleted-command-id'")
+        with board.store.db.read() as connection:
+            self.assertEqual(board.store._receipt(connection, "deleted-command-id", "task.submit", {},
+                                                  "owner-identity"),
+                             {"commandId": "deleted-command-id", "deleted": True})
+            for subject in (None, "other-identity"):
+                with self.subTest(subject=subject), self.assertRaises(BoardError) as caught:
+                    board.store._receipt(connection, "deleted-command-id", "task.submit", {}, subject)
+                self.assertEqual(caught.exception.code, "UNAUTHORIZED")
+
     def test_decision_continuation_takeover_and_cancel_keep_commits_with_current_view(self):
         board = self.board()
         submitted = self.submit(board)
@@ -236,3 +300,58 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
         _, applied_replay, _ = replay(board, "workflow.cleanup_apply", applied)
         self.assertTrue(applied_replay["removed"])
         self.assertEqual(applied_replay["retention"], applied["retention"])
+
+    def test_cleanup_apply_accepts_an_already_gone_allocation(self):
+        board = self.board()
+        submitted = self.micro_task_submit(board, request_id="missing-allocation", scope=(".",), kind="worktree")
+        run_id = submitted["runId"]
+        claimed = self.claim(board, run_id)
+        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        checkout = Path(manifest["path"])
+        (checkout / "tracked.txt").write_text("accepted output\n")
+        seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
+        self.finish_turn(board, claimed, seal)
+        delivered = self.view(board, run_id)
+        accepted = board.call("workflow_accept", {
+            "runId": run_id, "artifactId": delivered["finalArtifactId"],
+            "note": "Reviewed the output", "notRequired": "No separate target in this fixture",
+            "keepCheckout": True, **self.control(delivered),
+        })
+        planned = board.store.workflow.cleanup_plan({
+            "runId": run_id, "commandId": "missing-allocation-plan", "expectedRevision": accepted["revision"],
+            **self.control(accepted),
+        })
+        shutil.rmtree(self.directory / "workspaces" / manifest["workspaceId"])
+        with board.store.db.read() as connection:
+            retained = board.store.workflow._allocation_provenance(
+                connection, board.store.workflow._run_row(connection, run_id)
+            )
+        self.assertIsNone(workspace_module.resolve_allocation(self.directory, manifest, retained))
+        applied = board.store.workflow.cleanup_apply({
+            "runId": run_id, "planId": planned["plan"]["planId"], "commandId": "missing-allocation-apply",
+            "expectedRevision": planned["targetRevision"], "confirmPath": planned["plan"]["path"],
+            **self.control(accepted),
+        })
+        self.assertTrue(applied["removed"])
+        self.assertTrue(applied["plan"]["result"]["alreadyRemoved"])
+        # Reusing an applied journal cannot bypass a later deletion marker.
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO macro_task_deletions"
+                " (deletion_id,target_kind,target_id,state,started_at,micro_task_count)"
+                " VALUES('gone-deletion','micro-task-tree',?,'deleting',?,1)",
+                ('run:' + run_id,board.store.now()),
+            )
+        expected = applied['targetRevision']
+        operations = (
+            lambda: board.store.workflow.cleanup_plan({
+                'runId':run_id,'commandId':'gone-replan','expectedRevision':expected,**self.control(accepted)}),
+            lambda: board.store.workflow.cleanup_apply({
+                'runId':run_id,'planId':planned['plan']['planId'],'commandId':'gone-reapply',
+                'expectedRevision':expected,'confirmPath':planned['plan']['path'],**self.control(accepted)}),
+            lambda: board.call('workflow_reclaim',{'runId':run_id,**self.control(accepted)}),
+        )
+        for operation in operations:
+            with self.assertRaises(BoardError) as caught:
+                operation()
+            self.assertEqual(caught.exception.code,'TASK_DELETING')

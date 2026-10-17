@@ -8,6 +8,7 @@ still override the individual locations.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -30,3 +31,9 @@ def default_runtime_root() -> Path:
 def control_file_path(state_dir: Path, run_id: str, generation: int) -> Path:
     """The location of the CLI's saved control capability; no file is read here."""
     return state_dir / "controls" / f"{run_id}.g{generation}.json"
+
+
+def submission_file_path(state_dir: Path, request_id: str) -> Path:
+    """The CLI submission receipt path derived from its durable request identity."""
+    name = hashlib.sha256(request_id.encode("utf-8")).hexdigest()[:32]
+    return state_dir / "submissions" / f"{name}.json"

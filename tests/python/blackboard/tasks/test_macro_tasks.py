@@ -85,6 +85,73 @@ class ProjectLabelTests(WorkflowTestCase):
 
 
 class MacroTaskAdmissionTests(WorkflowTestCase):
+    def test_deleting_standalone_tree_fences_its_run(self):
+        board = self.board()
+        run = self.submit(board, request_id="standalone-fence")
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO macro_task_deletions"
+                " (deletion_id,target_kind,target_id,state,started_at,micro_task_count)"
+                " VALUES('standalone-deletion','micro-task-tree',?,'deleting',?,1)",
+                ("run:" + run["runId"], board.store.now()),
+            )
+        with self.assertRaises(BoardError) as continued:
+            board.call("workflow_continue", {
+                "runId": run["runId"], "commandId": "standalone-continue",
+                "expectedRevision": run["revision"], "input": "Continue this work",
+                **self.control(run),
+            })
+        self.assertEqual(continued.exception.code, "TASK_DELETING")
+        self.assertEqual(continued.exception.details["deletionId"], "standalone-deletion")
+        with self.assertRaises(BoardError) as retried:
+            board.store.task_retry({"runId": run["runId"], **self.control(run)})
+        self.assertEqual(retried.exception.code, "TASK_DELETING")
+
+    def test_deleting_group_rejects_named_and_inherited_admission(self):
+        board = self.board()
+        first = self.submit(board, macroTask={"title": "group"})
+        identifier = first["macroTaskId"]
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO macro_task_deletions"
+                " (deletion_id,target_kind,target_id,state,started_at,micro_task_count)"
+                " VALUES('deletion-1','macro-task',?,'deleting',?,1)",
+                (identifier, board.store.now()),
+            )
+        for presentation in ({"macroTaskId": identifier}, {"macroTaskOf": first["runId"]}):
+            with self.subTest(presentation=presentation), self.assertRaises(BoardError) as caught:
+                self.submit(board, request_id=f"blocked-{len(presentation)}-{next(iter(presentation))}",
+                            **presentation)
+            self.assertEqual(caught.exception.code, "MACRO_TASK_DELETED")
+            self.assertEqual(caught.exception.details["state"], "deleting")
+            self.assertEqual(caught.exception.details["macroTaskId"], identifier)
+        with self.assertRaises(BoardError) as continued:
+            board.call("workflow_continue", {
+                "runId": first["runId"], "commandId": "blocked-continue",
+                "expectedRevision": first["revision"], "input": "Continue this work",
+                **self.control(first),
+            })
+        self.assertEqual(continued.exception.code, "TASK_DELETING")
+        self.assertEqual(continued.exception.details["deletionId"], "deletion-1")
+        with self.assertRaises(BoardError) as retried:
+            board.store.task_retry({"runId": first["runId"], **self.control(first)})
+        self.assertEqual(retried.exception.code, "TASK_DELETING")
+        self.assertEqual(board.store.count_tasks(), 1)
+
+    def test_deleting_group_rejects_submission_recovery(self):
+        board = self.board()
+        run = self.submit(board, macroTask={"title":"recovering group"})
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO macro_task_deletions"
+                " (deletion_id,target_kind,target_id,state,started_at,micro_task_count)"
+                " VALUES('recovery-deletion','macro-task',?,'deleting',?,1)",
+                (run["macroTaskId"],board.store.now()),
+            )
+        with self.assertRaises(BoardError) as caught:
+            self.submit(board, macroTask={"title":"recovering group"})
+        self.assertEqual(caught.exception.code,"MACRO_TASK_DELETED")
+
     def test_group_and_title_replay_are_separate_from_execution(self):
         board = self.board()
         first = self.submit(board, kind='worktree', macroTask={'title':'Human group sentinel'}, title='Human run sentinel')

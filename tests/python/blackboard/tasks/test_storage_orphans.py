@@ -226,8 +226,13 @@ class StorageOrphanTests(WorkflowTestCase):
         with patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan:
             replanned = self.board_instance.call('storage_plan', {})
         scan.assert_not_called()
-        self.assertFalse(any(row['path'] in (str(checkout), str(parent))
-                             for row in replanned['candidates']))
+        rows = [row for row in replanned['candidates'] if row['path'] == str(parent)]
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]['eligible'])
+        self.assertIn('checkout-missing', rows[0]['reasons'])
+        self.assertIn('owner-unproven', rows[0]['reasons'])
+        self.assertGreater(rows[0]['bytes'], len('retained output'))
+        self.assertFalse(any(row['path'] == str(checkout) for row in replanned['candidates']))
         with self.board_instance.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM tasks').fetchone()[0], 0)
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workspace_reservations').fetchone()[0], 0)
@@ -429,8 +434,12 @@ class StorageOrphanTests(WorkflowTestCase):
         other.mkdir()
         planned = self.board_instance.call('storage_plan', {})
         rows = [row for row in planned['candidates'] if row.get('orphan')]
-        self.assertEqual([row['path'] for row in rows], [str(unknown / 'checkout')])
-        self.assertTrue(all(not row['eligible'] and 'allocation-unproven' in row['reasons'] for row in rows))
+        self.assertEqual({row['path'] for row in rows}, {str(unknown / 'checkout'), str(other)})
+        by_path = {row['path']:row for row in rows}
+        self.assertIn('allocation-unproven', by_path[str(unknown / 'checkout')]['reasons'])
+        self.assertIn('owner-unproven', by_path[str(other)]['reasons'])
+        self.assertIn('checkout-missing', by_path[str(other)]['reasons'])
+        self.assertTrue(all(not row['eligible'] for row in rows))
         self.apply(planned)
         self.assertEqual((unknown / 'checkout' / 'valuable.txt').read_text(), 'retain')
         self.assertTrue(other.is_dir())
@@ -452,7 +461,12 @@ class StorageOrphanTests(WorkflowTestCase):
         with patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan:
             planned = self.board_instance.call('storage_plan', {})
         scan.assert_not_called()
-        self.assertFalse(any(row['category'] == 'workspaces' for row in planned['candidates']))
+        rows = [row for row in planned['candidates'] if row['category'] == 'workspaces']
+        by_path = {row['path']:row for row in rows}
+        self.assertTrue({str(root/'empty'),str(request_only)} <= by_path.keys())
+        self.assertTrue(all(not row['eligible'] and 'checkout-missing' in row['reasons'] for row in rows))
+        self.assertTrue(all(Path(row['path']).parent == root for row in rows))
+        self.assertGreater(by_path[str(request_only)]['bytes'],0)
         self.assertTrue(request_only.is_dir())
         self.assertTrue((root / 'empty').is_dir())
         self.assertEqual((self.repo / 'tracked.txt').read_text(), 'input\n')

@@ -9,6 +9,7 @@ sandbox or a claim that every physical file remains unchanged.
 """
 from contextlib import ExitStack, contextmanager
 from ... import locking
+from ... import private_dirs
 from collections import Counter
 import hashlib
 import json
@@ -561,9 +562,9 @@ def _write_once(path, data):
 
 
 @contextmanager
-def _lock(directory):
-    descriptor = (windows_paths.lock_fd(directory / ".lock") if _WINDOWS else
-                  os.open(directory / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600))
+def _lock(directory, *, create=True):
+    descriptor = (windows_paths.lock_fd(directory / ".lock", create=create) if _WINDOWS else
+                  os.open(directory / ".lock", os.O_RDWR | (os.O_CREAT if create else 0) | os.O_NOFOLLOW, 0o600))
     try:
         try:
             locking.lock(descriptor, blocking=False)
@@ -2123,6 +2124,25 @@ def _workspace_identifier(value):
             and all(character in "0123456789abcdef" for character in value[3:]))
 
 
+def allocation_lock_directory(state_dir, workspace_id: str | None) -> Path | None:
+    """Return an existing private record directory with an ordinary lock file.
+
+    Both deletion marking and ordinary reclaim use this exact predicate. It
+    never creates a new lock or follows a linked component.
+    """
+    if not _workspace_identifier(workspace_id):
+        return None
+    directory = Path(state_dir).resolve() / "workspaces" / workspace_id
+    lock_path = directory / ".lock"
+    if (private_dirs.linked_component(lock_path) is not None
+            or not directory.is_dir()):
+        return None
+    try:
+        return directory if stat.S_ISREG(lock_path.lstat().st_mode) else None
+    except FileNotFoundError:
+        return None
+
+
 def _attached_branch_report(checkout_root, record) -> dict:
     """The honest diagnosis of a correctly registered worktree on a branch.
 
@@ -2492,6 +2512,93 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
     result["reasons"].append("unsealed-changes")
     result["unsealedPaths"] = unsealed[:32]
     return
+
+
+def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retained=()) -> dict:
+    """Prove deletion of one checkout without restoring an interrupted removal.
+
+    A missing gitfile can be the result of ``git worktree remove`` stopping
+    halfway through. In that state only surviving files are compared with
+    retained Git trees; missing files are allowed, but an added or changed file
+    keeps the checkout in place. The original registration and lock still have
+    to prove the exact physical allocation.
+    """
+    with _errors():
+        _validate_manifest(manifest)
+        allocation = resolve_allocation(state_dir, manifest)
+        if allocation is None or allocation["workspaceId"] != manifest["workspaceId"]:
+            return {"reasons": ["owner-unproven"], "resume": False}
+        checkout = Path(allocation["path"])
+        repository = Path(manifest["snapshot"]["repositoryPath"])
+        related = [item for item in _allocation_candidates(manifest, retained)
+                   if isinstance(item, dict) and item.get("repositoryId") == manifest["repositoryId"]
+                   and item.get("checkoutId") == manifest["checkoutId"]
+                   and item.get("checkoutRoot") == manifest["checkoutRoot"]]
+        by_hash = {item["manifestSha256"]: item for item in related}
+        candidates = [item for item in artifacts if isinstance(item, dict)
+                      and item.get("workspaceId") in {value["workspaceId"] for value in related}
+                      and item.get("manifestSha256") in by_hash
+                      and item.get("workspaceId") == by_hash[item["manifestSha256"]]["workspaceId"]
+                      and isinstance(item.get("snapshot"), dict)
+                      and isinstance(item.get("tree"), str)]
+        pointer_missing = not _path_present(checkout / ".git")
+        try:
+            record, _git_dir = _cleanup_resume_registration(repository, checkout, allocation, manifest)
+        except BoardError as error:
+            if error.code == "WORKSPACE_UNSAFE":
+                return {"reasons": error.details["reasons"], "resume": True}
+            raise
+        if record is None:
+            return {"reasons": [], "resume": True}
+        if "detached" not in record:
+            return {"reasons": ["attached-branch"], "resume": True}
+        if record.get("HEAD") != manifest["inputCommit"]:
+            return {"reasons": ["identity-changed"], "resume": True}
+        if not pointer_missing:
+            first = None
+            for candidate in candidates:
+                selected = by_hash[candidate["manifestSha256"]]
+                proof = cleanup_inspect(state_dir, selected, sealed=candidate, retained=related)
+                if proof["eligible"]:
+                    return {"reasons": [], "resume": True}
+                if first is None:
+                    first = proof
+            for selected in related:
+                proof = cleanup_inspect(state_dir, selected, retained=related)
+                if proof["eligible"]:
+                    return {"reasons": [], "resume": True}
+                if first is None:
+                    first = proof
+            return {"reasons": first["reasons"], "resume": True}
+
+        # The registration is still bound to this allocation, but Git removed
+        # its gitfile. Never write it back merely to complete deletion.
+        fmt = _line(repository, "rev-parse", "--show-object-format")
+        surviving = {}
+        def collect(directory):
+            for entry in os.scandir(directory):
+                path = Path(entry.path)
+                relative = path.relative_to(checkout).as_posix()
+                if relative == ".git":
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    collect(path)
+                else:
+                    value = _file(checkout, relative)
+                    if value is None:
+                        raise BoardError("WORKSPACE_CHANGED", "A checkout file vanished during deletion proof")
+                    surviving[relative] = [value[0], _blob_oid(value[1], fmt)]
+        collect(checkout)
+        trees = [item["tree"] for item in candidates if
+                 _line(repository, "rev-parse", item["commit"] + "^{tree}") == item["tree"]]
+        trees.append(manifest["inputTree"])
+        differences = []
+        for tree in dict.fromkeys(trees):
+            expected = _entries(repository, tree)
+            differences = [path for path, value in surviving.items() if expected.get(path) != value]
+            if not differences:
+                return {"reasons": [], "resume": True}
+        return {"reasons": ["unsealed-changes"], "unsealedPaths": sorted(differences)[:32], "resume": True}
 
 
 def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) -> dict:

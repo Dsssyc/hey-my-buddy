@@ -18,6 +18,7 @@ import uuid
 from typing import Any
 
 from . import fixes, micro_task, reminders
+from .macro_task_deletion_guard import reject_macro_task
 from ..routing import router
 from ...protocol import schemas
 from ...errors import BoardError
@@ -137,6 +138,7 @@ def attach_macro_task(connection, presentation: dict, *, spec: dict, host_id: st
     if fixed_run is not None and ("macroTask" in presentation or identifier != fixed_run["macro_task_id"]):
         raise BoardError("CONFLICT", "A fix must belong to the fixed micro task's macro task")
     if identifier is not None:
+        reject_macro_task(connection, identifier)
         row = connection.execute("SELECT * FROM macro_tasks WHERE macro_task_id=?", (identifier,)).fetchone()
         if row is None:
             raise BoardError("NOT_FOUND", "Unknown macroTaskId")

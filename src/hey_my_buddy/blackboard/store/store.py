@@ -320,6 +320,46 @@ class BoardStore:
         """Bind a command replay to one execution's nonce verifier."""
         return f"{self.db.nonce_verifier(nonce)}:{attempt_id}"
 
+    def _receipt_entry(
+        self,
+        connection: sqlite3.Connection,
+        command_id: str,
+        kind: str,
+        request: dict | None,
+        subject: str | None = None,
+        *,
+        deleted_only: bool = False,
+    ) -> sqlite3.Row | None:
+        row = connection.execute("SELECT * FROM commands WHERE command_id = ?", (command_id,)).fetchone()
+        if row is None:
+            return None
+        if deleted_only and row["deletion_id"] is None:
+            return None
+        if row["subject"] and ((subject is None and row["deletion_id"] is not None)
+                               or (subject is not None and not _constant_time_equal(row["subject"], subject))):
+            raise BoardError(
+                "UNAUTHORIZED",
+                "This commandId belongs to a different execution identity; it cannot be replayed from here",
+                commandId=command_id,
+            )
+        if row["kind"] != kind or (row["deletion_id"] is None and request is not None
+                                    and row["request_hash"] != sha256_text(canonical_json(request))):
+            raise BoardError(
+                "CONFLICT",
+                "This commandId already belongs to a different request; use a new commandId",
+                commandId=command_id,
+            )
+        return row
+
+    def _receipt_response(self, connection: sqlite3.Connection, row: sqlite3.Row | None) -> dict | None:
+        if row is None:
+            return None
+        if row["deletion_id"] is not None:
+            return {"commandId": row["command_id"], "deleted": True}
+        from ..tasks.command_receipts import replay_response
+
+        return replay_response(self.workflow, connection, row["kind"], json.loads(row["response_json"]))
+
     def _receipt(
         self,
         connection: sqlite3.Connection,
@@ -328,24 +368,9 @@ class BoardStore:
         request: dict,
         subject: str | None = None,
     ) -> dict | None:
-        row = connection.execute("SELECT * FROM commands WHERE command_id = ?", (command_id,)).fetchone()
-        if row is None:
-            return None
-        if subject is not None and row["subject"] and not _constant_time_equal(row["subject"], subject):
-            raise BoardError(
-                "UNAUTHORIZED",
-                "This commandId belongs to a different execution identity; it cannot be replayed from here",
-                commandId=command_id,
-            )
-        if row["kind"] != kind or row["request_hash"] != sha256_text(canonical_json(request)):
-            raise BoardError(
-                "CONFLICT",
-                "This commandId already belongs to a different request; use a new commandId",
-                commandId=command_id,
-            )
-        from ..tasks.command_receipts import replay_response
-
-        return replay_response(self.workflow, connection, kind, json.loads(row["response_json"]))
+        return self._receipt_response(
+            connection, self._receipt_entry(connection, command_id, kind, request, subject)
+        )
 
     def _store_receipt(
         self,
@@ -912,7 +937,7 @@ class BoardStore:
             existing = connection.execute("SELECT * FROM tasks WHERE request_id = ?", (request_id,)).fetchone()
             run = self.workflow._run_optional(connection, existing["task_id"]) if existing is not None else None
             if run is not None:
-                self.workflow._require_replayable_submission(run, request_id)
+                self.workflow._require_replayable_submission(connection, run, request_id)
             if command_id:
                 receipt = self._receipt(connection, command_id, "task.submit", request)
                 if receipt is not None:
