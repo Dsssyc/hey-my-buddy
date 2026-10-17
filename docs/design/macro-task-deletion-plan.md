@@ -10,7 +10,7 @@
 
 已核对的根因修订：`routing/decision.py` 派下一位 Router 时更新 `decision_requests.task_id`，`router_sequence.reserve_dispatch/dispatches` 才保留所有内部任务。当前 `workflow._routing_tasks` 与 `micro_task.RELATION_SQL` 的 dr 联接只看最新 task_id，`storage.inspect` 的 native_owners 又依赖前者；实施须在这些归属来源统一纳入 router_dispatches，与删除引擎共用完整关联，不能只在 DELETE 时临时补 SQL。`RELATION_SQL` 的 owned_executions 同样要收齐各次 dispatch，停止资格、读取与存储盘点才一致。这是本任务对路由归属根因修复的范围修订。
 
-另一个归属修订：当前 `MEMBERS_SQL` 只沿协助关系取 root_run_id，无宏任务的 Lead 与它名下的根各成为一个 run: 分组。拟从协助树根继续沿 `workflow_lead_tasks` 找最上层 Lead，统一得到 group root；列表、时间轴、删除集合与确认计数共用该归属，宏任务仍优先用实际 macro_task_id。同步改 `macro_task_list` 内自己计算分组的 SQL，不能只改 MEMBERS_SQL 而留另一套旧分组。依据：`macro_tasks.MEMBERS_SQL/macro_task_list`、`micro_task.RELATION_SQL` 的 root_lead 联接。
+Host 审后的删减（2026-10-17）：第 1 版审查提出的无宏任务 Lead 分组修订（让 Lead 名下的树归到 Lead 的 `run:` 分组）不随本批做。当日日常看板只读计数，没有宏任务的 Lead 名下微任务为 0 个。`run:<root>` 的 R 照上面的闭包收齐 Lead 名下的树，确认框的数来自同一个闭包；分组显示的修订记入待办，碰到时再做。
 
 | 表 | 命中的行与处理 | 当前依据 |
 | --- | --- | --- |
@@ -158,7 +158,7 @@ C-Two 沿 BoardError 形状返回 `{"error":{"code":"...","message":"...","detai
 
 当前 `_reclaim_checkout` 只是 cleanup_plan/cleanup_apply 的删除编排，并不重新准备检出；会补写文件的是 `workspace.cleanup_inspect(resume=True)` 调用 `_cleanup_restore`，它恢复缺失 gitfile/已保留树的叶子，再走普通回收证明。删除自己的恢复只在持 allocation 锁下复用其身份证明，不为删目录先恢复用户文件；删除中状态禁止另一路回收准入，先已进入 applying 的回收使首次删除拒绝。整合必须先把任务了结，delivered 尚不可删除；普通接纳/最终提交仍受原 revision 与数据库状态约束，不加全局锁或每层重复资格检查。
 
-已核对的恢复缺口：`tasks/interruption.py:recover` 当前只挑 execution_state!='finished' 或 cleanup_pending=1，`_recover_one` 对 finished 直接返回，即使它 shutdown_confirmed=0 也不会补确认。实施在同一中断恢复路径纳入这类执行，并在 finished 分支用 `process_identity.inspect_process_identity` 的 boot-changed/identity-absent 与 `_stop_native` 对原生子进程的证据完成确认，沿 `store.confirm_execution_shutdown` 补停止事实，不改原结果、不凭裸 PID 或 elapsed time 认定已停。身份/原生 journal 仍不足就保持拒绝。先演练盘点这类执行的数量，再验证补证据后可否删除；这也是范围修订，不放宽删除资格。
+Host 审后的删减（2026-10-17）：已 finished 而 `shutdown_confirmed=0` 的执行，当前的中断恢复不再判定（`tasks/interruption.py` 的 `recover` 与 `_recover_one`）。当日日常看板只读计数为 0 个，本批不改中断恢复。删除资格照旧拒绝这类执行（reasonCode stop-unconfirmed）；恢复的缺口记入待办，碰到时再修。
 
 ## 10. 确认框数据
 
@@ -174,7 +174,7 @@ preview 在一个读快照建立第 1 节完整分组：microTaskCount 为 R 的
 | 标记、资格与恢复 | queued/routing/running/awaiting-host/waiting-owned/helpers/delivered/open 请求/待续接/未确认停止拒绝；failed/cancelled 无结论可删；计数增长拒绝；标记后提交、继续、重试、回收拒绝；两个删除只建一次标记/通知；每个物理阶段、标记提交后、最后事务提交前后中断，重试均可收敛 |
 | 内容与收据 | Router 事实与事件确随删，其他决定不删；所有命中 kind 的 commands 身份留存、内容清空、deletion_id 明确、重放只有 commandId/deleted；不同输入仍 CONFLICT、无权 subject 拒绝；不新增事实转换与提交墓碑 |
 | 文件与 refs | `<state>/attempts/<taskId>/` 全删且其他任务证据不动；Router frozen-input、旧 adapter 根、controls/submissions、已回收检出留下的封存/记录目录一起处理；超过 64 个 refs 不截断；缺失成功、换 OID/换锁/链接/用户检出/未知归属保留；别处一行坏 JSON 不阻塞共享判断 |
-| 停止与并发 | finished 且未确认停止的 stock：boot 变化/身份消失+原生证据能补确认，活进程或证据不足不放行；旧 applying 回收、`_cleanup_restore` 与删除的 allocation 锁不冲突；准入事务先赢/标记先赢，检查原子性 |
+| 停止与并发 | finished 且未确认停止的执行被拒绝（不放行）；旧 applying 回收、`_cleanup_restore` 与删除的 allocation 锁不冲突；准入事务先赢/标记先赢，检查原子性 |
 | harness | DSH 记录与索引同删、ZCode DB/storage/旧根同删、Claude 无持久会话；Codex thread/delete 成功、重复删除的专门消息、非法 ID 同码不同消息、其他错误保留 deleting、跨回合去重/创建收据绑定；离线协议夹具不读真实 home、不调模型；tests/probes 的原生无模型探针按需另跑 |
 | 升级、HTTP、契约 | 24 → 25 对新建结构一致/保全/失败回滚；contract_signatures 0.46.0；Origin/CSRF/会话撤销与 Host/Worker/服务 token 拒绝；确认数、删除未完成、重复操作、409/410 的封套；最终通知驱动列表/详情刷新 |
 
@@ -182,7 +182,7 @@ preview 在一个读快照建立第 1 节完整分组：microTaskCount 为 R 的
 
 Host 的日常规模私有副本演练先做重绑定：借鉴 `load_fixture` 对私有路径、Git 身份与依赖哈希的处理，并针对真实副本补 allocation 身份与资源重建，不能只替换路径。`workspace._workspace_directory` 的编号是 state_dir 绝对路径与 request_id 的摘要，checkoutRoot、Git worktree 锁及固定清单又绑定这个编号；只改路径会使每个检出都无法证明归属。演练前记录“总受管检出数/副本上可证明归属数”，不达预期先修副本的重绑定，不拿 owner-unproven 的跳过当删除演练成功。所有 Git refs、文件与原生会话都指向私有副本/隔离测试 home，不能让副本操作日常原生会话库。
 
-演练前盘点每个宏任务能否删除及阻塞原因，数 finished 且 shutdown_confirmed=0 的执行、换过 Router 的决定，以及 `<state>/attempts/` 的文件数/字节；如有未确认停止，先走第 9 节恢复并记录前后数量。挑小、中、大且含大量事件/已回收封存的宏任务，量资格与标记事务、原生会话、检出、refs、allocation/封存、私有证据、最后删除事务及重试各阶段耗时；记录逐表删除前后行数、删掉的文件/字节/refs 数，做 foreign_key_check 与 integrity_check。不量峰值内存或别的任务读写延迟。
+演练前盘点每个宏任务能否删除及阻塞原因，数 finished 且 shutdown_confirmed=0 的执行、换过 Router 的决定，以及 `<state>/attempts/` 的文件数/字节；如有未确认停止，记下数量与受影响的宏任务（它们照资格删不掉，见第 9 节）。挑小、中、大且含大量事件/已回收封存的宏任务，量资格与标记事务、原生会话、检出、refs、allocation/封存、私有证据、最后删除事务及重试各阶段耗时；记录逐表删除前后行数、删掉的文件/字节/refs 数，做 foreign_key_check 与 integrity_check。不量峰值内存或别的任务读写延迟。
 
 删后以 R/T/A/D/会话编号作一次全库文本列、状态目录文件名与内容、`refs/hey-my-buddy/workspaces/` 的残留扫描；逐项区分应删内容、允许保留的命令身份/删除记录/路径编号、备份、归属不明项及 Codex 诊断日志，不把“没有扫描到”当作物理擦除承诺。记录每阶段中断后重试的最终状态与残留清单。Host 将实测耗时、计数、扫描解释和未动日常状态的证据写 `docs/acceptance/`；本计划不填虚构测量数。
 
@@ -191,9 +191,10 @@ Host 的日常规模私有副本演练先做重绑定：借鉴 `load_fixture` �
 | 微任务 | 写入范围 | 检查与依赖 |
 | --- | --- | --- |
 | 1：升级与存储形式 | `blackboard/store/{db,upgrade}.py`、`install/upgrade.py`、`tasks/command_receipts.py`、`store/store.py` 及对应 store/install/收据测试；24 样板不改成新基线 | 删除记录与 commands.deletion_id；显式 24 → 25、新建结构对比、保全/回滚/重放；本批其他存储改动以后扩展同一 pending upgrade |
-| 2：删除引擎与根因修复 | 新 `tasks/macro_task_deletion.py`，`tasks/{macro_tasks,micro_task,workflow,storage,workspace,interruption}.py`，必要 `private_dirs.py`、store 停止确认、CLI 文件定位公共函数及对应测试 | 集合、资格、标记、物理阶段、最后事务；完整 Router dispatch 归属、精确共享身份、finished 未确认停止的恢复、Lead/run: 分组；依赖 1，含这些明确的范围修订 |
-| 3：harness 会话 | `buddy/harnesses/codex/`、必要共享 harness 接口、`tasks/worker_sessions.py` 的创建收据判定、对应 harness 测试与 `tests/probes/` 无模型探针 | thread/delete 与仅专门消息算不存在；DSH/ZCode 私有根、Claude 无持久会话；归属沿创建收据，黑板 DB 连接不传入 buddy 层；依赖 1，可与 2 并行，公共接缝与写入文件先定归属 |
-| 4：控制台后端与契约 | `console/{server,reads,console_sessions}.py`、`blackboard/service/service.py`、protocol 实际命名映射/contract、签名夹具、版本文件及对应 console/protocol 测试 | 1–3 合并验证后最后接通；仅控制台权限，0.46.0；前端入口/确认/未完成显示在批次三 |
+| 2：Router 归属的根因修复 | `tasks/{workflow,micro_task,storage}.py` 及对应测试 | `workflow._routing_tasks`、`micro_task.RELATION_SQL` 的 dr 联接与 owned_executions、`storage.inspect` 的 native_owners 都按 `router_dispatches` 收齐换过 Router 的决定的全部内部任务；不改存储形式，可与 1 并行，先于 3 合入 |
+| 3：删除引擎 | 新 `tasks/macro_task_deletion.py`，`tasks/{macro_tasks,workflow,storage,workspace}.py`，必要 `private_dirs.py`、CLI 文件定位公共函数及对应测试 | 集合、资格、标记、物理阶段、最后事务；精确共享身份；`storage.inspect` 补列没有检出的 allocation 记录目录；依赖 1 与 2 |
+| 4：harness 会话 | `buddy/harnesses/codex/`、必要共享 harness 接口、`tasks/worker_sessions.py` 的创建收据判定、对应 harness 测试与 `tests/probes/` 无模型探针 | thread/delete 与仅专门消息算不存在；DSH/ZCode 私有根、Claude 无持久会话；归属沿创建收据，黑板 DB 连接不传入 buddy 层；依赖 1，可与 2、3 并行，公共接缝与写入文件先定归属 |
+| 5：控制台后端与契约 | `console/{server,reads,console_sessions}.py`、`blackboard/service/service.py`、protocol 实际命名映射/contract、签名夹具、版本文件及对应 console/protocol 测试 | 1–4 合并验证后最后接通；仅控制台权限，0.46.0；前端入口/确认/未完成显示在批次三 |
 
 Host 负责跨交付整合、完整检查、另一模型复审、第 11 节日常规模演练与安装决定。前端批次三的 `apps/console/`、 owning reference/skill 与 `docs/acceptance/` 分配在其自身任务中，不扩大本次写入范围。本回合只改本文，不重启服务、不写日常看板、不联网、不调用模型、不操作 stash/分支/tag。
 
@@ -201,4 +202,4 @@ Host 负责跨交付整合、完整检查、另一模型复审、第 11 节日�
 
 Codex 原生 thread/delete 及不存在消息按第 5 节 Host 的 Codex CLI 0.162.1 无模型实测记录采用，已经核实；本仓库调用尚待实现，本回合未独立重跑。L7 之前的事实随删、两次事务之间删物理内容，均由开发者 2026-10-17 定；不再列作待定。没有新增待开发者定的产品事项。
 
-代码核对的一处位置差别是 Router frozen-input 实际位于 harness 私有 attempt 根，见第 4 节；finished 未确认停止的当前恢复缺口也已明确写成微任务 2 的修复，不能描述为现有能力。其余本轮列明的源码事实核对相符。计划交 Host 审，尚未实施或验收。
+代码核对的一处位置差别是 Router frozen-input 实际位于 harness 私有 attempt 根，见第 4 节；finished 未确认停止的恢复缺口与无宏任务 Lead 的分组，Host 审后移到待办（见第 1、9 节）。其余本轮列明的源码事实核对相符。计划交 Host 审，尚未实施或验收。
