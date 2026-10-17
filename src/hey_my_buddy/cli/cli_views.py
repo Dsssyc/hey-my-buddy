@@ -178,7 +178,8 @@ def _request_brief(request: Any) -> Any:
     """An open boundary keeps every reported field the Host needs to decide."""
     if not isinstance(request, dict):
         return request
-    return {key: value for key, value in request.items() if value is not None and value != []}
+    return {key: value for key, value in request.items()
+            if key in ("summary", "reason") or value is not None and value != []}
 
 
 def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:

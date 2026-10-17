@@ -1,9 +1,15 @@
 {
+  "ANCESTOR_TERMINAL": [],
+  "CONFLICT": [],
   "HARNESS_BALANCE_ZERO": [],
   "HARNESS_QUOTA_EXHAUSTED": [],
   "HARNESS_QUOTA_LIMIT_REPORTED": [],
   "HARNESS_QUOTA_NEAR_LIMIT": [],
   "HARNESS_RATE_LIMIT_REPORTED": [],
+  "ILLEGAL_TRANSITION": [],
+  "REVISION_CONFLICT": [],
+  "SHUTDOWN_UNCONFIRMED": [],
+  "UPGRADE_IN_PROGRESS": [],
   "account.login-required": [],
   "account.not-checked": [],
   "catalog-unavailable": [],
@@ -85,8 +91,14 @@
   "harness.version-unknown": [
     "operation"
   ],
+  "helpers-settled": [],
   "history.reason-unavailable": [
     "recordId"
+  ],
+  "lead.result-refused": [
+    "disposition",
+    "unfinished",
+    "total"
   ],
   "macro-task-deletion.attached-branch": [],
   "macro-task-deletion.awaiting-host": [],
@@ -113,5 +125,12 @@
   "macro-task-deletion.unsealed-changes": [],
   "macro-task-deletion.unsealed-handoff": [],
   "model-cursor-shape-unreadable": [],
-  "model-list-shape-unreadable": []
+  "model-list-shape-unreadable": [],
+  "workspace-scope-violation": [
+    "conflictIds",
+    "paths"
+  ],
+  "workspace.continuation-prepare-failed": [
+    "continuationId"
+  ]
 }

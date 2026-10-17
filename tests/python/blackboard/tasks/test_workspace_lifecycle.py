@@ -1709,6 +1709,18 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         flow = self.helper_scope_failure()
         board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
         root_view = self.view(board, run_id)
+        helper_request = self.view(board, helper_id)["activeRequest"]
+        self.assertIsNone(root_view["activeRequest"]["summary"])
+        self.assertEqual(root_view["activeRequest"]["reason"], helper_request["reason"])
+        self.assertEqual(root_view["activeRequest"]["origin"], {
+            "runId": helper_id, "requestId": helper_request["requestId"]})
+        with board.store.db.read() as connection:
+            opened = connection.execute(
+                "SELECT COUNT(*) FROM events WHERE task_id=? AND kind='workflow.boundary_updated'"
+                " AND json_extract(payload_json,'$.activeRequestId')=?",
+                (run_id, root_view["activeRequest"]["requestId"]),
+            ).fetchone()[0]
+        self.assertEqual(opened, 1, "settlement must not propagate the system request a second time")
         resolved = board.store.workflow.workspace_resolve({
             "runId": run_id, "targetRunId": helper_id, "commandId": "helper-resolve",
             "expectedRevision": root_view["revision"], "conflictId": flow["conflict"]["conflictId"],
