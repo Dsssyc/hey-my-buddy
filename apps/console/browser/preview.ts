@@ -1,8 +1,10 @@
 import { test as base, expect, type Locator, type Page } from "@playwright/test";
+import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 /** All browser captures stay in this checkout, regardless of the runner's cwd. */
-export const screenshots = fileURLToPath(new URL("../../../tmp/step4-small-shots", import.meta.url));
+export const screenshots = fileURLToPath(new URL("../../../tmp/console-browser-shots", import.meta.url));
+mkdirSync(screenshots, { recursive: true });
 
 /**
  * Every check also fails on a page error or an error in the browser console,

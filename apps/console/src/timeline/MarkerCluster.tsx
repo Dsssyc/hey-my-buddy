@@ -11,8 +11,8 @@ export type TimelineMarker = { kind: "event"; event: TimelineEvent; x: number } 
 export const markerKey = (marker: TimelineMarker) => marker.kind === "event" ? `event:${marker.event.seq}` : `inquiry:${marker.inquiry.inquiryId}`;
 export const markerAt = (marker: TimelineMarker) => marker.kind === "event" ? marker.event.at : marker.inquiry.createdAt;
 
-export function MarkerCluster({ markers, x, y, runId, taskTitle, tabKey, boundary, onOpen, onFocusMarker, markerName, markerReadout }: {
-  markers: TimelineMarker[]; x: number; y: number; runId: string; taskTitle: string; tabKey?: string; boundary?: HTMLElement | null;
+export function MarkerCluster({ markers, x, y, runId, taskTitle, selected, onSelect, tabKey, boundary, onOpen, onFocusMarker, markerName, markerReadout }: {
+  markers: TimelineMarker[]; x: number; y: number; runId: string; taskTitle: string; selected: boolean; onSelect: (runId: string, key: string) => void; tabKey?: string; boundary?: HTMLElement | null;
   onOpen: (runId: string, key: string) => void; onFocusMarker: (marker: TimelineMarker | null) => void;
   markerName: (marker: TimelineMarker) => string; markerReadout: (marker: TimelineMarker) => string;
 }) {
@@ -29,12 +29,13 @@ export function MarkerCluster({ markers, x, y, runId, taskTitle, tabKey, boundar
   };
   return <Popover open={open} onOpenChange={setOpen}>
     <PopoverTrigger asChild><g ref={trigger} role="button" tabIndex={tabKey === key ? 0 : -1} data-slot="event-cluster" data-at={Date.parse(markerAt(first))} data-key={key}
-      aria-label={`${label} · ${taskTitle}`} onPointerEnter={() => onFocusMarker(first)} onPointerLeave={() => onFocusMarker(null)} onFocus={() => onFocusMarker(first)} onBlur={() => onFocusMarker(null)}
+      aria-label={`${label} · ${taskTitle}`} onClick={() => onSelect(runId, markerKey(first))} onPointerEnter={() => onFocusMarker(first)} onPointerLeave={() => onFocusMarker(null)} onFocus={() => onFocusMarker(first)} onBlur={() => onFocusMarker(null)}
       onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); setOpen(true); } }}
       className="group/fragment cursor-pointer outline-none">
+      {selected && <rect data-slot="selected-item" x={x - 12} y={y - 12} width={24} height={24} fill="none" className="pointer-events-none stroke-ink3"/>}
       <circle cx={x} cy={y} r={9} className="fill-card stroke-past" strokeWidth={1.5}/>
       <text x={x} y={y + 3.5} textAnchor="middle" aria-hidden="true" className="pointer-events-none fill-past text-xs font-semibold">{markers.length}</text>
-      <rect aria-hidden="true" data-slot="fragment-focus" x={x - 11} y={y - 11} width={22} height={22} fill="none" strokeWidth={2} className="pointer-events-none stroke-ink opacity-0 group-focus/fragment:opacity-100"/>
+      <rect aria-hidden="true" data-slot="fragment-focus" x={x - 11} y={y - 11} width={22} height={22} fill="none" strokeWidth={2} className={`pointer-events-none stroke-ink opacity-0 ${selected ? "" : "group-focus/fragment:opacity-100"}`}/>
     </g></PopoverTrigger>
     <PopoverContent collisionBoundary={boundary ?? undefined} avoidCollisions sideOffset={8} aria-label={label} className="w-72 max-w-(--radix-popover-content-available-width) max-h-(--radix-popover-content-available-height) overflow-y-auto rounded-none p-1"
       onOpenAutoFocus={event => { event.preventDefault(); items.current[0]?.focus(); }}

@@ -51,11 +51,10 @@ export default {
   },
   ending: { cause: "终止原因：{{cause}}", unrecorded: "终止原因未记录" },
   termination: {
-    "wrap-up": "Host 收尾完成", "grace-expired": "收尾宽限到期后停止", "forced-stop": "强制停止", "console-stop": "在控制台停止",
+    "wrap-up": "Host 收尾完成", "grace-expired": "收尾宽限到期后停止", "forced-stop": "强制停止",
     "service-stop": "服务停止", "unknown-stop": "停止（发起者未知）", deadline: "Router 预算用完", "harness-error": "Harness 错误",
     "transport-error": "传输故障", completed: "正常完成", wrapUpLead: "Lead 收尾完成",
   },
-  stop: { host: "Host 停止", lead: "Lead 停止", console: "在控制台停止", service: "服务停止", unknown: "停止（发起者未知）" },
   quota: { "quota-exceeded": "额度耗尽", "rate-limited": "原生服务限流" },
   seal: {
     name: "封存", commit: "提交", files: "文件 {{n}}", id: "产物 ID", sha: "SHA-256", diff: "差异", note: "标注",

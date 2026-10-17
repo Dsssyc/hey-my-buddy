@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 
 export type Interval = { left: number; right: number };
 export type Occupancy = Interval & { kind: "label" | "obstacle" };
-export type Label = Interval & { kind: "label"; text: string; y: number; className: string };
+export type Label = Interval & { kind: "label"; text: string; y: number; className: string; eventKey?: string };
 
 /** Text neighbours need twelve pixels; shapes need four. Full, short, then no label. */
 export function fitLabel(candidates: readonly string[], bounds: Interval, occupied: readonly Occupancy[], measure: (text: string) => number, preferred = bounds.left): (Interval & { kind: "label"; text: string }) | null {
@@ -27,6 +27,22 @@ export function fitLabel(candidates: readonly string[], bounds: Interval, occupi
       const x = Math.max(room.left, Math.min(preferred, room.right - width));
       return { kind: "label", text, left: x, right: x + width };
     }
+  }
+  return null;
+}
+
+/** Event names stay beside their mark: right, left, or omitted, never shifted. */
+export function fitAdjacentLabel(text: string, mark: Interval, bounds: Interval, occupied: readonly Occupancy[], measure: (text: string) => number): (Interval & { kind: "label"; text: string }) | null {
+  const width = measure(text);
+  if (!text || !Number.isFinite(width)) return null;
+  for (const left of [mark.right + 4, mark.left - 4 - width]) {
+    const right = left + width;
+    if (left < bounds.left || right > bounds.right) continue;
+    if (occupied.some(item => {
+      const gap = item.kind === "label" ? 12 : 4;
+      return left < item.right + gap && right > item.left - gap;
+    })) continue;
+    return { kind: "label", text, left, right };
   }
   return null;
 }
