@@ -64,6 +64,7 @@ export function TaskWork(props: TaskWorkProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const namesRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef(new Map<string, HTMLButtonElement>());
+  const movingDetailFocus = useRef(false);
   const wasOpen = useRef<string | null>(null);
   const open = openedRunId !== null;
   const nowMs = instant(displayObservedAt ?? timeline?.observedAt) ?? 0;
@@ -100,7 +101,9 @@ export function TaskWork(props: TaskWorkProps) {
     const previous = wasOpen.current;
     if (openedRunId !== previous) {
       const target = openedRunId ?? previous;
+      movingDetailFocus.current = true;
       if (target) rowsRef.current.get(target)?.focus();
+      movingDetailFocus.current = false;
     }
     wasOpen.current = openedRunId;
   }, [openedRunId, open]);
@@ -124,7 +127,7 @@ export function TaskWork(props: TaskWorkProps) {
     const lastEnd = row.state === "delivered" && spans.filter(span => span.kind === "execution").every(span => span.shutdownConfirmed === true)
       ? Math.max(0, ...spans.filter(span => span.kind === "execution").map(span => instant(span.endAt) ?? 0)) : 0;
     const start = wait ? instant(wait.startAt) : lastEnd || null;
-    return [rowStateInfo(row).label, start !== null ? t("openWait", { duration: formatDuration(Math.max(0, nowMs - start)) }) : null, t("turnCount", { n: turns }), buddyLabel(row.buddy, props.buddies)].filter(Boolean).join(" · ");
+    return [rowStateInfo(row, rows).label, start !== null ? t("openWait", { duration: formatDuration(Math.max(0, nowMs - start)) }) : null, t("turnCount", { n: turns }), buddyLabel(row.buddy, props.buddies)].filter(Boolean).join(" · ");
   };
   const activeSpan = hoveredSpan ?? (hoveredRow ? null : focusedSpan ?? selectedSpan);
   const activeRow = hoveredRow ?? focusedRow ?? rows.find(row => row.runId === selectedRunId);
@@ -142,9 +145,9 @@ export function TaskWork(props: TaskWorkProps) {
   };
   const renderName = (row: TimelineRow) => <Collapsible key={row.runId} open={openedRunId === row.runId} className={cn("min-w-0", open && openedRunId !== row.runId && "max-[760px]:hidden")}>
     <RowName ref={element => { if (element) rowsRef.current.set(row.runId, element); else rowsRef.current.delete(row.runId); }}
-      row={row} tabIndex={tabKey === `row:${row.runId}` ? 0 : -1} selected={selectedRunId === row.runId} open={openedRunId === row.runId} fresh={props.newRunIds.has(row.runId)} buddies={props.buddies}
+      row={row} rows={rows} tabIndex={tabKey === `row:${row.runId}` ? 0 : -1} selected={selectedRunId === row.runId} open={openedRunId === row.runId} fresh={props.newRunIds.has(row.runId)} buddies={props.buddies}
       onClick={() => select(row.runId)} onOpen={() => props.onOpen(row.runId)}
-      onEnter={() => { setPointerX(null); setActiveMarker(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={() => { setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>
+      onEnter={() => { setPointerX(null); setActiveMarker(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={event => { if (movingDetailFocus.current) event.preventDefault(); setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>
     <CollapsibleContent className="bg-sunk">
       {(openedRunId ?? shownRunId) === row.runId && <div ref={setRailTarget} data-slot="task-steps-drawer"/>}
     </CollapsibleContent>

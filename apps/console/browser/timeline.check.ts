@@ -155,7 +155,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) test.d
     const readout = await page.locator('[data-slot=timeline-status]').innerText();
     await expect(page.getByRole("button", { name: readout, exact: true })).toBeFocused();
     await expect(fragment(keys[0]).locator('[data-slot=fragment-focus]')).toHaveCSS("opacity", "1");
-    await page.screenshot({ path: "../../tmp/polish-shots/fragment-focus.png" });
+    await page.screenshot({ path: `${process.env.HMB_BROWSER_SHOTS ?? "../../tmp/polish-shots"}/fragment-focus.png` });
     await page.keyboard.press("ArrowLeft");
     await expect(selected).toBeFocused();
     await page.keyboard.press("End"); await expect(fragment(keys.at(-1)!)).toBeFocused();

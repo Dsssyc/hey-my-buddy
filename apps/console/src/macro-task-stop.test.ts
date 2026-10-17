@@ -24,6 +24,13 @@ function read(overrides: Record<string, Partial<MacroTaskTimeline["rows"][number
 afterEach(() => { void i18n.changeLanguage("zh"); });
 
 describe("macro task stop scope and evidence", () => {
+  it("shows recorded pending stops without a command from this browser and clears only when confirmed", () => {
+    const cancelled = { state: "cancelled", status: "cancelling", shutdownConfirmed: false };
+    expect(stopStatus(undefined, read({ r4: cancelled }))).toEqual({ phase: "in-progress", label: "正在停止",
+      detail: "仍有 1 项停止未确认" });
+    expect(stopStatus(undefined, read({ r4: { ...cancelled, status: "cancelled" } }))?.label).toBe("停止未确认");
+    expect(stopStatus(undefined, read({ r4: { ...cancelled, status: "cancelled", shutdownConfirmed: true } }))).toBeNull();
+  });
   it("counts exact active states across the group, including helpers under preserved roots", () => {
     const summary = macroTaskSummary({ counts: { ...macroTaskSummary().counts,
       stoppableRoots: 0, stoppableHelpers: 1, delivered: 2, awaitingHost: 1 } });

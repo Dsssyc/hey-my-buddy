@@ -6,7 +6,7 @@ import { useTextClipped } from "@/components/use-text-clipped";
 import { Button } from "@/components/ui/button";
 import { StateMark } from "@/components/ui/state-mark";
 import { formatClock, formatDuration, formatMomentMinutes } from "../i18n/format";
-import { taskTitle } from "../task-state";
+import { taskStatus, taskTitle } from "../task-state";
 import type { Task } from "../types";
 import type { TaskView, Workflow } from "./types";
 
@@ -15,10 +15,11 @@ export function DetailBack({ onBack }: { onBack: () => void }) {
   return <Button variant="ghost" size="icon-sm" aria-label={t("back")} onClick={onBack}><ArrowLeft aria-hidden="true" strokeWidth={1.5}/></Button>;
 }
 
-export type StateWord = { key: "running" | "queued" | "host" | "lead" | "review" | "accepted" | "done" | "ended" | "failed"; mark: "live" | "hand" | "done" | "fail" | "idle" };
+export type StateWord = { key: "running" | "stopping" | "queued" | "host" | "lead" | "review" | "accepted" | "done" | "ended" | "failed"; mark: "live" | "hand" | "done" | "fail" | "idle" };
 
 /** The one word a micro task's state has, and the mark that goes with it. */
 export function stateWord(task: Task, lead: boolean, workflowState: string | null = task.workflow?.state ?? null): StateWord {
+  if (taskStatus(task) === "cancelling") return { key: "stopping", mark: "hand" };
   if (task.status === "queued") return { key: "queued", mark: "idle" };
   switch (workflowState) {
     case "awaiting-host": return { key: lead ? "lead" : "host", mark: "hand" };
@@ -29,7 +30,7 @@ export function stateWord(task: Task, lead: boolean, workflowState: string | nul
     case "executing": case "waiting-helpers": case "waiting-owned": return { key: "running", mark: "live" };
     default: break;
   }
-  if (["running", "cancelling"].includes(task.status)) return { key: "running", mark: "live" };
+  if (task.status === "running") return { key: "running", mark: "live" };
   if (task.status === "failed") return { key: "failed", mark: "fail" };
   return { key: task.status === "completed" ? "done" : "ended", mark: "idle" };
 }
@@ -67,7 +68,9 @@ export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, erro
           {turns !== null && <div className="flex gap-1.5"><dt className="text-ink3">{t("header.turns")}</dt><dd>{turns}</dd></div>}
         </dl>
         <div className="flex shrink-0 items-center gap-2 @max-[650px]:ml-auto">
-          <span data-slot="detail-status" className={cn("text-xs whitespace-nowrap", word.mark === "hand" ? "text-hand" : word.mark === "live" ? "text-live" : word.mark === "fail" ? "text-fail" : "text-ink2")}>{t(`state.${word.key}`)}</span>
+          <Hint text={word.key === "stopping" && workflow?.shutdown ? t("acceptance.unconfirmed", { n: workflow.shutdown.unconfirmedCount }) : undefined}>
+            <span data-slot="detail-status" tabIndex={word.key === "stopping" ? 0 : undefined} className={cn("text-xs whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring", word.mark === "hand" ? "text-hand" : word.mark === "live" ? "text-live" : word.mark === "fail" ? "text-fail" : "text-ink2")}>{t(`state.${word.key}`)}</span>
+          </Hint>
           {reminders.overdue && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.overdue")}</span>}
           {reminders.possiblyStuck && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.possiblyStuck")}</span>}
           <Hint text={verifiedAtMs !== null ? t("refresh.verified", { time: formatClock(verifiedAtMs) }) : t("refresh.unverified")}>
