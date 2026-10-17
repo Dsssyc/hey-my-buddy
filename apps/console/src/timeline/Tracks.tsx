@@ -2,23 +2,17 @@ import { useId } from "react";
 import i18n from "i18next";
 import { cn } from "cn";
 import { useTranslation } from "react-i18next";
-import { clockTime, spanOutcome, outcomeLabel, buddyLabel } from "../macro-task-display";
+import { clockTime, spanOutcome, outcomeLabel, buddyLabel, eventName } from "../macro-task-display";
 import type { TimelineEvent, TimelineRow, TimelineSpan } from "../macro-task-types";
 import type { FriendlyBuddy } from "../macro-task-display";
 import type { TimelineScale } from "./scale";
 import { parseTimelineInstant as instant } from "./instant";
 import { formatClock, formatClockMinutes, formatDuration } from "../i18n/format";
-import { actorRoleText } from "../actor";
 import { acceptanceInterval } from "./acceptance";
 import { fitLabel, useTextMeasure } from "./labels";
 import type { Interval, Label, Occupancy } from "./labels";
 import { MarkerCluster, markerAt, markerKey } from "./MarkerCluster";
 import type { TimelineMarker } from "./MarkerCluster";
-
-export function eventName(event: TimelineEvent): string {
-  return event.kind === "cancel" ? i18n.t("tasks:drawing.stoppedBy", { actor: actorRoleText(event.actor?.role) })
-    : i18n.t(`tasks:drawing.events.${event.kind}`);
-}
 
 export function eventReadout(event: TimelineEvent): string {
   return [eventName(event), clockTime(event.at), event.summary].filter(Boolean).join(" · ");

@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Section } from "@/components/section";
 import { actorText } from "../actor";
+import { eventName } from "../macro-task-display";
 import { Facts, Moment, Pane, PaneTitle } from "./parts";
 import { quad } from "./names";
 import type { Step } from "./steps";
@@ -18,7 +19,7 @@ export function EventPane({ step, ctx }: { step: Step; ctx: Context }) {
   const stopped = event?.kind === "cancel" ? event.stopInitiator ?? event.actor?.role ?? null : null;
   const reason = event?.kind === "cancel" ? ctx.view.attempt?.ending?.reason ?? null : null;
   return <Pane>
-    <PaneTitle title={t(`step.${step.kind}`)}><Moment at={step.at} /></PaneTitle>
+    <PaneTitle title={step.kind === "cancel" ? eventName(event!) : t(`step.${step.kind}`)}><Moment at={step.at} /></PaneTitle>
     <Section name={t("event.facts")} className="border-t">
       {step.kind === "handoff"
         ? <Facts items={[[t("event.from"), quad(step.from) ?? unrecorded, true], [t("event.to"), quad(step.to) ?? unrecorded, true]]} />

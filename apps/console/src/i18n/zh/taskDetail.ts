@@ -16,7 +16,7 @@ export default {
   rail: { label: "步骤", truncated: "时间轴的读取不完整，没有这个微任务的一行；这里只列出委派。" },
   step: {
     delegation: "委派", routing: "路由", turn: "回合 {{n}}", handoff: "换手", decision: "决定", continue: "继续",
-    cancel: "取消", takeover: "接管", acceptance: "验收",
+    takeover: "接管", acceptance: "验收",
   },
   fold: { more: "展开", less: "收起" },
   result: { name: "结果" },

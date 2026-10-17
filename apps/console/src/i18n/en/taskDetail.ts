@@ -17,7 +17,7 @@ export default {
   rail: { label: "Steps", truncated: "The timeline read is incomplete and has no row for this micro task; only the delegation is listed." },
   step: {
     delegation: "Delegate", routing: "Route", turn: "Turn {{n}}", handoff: "Handoff", decision: "Decision", continue: "Continue",
-    cancel: "Cancel", takeover: "Takeover", acceptance: "Acceptance",
+    takeover: "Takeover", acceptance: "Acceptance",
   },
   fold: { more: "Show more", less: "Show less" },
   result: { name: "Result" },

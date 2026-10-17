@@ -1,8 +1,7 @@
 import { expect } from "@playwright/test";
-import { expectNoSidewaysScroll, open, test } from "./preview";
+import { screenshots as shots, expectNoSidewaysScroll, open, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
-const shots = process.env.HMB_BROWSER_SHOTS ?? "../../tmp/polish-shots";
 for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.describe(`trial polish ${theme} ${width}`, () => {
   test.use({ locale: "zh-CN", viewport: { width, height: width === 390 ? 844 : 1000 }, reducedMotion: "reduce" });
   test("selects without opening, opens exact turns, collapses with the back button and switches details", async ({ page }) => {

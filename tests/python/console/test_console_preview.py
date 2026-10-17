@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 import sys
 import unittest
+from hey_my_buddy.blackboard.tasks.macro_tasks import HOST_MARKERS
 
 
 PROBE = Path(__file__).resolve().parents[3] / "tests/probes/macro_task_console_preview.py"
@@ -68,9 +69,12 @@ class LeadStopPreviewTests(unittest.TestCase):
                          (row["state"], row["status"], row["category"], row["shutdownConfirmed"]))
         self.assertEqual("active", timeline["macroTask"]["state"])
         events = [event for event in timeline["events"] if event["runId"] == owned["runId"] and event["kind"] == "cancel"]
-        self.assertEqual(["lead", "host"], [event["actor"]["role"] for event in events])
+        self.assertEqual(["lead"], [event["actor"]["role"] for event in events])
         self.assertEqual(attempt["cancelRequestedAt"], events[0]["at"])
-        self.assertGreater(events[1]["at"], attempt["cancelRequestedAt"])
+        self.assertTrue(all(event["eventKind"] in HOST_MARKERS for event in timeline["events"] if event["kind"] == "cancel"))
+        lead_stops = [event for event in timeline["events"] if event["runId"] == lead["runId"] and event["kind"] == "cancel"]
+        self.assertEqual(["host"], [event["actor"]["role"] for event in lead_stops])
+        self.assertGreater(lead_stops[0]["at"], attempt["cancelRequestedAt"])
         files = preview.fixture_payloads()
         for run_id in ("preview-run-b6", "preview-run-b7", "preview-run-b8"):
             self.assertIn(f"normal/workflow-{run_id}.json", files)
