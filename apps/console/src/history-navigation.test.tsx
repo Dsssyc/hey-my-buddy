@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MacroTasks } from "./MacroTasks";
 import type { ConsoleApi } from "./api";
-import type { Snapshot, Task, TaskQuery } from "./types";
+import type { Snapshot } from "./types";
 import { task as detailTask, workflow as detailWorkflow, audit as detailAudit } from "./task-detail/task-detail.fixtures";
 import { macroTaskTimelineFixture } from "./macro-task-fixtures";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
@@ -26,10 +26,6 @@ function snapshotFixture(): Snapshot {
   };
 }
 
-const rawRecord = (): Task => ({ runId: "cmd-9", task: "外部命令记录", status: "completed", owner: "fixture",
-  cwd: "/worktrees/cmd-9", revision: 1, createdAt: "2026-09-26T05:00:00Z", updatedAt: "2026-09-26T05:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
-  lineage: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: "cmd-9", rootLeadRunId: null, routingTask: null,
-    project: { id: "px", label: "外部", path: null }, buddy: null } });
 
 function harness(paged = false) {
   const snapshot = snapshotFixture();
@@ -42,10 +38,9 @@ function harness(paged = false) {
         ...(params.includeAudit ? { audit: detailAudit(), routingHistory: { entries: [], nextCursor: null, total: 0 } } : {}) };
       throw new Error(`Unexpected operation: ${operation}`);
     }),
-    task: vi.fn(async (runId: string) => runId === "cmd-9" ? rawRecord() : detailTask({ runId,
+    task: vi.fn(async (runId: string) => detailTask({ runId,
       lineage: { ...detailTask().lineage!, rootRunId: runId },
       workflow: { ...detailTask().workflow!, macroTaskId: timeline.macroTask.macroTaskId } })),
-    tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : [rawRecord()], total: 1, nextCursor: null })),
     macroTasks: vi.fn(async () => ({ macroTasks: [timeline.macroTask], totals: { all: 1, active: 1, host: 0, review: 0 }, nextCursor: paged ? "older" : null, cursor: 41, changed: false })),
     macroTaskTimeline: vi.fn(async () => ({ timeline, verifiedAtMs: null })),
   } as unknown as ConsoleApi;
@@ -70,24 +65,7 @@ async function openDetail(f: ReturnType<typeof harness>) {
   await screen.findByRole("region", { name: "微任务详情" });
 }
 
-describe("macro task and record navigation", () => {
-  it("switches between macro tasks and command records by keyboard", async () => {
-    const f = harness();
-    await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
-    const macro = screen.getByRole("button", { name: "宏任务" });
-    const records = screen.getByRole("button", { name: "记录" });
-    expect(macro.getAttribute("aria-pressed")).toBe("true");
-    expect(records.getAttribute("aria-pressed")).toBe("false");
-    records.focus();
-    await f.user.keyboard("{Enter}");
-    expect(screen.getByRole("button", { name: "记录" }).getAttribute("aria-pressed")).toBe("true");
-    expect(await screen.findByRole("button", { name: /外部命令记录/ })).toBeTruthy();
-    screen.getByRole("button", { name: "宏任务" }).focus();
-    await f.user.keyboard(" ");
-    expect(macroTaskRow()).toBeTruthy();
-    expect(document.querySelector("[data-slot=records-list]")!.closest("[hidden]")).toBeTruthy();
-  });
-
+describe("macro task navigation", () => {
   it("removes the whole list column when collapsed and retains its query and pagination after expansion", async () => {
     const f = harness(true);
     await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
@@ -153,7 +131,6 @@ describe("macro task and record navigation", () => {
     const header = document.querySelector('[data-slot="macro-overview-header"]') as HTMLElement;
     expect(within(header).getByRole("button", { name: "展开宏任务列表" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "宏任务列表（已收起）" })).toBeNull();
-    expect(document.querySelector(".history-view:not([hidden]) .rail-panel")).toBeNull();
     await f.user.click(within(header).getByRole("button", { name: "展开宏任务列表" }));
     expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
   });

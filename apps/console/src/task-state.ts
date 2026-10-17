@@ -42,13 +42,8 @@ export type TaskTitle = {
  * raw task text stays available in the detail view.
  */
 export function taskTitle(task: Task): TaskTitle {
-  const routed = task.lineage?.routingTask;
-  const explicit = normalizeDisplay(routed ? routed.title ?? "" : task.workflow?.title ?? "");
-  if (explicit) {
-    const source = routed?.titleSource === "first-line" ? "task" : "title";
-    return { text: source === "task" ? excerpt(explicit, TASK_LINE_CHARS) : explicit, fullText: explicit, source };
-  }
-  if (routed) return { text: UNTITLED_MICRO_TASK(), fullText: UNTITLED_MICRO_TASK(), source: "none" };
+  const explicit = normalizeDisplay(task.workflow?.title ?? "");
+  if (explicit) return { text: explicit, fullText: explicit, source: "title" };
   const firstLine = normalizeDisplay(task.task.trim().split("\n", 1)[0]);
   if (firstLine) return { text: excerpt(firstLine, TASK_LINE_CHARS), fullText: firstLine, source: "task" };
   return { text: UNTITLED_MICRO_TASK(), fullText: UNTITLED_MICRO_TASK(), source: "none" };

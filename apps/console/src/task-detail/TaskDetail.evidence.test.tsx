@@ -520,30 +520,6 @@ describe("the delegation", () => {
   });
 });
 
-describe("a run with no collaboration record", () => {
-  const record = (overrides: Record<string, unknown> = {}) => task({ workflow: undefined, lineage: { ...task().lineage, kind: "execution", buddy: null }, task: "npm test", status: "failed",
-    selectedAttempt: { attemptId: "att-c", startedAt: at("10:00"), finishedAt: at("10:02"), result: { terminationReason: "harness-error", result: { stdout: "1 failed",
-      nativeSession: { sessionId: "native-session-123456", storageScope: "harness-user-store", nativeAppVisibility: "listed-in-native-app", resumable: true } } } },
-    quotaFailure: { code: "quota-exceeded" }, ...overrides });
-
-  it("records its Host provenance, native session, native limit and ending", async () => {
-    open({ replies: { task: record() }, timeline: null });
-    await ready();
-    expect(pane().textContent).toContain("Host");
-    expect(pane().textContent).toContain("codex-desktop");
-    expect(pane().textContent).toContain("Harness 错误");
-    expect(pane().textContent).toContain("额度耗尽");
-    expect(within(band()).getByRole("button", { name: /复制标识 native-session-123456/ })).toBeTruthy();
-    await userEvent.setup().hover(within(band()).getByRole("button", { name: /复制标识 native-session-123456/ }));
-    expect((await screen.findAllByText(/Harness 用户存储 · 原生应用里列出 · 可恢复/))[0]).toBeTruthy();
-    cleanup();
-    open({ replies: { task: record({ status: "cancelled", cancellation: { actor: HOST, reason: "不再需要" }, selectedAttempt: { stopInitiator: "host", result: { terminationReason: "forced-stop" } } }) }, timeline: null });
-    await ready();
-    expect(pane().textContent).toContain("Host 停止");
-    expect(pane().textContent).toContain("不再需要");
-  });
-});
-
 describe("the detail is only read", () => {
   it("offers none of the controls that were taken out", async () => {
     const removed = ["决定理由", "添加协助任务", "批准所列协助", "拒绝协助并记录理由", "交给下一回合的输入", "提交接续输入", "仍在执行的协助任务", "新的 Host ID", "移交控制权",

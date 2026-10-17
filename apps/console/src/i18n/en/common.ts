@@ -14,7 +14,7 @@ export default {
     reminders: "The reminder settings are not recognised; refresh and retry.", storagePlan: "The storage plan reply is incomplete; check the service version.",
     version: "The version information is not recognised; check the service version.", network: "Cannot reach the local blackboard; refresh and retry.",
     unparsable: "The local service sent a reply that cannot be read.", snapshot: "The console data is incomplete; check the service version.",
-    submit: "The result of the submission is unknown; check it, then retry.", history: "The micro task history is incomplete; check the service version.",
+    submit: "The result of the submission is unknown; check it, then retry.",
     macroTasks: "The macro task list is incomplete; check the service version.", timeline: "The macro task timeline is incomplete; check the service version.",
     cleanup: "The result of the cleanup is unknown; retry the same request.", recheck: "The result of the check is incomplete; check the service version.",
     pathSaved: "The result of saving the path is unknown; check the service version.", refused: "The request did not succeed.", failed: "The request failed; try again later.",

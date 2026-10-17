@@ -2,7 +2,7 @@ import type zh from "../zh/taskDetail";
 
 export default {
   label: "Micro task detail",
-  back: { timeline: "Timeline", records: "Records" },
+  back: { timeline: "Timeline" },
   loading: "Reading the micro task…",
   failed: "Could not read the micro task",
   retry: "Retry",
@@ -11,13 +11,13 @@ export default {
   untitled: "Untitled micro task",
   title: { fromTask: "{{title}} (taken from the first line of the task)" },
   refresh: { label: "Read again", verified: "Verified {{time}}", unverified: "Verification time not recorded" },
-  header: { started: "Started", ended: "Ended", elapsed: "Elapsed", turns: "Turns" },
+  header: { started: "Started", elapsed: "Elapsed", turns: "Turns" },
   state: { running: "Running", unknown: "Stop not confirmed", queued: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
   wait: { queue: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", acceptance: "Awaiting acceptance" },
   rail: { label: "Steps", truncated: "The timeline read is incomplete and has no row for this micro task; only the delegation is listed." },
   step: {
     delegation: "Delegate", routing: "Route", turn: "Turn {{n}}", handoff: "Handoff", decision: "Decision", continue: "Continue",
-    cancel: "Cancel", takeover: "Takeover", acceptance: "Acceptance", record: "Run", calculation: "Routing calculation",
+    cancel: "Cancel", takeover: "Takeover", acceptance: "Acceptance",
   },
   fold: { more: "Show more", less: "Show less" },
   result: { name: "Result" },
@@ -79,7 +79,7 @@ export default {
   delegation: {
     task: "Task", source: "Source", originalDelegator: "Originally delegated by", currentOwner: "Current owner", project: "Project", unknownProject: "Project not recorded", id: "Micro task ID",
     parent: "Parent micro task", cwd: "Working directory", authority: "Delegation authority", authorityYes: "Has delegation authority", helpers: "Helpers",
-    calculation: "Routing calculation", fixes: "Fixes", fixesTarget: "Micro task being fixed", fixedBy: "Fixed by: {{n}}",
+    fixes: "Fixes", fixesTarget: "Micro task being fixed", fixedBy: "Fixed by: {{n}}",
     inquiries: "Inquiries",
   },
   decision: {
@@ -102,6 +102,5 @@ export default {
     status: { failed: "Failed", cancelled: "Cancelled" },
     exception: "Exceptions", unconfirmed: "Stop not confirmed; executions not yet verified: {{n}}",
   },
-  record: { label: "Record detail", loading: "Reading the record…", failed: "Could not read the record", command: "Command execution", untitled: "Untitled", microTask: "Micro task", macroTask: "Macro task", host: "Host", id: "ID" },
   error: { incomplete: "The reply is incomplete ({{what}}); check the service version." },
 } satisfies typeof zh;

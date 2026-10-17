@@ -27,7 +27,7 @@ export function task(overrides: Record<string, unknown> = {}): Task {
     revision: 5, createdAt: at("10:00"), updatedAt: at("11:00"), acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     activeAttemptId: null, selectedAttemptId: "att-2", resultAvailable: true, shutdownConfirmed: true,
     lineage: { kind: "micro-task", sourceHostId: "codex-desktop", currentHostId: "codex-desktop", parentRunId: null, rootRunId: "m1", rootLeadRunId: null,
-      project: { id: "p1", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" }, routingTask: null, buddy: OPUS },
+      project: { id: "p1", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" }, buddy: OPUS },
     workflow: { state: "delivered", awaitingHost: false, hostId: "codex-desktop", ownerGeneration: 1, revision: 9, title: "微任务详情", macroTaskId: "macro-1" },
     selectedAttempt: { attemptId: "att-2", startedAt: at("10:42"), finishedAt: at("11:00"), error: null, shutdownConfirmed: true, tokenUsage: null,
       reminders: { overdue: false, possiblyStuck: false, lastNativeEventAt: null, toolInProgress: false },

@@ -111,8 +111,3 @@ export function formatMoment(ms: number, nowMs: number): string {
   const day = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
   return `${date.getFullYear() === now.getFullYear() ? "" : `${date.getFullYear()}-`}${day} ${clockText}`;
 }
-
-/** Calendar date for a records group, in the active locale. */
-export function formatCalendarDate(ms: number): string {
-  return new Intl.DateTimeFormat(locale, { year: "numeric", month: "2-digit", day: "2-digit" }).format(ms);
-}

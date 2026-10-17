@@ -10,7 +10,6 @@ import type { MacroTaskFilter, MacroTaskSummary } from "./macro-task-types";
 import type { TimelineItem } from "./macro-task-display";
 
 import type { InspectorSelection } from "./inspector-card";
-import { Records } from "./Records";
 import { ListFold } from "./MacroTaskList";
 import { Hint } from "./components/hint";
 import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
@@ -72,11 +71,6 @@ function StopDialog({ summary, scope, onConfirm, onCancel }: {
 }
 
 /**
- * Content of the 微任务记录 tab. The primary view browses micro tasks
- * as work macroTasks; the clearly labelled secondary switch keeps the
- * raw task history (command and external records included) reachable
- * instead of silently removing it.
- *
  * Where the page is (a macro task, one of its micro tasks, a step of it) is the
  * address, and the address is the only place it lives: choosing a macro task,
  * opening a micro task and going back to the timeline each add a step to the
@@ -94,20 +88,12 @@ export function MacroTasks({ snapshot, api, refresh, active = true, authority, w
 
   const [listCollapsed, setListCollapsed] = useViewPreference("macro-task-list-collapsed");
   const [location, setLocation] = useState<TasksLocation>(() => tasksLocation(window.location.hash) ?? TASKS_ROOT);
-  const view = location.records ? "records" : "macroTasks";
-  // Each view remembers its browsing address while the other one is open.
-  const macroAddress = useRef<TasksLocation>(location.records ? TASKS_ROOT : location);
-  const recordsAddress = useRef<TasksLocation>(location.records ? location : { ...TASKS_ROOT, records: true });
-  function remember(next: TasksLocation) {
-    if (next.records) recordsAddress.current = next; else macroAddress.current = next;
-  }
   // The timeline item the open detail came from; it names the step the detail opens on.
   const [origin, setOrigin] = useState<string | null>(null);
   function go(next: TasksLocation, how: "push" | "replace", from: string | null = null) {
     const hash = tasksHash(next);
     if (window.location.hash !== hash) (how === "push" ? window.history.pushState : window.history.replaceState).call(window.history, null, "", hash);
     setOrigin(from);
-    remember(next);
     setLocation(next);
     onAddress?.(hash);
   }
@@ -117,7 +103,6 @@ export function MacroTasks({ snapshot, api, refresh, active = true, authority, w
       const next = tasksLocation(window.location.hash);
       if (!next) return;
       setOrigin(null);
-      remember(next);
       setLocation(next);
       onAddress?.(tasksHash(next));
     };
@@ -126,27 +111,11 @@ export function MacroTasks({ snapshot, api, refresh, active = true, authority, w
     window.addEventListener("popstate", changed);
     return () => { window.removeEventListener("hashchange", changed); window.removeEventListener("popstate", changed); };
   }, []);
-  const listNavigation = () => <div data-slot="macro-list-navigation" className="flex items-center gap-3.5" role="group" aria-label={t("list")}>
-    <button type="button" className={cn("h-7 text-base hover:text-foreground transition-colors duration-150 motion-reduce:transition-none", view === "macroTasks" ? "font-semibold text-foreground" : "font-normal text-ink2")} aria-pressed={view === "macroTasks"} onClick={() => go(macroAddress.current, "push")}>{t("macro")}</button>
-    <button type="button" className={cn("h-7 text-base hover:text-foreground transition-colors duration-150 motion-reduce:transition-none", view === "records" ? "font-semibold text-foreground" : "font-normal text-ink2")} aria-pressed={view === "records"} onClick={() => go(recordsAddress.current, "push")}>{t("records")}</button>
-  </div>;
-  return <div className="flex h-full min-h-0 flex-col">
-    {view === "records" && connectionError && <ConnectionStrip error={connectionError} verifiedAtMs={verifiedAtMs} retry={() => { void refresh(); }}/>}
-    <div className="min-h-0 flex-1 overflow-hidden" hidden={view !== "macroTasks"}>
-      <MacroTasksWorkspace snapshot={snapshot} api={api} refresh={refresh}
-        active={active && view === "macroTasks"} authority={authority} writesAvailable={writesAvailable} connectionError={connectionError} verifiedAtMs={verifiedAtMs}
-        location={view === "macroTasks" ? location : macroAddress.current} origin={origin} go={go}
-        listNavigation={listNavigation} listCollapsed={listCollapsed}
-        onCollapseList={() => setListCollapsed(true)} onExpandList={() => setListCollapsed(false)} />
-    </div>
-    <div className="min-h-0 flex-1 overflow-hidden" hidden={view !== "records"}>
-      <Records snapshot={snapshot} api={api} active={active && view === "records"}
-        selected={view === "records" ? location.runId : recordsAddress.current.runId} onSelect={runId => go({ macroTaskId: null, runId, step: null, records: true }, "push")}
-        onOpenMicroTask={(macroTaskId, runId) => go({ macroTaskId, runId, step: null }, "push")}
-        listNavigation={listNavigation()} listCollapsed={listCollapsed}
-        onCollapseList={() => setListCollapsed(true)} onExpandList={() => setListCollapsed(false)} />
-    </div>
-  </div>;
+  const listNavigation = () => <h2 data-slot="macro-list-heading" className="text-base font-semibold">{t("macro")}</h2>;
+  return <MacroTasksWorkspace snapshot={snapshot} api={api} refresh={refresh}
+    active={active} authority={authority} writesAvailable={writesAvailable} connectionError={connectionError} verifiedAtMs={verifiedAtMs}
+    location={location} origin={origin} go={go} listNavigation={listNavigation} listCollapsed={listCollapsed}
+    onCollapseList={() => setListCollapsed(true)} onExpandList={() => setListCollapsed(false)} />;
 }
 
 function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writesAvailable, location, origin, go, listNavigation, listCollapsed, onCollapseList, onExpandList, connectionError, verifiedAtMs }: {

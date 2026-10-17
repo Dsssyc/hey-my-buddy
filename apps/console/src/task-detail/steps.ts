@@ -24,9 +24,7 @@ export type Wait = {
   requestId: string | null;
 };
 
-type StepKind = "delegation" | "routing" | "turn" | "handoff" | "decision" | "continue" | "cancel" | "takeover" | "acceptance"
-  /** A run with no collaboration record has one step: a command's execution, or a Router's calculation. */
-  | "record" | "calculation";
+type StepKind = "delegation" | "routing" | "turn" | "handoff" | "decision" | "continue" | "cancel" | "takeover" | "acceptance";
 
 export type Step = {
   key: string;
@@ -64,7 +62,7 @@ const SETTLING_EVENTS = ["accept", "reject", "conclude"];
 const AFTER_DELIVERY = ["delivered", "accepted", "concluded"];
 /** Order of steps that start at the same instant. */
 const RANK: Record<StepKind, number> = {
-  delegation: 0, decision: 1, continue: 1, cancel: 1, takeover: 1, routing: 2, handoff: 3, turn: 4, acceptance: 5, record: 4, calculation: 4,
+  delegation: 0, decision: 1, continue: 1, cancel: 1, takeover: 1, routing: 2, handoff: 3, turn: 4, acceptance: 5,
 };
 
 /** A change of buddy needs both sides recorded: a missing buddy is not a different one. */
@@ -76,11 +74,6 @@ const ms = parseTimelineInstant;
 
 function blank(kind: StepKind, key: string, at: number | null): Step {
   return { key, kind, at, ms: null, span: null, events: [], pending: false, turnIndex: null, outcome: null, from: null, to: null, waits: [] };
-}
-
-/** The one step of a run that has no collaboration record. */
-export function recordSteps(kind: "record" | "calculation"): Steps {
-  return { steps: [blank(kind, kind, null)], tail: [], complete: true };
 }
 
 /** The steps of the micro task `runId` in the macro task's timeline. */

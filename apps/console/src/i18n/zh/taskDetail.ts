@@ -1,7 +1,7 @@
 /** The detail of a micro task, organised by turn: its steps on the left, the chosen step on the right. */
 export default {
   label: "微任务详情",
-  back: { timeline: "时间轴", records: "记录" },
+  back: { timeline: "时间轴" },
   loading: "正在读取微任务…",
   failed: "读取微任务失败",
   retry: "重试读取",
@@ -10,13 +10,13 @@ export default {
   untitled: "未命名微任务",
   title: { fromTask: "{{title}}（取自任务首行）" },
   refresh: { label: "重新读取", verified: "核对时间 {{time}}", unverified: "核对时间未记录" },
-  header: { started: "开始", ended: "结束", elapsed: "历时", turns: "回合" },
+  header: { started: "开始", elapsed: "历时", turns: "回合" },
   state: { running: "进行中", unknown: "结束未确认", queued: "排队", host: "等待 Host", lead: "等待 Lead", review: "等待验收", accepted: "已验收", done: "已完成", ended: "已结束", failed: "失败" },
   wait: { queue: "排队", host: "等待 Host", lead: "等待 Lead", acceptance: "等待验收" },
   rail: { label: "步骤", truncated: "时间轴的读取不完整，没有这个微任务的一行；这里只列出委派。" },
   step: {
     delegation: "委派", routing: "路由", turn: "回合 {{n}}", handoff: "换手", decision: "决定", continue: "继续",
-    cancel: "取消", takeover: "接管", acceptance: "验收", record: "执行", calculation: "路由计算",
+    cancel: "取消", takeover: "接管", acceptance: "验收",
   },
   fold: { more: "展开", less: "收起" },
   result: { name: "结果" },
@@ -78,7 +78,7 @@ export default {
   delegation: {
     task: "任务", source: "来源", originalDelegator: "原始委派方", currentOwner: "当前负责方", project: "项目", unknownProject: "未记录项目", id: "微任务 ID",
     parent: "上级微任务", cwd: "执行位置", authority: "委派权", authorityYes: "带委派权", helpers: "协助任务",
-    calculation: "路由计算", fixes: "修正", fixesTarget: "被修正的微任务", fixedBy: "被修正 {{n}} 次",
+    fixes: "修正", fixesTarget: "被修正的微任务", fixedBy: "被修正 {{n}} 次",
     inquiries: "问询",
   },
   decision: {
@@ -101,6 +101,5 @@ export default {
     status: { failed: "失败", cancelled: "已取消" },
     exception: "例外", unconfirmed: "停止未确认，{{n}} 项执行尚未核实",
   },
-  record: { label: "记录详情", loading: "正在读取记录…", failed: "读取记录失败", command: "命令执行", untitled: "未命名", microTask: "微任务", macroTask: "宏任务", host: "Host", id: "编号" },
   error: { incomplete: "读取的内容不完整（{{what}}）；请检查服务版本。" },
 };

@@ -54,11 +54,10 @@ export type DetailRead = {
  * three seconds while the page shows; the audit is read when it opens and when
  * the record's revision moves, down to the routing decisions of the timeline;
  * while the micro task is live the task and its inquiries are read on the same
- * beat, and otherwise the inquiries once. `listed` is the revision the list
- * the detail was opened from reads for this run, when it has one: a new one
- * reads the task again. A failed read keeps what was read, and nothing here writes.
+ * beat, and otherwise the inquiries once. A failed read keeps what was read,
+ * and nothing here writes.
  */
-export function useTaskDetail(client: TaskDetailClient, runId: string, active: boolean, decisionIds: string[], listed: number | null): DetailRead {
+export function useTaskDetail(client: TaskDetailClient, runId: string, active: boolean, decisionIds: string[]): DetailRead {
   useTranslation("common");
   const [data, setData] = useState<Data>(empty);
   const [busy, setBusy] = useState(false);
@@ -102,12 +101,10 @@ export function useTaskDetail(client: TaskDetailClient, runId: string, active: b
     return { value: Object.fromEntries(reads.map(([id, read]) => [id, read.value])), verifiedAtMs: null };
   }, (previous, bases: Record<string, Basis>) => ({ ...previous, bases: { ...previous.bases, ...bases } })), [client, load]);
 
-  const collaboration = data.view === null ? null : data.view.record === null;
   const live = data.view !== null && LIVE_STATUSES.includes(data.view.task.status);
   const revision = data.workflow?.revision ?? null;
 
-  // A record without a collaboration record has no record of its own to watch: the list it was opened from says when it moved.
-  useEffect(() => { if (run) void loadTask(); }, [run, listed, loadTask]);
+  useEffect(() => { if (run) void loadTask(); }, [run, loadTask]);
 
   // The record moving means the task moved with it: its attempt, result and stop.
   const readAt = useRef<number | null>(null);
@@ -117,7 +114,7 @@ export function useTaskDetail(client: TaskDetailClient, runId: string, active: b
   }, [revision, run, loadTask]);
 
   useEffect(() => {
-    if (!run || !collaboration) return;
+    if (!run || data.view === null) return;
     let current = true;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
@@ -128,12 +125,12 @@ export function useTaskDetail(client: TaskDetailClient, runId: string, active: b
     }
     void poll();
     return () => { current = false; clearTimeout(timer); };
-  }, [run, collaboration, loadWorkflow]);
+  }, [run, data.view !== null, loadWorkflow]);
 
-  useEffect(() => { if (run && collaboration && revision !== null) void loadAudit(); }, [run, collaboration, revision, wantedKey, loadAudit]);
+  useEffect(() => { if (run && revision !== null) void loadAudit(); }, [run, revision, wantedKey, loadAudit]);
 
   useEffect(() => {
-    if (!run || !collaboration) return;
+    if (!run || data.view === null) return;
     void loadInquiries();
     if (!live) return;
     const timer = setInterval(() => {
@@ -142,7 +139,7 @@ export function useTaskDetail(client: TaskDetailClient, runId: string, active: b
       void loadInquiries();
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [run, collaboration, live, loadInquiries, loadTask]);
+  }, [run, data.view !== null, live, loadInquiries, loadTask]);
 
   // The bounds a routing decision was made within are frozen with it: each is read once.
   const programmed = data.routing.filter(entry => entry.source !== null && PROGRAM_SOURCES.includes(entry.source)).map(entry => entry.decisionId);
@@ -155,14 +152,14 @@ export function useTaskDetail(client: TaskDetailClient, runId: string, active: b
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
-    const reads = [loadTask(), ...(collaboration ? [loadWorkflow(), loadAudit(), loadInquiries()] : [])];
+    const reads = [loadTask(), loadWorkflow(), loadAudit(), loadInquiries()];
     void Promise.all(reads).finally(() => { busyRef.current = false; setBusy(false); });
-  }, [collaboration, loadTask, loadWorkflow, loadAudit, loadInquiries]);
+  }, [loadTask, loadWorkflow, loadAudit, loadInquiries]);
 
   const { errors, verified, ...read } = data;
   return {
     ...read, busy, refresh,
-    verifiedAtMs: collaboration ? verified.workflow : verified.task,
+    verifiedAtMs: verified.workflow,
     error: Object.values(errors).find(Boolean)?.() ?? "",
   };
 }

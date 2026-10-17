@@ -139,9 +139,10 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
         })),
       };
     } else if (entry.kind === "task-page") {
-      const page = await api.tasks({});
-      // Every run the page lists is also a task view the detail reads.
-      for (const run of page.runs) parseTask(run, run.runId);
+      // The CLI preview regression still checks the server's execution-list fixture.
+      // Only collaboration tasks have a console detail entry point.
+      const page = bodyFor(entry) as { runs: import("./types").Task[]; total: number; nextCursor: string | null };
+      for (const run of page.runs.filter(run => run.workflow)) parseTask(run, run.runId);
       outcome.facts = { total: page.total, runs: page.runs.length, nextCursor: page.nextCursor };
     } else if (entry.kind === "runtime-version") {
       const version = await api.runtimeVersion();

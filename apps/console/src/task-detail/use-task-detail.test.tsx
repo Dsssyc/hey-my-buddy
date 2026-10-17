@@ -7,8 +7,8 @@ import type { DetailRead } from "./use-task-detail";
 import { useTaskDetail } from "./use-task-detail";
 
 let latest!: DetailRead;
-function Probe({ reads, active = true, runId = "m1", decisionIds = [], listed = null }: { reads: ReturnType<typeof client>; active?: boolean; runId?: string; decisionIds?: string[]; listed?: number | null }) {
-  latest = useTaskDetail(reads, runId, active, decisionIds, listed);
+function Probe({ reads, active = true, runId = "m1", decisionIds = [] }: { reads: ReturnType<typeof client>; active?: boolean; runId?: string; decisionIds?: string[] }) {
+  latest = useTaskDetail(reads, runId, active, decisionIds);
   return null;
 }
 const calls = (fn: unknown) => (fn as ReturnType<typeof vi.fn>).mock.calls.length;
@@ -77,14 +77,6 @@ describe("what the detail of a micro task reads", () => {
     await settle(9000);
     expect(calls(running.inquiries)).toBe(after);
     expect(calls(running.task)).toBe(taskReads + 3);
-  });
-
-  it("reads no collaboration record for a run that has none", async () => {
-    const reads = client({ task: task({ workflow: undefined, lineage: { ...task().lineage, kind: "execution" } }) });
-    render(<Probe reads={reads} />);
-    await settle(6000);
-    expect(latest.view?.task.runId).toBe("m1");
-    expect([calls(reads.workflow), calls(reads.audit), calls(reads.inquiries)]).toEqual([0, 0, 0]);
   });
 
   it("keeps what it read when a read fails, says which failed, and clears it when the read works again", async () => {
@@ -172,27 +164,9 @@ describe("what the head rests on", () => {
     expect(calls(reads.task)).toBeGreaterThan(0);
   });
 
-  it("is the time of the task read for a run that has no collaboration record", async () => {
-    const reads = client({ task: task({ workflow: undefined, lineage: { ...task().lineage, kind: "execution" } }) });
-    render(<Probe reads={reads} />);
-    await settle();
-    expect(latest.verifiedAtMs).not.toBeNull();
-  });
 });
 
 describe("what moves the reads", () => {
-  it("reads the task again when the list it was opened from reads a new revision, and by no timer of its own", async () => {
-    const reads = client({ task: task({ workflow: undefined, lineage: { ...task().lineage, kind: "execution" } }) });
-    const view = render(<Probe reads={reads} listed={5} />);
-    await settle();
-    await settle(9000);
-    expect(calls(reads.task)).toBe(1);
-    view.rerender(<Probe reads={reads} listed={6} />);
-    await settle();
-    expect(calls(reads.task)).toBe(2);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("asks the audit for the routing decisions of the timeline, and reads it again when they change", async () => {
     const reads = client();
     const view = render(<Probe reads={reads} decisionIds={["d1"]} />);
