@@ -34,6 +34,7 @@ from ..harnesses.run_contract import (
 )
 from . import turn_io, worker_services
 from .run_observers import FastCorrection, ReviewObserver, worker_observer
+from .run_controller import NATIVE_OPERATIONS
 from .structured_call import (
     _NoToolEvidence, no_tool_prompt, valid_answer,
 )
@@ -803,22 +804,12 @@ def _artifacts(context: ExecutionContext, handle: InlineRunHandle) -> list[dict]
 
 
 def discover_models(name: str) -> dict:
-    return _native_operation(name, "discover", {
-        "seam": "run_discovery", "resultKey": "catalog",
-        "unavailableCode": "CATALOG_UNAVAILABLE",
-        "stopUnconfirmedCode": "HARNESS_DISCOVERY_STOP_UNCONFIRMED",
-        "unknownResult": {"source": "native-discovery", "providers": [], "discoveries": [{
-            "harness": name, "status": "unknown", "accountStatus": "unknown",
-            "reason": "native-metadata-wait-expired"}]},
-    })
+    return _native_operation(name, "discover")
 
 
 def delete_sessions(name: str, session_ids: list[str]) -> dict[str, str]:
     """Delete proven native sessions, validating the controller receipt once."""
-    sessions = _native_operation(name, "delete-sessions", {
-        "seam": "run_delete_sessions", "resultKey": "sessions", "unknownResult": None,
-        "unavailableCode": "UNSUPPORTED", "stopUnconfirmedCode": "HARNESS_DELETE_STOP_UNCONFIRMED",
-    }, session_ids=session_ids)
+    sessions = _native_operation(name, "delete-sessions", session_ids=session_ids)
     if (not isinstance(sessions, dict) or sessions.keys() != set(session_ids)
             or any(value not in ("deleted", "already-gone") for value in sessions.values())):
         raise BoardError("INVALID_PROTOCOL", "The native session deletion receipt does not match the request",
@@ -826,10 +817,11 @@ def delete_sessions(name: str, session_ids: list[str]) -> dict[str, str]:
     return sessions
 
 
-def _native_operation(name: str, operation: str, specification: dict, **arguments) -> dict:
+def _native_operation(name: str, operation: str, **arguments) -> dict:
     from ..harnesses.registry import run_seam
     from ..harnesses.runtime_selection import controller_environment
 
+    specification = NATIVE_OPERATIONS[operation]
     directory = None
     stopped = True  # No controller exists during control-file preparation.
     try:
@@ -840,7 +832,7 @@ def _native_operation(name: str, operation: str, specification: dict, **argument
                                  f"The harness has no registered {operation} operation", harness=name)
             directory = Path(tempfile.mkdtemp(prefix=f"hey-my-buddy-{name}-{specification['resultKey']}-"))
             control = directory / _NATIVE_CONTROL
-            private_json(control, {"operation": operation, "specification": specification, "arguments": arguments,
+            private_json(control, {"operation": operation, "arguments": arguments,
                                    "harness": name,
                                    "privateRoot": str(directory), "nativeRoot": str(directory / "native"),
                                    "cwd": str(directory), "timeoutSeconds": 25})
@@ -870,8 +862,10 @@ def _native_operation(name: str, operation: str, specification: dict, **argument
                 raise BoardError(specification["stopUnconfirmedCode"],
                                  f'The native {operation} process stop is unconfirmed', harness=name)
             payload = collection.payload
-            if specification["unknownResult"] is not None and (wait_expired or payload.get("status") == "unknown"):
-                return specification["unknownResult"]
+            if specification["allowUnknown"] and (wait_expired or payload.get("status") == "unknown"):
+                return {"source": "native-discovery", "providers": [], "discoveries": [{
+                    "harness": name, "status": "unknown", "accountStatus": "unknown",
+                    "reason": "native-metadata-wait-expired"}]}
             if wait_expired or collection.exit_code != 0 or payload.get("status") != "ok":
                 message = (collection.payload or {}).get("error")
                 if not isinstance(message, str) or not message:

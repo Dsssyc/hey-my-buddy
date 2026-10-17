@@ -1,5 +1,9 @@
-"""Controller specifications and deletion receipts at the process boundary."""
+"""Named controller operations and deletion receipts at the process boundary."""
 import json
+import os
+import subprocess
+import sys
+import tempfile
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,29 +15,57 @@ from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
 from hey_my_buddy.errors import BoardError
 
 
-class ControllerSpecificationTests(unittest.TestCase):
-    def control(self, *, unknown_result=None):
-        return {"operation": "fixture-operation", "harness": "codex",
-                "specification": {"seam": "fixture_seam", "resultKey": "fixtureResult",
-                                  "unknownResult": unknown_result},
-                "arguments": {"session_ids": ["owned"]}, "cwd": "/fixture",
+class ControllerOperationTests(unittest.TestCase):
+    def control(self, operation="delete-sessions"):
+        return {"operation": operation, "harness": "codex",
+                "arguments": {"session_ids": ["owned"]} if operation == "delete-sessions" else {}, "cwd": "/fixture",
                 "privateRoot": "/fixture", "nativeRoot": "/fixture/native", "timeoutSeconds": 1}
 
-    def test_controller_uses_the_supplied_seam_arguments_and_result_key(self):
+    def test_controller_resolves_the_registered_operation_and_passes_arguments(self):
         seam = Mock(return_value={"owned": "deleted"})
-        with patch.object(run_controller, "run_seam", return_value=SimpleNamespace(fixture_seam=seam)):
+        with patch.object(run_controller, "run_seam", return_value=SimpleNamespace(run_delete_sessions=seam)):
             frame, code = run_controller.execute(self.control(), threading.Event(), Path("/fixture/state"))
         self.assertEqual(code, 0)
-        self.assertEqual(json.loads(frame)["fixtureResult"], {"owned": "deleted"})
+        self.assertEqual(json.loads(frame)["sessions"], {"owned": "deleted"})
         self.assertEqual(seam.call_args.kwargs["session_ids"], ["owned"])
 
-    def test_deadline_disposition_follows_the_specification(self):
+    def test_unknown_operation_is_refused_before_resolving_any_harness(self):
+        for operation in ("review", "fixture-operation", None, []):
+            with self.subTest(operation=operation), patch.object(run_controller, "run_seam") as resolve:
+                with self.assertRaises(BoardError) as caught:
+                    run_controller.execute({"operation": operation}, threading.Event(), Path("/fixture/state"))
+                self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+                resolve.assert_not_called()
+
+    def test_control_file_cannot_supply_a_seam_specification(self):
+        control = {**self.control(), "specification": {"seam": "run_review"}}
+        with patch.object(run_controller, "run_seam") as resolve, self.assertRaises(BoardError) as caught:
+            run_controller.execute(control, threading.Event(), Path("/fixture/state"))
+        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+        resolve.assert_not_called()
+
+    def test_controller_process_preserves_unknown_operation_error_before_native_launch(self):
+        with tempfile.TemporaryDirectory(prefix='unknown-controller-operation-') as directory:
+            control = Path(directory) / 'control.json'
+            run_execution.private_json(control, {'operation': 'review', 'harness': 'codex'})
+            completed = subprocess.run(
+                [sys.executable, '-m', 'hey_my_buddy.buddy.roles.run_controller', '--control', str(control)],
+                env={**os.environ, 'PATH': str(Path(directory) / 'no-executables')},
+                capture_output=True, text=True, timeout=10)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload['code'], 'INVALID_ARGUMENT')
+        self.assertEqual(payload['message'], 'Unknown native controller operation')
+        self.assertIs(payload['modelStarted'], False)
+        self.assertIs(payload['processState']['shutdownConfirmed'], True)
+
+    def test_deadline_disposition_follows_the_registered_operation(self):
         error = CodexProtocolError("deadline", "fixture deadline")
         error.discovery_shutdown_confirmed = True
-        for unknown_result, status, exit_code in ((None, "error", 1), ({}, "unknown", 0)):
+        for operation, status, exit_code in (("delete-sessions", "error", 1), ("discover", "unknown", 0)):
             with self.subTest(status=status), patch.object(run_controller, "run_seam", return_value=
-                    SimpleNamespace(fixture_seam=Mock(side_effect=error))):
-                frame, code = run_controller.execute(self.control(unknown_result=unknown_result),
+                    SimpleNamespace(run_delete_sessions=Mock(side_effect=error), run_discovery=Mock(side_effect=error))):
+                frame, code = run_controller.execute(self.control(operation),
                                                     threading.Event(), Path("/fixture/state"))
                 self.assertEqual(code, exit_code)
                 self.assertEqual(json.loads(frame)["status"], status)
@@ -43,7 +75,7 @@ class ControllerSpecificationTests(unittest.TestCase):
         error = CodexProtocolError("native-rpc-error", native["message"], native_error=native)
         error.discovery_shutdown_confirmed = True
         with patch.object(run_controller, "run_seam", return_value=
-                SimpleNamespace(fixture_seam=Mock(side_effect=error))):
+                SimpleNamespace(run_delete_sessions=Mock(side_effect=error))):
             frame, code = run_controller.execute(self.control(), threading.Event(), Path("/fixture/state"))
         payload = json.loads(frame)
         self.assertEqual(code, 1)
@@ -52,6 +84,25 @@ class ControllerSpecificationTests(unittest.TestCase):
 
 
 class DeletionReceiptBoundaryTests(unittest.TestCase):
+    def test_control_file_carries_only_the_operation_name_arguments_and_context(self):
+        handle = Mock()
+        handle.wait.return_value = 0
+        collection = SimpleNamespace(payload={'status': 'ok', 'sessions': {'owned': 'deleted'}},
+                                     exit_code=0, stop_confirmed=True)
+
+        def launch(**kwargs):
+            argv, _, _ = kwargs['prepare']()
+            control = json.loads(Path(argv[-1]).read_text())
+            self.assertEqual(set(control), {'operation', 'arguments', 'harness', 'privateRoot',
+                                             'nativeRoot', 'cwd', 'timeoutSeconds'})
+            self.assertEqual(control['operation'], 'delete-sessions')
+            self.assertEqual(control['arguments'], {'session_ids': ['owned']})
+            return handle
+
+        with patch.object(run_execution, 'launch_controller', side_effect=launch), \
+             patch.object(run_execution, 'collect_controller', return_value=collection):
+            self.assertEqual(run_execution.delete_sessions('codex', ['owned']), {'owned': 'deleted'})
+
     def receipt(self, payload, *, stopped=True, wait_result=0, exit_code=0):
         handle = Mock()
         handle.wait.return_value = wait_result

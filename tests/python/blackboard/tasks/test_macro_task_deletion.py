@@ -111,7 +111,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         self.assertEqual(preview["microTaskCount"], 53)
         self.assertGreaterEqual(preview["blockerTotal"], 53)
         self.assertEqual(len(preview["blockers"]), 50)
-        self.assertEqual(len({(item["runId"], item["reasonCode"]) for item in preview["blockers"]}), 50)
+        self.assertEqual(len({(item["runId"], item["reason"]["code"]) for item in preview["blockers"]}), 50)
 
     def test_run_group_counts_failed_without_conclusion_and_accepts_it(self):
         board = self.board()
@@ -135,10 +135,12 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         target = "run:" + run["runId"]
         preview = macro_task_deletion.preview(board.store, target)
         self.assertGreaterEqual(preview["blockerTotal"], 1)
-        blocker = next(item for item in preview["blockers"] if item["reasonCode"] == "queued")
+        blocker = next(item for item in preview["blockers"] if item["reason"]["code"] == "macro-task-deletion.queued")
         self.assertEqual(blocker["runId"], run["runId"])
-        self.assertEqual(blocker["reasonCode"], "queued")
-        self.assertIn("resolution", blocker)
+        self.assertEqual(blocker["reason"], {"code": "macro-task-deletion.queued", "params": {}})
+        self.assertEqual(blocker["reason"]["params"], {})
+        self.assertNotIn("resolution", blocker)
+        self.assertNotIn("reasonCode", blocker)
         error = self.assert_code("MACRO_TASK_NOT_SETTLED", macro_task_deletion.delete, board.store, target, 1)
         self.assertEqual(error.details["blockerTotal"], preview["blockerTotal"])
         with board.store.db.read() as db:
@@ -449,20 +451,20 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                     db.execute("UPDATE tasks SET state=? WHERE task_id=?", (task_state, run["runId"]))
                     db.execute("UPDATE workflow_runs SET state=? WHERE run_id=?", (run_state, run["runId"]))
                 preview = macro_task_deletion.preview(board.store, target)
-                self.assertIn(reason, {blocker["reasonCode"] for blocker in preview["blockers"]})
+                self.assertIn("macro-task-deletion." + reason, {blocker["reason"]["code"] for blocker in preview["blockers"]})
                 error = self.assert_code("MACRO_TASK_NOT_SETTLED", macro_task_deletion.delete,
                                          board.store, target, 1)
-                self.assertIn(reason, {blocker["reasonCode"] for blocker in error.details["blockers"]})
+                self.assertIn("macro-task-deletion." + reason, {blocker["reason"]["code"] for blocker in error.details["blockers"]})
         with board.store.db.write() as db:
             db.execute("UPDATE tasks SET state=?,selected_attempt_id='missing-attempt' WHERE task_id=?",
                        (original_task["state"], run["runId"]))
             db.execute("UPDATE workflow_runs SET state=? WHERE run_id=?", (original_run["state"], run["runId"]))
-        self.assertIn("stop-unconfirmed", {b["reasonCode"] for b in
+        self.assertIn("macro-task-deletion.stop-unconfirmed", {b["reason"]["code"] for b in
                          macro_task_deletion.preview(board.store, target)["blockers"]})
         with board.store.db.write() as db:
             db.execute("UPDATE tasks SET selected_attempt_id=NULL,active_attempt_id='missing-attempt'"
                        " WHERE task_id=?", (run["runId"],))
-        self.assertIn("stop-unconfirmed", {b["reasonCode"] for b in
+        self.assertIn("macro-task-deletion.stop-unconfirmed", {b["reason"]["code"] for b in
                          macro_task_deletion.preview(board.store, target)["blockers"]})
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM macro_task_deletions").fetchone()[0], 0)
@@ -476,7 +478,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        "adapter,shutdown_confirmed,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
                        ("finished-unconfirmed", run["runId"], 1, "fixture", "finished", "dsh", 0, now, now))
         preview = macro_task_deletion.preview(board.store, run["macroTaskId"])
-        stop = next(b for b in preview["blockers"] if b["reasonCode"] == "stop-unconfirmed")
+        stop = next(b for b in preview["blockers"] if b["reason"]["code"] == "macro-task-deletion.stop-unconfirmed")
         self.assertEqual(stop["attemptIds"], ["finished-unconfirmed"])
         self.assert_code("MACRO_TASK_NOT_SETTLED", macro_task_deletion.delete,
                          board.store, run["macroTaskId"], 1)
@@ -495,16 +497,16 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             db.execute("INSERT INTO workflow_requests(request_id,run_id,kind,summary,payload_json,state,"
                        "expected_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
                        ("pending-request", run["runId"], "attention", "private", "{}", "open", 1, now, now))
-        self.assertIn("awaiting-host", {b["reasonCode"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
+        self.assertIn("macro-task-deletion.awaiting-host", {b["reason"]["code"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_requests SET state='declined' WHERE request_id='pending-request'")
             db.execute("INSERT INTO workflow_continuations(continuation_id,run_id,kind,expected_revision,"
                        "input_text,input_bytes,state,created_at) VALUES(?,?,?,?,?,?,?,?)",
                        ("pending-continuation", run["runId"], "manual", 1, "private", 7, "recorded", now))
-        self.assertIn("queued", {b["reasonCode"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
+        self.assertIn("macro-task-deletion.queued", {b["reason"]["code"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_continuations SET state='queued' WHERE continuation_id='pending-continuation'")
-        self.assertIn("queued", {b["reasonCode"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
+        self.assertIn("macro-task-deletion.queued", {b["reason"]["code"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_continuations SET state='cancelled' WHERE continuation_id='pending-continuation'")
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,created_at) VALUES(?,?,?,?)",
@@ -513,7 +515,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        "updated_at) VALUES(?,?,?,?,?,?)", ("pending-decision", "pending-route", "select", "hash", now, now))
             db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at,updated_at)"
                        " VALUES(?,?,?,?,?,?)", ("pending-decision", run["runId"], 1, "pending", now, now))
-        self.assertIn("routing", {b["reasonCode"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
+        self.assertIn("macro-task-deletion.routing", {b["reason"]["code"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_routes SET state='resolved' WHERE decision_id='pending-decision'")
             db.execute("INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,checkout_id,path,kind,"
@@ -586,8 +588,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             for stage in PHYSICAL_STAGES[1:]:
                 stack.enter_context(patch.object(macro_task_deletion, stage, return_value=[]))
             interrupted = macro_task_deletion.delete(board.store, target, 1)
-            self.assertEqual((interrupted["state"], interrupted["reasonCode"], interrupted["objectKind"]),
-                             ("deleting", "IO_ERROR", "native-session"))
+            self.assertEqual((interrupted["state"], interrupted["reason"], interrupted["objectKind"]),
+                             ("deleting", {"code": "macro-task-deletion.physical-failed", "params": {"errorCode": "IO_ERROR"}}, "native-session"))
             with board.store.db.read() as db:
                 self.assertIsNotNone(db.execute("SELECT 1 FROM attempts WHERE attempt_id='native-attempt-1'").fetchone())
             completed = macro_task_deletion.delete(board.store, target, 1)

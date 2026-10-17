@@ -86,6 +86,10 @@ class TestNamedContract(BoardTestCase):
                     board.task_list(json.dumps({"token": endpoint["token"], "nonsense": 1}))
                 )
                 self.assertEqual(rejected["error"]["code"], "INVALID_ARGUMENT")
+                for operation, params in (("macro_task_deletion_preview", {"macroTaskId": "macro-private"}),
+                        ("macro_task_delete", {"macroTaskId": "macro-private", "microTaskCount": 0, "confirm": True})):
+                    denied = json.loads(getattr(board, operation)(json.dumps({"token": endpoint["token"], **params})))
+                    self.assertEqual(denied["error"]["code"], "UNAUTHORIZED")
 
     def test_the_wait_route_is_a_separate_resource_with_its_own_capacity(self):
         with self.daemon(env={"HMB_WAIT_CAPACITY": "1"}):

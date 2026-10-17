@@ -7,15 +7,34 @@ from typing import Callable
 
 from ... import private_dirs
 from ...errors import BoardError
+from ...protocol.reasons import reason
 from . import workspace
 
 
 _PREFIX = "refs/hey-my-buddy/workspaces/"
+_SKIP_CODES = {
+    "REF_UNPROVEN": "macro-task-deletion.ref-unproven",
+    "REF_CHANGED": "macro-task-deletion.ref-changed",
+    "OWNER_UNPROVEN": "macro-task-deletion.owner-unproven",
+    "REPOSITORY_CHANGED": "macro-task-deletion.repository-changed",
+    "DEPENDENCY_RETAINED": "macro-task-deletion.dependency-retained",
+    "owner-unproven": "macro-task-deletion.owner-unproven",
+    "not-a-managed-worktree": "macro-task-deletion.not-a-managed-worktree",
+    "unsafe-path": "macro-task-deletion.unsafe-path",
+    "checkout-missing": "macro-task-deletion.checkout-missing",
+    "identity-changed": "macro-task-deletion.identity-changed",
+    "unregistered-checkout": "macro-task-deletion.unregistered-checkout",
+    "lock-mismatch": "macro-task-deletion.lock-mismatch",
+    "attached-branch": "macro-task-deletion.attached-branch",
+    "unsealed-changes": "macro-task-deletion.unsealed-changes",
+    "unsealed-handoff": "macro-task-deletion.unsealed-handoff",
+    "sealed-output-invalid": "macro-task-deletion.sealed-output-invalid",
+}
 
 
-def _skip(kind: str, path: str, reason: str, workspace_id: str | None = None) -> dict:
+def _skip(kind: str, path: str, code: str, workspace_id: str | None = None) -> dict:
     return {"kind": kind, "path": path, "workspaceId": workspace_id,
-            "reasonCode": reason, "reasons": [reason]}
+            "reason": reason(_SKIP_CODES[code])}
 
 
 def _fixed_refs(manifest: dict) -> dict[str, str]:

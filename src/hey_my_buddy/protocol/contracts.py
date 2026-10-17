@@ -14,7 +14,7 @@ control capacity that cancel, renew and result commits need.
 import c_two as cc
 
 # Patch releases share the software's major/minor contract (major.minor.0).
-CONTRACT_VERSION = "0.45.0"
+CONTRACT_VERSION = "0.46.0"
 CONTROL_NAME = "hey-my-buddy-control"
 WAIT_NAME = "hey-my-buddy-wait"
 
@@ -180,7 +180,7 @@ class BuddyControl:
     def workflow_suggest(self, request_json: str) -> str:
         ...
 
-    # -- work macro tasks (reads and console-only cancellation) --------------
+    # -- work macro tasks (reads and console-only stop/deletion) -------------
     def macro_task_list(self, request_json: str) -> str:
         ...
 
@@ -188,6 +188,12 @@ class BuddyControl:
         ...
 
     def macro_task_stop(self, request_json: str) -> str:
+        ...
+
+    def macro_task_deletion_preview(self, request_json: str) -> str:
+        ...
+
+    def macro_task_delete(self, request_json: str) -> str:
         ...
 
 

@@ -22,13 +22,31 @@ if __name__ == "__main__":
 
 from ...errors import BoardError
 from ...json_codec import canonical_json, decode_strict_json
+from ...protocol import schemas
 from ..harnesses.registry import run_seam
 from .turn_io import guard_private_path
 
 
+NATIVE_OPERATIONS = {
+    "discover": {
+        "seam": "run_discovery", "resultKey": "catalog", "allowUnknown": True,
+        "unavailableCode": "CATALOG_UNAVAILABLE",
+        "stopUnconfirmedCode": "HARNESS_DISCOVERY_STOP_UNCONFIRMED",
+    },
+    "delete-sessions": {
+        "seam": "run_delete_sessions", "resultKey": "sessions", "allowUnknown": False,
+        "unavailableCode": "UNSUPPORTED", "stopUnconfirmedCode": "HARNESS_DELETE_STOP_UNCONFIRMED",
+    },
+}
+
+
 def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple[str, int]:
-    operation = control["operation"]
-    specification = control["specification"]
+    operation = control.get("operation")
+    if not isinstance(operation, str) or operation not in NATIVE_OPERATIONS:
+        raise BoardError("INVALID_ARGUMENT", "Unknown native controller operation")
+    schemas.reject_unknown(control, {"operation", "arguments", "harness", "cwd", "privateRoot",
+                                     "nativeRoot", "timeoutSeconds"}, "native controller")
+    specification = NATIVE_OPERATIONS[operation]
     seam = specification["seam"]
     module = run_seam(control["harness"])
     if module is None or not callable(getattr(module, seam, None)):
@@ -39,7 +57,7 @@ def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple
             native_root=Path(control["nativeRoot"]), timeout_seconds=control["timeoutSeconds"],
             cancelled=cancelled.is_set, **control["arguments"])
     except Exception as error:
-        unknown = specification["unknownResult"] is not None and getattr(error, "code", None) == "deadline"
+        unknown = specification["allowUnknown"] and getattr(error, "code", None) == "deadline"
         native_error = getattr(error, "native_error", None)
         return canonical_json({"status": "unknown" if unknown else "error", "modelStarted": False,
             "code": getattr(error, "code", None), "error": str(error).encode("utf-8")[:512].decode("utf-8", errors="ignore"),
@@ -62,6 +80,9 @@ def main() -> int:
     try:
         control = decode_strict_json(guard_private_path(Path(args.control)).read_bytes())
         frame, code = execute(control, _cancelled, Path(selected))
+    except BoardError as error:
+        frame, code = canonical_json({"status": "error", "modelStarted": False, **error.payload(),
+                                      "processState": {"shutdownConfirmed": True}}), 1
     except Exception:
         frame, code = canonical_json({"status": "error", "code": "role-controller-failed",
                                       "processState": {"shutdownConfirmed": False}}), 1

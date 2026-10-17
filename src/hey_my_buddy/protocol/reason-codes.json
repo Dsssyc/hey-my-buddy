@@ -88,6 +88,30 @@
   "history.reason-unavailable": [
     "recordId"
   ],
+  "macro-task-deletion.attached-branch": [],
+  "macro-task-deletion.awaiting-host": [],
+  "macro-task-deletion.checkout-missing": [],
+  "macro-task-deletion.dependency-retained": [],
+  "macro-task-deletion.identity-changed": [],
+  "macro-task-deletion.lock-mismatch": [],
+  "macro-task-deletion.not-a-managed-worktree": [],
+  "macro-task-deletion.owner-unproven": [],
+  "macro-task-deletion.physical-failed": [
+    "errorCode"
+  ],
+  "macro-task-deletion.queued": [],
+  "macro-task-deletion.ref-changed": [],
+  "macro-task-deletion.ref-unproven": [],
+  "macro-task-deletion.repository-changed": [],
+  "macro-task-deletion.review": [],
+  "macro-task-deletion.routing": [],
+  "macro-task-deletion.running": [],
+  "macro-task-deletion.sealed-output-invalid": [],
+  "macro-task-deletion.stop-unconfirmed": [],
+  "macro-task-deletion.unregistered-checkout": [],
+  "macro-task-deletion.unsafe-path": [],
+  "macro-task-deletion.unsealed-changes": [],
+  "macro-task-deletion.unsealed-handoff": [],
   "model-cursor-shape-unreadable": [],
   "model-list-shape-unreadable": []
 }
