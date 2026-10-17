@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { macroTaskMetrics, relatedEventsForRun, relatedEventsForSpan, runRollup, latestExecutionResult } from "./macro-task-metrics";
+import { macroTaskMetrics } from "./macro-task-metrics";
 import { macroTaskTimelineFixture, macroTaskSummary } from "./macro-task-fixtures";
-import type { MacroTaskTimeline, TimelineEvent, TimelineSpan } from "./macro-task-types";
+import type { MacroTaskTimeline, TimelineSpan } from "./macro-task-types";
 
 const minutes = (count: number) => count * 60000;
-const at = (base: string, offsetMs: number) => new Date(new Date(base).getTime() + offsetMs).toISOString();
 
 function withSpans(spans: TimelineSpan[], overrides: Partial<MacroTaskTimeline> = {}): MacroTaskTimeline {
   const timeline = macroTaskTimelineFixture(overrides);
@@ -150,132 +149,5 @@ describe("macroTask metrics", () => {
     expect(keys).toContain("events");
     // Existing recorded numbers stay untouched rather than being prefixed or dropped.
     expect(metrics.unionMs).not.toBeNull();
-  });
-});
-
-describe("related Host events by recorded identity", () => {
-  const events: TimelineEvent[] = [
-    { seq: 1, runId: "r1", kind: "dispatch", at: "2026-09-26T01:00:00Z", label: "派发", summary: "", actor: null,
-      attemptId: "att-1", requestId: null, artifactId: null },
-    { seq: 2, runId: "r2", kind: "decide", at: "2026-09-26T01:01:00Z", label: "决定", summary: "", actor: null,
-      attemptId: null, requestId: "req-1", artifactId: null },
-    { seq: 3, runId: "r3", kind: "dispatch", at: "2026-09-26T01:02:00Z", label: "派发", summary: "", actor: null,
-      attemptId: "att-1", requestId: null, artifactId: null },
-    { seq: 4, runId: "r4", kind: "dispatch", at: "2026-09-26T01:03:00Z", label: "派发", summary: "", actor: null,
-      attemptId: "", requestId: "", artifactId: null },
-  ];
-
-  it("matches spans only through non-empty attempt or request keys on the same run", () => {
-    const byAttempt = { ...macroTaskTimelineFixture().spans[2]!, spanId: "x", runId: "r1", attemptId: "att-1", requestId: null } as TimelineSpan;
-    expect(relatedEventsForSpan(byAttempt, events).map(event => event.seq)).toEqual([1]);
-    const byRequest = { ...macroTaskTimelineFixture().spans[5]!, spanId: "y", runId: "r2", attemptId: null, requestId: "req-1" } as TimelineSpan;
-    expect(relatedEventsForSpan(byRequest, events).map(event => event.seq)).toEqual([2]);
-  });
-
-  it("never lets null, undefined or empty-string keys match each other", () => {
-    const empty = { ...macroTaskTimelineFixture().spans[2]!, spanId: "z", attemptId: null, requestId: null } as TimelineSpan;
-    expect(relatedEventsForSpan(empty, events)).toEqual([]);
-    const undefinedKeys = { ...empty, attemptId: undefined, requestId: undefined } as unknown as TimelineSpan;
-    expect(relatedEventsForSpan(undefinedKeys, events)).toEqual([]);
-    // An empty string is not a key either.
-    const blank = { ...empty, runId: "r4", attemptId: "", requestId: "" } as TimelineSpan;
-    expect(relatedEventsForSpan(blank, events)).toEqual([]);
-    // A non-empty key on only one side never matches.
-    const oneSided = { ...empty, runId: "r1", attemptId: "att-9" } as TimelineSpan;
-    expect(relatedEventsForSpan(oneSided, events)).toEqual([]);
-  });
-
-  it("requires the same run even when the record identity is shared", () => {
-    // seq 3 carries r3 with the same attemptId as the r1 span: no match.
-    const span = { ...macroTaskTimelineFixture().spans[2]!, spanId: "c", runId: "r1", attemptId: "att-1", requestId: null } as TimelineSpan;
-    expect(relatedEventsForSpan(span, events).map(event => event.seq)).toEqual([1]);
-  });
-
-  it("matches whole runs by runId only", () => {
-    expect(relatedEventsForRun("r1", events).map(event => event.seq)).toEqual([1]);
-    expect(relatedEventsForRun("missing", events)).toEqual([]);
-  });
-});
-
-describe("per-micro-task rollups", () => {
-  it("gathers rounds, helpers and pending requests for one run", () => {
-    const timeline = macroTaskTimelineFixture();
-    const rollup = runRollup(timeline.rows.find(row => row.runId === "r2")!, timeline);
-    expect(rollup.executions.map(span => span.turnIndex)).toEqual([1, 2]);
-    expect(rollup.helpers.map(row => row.runId)).toEqual(["r3"]);
-    expect(rollup.pending).toEqual([]);
-    expect(rollup.executionMs).not.toBeNull();
-    // A run with an open host request reports it as pending.
-    const openWait = runRollup(timeline.rows.find(row => row.runId === "r2")!, { ...timeline, spans: [...timeline.spans, {
-      ...timeline.spans[5]!, spanId: "s-r2-w2", runId: "r2", kind: "host", startAt: "2026-09-26T04:00:00Z", endAt: null,
-      state: "open", requestId: "req-2", requestKind: "continue", summary: "等待续接决定",
-    }] as TimelineSpan[] });
-    expect(openWait.pending.map(span => span.requestId)).toEqual(["req-2"]);
-  });
-
-  it("counts a host request as pending only while its recorded state is open", () => {
-    const timeline = macroTaskTimelineFixture();
-    const decided = runRollup(timeline.rows.find(row => row.runId === "r2")!, { ...timeline, spans: [
-      ...timeline.spans.filter(span => span.spanId !== "s-r2-w"),
-      // A decided request without an end timestamp is not still waiting.
-      { ...timeline.spans[5]!, spanId: "s-r2-w", runId: "r2", kind: "host",
-        startAt: "2026-09-26T02:10:00Z", endAt: null, state: "approved", requestId: "req-schema" },
-    ] });
-    expect(decided.pending).toEqual([]);
-  });
-
-  it("propagates read-scope limitations into a rollup instead of claiming absence", () => {
-    const timeline = macroTaskTimelineFixture({
-      truncated: { rows: true, spans: true, events: true }, scopeComplete: false, filtered: true,
-    });
-    const rollup = runRollup(timeline.rows.find(row => row.runId === "r4")!, timeline);
-    const keys = rollup.limitations;
-    expect(keys).toContain("scope");
-    expect(keys).toContain("rows");
-    expect(keys).toContain("spans");
-    expect(keys).toContain("events");
-  });
-
-  it("reports a null latest result as unrecorded, never as success", () => {
-    const timeline = macroTaskTimelineFixture();
-    const r4 = timeline.rows.find(row => row.runId === "r4")!;
-    const noResult = runRollup(r4, { ...timeline, spans: timeline.spans.filter(span => span.runId === "r4") });
-    // r4's only execution is running without a receipt.
-    expect(latestExecutionResult(noResult)?.label).toBe("未记录");
-    const r1 = timeline.rows.find(row => row.runId === "r1")!;
-    const none = runRollup(r1, { ...timeline, spans: [] });
-    expect(latestExecutionResult(none)).toBeNull();
-    const r3 = timeline.rows.find(row => row.runId === "r3")!;
-    const helper = runRollup(r3, timeline);
-    expect(latestExecutionResult(helper)?.label).toBe("成功");
-  });
-
-  it("orders the latest result by recorded turn index, not by whichever span has a start", () => {
-    const timeline = macroTaskTimelineFixture();
-    const r2 = timeline.rows.find(row => row.runId === "r2")!;
-    // Turn 2 has no usable start; turn order must still crown it, and its
-    // missing receipt reads 未记录 instead of resurrecting turn 1's success.
-    const newer = runRollup(r2, { ...timeline, spans: [
-      timeline.spans[0]!,
-      ...timeline.spans.filter(span => span.runId === "r2" && span.spanId === "s-r2-e1"),
-      { ...timeline.spans[6]!, spanId: "s-r2-e2", runId: "r2", kind: "execution", startAt: null, endAt: null,
-        state: "finished", turnIndex: 2, attemptId: "att-r2b", buddy: null, shutdownConfirmed: true },
-    ] });
-    const latest = latestExecutionResult(newer)!;
-    expect(latest.span.turnIndex).toBe(2);
-    expect(latest.label).toBe("未记录");
-  });
-
-  it("labels the latest result unknown when no ordering can identify it", () => {
-    const timeline = macroTaskTimelineFixture();
-    const r1 = timeline.rows.find(row => row.runId === "r1")!;
-    // One span has a start, the other has neither turn index nor time: the
-    // older success may not speak for the run.
-    const unordered = runRollup(r1, { ...timeline, spans: [
-      timeline.spans[1]!,
-      { ...timeline.spans[1]!, spanId: "s-r1-e9", runId: "r1", kind: "execution", startAt: null, endAt: null,
-        state: "finished", turnIndex: null, attemptId: "att-r1b", buddy: null, shutdownConfirmed: true },
-    ] });
-    expect(latestExecutionResult(unordered)?.label).toBe("未记录");
   });
 });

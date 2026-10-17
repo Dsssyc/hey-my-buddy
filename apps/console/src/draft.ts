@@ -38,7 +38,7 @@ export function makeDraft(snapshot: Snapshot): Draft {
   });
 }
 
-export function emptyModelServiceNote(modelService: ModelService): ModelServiceNote {
+function emptyModelServiceNote(modelService: ModelService): ModelServiceNote {
   return { ...modelServiceOf(modelService), text: "", updatedAt: null };
 }
 
@@ -167,11 +167,11 @@ export function modelServiceConcurrencyChanges(
 }
 
 /** The only fields a human may publish; program-owned buddy/catalog fields stay out. */
-export type BuddySettingPatch = { buddyId: string; enabled: boolean };
+type BuddySettingPatch = { buddyId: string; enabled: boolean };
 /** One buddy's preference; `mode: null` clears it. */
-export type PreferenceChangePatch = { buddyId: string; mode: PreferenceMode | null; reason: string };
+type PreferenceChangePatch = { buddyId: string; mode: PreferenceMode | null; reason: string };
 /** Model service note patch; `text: ""` clears the note. */
-export type ModelServiceNoteChangePatch = ModelService & { text: string };
+type ModelServiceNoteChangePatch = ModelService & { text: string };
 
 export type UserPolicyPublication = {
   commandId: string;
@@ -241,7 +241,7 @@ export function routerListEqual(a: string[] | undefined, b: string[] | undefined
   return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
 }
 
-export const ROUTER_FIELDS = ["routerBuddyIds", "defaultRoutingMode", "routerRetryIntervalSeconds"] as const;
+const ROUTER_FIELDS = ["routerBuddyIds", "defaultRoutingMode", "routerRetryIntervalSeconds"] as const;
 
 export function routerFieldChanged(baseline: Draft, draft: Draft, field: typeof ROUTER_FIELDS[number]): boolean {
   if (!baseline.configuration || !draft.configuration) return false;
@@ -250,7 +250,7 @@ export function routerFieldChanged(baseline: Draft, draft: Draft, field: typeof 
   return field === "routerBuddyIds" ? !routerListEqual(before as string[], after as string[]) : before !== after;
 }
 
-export function routingBudgetChanged(baseline: Draft, draft: Draft): boolean {
+function routingBudgetChanged(baseline: Draft, draft: Draft): boolean {
   return !!baseline.configuration && !!draft.configuration && baseline.configuration.routingBudget !== draft.configuration.routingBudget;
 }
 
@@ -350,8 +350,8 @@ export function changeCount(baseline: Draft, draft: Draft): number {
  * the bounded snapshot had no row to compare against yet, so the edit stays
  * unresolved until fresh retained-row data is read.
  */
-export type RebaseConflictKind = "changed" | "unread";
-export type RebaseConflict = {
+type RebaseConflictKind = "changed" | "unread";
+type RebaseConflict = {
   kind: RebaseConflictKind;
   field: "enabled" | "preference" | "modelServiceNote" | "configuration" | "defaultRoutingMode" | "routingBudget" | "routerRetryIntervalSeconds" | "modelServiceConcurrency";
   /** The buddy id, or the `harness/provider/model` of a model service field. */
@@ -359,7 +359,7 @@ export type RebaseConflict = {
   message: string;
 };
 
-export type RebaseOutcome = {
+type RebaseOutcome = {
   draft: Draft;
   baseline: Draft;
   conflicts: RebaseConflict[];

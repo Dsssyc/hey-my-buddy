@@ -2,7 +2,6 @@ import type zh from "../zh/taskDetail";
 
 export default {
   label: "Micro task detail",
-  back: { timeline: "Timeline" },
   loading: "Reading the micro task…",
   failed: "Could not read the micro task",
   retry: "Retry",

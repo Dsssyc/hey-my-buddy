@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 
-export type Theme = "light" | "dark";
+type Theme = "light" | "dark";
 /** The user's display choice; `system` follows the operating system setting. */
 export type ThemeChoice = Theme | "system";
 
@@ -14,7 +14,7 @@ const DARK_QUERY = "(prefers-color-scheme: dark)";
  * disabled cookies) or hold an unrelated value; both fall back to the light
  * theme instead of failing the page.
  */
-export function readStoredChoice(): ThemeChoice {
+function readStoredChoice(): ThemeChoice {
   try {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
     return stored === "dark" || stored === "system" ? stored : "light";
@@ -23,7 +23,7 @@ export function readStoredChoice(): ThemeChoice {
   }
 }
 
-export function storeChoice(choice: ThemeChoice): void {
+function storeChoice(choice: ThemeChoice): void {
   try {
     window.localStorage.setItem(THEME_STORAGE_KEY, choice);
   } catch {
@@ -32,7 +32,7 @@ export function storeChoice(choice: ThemeChoice): void {
 }
 
 /** The operating system's scheme; an environment without media queries is light. */
-export function systemTheme(): Theme {
+function systemTheme(): Theme {
   try {
     return typeof window.matchMedia === "function" && window.matchMedia(DARK_QUERY).matches
       ? "dark"
@@ -42,17 +42,17 @@ export function systemTheme(): Theme {
   }
 }
 
-export function resolveTheme(choice: ThemeChoice): Theme {
+function resolveTheme(choice: ThemeChoice): Theme {
   return choice === "system" ? systemTheme() : choice;
 }
 
 /** Resolved theme of the stored choice. */
-export function readStoredTheme(): Theme {
+function readStoredTheme(): Theme {
   return resolveTheme(readStoredChoice());
 }
 
 /** Applies the theme to the document so CSS tokens and color-scheme switch. */
-export function applyTheme(theme: Theme): void {
+function applyTheme(theme: Theme): void {
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.colorScheme = theme;
 }

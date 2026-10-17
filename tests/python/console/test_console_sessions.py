@@ -34,7 +34,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         self.assertNotIn(ticket.removeprefix('/launch/'), browser.prefix)
         self.assertNotIn(browser.cookie.split('=', 1)[1], browser.prefix)
         copied = Browser(browser.origin + browser.prefix + '/')
-        for route in ('/', '/api/console', '/api/tasks', '/assets/app.js'):
+        for route in ('/', '/api/console', '/api/macro-tasks', '/assets/app.js'):
             self.assertEqual(copied.get(route)[0], 401, route)
             self.assertEqual(browser.get(route)[0], 200, route)
         self.assertNotIn('url', board.call('console', {'action': 'status'}))

@@ -1,7 +1,7 @@
 import type { Buddy } from "./types";
 
 /** Fields needed to render a buddy name; callers may pass a whole record. */
-export type NamedBuddy = Pick<Buddy, "label" | "model" | "effort">;
+type NamedBuddy = Pick<Buddy, "label" | "model" | "effort">;
 
 /**
  * The board's recorded pending fact for one buddy (ADR-027 §6): the model is

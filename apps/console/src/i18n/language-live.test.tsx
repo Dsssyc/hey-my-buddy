@@ -1,11 +1,10 @@
 import { act, cleanup, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { getLanguageChoice, setLanguageChoice } from "./index";
-import { ConfirmDialog } from "../ConfirmDialog";
+import { MacroTaskList } from "../MacroTaskList";
+import { TooltipProvider } from "../components/ui/tooltip";
 import { formatList, formatNumber } from "./format";
-import { outcomeLabel, rowStateInfo, spanFacts, spanHead } from "../macro-task-display";
-import { TimelineInspector } from "../TimelineInspector";
-import { macroTaskTimelineFixture } from "../macro-task-fixtures";
+import { outcomeLabel, rowStateInfo } from "../macro-task-display";
 import { taskTitle } from "../task-state";
 import { useEditor } from "../use-editor";
 import type { ConsoleApi } from "../api";
@@ -15,21 +14,22 @@ import type { TimelineRow, TimelineSpan } from "../macro-task-types";
 afterEach(() => { cleanup(); setLanguageChoice("browser"); });
 
 describe("changing the language in an already loaded console", () => {
-  it("updates mounted legacy controls and previously imported helper vocabulary without reloading", () => {
-    render(<ConfirmDialog title="Example" confirmLabel="Continue" onCancel={() => {}} onConfirm={() => {}}>Example</ConfirmDialog>);
-    expect(screen.getByRole("button", { name: "取消" })).toBeTruthy();
+  it("updates the mounted macro task list and previously imported helper vocabulary without reloading", () => {
+    render(<TooltipProvider><MacroTaskList rows={[]} totals={{ all: 0, active: 0, host: 0, review: 0 }}
+      loading={false} error="" nextCursor={null} reorder={null} filter="all" query="" selected={null}
+      onCollapse={() => {}} onFilterChange={() => {}} onQueryChange={() => {}}
+      onSelect={() => {}} onMore={() => {}} onApplyReorder={() => {}} /></TooltipProvider>);
+    expect(screen.getByText("没有宏任务")).toBeTruthy();
     act(() => setLanguageChoice("en"));
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+    expect(screen.getByText("No macro tasks")).toBeTruthy();
     expect(getLanguageChoice()).toBe("en");
     expect(outcomeLabel({ kind: "execution" } as TimelineSpan, "unknown")).toBe("Stop unconfirmed");
-    expect(spanHead("host")).toBe("Waiting for Host");
     expect(rowStateInfo({ state: "accepted" } as TimelineRow).label).toBe("Accepted");
     expect(taskTitle({ task: "" } as Task).text).toBe("Unnamed micro task");
     expect(formatNumber(12345.6)).toBe(new Intl.NumberFormat("en").format(12345.6));
     expect(formatList(["Codex", "Claude"])).toBe(new Intl.ListFormat("en", { type: "conjunction" }).format(["Codex", "Claude"]));
     act(() => setLanguageChoice("zh"));
-    expect(screen.getByRole("button", { name: "取消" })).toBeTruthy();
-    expect(spanHead("host")).toBe("等待 Host");
+    expect(screen.getByText("没有宏任务")).toBeTruthy();
     expect(rowStateInfo({ state: "accepted" } as TimelineRow).label).toBe("已验收");
     expect(taskTitle({ task: "" } as Task).text).toBe("未命名微任务");
   });
@@ -46,25 +46,4 @@ describe("changing the language in an already loaded console", () => {
     expect(result.current.draft).toBeNull();
   });
 
-  it("rebuilds a missing pinned record in the new language from its retained evidence", () => {
-    const timeline = macroTaskTimelineFixture();
-    const span = timeline.spans.find(candidate => candidate.kind === "execution" && candidate.resultStatus === "ok")!;
-    const row: TimelineRow = { ...timeline.rows.find(candidate => candidate.runId === span.runId)!, title: "Retained task", titleSource: "title" };
-    const retained = { ...timeline, rows: [row], spans: [span], events: [] };
-    const { item } = spanFacts(span, row, Date.parse(timeline.observedAt));
-    const props = { selection: { type: "item" as const, key: item.key }, timeline: retained,
-      itemsByKey: new Map([[item.key, item]]), truncatedEvents: false,
-      onOpen: () => {}, onSelectItem: () => {}, onSelectRun: () => {}, onUnpin: () => {} };
-    const { container, rerender } = render(<TimelineInspector {...props} />);
-    expect(screen.getByText("Retained task")).toBeTruthy();
-    rerender(<TimelineInspector {...props} timeline={{ ...retained, rows: [], spans: [] }} itemsByKey={new Map()} />);
-    expect(screen.getByText("记录在当前范围外")).toBeTruthy();
-    act(() => setLanguageChoice("en"));
-    expect(screen.getByText("Record outside the current scope")).toBeTruthy();
-    expect(screen.getByText("Retained task")).toBeTruthy();
-    expect(screen.getByText("Execution completed")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open details" }).getAttribute("aria-disabled")).toBe("true");
-    expect([...container.querySelectorAll(".inspector-field-label")].map(node => node.textContent)).toContain("Result");
-    expect([...container.querySelectorAll(".inspector-field-label")].some(node => /[\u4e00-\u9fff]/.test(node.textContent ?? ""))).toBe(false);
-  });
 });

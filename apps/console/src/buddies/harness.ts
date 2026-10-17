@@ -56,7 +56,7 @@ function remedyText(row: HarnessHealth, t: T): string | null {
 }
 
 /** The quota summary of a harness section: the window nearest its limit. */
-export type QuotaCell = {
+type QuotaCell = {
   /** The share used, 0–100; null while it is unknown, which never reads as 0. */
   used: number | null;
   text: string;
@@ -97,7 +97,7 @@ export type WindowRow = {
 };
 
 /** One persisted exhaustion record, with where its recovery stands. */
-export type ExhaustedRow = {
+type ExhaustedRow = {
   key: string;
   provider: string;
   limitId: string | null;

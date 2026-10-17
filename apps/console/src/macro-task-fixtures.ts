@@ -5,7 +5,6 @@
  */
 
 import type {
-  MacroTaskPage,
   MacroTaskSummary,
   MacroTaskTimeline,
   TimelineBuddy,
@@ -14,10 +13,10 @@ import type {
   TimelineSpan,
 } from "./macro-task-types";
 
-export const OPUS: TimelineBuddy = { harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
-export const CODEX: TimelineBuddy = { harness: "codex", provider: "openai", model: "gpt-5-codex", effort: "max" };
-export const GLM: TimelineBuddy = { harness: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" };
-export const SONNET: TimelineBuddy = { harness: "claude", provider: "anthropic", model: "claude-sonnet-5", effort: "low" };
+const OPUS: TimelineBuddy = { harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
+const CODEX: TimelineBuddy = { harness: "codex", provider: "openai", model: "gpt-5-codex", effort: "max" };
+const GLM: TimelineBuddy = { harness: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" };
+const SONNET: TimelineBuddy = { harness: "claude", provider: "anthropic", model: "claude-sonnet-5", effort: "low" };
 
 export const OBSERVED_AT = "2026-09-26T08:12:00Z";
 
@@ -74,7 +73,9 @@ function span(spanId: string, runId: string, kind: TimelineSpan["kind"], startAt
     spanId, runId, kind, startAt, endAt,
     state: kind === "queue" ? "admitted" : kind === "host" ? "approved" : "finished",
     attemptId: null, turnId: null, turnIndex: null, requestId: null,
-    buddy: null, shutdownConfirmed: null, uncertain: false, clockSkew: false,
+    buddy: null, expectedSeconds: kind === "execution" ? 1800 : null,
+    reminders: null, inquiries: kind === "execution" ? [] : null,
+    shutdownConfirmed: null, uncertain: false, clockSkew: false,
     ...overrides,
   };
 }
@@ -116,7 +117,8 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
       usage: { elapsedMs: 180000, toolCalls: 3, bytesRead: 1024 },
     } }),
     span("s-r2-e1", "r2", "execution", "2026-09-26T01:24:00Z", "2026-09-26T02:10:00Z",
-      { turnIndex: 1, attemptId: "att-r2a", buddy: CODEX, shutdownConfirmed: true }),
+      { turnIndex: 1, attemptId: "att-r2a", buddy: CODEX, shutdownConfirmed: true,
+        inquiries: [{ inquiryId: "inq-r2a", createdAt: "2026-09-26T01:50:00Z", author: "codex-desktop", state: "answered" }] }),
     span("s-r2-w", "r2", "host", "2026-09-26T02:10:00Z", "2026-09-26T03:00:00Z",
       { state: "approved", requestId: "req-schema", summary: "schema 版本号需与性能优化的合入顺序对齐" }),
     span("s-r2-e2", "r2", "execution", "2026-09-26T03:00:00Z", "2026-09-26T03:10:00Z",
@@ -131,7 +133,8 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
       { turnIndex: 1, attemptId: "att-r5", buddy: GLM, resultStatus: "cancelled", shutdownConfirmed: true }),
     span("s-r4-q", "r4", "queue", "2026-09-26T06:38:00Z", "2026-09-26T06:40:00Z", { state: "admitted" }),
     span("s-r4-e", "r4", "execution", "2026-09-26T06:40:00Z", null,
-      { state: "executing", turnIndex: 1, attemptId: "att-r4", buddy: SONNET, shutdownConfirmed: false }),
+      { state: "executing", turnIndex: 1, attemptId: "att-r4", buddy: SONNET, shutdownConfirmed: false,
+        reminders: { overdue: true, possiblyStuck: false, lastNativeEventAt: "2026-09-26T08:10:00Z", toolInProgress: true } }),
     span("s-r6-e", "r6", "execution", "2026-09-26T07:05:00Z", "2026-09-26T07:38:00Z",
       { state: "uncertain", uncertain: true, turnIndex: 1, attemptId: "att-r6", buddy: GLM, shutdownConfirmed: false }),
   ];
@@ -159,10 +162,6 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
   };
 }
 
-export function macroTaskPageFixture(macroTasks: MacroTaskSummary[] = [macroTaskSummary()]): MacroTaskPage {
-  return { macroTasks, totals: { all: macroTasks.length, active: macroTasks.length, host: 0, review: 0 }, nextCursor: null, cursor: 41, changed: false };
-}
-
 /** The standalone-root and second-project rows used by the list tests. */
 export function listFixture(): MacroTaskSummary[] {
   return [
@@ -183,7 +182,3 @@ export function listFixture(): MacroTaskSummary[] {
         stoppableRoots: 1, stoppableHelpers: 0, delivered: 0, awaitingHost: 1 } }),
   ];
 }
-
-/** A task-first-line title long enough to exercise the ~40-character one-line clamp. */
-export const LONG_TASK_LINE =
-  "修复标题回退在 CRLF 输入下的显示，补充回归测试并核对两处相关调用的输出稳定性与提示文案是否一致";

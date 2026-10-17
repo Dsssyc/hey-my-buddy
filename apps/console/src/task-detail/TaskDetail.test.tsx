@@ -17,6 +17,8 @@ describe("opening the detail of a micro task", () => {
     expect(f.reads.audit).toHaveBeenCalledWith("m1", ["decision-1"]);
     expect(f.reads.inquiries).toHaveBeenCalledWith("m1");
     expect(selected().textContent).toContain("回合 2");
+    expect(within(screen.getByTestId("rail-target")).getByRole("navigation", { name: "步骤" })).toBe(rail());
+    expect(document.querySelector("[data-slot=task-detail] [data-slot=detail-rail]")).toBeNull();
     expect(f.onStep).toHaveBeenCalledExactlyOnceWith(7);
   });
 
@@ -64,19 +66,18 @@ describe("opening the detail of a micro task", () => {
     expect(pane().textContent).toContain("实现微任务详情");
   });
 
-  it("goes back by its button and by Escape, unless the key is for a field or a dialog, and not while the page is elsewhere", async () => {
+  it("goes back by Escape, unless the key is for a field or a dialog, and not while the page is elsewhere", async () => {
     const f = open();
     await ready();
-    await f.user.click(screen.getByRole("button", { name: "时间轴" }));
-    expect(f.onBack).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "时间轴" })).toBeNull();
     fireEvent.keyDown(document.body, { key: "Escape" });
-    expect(f.onBack).toHaveBeenCalledTimes(2);
+    expect(f.onBack).toHaveBeenCalledTimes(1);
     const field = document.body.appendChild(document.createElement("input"));
     fireEvent.keyDown(field, { key: "Escape" });
     const dialog = document.body.appendChild(document.createElement("div"));
     dialog.setAttribute("role", "dialog");
     fireEvent.keyDown(dialog, { key: "Escape" });
-    expect(f.onBack).toHaveBeenCalledTimes(2);
+    expect(f.onBack).toHaveBeenCalledTimes(1);
     field.remove();
     dialog.remove();
     cleanup();
@@ -85,14 +86,27 @@ describe("opening the detail of a micro task", () => {
     expect(away.onBack).not.toHaveBeenCalled();
   });
 
-  it("shows a read that failed as a failure with the way back, and a retry that reads again", async () => {
+  it("switches detail steps with horizontal arrows, clamps both ends and focuses the chosen step", async () => {
+    const f = open({ step: 1 });
+    await ready();
+    await f.user.keyboard("{ArrowLeft}"); expect(selected().getAttribute("data-step")).toBe("1");
+    await f.user.keyboard("{ArrowRight}"); expect(selected().getAttribute("data-step")).toBe("2");
+    expect(document.activeElement).toBe(selected());
+    await f.user.keyboard("{ArrowLeft}"); expect(selected().getAttribute("data-step")).toBe("1");
+    const count = within(rail()).getAllByRole("button").length;
+    await f.user.keyboard("{ArrowRight>20/}"); expect(selected().getAttribute("data-step")).toBe(String(count));
+    expect(within(rail()).getAllByRole("button").every(button => button.tabIndex === -1)).toBe(true);
+    const field = document.body.appendChild(document.createElement("input")); field.focus();
+    await f.user.keyboard("{ArrowLeft}"); expect(selected().getAttribute("data-step")).toBe(String(count)); field.remove();
+  });
+
+  it("shows a read that failed as a failure with a retry that reads again", async () => {
     const reads = client();
     (reads.task as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new ApiError("NOT_FOUND", "Unknown runId"));
     const f = open({ client: reads });
     expect((await screen.findByRole("alert")).textContent).toContain("Unknown runId");
     expect(screen.getByRole("heading", { name: "读取微任务失败" })).toBeTruthy();
-    await f.user.click(screen.getByRole("button", { name: "时间轴" }));
-    expect(f.onBack).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "时间轴" })).toBeNull();
     await f.user.click(screen.getByRole("button", { name: "重试读取" }));
     await ready();
     expect(reads.task).toHaveBeenCalledTimes(2);
@@ -199,7 +213,7 @@ describe("the delegation", () => {
     const long = "第一段。".repeat(120);
     const helper = workflow({ children: [{ taskId: "h1", role: "helper", state: "succeeded" }, { taskId: "d1", role: "router", state: "succeeded" }], delegationAuthority: true });
     const withFixes = timeline();
-    withFixes.rows = [row({ fixes: "m0", fixedBy: ["m2"] }), row({ runId: "m0", title: "被修正的微任务" }), row({ runId: "m2", title: "后来的修正" }), row({ runId: "h1", title: "协助查路径" })];
+    withFixes.rows = [row({ fixes: "m0", fixesTitle: "被修正的微任务", fixesTitleSource: "title", fixedBy: ["m2"] }), row({ runId: "m0", title: "被修正的微任务" }), row({ runId: "m2", title: "后来的修正" }), row({ runId: "h1", title: "协助查路径" })];
     const f = open({ step: 1, timeline: withFixes, replies: { task: task({ task: long, lineage: { ...task().lineage, parentRunId: "m0" } }), workflow: helper } });
     await ready();
     const text = pane().textContent!;

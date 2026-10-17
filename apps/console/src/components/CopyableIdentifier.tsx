@@ -31,7 +31,7 @@ function Identifier({ value, hint }: { value: string; hint?: string }) {
   }
   return <TooltipProvider><Tooltip open={!!feedback || open} onOpenChange={setOpen}>
     <TooltipTrigger asChild>
-      <Button type="button" variant="ghost" size="xs" className="max-w-full font-mono text-xs font-normal text-muted-foreground"
+      <Button type="button" variant="ghost" size="sm" className="max-w-full font-mono text-xs font-normal text-muted-foreground"
         aria-label={t("identifier.copy", { value })} onClick={() => void copy()}>
         <span className="truncate">{shortened}</span>
         {feedback?.kind === "copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}

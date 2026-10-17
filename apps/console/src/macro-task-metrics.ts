@@ -13,20 +13,20 @@ import i18n from "i18next";
  * open Host request) is live, not a missing-time error.
  */
 
-import type { MacroTaskTimeline, TimelineEvent, TimelineRow, TimelineSpan } from "./macro-task-types";
-import { parseTimelineInstant } from "./macro-task-timeline-layout";
+import type { MacroTaskTimeline, TimelineSpan } from "./macro-task-types";
+import { parseTimelineInstant } from "./timeline/instant";
 import { spanOutcome } from "./macro-task-display";
 
-export type MetricInterval = { startMs: number; endMs: number };
+type MetricInterval = { startMs: number; endMs: number };
 
 /** Why the displayed numbers describe only the recorded part of the scope. */
-export type MetricLimitation = {
+type MetricLimitation = {
   /** Machine-stable key so tests and the truncation banner can share wording. */
   key: "scope" | "rows" | "spans" | "events" | "missing-time" | "reversed" | "clock-skew" | "unconfirmed-end" | "running";
   label: string;
 };
 
-export const LIMITATION_LABEL: Record<MetricLimitation["key"], string> = {
+const LIMITATION_LABEL: Record<MetricLimitation["key"], string> = {
   get scope() { return i18n.t("console:incompleteReadScope"); },
   get rows() { return i18n.t("console:microTaskRowsTruncated"); },
   get spans() { return i18n.t("console:executionSpansTruncated"); },
@@ -38,14 +38,7 @@ export const LIMITATION_LABEL: Record<MetricLimitation["key"], string> = {
   get running() { return i18n.t("console:runningCountedUntilReadTime"); },
 };
 
-/** Scope-level limitation keys: the read itself cannot prove absence. */
-const SCOPE_KEYS: ReadonlySet<MetricLimitation["key"]> = new Set(["scope", "rows", "spans", "events"]);
-
-export function hasScopeLimitations(limitations: readonly MetricLimitation["key"][]): boolean {
-  return limitations.some(key => SCOPE_KEYS.has(key));
-}
-
-export type MacroTaskMetrics = {
+type MacroTaskMetrics = {
   /** Earliest usable start (macroTask creation when no span has one) to the latest recorded instant. */
   totalSpanMs: number | null;
   /** Union of execution intervals that are actually confirmable. */
@@ -197,115 +190,4 @@ export function macroTaskMetrics(timeline: MacroTaskTimeline): MacroTaskMetrics 
     unknownEndCount,
     limitations: limitations(limitationKeys),
   };
-}
-
-/* ---- related Host events: identity match only, never time proximity ---- */
-
-function sameKey(left: string | null | undefined, right: string | null | undefined): boolean {
-  // null, undefined and the empty string are not keys: they never match.
-  const a = left ?? null;
-  const b = right ?? null;
-  return a !== null && b !== null && a !== "" && b !== "" && a === b;
-}
-
-/** Events related to one span: same run plus a shared non-empty attempt or request identity. */
-export function relatedEventsForSpan(span: TimelineSpan, events: readonly TimelineEvent[]): TimelineEvent[] {
-  return events.filter(event => event.runId === span.runId
-    && (sameKey(event.attemptId, span.attemptId) || sameKey(event.requestId, span.requestId)));
-}
-
-/** Events recorded on one micro task's own run identity. */
-export function relatedEventsForRun(runId: string, events: readonly TimelineEvent[]): TimelineEvent[] {
-  return events.filter(event => event.runId === runId);
-}
-
-/* ---- per-micro-task rollups for whole-run selection and overview cards ---- */
-
-export type RunRollup = {
-  row: TimelineRow;
-  /** This run's own execution spans in start order (missing starts last). */
-  executions: TimelineSpan[];
-  /** Waiting-Host spans whose request is actually still open. */
-  pending: TimelineSpan[];
-  /** Direct helpers of this run, in tree order. */
-  helpers: TimelineRow[];
-  /** Union duration of the run's own execution spans, or null when none is confirmable. */
-  executionMs: number | null;
-  /** Limitations that keep `executionMs` a recorded-part number, including read scope. */
-  limitations: MetricLimitation["key"][];
-};
-
-function runExecutionMs(spans: readonly TimelineSpan[], observedAtMs: number | null): {
-  ms: number | null; limitations: MetricLimitation["key"][];
-} {
-  const intervals: MetricInterval[] = [];
-  const keys: MetricLimitation["key"][] = [];
-  for (const span of spans) {
-    const reading = executionInterval(span, observedAtMs);
-    if (reading.interval !== null) intervals.push(reading.interval);
-    if (reading.limitation !== null) keys.push(reading.limitation);
-  }
-  const merged = mergeUnion(intervals);
-  return { ms: merged.length ? unionLength(merged) : null, limitations: [...new Set(keys)] };
-}
-
-/**
- * Rolls up one micro task from the same bounded read: rounds, helpers, the
- * result of the latest execution span, acceptance fields and pending Host
- * requests. Read-scope limitations propagate so a truncated card can never
- * claim definitive absence; a null result is never turned into a success.
- */
-export function runRollup(row: TimelineRow, timeline: MacroTaskTimeline): RunRollup {
-  const observedAtMs = parseTimelineInstant(timeline.observedAt);
-  const own = timeline.spans.filter(span => span.runId === row.runId);
-  const executions = [...own.filter(span => span.kind === "execution")].sort((left, right) => {
-    const a = parseTimelineInstant(left.startAt);
-    const b = parseTimelineInstant(right.startAt);
-    if (a === null) return 1;
-    if (b === null) return -1;
-    return a - b;
-  });
-  // A request is pending only while its recorded state is open; a decided
-  // request without an end timestamp is not still waiting.
-  const pending = own.filter(span => span.kind === "host" && spanOutcome(span) === "open");
-  const helpers = timeline.rows.filter(candidate => candidate.parentRunId === row.runId);
-  const { ms, limitations } = runExecutionMs(executions, observedAtMs);
-  const scope: MetricLimitation["key"][] = [];
-  if (timeline.scopeComplete !== true) scope.push("scope");
-  if (timeline.truncated.rows) scope.push("rows");
-  if (timeline.truncated.spans) scope.push("spans");
-  if (timeline.truncated.events) scope.push("events");
-  return { row, executions, pending, helpers, executionMs: ms, limitations: [...new Set([...scope, ...limitations])] };
-}
-
-/**
- * Honest text of one micro task's latest execution result; null only when no
- * execution was recorded at all. Ordering prefers recorded turn indices, then
- * usable start times; when neither can identify the latest attempt the label
- * stays 未记录 instead of resurrecting an older span's outcome.
- */
-export function latestExecutionResult(rollup: RunRollup): { span: TimelineSpan; label: string } | null {
-  const executions = rollup.executions;
-  if (!executions.length) return null;
-  const labelFor = (span: TimelineSpan): string => {
-    const outcome = spanOutcome(span);
-    if (outcome === "unknown") return i18n.t("console:stopUnconfirmed");
-    if (span.resultStatus === "ok") return i18n.t("console:succeeded");
-    if (span.resultStatus === "failed") return i18n.t("console:failed");
-    if (span.resultStatus === "cancelled") return i18n.t("console:cancelled");
-    return i18n.t("console:notRecorded");
-  };
-  if (executions.every(span => span.turnIndex !== null && span.turnIndex !== undefined)) {
-    const latest = executions.reduce((best, span) => (span.turnIndex! > best.turnIndex! ? span : best));
-    return { span: latest, label: labelFor(latest) };
-  }
-  const withStarts = executions.filter(span => parseTimelineInstant(span.startAt) !== null);
-  if (withStarts.length === executions.length) {
-    const latest = withStarts.reduce((best, span) =>
-      parseTimelineInstant(span.startAt)! >= parseTimelineInstant(best.startAt)! ? span : best);
-    return { span: latest, label: labelFor(latest) };
-  }
-  // Some executions carry neither turn order nor usable time: which one is
-  // latest is unknown, so no older outcome may speak for the run.
-  return { span: executions[executions.length - 1]!, label: i18n.t("console:notRecorded") };
 }

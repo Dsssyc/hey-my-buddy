@@ -53,51 +53,7 @@ READ_CACHE_CONTROL = "private, max-age=0, must-revalidate"
 #: exact activity time stays available through the access commands.
 SESSION_STAMP_SECONDS = 60
 
-#: Exact parameter whitelist of the read-only task history route. It is forwarded to
-#: the same named ``task_list`` operation the CLI and C-Two use; an unknown or
-#: repeated parameter is refused instead of being ignored or silently collapsed.
-TASK_HISTORY_PARAMETERS = frozenset(
-    {"limit", "offset", "state", "adapter", "before", "rootsOnly", "query", "projectId", "hostId", "filter"}
-)
-TASK_HISTORY_INTEGERS = frozenset({"limit", "offset"})
-TASK_HISTORY_BOOLEANS = frozenset({"rootsOnly"})
 _QUERY_INTEGER = re.compile(r"^[0-9]{1,7}$")
-_TRUE_VALUES = frozenset({"true", "1"})
-_FALSE_VALUES = frozenset({"false", "0"})
-
-
-def parse_task_history_query(query: str) -> dict:
-    """Parse one task-history query string into typed ``task_list`` parameters.
-
-    Only the exact whitelist above is accepted; a repeated parameter is an error so
-    a caller can never smuggle two values past a checker that validated one, and
-    booleans/integers are converted here so the store receives real JSON types.
-    """
-    entries = parse_qs(query, keep_blank_values=True)
-    params: dict[str, Any] = {}
-    for name in sorted(entries):
-        if name not in TASK_HISTORY_PARAMETERS:
-            raise BoardError("INVALID_ARGUMENT", f"Unknown task history parameter: {name}", field=name)
-        values = entries[name]
-        if len(values) != 1:
-            raise BoardError("INVALID_ARGUMENT", f"Duplicate task history parameter: {name}", field=name)
-        value = values[0]
-        if name in TASK_HISTORY_BOOLEANS:
-            lowered = value.lower()
-            if lowered not in _TRUE_VALUES | _FALSE_VALUES:
-                raise BoardError("INVALID_ARGUMENT", f"{name} must be true or false", field=name)
-            params[name] = lowered in _TRUE_VALUES
-        elif name in TASK_HISTORY_INTEGERS:
-            if not _QUERY_INTEGER.match(value):
-                raise BoardError("INVALID_ARGUMENT", f"{name} must be a nonnegative integer", field=name)
-            params[name] = int(value)
-        else:
-            if not value:
-                raise BoardError("INVALID_ARGUMENT", f"{name} must be a nonempty value", field=name)
-            params[name] = value
-    return params
-
-
 #: Exact parameter whitelists of the read-only macro task routes; they reach the
 #: same named ``macro_task_list``/``macro_task_timeline`` operations as the CLI.
 MACRO_TASK_LIST_PARAMETERS = frozenset({"limit", "before", "projectId", "hostId", "query", "filter"})
@@ -780,8 +736,6 @@ class Console:
                     return self._page()
                 if relative == "/api/console":
                     return self._console_read()
-                if relative == "/api/tasks":
-                    return self._task_history()
                 if relative == "/api/runtime-version":
                     return self._runtime_version()
                 if relative == "/api/macro-tasks":
@@ -863,38 +817,6 @@ class Console:
                 except Exception:  # noqa: BLE001 - no private paths or traceback cross the boundary
                     return self._error(500, "INTERNAL_ERROR", "The runtime version could not be read")
                 self._json(200, report)
-
-            def _task_history(self) -> None:
-                """Read-only task history over the same named ``task_list`` operation.
-
-                Reads authenticate the session cookie and exact-origin trust boundary;
-                they require no write authority or publication lease. The page is
-                cached per query and session under the board marker, so an unchanged
-                page answers 304 without re-running the projection.
-                """
-                coding = self._negotiated_coding()
-                if coding is None:
-                    return
-                query = urlsplit(self.path).query
-                try:
-                    params = parse_task_history_query(query)
-                except BoardError as error:
-                    return self._board_error(error)
-                try:
-                    outcome = console.read_cache.serve(
-                        kind="tasks",
-                        key=query or "",
-                        session=self.browser_session.id,
-                        extra_marker=(),
-                        generate=lambda: (call_operation(console.service, "task_list", params), None),
-                        if_none_match=self.headers.get("If-None-Match"),
-                        coding=coding,
-                    )
-                except BoardError as error:
-                    return self._board_error(error)
-                except Exception:  # noqa: BLE001 - no traceback crosses the boundary
-                    return self._error(500, "INTERNAL_ERROR", "The task history could not be read")
-                self._send_read(outcome, coding)
 
             def _macro_task_read(self, operation: str, fixed: dict, allowed: frozenset[str]) -> None:
                 """Authenticated read-only macro task browsing; no lease, write authority or model call.

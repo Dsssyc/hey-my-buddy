@@ -58,12 +58,11 @@ export default {
   },
   budget: {
     name: "Review budget",
-    nameHint: "The review budget applies to later routing only; fast routing is fixed at 60 seconds",
+    nameHint: "The review budget applies to later routing only; fast routing is fixed at {{duration}}",
     label: "Review budget",
     brief: "Brief",
     standard: "Standard",
     deep: "Deep",
-    seconds: "{{n}} s",
     toolCalls: "{{n}} tool calls",
     bytes: "{{n}} bytes",
   },

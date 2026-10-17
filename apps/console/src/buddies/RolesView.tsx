@@ -9,6 +9,7 @@ import { Segmented, SegmentedItem } from "@/components/ui/segmented";
 import { ROUTER_RETRY_INTERVAL_MAX, ROUTER_RETRY_INTERVAL_MIN, retryIntervalSeconds } from "../console-data";
 import { routerListEqual } from "../draft";
 import { locale } from "../i18n";
+import { formatDuration } from "../i18n/format";
 import type { Configuration, Buddy, RoutingBudget, RoutingMode, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
 import { RolesRecords } from "./RolesRecords";
@@ -111,7 +112,7 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
         </Segmented>
       </Section>
 
-      <Section name={t("roles.budget.name")} hint={t("roles.budget.nameHint")} unsaved={mark(unsaved.budget)}>
+      <Section name={t("roles.budget.name")} hint={t("roles.budget.nameHint", { duration: formatDuration(60_000) })} unsaved={mark(unsaved.budget)}>
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
           <Segmented aria-label={t("roles.budget.label")} value={configuration?.routingBudget ?? ""}
             onValueChange={value => change({ routingBudget: value as RoutingBudget })}>
@@ -121,7 +122,7 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
           </Segmented>
           {/* The limits are recorded for one level only; another level chosen in the draft has none to show. */}
           {limits && limits.preset === configuration?.routingBudget && <span className="flex flex-wrap gap-x-3 text-xs text-ink2 tabular-nums">
-            <span>{t("roles.budget.seconds", { n: limits.timeoutSeconds.toLocaleString(locale) })}</span>
+            <span>{formatDuration(limits.timeoutSeconds * 1000)}</span>
             <span>{t("roles.budget.toolCalls", { n: limits.toolCalls.toLocaleString(locale) })}</span>
             <span>{t("roles.budget.bytes", { n: limits.bytesRead.toLocaleString(locale) })}</span>
           </span>}

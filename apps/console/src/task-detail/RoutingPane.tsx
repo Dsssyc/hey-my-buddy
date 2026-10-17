@@ -34,13 +34,13 @@ export function RoutingPane({ step, ctx }: { step: Step; ctx: Context }) {
   return <Pane>
     <PaneTitle title={t("step.routing")} state={state} tone={running ? "live" : failed ? "fail" : step.outcome === "unknown" ? "hand" : "past"} note={failed && span.error ? span.error : undefined}>
       <span className="font-mono tabular-nums">{step.at !== null ? <Moment at={step.at} /> : unrecorded} – {span.endAt ? <Moment at={span.endAt} /> : null}</span>
-      {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, true)}</b>}
+      {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, "fine")}</b>}
     </PaneTitle>
     <Band role="Router" identity={notCalled ? undefined : quad(entry?.routerBuddy) ?? <span className="font-sans text-ink3">{unrecorded}</span>}
       end={notCalled ? t("routing.notCalled") : mode ? t(`routing.mode.${mode}`) : unrecorded}
       second={<span className="inline-flex flex-wrap gap-x-3.5">
         <Usage usage={parseTokenUsage(span.tokenUsage)} />
-        <span>{t("routing.elapsed", { time: usage?.elapsedMs != null ? formatDuration(usage.elapsedMs, true) : t("unknown") })}</span>
+        <span>{t("routing.elapsed", { time: usage?.elapsedMs != null ? formatDuration(usage.elapsedMs, "fine") : t("unknown") })}</span>
         <span>{t("routing.toolCalls", { n: usage?.toolCalls ?? t("unknown") })}</span>
       </span>} />
     <Thread key={span.spanId}>

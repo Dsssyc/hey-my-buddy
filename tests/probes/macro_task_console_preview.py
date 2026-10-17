@@ -153,8 +153,8 @@ HOST_CONCLUSION_KEYS = {"conclusionId", "attemptId", "executionStatus", "note", 
                         "runRevision"}
 TOKEN_USAGE_KEYS = {"inputTokens", "cachedInputTokens", "outputTokens", "source", "scope"}
 
-#: ``--emit-fixtures`` tree: the scenario order and the exact file set beneath
-#: each scenario directory (manifest entries are sorted by scenario, then path).
+#: ``--emit-fixtures`` manifest: the scenario order and exact fixture files
+#: (entries are sorted by scenario, then path).
 EMIT_SOURCE = "tests/probes/macro_task_console_preview.py"
 EMIT_SCENARIOS = ("normal", "readonly", "truncated", "error")
 EMIT_LAYOUT = {
@@ -271,7 +271,7 @@ def digest(tag: str) -> str:
 def attempt(attempt_id: str, turn_index: int, state: str, confirmed: bool, started: str,
             finished: str | None, buddy: dict | None, *, error: str | None = None,
             result: str | dict | None = None, disposition: str = "completed",
-            usage: dict | None = None) -> dict:
+            usage: dict | None = None, expected_seconds: int = 1800) -> dict:
     # `result` is the stored worker receipt: {"status", "result", "shutdownConfirmed"},
     # exactly what store.task_result unpacks; the adapter payload nests under `result`.
     # `usage` is the ADR-018 per-attempt token usage: null when the record is
@@ -283,6 +283,7 @@ def attempt(attempt_id: str, turn_index: int, state: str, confirmed: bool, start
             "generation": turn_index, "state": state, "shutdownConfirmed": confirmed,
             "startedAt": started, "finishedAt": finished, "buddy": buddy,
             "error": error, "result": receipt, "disposition": disposition, "usage": usage,
+            "expectedSeconds": expected_seconds,
             "uncertain": state == "uncertain" or (state == "finished" and not confirmed)}
 
 
@@ -575,7 +576,7 @@ def build_runs() -> dict[str, dict]:
                         usage=usage("dsh-native", 12000, 9000, 1500)),
                 attempt("att-a1-2", 2, "finished", True, instant(6, 46), instant(7, 0), CFG_CODEX,
                         result="合成预览：第二轮完成并确认停止。",
-                        usage=usage("codex-native", 20000, 15000, 800)),
+                        usage=usage("codex-native", 20000, 15000, 800), expected_seconds=900),
             ],
             markers=[
                 marker(instant(6, 0), "dispatch", actor=host_actor(HOST_A)),
@@ -705,6 +706,7 @@ def build_runs() -> dict[str, dict]:
             task_text="修正第一轮时间轴中折叠空闲区间的键盘焦点顺序，并补充可访问性检查。",
             created=instant(9, 35), updated=instant(9, 39), state="executing", status="running",
             category="active", buddy=CFG_CLAUDE, shutdown_confirmed=False, routing=ROUTING_A3,
+            expected_seconds=600,
             spans=[
                 span("queue:att-a3-1", "queue", instant(9, 35), instant(9, 36), "admitted",
                      attempt_id="att-a3-1"),
@@ -716,7 +718,7 @@ def build_runs() -> dict[str, dict]:
                      disposition="completed", turn_index=1),
             ],
             attempts=[attempt("att-a3-1", 1, "executing", False, instant(9, 39), None, CFG_CLAUDE,
-                              usage=None)],
+                              usage=None, expected_seconds=600)],
             markers=[marker(instant(9, 35), "dispatch", actor=host_actor(HOST_A))],
             activity={"phase": "tool-running", "observedAt": instant(9, 41), "eventSeq": 12,
                       "lastToolActivityAt": instant(9, 41), "toolName": "Bash",
@@ -1158,7 +1160,7 @@ def turn_view(entry: dict, item: dict) -> dict:
     """One turn as the board lists it: no turn carries its result here."""
     return {
         "turnId": item["turnId"], "turnIndex": item["turnIndex"], "attemptId": item["attemptId"],
-        "expectedSeconds": entry["expectedSeconds"],
+        "expectedSeconds": item["expectedSeconds"],
         "generation": item["generation"], "resumeMode": "reconstructed-new-session",
         "sessionId": None, "state": "returned" if item["state"] == "finished" else "open",
         "disposition": item["disposition"], "createdAt": item["startedAt"],
@@ -1289,9 +1291,13 @@ def timeline_row(entry: dict, depth: int) -> dict:
         "buddy": ({key: buddy.get(key) for key in ("harness", "provider", "model", "effort")}
                           if buddy else None),
         "acceptedAt": entry["acceptedAt"], "acceptanceVerdict": entry["acceptanceVerdict"],
+        "reviewRejectedAt": None, "reviewRejectionNote": None,
     }
     if entry["runId"] in PREVIEW_FIXES:
-        row["fixes"] = PREVIEW_FIXES[entry["runId"]]
+        target = FIXTURES["runs"][PREVIEW_FIXES[entry["runId"]]]
+        row["fixes"] = target["runId"]
+        row["fixesTitle"] = target["title"] or UNTITLED
+        row["fixesTitleSource"] = target["titleSource"]
     fixed_by = [run_id for run_id, target in PREVIEW_FIXES.items() if target == entry["runId"]]
     if fixed_by:
         row["fixedBy"] = fixed_by
@@ -1343,7 +1349,24 @@ def macro_task_summary(group: str, matching: set[str]) -> dict:
 
 
 def span_views(entry: dict) -> list[dict]:
-    return [{**item, "runId": entry["runId"]} for item in entry["spans"]]
+    attempts = {item["attemptId"]: item for item in entry["attempts"]}
+    selected = entry["attempts"][-1] if entry["attempts"] else None
+    views = []
+    for item in entry["spans"]:
+        execution = item["kind"] == "execution"
+        attempt = attempts.get(item["attemptId"]) if execution else None
+        current = (attempt is not None and attempt is selected and entry["status"] == "running"
+                   and attempt["state"] != "finished" and attempt["result"] is None)
+        views.append({
+            **item, "runId": entry["runId"],
+            "expectedSeconds": attempt["expectedSeconds"]
+            if attempt is not None else None,
+            "reminders": attempt_view(entry, attempt)["reminders"] if current else None,
+            "inquiries": [{key: message[key] for key in ("inquiryId", "createdAt", "author", "state")}
+                          for message in entry["messages"] if message["attemptId"] == attempt["attemptId"]]
+            if attempt is not None else None,
+        })
+    return views
 
 
 def marker_views(run_ids: list[str]) -> list[dict]:
@@ -1492,24 +1515,6 @@ def macro_task_timeline(params: dict, scenario: str) -> dict:
         "scopeComplete": not applied and not any(truncated.values()),
     }
 
-
-def task_page(params: dict) -> dict:
-    if params.get("before"):
-        raise PreviewError("UNSUPPORTED", "The synthetic preview serves one task page; omit before")
-    limit = parse_limit(params, 20, 100)
-    applied = applied_filters(params)
-    entries = [entry for entry in FIXTURES["runs"].values() if matches(entry, applied)]
-    if params.get("state"):
-        entries = [entry for entry in entries if entry["status"] == params["state"]]
-    if params.get("adapter"):
-        entries = [entry for entry in entries
-                   if (entry["adapter"] or (entry["buddy"] or {}).get("harness")) == params["adapter"]]
-    if (params.get("rootsOnly") or "false").lower() in ("true", "1"):
-        entries = [entry for entry in entries if entry["parentRunId"] is None]
-    entries.sort(key=lambda entry: (entry["createdAt"], entry["runId"]), reverse=True)
-    views = [task_view(entry) for entry in entries[:limit]]
-    return {"runs": views, "total": len(entries), "cursor": FIXTURES["head"],
-            "nextCursor": None}
 
 
 def buddy_views() -> list[dict]:
@@ -1888,7 +1893,6 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
         f"GET  {base}/api/macro-tasks",
         f"GET  {base}/api/macro-tasks/{MACRO_A}/timeline",
         f"GET  {base}/api/macro-tasks/{urllib.parse.quote(STANDALONE_GROUP, safe='')}/timeline",
-        f"GET  {base}/api/tasks",
         f"GET  {base}/api/tasks/preview-run-a1",
         f"GET  {base}/api/runtime-version",
         f"POST {base}/api/command  workflow_get · message_list · selection_get · selection_list · "
@@ -1993,10 +1997,6 @@ class PreviewHandler(BaseHTTPRequestHandler):
             if path == "/api/macro-tasks":
                 params = parse_query(query, frozenset({"limit", "projectId", "hostId", "query", "filter"}))
                 return self._json(200, macro_task_page(params))
-            if path == "/api/tasks":
-                params = parse_query(query, frozenset({"limit", "state", "adapter", "before", "rootsOnly",
-                                                       "query", "projectId", "hostId", "filter"}))
-                return self._json(200, task_page(params))
             if path == "/api/runtime-version":
                 return self._json(200, runtime_version_report())
             if path.startswith("/api/macro-tasks/") and path.endswith("/timeline"):
@@ -2146,11 +2146,11 @@ REQUIRED_KEYS = {
                         "stoppableRoots", "stoppableHelpers", "delivered", "awaitingHost"},
     "TimelineSpan": {"spanId", "runId", "kind", "startAt", "endAt", "state", "attemptId", "turnId",
                      "turnIndex", "requestId", "buddy", "shutdownConfirmed", "uncertain",
-                     "clockSkew"},
+                     "clockSkew", "expectedSeconds", "reminders", "inquiries"},
     "TimelineRow": {"runId", "parentRunId", "rootRunId", "rootLeadRunId", "leadOwnership",
                     "title", "titleSource", "taskSummary", "summary",
                     "createdAt", "state", "status", "category", "shutdownConfirmed", "depth", "kind",
-                    "buddy", "acceptedAt", "acceptanceVerdict"},
+                    "buddy", "acceptedAt", "acceptanceVerdict", "reviewRejectedAt", "reviewRejectionNote"},
     "TimelineEvent": {"seq", "runId", "kind", "at", "label", "summary", "actor", "attemptId",
                       "requestId", "artifactId"},
     "MacroTaskTimeline": {"macroTask", "observedAt", "cursor", "rows", "spans", "events", "totals",
@@ -2252,7 +2252,8 @@ def validate_fixtures() -> list[str]:
             or owned["markers"][0]["actor"] != {"role": "lead", "id": "preview-run-b1"}):
         problems.append("Lead-owned preview run must keep its nullable Host and explicit Lead actor")
     for group in FIXTURES["groups"]:
-        for row in macro_task_timeline({"macroTaskId": group}, "normal")["rows"]:
+        group_timeline = macro_task_timeline({"macroTaskId": group}, "normal")
+        for row in group_timeline["rows"]:
             lineage = FIXTURES["runs"][row["runId"]]["lineage"]
             missing = REQUIRED_KEYS["TimelineRow"] - set(row)
             if missing:
@@ -2260,9 +2261,29 @@ def validate_fixtures() -> list[str]:
             for key in ("rootLeadRunId", "leadOwnership"):
                 if key not in row or row[key] != lineage[key]:
                     problems.append(f"{row['runId']}: timeline {key} differs from task lineage")
+        for span in group_timeline["spans"]:
+            if REQUIRED_KEYS["TimelineSpan"] - set(span):
+                problems.append(f"{span['spanId']}: timeline span missing F2 facts")
+            if span["kind"] != "execution":
+                if any(span[key] is not None for key in ("expectedSeconds", "reminders", "inquiries")):
+                    problems.append(f"{span['spanId']}: non-execution span carries turn facts")
+            elif span["expectedSeconds"] is None or span["expectedSeconds"] <= 0 or span["inquiries"] is None:
+                problems.append(f"{span['spanId']}: execution span lacks turn facts")
+    live = next(span for span in timeline["spans"] if span["spanId"] == "execution:att-a3-1")
+    if (live["expectedSeconds"] != 600 or live["reminders"] is None
+            or not live["reminders"]["overdue"] or not live["reminders"]["possiblyStuck"]
+            or [item["inquiryId"] for item in live["inquiries"]] != ["inq-a3-1"]):
+        problems.append("preview-run-a3 must show a live overrun, silence reminder and Host inquiry")
+    if "测试跑了很久还没有结束" in json.dumps(live, ensure_ascii=False):
+        problems.append("timeline inquiry must omit question body")
+    historic = next(span for span in timeline["spans"] if span["spanId"] == "execution:att-a1-2")
+    if historic["expectedSeconds"] != 900 or historic["reminders"] is not None:
+        problems.append("preview second turn must retain its own duration without live reminders")
     fixes = {row["runId"]: row for row in timeline["rows"]}
     if (fixes["preview-run-a2"].get("fixes") != "preview-run-a1"
             or fixes["preview-run-a3"].get("fixes") != "preview-run-a1"
+            or fixes["preview-run-a2"].get("fixesTitle") != FIXTURES["runs"]["preview-run-a1"]["title"]
+            or fixes["preview-run-a2"].get("fixesTitleSource") != "title"
             or fixes["preview-run-a1"].get("fixedBy") != ["preview-run-a2", "preview-run-a3"]):
         problems.append("preview must show two fixes of the same accepted micro task")
     for run_id, fixed_run_id in PREVIEW_FIXES.items():
@@ -2657,12 +2678,15 @@ def emit_fixture_files() -> list[dict]:
             add(scenario, "console.json", "console-snapshot", "GET /api/console", 200, "accepted",
                 console_snapshot(scenario, assets_ready=False), request={})
         if scenario == "normal":
-            # The records view's paginated read and the settings page's version
-            # facts are read separately from the slim snapshot.
-            add(scenario, "tasks.json", "task-page", "GET /api/tasks", 200, "accepted",
-                task_page({}), request={})
+            # Settings reads version facts separately from the slim snapshot.
             add(scenario, "runtime-version.json", "runtime-version", "GET /api/runtime-version",
                 200, "accepted", runtime_version_report(), request={})
+            # Task views let the parser check that timeline lineage matches its
+            # full task records. This is internal evidence, not an HTTP route.
+            records = [task_view(entry) for entry in FIXTURES["runs"].values()]
+            add(scenario, "tasks.json", "lineage-records", "fixture:lineage-records",
+                200, "accepted", {"runs": records, "total": len(records),
+                                   "cursor": FIXTURES["head"], "nextCursor": None}, request={})
         add(scenario, "macro-tasks.json", "macro-tasks-page", "GET /api/macro-tasks", 200, "accepted",
             macro_task_page({}), request={})
         if scenario == "error":
@@ -2849,10 +2873,8 @@ def smoke(assets: Path, scenario: str) -> int:
         check("slim snapshot carries the board-wide pending count",
               snapshot.get("tasks") == {"pendingCount": pending_root_count()},
               str(snapshot.get("tasks")))
-        status, records, _headers = call("GET", "/api/tasks?rootsOnly=true&limit=50")
-        check("GET /api/tasks serves the paginated records page", status == 200
-              and isinstance(records.get("runs"), list) and isinstance(records.get("total"), int)
-              and records.get("nextCursor") is None, f"status={status}")
+        status, _records, _headers = call("GET", "/api/tasks")
+        check("removed GET /api/tasks returns 404", status == 404, f"status={status}")
         status, version, _headers = call("GET", "/api/runtime-version")
         check("GET /api/runtime-version serves the version facts", status == 200
               and version.get("running", {}).get("mode") == "runtime"

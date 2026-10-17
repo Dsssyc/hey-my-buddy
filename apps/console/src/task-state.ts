@@ -2,7 +2,7 @@ import i18n from "i18next";
 import type { Lineage, Task } from "./types";
 
 /** Where a micro task title came from; the Worker result summary is never one. */
-export type TitleSource = "title" | "task" | "none";
+type TitleSource = "title" | "task" | "none";
 
 export function excerpt(text: string, limit = 120): string {
   let result = "", count = 0;
@@ -18,12 +18,12 @@ function normalizeDisplay(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-export const UNTITLED_MICRO_TASK = () => i18n.t("console:unnamedMicroTask");
+const UNTITLED_MICRO_TASK = () => i18n.t("console:unnamedMicroTask");
 /** Task-first-line titles cap at roughly this many characters (0.16 0.1). */
 const TASK_LINE_CHARS = 40;
 /** Suffix pointing readers to the detail view for the full task text. */
 
-export type TaskTitle = {
+type TaskTitle = {
   /** The bounded text lists, headings and breadcrumbs display. */
   text: string;
   /**
@@ -67,37 +67,6 @@ export function taskStatus(task: Task): string {
 }
 
 /** Presentation only: the stored state stays awaiting-host for a Lead-owned tree. */
-export function displayWorkflowState(state: string, rootLeadRunId: Lineage["rootLeadRunId"]): string {
+function displayWorkflowState(state: string, rootLeadRunId: Lineage["rootLeadRunId"]): string {
   return state === "awaiting-host" && rootLeadRunId !== null ? "awaiting-lead" : state;
-}
-
-export function canRetry(task: Task): boolean {
-  // A cancelled queued task has no process to stop. Missing identity fields are
-  // unknown, so require the explicit nulls returned by the authoritative store.
-  const neverClaimed =
-    task.selectedAttemptId === null && task.activeAttemptId === null;
-  return (
-    !task.workflow &&
-    task.spec?.harness !== "decision" &&
-    ["failed", "cancelled"].includes(task.status) &&
-    (neverClaimed || task.shutdownConfirmed === true)
-  );
-}
-
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-export function resultText(value: unknown): string {
-  const task = record(value);
-  const attempt = record(task?.selectedAttempt);
-  const receipt = record(attempt?.result);
-  if (!receipt) return i18n.t("console:deliveryResultNotRecorded");
-  const output = record(receipt.result);
-  for (const text of [output?.finalText, output?.stdout, receipt.error]) {
-    if (typeof text === "string" && text.trim()) return text;
-  }
-  return JSON.stringify(output || receipt, null, 2);
 }

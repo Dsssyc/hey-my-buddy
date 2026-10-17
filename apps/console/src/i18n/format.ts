@@ -68,27 +68,20 @@ export function formatCompact(value: number): string {
   return value < 1000 ? formatters().whole.format(value) : `${formatters().tenth.format(value / 1000)}k`;
 }
 
-/**
- * A length of time in the two units that matter. Fine adds the seconds that a
- * coarse reading drops: 3 min 08 s against 32 min.
- */
-export function formatDuration(ms: number, fine = false): string {
-  const total = Math.max(0, Math.round(ms / 1000));
-  const [h, m, s] = [Math.floor(total / 3600), Math.floor(total / 60) % 60, total % 60];
+/** A duration; "fine" includes seconds, while "minutes" reads completed whole minutes. */
+export function formatDuration(ms: number, mode: "coarse" | "fine" | "minutes" = "coarse"): string {
   const part = (unit: "hour" | "minute" | "second", n: number, padded = false) =>
     i18n.t(`shell:duration.${unit}`, { n: padded ? String(n).padStart(2, "0") : formatters().whole.format(n) });
-  if (h > 0) return fine ? `${part("hour", h)} ${part("minute", m, true)} ${part("second", s, true)}` : m ? `${part("hour", h)} ${part("minute", m)}` : part("hour", h);
-  if (m > 0) return fine ? `${part("minute", m)} ${part("second", s, true)}` : total < 600 && s ? `${part("minute", m)} ${part("second", s)}` : part("minute", m);
+  if (mode === "minutes") {
+    const totalMinutes = Math.max(0, Math.floor(ms / 60_000));
+    const [h, m] = [Math.floor(totalMinutes / 60), totalMinutes % 60];
+    return h ? `${part("hour", h)} ${part("minute", m)}` : part("minute", m);
+  }
+  const total = Math.max(0, Math.round(ms / 1000));
+  const [h, m, s] = [Math.floor(total / 3600), Math.floor(total / 60) % 60, total % 60];
+  if (h > 0) return mode === "fine" ? `${part("hour", h)} ${part("minute", m, true)} ${part("second", s, true)}` : m ? `${part("hour", h)} ${part("minute", m)}` : part("hour", h);
+  if (m > 0) return mode === "fine" ? `${part("minute", m)} ${part("second", s, true)}` : total < 600 && s ? `${part("minute", m)} ${part("second", s)}` : part("minute", m);
   return part("second", s);
-}
-
-/** Wall time in whole minutes, including an explicit zero-minute part after hours. */
-export function formatDurationMinutes(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 60_000));
-  const hours = Math.floor(total / 60);
-  const minutes = total % 60;
-  const minute = (n: number) => i18n.t("shell:duration.minute", { n: formatNumber(n) });
-  return hours ? `${i18n.t("shell:duration.hour", { n: formatNumber(hours) })} ${minute(minutes)}` : minute(minutes);
 }
 
 /** 19 minutes ago, in the nearest unit, written like a duration; an instant that has not come yet reads as now. */

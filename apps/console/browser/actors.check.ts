@@ -11,7 +11,7 @@ for (const [locale, recordedBy, conclusion] of [["zh-CN", "记录人", "Host 的
       await open(page, `#tasks/${MACRO}/preview-run-b2`);
       const detail = page.locator("[data-slot=task-detail]");
       await expect(detail).toBeVisible();
-      await detail.locator("[data-slot=detail-rail] button").last().click();
+      await page.locator("[data-slot=detail-rail] button").last().click();
       const section = page.locator("[data-slot=detail-pane]").getByRole("group", { name: conclusion });
       await expect(section).toContainText("Lead · preview-run-b1");
       await expect(section.getByText(recordedBy, { exact: true })).toBeVisible();

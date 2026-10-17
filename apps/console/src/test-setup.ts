@@ -11,4 +11,8 @@ Element.prototype.hasPointerCapture ??= () => false;
 Element.prototype.releasePointerCapture ??= () => {};
 Element.prototype.scrollIntoView ??= () => {};
 
+// Only semantic label-selection tests use this deterministic font metric. Real
+// glyph widths and collision geometry are checked in Playwright.
+Object.defineProperty(SVGElement.prototype, "getComputedTextLength", { configurable: true, value() { return [...(this.textContent ?? "")].reduce((width, char) => width + (/[^\x00-\x7f]/.test(char) ? 12 : 6), 0); } });
+
 export {};

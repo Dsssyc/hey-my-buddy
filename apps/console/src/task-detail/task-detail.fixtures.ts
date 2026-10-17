@@ -13,7 +13,7 @@ import type { Audit, Basis, Buddy, Inquiries, Inquiry, ResultTurn, RoutingEntry,
  */
 export const CODEX: Buddy = { harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high" };
 export const OPUS: Buddy = { harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
-export const ROUTER: Buddy = { harness: "codex", provider: "openai", model: "gpt-6-luna", effort: "high" };
+const ROUTER: Buddy = { harness: "codex", provider: "openai", model: "gpt-6-luna", effort: "high" };
 export const HOST = { role: "host" as const, id: "codex-desktop" };
 
 export const at = (clock: string, second = 0) => `2026-09-26T${clock}:${String(second).padStart(2, "0")}Z`;
@@ -36,7 +36,7 @@ export function task(overrides: Record<string, unknown> = {}): Task {
   } as Task;
 }
 
-export function turn(index: number, overrides: Partial<Turn> = {}): Turn {
+function turn(index: number, overrides: Partial<Turn> = {}): Turn {
   return {
     turnId: `turn-${index}`, turnIndex: index, attemptId: `att-${index}`, expectedSeconds: 1800, resumeMode: index === 1 ? "initial" : "native-session",
     sessionId: `01a2f7c4-${index}e31`.padEnd(36, "0"), state: "returned", disposition: "completed", createdAt: at(index === 1 ? "10:02" : "10:42"),
@@ -94,7 +94,9 @@ const tb = (buddy: Buddy | null): TimelineBuddy | null => buddy;
 
 export function span(spanId: string, kind: TimelineSpan["kind"], startAt: string | null, endAt: string | null, overrides: Partial<TimelineSpan> = {}): TimelineSpan {
   return { spanId, runId: "m1", kind, startAt, endAt, state: kind === "queue" ? "admitted" : kind === "host" ? "approved" : "finished",
-    attemptId: null, turnId: null, turnIndex: null, requestId: null, buddy: null, shutdownConfirmed: null, uncertain: false, clockSkew: false, ...overrides };
+    attemptId: null, turnId: null, turnIndex: null, requestId: null, buddy: null,
+    expectedSeconds: kind === "execution" ? 1800 : null, reminders: null, inquiries: kind === "execution" ? [] : null,
+    shutdownConfirmed: null, uncertain: false, clockSkew: false, ...overrides };
 }
 
 export function event(seq: number, kind: string, when: string, overrides: Partial<TimelineEvent> = {}): TimelineEvent {

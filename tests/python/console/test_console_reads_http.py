@@ -91,8 +91,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
 
         # A raw SQL change with no business event and no visible content: the
         # marker must not miss it, so the projection is recomputed. (A plain
-        # task submission no longer appears in the slim snapshot at all; the
-        # paged /api/tasks read owns that change and is covered below.)
+        # task submission no longer appears in the slim snapshot at all.)
         with board.store.db.write() as connection:
             connection.execute("INSERT INTO meta(key,value) VALUES('console-read-test','1')"
                                " ON CONFLICT(key) DO UPDATE SET value=excluded.value")
@@ -300,7 +299,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         After a same-schema database replacement the reconnected marker may
         re-read the data_version other routes' entries were cached under; the
         connection epoch must invalidate them all. The snapshot visibly
-        changes (Router retry interval), while the tasks route re-enters its
+        changes (Router retry interval), while the macro task route re-enters its
         projection even though its content is byte-identical — an honest
         recompute-304, never a stale cache hit.
         """
@@ -308,7 +307,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         browser = self.open(board)
         _status, console_headers, console_body = browser.get("/api/console")
         self.assertEqual(json.loads(console_body)["configuration"]["routerRetryIntervalSeconds"], 600)
-        _status, tasks_headers, _body = browser.get("/api/tasks?limit=5")
+        _status, tasks_headers, _body = browser.get("/api/macro-tasks?limit=5")
         import sqlite3
         from contextlib import closing
 
@@ -326,24 +325,24 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(status, 200, body[:300])
         self.assertEqual(json.loads(body)["configuration"]["routerRetryIntervalSeconds"], 997)
         self.assertNotEqual(_headers["etag"], console_headers["etag"])
-        projections = board.console.read_cache.calls["tasks"]["projections"]
+        projections = board.console.read_cache.calls["macroTasks"]["projections"]
         status, _headers, _ = browser.get(
-            "/api/tasks?limit=5", headers={"If-None-Match": tasks_headers["etag"]}
+            "/api/macro-tasks?limit=5", headers={"If-None-Match": tasks_headers["etag"]}
         )
         self.assertEqual(
-            board.console.read_cache.calls["tasks"]["projections"], projections + 1,
-            "The tasks page belongs to the replaced epoch: the conditional read must re-enter "
+            board.console.read_cache.calls["macroTasks"]["projections"], projections + 1,
+            "The macro task page belongs to the replaced epoch: the conditional read must re-enter "
             "the projection instead of serving the pre-replacement cache entry",
         )
         self.assertIn(status, (200, 304))
 
-    def test_task_macro_task_and_timeline_reads_are_conditional(self):
+    def test_macro_task_and_timeline_reads_are_conditional(self):
         board = self.board()
         submitted = self.submit(
             board, request_id="cond-1", cwd=str(self.workdir("cond-1")), macroTask={"title": "Conditional"}
         )
         browser = self.open(board)
-        for path in ("/api/tasks?limit=5", "/api/macro-tasks?limit=5",
+        for path in ("/api/macro-tasks?limit=5",
                      f"/api/macro-tasks/{submitted['macroTaskId']}/timeline"):
             with self.subTest(path=path):
                 status, headers, body = browser.get(path)
@@ -354,12 +353,11 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
                 self.assertEqual(replay_headers["etag"], headers["etag"])
         # A new run changes the board: the conditional reads answer with content.
         self.submit(board, request_id="cond-2", cwd=str(self.workdir("cond-2")))
-        for path in ("/api/tasks?limit=5", "/api/macro-tasks?limit=5"):
+        for path in ("/api/macro-tasks?limit=5",):
             with self.subTest(path=path):
                 status, _headers, _body = browser.get(path, headers={"If-None-Match": "nope"})
                 self.assertEqual(status, 200)
         counts = board.console.read_cache.calls
-        self.assertEqual(counts["tasks"]["projections"], 2)
         # One kind covers the macro task routes: two list generations plus the
         # timeline's single generation.
         self.assertEqual(counts["macroTasks"]["projections"], 3)

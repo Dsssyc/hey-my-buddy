@@ -139,7 +139,7 @@ export function TurnPane({ step, ctx }: { step: Step; ctx: Context }) {
         {step.at !== null ? <Moment at={step.at} /> : t("unrecorded")} – {span.endAt ? <Moment at={span.endAt} /> : null}
       </span>
       {expected !== null && <span className="tabular-nums text-ink3">{t("turn.expected", { time: formatDuration(expected * 1000) })}</span>}
-      {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, true)}</b>}
+      {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, "fine")}</b>}
     </PaneTitle>
     <Band role="Worker" identity={quad(buddy) ?? <span className="font-sans text-ink3">{t("unrecorded")}</span>}
       end={!turn?.routing ? <span className="text-ink3">{t("origin.unrecorded")}</span>

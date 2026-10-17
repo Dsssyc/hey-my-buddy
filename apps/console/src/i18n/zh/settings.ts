@@ -10,7 +10,7 @@ export default {
   },
   reminders: {
     title: "提醒", possiblyStuck: "可能卡住", minutesWithoutProgress: "分钟没有进展", silenceMinutes: "静默提醒阈值（分钟）",
-    description: "一次执行这么久没有任何进展，时间轴与微任务里标为可能卡住。", range: "请输入 1 至 1440 的整数分钟。", currentSeconds: "当前保存值为 {{n}} 秒；请输入整数分钟才能修改。",
+    description: "一次执行这么久没有任何进展，时间轴与微任务里标为可能卡住。", range: "请输入 1 至 1440 的整数分钟。", currentDuration: "当前保存值为 {{duration}}；请输入整数分钟才能修改。",
     save: "保存", saving: "保存中", saved: "提醒设置已保存。", unavailable: "提醒设置暂不可用，请刷新控制台。", disconnected: "连接中断或当前浏览器无权修改。", unchanged: "没有需要保存的改动。", busy: "正在保存提醒设置。", unsaved: "未保存",
   },
   version: {

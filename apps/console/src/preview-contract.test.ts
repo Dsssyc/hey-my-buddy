@@ -36,7 +36,7 @@ import type { Snapshot } from "./types";
 type ManifestEntry = {
   scenario: string;
   path: string;
-  kind: "console-snapshot" | "task-page" | "runtime-version" | "macro-tasks-page" | "macro-task-timeline" | "workflow-get"
+  kind: "console-snapshot" | "lineage-records" | "runtime-version" | "macro-tasks-page" | "macro-task-timeline" | "workflow-get"
     | "workflow-audit" | "message-list";
   endpoint: string;
   httpStatus: number;
@@ -126,7 +126,7 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
       outcome.facts = {
         configuration: snapshot.configuration,
         // The slim snapshot carries the server's board-wide pending count;
-        // full execution records stay on the paginated tasks read.
+        // each micro task has its own detail read.
         pendingCount: snapshot.tasks.pendingCount,
         harnesses: harnesses.map(row => ({
           harness: row.harness,
@@ -138,12 +138,11 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
             : quotaView(row.quota),
         })),
       };
-    } else if (entry.kind === "task-page") {
-      // The CLI preview regression still checks the server's execution-list fixture.
-      // Only collaboration tasks have a console detail entry point.
-      const page = bodyFor(entry) as { runs: import("./types").Task[]; total: number; nextCursor: string | null };
-      for (const run of page.runs.filter(run => run.workflow)) parseTask(run, run.runId);
-      outcome.facts = { total: page.total, runs: page.runs.length, nextCursor: page.nextCursor };
+    } else if (entry.kind === "lineage-records") {
+      // Internal task views support the probe's lineage checks; this is no HTTP read.
+      const records = bodyFor(entry) as { runs: import("./types").Task[]; total: number; nextCursor: string | null };
+      for (const run of records.runs.filter(run => run.workflow)) parseTask(run, run.runId);
+      outcome.facts = { total: records.total, runs: records.runs.length, nextCursor: records.nextCursor };
     } else if (entry.kind === "runtime-version") {
       const version = await api.runtimeVersion();
       outcome.facts = { mode: version.running.mode, softwareVersion: version.running.softwareVersion,
@@ -219,12 +218,12 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
 }
 
 describe("synthetic preview fixtures through the real console parsers", () => {
-  it("declares the eight preview reads and a self-consistent manifest", () => {
+  it("declares the seven preview reads and internal lineage records and a self-consistent manifest", () => {
     expect(manifest.fixtureVersion).toBe(1);
     expect(manifest.source).toBe("tests/probes/macro_task_console_preview.py");
     expect(manifest.scenarios).toEqual(["normal", "readonly", "truncated", "error"]);
     expect(new Set(manifest.files.map(entry => entry.kind))).toEqual(
-      new Set(["console-snapshot", "task-page", "runtime-version", "macro-tasks-page", "macro-task-timeline", "workflow-get", "workflow-audit", "message-list"]));
+      new Set(["console-snapshot", "lineage-records", "runtime-version", "macro-tasks-page", "macro-task-timeline", "workflow-get", "workflow-audit", "message-list"]));
     for (const entry of manifest.files) {
       expect(entry.expected === "accepted" ? entry.expectedCode === undefined : typeof entry.expectedCode === "string").toBe(true);
     }

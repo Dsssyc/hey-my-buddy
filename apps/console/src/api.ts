@@ -2,7 +2,7 @@ import i18n from "i18next";
 import { locale } from "./i18n";
 import type { RuntimeVersionInfo, VersionFacts, Configuration, ConsoleAccess, ConsoleSession, ReminderSettings, RoutingHealth, Snapshot } from "./types";
 import type {
-  MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskSummary, MacroTaskTimeline, TimelineRow,
+  MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskSummary, MacroTaskTimeline, TimelineRow, TimelineSpan,
 } from "./macro-task-types";
 
 export class ApiError extends Error {
@@ -21,7 +21,7 @@ export class ApiError extends Error {
  * `CONSOLE_SESSION_EXPIRED`. A callback receiving it must not automatically
  * retry a write; a fresh `hey-my-buddy console` login restores authority.
  */
-export const SESSION_EXPIRED_CODE = "CONSOLE_SESSION_EXPIRED";
+const SESSION_EXPIRED_CODE = "CONSOLE_SESSION_EXPIRED";
 
 export function isSessionExpiredRefusal(error: unknown): boolean {
   return error instanceof ApiError && error.code === SESSION_EXPIRED_CODE;
@@ -35,7 +35,7 @@ export function isSessionExpiredRefusal(error: unknown): boolean {
  * access. An expired or absent login is reported by the HTTP layer as a 401
  * `CONSOLE_SESSION_EXPIRED`, not by a writable-but-flagged descriptor.
  */
-export function parseConsoleSession(value: unknown): ConsoleSession {
+function parseConsoleSession(value: unknown): ConsoleSession {
   const session = value as Partial<ConsoleSession> | null | undefined;
   const valid = !!session && typeof session === "object" && !Array.isArray(session)
     && typeof session.id === "string" && session.id.trim().length > 0
@@ -195,7 +195,7 @@ export type StorageCategory = {
   eligibleCount: number;
   reasons: string[];
 };
-export type StorageCandidate = {
+type StorageCandidate = {
   id: string;
   category: string;
   path: string;
@@ -252,14 +252,14 @@ function validStoragePlan(value: unknown): value is StoragePlan {
       && (row.runtimeDir === null || typeof row.runtimeDir === "string"));
 }
 
-export function parseStoragePlan(value: unknown): StoragePlan {
+function parseStoragePlan(value: unknown): StoragePlan {
   if (!validStoragePlan(value)) {
     throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.storagePlan"));
   }
   return value;
 }
 
-export function validStorageApplyResult(value: unknown): value is StorageApplyResult {
+function validStorageApplyResult(value: unknown): value is StorageApplyResult {
   return storageObject(value) && storageString(value.planId) && storageCount(value.removedBytes) && value.complete === true
     && Array.isArray(value.removed) && value.removed.every(row => storageObject(row) && storageString(row.id)
       && typeof row.path === "string" && storageCount(row.bytes))
@@ -306,9 +306,35 @@ function validTimelineRows(rows: unknown): boolean {
     const entry = row as TimelineRow | null;
     return !!entry && typeof entry === "object"
       && (entry.taskSummary === null || typeof entry.taskSummary === "string")
-      && (!Object.hasOwn(entry, "fixes") || (typeof entry.fixes === "string" && entry.fixes.length > 0))
+      && (Object.hasOwn(entry, "fixes")
+        ? typeof entry.fixes === "string" && entry.fixes.length > 0 && typeof entry.fixesTitle === "string"
+          && ["title", "task", "none"].includes(entry.fixesTitleSource!)
+        : !Object.hasOwn(entry, "fixesTitle") && !Object.hasOwn(entry, "fixesTitleSource"))
       && (!Object.hasOwn(entry, "fixedBy") || (Array.isArray(entry.fixedBy) && entry.fixedBy.length > 0
         && entry.fixedBy.every(runId => typeof runId === "string" && runId.length > 0)));
+  });
+}
+
+function validTimelineSpans(spans: unknown): boolean {
+  return Array.isArray(spans) && spans.every(span => {
+    const entry = span as TimelineSpan | null;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    if (entry.kind !== "execution") {
+      return entry.expectedSeconds === null && entry.reminders === null && entry.inquiries === null;
+    }
+    if (!(entry.expectedSeconds === null || (typeof entry.expectedSeconds === "number"
+      && Number.isSafeInteger(entry.expectedSeconds) && entry.expectedSeconds > 0))
+      || !Array.isArray(entry.inquiries) || !entry.inquiries.every(inquiry =>
+        inquiry && typeof inquiry === "object" && !Array.isArray(inquiry)
+        && typeof inquiry.inquiryId === "string" && inquiry.inquiryId.length > 0
+        && typeof inquiry.createdAt === "string" && Number.isFinite(Date.parse(inquiry.createdAt))
+        && typeof inquiry.author === "string" && inquiry.author.length > 0
+        && typeof inquiry.state === "string" && inquiry.state.length > 0)) return false;
+    const reminders = entry.reminders;
+    return reminders === null || !!reminders && typeof reminders === "object" && !Array.isArray(reminders)
+      && typeof reminders.overdue === "boolean" && typeof reminders.possiblyStuck === "boolean"
+      && (reminders.lastNativeEventAt === null || typeof reminders.lastNativeEventAt === "string" && Number.isFinite(Date.parse(reminders.lastNativeEventAt)))
+      && typeof reminders.toolInProgress === "boolean";
   });
 }
 
@@ -319,7 +345,7 @@ import type { HarnessHealth, QuotaRetryWindow, QuotaRoutingRecord } from "./type
 import { parseQuota } from "./quota";
 
 /** The supported harnesses, in the Buddy page's fixed display order. */
-export const HARNESS_ORDER = ["dsh", "zcode", "codex", "claude"] as const;
+const HARNESS_ORDER = ["dsh", "zcode", "codex", "claude"] as const;
 
 /** Strict parse of one retry window (ADR-019): every fact is named or the value is null. */
 function parseQuotaRetry(value: unknown): QuotaRetryWindow | null {
@@ -426,7 +452,7 @@ export function snapshotHarnesses(snapshot: Snapshot): HarnessHealth[] {
 }
 
 /** The `harnesses` rows carried by a `capabilities` reply. */
-export function commandHarnesses(reply: unknown): HarnessHealth[] {
+function commandHarnesses(reply: unknown): HarnessHealth[] {
   return harnessRows((reply as { harnesses?: unknown } | null)?.harnesses);
 }
 
@@ -724,7 +750,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         || !data.macroTask || typeof data.macroTask.macroTaskId !== "string"
         || !validMacroTaskSummary(data.macroTask)
         || !Array.isArray(data.rows) || !Array.isArray(data.spans) || !Array.isArray(data.events)
-        || !validTimelineRows(data.rows)
+        || !validTimelineRows(data.rows) || !validTimelineSpans(data.spans)
         || !data.totals || !Number.isInteger(data.totals.rows) || !Number.isInteger(data.totals.allRows)
         || !Number.isInteger(data.totals.spans) || !Number.isInteger(data.totals.events)
         || !data.truncated || typeof data.truncated.rows !== "boolean"

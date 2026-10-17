@@ -7,9 +7,9 @@ import { useTranslation } from "react-i18next";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import type { MacroTaskFilter, MacroTaskSummary } from "./macro-task-types";
-import type { TimelineItem } from "./macro-task-display";
 
-import type { InspectorSelection } from "./inspector-card";
+
+
 import { ListFold } from "./MacroTaskList";
 import { Hint } from "./components/hint";
 import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
@@ -17,7 +17,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "./compone
 import { StateMark } from "./components/ui/state-mark";
 import { formatClockMinutes, formatNumber } from "./i18n/format";
 import { MacroTaskList } from "./MacroTaskList";
-import { MacroTaskTimeline } from "./MacroTaskTimeline";
+import { TaskWork } from "./timeline/TaskWork";
 import { TaskDetail } from "./task-detail/TaskDetail";
 import { createTaskDetailClient } from "./task-detail/client";
 import { TASKS_ROOT, tasksHash, tasksLocation } from "./task-detail/location";
@@ -142,8 +142,6 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     changed(); media.addEventListener("change", changed);
     return () => media.removeEventListener("change", changed);
   }, []);
-  // The pinned inspector selection, kept per macroTask so switching back restores it.
-  const [selectionByMacroTask, setSelectionByMacroTask] = useState<Map<string, InspectorSelection>>(() => new Map());
   const list = useMacroTaskList(api, { query, filter }, active);
   const timeline = useMacroTaskTimeline(api, selected, active);
   useEffect(() => {
@@ -175,33 +173,8 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   const stopEntry = selected ? stop.entries.get(selected) : undefined;
   const stopState = stopStatus(stopEntry, timeline.timeline);
 
-  function setSelection(next: InspectorSelection | null) {
-    if (!selected) return;
-    setSelectionByMacroTask(previous => {
-      const map = new Map(previous);
-      if (next === null) map.delete(selected);
-      else map.set(selected, next);
-      return map;
-    });
-  }
-  const selection = selected ? selectionByMacroTask.get(selected) ?? null : null;
-
   const selectMacroTask = (macroTaskId: string) => { setShowNarrowList(false); go({ macroTaskId, runId: null, step: null }, "push"); };
-  const openRun = (runId: string, from: string | null = null) => {
-    // Opening from a row or a card names no span: the detail opens on its own first choice.
-    setSelection({ type: "run", runId });
-    go({ macroTaskId: selected, runId, step: null }, "push", from);
-  };
-  function selectItem(item: TimelineItem) {
-    setSelection({ type: "item", key: item.key });
-  }
-  function selectRun(runId: string) {
-    setSelection({ type: "run", runId });
-  }
-  function openItem(item: TimelineItem) {
-    setSelection({ type: "item", key: item.key });
-    go({ macroTaskId: selected, runId: item.runId, step: null }, "push", item.key);
-  }
+  const openRun = (runId: string, from: string | null = null) => go({ macroTaskId: selected, runId, step: null }, "push", from);
   const backToTimeline = () => go({ macroTaskId: selected, runId: null, step: null }, "push");
 
   let stopControl: ReactNode = null;
@@ -227,36 +200,18 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     onFilterChange={setFilter} onQueryChange={setQuery} onSelect={selectMacroTask}
     onMore={list.more} onApplyReorder={list.applyReorder} />;
 
-  // The detail takes the place of the timeline, under the macro task's own header.
-  const detail = detailRunId ? <TaskDetail key={detailRunId} client={detailClient} runId={detailRunId}
-    timeline={timeline.timeline} timelineLoading={timeline.loading && !timeline.timeline}
-    nowMs={timeline.displayObservedAt ? Date.parse(timeline.displayObservedAt) : Date.now()}
-    step={location.step} origin={origin} active={active}
-    onStep={step => go({ macroTaskId: selected, runId: detailRunId, step }, "replace", origin)}
-    onBack={backToTimeline} onOpenRun={runId => openRun(runId)} /> : null;
-
-  const timelinePane = selected ? <MacroTaskTimeline
-    active={active}
-    summary={selectedSummary}
-    timeline={timeline.timeline}
-    displayObservedAt={timeline.displayObservedAt}
-    loading={timeline.loading}
-    error={timeline.error}
-    stale={timeline.stale}
-    newRunIds={timeline.newRunIds}
-    hidden={!!detail}
-    detail={detail}
-    openedKey={origin}
-    openedRunId={detailRunId}
-    selection={selection}
-    headerActions={stopControl}
-    listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
-    buddies={snapshot.buddies}
-    onSelectItem={selectItem}
-    onOpenItem={openItem}
-    onSelectRun={selectRun}
-    onOpenRun={runId => openRun(runId)}
-    onClearSelection={() => setSelection(null)}
+  const timelinePane = selected ? <TaskWork key={selected}
+    active={active} summary={selectedSummary} timeline={timeline.timeline}
+    displayObservedAt={timeline.displayObservedAt} loading={timeline.loading} error={timeline.error}
+    stale={timeline.stale} newRunIds={timeline.newRunIds} openedRunId={detailRunId}
+    detail={(runId, railTarget, exiting) => <TaskDetail key={runId} client={detailClient} runId={runId}
+      railTarget={railTarget} timeline={timeline.timeline} timelineLoading={timeline.loading && !timeline.timeline}
+      nowMs={timeline.displayObservedAt ? Date.parse(timeline.displayObservedAt) : null}
+      step={location.step} origin={origin} active={active && !exiting}
+      onStep={step => { if (!exiting) go({ macroTaskId: selected, runId, step }, "replace", origin); }}
+      onBack={backToTimeline} onOpenRun={next => openRun(next)} />}
+    headerActions={stopControl} listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
+    buddies={snapshot.buddies} onOpen={(runId, key) => openRun(runId, key)} onClose={backToTimeline}
     onRetry={() => void timeline.retry()}
     onBackToList={() => { setShowNarrowList(true); if (listCollapsed) onExpandList(); }} /> : null;
 

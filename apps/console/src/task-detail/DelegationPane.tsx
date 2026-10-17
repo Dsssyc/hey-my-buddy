@@ -31,7 +31,8 @@ export function DelegationPane({ step, ctx }: { step: Step; ctx: Context }) {
   const { task } = view;
   const title = (runId: string) => {
     const found = timeline?.rows.find(item => item.runId === runId);
-    return found ? displayTitle(found.titleSource, found.title).text : runId;
+    if (found) return displayTitle(found.titleSource, found.title).text;
+    return row?.fixes === runId ? displayTitle(row.fixesTitleSource!, row.fixesTitle!).text : runId;
   };
   const project = taskProject(task);
   const parent = task.lineage?.parentRunId ?? null;
