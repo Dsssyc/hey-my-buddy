@@ -580,11 +580,15 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             if len(calls) == 1:
                 raise OSError("offline adapter interruption")
             return {session_id: "already-gone"}
+        # Deletion eligibility reads harness health, which asks the registry for
+        # the registered read-only capabilities; the stand-in borrows the real one.
+        read_only_check = harness_registry.adapter("codex").local_read_only_check
         with ExitStack() as stack:
             inventory = stack.enter_context(patch.object(worker_sessions,"deletable_sessions",
                                                           wraps=worker_sessions.deletable_sessions))
             stack.enter_context(patch.object(harness_registry, "adapter",
-                                             side_effect=lambda harness: SimpleNamespace(delete_sessions=delete_native)))
+                                             side_effect=lambda harness: SimpleNamespace(delete_sessions=delete_native,
+                                                                                         local_read_only_check=read_only_check)))
             for stage in PHYSICAL_STAGES[1:]:
                 stack.enter_context(patch.object(macro_task_deletion, stage, return_value=[]))
             interrupted = macro_task_deletion.delete(board.store, target, 1)
