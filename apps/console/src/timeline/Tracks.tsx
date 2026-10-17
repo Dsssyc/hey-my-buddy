@@ -1,14 +1,17 @@
 import i18n from "i18next";
 import { cn } from "cn";
 import { useTranslation } from "react-i18next";
-import { clockTime, durationText, spanOutcome, outcomeLabel, buddyLabel, acceptanceWaitMs } from "../macro-task-display";
+import { clockTime, durationText, spanOutcome, outcomeLabel, buddyLabel } from "../macro-task-display";
 import type { TimelineEvent, TimelineRow, TimelineSpan } from "../macro-task-types";
 import type { FriendlyBuddy } from "../macro-task-display";
 import type { TimelineScale } from "./scale";
 import { parseTimelineInstant as instant } from "./instant";
 import { formatDurationMinutes } from "../i18n/format";
+import { acceptanceInterval } from "./acceptance";
 import { fitLabel, useTextMeasure } from "./labels";
 import type { Interval, Label } from "./labels";
+import { MarkerCluster, markerAt, markerKey } from "./MarkerCluster";
+import type { TimelineMarker } from "./MarkerCluster";
 
 export function eventName(event: TimelineEvent): string { return i18n.t(`tasks:drawing.events.${event.kind}`); }
 
@@ -76,9 +79,9 @@ export function Axis({ scale, ongoing, nowMs }: { scale: TimelineScale; ongoing:
 type PositionedSpan = { span: TimelineSpan; start: number; end: number; execution: boolean; outcome: ReturnType<typeof spanOutcome> };
 const diamond = (x: number, y: number) => `M${x} ${y - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`;
 
-export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onHover, onFocusSpan, onEvent, selected, tabKey }: {
+export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onHover, onFocusSpan, onEvent, selected, tabKey, boundary }: {
   row: TimelineRow; spans: TimelineSpan[]; events: TimelineEvent[]; scale: TimelineScale; nowMs: number; ongoing: boolean;
-  buddies?: readonly FriendlyBuddy[] | null; selected: boolean; tabKey?: string;
+  buddies?: readonly FriendlyBuddy[] | null; selected: boolean; tabKey?: string; boundary?: HTMLElement | null;
   onOpen: (runId: string, key: string) => void; onHover: (span: TimelineSpan | null) => void; onFocusSpan: (span: TimelineSpan | null) => void;
   onEvent: (event: TimelineEvent | null) => void;
 }) {
@@ -93,15 +96,30 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     if (start === null || end === null || end < start) continue;
     positioned.push({ span, start, end, outcome, execution: span.kind === "execution" || span.kind === "routing" });
   }
-  const executions = spans.filter(span => span.kind === "execution");
-  const latest = executions.reduce<TimelineSpan | null>((last, span) => (instant(span.endAt) ?? -Infinity) > (instant(last?.endAt) ?? -Infinity) ? span : last, null);
-  const settledWait = acceptanceWaitMs(row, spans);
-  const acceptanceOpen = row.state === "delivered" && executions.length > 0 && executions.every(span => span.endAt !== null && span.shutdownConfirmed === true);
-  const waitStart = latest ? instant(latest.endAt) : null;
-  const waitEnd = acceptanceOpen ? nowMs : settledWait !== null ? instant(row.acceptedAt ?? row.reviewRejectedAt) : null;
-  const acceptance = waitStart !== null && waitEnd !== null ? { start: scale.toX(waitStart)!, end: scale.toX(waitEnd)!, duration: formatDurationMinutes(waitEnd - waitStart) } : null;
+  const wait = acceptanceInterval(row, spans, nowMs);
+  const acceptanceOpen = wait?.open ?? false;
+  const acceptance = wait ? { start: scale.toX(wait.startMs)!, end: scale.toX(wait.endMs)!, duration: formatDurationMinutes(wait.endMs - wait.startMs) } : null;
   const markers = events.filter(event => event.kind !== "dispatch" && event.kind !== "integrate").map(event => ({ event, x: scale.toX(instant(event.at)!)! }));
-  const inquiries = positioned.flatMap(({ span }) => (span.inquiries ?? []).map(inquiry => ({ inquiry, x: scale.toX(instant(inquiry.createdAt)!)! })));
+  const inquiries = positioned.flatMap(({ span }) => (span.inquiries ?? []).map(inquiry => ({ inquiry, span, x: scale.toX(instant(inquiry.createdAt)!)! })));
+  const allMarkers: TimelineMarker[] = [
+    ...markers.map(({ event, x }) => ({ kind: "event" as const, event, x })),
+    ...inquiries.map(({ inquiry, span, x }) => ({ kind: "inquiry" as const, inquiry, span, x })),
+  ].sort((a, b) => a.x - b.x || markerKey(a).localeCompare(markerKey(b)));
+  const markerGroups: TimelineMarker[][] = [];
+  for (const marker of allMarkers) {
+    const last = markerGroups.at(-1);
+    if (last && marker.x - last.at(-1)!.x <= 16) last.push(marker);
+    else markerGroups.push([marker]);
+  }
+  const singletonEvents = markerGroups.filter(group => group.length === 1 && group[0]!.kind === "event").map(group => group[0] as Extract<TimelineMarker, { kind: "event" }>);
+  const singletonInquiries = markerGroups.filter(group => group.length === 1 && group[0]!.kind === "inquiry").map(group => group[0] as Extract<TimelineMarker, { kind: "inquiry" }>);
+  const focusMarker = (marker: TimelineMarker | null) => {
+    if (marker?.kind === "inquiry") { onEvent(null); onFocusSpan(marker.span); }
+    else { onFocusSpan(null); onEvent(marker?.event ?? null); }
+  };
+  const markerName = (marker: TimelineMarker) => marker.kind === "event" ? eventName(marker.event) : t("drawing.inquiry");
+  const markerReadout = (marker: TimelineMarker) => marker.kind === "event" ? eventReadout(marker.event) :
+    t("drawing.inquiryReadout", { author: marker.inquiry.author, at: clockTime(marker.inquiry.createdAt), state: i18n.t(`taskDetail:inquiry.${marker.inquiry.state}`) });
   const duration = (item: PositionedSpan) => formatDurationMinutes((instant(item.span.endAt) ?? nowMs) - instant(item.span.startAt)!);
   const waitingKind = (span: TimelineSpan) => span.kind === "queue" ? t("kind.queue") : i18n.t(row.rootLeadRunId ? "console:waitingForLead" : "console:waitingForHost");
   const fullLabel = (item: PositionedSpan) => item.execution ? item.outcome === "running" ? t("drawing.running", { duration: duration(item) }) : item.outcome === "failed" ? t("drawing.failed", { duration: duration(item) }) : duration(item)!
@@ -118,20 +136,20 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     ...expected.map(entry => entry.text), ...markers.map(marker => eventName(marker.event)), acceptanceLabel, acceptance?.duration ?? ""];
   const { measure, ruler } = useTextMeasure(candidates);
   const labels: Label[] = [];
-  const occupied: Record<number, Interval[]> = { 12: [], 35: [...markers, ...inquiries, ...expected].map(mark => ({ left: mark.x - 8, right: mark.x + 8 })), 58: [] };
+  const occupied: Record<number, Interval[]> = { 12: [], 35: [...markerGroups.map(group => ({ x: group.reduce((sum, mark) => sum + mark.x, 0) / group.length, radius: group.length > 1 ? 11 : 8 })), ...expected.map(mark => ({ x: mark.x, radius: 8 }))].map(mark => ({ left: mark.x - mark.radius, right: mark.x + mark.radius })), 58: [] };
   const add = (texts: string[], left: number, right: number, y: number, className: string, preferred = left, blocks: Interval[] = []) => {
     const label = fitLabel(texts, { left: Math.max(0, left), right: Math.min(scale.widthPx, right) }, [...occupied[y]!, ...blocks], measure, preferred);
     if (label) { labels.push({ ...label, y, className }); occupied[y]!.push(label); }
   };
-  for (const { x } of inquiries) {
+  for (const { x } of singletonInquiries) {
     const labelWidth = measure(t("drawing.inquiry"));
     add([t("drawing.inquiry")], x - labelWidth / 2, x + labelWidth / 2, 12, "fill-ink2");
   }
   for (const entry of expected) add([entry.text], entry.item.start, entry.item.end, 58, "fill-hand", entry.x - measure(entry.text) - 4);
-  for (const marker of markers) {
+  for (const marker of singletonEvents) {
     const text = eventName(marker.event), room = measure(text) + 20;
-    if (markers.some(other => other !== marker && Math.abs(other.x - marker.x) < room)) continue;
-    const next = Math.min(scale.widthPx, ...markers.filter(other => other.x > marker.x).map(other => other.x - 10));
+    if (allMarkers.some(other => other !== marker && Math.abs(other.x - marker.x) < room)) continue;
+    const next = Math.min(scale.widthPx, ...allMarkers.filter(other => other.x > marker.x).map(other => other.x - 10));
     add([text], marker.x + 10, next, 35, "fill-ink2", marker.x + 10, positioned.filter(item => item.execution).map(item => ({ left: item.start - 4, right: item.end + 4 })));
   }
   if (acceptance && acceptanceOpen) add([acceptanceLabel, t("review"), acceptance.duration!], acceptance.start + 10, acceptance.end, 12, "fill-hand");
@@ -161,12 +179,19 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     </g>)}
     {tails.map(tail => <rect pointerEvents="none" data-slot="silent-tail" key={tail.item.span.spanId} x={tail.x} y={middle - 10.25} width={Math.max(0, tail.item.end - tail.x)} height={20.5} strokeWidth={1.5} className="fill-hand-wash stroke-hand-mark"/>)}
     {expected.map(entry => <line pointerEvents="none" data-slot="expected-mark" key={entry.item.span.spanId} x1={entry.x} x2={entry.x} y1={middle - 16} y2={middle + 16} strokeWidth={2} className="stroke-hand-mark"/>)}
-    {inquiries.map(({ inquiry, x }) => <path pointerEvents="none" data-slot="inquiry-mark" key={inquiry.inquiryId} d={diamond(x, middle)} className="fill-card stroke-ink2" strokeWidth={1.3}/>)}
-    {markers.map(({ event, x }) => <g key={event.seq} role="button" tabIndex={tabKey === `event:${event.seq}` ? 0 : -1} data-at={instant(event.at)!} data-key={`event:${event.seq}`} aria-label={eventReadout(event)} onPointerEnter={() => onEvent(event)} onPointerLeave={() => onEvent(null)} onFocus={() => onEvent(event)} onBlur={() => onEvent(null)}
+    {singletonInquiries.map(marker => <g key={markerKey(marker)} role="button" tabIndex={tabKey === markerKey(marker) ? 0 : -1} data-at={Date.parse(markerAt(marker))} data-key={markerKey(marker)} aria-label={markerReadout(marker)}
+      onPointerEnter={() => focusMarker(marker)} onPointerLeave={() => focusMarker(null)} onFocus={() => focusMarker(marker)} onBlur={() => focusMarker(null)}
+      onClick={() => onOpen(row.runId, `span:${marker.span.spanId}`)} onKeyDown={key => { if (key.key === "Enter") onOpen(row.runId, `span:${marker.span.spanId}`); }} className="group/fragment cursor-pointer outline-none">
+      <path data-slot="inquiry-mark" d={diamond(marker.x, middle)} className="fill-card stroke-ink2" strokeWidth={1.3}/>
+      <rect aria-hidden="true" data-slot="fragment-focus" x={marker.x - 8} y={middle - 10} width={16} height={20} fill="none" strokeWidth={2} className="pointer-events-none stroke-ink opacity-0 group-focus/fragment:opacity-100"/>
+    </g>)}
+    {singletonEvents.map(({ event, x }) => <g key={event.seq} role="button" tabIndex={tabKey === `event:${event.seq}` ? 0 : -1} data-at={instant(event.at)!} data-key={`event:${event.seq}`} aria-label={eventReadout(event)} onPointerEnter={() => onEvent(event)} onPointerLeave={() => onEvent(null)} onFocus={() => onEvent(event)} onBlur={() => onEvent(null)}
       onClick={() => onOpen(row.runId, `event:${event.seq}`)} onKeyDown={key => { if (key.key === "Enter") onOpen(row.runId, `event:${event.seq}`); }} className="group/fragment cursor-pointer outline-none">
       {event.kind === "accept" ? <path data-slot="accept-mark" d={`M${x - 5} ${middle}l3 3 7-8`} fill="none" className="stroke-past" strokeWidth={1.8}/> : <circle data-slot="event-mark" cx={x} cy={middle} r={2.5} className="fill-past"/>}
       <rect aria-hidden="true" data-slot="fragment-focus" x={x - 8} y={middle - 10} width={16} height={20} fill="none" strokeWidth={2} className="pointer-events-none stroke-ink opacity-0 group-focus/fragment:opacity-100"/>
     </g>)}
+    {markerGroups.filter(group => group.length > 1).map(group => <MarkerCluster key={markerKey(group[0]!)} markers={group} x={group.reduce((sum, marker) => sum + marker.x, 0) / group.length} y={middle}
+      runId={row.runId} taskTitle={row.title} tabKey={tabKey} boundary={boundary} onOpen={onOpen} onFocusMarker={focusMarker} markerName={markerName} markerReadout={markerReadout}/>)}
     {labels.map((label, index) => <text aria-hidden="true" pointerEvents="none" data-slot="track-label" key={index} x={label.left} y={label.y} className={label.className}>{label.text}</text>)}
   </svg>;
 }

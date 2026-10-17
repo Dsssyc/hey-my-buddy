@@ -3,7 +3,7 @@ import type { MacroTaskTimeline, TimelineSpan } from "../src/macro-task-types";
 import { expectNoSidewaysScroll, open, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
-const shots = "../../tmp/f2-drawing-shots";
+const shots = "../../tmp/f2-integration-shots";
 
 /** The approved drawing's time distribution, using the service's exact DTO. */
 function comparison(timeline: MacroTaskTimeline): MacroTaskTimeline {

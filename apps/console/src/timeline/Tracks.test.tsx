@@ -1,4 +1,5 @@
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { macroTaskTimelineFixture } from "../macro-task-fixtures";
 import type { TimelineEvent, TimelineSpan } from "../macro-task-types";
@@ -11,8 +12,8 @@ const at = (minutes: number) => new Date(Date.UTC(2026, 9, 17, 8, minutes)).toIS
 const scale = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, 800);
 const base = macroTaskTimelineFixture();
 const execution = (extra: Partial<TimelineSpan> = {}): TimelineSpan => ({ ...base.spans.find(span => span.kind === "execution")!, spanId: "e", startAt: at(5), endAt: at(15), resultStatus: "ok", state: "finished", uncertain: false, shutdownConfirmed: true, expectedSeconds: 600, reminders: null, inquiries: [], ...extra });
-function track(spans: TimelineSpan[], extra: { state?: string; events?: TimelineEvent[]; width?: number } = {}) {
-  return render(<Track row={{ ...base.rows[0]!, state: extra.state ?? "accepted", acceptedAt: null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} ongoing buddies={[]} onOpen={vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onEvent={vi.fn()} selected={false}/>);
+function track(spans: TimelineSpan[], extra: { state?: string; events?: TimelineEvent[]; width?: number; tabKey?: string; onOpen?: (runId: string, key: string) => void; onEvent?: (event: TimelineEvent | null) => void } = {}) {
+  return render(<Track row={{ ...base.rows[0]!, state: extra.state ?? "accepted", acceptedAt: null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} ongoing buddies={[]} onOpen={extra.onOpen ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onEvent={extra.onEvent ?? vi.fn()} selected={false} tabKey={extra.tabKey}/>);
 }
 const slot = (name: string) => document.querySelector(`[data-slot=${name}]`);
 
@@ -86,7 +87,7 @@ describe("timeline drawings follow recorded facts", () => {
     expect(slot("queue-wait")?.hasAttribute("stroke-dasharray")).toBe(false);
     expect(document.querySelector('[data-slot=track-label]')?.textContent).toContain("排队");
   });
-  it("draws hollow inquiries, acceptance checks and dots for every other Host event, excluding dispatch and integration", () => {
+  it("draws hollow inquiries, acceptance checks and dots for separate Host events, excluding dispatch and integration", () => {
     const events = ["dispatch", "accept", "decide", "continue", "integrate", "reject", "conclude", "cancel", "takeover"].map((kind, seq) => ({ ...base.events[0]!, seq, kind, at: at(16 + seq * 2), summary: "Explanation" }));
     track([execution({ inquiries: [{ inquiryId: "q", createdAt: at(10), author: "host-1", state: "answered" }] })], { events });
     expect(slot("inquiry-mark")?.getAttribute("class")).toContain("fill-card");
@@ -94,12 +95,61 @@ describe("timeline drawings follow recorded facts", () => {
     expect(document.querySelectorAll('[data-slot=event-mark]')).toHaveLength(6);
     expect(spanReadout(execution({ inquiries: [{ inquiryId: "q", createdAt: at(10), author: "host-1", state: "answered" }] }), Date.parse(at(40)))).toContain("已答复");
   });
-  it("keeps crowded event names in the accessible readout and omits integration", () => {
+  it("merges coincident events into one selectable mark and omits integration", async () => {
     const events = ["reject", "continue", "integrate", "accept"].map((kind, seq) => ({ ...base.events[0]!, seq, kind, at: at(20), summary: "Explanation" }));
-    track([], { events });
+    const onOpen = vi.fn();
+    track([], { events, onOpen, tabKey: "cluster:event:0" });
     expect(document.querySelector('[data-key="event:2"]')).toBeNull();
     expect(document.querySelectorAll('[data-slot=track-label]')).toHaveLength(0);
-    expect(document.querySelector('[data-key="event:0"]')?.getAttribute("aria-label")).toContain("Explanation");
+    expect(document.querySelectorAll('[data-slot=event-cluster]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-slot=event-mark]')).toHaveLength(0);
+    const cluster = document.querySelector<SVGGElement>('[data-slot=event-cluster]')!;
+    expect(cluster.getAttribute("data-key")).toBe("cluster:event:0");
+    expect(cluster.getAttribute("tabindex")).toBe("0");
+    await userEvent.setup().click(cluster);
+    const content = document.querySelector<HTMLElement>('[data-slot=popover-content]')!;
+    expect(within(content).getAllByRole("button")).toHaveLength(3);
+    expect(content.textContent).toContain(base.rows[0]!.title);
+    expect(within(content).getAllByRole("button")[0]?.getAttribute("aria-label")).toContain("Explanation");
+    await userEvent.setup().click(within(content).getAllByRole("button")[2]!);
+    expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "event:3");
+  });
+  it("moves through mixed event and inquiry entries, then restores cluster focus on Escape", async () => {
+    const user = userEvent.setup();
+    const inquiry = { inquiryId: "q", createdAt: at(20), author: "host-1", state: "answered" as const };
+    const event = { ...base.events[0]!, seq: 7, kind: "reject", at: at(20), summary: "Decision" };
+    const onOpen = vi.fn();
+    track([execution({ inquiries: [inquiry] })], { events: [event], onOpen, tabKey: "cluster:event:7" });
+    const cluster = document.querySelector<SVGGElement>('[data-slot=event-cluster]')!;
+    expect(document.querySelector('[data-slot=inquiry-mark]')).toBeNull();
+    await user.click(cluster);
+    const buttons = within(document.querySelector<HTMLElement>('[data-slot=popover-content]')!).getAllByRole("button");
+    expect(document.activeElement).toBe(buttons[0]);
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(buttons[1]);
+    expect(buttons[1]!.textContent).toContain("问询");
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).toBe(cluster);
+    await user.keyboard("{Enter}");
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "span:e");
+  });
+  it("opens a single inquiry directly at its containing span", async () => {
+    const onOpen = vi.fn();
+    track([execution({ inquiries: [{ inquiryId: "q", createdAt: at(20), author: "host-1", state: "answered" }] })], { onOpen, tabKey: "inquiry:q" });
+    const inquiry = document.querySelector<SVGGElement>('[data-key="inquiry:q"]')!;
+    expect(inquiry.getAttribute("tabindex")).toBe("0");
+    await userEvent.setup().click(inquiry);
+    expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "span:e");
+  });
+  it("keeps isolated events direct and groups marks within 16 pixels", async () => {
+    const onOpen = vi.fn();
+    const events = [0, 1, 3].map((minute, seq) => ({ ...base.events[0]!, seq, kind: "reject", at: at(20 + minute), summary: `Event ${seq}` }));
+    track([], { events, onOpen, width: 400 });
+    expect(document.querySelectorAll('[data-slot=event-cluster]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-slot=event-mark]')).toHaveLength(1);
+    await userEvent.setup().click(document.querySelector('[data-key="event:2"]')!);
+    expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "event:2");
   });
   it("hides ticks and breaks from screen readers", () => {
     render(<Axis scale={scale} ongoing nowMs={Date.parse(at(40))}/>);

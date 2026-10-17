@@ -1,11 +1,14 @@
 export const tasks = {
+  chronological: "清单", timelineView: "时间视图", idle: "空闲 {{duration}}",
+  zoomOut: "缩小（-）", zoomIn: "放大（+）", zoomFit: "适应窗口（0）",
   drawing: {
+    eventCluster: "{{count}} 个记号",
     stopUnconfirmed: "停止未确认",
     running: "进行中 {{duration}}", failed: "{{duration}} 失败", queue: "排队 {{duration}}",
     expected: "预期 {{duration}}", silent: "可能卡住 · 静默 {{duration}}", silence: "静默 {{duration}}", silentLegend: "静默的尾巴",
     waiting: "{{kind}} {{duration}}", inquiry: "问询", inquiryReadout: "问询 · {{author}} · {{at}} · {{state}}",
     pointer: "{{at}}", gap: "断口 {{start}}–{{end}} · 压缩 {{duration}}", routingMode: "路由 · {{mode}}",
-    events: { decide: "决定", continue: "续接", integrate: "整合", accept: "已验收", reject: "打回", conclude: "结论", cancel: "取消", takeover: "接管" },
+    events: { dispatch: "派发", decide: "决定", continue: "续接", integrate: "整合", accept: "已验收", reject: "打回", conclude: "结论", cancel: "取消", takeover: "接管" },
   },
 
   waiting: "等人接手", failed: "失败",
