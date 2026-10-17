@@ -55,6 +55,12 @@ export type MacroTaskPage = {
 export type TimelineBuddy = {
   harness: string | null; provider: string | null; model: string | null; effort: string | null;
 };
+export type TimelineReminders = {
+  overdue: boolean; possiblyStuck: boolean; lastNativeEventAt: string | null; toolInProgress: boolean;
+};
+export type TimelineInquiry = {
+  inquiryId: string; createdAt: string; author: string; state: string;
+};
 export type TimelineRow = {
   runId: string; parentRunId: string | null; rootRunId: string;
   title: string;
@@ -98,6 +104,12 @@ export type TimelineSpan = {
   state: string;
   attemptId: string | null; turnId: string | null; turnIndex: number | null;
   requestId: string | null; buddy: TimelineBuddy | null;
+  /** Execution attempt's expected duration; null on non-execution spans. */
+  expectedSeconds: number | null;
+  /** Current selected execution's reminder facts; null for all other spans. */
+  reminders: TimelineReminders | null;
+  /** Host inquiries bound to this attempt, without question text; null on non-execution spans. */
+  inquiries: TimelineInquiry[] | null;
   shutdownConfirmed: boolean | null; uncertain: boolean; clockSkew: boolean;
   generation?: number; disposition?: string; error?: string;
   /** Own durable attempt receipt; a model turn disposition is not the execution result. */

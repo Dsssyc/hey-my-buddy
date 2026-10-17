@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { macroTaskTimelineFixture } from "../macro-task-fixtures";
@@ -84,6 +85,19 @@ describe("persistent task rows and basic SVG tracks", () => {
     fireEvent.blur(span);
     fireEvent.focus(row("r6"));
     expect(status()).toContain("已等待");
+  });
+  it("writes the repaired task title and reveals the full title on hover", async () => {
+    const timeline = macroTaskTimelineFixture();
+    const target = "被修正的任务：" + "完整标题".repeat(20);
+    timeline.rows[0]!.title = target;
+    timeline.rows[1]!.fixes = "r1";
+    timeline.rows[0]!.fixedBy = ["r2"];
+    setup({ timeline });
+    expect(row("r2").querySelector('[data-slot=fix-link]')?.textContent).toBe(`↪ ${target}`);
+    expect(row("r1").querySelector('[data-slot=fixed-by]')?.textContent).toBe("↩ 1");
+    expect(row("r2").getAttribute("aria-label")).toContain(target);
+    await userEvent.hover(row("r2"));
+    expect((await screen.findByRole("tooltip")).textContent).toBe(target);
   });
   it("explains incomplete reads and retains frozen source facts with retry", () => {
     const timeline = macroTaskTimelineFixture({ filtered: true });

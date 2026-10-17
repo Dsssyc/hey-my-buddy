@@ -142,6 +142,58 @@ describe("work macro task reads", () => {
     }
   });
 
+  it("reads execution timing, current reminders and Host inquiry metadata from timeline spans", async () => {
+    const good = macroTaskTimelineFixture();
+    const api = createApi("/private", vi.fn(async () => new Response(JSON.stringify(good))) as typeof fetch);
+    const { timeline } = await api.macroTaskTimeline("macro-1", {});
+    expect(timeline.spans.find(span => span.spanId === "s-r4-e")).toMatchObject({
+      expectedSeconds: 1800,
+      reminders: { overdue: true, possiblyStuck: false, lastNativeEventAt: "2026-09-26T08:10:00Z", toolInProgress: true },
+      inquiries: [],
+    });
+    expect(timeline.spans.find(span => span.spanId === "s-r2-e1")?.inquiries).toEqual([
+      { inquiryId: "inq-r2a", createdAt: "2026-09-26T01:50:00Z", author: "codex-desktop", state: "answered" },
+    ]);
+    expect(timeline.spans.find(span => span.spanId === "s-r2-e1")?.reminders).toBeNull();
+    expect(timeline.spans.find(span => span.spanId === "s-r1-q")).toMatchObject({
+      expectedSeconds: null, reminders: null, inquiries: null,
+    });
+    const incompleteTurn = macroTaskTimelineFixture();
+    incompleteTurn.spans.find(span => span.spanId === "s-r2-e1")!.expectedSeconds = null;
+    const incompleteReader = createApi("/private", vi.fn(async () => new Response(JSON.stringify(incompleteTurn))) as typeof fetch);
+    await expect(incompleteReader.macroTaskTimeline("macro-1", {})).resolves.toMatchObject({
+      timeline: { spans: expect.arrayContaining([expect.objectContaining({ spanId: "s-r2-e1", expectedSeconds: null })]) },
+    });
+  });
+
+  it("rejects missing or malformed execution facts and non-execution projections", async () => {
+    const good = macroTaskTimelineFixture();
+    const execution = good.spans.find(span => span.spanId === "s-r4-e")!;
+    const queue = good.spans[0]!;
+    const variants = [
+      { spanId: execution.spanId, expectedSeconds: undefined },
+      { spanId: execution.spanId, expectedSeconds: 0 },
+      { spanId: execution.spanId, expectedSeconds: 1.5 },
+      { spanId: execution.spanId, reminders: undefined },
+      { spanId: execution.spanId, reminders: { ...execution.reminders, overdue: "yes" } },
+      { spanId: execution.spanId, reminders: { ...execution.reminders, lastNativeEventAt: undefined } },
+      { spanId: execution.spanId, reminders: { ...execution.reminders, lastNativeEventAt: "invalid" } },
+      { spanId: execution.spanId, reminders: { ...execution.reminders, toolInProgress: undefined } },
+      { spanId: execution.spanId, inquiries: undefined },
+      { spanId: execution.spanId, inquiries: null },
+      { spanId: execution.spanId, inquiries: [{ inquiryId: "i", createdAt: "now", author: "host" }] },
+      { spanId: execution.spanId, inquiries: [{ inquiryId: "i", createdAt: "invalid", author: "host", state: "queued" }] },
+      { spanId: queue.spanId, expectedSeconds: undefined },
+      { spanId: queue.spanId, reminders: { overdue: false, possiblyStuck: false, lastNativeEventAt: null, toolInProgress: false } },
+      { spanId: queue.spanId, inquiries: [] },
+    ];
+    for (const variant of variants) {
+      const malformed = { ...good, spans: good.spans.map(span => span.spanId === variant.spanId ? { ...span, ...variant } : span) };
+      const api = createApi("/private", vi.fn(async () => new Response(JSON.stringify(malformed))) as typeof fetch);
+      await expect(api.macroTaskTimeline("macro-1", {})).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    }
+  });
+
   it("accepts valid fix links and rejects malformed optional row relations at the response boundary", async () => {
     const good = macroTaskTimelineFixture();
     good.rows[0]!.fixedBy = ["r2"];

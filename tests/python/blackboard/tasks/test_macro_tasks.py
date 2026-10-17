@@ -440,6 +440,73 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertEqual(timeline['events'][0]['actor'], {'role': 'host', 'id': 'host-1'})
         self.assertNotIn('controlToken', json.dumps(timeline))
 
+    def test_execution_spans_project_turn_duration_live_reminders_and_host_question_metadata(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree', expectedSeconds=37)
+        run_id = run['runId']
+        board.call('message_post', {'runId': run_id, 'inquiryId': 'before-turn',
+                                    'question': 'Question before a turn', 'author': 'host-1'})
+        claim = self.claim(board, run_id=run_id)
+        attempt_id = claim['claim']['attempt']['attemptId']
+        asked = board.call('message_post', {'runId': run_id, 'inquiryId': 'during-turn',
+                                            'question': 'Sensitive question body', 'author': 'host-1'})['message']
+        now = board.store.now()
+        with board.store.db.write() as connection:
+            attempt = connection.execute('SELECT * FROM attempts WHERE attempt_id=?', (attempt_id,)).fetchone()
+            board.store._store_activity(connection, attempt, {
+                'phase': 'tool-running', 'eventSeq': 1,
+                'lastNativeActivityAt': now, 'observedAt': now,
+            })
+            connection.execute(
+                'INSERT INTO attempt_reminders(task_id,attempt_id,kind,expected_multiple,'
+                ' elapsed_seconds,tool_in_progress,created_at) VALUES(?,?,?,?,?,?,?)',
+                (run_id, attempt_id, 'expected-duration', 1, 37, 0, now),
+            )
+            connection.execute(
+                'INSERT INTO attempt_reminders(task_id,attempt_id,kind,silence_started_at,'
+                ' elapsed_seconds,last_native_event_at,tool_in_progress,created_at)'
+                ' VALUES(?,?,?,?,?,?,?,?)',
+                (run_id, attempt_id, 'native-silence', now, 37, now, 1, now),
+            )
+        timeline = board.call('macro_task_timeline', {'macroTaskId': f'run:{run_id}'})
+        execution = next(span for span in timeline['spans'] if span['kind'] == 'execution')
+        self.assertEqual(execution['expectedSeconds'], 37)
+        self.assertEqual(execution['reminders'], {
+            'overdue': True, 'possiblyStuck': True, 'lastNativeEventAt': now, 'toolInProgress': True,
+        })
+        self.assertEqual(execution['reminders'],
+                         board.call('task_get', {'runId': run_id})['task']['selectedAttempt']['reminders'])
+        self.assertEqual(execution['inquiries'], [{
+            'inquiryId': 'during-turn', 'createdAt': asked['createdAt'],
+            'author': 'host-1', 'state': asked['state'],
+        }])
+        self.assertNotIn('Sensitive question body', json.dumps(timeline))
+        for span in timeline['spans']:
+            if span['kind'] != 'execution':
+                self.assertEqual((span['expectedSeconds'], span['reminders'], span['inquiries']),
+                                 (None, None, None))
+        self.finish_turn(board, claim)
+        ended = board.call('macro_task_timeline', {'macroTaskId': f'run:{run_id}'})
+        execution = next(span for span in ended['spans'] if span['kind'] == 'execution')
+        self.assertEqual(execution['expectedSeconds'], 37)
+        self.assertIsNone(execution['reminders'])
+        self.assertEqual(execution['inquiries'][0]['inquiryId'], 'during-turn')
+
+        # A later turn may freeze a different expectation. The earlier span keeps
+        # its own turn's value, and a turn with no questions has an empty list.
+        with board.store.db.write() as connection:
+            connection.execute('UPDATE tasks SET expected_seconds=59 WHERE task_id=?', (run_id,))
+        view = board.call('workflow_get', {'runId': run_id})
+        self.continue_run(board, view, reason='review the output again')
+        self.claim(board, claim_request_id='c2', run_id=run_id)
+        timeline = board.call('macro_task_timeline', {'macroTaskId': f'run:{run_id}'})
+        executions = [span for span in timeline['spans'] if span['kind'] == 'execution']
+        self.assertEqual([span['expectedSeconds'] for span in executions], [37, 59])
+        self.assertEqual([span['inquiries'] for span in executions], [execution['inquiries'], []])
+        self.assertIsNone(executions[0]['reminders'])
+        self.assertEqual(executions[1]['reminders'],
+                         board.call('task_get', {'runId': run_id})['task']['selectedAttempt']['reminders'])
+
     def test_timeline_markers_keep_actor_roles_and_explicit_host_fallbacks(self):
         board = self.board()
         run = self.submit(board, kind='worktree')

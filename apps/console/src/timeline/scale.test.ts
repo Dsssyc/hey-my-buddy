@@ -11,7 +11,8 @@ const at = (minutes: number) => new Date(ms(minutes)).toISOString();
 const span = (overrides: Partial<TimelineSpan> = {}): TimelineSpan => ({
   spanId: "span", runId: "run", kind: "execution", startAt: at(0), endAt: at(10),
   state: "finished", attemptId: null, turnId: null, turnIndex: null, requestId: null,
-  buddy: null, shutdownConfirmed: true, uncertain: false, clockSkew: false, ...overrides,
+  buddy: null, expectedSeconds: 1800, reminders: null, inquiries: [],
+  shutdownConfirmed: true, uncertain: false, clockSkew: false, ...overrides,
 });
 const event = (minutes: number): TimelineEvent => ({
   seq: 1, runId: "run", kind: "accept", at: at(minutes), label: "", summary: "",

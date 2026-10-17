@@ -41,6 +41,7 @@ describe("0.16 acceptance wait (P1.8)", () => {
   const execution = (startAt: string, endAt: string | null, overrides: Partial<TimelineSpan> = {}): TimelineSpan => ({
     spanId: "e", runId: "r1", kind: "execution", startAt, endAt, state: "finished",
     attemptId: "a", turnId: null, turnIndex: 1, requestId: null, buddy: null,
+    expectedSeconds: 1800, reminders: null, inquiries: [],
     shutdownConfirmed: true, uncertain: false, clockSkew: false, ...overrides,
   });
 

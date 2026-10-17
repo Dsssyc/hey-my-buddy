@@ -17,7 +17,7 @@ import re
 import uuid
 from typing import Any
 
-from . import fixes, micro_task
+from . import fixes, micro_task, reminders
 from ..routing import router
 from ...protocol import schemas
 from ...errors import BoardError
@@ -517,7 +517,7 @@ def macro_task_timeline(store, params: dict) -> dict:
         shown = [row for row, _depth in shown]
         spans = []
         for row in shown:
-            spans.extend(_run_spans(connection, row))
+            spans.extend(_run_spans(store, connection, row))
         routing_owner = {row["task_id"]: row["delegated_parent_run_id"] for row in members
                          if row["micro_task_run_id"] is None and row["decision_id"] is not None}
         for decision_task_id, owner in routing_owner.items():
@@ -622,7 +622,9 @@ def _reversed(start: Any, end: Any) -> bool:
 def _span(kind: str, span_id: str, run_id: str, start: Any, end: Any, state: str, *,
           attempt_id: str | None = None, turn_id: str | None = None, turn_index: int | None = None,
           request_id: str | None = None, buddy: dict | None = None,
-          shutdown_confirmed: bool | None = None, uncertain: bool = False, **extra) -> dict:
+          shutdown_confirmed: bool | None = None, uncertain: bool = False,
+          expected_seconds: int | None = None, reminder_status: dict | None = None,
+          inquiries: list[dict] | None = None, **extra) -> dict:
     """One recorded interval. Missing or reversed timing is reported, never repaired."""
     span = {
         "spanId": span_id,
@@ -639,6 +641,9 @@ def _span(kind: str, span_id: str, run_id: str, start: Any, end: Any, state: str
         "shutdownConfirmed": shutdown_confirmed,
         "uncertain": uncertain,
         "clockSkew": _reversed(start, end),
+        "expectedSeconds": expected_seconds,
+        "reminders": reminder_status,
+        "inquiries": inquiries,
     }
     span.update({key: value for key, value in extra.items() if value is not None})
     return span
@@ -672,17 +677,28 @@ def _turn_buddy(input_json: Any) -> dict | None:
     return {key: buddy.get(key) for key in micro_task.BUDDY_FIELDS if buddy.get(key)}
 
 
-def _run_spans(connection, row) -> list[dict]:
+def _run_spans(store, connection, row) -> list[dict]:
     """Queue, execution and waiting-Host spans of one micro-task run, from recorded rows."""
     run_id = row["task_id"]
     spans: list[dict] = []
     attempts = connection.execute(
         "SELECT a.*, json_extract(a.result_json,'$.status') AS result_status,"
-        " t.turn_id, t.turn_index, t.input_json, t.disposition"
+        " t.turn_id, t.turn_index, t.input_json, t.disposition, t.expected_seconds AS turn_expected_seconds"
         " FROM attempts a LEFT JOIN workflow_turns t ON t.attempt_id = a.attempt_id"
         " WHERE a.task_id=? ORDER BY a.generation, a.created_at",
         (run_id,),
     ).fetchall()
+    selected_id = row["active_attempt_id"] or row["selected_attempt_id"]
+    inquiries_by_attempt: dict[str, list[dict]] = {}
+    for question in connection.execute(
+        "SELECT attempt_id, inquiry_id, created_at, author, state FROM messages"
+        " WHERE task_id=? AND direction='question' AND attempt_id IS NOT NULL"
+        " ORDER BY created_at, message_id", (run_id,),
+    ):
+        inquiries_by_attempt.setdefault(question["attempt_id"], []).append({
+            "inquiryId": question["inquiry_id"], "createdAt": question["created_at"],
+            "author": question["author"], "state": question["state"],
+        })
     continuations = {
         item["attempt_id"]: item for item in connection.execute(
             "SELECT continuation_id, attempt_id, created_at FROM workflow_continuations"
@@ -702,11 +718,18 @@ def _run_spans(connection, row) -> list[dict]:
             {"harness": attempt["model_harness"], "provider": attempt["model_provider"], "model": attempt["model_model"]}
             if attempt["model_harness"] else None
         )
+        current = (row["state"] == "running" and attempt["attempt_id"] == selected_id
+                   and attempt["execution_state"] != "finished" and attempt["result_json"] is None)
+        reminder_status = reminders.status(
+            connection, attempt, store._activity_latest(connection, attempt["attempt_id"])
+        ) if current else None
         spans.append(_span(
             "execution", f"execution:{attempt['attempt_id']}", run_id,
             attempt["started_at"] or attempt["created_at"], attempt["finished_at"] if state == "finished" else None,
             state, attempt_id=attempt["attempt_id"], turn_id=attempt["turn_id"], turn_index=attempt["turn_index"],
             buddy=buddy, shutdown_confirmed=confirmed, uncertain=uncertain,
+            expected_seconds=attempt["turn_expected_seconds"], reminder_status=reminder_status,
+            inquiries=inquiries_by_attempt.get(attempt["attempt_id"], []),
             generation=attempt["generation"], disposition=attempt["disposition"],
             resultStatus=attempt["result_status"],
             tokenUsage=json.loads(attempt["token_usage_json"]) if attempt["token_usage_json"] else None,

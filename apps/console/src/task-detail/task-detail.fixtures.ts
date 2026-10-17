@@ -94,7 +94,9 @@ const tb = (buddy: Buddy | null): TimelineBuddy | null => buddy;
 
 export function span(spanId: string, kind: TimelineSpan["kind"], startAt: string | null, endAt: string | null, overrides: Partial<TimelineSpan> = {}): TimelineSpan {
   return { spanId, runId: "m1", kind, startAt, endAt, state: kind === "queue" ? "admitted" : kind === "host" ? "approved" : "finished",
-    attemptId: null, turnId: null, turnIndex: null, requestId: null, buddy: null, shutdownConfirmed: null, uncertain: false, clockSkew: false, ...overrides };
+    attemptId: null, turnId: null, turnIndex: null, requestId: null, buddy: null,
+    expectedSeconds: kind === "execution" ? 1800 : null, reminders: null, inquiries: kind === "execution" ? [] : null,
+    shutdownConfirmed: null, uncertain: false, clockSkew: false, ...overrides };
 }
 
 export function event(seq: number, kind: string, when: string, overrides: Partial<TimelineEvent> = {}): TimelineEvent {

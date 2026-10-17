@@ -12,7 +12,7 @@ function row(page: Page, runId: string) {
 for (const { locale, language, fixes } of [
   { locale: "zh-CN", language: "zh-CN", fixes: "修正" },
   { locale: "en-US", language: "en", fixes: "Fixes" },
-]) for (const width of [1440, 1024]) {
+]) for (const width of [1440, 1024, 390]) {
   test.describe(`corrections in ${locale} at ${width}px`, () => {
     test.use({ locale, viewport: { width, height: 1000 } });
     test("renders linked corrections", async ({ page }) => {
@@ -34,11 +34,17 @@ for (const { locale, language, fixes } of [
     const third = row(page, "preview-run-a3");
     await expect(first.locator("[data-slot=fixed-by]")).toHaveText("↩ 2");
     await expect(second.locator("[data-slot=fixed-by]")).toHaveCount(0);
-    await expect(second.locator("[data-slot=fix-link]")).toHaveText("↪");
-    await expect(third.locator("[data-slot=fix-link]")).toHaveText("↪");
+    await expect(second.locator("[data-slot=fix-link]")).toHaveText(`↪ ${timeline.rows.find(item => item.runId === "preview-run-a1")!.title}`);
+    await expect(third.locator("[data-slot=fix-link]")).toHaveText(`↪ ${timeline.rows.find(item => item.runId === "preview-run-a1")!.title}`);
     await expect(second).toHaveAttribute("data-fixes", "preview-run-a1");
     await expect(third).toHaveAttribute("data-fixes", "preview-run-a1");
     await expect(second.locator("[data-slot=fix-link]")).toHaveAttribute("aria-label", /.+/);
+    const target = timeline.rows.find(item => item.runId === "preview-run-a1")!.title;
+    const clipped = await second.locator('[data-slot=fix-link]').evaluate(node => node.scrollWidth > node.clientWidth);
+    expect(clipped).toBe(true);
+    await second.locator('[data-slot=fix-link]').hover();
+    await expect(page.getByRole("tooltip")).toHaveText(target);
+    await expect(page.getByRole("tooltip")).toBeInViewport();
     await expect(page.locator("html")).toHaveAttribute("lang", language);
     for (const label of [first, second, third]) {
       await expectWholeAndApart(label, label.locator(":scope > span"));
