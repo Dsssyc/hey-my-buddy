@@ -1,7 +1,6 @@
 import { cn } from "cn";
 import { ChevronRight } from "lucide-react";
 import { forwardRef } from "react";
-import type { KeyboardEventHandler } from "react";
 import { useTranslation } from "react-i18next";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { StateMark } from "../components/ui/state-mark";
@@ -11,18 +10,18 @@ import type { TimelineRow } from "../macro-task-types";
 
 /** A row keeps the same name, measure and disclosure in both views. */
 export const RowName = forwardRef<HTMLButtonElement, {
-  row: TimelineRow; fixesTitle: string | null; open: boolean; selected: boolean; fresh: boolean; buddies?: readonly FriendlyBuddy[] | null;
-  onClick: () => void; onEnter: () => void; onLeave: () => void; onKeyDown: KeyboardEventHandler<HTMLButtonElement>; onFocus: () => void; onBlur: () => void;
-}>(function RowName({ row, fixesTitle, open, selected, fresh, buddies, onClick, onEnter, onLeave, onKeyDown, onFocus, onBlur }, ref) {
+  row: TimelineRow; tabIndex: number; open: boolean; selected: boolean; fresh: boolean; buddies?: readonly FriendlyBuddy[] | null;
+  onClick: () => void; onEnter: () => void; onLeave: () => void; onFocus: () => void; onBlur: () => void;
+}>(function RowName({ row, tabIndex, open, selected, fresh, buddies, onClick, onEnter, onLeave, onFocus, onBlur }, ref) {
   const { t } = useTranslation("tasks");
   const state = rowStateInfo(row);
   const title = displayTitle(row.titleSource, row.title);
-  const repairTitle = fixesTitle ?? t("unknown");
+  const repairTitle = row.fixes ? displayTitle(row.fixesTitleSource!, row.fixesTitle!).fullText : null;
   const repair = row.fixes ? t("fixes", { title: repairTitle }) : null;
   const mark = row.status === "queued" ? "idle" : row.category === "host" || row.state === "delivered" || row.state === "reconciliation-needed" ? "hand"
     : row.category === "active" ? "live" : null;
   const button = <button ref={ref} type="button" data-key={`row:${row.runId}`} data-slot="timeline-row-name" data-run-id={row.runId} data-fixes={row.fixes}
-    aria-expanded={open} aria-label={[title.fullText, repair, state.label].filter(Boolean).join(" · ")} onClick={onClick} onKeyDown={onKeyDown}
+    tabIndex={tabIndex} aria-expanded={open} aria-label={[title.fullText, repair, state.label].filter(Boolean).join(" · ")} onClick={onClick}
     onPointerEnter={onEnter} onPointerLeave={onLeave} onFocus={onFocus} onBlur={onBlur}
     className={cn("group flex h-[62px] w-full shrink-0 flex-col justify-center gap-1 border-t px-3 text-left outline-none transition-colors duration-150 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-live",
       selected ? "bg-live-wash hover:bg-live-wash" : "hover:bg-sunk", open ? "shadow-[inset_2px_0_var(--live)] max-[760px]:sticky max-[760px]:top-0 max-[760px]:z-20 min-[761px]:relative" : "relative")}

@@ -86,6 +86,20 @@ describe("opening the detail of a micro task", () => {
     expect(away.onBack).not.toHaveBeenCalled();
   });
 
+  it("switches detail steps with horizontal arrows, clamps both ends and focuses the chosen step", async () => {
+    const f = open({ step: 1 });
+    await ready();
+    await f.user.keyboard("{ArrowLeft}"); expect(selected().getAttribute("data-step")).toBe("1");
+    await f.user.keyboard("{ArrowRight}"); expect(selected().getAttribute("data-step")).toBe("2");
+    expect(document.activeElement).toBe(selected());
+    await f.user.keyboard("{ArrowLeft}"); expect(selected().getAttribute("data-step")).toBe("1");
+    const count = within(rail()).getAllByRole("button").length;
+    await f.user.keyboard("{ArrowRight>20/}"); expect(selected().getAttribute("data-step")).toBe(String(count));
+    expect(within(rail()).getAllByRole("button").every(button => button.tabIndex === -1)).toBe(true);
+    const field = document.body.appendChild(document.createElement("input")); field.focus();
+    await f.user.keyboard("{ArrowLeft}"); expect(selected().getAttribute("data-step")).toBe(String(count)); field.remove();
+  });
+
   it("shows a read that failed as a failure with a retry that reads again", async () => {
     const reads = client();
     (reads.task as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new ApiError("NOT_FOUND", "Unknown runId"));
@@ -199,7 +213,7 @@ describe("the delegation", () => {
     const long = "第一段。".repeat(120);
     const helper = workflow({ children: [{ taskId: "h1", role: "helper", state: "succeeded" }, { taskId: "d1", role: "router", state: "succeeded" }], delegationAuthority: true });
     const withFixes = timeline();
-    withFixes.rows = [row({ fixes: "m0", fixedBy: ["m2"] }), row({ runId: "m0", title: "被修正的微任务" }), row({ runId: "m2", title: "后来的修正" }), row({ runId: "h1", title: "协助查路径" })];
+    withFixes.rows = [row({ fixes: "m0", fixesTitle: "被修正的微任务", fixesTitleSource: "title", fixedBy: ["m2"] }), row({ runId: "m0", title: "被修正的微任务" }), row({ runId: "m2", title: "后来的修正" }), row({ runId: "h1", title: "协助查路径" })];
     const f = open({ step: 1, timeline: withFixes, replies: { task: task({ task: long, lineage: { ...task().lineage, parentRunId: "m0" } }), workflow: helper } });
     await ready();
     const text = pane().textContent!;

@@ -282,6 +282,33 @@ class MacroTaskReadTests(WorkflowTestCase):
     def list_(self, board, **params):
         return board.call('macro_task_list', params)
 
+    def test_fix_target_title_uses_target_presentation_across_macro_tasks(self):
+        board = self.board()
+        target = self.submit(board, request_id='target', kind='worktree',
+                             macroTask={'title': 'First group'}, title='Backend')
+        correction = self.submit(board, request_id='correction', kind='worktree',
+                                 macroTask={'title': 'Second group'}, title='Repair')
+        self.assertNotEqual(target['macroTaskId'], correction['macroTaskId'])
+        with board.store.db.write() as db:
+            db.execute(
+                'INSERT INTO workflow_fixes(run_id,fixed_run_id,created_at) VALUES(?,?,?)',
+                (correction['runId'], target['runId'], '2026-01-01T00:00:00Z'),
+            )
+        timeline = board.call('macro_task_timeline', {'macroTaskId': correction['macroTaskId']})
+        row = timeline['rows'][0]
+        self.assertEqual((row['fixes'], row['fixesTitle'], row['fixesTitleSource']),
+                         (target['runId'], 'Backend', 'title'))
+        self.assertNotIn('fixesTitle', board.call('macro_task_timeline', {
+            'macroTaskId': target['macroTaskId'],
+        })['rows'][0])
+
+        with board.store.db.write() as db:
+            db.execute('UPDATE workflow_runs SET title=NULL WHERE run_id=?', (target['runId'],))
+        row = board.call('macro_task_timeline', {
+            'macroTaskId': correction['macroTaskId'],
+        })['rows'][0]
+        self.assertEqual((row['fixesTitle'], row['fixesTitleSource']), ('do the thing', 'task'))
+
     def test_intent_title_is_not_replaced_by_worker_result_summary(self):
         board = self.board()
         submitted = self.submit(board, kind='worktree', task='Implement bounded routing\nDetailed request')

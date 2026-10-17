@@ -11,6 +11,8 @@ export const test = base.extend({
     page.on("pageerror", error => errors.push(String(error)));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
     await use(page);
+    // Let in-flight synthetic response handlers finish before the page is disposed.
+    await page.unrouteAll({ behavior: "wait" });
     expect(errors, "errors reported by the page").toEqual([]);
   },
 });

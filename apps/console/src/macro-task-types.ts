@@ -81,6 +81,8 @@ export type TimelineRow = {
   kind: "micro-task" | "helper";
   /** The micro task this row repairs; absent when this is not a repair. */
   fixes?: string;
+  fixesTitle?: string;
+  fixesTitleSource?: "title" | "task" | "none";
   /** Micro tasks that directly repair this row; absent when there are none. */
   fixedBy?: string[];
   /** Lead owning this row's root tree, including helper descendants. */

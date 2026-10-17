@@ -26,6 +26,7 @@ export type TaskWorkProps = {
 export function TaskWork(props: TaskWorkProps) {
   const { t } = useTranslation("tasks");
   const { timeline, openedRunId, displayObservedAt } = props;
+  const [focusKey, setFocusKey] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState(openedRunId);
   useEffect(() => { if (openedRunId !== null) setSelectedRunId(openedRunId); }, [openedRunId]);
   const [shownRunId, setShownRunId] = useState(openedRunId);
@@ -51,6 +52,7 @@ export function TaskWork(props: TaskWorkProps) {
     return () => media.removeEventListener("change", update);
   }, []);
   const [width, setWidth] = useState(640);
+  const rootRef = useRef<HTMLElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const namesRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef(new Map<string, HTMLButtonElement>());
@@ -70,7 +72,10 @@ export function TaskWork(props: TaskWorkProps) {
   }, [!!timeline]);
   useEffect(() => {
     const previous = wasOpen.current;
-    if (!open && previous) rowsRef.current.get(previous)?.focus();
+    if (openedRunId !== previous) {
+      const target = openedRunId ?? previous;
+      if (target) rowsRef.current.get(target)?.focus();
+    }
     wasOpen.current = openedRunId;
   }, [openedRunId, open]);
   const rows = timeline?.rows ?? [];
@@ -81,6 +86,11 @@ export function TaskWork(props: TaskWorkProps) {
     }
     return grouped;
   }, [timeline]);
+  const tabKey = focusKey ?? `row:${selectedRunId ?? rows[0]?.runId}`;
+  const focusRow = (runId: string) => rowsRef.current.get(runId)?.focus();
+  const fragments = (runId: string) => Array.from(rootRef.current?.querySelectorAll<SVGElement>("[data-slot=timeline-track] [data-key]") ?? [])
+    .filter(element => element.closest("[data-slot=timeline-row]")?.getAttribute("data-run-id") === runId)
+    .sort((left, right) => Number(left.dataset.at) - Number(right.dataset.at));
   const rowLine = (row: TimelineRow) => {
     const spans = spansByRow.get(row.runId) ?? [];
     const turns = spans.filter(span => span.kind === "execution").length;
@@ -100,22 +110,37 @@ export function TaskWork(props: TaskWorkProps) {
   const incomplete = timeline && (timeline.filtered || !timeline.scopeComplete || Object.values(timeline.truncated).some(Boolean));
   const renderName = (row: TimelineRow) => <Collapsible key={row.runId} open={openedRunId === row.runId} className={cn("min-w-0", open && openedRunId !== row.runId && "max-[760px]:hidden")}>
     <RowName ref={element => { if (element) rowsRef.current.set(row.runId, element); else rowsRef.current.delete(row.runId); }}
-      row={row} fixesTitle={rows.find(target => target.runId === row.fixes)?.title ?? null} selected={selectedRunId === row.runId} open={openedRunId === row.runId} fresh={props.newRunIds.has(row.runId)} buddies={props.buddies}
+      row={row} tabIndex={tabKey === `row:${row.runId}` ? 0 : -1} selected={selectedRunId === row.runId} open={openedRunId === row.runId} fresh={props.newRunIds.has(row.runId)} buddies={props.buddies}
       onClick={() => openedRunId === row.runId ? props.onClose() : props.onOpen(row.runId)}
-      onEnter={() => { setPointerX(null); setActiveEvent(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={() => setFocusedRow(row)} onBlur={() => setFocusedRow(null)}
-      onKeyDown={event => {
-        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-          event.preventDefault();
-          const index = rows.findIndex(candidate => candidate.runId === row.runId);
-          const next = rows[Math.max(0, Math.min(rows.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))];
-          if (next) rowsRef.current.get(next.runId)?.focus();
-        }
-      }}/>
+      onEnter={() => { setPointerX(null); setActiveEvent(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={() => { setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveEvent(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>
     <CollapsibleContent className="border-l-2 border-live bg-sunk">
       {(openedRunId ?? shownRunId) === row.runId && <div ref={setRailTarget} data-slot="task-steps-drawer"/>}
     </CollapsibleContent>
   </Collapsible>;
-  return <section data-slot="task-work" data-mode={open ? "detail" : "timeline"} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+  return <section ref={rootRef} data-slot="task-work" onFocusCapture={event => {
+    const key = (event.target as Element).closest("[data-key]")?.getAttribute("data-key");
+    if (key) { setFocusKey(key); setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveEvent(null); }
+  }} onBlurCapture={event => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusKey(null);
+  }} onKeyDown={event => {
+    if (!(event.target as Element).closest("[data-slot=task-names], [data-slot=timeline-tracks], [data-slot=timeline-detail-stage]")) return;
+    if (event.defaultPrevented || (event.target as Element).closest("input, textarea, select, [role=dialog]")) return;
+    const element = (event.target as Element).closest("[data-key]");
+    const runId = open ? openedRunId : element?.closest("[data-run-id]")?.getAttribute("data-run-id");
+    if (!runId) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const index = rows.findIndex(row => row.runId === runId);
+      const next = rows[Math.max(0, Math.min(rows.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))];
+      if (next) { if (open && next.runId !== openedRunId) props.onOpen(next.runId); else focusRow(next.runId); }
+    } else if (!open && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      const items = fragments(runId), index = items.findIndex(item => item === element);
+      const next = event.key === "Home" ? items[0] : event.key === "End" ? items.at(-1)
+        : items[Math.min(items.length - 1, index + (event.key === "ArrowRight" ? 1 : -1))];
+      if (next) next.focus(); else focusRow(runId);
+    }
+  }} data-mode={open ? "detail" : "timeline"} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     <MacroTaskOverview summary={props.summary} timeline={timeline} loading={props.loading} stale={props.stale} active={props.active} nowMs={nowMs}
       onBackToList={props.onBackToList} listToggle={props.listToggle} headerActions={props.headerActions}/>
     {props.error && <div role="alert" className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-hand-wash px-4 py-2 text-xs text-hand">{t("timelineReadFailed", { at: clockTime(timeline?.observedAt) })}<span className="wrap-anywhere">{props.error}</span><Button variant="outline" size="sm" onClick={props.onRetry}>{t("retry")}</Button></div>}
@@ -125,7 +150,7 @@ export function TaskWork(props: TaskWorkProps) {
         <div className="flex min-h-9 shrink-0 flex-wrap items-center gap-x-5 gap-y-2 px-4 py-2 text-xs text-ink2 sm:px-6"><strong className="font-medium text-ink">{t("timeline")}</strong>
           <div data-slot="timeline-legend" aria-hidden={open} className={cn("flex flex-wrap gap-4", open && "invisible")}><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-line2 bg-past-wash"/>{t("execution")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t border-ink3"/>{t("wait")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t-2 border-dashed border-hand-mark"/>{t("waiting")}</span><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-hand-mark bg-hand-wash"/>{t("drawing.silentLegend")}</span></div>
         </div>
-        <div className="relative grid min-h-0 min-w-0 flex-1 grid-cols-[272px_minmax(0,1fr)] max-[760px]:flex max-[760px]:flex-col">
+        <div role="region" aria-label={t("timeline")} className="relative grid min-h-0 min-w-0 flex-1 grid-cols-[272px_minmax(0,1fr)] max-[760px]:flex max-[760px]:flex-col">
           <div ref={namesRef} data-slot="task-names" className={cn("min-h-0 min-w-0 overflow-x-hidden overflow-y-auto bg-background pl-6 max-[760px]:px-4", open ? "max-[760px]:max-h-[38dvh] max-[760px]:shrink-0" : "max-[760px]:hidden")}
             onScroll={event => { if (!open && trackRef.current) trackRef.current.scrollTop = event.currentTarget.scrollTop; }}>
             <div className="flex h-9 shrink-0 items-center justify-between pr-4 text-xs text-ink3 max-[760px]:hidden"><span>{t("microTasks")}</span><span>{rows.length}</span></div>
@@ -144,8 +169,8 @@ export function TaskWork(props: TaskWorkProps) {
               }} onPointerLeave={() => { setPointerX(null); setHoveredSpan(null); setHoveredRow(null); setActiveEvent(null); }}>{narrow && <svg aria-hidden="true" data-slot="timeline-break-columns" viewBox={`-8 0 ${scale.widthPx + 16} 1`} preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full">{scale.breaks.map(gap => <rect key={gap.startMs} x={gap.startX} width={gap.endX - gap.startX} height={1} className="fill-sunk"/>)}</svg>}<div className="sticky top-0 z-10 bg-card"><Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs}/></div>
                 {rows.map(row => <div key={row.runId} data-slot="timeline-row" data-run-id={row.runId} className="relative">
                   {narrow && !open && <div className="sticky left-0 z-10" style={{ width: Math.max(1, width - 32) }}>{renderName(row)}</div>}
-                  <Track selected={selectedRunId === row.runId} row={row} spans={spansByRow.get(row.runId) ?? []} events={timeline!.events.filter(event => event.runId === row.runId)} onEvent={event => { setActiveEvent(event); if (event) setHoveredSpan(null); }} scale={scale} nowMs={nowMs} ongoing={input.nowAtEnd} buddies={props.buddies}
-                    onOpen={props.onOpen} onFocusSpan={setFocusedSpan} onHover={span => { setActiveEvent(null); setHoveredSpan(span); if (span) setHoveredRow(null); }}/>
+                  <Track tabKey={tabKey} selected={selectedRunId === row.runId} row={row} spans={spansByRow.get(row.runId) ?? []} events={timeline!.events.filter(event => event.runId === row.runId)} onEvent={event => { setActiveEvent(event); if (event) setHoveredSpan(null); }} scale={scale} nowMs={nowMs} ongoing={input.nowAtEnd} buddies={props.buddies}
+                    onOpen={props.onOpen} onFocusSpan={span => { setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveEvent(null); setFocusedSpan(span); }} onHover={span => { setActiveEvent(null); setHoveredSpan(span); if (span) setHoveredRow(null); }}/>
                 </div>)}
                 {pointerX !== null && <svg data-slot="timeline-pointer" aria-hidden="true" viewBox={`-8 0 ${scale.widthPx + 16} 1`} preserveAspectRatio="none" className="pointer-events-none absolute inset-0 z-20 h-full w-full"><line x1={pointerX} x2={pointerX} y2={1} className="stroke-ink3" vectorEffect="non-scaling-stroke"/></svg>}
               </div>}

@@ -572,6 +572,11 @@ def _tree_order(runs: list) -> list:
 def _timeline_row(connection, row, depth: int) -> dict:
     metadata = micro_task.metadata_from_row(row)
     title, title_source, result_summary = _run_presentation(connection, row["task_id"])
+    fix_relation = fixes.view(connection, row["task_id"])
+    if "fixes" in fix_relation:
+        fixes_title, fixes_title_source, _ = _run_presentation(connection, fix_relation["fixes"])
+        fix_relation["fixesTitle"] = fixes_title or UNTITLED
+        fix_relation["fixesTitleSource"] = fixes_title_source
     task_text = connection.execute("SELECT json_extract(micro_task_json,'$.task') FROM workflow_runs WHERE run_id=?", (row["task_id"],)).fetchone()
     shutdown = connection.execute(
         "SELECT COUNT(*) AS attempts,"
@@ -584,7 +589,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
     # task that claims to run without any attempt record is not proven stopped either.
     unproven = row["state"] in ("running", "cancelling", "reconciliation-needed") and attempts == 0
     return {
-        **fixes.view(connection, row["task_id"]),
+        **fix_relation,
         "runId": row["task_id"],
         "parentRunId": row["child_parent_run_id"],
         "rootRunId": row["root_run_id"],
