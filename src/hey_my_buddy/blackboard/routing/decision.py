@@ -971,7 +971,7 @@ class DecisionCoordinator:
                               shutdown_confirmed=stopped, error=reason, now=now,
                               release_stopped=stopped, released=True)
 
-    def cancelled(self, connection: sqlite3.Connection, *, task: sqlite3.Row, reason: str, now: str) -> dict | None:
+    def cancelled(self, connection: sqlite3.Connection, *, task: sqlite3.Row, reason: str | None, now: str) -> dict | None:
         """Durable cancel intent: the decision is cancelled, not silently forgotten."""
         row = self._decision_for_task(connection, task)
         if row is None:
@@ -981,7 +981,7 @@ class DecisionCoordinator:
                 connection,
                 row,
                 status="cancelled",
-                reason=f"the decision run was cancelled: {reason}"[:MAX_DECISION_REASON],
+                reason=("the decision run was cancelled" + (f": {reason}" if reason is not None else ""))[:MAX_DECISION_REASON],
                 now=now,
             )
         return {"decisionId": row["decision_id"], "status": self._status(connection, row["decision_id"])}

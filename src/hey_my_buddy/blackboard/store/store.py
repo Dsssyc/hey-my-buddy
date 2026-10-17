@@ -1214,7 +1214,7 @@ class BoardStore:
                 # A decision run is an ordinary cancellable task. Cancelling it marks
                 # the decision terminal in the same transaction, so a queued selection
                 # that is cancelled can never become a current recommendation.
-                self.decisions.cancelled(connection, task=task, reason=note or "", now=now)
+                self.decisions.cancelled(connection, task=task, reason=note, now=now)
             response = {"task": self._decorate(connection, task), "alreadyTerminal": already}
             if command_id:
                 self._store_receipt(

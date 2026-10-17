@@ -201,7 +201,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         event2 = connection.execute('SELECT seq FROM events WHERE seq!=? ORDER BY seq LIMIT 1', (event,)).fetchone()[0]
         connection.execute("UPDATE events SET kind='workflow.cancelled',payload_json=? WHERE seq=?",
                            (json.dumps({'reason': 'service stop: ' + authored,
-                                        'actor': {'role': 'service', 'id': 'stop'}}), event2))
+                                        'stopInitiator': 'service'}), event2))
+        connection.execute("UPDATE events SET actor_role='service',actor_id='stop' WHERE seq=?", (event2,))
         event3 = connection.execute('SELECT seq FROM events WHERE seq NOT IN (?,?) ORDER BY seq LIMIT 1',
                                     (event, event2)).fetchone()[0]
         route_cancel = {'reason': 'Owning Micro task cancelled', 'owningRunId': run_id}
@@ -210,7 +211,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         event4 = connection.execute('SELECT seq FROM events WHERE seq NOT IN (?,?,?) ORDER BY seq LIMIT 1',
                                     (event, event2, event3)).fetchone()[0]
         connection.execute("UPDATE events SET kind='workflow.cancelled',payload_json=? WHERE seq=?",
-                           (json.dumps({'reason': 'signal', 'actor': {'role': 'host', 'id': 'fixture'}}), event4))
+                           (json.dumps({'reason': 'signal'}), event4))
+        connection.execute("UPDATE events SET actor_role='host',actor_id='fixture' WHERE seq=?", (event4,))
         connection.commit()
         commands = [tuple(row) for row in connection.execute(
             'SELECT command_id,kind,request_hash FROM commands ORDER BY command_id')]
@@ -239,23 +241,24 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_scope_versions WHERE note IS NOT NULL'
                                             " AND scope_version=1").fetchone()[0], 0)
         self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_continuations WHERE kind='manual'"
-                                            " AND note='Host continuation'").fetchone()[0], 0)
+                                            " AND note='Host continuation'").fetchone()[0],
+                         connection.execute("SELECT COUNT(*) FROM workflow_continuations WHERE kind='manual'").fetchone()[0])
         self.assertEqual(json.loads(connection.execute(
             'SELECT execution_workspace_json FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()[0])['accessNote'],
                          authored)
         if request is not None:
             self.assertEqual(json.loads(connection.execute('SELECT decision_json FROM workflow_requests WHERE request_id=?',
                                                             (request['request_id'],)).fetchone()[0])['note'], authored)
-        self.assertNotIn('note', json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?',
-                                                               (event,)).fetchone()[0]))
+        self.assertIsNone(json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?',
+                                                        (event,)).fetchone()[0])['note'])
         self.assertEqual(json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?',
                                                        (event2,)).fetchone()[0])['note'], authored)
         self.assertEqual(json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?',
                                                        (event3,)).fetchone()[0]), route_cancel)
-        self.assertNotIn('note', json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?',
-                                                               (event4,)).fetchone()[0]))
+        self.assertEqual(json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?',
+                                                       (event4,)).fetchone()[0])['note'], 'signal')
 
-    def prepare_generated_conclusion(self, fixture, connection, *, complete: bool, nested: bool = False):
+    def prepare_generated_conclusion(self, fixture, connection, *, nested: bool = False):
         conclusions = [dict(row) for row in connection.execute(
             "SELECT c.*,e.seq FROM workflow_host_conclusions c JOIN events e"
             " ON json_extract(e.payload_json,'$.conclusionId')=c.conclusion_id"
@@ -285,28 +288,12 @@ class UpgradeFixtureTests(unittest.TestCase):
                            ' WHERE conclusion_id=?',
                            (note, parent['created_at'], parent['actor_role'], parent['actor_id'],
                             child['conclusion_id']))
-        if complete:
-            owners = []
-            for (owner,) in connection.execute('SELECT run_id FROM workflow_runs'):
-                key = {'runId': owner, 'targetRunId': parent['run_id'], 'note': parent['note'],
-                       'attemptId': parent['attempt_id']}
-                if parent['command_id'] == 'conclude-' + hashlib.sha256(canonical_json(key).encode()).hexdigest()[:32]:
-                    owners.append(owner)
-            self.assertEqual(len(owners), 1)
-            key = {'runId': owners[0], 'targetRunId': child['run_id'], 'note': note,
-                   'attemptId': child['attempt_id']}
-            digest = hashlib.sha256(canonical_json(key).encode()).hexdigest()
-            generated_command = 'conclude-' + digest[:32]
-            connection.execute('UPDATE commands SET command_id=?,request_hash=? WHERE command_id=?',
-                               (generated_command, digest, child['command_id']))
-            connection.execute('UPDATE workflow_host_conclusions SET command_id=? WHERE conclusion_id=?',
-                               (generated_command, child['conclusion_id']))
         connection.commit()
         return child, parent, note
 
     def test_generated_conclusion_uses_lead_relationship_and_preserves_command_identity(self):
         fixture, connection = self.restored('generated-conclusion')
-        child, parent, _note = self.prepare_generated_conclusion(fixture, connection, complete=True, nested=True)
+        child, parent, _note = self.prepare_generated_conclusion(fixture, connection, nested=True)
         commands = [tuple(row) for row in connection.execute(
             'SELECT command_id,request_hash FROM commands ORDER BY command_id')]
         upgrade_schema_24_to_25(fixture['state'])
@@ -315,6 +302,9 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertIsNone(converted['note'])
         self.assertEqual(converted['reason_code'], 'lead.owned-concluded')
         self.assertEqual(json.loads(converted['reason_params_json']), {'leadRunId': parent['run_id']})
+        self.assertEqual(json.loads(connection.execute(
+            "SELECT payload_json FROM events WHERE kind='workflow.host_concluded' AND task_id=?",
+            (child['run_id'],)).fetchone()[0])['reason']['code'], 'lead.owned-concluded')
         self.assertEqual([tuple(row) for row in connection.execute(
             'SELECT command_id,request_hash FROM commands ORDER BY command_id')], commands)
 
@@ -323,7 +313,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             with self.subTest(nested=nested):
                 fixture, connection = self.restored('generated-helper-conclusion-' + str(nested))
                 child, parent, _note = self.prepare_generated_conclusion(
-                    fixture, connection, complete=True, nested=nested)
+                    fixture, connection, nested=nested)
                 immediate = connection.execute('SELECT lead_run_id FROM workflow_lead_tasks WHERE owned_run_id=?',
                                                (child['run_id'],)).fetchone()[0]
                 connection.execute('DELETE FROM workflow_lead_tasks WHERE owned_run_id=?', (child['run_id'],))
@@ -340,14 +330,17 @@ class UpgradeFixtureTests(unittest.TestCase):
                 self.assertEqual(row['reason_code'], 'lead.owned-concluded')
                 self.assertEqual(json.loads(row['reason_params_json']), {'leadRunId': parent['run_id']})
 
-    def test_generated_looking_conclusion_with_incomplete_relation_rolls_back(self):
+    def test_generated_looking_conclusion_without_matching_time_remains_content(self):
         fixture, connection = self.restored('ambiguous-conclusion')
-        self.prepare_generated_conclusion(fixture, connection, complete=False)
-        before = backup.database_snapshot(connection, exact=True)
-        with self.assertRaises(BoardError) as caught:
-            upgrade_schema_24_to_25(fixture['state'])
-        self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
-        self.assertEqual(backup.database_snapshot(connection, exact=True), before)
+        child, _, note = self.prepare_generated_conclusion(fixture, connection)
+        connection.execute('UPDATE workflow_host_conclusions SET created_at=? WHERE conclusion_id=?',
+                           ('different-time', child['conclusion_id']))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        row = connection.execute('SELECT note,reason_code FROM workflow_host_conclusions WHERE conclusion_id=?',
+                                 (child['conclusion_id'],)).fetchone()
+        self.assertEqual(row['note'], note)
+        self.assertIsNone(row['reason_code'])
 
     def test_host_conclusion_sentence_without_lead_cascade_remains_content(self):
         fixture, connection = self.restored('host-conclusion-content')

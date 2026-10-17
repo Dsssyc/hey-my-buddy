@@ -3,13 +3,11 @@ from __future__ import annotations
 
 from contextlib import closing
 from pathlib import Path
-import hashlib
 import json
-import re
 import sqlite3
 
 from .db import (COMMAND_DELETION_COLUMN, HOST_CONCLUSION_INDEX, HOST_CONCLUSION_TABLE,
-                 MACRO_TASK_DELETIONS_DDL, WORKFLOW_REQUESTS_DDL, WORKFLOW_TABLES,
+                 MACRO_TASK_DELETIONS_DDL, WORKFLOW_REQUESTS_DDL,
                  EVALUATION_TABLES, canonical_json)
 from ...errors import BoardError
 from ...protocol.reasons import reason as make_reason
@@ -465,34 +463,58 @@ def _upgrade_workflow_requests(connection: sqlite3.Connection) -> None:
         connection.execute('UPDATE events SET payload_json=? WHERE seq=?', (canonical_json(payload), seq))
 
 
-_DEFAULT_NOTES = frozenset({
-    'original submission', 'helper admission', 'owned-micro-task-boundary',
-    'Host cancelled', 'User stopped macro task', 'manual continuation cancelled live helpers',
-    'Owned micro task stopped because its Lead is being concluded',
-    'Host approved the next turn', 'Host declined assistance', 'Host continuation',
-    'operator request', 'explicit retry', 'service stop requested', 'signal',
-})
 _NOTE_EVENTS = frozenset({
     'workflow.request_declined', 'workflow.review_rejected', 'workflow.buddy_overridden',
     'workflow.cancelled', 'workflow.helper_cancelled', 'workflow.lead_task_cancelled',
     'task.cancelled', 'task.cancel_requested', 'task.retried',
 })
-_AUTO_CONCLUSION = re.compile(r'^Concluded because Lead micro task .+ received a Host conclusion$')
 
 
 def _note(value: str | None) -> str | None:
-    if value is None or value in _DEFAULT_NOTES:
-        return None
-    return value
+    return value or None
 
 
-def _event_note(value: str | None, payload: dict) -> str | None:
-    actor = payload.get('actor')
-    if (isinstance(value, str) and value.startswith('service stop: ')
-            and (payload.get('stopInitiator') == 'service'
-                 or isinstance(actor, dict) and actor.get('role') == 'service')):
-        return _note(value[len('service stop: '):])
-    return _note(value)
+def _manual_cancel_continuation(connection: sqlite3.Connection, row: sqlite3.Row,
+                                payload: dict) -> str:
+    candidates = connection.execute(
+        "SELECT c.continuation_id FROM workflow_continuations c JOIN events e"
+        " ON e.task_id=c.run_id AND e.kind='workflow.continued'"
+        " AND json_extract(e.payload_json,'$.continuationId')=c.continuation_id"
+        " WHERE c.run_id=? AND c.kind='manual' AND c.helper_policy='cancel'"
+        " AND c.created_at<=? AND e.created_at>=? AND e.seq>?",
+        (payload['cancelledByRunId'], row['created_at'], row['created_at'], row['seq']),
+    ).fetchall()
+    if len(candidates) != 1:
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Manual helper cancellation lacks one continuation')
+    return candidates[0][0]
+
+
+def _converted_event_note(connection: sqlite3.Connection, row: sqlite3.Row,
+                          payload: dict) -> tuple[bool, str | None]:
+    """Return whether an old reason belongs to the authored-note contract."""
+    kind, value, role = row['kind'], payload['reason'], row['actor_role']
+    if role == 'service':
+        if isinstance(value, str) and value.startswith('service stop: '):
+            body = value[len('service stop: '):]
+            return True, None if body in ('service stop requested', 'signal') else _note(body)
+        return False, None
+    if kind == 'task.retried':
+        return True, None if value == 'explicit retry' else _note(value)
+    if role not in ('host', 'console', 'lead'):
+        return False, None
+    if kind in ('task.cancelled', 'task.cancel_requested'):
+        return True, None if value == 'operator request' else _note(value)
+    if kind in ('workflow.cancelled', 'workflow.helper_cancelled', 'workflow.lead_task_cancelled'):
+        if value == 'Owned micro task stopped because its Lead is being concluded':
+            payload['leadRunId'] = (row['task_id'] if kind == 'workflow.cancelled'
+                                    else payload['cancelledByRunId'])
+            return True, None
+        if value == 'manual continuation cancelled live helpers' and kind == 'workflow.helper_cancelled':
+            payload['continuationId'] = _manual_cancel_continuation(connection, row, payload)
+            return True, None
+        defaults = ('Host cancelled', 'User stopped macro task') if role == 'console' else ('Host cancelled',)
+        return True, None if value in defaults else _note(value)
+    return True, _note(value)
 
 
 def _upgrade_notes(connection: sqlite3.Connection) -> None:
@@ -504,36 +526,27 @@ def _upgrade_notes(connection: sqlite3.Connection) -> None:
         ('workflow_workspace_conflicts', 'reason', 'note'),
         ('workflow_integrations', 'reason', 'note'),
     ):
-        old_column = next(column for column in connection.execute(f'PRAGMA table_info({table})')
-                          if column['name'] == old)
-        if old_column['notnull']:
-            # A renamed NOT NULL column would keep the old constraint. Build
-            # from the current schema so upgraded and newly created boards agree.
-            ddl = next(statement for statement in WORKFLOW_TABLES
-                       if statement.lstrip().startswith(f'CREATE TABLE IF NOT EXISTS {table} ('))
-            connection.execute(ddl.replace(f'{table} (', f'{table}_upgrade (', 1))
-            columns = [column['name'] for column in connection.execute(f'PRAGMA table_info({table})')]
-            target = [new if column == old else column for column in columns]
-            connection.execute(f'INSERT INTO {table}_upgrade ({",".join(target)}) SELECT {",".join(columns)} FROM {table}')
-            connection.execute(f'DROP TABLE {table}')
-            connection.execute(f'ALTER TABLE {table}_upgrade RENAME TO {table}')
-            for statement in WORKFLOW_TABLES:
-                if (statement.lstrip().startswith(('CREATE INDEX IF NOT EXISTS ',
-                                                   'CREATE UNIQUE INDEX IF NOT EXISTS '))
-                        and f'ON {table}(' in statement):
-                    connection.execute(statement)
-        else:
-            connection.execute(f'ALTER TABLE {table} RENAME COLUMN {old} TO {new}')
-        if table != 'workflow_turns':
-            connection.execute(f'UPDATE {table} SET note=NULL WHERE note IN ('
-                               + ','.join('?' for _ in _DEFAULT_NOTES) + ')', tuple(_DEFAULT_NOTES))
+        connection.execute(f'ALTER TABLE {table} RENAME COLUMN {old} TO {new}')
+        connection.execute(f"UPDATE {table} SET {new}=NULL WHERE {new}='' ")
+
+    connection.execute(
+        "UPDATE workflow_continuations SET note=NULL WHERE kind='lead-wakeup'"
+        " AND note='owned-micro-task-boundary'")
+    for run_id, version, raw, note in connection.execute(
+        'SELECT run_id,scope_version,stopped_evidence_json,note FROM workflow_scope_versions'
+    ).fetchall():
+        if version != 1:
+            continue
+        kind = json.loads(raw)['kind']
+        if (kind == 'initial' and note == 'original submission'
+                or kind == 'helper' and note == 'helper admission'):
+            connection.execute('UPDATE workflow_scope_versions SET note=NULL WHERE run_id=? AND scope_version=1',
+                               (run_id,))
 
     for run_id, raw in connection.execute('SELECT run_id,execution_workspace_json FROM workflow_runs').fetchall():
         workspace = json.loads(raw)
         if 'accessReason' in workspace:
-            value = _note(workspace.pop('accessReason'))
-            if value is not None:
-                workspace['accessNote'] = value
+            workspace['accessNote'] = _note(workspace.pop('accessReason'))
             connection.execute('UPDATE workflow_runs SET execution_workspace_json=? WHERE run_id=?',
                                (canonical_json(workspace), run_id))
     for integration_id, raw in connection.execute(
@@ -549,12 +562,11 @@ def _upgrade_notes(connection: sqlite3.Connection) -> None:
     ).fetchall():
         decision = json.loads(raw)
         if 'reason' in decision:
-            value = _note(decision.pop('reason'))
-            if value is not None:
-                decision['note'] = value
+            decision['note'] = _note(decision.pop('reason'))
             connection.execute('UPDATE workflow_requests SET decision_json=? WHERE request_id=?',
                                (canonical_json(decision), request_id))
-    for seq, kind, raw in connection.execute('SELECT seq,kind,payload_json FROM events').fetchall():
+    for row in connection.execute('SELECT seq,task_id,kind,payload_json,actor_role,created_at FROM events').fetchall():
+        seq, kind, raw = row['seq'], row['kind'], row['payload_json']
         if kind not in _NOTE_EVENTS and kind != 'workflow.access_changed':
             continue
         payload = json.loads(raw)
@@ -562,72 +574,42 @@ def _upgrade_notes(connection: sqlite3.Connection) -> None:
             continue
         changed = False
         if kind in _NOTE_EVENTS and 'reason' in payload:
-            value = _event_note(payload.pop('reason'), payload)
-            if value is not None:
+            convert, value = _converted_event_note(connection, row, payload)
+            if convert:
+                payload.pop('reason')
                 payload['note'] = value
-            changed = True
+                changed = True
         if kind == 'workflow.access_changed' and 'accessReason' in payload:
-            payload['accessNote'] = payload.pop('accessReason')
+            payload['accessNote'] = _note(payload.pop('accessReason'))
             changed = True
         if changed:
             connection.execute('UPDATE events SET payload_json=? WHERE seq=?', (canonical_json(payload), seq))
+    for task_id, artifact_id, opinion in connection.execute(
+        'SELECT t.task_id,r.final_artifact_id,t.review_rejection_note FROM tasks t'
+        ' JOIN workflow_runs r ON r.run_id=t.task_id'
+        ' WHERE t.review_rejected_at IS NOT NULL AND t.review_rejection_note IS NOT NULL'
+    ).fetchall():
+        event = connection.execute(
+            "SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.review_rejected'"
+            ' ORDER BY seq DESC LIMIT 1', (task_id,),
+        ).fetchone()
+        payload = json.loads(event[0]) if event is not None else None
+        if (payload is not None and payload.get('artifactId') == artifact_id
+                and payload.get('opinion') == opinion
+                and 'note' in payload and payload['note'] is None):
+            connection.execute('UPDATE tasks SET review_rejection_note=NULL WHERE task_id=?', (task_id,))
 
 
 def _auto_conclusion_lead(connection: sqlite3.Connection, row: dict, lead_run_id: str) -> bool:
-    """Prove one descendant was concluded by this Lead's command operation."""
+    """Match the old generated sentence to a concluded owning Lead."""
+    if row['note'] != f'Concluded because Lead micro task {lead_run_id} received a Host conclusion':
+        return False
     parent = connection.execute('SELECT * FROM workflow_host_conclusions WHERE run_id=?',
                                 (lead_run_id,)).fetchone()
     if parent is None:
         return False
-    parent = dict(parent)
-    if (row['created_at'] != parent['created_at'] or row['actor_role'] != parent['actor_role']
-            or row['actor_id'] != parent['actor_id']):
-        return False
-    receipt = connection.execute('SELECT kind,request_hash,response_json FROM commands WHERE command_id=?',
-                                 (parent['command_id'],)).fetchone()
-    if receipt is None or receipt[0] != 'workflow.conclude':
-        return False
-    response = json.loads(receipt['response_json'])
-    if response.get('conclusionId') != parent['conclusion_id'] or response.get('runId') != lead_run_id:
-        return False
-    child_receipt = connection.execute('SELECT kind,request_hash,response_json FROM commands WHERE command_id=?',
-                                       (row['command_id'],)).fetchone()
-    if child_receipt is None or child_receipt[0] != 'workflow.conclude':
-        return False
-    child_response = json.loads(child_receipt['response_json'])
-    if (child_response.get('conclusionId') != row['conclusion_id']
-            or child_response.get('runId') != row['run_id']):
-        return False
-    events = {}
-    for seq, task_id, raw in connection.execute(
-        "SELECT seq,task_id,payload_json FROM events WHERE kind='workflow.host_concluded'"
-        ' AND task_id IN (?,?)', (row['run_id'], lead_run_id)
-    ):
-        identifier = json.loads(raw).get('conclusionId')
-        if identifier in (row['conclusion_id'], parent['conclusion_id']):
-            events[identifier] = (seq, task_id)
-    if (events.get(row['conclusion_id'], (None, None))[1] != row['run_id']
-            or events.get(parent['conclusion_id'], (None, None))[1] != lead_run_id
-            or events[row['conclusion_id']][0] >= events[parent['conclusion_id']][0]):
-        return False
-    # The old command hashes include the original notes. A matching parent
-    # command reveals the actual controlling run without guessing from actor ID.
-    candidates = [item[0] for item in connection.execute('SELECT run_id FROM workflow_runs')]
-    owners = []
-    for owner in candidates:
-        key = {'runId': owner, 'targetRunId': lead_run_id, 'note': parent['note'],
-               'attemptId': parent['attempt_id']}
-        digest = hashlib.sha256(canonical_json(key).encode()).hexdigest()
-        if parent['command_id'] == 'conclude-' + digest[:32] and receipt['request_hash'] == digest:
-            owners.append(owner)
-    if len(owners) != 1:
-        return False
-    generated_note = f'Concluded because Lead micro task {lead_run_id} received a Host conclusion'
-    key = {'runId': owners[0], 'targetRunId': row['run_id'], 'note': generated_note,
-           'attemptId': row['attempt_id']}
-    digest = hashlib.sha256(canonical_json(key).encode()).hexdigest()
-    return (row['note'] == generated_note and row['command_id'] == 'conclude-' + digest[:32]
-            and child_receipt['request_hash'] == digest)
+    return (row['created_at'] == parent['created_at'] and row['actor_role'] == parent['actor_role']
+            and row['actor_id'] == parent['actor_id'])
 
 
 def _conclusion_ancestors(connection: sqlite3.Connection, run_id: str) -> list[str]:
@@ -656,14 +638,18 @@ def _upgrade_host_conclusions(connection: sqlite3.Connection) -> None:
             row['note'] = None
             row['reason_code'] = 'lead.owned-concluded'
             row['reason_params_json'] = canonical_json({'leadRunId': lead_run_id})
+            for seq, raw in connection.execute(
+                "SELECT seq,payload_json FROM events WHERE kind='workflow.host_concluded' AND task_id=?",
+                (row['run_id'],),
+            ).fetchall():
+                payload = json.loads(raw)
+                if payload.get('conclusionId') == row['conclusion_id']:
+                    payload['reason'] = make_reason('lead.owned-concluded', leadRunId=lead_run_id)
+                    connection.execute('UPDATE events SET payload_json=? WHERE seq=?',
+                                       (canonical_json(payload), seq))
         else:
-            if (_AUTO_CONCLUSION.fullmatch(row['note'] or '')
-                    and any(connection.execute(
-                        'SELECT 1 FROM workflow_host_conclusions WHERE run_id=? AND created_at=? AND actor_role=? AND actor_id=?',
-                        (lead_id, row['created_at'], row['actor_role'], row['actor_id'])).fetchone()
-                            for lead_id in _conclusion_ancestors(connection, row['run_id']))):
-                raise BoardError('UPGRADE_INVALID_BOARD', 'Generated conclusion has incomplete ownership evidence')
             row['reason_code'] = row['reason_params_json'] = None
+            row['note'] = _note(row['note'])
         columns = list(row)
         connection.execute('INSERT INTO workflow_host_conclusions_upgrade (' + ','.join(columns) +
                            ') VALUES (' + ','.join('?' for _ in columns) + ')', [row[key] for key in columns])
