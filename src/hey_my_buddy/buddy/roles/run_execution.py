@@ -40,7 +40,7 @@ from .structured_call import (
 from .turn_io import input_hash, private_json, validate_outcome, guard_private_path, canonical_json
 
 WORKER_STOP_GRACE_SECONDS = 8.0
-_DISCOVERY_CONTROL = "discovery-control.json"
+_NATIVE_CONTROL = "native-control.json"
 _execution_live_server = None
 
 
@@ -803,6 +803,16 @@ def _artifacts(context: ExecutionContext, handle: InlineRunHandle) -> list[dict]
 
 
 def discover_models(name: str) -> dict:
+    return _native_operation(name, "discover", "run_discovery", "catalog")
+
+
+def delete_sessions(name: str, session_ids: list[str]) -> dict[str, str]:
+    """Delete proven native sessions through the registered controller path."""
+    return _native_operation(name, "delete-sessions", "run_delete_sessions", "sessions",
+                             sessionIds=session_ids)
+
+
+def _native_operation(name: str, operation: str, seam: str, result_key: str, **arguments) -> dict:
     from ..harnesses.registry import run_seam
     from ..harnesses.runtime_selection import controller_environment
 
@@ -811,13 +821,14 @@ def discover_models(name: str) -> dict:
     try:
         try:
             module = run_seam(name)
-            if module is None or not callable(getattr(module, "run_discovery", None)):
-                raise BoardError("CATALOG_UNAVAILABLE", "The harness has no registered discovery operation", harness=name)
-            directory = Path(tempfile.mkdtemp(prefix="hey-my-buddy-" + name + "-catalog-"))
-            control = directory / _DISCOVERY_CONTROL
-            private_json(control, {"operation": "discover", "harness": name,
+            if module is None or not callable(getattr(module, seam, None)):
+                raise BoardError("CATALOG_UNAVAILABLE" if operation == "discover" else "UNSUPPORTED",
+                                 f"The harness has no registered {operation} operation", harness=name)
+            directory = Path(tempfile.mkdtemp(prefix="hey-my-buddy-" + name + ("-catalog-" if operation == "discover" else "-delete-sessions-")))
+            control = directory / _NATIVE_CONTROL
+            private_json(control, {"operation": operation, "harness": name,
                                    "privateRoot": str(directory), "nativeRoot": str(directory / "native"),
-                                   "cwd": str(directory), "timeoutSeconds": 25})
+                                   "cwd": str(directory), "timeoutSeconds": 25, **arguments})
             environment = controller_environment(directory)
             stopped = False  # Ownership passes to the launch boundary.
             try:
@@ -841,19 +852,21 @@ def discover_models(name: str) -> dict:
                                             stop=lambda payload, owned: stop_confirmed(payload, owned.shutdown_confirmed))
             stopped = collection.stop_confirmed
             if not stopped:
-                raise BoardError('HARNESS_DISCOVERY_STOP_UNCONFIRMED',
-                                 'The native metadata read process stop is unconfirmed', harness=name)
+                raise BoardError('HARNESS_DISCOVERY_STOP_UNCONFIRMED' if operation == 'discover'
+                                 else 'HARNESS_DELETE_STOP_UNCONFIRMED',
+                                 f'The native {operation} process stop is unconfirmed', harness=name)
             payload = collection.payload
-            if wait_expired or payload.get('status') == 'unknown':
+            if operation == 'discover' and (wait_expired or payload.get('status') == 'unknown'):
                 return {'source': 'native-discovery', 'providers': [], 'discoveries': [{
                     'harness': name, 'status': 'unknown', 'accountStatus': 'unknown',
                     'reason': 'native-metadata-wait-expired'}]}
-            if collection.exit_code != 0 or collection.payload.get("status") != "ok":
+            if wait_expired or collection.exit_code != 0 or payload.get("status") != "ok":
                 message = (collection.payload or {}).get("error")
-                if not isinstance(message, str) or not message or len(message) > 512:
-                    message = "Native model discovery did not settle successfully"
-                raise BoardError("HARNESS_UNAVAILABLE", message, harness=name)
-            return collection.payload["catalog"]
+                if not isinstance(message, str) or not message:
+                    message = f"Native {operation} did not settle successfully"
+                raise BoardError("HARNESS_UNAVAILABLE", message, harness=name,
+                                 **({"nativeError": payload["nativeError"]} if "nativeError" in payload else {}))
+            return payload[result_key]
         finally:
             if stopped and directory is not None:
                 shutil.rmtree(directory)
