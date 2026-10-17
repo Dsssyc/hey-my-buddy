@@ -95,6 +95,9 @@
   "history.reason-unavailable": [
     "recordId"
   ],
+  "lead.owned-concluded": [
+    "leadRunId"
+  ],
   "lead.result-refused": [
     "disposition",
     "unfinished",
@@ -126,6 +129,7 @@
   "macro-task-deletion.unsealed-handoff": [],
   "model-cursor-shape-unreadable": [],
   "model-list-shape-unreadable": [],
+  "not-enabled": [],
   "workspace-scope-violation": [
     "conflictIds",
     "paths"

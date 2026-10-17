@@ -321,7 +321,7 @@ class ActivityProjection(BoardTestCase):
                 "terminationReason": "harness-error",
             })
         self.assertEqual(client.get(runId=task["runId"])["status"], "failed")
-        client.retry(runId=task["runId"], reason="second generation")
+        client.retry(runId=task["runId"], note="second generation")
         second = admit_execution(client, "b" * 32)["claim"]["attempt"]
         self.assertEqual(second["generation"], 2)
         self.assertNotEqual(second["attemptId"], attempt["attemptId"])
@@ -482,7 +482,7 @@ class ExecutionActivityForwarding(BoardTestCase):
         self.assertIsNotNone(control.handle.process.poll())
         client.submit_result(attempt["attemptId"], attempt["generation"], "c" * 32, {"status": "failed", "result": {"status": "nonzero"}, "error": "fixture-stopped",
                               "shutdownConfirmed": True, "terminationReason": "harness-error"})
-        client.retry(runId=attempt["taskId"], reason="replacement generation")
+        client.retry(runId=attempt["taskId"], note="replacement generation")
         replacement = admit_execution(client, "e" * 32)["claim"]["attempt"]
         self.assertEqual(replacement["generation"], attempt["generation"] + 1)
         second = {"phase": "tool-running", "eventSeq": 2}

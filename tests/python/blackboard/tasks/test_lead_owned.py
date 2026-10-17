@@ -34,7 +34,7 @@ class LeadOwnedTests(WorkflowTestCase):
     def lead(self, board, name="lead", worker="w1", **extra):
         enable_fixture_buddy(board.store, BUDDY)
         submitted = self.submit(board, request_id=name, cwd=str(self.workdir(name)), access="full",
-                                executionWorkspace={"kind": "existing", "access": "full", "accessReason": "Lead checks"},
+                                executionWorkspace={"kind": "existing", "access": "full", "accessNote": "Lead checks"},
                                 delegationAuthority=True, **extra)
         self.register(board, worker)
         claim = self.claim(board, worker, claim_request_id="claim-" + name, run_id=submitted["runId"])
@@ -114,7 +114,7 @@ class LeadOwnedTests(WorkflowTestCase):
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         with self.assertRaises(BoardError) as caught:
             self.owned(board, claim, delegationAuthority=True,
-                       executionWorkspace={"kind": "existing", "access": "full", "accessReason": "forged grant"})
+                       executionWorkspace={"kind": "existing", "access": "full", "accessNote": "forged grant"})
         self.assertEqual(caught.exception.code, "FORBIDDEN")
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_lead_tasks").fetchone()[0], 0)
@@ -232,7 +232,7 @@ class LeadOwnedTests(WorkflowTestCase):
         self.assertEqual(concluded["state"], "concluded")
         cancelled = self.owned(board, claim, "cancelled")
         running = self.claim(board, "w2", claim_request_id="cancel-running", run_id=cancelled["runId"])
-        result = board.call("workflow_cancel", {"runId": cancelled["runId"], "reason": "Lead stopped owned work",
+        result = board.call("workflow_cancel", {"runId": cancelled["runId"], 'note': "Lead stopped owned work",
                                                **cred})
         self.assertEqual(result["state"], "cancelled")
         attempt = board.call("task_get", {"runId": cancelled["runId"]})["task"]["selectedAttempt"]
@@ -413,7 +413,7 @@ class LeadOwnedTests(WorkflowTestCase):
         leaked = {"hostId": None, "ownerGeneration": 1,
                   "controlToken": board.store.db.control_token(run_id, 1)}
         operations = (
-            ("workflow_cancel", {"reason": "uncredentialed stop"}),
+            ("workflow_cancel", {"note": "uncredentialed stop"}),
             ("workflow_continue", {"commandId": "uncredentialed-continue", "input": "continue", "expectedRevision": child["revision"]}),
             ("workflow_accept", {"artifactId": "unreviewed-artifact", "note": "uncredentialed accept", "notRequired": "fixture"}),
             ("workflow_takeover", {"commandId": "uncredentialed-takeover", "newHostId": "forged-host", "expectedOwnerGeneration": 1}),

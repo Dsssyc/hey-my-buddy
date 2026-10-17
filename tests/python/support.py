@@ -132,7 +132,7 @@ def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
             if endpoint is not None:
                 try:
                     reply = _request(endpoint, "service_control", {"action": "stop", "drainSeconds": 20,
-                                                                    "reason": "private test cleanup"}, state_dir=directory)
+                                                                    'note': "private test cleanup"}, state_dir=directory)
                 except ServiceError:
                     # The endpoint may have disappeared during a restart. Recheck
                     # the lifetime locks and attach to its replacement if needed.

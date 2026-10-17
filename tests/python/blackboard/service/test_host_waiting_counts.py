@@ -149,7 +149,7 @@ class PrivateServiceWaitingCountsTests(RealWorkspaceTestCase):
             self.assertEqual(concluded['waitingForHost'], {'host': 1})
             cancelled = self.invoke('cancel', {
                 'runId': run_id, **boundary[0]['control'], 'commandId': 'cancel-boundary',
-                'reason': 'close the fixture Host boundary',
+                'note': 'close the fixture Host boundary',
             })
             self.assertNotIn('waitingForHost', cancelled)
             concluded = self.invoke('conclude', {

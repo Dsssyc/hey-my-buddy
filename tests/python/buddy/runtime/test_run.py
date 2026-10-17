@@ -143,7 +143,7 @@ class TestExecutionRecords(BoardTestCase):
             task = self.command_task("exec-cancel-1", ["/bin/sleep", "30"])
             self.assertTrue(wait_for(lambda: self.cli("status", json.dumps({"runId": task["runId"]}))[1]["status"] == "running", 30))
             code, cancelled = self.cli(
-                "execution-cancel", json.dumps({"runId": task["runId"], "reason": "operator stopped it"})
+                "execution-cancel", json.dumps({"runId": task["runId"], "note": "operator stopped it"})
             )
             self.assertEqual(code, 0, cancelled)
             done = wait_for(

@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
+from hey_my_buddy.blackboard.routing.router_boundary import build_boundary
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing.router_boundary_data import routing_boundary
@@ -22,6 +23,24 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 TRIAL_FIELDS = {"buddyId", "identity", "index", "phase", "outcome", "code", "reason",
                 "taskId", "attemptId", "shutdownConfirmed", "consecutiveNoAnswers", "retryAt", "usage"}
 BOUNDARY_FIELDS = {"kind", "code", "reason", "routerTrials", "candidates", "facts", "retryAt", "commands", "userAction"}
+
+
+class BoundaryTemplateIdentityTests(unittest.TestCase):
+    def test_removing_generated_notes_keeps_existing_command_ids(self):
+        boundary = build_boundary(
+            kind="router-unavailable", code=None, reason="Router unavailable",
+            candidates=[{"buddyId": "buddy-stable", "harness": "dsh", "provider": "fixture",
+                         "model": "alpha", "effort": "max"}],
+            facts={}, router_trials=[], retry_at="2026-01-01T00:10:00.000Z",
+            decision_id="decision-stable", run_id="run-stable", revision=7, shutdown_confirmed=True)
+        choice = boundary["commands"]["continue"]["choices"][0]["params"]
+        reroute = boundary["commands"]["reroute"]["params"]
+        self.assertNotIn("note", choice)
+        self.assertNotIn("note", reroute)
+        self.assertEqual(choice["commandId"],
+                         "router-continue-50c19c335009bc53af3aee2c71a272510dd18cc3cb2848756e3fd64a5466dc19")
+        self.assertEqual(reroute["commandId"],
+                         "router-reroute-25a280bdbc650e1cf521a05244912b76c2f515ebada6dac879cec6aef64b194e")
 
 
 class BoundaryReadingTests(RouterDispatchTestCase):
@@ -448,10 +467,12 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         self.controls[response["runId"]] = response["control"]
         return response
 
-    def template_params(self, view, template):
+    def template_params(self, view, template, *, note=None):
         params = copy.deepcopy(template)
         self.assertEqual(params.pop("controlFile"), "<saved-control-file>")
         params.update(self.control(view))
+        if note is not None:
+            params["note"] = note
         return params
 
     def test_micro_task_boundary_has_post_attention_revision_and_real_continue_tuple(self):
@@ -466,14 +487,17 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
             self.assertEqual(params["runId"], view["runId"])
             self.assertEqual(params["expectedRevision"], view["revision"])
             self.assertTrue(params["input"])
-            self.assertTrue(params["reason"])
+            self.assertNotIn("note", params)
             self.assertLessEqual(len(params["commandId"]), 128)
         chosen = choices[1]["params"]
-        continued = self.board_.call("workflow_continue", self.template_params(view, chosen))
+        host_params = self.template_params(view, chosen)
+        host_params["note"] = "Host 选择冻结候选中的第二位 buddy 继续"
+        self.assertEqual(host_params["commandId"], chosen["commandId"])
+        continued = self.board_.call("workflow_continue", host_params)
         self.assertEqual(continued["buddy"], chosen["buddy"])
         self.assertEqual(continued["runId"], view["runId"])
         self.assertFalse(continued["awaitingHost"])
-        self.assertTrue(self.board_.call("workflow_continue", self.template_params(view, chosen))["duplicate"])
+        self.assertTrue(self.board_.call("workflow_continue", host_params)["duplicate"])
 
     def test_buddy_required_error_explains_same_boundary_commands(self):
         view = self.routed()
@@ -521,7 +545,8 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
             self.assertTrue(command["blocked"])
             self.assertTrue(command["reason"])
         with self.assertRaises(BoardError) as raised:
-            self.board_.call("workflow_continue", self.template_params(view, chosen))
+            self.board_.call("workflow_continue", self.template_params(
+                view, chosen, note="Host 选择候选时仍需先完成工作区清理"))
         self.assertEqual(raised.exception.code, "CONFLICT")
 
     def test_missing_workspace_ownership_blocks_templates_without_reacquiring_it(self):
@@ -535,7 +560,8 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         self.assertIn("allocation", boundary["commands"]["continue"]["reason"])
         self.assertEqual(boundary["candidates"], original["candidates"])
         with self.assertRaises(BoardError) as raised:
-            self.board_.call("workflow_continue", self.template_params(view, params))
+            self.board_.call("workflow_continue", self.template_params(
+                view, params, note="Host 选择候选时工作区所有权已失效"))
         self.assertEqual(raised.exception.code, "PREPARATION_CONFLICT")
 
     def test_locked_hard_tuple_keeps_frozen_candidates_and_blocks_other_choice(self):
@@ -553,7 +579,8 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         self.assertTrue(other["blocked"])
         self.assertTrue(other["reason"])
         with self.assertRaises(BoardError) as raised:
-            self.board_.call("workflow_continue", self.template_params(view, other["params"]))
+            self.board_.call("workflow_continue", self.template_params(
+                view, other["params"], note="Host 请求另一个冻结候选"))
         self.assertEqual(raised.exception.code, "BUDDY_CONFLICT")
 
     def test_nested_boundary_uses_root_control_and_current_owner_revision(self):
@@ -576,8 +603,10 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         self.assertEqual(chosen["targetRunId"], leaf["runId"])
         self.assertEqual(chosen["expectedRevision"], root["revision"])
         self.assertEqual(chosen["controlFile"], "<saved-control-file>")
+        self.assertNotIn("note", chosen)
         self.assertNotIn("controlToken", canonical_json(boundary))
         params = self.template_params(root, chosen)
+        params["note"] = "Host 指定拥有的微任务使用冻结候选"
         continued = self.board_.call("workflow_continue", params)
         self.assertEqual(continued["runId"], root["runId"])
         continued_leaf = self.board_.call("workflow_get", {"runId": leaf["runId"]})
@@ -599,7 +628,8 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
                 after = self.board_.call("workflow_get", {"runId": leaf["runId"]})
                 self.assertTrue(after["routing"]["routingBoundary"]["commands"]["continue"]["blocked"])
                 with self.assertRaises(BoardError) as raised:
-                    self.board_.call("workflow_continue", self.template_params(root, chosen))
+                    self.board_.call("workflow_continue", self.template_params(
+                        root, chosen, note="Host 请求已结束的拥有任务使用冻结候选"))
                 self.assertEqual(raised.exception.code, "ANCESTOR_TERMINAL")
 
     def test_cli_brief_get_and_await_retain_only_existing_boundary_data(self):
@@ -661,10 +691,12 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         reroute = boundary["commands"]["reroute"]
         self.assertEqual(reroute["notBefore"], boundary["retryAt"])
         self.assertNotIn("notBefore", reroute["params"])
+        self.assertNotIn("note", reroute["params"])
         self.clock.advance(601)
         view = self.board_.call("workflow_get", {"runId": view["runId"]})
         reroute = view["routing"]["routingBoundary"]["commands"]["reroute"]
         self.assertEqual(reroute["notBefore"], self.clock.value)
+        self.assertNotIn("note", reroute["params"])
         continued = self.board_.call("workflow_continue", self.template_params(view, reroute["params"]))
         self.assertEqual(continued["runId"], view["runId"])
         self.assertIsNone(continued["buddy"])

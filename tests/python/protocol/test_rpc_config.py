@@ -648,7 +648,7 @@ class RealDaemonControlTests(unittest.TestCase):
             self.assertEqual(control("health", "health", {})["status"], "ok")
             self.assertIn("events", control("events", "events_read", {"after": 0}))
             cancelled = control("cancel", "task_cancel", {"runId": cancellable,
-                                                           "reason": "rpc profile probe"})
+                                                           "note": "rpc profile probe"})
             self.assertTrue(cancelled["task"]["cancelRequested"])
             quick = self._submit_command("rpc-quick", sleep=0)
             self.assertEqual(self._admission()["admitted"], self.WAIT_CAPACITY)

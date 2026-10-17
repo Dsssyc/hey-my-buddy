@@ -38,7 +38,7 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
             "workflow_reclaim": lambda child, lead: {},
             "workflow_scope_amend": lambda child, lead: {
                 "commandId": "host-amend-child", "expectedRevision": lead["revision"],
-                "writeScope": ["review.txt"], "expectedScopeVersion": 1, "reason": "Review scope",
+                "writeScope": ["review.txt"], "expectedScopeVersion": 1, 'note': "Review scope",
             },
         }
         board = self.board()
@@ -66,7 +66,7 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
         for operation, fields in (
             ("workflow_decide", {"requestId": request_id, "commandId": "wrong-decision",
                                  "expectedRevision": child["revision"], "decision": "decline"}),
-            ("workflow_cancel", {"reason": "Wrong owner"}),
+            ("workflow_cancel", {"note": "Wrong owner"}),
             ("workflow_takeover", {"commandId": "wrong-takeover", "expectedOwnerGeneration": 1,
                                    "newHostId": "another-host"}),
         ):

@@ -58,7 +58,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             path = failed["workspace"]["path"]
             continued = self.call("continue", {"runId": failed["runId"], "commandId": "change-after-quota",
                 "expectedRevision": failed["revision"], "controlFile": submitted["controlFile"],
-                "buddy": {**BUDDY, "effort": "high"}, "reason": "Use another enabled buddy after quota failure",
+                "buddy": {**BUDDY, "effort": "high"}, "note": "Use another enabled buddy after quota failure",
                 "input": "Finish and verify the preserved changes."})
             self.assertEqual(continued["workspace"]["path"], path)
             self.call("await", {"runId": failed["runId"], "waitSeconds": 90})
@@ -89,7 +89,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             submitted, failed, _partial = self.quota_failure(locked=True)
             code, refused = self.cli("continue", json.dumps({"runId": failed["runId"], "commandId": "refused-override",
                 "expectedRevision": failed["revision"], "controlFile": submitted["controlFile"],
-                "buddy": {**BUDDY, "effort": "high"}, "reason": "Attempt a locked replacement",
+                "buddy": {**BUDDY, "effort": "high"}, "note": "Attempt a locked replacement",
                 "input": "Finish."}), env=self.env())
             self.assertEqual(code, 1)
             self.assertEqual(refused["error"]["code"], "BUDDY_CONFLICT")
@@ -166,7 +166,7 @@ class CrossHarnessQuotaRecoveryTests(HostQuotaRecoveryTests):
             self.assertIsNotNone(failed["currentTurn"]["tokenUsage"])
             continued = self.call("continue", {"runId": submitted["runId"], "commandId": "change-harness",
                 "expectedRevision": failed["revision"], "controlFile": submitted["controlFile"],
-                "buddy": {**BUDDY, "effort": "high"}, "reason": "Recover with an enabled different harness",
+                "buddy": {**BUDDY, "effort": "high"}, "note": "Recover with an enabled different harness",
                 "input": "Finish the retained work within the same authorized checkout."})
             self.assertEqual(continued["workspace"]["path"], failed["workspace"]["path"])
             self.call("await", {"runId": submitted["runId"], "waitSeconds": 90})

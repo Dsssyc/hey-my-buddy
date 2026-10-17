@@ -1496,7 +1496,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             "runId": submitted["runId"], "commandId": "adopt-site", "expectedRevision": view["revision"],
             "conflictId": conflict["conflictId"], "action": "adopt",
             "observedFingerprint": conflict["observedFingerprint"],
-            "reason": "the Host adopts this exact site as the delivered outcome", **self.control(view),
+            'note': "the Host adopts this exact site as the delivered outcome", **self.control(view),
         })
         self.assertEqual(adopted["resolutionState"], "adopted")
         self.assertTrue(adopted["delivered"])
@@ -1547,7 +1547,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             "runId": submitted["runId"], "commandId": "adopt-site", "expectedRevision": view["revision"],
             "conflictId": conflict["conflictId"], "action": "adopt",
             "observedFingerprint": conflict["observedFingerprint"],
-            "reason": "adopt this exact site", **self.control(view),
+            'note': "adopt this exact site", **self.control(view),
         })
         self.assertTrue(adopted["delivered"])
         # A Host change beyond both the scope and the adopted site, plus a forged
@@ -1694,7 +1694,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         amended = board.store.workflow.scope_amend({
             "runId": run_id, "targetRunId": helper_id, "commandId": "helper-amend",
             "expectedRevision": root_view["revision"], "expectedScopeVersion": 1,
-            "writeScope": ["docs", "."], "reason": "the helper may touch docs next", **self.control(root_view),
+            "writeScope": ["docs", "."], 'note': "the helper may touch docs next", **self.control(root_view),
         })
         self.assertEqual(amended["scopeVersion"], 2)
         self.assertEqual(amended["targetRunId"], helper_id)
@@ -1726,7 +1726,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             "expectedRevision": root_view["revision"], "conflictId": flow["conflict"]["conflictId"],
             "action": "restore", "paths": ["tracked.txt"],
             "observedFingerprint": flow["conflict"]["observedFingerprint"],
-            "reason": "restore the helper site to its authorized input", **self.control(root_view),
+            'note': "restore the helper site to its authorized input", **self.control(root_view),
         })
         self.assertEqual(resolved["targetRunId"], helper_id)
         self.assertEqual(resolved["resolutionState"], "restored")
@@ -2130,7 +2130,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
     def branch_ref(self, name):
         return git(self.repo, "for-each-ref", f"refs/heads/{name}", "--format=%(objectname)").strip()
 
-    def test_an_attached_branch_blocks_removal_with_the_branch_and_the_detach_retry(self):
+    def test_an_attached_branch_blocks_removal_with_the_branch_and_detach_command(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(
             request_id="attached-branch")
         run_id = submitted["runId"]
@@ -2165,7 +2165,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(diagnosis["detachCommand"].startswith("git -C '"))
         self.assertIn("switch --detach", diagnosis["detachCommand"])
         self.assertIn(head, diagnosis["detachCommand"])
-        self.assertIn("retry", diagnosis)
+        self.assertNotIn("note", diagnosis)
+        self.assertNotIn("retry", diagnosis)
         # The direct removal refuses with the same facts and touches nothing.
         with self.assertRaises(BoardError) as raised:
             workspace_module.cleanup_remove(self.directory, manifest)
@@ -2403,7 +2404,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             "runId": root_id, "targetRunId": helper_id, "commandId": "restart-restore-resolution",
             "expectedRevision": root["revision"], "conflictId": flow["conflict"]["conflictId"], "action": "restore",
             "paths": ["tracked.txt"], "observedFingerprint": flow["conflict"]["observedFingerprint"],
-            "reason": "restore the authorized helper input", **self.control(root),
+            'note': "restore the authorized helper input", **self.control(root),
         })
         self.assertEqual(resolved["resolutionState"], "restored")
         self.assertEqual((flow["helperCheckout"] / "tracked.txt").read_text(), "base\n")
@@ -2431,7 +2432,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         abandoned = board.store.workflow.workspace_resolve({
             "runId": root_id, "targetRunId": helper_id, "commandId": "restart-abandon-resolution",
             "expectedRevision": root["revision"], "conflictId": flow["conflict"]["conflictId"], "action": "abandon",
-            "observedFingerprint": flow["conflict"]["observedFingerprint"], "reason": "preserve this failed round as evidence",
+            "observedFingerprint": flow["conflict"]["observedFingerprint"], 'note': "preserve this failed round as evidence",
             **self.control(root),
         })
         self.assertEqual(abandoned["resolutionState"], "abandoned")

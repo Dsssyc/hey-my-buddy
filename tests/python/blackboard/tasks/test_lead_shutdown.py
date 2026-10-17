@@ -50,7 +50,7 @@ class LeadShutdownTests(WorkflowTestCase):
         helper_claim = self.claim(board, "w4", claim_request_id="helper-running", run_id=helper["runId"])
 
         stopped = board.call("workflow_cancel", {"runId": lead["runId"],
-                                                 "reason": "Host stops Lead", **self.control(lead)})
+                                                 'note': "Host stops Lead", **self.control(lead)})
         self.assertEqual(stopped["state"], "cancelled")
         for run in (lead, owned, waiting, helper):
             self.assertEqual(self.get(board, run)["state"], "cancelled")
@@ -243,7 +243,8 @@ class LeadShutdownTests(WorkflowTestCase):
         concluded = self.conclude(board, lead)
         self.assertEqual(concluded["state"], "concluded")
         self.assertEqual(self.get(board, child)["state"], "concluded")
-        self.assertIn("because Lead micro task", self.get(board, child)["hostConclusion"]["note"])
+        self.assertIsNone(self.get(board, child)["hostConclusion"]["note"])
+        self.assertEqual(self.get(board, child)["hostConclusion"]["reason"], {"code": "lead.owned-concluded", "params": {"leadRunId": lead["runId"]}})
 
     def test_lead_conclusion_records_all_unaccepted_outcomes_and_preserves_acceptance(self):
         board = self.board(max_concurrent=8)
@@ -274,7 +275,8 @@ class LeadShutdownTests(WorkflowTestCase):
             with self.subTest(outcome=name):
                 view = self.get(board, child)
                 self.assertEqual(view["state"], "concluded")
-                self.assertIn("because Lead micro task", view["hostConclusion"]["note"])
+                self.assertIsNone(view["hostConclusion"]["note"])
+                self.assertEqual(view["hostConclusion"]["reason"], {"code": "lead.owned-concluded", "params": {"leadRunId": lead["runId"]}})
                 self.assertNotIn("not-accepted", view["cleanup"]["reasons"])
                 self.assertEqual(view["cleanup"]["evidence"]["acceptance"]["state"], "concluded")
         accepted = self.get(board, accepted_child)

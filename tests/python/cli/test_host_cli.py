@@ -370,11 +370,11 @@ class HelpTests(unittest.TestCase):
         self.assertIn("default write", submit_access)
         self.assertNotIn("default write", continue_access)  # Omission keeps the current choice.
         for text in (submit, continuation):
-            reason = next(line.strip() for line in text.splitlines() if line.strip().startswith("accessReason "))
-            self.assertIn("required when access is full", reason)
-            self.assertIn("≤1000 characters", reason)
-            self.assertIn("single line", reason)
-            self.assertNotIn("splitlines()", reason)
+            note = next(line.strip() for line in text.splitlines() if line.strip().startswith("accessNote "))
+            self.assertIn("required when access is full", note)
+            self.assertIn("≤10000 UTF-8 bytes", note)
+            self.assertIn("single line", note)
+            self.assertNotIn("splitlines()", note)
             self.assertNotIn("any((", text)
 
     def test_accept_and_conclude_help_require_the_note(self):

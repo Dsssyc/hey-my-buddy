@@ -81,7 +81,7 @@ class InterruptedSealTests(RealWorkspaceTestCase):
         resolved = board.call("workflow_workspace_resolve", {
             "runId": submitted["runId"], "commandId": "restore-orphan", "expectedRevision": view["revision"],
             "conflictId": conflict["conflictId"], "action": "restore", "paths": ["tracked.txt"],
-            "observedFingerprint": conflict["observedFingerprint"], "reason": "restore outside change",
+            "observedFingerprint": conflict["observedFingerprint"], 'note': "restore outside change",
             **submitted["control"],
         })
         self.assertTrue(resolved["resolved"])

@@ -1160,7 +1160,7 @@ class BoardStore:
                 "runId",
                 "taskId",
                 "requestId",
-                "reason",
+                "note",
                 "requestedBy",
                 *schemas.CONTROL_FIELDS,
                 schemas.CONSOLE_AUTHORITY_FIELD,
@@ -1168,10 +1168,11 @@ class BoardStore:
             "task.cancel",
         )
         schemas.reject_untrusted_override(params)
-        reason = schemas.optional_string(params, "reason") or "operator request"
+        note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
+                if params.get("note") is not None else None)
         actor = {"role": "service" if initiator == "service" else "host",
                  "id": schemas.optional_string(params, "requestedBy") or "cli"}
-        request = {"selector": {k: params[k] for k in ("runId", "taskId", "requestId") if k in params}, "reason": reason}
+        request = {"selector": {k: params[k] for k in ("runId", "taskId", "requestId") if k in params}, "note": note}
         with self.db.write() as connection:
             if command_id:
                 receipt = self._receipt(connection, command_id, "task.cancel", request)
@@ -1193,7 +1194,7 @@ class BoardStore:
                         "task.cancelled",
                         task_id=task["task_id"],
                         revision=task["revision"] + 1,
-                        payload={"reason": reason, "actor": actor, "phase": "queued"},
+                        payload={"note": note, "actor": actor, "phase": "queued"},
                     )
                 else:
                     if task["state"] not in ("cancelling",):
@@ -1207,13 +1208,13 @@ class BoardStore:
                         task_id=task["task_id"],
                         attempt_id=attempt["attempt_id"] if attempt else None,
                         revision=task["revision"] + 1,
-                        payload={"reason": reason, "actor": actor},
+                        payload={"note": note, "actor": actor},
                     )
                 task = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task["task_id"],)).fetchone()
                 # A decision run is an ordinary cancellable task. Cancelling it marks
                 # the decision terminal in the same transaction, so a queued selection
                 # that is cancelled can never become a current recommendation.
-                self.decisions.cancelled(connection, task=task, reason=reason, now=now)
+                self.decisions.cancelled(connection, task=task, reason=note or "", now=now)
             response = {"task": self._decorate(connection, task), "alreadyTerminal": already}
             if command_id:
                 self._store_receipt(
@@ -1231,7 +1232,7 @@ class BoardStore:
 
         An attempt whose shutdown is unconfirmed keeps its resource claims and
         refuses to be retried. There is deliberately **no operator override**: a
-        written reason is not evidence of termination. Recovery releases the claim
+        written note is not evidence of termination. Recovery releases the claim
         only after verified process shutdown, or proof that no process was created.
         """
         schemas.reject_unknown(
@@ -1240,7 +1241,7 @@ class BoardStore:
                 "runId",
                 "taskId",
                 "requestId",
-                "reason",
+                "note",
                 "requestedBy",
                 *schemas.CONTROL_FIELDS,
                 schemas.CONSOLE_AUTHORITY_FIELD,
@@ -1248,10 +1249,11 @@ class BoardStore:
             "task.retry",
         )
         schemas.reject_untrusted_override(params)
-        reason = schemas.optional_string(params, "reason") or "explicit retry"
+        note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
+                if params.get("note") is not None else None)
         request = {
             "selector": {k: params[k] for k in ("runId", "taskId", "requestId") if k in params},
-            "reason": reason,
+            "note": note,
         }
         with self.db.write() as connection:
             if command_id:
@@ -1279,7 +1281,7 @@ class BoardStore:
                     "SHUTDOWN_UNCONFIRMED",
                     "The current attempt's shutdown is unconfirmed, so nothing is released and no replacement may "
                     "touch its resources. The worker that owns the process handle must reattach and report an "
-                    "observed outcome; a written reason is not evidence of termination.",
+                    "observed outcome; a written note is not evidence of termination.",
                     attemptId=attempt["attempt_id"],
                     retainedClaims=[claim["resource"] for claim in self._held_claims(connection)],
                 )
@@ -1330,7 +1332,7 @@ class BoardStore:
                 task_id=task["task_id"],
                 attempt_id=attempt["attempt_id"] if attempt else None,
                 revision=task["revision"] + 1,
-                payload={"reason": reason, "previousAttemptId": attempt["attempt_id"] if attempt else None},
+                payload={"note": note, "previousAttemptId": attempt["attempt_id"] if attempt else None},
             )
             task = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task["task_id"],)).fetchone()
             response = {"task": self._decorate(connection, task), "retry": True}

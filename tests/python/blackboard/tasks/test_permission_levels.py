@@ -35,7 +35,7 @@ class PermissionLevelsTests(WorkflowTestCase):
             with self.subTest(access=access):
                 kwargs = {'executionWorkspace': {'kind': 'existing', 'access': access}}
                 if reason:
-                    kwargs['executionWorkspace']['accessReason'] = reason
+                    kwargs['executionWorkspace']['accessNote'] = reason
                 with self.assertRaises(BoardError) as rejected:
                     self.submit(board, **kwargs)
                 self.assertEqual(rejected.exception.code, 'UNSUPPORTED_CAPABILITY')
@@ -48,7 +48,7 @@ class PermissionLevelsTests(WorkflowTestCase):
         for access, reason in [('full', 'Need system writes')]:
             kwargs = {'access': access}
             if reason:
-                kwargs['accessReason'] = reason
+                kwargs['accessNote'] = reason
             with self.assertRaises(BoardError) as rejected:
                 self.continue_run(board, view, **kwargs)
             self.assertEqual(rejected.exception.code, 'UNSUPPORTED_CAPABILITY')
@@ -77,7 +77,7 @@ class PermissionLevelsTests(WorkflowTestCase):
                 with self.assertRaises(BoardError) as rejected:
                     self.submit(board, request_id='full-' + adapter, adapter=adapter, **fields,
                                 executionWorkspace={'kind': 'existing', 'access': 'full',
-                                                    'accessReason': 'Exercise the existing connector permission gate'})
+                                                    'accessNote': 'Exercise the existing connector permission gate'})
                 self.assertEqual(rejected.exception.code, 'INVALID_ARGUMENT')
                 self.assertEqual(rejected.exception.details['field'], 'adapter')
                 self.assertIn('Micro tasks do not accept', rejected.exception.message)
@@ -94,25 +94,48 @@ class PermissionLevelsTests(WorkflowTestCase):
                 current = board.call('workflow_get', {'runId': view['runId']})
                 kwargs = {} if index == 3 else {'access': access}
                 if reason and index != 3:
-                    kwargs['accessReason'] = reason
+                    kwargs['accessNote'] = reason
                 self.continue_run(board, current, command_id=f'continue-{index}', **kwargs)
             claim = self.claim(board, run_id=view['runId'], claim_request_id=f'claim-{index}')
             self.assertIsNotNone(claim['claim'])
             workspace = claim['claim']['turn']['input']['executionWorkspace']
             self.assertEqual(workspace['access'], access)
-            self.assertEqual(workspace.get('accessReason'), reason)
+            self.assertEqual(workspace['version'], 3)
+            self.assertNotIn('accessNote', workspace)
+            self.assertNotIn('accessReason', workspace)
             self.finish_turn(board, claim, session_id=f'session-{index}')
         full = board.call('workflow_get', {'runId': view['runId'], 'includeAudit': True})
         turns = sorted(full['audit']['turns'], key=lambda turn: turn['turnIndex'])
-        self.assertEqual([(turn['access'], turn['accessReason']) for turn in turns], expected)
+        self.assertEqual([(turn['access'], turn['accessNote']) for turn in turns], expected)
         self.assertEqual(micro_task_brief(full)['access'], 'full')
         with board.store.db.read() as connection:
-            stored = connection.execute('SELECT access,access_reason FROM workflow_turns ORDER BY turn_index').fetchall()
+            stored = connection.execute('SELECT access,access_note FROM workflow_turns ORDER BY turn_index').fetchall()
             self.assertEqual([tuple(row) for row in stored], expected)
             changes = connection.execute("SELECT payload_json FROM events WHERE kind='workflow.access_changed' ORDER BY seq").fetchall()
             self.assertEqual([json.loads(row[0])['access'] for row in changes], ['write', 'full'])
-            self.assertEqual(json.loads(changes[-1][0])['accessReason'], 'Need system writes')
+            self.assertEqual(json.loads(changes[-1][0])['accessNote'], 'Need system writes')
             self.assertEqual(connection.execute("SELECT access FROM workspace_reservations WHERE state='held'").fetchone()[0], 'write')
+
+    def test_note_only_continuation_reuses_workspace_and_freezes_current_intent_note(self):
+        board = self.board()
+        original = self.claude_run(board, request_id='note-only', executionWorkspace={
+            'kind': 'existing', 'access': 'full', 'accessNote': 'Original explanation'})
+        manifest = self.workspace.manifest_for('note-only')
+        prepared = len(self.workspace.prepare_calls)
+        current = self.continue_run(board, original, access='full', accessNote='  Updated explanation  ')
+        claim = self.claim(board, run_id=original['runId'])
+        execution = claim['claim']['turn']['input']['executionWorkspace']
+        self.assertEqual(execution, manifest)
+        self.assertEqual(len(self.workspace.prepare_calls), prepared)
+        self.assertNotIn('accessNote', execution)
+        self.assertNotIn('accessReason', execution)
+        view = board.call('workflow_get', {'runId': original['runId']})
+        self.assertEqual(view['currentTurn']['accessNote'], '  Updated explanation  ')
+        self.assertEqual(current['accessNote'], '  Updated explanation  ')
+        with board.store.db.read() as connection:
+            row = connection.execute('SELECT access_note FROM workflow_turns WHERE run_id=?',
+                                     (original['runId'],)).fetchone()
+            self.assertEqual(row['access_note'], '  Updated explanation  ')
 
     def test_access_change_before_first_claim_uses_the_new_selection(self):
         board = self.board()
@@ -127,8 +150,8 @@ class PermissionLevelsTests(WorkflowTestCase):
     def test_continue_unknown_access_and_invalid_reason_are_rejected(self):
         board = self.board()
         view = self.submit(board)
-        for kwargs in ({'access': 'unknown'}, {'access': 'full'}, {'access': 'read', 'accessReason': 'Reason'},
-                       {'accessReason': 'Reason'}, {'access': 'full', 'accessReason': 'x' * 1001}):
+        for kwargs in ({'access': 'unknown'}, {'access': 'full'}, {'access': 'read', 'accessNote': 'Reason'},
+                       {'accessNote': 'Reason'}, {'access': 'full', 'accessNote': 'x' * 10001}):
             with self.subTest(kwargs=kwargs), self.assertRaises(BoardError) as rejected:
                 self.continue_run(board, view, **kwargs)
             self.assertEqual(rejected.exception.code, 'INVALID_ARGUMENT')
@@ -166,7 +189,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
                 board.call('workflow_continue', {
                     'runId': run_id, 'commandId': f'git-continue-{index}', 'expectedRevision': current['revision'],
                     **self.control(current), 'input': 'Continue at next permission', 'access': access,
-                    **({'accessReason': 'Need system writes'} if access == 'full' else {}),
+                    **({'accessNote': 'Need system writes'} if access == 'full' else {}),
                 })
             claim = self.claim(board, run_id, request_id=f'git-claim-{index}')
             self.assertIsNotNone(claim['claim'])
@@ -180,7 +203,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
             seal = git_workspace.seal(self.directory, manifest, run_id, attempt_id)
             self.finish_turn(board, claim, seal)
         with board.store.db.read() as connection:
-            turns = connection.execute('SELECT input_json,access,access_reason FROM workflow_turns ORDER BY turn_index').fetchall()
+            turns = connection.execute('SELECT input_json,access,access_note FROM workflow_turns ORDER BY turn_index').fetchall()
             self.assertEqual([json.loads(row[0])['executionWorkspace'] for row in turns], saved)
             self.assertEqual([row[1] for row in turns], ['write', 'read', 'full', 'write'])
             self.assertEqual([row[2] for row in turns], [None, None, 'Need system writes', None])
@@ -192,7 +215,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
         submitted = board.call('workflow_submit', {
             **BUDDY, 'requestId': 'permission-route-git', 'hostId': 'host-1', 'task': 'Full storage route',
             'cwd': str(self.repo), 'submissionToken': 't' * 32,
-            'executionWorkspace': {'kind': 'worktree', 'access': 'full', 'accessReason': 'Need system writes'},
+            'executionWorkspace': {'kind': 'worktree', 'access': 'full', 'accessNote': 'Need system writes'},
         })
         run_id = submitted['runId']
         self.controls[run_id] = submitted['control']

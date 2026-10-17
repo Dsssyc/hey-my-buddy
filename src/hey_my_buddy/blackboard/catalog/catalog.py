@@ -53,7 +53,6 @@ RETIRED_EFFORT_REASON = "catalog.effort-retired"
 CATALOG_FACT_REASONS = (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON, "catalog.native-unavailable")
 
 #: ADR-027 rule 3: how an operator refreshes harness catalogs and their readings.
-CATALOG_REMEDY = "Run hey-my-buddy harnesses with refresh:true"
 
 #: The one reason every catalog-caused refusal carries. The user's independent
 #: enabled gate keeps its own separate reason.

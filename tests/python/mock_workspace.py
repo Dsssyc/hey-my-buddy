@@ -67,13 +67,12 @@ class MockWorkspace:
         base = intent.get("base") if isinstance(intent.get("base"), dict) else {}
         base_commit = base.get("ref") or "a" * 40
         manifest = {
-            "version": 2,
+            "version": 3,
             "workspaceId": f"ws-{request_id}",
             "kind": kind,
             "path": path,
             **identity,
             "access": intent.get("access", "write"),
-            **({"accessReason": intent["accessReason"]} if intent.get("access") == "full" else {}),
             "baseCommit": base_commit,
             "inputCommit": sha256_text(f"input:{request_id}"),
             "inputTree": "c" * 40,
@@ -207,7 +206,7 @@ class MockWorkspace:
     # -- Host lifecycle surface: this double owns no disposable checkout -----
     def integration_verify(self, artifact, *, original_input=None, final_input=None, path=None, ref=None,
                            strategy="patch", before_commit=None, repository_id=None, checkout_id=None,
-                           adjusted_paths=None, host_paths=None, reason=None, _confirm_adjustments=False):
+                           adjusted_paths=None, host_paths=None, note=None, _confirm_adjustments=False):
         """The mock target carries the artifact only once its marker exists, or an
         explicit adjustment names the differing paths."""
         changed = [str(item) for item in (artifact.get("changedPaths") or [])]
@@ -225,7 +224,7 @@ class MockWorkspace:
             "matchingPaths": changed if carried else [],
             "differingPaths": [] if carried else [{"path": item} for item in changed],
             "missingPaths": [], "adjustments": sorted(set(adjusted_paths or ())),
-            "hostPaths": sorted(host_paths or ()), "unrecordedPaths": [], "reason": reason,
+            "hostPaths": sorted(host_paths or ()), "unrecordedPaths": [], "note": note,
         }
 
     def adopted_paths(self, state_dir, manifest):

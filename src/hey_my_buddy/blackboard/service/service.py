@@ -430,17 +430,18 @@ class BoardService(_BaseResource):
 
     def service_control(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            schemas.reject_unknown(params, {"action", "drainSeconds", "reason"}, "service.control")
+            schemas.reject_unknown(params, {"action", "drainSeconds", "note"}, "service.control")
             action = schemas.required_string(params, "action", max_length=32)
             if action not in ("stop", "restart", "status"):
                 raise BoardError("INVALID_ARGUMENT", "action must be 'stop', 'restart' or 'status'")
             if action == "status":
                 return {"action": "status", "control": dict(self.control)}
             drain = schemas.optional_int(params, "drainSeconds", 10, 0, 120)
-            reason = schemas.optional_string(params, "reason") or f"service {action} requested"
+            note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
+                    if params.get("note") is not None else None)
             if action == "stop":
-                return self.on_stop({"drainSeconds": drain, "reason": reason})
-            return self.on_restart({"drainSeconds": drain, "reason": reason})
+                return self.on_stop({"drainSeconds": drain, "note": note})
+            return self.on_restart({"drainSeconds": drain, "note": note})
 
         return self._guard("service.control", request_json, handler)
 

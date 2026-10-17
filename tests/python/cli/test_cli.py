@@ -210,7 +210,7 @@ class HelpTests(unittest.TestCase):
             "let the Router choose",
             "wait-timeout",
             "Accept one delivered artifact",
-            'adjusted":true (the note is the reason)',
+            'adjusted":true and a note',
             "conclude ends a failed, cancelled or delivered-but-unaccepted micro task",
             "conclude ends a failed, cancelled or delivered-but-unaccepted micro task",
             "hey-my-buddy get",
@@ -505,7 +505,7 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
         board = self.board()
         enable_fixture_buddy(board.store, BUDDY)
         lead = self.submit(board, request_id="lead", access="full", delegationAuthority=True,
-                           executionWorkspace={"kind": "existing", "access": "full", "accessReason": "Lead checks"})
+                           executionWorkspace={"kind": "existing", "access": "full", "accessNote": "Lead checks"})
         self.register(board)
         credential = self.claim(board)["claim"]["agentCredential"]
         self.use_board_transport(board)
@@ -573,7 +573,7 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
         # The named control file authorizes the micro-task mutation...
         code, cancelled = self.run_cli(
             "cancel",
-            json.dumps({"runId": run_id, "commandId": "cli-cancel-1", "reason": "host stop", "controlFile": submitted["controlFile"]}),
+            json.dumps({"runId": run_id, "commandId": "cli-cancel-1", "note": "host stop", "controlFile": submitted["controlFile"]}),
         )
         self.assertEqual(code, 0, cancelled)
         self.assertTrue(cancelled["cancelled"])

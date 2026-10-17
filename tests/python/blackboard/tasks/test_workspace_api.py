@@ -110,7 +110,7 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
             "conflictId": conflict["conflictId"], "action": "restore",
             "paths": ["outside.txt", "tracked.txt"],
             "observedFingerprint": conflict["observedFingerprint"],
-            "reason": "Restore the unauthorized paths while retaining the legal edit",
+            'note': "Restore the unauthorized paths while retaining the legal edit",
         }
         status, _headers, body = browser.command("workflow_workspace_resolve", {
             **resolution, "consoleAuthority": {"sessionId": "forged"},
@@ -130,7 +130,7 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
 
         scope = {"runId": resolved["runId"], "commandId": "http-amend",
                  "expectedRevision": resolved["revision"], "expectedScopeVersion": 1,
-                 "writeScope": ["src", "docs"], "reason": "Host authorized documentation changes for the next stage"}
+                 "writeScope": ["src", "docs"], 'note': "Host authorized documentation changes for the next stage"}
         status, _headers, body = browser.command("workflow_scope_amend", scope, csrf=csrf)
         self.assertEqual(status, 404, body)
         self.assertEqual(json.loads(body)["error"]["code"], "METHOD_NOT_FOUND")

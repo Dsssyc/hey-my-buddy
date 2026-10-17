@@ -165,7 +165,7 @@ class WorkflowTestCase(BoardTestCase):
         if extra.get("buddy") is not None:
             from support import enable_fixture_buddy
             enable_fixture_buddy(board.store, extra["buddy"])
-            extra.setdefault("reason", "Use the explicit fixture buddy for this continuation")
+            extra.setdefault("note", "Use the explicit fixture buddy for this continuation")
         params = {
             "runId": view["runId"],
             "commandId": command_id,
@@ -457,13 +457,13 @@ class LifecycleTests(WorkflowTestCase):
             view,
             view["activeRequest"]["requestId"],
             decision="decline",
-            reason="the plan is not acceptable; use the existing schema",
+            note="the plan is not acceptable; use the existing schema",
         )
         self.assertEqual(declined["state"], "executing")
         self.assertIsNone(declined["activeRequest"])
         second = self.claim(board, claim_request_id="c2")
         context = second["claim"]["turn"]["input"]["context"]
-        self.assertEqual(context["continuation"]["reason"], "the plan is not acceptable; use the existing schema")
+        self.assertEqual(context["continuation"]["note"], "the plan is not acceptable; use the existing schema")
         self.assertEqual(context["continuation"]["kind"], "helper")
 
     def test_decline_without_auto_continue_waits_for_host(self):
@@ -679,7 +679,7 @@ class LifecycleTests(WorkflowTestCase):
         child = approved["children"][0]["taskId"]
         helper_claim = self.claim(board, claim_request_id="c2", run_id=child)
         cancelled = board.call(
-            "workflow_cancel", {"runId": run_id, "reason": "stop", **self.control(approved)}
+            "workflow_cancel", {"runId": run_id, 'note': "stop", **self.control(approved)}
         )
         self.assertEqual(cancelled["state"], "cancelled")
         self.assertTrue(cancelled["cancelled"])
@@ -1326,7 +1326,7 @@ class LateCancellationTests(WorkflowTestCase):
         )
         child = approved["children"][0]["taskId"]
         helper_claim = self.claim(board, claim_request_id="c2", run_id=child)
-        board.call("workflow_cancel", {"runId": submitted["runId"], "reason": "stop", **self.control(approved)})
+        board.call("workflow_cancel", {"runId": submitted["runId"], 'note': "stop", **self.control(approved)})
         late = self.finish_turn(board, helper_claim)
         self.assertEqual(late["taskState"], "completed")
         child_view = board.call("workflow_get", {"runId": child})
@@ -1414,7 +1414,7 @@ class HelperAttentionResolutionTests(WorkflowTestCase):
             parent,
             request["requestId"],
             command_id="parent-answer-1",
-            reason="use the narrower approach",
+            note="use the narrower approach",
         )
         self.assertEqual(resolved["state"], "waiting-helpers")
         self.assertIsNone(resolved["activeRequest"])
@@ -1442,7 +1442,7 @@ class HelperAttentionResolutionTests(WorkflowTestCase):
             parent["activeRequest"]["requestId"],
             command_id="parent-answer-2",
             decision="decline",
-            reason="proceed without it",
+            note="proceed without it",
         )
         self.assertEqual(resolved["state"], "waiting-helpers")
         second = self.claim(board, claim_request_id="helper-c5", run_id=child)
@@ -1579,7 +1579,7 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         # the Host's opinion are recorded next to the immutable artifact.
         turned = board.call("workflow_get", {"runId": submitted["runId"]})
         continued = self.continue_run(board, turned, command_id="continue-1", input="address the review",
-                                      reason="not good enough")
+                                      note="not good enough")
         self.assertEqual(continued["state"], "executing")
         archived = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         # The delivered outcome is recorded as rejected, never silently carried
@@ -1594,13 +1594,13 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         )["events"]
         rejection = next(event for event in events if event["kind"] == "workflow.review_rejected")
         self.assertEqual(rejection["payload"]["artifactId"], output["artifactId"])
-        self.assertEqual(rejection["payload"]["reason"], "not good enough")
+        self.assertEqual(rejection["payload"]["note"], "not good enough")
         second = self.claim(board, claim_request_id="c2")
         self.finish_turn(board, second, session_id="sess-2")
         delivered = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(delivered["state"], "delivered")
         continued_again = self.continue_run(board, delivered, command_id="continue-2",
-                                            input="Fix the remaining defect", reason="second review")
+                                            input="Fix the remaining defect", note="second review")
         self.assertEqual(continued_again["task"]["reviewRejectionNote"], "second review")
         self.assertIsNotNone(continued_again["task"]["reviewRejectedAt"])
         self.assertIsNone(continued_again["task"]["acceptedAt"])
@@ -1625,7 +1625,7 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         submitted = self.submit(board)
         claim = self.claim(board)
         cancelled = board.call(
-            "workflow_cancel", {"runId": submitted["runId"], "reason": "stop", **self.control(submitted)}
+            "workflow_cancel", {"runId": submitted["runId"], 'note': "stop", **self.control(submitted)}
         )
         self.assertEqual(cancelled["state"], "cancelled")
         truncated = {"decisions": {"droppedItems": 2, "shortenedItems": 0}}
@@ -1758,7 +1758,7 @@ class HelperDependencyTests(WorkflowTestCase):
             parent,
             parent["activeRequest"]["requestId"],
             command_id="grant-a-1",
-            reason="use the dependency output",
+            note="use the dependency output",
             helpers=[
                 {
                     "requestId": "helper-c",
@@ -1882,7 +1882,7 @@ class CancellationCascadeTests(WorkflowTestCase):
         child = self._approve_helper(board, view, submitted, root)
         approved = board.call("workflow_get", {"runId": submitted["runId"]})
         cancelled = board.call(
-            "workflow_cancel", {"runId": submitted["runId"], "reason": "stop", **self.control(approved)}
+            "workflow_cancel", {"runId": submitted["runId"], 'note': "stop", **self.control(approved)}
         )
         self.assertEqual(cancelled["state"], "cancelled")
         child_view = board.call("workflow_get", {"runId": child})
@@ -1907,7 +1907,7 @@ class CancellationCascadeTests(WorkflowTestCase):
         parent = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(parent["activeRequest"]["kind"], "helper-attention")
         cancelled = board.call(
-            "workflow_cancel", {"runId": submitted["runId"], "reason": "stop", **self.control(parent)}
+            "workflow_cancel", {"runId": submitted["runId"], 'note': "stop", **self.control(parent)}
         )
         self.assertEqual(cancelled["state"], "cancelled")
         child_view = board.call("workflow_get", {"runId": child, "includeAudit": True})
@@ -1940,7 +1940,7 @@ class CancellationCascadeTests(WorkflowTestCase):
         self.assertEqual(nested["state"], "waiting-helpers")
         dependency = board.call("workflow_get", {"runId": child})["children"][0]["taskId"]
         cancelled = board.call(
-            "workflow_cancel", {"runId": submitted["runId"], "reason": "stop", **self.control(nested)}
+            "workflow_cancel", {"runId": submitted["runId"], 'note': "stop", **self.control(nested)}
         )
         self.assertEqual(cancelled["state"], "cancelled")
         for task_id in (child, dependency):
@@ -1960,7 +1960,7 @@ class CancellationCascadeTests(WorkflowTestCase):
         helper = self.claim(board, claim_request_id="c2", run_id=child)
         approved = board.call("workflow_get", {"runId": submitted["runId"]})
         cancelled = board.call(
-            "workflow_cancel", {"runId": submitted["runId"], "reason": "stop", **self.control(approved)}
+            "workflow_cancel", {"runId": submitted["runId"], 'note': "stop", **self.control(approved)}
         )
         self.assertEqual(cancelled["state"], "cancelled")
         child_view = board.call("workflow_get", {"runId": child})

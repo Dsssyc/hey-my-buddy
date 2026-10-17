@@ -147,7 +147,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual([p["buddyId"] for p in queued["input"]["buddies"]],
                          [BUDDY_ID, SECOND_BUDDY_ID])
         # The queued recommendation is cancelled through the ordinary task operation.
-        board.call("task_cancel", {"runId": first["runId"], "reason": "not needed"})
+        board.call("task_cancel", {"runId": first["runId"], 'note': "not needed"})
         self.assertEqual(self.decision(board, first["decisionId"])["status"], "cancelled")
         # The idempotent replay still resolves the same decision after it terminated.
         replayed = self.request(board)
@@ -419,7 +419,7 @@ class DecisionGateTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         request = self.request(board)
-        board.call("task_cancel", {"runId": request["runId"], "reason": "user cancelled the pending selection"})
+        board.call("task_cancel", {"runId": request["runId"], 'note': "user cancelled the pending selection"})
         self.assertEqual(self.decision(board, request["decisionId"])["status"], "cancelled")
         self.run_worker(board)
         self.assertEqual(board.call("task_get", {"runId": request["runId"]})["task"]["status"], "cancelled")
@@ -659,7 +659,7 @@ class DecisionFailureTests(DecisionTestCase):
         thread = threading.Thread(target=execution.run, daemon=True)
         thread.start()
         self.assertTrue(wait_for(lambda: self.readonly_start.called, timeout=20))
-        board.call("task_cancel", {"runId": request["runId"], "reason": "operator stopped it"})
+        board.call("task_cancel", {"runId": request["runId"], 'note': "operator stopped it"})
         execution.request_stop("unknown")
         thread.join(timeout=40)
         self.assertFalse(thread.is_alive(), "the worker did not observe the cancel")

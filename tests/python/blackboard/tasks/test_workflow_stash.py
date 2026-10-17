@@ -209,8 +209,8 @@ class SealFactPinningTests(WorkflowStashTestCase):
         self.assertEqual(lost["commit"], "a" * 40)
         self.assertEqual(lost["recoverCommand"], f"git stash store -m 'user'\\''s staged work' {'a' * 40}")
         self.assertEqual(lost["cause"], "unknown")
-        self.assertIn("unknown", summary["comparison"]["causeNote"])
-        self.assertIn("another session", summary["comparison"]["causeNote"])
+        self.assertNotIn("causeNote", summary["comparison"])
+        self.assertNotIn("partialNote", summary["comparison"])
         # The fixed get view carries the start fact on the turn and the whole
         # comparison on the pinned shared-refs artifact.
         view = board.call("workflow_get", {"runId": self.run_id})

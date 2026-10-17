@@ -134,7 +134,7 @@ class HostCutoverTests(WorkflowTestCase):
         control_bytes = control_file.read_bytes()
         request = {'runId': submitted['runId'], 'commandId': 'cutover-scope',
                    'expectedRevision': boundary['revision'], 'expectedScopeVersion': 1,
-                   'writeScope': ['src'], 'reason': 'Host reviewed', **control}
+                   'writeScope': ['src'], 'note': 'Host reviewed', **control}
         receipt = board.call('workflow_scope_amend', request)
         before = board.call('workflow_get', {'runId': submitted['runId']})
         board.store.db.close()

@@ -171,7 +171,7 @@ def probe(state: Path, target: Path) -> dict | None:
 
 def detach(state: Path, target: Path, *, contract_changed: bool = True) -> None:
     try:
-        command(state, target, 'restart', {'drainSeconds': 0, 'reason': 'coordinated installation'})
+        command(state, target, 'restart', {'drainSeconds': 0})
     except (BoardError, subprocess.SubprocessError):
         # A lost restart reply is not a stop receipt. The ownership locks below
         # must still be acquired before inspecting or restoring any state.

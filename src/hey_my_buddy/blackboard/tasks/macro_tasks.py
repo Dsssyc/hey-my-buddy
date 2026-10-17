@@ -869,7 +869,7 @@ def _markers(connection, run_ids: list[str]) -> list[dict]:
         actor = ({"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else
                  {"role": "host", "id": fallback_host} if fallback_host else None)
         details = [part for part in (text("decision"), text("verdict"), text("state"), text("strategy"),
-                                     text("reason")) if part]
+                                     text("note")) if part]
         markers.append({
             "seq": row["seq"],
             "runId": row["task_id"],

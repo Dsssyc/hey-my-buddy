@@ -110,6 +110,26 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertTrue(checkout.is_dir())
         self.assertEqual(result['removed'], [])
 
+    def test_old_full_manifest_checkout_is_proven_as_an_orphan(self):
+        current, checkout, _ = self.orphan()
+        old = dict(current, version=2, access='full', accessReason='Original Host explanation')
+        old['manifestSha256'] = workspace._sha(workspace._json({
+            key: value for key, value in old.items() if key != 'manifestSha256'}))
+        (checkout.parent / 'manifest.json').write_bytes(workspace._json(old))
+        request_path = checkout.parent / 'request.json'
+        request = json.loads(request_path.read_bytes())
+        request['version'] = 2
+        request['intent']['access'] = 'full'
+        request['intent']['accessReason'] = old['accessReason']
+        request_path.write_bytes(workspace._json(request))
+        planned = self.board_instance.call('storage_plan', {})
+        row = next(row for row in planned['candidates'] if row['path'] == str(checkout))
+        self.assertTrue(row['eligible'], row['reasons'])
+        self.assertTrue(row['orphan'])
+        result = self.apply(planned)
+        self.assertFalse(checkout.exists())
+        self.assertIn(str(checkout), [removed['path'] for removed in result['removed']])
+
     def test_public_integration_after_plan_blocks_removal(self):
         manifest, checkout, planned = self.orphan()
         self.accept_at_orphan(manifest, checkout)

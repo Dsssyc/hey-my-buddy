@@ -62,10 +62,23 @@ class TestAtomicity(BoardTestCase):
         client = board.client()
         cwd = self.workdir()
         task = board.submit_execution(requestId="atomic-2", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
-        client.cancel(runId=task["runId"], reason="test")
+        client.cancel(runId=task["runId"], note="test")
         kinds = [event["kind"] for event in board.store.events_read({"after": 0})["events"]]
         self.assertEqual(kinds, ["task.submitted", "task.cancelled"])
         self.assertEqual(client.get(runId=task["runId"])["status"], "cancelled")
+
+    def test_execution_cancel_records_only_the_supplied_note(self):
+        board = self.board()
+        first = board.submit_execution(requestId="cancel-note", task="do", cwd=str(self.workdir()),
+                                       adapter="command", argv=["/bin/true"])["task"]
+        board.store.task_cancel({"runId": first["runId"], "note": "Host asked to stop"})
+        second = board.submit_execution(requestId="cancel-without-note", task="do", cwd=str(self.workdir()),
+                                        adapter="command", argv=["/bin/true"])["task"]
+        board.store.task_cancel({"runId": second["runId"]})
+        cancelled = [event["payload"] for event in board.store.events_read({"after": 0})["events"]
+                     if event["kind"] == "task.cancelled"]
+        self.assertEqual([payload["note"] for payload in cancelled], ["Host asked to stop", None])
+        self.assertTrue(all("reason" not in payload for payload in cancelled))
 
     def test_reconnect_sees_only_committed_state_and_integrity_passes(self):
         board = self.board()
@@ -194,7 +207,7 @@ class TestConcurrency(BoardTestCase):
         attempt = claim["claim"]["attempt"]
         release_before_spawn(client, attempt["attemptId"], reason="test release")
         self.assertEqual(board.store.resource_claims(), [], "a released attempt frees its reservation")
-        client.retry(runId=task["runId"], reason="test retry")
+        client.retry(runId=task["runId"], note="test retry")
         claim_two = admit_execution(client, "a" * 32)
         self.assertIsNotNone(claim_two["claim"])
         self.assertEqual(claim_two["claim"]["attempt"]["generation"], 2)
@@ -220,7 +233,7 @@ class TestConcurrency(BoardTestCase):
         claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
         client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, {"status": "failed", "result": {"status": "nonzero"}, "shutdownConfirmed": True, "error": "boom"})
-        client.retry(runId=task["runId"], reason="again")
+        client.retry(runId=task["runId"], note="again")
         pass  # Admission is owned by the service.
         second = admit_execution(client, "b" * 32)["claim"]["attempt"]
         self.assertEqual(second["generation"], 2)
@@ -250,7 +263,7 @@ class TestConcurrency(BoardTestCase):
             board.call("task_acknowledge", {"runId": task["runId"], "note": "now accepted"})
         self.assertEqual(caught.exception.code, "CONFLICT")
 
-        retried = client.retry(runId=task["runId"], reason="revise output")
+        retried = client.retry(runId=task["runId"], note="revise output")
         self.assertIsNone(retried["reviewRejectedAt"])
         self.assertIsNone(retried["reviewRejectionNote"])
         events = board.call("events_read", {"runId": task["runId"], "after": 0})["events"]
@@ -712,7 +725,7 @@ class TestIdentity(BoardTestCase):
         pass  # Admission is owned by the service.
         first = admit_execution(client, "a" * 32)["claim"]["attempt"]
         release_before_spawn(client, first["attemptId"], reason="test")
-        client.retry(runId=task["runId"], reason="test")
+        client.retry(runId=task["runId"], note="test")
         pass  # Admission is owned by the service.
         second = admit_execution(client, "b" * 32)["claim"]["attempt"]
         self.assertEqual(second["generation"], 2)
@@ -783,7 +796,7 @@ class TestDelivery(BoardTestCase):
                         "two waits must occupy capacity and an overflow must be observed")
         # Mutations must stay responsive: renew, cancel and the result commit.
         client.progress(attempt["attemptId"], attempt["generation"], "a" * 32)
-        client.cancel(runId=task["runId"], reason="race")
+        client.cancel(runId=task["runId"], note="race")
         client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True})
         for thread in threads:
             thread.join(timeout=30)
@@ -800,7 +813,7 @@ class TestDelivery(BoardTestCase):
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
-        client.cancel(runId=task["runId"], reason="cancel then complete")
+        client.cancel(runId=task["runId"], note="cancel then complete")
         completed = client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True})
         self.assertEqual(completed["taskState"], "completed", "a confirmed completion is the one durable outcome")
         kinds = [event["kind"] for event in board.store.events_read({"after": 0})["events"]]

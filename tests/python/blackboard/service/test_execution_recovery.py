@@ -65,7 +65,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
     def restart(self, daemon):
         endpoint = _read_endpoint(self.directory)
         self.assertIsNotNone(endpoint)
-        reply = _request(endpoint, "service_control", {"action": "restart", "reason": "private recovery test"},
+        reply = _request(endpoint, "service_control", {"action": "restart", 'note': "private recovery test"},
                          state_dir=self.directory)
         self.assertTrue(reply["restarting"], reply)
         self.assertTrue(reply["executionsPreserved"], reply)
@@ -101,7 +101,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.assertEqual(attempt["processIdentity"], identity)
                 self.assert_retained(run_id, before["attemptId"])
                 code, response = self.cli("execution-cancel", json.dumps({
-                    "runId": run_id, "reason": "private test"}))
+                    "runId": run_id, "note": "private test"}))
                 self.assertEqual(code, 0, response)
                 finished = wait_for(lambda: self._finished(run_id), timeout=35)
                 self.assertIsNotNone(finished, self.client().get(runId=run_id))
@@ -197,7 +197,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.assertEqual(unknown["selectedAttempt"]["attemptId"], before["attemptId"])
                 self.assert_retained(run_id, before["attemptId"])
                 code, response = self.cli("execution-cancel", json.dumps({
-                    "runId": run_id, "reason": "frozen private execution"}))
+                    "runId": run_id, "note": "frozen private execution"}))
                 self.assertEqual(code, 0, response)
                 forced = wait_for(lambda: self.client().get(runId=run_id)["selectedAttempt"].get("forceRequestedAt"),
                                   timeout=35)

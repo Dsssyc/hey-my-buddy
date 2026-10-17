@@ -17,7 +17,7 @@ class RefusedResumeTests(WorkflowTestCase):
         if continuation_kind == "manual":
             self.continue_run(board, view, command_id="continue-" + suffix, input="Keep this exact continuation input.")
         else:
-            self.decide(board, view, view["activeRequest"]["requestId"], reason="Keep this approved input.")
+            self.decide(board, view, view["activeRequest"]["requestId"], note="Keep this approved input.")
         second = self.claim(board, claim_request_id="native-" + suffix)
         self.assertEqual(second["claim"]["turn"]["resumeMode"], "native-session")
         return board, submitted["runId"], second

@@ -8,9 +8,10 @@ import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.blackboard.tasks import workspace
+from hey_my_buddy.blackboard.tasks import workspace, macro_task_deletion_workspace
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -76,13 +77,28 @@ class WorkspaceTests(unittest.TestCase):
     def prepare(self, request="request", **updates):
         return workspace.prepare(self.state, request, self.intent(**updates))
 
+    def legacy_full_manifest(self, manifest):
+        legacy = dict(manifest, version=2, accessReason="Original Host explanation", access="full")
+        legacy["manifestSha256"] = workspace._sha(workspace._json({
+            key: value for key, value in legacy.items() if key != "manifestSha256"}))
+        directory = self.state / "workspaces" / legacy["workspaceId"]
+        (directory / "manifest.json").write_bytes(workspace._json(legacy))
+        request_path = directory / "request.json"
+        request = json.loads(request_path.read_bytes())
+        request["version"] = 2
+        request["intent"]["access"] = "full"
+        request["intent"].pop("accessNote", None)
+        request["intent"]["accessReason"] = legacy["accessReason"]
+        request_path.write_bytes(workspace._json(request))
+        return legacy
+
     def test_integrator_is_a_structured_identity_for_new_workspaces(self):
         for invalid in ("host:host-1", {}, {"role": "host"}, {"role": "worker", "id": "worker-1"},
                         {"role": "lead", "id": " "}, {"role": "host", "id": "host-1", "extra": True}):
             with self.subTest(integrator=invalid):
                 self.assert_error("INVALID_WORKSPACE", workspace._intent, self.intent(integrator=invalid))
         manifest = self.prepare(integrator={"role": "lead", "id": "lead-1"})
-        self.assertEqual(manifest["version"], 2)
+        self.assertEqual(manifest["version"], 3)
         self.assertEqual(manifest["integrator"], {"role": "lead", "id": "lead-1"})
         self.assertTrue(workspace.verify(manifest)["unchanged"])
 
@@ -100,6 +116,61 @@ class WorkspaceTests(unittest.TestCase):
             key: value for key, value in invalid_current.items() if key != "manifestSha256"
         })).hexdigest()
         self.assert_error("INVALID_WORKSPACE", workspace._validate_manifest, invalid_current)
+
+    def test_full_manifest_version_keeps_legacy_reason_only_in_historical_artifacts(self):
+        current = self.prepare(access="full", accessNote="Host approved this access")
+        self.assertEqual(current["version"], 3)
+        self.assertEqual(current["access"], "full")
+        self.assertNotIn("accessNote", current)
+        self.assertNotIn("accessReason", current)
+        self.assertTrue(workspace.verify(current)["unchanged"])
+        legacy = self.legacy_full_manifest(current)
+        self.assertTrue(workspace.verify(legacy)["unchanged"])
+        first = dict(legacy, version=1, integrator="host:host-1")
+        first["manifestSha256"] = workspace._sha(workspace._json({
+            key: value for key, value in first.items() if key != "manifestSha256"}))
+        self.assertTrue(workspace.verify(first)["unchanged"])
+        self.assert_error("INVALID_WORKSPACE", workspace._validate_manifest,
+                          dict(legacy, accessNote="renamed"))
+        self.assert_error("INVALID_WORKSPACE", workspace._validate_manifest,
+                          dict(current, accessReason="not in v3"))
+
+    def test_old_full_manifest_allocation_can_be_deleted(self):
+        current = self.prepare(access="full", accessNote="Host approved this access")
+        legacy = self.legacy_full_manifest(current)
+        checkout = Path(legacy["checkoutRoot"])
+        self.assertTrue(checkout.is_dir())
+        self.assertEqual(macro_task_deletion_workspace.delete_workspaces(
+            SimpleNamespace(directory=self.state), [legacy], []), [])
+        self.assertFalse(checkout.exists())
+
+    def test_v2_request_replays_without_changing_its_disk_records(self):
+        current = self.prepare()
+        directory = self.state / "workspaces" / current["workspaceId"]
+        old = dict(current, version=2)
+        old["manifestSha256"] = workspace._sha(workspace._json({
+            key: value for key, value in old.items() if key != "manifestSha256"}))
+        (directory / "manifest.json").write_bytes(workspace._json(old))
+        request_path = directory / "request.json"
+        request = json.loads(request_path.read_bytes())
+        request["version"] = 2
+        request_path.write_bytes(workspace._json(request))
+        before = {name: (directory / name).read_bytes() for name in ("request.json", "manifest.json")}
+        self.assertEqual(self.prepare(), old)
+        self.assertEqual({name: (directory / name).read_bytes() for name in before}, before)
+
+    def test_incomplete_v2_request_cannot_create_a_v3_manifest(self):
+        current = self.prepare()
+        directory = self.state / "workspaces" / current["workspaceId"]
+        (directory / "manifest.json").unlink()
+        request_path = directory / "request.json"
+        request = json.loads(request_path.read_bytes())
+        request["version"] = 2
+        request_path.write_bytes(workspace._json(request))
+        before = request_path.read_bytes()
+        self.assert_error("WORKSPACE_CONFLICT", self.prepare)
+        self.assertEqual(request_path.read_bytes(), before)
+        self.assertFalse((directory / "manifest.json").exists())
 
     def test_borrowed_setup_without_a_template_preserves_router_input_capture(self):
         from blackboard.routing.test_router import RouterInputTests

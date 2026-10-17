@@ -33,14 +33,17 @@ class RouterBoundaryTests(unittest.TestCase):
         self.assertEqual(params["controlFile"], "<saved-control-file>")
         self.assertEqual(params["buddy"], {key: CANDIDATE[key] for key in ("harness", "provider", "model", "effort")})
         self.assertTrue(params["input"])
-        self.assertTrue(params["reason"])
+        self.assertNotIn("note", params)
+        self.assertNotIn("reason", params)
         reroute = result["commands"]["reroute"]
         self.assertEqual(reroute["notBefore"], RETRY)
         self.assertEqual(reroute["method"], "continue")
         self.assertTrue(reroute["params"]["reroute"])
         self.assertNotIn("notBefore", reroute["params"])
+        self.assertNotIn("note", reroute["params"])
+        self.assertNotIn("reason", reroute["params"])
         # Validate the public parameter vocabulary, without a control-file read
-        # or any service/model call. Required input/reason are in the templates.
+        # or any service/model call. The Host supplies a note when selecting a buddy.
         from hey_my_buddy.cli.cli_help import method_help
         help_ = method_help("continue")
         self.assertTrue(help_)

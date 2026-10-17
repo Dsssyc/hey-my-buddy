@@ -18,7 +18,7 @@ class HostAdmissionTests(WorkflowTestCase):
         with self.assertRaises(BoardError) as caught:
             board.call("workflow_continue", {"runId": submitted["runId"], "commandId": "disabled-override",
                 "expectedRevision": submitted["revision"], "input": "Continue", "buddy": replacement,
-                "reason": "Try disabled buddy", **self.control(submitted)})
+                'note': "Try disabled buddy", **self.control(submitted)})
         self.assertEqual(caught.exception.code, "BUDDY_UNAVAILABLE")
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT enabled FROM buddies WHERE effort='high'").fetchone()[0], 0)
@@ -328,7 +328,7 @@ class HostCompletionTests(WorkflowTestCase):
         self.register(board)
         self.finish_turn(board, self.claim(board))
         delivered = board.call("workflow_get", {"runId": submitted["runId"]})
-        continued = self.continue_run(board, delivered, input="Address review", reason="Needs work")
+        continued = self.continue_run(board, delivered, input="Address review", note="Needs work")
         self.assertIsNotNone(continued["task"]["reviewRejectedAt"])
         self.assertEqual(continued["task"]["reviewRejectionNote"], "Needs work")
         for key in ("acceptedAt", "acceptanceNote", "acceptanceVerdict"):

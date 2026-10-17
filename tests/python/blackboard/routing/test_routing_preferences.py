@@ -438,14 +438,14 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
                 "expectedRevision": view["revision"], "input": "keep going", "helperPolicy": "keep",
                 "buddy": BUDDY, **self.control(view)})
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        updated = self.continue_run(board, view, buddy=BUDDY, reason="Host selected the installed buddy")
+        updated = self.continue_run(board, view, buddy=BUDDY, note="Host selected the installed buddy")
         self.assertEqual(updated["routing"]["source"], "host-override")
         self.assertNotIn("routingPreferences", updated["routing"])
         with board.store.db.read() as connection:
             row = connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.buddy_overridden'",
                                      (view["runId"],)).fetchone()
             payload = json.loads(row["payload_json"])
-        self.assertEqual(payload["reason"], "Host selected the installed buddy")
+        self.assertEqual(payload["note"], "Host selected the installed buddy")
         self.assertNotIn("routingPreferences", payload)
 
 

@@ -467,7 +467,7 @@ class InterruptionRecoveryTests(BoardTestCase):
 
     def test_service_stop_between_admission_and_creation_releases_as_cancelled(self):
         board, client, task, _, actor = self.claimed(identity=False)
-        board.store.task_cancel({'runId': task['taskId'], 'reason': 'service stop'}, initiator='service')
+        board.store.task_cancel({'runId': task['taskId'], 'note': 'service stop'}, initiator='service')
         board.store.release_execution(actor['attemptId'], reason='service stopped before execution launch')
         final = client.get(runId=task['taskId'])
         self.assertEqual(final['state'], 'cancelled')

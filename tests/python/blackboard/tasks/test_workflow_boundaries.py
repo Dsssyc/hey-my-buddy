@@ -36,7 +36,7 @@ class WorkflowBoundaryTests(WorkflowTestCase):
     def answer(self, board, root_id, command, **extra):
         view = self.view(board, root_id)
         return self.decide(board, view, view["activeRequest"]["requestId"], command_id=command,
-                           reason="Host supplied the requested direction", **extra)
+                           note="Host supplied the requested direction", **extra)
 
     def test_two_attention_helpers_remain_visible_and_parent_continues_once(self):
         board, root, (first, second) = self.parent_with_helpers(2)

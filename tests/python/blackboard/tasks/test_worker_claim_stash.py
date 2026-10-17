@@ -235,7 +235,7 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
                 self.assertEqual(view["state"], "delivered")
                 board.call("workflow_continue", {
                     "runId": target["runId"], "commandId": "host-requeue", "expectedRevision": view["revision"],
-                    "reason": "explicit private rejection and retry", "input": "repeat the fixture work",
+                    'note': "explicit private rejection and retry", "input": "repeat the fixture work",
                     **target["control"],
                 })
                 coordinator.prepare_continuation_workspace({"runId": target["runId"]})

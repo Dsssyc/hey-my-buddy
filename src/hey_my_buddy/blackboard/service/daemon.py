@@ -174,13 +174,13 @@ class Daemon:
 
     def on_stop(self, params: dict) -> dict:
         drain = int(params.get("drainSeconds", DRAIN_SECONDS_DEFAULT))
-        reason = params.get("reason", "service stop requested")
+        note = params.get("note")
         with self._admission_lock:
             self.control["stopping"] = True
-        atomic_json(self.stop_path, {"requestedAt": utc_now(), "reason": reason, "drainSeconds": drain})
-        micro_task, micro_task_task_ids = self.store.workflow.cancel_for_service_stop(f"service stop: {reason}")
-        queued = micro_task["queued"] + self.cancel_queued(reason, exclude=micro_task_task_ids)
-        active = micro_task["active"] + self.cancel_active(reason, exclude=micro_task_task_ids)
+        atomic_json(self.stop_path, {"requestedAt": utc_now(), "note": note, "drainSeconds": drain})
+        micro_task, micro_task_task_ids = self.store.workflow.cancel_for_service_stop(note)
+        queued = micro_task["queued"] + self.cancel_queued(note, exclude=micro_task_task_ids)
+        active = micro_task["active"] + self.cancel_active(note, exclude=micro_task_task_ids)
         if self.scheduler is not None:
             self.scheduler.send_pending_stops()
         unresolved = self.drain(drain)
@@ -191,10 +191,10 @@ class Daemon:
 
     def on_restart(self, params: dict) -> dict:
         drain = int(params.get("drainSeconds", DRAIN_SECONDS_DEFAULT))
-        reason = params.get("reason", "service restart requested")
+        note = params.get("note")
         with self._admission_lock:
             self.control["restart_requested"] = True
-        atomic_json(self.resume_path, {"requestedAt": utc_now(), "reason": reason,
+        atomic_json(self.resume_path, {"requestedAt": utc_now(), "note": note,
                                        "serviceId": self.service_id, "drainSeconds": drain})
         self.stopping.set()
         self.store.stop_waiters()
@@ -210,26 +210,26 @@ class Daemon:
             return self.console.status()
         return self.console.start()
 
-    def cancel_queued(self, reason: str, *, exclude: set[str] | None = None) -> int:
+    def cancel_queued(self, note: str | None, *, exclude: set[str] | None = None) -> int:
         count = 0
         for task in self.store.active_work()["queuedTasks"]:
             if exclude and task["taskId"] in exclude:
                 continue
             try:
-                self.store.task_cancel({"runId": task["taskId"], "reason": f"service stop: {reason}"},
+                self.store.task_cancel({"runId": task["taskId"], **({"note": note} if note else {})},
                                        initiator="service")
                 count += 1
             except BoardError:
                 continue
         return count
 
-    def cancel_active(self, reason: str, *, exclude: set[str] | None = None) -> int:
+    def cancel_active(self, note: str | None, *, exclude: set[str] | None = None) -> int:
         count = 0
         for attempt in self.store.active_work()["attempts"]:
             if exclude and attempt["taskId"] in exclude:
                 continue
             try:
-                self.store.task_cancel({"runId": attempt["taskId"], "reason": f"service stop: {reason}"},
+                self.store.task_cancel({"runId": attempt["taskId"], **({"note": note} if note else {})},
                                        initiator="service")
                 count += 1
             except BoardError:
@@ -305,7 +305,7 @@ def main() -> int:
     directory = Path(selected)
     daemon = Daemon(directory)
     for signum in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(signum, lambda *_args: daemon.on_stop({"drainSeconds": DRAIN_SECONDS_DEFAULT, "reason": "signal"}))
+        signal.signal(signum, lambda *_args: daemon.on_stop({"drainSeconds": DRAIN_SECONDS_DEFAULT}))
     try:
         return daemon.run()
     except BoardError as error:

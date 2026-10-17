@@ -4,7 +4,7 @@ A managed checkout shares ``refs/stash`` with the user's own worktrees, so the
 board freezes what existed before a turn and compares it at the seal boundary.
 These tests pin the observation itself (commit ids, full descriptions, SHA-1 and
 SHA-256 repositories, honest unknowns), the full-entry comparison with its
-recovery command and cause-unknown note, and the fact that stash changes never
+recovery command and unknown cause, and the fact that stash changes never
 interact with prepare/seal/verify. Every repository is a private fixture created
 by the test; no shared or daily board is touched.
 """
@@ -165,8 +165,8 @@ class SharedStashComparisonTests(unittest.TestCase):
         self.assertEqual(recorded["description"], "user's staged work")
         self.assertEqual(recorded["cause"], "unknown")
         self.assertEqual(recorded["recoverCommand"], f"git stash store -m 'user'\\''s staged work' {'a' * 40}")
-        self.assertIn("unknown", comparison["causeNote"])
-        self.assertIn("another session", comparison["causeNote"])
+        self.assertNotIn("causeNote", comparison)
+        self.assertNotIn("partialNote", comparison)
 
     def test_entries_are_compared_by_commit_and_description_together(self):
         same_commit = "a" * 40
@@ -256,7 +256,8 @@ class TruncatedObservationHonestyTests(StashInventoryTestCase):
         # the dropped entry really is gone from the whole shared stash.
         self.assertEqual(comparison["lostCount"], 1)
         self.assertEqual(comparison["lostEntries"][0]["commit"], dropped)
-        self.assertIn("causeNote", comparison)
+        self.assertNotIn("causeNote", comparison)
+        self.assertNotIn("partialNote", comparison)
 
 
 class StashChangesNeverGateWorkTests(StashInventoryTestCase):
@@ -376,7 +377,8 @@ class RealBoardClaimStashTests(StashInventoryTestCase):
         self.assertEqual(lost["commit"], oid)
         self.assertEqual(lost["description"], description)
         self.assertEqual(lost["cause"], "unknown")
-        self.assertIn("unknown", comparison["causeNote"])
+        self.assertNotIn("causeNote", comparison)
+        self.assertNotIn("partialNote", comparison)
         # The pinned record's digest is recomputable from its stored contents,
         # and the executed workspace manifest keeps its own separate digest.
         with board.store.db.read() as connection:

@@ -13,7 +13,7 @@ class LeadGrantTests(WorkflowTestCase):
         return {**BUDDY, "requestId": "lead", "hostId": "host", "task": "Integrate the work",
                 "submissionToken": "s" * 32,
                 "cwd": str(self.workdir()), "delegationAuthority": True,
-                "executionWorkspace": {"kind": "existing", "access": "full", "accessReason": "Lead checks"},
+                "executionWorkspace": {"kind": "existing", "access": "full", "accessNote": "Lead checks"},
                 **extra}
 
     def grant(self, board, **extra):

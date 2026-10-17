@@ -24,12 +24,5 @@ def for_run(connection, run_id: str) -> dict | None:
     if not isinstance(payload, dict):
         payload = {}
 
-    def bounded(key: str, limit: int) -> str | None:
-        value = payload.get(key)
-        if not isinstance(value, str):
-            return None
-        value = value.strip()
-        return value[:limit] if value else None
-
     actor = {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None
-    return {"actor": actor, "reason": bounded("reason", 4000)}
+    return {"actor": actor, "note": payload.get("note")}

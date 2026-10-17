@@ -273,5 +273,5 @@ class ConsoleForegroundTests(ConsoleTestCase):
                 if child.poll() is None:
                     child.terminate()
                     child.communicate(timeout=10)
-                self.cli('execution-cancel', json.dumps({'runId': task['runId'], 'reason': 'private test cleanup'}))
+                self.cli('execution-cancel', json.dumps({'runId': task['runId'], 'note': 'private test cleanup'}))
                 self.cli('await', json.dumps({'runId': task['runId'], 'waitSeconds': 15}))

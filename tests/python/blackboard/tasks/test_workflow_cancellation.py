@@ -31,7 +31,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
         return board, root, approved, approved["children"][0]["taskId"]
 
     def cancel(self, board, view):
-        return board.call("workflow_cancel", {"runId": view["runId"], "reason": "Host stopped this micro task", **self.control(view)})
+        return board.call("workflow_cancel", {"runId": view["runId"], 'note': "Host stopped this micro task", **self.control(view)})
 
     def reservations(self, board):
         with board.store.db.read() as connection:
@@ -151,9 +151,9 @@ class WorkflowCancellationTests(WorkflowTestCase):
         root_id = parent["runId"]
         reason = "Host took the remaining work"
         cancelled = board.call("workflow_cancel", {
-            "runId": root_id, "commandId": "actor-cancel-1", "reason": reason, **self.control(parent),
+            "runId": root_id, "commandId": "actor-cancel-1", 'note': reason, **self.control(parent),
         })
-        expected = {"actor": {"role": "host", "id": "host-1"}, "reason": reason}
+        expected = {"actor": {"role": "host", "id": "host-1"}, "note": reason}
         self.assertEqual(cancelled["cancellation"], expected)
         self.assertEqual(board.call("workflow_get", {"runId": root_id})["cancellation"], expected)
         self.assertEqual(board.call("workflow_get", {"runId": child})["cancellation"], expected)
@@ -164,11 +164,11 @@ class WorkflowCancellationTests(WorkflowTestCase):
 
         # A later explicit cancellation of the already fenced helper is not its
         # original cancellation, including when read through an old receipt.
-        board.store.workflow.cancel({"runId": child, "reason": "later console action"},
+        board.store.workflow.cancel({"runId": child, "note": "later console action"},
                                     console_authority={"sessionId": "later"})
         self.assertEqual(board.call("workflow_get", {"runId": child})["cancellation"], expected)
         replay = board.call("workflow_cancel", {
-            "runId": root_id, "commandId": "actor-cancel-1", "reason": reason, **self.control(parent),
+            "runId": root_id, "commandId": "actor-cancel-1", 'note': reason, **self.control(parent),
         })
         self.assertEqual(replay["cancellation"], expected)
 
@@ -178,9 +178,9 @@ class WorkflowCancellationTests(WorkflowTestCase):
         board, _, parent, _ = self.parent_and_child()
         root_id = parent["runId"]
         before = board.call("task_result", {"runId": root_id})
-        stopped = board.store.workflow.cancel({"runId": root_id, "reason": "Stopped from browser"},
+        stopped = board.store.workflow.cancel({"runId": root_id, "note": "Stopped from browser"},
                                               console_authority={"sessionId": "browser-1"})
-        expected = {"actor": {"role": "console", "id": "browser-1"}, "reason": "Stopped from browser"}
+        expected = {"actor": {"role": "console", "id": "browser-1"}, "note": "Stopped from browser"}
         self.assertEqual(stopped["cancellation"], expected)
         after = board.call("task_result", {"runId": root_id})
         self.assertEqual(after["result"], before["result"])
@@ -196,10 +196,10 @@ class WorkflowCancellationTests(WorkflowTestCase):
                 " WHERE seq=(SELECT MIN(seq) FROM events WHERE task_id=? AND kind='workflow.helper_cancelled')",
                 (child,),
             )
-        board.store.workflow.cancel({"runId": child, "reason": "later"},
+        board.store.workflow.cancel({"runId": child, "note": "later"},
                                     console_authority={"sessionId": "later"})
         self.assertEqual(board.call("workflow_get", {"runId": child})["cancellation"],
-                         {"actor": None, "reason": "Host stopped this micro task"})
+                         {"actor": None, "note": "Host stopped this micro task"})
 
     def test_new_cancellation_after_continuation_has_its_own_actor(self):
         board = self.board()
@@ -207,9 +207,9 @@ class WorkflowCancellationTests(WorkflowTestCase):
         cancelled = self.cancel(board, submitted)
         continued = self.continue_run(board, cancelled, input='Resume this cancelled micro task')
         self.assertIsNone(continued['cancellation'])
-        second = board.store.workflow.cancel({'runId': continued['runId'], 'reason': 'second stop'},
+        second = board.store.workflow.cancel({'runId': continued['runId'], 'note': 'second stop'},
                                             console_authority={'sessionId': 'second-browser'})
-        self.assertEqual(second['cancellation'], {'actor': {'role': 'console', 'id': 'second-browser'}, 'reason': 'second stop'})
+        self.assertEqual(second['cancellation'], {'actor': {'role': 'console', 'id': 'second-browser'}, 'note': 'second stop'})
 
     def test_long_valid_host_id_is_not_truncated_or_mislabelled(self):
         board = self.board()

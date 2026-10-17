@@ -74,12 +74,11 @@ def build_boundary(*, kind: str, code: str | None, reason: str, candidates: list
         for index, (candidate, identity) in enumerate(zip(candidates, identities)):
             choices.append({"buddyId": candidate["buddyId"], "method": "continue", "params": {
                 **base, "commandId": command_id("continue", index=index, identity=identity),
-                "buddy": identity, "reason": "Host 根据路由边界的冻结候选指定 buddy 继续"}})
+                "buddy": identity}})
     continue_reason = blocked or ("没有冻结的合法候选" if not choices else None)
     reroute_reason = blocked or ("尚无可知的 Router 恢复时间；可先读取 health 再决定" if retry_at is None else None)
     reroute_params = None if reroute_reason else {
-        **base, "commandId": command_id("reroute"), "reroute": True,
-        "reason": "在 Router 再试时间之后重新路由同一微任务"}
+        **base, "commandId": command_id("reroute"), "reroute": True}
     if (kind in ("router-unavailable", "routing-changed")
             and "取消后重新提交没有用" not in reason):
         reason += "；取消后重新提交没有用。"
