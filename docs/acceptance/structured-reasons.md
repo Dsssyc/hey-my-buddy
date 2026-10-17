@@ -25,3 +25,11 @@
 - **核对：** 差异读过。升级在日常看板的只读备份副本上跑过：0.035 秒，schema 25，完整性检查通过，外键检查为空；buddy 122 个没有原因，16 个是 `catalog.model-absent`；52 条目录读取记录删去 note、补上空的不可用内容，39 条固定警告删去（三种各 13 条）；4 条健康记录的 `reasonCode`、`remedy` 换成空的 `reason`。副本里含 `history.reason-unavailable` 字样的 10 个单元格都是 Host 的任务书与 Worker 的结果里引用这个代码的原文，属于内容，没有一条是转换出来的。合并后的 184 个文件 3101 项里只有 `blackboard/routing/test_stage2_review_scope.py` 失败，原因是会话删除那个微任务改了运行控制器，见[删除宏任务的验收记录](macro-task-deletion.md)，与本微任务无关。
 - **顺带项（下一个原因的微任务）：** 目录刷新失败时健康记为 `harness.launch-failed`，应记 `catalog.discovery-failed` 并带上错误码；`read_health` 读出时、探测合并时各补一次空的 `reason`，所有写入都已带着它，两处默认值删除；`run_execution.discover_models` 等待到期时仍写字符串原因 `native-metadata-wait-expired`，登记代码之后，`canonical_payload` 接受字符串原因与字符串警告的分支一并删除；`capability_report` 对从未探测过的 harness 编出 `harness.probe-failed`，应取健康记录的原因或 `harness.not-checked`。
 - **消耗：** 三个回合输入 1706 万，其中命中缓存 1680 万，输出 3.3 万。
+
+## 微任务 2a：系统请求
+
+- **拆分：** 2026-10-18，Host 给计划的第 2 项写说明之前清点了读写点，把它拆成 2a（系统请求）与 2b（备注与黑板的缺省句子），路由请求移到第 3 项（[计划](../design/structured-reasons-plan.md)第 6 节）。控制台的任务详情要求请求的 summary 与结论的 note 是字符串，所以 0.46.0 与批次三一起装。
+- **微任务：** “原因2a：系统请求”（run `c058d176`，Codex CLI `gpt-6.1-sol / high`，一个回合，17 分钟）。基点 `3efde4d3`，输出 `b6ad94e3`，合并在 `socu/batch2` 上（`92540af9`）。
+- **做了什么：** `workflow_requests.summary` 改为可空，加 `reason_code` 与 `reason_params_json`，CHECK 写明内容与原因两种形式互斥。工作区越界、继续准备失败、Lead 拒收与 helper 汇报经一个共用的写入函数写一个原因及其事实，不再写 summary、attempted、neededWork、expectedArtifacts、acceptance 这些程序句子；Lead 不再拼假的回合。自动续接被拒时，错误代码经一张六项的有限映射成为原因，映射之外的代码直接失败。代理照抄来源的形式。完整视图总有 summary 与 reason 两个键，恰好一个非空；时间线的等待片段给内容或原因；`workflow.lead_result_refused` 事件去掉理由句子。升级按现有标记转换存量，代理随来源转，Worker 的内容逐字不动，helper 汇报的代码认不出时升级失败。登记 10 个代码。路由请求照旧，由第 3 项改。
+- **核对：** 差异读过。两处行为变化接受：系统请求经 `_sync_boundary` 选当前请求，run 已有打开的当前请求时它不变（原来新请求顶替它）；这几种请求打开时多记一条 `workflow.boundary_updated`。升级在日常看板的只读备份副本上跑过：0.04 秒，schema 25，完整性检查通过，外键检查为空；44 条请求里 1 条工作区越界转成原因，43 条是 Worker 的内容，逐条对得上各自回合的结果，转换前后逐字不变，没有转成 `history.reason-unavailable` 的。合并后的完整检查 276 个文件 4325 项，只有 `install/test_first_install.py` 的 README 安装命令一项失败：批次二的版本已是 0.46.0，README 还写着 0.45.2，与本微任务无关，批次二合入整合分支时改。看板上已验收（`int-8933d008`），检出已回收。
+- **消耗：** 输入 781 万，其中命中缓存 760 万，输出 4.4 万。
