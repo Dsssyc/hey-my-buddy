@@ -142,7 +142,7 @@ C-Two 沿 BoardError 形状返回 `{"error":{"code":"...","message":"...","detai
 
 按 AGENTS 新建 `blackboard/store/upgrade.py`，只做 upgrade base 24 → 25；本批其他存储改动以后扩展同一个待做升级，不另开历史链。`db.SCHEMA_VERSION=25` 与新 DDL 同次修改；`Database._require_current_schema/initialize` 继续只认当前结构，启动不自动迁移。`install/upgrade.py:preflight/idle_snapshot/upgrade` 先按旧结构验证空闲与停止证据、做验证过的 24 备份，在已有独占安装/服务锁与停止旧服务后执行迁移事务，建空删除表、为旧 commands 补 deletion_id=NULL，最后写 schema_version=25；失败恢复完整 24 备份。不能先用新 SCHEMA_VERSION 的当前 preflight 拒掉 24，也不在打开旧库时顺便加表冒充升级。
 
-样板仍是 `tests/fixtures/upgrade-base/metadata.json` 指定的 0.42.0/90bd0148/schema 24；`tests/python/blackboard/store/upgrade_fixture.py:load_fixture` 先在私有根重绑定，再作为迁移输入。这次不把样板改成 25、不重生成基线。修改 `test_upgrade_fixture.py` 中“24 是当前”的断言，明确运行显式升级，再比较新建 25 的 sqlite_master/外键/索引/约束；未改变表逐行/指纹保持，commands 仅多 NULL 列，新删除表为空。`backup.database_snapshot`、`install.upgrade.verify_started` 按明确转换验证，不能一律要求旧指纹原样，也不能跳过保全检查。补迁移失败回滚、重复安装、非 24 输入拒绝、24 启动不写入、样板摘要不变。25 真在实际看板跑过后才按 AGENTS 消费本升级，更新基线提交并重新生成样板，由 Host 留验收证据。
+样板仍是 `tests/fixtures/upgrade-base/metadata.json` 指定的 0.42.0/90bd0148/schema 24；`tests/python/blackboard/store/upgrade_fixture.py:load_fixture` 先在私有根重绑定，再作为迁移输入。这次不把样板改成 25、不重生成基线。修改 `test_upgrade_fixture.py` 中“24 是当前”的断言，明确运行显式升级，再比较新建 25 的 sqlite_master/外键/索引/约束；未改变表逐行/指纹保持，commands 仅多 NULL 列，新删除表为空。安装沿用上一次升级的流程（`627d0f6c^` 的 `install/upgrade.py`）：先升级，再从升级后的看板取 `expected`，`verify_started` 照旧比对新服务启动前后；升级本身的正确性由样板升级测试与 Host 在日常副本上的演练证明，不在每次安装时另算一份转换后的指纹（Host 2026-10-17 审微任务 1 时改）。补迁移失败回滚、重复安装、非 24 输入拒绝、24 启动不写入、样板摘要不变。25 真在实际看板跑过后才按 AGENTS 消费本升级，更新基线提交并重新生成样板，由 Host 留验收证据。
 
 ## 8. 控制台入口与契约
 
