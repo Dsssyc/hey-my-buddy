@@ -1,4 +1,4 @@
-import { parseTimelineInstant } from "../macro-task-timeline-layout";
+import { parseTimelineInstant } from "../timeline/instant";
 import type { Steps } from "./steps";
 import type { Inquiry } from "./types";
 

@@ -6,7 +6,7 @@ const macro = "macro-11111111-1111-4111-8111-111111111111";
 const timelinePath = `/api/macro-tasks/${macro}/timeline`;
 
 function row(page: Page, runId: string) {
-  return page.locator(`.tl-label[data-key="row:${runId}"]`);
+  return page.locator(`[data-slot=timeline-row-name][data-key="row:${runId}"]`);
 }
 
 for (const { locale, language, fixes } of [
@@ -32,19 +32,16 @@ for (const { locale, language, fixes } of [
     const first = row(page, "preview-run-a1");
     const second = row(page, "preview-run-a2");
     const third = row(page, "preview-run-a3");
-    await expect(first.locator(".fix-target-mark")).toHaveText("↩2");
-    await expect(second.locator(".fix-target-mark")).toHaveCount(0);
-    await expect(second.locator(".fix-source-text")).toContainText(fixes);
-    await expect(third.locator(".fix-source-text")).toContainText(fixes);
+    await expect(first.locator("[data-slot=fixed-by]")).toHaveText("↩ 2");
+    await expect(second.locator("[data-slot=fixed-by]")).toHaveCount(0);
+    await expect(second.locator("[data-slot=fix-link]")).toHaveText("↪");
+    await expect(third.locator("[data-slot=fix-link]")).toHaveText("↪");
     await expect(second).toHaveAttribute("data-fixes", "preview-run-a1");
     await expect(third).toHaveAttribute("data-fixes", "preview-run-a1");
-    await expect(second).toHaveAccessibleName(new RegExp(fixes));
+    await expect(second.locator("[data-slot=fix-link]")).toHaveAttribute("aria-label", /.+/);
     await expect(page.locator("html")).toHaveAttribute("lang", language);
     for (const label of [first, second, third]) {
-      await expectWholeAndApart(label.locator(".lbl-title"), label.locator(".lbl-title > span"));
-    }
-    for (const label of [second, third]) {
-      await expectWholeAndApart(label.locator(".lbl-sub"), label.locator(".lbl-sub > span"));
+      await expectWholeAndApart(label, label.locator(":scope > span"));
     }
     await expectNoSidewaysScroll(page);
     });

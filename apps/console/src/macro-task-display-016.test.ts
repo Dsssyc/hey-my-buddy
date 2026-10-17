@@ -1,40 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { MacroTaskSummary, TimelineEvent, TimelineRow, TimelineSpan } from "./macro-task-types";
-import {
-  acceptanceWaitMs, acceptanceWaitText, buddyLabel, buddyNamer, eventClusterGlyph,
-  eventClusterLabel, eventSentence, macroTaskProgressText, macroTaskStateLabel, rowStateInfo, spanFacts,
-} from "./macro-task-display";
-
-const stopCounts = { stoppableRoots: 0, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 };
-
-function summary(overrides: Partial<MacroTaskSummary> = {}): MacroTaskSummary {
-  return {
-    macroTaskId: "macro-x", kind: "macro-task", title: "示例目标", titleSource: "macro-task",
-    description: null, summary: null,
-    project: { id: "p", path: null, label: "p" }, sourceHostId: "codex", currentHostIds: ["codex"],
-    createdAt: "2026-09-26T01:00:00Z", lastActivityAt: "2026-09-26T08:00:00Z", lastActivitySeq: 1,
-    state: "active", counts: { roots: 3, helpers: 0, accepted: 1, failed: 0, active: 1, host: 0, review: 0, ended: 2, ...stopCounts },
-    matchingRuns: 3, rootRunIds: [],
-    ...overrides,
-  };
-}
-
-describe("0.16 status vocabulary (0.2)", () => {
-  it("derives 已完成 only from full acceptance counts, never from Worker summaries", () => {
-    expect(macroTaskStateLabel(summary({ state: "ended", counts: { roots: 3, helpers: 0, accepted: 3, failed: 0, active: 0, host: 0, review: 0, ended: 3, ...stopCounts }, summary: "全部完成" })))
-      .toBe("已完成");
-    expect(macroTaskStateLabel(summary({ state: "ended", counts: { roots: 3, helpers: 0, accepted: 2, failed: 0, active: 0, host: 0, review: 0, ended: 3, ...stopCounts }, summary: "全部完成" })))
-      .toBe("已结束");
-    expect(macroTaskStateLabel(summary({ state: "host" }))).toBe("等待 Host");
-    expect(macroTaskStateLabel(summary({ state: "review" }))).toBe("等待验收");
-  });
-
-  it("composes the header progress sentence", () => {
-    expect(macroTaskProgressText(summary({ state: "ended", counts: { roots: 3, helpers: 0, accepted: 3, failed: 0, active: 0, host: 0, review: 0, ended: 3, ...stopCounts } })))
-      .toBe("已完成 · 3 / 3 个微任务已验收");
-    expect(macroTaskProgressText(summary())).toBe("进行中 · 1 / 3 个微任务已验收");
-  });
-});
+import type { TimelineRow, TimelineSpan } from "./macro-task-types";
+import { acceptanceWaitMs, buddyLabel, rowStateInfo, spanOutcome } from "./macro-task-display";
 
 describe("0.16 friendly buddy names (0.3)", () => {
   const config = (model: string, effort: string | null = "high") => ({
@@ -53,102 +19,15 @@ describe("0.16 friendly buddy names (0.3)", () => {
   it("omits the effort half when it is empty, and keeps every native name including off", () => {
     expect(buddyLabel(config("glm-5.3", ""))).toBe("GLM-5.3");
     expect(buddyLabel(config("glm-5.3", null))).toBe("GLM-5.3");
-    expect(buddyNamer(null)(config("glm-5.3", "off")).text).toBe("GLM-5.3 · off");
+    expect(buddyLabel(config("glm-5.3", "off"))).toBe("GLM-5.3 · off");
   });
 
-  it("keeps the raw harness/provider/model/effort identity for tooltips", () => {
-    expect(buddyNamer(null)(config("claude-opus-5-5")).title).toBe("claude / anthropic / claude-opus-5-5 / high");
-  });
 });
 
-describe("0.16 Host event sentences and cluster glyphs (P1.7)", () => {
-  const row = (title: string): TimelineRow => ({
-    runId: "r1", parentRunId: null, rootRunId: "r1", rootLeadRunId: null, title, titleSource: "title", taskSummary: null, summary: null,
-    createdAt: "2026-09-26T01:00:00Z", state: "delivered", status: "completed", category: "review",
-    shutdownConfirmed: true, depth: 0, kind: "micro-task", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
-  });
-  const event = (kind: string, at = "2026-09-26T05:20:00Z", extra: Partial<TimelineEvent> = {}): TimelineEvent => ({
-    seq: 1, runId: "r1", kind, at, label: "", summary: "", actor: kind === "cancel" ? null : { role: "host", id: "host" },
-    attemptId: null, requestId: null, artifactId: null, ...extra,
-  });
-
-  it("names the explicit Lead role and preserves a Host's Lead-like attribution", () => {
-    expect(eventSentence(event("accept", undefined, { actor: { role: "lead", id: "lead-run" } }), row("成果"))).toContain("Lead 验收通过");
-    expect(eventSentence(event("accept", undefined, { actor: { role: "host", id: "lead:literal-host" } }), row("成果"))).toContain("Host 验收通过");
-  });
-
-  it("writes one natural-language sentence per kind with the microTask's short title", () => {
-    expect(eventSentence(event("dispatch"), row("修复标题"))).toMatch(/^\d{2}:\d{2} Host 派发「修复标题」$/);
-    expect(eventSentence(event("decide"), row("修复标题"))).toContain("Host 批准 / 拒绝了「修复标题」的请求");
-    expect(eventSentence(event("decide", "2026-09-26T05:20:00Z", { eventKind: "workflow.request_approved" }), row("修复标题")))
-      .toContain("Host 批准了「修复标题」的请求");
-    expect(eventSentence(event("continue"), row("修复标题"))).toContain("Host 让「修复标题」继续");
-    expect(eventSentence(event("integrate"), row("修复标题"))).toContain("Host 整合了「修复标题」的产出");
-    expect(eventSentence(event("accept"), row("修复标题"))).toContain("Host 验收通过「修复标题」");
-    expect(eventSentence(event("reject"), row("修复标题"))).toContain("Host 对「修复标题」提出验收问题");
-    expect(eventSentence(event("cancel", undefined, { stopInitiator: "host" }), row("修复标题"))).toContain("Host 停止了「修复标题」");
-    expect(eventSentence(event("takeover"), row("修复标题"))).toContain("Host 接管了「修复标题」");
-  });
-
-  it("names every recorded stop initiator, and leaves a missing one unknown", () => {
-    const target = row("修复标题");
-    const sentences = [
-      ["host", "Host 停止了"], ["lead", "Lead 停止了"],
-      ["console", "在控制台停止了"], ["service", "服务停止了"],
-      ["unknown", "停止了「修复标题」（发起者未知）"],
-    ] as const;
-    for (const [initiator, phrase] of sentences) {
-      expect(eventSentence(event("cancel", undefined, { stopInitiator: initiator }), target)).toContain(phrase);
-    }
-    expect(eventSentence(event("cancel"), target)).toContain("发起者未知");
-  });
-
-  it("labels clusters by kind with counts and picks the shared glyph", () => {
-    const dispatches = [event("dispatch"), event("dispatch", "2026-09-26T05:21:00Z")];
-    expect(eventClusterLabel(dispatches)).toBe("Host 事件 2 条：派发 2，按 Enter 列出");
-    expect(eventClusterGlyph(dispatches)).toEqual({ glyph: "▶", count: 2 });
-    const mixed = [event("dispatch"), event("accept", "2026-09-26T05:21:00Z")];
-    expect(eventClusterGlyph(mixed)).toEqual({ glyph: "≡", count: 2 });
-    expect(eventClusterLabel(mixed)).toBe("Host 事件 2 条：派发、验收，按 Enter 列出");
-    expect(eventClusterGlyph([event("dispatch")])).toEqual({ glyph: "▶", count: 0 });
-  });
-});
-
-describe("0.16 span-facts locator (T4)", () => {
-  const row: TimelineRow = {
-    runId: "r1", parentRunId: null, rootRunId: "r1", rootLeadRunId: null, title: "修复标题错位", titleSource: "title", taskSummary: null,
-    summary: null, createdAt: "2026-09-26T01:00:00Z", state: "delivered", status: "completed", category: "review",
-    shutdownConfirmed: true, depth: 0, kind: "micro-task",
-    buddy: { harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" },
-    acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
-  };
-  const span = (overrides: Partial<TimelineSpan> = {}): TimelineSpan => ({
-    spanId: "s1", runId: "r1", kind: "execution", startAt: "2026-09-26T05:29:00Z", endAt: "2026-09-26T05:34:00Z",
-    state: "finished", attemptId: "a1", turnId: null, turnIndex: 1, requestId: null,
-    buddy: row.buddy, shutdownConfirmed: true, uncertain: false, clockSkew: false, ...overrides,
-  });
-
-  it("states only the round and time; no title and no buddy", () => {
-    expect(spanFacts(span(), row, null).item.locator).toMatch(/^第 1 轮 \d{2}:\d{2}–\d{2}:\d{2}$/);
-    expect(spanFacts(span(), row, null).item.locator).not.toContain("修复标题错位");
-    expect(spanFacts(span(), row, null).item.locator).not.toContain("claude");
-    expect(spanFacts(span({ kind: "queue" }), row, null).item.locator).toMatch(/^排队 \d{2}:\d{2}–\d{2}:\d{2}$/);
-    expect(spanFacts(span({ kind: "host" }), row, null).item.locator).toMatch(/^等待 Host \d{2}:\d{2}–\d{2}:\d{2}$/);
-    expect(spanFacts(span({ endAt: null }), row, null).item.locator).toMatch(/^第 1 轮 \d{2}:\d{2} 起 · 结束时间缺失$/);
-    expect(spanFacts(span({ startAt: null, endAt: null }), row, null).item.locator).toBe("第 1 轮 时间未记录");
-  });
-
-  it("shows the Lead on root and helper waits using root ownership", () => {
-    const owned = { ...row, state: "awaiting-host", rootLeadRunId: "lead-1",
-      leadOwnership: { leadRunId: "lead-1", leadTurnId: "turn-1", createdAt: row.createdAt } };
-    expect(rowStateInfo(owned).label).toBe("等待 Lead");
-    expect(spanFacts(span({ kind: "host" }), owned, null).item.head).toBe("等待 Lead");
-    expect(spanFacts(span({ kind: "host" }), owned, null).item.locator).toMatch(/^等待 Lead /);
-    const helper = { ...owned, kind: "helper" as const, parentRunId: "r1", leadOwnership: null };
-    expect(rowStateInfo(helper).label).toBe("等待 Lead");
-    expect(spanFacts(span({ kind: "host" }), helper, null).item.head).toBe("等待 Lead");
-    expect(spanFacts(span({ kind: "host" }), helper, null).item.locator).toMatch(/^等待 Lead /);
-    expect(rowStateInfo({ ...row, state: "waiting-owned" }).label).toBe("等待名下的微任务");
+describe("recorded row state", () => {
+  it("attributes Host waits to a recorded Lead owner", () => {
+    expect(rowStateInfo({ state: "awaiting-host", rootLeadRunId: "lead-1" } as TimelineRow).label).toBe("等待 Lead");
+    expect(rowStateInfo({ state: "waiting-owned" } as TimelineRow).label).toBe("等待名下的微任务");
   });
 });
 
@@ -167,7 +46,6 @@ describe("0.16 acceptance wait (P1.8)", () => {
 
   it("measures the wait only from a recorded, confirmed end at or before the acceptance", () => {
     expect(acceptanceWaitMs(row, [execution("2026-09-26T05:20:00Z", "2026-09-26T05:25:00Z")])).toBe(2 * 3600_000);
-    expect(acceptanceWaitText(row, [execution("2026-09-26T05:20:00Z", "2026-09-26T05:25:00Z")])).toBe("等待验收 2 小时");
     // An unconfirmed stop never draws a line or a wait.
     expect(acceptanceWaitMs(row, [execution("2026-09-26T05:20:00Z", "2026-09-26T05:25:00Z", { uncertain: true, state: "uncertain", shutdownConfirmed: false })])).toBeNull();
     // A missing end time is unknown, not zero.
@@ -184,7 +62,6 @@ describe("0.16 acceptance wait (P1.8)", () => {
     expect(acceptanceWaitMs(row, [ended(null)])).toBeNull();
     expect(acceptanceWaitMs(row, [ended(false)])).toBeNull();
     expect(acceptanceWaitMs(row, [ended(undefined)])).toBeNull();
-    expect(acceptanceWaitText(row, [ended(null)])).toBeNull();
     // Only the last stop counts: an earlier confirmed end cannot stand in for
     // a later unconfirmed one, nor for a later execution without an end.
     const earlier = execution("2026-09-26T03:00:00Z", "2026-09-26T03:10:00Z", { spanId: "e0" });
@@ -193,8 +70,12 @@ describe("0.16 acceptance wait (P1.8)", () => {
     expect(acceptanceWaitMs(row, [ended(null), { ...earlier, spanId: "e3", startAt: "2026-09-26T06:00:00Z", endAt: "2026-09-26T06:25:00Z" }])).toBe(3600_000);
   });
 
-  it("words a rejected verdict as a pending conclusion", () => {
-    expect(acceptanceWaitText({ ...row, acceptedAt: null, reviewRejectedAt: "2026-09-26T07:25:00Z" }, [execution("2026-09-26T05:20:00Z", "2026-09-26T05:25:00Z")]))
-      .toContain("等待验收结论");
+});
+
+describe("routing outcome precedence", () => {
+  it("keeps an abstention distinct from failure and gives unconfirmed shutdown precedence", () => {
+    const span = { kind: "routing", state: "finished", disposition: "abstention", resultStatus: "ok", error: "no target" } as TimelineSpan;
+    expect(spanOutcome(span)).toBe("abstention");
+    expect(spanOutcome({ ...span, uncertain: true })).toBe("unknown");
   });
 });

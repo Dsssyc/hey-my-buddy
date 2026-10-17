@@ -6,9 +6,7 @@ import { MacroTaskOverview } from "./MacroTaskOverview";
 import { TaskDetail } from "./task-detail/TaskDetail";
 import { createTaskDetailClient } from "./task-detail/client";
 import { task as microTask, workflow, audit } from "./task-detail/task-detail.fixtures";
-import { TimelineInspector } from "./TimelineInspector";
 import { macroTaskTimelineFixture } from "./macro-task-fixtures";
-import { rowLabelItem, spanFacts } from "./macro-task-display";
 import type { ConsoleApi } from "./api";
 
 afterEach(async () => { cleanup(); vi.restoreAllMocks(); await i18n.changeLanguage("zh"); });
@@ -35,35 +33,10 @@ describe("task identifiers and recorded attribution", () => {
     const api = { task: vi.fn(async () => task), command: vi.fn(async (operation: string, params: { includeAudit?: boolean }) => operation === "message_list" ? { messages: [] } : {
       ...workflow({ runId }), ...(params.includeAudit ? { audit: audit(), routingHistory: { entries: [], nextCursor: null } } : {}),
     }) } as unknown as ConsoleApi;
-    render(<TaskDetail client={createTaskDetailClient(api, "fixture")} runId={runId} timeline={null} timelineLoading={false}
+    render(<TaskDetail railTarget={null} client={createTaskDetailClient(api, "fixture")} runId={runId} timeline={null} timelineLoading={false}
       nowMs={Date.parse("2026-10-15T01:00:00Z")} step={1} origin={null} active onStep={vi.fn()} onBack={vi.fn()} onOpenRun={vi.fn()} />);
     await user.click(await screen.findByRole("button", { name: `复制标识 ${runId}` }));
     expect(write).toHaveBeenCalledWith(runId);
-  });
-
-  it("copies the selected run from inspector spans, whole tasks and retained facts", async () => {
-    const user = userEvent.setup();
-    const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
-    const timeline = macroTaskTimelineFixture();
-    const span = timeline.spans.find(span => span.spanId === "s-r1-e")!;
-    const item = spanFacts(span, timeline.rows[0], Date.parse(timeline.observedAt)).item;
-    const props = { selection: { type: "item" as const, key: item.key }, timeline, itemsByKey: new Map([[item.key, item]]),
-      truncatedEvents: false, onOpen: vi.fn(), onSelectItem: vi.fn(), onSelectRun: vi.fn(), onUnpin: vi.fn() };
-    const view = render(<TimelineInspector {...props} />);
-    await user.click(screen.getByRole("button", { name: "复制标识 r1" }));
-    expect(write).toHaveBeenLastCalledWith("r1");
-    view.rerender(<TimelineInspector {...props} timeline={{ ...timeline, spans: [] }} itemsByKey={new Map()} />);
-    expect(screen.getByText("记录在当前范围外")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "复制标识 r1" }));
-    expect(write).toHaveBeenLastCalledWith("r1");
-    const row = timeline.rows.find(row => row.runId !== "r1")!;
-    const rowItem = rowLabelItem(row);
-    view.rerender(<TimelineInspector {...props} selection={{ type: "run", runId: row.runId }}
-      itemsByKey={new Map([[rowItem.key, rowItem]])} />);
-    await user.click(screen.getByRole("button", { name: `复制标识 ${row.runId}` }));
-    expect(write).toHaveBeenLastCalledWith(row.runId);
-    expect(props.onOpen).not.toHaveBeenCalled();
-    expect(props.onSelectRun).not.toHaveBeenCalled();
   });
 
 });

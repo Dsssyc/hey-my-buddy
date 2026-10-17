@@ -347,7 +347,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await user.click(screen.getByRole("link", { name: "任务" }));
     await user.click(await screen.findByRole("button", { name: /只读微任务/ }));
     await waitFor(() => expect(document.querySelector('[data-key="row:readonly-task"]')).toBeTruthy());
-    await user.dblClick(document.querySelector('[data-key="row:readonly-task"]') as HTMLElement);
+    await user.click(document.querySelector('[data-key="row:readonly-task"]') as HTMLElement);
     await screen.findByRole("heading", { name: /只读微任务/ });
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
@@ -470,7 +470,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
       window.location.hash = "#tasks/run%3Abrowse-task/browse-task";
       render(<App suppliedApi={f.api} />);
       const detail = await screen.findByRole("region", { name: "微任务详情" });
-      await within(detail).findByRole("navigation", { name: "步骤" });
+      await screen.findByRole("navigation", { name: "步骤" });
       expect(await within(detail).findByText("协助 browse-task")).toBeTruthy();
       expect(within(detail).queryByRole("group", { name: "用户决定" })).toBeNull();
       expect(within(detail).queryByRole("group", { name: "手工接续" })).toBeNull();
@@ -497,7 +497,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     window.location.hash = "#tasks/run%3Agated-micro-task/gated-micro-task";
     render(<App suppliedApi={f.api} />);
     const detail = await screen.findByRole("region", { name: "微任务详情" });
-    await within(detail).findByRole("navigation", { name: "步骤" });
+    await screen.findByRole("navigation", { name: "步骤" });
 
     await readSnapshotOnForeground(f.api.snapshot);
     expect(await screen.findByText("连接中断")).toBeTruthy();

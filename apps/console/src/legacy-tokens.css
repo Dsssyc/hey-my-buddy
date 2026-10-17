@@ -1,11 +1,9 @@
 /* What the old stylesheet still reads, until it is deleted in F3 (ADR-029). Its
    names point at the one palette of tokens.css, so pages that have not moved yet
-   already wear the new colours. The colours by buddy and by preference have no
+   already wear the new colours. The colours by preference have no
    place in the new design and go with the pages that use them. */
 :root {
   --canvas: var(--paper);
-  --surface-raised: var(--sunk);
-  --detail-separator: var(--ink3);
   --subtle: var(--sunk);
   --muted: var(--ink2);
   --faint: var(--ink3);
@@ -28,13 +26,6 @@
   --edit-line: var(--line2);
   --edit-wash: var(--sunk);
   --radius: 4px;
-  --cfg-1: #9a5226;
-  --cfg-2: #3e6aa1;
-  --cfg-3: #2f7684;
-  --cfg-4: #7a5ba6;
-  --cfg-5: #9b4d6a;
-  --cfg-6: #5d6b3a;
-  --on-cfg: #ffffff;
   --pref-prefer: #2f5f9e;
   --pref-prefer-wash: #edf3fb;
   --pref-pin: #6a4a9c;
@@ -44,13 +35,6 @@
 }
 
 :root[data-theme="dark"] {
-  --cfg-1: #e0a276;
-  --cfg-2: #93b4e6;
-  --cfg-3: #7cc4cf;
-  --cfg-4: #bda3e6;
-  --cfg-5: #e39ab5;
-  --cfg-6: #b6c27f;
-  --on-cfg: #101512;
   --pref-prefer: #93b6ea;
   --pref-prefer-wash: #1c2533;
   --pref-pin: #c3a8ec;

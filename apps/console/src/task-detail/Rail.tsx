@@ -57,7 +57,7 @@ function Entry({ step, selected, index, last, onSelect, buddyName, lead, reminde
     index === 0 && "before:top-1/2", last && "before:bottom-1/2", step.pending && "before:left-[20.5px] before:border-l-2 before:border-dashed before:border-hand-mark")}>
     <button type="button" aria-current={selected ? "step" : undefined} data-step={index + 1}
       onClick={onSelect}
-      className="relative grid w-full grid-cols-[44px_minmax(0,1fr)_auto] items-baseline gap-x-2 gap-y-px py-[9px] pr-4 text-left outline-none transition-colors duration-150 motion-reduce:transition-none [--rail-ring:var(--paper)] hover:bg-sunk focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset aria-[current=step]:bg-live-wash aria-[current=step]:[--rail-ring:var(--live-wash)] aria-[current=step]:hover:bg-live-wash aria-[current=step]:after:absolute aria-[current=step]:after:inset-y-0 aria-[current=step]:after:left-0 aria-[current=step]:after:w-0.5 aria-[current=step]:after:bg-live">
+      className="relative grid w-full grid-cols-[44px_minmax(0,1fr)_auto] items-baseline gap-x-2 gap-y-px py-[9px] pr-4 text-left outline-none transition-colors duration-150 motion-reduce:transition-none [--rail-ring:var(--sunk)] hover:bg-card focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset aria-[current=step]:bg-live-wash aria-[current=step]:[--rail-ring:var(--live-wash)] aria-[current=step]:hover:bg-live-wash aria-[current=step]:after:absolute aria-[current=step]:after:inset-y-0 aria-[current=step]:after:left-0 aria-[current=step]:after:w-0.5 aria-[current=step]:after:bg-live">
       <Mark step={step} />
       <span className="font-medium">{name}</span>
       <span className="text-xs text-ink2 tabular-nums">{right}</span>

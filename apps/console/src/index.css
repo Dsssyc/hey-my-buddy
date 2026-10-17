@@ -46,6 +46,9 @@
   --color-fail: var(--fail);
   --color-fail-wash: var(--fail-wash);
   --color-past: var(--past);
+  --color-past-wash: var(--past-wash);
+  --color-ink: var(--ink);
+  --color-line: var(--line);
   --color-bar: var(--bar);
   --color-bar-ink: var(--bar-ink);
   --color-bar-ink2: var(--bar-ink2);

@@ -55,10 +55,10 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
   ];
   const startText = created === null ? t("unrecorded") : formatMomentMinutes(created, clock);
 
-  return <header data-slot="macro-overview-header" className="flex shrink-0 flex-col gap-2.5 border-b bg-card px-4 py-3 sm:px-6 min-[761px]:flex-row min-[761px]:items-start min-[761px]:gap-6 min-[761px]:pt-4.5 min-[761px]:pb-4">
-    <div className="flex min-w-0 flex-1 items-start gap-3 max-[760px]:block">
+  return <header data-slot="macro-overview-header" className="flex shrink-0 flex-col gap-2.5 border-b bg-card px-4 py-3 sm:px-6 @min-[700px]:flex-row @min-[700px]:items-start @min-[700px]:gap-6 @min-[700px]:pt-4.5 @min-[700px]:pb-4">
+    <div className="flex min-w-0 flex-1 items-start gap-3 @max-[700px]:block">
       {listToggle}
-      <Button type="button" variant="ghost" size="sm" onClick={onBackToList} className="mb-1 -ml-2 hidden max-[760px]:inline-flex">
+      <Button type="button" variant="ghost" size="sm" onClick={onBackToList} className="mb-1 -ml-2 hidden @max-[700px]:inline-flex">
         {t("back")}
       </Button>
       <div className="min-w-0 flex-1">
@@ -96,10 +96,10 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
         </dl>
       </div>
     </div>
-    <div className="flex min-w-0 shrink-0 items-start gap-4 max-[760px]:w-full max-[760px]:items-center min-[761px]:gap-10">
-      <dl data-slot="macro-overview-counts" className="flex flex-wrap gap-x-4 gap-y-1.5 max-[760px]:min-w-0 max-[760px]:flex-1 min-[761px]:gap-x-5">
-        {counts.filter(count => count.value > 0).map(count => <div key={count.key} data-slot={`macro-overview-count-${count.key}`} className="flex flex-col items-end gap-0.5 whitespace-nowrap max-[760px]:flex-row max-[760px]:items-center max-[760px]:gap-1.5">
-          <dd className={`text-lg font-semibold leading-tight tabular-nums max-[760px]:text-sm ${count.mark === "hand" ? "text-hand" : count.mark === "live" ? "text-live" : count.mark === "fail" ? "text-fail" : "text-ink"}`}>{formatNumber(count.value)}</dd>
+    <div className="flex min-w-0 shrink-0 items-start gap-4 @max-[700px]:w-full @max-[700px]:items-center @min-[700px]:gap-10">
+      <dl data-slot="macro-overview-counts" className="flex flex-wrap gap-x-4 gap-y-1.5 @max-[700px]:min-w-0 @max-[700px]:flex-1 @min-[700px]:gap-x-5">
+        {counts.filter(count => count.value > 0).map(count => <div key={count.key} data-slot={`macro-overview-count-${count.key}`} className="flex flex-col items-end gap-0.5 whitespace-nowrap @max-[700px]:flex-row @max-[700px]:items-center @max-[700px]:gap-1.5">
+          <dd className={`text-lg font-semibold leading-tight tabular-nums @max-[700px]:text-sm ${count.mark === "hand" ? "text-hand" : count.mark === "live" ? "text-live" : count.mark === "fail" ? "text-fail" : "text-ink"}`}>{formatNumber(count.value)}</dd>
           <dt className="flex items-center gap-1.5 text-xs text-ink2"><StateMark kind={count.mark} />{t(count.key === "host" ? "hostWait" : count.key)}</dt>
         </div>)}
       </dl>

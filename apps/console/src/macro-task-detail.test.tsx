@@ -135,12 +135,12 @@ const stopReplyFor = (macroTaskId: string) => ({ macroTaskId, duplicate: false,
 
 const openMacroTask = async (f: ReturnType<typeof harness>) => {
   await f.user.click(await screen.findByRole("button", { name: new RegExp(f.listed[0]!.title.slice(0, 10)) }));
-  await screen.findByRole("group", { name: "宏任务时间轴" });
+  await waitFor(() => expect(document.querySelector("[data-slot=timeline-axis]")).toBeTruthy());
 };
 // Layer mode opens details with Enter or a double click; a single click only pins.
 const openSpan = async (f: ReturnType<typeof harness>, key: string) => {
-  const surface = window.matchMedia?.("(max-width: 760px)").matches ? ".tl-list" : ".tl-scroll";
-  await f.user.dblClick(document.querySelector(`${surface} [data-key="span:${key}"]`) as HTMLButtonElement);
+  const surface = "[data-slot=timeline-tracks]";
+  await f.user.click(document.querySelector(`${surface} [data-key="span:${key}"]`) as HTMLButtonElement);
   await screen.findByRole("navigation", { name: "步骤" });
 };
 
@@ -173,46 +173,39 @@ describe("the detail of a micro task in its macro task", () => {
     expect(f.api.command).toHaveBeenCalledWith("message_list", { runId: "r2", limit: 200 }, "csrf");
     // The macro task's header stays, and so does the timeline, mounted under the detail.
     expect(screen.getByRole("heading", { name: "宏任务时间轴：设计、接口与实现" })).toBeTruthy();
-    expect(document.querySelector(".tl-grid")).toBeTruthy();
-    expect(document.querySelector(".timeline-view")!.className).toContain("hidden");
-    expect(detailOf().closest(".timeline-view")).toBeTruthy();
+    expect(document.querySelector("[data-slot=timeline-tracks]")).toBeTruthy();
+    expect(document.querySelector("[data-slot=timeline-tracks]")!.getAttribute("aria-hidden")).toBe("true");
+    expect(detailOf().closest("[data-slot=task-work]")).toBeTruthy();
   });
 
   it("opens from a row of the timeline on its first choice, and from a marker on the step of that marker", async () => {
     stubViewport(false);
     const f = harness();
     await openMacroTask(f);
-    await f.user.dblClick(document.querySelector('[data-key="row:r1"]') as HTMLButtonElement);
+    await f.user.click(document.querySelector('[data-key="row:r1"]') as HTMLButtonElement);
     await screen.findByRole("navigation", { name: "步骤" });
     expect(hashNow()).toMatch(/^#tasks\/macro-1\/r1\/\d+$/);
     expect(selectedStep()).toContain("回合 1");
-    await f.user.click(within(detailOf()).getByRole("button", { name: "时间轴" }));
-    await f.user.dblClick(document.querySelector('[data-key="span:s-r2-w"]') as HTMLButtonElement);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    await f.user.click(document.querySelector('[data-key="span:s-r2-w"]') as HTMLButtonElement);
     await screen.findByRole("navigation", { name: "步骤" });
     expect(selectedStep()).toContain("决定");
   });
 
-  it("returns to the timeline by button and by Escape, restoring focus, outline and the fixed idle blocks", async () => {
-    stubViewport(true);
+  it.each([false, true])("collapses by its row and Escape, returning focus to that row (narrow %s)", async narrow => {
+    stubViewport(narrow);
     const f = harness();
     await openMacroTask(f);
-    const idleCount = document.querySelectorAll(".idle-block").length;
-    expect(idleCount).toBeGreaterThan(0);
     await openSpan(f, "s-r1-e");
-    const span = document.querySelector('.tl-list [data-key="span:s-r1-e"]') as HTMLButtonElement;
-    await f.user.click(within(detailOf()).getByRole("button", { name: "时间轴" }));
+    await f.user.click(document.querySelector('[data-slot=task-names] [data-key="row:r1"]')!);
     await waitFor(() => expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull());
     expect(hashNow()).toBe("#tasks/macro-1");
-    expect(document.querySelector(".timeline-view")!.className).not.toContain("hidden");
-    expect(document.activeElement).toBe(span);
-    // Opening pinned the selection, so the outline survives the return.
-    expect(span.className).toContain("selected");
-    expect(document.querySelectorAll(".idle-block")).toHaveLength(idleCount);
-    // Reopen and return with Escape while focus is outside any field.
+    expect(document.activeElement?.getAttribute("data-key")).toBe("row:r1");
     await openSpan(f, "s-r1-e");
     fireEvent.keyDown(document.body, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull());
     expect(hashNow()).toBe("#tasks/macro-1");
+    expect(document.activeElement?.getAttribute("data-key")).toBe("row:r1");
   });
 
   it("goes back and forward through the browser's history: each opening and each return is a step, choosing a step is not", async () => {
@@ -229,7 +222,7 @@ describe("the detail of a micro task in its macro task", () => {
     await traverse("back");
     await waitFor(() => expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull());
     expect(hashNow()).toBe("#tasks/macro-1");
-    expect(document.querySelector(".tl-grid")).toBeTruthy();
+    expect(document.querySelector("[data-slot=timeline-tracks]")).toBeTruthy();
     await traverse("forward");
     await screen.findByRole("navigation", { name: "步骤" });
     expect(hashNow()).toBe("#tasks/macro-1/r2/1");
@@ -258,7 +251,7 @@ describe("the detail of a micro task in its macro task", () => {
     window.history.replaceState(null, "", "#tasks/macro-1/r-gone");
     const f = harness();
     expect((await screen.findByRole("alert")).textContent).toContain("Unknown run: r-gone");
-    await f.user.click(within(detailOf()).getByRole("button", { name: "时间轴" }));
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(hashNow()).toBe("#tasks/macro-1");
     cleanup();
     window.history.replaceState(null, "", "#tasks/macro-1/r7");
@@ -306,9 +299,9 @@ describe("the detail of a micro task in its macro task", () => {
     await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("r3", expect.any(AbortSignal)));
     await waitFor(() => expect(hashNow()).toMatch(/^#tasks\/macro-1\/r3\/\d+$/));
     expect(screen.getByRole("heading", { name: "宏任务时间轴：设计、接口与实现" })).toBeTruthy();
-    await f.user.click(within(detailOf()).getByRole("button", { name: "时间轴" }));
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(hashNow()).toBe("#tasks/macro-1");
-    expect(document.querySelector(".tl-grid")).toBeTruthy();
+    expect(document.querySelector("[data-slot=timeline-tracks]")).toBeTruthy();
   });
 
   it("keeps every read working in a read-only session with the stop action disabled, and asks the board for reads alone", async () => {
@@ -335,25 +328,27 @@ describe("the detail of a micro task in its macro task", () => {
     await openSpan(f, "s-r2-r");
     expect(selectedStep()).toContain("路由");
     await f.user.click(within(railOf()).getByRole("button", { name: /^委派/ }));
-    await f.user.click(within(detailOf()).getByRole("button", { name: "时间轴" }));
+    fireEvent.keyDown(document.body, { key: "Escape" });
     await openSpan(f, "s-r2-r");
     expect(selectedStep()).toContain("路由");
     expect(hashNow()).toBe("#tasks/macro-1/r2/2");
   });
 
-  it("never opens a detail by a single click: the inspector pins instead", async () => {
-    stubViewport(true);
+  it("opens a row with one click, and switches rows while its detail is open", async () => {
+    stubViewport(false);
     const f = harness();
     await openMacroTask(f);
-    await f.user.click(document.querySelector('[data-key="span:s-r2-e1"]') as HTMLButtonElement);
-    expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull();
-    expect(hashNow()).toBe("#tasks/macro-1");
-    const inspector = document.querySelector(".inspector-dock-title") as HTMLElement;
-    expect(inspector.textContent).toContain("执行片段");
-    await f.user.click(document.querySelector('[data-key="row:r1"]') as HTMLButtonElement);
-    expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull();
-    expect(document.querySelector(".inspector-dock-title")!.textContent).toContain("整项微任务");
+    const row = document.querySelector('[data-key="row:r1"]')!;
+    await f.user.click(row);
+    await screen.findByRole("navigation", { name: "步骤" });
+    expect(hashNow()).toMatch(/^#tasks\/macro-1\/r1\/\d+$/);
+    expect(document.querySelector('[data-key="row:r1"]')).toBe(row);
+    await f.user.click(document.querySelector('[data-key="row:r2"]')!);
+    await waitFor(() => expect(hashNow()).toMatch(/^#tasks\/macro-1\/r2\/\d+$/));
+    expect(document.querySelector('[data-key="row:r1"]')).toBe(row);
+    expect(document.querySelector('[data-key="row:r2"]')!.getAttribute("aria-expanded")).toBe("true");
   });
+
 });
 
 describe("macro-task-level stop (0.15.1 U4)", () => {

@@ -25,7 +25,7 @@ async function openLeadMacro(page: Page, language: string, tasks: string) {
 }
 
 function row(page: Page, runId: string) {
-  return page.locator(`.tl-label[data-key="row:${runId}"]`);
+  return page.locator(`[data-slot=timeline-row-name][data-key="row:${runId}"]`);
 }
 
 /** The model suffix may ellipsize; the complete state must fit before it. */
@@ -74,43 +74,25 @@ for (const { locale, language, tasks } of [
       for (const [runId, state] of [[LEAD, ownedState], [WAITING, leadState]]) {
         const label = row(page, runId);
         await expect(label).toHaveAccessibleName(new RegExp(state));
-        await expectReadableStart(label.locator(".lbl-sub"), state);
+        await expectReadableStart(label.locator(":scope > span:last-child > span"), state);
         await expectWholeAndApart(label, label.locator(":scope > span"));
       }
 
-      const wait = row(page, WAITING).locator("..").locator(".sp.wait");
-      await expect(wait).toHaveAccessibleName(new RegExp(leadState));
-      await expectReadableStart(wait.locator(".sp-text"), leadState);
-      await wait.focus();
-      await expect(wait).toBeFocused();
-      await wait.press(" ");
-      const expand = page.getByRole("button", { name: zh ? "展开检查器" : "Expand inspector", exact: true });
-      await expand.focus();
-      await expand.press("Enter");
-      await expect(page.locator(".inspector-dock-toggle")).toHaveAttribute("aria-expanded", "true");
-      const card = page.locator(".inspector-card");
-      await expect(card.locator(".inspector-field").filter({ hasText: zh ? "类型" : "Type" }).locator("dd")).toHaveText(leadState);
-      const waitHeading = await card.locator(".inspector-card-head > strong").textContent();
-      await settle(page);
-      await expectWholeAndApart(card, card.locator(":scope > div, :scope > dl"));
-      await expectTextUncut(card.locator("dt, dd"));
-
       await row(page, LEAD).focus();
-      await row(page, LEAD).press(" ");
-      await expectReadableStart(card.locator(".inspector-field").filter({ hasText: zh ? "结果" : "Result" }).locator("dd"), ownedState);
+      await expect(page.locator("[data-slot=timeline-status]")).toContainText(ownedState);
       await row(page, WAITING).focus();
       await row(page, WAITING).press("Enter");
       // Enter opens the micro task on the decision it waits for: the Lead's, with the request as recorded.
       const detail = page.locator("[data-slot=task-detail]");
       await expect(detail).toBeVisible();
-      await expect(detail.locator("[data-slot=detail-rail] [aria-current=step]")).toContainText("Lead");
+      await expect(page.locator("[data-slot=detail-rail] [aria-current=step]")).toContainText("Lead");
       const request = detail.locator("[data-slot=detail-pane]");
       await expect(request).toContainText("需要 Lead 决定路径样例的核对范围");
       await expect(request).toContainText("由 Lead 确定后续核对范围");
       await expectTextUncut(request.locator("h3, dt, dd, p"));
       await expectNoSidewaysScroll(page);
       expect(errors).toEqual({ page: [], console: [] });
-      expect(waitHeading, "the inspector heading must identify the same Lead wait as its type field").toBe(leadState);
+
     });
 
     test("confirms the Lead's macro task stop scope and keeps the real read-only refusal honest", async ({ page }) => {
@@ -179,8 +161,8 @@ for (const { locale, language, tasks } of [
       expect(unchanged.status()).toBe(200);
       expect(unchanged.headers()["x-hey-my-buddy-preview"]).toBe("synthetic-fixture-data");
       expect(await unchanged.text()).toBe(body);
-      await expectReadableStart(row(page, LEAD).locator(".lbl-sub"), zh ? "等待名下的微任务" : "Waiting for owned micro tasks");
-      await expectReadableStart(row(page, WAITING).locator(".lbl-sub"), zh ? "等待 Lead" : "Waiting for Lead");
+      await expectReadableStart(row(page, LEAD).locator(":scope > span:last-child > span"), zh ? "等待名下的微任务" : "Waiting for owned micro tasks");
+      await expectReadableStart(row(page, WAITING).locator(":scope > span:last-child > span"), zh ? "等待 Lead" : "Waiting for Lead");
       await page.getByRole("button", { name: zh ? "知道了" : "Dismiss", exact: true }).click();
       await expect(status).toHaveCount(0);
       await more.click();

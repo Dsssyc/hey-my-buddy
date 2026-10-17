@@ -27,7 +27,7 @@ const timeline = (overrides: Partial<MacroTaskTimeline> = {}): MacroTaskTimeline
 const interval = (start: number, end: number) => ({ startMs: ms(start), endMs: ms(end) });
 const input = (end: number, busy: number[][], instants: number[] = [], canFold = true): ScaleInput => ({
   domain: interval(0, end), busy: busy.map(([start, end]) => interval(start!, end!)),
-  instants: [...new Set([0, end, ...busy.flat(), ...instants])].map(ms), canFold, nowMs: ms(end),
+  instants: [...new Set([0, end, ...busy.flat(), ...instants])].map(ms), canFold, nowAtEnd: false,
 });
 
 describe("createTimelineScale", () => {
@@ -86,6 +86,12 @@ describe("createTimelineScale", () => {
     }
   });
 
+  it("keeps a wait-only manual scale proportional even if folding was requested", () => {
+    const scale = createTimelineScale(input(120, [], [30, 60]), 600, 100);
+    expect(scale.breaks).toEqual([]);
+    expect(scale.toX(ms(60))).toBeCloseTo(scale.widthPx / 2);
+  });
+
   it("round-trips both coordinates through real intervals and break interiors", () => {
     const facts = input(10000, [[0, 1.7], [501.2, 505.4], [9997.3, 10000]], [800, 2000]);
     for (const ppm of [undefined, 0.1, 10, 100]) {
@@ -101,18 +107,38 @@ describe("createTimelineScale", () => {
     }
   });
 
-  it("compresses an ongoing wait-only domain, preserving the wait's endpoint bindings", () => {
+  it("keeps an ongoing wait-only domain proportional, preserving the wait's endpoint bindings", () => {
     const facts = timelineScaleInput(timeline({ spans: [span({
       kind: "host", startAt: at(10), endAt: null, state: "open", shutdownConfirmed: null,
-    })] }), ms(120));
+    })] }));
     const scale = createTimelineScale(facts, 600);
     expect(facts.busy).toEqual([]);
-    expect(scale.breaks).toEqual([{ ...interval(10, 120), startX: 0, endX: 54 }]);
+    expect(facts.canFold).toBe(false);
+    expect(facts.nowAtEnd).toBe(true);
+    expect(scale.breaks).toEqual([]);
+    expect(scale.widthPx).toBe(600);
     expect(scale.toX(ms(10))).toBe(0);
     expect(scale.toX(ms(120))).toBe(scale.widthPx);
     expect(scale.toTime(0)).toBe(ms(10));
     expect(scale.toTime(scale.widthPx)).toBe(ms(120));
-    expect(scale.toX(ms(65))).toBe(27);
+    expect(scale.toX(ms(65))).toBe(300);
+  });
+
+  it("never folds queue and Host waits with a marker but no execution, even at manual zoom", () => {
+    const facts = timelineScaleInput(timeline({
+      spans: [
+        span({ kind: "queue", state: "queued", startAt: at(0), endAt: at(30), shutdownConfirmed: null }),
+        span({ kind: "host", state: "open", startAt: at(30), endAt: null, shutdownConfirmed: null }),
+      ],
+      events: [event(60)],
+    }));
+    expect(facts.busy).toEqual([]);
+    expect(facts.canFold).toBe(false);
+    for (const ppm of [undefined, 100]) {
+      const scale = createTimelineScale(facts, 600, ppm);
+      expect(scale.breaks).toEqual([]);
+      expect(scale.toX(ms(60))).toBeCloseTo(scale.widthPx / 2);
+    }
   });
 
   it("reserves 64px for proportional time when breaks overflow the window", () => {
@@ -203,7 +229,7 @@ describe("timeline ticks", () => {
   });
 
   it("spaces labels by 72px and keeps regular labels 72px from now", () => {
-    const scale = createTimelineScale(input(20, [[0, 20]]), 600, 30);
+    const scale = createTimelineScale({ ...input(20, [[0, 20]]), nowAtEnd: true }, 600, 30);
     const labels = scale.ticks.filter(tick => tick.labeled);
     expect(labels.map(tick => (tick.atMs - BASE) / MINUTE)).toEqual([0, 4, 8, 12, 16]);
     for (let i = 1; i < labels.length; i += 1) {
@@ -211,6 +237,8 @@ describe("timeline ticks", () => {
       expect(scale.widthPx - scale.toX(labels[i]!.atMs)!).toBeGreaterThanOrEqual(72);
     }
     expect(scale.ticks).toContainEqual({ atMs: ms(18), labeled: false });
+    const finished = createTimelineScale(input(20, [[0, 20]]), 600, 30);
+    expect(finished.ticks).toContainEqual({ atMs: ms(20), labeled: true });
   });
 
   it("aligns integer multiples to local midnight, including fractional timezone offsets", () => {
@@ -232,36 +260,86 @@ describe("timeline ticks", () => {
 });
 
 describe("timelineScaleInput", () => {
+  it("extends a delivered row's confirmed execution to observedAt for its open acceptance wait", () => {
+    const row = { ...macroTaskTimelineFixture().rows[0]!, runId: "run", state: "delivered",
+      acceptedAt: null, reviewRejectedAt: null };
+    const facts = timelineScaleInput(timeline({ rows: [row] }));
+    expect(facts.domain).toEqual(interval(0, 120));
+    expect(facts.instants).toEqual([ms(0), ms(10), ms(120)]);
+    expect(facts.nowAtEnd).toBe(true);
+    expect(facts.canFold).toBe(true);
+    expect(createTimelineScale(facts, 600).breaks).toEqual([
+      { ...interval(10, 120), startX: 546, endX: 600 },
+    ]);
+  });
+
+  it("includes recorded acceptance and rejection instants without extending a settled row to now", () => {
+    const row = { ...macroTaskTimelineFixture().rows[0]!, runId: "run", state: "accepted",
+      acceptedAt: at(80), reviewRejectedAt: at(40) };
+    const facts = timelineScaleInput(timeline({ rows: [row] }));
+    expect(facts.domain).toEqual(interval(0, 80));
+    expect(facts.instants).toEqual([0, 10, 40, 80].map(ms));
+    expect(facts.nowAtEnd).toBe(false);
+  });
+
+  it("does not extend delivery when its final execution lacks confirmed shutdown", () => {
+    const row = { ...macroTaskTimelineFixture().rows[0]!, runId: "run", state: "delivered",
+      acceptedAt: null, reviewRejectedAt: null };
+    const facts = timelineScaleInput(timeline({ rows: [row], spans: [span({ shutdownConfirmed: false })] }));
+    expect(facts.domain).toEqual(interval(0, 10));
+    expect(facts.nowAtEnd).toBe(false);
+    expect(facts.canFold).toBe(false);
+  });
+
   it("keeps bars busy and waits as instants, including Host markers", () => {
     const input = timelineScaleInput(timeline({ spans: [
       span({ kind: "queue", startAt: at(0), endAt: at(1) }),
       span({ kind: "routing", startAt: at(1), endAt: at(2) }),
       span({ startAt: at(2), endAt: at(10) }),
       span({ kind: "host", startAt: at(10), endAt: at(30) }),
-    ], events: [event(40)] }), ms(150));
+    ], events: [event(40)] }));
     expect(input.domain).toEqual({ startMs: ms(0), endMs: ms(40) });
     expect(input.busy).toEqual([
       { startMs: ms(1), endMs: ms(2) }, { startMs: ms(2), endMs: ms(10) },
     ]);
     expect(input.instants).toEqual([0, 1, 2, 10, 30, 40].map(ms));
     expect(input.canFold).toBe(true);
-    expect(input.nowMs).toBe(ms(150));
+    expect(input.nowAtEnd).toBe(false);
   });
 
-  it.each(["queue", "routing", "execution", "host"] as const)("ends ongoing %s at observedAt", kind => {
+  it.each([
+    ["queue", "queued"], ["routing", "starting"], ["routing", "executing"],
+    ["routing", "finalizing"], ["routing", "uncertain"],
+    ["execution", "starting"], ["execution", "executing"],
+    ["execution", "finalizing"], ["execution", "uncertain"], ["host", "open"],
+  ] as const)("ends ongoing %s in state %s at observedAt", (kind, state) => {
     const input = timelineScaleInput(timeline({ spans: [span({
-      kind, endAt: null, state: kind === "host" ? "open" : "executing", shutdownConfirmed: null,
-    })] }), ms(150));
+      kind, endAt: null, state, shutdownConfirmed: null,
+    })] }));
     expect(input.domain).toEqual({ startMs: ms(0), endMs: ms(120) });
     expect(input.instants).toEqual([ms(0), ms(120)]);
     expect(input.busy).toEqual(kind === "queue" || kind === "host" ? [] : [input.domain]);
-    expect(input.canFold).toBe(true);
+    expect(input.nowAtEnd).toBe(true);
+    expect(input.canFold).toBe(kind === "routing" || kind === "execution");
+  });
+
+  it.each([
+    ["queue", "executing"], ["host", "queued"], ["execution", "open"],
+    ["routing", "admitted"], ["execution", " Executing "], ["host", "OPEN"],
+  ] as const)("does not guess that %s in state %s is open", (kind, state) => {
+    const facts = timelineScaleInput(timeline({ spans: [span({
+      kind, endAt: null, state, shutdownConfirmed: null,
+    })] }));
+    expect(facts.domain).toEqual(interval(0, 0));
+    expect(facts.nowAtEnd).toBe(false);
+    expect(facts.canFold).toBe(false);
   });
 
   it("reserves an uncertain execution through observedAt until shutdown is confirmed", () => {
-    const input = timelineScaleInput(timeline({ spans: [span({ uncertain: true, shutdownConfirmed: false })] }), ms(120));
+    const input = timelineScaleInput(timeline({ spans: [span({ uncertain: true, shutdownConfirmed: false })] }));
     expect(input.busy).toEqual([{ startMs: ms(0), endMs: ms(120) }]);
     expect(input.instants).toEqual([ms(0), ms(10), ms(120)]);
+    expect(input.nowAtEnd).toBe(true);
   });
 
   it.each([
@@ -276,10 +354,10 @@ describe("timelineScaleInput", () => {
     { spans: [span({ endAt: null, shutdownConfirmed: false, state: "executing" })], observedAt: at(-1) },
     { spans: [span({ endAt: null, shutdownConfirmed: false, state: "executing" })], observedAt: "unavailable" },
   ])("refuses folding with incomplete or untrustworthy facts: %j", overrides => {
-    expect(timelineScaleInput(timeline(overrides), ms(120)).canFold).toBe(false);
+    expect(timelineScaleInput(timeline(overrides)).canFold).toBe(false);
   });
 
   it("has no domain without available instants", () => {
-    expect(timelineScaleInput(timeline({ spans: [] }), ms(120)).domain).toBeNull();
+    expect(timelineScaleInput(timeline({ spans: [] })).domain).toBeNull();
   });
 });
