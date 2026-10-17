@@ -39,13 +39,6 @@ export type AuthorityLatch = ReturnType<typeof createAuthorityLatch>;
 
 /* Every authenticated window may edit. */
 
-/**
- * Copy for an expired or invalid login (cookie). The cookie applies to the
- * whole origin, so re-logging-in from any window restores this page's polling
- * without a reload; drafts stay right here.
- */
-export const LOGIN_EXPIRED_BANNER = () => i18n.t("console:yourLoginExpiredRunHeyMyBuddy");
-
 /** Copy for a mutation control an unauthenticated page cannot use. */
 export const LOGIN_EXPIRED_ACTION_REFUSAL = () => i18n.t("console:yourLoginExpiredTheActionWasNot");
 
@@ -58,10 +51,3 @@ export const LOGIN_EXPIRED_SAVE_REFUSAL = () => i18n.t("console:yourLoginExpired
  * inspection/replay. Never described as failure or rollback.
  */
 export const UNRESOLVED_SAVE_NOTE = () => i18n.t("console:theSaveResultIsUnknownAndMay");
-
-/**
- * Copy for a page whose writes are paused because the authenticated poll failed
- * (network loss or an unreadable snapshot). A failed poll alone says nothing
- * about login validity, so it never borrows the login-expired wording.
- */
-export const CONNECTION_WRITE_PAUSED = () => i18n.t("console:disconnectedCannotSubmitRefreshAndRetryYour");

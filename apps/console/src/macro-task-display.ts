@@ -183,16 +183,6 @@ export function clockTime(value: string | number | null | undefined): string {
   return format(value, { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-export function durationText(ms: number | null): string | null {
-  if (ms === null || !Number.isFinite(ms) || ms < 0) return null;
-  const minutes = Math.round(ms / 60000);
-  if (minutes < 1) return i18n.t("console:lessThan1Min");
-  if (minutes < 60) return i18n.t("console:min", { v0: minutes });
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return rest ? i18n.t("console:hrMin", { v0: hours, v1: rest }) : i18n.t("console:hr", { v0: hours });
-}
-
 /**
  * The measured acceptance wait (0.16 P1.8): from the row's last execution
  * span's recorded end to its acceptance marker. Null whenever any condition

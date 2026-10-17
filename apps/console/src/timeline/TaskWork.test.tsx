@@ -72,7 +72,7 @@ describe("persistent task rows and basic SVG tracks", () => {
     fireEvent.blur(row("r4"));
     const span = document.querySelector('[data-key="span:s-r2-e1"]')!;
     fireEvent.pointerEnter(span);
-    expect(status()).toContain("46 分钟");
+    expect(status()).toContain("46 分");
     expect(status()).toContain("gpt-5-codex");
     expect(screen.queryByRole("tooltip")).toBeNull();
     fireEvent.pointerLeave(span);
@@ -83,7 +83,7 @@ describe("persistent task rows and basic SVG tracks", () => {
     expect(status()).toContain("执行中");
     fireEvent.blur(row("r4"));
     fireEvent.focus(span);
-    expect(status()).toContain("46 分钟");
+    expect(status()).toContain("46 分");
     fireEvent.blur(span);
     fireEvent.focus(row("r6"));
     expect(status()).toContain("已等待");

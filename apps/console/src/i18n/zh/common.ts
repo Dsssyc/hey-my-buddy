@@ -1,7 +1,6 @@
 
-/** Text shared by data reads and the small UI primitives across pages. */
+/** Text shared by data reads and snapshot labels across pages. */
 export default {
-  emptyMark: "＋",
   error: {
     codes: {
       REVISION_CONFLICT: "记录已更新；请刷新核对后重试。", CONFLICT: "记录冲突；请刷新核对后重试。", FORBIDDEN: "无操作权限；请重新打开控制台。",
@@ -18,16 +17,5 @@ export default {
   snapshot: {
     verified: "核对时间",
     unverified: "核对时间未记录",
-  },
-  unrecorded: "未记录",
-  status: {
-    queued: "排队中", running: "执行中", cancelling: "正在取消",
-    completed: "执行完成", cancelled: "已取消", failed: "执行失败",
-    "reconciliation-needed": "等待核对", "waiting-assistance": "等待协助",
-    "waiting-decision": "等待决定", "waiting-host": "等待 Host",
-    "awaiting-host": "等待 Host", "awaiting-lead": "等待 Lead",
-    "waiting-owned": "等待名下的微任务", "waiting-helpers": "协助执行中",
-    executing: "执行中", delivered: "等待验收", accepted: "已验收",
-    concluded: "已结束", yielded: "回合已结束",
   },
 };

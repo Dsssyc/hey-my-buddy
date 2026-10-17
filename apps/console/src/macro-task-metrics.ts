@@ -17,16 +17,16 @@ import type { MacroTaskTimeline, TimelineSpan } from "./macro-task-types";
 import { parseTimelineInstant } from "./timeline/instant";
 import { spanOutcome } from "./macro-task-display";
 
-export type MetricInterval = { startMs: number; endMs: number };
+type MetricInterval = { startMs: number; endMs: number };
 
 /** Why the displayed numbers describe only the recorded part of the scope. */
-export type MetricLimitation = {
+type MetricLimitation = {
   /** Machine-stable key so tests and the truncation banner can share wording. */
   key: "scope" | "rows" | "spans" | "events" | "missing-time" | "reversed" | "clock-skew" | "unconfirmed-end" | "running";
   label: string;
 };
 
-export const LIMITATION_LABEL: Record<MetricLimitation["key"], string> = {
+const LIMITATION_LABEL: Record<MetricLimitation["key"], string> = {
   get scope() { return i18n.t("console:incompleteReadScope"); },
   get rows() { return i18n.t("console:microTaskRowsTruncated"); },
   get spans() { return i18n.t("console:executionSpansTruncated"); },
@@ -38,7 +38,7 @@ export const LIMITATION_LABEL: Record<MetricLimitation["key"], string> = {
   get running() { return i18n.t("console:runningCountedUntilReadTime"); },
 };
 
-export type MacroTaskMetrics = {
+type MacroTaskMetrics = {
   /** Earliest usable start (macroTask creation when no span has one) to the latest recorded instant. */
   totalSpanMs: number | null;
   /** Union of execution intervals that are actually confirmable. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatClockMinutes, formatCompact, formatDuration, formatDurationMinutes, formatMoment, formatMomentMinutes, formatNumber, formatRelative } from "./format";
+import { formatClockMinutes, formatCompact, formatDuration, formatMoment, formatMomentMinutes, formatNumber, formatRelative } from "./format";
 
 describe("the numbers and the times the detail writes", () => {
   it("writes a length of time in the units that matter, with the seconds only when asked for", () => {
@@ -8,12 +8,13 @@ describe("the numbers and the times the detail writes", () => {
     expect(formatDuration(32 * 60_000 + 20_000)).toBe("32 分");
     expect(formatDuration(2 * 3_600_000 + 24 * 60_000)).toBe("2 时 24 分");
     expect(formatDuration(2 * 3_600_000)).toBe("2 时");
-    expect(formatDuration(188_000, true)).toBe("3 分 08 秒");
-    expect(formatDuration(3_725_000, true)).toBe("1 时 02 分 05 秒");
+    expect(formatDuration(188_000, "fine")).toBe("3 分 08 秒");
+    expect(formatDuration(3_725_000, "fine")).toBe("1 时 02 分 05 秒");
     expect(formatDuration(0)).toBe("0 秒");
     expect(formatDuration(-5000)).toBe("0 秒");
-    expect(formatDurationMinutes(0)).toBe("0 分");
-    expect(formatDurationMinutes(2 * 3_600_000)).toBe("2 时 0 分");
+    expect(formatDuration(0, "minutes")).toBe("0 分");
+    expect(formatDuration(2 * 3_600_000, "minutes")).toBe("2 时 0 分");
+    expect(formatDuration(2 * 3_600_000 + 59_000, "minutes")).toBe("2 时 0 分");
   });
 
   it("writes a count of tokens short above a thousand, and whole below", () => {

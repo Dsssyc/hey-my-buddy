@@ -5,7 +5,8 @@ import { useTranslation } from "react-i18next";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { MacroTaskOverview } from "../MacroTaskOverview";
-import { buddyLabel, clockTime, durationText, rowStateInfo } from "../macro-task-display";
+import { buddyLabel, clockTime, rowStateInfo } from "../macro-task-display";
+import { formatDuration } from "../i18n/format";
 import type { FriendlyBuddy } from "../macro-task-display";
 import type { MacroTaskSummary, MacroTaskTimeline, TimelineEvent, TimelineRow, TimelineSpan } from "../macro-task-types";
 import { parseTimelineInstant as instant } from "./instant";
@@ -108,12 +109,12 @@ export function TaskWork(props: TaskWorkProps) {
     const lastEnd = row.state === "delivered" && spans.filter(span => span.kind === "execution").every(span => span.shutdownConfirmed === true)
       ? Math.max(0, ...spans.filter(span => span.kind === "execution").map(span => instant(span.endAt) ?? 0)) : 0;
     const start = wait ? instant(wait.startAt) : lastEnd || null;
-    return [rowStateInfo(row).label, start !== null ? t("openWait", { duration: durationText(Math.max(0, nowMs - start)) }) : null, t("turnCount", { n: turns }), buddyLabel(row.buddy, props.buddies)].filter(Boolean).join(" · ");
+    return [rowStateInfo(row).label, start !== null ? t("openWait", { duration: formatDuration(Math.max(0, nowMs - start)) }) : null, t("turnCount", { n: turns }), buddyLabel(row.buddy, props.buddies)].filter(Boolean).join(" · ");
   };
   const activeSpan = hoveredSpan ?? (hoveredRow ? null : focusedSpan);
   const activeRow = hoveredRow ?? focusedRow;
   const pointerGap = scale?.breaks.find(gap => pointerX !== null && pointerX >= gap.startX && pointerX <= gap.endX);
-  const pointerLine = pointerX !== null && scale ? pointerGap ? t("drawing.gap", { start: clockTime(pointerGap.startMs), end: clockTime(pointerGap.endMs), duration: durationText(pointerGap.endMs - pointerGap.startMs) }) : t("drawing.pointer", { at: clockTime(scale.toTime(pointerX)) }) : null;
+  const pointerLine = pointerX !== null && scale ? pointerGap ? t("drawing.gap", { start: clockTime(pointerGap.startMs), end: clockTime(pointerGap.endMs), duration: formatDuration(pointerGap.endMs - pointerGap.startMs) }) : t("drawing.pointer", { at: clockTime(scale.toTime(pointerX)) }) : null;
   const facts = activeEvent ? eventReadout(activeEvent) : activeSpan ? t("segment", { label: spanReadout(activeSpan, nowMs, props.buddies, rows.find(row => row.runId === activeSpan.runId)) }) : activeRow ? rowLine(activeRow)
     : input?.domain ? t("range", { start: clockTime(input.domain.startMs), end: clockTime(input.domain.endMs), n: rows.length }) : t("noTime");
   const readout = [pointerLine, facts].filter(Boolean).join(" · ");

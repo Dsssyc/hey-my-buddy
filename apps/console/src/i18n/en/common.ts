@@ -1,7 +1,6 @@
 import type zh from "../zh/common";
 
 export default {
-  emptyMark: "+",
   error: {
     codes: {
       REVISION_CONFLICT: "The record was updated; refresh, check it and try again.", CONFLICT: "The records conflict; refresh, check them and try again.",
@@ -22,16 +21,5 @@ export default {
   snapshot: {
     verified: "Verified",
     unverified: "Verification time not recorded",
-  },
-  unrecorded: "Not recorded",
-  status: {
-    queued: "Queued", running: "Running", cancelling: "Cancelling",
-    completed: "Completed", cancelled: "Cancelled", failed: "Failed",
-    "reconciliation-needed": "Awaiting reconciliation", "waiting-assistance": "Waiting for assistance",
-    "waiting-decision": "Waiting for decision", "waiting-host": "Waiting for Host",
-    "awaiting-host": "Waiting for Host", "awaiting-lead": "Waiting for Lead",
-    "waiting-owned": "Waiting for owned micro tasks", "waiting-helpers": "Helpers running",
-    executing: "Executing", delivered: "Awaiting acceptance", accepted: "Accepted",
-    concluded: "Ended", yielded: "Turn ended",
   },
 } satisfies typeof zh;

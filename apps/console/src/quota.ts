@@ -68,7 +68,7 @@ export type QuotaWindowView = QuotaWindow & {
   atLimit: boolean;
 };
 
-export type QuotaView = {
+type QuotaView = {
   stale: boolean;
   limitReported: boolean;
   /** True when some recorded window is at or above the near-limit threshold. */

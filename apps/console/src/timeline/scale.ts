@@ -6,7 +6,7 @@ const MIN_REAL_PX = 64;
 const TICK_MINUTES = [1, 2, 5, 10, 15, 30, 60, 120, 240, 480, 720, 1440];
 const ACTIVE_EXECUTION_STATES = new Set(["starting", "executing", "finalizing", "uncertain"]);
 
-export type TimeInterval = { startMs: number; endMs: number };
+type TimeInterval = { startMs: number; endMs: number };
 
 export type ScaleInput = {
   domain: TimeInterval | null;
@@ -114,7 +114,7 @@ export function timelineScaleInput(timeline: MacroTaskTimeline): ScaleInput {
 }
 
 export type TimelineBreak = TimeInterval & { startX: number; endX: number };
-export type TimelineTick = { atMs: number; labeled: boolean };
+type TimelineTick = { atMs: number; labeled: boolean };
 export type TimelineScale = {
   widthPx: number;
   pixelsPerMinute: number;

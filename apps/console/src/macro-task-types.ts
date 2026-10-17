@@ -3,8 +3,8 @@ import type { RoutingMode } from "./types";
 
 export type MacroTaskFilter = "all" | "active" | "host" | "review";
 /** Disjoint member states in display priority 待决定 (host) > 进行中 (active) > 待验收 (review) > 已结束 (ended). */
-export type MacroTaskCategory = "host" | "active" | "review" | "ended";
-export type MacroTaskCounts = {
+type MacroTaskCategory = "host" | "active" | "review" | "ended";
+type MacroTaskCounts = {
   roots: number; helpers: number;
   /** Accepted root micro tasks; the numerator of progress against the root count. */
   accepted: number;
@@ -55,10 +55,10 @@ export type MacroTaskPage = {
 export type TimelineBuddy = {
   harness: string | null; provider: string | null; model: string | null; effort: string | null;
 };
-export type TimelineReminders = {
+type TimelineReminders = {
   overdue: boolean; possiblyStuck: boolean; lastNativeEventAt: string | null; toolInProgress: boolean;
 };
-export type TimelineInquiry = {
+type TimelineInquiry = {
   inquiryId: string; createdAt: string; author: string; state: string;
 };
 export type TimelineRow = {
@@ -136,11 +136,9 @@ export type TimelineSpan = {
     usage?: { elapsedMs?: number | null; toolCalls?: number | null; bytesRead?: number | null } | null;
   } | null;
 };
-export type TimelineEventKind =
-  "dispatch" | "decide" | "continue" | "integrate" | "accept" | "reject" | "conclude" | "cancel" | "takeover";
 export type TimelineEvent = {
   seq: number; runId: string;
-  /** One of TimelineEventKind from the current service; kept open for newer kinds. */
+  /** A current service event kind; kept open for newer kinds. */
   kind: string; at: string;
   label: string; summary: string; actor: Actor | null;
   attemptId: string | null; requestId: string | null; artifactId: string | null;

@@ -21,7 +21,7 @@ export class ApiError extends Error {
  * `CONSOLE_SESSION_EXPIRED`. A callback receiving it must not automatically
  * retry a write; a fresh `hey-my-buddy console` login restores authority.
  */
-export const SESSION_EXPIRED_CODE = "CONSOLE_SESSION_EXPIRED";
+const SESSION_EXPIRED_CODE = "CONSOLE_SESSION_EXPIRED";
 
 export function isSessionExpiredRefusal(error: unknown): boolean {
   return error instanceof ApiError && error.code === SESSION_EXPIRED_CODE;
@@ -35,7 +35,7 @@ export function isSessionExpiredRefusal(error: unknown): boolean {
  * access. An expired or absent login is reported by the HTTP layer as a 401
  * `CONSOLE_SESSION_EXPIRED`, not by a writable-but-flagged descriptor.
  */
-export function parseConsoleSession(value: unknown): ConsoleSession {
+function parseConsoleSession(value: unknown): ConsoleSession {
   const session = value as Partial<ConsoleSession> | null | undefined;
   const valid = !!session && typeof session === "object" && !Array.isArray(session)
     && typeof session.id === "string" && session.id.trim().length > 0
@@ -195,7 +195,7 @@ export type StorageCategory = {
   eligibleCount: number;
   reasons: string[];
 };
-export type StorageCandidate = {
+type StorageCandidate = {
   id: string;
   category: string;
   path: string;
@@ -252,14 +252,14 @@ function validStoragePlan(value: unknown): value is StoragePlan {
       && (row.runtimeDir === null || typeof row.runtimeDir === "string"));
 }
 
-export function parseStoragePlan(value: unknown): StoragePlan {
+function parseStoragePlan(value: unknown): StoragePlan {
   if (!validStoragePlan(value)) {
     throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.storagePlan"));
   }
   return value;
 }
 
-export function validStorageApplyResult(value: unknown): value is StorageApplyResult {
+function validStorageApplyResult(value: unknown): value is StorageApplyResult {
   return storageObject(value) && storageString(value.planId) && storageCount(value.removedBytes) && value.complete === true
     && Array.isArray(value.removed) && value.removed.every(row => storageObject(row) && storageString(row.id)
       && typeof row.path === "string" && storageCount(row.bytes))
@@ -345,7 +345,7 @@ import type { HarnessHealth, QuotaRetryWindow, QuotaRoutingRecord } from "./type
 import { parseQuota } from "./quota";
 
 /** The supported harnesses, in the Buddy page's fixed display order. */
-export const HARNESS_ORDER = ["dsh", "zcode", "codex", "claude"] as const;
+const HARNESS_ORDER = ["dsh", "zcode", "codex", "claude"] as const;
 
 /** Strict parse of one retry window (ADR-019): every fact is named or the value is null. */
 function parseQuotaRetry(value: unknown): QuotaRetryWindow | null {
@@ -452,7 +452,7 @@ export function snapshotHarnesses(snapshot: Snapshot): HarnessHealth[] {
 }
 
 /** The `harnesses` rows carried by a `capabilities` reply. */
-export function commandHarnesses(reply: unknown): HarnessHealth[] {
+function commandHarnesses(reply: unknown): HarnessHealth[] {
   return harnessRows((reply as { harnesses?: unknown } | null)?.harnesses);
 }
 

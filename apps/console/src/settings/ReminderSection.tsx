@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { ConsoleApi } from "../api";
 import { errorText, parseReminderSettings } from "../api";
 import type { ReminderSettings } from "../types";
-import { formatNumber } from "../i18n/format";
+import { formatDuration } from "../i18n/format";
 import { Hint } from "../components/hint";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -64,7 +64,7 @@ export function ReminderSection({ api, csrfToken, settings, refresh, unavailable
         </div>
         <p id={`${inputId}-description`} className="max-w-[560px] text-xs leading-relaxed text-ink2">{t("reminders.description")}</p>
       </div> : <p className="text-xs text-ink2">{t("reminders.unavailable")}</p>}
-      {current && current.silenceSeconds % 60 !== 0 && <p className="flex items-center gap-2 text-xs text-hand" role="status"><StateMark kind="hand" />{t("reminders.currentSeconds", { n: formatNumber(current.silenceSeconds) })}</p>}
+      {current && current.silenceSeconds % 60 !== 0 && <p className="flex items-center gap-2 text-xs text-hand" role="status"><StateMark kind="hand" />{t("reminders.currentDuration", { duration: formatDuration(current.silenceSeconds * 1000) })}</p>}
       {note && <p className="flex items-center gap-2 text-xs text-ink2" role="status"><StateMark kind="done" />{t("reminders.saved")}</p>}
       {error && <p className="flex items-center gap-2 text-xs text-fail" role="alert"><StateMark kind="fail" />{error}</p>}
     </div>

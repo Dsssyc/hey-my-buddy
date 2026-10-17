@@ -75,7 +75,7 @@ for (const reducedMotion of ["reduce", "no-preference"] as const) test.describe(
     });
     expect(style.opacity).toBe("0");
     expect(style.translate).not.toBe("none");
-    if (reducedMotion === "reduce") expect(style.duration.split(",").every(value => parseFloat(value) === 0)).toBe(true);
+    if (reducedMotion === "reduce") expect(style.property).toBe("none");
     else {
       expect(style.property).toContain("opacity"); expect(style.property).toContain("translate");
       expect(parseFloat(style.duration)).toBeGreaterThan(0); expect(parseFloat(style.duration)).toBeLessThanOrEqual(.2);

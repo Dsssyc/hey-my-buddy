@@ -1,5 +1,5 @@
 /** Directory selection; the existing roles view sends a buddy using the models intent. */
-export const BUDDY_VIEWS = ["models", "roles"] as const;
+const BUDDY_VIEWS = ["models", "roles"] as const;
 export type BuddyView = (typeof BUDDY_VIEWS)[number];
 export type BuddyLocation = { view: BuddyView; target?: string; targetKind?: "harness" | "model" | "buddy" };
 

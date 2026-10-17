@@ -46,7 +46,7 @@ export type HarnessBlock = {
   total: number;
 };
 
-export type ModelFilters = { query: string; enabledOnly: boolean; showUnavailable: boolean };
+type ModelFilters = { query: string; enabledOnly: boolean; showUnavailable: boolean };
 
 /**
  * The models the two filters and the search leave. A model is listed when at

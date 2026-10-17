@@ -27,7 +27,7 @@ export function modelServiceSearchText(buddy: Buddy): string {
   ].join(" ").toLowerCase();
 }
 
-export type HarnessGroup = {
+type HarnessGroup = {
   harness: string;
   name: string;
   modelServices: ModelServiceGroup[];

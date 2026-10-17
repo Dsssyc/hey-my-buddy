@@ -14,7 +14,7 @@ import type { Buddy, Snapshot } from "../types";
  */
 
 export const CHECKED_AT = "2026-09-28T09:30:00.000Z";
-export const CODEX_EXECUTABLE = "/Users/fixture/.nvm/versions/node/v24/bin/codex";
+const CODEX_EXECUTABLE = "/Users/fixture/.nvm/versions/node/v24/bin/codex";
 const sonnet = { harness: "claude", provider: "anthropic", model: "claude-sonnet-5" };
 const mediumId = "claude:anthropic:claude-sonnet-5:medium";
 
@@ -44,7 +44,7 @@ export function harnesses(): HarnessHealth[] {
   ];
 }
 
-export type HarnessSnapshot = Snapshot & { harnesses: HarnessHealth[] };
+type HarnessSnapshot = Snapshot & { harnesses: HarnessHealth[] };
 
 export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
   const buddy: Buddy = { buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium", available: true,
@@ -65,7 +65,7 @@ export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
 }
 
 type Reply = (params: Record<string, any>) => unknown;
-export type FixtureOptions = {
+type FixtureOptions = {
   harnesses?: HarnessHealth[];
   /** The session cannot write. */
   readOnly?: boolean;

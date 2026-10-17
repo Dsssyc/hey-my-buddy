@@ -42,7 +42,7 @@ export type HarnessHealth = {
   account?: import("./harness-account").HarnessAccount;
 };
 
-export type ReadOnlyStructured = {
+type ReadOnlyStructured = {
   eligible: boolean;
   systemSandbox: boolean;
   reasonCode: string | null;
@@ -51,7 +51,7 @@ export type ReadOnlyStructured = {
   implemented?: boolean;
 };
 
-export type BillingFact = {
+type BillingFact = {
   kind: "subscription" | "metered" | "unknown";
   source: string;
   observedAt: string;
@@ -125,7 +125,7 @@ export type QuotaRoutingRecord = {
  * stays usable until a later reading confirms the absence. The console only
  * renders this state; the board owns every judgment about it.
  */
-export type CatalogStatus = "available" | "pending" | "unavailable";
+type CatalogStatus = "available" | "pending" | "unavailable";
 
 export type Buddy = {
   billing?: BillingFact;
@@ -160,7 +160,7 @@ export type ModelServiceNote = ModelService & {
   text: string;
   updatedAt: string | null;
 };
-export type Decision = {
+type Decision = {
   decisionId: string;
   runId?: string | null;
   requestId?: string;
@@ -188,7 +188,7 @@ export type Lineage = {
   rootLeadRunId: string | null;
   leadOwnership?: { leadRunId: string; leadTurnId: string; createdAt: string } | null;
 };
-export type QuotaFailure = { code: "quota-exceeded" | "rate-limited"; nativeCode?: string; source?: string };
+type QuotaFailure = { code: "quota-exceeded" | "rate-limited"; nativeCode?: string; source?: string };
 
 export type Task = {
   quotaFailure?: QuotaFailure | null;
@@ -245,7 +245,7 @@ export type Task = {
   [key: string]: unknown;
 };
 /** Public attempt receipt. The claim capability and nonce verifier never appear. */
-export type AttemptReceipt = {
+type AttemptReceipt = {
   attemptId?: string;
   generation?: number;
   executionState?: string;
@@ -272,7 +272,7 @@ export type ActivityPhase =
   | "waiting-host"
   | "finishing"
   | "unknown";
-export type ActivityCounts = {
+type ActivityCounts = {
   modelTurns?: number | null;
   toolCalls?: number | null;
 };
@@ -280,7 +280,7 @@ export type ActivityCounts = {
  * Bounded `execution_progress` activity. Unknown fields stay absent instead of being
  * invented; there is deliberately no percentage or completion estimate here.
  */
-export type TaskActivity = {
+type TaskActivity = {
   phase: ActivityPhase;
   observedAt?: string | null;
   eventSeq?: number | null;
@@ -291,7 +291,7 @@ export type TaskActivity = {
   waitingReason?: string | null;
   counts?: ActivityCounts | null;
 };
-export type Shutdown = {
+type Shutdown = {
   selfConfirmed: boolean;
   descendantsConfirmed: boolean;
   unconfirmedRunIds: string[];
@@ -313,7 +313,7 @@ export type ModelServiceConcurrencySetting = ModelService & { limit: number };
 export type ModelServiceConcurrencyEntry = ModelServiceConcurrencySetting & { active: number };
 export type RoutingMode = "fast" | "review";
 export type RoutingBudget = "brief" | "standard" | "deep";
-export type RoutingBudgetLimits = { preset: RoutingBudget; timeoutSeconds: number; toolCalls: number; bytesRead: number };
+type RoutingBudgetLimits = { preset: RoutingBudget; timeoutSeconds: number; toolCalls: number; bytesRead: number };
 /**
  * The ordered Router list settings (ADR-021 §2). `routerBuddyIds` is the
  * user's order; the head is the preferred first choice and the tail follows it.

@@ -51,7 +51,7 @@ describe("timeline drawings follow recorded facts", () => {
     expect(document.querySelector('[data-slot=track-label]')?.textContent).toBe("40 分");
     cleanup(); track([live], { width: 25 });
     expect(document.querySelector('[data-slot=track-label]')).toBeNull();
-    expect(document.querySelector('[data-key="span:e"]')?.getAttribute("aria-label")).toContain("40 分钟");
+    expect(document.querySelector('[data-key="span:e"]')?.getAttribute("aria-label")).toContain("40 分");
   });
   it("draws silence only for the reminder and turns a passed expected mark orange", () => {
     track([execution({ endAt: null, state: "executing", shutdownConfirmed: false, resultStatus: undefined, reminders: { overdue: true, possiblyStuck: true, lastNativeEventAt: at(20), toolInProgress: false } })]);
@@ -65,7 +65,7 @@ describe("timeline drawings follow recorded facts", () => {
     const live = execution({ startAt: at(5), endAt: null, state: "executing", shutdownConfirmed: false, expectedSeconds: 7200 });
     track([live]);
     expect(slot("expected-mark")).toBeNull();
-    expect(spanReadout(live, Date.parse(at(40)))).toContain("预期 2 小时");
+    expect(spanReadout(live, Date.parse(at(40)))).toContain("预期 2 时");
     cleanup(); track([{ ...live, expectedSeconds: 35 * 60 }]);
     expect(slot("expected-mark")).toBeNull();
   });

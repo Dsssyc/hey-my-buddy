@@ -1,6 +1,6 @@
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { ReactElement } from "react";
-import { act, cleanup, fireEvent, render as baseRender, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as baseRender, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MacroTasks } from "./MacroTasks";

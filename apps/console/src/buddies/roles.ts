@@ -7,7 +7,7 @@ export function buddyQuad(identity: RouterHealthIdentity): string {
 }
 
 /** What the recorded window says is wrong with routing; the user has something to do about either. */
-export type HealthWarning = { kind: "unavailable"; code: string | null } | { kind: "failing"; count: number };
+type HealthWarning = { kind: "unavailable"; code: string | null } | { kind: "failing"; count: number };
 
 /**
  * The warning the recorded routing window gives, or none. Absent data is
@@ -62,7 +62,7 @@ function statusOf(buddyId: string, current: string | null, recorded: string[], e
 }
 
 /** Why a buddy cannot be the Router in a mode; the words are the page's own, under `roles.refusal`. */
-export type RouterRefusal = "fast" | "review" | "unavailable" | "disabled";
+type RouterRefusal = "fast" | "review" | "unavailable" | "disabled";
 
 /** The capability comes first: it is the one reason the user cannot fix here. */
 export function routerRefusalOf(buddy: Buddy, mode: RoutingMode): RouterRefusal | null {
@@ -74,7 +74,7 @@ export function routerRefusalOf(buddy: Buddy, mode: RoutingMode): RouterRefusal 
 }
 
 /** One buddy that the list does not have yet, with the reason it cannot be added in the current mode. */
-export type RouterCandidate = { buddy: Buddy; refusal: RouterRefusal | null };
+type RouterCandidate = { buddy: Buddy; refusal: RouterRefusal | null };
 
 /** The buddies of the catalogue outside the list that match the search, those that can serve in `mode` first. */
 export function routerCandidates(buddies: Buddy[], list: string[], mode: RoutingMode, query: string): RouterCandidate[] {
@@ -135,8 +135,8 @@ export function routerNote(source: Pick<Draft, "configuration" | "buddies">, hea
 }
 
 /** The counts of the window that are written out as names with a number; a count of nothing is left out. */
-export const RECORD_COUNTS = ["consecutiveFailures", "abstention", "cancelled", "budgetExhausted", "boundsRejected", "inputChanged"] as const;
-export type RecordCount = (typeof RECORD_COUNTS)[number];
+const RECORD_COUNTS = ["consecutiveFailures", "abstention", "cancelled", "budgetExhausted", "boundsRejected", "inputChanged"] as const;
+type RecordCount = (typeof RECORD_COUNTS)[number];
 
 export function recordCounts(health: RoutingHealth): { name: RecordCount; n: number }[] {
   const counts: Record<RecordCount, number | undefined> = {
