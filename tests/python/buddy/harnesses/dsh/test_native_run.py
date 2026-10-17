@@ -1154,8 +1154,8 @@ class RoleSeamFunctionTests(unittest.TestCase):
                 mock.patch.object(discovery, "discover", return_value=detected) as scan:
             self.assertIsNone(native_run.check_preparation({}, {}))
         scan.assert_called_once_with("dsh", environment={})
-        cases = ((None, {"status": "missing", "available": False, "remedy": "install dsh",
-                         "reasonCode": "not-found"}),
+        cases = ((None, {"status": "missing", "available": False,
+                         "reason": {"code": "harness.not-found", "params": {"operation": "probe"}}}),
                  ({"status": "missing"}, None),
                  ({"status": "ready", "command": []}, None))
         for selected, detected_result in cases:
@@ -1453,8 +1453,7 @@ class DiscoveryTests(NativeRunCase):
         self.assertEqual(catalog["harnessVersion"], "0.0.1")
         self.assertEqual(catalog["discoveries"],
                          [{"harness": "dsh", "status": "complete", "accountStatus": "not-applicable"}])
-        self.assertTrue(any("account status is not applicable" in warning for warning in catalog["warnings"]),
-                        catalog["warnings"])
+        self.assertEqual(catalog["warnings"], [])
         provider = next(entry for entry in catalog["providers"] if entry["provider"] == "fake")
         models = {model["id"]: model for model in provider["models"]}
         self.assertEqual(set(models), {"m1", "m2"})

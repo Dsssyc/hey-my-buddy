@@ -232,7 +232,7 @@ class QuotaRetryTests(QuotaRetryBoard):
             "executionWorkspace": {"kind": "existing", "access": "write"},
             "harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"})
         self.assertEqual(result["buddy"]["model"], "deepseek-flash")
-        self.assertEqual(result["quotaWarnings"][0]["code"], "HARNESS_QUOTA_EXHAUSTED")
+        self.assertEqual(result["quotaWarnings"][0]["reason"]["code"], "HARNESS_QUOTA_EXHAUSTED")
         self.assertIsNone(self.marker_value())
 
     def test_sole_candidate_retry_completes_by_program_selection(self):

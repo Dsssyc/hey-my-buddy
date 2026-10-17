@@ -447,7 +447,7 @@ class Execution:
                     if review:
                         return self._review_unavailable(claim, directory, history, 'router-unavailable')
                     return self.receipt(claim, {'status': 'failed', 'result': {'harness': record, 'harnessAttempts': history},
-                        'error': 'HARNESS_UNAVAILABLE: ' + str((record or {}).get('remedy') or 'Run hey-my-buddy harnesses with refresh:true'),
+                        'error': 'HARNESS_UNAVAILABLE',
                         'exitCode': None, 'signal': None, 'shutdownConfirmed': True, 'artifacts': [],
                         'terminationReason': TERMINATION_HARNESS_ERROR}, directory)
                 holder['harnessHistory'] = history

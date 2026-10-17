@@ -154,7 +154,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
                 result = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""})
-            self.assertIn(result["reasonCode"], ("output-limit", "shutdown-unverified"))
+            self.assertIn(result["reason"]["code"], ("harness.output-limit", "harness.shutdown-unverified"))
             self.assertEqual(result["status"], "unhealthy")
             self.assertFalse(result["available"])
             self.assertNotIn("secret", str(result))
@@ -173,7 +173,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 discovery, "_terminate_group", side_effect=unobserved_stop
             ):
                 uncertain = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""})
-            self.assertEqual(uncertain["reasonCode"], "shutdown-unverified")
+            self.assertEqual(uncertain["reason"]["code"], "harness.shutdown-unverified")
             self.assertEqual(uncertain["status"], "unhealthy")
             self.assertFalse(uncertain["available"])
             self.assertNotIn("secret", str(uncertain))
@@ -239,7 +239,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 second = discovery.candidate_snapshot('codex', environment={
                     'PATH': os.pathsep.join([*paths, str(cli.parent)])})
                 with patch.object(discovery, '_candidate_handshake', return_value={
-                        'path': str(cli), 'source': 'path', 'status': 'ready', 'reasonCode': None,
+                        'path': str(cli), 'source': 'path', 'status': 'ready', 'reason': None,
                         'command': [str(cli)], 'version': '1.0', 'fingerprint': {}}) as handshake:
                     result = discovery.discover('codex', environment={
                         'PATH': os.pathsep.join([*paths, str(cli.parent)])})
@@ -409,7 +409,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 result = discovery.discover("zcode", manual_path=str(cli), environment={"PATH": ""})
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["version"], "unknown")
-            self.assertEqual(result["reasonCode"], "version-unknown")
+            self.assertEqual(result["reason"]["code"], "harness.version-unknown")
             self.assertFalse(marker.exists())
             self.assertNotIn("private detail", str(result))
 
@@ -427,10 +427,10 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 started = time.monotonic()
                 result = discovery.discover("zcode", manual_path=str(cli), environment={"PATH": ""})
             self.assertLess(time.monotonic() - started, 2)
-            self.assertEqual(result["status"], "unhealthy" if result["reasonCode"] == "shutdown-unverified" else "unknown")
+            self.assertEqual(result["status"], "unhealthy" if result["reason"]["code"] == "harness.shutdown-unverified" else "unknown")
             # A slow OS reaper may not close the inherited pipe within the
             # cleanup budget. It must remain unavailable with honest evidence.
-            self.assertIn(result["reasonCode"], ("scan-timeout", "shutdown-unverified"))
+            self.assertIn(result["reason"]["code"], ("harness.scan-timeout", "harness.shutdown-unverified"))
             self.assertIn(signal.SIGTERM, [call.args[1] for call in kill_group.call_args_list])
             groups = {call.args[0] for call in kill_group.call_args_list}
             self.assertTrue(groups)
@@ -452,7 +452,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 started = time.monotonic()
                 result = discovery.discover("zcode", manual_path=str(manual), environment={"PATH": ""})
             self.assertLess(time.monotonic() - started, 1.5)
-            self.assertEqual(result["reasonCode"], "scan-timeout")
+            self.assertEqual(result["reason"]["code"], "harness.scan-timeout")
             self.assertEqual(len(result["candidates"]), 2)
 
     def test_a_later_unknown_node_scan_is_not_replaced_by_an_earlier_failure(self):
@@ -465,10 +465,10 @@ class HarnessDiscoveryTests(unittest.TestCase):
             with patch.object(discovery, '_variants', return_value=[node]), \
                  patch.object(discovery, 'probe', return_value=('probe-failed', b'')), \
                  patch.object(discovery, '_discover', return_value={'status': 'unknown', 'available': False,
-                                                                  'reasonCode': 'scan-timeout'}):
+                                                                  'reason': {'code': 'harness.scan-timeout', 'params': {'operation': 'probe'}}}):
                 result = discovery._candidate_handshake('codex', candidate, {'PATH': ''}, time.monotonic() + 20)
             self.assertEqual(result['status'], 'unknown')
-            self.assertEqual(result['reasonCode'], 'scan-timeout')
+            self.assertEqual(result['reason']['code'], 'harness.scan-timeout')
 
     def test_native_environment_does_not_enumerate_values(self):
         class NoEnumeration(dict):
@@ -600,7 +600,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
                  patch.object(discovery, '_launch_command', return_value=['/fixture/cli']), \
                  patch.object(discovery, 'probe', side_effect=[(None, b'fixture 1.0'), ('shutdown-unverified', output)]):
                 result = discovery._candidate_handshake(harness, candidate, {}, time.monotonic() + 1)
-            self.assertEqual(result['reasonCode'], 'shutdown-unverified')
+            self.assertEqual(result['reason']['code'], 'harness.shutdown-unverified')
 
     def test_adjacent_node_unverified_stop_cannot_fall_through(self):
         with patch.object(discovery, '_variants', return_value=[Path('/fixture/node')]), \
@@ -619,7 +619,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
              patch.object(discovery, '_launch_command', return_value=['/fixture/node']), \
              patch.object(discovery, 'probe', return_value=('probe-failed', b'')), \
              patch.object(discovery, '_discover', return_value={'available': False, 'status': 'unhealthy',
-                                                              'reasonCode': 'shutdown-unverified'}):
+                                                              'reason': {'code': 'harness.shutdown-unverified', 'params': {'operation': 'probe'}}}):
             node, reason = discovery._node_for(Path('/fixture/cli'), {}, time.monotonic() + 1)
         self.assertIsNone(node)
         self.assertEqual(reason, 'shutdown-unverified')

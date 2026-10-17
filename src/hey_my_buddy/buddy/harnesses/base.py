@@ -157,22 +157,19 @@ def registered_read_only_check(description) -> dict:
 
     platforms = description.system_sandbox_platforms
     sandbox = sys.platform in platforms
-    result = {"eligible": False, "reasonCode": "readonly-not-implemented",
-              "reason": "No implemented native read-only structured call", "systemSandbox": sandbox,
+    from ...protocol.reasons import reason
+    result = {"eligible": False, "reason": reason("harness.readonly-not-implemented"), "systemSandbox": sandbox,
               "sameAttemptContinuation": description.read_only_structured_resume}
     if not description.read_only_structured:
         return result
     if platforms and not sandbox:
-        return {**result, "reasonCode": "readonly-platform-unsupported",
-                "reason": "The native read-only sandbox is unsupported on this platform"}
+        return {**result, "reason": reason("harness.readonly-platform-unsupported")}
     categories = getattr(description, "read_only_tool_categories", ())
     if not sandbox and (not categories or set(categories) - {"read", "search"}):
-        return {**result, "reasonCode": "readonly-tools-unrestricted",
-                "reason": "A harness without a system sandbox must restrict tools to read and search"}
+        return {**result, "reason": reason("harness.readonly-tools-unrestricted")}
     if not callable(getattr(run_seam(description.name), "run", None)):
-        return {**result, "reasonCode": "readonly-resource-missing",
-                "reason": "The registered native read-only run is missing"}
-    return {**result, "eligible": True, "reasonCode": None, "reason": None}
+        return {**result, "reason": reason("harness.readonly-resource-missing")}
+    return {**result, "eligible": True, "reason": None}
 
 
 class Adapter:

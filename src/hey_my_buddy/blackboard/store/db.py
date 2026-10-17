@@ -368,7 +368,11 @@ CREATE TABLE IF NOT EXISTS buddies (
     context_window      INTEGER,
     description         TEXT NOT NULL DEFAULT '',
     source              TEXT NOT NULL DEFAULT '',
-    unavailable_reason  TEXT
+    unavailable_code        TEXT,
+    unavailable_params_json TEXT,
+    unavailable_content     TEXT,
+    CHECK ((unavailable_code IS NULL) = (unavailable_params_json IS NULL)),
+    CHECK (unavailable_content IS NULL OR unavailable_code IS 'catalog.native-unavailable')
 );
 """,
     """

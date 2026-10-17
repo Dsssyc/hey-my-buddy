@@ -363,7 +363,7 @@ class BoardService(_BaseResource):
                 report, capabilities = capability_report(), local_capabilities()
             for record in records:
                 if self.automatic_discovery or record['revision']:
-                    report[record['harness']].update(available=record['available'], reason=record.get('reasonCode'), harness=record)
+                    report[record['harness']].update(available=record['available'], reason=record.get('reason'), harness=record)
 
             return {
                 "adapters": report,
@@ -527,7 +527,7 @@ class BoardService(_BaseResource):
             catalog_store.record(self.evaluation, payload, observation['observationId'], health_generation=(name, record['revision']))
         except BoardError as error:
             if error.code != 'UPGRADE_IN_PROGRESS':
-                self.harnesses.invalidate(name, record['revision'], error.code)
+                self.harnesses.invalidate(name, record['revision'], diagnostic_code=error.code)
 
     def _reread_catalog_for_validation(self, name):
         """One bounded re-read through the service's ordinary refresh path."""
@@ -671,7 +671,7 @@ class BoardService(_BaseResource):
                 with self.store.db.read() as db:
                     cached = catalog_store.current(db)
                 discovered = cached.payload if cached else {'source': 'harness-health', 'providers': [], 'discoveries': [
-                    {'harness': row['harness'], 'status': 'unknown', 'reason': row.get('reasonCode')} for row in self.harnesses.all()]}
+                    {'harness': row['harness'], 'status': 'unknown', 'reason': row.get('reason')} for row in self.harnesses.all()]}
             else:
                 from ...buddy.harnesses.runtime_selection import bound
                 with bound(observation['harnesses']):

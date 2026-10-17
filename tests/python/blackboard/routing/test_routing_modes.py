@@ -90,7 +90,7 @@ class RoutingModesTests(BoardTestCase):
         result = board.call('selection_request', {'requestId': 'later-ineligible', 'task': 'choose'})
         pass  # Admission is owned by the service.
         with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
-                'eligible': False, 'reasonCode': 'readonly-unavailable', 'reason': 'changed local resource',
+                'eligible': False, 'reason': {'code': 'harness.readonly-unavailable', 'params': {}},
                 'systemSandbox': False, 'sameAttemptContinuation': False}):
             claim = admit_execution(board.client(), 'nonce-abcdefghijklmnop', task_id=result['runId'])['claim']
         self.assertIsNone(claim)

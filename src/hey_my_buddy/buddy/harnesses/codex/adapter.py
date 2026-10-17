@@ -34,7 +34,7 @@ class CodexAdapter:
         from ..runtime_selection import selected
         record = selected("codex")
         if record is not None:
-            return record.get('status') == 'ready', record.get('reasonCode')
+            return record.get('status') == 'ready', (record.get('reason') or {}).get('code')
         try:
             cli_command()
             return True, None

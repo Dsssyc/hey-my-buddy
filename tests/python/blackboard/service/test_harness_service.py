@@ -19,7 +19,7 @@ class HarnessServiceTests(BoardTestCase):
         params = {'attemptId': attempt['attemptId'],
                   'generation': attempt['generation'], 'nonce': 'n' * 32}
         unknown = {'harness': 'codex', 'status': 'unknown', 'available': False,
-                   'lastProbe': {'status': 'unknown', 'reasonCode': 'timeout'}}
+                   'lastProbe': {'status': 'unknown', 'reason': {'code': 'harness.timeout', 'params': {'operation': 'probe'}}}}
         ready = {'harness': 'codex', 'status': 'ready', 'available': True,
                  'lastProbe': {'status': 'complete'}}
         with patch.object(self.service.harnesses, 'refresh', side_effect=[unknown, ready]):
@@ -106,7 +106,8 @@ class HarnessServiceTests(BoardTestCase):
             refresh.assert_called_once_with('codex', force=True)
 
     def test_manual_path_write_uses_latest_value(self):
-        missing = {'harness': 'codex', 'status': 'missing', 'reasonCode': 'not-found'}
+        missing = {'harness': 'codex', 'status': 'missing',
+                   'reason': {'code': 'harness.not-found', 'params': {'operation': 'probe'}}}
         with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'harness': 'codex', 'managerRecords': [], 'candidates': []}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=missing):
             saved = self.call('harness_set', harness='codex', path='/custom/codex')
             latest = self.call('harness_set', harness='codex', path='/other/codex')

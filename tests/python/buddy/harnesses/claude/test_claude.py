@@ -74,13 +74,14 @@ class ClaudeFixtureCase(unittest.TestCase):
 
     def test_unknown_metadata_is_unavailable_and_reused_until_cache_expiry(self):
         unknown = {'catalog': {'discoveries': [{'harness': 'claude', 'status': 'unknown',
-                                               'reason': 'native-metadata-wait-expired'}]}}
+                                               'reason': {'code': 'catalog.native-unknown',
+                                                          'params': {'harness': 'claude'}}}]}}
         complete = {'catalog': {'discoveries': [{'harness': 'claude', 'status': 'complete'}]}}
         with mock.patch.dict(os.environ, self.environment, clear=True), \
              mock.patch.object(claude_module, '_probe_native_metadata', side_effect=[unknown, complete]) as probe, \
              mock.patch.object(claude_module.time, 'monotonic', side_effect=[10, 11, 71]):
-            self.assertEqual(self.adapter.available(), (False, 'native-metadata-wait-expired'))
-            self.assertEqual(self.adapter.available(), (False, 'native-metadata-wait-expired'))
+            self.assertEqual(self.adapter.available(), (False, 'catalog.native-unknown'))
+            self.assertEqual(self.adapter.available(), (False, 'catalog.native-unknown'))
             self.assertEqual(probe.call_count, 1)
             self.assertEqual(self.adapter.available(), (True, None))
             self.assertEqual(probe.call_count, 2)
@@ -124,7 +125,7 @@ class ClaudeAvailabilityTests(ClaudeFixtureCase):
             self.assertTrue(entered.wait(3))
             release.set()
             self.assertEqual([future.result(5) for future in futures],
-                             [(False, "fixture unauthenticated")] * 8)
+                             [(False, "HARNESS_UNAVAILABLE")] * 8)
             self.assertEqual(discover.call_count, 1)
 
 

@@ -50,6 +50,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from ....protocol.reasons import reason as make_reason
+
 from ....errors import BoardError
 from ....json_codec import canonical_json
 from ....private_dirs import ensure_private_dir
@@ -153,7 +155,7 @@ def _catalog(initialize: dict | None, version: str) -> dict:
     status = "complete"
     if not isinstance(entries, list):
         status = "unknown"
-        warnings.append(f"Claude model list was unread (shape: {type(entries).__name__})")
+        warnings.append({"reason": make_reason("catalog.model-list-unreadable", shape=type(entries).__name__)})
         entries = []
     if len(entries) > 200:
         raise ClaudeProtocolError("invalid-catalog", "Claude model list exceeds the catalog bound")
@@ -162,7 +164,7 @@ def _catalog(initialize: dict | None, version: str) -> dict:
             continue
         model_id = item.get("resolvedModel")
         if not isinstance(model_id, str) or not model_id or len(model_id) > 128:
-            warnings.append("A model without a resolved identity was omitted")
+            warnings.append({"reason": make_reason("catalog.model-identity-omitted")})
             continue
         if model_id in seen:
             continue
@@ -172,7 +174,7 @@ def _catalog(initialize: dict | None, version: str) -> dict:
             efforts = [DEFAULT_EFFORT]
         elif not isinstance(levels, list) or len(levels) > 16 or any(
                 level not in ("low", "medium", "high", "xhigh", "max") for level in levels):
-            warnings.append("A model with an invalid effort directory was omitted")
+            warnings.append({"reason": make_reason("catalog.effort-directory-omitted")})
             continue
         else:
             efforts = list(dict.fromkeys(levels))
@@ -186,7 +188,7 @@ def _catalog(initialize: dict | None, version: str) -> dict:
                               "packageVersion": version, "models": models}],
                "discoveries": [{"harness": "claude", "status": status,
                                 "accountStatus": account_status}],
-               "warnings": list(dict.fromkeys(warnings))}
+               "warnings": list({canonical_json(item): item for item in warnings}.values())}
     return catalog
 
 
@@ -384,9 +386,10 @@ def _initialize(spawn: _Spawn) -> dict:
     initialize = spawn.connection.call({"subtype": "initialize"})
     catalog = _catalog(initialize, spawn.version or "unknown")
     if spawn.connection.unknown_events or spawn.connection.unread_responses:
-        catalog["warnings"].append("Claude initialize protocol observations are incomplete")
+        incomplete = make_reason("catalog.initialize-incomplete")
+        catalog["warnings"].append({"reason": incomplete})
         for sample in spawn.connection.observations()["samples"][:14]:
-            catalog["warnings"].append("Claude unread initialization: " + canonical_json(sample))
+            catalog["warnings"].append({"reason": incomplete, "diagnostic": sample})
     return catalog
 
 

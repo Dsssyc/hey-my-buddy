@@ -1,1 +1,93 @@
-{}
+{
+  "HARNESS_BALANCE_ZERO": [],
+  "HARNESS_QUOTA_EXHAUSTED": [],
+  "HARNESS_QUOTA_LIMIT_REPORTED": [],
+  "HARNESS_QUOTA_NEAR_LIMIT": [],
+  "HARNESS_RATE_LIMIT_REPORTED": [],
+  "account.login-required": [],
+  "account.not-checked": [],
+  "catalog-unavailable": [],
+  "catalog.account-binding-changed": [],
+  "catalog.account-status-unknown": [
+    "harness"
+  ],
+  "catalog.acp-initialize-unreadable": [],
+  "catalog.discovery-failed": [
+    "harness",
+    "errorCode"
+  ],
+  "catalog.effort-directory-omitted": [],
+  "catalog.effort-retired": [],
+  "catalog.initialize-incomplete": [],
+  "catalog.model-absent": [],
+  "catalog.model-identity-omitted": [],
+  "catalog.model-identity-or-effort-omitted": [],
+  "catalog.model-list-unreadable": [
+    "shape"
+  ],
+  "catalog.model-shape-unreadable": [],
+  "catalog.native-unavailable": [],
+  "catalog.native-unknown": [
+    "harness"
+  ],
+  "catalog.native-warning": [],
+  "config-options-shape-unreadable": [],
+  "config-shape-unreadable": [],
+  "harness.account-read-failed": [
+    "operation"
+  ],
+  "harness.auth-unverified": [
+    "operation"
+  ],
+  "harness.interpreter-missing": [
+    "operation"
+  ],
+  "harness.launch-failed": [
+    "operation"
+  ],
+  "harness.login-required": [
+    "operation"
+  ],
+  "harness.node-missing": [
+    "operation"
+  ],
+  "harness.not-checked": [
+    "operation"
+  ],
+  "harness.not-found": [
+    "operation"
+  ],
+  "harness.output-limit": [
+    "operation"
+  ],
+  "harness.pipe-failed": [
+    "operation"
+  ],
+  "harness.probe-failed": [
+    "operation"
+  ],
+  "harness.readonly-not-implemented": [],
+  "harness.readonly-platform-unsupported": [],
+  "harness.readonly-resource-missing": [],
+  "harness.readonly-tools-unrestricted": [],
+  "harness.readonly-worker-carrier-unimplemented": [
+    "harness"
+  ],
+  "harness.scan-timeout": [
+    "operation"
+  ],
+  "harness.shutdown-unverified": [
+    "operation"
+  ],
+  "harness.timeout": [
+    "operation"
+  ],
+  "harness.version-unknown": [
+    "operation"
+  ],
+  "history.reason-unavailable": [
+    "recordId"
+  ],
+  "model-cursor-shape-unreadable": [],
+  "model-list-shape-unreadable": []
+}

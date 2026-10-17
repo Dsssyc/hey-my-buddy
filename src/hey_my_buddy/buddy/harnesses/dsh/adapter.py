@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from ....errors import BoardError
 from ....protocol.capabilities import adapter_capabilities
+from ....protocol.reasons import reason
 from . import native_run
 
 
@@ -33,8 +34,7 @@ class DshAdapter:
         return adapter_capabilities(self.name)
 
     def local_read_only_check(self) -> dict:
-        return {"eligible": False, "reasonCode": "readonly-worker-carrier-unimplemented",
-                "reason": "DSH review on the Worker carrier is not implemented; its separate read-only channel was removed from stage 2",
+        return {"eligible": False, "reason": reason("harness.readonly-worker-carrier-unimplemented", harness=self.name),
                 "systemSandbox": False, "sameAttemptContinuation": self.read_only_structured_resume}
 
     def available(self) -> tuple[bool, str | None]:
@@ -52,11 +52,11 @@ class DshAdapter:
         if record is not None:
             if record.get("status") == "ready" and record.get("command"):
                 return True, None
-            return False, record.get("remedy") or record.get("reasonCode")
+            return False, (record.get("reason") or {}).get("code")
         from ..discovery import discover
         detected = discover("dsh")
         if not detected["available"]:
-            return False, detected.get("remedy") or detected.get("reasonCode")
+            return False, (detected.get("reason") or {}).get("code")
         return True, None
 
     def discovery_available(self) -> tuple[bool, str | None]:

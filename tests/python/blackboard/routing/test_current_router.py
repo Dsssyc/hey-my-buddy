@@ -31,7 +31,7 @@ class CurrentRouterTestCase(BoardTestCase):
         # Ordered-resolution scenarios supply a private review mechanism;
         # production DSH review is intentionally unavailable in this stage.
         self.enterContext(patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
-            'eligible': True, 'reasonCode': None, 'reason': 'private fixture',
+            'eligible': True, 'reason': None,
             'systemSandbox': False, 'sameAttemptContinuation': True}))
 
     # -- fixtures ------------------------------------------------------------

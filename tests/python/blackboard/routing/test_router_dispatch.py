@@ -481,6 +481,25 @@ class WorkflowWiringTests(RouterDispatchTestCase):
 
 
 class HostReviewRegressionTests(RouterDispatchTestCase):
+    def test_new_catalog_reason_does_not_rewrite_sent_dispatch_bytes(self):
+        frozen = self.request()
+        with self.board_.store.db.read() as db:
+            before = db.execute('SELECT document_json,input_sha256 FROM router_dispatches WHERE task_id=?',
+                                (frozen['runId'],)).fetchone()
+            original = tuple(before)
+        with self.board_.store.db.write() as db:
+            db.execute('UPDATE buddies SET available=0,unavailable_code=?,unavailable_params_json=?,unavailable_content=? WHERE buddy_id=?',
+                       ('catalog.native-unavailable', '{}', '  native text\n', B))
+            current_input = self.board_.store.decisions._buddy_input(
+                db.execute('SELECT * FROM buddies WHERE buddy_id=?', (B,)).fetchone())
+        self.assertEqual(current_input['unavailableReason'],
+                         {'code': 'catalog.native-unavailable', 'params': {}})
+        self.assertEqual(current_input['unavailableContent'], '  native text\n')
+        with self.board_.store.db.read() as db:
+            after = db.execute('SELECT document_json,input_sha256 FROM router_dispatches WHERE task_id=?',
+                               (frozen['runId'],)).fetchone()
+        self.assertEqual(tuple(after), original)
+
     def catalog_read(self, *, changed=False):
         return self.board_.evaluation.record_catalog({
             'source': 'routing-reread-fixture',
@@ -550,7 +569,7 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
     def test_request_snapshot_and_dispatch_preserve_the_settings_budget(self):
         self.set_settings(mode="review")
         with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
-                "eligible": True, "reasonCode": None, "reason": "fixture", "systemSandbox": False,
+                "eligible": True, "reason": None, "systemSandbox": False,
                 "sameAttemptContinuation": True}):
             response = self.board_.call("selection_request", {"requestId": "deadline", "task": "choose"})
         with self.board_.store.db.read() as db:

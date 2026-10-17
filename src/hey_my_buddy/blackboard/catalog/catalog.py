@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ...errors import BoardError
+from ...protocol.reasons import reason
 
 MAX_MODELS = 200
 MAX_PROVIDERS = 32
@@ -41,15 +42,15 @@ CONFIRMATION_SECONDS = 3600
 CATALOG_SHELF_SECONDS = 6 * 3600
 
 #: ADR-027 rule 2: the unavailable reason of a model whose absence was confirmed.
-CONFIRMED_ABSENCE_REASON = "not present in the latest confirmed native discovery"
+CONFIRMED_ABSENCE_REASON = "catalog.model-absent"
 
 #: The unavailable reason of one retired effort whose model remains in the reading.
-RETIRED_EFFORT_REASON = "not present in the latest complete native discovery"
+RETIRED_EFFORT_REASON = "catalog.effort-retired"
 
 #: Unavailable reasons that are catalog facts, never undone by health recovery.
 #: A 0 left behind by a harness health failure is a health fact, not evidence
 #: that the native model disappeared (ADR-027 rules 1 and 2).
-CATALOG_FACT_REASONS = (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON)
+CATALOG_FACT_REASONS = (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON, "catalog.native-unavailable")
 
 #: ADR-027 rule 3: how an operator refreshes harness catalogs and their readings.
 CATALOG_REMEDY = "Run hey-my-buddy harnesses with refresh:true"
@@ -213,16 +214,16 @@ def restore_retained_availability(db, harness: str) -> int:
         pending_efforts[(provider, model)] = pending_model_efforts(db, harness, provider, model) or []
     restored = 0
     for buddy in db.execute(
-            "SELECT buddy_id, provider, model, effort, available, unavailable_reason"
+            "SELECT buddy_id, provider, model, effort, available, unavailable_code"
             " FROM buddies WHERE harness=?",
             (harness,)).fetchall():
-        if buddy["available"] or buddy["unavailable_reason"] in CATALOG_FACT_REASONS:
+        if buddy["available"] or buddy["unavailable_code"] in CATALOG_FACT_REASONS:
             continue
         model_service = (buddy["provider"], buddy["model"])
         identity = (*model_service, buddy["effort"])
         legal_pending = pending_efforts.get(model_service)
         if identity in identities or (legal_pending is not None and buddy["effort"] in legal_pending):
-            db.execute("UPDATE buddies SET available=1,unavailable_reason=NULL WHERE buddy_id=?",
+            db.execute("UPDATE buddies SET available=1,unavailable_code=NULL,unavailable_params_json=NULL,unavailable_content=NULL WHERE buddy_id=?",
                        (buddy["buddy_id"],))
             restored += 1
     return restored
@@ -296,6 +297,12 @@ def canonical_payload(value: Any) -> dict:
             if isinstance(context, bool) or not isinstance(context, int) or context <= 0:
                 context = None
             available = model.get("available", True) is True
+            native_content = model.get("unavailableContent")
+            if native_content is None and isinstance(model.get("unavailableReason"), str):
+                native_content = model["unavailableReason"]
+            native_reason = model.get("unavailableReason")
+            if not available and not isinstance(native_reason, dict):
+                native_reason = reason("catalog.native-unavailable")
             models.append({
                 "id": model_id,
                 "name": _text(model.get("name"), 200) or model_id,
@@ -304,7 +311,8 @@ def canonical_payload(value: Any) -> dict:
                 "inputModalities": _strings(model.get("inputModalities")) or ["text"],
                 "efforts": efforts,
                 "available": available,
-                "unavailableReason": None if available else _text(model.get("unavailableReason")) or "native route is unavailable",
+                "unavailableReason": None if available else native_reason,
+                "unavailableContent": None if available else native_content,
             })
         providers.append({
             "harness": harness, "provider": provider,
@@ -330,9 +338,15 @@ def canonical_payload(value: Any) -> dict:
         # The native reading keeps its own status; the account-status fact is
         # normalized, never invented: a missing or malformed fact stays unknown.
         account_status = result.get("accountStatus")
+        native_reason = result.get("reason")
+        native_content = result.get("content")
+        if isinstance(native_reason, str):
+            native_content = native_reason
+            native_reason = reason("catalog.native-unknown", harness=name)
         discoveries.append({"harness": name, "status": result["status"],
                             "accountStatus": account_status if account_status in ACCOUNT_STATUSES else "unknown",
-                            "reason": _text(result.get("reason")) or None})
+                            "reason": native_reason if result["status"] == "unknown" else None,
+                            "content": native_content})
     if any(p["harness"] not in seen for p in providers):
         raise BoardError("CATALOG_INVALID", "Every provider must have a harness observation")
     return {
@@ -342,7 +356,11 @@ def canonical_payload(value: Any) -> dict:
         "discoveredAt": _text(value.get("discoveredAt"), 64) or None,
         "providers": providers,
         "discoveries": discoveries,
-        "warnings": [_text(item) for item in (value.get("warnings") or []) if isinstance(item, str)][:16],
+        "warnings": [{key: item[key] for key in ("reason", "harness", "content", "diagnostic") if key in item}
+                     if isinstance(item, dict) else
+                     {"reason": reason("catalog.native-warning"), "content": item}
+                     for item in (value.get("warnings") or [])
+                     if isinstance(item, (str, dict))][:16],
     }
 
 
@@ -398,27 +416,31 @@ def discover(*, directory: Path, harnesses=None) -> dict:
         try:
             environment = dict(os.environ)
             with bound([selected_health], environment=environment) if selected_health else nullcontext():
-                usable, reason = instance.discovery_available()
+                usable, _availability_detail = instance.discovery_available()
                 if not usable:
-                    warnings.append(f"{name}: {reason or 'harness unavailable'}")
+                    health_reason = selected_health.get("reason") if selected_health else None
+                    unavailable = health_reason or reason("harness.not-checked", operation="probe")
+                    warnings.append({"harness": name, "reason": unavailable})
                     discoveries.append({"harness": name, "status": "unknown", "accountStatus": "unknown",
-                                        "reason": reason or "harness unavailable"})
+                                        "reason": unavailable})
                     continue
                 payload = instance.discover_models()
             payload = canonical_payload(payload)
             if any(entry["harness"] != name for entry in payload["providers"]):
                 raise BoardError("CATALOG_INVALID", "A harness advertised another harness identity")
         except BoardError as error:
-            warnings.append(f"{name}: {error.code}")
-            discoveries.append({"harness": name, "status": "unknown", "accountStatus": "unknown", "reason": error.code})
+            failure = reason("catalog.discovery-failed", harness=name, errorCode=error.code)
+            warnings.append({"harness": name, "reason": failure})
+            discoveries.append({"harness": name, "status": "unknown", "accountStatus": "unknown", "reason": failure})
             continue
         providers.extend(payload["providers"])
         # Preserve this native session's reading status, reason and account fact.
         native_fact = next((item for item in payload["discoveries"] if item["harness"] == name), None)
         discoveries.append({"harness": name, "status": native_fact["status"] if native_fact else "complete",
                             "accountStatus": (native_fact or {}).get("accountStatus", "unknown"),
-                            **({"reason": native_fact["reason"]} if native_fact and native_fact.get("reason") is not None else {})})
-        warnings.extend(payload["warnings"])
+                            **({"reason": native_fact["reason"]} if native_fact and native_fact.get("reason") is not None else {}),
+                            **({"content": native_fact["content"]} if native_fact and native_fact.get("content") is not None else {})})
+        warnings.extend({**item, "harness": name} for item in payload["warnings"])
         sources.append(payload["source"])
         if payload.get("harnessVersion"):
             versions.append(f"{name}:{payload['harnessVersion']}")
@@ -428,8 +450,8 @@ def discover(*, directory: Path, harnesses=None) -> dict:
     })
 
 
-def _reject_unavailable(selected: dict, *, read_at: str | None, remedy: str) -> BoardError:
-    details = {"buddy": selected, "reason": CATALOG_UNAVAILABLE_REASON, "remedy": remedy}
+def _reject_unavailable(selected: dict, *, read_at: str | None) -> BoardError:
+    details = {"buddy": selected, "reason": reason("catalog-unavailable")}
     if read_at:
         details["catalogReadAt"] = read_at
     return BoardError("BUDDY_UNAVAILABLE", "The requested native model route is not available", **details)
@@ -470,18 +492,18 @@ def validate_buddy(buddy: dict, *, directory: Path) -> dict:
             read_at = catalog_read_at(db, selected["harness"])
             pending_efforts = pending_model_efforts(db, selected["harness"], selected["provider"], selected["model"])
         if not health["available"]:
-            raise BoardError("HARNESS_UNAVAILABLE", health.get("remedy") or CATALOG_REMEDY, harness=health)
+            raise BoardError("HARNESS_UNAVAILABLE", "The harness is unavailable", harness=health,
+                             reason=health["reason"])
         if recorded is None:
-            raise BoardError("CATALOG_UNAVAILABLE",
-                             f"No native model catalog is recorded; {CATALOG_REMEDY}",
-                             reason=CATALOG_UNAVAILABLE_REASON, remedy=CATALOG_REMEDY)
+            raise BoardError("CATALOG_UNAVAILABLE", "No native model catalog is recorded",
+                             reason=reason("catalog-unavailable"))
         try:
             return _check_recorded(selected, CatalogView.from_payload(recorded.payload),
                                    pending_efforts=pending_efforts)
         except BoardError as error:
             if error.code != "BUDDY_UNAVAILABLE":
                 raise
-            raise _reject_unavailable(selected, read_at=read_at, remedy=CATALOG_REMEDY) from None
+            raise _reject_unavailable(selected, read_at=read_at) from None
 
     try:
         return judge()
@@ -527,10 +549,10 @@ def _check_recorded(selected: dict, view: "CatalogView", *, pending_efforts: lis
                                  legalEfforts=pending_efforts, buddy=selected)
             return selected
         raise BoardError("BUDDY_UNAVAILABLE", "The requested native model route is not available",
-                         buddy=selected, reason=CATALOG_UNAVAILABLE_REASON)
+                         buddy=selected, reason=reason("catalog-unavailable"))
     if not model["available"]:
         raise BoardError("BUDDY_UNAVAILABLE", "The requested native model route is not available",
-                         buddy=selected, reason=CATALOG_UNAVAILABLE_REASON)
+                         buddy=selected, reason=reason("catalog-unavailable"))
     if selected["effort"] not in model["efforts"]:
         raise BoardError("INVALID_ARGUMENT", "The requested effort is not supported by this model",
                          legalEfforts=model["efforts"], buddy=selected)
@@ -604,7 +626,8 @@ class CatalogView:
                     proposals.append({
                         "buddyId": buddy_id, "label": f"{model['name']} · {effort}"[:200],
                         "harness": entry["harness"], "provider": entry["provider"], "model": model["id"], "effort": effort,
-                        "available": model["available"], "unavailableReason": model["unavailableReason"], "enabled": False,
+                        "available": model["available"], "unavailableReason": model["unavailableReason"],
+                        "unavailableContent": model["unavailableContent"], "enabled": False,
                         "capabilities": capabilities,
                         "contextWindow": model["contextWindow"],
                         "description": (model["description"] or f"{model['name']} via {entry['displayName']}")[:4000],

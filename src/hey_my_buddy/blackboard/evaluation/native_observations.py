@@ -3,6 +3,12 @@ from datetime import datetime, timezone
 import json
 
 from ..store.db import canonical_json, utc_now
+from ...protocol.reasons import reason
+
+QUOTA_EXHAUSTION_REASONS = {
+    'HARNESS_BALANCE_ZERO': 'HARNESS_BALANCE_ZERO',
+    'HARNESS_QUOTA_EXHAUSTED': 'HARNESS_QUOTA_EXHAUSTED',
+}
 
 
 def _time(value):
@@ -82,23 +88,23 @@ def warnings(connection, buddy, *, now=None):
     quota = quota_view(latest_quota(connection, buddy["harness"]), now=now)
     explicit = exhausted(connection, buddy, now=now)
     if explicit is not None:
-        return [{**explicit, "harness": buddy["harness"], "provider": buddy["provider"],
-                 "message": "A recent native observation reports this selected buddy has exhausted its quota."}]
+        return [{**{key: value for key, value in explicit.items() if key != "code"},
+                 "reason": reason(QUOTA_EXHAUSTION_REASONS[explicit["code"]]),
+                 "harness": buddy["harness"], "provider": buddy["provider"]}]
     if not quota or quota["stale"] or quota.get("provider") not in (None, buddy.get("provider")):
         return []
     from ...protocol.usage import classify_quota_code
     if quota.get("reachedType") and classify_quota_code(quota["reachedType"]) == "rate-limited":
-        return [{"code": "HARNESS_RATE_LIMIT_REPORTED", "harness": buddy["harness"],
+        return [{"reason": reason("HARNESS_RATE_LIMIT_REPORTED"), "harness": buddy["harness"],
                  "provider": quota.get("provider"), "source": quota.get("source"), "observedAt": quota.get("observedAt"),
-                 "reachedType": quota.get("reachedType"), "message": "A recent native observation reported a temporary rate limit."}]
+                 "reachedType": quota.get("reachedType")}]
     if quota.get("reachedType") or quota.get("ordinaryUsageAllowed") is False:
-        return [{"code": "HARNESS_QUOTA_LIMIT_REPORTED", "harness": buddy["harness"],
+        return [{"reason": reason("HARNESS_QUOTA_LIMIT_REPORTED"), "harness": buddy["harness"],
                  "provider": quota.get("provider"), "source": quota.get("source"), "observedAt": quota.get("observedAt"),
-                 "reachedType": quota.get("reachedType"), "message": "A recent native observation reported a quota limit; its current reset state may be unknown."}]
-    return [{"code": "HARNESS_QUOTA_NEAR_LIMIT", "harness": buddy["harness"],
+                 "reachedType": quota.get("reachedType")}]
+    return [{"reason": reason("HARNESS_QUOTA_NEAR_LIMIT"), "harness": buddy["harness"],
              "provider": quota.get("provider"), "source": quota.get("source"),
-             "observedAt": quota.get("observedAt"), "window": window,
-             "message": "Recent native quota observation is near its limit; review before continuing."}
+             "observedAt": quota.get("observedAt"), "window": window}
             for window in quota["windows"] if not window["stale"]
             and isinstance(window.get("usedPercent"), (int, float)) and window["usedPercent"] >= 90]
 

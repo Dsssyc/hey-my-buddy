@@ -165,13 +165,18 @@ def adapter(name: str) -> Adapter | ZcodeAdapter:
 
 
 def capability_report() -> dict:
+    from ...protocol.reasons import reason as make_reason
+    from .runtime_selection import selected
     report = {}
     for name, instance in adapters().items():
-        usable, reason = instance.available()
+        usable, _diagnostic = instance.available()
+        record = selected(name)
+        cause = (record.get('reason') if record is not None else
+                 make_reason('harness.probe-failed', operation='probe') if not usable else None)
         report[name] = {
             "adapter": name,
             "available": usable,
-            "reason": reason,
+            "reason": cause,
             "capabilities": list(instance.capabilities),
             "readOnlyStructured": {
                 "implemented": instance.read_only_structured,

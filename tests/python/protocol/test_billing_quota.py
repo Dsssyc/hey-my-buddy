@@ -142,7 +142,7 @@ class BillingQuotaTests(BoardTestCase):
         self._quota(board, reachedType="rate_limit_reached")
         with board.store.db.read() as db:
             self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 2)
-            self.assertEqual(warnings(db, config)[0]["code"], "HARNESS_RATE_LIMIT_REPORTED")
+            self.assertEqual(warnings(db, config)[0]["reason"]["code"], "HARNESS_RATE_LIMIT_REPORTED")
         self.quota_clock.advance(1)
         self._quota(board, reachedType="usage_limit_reached", scope={"provider": "deepseek-official", "limitId": "other-model"})
         with board.store.db.read() as db:
@@ -160,7 +160,7 @@ class BillingQuotaTests(BoardTestCase):
             self.assertEqual(DecisionCoordinator._select_candidates(db, [], coding_only=True), [])
             self.assertEqual(router.buddy_problem(db, BUDDY_ID, "fast")[1], "router-quota-exhausted")
             self.assertIsNone(exhausted(db, {**config, "provider": "other"}))
-            self.assertEqual(warnings(db, config)[0]["code"], "HARNESS_QUOTA_EXHAUSTED")
+            self.assertEqual(warnings(db, config)[0]["reason"]["code"], "HARNESS_QUOTA_EXHAUSTED")
         self.quota_clock.advance(1)
         self._quota(board, reachedType="usage_limit_reached", resetsAt=reset)
         self.quota_clock.advance(3600)
@@ -203,7 +203,7 @@ class BillingQuotaTests(BoardTestCase):
             "executionWorkspace": {"kind": "existing", "access": "write"},
             "harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"})
         self.assertEqual(result["buddy"]["model"], "deepseek-flash")
-        self.assertEqual(result["quotaWarnings"][0]["code"], "HARNESS_QUOTA_EXHAUSTED")
+        self.assertEqual(result["quotaWarnings"][0]["reason"]["code"], "HARNESS_QUOTA_EXHAUSTED")
 
     def test_exhaustion_outlives_display_freshness_and_unknown_cannot_clear_it(self):
         from hey_my_buddy.blackboard.routing.quota_routing import record

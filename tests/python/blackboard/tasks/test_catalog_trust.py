@@ -2,8 +2,8 @@
 
 A pending model stays acceptable for an explicitly specified buddy (C02); a
 missing or unavailable route gets exactly one bounded re-read of that harness
-before rejection, and the rejection names the catalog read time and the refresh
-remedy (C05). Health availability and adopted catalog facts stay separate: a
+before rejection, and the rejection names the catalog read time and structured
+reason (C05). Health availability and adopted catalog facts stay separate: a
 health failure never masks or resurrects catalog state.
 """
 from datetime import datetime, timedelta, timezone
@@ -46,10 +46,10 @@ class ExplicitCatalogTrustTests(BoardTestCase):
     def validate(self, identity=None):
         return catalog.validate_buddy(identity or IDENTITY, directory=self.directory)
 
-    def fail_health_then_recover(self, reason='HARNESS_HANDSHAKE_FAILED'):
+    def fail_health_then_recover(self):
         """A harness health failure, then recovery published like a real check."""
         harnesses = self.board.service.harnesses
-        harnesses.invalidate('dsh', harnesses.get('dsh')['revision'], reason)
+        harnesses.invalidate('dsh', harnesses.get('dsh')['revision'])
         with self.board.store.db.write() as db:
             db.execute("UPDATE harness_health SET status='ready',expires_at=?,scan_after=? WHERE harness='dsh'",
                        (_later(3600), _later(180)))
@@ -104,9 +104,8 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.assertEqual(error.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(calls, ["dsh"], "Exactly one bounded re-read of exactly that harness")
         self.assertEqual(error.details["catalogReadAt"], self.clock.value)
-        self.assertEqual(error.details["remedy"], catalog.CATALOG_REMEDY)
-        self.assertEqual(error.details["reason"], "catalog-unavailable")
-        self.assertIn("harnesses", error.details["remedy"])
+        self.assertNotIn("remedy", error.details)
+        self.assertEqual(error.details["reason"], {"code": "catalog-unavailable", "params": {}})
 
     def test_c05_a_successful_reread_admits_the_route_without_rejection(self):
         self.evaluation.record_catalog(reading())
@@ -137,15 +136,15 @@ class ExplicitCatalogTrustTests(BoardTestCase):
 
     def test_c05_a_reread_that_breaks_health_keeps_the_rejection_context(self):
         # The bounded re-read's native failure path invalidates the harness; the
-        # fresh health diagnostics lead, but the catalog read time and the
-        # refresh method of rule 3 must survive this boundary too.
+        # fresh health reason leads, and the catalog read time of rule 3
+        # must survive this boundary too.
         self.evaluation.record_catalog(reading())
         read_at = self.clock.value
         harnesses = self.board.service.harnesses
 
         def reread(name):
             record = harnesses.get(name)
-            harnesses.invalidate(name, record["revision"], "HARNESS_HANDSHAKE_FAILED")
+            harnesses.invalidate(name, record["revision"])
 
         catalog.register_catalog_reread(self.directory, reread)
         with self.assertRaises(BoardError) as rejected:
@@ -153,8 +152,8 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         error = rejected.exception
         self.assertEqual(error.code, "HARNESS_UNAVAILABLE")
         self.assertEqual(error.details["catalogReadAt"], read_at)
-        self.assertEqual(error.details["remedy"], catalog.CATALOG_REMEDY)
-        self.assertEqual(error.details["harness"]["reasonCode"], "HARNESS_HANDSHAKE_FAILED")
+        self.assertNotIn("remedy", error.details)
+        self.assertEqual(error.details["harness"]["reason"], {"code": "harness.launch-failed", "params": {"operation": "probe"}})
 
     def test_c05_reread_is_limited_to_one_native_read_per_scan_window(self):
         from hey_my_buddy.blackboard.service.harness_health import SCAN_SECONDS
@@ -170,8 +169,8 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.assertLessEqual(remaining, SCAN_SECONDS)
         for _ in range(3):
             again = self.reject_missing()
-            self.assertEqual(again.details["reason"], "catalog-unavailable")
-            self.assertEqual(again.details["remedy"], catalog.CATALOG_REMEDY)
+            self.assertEqual(again.details["reason"], {"code": "catalog-unavailable", "params": {}})
+            self.assertNotIn("remedy", again.details)
             self.assertEqual(again.details["catalogReadAt"], self.clock.value)
         self.assertEqual(calls, ["dsh"], "Repeat submissions inside the window start no native read")
         self.expire_reread_window()
@@ -326,7 +325,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
             release.set()
             first.join(timeout=10)
         self.assertLess(elapsed, 5, "The bounded join returns without hanging")
-        self.assertEqual(waiter["outcome"], ("BUDDY_UNAVAILABLE", "catalog-unavailable", read_at),
+        self.assertEqual(waiter["outcome"], ("BUDDY_UNAVAILABLE", {"code": "catalog-unavailable", "params": {}}, read_at),
                          "A timed-out join falls back to the recorded facts")
         self.assertEqual(calls, ["dsh"], "The timed-out join still starts no second native read")
 
@@ -422,7 +421,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
             self.assertGreater(db.execute("SELECT revision FROM harness_health WHERE harness='dsh'").fetchone()[0],
                                revision_before, "The fixture really revised the health record")
         again = self.reject_missing()
-        self.assertEqual(again.details["reason"], "catalog-unavailable")
+        self.assertEqual(again.details["reason"], {"code": "catalog-unavailable", "params": {}})
         self.assertEqual(calls, ["dsh"], "A health observation revision alone starts no second native read")
 
 
@@ -433,7 +432,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.assertEqual(self.validate(), IDENTITY, "The operator pin still admits the listed route")
         error = self.reject_missing()
         self.assertEqual(error.code, "BUDDY_UNAVAILABLE")
-        self.assertEqual(error.details["reason"], "catalog-unavailable")
+        self.assertEqual(error.details["reason"], {"code": "catalog-unavailable", "params": {}})
         self.assertEqual(calls, [], "The operator pin replaces discovery; no native re-read applies")
         self.assertNotIn("catalogReadAt", error.details)
 
@@ -442,7 +441,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         with self.assertRaises(BoardError) as rejected:
             self.validate()
         self.assertEqual(rejected.exception.code, "CATALOG_UNAVAILABLE")
-        self.assertEqual(rejected.exception.details["reason"], "catalog-unavailable")
+        self.assertEqual(rejected.exception.details["reason"], {"code": "catalog-unavailable", "params": {}})
 
     def test_service_refresh_populates_the_catalog_for_a_cold_board(self):
         calls = []
@@ -552,7 +551,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         # only high is legal, even when no row keeps the retirement reason.
         with self.board.store.db.write() as db:
             db.execute("UPDATE buddies SET available=0,enabled=1,"
-                       "unavailable_reason='HARNESS_HANDSHAKE_FAILED' WHERE harness='dsh'")
+                       "unavailable_code='harness.probe-failed',unavailable_params_json='{\"operation\":\"probe\"}',unavailable_content=NULL WHERE harness='dsh'")
 
     def test_health_mask_cannot_restore_a_retired_effort_on_unknown_read(self):
         self.masked_retired_effort()

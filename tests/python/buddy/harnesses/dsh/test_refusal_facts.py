@@ -264,10 +264,9 @@ class RefusalFactsTests(NativeRunCase):
                                            native_root=self.root, timeout_seconds=30, cancelled=lambda: False)
         self.assertEqual(catalog["discoveries"],
                          [{"harness": "dsh", "status": "unknown", "accountStatus": "not-applicable",
-                           "reason": native_run.UNREAD_CATALOG_REASON}])
+                           "reason": {"code": native_run.UNREAD_CATALOG_REASON, "params": {}}}])
         self.assertEqual(catalog["providers"], [])
-        self.assertTrue(any("configuration options had an unrecognized shape" in warning
-                            for warning in catalog["warnings"]), catalog["warnings"])
+        self.assertEqual(catalog["warnings"], [])
         self.assertNotIn("session/prompt", self.methods)
         self.assertIn("session/close", self.methods)
         self.assertEqual(self.client.shutdown.call_count, 1)
@@ -371,8 +370,8 @@ class RefusalFactsTests(NativeRunCase):
                                            invocation_root=self.base / "discovery",
                                            native_root=self.root, timeout_seconds=30, cancelled=lambda: False)
         self.assertEqual(catalog["harnessVersion"], "unknown")
-        self.assertTrue(any('"initialize"' in warning and '"status": "unknown"' in warning
-                            for warning in catalog["warnings"]))
+        self.assertEqual(catalog["warnings"][0]["reason"]["code"], "catalog.acp-initialize-unreadable")
+        self.assertEqual(catalog["warnings"][0]["diagnostic"]["initialize"]["status"], "unknown")
         self.assertNotIn("session/prompt", self.methods)
         self.assertIn("session/close", self.methods)
 

@@ -3,7 +3,7 @@
 A Host's explicit ``workflow_continue`` buddy must meet the same catalog
 facts as a submission: a missing or unavailable route gets exactly one bounded
 re-read of its harness before rejection, and the rejection names the catalog read
-time and the refresh remedy. The user's enabled choice stays a separate gate
+time and a structured reason. The user's enabled choice stays a separate gate
 that neither a refresh nor the override can flip, and its refusal carries a
 different reason and facts than a catalog refusal. These tests run the real
 ``catalog.validate_buddy`` (WorkflowTestCase's passthrough mock is
@@ -102,8 +102,8 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.assertEqual(error.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(calls, ["dsh"])
         self.assertEqual(error.details.get("catalogReadAt"), read_at)
-        self.assertEqual(error.details.get("remedy"), catalog.CATALOG_REMEDY)
-        self.assertEqual(error.details.get("reason"), "catalog-unavailable",
+        self.assertNotIn("remedy", error.details)
+        self.assertEqual(error.details.get("reason"), {"code": "catalog-unavailable", "params": {}},
                          "The cause is the catalog, not the user gate")
         self.assertNotIn("enabled", error.details)
 
@@ -127,7 +127,7 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.assertEqual(error.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(calls, ["dsh"])
         self.assertEqual(error.details.get("catalogReadAt"), confirmed_at)
-        self.assertEqual(error.details.get("remedy"), catalog.CATALOG_REMEDY)
+        self.assertNotIn("remedy", error.details)
         self.assertNotIn("enabled", error.details)
 
     def test_confirmed_unavailable_route_recovers_when_the_reread_lists_it_again(self):
@@ -275,11 +275,11 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         absent = missing.exception
         self.assertEqual(absent.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(calls, ["dsh"])
-        self.assertEqual(absent.details.get("remedy"), catalog.CATALOG_REMEDY)
-        self.assertEqual(absent.details.get("reason"), "catalog-unavailable")
+        self.assertNotIn("remedy", absent.details)
+        self.assertEqual(absent.details.get("reason"), {"code": "catalog-unavailable", "params": {}})
         self.assertNotIn("enabled", absent.details)
         self.assertNotEqual(gate.message, absent.message)
-        self.assertNotEqual(gate.details["remedy"], absent.details["remedy"])
+        self.assertNotEqual(gate.details["reason"], absent.details["reason"])
 
     def test_refresh_never_flips_the_users_enabled_choice(self):
         submitted = self.seed()  # alpha is listed; both buddies start disabled.

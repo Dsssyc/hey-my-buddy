@@ -53,18 +53,19 @@ class ClaudeAdapter:
         from ..runtime_selection import selected
         record = selected("claude")
         if record is not None:
-            return record.get('status') == 'ready', record.get('reasonCode')
+            return record.get('status') == 'ready', (record.get('reason') or {}).get('code')
         usable, reason = self.discovery_available()
         if not usable:
             return False, reason
         try:
             metadata = _cached_native_metadata()
         except BoardError as error:
-            return False, error.message
+            return False, error.code
         unknown = next((item for item in metadata['catalog']['discoveries']
                         if item['status'] == 'unknown'), None)
         if unknown is not None:
-            return False, unknown.get('reason') or 'Native metadata is still unknown'
+            cause = unknown.get('reason')
+            return False, cause['code'] if cause is not None else 'catalog-unavailable'
         return True, None
 
     def discovery_available(self) -> tuple[bool, str | None]:

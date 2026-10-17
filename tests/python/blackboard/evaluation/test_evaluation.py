@@ -86,6 +86,18 @@ class EvaluationTestCase(BoardTestCase):
 # Published settings and validation
 # ---------------------------------------------------------------------------
 class EvaluationPublishTests(EvaluationTestCase):
+    def test_account_view_reports_one_structured_reason(self):
+        from hey_my_buddy.blackboard.catalog.accounts import view
+        board = self.board()
+        with board.store.db.write() as db:
+            db.execute("INSERT INTO harness_health(harness,status,record_json) VALUES('codex','login-required','{}') "
+                       "ON CONFLICT(harness) DO UPDATE SET status=excluded.status,record_json=excluded.record_json")
+        with board.store.db.read() as db:
+            account = view(db, 'codex')
+        self.assertEqual(account['reason'], {'code': 'account.login-required', 'params': {}})
+        self.assertNotIn('reasonCode', account)
+        self.assertNotIn('guidance', account)
+
     def test_catalog_permissions_persist_through_user_publication(self):
         board = self.board()
         catalog_result = self.seed_catalog(board)
@@ -310,7 +322,7 @@ class CatalogRefreshTests(EvaluationTestCase):
         self.assertTrue(proposals)
         self.assertTrue(all(item["enabled"] is False for item in proposals), "discovered buddies start disabled")
         self.assertTrue(all(item["available"] is True for item in proposals))
-        self.assertIn("refreshed", refreshed["note"])
+        self.assertNotIn("note", refreshed)
         self.assertNotIn("tableRevision", refreshed)
         self.assertEqual(len(self.snapshot(board)["buddies"]), len(proposals))
         buddy_ids = [buddy["buddyId"] for buddy in self.snapshot(board)["buddies"]]

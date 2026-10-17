@@ -234,7 +234,8 @@ class NativeShapeRoundTests(NativeRunCase):
                 native_root=self.base / "reading-native", timeout_seconds=3, cancelled=lambda: False)
         self.assertEqual(receipt["discoveries"][0]["status"], "unknown")
         self.assertEqual(receipt["providers"], [])
-        self.assertTrue(any("not fully recognized" in warning for warning in receipt["warnings"]))
+        self.assertEqual(receipt["discoveries"][0]["reason"],
+                         {"code": "catalog.model-shape-unreadable", "params": {}})
 
     def execute_shape(self, rewrite):
         self.fake.write_text(rewrite(self.fake.read_text()))

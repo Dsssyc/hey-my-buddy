@@ -1,4 +1,5 @@
 """ADR-027 service wiring: native reading and account facts survive refresh."""
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -36,10 +37,12 @@ class CatalogRefreshServiceTests(BoardTestCase):
             row = db.execute("SELECT status, reason FROM catalog_current WHERE harness='dsh'").fetchone()
             buddies = db.execute("SELECT buddy_id FROM buddies WHERE harness='dsh'").fetchall()
             read_at = catalog.catalog_read_at(db, "dsh")
+        row = dict(row)
+        row['reason'] = json.loads(row['reason']) if row['reason'] is not None else None
         return row, buddies, read_at
 
     def test_refresh_preserves_native_status_and_optional_reason(self):
-        for status, account_status, reason in (("unknown", "confirmed", "native model shape unreadable"),
+        for status, account_status, reason in (("unknown", "confirmed", {"code": "catalog.model-shape-unreadable", "params": {}}),
                                                 ("unknown", "not-applicable", None),
                                                 ("complete", "not-applicable", None),
                                                 ("complete", "confirmed", "native discovery note")):
@@ -52,7 +55,8 @@ class CatalogRefreshServiceTests(BoardTestCase):
                 self.assertEqual(record.call_args.args[1]["discoveries"], [observation])
                 row, _, _ = self.catalog_state()
                 self.assertEqual(row["status"], status)
-                self.assertEqual(row["reason"], reason if status == "unknown" else None)
+                expected = (reason or {"code": "catalog.native-unknown", "params": {"harness": "dsh"}})
+                self.assertEqual(row["reason"], expected if status == "unknown" else None)
 
     def test_unknown_refresh_retains_catalog_without_confirming_model_absence(self):
         self.refresh_catalog("confirmed", models=("alpha", "beta"))
@@ -62,11 +66,11 @@ class CatalogRefreshServiceTests(BoardTestCase):
             confirmed_buddies = [tuple(row) for row in db.execute("SELECT * FROM buddies WHERE harness='dsh'")]
         for elapsed in (1, catalog.CONFIRMATION_SECONDS + 1):
             self.clock.advance(elapsed)
-            self.refresh_catalog("confirmed", status="unknown", reason="native model shape unreadable",
+            self.refresh_catalog("confirmed", status="unknown", reason={"code": "catalog.model-shape-unreadable", "params": {}},
                                  models=("alpha", "untrusted"))
             row, _, read_at = self.catalog_state()
             self.assertEqual(row["status"], "unknown")
-            self.assertEqual(row["reason"], "native model shape unreadable")
+            self.assertEqual(row["reason"], {"code": "catalog.model-shape-unreadable", "params": {}})
             self.assertEqual(read_at, confirmed_at)
             with self.board.store.db.read() as db:
                 self.assertEqual(db.execute("SELECT discovery_id FROM catalog_current WHERE harness='dsh'").fetchone()[0],
@@ -100,11 +104,11 @@ class CatalogRefreshServiceTests(BoardTestCase):
         self.assertEqual({p["buddy_id"] for p in buddies},
                          {"dsh:fixture:alpha:max", "dsh:fixture:beta:max", "dsh:fixture:gamma:max"})
         with self.board.store.db.read() as db:
-            buddies = {p["model"]: p for p in db.execute("SELECT model,available,unavailable_reason FROM buddies")}
+            buddies = {p["model"]: p for p in db.execute("SELECT model,available,unavailable_code FROM buddies")}
             self.assertTrue(buddies["alpha"]["available"])
             self.assertTrue(buddies["gamma"]["available"])
             self.assertFalse(buddies["beta"]["available"])
-            self.assertEqual(buddies["beta"]["unavailable_reason"], catalog.CONFIRMED_ABSENCE_REASON)
+            self.assertEqual(buddies["beta"]["unavailable_code"], catalog.CONFIRMED_ABSENCE_REASON)
             self.assertEqual(catalog.pending_model_services(db), {})
 
     def test_refresh_without_own_observation_keeps_complete_and_unknown_account(self):
@@ -120,7 +124,7 @@ class CatalogRefreshServiceTests(BoardTestCase):
                          [{"harness": "dsh", "status": "complete", "accountStatus": "unknown"}])
         row, buddies, read_at = self.catalog_state()
         self.assertEqual(row["status"], "unknown")
-        self.assertEqual(row["reason"], "ACCOUNT_STATUS_UNKNOWN")
+        self.assertEqual(row["reason"], {"code": "catalog.account-status-unknown", "params": {"harness": "dsh"}})
         self.assertEqual(buddies, [])
         self.assertIsNone(read_at)
 
@@ -130,7 +134,7 @@ class CatalogRefreshServiceTests(BoardTestCase):
                 self.refresh_catalog(account_status)
                 row, buddies, read_at = self.catalog_state()
                 self.assertEqual(row["status"], "unknown")
-                self.assertEqual(row["reason"], "ACCOUNT_STATUS_UNKNOWN")
+                self.assertEqual(row["reason"], {"code": "catalog.account-status-unknown", "params": {"harness": "dsh"}})
                 self.assertEqual(buddies, [], "No buddies are published from an untrusted reading")
                 self.assertIsNone(read_at)
 

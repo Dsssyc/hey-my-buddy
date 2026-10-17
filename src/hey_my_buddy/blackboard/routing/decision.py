@@ -309,8 +309,11 @@ class DecisionCoordinator:
             "description": row["description"],
             "source": row["source"],
         }
-        if row["unavailable_reason"]:
-            entry["unavailableReason"] = row["unavailable_reason"]
+        if row["unavailable_code"]:
+            entry["unavailableReason"] = {"code": row["unavailable_code"],
+                                          "params": json.loads(row["unavailable_params_json"])}
+            if row["unavailable_content"] is not None:
+                entry["unavailableContent"] = row["unavailable_content"]
         return entry
 
     def _table_input(

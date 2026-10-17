@@ -34,7 +34,9 @@ class DeferredReviewTests(unittest.TestCase):
                     self.assertFalse(item.read_only_structured)
                     self.assertFalse(item.read_only_structured_resume)
                     self.assertTrue(item.no_tool_structured)
-                    self.assertEqual(item.local_read_only_check()['reasonCode'], 'readonly-worker-carrier-unimplemented')
+                    self.assertEqual(item.local_read_only_check()['reason'],
+                                     {'code': 'harness.readonly-worker-carrier-unimplemented',
+                                      'params': {'harness': item.name}})
                     with self.assertRaises(BoardError):
                         router_role.prepare_router_review({}, {}, item, context)
 

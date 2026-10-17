@@ -160,12 +160,12 @@ def buddy_problem(connection, buddy_id: str | None, routing_mode: str) -> tuple[
     if not row["enabled"]:
         return unavailable("router-unavailable", f"buddy {buddy_id} 已禁用")
     if not row["available"]:
-        detail = row["unavailable_reason"] or "目录未声明可用"
+        detail = row["unavailable_code"] or "目录未声明可用"
         return unavailable("router-unavailable", f"buddy {buddy_id} 在已发布目录中不可用（{detail}）")
     health = read_health(connection, row["harness"])
     if not health["available"]:
-        detail = health.get("reason") or health.get("remedy") or health.get("status")
-        return unavailable("router-unavailable", f"harness {row['harness']} 不可用（{health.get('reasonCode')}: {detail}）")
+        detail = (health.get("reason") or {}).get("code") or health.get("status")
+        return unavailable("router-unavailable", f"harness {row['harness']} 不可用（{detail}）")
     from ..evaluation.native_observations import exhausted
     if exhausted(connection, dict(row)) is not None:
         return unavailable("router-quota-exhausted", f"buddy {buddy_id} 有仍然生效的原生额度耗尽记录")
@@ -178,7 +178,7 @@ def buddy_problem(connection, buddy_id: str | None, routing_mode: str) -> tuple[
             else:
                 check = native.local_read_only_check()
                 eligible = check["eligible"]
-                detail = f"{check['reasonCode']}: {check['reason']}"
+                detail = (check.get("reason") or {}).get("code")
     except BoardError as error:
         eligible, detail = False, f"{error.code}: {error.message}"
     if not eligible:

@@ -60,7 +60,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
                            HMB_STATE_DIR=str(self.root / 'state'), HMB_RUNTIME_ROOT=str(self.root / 'runtime'),
                            TMPDIR=str(self.root))
         record = {'harness': 'codex', 'status': 'unavailable', 'command': [],
-                  'reasonCode': 'HARNESS_UNAVAILABLE', 'remedy': 'fixture PATH has no harness'}
+                  'reason': {'code': 'harness.not-found', 'params': {'operation': 'probe'}}}
         with patch.dict(os.environ, environment, clear=True), \
              patch.object(run_execution.tempfile, 'tempdir', str(self.root)), \
              bound([record], environment=environment):
@@ -260,11 +260,11 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
                                HMB_STATE_DIR=str(root / 'state'), HMB_RUNTIME_ROOT=str(root / 'runtime'),
                                TMPDIR=str(root))
             record = {'harness': 'codex', 'status': 'unavailable', 'command': [],
-                      'reasonCode': 'HARNESS_UNAVAILABLE', 'remedy': 'fixture PATH has no harness'}
+                      'reason': {'code': 'harness.not-found', 'params': {'operation': 'probe'}}}
             with patch.dict(os.environ, environment, clear=True), bound([record], environment=environment):
                 with self.assertRaises(BoardError) as caught:
                     run_execution.discover_models('codex')
             self.assertEqual(caught.exception.code, 'HARNESS_UNAVAILABLE')
-            self.assertEqual(caught.exception.message, record['remedy'])
+            self.assertEqual(caught.exception.message, 'The selected harness is unavailable')
             self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
             self.assertEqual(list(root.glob('hey-my-buddy-codex-catalog-*')), [])

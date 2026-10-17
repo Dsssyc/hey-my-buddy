@@ -54,7 +54,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
                 self.seed(board)
                 self.configure(board, defaultRoutingMode=mode)
                 with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
-                        'eligible': True, 'reasonCode': None, 'reason': None,
+                        'eligible': True, 'reason': None,
                         'systemSandbox': sandbox, 'sameAttemptContinuation': False}):
                     requested, claim = self.request_route(board, f'matrix-{number}')
                 events = settled(category, 'call-1') if category else []
@@ -163,7 +163,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
         self.seed(board)
         result, first = self.request_route(board, "freeze-once")
         with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
-                "eligible": True, "reasonCode": None, "reason": None,
+                "eligible": True, "reason": None,
                 "systemSandbox": True, "sameAttemptContinuation": False}):
             _later, second = self.request_route(board, "freeze-true", worker="router-2")
             self.assertEqual(self.attempt_policy(board, second["attempt"]["attemptId"]),
@@ -263,7 +263,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
         problem = self.problem(board, result["decisionId"], {**output, "toolEvidence": execute})
         self.assertEqual(problem["code"], "router-tools-forbidden")
         with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
-                "eligible": True, "reasonCode": None, "reason": None,
+                "eligible": True, "reason": None,
                 "systemSandbox": True, "sameAttemptContinuation": False}):
             sandboxed, sandboxed_claim = self.request_route(board, "sandbox", worker="router-2")
             self.assertEqual(self.attempt_policy(board, sandboxed_claim["attempt"]["attemptId"]),

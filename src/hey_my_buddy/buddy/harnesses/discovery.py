@@ -19,6 +19,8 @@ import tempfile
 import time
 import selectors
 
+from ...protocol.reasons import reason as make_reason
+
 
 HARNESSES = ("dsh", "zcode", "codex", "claude")
 _NAMES = {"dsh": "dsh", "zcode": "zcode", "codex": "codex", "claude": "claude", "node": "node"}
@@ -609,14 +611,14 @@ def _node_for(path: Path, environment: dict, deadline: float) -> tuple[str | Non
             failures.append(code)
         shutdown = False
         found = _discover("node", environment=environment, deadline=deadline)
-        shutdown = found["reasonCode"] != "shutdown-unverified"
+        shutdown = _code(found) != "shutdown-unverified"
         if found["available"]:
             return found["executable"], found["version"]
         if not shutdown:
-            return None, found["reasonCode"]
+            return None, _code(found)
         if found['status'] == 'unknown' or any(code in ('timeout', 'scan-timeout') for code in failures):
-            return None, 'scan-timeout' if found['reasonCode'] == 'scan-timeout' else 'timeout'
-        missing = "node-missing" if found["status"] == "missing" else found["reasonCode"]
+            return None, 'scan-timeout' if _code(found) == 'scan-timeout' else 'timeout'
+        missing = "node-missing" if found["status"] == "missing" else _code(found)
         return None, failures[0] if failures else missing or "node-missing"
     except Exception as error:
         if hasattr(error, "discovery_shutdown_confirmed"):
@@ -642,15 +644,41 @@ def _launch_command(path: Path, environment: dict) -> list[str] | None:
     return [str(path)]
 
 
+PROBE_REASON_CODES: dict[str, str] = {
+    "not-found": "harness.not-found",
+    "node-missing": "harness.node-missing",
+    "login-required": "harness.login-required",
+    "interpreter-missing": "harness.interpreter-missing",
+    "timeout": "harness.timeout",
+    "output-limit": "harness.output-limit",
+    "auth-unverified": "harness.auth-unverified",
+    "version-unknown": "harness.version-unknown",
+    "scan-timeout": "harness.scan-timeout",
+    "shutdown-unverified": "harness.shutdown-unverified",
+    "pipe-failed": "harness.pipe-failed",
+    "probe-failed": "harness.probe-failed",
+    "launch-failed": "harness.launch-failed",
+}
+
+
+def _probe_reason(code: str | None) -> dict | None:
+    return make_reason(PROBE_REASON_CODES[code], operation="probe") if code else None
+
+
+def _code(record: dict) -> str | None:
+    value = record.get("reason")
+    return value["code"].removeprefix("harness.") if value else None
+
+
 def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadline: float) -> dict:
     shutdown = True  # No child has been created in this scan stage.
     try:
         path = Path(candidate["path"])
         result = {"path": str(path), "source": candidate["source"], "fingerprint": candidate["fingerprint"],
-                  "status": "unhealthy", "reasonCode": None, "version": None, "command": []}
+                  "status": "unhealthy", "reason": None, "version": None, "command": []}
         if not candidate["exists"]:
             result["status"] = "missing"
-            result["reasonCode"] = "not-found"
+            result["reason"] = _probe_reason("not-found")
             return result
         if harness != "node" and _script_uses_node(path):
             shutdown = False
@@ -659,13 +687,13 @@ def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadl
             if node is None:
                 if problem in ('timeout', 'scan-timeout'):
                     result['status'] = 'unknown'
-                result["reasonCode"] = problem
+                result["reason"] = _probe_reason(problem)
                 return result
             command = [node, str(path)]
         else:
             command = _launch_command(path, environment)
             if command is None:
-                result["reasonCode"] = "interpreter-missing"
+                result["reason"] = _probe_reason("interpreter-missing")
                 return result
         child_env = native_environment(environment, command=command)
         shutdown = False
@@ -675,7 +703,7 @@ def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadl
         if code is not None:
             if code in ("timeout", "scan-timeout"):
                 result["status"] = "unknown"
-            result["reasonCode"] = code
+            result["reason"] = _probe_reason(code)
             return result
         match = _VERSION.search(output.decode("utf-8", "replace")[:256])
         result["version"] = match.group(0) if match else "unknown"
@@ -684,40 +712,40 @@ def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadl
             code, output = probe([*command, "login", "status"], child_env, deadline=deadline)
             shutdown = code != "shutdown-unverified"
             if not shutdown:
-                result["reasonCode"] = code
+                result["reason"] = _probe_reason(code)
                 return result
             status = output.decode("utf-8", "replace").lower()
             if "not logged in" in status or "logged out" in status:
-                result.update(status="login-required", reasonCode="login-required")
+                result.update(status="login-required", reason=_probe_reason("login-required"))
                 return result
             if code is not None:
                 if code in ("timeout", "scan-timeout"):
                     result["status"] = "unknown"
-                result["reasonCode"] = code
+                result["reason"] = _probe_reason(code)
                 return result
             if "logged in" not in status:
-                result["reasonCode"] = "auth-unverified"
+                result["reason"] = _probe_reason("auth-unverified")
                 return result
         elif harness == "claude":
             shutdown = False
             code, output = probe([*command, "auth", "status", "--json"], child_env, deadline=deadline)
             shutdown = code != "shutdown-unverified"
             if not shutdown:
-                result["reasonCode"] = code
+                result["reason"] = _probe_reason(code)
                 return result
             if code in ("timeout", "scan-timeout"):
-                result.update(status="unknown", reasonCode=code)
+                result.update(status="unknown", reason=_probe_reason(code))
                 return result
             try:
                 account = json.loads(output)
             except (ValueError, UnicodeError):
-                result["reasonCode"] = code or "auth-unverified"
+                result["reason"] = _probe_reason(code or "auth-unverified")
                 return result
             if not isinstance(account, dict) or account.get("loggedIn") is not True:
-                result.update(status="login-required", reasonCode="login-required")
+                result.update(status="login-required", reason=_probe_reason("login-required"))
                 return result
             if code is not None:
-                result["reasonCode"] = code
+                result["reason"] = _probe_reason(code)
                 return result
             from .claude.config import provider_from_account
             from ...protocol.billing import claude_status
@@ -726,30 +754,13 @@ def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadl
             provider = provider_from_account(account)
             result["billingByProvider"] = {provider: claude_status({**account, "apiProvider": provider}, observed_at)}
         result.update(status="ready", command=command,
-                      reasonCode="version-unknown" if match is None else None)
+                      reason=_probe_reason("version-unknown") if match is None else None)
         return result
     except Exception as error:
         if hasattr(error, "discovery_shutdown_confirmed"):
             shutdown = error.discovery_shutdown_confirmed
         error.discovery_shutdown_confirmed = shutdown
         raise
-
-
-_REMEDIES = {
-    "not-found": "安装该 harness，或提供其可执行文件的手动路径后重新检测。",
-    "node-missing": "安装与 CLI 配套的 Node.js，或将 node 放在 CLI 的 bin 目录。",
-    "login-required": "使用所选 CLI 的原生登录命令登录后重新检测。",
-    "interpreter-missing": "安装脚本所需的解释器后重新检测。",
-    "timeout": "检查 CLI 本地启动是否卡住，然后重新检测。",
-    "output-limit": "检查 CLI 的版本或登录检查输出，然后重新检测。",
-    "auth-unverified": "检查 CLI 的本地登录状态与版本后重新检测。",
-    "version-unknown": "CLI 握手通过，但版本文本未识别；请核对本地版本。",
-    "scan-timeout": "候选检测超过总时间上限；请缩小候选范围后重新检测。",
-    "shutdown-unverified": "探测子进程的停止状态未获确认；请检查残留进程后重新检测。",
-    "pipe-failed": "探测输出管道失败；请检查 CLI 的本地启动。",
-    "probe-failed": "检查 CLI 安装与本地启动依赖后重新检测。",
-    "launch-failed": "检查可执行权限与安装路径后重新检测。",
-}
 
 
 def discover(harness: str, *, manual_path: str | None = None, environment: dict | None = None) -> dict:
@@ -780,13 +791,13 @@ def _discover(harness: str, *, manual_path: str | None = None,
                 break
             shutdown = False
             attempt = _candidate_handshake(harness, item, environment, deadline)
-            shutdown = attempt["reasonCode"] != "shutdown-unverified"
+            shutdown = _code(attempt) != "shutdown-unverified"
             attempts.append(attempt)
             if attempt["status"] == "ready":
                 ready_tier = tier
-            if attempt["reasonCode"] in ("scan-timeout", "shutdown-unverified"):
+            if _code(attempt) in ("scan-timeout", "shutdown-unverified"):
                 incomplete = True
-                incomplete_reason = attempt["reasonCode"]
+                incomplete_reason = _code(attempt)
                 break
         ready = [item for item in attempts if item["status"] == "ready"]
         selected = min(ready, key=lambda item: (_priority(item["source"]),
@@ -800,14 +811,14 @@ def _discover(harness: str, *, manual_path: str | None = None,
             failure = failure or next((item for item in attempts if item["status"] == "login-required"), None)
             failure = failure or (attempts[0] if attempts else None)
             status = failure["status"] if failure else "missing"
-            reason = failure["reasonCode"] if failure else "not-found"
+            reason = _code(failure) if failure else "not-found"
         else:
-            status, reason = "ready", selected["reasonCode"]
+            status, reason = "ready", _code(selected)
         diagnostics = [{"path": item["path"], "source": item["source"], "status": item["status"],
-                        "reasonCode": item["reasonCode"]} for item in attempts[:_MAX_DIAGNOSTICS]]
+                        "reason": item["reason"]} for item in attempts[:_MAX_DIAGNOSTICS]]
         if not attempts:
             diagnostics = [{"path": item["path"], "source": item["source"], "status": "missing",
-                            "reasonCode": "not-found"} for item in snapshot["candidates"][:_MAX_DIAGNOSTICS]]
+                            "reason": _probe_reason("not-found")} for item in snapshot["candidates"][:_MAX_DIAGNOSTICS]]
         return {"harness": harness, "status": status, "available": selected is not None,
                 "command": selected["command"] if selected else [],
                 "executable": selected["path"] if selected else None,
@@ -817,7 +828,7 @@ def _discover(harness: str, *, manual_path: str | None = None,
                 "scanFingerprint": _scan_hash(snapshot), "candidates": diagnostics,
                 **({"billingByProvider": selected["billingByProvider"]}
                    if selected is not None and "billingByProvider" in selected else {}),
-                "reasonCode": reason, "remedy": _REMEDIES.get(reason) if reason else None}
+                "reason": _probe_reason(reason)}
     except Exception as error:
         if hasattr(error, "discovery_shutdown_confirmed"):
             shutdown = error.discovery_shutdown_confirmed

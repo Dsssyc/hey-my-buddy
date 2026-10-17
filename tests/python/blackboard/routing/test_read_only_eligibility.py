@@ -26,7 +26,7 @@ class LocalEligibilityTests(unittest.TestCase):
                     result = item.local_read_only_check()
                     self.assertTrue(result['eligible'])
                     self.assertTrue(result['systemSandbox'])
-                    self.assertIsNone(result['reasonCode'])
+                    self.assertIsNone(result['reason'])
 
     def test_unimplemented_non_sandbox_adapters_stay_ineligible(self):
         with patch('subprocess.Popen', side_effect=AssertionError('native process')), \
@@ -37,8 +37,8 @@ class LocalEligibilityTests(unittest.TestCase):
                     self.assertFalse(result['eligible'])
                     self.assertFalse(result['systemSandbox'])
                     if item.name in ('dsh', 'zcode'):
-                        self.assertEqual(result['reasonCode'], 'readonly-worker-carrier-unimplemented')
-                        self.assertIn('Worker carrier', result['reason'])
+                        self.assertEqual(result['reason'], {'code': 'harness.readonly-worker-carrier-unimplemented',
+                                                            'params': {'harness': item.name}})
 
     def test_a_declaration_without_a_handler_is_ineligible(self):
         class Declared(Adapter):
@@ -52,9 +52,10 @@ class LocalEligibilityTests(unittest.TestCase):
             result = ClaudeAdapter().local_read_only_check()
             self.assertFalse(result['eligible'])
             self.assertFalse(result['systemSandbox'])
-            self.assertEqual(result['reasonCode'], 'readonly-platform-unsupported')
+            self.assertEqual(result['reason'], {'code': 'harness.readonly-platform-unsupported', 'params': {}})
         with patch('hey_my_buddy.buddy.harnesses.base.sys.platform', 'darwin'), patch.dict(RUN_SEAMS, {'codex': None}):
-            self.assertEqual(CodexAdapter().local_read_only_check()['reasonCode'], 'readonly-resource-missing')
+            self.assertEqual(CodexAdapter().local_read_only_check()['reason'],
+                             {'code': 'harness.readonly-resource-missing', 'params': {}})
 
     def test_non_sandbox_mechanism_cannot_allow_commands(self):
         class Restricted(Adapter):
@@ -78,7 +79,8 @@ class HealthEligibilityTests(BoardTestCase):
                 capability = result['readOnlyStructured']
                 self.assertFalse(capability['eligible'])
                 self.assertFalse(capability['systemSandbox'])
-                self.assertEqual(capability['reasonCode'], 'readonly-worker-carrier-unimplemented')
+                self.assertEqual(capability['reason'], {'code': 'harness.readonly-worker-carrier-unimplemented',
+                                                        'params': {'harness': harness}})
             self.assertEqual(db.total_changes, before)
 
     def test_health_reads_ignore_old_certificates_and_do_not_write_state(self):
