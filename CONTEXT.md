@@ -196,7 +196,7 @@ Text that a buddy or a native harness wrote, such as a Host's continuation, a Wo
 _Avoid_: reason (for words someone wrote)
 
 **备注 / note**:
-The content someone attaches to an action of their own: a Host's decision, continuation, cancellation, scope change, acceptance or request for full access, the user's stop of a macro task, a Router's choice of buddy. A Host and the user may leave it out; the blackboard then writes nothing in its place, because the record already says who acted.
+The content someone attaches to an action of their own: a Host's decision, continuation, cancellation, scope change, acceptance or request for full access, the user's stop of a macro task, a Router's choice of buddy. Some actions require one; where it is left out, the blackboard writes nothing in its place, because the record already says who acted.
 _Avoid_: reason (for these words)
 
 **诊断 / diagnostic**:
