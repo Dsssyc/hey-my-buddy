@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from hey_my_buddy.protocol import schemas
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.routing import router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
@@ -733,6 +734,12 @@ class RoutingSpanTests(WorkflowTestCase):
                        " VALUES('recorded-decision','recorded-request','select','fingerprint',?,?,?,?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",
                        (task_id, json.dumps(selected) if selected else None, json.dumps(output) if output else None,
                         json.dumps({'budget': {'preset': 'deep'}})))
+            now = '2026-01-01T00:00:00Z'
+            router_sequence.freeze_request(db, 'recorded-decision',
+                                           snapshot={'facts': {}, 'baseInput': {}, 'inspections': []}, now=now)
+            router_sequence.reserve_dispatch(db, decision_id='recorded-decision', task_id=task_id, router_index=0,
+                                             buddy={'buddyId': 'frozen-router', 'harness': 'dsh', 'provider': 'fixture',
+                                                    'model': 'router', 'effort': 'max'}, document={}, now=now)
 
     def spans(self, board, task_id):
         from hey_my_buddy.blackboard.tasks.macro_tasks import _routing_spans
@@ -769,7 +776,7 @@ class RoutingSpanTests(WorkflowTestCase):
                            " VALUES(?,?,1,'resolved','2026-01-02T00:00:00Z','2026-01-02T00:00:00Z')", (decision_id, task_id))
         self.assertEqual(self.spans(board, task_id)[0], before)
 
-    def test_missing_records_are_null_and_reads_do_not_backfill(self):
+    def test_missing_details_are_null_and_current_pointer_cannot_rewrite_dispatch(self):
         board, task_id = self.recorded_task()
         before = self.spans(board, task_id)[0]
         self.assertIsNone(before['decisionId'])
@@ -788,6 +795,7 @@ class RoutingSpanTests(WorkflowTestCase):
         self.assertEqual(self.spans(board, 'no-task-or-attempt'), [])
         with board.store.db.write() as db:
             db.execute("UPDATE decision_requests SET task_id='not-started'")
+        self.assertEqual(self.spans(board, task_id)[0], span)
         self.assertEqual(self.spans(board, 'not-started'), [])
 
     def test_only_new_valid_abstention_is_marked_and_cancel_is_not(self):

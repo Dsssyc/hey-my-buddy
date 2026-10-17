@@ -777,12 +777,14 @@ def _run_spans(store, connection, row) -> list[dict]:
 
 
 def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list[dict]:
-    # Resolve the immutable decision from its own calculation task, never from
-    # the owner's current workflow route (which may have been retried).
+    # Resolve every Router task through its immutable dispatch, including tasks
+    # replaced by a later Router in the same decision.
     record = connection.execute(
         "SELECT d.decision_id, d.status, d.buddy_id, d.reason, r.selected_json, r.output_json, r.requested_json"
-        " FROM decision_requests r JOIN evaluation_decisions d USING(decision_id)"
-        " WHERE r.task_id=?", (decision_task_id,)
+        f" FROM ({micro_task.ROUTING_TASKS_SQL}) routing"
+        " JOIN decision_requests r ON r.decision_id=routing.decision_id"
+        " JOIN evaluation_decisions d ON d.decision_id=routing.decision_id"
+        " WHERE routing.task_id=?", (decision_task_id,)
     ).fetchone()
     output = json.loads(record["output_json"]) if record and record["output_json"] else {}
     output = output if isinstance(output, dict) else {}
