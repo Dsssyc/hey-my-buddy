@@ -78,16 +78,13 @@ class TitleFallbackTests(WorkflowTestCase):
         view = micro_task_view(board, submitted["runId"])
         self.assertIsNone(workflow_summary(view))
         self.assertIn("workflow", view)
-        plain = board.call(
-            "task_submit",
-            {
+        plain = board.submit_execution(**{
                 "requestId": "plain-1",
                 "task": "ordinary command task",
                 "cwd": str(self.workdir()),
                 "adapter": "command",
                 "argv": ["/bin/echo", "plain"],
-            },
-        )["task"]
+            })["task"]
         self.assertNotIn("workflow", plain)
 
     def test_running_turn_does_not_hide_the_last_returned_result(self):

@@ -35,8 +35,8 @@ PROTOCOL_VERSION = 2
 #: surface; the C-Two operation names never change here. ``await`` is a CLI-level
 #: read-only wait implemented on top of these in ``blocking.py`` and never appears
 #: here. The single micro task lifecycle keeps the bare names; the advanced
-#: ``execution-*`` names reach the ordinary task records that the command
-#: adapters and the internal decision infrastructure own.
+#: ``execution-*`` names manage ordinary task records created by the workflow
+#: and internal decision infrastructure.
 METHOD_MAP: dict[str, tuple[str, str]] = {
     "accounts": ("control", "accounts"),
     "ping": ("control", "ping"),
@@ -65,7 +65,6 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     "macro-task-list": ("control", "macro_task_list"),
     "macro-task-timeline": ("control", "macro_task_timeline"),
     # -- execution records for command/decision infrastructure -----
-    "execution-submit": ("control", "task_submit"),
     "execution-cancel": ("control", "task_cancel"),
     "execution-retry": ("control", "task_retry"),
     "execution-acknowledge": ("control", "task_acknowledge"),
@@ -96,7 +95,7 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
 }
 
 #: Methods whose response body wraps the execution task view under ``task``.
-UNWRAP_TASK = frozenset({"execution-submit", "execution-cancel", "execution-retry", "execution-acknowledge", "status"})
+UNWRAP_TASK = frozenset({"execution-cancel", "execution-retry", "execution-acknowledge", "status"})
 #: Methods whose response body *is* the task view (the wait route returns it directly).
 DIRECT_TASK_VIEW = frozenset({"wait"})
 

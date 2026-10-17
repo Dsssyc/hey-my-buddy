@@ -171,7 +171,7 @@ class ActivityProjection(BoardTestCase):
     def claimed_attempt(self, board, *, request_id: str = "activity-1", argv=("/bin/sleep", "20")):
         client = board.client()
         cwd = self.workdir()
-        task = client.submit(
+        task = board.submit_execution(
             requestId=request_id,
             task="observe me",
             cwd=str(cwd),
@@ -347,7 +347,7 @@ class ExecutionActivityForwarding(BoardTestCase):
         board = self.board(lease_seconds=lease_seconds)
         client = board.client()
         cwd = self.workdir()
-        task = client.submit(
+        task = board.submit_execution(
             requestId="forward-1",
             task="supervise",
             cwd=str(cwd),

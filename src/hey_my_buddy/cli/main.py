@@ -3,9 +3,9 @@
 Everything the shared skill offers is one ``hey-my-buddy`` command: one method name, one JSON
 object argument, one JSON object on stdout. The single micro task lifecycle owns
 the bare names (``submit``, ``get``, ``decide``, ``continue``, ``takeover``,
-``cancel``, ``accept``, ``conclude``, ``reclaim``, ``await``, ``suggest``); ``execution-*`` names reach the
-ordinary task records that the command adapter and internal decision
-infrastructure own. The current command surface is documented in
+``cancel``, ``accept``, ``conclude``, ``reclaim``, ``await``, ``suggest``); ``execution-*`` names manage
+ordinary task records created by the workflow and internal decision
+infrastructure. The current command surface is documented in
 ``docs/reference/cli.md``.
 
 The one JSON object may be given as the positional argument, as ``--params-file
@@ -65,7 +65,6 @@ METHODS = [
     "macro-task-list",
     "macro-task-timeline",
     # -- execution records for command/decision infrastructure -----
-    "execution-submit",
     "execution-cancel",
     "execution-retry",
     "execution-acknowledge",
@@ -151,15 +150,12 @@ examples:
       runId, use status/get for live state, and result only after a receipt exists.
       Cancel a micro task with cancel, or an execution record with execution-cancel.
 
-  Advanced execution records (command adapter and internal decision
-  infrastructure only; the service refuses coding harnesses here):
-  hey-my-buddy execution-submit '{"requestId":"probe-1","task":"...","cwd":"/abs/path","adapter":"command","argv":["/bin/echo","hi"],"expectedSeconds":1800}'
+  Execution records created by the workflow or internal decision infrastructure:
   hey-my-buddy execution-cancel '{"runId":"<runId>","reason":"..."}'
   hey-my-buddy execution-retry '{"runId":"<runId>","reason":"..."}'
   hey-my-buddy execution-acknowledge '{"runId":"<runId>","note":"...","verdict":"accepted"}'
-      Explicit task operations, separate from the micro task lifecycle. execution-submit
-      requires requestId, task and an absolute cwd; use the command
-      adapter. A micro-task run's execution record additionally needs its Host control.
+      Explicit task operations, separate from the micro task lifecycle. A micro-task
+      run's execution record additionally needs its Host control.
 
   hey-my-buddy status '{"runId":"<runId>"}'   hey-my-buddy result '{"runId":"<runId>"}'   hey-my-buddy list '{"limit":20}'
   hey-my-buddy artifacts '{"runId":"<runId>"}'   hey-my-buddy events '{"after":0}'

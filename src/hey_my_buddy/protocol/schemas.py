@@ -520,11 +520,10 @@ def _reject_retired_spec_keys(params: dict) -> None:
         )
     if "adapter" in params:
         raise BoardError("INVALID_ARGUMENT",
-                         "Micro tasks do not accept adapter; name a buddy with harness, "
-                         "or use execution-submit for command execution records", field="adapter")
+                         "Micro tasks do not accept adapter; name a buddy with harness", field="adapter")
     if "argv" in params:
         raise BoardError("INVALID_ARGUMENT",
-                         "Micro tasks do not accept argv; use execution-submit for command execution records", field="argv")
+                         "Micro tasks do not accept argv", field="argv")
     if "inheritRoutingPreferences" in params:
         raise BoardError(
             "INVALID_ARGUMENT",

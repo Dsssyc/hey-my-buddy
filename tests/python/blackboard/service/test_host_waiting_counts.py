@@ -130,10 +130,11 @@ class PrivateServiceWaitingCountsTests(RealWorkspaceTestCase):
                 self.assertEqual(listed['total'], expected[name])
             self.assertNotIn('waitingForHost', self.invoke('list', {'hostId': 'host-b'}))
             self.assertNotIn('waitingForHost', self.invoke('list', {}))
-            command = self.invoke('execution-submit', {
+            seeded = self.submit_execution(**{
                 'requestId': 'no-model-command', 'task': 'Run a private command',
                 'cwd': str(self.workdir('command')), 'adapter': 'command', 'argv': ['/bin/echo', 'done'],
-            })
+            })['task']
+            command = self.invoke('status', {'runId': seeded['runId']})
             self.assertNotIn('waitingForHost', command)
             self.assertTrue(self.invoke('await', {'runId': command['runId'], 'waitSeconds': 10})['ok'])
             accepted = self.invoke('accept', {

@@ -7,7 +7,7 @@ bounded wait slice until the run is terminal or this call's wait window is spent
 
 The wait window (``waitSeconds``) is how long *this CLI call* stays connected,
 1-86400 s, default 86400 s. The durable run keeps its own lifetime: admission and
-execution belong to ``submit``/``execution-submit`` and to the engine's runner
+execution belong to ``submit`` and to the engine's runner
 deadline, never to this wait. Reaching the window returns an honest
 ``wait-timeout`` envelope and the job keeps running, recovered by ``requestId`` or
 ``runId``.
@@ -119,9 +119,9 @@ def _recovery(request_id: str | None, run_id: str | None, reason: str) -> dict:
     else:
         action = (
             "Read the runId from the commands below, then inspect it. `hey-my-buddy await` by this requestId waits on an "
-            "existing run and never starts work (NOT_FOUND means this requestId was never admitted; admit a micro-task "
-            "micro task with `hey-my-buddy submit`, or an execution record with `execution-submit`, then await the same "
-            "requestId). `status`/`get`/`result`/`cancel` need a runId."
+            "existing run and never starts work (NOT_FOUND means this requestId was never admitted; admit a micro task "
+            "with `hey-my-buddy submit`, then await the same requestId). "
+            "`status`/`get`/`result`/`cancel` need a runId."
         )
     return {
         "reason": reason,
@@ -747,7 +747,7 @@ def await_run(
                 raise ServiceError(
                     "NOT_FOUND",
                     "No existing run has this requestId; await never starts work. Admit a micro task with "
-                    "`hey-my-buddy submit`, or an execution record with `execution-submit`, then await the same requestId.",
+                    "`hey-my-buddy submit`, then await the same requestId.",
                 )
         run_id = run["runId"]
         request_id = run.get("requestId", request_id)

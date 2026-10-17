@@ -4,6 +4,7 @@ import ast
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import re
 from pathlib import Path
@@ -45,7 +46,8 @@ class CurrentCoreTests(BoardTestCase):
         return path
 
     def test_fresh_schema_has_only_current_fields_and_survives_reopen(self):
-        self.assertEqual(CONTRACT_VERSION, "0.44.0")
+        signature = json.loads((Path(__file__).resolve().parents[2] / "protocol" / "contract_signatures.json").read_text())
+        self.assertEqual(CONTRACT_VERSION, signature["contractVersion"])
         self.assertEqual(SCHEMA_VERSION, 24)
         board = self.board()
         with board.store.db.read() as connection:
@@ -56,7 +58,7 @@ class CurrentCoreTests(BoardTestCase):
         self.assertNotIn("result_command_id", attempt_columns)
         self.assertFalse(any(name.startswith("legacy") for name in columns))
         request = {"requestId": "same-current-input", "task": "current task", "cwd": str(self.workdir()), "adapter": "command", "argv": ["/bin/true"]}
-        first = board.call("task_submit", request)
+        first = board.submit_execution(**request)
         reopened = BoardStore(self.directory)
         reopened.initialize()
         replay = reopened.task_submit(request)
@@ -150,8 +152,13 @@ class CurrentCoreTests(BoardTestCase):
             self.assertIsNone(importlib.util.find_spec(module))
         self.assertFalse(hasattr(schemas, "FINGERPRINT_VERSION_LEGACY"))
         self.assertFalse(hasattr(schemas, "legacy_fingerprint"))
-        for operation in ("execution_progress", 'execution_result', "task_submit", "task_get", "console"):
+        for operation in ("execution_progress", 'execution_result', "task_get", "console"):
             self.assertIn(operation, CONTROL_OPERATIONS)
+        self.assertNotIn("task_submit", CONTROL_OPERATIONS)
+        self.assertFalse(hasattr(BuddyControl, "task_submit"))
+        self.assertFalse(hasattr(board.service, "task_submit"))
+        self.assertNotIn("execution-submit", cli.METHODS)
+        self.assertNotIn(("control", "task_submit"), transport.METHOD_MAP.values())
         with self.assertRaises(BoardError) as caught:
             board.call("workflow_get", {"runId": "current-run", "taskId": "silently-ignored-target"})
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
@@ -161,11 +168,11 @@ class CurrentCoreTests(BoardTestCase):
             with self.subTest(status=status, shutdownConfirmed=confirmed):
                 board = self.board()
                 client = board.client()
-                task = client.submit(requestId=f"inquiry-end-{status}-{confirmed}", task="return data",
+                task = board.submit_execution(requestId=f"inquiry-end-{status}-{confirmed}", task="return data",
                     cwd=str(self.workdir(f"{status}-{confirmed}")), adapter="command", argv=["true"])["task"]
                 claim = admit_execution(client, "n" * 32, task_id=task["taskId"])["claim"]
                 attempt = claim["attempt"]
-                other = client.submit(requestId=f"other-{status}-{confirmed}", task="still running",
+                other = board.submit_execution(requestId=f"other-{status}-{confirmed}", task="still running",
                     cwd=str(self.workdir(f"other-{status}-{confirmed}")), adapter="command", argv=["true"])["task"]
                 other_attempt = admit_execution(client, "o" * 32, task_id=other["taskId"])["claim"]["attempt"]
                 client.post_question("q-other", "Still there?", runId=other["taskId"])
@@ -195,7 +202,7 @@ class CurrentCoreTests(BoardTestCase):
     def test_current_receipt_keeps_result_opaque_and_refuses_flat_old_format(self):
         board = self.board()
         client = board.client()
-        task = client.submit(requestId="opaque-current-result", task="return data", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"])["task"]
+        task = board.submit_execution(requestId="opaque-current-result", task="return data", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"])["task"]
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "n" * 32, task_id=task["taskId"])["claim"]
         attempt = claim["attempt"]

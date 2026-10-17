@@ -31,7 +31,7 @@ class ReminderBoardTests(BoardTestCase):
         self.client = self.board_instance.client()
 
     def claim_command(self, *, expected_seconds=2):
-        submitted = self.client.submit(
+        submitted = self.board_instance.submit_execution(
             requestId="reminder-command", task="Run a private command", cwd=str(self.workdir()),
             adapter="command", argv=["/bin/sleep", "1"], expectedSeconds=expected_seconds,
         )
@@ -136,12 +136,11 @@ class ReminderPrivateServiceTests(BoardTestCase):
                   f"release=pathlib.Path({str(release)!r})\n"
                   "while not release.exists(): time.sleep(.05)\n")
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
-            code, submitted = self.cli("execution-submit", json.dumps({
+            submitted = self.submit_execution(**{
                 "requestId": "private-reminder-command", "task": "Wait in a private execution",
                 "cwd": str(self.workdir()), "adapter": "command", "argv": [sys.executable, "-c", script],
                 "expectedSeconds": 1,
-            }))
-            self.assertEqual(code, 0, submitted)
+            })["task"]
             run_id = submitted["runId"]
             try:
                 self.assertTrue(wait_for(started.exists, timeout=60))

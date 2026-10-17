@@ -80,7 +80,7 @@ class MicroTaskServiceStopTests(WorkflowTestCase):
         with self.assertRaises(BoardError) as raised:
             board.call("service_control", {"action": "stop", "credential": claim["claim"]["agentCredential"]})
         self.assertEqual(raised.exception.code, "FORBIDDEN")
-        ordinary = board.call("task_submit", {
+        ordinary = board.submit_execution(**{
             "requestId": "ordinary", "adapter": "command", "task": "plain",
             "cwd": str(self.workdir("ordinary")), "argv": ["/bin/true"],
         })

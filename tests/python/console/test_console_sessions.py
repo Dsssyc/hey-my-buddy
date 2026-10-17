@@ -74,7 +74,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         self.assertIsNone(reread['consoleSession']['reason'])
 
     def queued_task(self, board):
-        return board.call('task_submit', {'requestId': 'console-session-task', 'task': 'still pending',
+        return board.submit_execution(**{'requestId': 'console-session-task', 'task': 'still pending',
             'cwd': str(self.workdir()), 'adapter': 'command', 'argv': ['/bin/echo', 'ok']})['task']['runId']
 
     def test_independent_sessions_can_publish_without_revision_fences(self):
@@ -237,12 +237,11 @@ class ConsoleForegroundTests(ConsoleTestCase):
         with self.daemon():
             code, before = self.cli('ping')
             self.assertEqual(code, 0)
-            code, task = self.cli('execution-submit', json.dumps({
+            task = self.submit_execution(**{
                 'requestId': 'console-wait-owned-task', 'task': 'outlive the browser',
                 'cwd': str(self.workdir()), 'adapter': 'command',
                 'argv': ['/bin/sleep', '30'], 'expectedSeconds': 1800,
-            }))
-            self.assertEqual(code, 0, task)
+            })["task"]
             child = subprocess.Popen([sys.executable, '-m', 'hey_my_buddy.cli.main', 'console',
                 '{"browser":false,"wait":true}'], env=_child_environment(self.directory),
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

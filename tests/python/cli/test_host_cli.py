@@ -118,22 +118,27 @@ class PrivateCliTestCase(BoardTestCase):
         return path
 
 
-def command_payload(request_id: str, task: str = "noop") -> dict:
-    return {"requestId": request_id, "task": task, "cwd": "", "adapter": "command", "argv": ["/bin/echo", "hi"]}
+def micro_task_payload(request_id: str, cwd: Path, task: str = "do the thing") -> dict:
+    return {
+        "requestId": request_id, "hostId": "host-1", "task": task, "cwd": str(cwd),
+        "harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash",
+        "effort": "off", "executionWorkspace": {"kind": "existing", "access": "write"},
+    }
 
 
-class ParameterDocumentTests(PrivateCliTestCase):
+class ParameterDocumentTests(PrivateCliTestCase, WorkflowTestCase):
     """Item 12: the same request from an argument, a file or standard input."""
 
     def test_a_params_file_is_equivalent_to_the_positional_argument(self):
+        self.catalog_fixture()
         board = self.board()
         captured: list = []
         self.use_board_transport(board, captured)
-        payload = {**command_payload("host-cli-1"), "cwd": str(self.workdir())}
+        payload = micro_task_payload("host-cli-1", self.workdir())
         path = self.write_params(payload)
-        code, from_file, _ = self.run_cli("execution-submit", "--params-file", str(path))
+        code, from_file, _ = self.run_cli("submit", "--params-file", str(path))
         self.assertEqual(code, 0, from_file)
-        code, from_argument, _ = self.run_cli("execution-submit", json.dumps(payload))
+        code, from_argument, _ = self.run_cli("submit", json.dumps(payload))
         self.assertEqual(code, 0, from_argument)
         # The identical request is recovered, not duplicated: the durable identity and
         # the request the service received are what "same document" must mean.
@@ -142,13 +147,14 @@ class ParameterDocumentTests(PrivateCliTestCase):
         self.assertEqual(captured[0], captured[1])
 
     def test_standard_input_and_the_dash_file_are_the_same_document(self):
+        self.catalog_fixture()
         board = self.board()
         self.use_board_transport(board)
-        payload = {**command_payload("host-cli-2"), "cwd": str(self.workdir())}
+        payload = micro_task_payload("host-cli-2", self.workdir())
         document = json.dumps(payload).encode("utf-8")
-        code, from_stdin, _ = self.run_cli("execution-submit", "-", stdin=document)
+        code, from_stdin, _ = self.run_cli("submit", "-", stdin=document)
         self.assertEqual(code, 0, from_stdin)
-        code, from_dash_file, _ = self.run_cli("execution-submit", "--params-file", "-", stdin=document)
+        code, from_dash_file, _ = self.run_cli("submit", "--params-file", "-", stdin=document)
         self.assertEqual(code, 0, from_dash_file)
         self.assertEqual(from_stdin["runId"], from_dash_file["runId"])
 
@@ -167,38 +173,40 @@ class ParameterDocumentTests(PrivateCliTestCase):
     def test_the_attempt_scoped_credential_is_injected_identically_from_a_file(self):
         captured: list = []
         self.use_capture_transport(captured)
-        payload = {**command_payload("host-cli-4"), "cwd": str(self.workdir())}
+        payload = {"requestId": "host-cli-4"}
         credential_file = self.directory / "agent-credential.json"
         credential_file.write_text(json.dumps({"token": "scoped-token", "stateDir": str(self.directory)}))
         credential_file.chmod(0o600)
         with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(credential_file)}):
-            code, _, _ = self.run_cli("execution-submit", "--params-file", str(self.write_params(payload)))
+            code, _, _ = self.run_cli("status", "--params-file", str(self.write_params(payload)))
             self.assertEqual(code, 0)
-            code, _, _ = self.run_cli("execution-submit", json.dumps(payload))
+            code, _, _ = self.run_cli("status", json.dumps(payload))
             self.assertEqual(code, 0)
         self.assertEqual(captured[0], captured[1])
         self.assertEqual(captured[0].get("credential"), "scoped-token")
         self.assertNotIn("submissionToken", captured[0])
 
     def test_file_content_is_never_reinterpreted_by_a_shell(self):
+        self.catalog_fixture()
         board = self.board()
         captured: list = []
         self.use_board_transport(board, captured)
         marker = self.directory / "shell-would-have-created-this"
         task = f'keep $(touch {marker}) `touch {marker}` ; rm -rf {marker} "quotes" \'single\' \\backslash\\'
-        payload = {**command_payload("host-cli-5", task), "cwd": str(self.workdir())}
-        code, submitted, _ = self.run_cli("execution-submit", "--params-file", str(self.write_params(payload)))
+        payload = micro_task_payload("host-cli-5", self.workdir(), task)
+        code, submitted, _ = self.run_cli("submit", "--params-file", str(self.write_params(payload)))
         self.assertEqual(code, 0, submitted)
         self.assertEqual(captured[0]["task"], task)
         self.assertFalse(marker.exists())
 
     def test_utf8_documents_are_accepted_and_invalid_utf8_is_refused(self):
+        self.catalog_fixture()
         board = self.board()
         self.use_board_transport(board)
-        payload = {**command_payload("host-cli-6", "用中文写下结果"), "cwd": str(self.workdir())}
+        payload = micro_task_payload("host-cli-6", self.workdir(), "用中文写下结果")
         path = self.directory / "utf8.json"
         path.write_bytes(b"\xef\xbb\xbf" + json.dumps(payload, ensure_ascii=False).encode("utf-8"))
-        code, submitted, _ = self.run_cli("execution-submit", "--params-file", str(path))
+        code, submitted, _ = self.run_cli("submit", "--params-file", str(path))
         self.assertEqual(code, 0, submitted)
 
         broken = self.directory / "broken.json"

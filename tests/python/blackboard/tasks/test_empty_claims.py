@@ -10,8 +10,8 @@ from support import BoardTestCase
 NONCE = "a" * 32
 
 
-def submit_command(client, request_id: str, cwd, task: str = "do") -> dict:
-    return client.submit(
+def submit_command(board, request_id: str, cwd, task: str = "do") -> dict:
+    return board.submit_execution(
         requestId=request_id, task=task, cwd=str(cwd), adapter="command", argv=["/bin/true"]
     )["task"]
 
@@ -40,7 +40,7 @@ class EmptyClaimTests(BoardTestCase):
         board = self.board()
         client = board.client()
         self.assertIsNone(admit_execution(client, NONCE)["claim"])
-        task = submit_command(client, "after-empty", self.workdir("retry-work"))
+        task = submit_command(board, "after-empty", self.workdir("retry-work"))
         first = admit_execution(client, NONCE)
         self.assertEqual(first["claim"]["task"]["runId"], task["runId"])
         self.assertIsNone(admit_execution(client, NONCE)["claim"])
@@ -50,7 +50,7 @@ class EmptyClaimTests(BoardTestCase):
     def test_restart_does_not_replay_a_consumed_admission(self):
         board = self.board()
         client = board.client()
-        task = submit_command(client, "reopen-fixture", self.workdir("reopen-work"))
+        task = submit_command(board, "reopen-fixture", self.workdir("reopen-work"))
         first = admit_execution(client, NONCE)
         store_two = type(board.store)(self.directory, max_concurrent=2)
         store_two.initialize()
@@ -61,9 +61,9 @@ class EmptyClaimTests(BoardTestCase):
     def test_capacity_blocked_admission_retries_after_completion(self):
         board = self.board(max_concurrent=1)
         client = board.client()
-        held = submit_command(client, "cap-held", self.workdir("cap-held"))
+        held = submit_command(board, "cap-held", self.workdir("cap-held"))
         first = admit_execution(client, NONCE)["claim"]
-        waiting = submit_command(client, "cap-waiting", self.workdir("cap-waiting"))
+        waiting = submit_command(board, "cap-waiting", self.workdir("cap-waiting"))
         blocked = admit_execution(client, NONCE)
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "capacity")
@@ -83,9 +83,9 @@ class EmptyClaimTests(BoardTestCase):
         parent = self.workdir("repo")
         nested = parent / "nested"
         nested.mkdir()
-        submit_command(client, "ws-parent", parent)
+        submit_command(board, "ws-parent", parent)
         self.assertIsNotNone(admit_execution(client, NONCE)["claim"])
-        child = submit_command(client, "ws-child", nested)
+        child = submit_command(board, "ws-child", nested)
         blocked = admit_execution(client, NONCE)
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "cwd-overlap")

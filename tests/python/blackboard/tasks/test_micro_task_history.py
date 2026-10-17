@@ -33,16 +33,13 @@ class MicroTaskTestCase(WorkflowTestCase):
         DecisionTestCase.use_helper(self)
 
     def execution_task(self, board, request_id: str, *, cwd=None, task_text=None):
-        return board.call(
-            "task_submit",
-            {
+        return board.submit_execution(**{
                 "requestId": request_id,
                 "task": task_text or f"ordinary {request_id}",
                 "cwd": str(cwd or self.workdir()),
                 "adapter": "command",
                 "argv": ["/bin/echo", request_id],
-            },
-        )["task"]
+            })["task"]
 
     def task_view(self, board, run_id: str) -> dict:
         return board.call("task_get", {"runId": run_id})["task"]

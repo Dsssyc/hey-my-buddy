@@ -30,7 +30,7 @@ from hey_my_buddy.protocol.contracts import BuddyControl
 
 #: Every CLI method that was removed by ADR-007, plus the ADR-008 removal of the
 #: internal maintenance call and the ADR-021 retirement of the paid review
-#: verifier. None may remain as an alias.
+#: verifier, and the retired Host execution submission. None may remain as an alias.
 RETIRED_METHODS = (
     "run",
     "start",
@@ -59,6 +59,7 @@ RETIRED_METHODS = (
     "evaluation-history",
     "assessment-publish",
     "harness-verify",
+    "execution-submit",
 )
 
 
@@ -76,7 +77,6 @@ class MethodSurfaceTests(unittest.TestCase):
             "conclude": ("control", "workflow_conclude"),
             "reclaim": ("control", "workflow_reclaim"),
             "suggest": ("control", "workflow_suggest"),
-            "execution-submit": ("control", "task_submit"),
             "execution-cancel": ("control", "task_cancel"),
             "execution-retry": ("control", "task_retry"),
             "execution-acknowledge": ("control", "task_acknowledge"),
@@ -114,10 +114,19 @@ class MethodSurfaceTests(unittest.TestCase):
         self.assertEqual(error["code"], "UNKNOWN_METHOD")
         self.assertEqual(error["didYouMean"], cli_help.nearest_methods("capabilities", cli.METHODS))
 
+    def test_execution_submission_is_internal_only(self):
+        self.assertNotIn("execution-submit", cli.METHODS)
+        self.assertNotIn("execution-submit", transport.METHOD_MAP)
+        self.assertNotIn("execution-submit", cli_help.SUMMARIES)
+        self.assertNotIn("task_submit", CONTROL_OPERATIONS)
+        for owner in (BoardService, BuddyControl, BoardClient):
+            self.assertFalse(hasattr(owner, "task_submit"))
+        self.assertFalse(hasattr(BoardClient, "submit"))
+
     def test_execution_results_unwrap_the_task_view_and_micro_task_results_do_not(self):
         self.assertEqual(
             transport.UNWRAP_TASK,
-            frozenset({"execution-submit", "execution-cancel", "execution-retry", "execution-acknowledge", "status"}),
+            frozenset({"execution-cancel", "execution-retry", "execution-acknowledge", "status"}),
         )
         self.assertEqual(transport.DIRECT_TASK_VIEW, frozenset({"wait"}))
         for micro_task in ("submit", "get", "decide", "continue", "takeover", "cancel", "accept", "conclude", "reclaim", "suggest"):
@@ -204,7 +213,6 @@ class HelpTests(unittest.TestCase):
             'adjusted":true (the note is the reason)',
             "conclude ends a failed, cancelled or delivered-but-unaccepted micro task",
             "conclude ends a failed, cancelled or delivered-but-unaccepted micro task",
-            "execution-submit",
             "hey-my-buddy get",
             "hey-my-buddy await",
             "no implicit",
@@ -219,7 +227,7 @@ class HelpTests(unittest.TestCase):
         text = self.help_text()
         for removed in ("workflow-submit", "workflow-get", "workflow-decide", "workflow-continue", "buddy run ", "buddy start ",
                         "integration-record", "workspace-cleanup-plan", "workspace-cleanup-apply",
-                        "hey-my-buddy acknowledge"):
+                        "hey-my-buddy acknowledge", "execution-submit"):
             self.assertNotIn(removed, text)
         # The old misleading sentence used to promise a cached generation was reused.
         self.assertNotIn("without it the latest saved generation", text)

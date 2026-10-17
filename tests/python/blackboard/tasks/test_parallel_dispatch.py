@@ -20,7 +20,7 @@ class DirectAdmissionTests(BoardTestCase):
                   "adapter": "command", "argv": ["/bin/true"]}
         if exclusive is not None:
             params["exclusiveResources"] = exclusive
-        return board.call("task_submit", params)["task"]
+        return board.submit_execution(**params)["task"]
 
     def test_total_capacity_and_workspace_resource_admission(self):
         board = self.board(max_concurrent=2)
@@ -74,7 +74,7 @@ class ModelServiceAdmissionTests(BoardTestCase):
         refused = board.store.admit_execution("m" * 32, task_id=second["runId"])
         self.assertIsNone(refused["claim"])
         self.assertEqual(refused["reason"], "model-capacity")
-        command = board.call("task_submit", {
+        command = board.submit_execution(**{
             "requestId": "command-free", "task": "offline command",
             "cwd": str(self.workdir("command-free")), "adapter": "command", "argv": ["/bin/true"],
         })["task"]
@@ -108,10 +108,10 @@ class ModelServiceAdmissionTests(BoardTestCase):
         self.assertEqual(blocked["reason"], "model-capacity")
         self.assertEqual(board.call("task_get", {"runId": second["runId"]})["task"]["queueReason"],
                          "model-capacity")
-        command = board.call("task_submit", {"requestId": "deep-other", "task": "offline", "adapter": "command",
+        command = board.submit_execution(**{"requestId": "deep-other", "task": "offline", "adapter": "command",
                                                   "argv": ["/bin/true"], "cwd": str(self.workdir("deep-other"))})["task"]
         self.assertIsNotNone(board.store.admit_execution("c" * 32, task_id=command["runId"])["claim"])
-        third = board.call("task_submit", {"requestId": "deep-third", "task": "offline", "adapter": "command",
+        third = board.submit_execution(**{"requestId": "deep-third", "task": "offline", "adapter": "command",
                                                 "argv": ["/bin/true"], "cwd": str(self.workdir("deep-third"))})["task"]
         blocked_total = board.store.admit_execution("d" * 32, task_id=third["runId"])
         self.assertEqual(blocked_total["reason"], "capacity")
@@ -129,7 +129,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
         except psutil.NoSuchProcess:
             return True
 
-    def gated(self, client: BoardClient, name: str):
+    def gated(self, name: str):
         started = self.directory / f"{name}.started"
         pid_path = self.directory / f"{name}.pid"
         release = self.directory / f"{name}.release"
@@ -138,7 +138,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
                   f"pathlib.Path({str(started)!r}).touch()\n"
                   f"release=pathlib.Path({str(release)!r})\n"
                   "while not release.exists(): time.sleep(.05)\n")
-        task = client.submit(requestId=name, task="hold one execution", cwd=str(self.workdir(name)),
+        task = self.submit_execution(requestId=name, task="hold one execution", cwd=str(self.workdir(name)),
                              adapter="command", argv=[sys.executable, "-c", script],
                              expectedSeconds=120)["task"]
         return task["runId"], started, release
@@ -146,14 +146,14 @@ class PrivateDaemonDispatchTests(BoardTestCase):
     def test_command_processes_use_free_slots_then_complete(self):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "2"}):
             client = BoardClient(self.directory, autostart=False)
-            first, first_started, first_release = self.gated(client, "first")
-            second, second_started, second_release = self.gated(client, "second")
+            first, first_started, first_release = self.gated("first")
+            second, second_started, second_release = self.gated("second")
             third_release = self.directory / "third.release"
             try:
                 self.assertTrue(wait_for(lambda: first_started.exists() and second_started.exists(), timeout=60),
                                 (self.directory / "test-daemon.log").read_text()[-3000:])
                 self.assertEqual(client.health()["capacity"]["totalActive"], 2)
-                third, third_started, third_release = self.gated(client, "third")
+                third, third_started, third_release = self.gated("third")
                 self.assertEqual(client.get(runId=third)["queueReason"], "capacity")
                 first_release.touch()
                 self.assertTrue(wait_for(lambda: third_started.exists(), timeout=60),
@@ -172,7 +172,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
     def test_stop_reaches_the_execution_and_confirms_shutdown(self):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
             client = BoardClient(self.directory, autostart=False)
-            run_id, started, release = self.gated(client, "stop-running")
+            run_id, started, release = self.gated("stop-running")
             try:
                 self.assertTrue(wait_for(started.exists, timeout=60))
                 client.cancel(runId=run_id)
@@ -185,7 +185,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
     def test_zero_drain_service_stop_reaches_connected_execution(self):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}) as first:
             client = BoardClient(self.directory, autostart=False)
-            run_id, started, release = self.gated(client, "zero-drain")
+            run_id, started, release = self.gated("zero-drain")
             self.assertTrue(wait_for(started.exists, timeout=45))
             self.assertIsNotNone(wait_for(lambda: (client.get(runId=run_id).get("selectedAttempt") or {}).get(
                 "processIdentity"), timeout=20))
@@ -213,7 +213,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
         try:
             with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}) as first:
                 client = BoardClient(self.directory, autostart=False)
-                run_id, started, release = self.gated(client, "restart-running")
+                run_id, started, release = self.gated("restart-running")
                 self.assertTrue(wait_for(started.exists, timeout=60))
                 attempt_id = client.get(runId=run_id)["selectedAttemptId"]
                 reply = client.call("service_control", {"action": "restart"})
@@ -231,7 +231,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
     def test_execution_death_does_not_report_stopped_until_native_work_ends(self):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
             client = BoardClient(self.directory, autostart=False)
-            run_id, started, release = self.gated(client, "death-running")
+            run_id, started, release = self.gated("death-running")
             try:
                 self.assertTrue(wait_for(started.exists, timeout=60))
                 def published():
@@ -258,7 +258,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
                       f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))\n"
                       f"pathlib.Path({str(started)!r}).touch()\n"
                       "while True: time.sleep(1)\n")
-            run_id = client.submit(requestId="frozen", task="ignore stop", cwd=str(self.workdir("frozen")),
+            run_id = self.submit_execution(requestId="frozen", task="ignore stop", cwd=str(self.workdir("frozen")),
                                    adapter="command", argv=[sys.executable, "-c", script],
                                    expectedSeconds=120)["task"]["runId"]
             self.assertTrue(wait_for(started.exists, timeout=45))
@@ -277,7 +277,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             self.skipTest("SIGSTOP is unavailable")
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
             client = BoardClient(self.directory, autostart=False)
-            run_id, started, release = self.gated(client, "freeze-execution")
+            run_id, started, release = self.gated("freeze-execution")
             self.assertTrue(wait_for(started.exists, timeout=45))
             identity = wait_for(lambda: (client.get(runId=run_id).get("selectedAttempt") or {}).get(
                 "processIdentity"), timeout=20)

@@ -945,7 +945,7 @@ def build_runs() -> dict[str, dict]:
                         revision=1))
         runs[-1]["decisionId"] = record["decisionId"]
         runs[-1]["requestId"] = f"request-{router}"
-    # An ordinary `execution-submit` command record has no collaboration row.
+    # An internal command execution record has no collaboration row.
     # The board may also have no project attribution for such a record.
     runs.append(run("preview-command-c1", project=None, title="", title_source="none",
                     task_text="printf 'synthetic preview command'", created=instant(-20, 10),

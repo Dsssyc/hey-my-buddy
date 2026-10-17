@@ -194,7 +194,7 @@ class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
 
     def test_history_on_an_execution_task_is_honestly_empty(self):
         board = self.board()
-        plain = board.call("task_submit", {
+        plain = board.submit_execution(**{
             "requestId": "plain", "adapter": "command", "argv": ["true"],
             "task": "ordinary", "cwd": str(self.workdir("plain")),
         })

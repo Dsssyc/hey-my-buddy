@@ -472,7 +472,7 @@ class TestInquiry(BoardTestCase):
         result = board.call("inquiry_observe", {"runId": dsh_task["runId"]})
         self.assertFalse(result["bridge"]["enabled"])
         self.assertIn("has not attached", result["bridge"]["reason"] or "")
-        command_task = client.submit(
+        command_task = board.submit_execution(
             requestId="no-bridge-command",
             task="do",
             cwd=str(self.workdir("other")),
@@ -489,7 +489,7 @@ class TestInquiry(BoardTestCase):
 
     def test_command_expected_duration_is_visible_without_an_execution_deadline(self):
         board = self.board()
-        task = board.client().submit(
+        task = board.submit_execution(
             requestId="expected-inquiry", task="a long task", cwd=str(self.workdir()),
             adapter="command", argv=["/bin/true"], expectedSeconds=7,
         )["task"]
@@ -514,7 +514,7 @@ class TestInquiry(BoardTestCase):
     def test_an_unsupported_adapter_answers_with_a_capability_error(self):
         board = self.board()
         client = board.client()
-        task = client.submit(
+        task = board.submit_execution(
             requestId="ext-inq", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"]
         )["task"]
         result = board.call("inquiry_observe", {"runId": task["runId"]})

@@ -49,7 +49,7 @@ class FullModelServiceBacklogTests(StoreConcurrencyTestCase):
             self.submit_micro_task(board, f"cmd-backlog-{index}")
         client = board.client()
         pass  # Admission is owned by the service.
-        submitted = client.submit(
+        submitted = board.submit_execution(
             requestId="command-runnable",
             task="no model at all",
             cwd=str(self.workdir("command-runnable")),

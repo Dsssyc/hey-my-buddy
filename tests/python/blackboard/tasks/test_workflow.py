@@ -238,7 +238,7 @@ class LifecycleTests(WorkflowTestCase):
             with self.subTest(fields=fields), self.assertRaises(BoardError) as caught:
                 self.submit(board, **fields)
             self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
-            self.assertIn('execution-submit', caught.exception.message)
+            self.assertIn('Micro tasks do not accept', caught.exception.message)
         self.catalog_validation.assert_not_called()
         self.assertEqual(self.workspace.prepare_calls, [])
         with board.store.db.read() as connection:
@@ -703,7 +703,6 @@ class LifecycleTests(WorkflowTestCase):
         allowed = board.call("workflow_get", {"runId": run_id, "credential": credential})
         self.assertEqual(allowed["runId"], run_id)
         for operation, params in (
-            ("task_submit", {"requestId": "forged", "task": "x", "cwd": str(self.workdir("evil"))}),
             ("workflow_submit", {"requestId": "forged", "hostId": "host-1", "task": "x", "cwd": str(self.workdir("evil"))}),
             ("user_policy_publish", {"commandId": "forged", "expectedRevision": 0, "buddySettings": []}),
             ("execution_progress", {}),
@@ -758,9 +757,7 @@ class LifecycleTests(WorkflowTestCase):
         cancelled = board.call("workflow_cancel", {"runId": run_id, **self.control(submitted)})
         self.assertEqual(cancelled["state"], "cancelled")
         # The caller-owned execution primitive remains independently cancellable.
-        execution = board.call(
-            "task_submit", {"requestId": "execution-1", "adapter": "command", "argv": ["/bin/true"], "task": "plain", "cwd": str(self.workdir("execution"))}
-        )
+        execution = board.submit_execution(**{"requestId": "execution-1", "adapter": "command", "argv": ["/bin/true"], "task": "plain", "cwd": str(self.workdir("execution"))})
         plain = board.call("task_cancel", {"runId": execution["task"]["runId"]})
         self.assertEqual(plain["task"]["state"], "cancelled")
 

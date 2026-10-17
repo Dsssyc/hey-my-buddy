@@ -296,7 +296,8 @@ class SyntheticBoard:
             if macro < r.helpers:
                 self._helper(parent, f"synthetic-helper-{macro}")
         for number in range(r.plain):
-            view = self.call("task_submit", {"requestId": f"synthetic-plain-{number}", "adapter": "command",
+            self.clock.advance(1)
+            view = self.board.submit_execution(**{"requestId": f"synthetic-plain-{number}", "adapter": "command",
                                              "argv": ["synthetic-never-executed"], "task": "Fictional plain record",
                                              "cwd": str(self.state / "fictional-project")})
             self.plain.append(view["task"]["taskId"])

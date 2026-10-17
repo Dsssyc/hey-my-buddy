@@ -157,13 +157,13 @@ class RetiredSubmissionInputTests(unittest.TestCase):
                     with self.assertRaises(BoardError) as raised:
                         schemas.normalize_workflow_submit({**self.submit_params(root), **fields})
                     self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-                    self.assertIn("execution-submit", raised.exception.message)
+                    self.assertIn("Micro tasks do not accept", raised.exception.message)
                     self.assertEqual(raised.exception.details["field"], field)
                     with self.assertRaises(BoardError) as raised:
                         schemas.normalize_helpers({"helpers": [{**helper, **fields}]},
                                                   integrator={"role": "host", "id": "fixture-host"})
                     self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-                    self.assertIn("execution-submit", raised.exception.message)
+                    self.assertIn("Micro tasks do not accept", raised.exception.message)
                     self.assertEqual(raised.exception.details["field"], field)
 
 

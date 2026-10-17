@@ -102,12 +102,11 @@ class InstallWithoutUpgradeTests(BoardTestCase):
                   f"release=pathlib.Path({str(release)!r})\n"
                   "while not release.exists(): time.sleep(.05)\n"
                   "print('finished after install', flush=True)\n")
-        code, submitted = self.cli("execution-submit", json.dumps({
+        submitted = self.submit_execution(**{
             "requestId": name, "task": "Wait across private installation",
             "cwd": str(self.workdir(name)), "adapter": "command",
             "argv": [sys.executable, "-c", script],
-        }))
-        self.assertEqual(code, 0, submitted)
+        })["task"]
         self.assertTrue(wait_for(started.exists, timeout=60), submitted)
         run_id = submitted["runId"]
         running = wait_for(lambda: self.running(run_id), timeout=30)

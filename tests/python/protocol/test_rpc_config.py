@@ -23,6 +23,7 @@ from support import stop_private_service, _child_environment, shutdown_private_r
 
 from hey_my_buddy.protocol import rpc_config
 from hey_my_buddy.blackboard.service.service import WAIT_CAPACITY_DEFAULT
+from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.protocol.transport import MAX_MESSAGE_BYTES, ServiceError, _read_endpoint, _request, call_board, encode_message
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -594,11 +595,16 @@ class RealDaemonControlTests(unittest.TestCase):
     def _submit_command(self, request_id: str, *, sleep: float) -> str:
         cwd = self.work / request_id
         cwd.mkdir(parents=True, exist_ok=True)
-        reply = call_board("task_submit", {
-            "requestId": request_id, "task": "private command probe", "cwd": str(cwd),
-            "adapter": "command", "argv": [sys.executable, "-c", f"import time; time.sleep({sleep})"],
-            "expectedSeconds": 30,
-        }, endpoint=self.endpoint, state_dir=self.state)
+        capacity = call_board("health", {}, endpoint=self.endpoint, state_dir=self.state)["capacity"]
+        store = BoardStore(self.state, max_concurrent=capacity["totalLimit"])
+        try:
+            reply = store.task_submit({
+                "requestId": request_id, "task": "private command probe", "cwd": str(cwd),
+                "adapter": "command", "argv": [sys.executable, "-c", f"import time; time.sleep({sleep})"],
+                "expectedSeconds": 30,
+            })
+        finally:
+            store.db.close()
         return reply["task"]["runId"]
 
     def _admission(self) -> dict:

@@ -66,7 +66,6 @@ SUMMARIES: dict[str, str] = {
     "suggest": "Record one bounded suggestion on the caller's own run.",
     "macro-task-list": "Bounded summaries of macro tasks and standalone micro tasks by latest activity.",
     "macro-task-timeline": "One work macro task's bounded timeline with spans and Host markers.",
-    "execution-submit": "Admit one ordinary command execution record.",
     "execution-cancel": "Cancel one ordinary execution: queued work now, durable intent for an active attempt.",
     "execution-retry": "Requeue an eligible failed, cancelled or reconciliation-needed task as a new generation.",
     "execution-acknowledge": "Record review of a persisted execution result.",

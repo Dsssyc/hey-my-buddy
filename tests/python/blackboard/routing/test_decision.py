@@ -391,13 +391,12 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertNotIn("selection", report["limitations"])
         self.assertIn("selectionFallback", report["limitations"])
 
-    def test_public_task_submit_cannot_create_a_decision_run(self):
+    def test_ordinary_execution_storage_cannot_create_a_decision_run(self):
         board = self.board()
         self.assert_code(
             "UNSUPPORTED_ADAPTER",
-            board.call,
-            "task_submit",
-            {"requestId": "forged", "task": "x", "cwd": str(self.workdir()), "adapter": "decision"},
+            board.submit_execution,
+            requestId="forged", task="x", cwd=str(self.workdir()), adapter="decision",
         )
 
 

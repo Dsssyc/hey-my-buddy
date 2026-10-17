@@ -4,10 +4,10 @@ Everything runs against an isolated ``HMB_STATE_DIR`` with the real daemon, the
 real execution processes and the real ``command`` adapter; no model is called.
 The CLI is invoked exactly as a user invokes it from an unrelated working directory.
 
-``execution-*`` is the advanced surface the command/external adapters and internal
-decision infrastructure own; the micro task micro task lifecycle is covered by the workflow
-tests. ``await`` is read-only: these tests pin that it never starts, retries or
-cancels a run, including when its own wait window ends.
+The command execution records are seeded directly into the private board; the
+micro task lifecycle is covered by the workflow tests. ``await`` is read-only:
+these tests pin that it never starts, retries or cancels a run, including when
+its own wait window ends.
 """
 from __future__ import annotations
 
@@ -15,27 +15,17 @@ import json
 import unittest
 
 from support import BoardTestCase, wait_for
+from hey_my_buddy.errors import BoardError
 
 
 class TestExecutionRecords(BoardTestCase):
     def command_task(self, request_id: str, argv: list[str], *, expected_seconds: int = 120) -> dict:
-        code, task = self.cli(
-            "execution-submit",
-            json.dumps(
-                {
-                    "requestId": request_id,
-                    "task": "run one command",
-                    "cwd": str(self.workdir()),
-                    "adapter": "command",
-                    "argv": argv,
-                    "expectedSeconds": expected_seconds,
-                }
-            ),
-        )
-        self.assertEqual(code, 0, task)
-        return task
+        return self.submit_execution(
+            requestId=request_id, task="run one command", cwd=str(self.workdir()),
+            adapter="command", argv=argv, expectedSeconds=expected_seconds,
+        )["task"]
 
-    def test_execution_submit_completes_one_real_task_and_await_delivers_its_result(self):
+    def test_internal_execution_completes_one_real_task_and_await_delivers_its_result(self):
         with self.daemon():
             marker = self.directory / "execution-marker.txt"
             task = self.command_task("exec-1", ["/bin/sh", "-c", f"echo done > {marker}; echo finished"])
@@ -55,7 +45,7 @@ class TestExecutionRecords(BoardTestCase):
             self.assertIn("argv", envelope["result"])
             self.assertEqual(marker.read_text().strip(), "done")
 
-    def test_execution_submit_is_idempotent_for_the_same_request_id(self):
+    def test_internal_execution_submit_is_idempotent_for_the_same_request_id(self):
         with self.daemon():
             payload = {
                 "requestId": "exec-recover-1",
@@ -70,9 +60,9 @@ class TestExecutionRecords(BoardTestCase):
             self.assertEqual(second["runId"], first["runId"])
             self.assertEqual(self.cli("list")[1]["total"], 1)
 
-            code, conflict = self.cli("execution-submit", json.dumps({**payload, "task": "changed"}))
-            self.assertEqual(code, 1)
-            self.assertEqual(conflict["error"]["code"], "CONFLICT")
+            with self.assertRaises(BoardError) as conflict:
+                self.submit_execution(**{**payload, "task": "changed"})
+            self.assertEqual(conflict.exception.code, "CONFLICT")
             self.assertEqual(self.cli("list")[1]["total"], 1)
 
     def test_await_never_launches_work_and_honours_its_wait_window(self):
@@ -81,7 +71,6 @@ class TestExecutionRecords(BoardTestCase):
             self.assertEqual(code, 1)
             self.assertEqual(missing["error"]["code"], "NOT_FOUND")
             message = missing["error"]["message"]
-            self.assertIn("execution-submit", message)
             self.assertIn("hey-my-buddy submit", message)
             self.assertNotIn("buddy run", message)
 
