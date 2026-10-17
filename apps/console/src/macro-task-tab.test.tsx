@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MacroTasks } from "./MacroTasks";
 import type { ConsoleApi } from "./api";
-import type { Snapshot, Task, TaskQuery } from "./types";
+import type { Snapshot } from "./types";
 import { macroTaskTimelineFixture, OBSERVED_AT } from "./macro-task-fixtures";
 import { clockTime } from "./macro-task-display";
 
@@ -20,10 +20,6 @@ function snapshotFixture(): Snapshot {
   };
 }
 
-const rawRecord = (): Task => ({ runId: "cmd-9", task: "外部命令记录", status: "completed", owner: "fixture",
-  cwd: "/worktrees/cmd-9", revision: 1, createdAt: "2026-09-26T05:00:00Z", updatedAt: "2026-09-26T05:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
-  lineage: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: "cmd-9", rootLeadRunId: null, routingTask: null,
-    project: { id: "px", label: "外部", path: null }, buddy: null } });
 
 function harness() {
   const snapshot = snapshotFixture();
@@ -31,8 +27,7 @@ function harness() {
   const api = {
     snapshot: vi.fn(async () => structuredClone(snapshot)),
     command: vi.fn(),
-    task: vi.fn(async () => rawRecord()),
-    tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : [rawRecord()], total: 1, nextCursor: null })),
+    task: vi.fn(),
     macroTasks: vi.fn(async () => ({ macroTasks: [timeline.macroTask], totals: { all: 1, active: 1, host: 0, review: 0 }, nextCursor: null, cursor: 41, changed: false })),
     macroTaskTimeline: vi.fn(async () => ({ timeline, verifiedAtMs: null })),
   } as unknown as ConsoleApi;
@@ -45,7 +40,7 @@ function harness() {
 beforeEach(() => window.history.replaceState(null, "", "#tasks"));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-describe("微任务记录 tab views", () => {
+describe("macro task page", () => {
   it("opens the first macro task and replaces the root URL", async () => {
     const replace = vi.spyOn(window.history, "replaceState");
     const push = vi.spyOn(window.history, "pushState");
@@ -59,22 +54,6 @@ describe("微任务记录 tab views", () => {
     expect(push).not.toHaveBeenCalled();
     expect(screen.queryByRole("heading", { name: "选择一个宏任务" })).toBeNull();
     await waitFor(() => expect(f.api.macroTasks).toHaveBeenCalledTimes(1));
-    expect(f.api.tasks).not.toHaveBeenCalled();
-  });
-
-  it("keeps all task history reachable through the labelled records switch", async () => {
-    const f = harness();
-    const user = f.user;
-    await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
-    await user.click(screen.getByRole("button", { name: "记录" }));
-    expect(await within(screen.getByRole("region", { name: "记录列表" })).findByRole("button", { name: /外部命令记录/ })).toBeTruthy();
-    expect(within(screen.getByRole("region", { name: "记录列表" })).getByLabelText("搜索标题、项目、Host 或编号")).toBeTruthy();
-    expect(screen.queryByLabelText("显示协助任务与内部执行")).toBeNull();
-    expect(f.api.tasks).toHaveBeenCalledWith(expect.objectContaining({ rootsOnly: false }), expect.any(AbortSignal));
-    // Switching back keeps the macroTasks data and hides the records view.
-    await user.click(screen.getByRole("button", { name: "宏任务" }));
-    expect(await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ })).toBeTruthy();
-    expect(document.querySelector("[data-slot=records-list]")!.closest("[hidden]")).not.toBeNull();
   });
 
   it("advances the timeline's 现在 clock across an unchanged poll through the parent wiring", async () => {

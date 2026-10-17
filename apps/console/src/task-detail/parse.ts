@@ -1,5 +1,4 @@
 import i18n from "i18next";
-import { recordMetadata } from "../record-metadata";
 import { ApiError } from "../api";
 import { parseActor } from "../actor";
 import type { ActivityPhase, Actor, RoutingMode, Task, TokenUsage } from "../types";
@@ -314,13 +313,6 @@ function parseRoutingEntry(value: unknown): RoutingEntry {
   };
 }
 
-/** A compact decision read attached to one calculation task. */
-export function parseSelection(value: unknown, decisionId: string): RoutingEntry {
-  const decision = rec(rec(value, "decision").decision, "decision");
-  if (decision.decisionId !== decisionId) refuse("decision.decisionId");
-  return parseRoutingEntry(decision);
-}
-
 /** One page of the routing decisions of a micro task, newest first. */
 type RoutingPage = { entries: RoutingEntry[]; nextCursor: number | null };
 
@@ -432,7 +424,6 @@ function parseAttempt(task: Rec): Attempt | null {
   const active = task.activeAttemptId === attemptId;
   const reminders = rec(attempt.reminders, "task.selectedAttempt.reminders");
   const receipt = recOrNull(attempt.result, "task.selectedAttempt.result");
-  const output = receipt && recOrNull(receipt.result, "task.selectedAttempt.result");
   const quotaFailure = recOrNull(task.quotaFailure, "task.quotaFailure");
   const quota = quotaFailure ? oneOf(quotaFailure.code, ["quota-exceeded", "rate-limited"] as const, "task.quotaFailure") : null;
   const initiator = attempt.stopInitiator ?? task.stopInitiator;
@@ -444,8 +435,6 @@ function parseAttempt(task: Rec): Attempt | null {
   const stoppedBy = stopper ?? (cancelled ? (who && (STOPPERS as readonly string[]).includes(who.role) ? who.role as (typeof STOPPERS)[number] : "unknown") : null);
   // Only a person who stopped it is named; the console and the service are the stopper, not a name.
   const named = who && (stoppedBy === "host" || stoppedBy === "lead") && who.role === stoppedBy ? who : null;
-  const finalText = [output?.finalText, output?.stdout, receipt?.error]
-    .map(item => strOrNull(item, "task.selectedAttempt.result")?.trim() || null).find(Boolean) ?? null;
   // A run that is over and says no cause is not a normal end: its cause is unknown.
   const normal = raw === "completed" || (raw === null && !cancelled && !quota && !["completed", "failed"].includes(task.status as string));
   const ending: Ending | null = normal ? null : {
@@ -459,13 +448,33 @@ function parseAttempt(task: Rec): Attempt | null {
     overdue: active && bool(reminders.overdue, "task.selectedAttempt.reminders"),
     possiblyStuck: active && bool(reminders.possiblyStuck, "task.selectedAttempt.reminders"),
     activity: active ? parseActivity(task.activity) : null,
-    ending, session: parseSession(receipt), finalText,
+    ending, session: parseSession(receipt),
     tokenUsage: parseTokenUsage(attempt.tokenUsage),
     shutdownConfirmed: bool(attempt.shutdownConfirmed, "task.selectedAttempt"),
   };
 }
 
-const LINEAGE_KINDS = ["micro-task", "helper", "decision", "execution"] as const;
+const LINEAGE_KINDS = ["micro-task", "helper"] as const;
+
+function parseLineage(value: unknown): Rec {
+  const lineage = rec(value, "task.lineage");
+  oneOf(lineage.kind, LINEAGE_KINDS, "task.lineage.kind");
+  for (const key of ["sourceHostId", "currentHostId", "parentRunId", "rootRunId", "rootLeadRunId"]) {
+    if (lineage[key] === undefined) refuse(`task.lineage.${key}`);
+    strOrNull(lineage[key], `task.lineage.${key}`);
+  }
+  if (lineage.project === undefined || lineage.buddy === undefined) refuse("task.lineage");
+  const project = recOrNull(lineage.project, "task.lineage.project");
+  if (project) {
+    str(project.id, "task.lineage.project.id");
+    str(project.label, "task.lineage.project.label");
+    strOrNull(project.path, "task.lineage.project.path");
+  }
+  parseBuddy(lineage.buddy, "task.lineage.buddy");
+  const ownership = recOrNull(lineage.leadOwnership, "task.lineage.leadOwnership");
+  if (ownership) str(ownership.leadRunId, "task.lineage.leadOwnership.leadRunId");
+  return lineage;
+}
 
 /**
  * The task view of one run, as `/tasks/<id>` answers. The shared presentation
@@ -477,22 +486,12 @@ export function parseTask(value: unknown, runId: string): TaskView {
   if (task.runId !== runId) refuse("task.runId");
   for (const key of ["task", "status", "cwd", "createdAt", "updatedAt"]) str(task[key], `task.${key}`);
   for (const key of ["acceptedAt", "reviewRejectedAt", "reviewRejectionNote", "activeAttemptId", "terminationReason"]) strOrNull(task[key], `task.${key}`);
-  if (!recordMetadata(task.lineage)) refuse("task.lineage");
-  const lineage = rec(task.lineage, "task.lineage");
-  const kind = oneOf(lineage.kind, LINEAGE_KINDS, "task.lineage.kind");
-  const ownership = recOrNull(lineage.leadOwnership, "task.lineage.leadOwnership");
-  if (ownership) str(ownership.leadRunId, "task.lineage.leadOwnership");
-  const workflow = recOrNull(task.workflow, "task.workflow");
-  if (workflow) {
-    str(workflow.state, "task.workflow.state");
-    for (const key of ["hostId", "title", "macroTaskId"]) strOrNull(workflow[key], `task.workflow.${key}`);
-  }
-  const decision = kind === "decision" ? recOrNull(rec(task.spec, "task.spec").decision, "task.spec.decision") : null;
+  const lineage = parseLineage(task.lineage);
+  const workflow = rec(task.workflow, "task.workflow");
+  str(workflow.state, "task.workflow.state");
+  for (const key of ["hostId", "title", "macroTaskId"]) strOrNull(workflow[key], `task.workflow.${key}`);
   return {
     task: task as unknown as Task, updatedAt: task.updatedAt as string, attempt: parseAttempt(task),
     lead: (lineage.rootLeadRunId ?? null) !== null,
-    record: workflow ? null : kind === "decision" ? "calculation" : "record",
-    decisionId: decision ? str(decision.decisionId, "task.spec.decision.decisionId") : null,
-    routing: null,
   };
 }

@@ -5,7 +5,7 @@ import { Hint } from "@/components/hint";
 import { useTextClipped } from "@/components/use-text-clipped";
 import { Button } from "@/components/ui/button";
 import { StateMark } from "@/components/ui/state-mark";
-import { formatClock, formatDuration, formatMoment, formatMomentMinutes } from "../i18n/format";
+import { formatClock, formatDuration, formatMomentMinutes } from "../i18n/format";
 import { taskTitle } from "../task-state";
 import type { Task } from "../types";
 import type { TaskView, Workflow } from "./types";
@@ -34,36 +34,32 @@ export function stateWord(task: Task, lead: boolean, workflowState: string | nul
  * and how long it has gone on, and the one control
  * that reads it again. Reading is all it does; nothing here changes the board.
  */
-export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, error, busy, backTo, onBack, onRefresh }: {
+export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, error, busy, onBack, onRefresh }: {
   view: TaskView; workflow: Workflow | null; turns: number | null; endMs: number; nowMs: number;
-  verifiedAtMs: number | null; error: string; busy: boolean; backTo: "timeline" | "records"; onBack: () => void; onRefresh: () => void;
+  verifiedAtMs: number | null; error: string; busy: boolean; onBack: () => void; onRefresh: () => void;
 }) {
   const { t } = useTranslation("taskDetail");
   const shell = useTranslation("shell").t;
   const title = taskTitle(view.task);
-  const record = view.record;
-  const recordKind = record ? t(record === "calculation" ? "step.calculation" : "record.command") : "";
-  const text = title.source === "none" ? t(record ? "record.untitled" : "untitled") : title.text;
+  const text = title.source === "none" ? t("untitled") : title.text;
   const word = stateWord(view.task, view.lead, workflow?.state ?? null);
   const reminders = view.attempt ?? { overdue: false, possiblyStuck: false };
-  const start = Date.parse(record ? view.attempt?.startedAt ?? "" : view.task.createdAt);
-  const finish = Date.parse(view.attempt?.finishedAt ?? "");
-  const [titleRef, clipped] = useTextClipped<HTMLHeadingElement>(`${recordKind}${text}`);
+  const start = Date.parse(view.task.createdAt);
+  const [titleRef, clipped] = useTextClipped<HTMLHeadingElement>(text);
   const titleHint = title.source === "task" ? t("title.fromTask", { title: title.fullText }) : clipped && title.source !== "none" ? title.fullText : undefined;
   return <header data-slot="detail-header" className="shrink-0 border-b bg-card">
     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 px-4 py-3 sm:px-6">
-      <Button variant="outline" size="sm" onClick={onBack} className="mr-1.5 max-[760px]:order-1"><ChevronLeft strokeWidth={1.5} aria-hidden="true" />{t(`back.${backTo}`)}</Button>
+      <Button variant="outline" size="sm" onClick={onBack} className="mr-1.5 max-[760px]:order-1"><ChevronLeft strokeWidth={1.5} aria-hidden="true" />{t("back.timeline")}</Button>
       <div className="flex min-w-0 flex-1 items-center gap-2.5 max-[760px]:order-2 max-[760px]:basis-full">
         <StateMark kind={word.mark} />
         <Hint text={titleHint}>
-          <h2 ref={titleRef} tabIndex={0} className="min-w-0 truncate rounded-sm text-base font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{record && <span className="mr-2 font-normal text-ink2">{recordKind}</span>}{text}</h2>
+          <h2 ref={titleRef} tabIndex={0} className="min-w-0 truncate rounded-sm text-base font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{text}</h2>
         </Hint>
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-x-4 max-[760px]:order-3 max-[760px]:w-full max-[760px]:flex-wrap max-[760px]:gap-2">
         <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums max-[760px]:basis-full">
-          <div className="flex gap-1.5"><dt className="text-ink3">{t("header.started")}</dt><dd>{Number.isFinite(start) ? record ? formatMoment(start, nowMs) : formatMomentMinutes(start, nowMs) : t("unrecorded")}</dd></div>
-          {record && <div className="flex gap-1.5"><dt className="text-ink3">{t("header.ended")}</dt><dd>{Number.isFinite(finish) ? formatMoment(finish, nowMs) : t("unrecorded")}</dd></div>}
-          <div className="flex gap-1.5"><dt className="text-ink3">{t("header.elapsed")}</dt><dd>{Number.isFinite(start) ? formatDuration(Math.max(0, (record && Number.isFinite(finish) ? finish : endMs) - start), !!record) : t("unrecorded")}</dd></div>
+          <div className="flex gap-1.5"><dt className="text-ink3">{t("header.started")}</dt><dd>{Number.isFinite(start) ? formatMomentMinutes(start, nowMs) : t("unrecorded")}</dd></div>
+          <div className="flex gap-1.5"><dt className="text-ink3">{t("header.elapsed")}</dt><dd>{Number.isFinite(start) ? formatDuration(Math.max(0, endMs - start)) : t("unrecorded")}</dd></div>
           {turns !== null && <div className="flex gap-1.5"><dt className="text-ink3">{t("header.turns")}</dt><dd>{turns}</dd></div>}
         </dl>
         <div className="flex shrink-0 items-center gap-2 max-[760px]:ml-auto">

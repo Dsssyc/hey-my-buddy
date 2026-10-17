@@ -40,12 +40,14 @@ function Entry({ row, selected, onSelect }: { row: MacroTaskSummary; selected: s
   const { t } = useTranslation("tasks");
   const text = row.titleSource === "none" ? t("unnamed") : row.titleSource === "task" ? Array.from(row.title).slice(0, 40).join("") : row.title;
   const [titleRef, clipped] = useTextClipped<HTMLSpanElement>(text);
-  const kind = row.counts.host + row.counts.review > 0 ? "hand" : row.counts.active > 0 ? "live" : row.counts.failed > 0 ? "fail" : row.counts.roots > 0 && row.counts.accepted === row.counts.roots ? "done" : "idle";
+  const waiting = row.counts.host + row.counts.review > 0;
+  const edge = waiting ? "before:bg-hand-mark" : row.counts.active > 0 ? "before:bg-live" : null;
+  const status = waiting ? "waiting" : row.counts.active > 0 ? "active" : row.counts.failed > 0 ? "failed" : row.counts.roots > 0 && row.counts.accepted === row.counts.roots ? "accepted" : "ended";
   const hint = row.titleSource === "task" ? `${row.title} · ${t("source")}` : clipped ? text : undefined;
   return <li data-macro-task-id={row.macroTaskId}><Hint text={hint}>
-    <button type="button" data-slot="macro-entry" className={cn("relative grid w-full grid-cols-[18px_minmax(0,1fr)_auto] items-baseline gap-x-2 gap-y-0.5 border-t px-4 py-2.5 text-left text-sm text-foreground hover:bg-muted aria-pressed:hover:bg-live-wash transition-colors duration-150 motion-reduce:transition-none outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", selected === row.macroTaskId ? "bg-live-wash before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-live" : "bg-transparent")} aria-pressed={selected === row.macroTaskId} onClick={() => onSelect(row.macroTaskId)}>
-      <StateMark kind={kind} className="self-center"/><span ref={titleRef} data-slot="macro-entry-title" className="truncate font-medium">{text}</span><time className="whitespace-nowrap text-xs text-ink3 tabular-nums" dateTime={row.lastActivityAt ?? undefined}>{row.lastActivityAt === null ? t("unknown") : formatRelative(Date.parse(row.lastActivityAt), Date.now())}</time>
-      <span data-slot="macro-entry-counts" className="col-span-2 col-start-2 flex gap-3 text-xs text-ink2"><MacroCounts row={row}/></span>
+    <button type="button" data-slot="macro-entry" className={cn("relative grid w-full grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-2 gap-y-0.5 border-t px-4 py-2.5 text-left text-sm text-foreground hover:bg-muted aria-pressed:hover:bg-live-wash transition-colors duration-150 motion-reduce:transition-none outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", edge && "before:absolute before:inset-y-0 before:left-0 before:w-[3px]", edge, selected === row.macroTaskId ? "bg-live-wash" : "bg-transparent")} aria-label={`${text} · ${t(status)}`} aria-pressed={selected === row.macroTaskId} onClick={() => onSelect(row.macroTaskId)}>
+      <span ref={titleRef} data-slot="macro-entry-title" className="truncate font-medium">{text}</span><time className="whitespace-nowrap text-xs text-ink3 tabular-nums" dateTime={row.lastActivityAt ?? undefined}>{row.lastActivityAt === null ? t("unknown") : formatRelative(Date.parse(row.lastActivityAt), Date.now())}</time>
+      <span data-slot="macro-entry-counts" className="col-span-2 flex gap-3 text-xs text-ink2"><MacroCounts row={row}/></span>
     </button>
   </Hint></li>;
 }

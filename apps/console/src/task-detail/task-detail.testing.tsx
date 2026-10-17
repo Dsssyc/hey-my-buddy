@@ -9,14 +9,14 @@ import type { TaskDetailClient } from "./client";
 import { at, client, timeline } from "./task-detail.fixtures";
 import type { Replies } from "./task-detail.fixtures";
 
-export type Options = { replies?: Replies; timeline?: MacroTaskTimeline | null; timelineLoading?: boolean; step?: number | null; origin?: string | null; active?: boolean; backTo?: "timeline" | "records"; client?: TaskDetailClient };
+export type Options = { replies?: Replies; timeline?: MacroTaskTimeline | null; timelineLoading?: boolean; step?: number | null; origin?: string | null; active?: boolean; client?: TaskDetailClient };
 
 /** The page owns the step and the detail asks it to change: this holds the step as the address would. */
 function Harness({ options, onStep, onBack, onOpenRun }: { options: Options; onStep: (step: number) => void; onBack: () => void; onOpenRun: (runId: string) => void }) {
   const [step, setStep] = useState<number | null>(options.step ?? null);
   const reads = options.client ?? client(options.replies);
   return <TooltipProvider><TaskDetail client={reads} runId="m1" timeline={options.timeline === undefined ? timeline() : options.timeline}
-    timelineLoading={options.timelineLoading ?? false} nowMs={Date.parse(at("11:30"))} step={step} origin={options.origin ?? null} active={options.active ?? true} backTo={options.backTo}
+    timelineLoading={options.timelineLoading ?? false} nowMs={Date.parse(at("11:30"))} step={step} origin={options.origin ?? null} active={options.active ?? true}
     onStep={next => { onStep(next); setStep(next); }} onBack={onBack} onOpenRun={onOpenRun} /></TooltipProvider>;
 }
 

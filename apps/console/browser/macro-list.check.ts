@@ -83,7 +83,7 @@ async function assertListGeometry(page: Page, width: number) {
   const errors = await list.evaluate(node => {
     const frame = node.getBoundingClientRect();
     const offenders: string[] = [];
-    for (const element of node.querySelectorAll<HTMLElement>("[data-slot=macro-list-navigation], [data-slot=macro-search], [data-slot=macro-filter-tabs], [data-slot=macro-group-heading], [data-slot=macro-entry]")) {
+    for (const element of node.querySelectorAll<HTMLElement>("[data-slot=macro-list-heading], [data-slot=macro-search], [data-slot=macro-filter-tabs], [data-slot=macro-group-heading], [data-slot=macro-entry]")) {
       if (!element.getClientRects().length) continue;
       const box = element.getBoundingClientRect();
       if (box.left < frame.left - 1 || box.right > frame.right + 1) offenders.push(`${element.className}: outside list`);
@@ -104,7 +104,7 @@ async function assertListGeometry(page: Page, width: number) {
   const search = list.locator("[data-slot=macro-search]");
   expect(await search.evaluate(node => getComputedStyle(node).fontSize)).toBe("14px");
   expect((await search.boundingBox())!.height).toBeGreaterThanOrEqual(32);
-  const controls = await list.locator("[data-slot=macro-list-navigation], [data-slot=macro-search], [data-slot=macro-filter-tabs]").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()));
+  const controls = await list.locator("[data-slot=macro-list-heading], [data-slot=macro-search], [data-slot=macro-filter-tabs]").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()));
   expect(controls[0]!.bottom).toBeLessThanOrEqual(controls[1]!.top + 1);
   expect(controls[1]!.bottom).toBeLessThanOrEqual(controls[2]!.top + 1);
   const metrics = await list.evaluate(node => {
@@ -112,7 +112,7 @@ async function assertListGeometry(page: Page, width: number) {
       const item = node.querySelector<HTMLElement>(selector)!;
       return { font: parseFloat(getComputedStyle(item).fontSize), height: item.getBoundingClientRect().height };
     };
-    return { navigation: measure("[data-slot=macro-list-navigation] button"), search: measure("[data-slot=macro-search]"),
+    return { navigation: measure("[data-slot=macro-list-heading]"), search: measure("[data-slot=macro-search]"),
       tab: measure("[data-slot=tabs-trigger]"), group: measure("[data-slot=macro-group-heading]"), entry: measure("[data-slot=macro-entry]") };
   });
   expect(metrics.navigation.font).toBeGreaterThanOrEqual(14);
@@ -371,3 +371,80 @@ test.describe("macro list reduced motion", () => {
     expect(await confirmation.evaluate(node => getComputedStyle(node).animationName)).toBe("none");
   });
 });
+
+// State colour belongs to actionable work; selection contributes only its wash.
+for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
+  test.describe(`macro state edges, ${width}px, ${theme}`, () => {
+    test.use({ locale: "zh-CN", viewport: { width, height: width === 390 ? 844 : 800 }, reducedMotion: "reduce" });
+    test("keeps waiting and live edges, count shapes and accessible state names across selection", async ({ page }) => {
+      await themeBeforeLoad(page, theme);
+      await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
+        const response = await route.fetch();
+        const data = await response.json();
+        const original = data.macroTasks[0];
+        const variants = [
+          { title: "等待接手", host: 1, review: 1, active: 1, failed: 0, accepted: 0, ended: 0 },
+          { title: "进行中的任务", host: 0, review: 0, active: 1, failed: 0, accepted: 0, ended: 0 },
+          { title: "Host 已给结论的失败", host: 0, review: 0, active: 0, failed: 1, accepted: 0, ended: 1 },
+          { title: "全部验收", host: 0, review: 0, active: 0, failed: 0, accepted: 1, ended: 1 },
+        ];
+        data.macroTasks = variants.map(({ title, ...counts }, index) => ({ ...original,
+          macroTaskId: index === 1 ? A : `macro-edge-${index}`, title, titleSource: "macro-task",
+          state: index === 0 ? "host" : index === 1 ? "active" : "ended",
+          counts: { ...original.counts, roots: counts.host + counts.review + counts.active + counts.ended, ...counts },
+          lastActivitySeq: 100 - index,
+        }));
+        data.totals = { all: 4, host: 1, active: 2, review: 1 };
+        data.nextCursor = null; data.changed = false;
+        await route.fulfill({ response, json: data });
+      });
+      await page.route(/\/api\/macro-tasks\/macro-edge-3\/timeline(?:\?|$)/, async route => {
+        const response = await route.fetch({ url: route.request().url().replace("macro-edge-3", A) });
+        const data = await response.json();
+        data.macroTask = { ...data.macroTask, macroTaskId: "macro-edge-3", title: "全部验收", state: "ended",
+          counts: { ...data.macroTask.counts, roots: 1, host: 0, review: 0, active: 0, failed: 0, accepted: 1, ended: 1 } };
+        await route.fulfill({ response, json: data });
+      });
+      // Start with a finished row selected, so its selection cannot create an edge.
+      await open(page, "#tasks/macro-edge-3");
+      const list = page.locator("[data-slot=macro-list]");
+      if (width === 390) await page.locator("[data-slot=macro-overview-header]").getByRole("button", { name: /宏任务/ }).click();
+      await expect(list).toBeVisible();
+      const rows = list.locator("[data-slot=macro-entry]");
+      await expect(rows).toHaveCount(4);
+      for (const [index, state] of ["等人接手", "进行中", "失败", "已验收"].entries()) {
+        await expect(rows.nth(index)).toHaveAccessibleName(new RegExp(state));
+      }
+      expect(await rows.locator(":scope > [data-slot=state-mark]").count()).toBe(0);
+      await expect(rows.nth(2).locator("[data-slot=macro-entry-counts] [data-kind=fail] path")).toHaveCount(1);
+      const styles = () => rows.evaluateAll(nodes => nodes.map(node => {
+        const edge = getComputedStyle(node, "::before");
+        const style = getComputedStyle(node);
+        const token = (name: string) => {
+          const probe = document.createElement("span"); probe.style.color = `var(${name})`; node.append(probe);
+          const colour = getComputedStyle(probe).color; probe.remove(); return colour;
+        };
+        return { content: edge.content, width: edge.width, colour: edge.backgroundColor,
+          background: style.backgroundColor, border: style.borderLeftWidth,
+          hand: token("--hand-mark"), live: token("--live"), wash: token("--live-wash"), transition: style.transitionDuration };
+      }));
+      let measured = await styles();
+      expect(measured[0]).toMatchObject({ width: "3px", colour: measured[0].hand });
+      expect(measured[1]).toMatchObject({ width: "3px", colour: measured[1].live });
+      for (const index of [2, 3]) expect(measured[index].content).toBe("none");
+      expect(measured[3].background).toBe(measured[3].wash);
+      expect(measured.every(row => row.border === "0px" && row.transition === "0s")).toBe(true);
+      await assertListGeometry(page, width);
+      await photograph(page, "edges-list", "zh-CN", width, theme);
+      await rows.nth(1).click();
+      if (width === 390) await page.locator("[data-slot=macro-overview-header]").getByRole("button", { name: /宏任务/ }).click();
+      await settle(page);
+      await expect(rows.nth(1)).toHaveAttribute("aria-pressed", "true");
+      await rows.nth(1).hover(); await settle(page);
+      measured = await styles();
+      expect(measured[1]).toMatchObject({ width: "3px", colour: measured[1].live, background: measured[1].wash, border: "0px" });
+      await photograph(page, "edges-selected-live", "zh-CN", width, theme);
+      await expectNoSidewaysScroll(page);
+    });
+  });
+}
