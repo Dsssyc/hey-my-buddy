@@ -26,7 +26,7 @@
     3. 开发者于 2026-10-10 定下顺序：Worker 权限档位那一批验收之后，先做发版准备与持续集成的发布流程，再经 PR 正式发版，然后基于已发布的版本做更新，并以此作为更新的测试。发布渠道倾向 PyPI，首次用令牌、之后用 trusted publishing，细节届时讨论。开发者于 2026-10-16 定下：首次发布由开发者用自己的 PyPI 令牌手动 `uv publish` 一次，之后再配置持续集成的发布流程与 trusted publishing。当日核对：`hey-my-buddy` 这个名字在 PyPI 上没有被占用；仓库已有的 `build-distribution` 工作流在打 `v*` 标签时构建 wheel、sdist 与校验和，还没有发布这一步。发版时的版本号要高于此前从源码安装的那一版，基于发布版本的更新才有意义；第一个发布的版本里还没有"检查更新"，那一次更新用命令行从发布的包进行，自动化测试用私有的索引夹具，不连真实的 PyPI。发版中只能由开发者做的是 PyPI 的账户与发布方配置、合并 PR 与打标签。开发者同日同意在发版之前先完成改名（[ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md) 的 L14、U6 与 skill、README 的用词；2026-10-11 起它是 schema 17，16 由补升级 L18 占用），不把已经决定换掉的词汇与表名公开出去。
   （2026-10-02，2026-10-10 更新）
 
-- **推理强度的顺序是控制台自己排的，不是各 harness 的。** 开发者于 2026-10-11 审 Buddy 页的新设计时指出，不同 harness 的推理强度叫法与分级都不一样，界面应当照各自的来。现状：目录与快照里每个 buddy 只带推理强度的名字，不带顺序；控制台的 `console-data.ts` 用一张写死的总表给它们排序（`default`、`off`、`low` 直到 `max`、`ultra`），不在表里的排在最后，于是 `ultra` 排在 `max` 之后只是这张表的排法。应由 harness 声明自己的推理强度及其顺序（ADR-023：差异记为声明的能力），随模型目录带到控制台的快照，控制台照此排列并删掉那张表。要改黑板一侧与控制台的数据层，排在 ADR-021 L18 合入之后；前端分支上 Buddy 目录的重做在此之前沿用现有的顺序。 2026-10-17 核对：各 harness 的原生目录本来就按自己的顺序列出一个模型的推理强度（Claude Code CLI 的 `supportedEffortLevels`、Codex 的 `supportedReasoningEfforts`、DSH 的推理强度选项、ZCode 的 levels），看板在 `catalog_observations.response_json` 里存着原始回复，只是提议 buddy 时按行写进 `buddies` 表，顺序丢了。不必在 harness 的代码里另写一张表；要定的是从当前那次观察的原始回复读顺序，还是在升级里给 buddy 行存下位置。
+- **推理强度的顺序是控制台自己排的，不是各 harness 的。**（2026-10-17 做完，在批次二的分支上，随 0.46.0 安装；[验收记录](../acceptance/console-frontend.md)。） 开发者于 2026-10-11 审 Buddy 页的新设计时指出，不同 harness 的推理强度叫法与分级都不一样，界面应当照各自的来。现状：目录与快照里每个 buddy 只带推理强度的名字，不带顺序；控制台的 `console-data.ts` 用一张写死的总表给它们排序（`default`、`off`、`low` 直到 `max`、`ultra`），不在表里的排在最后，于是 `ultra` 排在 `max` 之后只是这张表的排法。应由 harness 声明自己的推理强度及其顺序（ADR-023：差异记为声明的能力），随模型目录带到控制台的快照，控制台照此排列并删掉那张表。要改黑板一侧与控制台的数据层，排在 ADR-021 L18 合入之后；前端分支上 Buddy 目录的重做在此之前沿用现有的顺序。 2026-10-17 核对：各 harness 的原生目录本来就按自己的顺序列出一个模型的推理强度（Claude Code CLI 的 `supportedEffortLevels`、Codex 的 `supportedReasoningEfforts`、DSH 的推理强度选项、ZCode 的 levels），看板在 `catalog_observations.response_json` 里存着原始回复，只是提议 buddy 时按行写进 `buddies` 表，顺序丢了。不必在 harness 的代码里另写一张表；要定的是从当前那次观察的原始回复读顺序，还是在升级里给 buddy 行存下位置。
 
 **合成预览里没有 Lead 的场景。**（2026-10-15 补上了等待 Lead、等待名下的微任务与停止宏任务时的确认范围，随 0.37.1 安装，[验收记录](../acceptance/lead-trial-2.md)；由 Lead 发起的停止与 Lead 还在停止中的场景于 2026-10-17 随控制台的小批次补上，[验收记录](../acceptance/console-frontend.md)） 2026-10-14 验收 Lead 名下的生命周期时发现：浏览器检查用的合成预览（`tests/probes/macro_task_console_preview.py`）不给出 `leadOwnership`、`rootLeadRunId`，也没有 `waiting-owned` 的微任务，它的 `TimelineRow` 字段清单里也没有这两个字段；浏览器检查因此画不到“等待 Lead”“等待名下的微任务”与 Lead 的停止。Host 那次只在临时副本里补了数据看像素。随下一步改控制台时补上一个 Lead 的场景。
 
@@ -45,6 +45,8 @@
 **停止的说法有两套文案。** 2026-10-17 验收控制台的小批次时看到：时间轴与详情左栏按事件的 actor 写“{角色} 停止”（`tasks.drawing.stoppedBy`），控制台发起的停止因此写成“控制台 停止”；详情的“停止发起”与提示用另一套（`taskDetail.stop`、`shell.stop`），写“在控制台停止”。Host 与 Lead 两种写法碰巧相同。合成一套，随下一次控制台的批次做。
 
 **浏览器检查共用的截图目录按批次起名。** 同一次验收：所有浏览器检查的截图现在都写进 `tmp/step4-small-shots`，按用途改名。随下一次控制台的批次做。
+
+**`effortRank` 在控制台的类型里是可选的，合成预览里也没有它。** 2026-10-17 验收推理强度的顺序时看到：`apps/console/src/types.ts` 把它写成 `effortRank?`，等于容忍服务不给；合成预览（`tests/probes/macro_task_console_preview.py`）的 buddy 没有这个字段，预览里的推理强度按名字排。改成必有，并给预览的 buddy 补上原生的位置。随下一次控制台的批次做。
 
 **无宏任务的 Lead，名下的微任务在列表里各成一组。** 2026-10-17 独立审查删除宏任务的计划时指出：`macro_tasks.MEMBERS_SQL` 只沿协助关系找分组的根，没有宏任务的 Lead 与它名下的每个微任务各成一个 `run:` 分组，`macro_task_list` 里另有一处自己算分组的 SQL。删除 `run:<Lead>` 时按闭包会连带删掉显示成别的分组的内容，确认框的数与那些分组看到的不一致。当日日常看板只读计数为 0 个（Lead 都在宏任务里），所以没有随删除做；碰到时让 Lead 名下的树归到 Lead 的分组，两处分组一起改。
 
