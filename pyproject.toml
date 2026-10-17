@@ -1,10 +1,10 @@
 [project]
 name = "hey-my-buddy"
-version = "0.43.0"
+version = "0.44.0"
 description = "A durable agent blackboard with independent workers and C-Two RPC"
 requires-python = ">=3.12,<3.15"
 dependencies = [
-    "c-two==0.7.5",
+    "c-two==0.7.6",
     "portalocker>=3,<4",
     "psutil>=7,<8",
     "pydantic>=2,<3",
