@@ -137,6 +137,8 @@ export type Buddy = {
   provider: string;
   model: string;
   effort: string;
+  /** This effort's 0-based position in the model's current native catalog; absent from that catalog is null. */
+  effortRank?: number | null;
   available: boolean;
   enabled: boolean;
   capabilities: string[];

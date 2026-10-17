@@ -67,11 +67,10 @@ export function modelServices(buddies: Buddy[]): ModelServiceGroup[] {
     if (!groups.has(key)) groups.set(key, { key, name: buddyName(buddy), harness: buddy.harness, provider: buddy.provider, buddies: [] });
     groups.get(key)!.buddies.push(buddy);
   }
-  // Display order only; default/off modes do not imply a capability score.
-  const levels = ["default", "none", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+  // Display order only: each harness's current catalog carries its own order.
   for (const group of groups.values()) group.buddies.sort((a, b) => {
-    const rank = (value: string) => levels.includes(value) ? levels.indexOf(value) : levels.length;
-    return rank(a.effort) - rank(b.effort) || a.effort.localeCompare(b.effort);
+    const rank = (value: number | null | undefined) => value ?? Number.MAX_SAFE_INTEGER;
+    return rank(a.effortRank) - rank(b.effortRank) || a.effort.localeCompare(b.effort);
   });
   return [...groups.values()].sort((a, b) => a.harness.localeCompare(b.harness)
     || Number(b.buddies.some(p => p.enabled)) - Number(a.buddies.some(p => p.enabled))

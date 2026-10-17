@@ -569,6 +569,16 @@ class CatalogView:
         entry = self.lookup(harness, provider, model)
         return list(entry["efforts"]) if entry else []
 
+    def effort_ranks(self) -> dict[tuple[str, str, str], dict[str, int]]:
+        """Each model's native effort order, indexed by its execution identity."""
+        return {
+            (entry["harness"], entry["provider"], model["id"]): {
+                effort: rank for rank, effort in enumerate(model["efforts"])
+            }
+            for entry in self.payload["providers"]
+            for model in entry["models"]
+        }
+
     def metadata(self) -> dict:
         return {**self.payload, "discoveryId": self.discovery_id,
                 "discoveredAt": self.recorded_at or self.payload.get("discoveredAt")}
