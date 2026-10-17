@@ -36,20 +36,20 @@ Host buddy 拥有微任务并负责验收，Worker buddy 在本地的编码 harn
 
 ## 安装
 
-hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.45.0（contract 0.45.0、schema 24），安装于 2026-10-17（[记录](docs/acceptance/install-0.45.0.md)）；当前源码是同一版本。Host 只经微任务委派，`execution-submit` 这个方法已经删掉。它让 Host 能在 Codex 与 Claude Code 正在跑的回合里提问，Host 等待过微任务之后也一样；它用 C-Two 0.7.6，不再加载 NumPy 与 FastDB（[验收记录](docs/acceptance/live-channel-0.43.0.md)）。控制台各页都已重做，宏任务的时间轴也在内，可以在中文与英文之间切换（[验收记录](docs/acceptance/console-frontend.md)）。在 Linux 上，状态目录的上层目录组可写而这个组是用户自己的私有组时，它信任这个目录（[验收记录](docs/acceptance/linux-portability.md)）。0.42.0 把看板从 schema 23 升级到 24：每条命令只留下标识这次提交的内容，执行心跳这类周期性状态只留最新的一条。skill 位于 `~/.agents/skills/hey-my-buddy`，Claude Code 通过 `~/.claude/skills/hey-my-buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。[原生沙盒审阅验收](docs/acceptance/native-sandbox-review-0.27.0.md)记录由固定原生探针拥有、不再解读模型输出的验证。[路由与验证验收](docs/acceptance/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同一宏任务内委派、Host 直接收尾、失败结论与清理、部分成果、更换 buddy 续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未发布。改了中间号的安装在切换之前先做校验过的备份（见[运行参考](docs/reference/operations.md#installation)）。
+hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.45.0（contract 0.45.0、schema 24），安装于 2026-10-17（[记录](docs/acceptance/install-0.45.0.md)）；当前源码是 0.45.1，只改了控制台，还没有安装。Host 只经微任务委派，`execution-submit` 这个方法已经删掉。它让 Host 能在 Codex 与 Claude Code 正在跑的回合里提问，Host 等待过微任务之后也一样；它用 C-Two 0.7.6，不再加载 NumPy 与 FastDB（[验收记录](docs/acceptance/live-channel-0.43.0.md)）。控制台各页都已重做，宏任务的时间轴也在内，可以在中文与英文之间切换（[验收记录](docs/acceptance/console-frontend.md)）。在 Linux 上，状态目录的上层目录组可写而这个组是用户自己的私有组时，它信任这个目录（[验收记录](docs/acceptance/linux-portability.md)）。0.42.0 把看板从 schema 23 升级到 24：每条命令只留下标识这次提交的内容，执行心跳这类周期性状态只留最新的一条。skill 位于 `~/.agents/skills/hey-my-buddy`，Claude Code 通过 `~/.claude/skills/hey-my-buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。[原生沙盒审阅验收](docs/acceptance/native-sandbox-review-0.27.0.md)记录由固定原生探针拥有、不再解读模型输出的验证。[路由与验证验收](docs/acceptance/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同一宏任务内委派、Host 直接收尾、失败结论与清理、部分成果、更换 buddy 续做、累计补丁和原生用量／额度观察。[Host 工作流验收](docs/acceptance/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未发布。改了中间号的安装在切换之前先做校验过的备份（见[运行参考](docs/reference/operations.md#installation)）。
 
 在开发者确定发布渠道与确切版本之后，安装入口是一条固定版本的包命令：
 
 ```sh
 # 发布渠道与版本确定之后使用；目前不可用
-uvx hey-my-buddy@0.45.0 install
+uvx hey-my-buddy@0.45.1 install
 ```
 
 包名是否可用、是否发布到 PyPI 仍待开发者决定，本候选尚未发布到 PyPI。在正式发布之前，可以从冻结源码构建 wheel，并用绝对路径安装：
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from /absolute/path/hey_my_buddy-0.45.0-py3-none-any.whl hey-my-buddy install
+uvx --from /absolute/path/hey_my_buddy-0.45.1-py3-none-any.whl hey-my-buddy install
 ```
 
 机器上没有 `uv` 时，发布包里的 `install.sh`（macOS、Linux）或 `install.ps1`（Windows）会先准备固定版本的私有 `uv`，再调用同一个安装入口；它们不修改 `PATH`、shell 或 Host 设置，也不会安装全局 `hey-my-buddy` 命令。安装会先列出将写入的路径、物化版本化运行时。只改末位的版本不打断在跑的工作：服务换到新运行时上重启，接回在跑的执行。改了中间号的版本，有排队或在跑的工作、未确认的停止时拒绝并列出阻塞项（`UPGRADE_NOT_IDLE`），空闲后切换，并做校验过的备份。两种都是 skill、启动器、运行时与服务整体切换，失败时回滚。重跑完整同版本只补齐缺失内容、不重启服务；内容损坏时用同一条固定版本命令修复；同版本内容变化会报告 `updated`。sdist 保留来源提交，解包后构建 wheel 仍保留相同 `sourceCommit`。安装或升级日常服务都需要用户的单独授权。代码与脚本可移植到 Windows，但尚未在真机验证。
@@ -88,7 +88,7 @@ HMB_CLI="$HOME/.agents/skills/hey-my-buddy/scripts/hey-my-buddy"
 
 控制台默认免登录，通过默认浏览器打开固定回环地址。可在设置中开启“需要登录”，使用有效期 10 分钟的一次性入口；会话不按 30 天过期，可显式退出或撤销。每个获准访问的窗口都可以编辑设置；后保存的内容生效，草稿按窗口保留。使用 `console '{"browser":false}'` 可自行打开链接；使用 `console '{"wait":true}'` 可让 CLI 留在前台，Ctrl-C 只关闭对应控制台。会话有效期、安全边界与独立的安装边界见[控制台入口说明](docs/reference/console.md)。
 
-打开命令返回的 loopback 地址，顶部提供“任务 / Buddy / 设置”三个页签。任务页按项目列出宏任务，独立微任务在最后一组。宏任务打开是它的微任务的时间轴，长的空闲压成固定宽度的断口；点一个微任务就地打开，按回合组织，它的各步挂在名字下面。Buddy 按 harness 归组模型服务，每种推理强度标识一个独立的 buddy；模型服务一行显示已启用的推理强度和并发占用；每个 buddy 分别编辑启用状态。“角色”分区显示有序 Router 列表与共享模式。页面直接编辑，没有全局编辑开关：改动控件即产生草稿，底部保存栏只提供放弃与保存；结果未确认时保留恢复信息。编辑只涉及你自己的 buddy 偏好与启用状态、模型服务的备注与并发设置和 Router 列表：目录事实始终只读。每个模型服务还有用户拥有的并发上限，在下一次准入时生效，调低上限不会停止正在运行的任务。同一页还显示记录的 harness 状态，提供显式“检测”和自动检测失败时的高级手动路径；检测不调用模型。“设置”页放主题、语言（中文或英文）、提醒、访问、版本，以及本地存储的检查与回收。查看、刷新和编辑草稿都不调用模型。
+打开命令返回的 loopback 地址，顶部提供“任务 / Buddy / 设置”三个页签。任务页按项目列出宏任务，独立微任务在最后一组。宏任务打开是它的微任务的时间轴，长的空闲压成固定宽度的断口；单击选中一个微任务，双击在原处打开，按回合组织，它的各步挂在名字下面。Buddy 按 harness 归组模型服务，每种推理强度标识一个独立的 buddy；模型服务一行显示已启用的推理强度和并发占用；每个 buddy 分别编辑启用状态。“角色”分区显示有序 Router 列表与共享模式。页面直接编辑，没有全局编辑开关：改动控件即产生草稿，底部保存栏只提供放弃与保存；结果未确认时保留恢复信息。编辑只涉及你自己的 buddy 偏好与启用状态、模型服务的备注与并发设置和 Router 列表：目录事实始终只读。每个模型服务还有用户拥有的并发上限，在下一次准入时生效，调低上限不会停止正在运行的任务。同一页还显示记录的 harness 状态，提供显式“检测”和自动检测失败时的高级手动路径；检测不调用模型。“设置”页放主题、语言（中文或英文）、提醒、访问、版本，以及本地存储的检查与回收。查看、刷新和编辑草稿都不调用模型。
 
 路由由 Python 冻结合法候选并检查答案边界；不健康的 harness 会从候选中排除。路由分两种模式：快速路由只做一次调用、由 harness 真正关闭全部工具，输入只有任务、候选的事实、偏好与备注；审阅路由是只读模式，另会读取冻结的仓库副本。快速路由已为 DSH、ZCode 与 Codex 实现：DSH 已通过授权实测，ZCode/Codex 已通过原生离线零工具检查；ZCode 的提供方验收被 429 限流阻断，Codex 快速路由尚未做付费实测。0.19.0 源码已在 macOS 的 Codex CLI 0.157.0 上验证 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算。Linux/Windows 与其他 harness 的审阅路由尚未验证；指定的 Router 还必须可用且已启用。共享模式适用于有序 Router buddy 列表；路由使用其中第一个可用且已启用的 buddy。没有可用项时，微任务在路由边界交回 Host。请注意：快速 Router 调用会把任务描述发送给该 Router 所在的模型提供方（包括准备交给其他模型执行的任务），审阅路由还会读取冻结的仓库副本。安装后由用户在 Buddy 中选择 buddy，本候选不修改用户设置。见[路由契约](docs/reference/decision.md)、[harness 发现](docs/reference/harnesses.md)和[验收证据](docs/acceptance/routing-modes-0.20.0.md)。
 
