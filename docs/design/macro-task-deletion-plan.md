@@ -82,7 +82,7 @@ commands 行长期保留，只加可空 `deletion_id REFERENCES macro_task_delet
 
 命中命令除 task_id/attempt_id 外，收齐 requests/children 的 decision_command_id，以及 continuations、scope、conflicts、integrations、cleanup、conclusions 的 command_id；按 `command_receipts.stored_response` 每种 kind 的固定字段收齐 runId、targetRunId、requestId、planId、artifactId 等对象，覆盖标识列为空而 response_json 含目标的收据。`workflow.workspace_resolve` 保存的文件路径列表及小回答同样清空。依据：`store._store_receipt/_receipt`、`command_receipts.stored_response/replay_response`。
 
-重放在统一收据边界先校验 subject、kind、request_hash；deletion_id 非空即只返回 `{"commandId":"...","deleted":true}`，不读已删的 run、不返回原内容与控制凭据、不再执行。入口现在有些先取 run/授权再查收据，实施要使 deleted 收据能在旧 run 不存在时完成上述身份校验与回复；current 收据的授权规则不变，不在每层加相同判断。无收据的旧 run 仍 NOT_FOUND。不建 deleted_submission_ids，不为提交重放新增 CONTENT_DELETED；名下全部了结后才删，指名宏任务的提交由第 6 节删除记录拒绝。
+deletion_id 非空的收据在入口读取旧 run 之前处理：只核对命令编号、kind 与 subject，不重算 request_hash（`decide`、`conclude` 的摘要含着随内容删掉的值，Host 2026-10-17 定），相符即只返回 `{"commandId":"...","deleted":true}`，不读已删的 run、不返回原内容与控制凭据、不再执行。入口现在有些先取 run/授权再查收据，实施要使 deleted 收据能在旧 run 不存在时完成上述身份校验与回复；current 收据的授权规则不变，不在每层加相同判断。无收据的旧 run 仍 NOT_FOUND。不建 deleted_submission_ids，不为提交重放新增 CONTENT_DELETED；名下全部了结后才删，指名宏任务的提交由第 6 节删除记录拒绝。
 
 ## 4. 物理内容与 Git 引用
 
