@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { Fold, Moment } from "./parts";
@@ -5,10 +6,14 @@ import { Node, Quote } from "./thread";
 import type { Inquiry } from "./types";
 
 /** One inquiry put to the running execution, and the answer it got. */
-export function Ask({ inquiry }: { inquiry: Inquiry }) {
+export function Ask({ inquiry, highlighted = false }: { inquiry: Inquiry; highlighted?: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (highlighted) ref.current!.scrollIntoView({ block: "center", behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+  }, [highlighted]);
   const { t } = useTranslation("taskDetail");
   const word = <span className="whitespace-nowrap">{t(`inquiry.${inquiry.state}`)}</span>;
-  return <>
+  return <div ref={ref} data-inquiry-id={inquiry.inquiryId} data-highlighted={highlighted} className="transition-colors duration-150 data-[highlighted=true]:bg-live-wash data-[highlighted=true]:ring-1 data-[highlighted=true]:ring-live motion-reduce:transition-none">
     <Node mark="ask">
       <Quote>
         <div className="flex items-baseline gap-2 text-xs text-ink3">
@@ -27,5 +32,5 @@ export function Ask({ inquiry }: { inquiry: Inquiry }) {
       </div>
       <Moment at={inquiry.answer.at} className="text-xs text-ink3" />
     </Node>}
-  </>;
+  </div>;
 }

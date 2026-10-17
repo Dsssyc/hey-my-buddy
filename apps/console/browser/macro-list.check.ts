@@ -412,7 +412,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
       await expect(list).toBeVisible();
       const rows = list.locator("[data-slot=macro-entry]");
       await expect(rows).toHaveCount(4);
-      for (const [index, state] of ["等人接手", "进行中", "失败", "已验收"].entries()) {
+      for (const [index, state] of ["等待接手", "进行中", "失败", "已验收"].entries()) {
         await expect(rows.nth(index)).toHaveAccessibleName(new RegExp(state));
       }
       expect(await rows.locator(":scope > [data-slot=state-mark]").count()).toBe(0);

@@ -174,6 +174,7 @@ export type InquiryState = "queued" | "claimed" | "delivered" | "answered" | "di
 
 export type Inquiry = {
   messageId: string;
+  inquiryId: string;
   attemptId: string | null;
   question: string;
   author: string;
@@ -264,6 +265,7 @@ export type Context = {
   inquiries: Inquiries | null;
   /** Where each inquiry is shown, by the key of the step: none is left out. */
   asked: Record<string, Inquiry[]>;
+  highlightedInquiry?: string | null;
   timeline: MacroTaskTimeline | null;
   row: TimelineRow | null;
   nowMs: number;

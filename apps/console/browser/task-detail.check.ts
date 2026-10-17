@@ -51,11 +51,11 @@ async function expectOneLineHead(page: Page, refresh: string, narrow: boolean) {
   const [title, figures, status, again, mark] = await Promise.all([
     header.locator("h2").boundingBox(), header.locator("dl").boundingBox(),
     header.locator("[data-slot=detail-status]").boundingBox(), header.getByRole("button", { name: refresh }).boundingBox(),
-    header.locator("[data-slot=state-mark]").first().boundingBox(),
+    header.locator("button").first().boundingBox(),
   ]);
   const centre = (box: { y: number; height: number }) => box.y + box.height / 2;
   expect(Math.abs(centre(status!) - centre(again!)), "the state stays beside refresh").toBeLessThan(10);
-  expect(Math.abs(centre(mark!) - centre(title!)), "the mark stays beside the title").toBeLessThan(10);
+  expect(Math.abs(centre(mark!) - centre(title!)), "the back button stays beside the title").toBeLessThan(10);
   if (narrow) {
     expect(figures!.y, "facts follow the title").toBeGreaterThan(title!.y);
     expect(status!.y, "state and refresh follow the facts").toBeGreaterThanOrEqual(figures!.y + figures!.height);
@@ -84,7 +84,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         // Opened from a span of the timeline, the detail opens on the turn that span belongs to.
         const span = page.locator('[data-slot=timeline-tracks] [data-key="span:execution:att-a1-2"]');
         await span.waitFor();
-        await span.click();
+        await span.dblclick();
         await expect(detail(page)).toBeVisible();
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}/preview-run-a1/7$`));
         await expect(rail(page).locator("[aria-current=step]")).toContainText(turn(2));

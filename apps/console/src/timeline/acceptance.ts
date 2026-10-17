@@ -2,7 +2,7 @@ import { acceptanceWaitMs } from "../macro-task-display";
 import type { TimelineRow, TimelineSpan } from "../macro-task-types";
 import { parseTimelineInstant as instant } from "./instant";
 
-/** The same confirmed delivery-to-verdict interval in tracks and chronological rows. */
+/** The same confirmed delivery-to-verdict interval in the timeline. */
 export function acceptanceInterval(row: TimelineRow, spans: readonly TimelineSpan[], nowMs: number) {
   const executions = spans.filter(span => span.kind === "execution");
   const latest = executions.reduce<TimelineSpan | null>((last, span) => (instant(span.endAt) ?? -Infinity) > (instant(last?.endAt) ?? -Infinity) ? span : last, null);

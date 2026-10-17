@@ -64,15 +64,15 @@ describe("macro task list", () => {
     expect(rows.map(row => row.classList.contains("before:bg-live"))).toEqual([false, true, false, false, false]);
     expect(rows.map(row => row.classList.contains("before:w-[3px]"))).toEqual([true, true, false, false, false]);
     expect(rows.every(row => !row.querySelector(":scope > [data-slot=state-mark]"))).toBe(true);
-    for (const [index, status] of ["等人接手", "进行中", "失败", "已验收", "已结束"].entries()) {
+    for (const [index, status] of ["等待接手", "进行中", "失败", "已验收", "已结束"].entries()) {
       const row = rows[index] as HTMLButtonElement;
       expect(row.hasAttribute("aria-label")).toBe(false);
       const time = row.querySelector("time")!.textContent!;
       expect(screen.getByRole("button", { name: new RegExp(`标题 ${index}.*${time}.*${status}`) })).toBe(row);
-      if (index === 0) expect(screen.getByRole("button", { name: /标题 0.*等人接手.*等人接手 3/ })).toBe(row);
+      if (index === 0) expect(screen.getByRole("button", { name: /标题 0.*等待接手.*等待接手 3/ })).toBe(row);
     }
     expect(rows[2].querySelector('[data-slot="macro-entry-counts"] [data-kind="fail"] path')).toBeTruthy();
-    expect(within(rows[0] as HTMLElement).getByText("等人接手 3", { selector: ".sr-only" })).toBeTruthy();
+    expect(within(rows[0] as HTMLElement).getByText("等待接手 3", { selector: ".sr-only" })).toBeTruthy();
     expect(rows[0].querySelectorAll('[data-slot="macro-entry-counts"] [data-kind="hand"]')).toHaveLength(1);
     expect(within(rows[2] as HTMLElement).getByText("失败 1", { selector: ".sr-only" })).toBeTruthy();
     expect(rows[0].hasAttribute("aria-description")).toBe(false);

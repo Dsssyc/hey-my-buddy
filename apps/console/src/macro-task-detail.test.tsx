@@ -140,7 +140,7 @@ const openMacroTask = async (f: ReturnType<typeof harness>) => {
 // Layer mode opens details with Enter or a double click; a single click only pins.
 const openSpan = async (f: ReturnType<typeof harness>, key: string) => {
   const surface = "[data-slot=timeline-tracks]";
-  await f.user.click(document.querySelector(`${surface} [data-key="span:${key}"]`) as HTMLButtonElement);
+  await f.user.dblClick(document.querySelector(`${surface} [data-key="span:${key}"]`) as HTMLButtonElement);
   await screen.findByRole("navigation", { name: "步骤" });
 };
 
@@ -182,22 +182,22 @@ describe("the detail of a micro task in its macro task", () => {
     stubViewport(false);
     const f = harness();
     await openMacroTask(f);
-    await f.user.click(document.querySelector('[data-key="row:r1"]') as HTMLButtonElement);
+    await f.user.dblClick(document.querySelector('[data-key="row:r1"]') as HTMLButtonElement);
     await screen.findByRole("navigation", { name: "步骤" });
     expect(hashNow()).toMatch(/^#tasks\/macro-1\/r1\/\d+$/);
     expect(selectedStep()).toContain("回合 1");
     fireEvent.keyDown(document.body, { key: "Escape" });
-    await f.user.click(document.querySelector('[data-key="span:s-r2-w"]') as HTMLButtonElement);
+    await f.user.dblClick(document.querySelector('[data-key="span:s-r2-w"]') as HTMLButtonElement);
     await screen.findByRole("navigation", { name: "步骤" });
     expect(selectedStep()).toContain("决定");
   });
 
-  it.each([false, true])("collapses by its row and Escape, returning focus to that row (narrow %s)", async narrow => {
+  it.each([false, true])("collapses by its back button and Escape, returning focus to that row (narrow %s)", async narrow => {
     stubViewport(narrow);
     const f = harness();
     await openMacroTask(f);
     await openSpan(f, "s-r1-e");
-    await f.user.click(document.querySelector('[data-slot=task-names] [data-key="row:r1"]')!);
+    await f.user.click(screen.getByRole("button", { name: "收起详情" }));
     await waitFor(() => expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull());
     expect(hashNow()).toBe("#tasks/macro-1");
     expect(document.activeElement?.getAttribute("data-key")).toBe("row:r1");
@@ -334,12 +334,15 @@ describe("the detail of a micro task in its macro task", () => {
     expect(hashNow()).toBe("#tasks/macro-1/r2/2");
   });
 
-  it("opens a row with one click, and switches rows while its detail is open", async () => {
+  it("selects a row with one click, opens with two, and switches rows while detail is open", async () => {
     stubViewport(false);
     const f = harness();
     await openMacroTask(f);
     const row = document.querySelector('[data-key="row:r1"]')!;
     await f.user.click(row);
+    expect(document.querySelector("[data-slot=task-detail]")).toBeNull();
+    expect(hashNow()).toBe("#tasks/macro-1");
+    await f.user.dblClick(row);
     await screen.findByRole("navigation", { name: "步骤" });
     expect(hashNow()).toMatch(/^#tasks\/macro-1\/r1\/\d+$/);
     expect(document.querySelector('[data-key="row:r1"]')).toBe(row);

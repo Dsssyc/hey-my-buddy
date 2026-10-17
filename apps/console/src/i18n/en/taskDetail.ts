@@ -1,6 +1,7 @@
 import type zh from "../zh/taskDetail";
 
 export default {
+  back: "Close detail",
   label: "Micro task detail",
   loading: "Reading the micro task…",
   failed: "Could not read the micro task",

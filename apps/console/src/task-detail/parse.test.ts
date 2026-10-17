@@ -174,11 +174,12 @@ describe("what a decision was bound by", () => {
 });
 
 describe("the inquiries", () => {
-  const message = (id: string, state: string, extra: Record<string, unknown> = {}) => ({ messageId: id, attemptId: "a1", question: "问", author: "host", createdAt: "t", state, reason: null, delivery: null, answer: null, ...extra });
+  const message = (id: string, state: string, extra: Record<string, unknown> = {}) => ({ messageId: id, inquiryId: `question-${id}`, attemptId: "a1", question: "问", author: "host", createdAt: "t", state, reason: null, delivery: null, answer: null, ...extra });
 
   it("lists the oldest first, as the board returns them newest first, and says when the page may not hold all", () => {
     const parsed = parseInquiries({ messages: [message("new", "delivered"), message("old", "answered", { answer: { text: "答", at: "t2", truncated: true } })] }, 2);
     expect(parsed.items.map(item => item.messageId)).toEqual(["old", "new"]);
+    expect(parsed.items.map(item => item.inquiryId)).toEqual(["question-old", "question-new"]);
     expect(parsed.items[0]!.answer).toEqual({ text: "答", at: "t2", truncated: true });
     expect(parsed.more).toBe(true);
     expect(parseInquiries({ messages: [] }, 200)).toEqual({ items: [], more: false });

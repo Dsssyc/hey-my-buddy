@@ -25,7 +25,7 @@ export function MarkerCluster({ markers, x, y, runId, taskTitle, tabKey, boundar
   const label = t("drawing.eventCluster", { count: markers.length });
   const openMarker = (marker: TimelineMarker) => {
     setOpen(false);
-    onOpen(runId, marker.kind === "event" ? markerKey(marker) : `span:${marker.span.spanId}`);
+    onOpen(runId, markerKey(marker));
   };
   return <Popover open={open} onOpenChange={setOpen}>
     <PopoverTrigger asChild><g ref={trigger} role="button" tabIndex={tabKey === key ? 0 : -1} data-slot="event-cluster" data-at={Date.parse(markerAt(first))} data-key={key}

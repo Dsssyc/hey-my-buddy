@@ -86,7 +86,7 @@ export const routing = (overrides: Partial<RoutingEntry> = {}): RoutingEntry => 
 });
 
 export function inquiry(overrides: Partial<Inquiry> = {}): Inquiry {
-  return { messageId: "inq-1", attemptId: "att-1", question: "测试跑了很久，卡在哪一步？", author: "codex-desktop", createdAt: at("10:20"),
+  return { messageId: "inq-1", inquiryId: "inq-1", attemptId: "att-1", question: "测试跑了很久，卡在哪一步？", author: "codex-desktop", createdAt: at("10:20"),
     state: "delivered", reason: null, deliveredAt: at("10:20", 3), answer: null, ...overrides };
 }
 

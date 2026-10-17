@@ -66,11 +66,11 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
           <h2 tabIndex={0} className="min-w-0 truncate rounded-sm text-lg leading-[1.45] font-semibold tracking-[-0.01em] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{titleText}</h2>
         </Hint></TooltipProvider>
         <dl data-slot="macro-overview-facts" className="mt-1.5 flex flex-wrap gap-x-5 gap-y-0.5 text-xs leading-5 tabular-nums">
-          <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("project")}</dt><dd className="min-w-0 wrap-anywhere text-ink2">{shown.project?.label ?? t("unrecorded")}</dd></div>
-          <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("host")}</dt><dd className="min-w-0 wrap-anywhere text-ink2">{shown.sourceHostId ?? t("unrecorded")}</dd></div>
-          <div className="flex gap-1.5"><dt className="shrink-0 text-ink3">{t("started")}</dt><dd className="text-ink2">{startText}</dd></div>
+          <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("project")}</dt><dd className="min-w-0 wrap-anywhere text-ink">{shown.project?.label ?? t("unrecorded")}</dd></div>
+          <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("host")}</dt><dd className="min-w-0 wrap-anywhere text-ink">{shown.sourceHostId ?? t("unrecorded")}</dd></div>
+          <div className="flex gap-1.5"><dt className="shrink-0 text-ink3">{t("started")}</dt><dd className="text-ink">{startText}</dd></div>
           <div className="flex gap-1.5"><dt className="shrink-0 text-ink3">{t("elapsed")}</dt><dd><Popover key={shown.macroTaskId} open={active && statsOpen} onOpenChange={setStatsOpen}>
-            <PopoverTrigger asChild><button type="button" className="inline-flex h-7 cursor-pointer items-center border-b border-dotted border-ink3 text-left text-ink2 transition-colors duration-150 hover:border-ink hover:text-ink focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-reduce:transition-none" aria-label={t("statsTitle")}>{elapsed}</button></PopoverTrigger>
+            <PopoverTrigger asChild><button type="button" className="inline-flex cursor-pointer items-center border-b border-dotted border-ink3 text-left text-ink transition-colors duration-150 hover:border-ink hover:text-ink focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-reduce:transition-none" aria-label={t("statsTitle")}>{elapsed}</button></PopoverTrigger>
             <PopoverContent ref={statsContent} align="start" aria-label={t("statsTitle")} className="w-[34rem] max-w-[calc(100vw-2rem)] rounded-none"
               onOpenAutoFocus={event => { event.preventDefault(); statsContent.current?.focus(); }}>
               <div data-slot="time-stats-body" className="grid gap-2 wrap-anywhere text-sm">

@@ -11,21 +11,22 @@ import type { TimelineRow } from "../macro-task-types";
 /** A row keeps the same name, measure and disclosure in both views. */
 export const RowName = forwardRef<HTMLButtonElement, {
   row: TimelineRow; tabIndex: number; open: boolean; selected: boolean; fresh: boolean; buddies?: readonly FriendlyBuddy[] | null;
-  onClick: () => void; onEnter: () => void; onLeave: () => void; onFocus: () => void; onBlur: () => void;
-}>(function RowName({ row, tabIndex, open, selected, fresh, buddies, onClick, onEnter, onLeave, onFocus, onBlur }, ref) {
+  onClick: () => void; onOpen: () => void; onEnter: () => void; onLeave: () => void; onFocus: () => void; onBlur: () => void;
+}>(function RowName({ row, tabIndex, open, selected, fresh, buddies, onClick, onOpen, onEnter, onLeave, onFocus, onBlur }, ref) {
   const { t } = useTranslation("tasks");
   const state = rowStateInfo(row);
   const title = displayTitle(row.titleSource, row.title);
   const repairTitle = row.fixes ? displayTitle(row.fixesTitleSource!, row.fixesTitle!).fullText : null;
   const repair = row.fixes ? t("fixes", { title: repairTitle }) : null;
-  const mark = row.status === "queued" ? "idle" : row.category === "host" || row.state === "delivered" || row.state === "reconciliation-needed" ? "hand"
-    : row.category === "active" ? "live" : null;
+  const tone = row.status === "queued" ? null : row.category === "host" || row.state === "delivered" || row.state === "reconciliation-needed" ? "hand"
+    : row.category === "active" ? "live" : row.state === "failed" || row.status === "failed" || row.acceptanceVerdict === "failed" ? "fail" : "past";
+  const mark = tone === "live" ? "live" : null;
   const button = <button ref={ref} type="button" data-key={`row:${row.runId}`} data-slot="timeline-row-name" data-run-id={row.runId} data-fixes={row.fixes}
-    tabIndex={tabIndex} aria-expanded={open} aria-label={[title.fullText, repair, state.label].filter(Boolean).join(" · ")} onClick={onClick}
+    tabIndex={tabIndex} aria-expanded={open} aria-label={[title.fullText, repair, state.label].filter(Boolean).join(" · ")} onClick={onClick} onDoubleClick={onOpen} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(); } }}
     onPointerEnter={onEnter} onPointerLeave={onLeave} onFocus={onFocus} onBlur={onBlur}
     className={cn("group flex h-[62px] w-full shrink-0 flex-col justify-center gap-1 border-t px-3 text-left outline-none transition-colors duration-150 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-live",
-      selected ? "bg-live-wash hover:bg-live-wash" : "hover:bg-sunk", open ? "shadow-[inset_2px_0_var(--live)] max-[760px]:sticky max-[760px]:top-0 max-[760px]:z-20 min-[761px]:relative" : "relative")}
-    style={{ paddingLeft: 13 + row.depth * 18 }}>
+      selected ? "bg-live-wash hover:bg-live-wash" : "hover:bg-sunk", open ? "max-[760px]:sticky max-[760px]:top-0 max-[760px]:z-20 min-[761px]:relative" : "relative")}
+    style={{ paddingLeft: 13 + row.depth * 18, boxShadow: tone ? `inset 3px 0 var(--${tone === "hand" ? "hand-mark" : tone})` : undefined }} data-state-tone={tone ?? "queued"}>
     <span className="flex w-full min-w-0 items-center gap-1.5 text-sm">
       {row.kind === "helper" && <span aria-hidden="true" className="text-ink3">└</span>}
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
@@ -42,7 +43,7 @@ export const RowName = forwardRef<HTMLButtonElement, {
         <ChevronRight size={16} strokeWidth={1.5} className={cn("text-ink2 transition-[opacity,rotate,color] duration-150 group-hover:text-ink group-hover:opacity-100 group-focus-visible:opacity-100 motion-reduce:transition-none", open ? "rotate-90 opacity-100" : "opacity-0")}/>
       </span>
     </span>
-    <span className="block w-full truncate text-xs text-ink3"><span className={cn("mr-1.5", mark === "hand" && "text-hand", mark === "live" && "text-live")}>{state.label}</span>{buddyLabel(row.buddy, buddies)}</span>
+    <span className="block w-full truncate text-xs text-ink3"><span className={cn("mr-1.5", tone === "hand" && "text-hand", mark === "live" && "text-live")}>{state.label}</span>{buddyLabel(row.buddy, buddies)}</span>
   </button>;
   return row.fixes ? <Tooltip><TooltipTrigger asChild>{button}</TooltipTrigger><TooltipContent side="right" align="start" className="wrap-anywhere text-left">{repairTitle}</TooltipContent></Tooltip> : button;
 });

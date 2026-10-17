@@ -30,17 +30,23 @@ describe("persistent task rows and basic SVG tracks", () => {
     expect(first.parentElement!.querySelector('[data-slot=task-steps-drawer]')).toBeTruthy();
     expect(document.querySelector('[data-slot=timeline-status]')).toBeNull();
     fireEvent.click(first);
+    expect(props.onClose).not.toHaveBeenCalled();
     rerender(<TooltipProvider><TaskWork {...props} openedRunId={null}/></TooltipProvider>);
     expect(first.getAttribute("aria-expanded")).toBe("false");
     expect(first.className).toContain("bg-live-wash");
     expect(document.querySelectorAll('[data-key="span:s-r1-e"] [data-slot=selected-span]')).toHaveLength(1);
-    expect(props.onClose).toHaveBeenCalledOnce();
+    expect(props.onClose).not.toHaveBeenCalled();
   });
   it("opens a row without an origin, and a segment with its exact identity; arrows move between rows", () => {
     const { props } = setup();
     fireEvent.click(row("r1"));
+    expect(props.onOpen).not.toHaveBeenCalled();
+    expect(row("r1").className).toContain("bg-live-wash");
+    fireEvent.doubleClick(row("r1"));
     expect(props.onOpen).toHaveBeenCalledWith("r1");
     fireEvent.click(document.querySelector('[data-key="span:s-r2-e1"]')!);
+    expect(props.onOpen).toHaveBeenCalledTimes(1);
+    fireEvent.doubleClick(document.querySelector('[data-key="span:s-r2-e1"]')!);
     expect(props.onOpen).toHaveBeenLastCalledWith("r2", "span:s-r2-e1");
     row("r1").focus();
     fireEvent.keyDown(row("r1"), { key: "ArrowDown" });
@@ -54,9 +60,9 @@ describe("persistent task rows and basic SVG tracks", () => {
     setup({ timeline });
     expect(row("r1").querySelector('[data-slot=row-state]')).toBeNull();
     expect(row("r2").querySelector('[data-slot=row-state]')).toBeNull();
-    expect(row("r5").querySelector('[data-slot=row-state]')?.getAttribute("data-kind")).toBe("idle");
+    expect(row("r5").querySelector('[data-slot=row-state]')?.getAttribute("data-kind")).toBeUndefined();
     expect(row("r4").querySelector('[data-slot=row-state]')?.getAttribute("data-kind")).toBe("live");
-    expect(row("r6").querySelector('[data-slot=row-state]')?.getAttribute("data-kind")).toBe("hand");
+    expect(row("r6").querySelector('[data-slot=row-state]')?.getAttribute("data-kind")).toBeUndefined();
     expect(within(row("r4")).getByLabelText("新出现的微任务")).toBeTruthy();
     expect([...document.querySelectorAll('[data-slot=timeline-row-name]')].map(node => node.getAttribute("data-run-id"))).toEqual(timeline.rows.map(entry => entry.runId));
     expect(row("r3").style.paddingLeft).toBe("31px");
@@ -186,4 +192,67 @@ describe("timeline keyboard and screen reader navigation", () => {
     await user.keyboard("{ArrowUp}");
     expect(row("r2").getAttribute("aria-expanded")).toBe("true"); expect(document.activeElement).toBe(row("r2"));
   });
+});
+
+it("gives each name a three-pixel state edge, with no queue edge or hand/queue symbol", () => {
+  setup();
+  for (const id of ["r1", "r2", "r3", "r4", "r5", "r6"]) {
+    const name = row(id);
+    if (name.dataset.stateTone === "queued") expect(name.style.boxShadow).toBe("");
+    else expect(name.style.boxShadow).toContain("inset 3px 0 var(--");
+    expect(name.querySelector('[data-slot=row-state][data-kind=hand], [data-slot=row-state][data-kind=idle]')).toBeNull();
+  }
+});
+
+it("selects empty track space without opening, and opens it on a double click", () => {
+  const { props } = setup();
+  const track = document.querySelector('[data-slot=timeline-row][data-run-id="r2"]')!;
+  fireEvent.click(track);
+  expect(props.onOpen).not.toHaveBeenCalled();
+  expect(row("r2").className).toContain("bg-live-wash");
+  fireEvent.doubleClick(track);
+  expect(props.onOpen).toHaveBeenCalledWith("r2");
+});
+
+it("assigns colours by the first model execution and preserves them when a new model is appended", () => {
+  const timeline = macroTaskTimelineFixture();
+  const source = timeline.spans.find(span => span.kind === "execution")!;
+  const start = Date.parse(source.startAt!);
+  timeline.spans = ["gpt-6.1-sol", "claude-opus-5-5", "gpt-6.1-sol"].map((model, index) => ({ ...source, spanId: `model-${index}`, startAt: new Date(start + index * 120000).toISOString(), endAt: new Date(start + index * 120000 + 60000).toISOString(), state: "finished", uncertain: false, shutdownConfirmed: true, resultStatus: "ok", buddy: { ...source.buddy!, model } }));
+  const { props, rerender } = setup({ timeline });
+  const colors = () => [...document.querySelectorAll<SVGElement>('[data-slot=execution-bar]')].map(bar => bar.style.fill);
+  expect(colors()).toEqual(["var(--model-1)", "var(--model-2)", "var(--model-1)"]);
+  const next = { ...timeline, spans: [...timeline.spans, { ...timeline.spans[2]!, spanId: "later-model", startAt: new Date(start + 360000).toISOString(), endAt: new Date(start + 420000).toISOString(), buddy: { ...source.buddy!, model: "new-model" } }] };
+  rerender(<TooltipProvider><TaskWork {...props} timeline={next}/></TooltipProvider>);
+  expect(colors()).toEqual(["var(--model-1)", "var(--model-2)", "var(--model-1)", "var(--model-3)"]);
+});
+
+it("retains an inquiry's own readout after selecting it without opening", () => {
+  const timeline = macroTaskTimelineFixture();
+  const span = timeline.spans.find(span => span.kind === "execution")!;
+  span.inquiries = [{ inquiryId: "selected-question", createdAt: span.endAt!, author: "host-select", state: "answered" }];
+  const { props } = setup({ timeline });
+  const mark = document.querySelector('[data-key="inquiry:selected-question"]')!;
+  fireEvent.pointerEnter(mark);
+  const hovered = status();
+  fireEvent.click(mark);
+  fireEvent.pointerLeave(mark);
+  expect(props.onOpen).not.toHaveBeenCalled();
+  expect(status()).toBe(hovered);
+  expect(status()).toContain("host-select");
+  expect(row(span.runId).className).toContain("bg-live-wash");
+});
+
+it("resolves a selected inquiry inside its own micro task when another task uses the same inquiry id", () => {
+  const timeline = macroTaskTimelineFixture();
+  const executions = timeline.spans.filter(span => span.kind === "execution");
+  const first = executions[0]!, second = executions.find(span => span.runId !== first.runId)!;
+  for (const [span, author] of [[first, "first-host"], [second, "second-host"]] as const) {
+    span.inquiries = [{ inquiryId: "shared-question", createdAt: span.endAt!, author, state: "answered" }];
+  }
+  timeline.events = [];
+  setup({ timeline });
+  fireEvent.click(document.querySelector(`[data-slot=timeline-row][data-run-id="${second.runId}"] [data-key="inquiry:shared-question"]`)!);
+  expect(status()).toContain("second-host");
+  expect(status()).not.toContain("first-host");
 });

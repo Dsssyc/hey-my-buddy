@@ -193,7 +193,7 @@ describe("desktop console", () => {
     await user.click(await screen.findByRole("button", { name: /目标 one/ }));
     await waitFor(() => expect(window.location.hash).toBe("#tasks/run%3Aone"));
     await waitFor(() => expect(document.querySelector('[data-key="row:one"]')).toBeTruthy());
-    await user.click(document.querySelector('[data-key="row:one"]') as HTMLElement);
+    await user.dblClick(document.querySelector('[data-key="row:one"]') as HTMLElement);
     const detail = await screen.findByRole("region", { name: "微任务详情" });
     await screen.findByRole("navigation", { name: "步骤" });
     expect(within(detail).getByRole("heading", { name: /目标 one/ })).toBeTruthy();
