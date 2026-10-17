@@ -20,6 +20,7 @@ from .launcher import write_active_runtime
 from ..protocol import schemas
 from ..protocol.contracts import CONTRACT_VERSION
 from ..blackboard.store.db import SCHEMA_VERSION, utc_now
+from ..blackboard.store.upgrade import UPGRADE_BASE_SCHEMA, upgrade_schema_24_to_25
 from ..errors import BoardError
 from ..protocol.transport import get_state_dir
 
@@ -61,9 +62,9 @@ def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = F
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if schema is None or int(schema[0]) != SCHEMA_VERSION:
+        if schema is None or int(schema[0]) not in (UPGRADE_BASE_SCHEMA, SCHEMA_VERSION):
             raise BoardError('UNSUPPORTED_SCHEMA',
-                             f'Upgrade accepts schema {SCHEMA_VERSION} only')
+                             f'Upgrade accepts schema {UPGRADE_BASE_SCHEMA} or {SCHEMA_VERSION} only')
         # A micro-task Host boundary has no autonomous next turn. A recorded or
         # queued continuation still has work to prepare/claim, even if the run
         # currently reports a Host boundary. Routing and helper tasks are checked
@@ -507,6 +508,8 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                         journal['before'] = before
                     journal.update(phase='backed-up', backup=backed_up)
                     write_journal(marker, journal)
+                    if before['schema'] == UPGRADE_BASE_SCHEMA:
+                        upgrade_schema_24_to_25(state)
                     expected = idle_snapshot(state, event_head=before['eventHead'])
                 else:
                     expected = before

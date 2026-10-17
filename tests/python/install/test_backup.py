@@ -9,6 +9,8 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy.blackboard.store.upgrade import UPGRADE_BASE_SCHEMA
+from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
@@ -18,6 +20,17 @@ STATE_FILES = ('console-settings.json', 'runtime-retention.json',
 
 
 class BackupTests(BoardTestCase):
+    def test_upgrade_base_backup_retains_schema_and_exact_board_bytes(self):
+        import gzip
+
+        fixture = load_fixture(self.directory)
+        before = (self.directory / 'board.sqlite3').read_bytes()
+        current = Path(backup.create(self.directory)['path'])
+        self.assertEqual(backup.verify(current)['schema'], UPGRADE_BASE_SCHEMA)
+        self.assertEqual(fixture['schemaVersion'], UPGRADE_BASE_SCHEMA)
+        self.assertEqual(gzip.decompress((current / 'board.sqlite3.gz').read_bytes()), before)
+        self.assertEqual((self.directory / 'board.sqlite3').read_bytes(), before)
+
     def test_roundtrip_contains_board_and_existing_state_files_only(self):
         board = self.board()
         board.store.db.close()

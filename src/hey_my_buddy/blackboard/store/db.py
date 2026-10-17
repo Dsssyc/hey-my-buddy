@@ -19,11 +19,27 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CONTROL_TOKEN_VERSION = 1
 AGENT_TOKEN_VERSION = 1
+
+MACRO_TASK_DELETIONS_DDL = """
+CREATE TABLE IF NOT EXISTS macro_task_deletions (
+    deletion_id      TEXT PRIMARY KEY,
+    target_kind      TEXT NOT NULL CHECK (target_kind IN ('macro-task','micro-task-tree')),
+    target_id        TEXT NOT NULL,
+    state            TEXT NOT NULL CHECK (state IN ('deleting','deleted')),
+    started_at       TEXT NOT NULL,
+    deleted_at       TEXT,
+    micro_task_count INTEGER NOT NULL,
+    UNIQUE(target_kind, target_id),
+    CHECK ((state='deleting' AND deleted_at IS NULL)
+        OR (state='deleted' AND deleted_at IS NOT NULL))
+);
+"""
+COMMAND_DELETION_COLUMN = 'deletion_id TEXT REFERENCES macro_task_deletions(deletion_id) ON DELETE RESTRICT'
 
 #: Every task state the durable model may hold. See ``docs/board.md`` for the
 #: documented transition table; ``store.py`` enforces it.
@@ -255,7 +271,8 @@ CREATE TABLE IF NOT EXISTS commands (
     request_hash    TEXT NOT NULL,
     response_json   TEXT NOT NULL,
     subject         TEXT,
-    created_at      TEXT NOT NULL
+    created_at      TEXT NOT NULL,
+    deletion_id TEXT REFERENCES macro_task_deletions(deletion_id) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS commands_kind_idx ON commands(kind, created_at);
 
@@ -1080,7 +1097,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_expected_idx
 CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_silence_idx
     ON attempt_reminders(attempt_id, silence_started_at) WHERE kind = 'native-silence';
 """
-SCHEMA = "\n".join((CORE_SCHEMA, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
+SCHEMA = "\n".join((CORE_SCHEMA, MACRO_TASK_DELETIONS_DDL, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
                     HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA,
                     CATALOG_PENDING_SCHEMA, REMINDER_SCHEMA, FIX_SCHEMA))
 
