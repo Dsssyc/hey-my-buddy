@@ -66,9 +66,9 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
       <span className="min-w-0 font-mono wrap-anywhere text-ink2">
         {buddy.harness} / {buddy.provider} / {buddy.model} / <strong className="font-semibold text-foreground">{effort}</strong>
       </span>
+      <CoolingStatus providers={buddy.providerCooling ? [buddy.providerCooling] : []} />
       {modelAvailable && !buddy.available && <Hint text={unavailableReason}><span className="text-ink3">{t("pane.unavailable")}</span></Hint>}
     </div>
-    <CoolingStatus providers={buddy.providerCooling ? [buddy.providerCooling] : []} />
     <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3 max-[600px]:flex-col max-[600px]:items-stretch">
       <div className="flex items-center gap-2.5 max-[600px]:justify-between">
         {name(t("models.enabled"), enableUnsaved, { htmlFor: `${id}-enabled` })}

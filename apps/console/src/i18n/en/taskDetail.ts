@@ -21,7 +21,7 @@ export default {
   },
   fold: { more: "Show more", less: "Show less" },
   result: { name: "Result" },
-  turn: { expected: "Expected {{time}}", rejected: "Rejected before the model started", reassigned: "Returned for a new route" },
+  turn: { expected: "Expected {{time}}", rejected: "Rejected before the model started", quotaRefused: "Refused for quota", rerouted: "Rerouted" },
   origin: { host: "Chosen by Host", locked: "Locked by user", single: "Only candidate", unrecorded: "Route not recorded" },
   usage: {
     inputShort: "Input", outputShort: "Output", cacheShort: "Cache",

@@ -34,6 +34,7 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
           {!row.available && !harnessState && <Hint text={reasonTexts(row.reasons, t).join(" · ") || undefined}>
             <span className="text-xs text-ink3">{t("models.unavailable")}</span>
           </Hint>}
+          <CoolingStatus providers={member.providerCooling ? [member.providerCooling] : []} />
           {row.pending && <Hint text={row.pendingSince ? t("models.pendingSince", { time: formatDateTime(Date.parse(row.pendingSince)) }) : undefined}>
             <span className="text-xs text-ink3">{t("models.pending")}</span>
           </Hint>}
@@ -46,7 +47,6 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
             {chip.preference && <span className="text-ink2">{t(`preference.${chip.preference}`)}</span>}
           </span>)}
         </span>
-        <span className="col-start-3 col-end-[-1] row-start-3 min-w-0 sm:row-start-2"><CoolingStatus providers={member.providerCooling ? [member.providerCooling] : []} /></span>
         <span className="col-start-4 row-start-1 whitespace-nowrap text-right text-xs text-ink2 tabular-nums sm:col-start-auto sm:row-start-auto" aria-label={occupancy}>
           {row.occupancy ?? "—"} / {Number.isNaN(row.limit) ? "—" : row.limit}
         </span>

@@ -65,11 +65,11 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
         for (const summary of await page.locator("[data-slot=harness-section]").getByRole("button", { name: new RegExp(` ${account}$`) }).all()) {
           await expectTextUncut(summary);
           // The row remains the button, and the cooldown summary belongs to it.
-          await expect(summary.locator("[data-slot=cooling-status]")).toHaveCount(1);
+          await expect(summary.locator("[data-slot=cooling-status]")).toHaveCount(await summary.getAttribute("aria-label") === `DSH ${account}` ? 1 : 0);
           expect(await contrastOf(summary)).toBeGreaterThanOrEqual(4.5);
         }
         const zcode = page.getByRole("button", { name: `ZCode ${account}`, exact: true });
-        await expect(zcode.locator("[data-slot=cooling-status]")).toBeEmpty();
+        await expect(zcode.locator("[data-slot=cooling-status]")).toHaveCount(0);
         await expectTextUncut(zcode);
         // The available sections precede the recorded login failure.
         await expect(page.locator("[data-slot=harness-section]").last()).toHaveAttribute("aria-label", "Claude Code");
@@ -89,6 +89,26 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
         await expectNoSidewaysScroll(page);
       });
 
+      test("keeps ordinary model rows compact and cooling inline", async ({ page }, testInfo) => {
+        await open(page, "#buddies/catalog");
+        const cooled = page.getByRole("button", { name: FLASH, exact: true }).locator("..");
+        const ordinary = page.getByRole("button", { name: "dsh / deepseek-partner / deepseek-flash", exact: true }).locator("..");
+        await expect(cooled.locator("[data-slot=cooling-status]")).toContainText(cooling);
+        const [coolingBox, ordinaryBox] = [(await cooled.boundingBox())!, (await ordinary.boundingBox())!];
+        expect(ordinaryBox.height).toBe(width === 390 ? 57 : 41);
+        if (width === 1280) {
+          expect(coolingBox.height).toBe(ordinaryBox.height);
+          const name = (await cooled.getByText("deepseek-flash", { exact: true }).boundingBox())!;
+          const status = (await cooled.locator("[data-slot=cooling-status]").boundingBox())!;
+          expect(Math.abs(name.y + name.height / 2 - status.y - status.height / 2)).toBeLessThan(3);
+        }
+        await expectNoSidewaysScroll(page);
+        await testInfo.attach("model-row-heights", { body: JSON.stringify({ locale, width, theme,
+          withoutCooling: ordinaryBox.height, withCooling: coolingBox.height }), contentType: "application/json" });
+        await page.getByRole("region", { name: "DSH", exact: true }).screenshot({
+          path: testInfo.outputPath(`buddy-inline-${locale}-${width}-${theme}.png`) });
+      });
+
       test("shows one cooling provider and a quiet non-cooling provider in the account details", async ({ page }, testInfo) => {
         await open(page, "#buddies/catalog");
         await page.getByRole("button", { name: `DSH ${account}`, exact: true }).click();
@@ -98,7 +118,7 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
         await expect(dsh.locator("[data-slot=cooling-details]")).toContainText("deepseek-official");
         await expect(dsh.locator("[data-slot=cooling-details]")).not.toContainText("deepseek-partner");
         await expect(dsh.getByRole("button", { name: clear })).toHaveCount(1);
-        await expect(codex.locator("[data-slot=cooling-details]")).toBeEmpty();
+        await expect(codex.locator("[data-slot=cooling-details]")).toHaveCount(0);
         await expect(codex.getByRole("button", { name: clear })).toHaveCount(0);
         await expectNoSidewaysScroll(page);
         await page.screenshot({ path: testInfo.outputPath(`catalogue-cooling-and-clear-${locale}-${width}-${theme}.png`), fullPage: true });

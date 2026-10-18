@@ -58,7 +58,7 @@ describe("a harness section's head", () => {
     await user.click(within(account).getByText("Claude Code"));
     expect([fold.getAttribute("aria-expanded"), account.getAttribute("aria-expanded")]).toEqual(["true", "true"]);
     expect(screen.getByRole("group", { name: "Claude Code 设置" })).toBeTruthy();
-    await user.click(account.querySelector<HTMLElement>("[data-slot=cooling-status]")!);
+    await user.click(within(account).getByText("anthropic"));
     expect(account.getAttribute("aria-expanded")).toBe("false");
     await user.click(fold);
     expect([fold.getAttribute("aria-expanded"), account.getAttribute("aria-expanded")]).toEqual(["false", "false"]);

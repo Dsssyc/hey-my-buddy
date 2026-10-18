@@ -459,7 +459,7 @@ describe("the account block", () => {
     await selectHarness(user, "ZCode");
     expect(paneBlock("账户").textContent).toBe("账户未记录");
     expect(within(paneBlock("账户")).queryByRole("button")).toBeNull();
-    expect(harnessButton("ZCode").querySelector("[data-slot=cooling-status]")?.textContent).toBe("");
+    expect(harnessButton("ZCode").querySelector("[data-slot=cooling-status]")).toBeNull();
   });
 
   it("keeps native login facts readable in a session that cannot write", async () => {

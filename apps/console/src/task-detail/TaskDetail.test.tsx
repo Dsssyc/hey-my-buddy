@@ -487,8 +487,8 @@ describe("a turn", () => {
     open({ step: 3, timeline: first, replies: { task: task({ status: "completed", workflow: { ...task().workflow, state: "accepted" } }), workflow: base, audit: history } });
     await ready();
     expect(pane().textContent).toContain("模型开始前额度被拒绝");
-    expect(pane().textContent).toContain("额度耗尽");
-    expect(pane().textContent).toContain("已交回重新路由");
+    expect(pane().textContent).toContain("额度被拒");
+    expect(pane().textContent).toContain("已改派");
     expect(pane().textContent).toContain(CODEX.model);
     expect(pane().textContent).not.toContain("失败");
     expect(chosenStep()).toContain("回合 1");

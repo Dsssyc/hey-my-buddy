@@ -130,7 +130,7 @@ export function TurnPane({ step, ctx }: { step: Step; ctx: Context }) {
       <span>{t("activity.toolCalls", { n: attempt.activity.toolCalls ?? t("unknown") })}</span>
     </span>
     : <Usage usage={turn?.tokenUsage ?? null} />;
-  const note = rejected ? [t("quota.quota-exceeded"), t("turn.reassigned")].join(" · ")
+  const note = rejected ? [t("turn.quotaRefused"), t("turn.rerouted")].join(" · ")
     : [attempt?.releaseReason ? reasonText(attempt.releaseReason) : null, attempt?.ending ? endingText(attempt.ending, t) : null, failed && span.error ? span.error : null].filter(Boolean).join(" · ");
   return <Pane footer={running ? <Live activity={attempt?.activity ?? null} stuck={reminders.possiblyStuck} nowMs={ctx.nowMs} /> : undefined}>
     <PaneTitle title={t("step.turn", { n: index })}
@@ -164,7 +164,7 @@ export function TurnPane({ step, ctx }: { step: Step; ctx: Context }) {
       {!running && <Node mark="result">
         <div className="min-w-0 flex-1">
           <p className="text-xs text-ink3">{t("result.name")}</p>
-          {rejected ? <p className="text-ink2">{t("turn.reassigned")}</p> : result === null || result.summary === null
+          {rejected ? <p className="text-ink2">{t("turn.rerouted")}</p> : result === null || result.summary === null
             ? <p className="text-ink3">{ctx.audit ? t("unrecorded") : t("loading")}</p>
             : <Fold text={result.summary || t("unrecorded")} className="text-foreground" />}
           {result && result.remaining.length > 0 && <Lines items={result.remaining} className="mt-2 text-ink2" />}

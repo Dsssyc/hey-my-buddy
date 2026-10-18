@@ -88,7 +88,7 @@ describe("routing outcome precedence", () => {
   });
 });
 
-describe("reassigned execution", () => {
+describe("rerouted execution", () => {
   it("keeps a confirmed pre-model rejection distinct from a failed task", () => {
     const span = { kind: "execution", state: "rejected", resultStatus: "failed", shutdownConfirmed: true } as TimelineSpan;
     expect(spanOutcome(span)).toBe("rejected");

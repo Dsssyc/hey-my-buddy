@@ -34,7 +34,7 @@ export default {
   "stillWaiting": "Still waiting",
   "decided": "Decided",
   "executionFailed": "Execution failed",
-  "reassignedAfterRejection": "Quota rejected; reassigned",
+  "reroutedAfterRejection": "Refused for quota; rerouted",
   "timeMissing": "Time missing",
   "abstained": "Abstained",
   "approved": "Approved",

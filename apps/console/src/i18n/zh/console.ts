@@ -32,7 +32,7 @@ export default {
   "stillWaiting": "仍在等待",
   "decided": "已决定",
   "executionFailed": "执行失败",
-  "reassignedAfterRejection": "额度被拒，已改派",
+  "reroutedAfterRejection": "额度被拒，已改派",
   "timeMissing": "时间缺失",
   "abstained": "已放弃选择",
   "approved": "已批准",

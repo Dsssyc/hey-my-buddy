@@ -52,7 +52,7 @@ const OUTCOME_LABEL: Record<SpanOutcome, string> = {
   get open() { return i18n.t("console:stillWaiting"); }, get admitted() { return i18n.t("console:started"); }, get resolved() { return i18n.t("console:decided"); }, get running() { return i18n.t("console:executing"); },
   get failed() { return i18n.t("console:executionFailed"); }, get cancelled() { return i18n.t("console:cancelled"); }, get unknown() { return i18n.t("console:stopUnconfirmed"); }, get finished() { return i18n.t("console:executionCompleted"); },
   get unplaced() { return i18n.t("console:timeMissing"); }, get abstention() { return i18n.t("console:abstained"); },
-  get rejected() { return i18n.t("console:reassignedAfterRejection"); },
+  get rejected() { return i18n.t("console:reroutedAfterRejection"); },
 };
 
 /** Host-request decision labels use the recorded request state, not a guess. */

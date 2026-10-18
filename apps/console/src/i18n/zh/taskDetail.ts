@@ -20,7 +20,7 @@ export default {
   },
   fold: { more: "展开", less: "收起" },
   result: { name: "结果" },
-  turn: { expected: "预期 {{time}}", rejected: "模型开始前额度被拒绝", reassigned: "已交回重新路由" },
+  turn: { expected: "预期 {{time}}", rejected: "模型开始前额度被拒绝", quotaRefused: "额度被拒", rerouted: "已改派" },
   origin: { host: "Host 指定", locked: "用户锁定", single: "唯一候选", unrecorded: "未记录路由" },
   usage: {
     inputShort: "输入", outputShort: "输出", cacheShort: "缓存",

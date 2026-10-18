@@ -23,14 +23,14 @@ function useCooling(providers: ProviderCooling[]) {
   return activeCooling(providers);
 }
 
-/** A stable single-line slot, silent while no provider is cooling. */
+/** An inline status, present only while a provider is cooling. */
 export function CoolingStatus({ providers }: { providers: ProviderCooling[] }) {
   const { t } = useTranslation("buddies");
   const cooling = useCooling(providers);
   // Earliest deadline answers when this harness has another provider to try.
   const next = cooling.length ? Math.min(...cooling.map(record => Date.parse(record.coolingUntil!))) : null;
-  const text = next === null ? "" : t("harness.cooling.status", { time: formatCoolingTime(next) });
-  return <span data-slot="cooling-status" className="block h-4 w-full max-w-full truncate text-xs text-ink3 tabular-nums sm:w-80">{text}</span>;
+  if (next === null) return null;
+  return <span data-slot="cooling-status" className="text-xs text-ink3 tabular-nums">{t("harness.cooling.status", { time: formatCoolingTime(next) })}</span>;
 }
 
 export function CoolingDetails({ providers, gate, onClear }: {
@@ -39,8 +39,9 @@ export function CoolingDetails({ providers, gate, onClear }: {
   const { t } = useTranslation("buddies");
   const cooling = useCooling(providers);
   const refusal = gate.refusal || (gate.busy ? t("harness.running") : undefined);
+  if (!cooling.length) return null;
   return <div data-slot="cooling-details" className="mt-4 min-w-0">
-    <div className="h-24 overflow-auto" role={cooling.length ? "group" : undefined} aria-label={cooling.length ? t("harness.cooling.name") : undefined}>
+    <div role="group" aria-label={t("harness.cooling.name")}>
       {cooling.map(record => <div key={record.provider} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 pb-3">
         <span className="font-mono text-xs wrap-anywhere">{record.provider}</span>
         <span className="col-start-1 text-xs text-ink3">{t("harness.cooling.status", { time: formatCoolingTime(Date.parse(record.coolingUntil!)) })}</span>

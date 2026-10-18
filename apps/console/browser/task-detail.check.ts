@@ -305,9 +305,9 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(detail(page).locator("[data-slot=detail-status]")).toHaveText(locale === "zh-CN" ? "已验收" : "Accepted");
         await step(page, turn(1)).click();
         await expect(pane(page)).toContainText(locale === "zh-CN" ? "模型开始前额度被拒绝" : "Rejected before the model started");
-        await expect(pane(page)).toContainText(locale === "zh-CN" ? "已交回重新路由" : "Returned for a new route");
+        await expect(pane(page)).toContainText(locale === "zh-CN" ? "已改派" : "Rerouted");
         await expect(pane(page)).toContainText("zcode");
-        await page.screenshot({ path: testInfo.outputPath(`task-reassigned-${locale}-${width}-light.png`) });
+        await page.screenshot({ path: testInfo.outputPath(`task-rerouted-${locale}-${width}-light.png`) });
         await expect(step(page, locale === "zh-CN" ? "路由" : "Routing")).toHaveCount(1);
         await step(page, locale === "zh-CN" ? "路由" : "Routing").last().click();
         await expect(chosen(page)).toHaveAccessibleName(new RegExp(locale === "zh-CN" ? "路由" : "Routing"));
