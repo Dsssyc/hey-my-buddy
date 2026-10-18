@@ -93,7 +93,10 @@ const STATE_LABELS: Record<string, string> = {
   get delivered() { return i18n.t("console:awaitingAcceptance"); }, get accepted() { return i18n.t("console:accepted"); }, get concluded() { return i18n.t("console:ended"); },
 };
 
-export function rowStateInfo(row: TimelineRow, rows: readonly TimelineRow[] = []): { label: string; tone: "green" | "amber" | "red" | "neutral"; glyph: string; glyphClass: string } {
+/** Settled terminal states: nobody needs to do anything, so the row's state word is its left edge alone. */
+const SETTLED_STATES = new Set(["accepted", "concluded", "cancelled", "completed"]);
+
+export function rowStateInfo(row: TimelineRow, rows: readonly TimelineRow[] = []): { label: string; tone: "green" | "amber" | "red" | "neutral"; glyph: string; glyphClass: string; settled: boolean } {
   const key = row.status === "cancelling" || row.state === "cancelled" && rows.some(owned => owned.rootLeadRunId === row.runId && !owned.shutdownConfirmed)
     ? "cancelling" : row.state || row.status;
   const style = ROW_STATE_STYLE[key];
@@ -102,6 +105,7 @@ export function rowStateInfo(row: TimelineRow, rows: readonly TimelineRow[] = []
     tone: style?.tone ?? "neutral",
     glyph: style?.glyph ?? "■",
     glyphClass: style?.glyphClass ?? "muted",
+    settled: SETTLED_STATES.has(key),
   };
 }
 

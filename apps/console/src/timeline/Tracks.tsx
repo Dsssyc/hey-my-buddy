@@ -101,14 +101,14 @@ function IdlePattern({ id }: { id: string }) {
 type PositionedSpan = { span: TimelineSpan; start: number; end: number; execution: boolean; outcome: ReturnType<typeof spanOutcome> };
 const diamond = (x: number, y: number) => `M${x} ${y - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`;
 
-export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey, ownedWaits, tabKey, boundary, height = 44 }: {
+export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey, ownedWaits, tabKey, boundary, height = 52 }: {
   row: TimelineRow; spans: TimelineSpan[]; events: TimelineEvent[]; scale: TimelineScale; nowMs: number; ongoing: boolean;
   buddies?: readonly FriendlyBuddy[] | null; selected: boolean; tabKey?: string | null; boundary?: HTMLElement | null;
   /** The detail strip highlights one fragment instead of the whole selected row; null is a strip selection whose slice is an overlay. */
   selectedKey?: string | null;
   /** A Lead's waits for its owned micro tasks, drawn like other waits from the recorded facts. */
   ownedWaits?: readonly OwnedWait[];
-  /** Row height; 44 keeps the bar and both name lines proportionate, a lane header is taller. */
+  /** Row height; 52 keeps the bar, both name lines and their spacing proportionate, a lane header is taller. */
   height?: number;
   onSelect: (runId: string, key?: string) => void;
   onOpen: (runId: string, key: string) => void; onHover: (span: TimelineSpan | null) => void; onFocusSpan: (span: TimelineSpan | null) => void;
@@ -177,6 +177,9 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
   }
   for (const entry of expected) add([entry.text], entry.item.start, entry.item.end, topTextY, "fill-hand", entry.x - measure(entry.text) - 4);
   for (const marker of singletonEvents) {
+    // Acceptance is the row's own settling mark; its word stays in the readout
+    // and on hover instead of repeating beside every settled row.
+    if (marker.event.kind === "accept") continue;
     const text = eventName(marker.event), room = measure(text) + 20;
     if (allMarkers.some(other => other !== marker && Math.abs(other.x - marker.x) < room)) continue;
     const next = Math.min(scale.widthPx, ...allMarkers.filter(other => other.x > marker.x).map(other => other.x - 10));

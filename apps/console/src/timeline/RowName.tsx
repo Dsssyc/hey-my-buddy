@@ -1,6 +1,7 @@
 import { cn } from "cn";
 import { ChevronRight } from "lucide-react";
 import { forwardRef, type FocusEvent } from "react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { StateMark } from "../components/ui/state-mark";
@@ -11,23 +12,30 @@ import type { FriendlyBuddy } from "../macro-task-display";
 import type { TimelineRow } from "../macro-task-types";
 
 /**
- * One micro task's name cell: two lines that hold the title, the state word
- * and the buddy, with the complete recorded title and the buddy's full
- * identity on hover and keyboard focus. In the timeline it also carries the
- * state mark that becomes the open hint; beside a detail it is a plain list
- * row. A lane header places its collapse toggle beside this cell as a
- * sibling, never inside it.
+ * One micro task's name cell: two lines that hold the title and the buddy,
+ * with the state word beside it only while a human still has something to do
+ * or something is running — a settled state is the colour band at the left
+ * edge alone. The complete recorded title and the buddy's full identity are
+ * on hover and keyboard focus, with a lane's summary after them when the row
+ * heads one. In the timeline the cell also carries the state mark that
+ * becomes the open hint; beside a detail it is a plain list row. A lane
+ * header places its collapse toggle beside this cell as a sibling, never
+ * inside it.
  */
 export const RowName = forwardRef<HTMLButtonElement, {
   row: TimelineRow; rows: readonly TimelineRow[]; tabIndex: number; current: boolean; fresh: boolean; buddies?: readonly FriendlyBuddy[] | null;
   /** The plain list beside an open detail: no open hint, the current row is where the reader is. */
   list?: boolean;
-  /** The taller lane-header row (60px) beside the ordinary 44px one. */
+  /** The taller lane-header row (60px) beside the ordinary 52px one. */
   tall?: boolean;
+  /** A lane member: one indent step inside its Lead, without any tree glyph. */
+  indent?: boolean;
   /** A word the accessible name starts with, such as the Lead badge. */
   ariaPrefix?: string;
+  /** Facts the hover appends after the title and identity, such as the lane's summary. */
+  hoverExtra?: ReactNode;
   onClick: () => void; onEnter: () => void; onLeave: () => void; onFocus: (event: FocusEvent<HTMLButtonElement>) => void; onBlur: () => void;
-}>(function RowName({ row, rows, tabIndex, current, fresh, buddies, list, tall, ariaPrefix, onClick, onEnter, onLeave, onFocus, onBlur }, ref) {
+}>(function RowName({ row, rows, tabIndex, current, fresh, buddies, list, tall, indent, ariaPrefix, hoverExtra, onClick, onEnter, onLeave, onFocus, onBlur }, ref) {
   const { t } = useTranslation("tasks");
   const state = rowStateInfo(row, rows);
   const title = displayTitle(row.titleSource, row.title);
@@ -40,10 +48,10 @@ export const RowName = forwardRef<HTMLButtonElement, {
   const button = <button ref={ref} type="button" data-key={`row:${row.runId}`} data-slot="timeline-row-name" data-run-id={row.runId} data-fixes={row.fixes}
     tabIndex={tabIndex} aria-current={list && current ? "true" : undefined} aria-label={[ariaPrefix, title.fullText, repair, state.label].filter(Boolean).join(" · ")} onClick={onClick}
     onPointerEnter={onEnter} onPointerLeave={onLeave} onFocus={onFocus} onBlur={onBlur}
-    className={cn("group flex w-full shrink-0 flex-col justify-center gap-0.5 border-t px-3 text-left outline-none transition-colors duration-150 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-live",
-      tall ? "h-[60px] border-t-0" : "h-11",
+    className={cn("group flex w-full shrink-0 flex-col justify-center gap-1 border-t px-3 text-left outline-none transition-colors duration-150 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-live",
+      tall ? "h-[60px] border-t-0" : "h-[52px]",
       current ? "bg-live-wash hover:bg-live-wash" : "hover:bg-sunk")}
-    style={{ paddingLeft: 13 + row.depth * 18, boxShadow: tone ? `inset 3px 0 var(--${tone === "hand" ? "hand-mark" : tone})` : undefined }} data-state-tone={tone ?? "queued"}>
+    style={{ paddingLeft: 13 + (row.depth + (indent ? 1 : 0)) * 18, boxShadow: tone ? `inset 3px 0 var(--${tone === "hand" ? "hand-mark" : tone})` : undefined }} data-state-tone={tone ?? "queued"}>
     <span className="flex w-full min-w-0 items-center gap-1.5 text-sm">
       {row.kind === "helper" && <span aria-hidden="true" className="text-ink3">└</span>}
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
@@ -60,13 +68,14 @@ export const RowName = forwardRef<HTMLButtonElement, {
         <ChevronRight size={16} strokeWidth={1.5} className={cn("text-ink2 transition-[opacity,rotate,color] duration-150 group-hover:text-ink group-hover:opacity-100 group-focus-visible:opacity-100 motion-reduce:transition-none opacity-0")}/>
       </span>}
     </span>
-    <span className="block w-full truncate text-xs text-ink3"><span className={cn("mr-1.5", tone === "hand" && "text-hand", mark === "live" && "text-live")}>{state.label}</span>{row.buddy?.harness && <span aria-hidden="true" className="mr-1 inline-flex translate-y-[2px] items-center [&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5"><HarnessLogo harness={row.buddy.harness}/></span>}{buddyLabel(row.buddy, buddies)}</span>
+    <span className={cn("block w-full truncate text-xs", current ? "text-ink3" : "text-ink4")}>{!state.settled && <span className={cn("mr-1.5", tone === "hand" ? "text-hand" : mark === "live" ? "text-live" : !current && "text-ink3")}>{state.label}</span>}{row.buddy?.harness && <span aria-hidden="true" className="mr-1 inline-flex translate-y-[2px] items-center [&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5"><HarnessLogo harness={row.buddy.harness}/></span>}{buddyLabel(row.buddy, buddies)}</span>
   </button>;
   const tuple = row.buddy ? [row.buddy.harness, row.buddy.provider, row.buddy.model, row.buddy.effort].map(value => value ?? t("unknown")).join(" · ") : null;
   const wholeTitle = titleClipped || title.clipped;
-  return repairTitle || tuple || wholeTitle ? <Tooltip><TooltipTrigger asChild onFocus={event => { if (!event.currentTarget.matches(":focus-visible")) event.preventDefault(); }}>{button}</TooltipTrigger><TooltipContent side="bottom" align="start" className="wrap-anywhere text-left">
+  return repairTitle || tuple || wholeTitle || hoverExtra ? <Tooltip><TooltipTrigger asChild onFocus={event => { if (!event.currentTarget.matches(":focus-visible")) event.preventDefault(); }}>{button}</TooltipTrigger><TooltipContent side="bottom" align="start" className="wrap-anywhere text-left">
     {wholeTitle && <span className="block">{title.fullText}</span>}
     {repairTitle && repairTitle !== (wholeTitle ? title.fullText : null) && <span className="block">{repairTitle}</span>}
     {tuple && <span className="block text-xs text-ink3">{tuple}</span>}
+    {hoverExtra}
   </TooltipContent></Tooltip> : button;
 });

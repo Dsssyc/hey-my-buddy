@@ -16,6 +16,8 @@ import i18n from "i18next";
 import type { MacroTaskTimeline, TimelineSpan } from "./macro-task-types";
 import { parseTimelineInstant } from "./timeline/instant";
 import { spanOutcome } from "./macro-task-display";
+import { usageTotals } from "./usage-totals";
+import type { UsageTotals } from "./usage-totals";
 
 type MetricInterval = { startMs: number; endMs: number };
 
@@ -53,6 +55,8 @@ type MacroTaskMetrics = {
   runningCount: number;
   /** Unconfirmed-end execution segments, excluded from union/sum and reported separately. */
   unknownEndCount: number;
+  /** Every execution's tokens on the basis every usage level shares. */
+  usage: UsageTotals;
   /** Recorded-part notes, shared with the truncation banner wording. */
   limitations: MetricLimitation[];
 };
@@ -188,6 +192,7 @@ export function macroTaskMetrics(timeline: MacroTaskTimeline): MacroTaskMetrics 
     segmentCount,
     runningCount,
     unknownEndCount,
+    usage: usageTotals(timeline.spans),
     limitations: limitations(limitationKeys),
   };
 }

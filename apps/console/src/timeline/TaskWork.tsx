@@ -8,7 +8,8 @@ import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { MacroTaskOverview } from "../MacroTaskOverview";
 import { buddyLabel, clockTime, displayTitle, rowStateInfo } from "../macro-task-display";
-import { formatDuration, formatNumber } from "../i18n/format";
+import { formatDuration } from "../i18n/format";
+import { usageTotalsLabel } from "../usage-totals";
 import type { FriendlyBuddy } from "../macro-task-display";
 import type { MacroTaskSummary, MacroTaskTimeline, TimelineRow, TimelineSpan } from "../macro-task-types";
 import { parseTimelineInstant as instant } from "./instant";
@@ -34,7 +35,6 @@ export type TaskWorkProps = {
 };
 
 const NAME_PX = 272;
-const TOTAL_PX = 208;
 const SLACK_PX = 8;
 const LEAD_PX = 60;
 
@@ -81,9 +81,9 @@ export function TaskWork(props: TaskWorkProps) {
   const selectedAt = selectedMarker ? instant(markerAt(selectedMarker)) : selectedSpan ? instant(selectedSpan.startAt) : selectedRunId ? Math.min(...(timeline?.spans.filter(span => span.runId === selectedRunId).map(span => instant(span.startAt)).filter((at): at is number => at !== null) ?? []), ...(timeline?.events.filter(event => event.runId === selectedRunId).map(event => instant(event.at)).filter((at): at is number => at !== null) ?? [])) : null;
   const macroId = timeline?.macroTask.macroTaskId;
   const buddyColors = useMemo(() => buddyColorRegistry(macroId, timeline?.spans ?? []), [macroId, timeline]);
-  // The scale may fill what the viewport leaves beside the sticky name and summary columns.
+  // The scale may fill the whole viewport beside the sticky name column.
   const originX = narrow ? SLACK_PX : NAME_PX + SLACK_PX;
-  const available = Math.max(1, width - (narrow ? SLACK_PX * 2 : NAME_PX + TOTAL_PX + SLACK_PX * 2));
+  const available = Math.max(1, width - (narrow ? SLACK_PX * 2 : NAME_PX + SLACK_PX * 2));
   const { scale, change: zoom, atMinimum, atMaximum } = useTimelineZoom(input, available, macroId, viewportRef, selectedAt !== null && Number.isFinite(selectedAt) ? selectedAt : null, lastPointerAt, nowMs, originX);
   useEffect(() => { setSelectedRunId(openedRunId); setSelectedKey(null); lastPointerAt.current = null; setPointerX(null); }, [macroId]);
   useEffect(() => {
@@ -134,10 +134,10 @@ export function TaskWork(props: TaskWorkProps) {
     setSelectedRunId(runId); setSelectedKey(key ?? null);
     setPointerX(null); setHoveredSpan(null); setFocusedSpan(null); setHoveredRow(null); setFocusedRow(null); setActiveMarker(null);
   };
-  const renderName = (row: TimelineRow, options: { list?: boolean; tall?: boolean; ariaPrefix?: string } = {}) => <RowName
+  const renderName = (row: TimelineRow, options: { list?: boolean; tall?: boolean; indent?: boolean; ariaPrefix?: string; hoverExtra?: ReactNode } = {}) => <RowName
     key={row.runId}
     ref={element => { if (element) rowsRef.current.set(row.runId, element); else rowsRef.current.delete(row.runId); }}
-    row={row} rows={rows} list={options.list} tall={options.tall} ariaPrefix={options.ariaPrefix}
+    row={row} rows={rows} list={options.list} tall={options.tall} indent={options.indent} ariaPrefix={options.ariaPrefix} hoverExtra={options.hoverExtra}
     tabIndex={tabKey === `row:${row.runId}` ? 0 : -1} current={(options.list ? openedRunId : selectedRunId) === row.runId} fresh={props.newRunIds.has(row.runId)} buddies={props.buddies}
     onClick={() => { select(row.runId); props.onOpen(row.runId); }}
     onEnter={() => { setPointerX(null); setActiveMarker(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={event => { if (movingDetailFocus.current) event.preventDefault(); setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>;
@@ -154,10 +154,10 @@ export function TaskWork(props: TaskWorkProps) {
     onDoubleClick={event => { if (!(event.target as Element).closest("[data-key]")) props.onOpen(row.runId); }}
     className={cn("relative transition-colors duration-150 motion-reduce:transition-none", inLane ? "bg-card" : "bg-background", selectedRunId === row.runId && "bg-live-wash")}>
     {narrow
-      ? <><div className={cn("sticky left-0 z-10", inLane ? "bg-card" : "bg-background")} style={{ width: Math.max(1, width - 2) }}>{renderName(row)}</div>
+      ? <><div className={cn("sticky left-0 z-10", inLane ? "bg-card" : "bg-background")} style={{ width: Math.max(1, width - 2) }}>{renderName(row, { indent: inLane })}</div>
         <Track {...trackProps(row)}/></>
-      : <div className="grid items-stretch" style={{ gridTemplateColumns: `${NAME_PX}px ${scale!.widthPx + SLACK_PX * 2}px minmax(${TOTAL_PX}px,1fr)` }}>
-        <div className={cn("sticky left-0 z-10", inLane ? "bg-card" : "bg-background")}>{renderName(row)}</div>
+      : <div className="grid items-stretch" style={{ gridTemplateColumns: `${NAME_PX}px ${scale!.widthPx + SLACK_PX * 2}px minmax(0,1fr)` }}>
+        <div className={cn("sticky left-0 z-10", inLane ? "bg-card" : "bg-background")}>{renderName(row, { indent: inLane })}</div>
         <Track {...trackProps(row)}/>
         <div className="border-t"/>
       </div>}
@@ -176,22 +176,23 @@ export function TaskWork(props: TaskWorkProps) {
     const lead = lane.lead;
     const collapsed = collapsedLanes.has(lead.runId);
     const summary = summaries[index]!;
-    const tokenLine = summary.usage.tokens !== null
-      ? summary.usage.partial ? t("laneTokensPartial", { n: formatNumber(summary.usage.tokens) }) : t("laneTokens", { n: formatNumber(summary.usage.tokens) })
-      : t("laneTokensUnknown");
-    const times = <span className="flex gap-2 whitespace-nowrap">
-      <span>{t("elapsed")}{summary.elapsedMs !== null ? formatDuration(summary.elapsedMs) : t("unknown")}</span>
-      <span>{t("execution")}{summary.executionMs !== null ? formatDuration(summary.executionMs) : t("unknown")}</span>
+    // The lane's own numbers ride on the Lead row's hover, where the reader asks for them.
+    const summaryLines = <span className="block text-xs text-ink3 tabular-nums">
+      <span className="block">{[
+        t("laneMicroTasks", { n: lane.members.length + 1 }),
+        `${t("elapsed")}${summary.elapsedMs !== null ? formatDuration(summary.elapsedMs) : t("unknown")}`,
+        `${t("execution")}${summary.executionMs !== null ? formatDuration(summary.executionMs) : t("unknown")}`,
+      ].join(" · ")}</span>
+      <span className="block">{usageTotalsLabel(summary.usage)}</span>
     </span>;
-    const counts = <span>{t("laneMicroTasks", { n: lane.members.length + 1 })}</span>;
     const leadName = () => <div className="flex min-w-0 flex-1 items-stretch">
-      {renderName(lead, { tall: true, ariaPrefix: t("leadBadge") })}
+      {renderName(lead, { tall: true, ariaPrefix: t("leadBadge"), hoverExtra: summaryLines })}
     </div>;
-    return <header data-slot="timeline-lane-lead" data-run-id={lead.runId} className={cn(narrow ? "block" : "grid items-stretch")} style={{ gridTemplateColumns: narrow ? undefined : `${NAME_PX}px ${scale!.widthPx + SLACK_PX * 2}px minmax(${TOTAL_PX}px,1fr)` }}>
+    // The divider under a Lead runs across the whole row; the members below it sit one indent step in.
+    return <header data-slot="timeline-lane-lead" data-run-id={lead.runId} className={cn("border-b-2 border-ink2", narrow ? "block" : "grid items-stretch")} style={{ gridTemplateColumns: narrow ? undefined : `${NAME_PX}px ${scale!.widthPx + SLACK_PX * 2}px minmax(0,1fr)` }}>
       {narrow
         ? <div className="sticky left-0 z-10 bg-card" style={{ width: Math.max(1, width - 2) }}>
           <div className="flex items-stretch">{laneToggle(lead, collapsed)}<span className="flex shrink-0 items-center text-xs text-ink2">{t("leadBadge")}</span>{leadName()}</div>
-          <div className="flex flex-wrap gap-x-2 px-3 pb-1.5 text-xs text-ink2 tabular-nums">{counts}{times}<span>{tokenLine}</span></div>
         </div>
         : <div className="sticky left-0 z-20 flex items-stretch bg-card">
           {laneToggle(lead, collapsed)}
@@ -200,9 +201,6 @@ export function TaskWork(props: TaskWorkProps) {
         </div>}
       {scale && input && <div className={narrow ? "block" : "flex items-center"}>
         <Track {...trackProps(lead)} ownedWaits={ownedWaits(lead, timeline!.spans, nowMs)} height={LEAD_PX}/>
-      </div>}
-      {!narrow && <div className="sticky right-0 z-20 flex h-[60px] flex-col items-end justify-center gap-0.5 border-t bg-card px-3.5 text-xs text-ink2 tabular-nums">
-        {counts}{times}<span>{tokenLine}</span>
       </div>}
     </header>;
   };
@@ -230,8 +228,8 @@ export function TaskWork(props: TaskWorkProps) {
         setHoveredRow(rows.find(row => row.runId === runId) ?? null);
       },
       onPointerLeave: () => { setPointerX(null); setHoveredSpan(null); setHoveredRow(null); setActiveMarker(null); } }}>
-    {scale && input && <div data-slot="timeline-canvas" data-ppm={scale.pixelsPerMinute} className="relative" style={{ width: narrow ? trackWidth : `max(100%, ${NAME_PX + trackWidth + TOTAL_PX}px)`, minWidth: "100%" }}>
-      <div data-slot="timeline-ruler" className="sticky top-0 z-30 border-b border-line bg-card" style={narrow ? undefined : { display: "grid", gridTemplateColumns: `${NAME_PX}px ${trackWidth}px minmax(${TOTAL_PX}px,1fr)` }}>
+    {scale && input && <div data-slot="timeline-canvas" data-ppm={scale.pixelsPerMinute} className="relative" style={{ width: narrow ? trackWidth : `max(100%, ${NAME_PX + trackWidth}px)`, minWidth: "100%" }}>
+      <div data-slot="timeline-ruler" className="sticky top-0 z-30 border-b border-line bg-card" style={narrow ? undefined : { display: "grid", gridTemplateColumns: `${NAME_PX}px ${trackWidth}px minmax(0,1fr)` }}>
         {narrow
           ? <Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs} pointerX={pointerX} pointerBounds={{ left: Math.max(0, (viewport?.scrollLeft ?? 0) - originX), right: Math.min(scale.widthPx, (viewport?.scrollLeft ?? 0) - originX + width) }}/>
           : <><div className="sticky left-0 z-40 flex h-9 items-center justify-between bg-card pl-4 pr-3 text-xs text-ink3"><span>{t("microTasks")}</span><span>{rows.length}</span></div>
@@ -241,7 +239,7 @@ export function TaskWork(props: TaskWorkProps) {
       {layout.lanes.map((lane, index) => <section key={lane.lead.runId} data-slot="timeline-lane" className={cn("border-t-2 border-ink2 bg-card", index > 0 && "mt-6")}>
         {laneHeader(lane, index)}
         <Collapsible open={!collapsedLanes.has(lane.lead.runId)}>
-          <CollapsibleContent className="border-t border-line">
+          <CollapsibleContent>
             <div id={`lane-${lane.lead.runId}`}>{lane.members.map(row => trackRow(row, true))}</div>
           </CollapsibleContent>
         </Collapsible>

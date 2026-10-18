@@ -8,6 +8,7 @@ import { Button } from "./components/ui/button";
 import { Hint } from "./components/hint";
 import { displayTitle } from "./macro-task-display";
 import { macroTaskMetrics } from "./macro-task-metrics";
+import { usageTotalsLabel } from "./usage-totals";
 import { formatDuration, formatList, formatMoment, formatMomentMinutes, formatNumber } from "./i18n/format";
 import { StateMark } from "./components/ui/state-mark";
 import { CopyableIdentifier } from "./components/CopyableIdentifier";
@@ -84,6 +85,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
                     <p className="text-xs">{t("span")}{metrics?.totalSpanMs != null ? formatDuration(metrics.totalSpanMs) : t("unrecorded")}</p>
                     <p className="text-xs">{t("execution")}{metrics?.unionMs != null ? formatDuration(metrics.unionMs) : t("unrecorded")}</p>
                     {cumulative !== null && <p className="text-xs">{t("cumulative")}{formatDuration(cumulative)}</p>}
+                    <p className="text-xs">{t("usage")}{usageTotalsLabel(metrics!.usage)}</p>
                     {metrics!.runningCount > 0 && <p className="text-xs text-ink2">{t("running", { count: metrics!.runningCount, time: formatMoment(Date.parse(timeline.observedAt), clock) })}</p>}
                     {metrics!.unknownEndCount > 0 && <p className="text-xs text-ink2">{t("unknownEnd", { count: metrics!.unknownEndCount })}</p>}
                     {metrics!.limitations.length > 0 && <p data-slot="time-stats-limitations" className="text-xs text-ink2">{t("limitations")}{formatList(metrics!.limitations.map(entry => t(`limitation.${entry.key}`)))}</p>}

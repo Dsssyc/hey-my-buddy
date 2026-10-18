@@ -107,6 +107,17 @@ describe("timeline drawings follow recorded facts", () => {
     expect(document.querySelectorAll('[data-slot=event-mark]')).toHaveLength(6);
     expect(spanReadout(execution({ inquiries: [{ inquiryId: "q", createdAt: at(10), author: "host-1", state: "answered" }] }), Date.parse(at(40)))).toContain("已答复");
   });
+  it("keeps the acceptance mark's word for its readout and hover, off the track itself", () => {
+    track([], { events: [{ ...base.events[0]!, seq: 3, kind: "accept", at: at(20) }] });
+    expect(slot("accept-mark")).toBeTruthy();
+    expect(document.querySelectorAll('[data-slot="track-label"]')).toHaveLength(0);
+    const mark = document.querySelector('[data-key="event:3"]')!;
+    expect(mark.getAttribute("aria-label")).toContain("已验收");
+    // Another event beside it still writes its own name.
+    cleanup();
+    track([], { events: [{ ...base.events[0]!, seq: 4, kind: "takeover", at: at(20) }], width: 800 });
+    expect(document.querySelector('[data-slot="track-label"]')?.textContent).toBe("接管");
+  });
   it("merges coincident events into one selectable mark and omits integration", async () => {
     const events = ["reject", "continue", "integrate", "accept"].map((kind, seq) => ({ ...base.events[0]!, seq, kind, at: at(20), note: "Explanation" }));
     const onOpen = vi.fn();

@@ -71,6 +71,33 @@ describe("the lanes and the detail workspace", () => {
     expect([...document.querySelectorAll('[data-slot=timeline-row-name]')].map(node => node.getAttribute("data-run-id"))).toEqual(timeline.rows.map(entry => entry.runId));
     expect(row("r3").style.paddingLeft).toBe("31px");
   });
+  it("writes the state word only while someone must act or something runs; the settled band speaks alone", () => {
+    setup();
+    // Settled terminal states: the word is gone from the row and stays in the accessible name.
+    for (const [id, word] of [["r1", "已验收"], ["r2", "已验收"], ["r3", "执行完成"], ["r5", "已取消"]] as const) {
+      expect(within(row(id)).queryByText(word, { exact: true })).toBeNull();
+      expect(row(id).getAttribute("aria-label")).toContain(word);
+    }
+    // What needs a person or is still running keeps its word.
+    for (const [id, word] of [["r4", "执行中"], ["r6", "等待验收"]] as const) {
+      expect(within(row(id)).getByText(word, { exact: true })).toBeTruthy();
+    }
+    // Queued keeps its word too: it is the one state that draws no band at all.
+    const timeline = macroTaskTimelineFixture();
+    timeline.rows[4] = { ...timeline.rows[4]!, state: "queued", status: "queued", category: "ended" };
+    cleanup();
+    setup({ timeline });
+    expect(within(row("r4")).getByText("排队中", { exact: true })).toBeTruthy();
+    expect(row("r4").getAttribute("data-state-tone")).toBe("queued");
+  });
+  it("fades the model-and-effort line one step below the state word, and restores it on the current row", () => {
+    const { props, rerender } = setup();
+    const secondLine = (id: string) => row(id).querySelector(":scope > span + span")!;
+    expect(secondLine("r2").className).toContain("text-ink4");
+    rerender(<TooltipProvider><TaskWork {...props} openedRunId="r2"/></TooltipProvider>);
+    rerender(<TooltipProvider><TaskWork {...props} openedRunId={null}/></TooltipProvider>);
+    expect(secondLine("r2").className).toContain("text-ink3");
+  });
   it("shows range by default, row state/wait/turns on row focus, and exact span facts on hover or focus", () => {
     const timeline = macroTaskTimelineFixture();
     timeline.spans = timeline.spans.map(span => span.spanId === "s-r6-e" ? { ...span, state: "finished", uncertain: false, shutdownConfirmed: true } : span);
@@ -154,19 +181,23 @@ describe("Lead lanes from recorded ownership", () => {
     expect(document.querySelectorAll("[data-slot=timeline-row-name]")).toHaveLength(6);
     expect(document.body.textContent).toContain("其他微任务");
   });
-  it("summarizes the lane on its header: members, elapsed, cumulative execution and tokens without double-counting the cache", () => {
+  it("summarizes the lane on the Lead row's hover: members, elapsed, execution and split usage", async () => {
+    const user = userEvent.setup();
     const timeline = laneFixture();
     setup({ timeline });
-    const header = document.querySelector('[data-slot=timeline-lane-lead]')!;
-    expect(header.textContent).toContain("3 个微任务");
-    expect(header.textContent).toMatch(/历时/);
-    expect(header.textContent).toMatch(/执行/);
-    expect(header.textContent).toContain("165 token");
+    await user.hover(row("r2"));
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("3 个微任务");
+    expect(tooltip.textContent).toMatch(/历时/);
+    expect(tooltip.textContent).toMatch(/执行/);
+    // Cache is inside the input and named beside it; the routing run and turns without a record mark the total partial.
+    expect(tooltip.textContent).toContain("输入 150（含缓存 40） · 输出 15 · 部分记录");
     // A read where most executions have no recorded usage is honest about it.
     timeline.spans.find(span => span.spanId === "s-r3-e1")!.tokenUsage = undefined;
     cleanup();
     setup({ timeline });
-    expect(document.querySelector('[data-slot=timeline-lane-lead]')!.textContent).toContain("110 token · 部分记录");
+    await user.hover(row("r2"));
+    expect((await screen.findByRole("tooltip")).textContent).toContain("输入 100（含缓存 40） · 输出 10 · 部分记录");
   });
   it("collapses one lane without touching the others, keeping the Lead's own header", async () => {
     const timeline = laneFixture();
@@ -193,11 +224,11 @@ describe("Lead lanes from recorded ownership", () => {
     const execution = timeline.spans.find(span => span.spanId === "s-r2-e1")!;
     timeline.spans = [execution];
     execution.tokenUsage = { inputTokens: 100, cachedInputTokens: 40, outputTokens: 10, source: "native", scope: "attempt", inputBasis: "includes-cached", completeness: "complete" };
-    expect(laneSummary({ lead, members: [] }, timeline).usage).toEqual({ tokens: 110, partial: false });
+    expect(laneSummary({ lead, members: [] }, timeline).usage).toEqual({ input: 100, cached: 40, output: 10, partial: false });
     execution.tokenUsage = { ...execution.tokenUsage as object, completeness: "partial" };
-    expect(laneSummary({ lead, members: [] }, timeline).usage).toEqual({ tokens: 110, partial: true });
+    expect(laneSummary({ lead, members: [] }, timeline).usage).toEqual({ input: 100, cached: 40, output: 10, partial: true });
   });
-  it("includes recorded Router usage and distinguishes missing counts from zero tokens", () => {
+  it("includes recorded Router usage and distinguishes missing counts from recorded zeros", () => {
     const timeline = laneFixture();
     const lead = timeline.rows.find(row => row.runId === "r2")!;
     const execution = timeline.spans.find(span => span.spanId === "s-r2-e1")!;
@@ -206,12 +237,12 @@ describe("Lead lanes from recorded ownership", () => {
       inputTokens: 10, cachedInputTokens: 5, outputTokens: 2, source: "native", scope: "attempt", inputBasis: "excludes-cached", completeness: "complete",
     } };
     timeline.spans = [execution, routing];
-    expect(laneSummary({ lead, members: [] }, timeline).usage).toEqual({ tokens: 127, partial: false });
+    expect(laneSummary({ lead, members: [] }, timeline).usage).toEqual({ input: 115, cached: 45, output: 12, partial: false });
     const unknown = { ...execution, tokenUsage: { source: "native", scope: "attempt", completeness: "unknown" } };
     timeline.spans = [unknown];
-    expect(laneSummary({ lead, members: [] }, timeline).usage.tokens).toBeNull();
+    expect(laneSummary({ lead, members: [] }, timeline).usage).toEqual({ input: null, cached: null, output: null, partial: false });
     timeline.spans = [execution, unknown];
-    expect(laneSummary({ lead, members: [] }, timeline).usage).toEqual({ tokens: 110, partial: true });
+    expect(laneSummary({ lead, members: [] }, timeline).usage).toEqual({ input: 100, cached: 40, output: 10, partial: true });
   });
   it("gives the Lead's own row the member rows' identity cell: one keyboard path and the full tuple on hover", async () => {
     const timeline = laneFixture();
@@ -222,7 +253,13 @@ describe("Lead lanes from recorded ownership", () => {
     expect(leadName.getAttribute("data-key")).toBe("row:r2");
     expect(leadName.getAttribute("aria-label")).toContain("Lead");
     expect(leadName.className).toContain("h-[60px]");
-    expect(row("r3").className).toContain("h-11");
+    expect(row("r3").className).toContain("h-[52px]");
+    // The Lead row ends in a divider that crosses the whole row; its members sit one indent step inside it.
+    const header = document.querySelector<HTMLElement>('[data-slot=timeline-lane-lead]')!;
+    expect(header.className).toContain("border-b-2 border-ink2");
+    expect(leadName.style.paddingLeft).toBe("13px");
+    expect(row("r3").style.paddingLeft).toBe("49px");
+    expect(row("r6").style.paddingLeft).toBe("31px");
     await userEvent.hover(leadName);
     const tooltip = await screen.findByRole("tooltip");
     expect(tooltip.textContent).toContain("codex · openai · gpt-5-codex · max");
@@ -548,6 +585,5 @@ it("sums a lane's elapsed and execution time from its own rows alone", () => {
   // r2's two executions and its Router run, plus r3's two helper executions, each counted; elapsed covers the lane's own span.
   expect(summary.elapsedMs).toBeGreaterThan(0);
   expect(summary.executionMs).toBe((46 + 10 + 3 + 22 + 26) * 60_000);
-  expect(summary.usage.tokens).toBeNull();
-  expect(summary.usage.partial).toBe(false);
+  expect(summary.usage).toEqual({ input: null, cached: null, output: null, partial: false });
 });

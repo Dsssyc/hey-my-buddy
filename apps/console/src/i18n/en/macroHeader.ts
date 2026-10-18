@@ -20,6 +20,7 @@ export default {
   span: "From start to last activity: ",
   execution: "Time with at least one run: ",
   cumulative: "Cumulative turns: ",
+  usage: "Usage: ",
   running: "Running turns {{count}} · as of {{time}}",
   unknownEnd: "Unconfirmed ends {{count}} · excluded",
   limitations: "Incomplete statistics: ",

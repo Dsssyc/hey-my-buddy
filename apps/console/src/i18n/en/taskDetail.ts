@@ -26,7 +26,7 @@ export default {
   usage: {
     inputShort: "Input", outputShort: "Output", cacheShort: "Cache",
     input: "Input {{n}}", inputWithCache: "Input {{n}} (including cache {{cached}})", output: "Output {{n}}", source: "Source {{source}}",
-    partial: "Only the part that was reported", unrecorded: "Usage not recorded",
+    partial: "Only the part that was reported", partialRecord: "Partial record", unrecorded: "Usage not recorded",
     scope: "This execution only; cache is counted in the input", inputBesideCache: "Input {{n}} (cache {{cached}} counted apart)", scopeApart: "This execution only; cache is not in the input",
   },
   session: {

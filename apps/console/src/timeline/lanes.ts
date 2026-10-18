@@ -1,7 +1,8 @@
 import { spanOutcome } from "../macro-task-display";
 import type { MacroTaskTimeline, TimelineRow, TimelineSpan } from "../macro-task-types";
-import { parseTokenUsage } from "../task-detail/parse";
 import { parseTimelineInstant } from "./instant";
+import { usageTotals } from "../usage-totals";
+import type { UsageTotals } from "../usage-totals";
 
 /**
  * Lanes group the timeline's rows by the recorded ownership facts (ADR-026
@@ -26,15 +27,12 @@ export function groupLanes(rows: readonly TimelineRow[]): LaneLayout {
   return { lanes, ordinary };
 }
 
-/** How a lane's tokens add up: cached input is never counted twice, and a missing or partial record is never a number. */
-export type LaneUsage = { tokens: number | null; partial: boolean };
-
 export type LaneSummary = {
   /** Wall-clock from the lane's earliest recorded start to its latest instant; null when no recorded time. */
   elapsedMs: number | null;
   /** Sum of the lane's confirmable execution intervals; concurrent members each count. */
   executionMs: number | null;
-  usage: LaneUsage;
+  usage: UsageTotals;
 };
 
 /**
@@ -77,34 +75,8 @@ export function laneSummary(lane: LaneGroup, timeline: MacroTaskTimeline): LaneS
   return {
     elapsedMs: earliest !== null && last !== null && last >= earliest ? last - earliest : null,
     executionMs: executionMs > 0 ? executionMs : null,
-    usage: laneUsage(spans),
+    usage: usageTotals(spans),
   };
-}
-
-/** One execution's tokens under the recorded cache basis; cached input is never counted twice. */
-function spanTokens(span: TimelineSpan): { tokens: number | null; partial: boolean } {
-  if (span.kind !== "execution" && span.kind !== "routing") return { tokens: null, partial: false };
-  const usage = parseTokenUsage(span.tokenUsage);
-  if (!usage) return { tokens: null, partial: true };
-  const input = usage.inputTokens, cached = usage.cachedInputTokens, output = usage.outputTokens;
-  if (input === null && cached === null && output === null) return { tokens: null, partial: true };
-  const total = usage.inputBasis === "excludes-cached" ? (input ?? 0) + (cached ?? 0) + (output ?? 0) : (input ?? 0) + (output ?? 0);
-  const partial = input === null || output === null || usage.inputBasis === "excludes-cached" && cached === null
-    || usage.completeness === "partial" || usage.completeness === "unknown";
-  return { tokens: total, partial };
-}
-
-function laneUsage(spans: readonly TimelineSpan[]): LaneUsage {
-  let total = 0, known = 0, unknown = 0, partial = false;
-  for (const span of spans) {
-    if (span.kind !== "execution" && span.kind !== "routing") continue;
-    const reading = spanTokens(span);
-    if (reading.tokens === null) { unknown += 1; continue; }
-    known += 1;
-    total += reading.tokens;
-    partial = partial || reading.partial;
-  }
-  return { tokens: known > 0 ? total : null, partial: partial || known > 0 && unknown > 0 };
 }
 
 /**

@@ -73,7 +73,7 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     const viewport = (await page.locator('[data-slot=timeline-tracks]').boundingBox())!;
     await page.mouse.move(viewport.x + (width > 760 ? 272 : 0) + 40, box.y + 15);
     await expect(page.locator('[data-slot=pointer-clock]')).toHaveText(/^\d{2}:\d{2}:\d{2}$/);
-    await page.mouse.move(viewport.x + viewport.width - (width > 760 ? 208 : 0) - 20, box.y + 15);
+    await page.mouse.move(viewport.x + viewport.width - 20, box.y + 15);
     const clockBox = (await page.locator('[data-slot=pointer-clock]').boundingBox())!;
     expect(clockBox.x + clockBox.width).toBeLessThanOrEqual(viewport.x + viewport.width);
     await page.screenshot({ path: `${shots}/pointer-seconds-${theme}-${width}.png` });

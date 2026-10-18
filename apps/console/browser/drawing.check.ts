@@ -123,9 +123,14 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       expect(durationPositions.length).toBeGreaterThan(0);
       expect(durationPositions.filter(label => !label.inside)).toEqual([]);
       await expectDrawingGeometry(page);
+      // The acceptance mark keeps its word for the readout; the track beside it stays quiet.
       const acceptedTrack = page.locator('[data-slot="timeline-track"]').first();
-      await expect(acceptedTrack.locator('[data-slot="accept-mark"]')).toHaveCount(1);
+      const acceptedMark = acceptedTrack.locator('[data-slot="accept-mark"]');
+      await expect(acceptedMark).toHaveCount(1);
       await expect(acceptedTrack.locator('[data-slot="track-label"]').filter({ hasText: locale === "zh-CN" ? "已验收" : "Accepted" })).toHaveCount(0);
+      await acceptedMark.hover();
+      await expect(page.locator('[data-slot="timeline-status"]')).toContainText(locale === "zh-CN" ? "已验收" : "Accepted");
+      await page.mouse.move(0, 0);
       const now = page.locator('[data-slot="timeline-axis"] [data-slot="axis-label"].fill-live');
       await expect(now).toContainText(locale === "zh-CN" ? "现在" : "Now");
       if (locale === "zh-CN") {

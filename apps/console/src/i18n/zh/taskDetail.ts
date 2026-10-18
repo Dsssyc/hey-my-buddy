@@ -25,7 +25,7 @@ export default {
   usage: {
     inputShort: "输入", outputShort: "输出", cacheShort: "缓存",
     input: "输入 {{n}}", inputWithCache: "输入 {{n}}（含缓存 {{cached}}）", output: "输出 {{n}}", source: "来源 {{source}}",
-    partial: "只含已报告的部分", unrecorded: "用量未记录",
+    partial: "只含已报告的部分", partialRecord: "部分记录", unrecorded: "用量未记录",
     scope: "单次执行；缓存已计入输入", inputBesideCache: "输入 {{n}}（缓存 {{cached}} 另计）", scopeApart: "单次执行；缓存不在输入之内",
   },
   session: {

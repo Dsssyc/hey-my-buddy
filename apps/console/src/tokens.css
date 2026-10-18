@@ -4,7 +4,10 @@
    Live is what runs, is current or is selected outside the timeline tracks. Hand is what waits for someone:
    a Host's decision or acceptance, unsaved changes, a quota near its limit. Fail
    is failure and nothing else. Ink and past are the record. The top bar keeps
-   the logo's ink in both themes, so what sits on it has its own colours. */
+   the logo's ink in both themes, so what sits on it has its own colours.
+   ink4 is the faintest text tier, for the model-and-effort line: it keeps 4.5:1
+   on the resting grounds (paper, surface, sunk); on the selected ground
+   (live-wash) even ink3 is at that floor, so the current row keeps ink3. */
 :root {
   color-scheme: light;
   --paper: #f3f1ea;
@@ -13,6 +16,7 @@
   --ink: #1f2a24;
   --ink2: #56645c;
   --ink3: #606b64;
+  --ink4: #657068;
   --line: #e4e2d9;
   --line2: #cfcdc3;
   --live: #24654d;
@@ -50,6 +54,7 @@
   --ink: #eceae2;
   --ink2: #a9aeb4;
   --ink3: #9aa0a6;
+  --ink4: #8b9196;
   --line: #26282c;
   --line2: #363940;
   --live: #7cc79f;

@@ -8,15 +8,19 @@ const B = "macro-22222222-2222-4222-8222-222222222222";
 for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
   test.describe(`batch-three integrated layout ${width}px ${theme}`, () => {
     test.use({ locale: "zh-CN", viewport: { width, height: 900 }, reducedMotion: "reduce", colorScheme: theme as "light" | "dark" });
-    test("keeps compact rows, the fixed detail strip and independently collapsible Lead lanes", async ({ page }, testInfo) => {
+    test("keeps spaced rows, the fixed detail strip and independently collapsible Lead lanes", async ({ page }, testInfo) => {
       await page.clock.setFixedTime(new Date("2026-09-27T10:00:00Z"));
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await open(page, `#tasks/${A}`);
       const name = page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a1"]');
       await expect(name).toBeVisible();
-      expect((await name.boundingBox())!.height).toBe(44);
+      expect((await name.boundingBox())!.height).toBe(52);
       await expectWholeAndApart(name, name.locator(":scope > span"));
       await expect(page.locator('[data-slot=execution-bar]').first()).toHaveAttribute("height", "22");
+      // Nothing sits beside the tracks: fitted, the canvas is exactly the scroll area's width.
+      const viewport = (await page.locator('[data-slot=timeline-tracks]').boundingBox())!;
+      const canvas = (await page.locator('[data-slot=timeline-canvas]').boundingBox())!;
+      expect(Math.abs(canvas.width - viewport.width)).toBeLessThanOrEqual(1);
       await settle(page);
       await expectNoSidewaysScroll(page);
       await page.mouse.move(0, 0);
@@ -43,7 +47,24 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
       const header = page.locator('[data-slot=timeline-lane-lead][data-run-id="preview-run-b3"]');
       const lane = page.locator('[data-slot=timeline-lane]').filter({ has: header });
       await expect(lane.locator('[data-slot=timeline-row-name]')).toHaveCount(5);
-      expect((await header.locator('[data-slot=timeline-row-name]').boundingBox())!.height).toBe(60);
+      const leadName = header.locator('[data-slot=timeline-row-name]');
+      expect((await leadName.boundingBox())!.height).toBe(60);
+      expect((await lane.locator('[data-slot=timeline-row-name][data-run-id="preview-run-b4"]').boundingBox())!.height).toBe(52);
+      // The Lead row ends in one divider that crosses the whole row, and its members sit one indent step inside it.
+      const laneBox = (await lane.boundingBox())!;
+      const headerBox = (await header.boundingBox())!;
+      expect(Math.abs(headerBox.width - laneBox.width)).toBeLessThanOrEqual(1);
+      expect(await header.evaluate(node => getComputedStyle(node).borderBottomWidth)).toBe("2px");
+      expect(await leadName.evaluate(node => node.style.paddingLeft)).toBe("13px");
+      await expect(lane.locator('[data-slot=timeline-row-name][data-run-id="preview-run-b4"]')).toHaveCSS("padding-left", "31px");
+      // The lane's own numbers ride on the Lead row's hover: members, times and split usage.
+      await leadName.hover();
+      const tooltip = page.getByRole("tooltip");
+      await expect(tooltip).toContainText("5 个微任务");
+      await expect(tooltip).toContainText(/历时/);
+      await expect(tooltip).toContainText(/执行/);
+      await expect(tooltip).toContainText("输入 24.5k（含缓存 12.0k） · 输出 2.5k");
+      await page.mouse.move(0, 0);
       const ordinary = page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-b10"]');
       await expect(ordinary).toHaveCount(1);
       const toggle = header.locator('[data-slot=lane-toggle]');

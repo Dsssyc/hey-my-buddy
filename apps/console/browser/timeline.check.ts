@@ -15,6 +15,14 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
       await expect(page.locator('[data-slot=timeline-axis]')).toHaveCount(1);
       const visibleNames = page.locator('[data-slot=timeline-row-name]:visible');
       await expect(visibleNames.first()).toBeVisible();
+      // The macro task's own usage lives in the elapsed panel, split the way every level writes it.
+      if (locale === "zh-CN" && theme === "light" && width === 1440) {
+        await page.getByRole("button", { name: "时间统计" }).click();
+        const stats = page.locator('[data-slot="time-stats-body"]');
+        await expect(stats).toContainText("用量：输入 63.9k（含缓存 38.6k） · 输出 6.3k · 部分记录");
+        await page.keyboard.press("Escape");
+        await expect(stats).toBeHidden();
+      }
       const selected = row(page, waiting);
       const before = await selected.boundingBox();
       await expectWholeAndApart(selected, selected.locator(':scope > span'));

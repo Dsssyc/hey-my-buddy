@@ -18,6 +18,7 @@ export default {
   span: "从开始到最近一次活动：",
   execution: "其间至少有一项在运行的时间：",
   cumulative: "回合累计：",
+  usage: "用量：",
   running: "运行中 {{count}} 回合 · 截至 {{time}}",
   unknownEnd: "结束未确认 {{count}} 回合 · 未计入",
   limitations: "统计范围不完整：",
