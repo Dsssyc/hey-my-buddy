@@ -11,7 +11,7 @@ afterEach(cleanup);
 /** The detail of `m1`, opened on the delegation step. */
 function detail(replies: Replies, step = 1) {
   const reads = client(replies);
-  const view = render(<TaskDetail railTarget={null} client={reads} runId="m1" timeline={timeline()} timelineLoading={false} nowMs={Date.parse(at("11:30"))}
+  const view = render(<TaskDetail client={reads} runId="m1" timeline={timeline()} timelineLoading={false} nowMs={Date.parse(at("11:30"))}
     step={step} origin={null} active onStep={() => undefined} onBack={() => undefined} onOpenRun={() => undefined} />);
   return { reads, view };
 }
@@ -72,7 +72,7 @@ describe("the micro task title rule in the detail (0.16 T1)", () => {
 
   it("keeps the explicit title across a refresh of the collaboration record; only the result changes", async () => {
     const reads = client();
-    render(<TaskDetail railTarget={null} client={reads} runId="m1" timeline={timeline()} timelineLoading={false} nowMs={Date.parse(at("11:30"))}
+    render(<TaskDetail client={reads} runId="m1" timeline={timeline()} timelineLoading={false} nowMs={Date.parse(at("11:30"))}
       step={7} origin={null} active onStep={() => undefined} onBack={() => undefined} onOpenRun={() => undefined} />);
     await ready();
     expect(heading().textContent).toBe("微任务详情");

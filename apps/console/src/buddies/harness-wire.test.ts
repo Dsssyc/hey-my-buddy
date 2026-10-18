@@ -14,6 +14,14 @@ import { CHECKED_AT, harness } from "./harness.fixtures";
  */
 
 describe("the harness wire contract", () => {
+  it("reads current health and candidate reason envelopes and refuses their old text shape", () => {
+    const reason = { code: "harness.not-found", params: { operation: "probe" } };
+    const row = harness({ harness: "codex", status: "missing", reason,
+      candidates: [{ path: "/missing/codex", status: "missing", reason }] });
+    expect(snapshotHarnesses({ harnesses: [row] } as unknown as Snapshot)).toEqual([row]);
+    expect(snapshotHarnesses({ harnesses: [{ ...row, reason: "not found" }] } as unknown as Snapshot)).toEqual([]);
+    expect(snapshotHarnesses({ harnesses: [{ ...row, candidates: [{ reason: "not found" }] }] } as unknown as Snapshot)).toEqual([]);
+  });
   const codexRow: HarnessHealth = {
     harness: "codex", status: "ready", available: true, revision: 4, manualPath: null,
     command: ["/opt/bin/codex"], executable: "/opt/bin/codex", version: "0.157.0", source: "PATH",
@@ -66,7 +74,7 @@ describe("the harness wire contract", () => {
   });
 
   it("parses free local qualification from snapshots and command replies without retaining certificates", async () => {
-    const readOnlyStructured = { eligible: true, systemSandbox: true, reason: null, reasonCode: null, sameAttemptContinuation: true };
+    const readOnlyStructured = { eligible: true, systemSandbox: true, reason: null, sameAttemptContinuation: true };
     const raw = { ...codexRow, systemSandbox: true, readOnlyStructured: { ...readOnlyStructured, verified: true },
       reviewVerification: { verified: true }, verified: true };
     const parsed = snapshotHarnesses({ harnesses: [raw] } as unknown as Snapshot)[0];
@@ -79,9 +87,9 @@ describe("the harness wire contract", () => {
   });
 
   it("keeps discovery health but treats malformed local qualification as unknown", () => {
-    const valid = { eligible: true, systemSandbox: true, reason: null, reasonCode: null, sameAttemptContinuation: true };
+    const valid = { eligible: true, systemSandbox: true, reason: null, sameAttemptContinuation: true };
     for (const readOnlyStructured of [null, {}, { eligible: true }, { ...valid, systemSandbox: "true" },
-      { ...valid, sameAttemptContinuation: 1 }, { ...valid, reasonCode: "readonly-resource-missing" },
+      { ...valid, sameAttemptContinuation: 1 }, { ...valid, reason: { code: "harness.readonly-resource-missing", params: {} } },
       { ...valid, reason: undefined }, { verified: true }]) {
       const parsed = snapshotHarnesses({ harnesses: [{ ...codexRow, readOnlyStructured }] } as unknown as Snapshot)[0];
       expect(parsed.status).toBe("ready");
@@ -132,7 +140,7 @@ describe("a quota observation on the wire", () => {
 
 describe("native login facts on the wire", () => {
   const facts: HarnessAccount = { harness: "codex", status: "logged-out", accountType: null,
-    checkedAt: null, reasonCode: null, guidance: null };
+    checkedAt: null, reason: null };
 
   it("accepts only the named login facts of the requested harness", () => {
     expect(parseHarnessAccount(facts, "codex")).toEqual(facts);

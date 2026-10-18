@@ -1,5 +1,6 @@
 import type { ModelServiceGroup } from "./console-data";
 import { effortText, buddyName } from "./buddy-name";
+import type { Reason } from "./reason";
 import type { Buddy } from "./types";
 
 /** Product names for the known harness ids; an unknown id is shown as recorded. */
@@ -34,7 +35,7 @@ type HarnessGroup = {
   /** No buddy of this harness is available in the directory right now. */
   unavailable: boolean;
   /** Recorded reasons, deduplicated; empty when none were recorded. */
-  reasons: string[];
+  reasons: Reason[];
 };
 
 /** Groups model services by harness, keeping the model service order of `modelServices`. */
@@ -46,7 +47,7 @@ export function harnessGroups(modelServices: ModelServiceGroup[], all: Buddy[]):
       const members = all.filter((buddy) => buddy.harness === modelService.harness);
       const unavailable = !members.some((buddy) => buddy.available);
       const reasons = unavailable
-        ? [...new Set(members.map((buddy) => buddy.unavailableReason?.trim() ?? "").filter(Boolean))]
+        ? [...new Map(members.filter(buddy => buddy.unavailableReason).map(buddy => [JSON.stringify(buddy.unavailableReason), buddy.unavailableReason!])).values()]
         : [];
       group = { harness: modelService.harness, name: harnessName(modelService.harness), modelServices: [], unavailable, reasons };
       groups.set(modelService.harness, group);

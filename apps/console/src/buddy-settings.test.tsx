@@ -1,3 +1,4 @@
+import { reasonText } from "./i18n/reason";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -37,7 +38,7 @@ const GLM = "zcode / zhipu / glm-5";
 
 function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "harness" | "provider" | "model" | "effort">): Buddy {
   return {
-    available: true, enabled: false, capabilities: [], contextWindow: null,
+    effortRank: null, available: true, enabled: false, capabilities: [], contextWindow: null,
     description: "", source: "catalog:fixture", ...entry,
   };
 }
@@ -45,16 +46,16 @@ function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "harnes
 /** Three harnesses: one available model service, one all-disabled model service, one offline model service. */
 function buddies(): Buddy[] {
   return [
-    buddy({ buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
+    buddy({ effortRank: null, buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
       enabled: true, capabilities: ["execution:claude", "routing:fast", "decision"], contextWindow: 200_000 }),
-    buddy({ buddyId: highId, label: "Claude Sonnet 5 · high", ...sonnet, effort: "high",
+    buddy({ effortRank: null, buddyId: highId, label: "Claude Sonnet 5 · high", ...sonnet, effort: "high",
       capabilities: ["execution:claude", "decision"], contextWindow: 200_000 }),
-    buddy({ buddyId: solMediumId, label: "GPT-6 Sol · medium", ...sol, effort: "medium",
+    buddy({ effortRank: null, buddyId: solMediumId, label: "GPT-6 Sol · medium", ...sol, effort: "medium",
       capabilities: ["execution:codex"] }),
-    buddy({ buddyId: solLowId, label: "GPT-6 Sol · low", ...sol, effort: "low",
+    buddy({ effortRank: null, buddyId: solLowId, label: "GPT-6 Sol · low", ...sol, effort: "low",
       capabilities: ["execution:codex"] }),
     buddy({ buddyId: glmId, label: "GLM-5 · default", ...glm, effort: "default", available: false,
-      unavailableReason: "本机未检测到 zcode CLI" }),
+      unavailableReason: { code: "harness.not-found", params: {} } }),
   ];
 }
 
@@ -71,7 +72,7 @@ function harnesses(): HarnessHealth[] {
       executable: "/Users/fixture/.local/bin/claude", version: "2.0.1",
       source: "版本管理器（nvm 默认版本）", checkedAt: "2026-09-28T09:30:00.000Z", candidates: [] },
     { harness: "zcode", status: "missing", available: false, revision: 1, manualPath: null,
-      reasonCode: "HARNESS_NOT_FOUND", remedy: "安装 ZCode CLI，或填写可执行文件的绝对路径。",
+      reason: { code: "harness.not-found", params: {} },
       checkedAt: "2026-09-28T09:30:00.000Z",
       candidates: [{ path: "/opt/homebrew/bin/zcode", source: "Homebrew", status: "missing" }] },
   ];
@@ -253,16 +254,16 @@ describe("the harness directory", () => {
     expect(zcode.getAttribute("aria-expanded")).toBe("false");
     const state = within(zcode.closest("[data-slot=harness-section]")!).getByRole("button", { name: "ZCode 账户" });
     expect(within(state).getByText("未找到")).toBeTruthy();
-    expect(state.getAttribute("aria-description")).toContain("本机未检测到 zcode CLI");
+    expect(state.getAttribute("aria-description")).toContain(reasonText({ code: "harness.not-found", params: {} }));
     await user.hover(state);
-    expect((await screen.findByRole("tooltip")).textContent).toContain("本机未检测到 zcode CLI");
+    expect((await screen.findByRole("tooltip")).textContent).toContain(reasonText({ code: "harness.not-found", params: {} }));
     // A folded harness hides its models; unfolded, the model says nothing the harness already said.
     expect(queryModel(GLM)).toBeNull();
     await user.click(zcode);
     expect(within(modelRow(GLM)).queryByText("不可用")).toBeNull();
     // Its side column says once that it cannot work, and why.
     await user.click(modelButton(GLM));
-    expect(within(pane(GLM)).getByText("不可用").getAttribute("aria-description")).toBe("ZCode 未找到 · 本机未检测到 zcode CLI");
+    expect(within(pane(GLM)).getByText("不可用").getAttribute("aria-description")).toBe("ZCode 未找到");
   });
 
   it("shows only enabled reasoning efforts in rows and opens a single drawer without naming roles", async () => {

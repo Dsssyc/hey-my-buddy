@@ -1,6 +1,10 @@
 import type zh from "../zh/common";
 
 export default {
+  concurrencyNotice: {
+    title: "Before running several sessions at once",
+    body: "Running more sessions at once uses more of your quota and requests at the same time. Some subscriptions are meant for one person's ordinary use; going beyond their terms or suggested concurrency can lead to rate limits, suspension or effects on your account. Check the terms of the harnesses and subscriptions you use before raising the limit.",
+  },
   error: {
     codes: {
       REVISION_CONFLICT: "The record was updated; refresh, check it and try again.", CONFLICT: "The records conflict; refresh, check them and try again.",
@@ -14,7 +18,7 @@ export default {
     version: "The version information is not recognised; check the service version.", network: "Cannot reach the local blackboard; refresh and retry.",
     unparsable: "The local service sent a reply that cannot be read.", snapshot: "The console data is incomplete; check the service version.",
     submit: "The result of the submission is unknown; check it, then retry.",
-    macroTasks: "The macro task list is incomplete; check the service version.", timeline: "The macro task timeline is incomplete; check the service version.",
+    macroTasks: "The macro task list is incomplete; check the service version.", timeline: "This macro task's record is incomplete; check the service version.",
     cleanup: "The result of the cleanup is unknown; retry the same request.", recheck: "The result of the check is incomplete; check the service version.",
     pathSaved: "The result of saving the path is unknown; check the service version.", refused: "The request did not succeed.", failed: "The request failed; try again later.",
   },

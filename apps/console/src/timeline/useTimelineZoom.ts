@@ -7,13 +7,15 @@ const MAX_PPM = 60;
 const DURATION = 180;
 
 /** Zoom the actual time scale while keeping the chosen time at its screen coordinate. */
-export function useTimelineZoom(input: ScaleInput | null, width: number, macroId: string | undefined,
-  viewport: RefObject<HTMLDivElement | null>, selectedAt: number | null, pointerAt: RefObject<number | null>, nowMs: number) {
-  const fit = useMemo(() => input ? createTimelineScale(input, Math.max(1, width - 48)) : null, [input, width]);
+export function useTimelineZoom(input: ScaleInput | null, available: number, macroId: string | undefined,
+  viewport: RefObject<HTMLDivElement | null>, selectedAt: number | null, pointerAt: RefObject<number | null>, nowMs: number,
+  /** Where scale x=0 sits in the viewport's own coordinates, so anchors hold beside sticky columns. */
+  originX = 24) {
+  const fit = useMemo(() => input ? createTimelineScale(input, Math.max(1, available)) : null, [input, available]);
   const minimum = Math.min(MAX_PPM, fit?.pixelsPerMinute ?? 0);
   const [zoom, setZoom] = useState<{ macroId: string | undefined; ppm: number | null }>({ macroId, ppm: null });
   const ppm = zoom.macroId === macroId && zoom.ppm !== null ? Math.max(minimum, Math.min(MAX_PPM, zoom.ppm)) : minimum;
-  const scale = useMemo(() => input ? createTimelineScale(input, Math.max(1, width - 48), ppm) : null, [input, width, ppm]);
+  const scale = useMemo(() => input ? createTimelineScale(input, Math.max(1, available), ppm) : null, [input, available, ppm]);
   const frame = useRef<number | null>(null);
   const target = useRef<number | null>(null);
   const anchor = useRef<{ at: number; screenX: number } | null>(null);
@@ -25,7 +27,7 @@ export function useTimelineZoom(input: ScaleInput | null, width: number, macroId
     if (viewport.current) viewport.current.scrollLeft = 0;
   }, [macroId]);
   useLayoutEffect(() => {
-    if (anchor.current && scale && viewport.current) viewport.current.scrollLeft = scale.toX(anchor.current.at)! + 24 - anchor.current.screenX;
+    if (anchor.current && scale && viewport.current) viewport.current.scrollLeft = scale.toX(anchor.current.at)! + originX - anchor.current.screenX;
     if (frame.current === null) anchor.current = null;
   }, [scale]);
 
@@ -34,7 +36,7 @@ export function useTimelineZoom(input: ScaleInput | null, width: number, macroId
     const next = direction === 0 ? minimum : Math.max(minimum, Math.min(MAX_PPM, (target.current ?? ppm) * (direction === 1 ? 2 : .5)));
     cancel(); target.current = next;
     const at = selectedAt ?? pointerAt.current ?? nowMs;
-    anchor.current = { at, screenX: scale.toX(at)! + 24 - viewport.current.scrollLeft };
+    anchor.current = { at, screenX: scale.toX(at)! + originX - viewport.current.scrollLeft };
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches || next === ppm) {
       target.current = null;
       setZoom({ macroId, ppm: next === minimum ? null : next });

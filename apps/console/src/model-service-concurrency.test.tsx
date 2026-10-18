@@ -14,7 +14,7 @@ const FLASH = "dsh / deepseek-official / deepseek-flash";
 const RETIRED = "dsh / deepseek-official / retired-model";
 
 function catalog(): Buddy[] {
-  const base = {
+  const base = { effortRank: null,
     harness: "dsh", provider: "deepseek-official", capabilities: ["execution:dsh", "decision"],
     contextWindow: null, source: "catalog:fixture", description: "",
   };
@@ -24,7 +24,7 @@ function catalog(): Buddy[] {
     { ...base, buddyId: flashHigh, model: "deepseek-flash", effort: "high", label: "deepseek-flash · high",
       available: true, enabled: false },
     { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", label: "retired-model · max",
-      available: false, enabled: true, unavailableReason: "provider paused" },
+      available: false, enabled: true, unavailableReason: { code: "catalog.native-unavailable", params: {} } },
   ];
 }
 

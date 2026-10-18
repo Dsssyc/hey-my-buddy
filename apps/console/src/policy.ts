@@ -1,3 +1,4 @@
+import { reasonText } from "./i18n/reason";
 import i18n from "i18next";
 import type { Draft, Buddy } from "./types";
 import {
@@ -97,8 +98,8 @@ function labelOf(buddy: Buddy | undefined, buddyId: string): string {
 
 function availabilityReason(buddy: Buddy | undefined): string {
   if (!buddy) return i18n.t("console:noLongerInTheCurrentCatalog");
-  return buddy.unavailableReason?.trim()
-    ? i18n.t("console:currentlyUnavailable", { v0: buddy.unavailableReason.trim() })
+  return buddy.unavailableReason
+    ? i18n.t("console:currentlyUnavailable", { v0: reasonText(buddy.unavailableReason) })
     : i18n.t("console:notInTheCurrentCatalog");
 }
 

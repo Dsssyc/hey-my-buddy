@@ -21,7 +21,7 @@ const SONNET = "claude / anthropic / claude-sonnet-5";
 const SOL = "codex / openai / gpt-6-sol";
 
 function buddy(modelService: typeof sonnet, effort: string, extra: Partial<Buddy> = {}): Buddy {
-  return {
+  return { effortRank: null,
     buddyId: `${modelService.harness}:${modelService.provider}:${modelService.model}:${effort}`, label: `${modelService.model} · ${effort}`, ...modelService, effort,
     available: true, enabled: false, capabilities: [], contextWindow: null, description: "", source: "catalog:fixture", ...extra,
   };
@@ -110,7 +110,7 @@ describe("the harness sections", () => {
   it("keeps an unavailable harness, its state and account when filters hide every model", async () => {
     const state = snapshot();
     state.buddies = state.buddies.map(entry => entry.harness === "claude"
-      ? { ...entry, available: false, unavailableReason: "HARNESS_UNHEALTHY" } : entry);
+      ? { ...entry, available: false, unavailableReason: { code: "harness.probe-failed", params: {} } } : entry);
     state.harnesses[0] = { ...state.harnesses[0], status: "login-required", available: false };
     const f = fixture(state, { buddy_list: () => page(state.buddies.filter(entry => !entry.available), state) });
     const user = userEvent.setup();
@@ -225,7 +225,7 @@ describe("a session that cannot write", () => {
 });
 
 describe("what the view says about its own reads", () => {
-  const retired = buddy({ harness: "claude", provider: "anthropic", model: "claude-old" }, "high", { available: false, unavailableReason: "provider paused" });
+  const retired = buddy({ harness: "claude", provider: "anthropic", model: "claude-old" }, "high", { available: false, unavailableReason: { code: "catalog.native-unavailable", params: {} } });
 
   it("says that it is reading unavailable buddies, and shows them when the read ends", async () => {
     const state = snapshot({ unavailableBuddyCount: 1 });
@@ -268,7 +268,7 @@ describe("what the view says about its own reads", () => {
   it("says where the list of unavailable buddies was cut", async () => {
     const state = snapshot({ unavailableBuddyCount: 700 });
     const many = Array.from({ length: 600 }, (_, index) => buddy({ harness: "claude", provider: "anthropic", model: "claude-old" }, `e${index}`,
-      { available: false, unavailableReason: "provider paused" }));
+      { available: false, unavailableReason: { code: "catalog.native-unavailable", params: {} } }));
     const f = fixture(state, { buddy_list: () => ({ ...page(many, state), nextCursor: "more" }) });
     const user = userEvent.setup();
     open(f);

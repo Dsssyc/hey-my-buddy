@@ -24,7 +24,9 @@ const languages = [
 ];
 
 const detail = (page: Page) => page.locator("[data-slot=task-detail]");
-const rail = (page: Page) => page.locator("[data-slot=detail-rail]");
+/** The steps along the top: the micro task's own row of the macro task, one selected slice at a time. */
+const strip = (page: Page) => page.locator("[data-slot=detail-strip]");
+const chosen = (page: Page) => strip(page).locator("[aria-pressed=true]");
 const pane = (page: Page) => page.locator("[data-slot=detail-pane]");
 /** The scrolled content of the pane: the frame its parts have to stay inside, however far it scrolls. */
 const content = (page: Page) => pane(page).locator("div.w-0.min-w-full").first();
@@ -36,8 +38,10 @@ async function expectDetailWhole(page: Page, { skipTitle = false } = {}) {
   await expectWholeAndApart(header, line.locator(":scope > *"));
   // The title is cut with an ellipsis by design; everything else in the head is written whole.
   await expectTextUncut(line.locator("button, dt, dd, span:not([data-slot=state-mark])").filter({ hasNot: page.locator("h2") }));
-  await expectWholeAndApart(rail(page), rail(page).locator("li"));
-  await expectTextUncut(rail(page).locator("li span"));
+  const canvas = strip(page).locator('[data-slot=detail-strip-scroll] > div > div');
+  // Events and inquiries share the time scale with bars; the axis and row occupy separate bands.
+  await expectWholeAndApart(canvas, strip(page).locator('[data-slot=timeline-axis], [data-slot=timeline-track]'));
+  await expectTextUncut(strip(page).locator("text:visible"));
   await expectWholeAndApart(content(page), content(page).locator(":scope > *"));
   await expectTextUncut(pane(page).locator("[data-slot=detail-band] span, [data-slot=detail-live] span"));
   await expectNoSidewaysScroll(page);
@@ -71,7 +75,9 @@ async function go(page: Page, hash: string): Promise<void> {
   await page.evaluate(next => { window.location.hash = next; }, hash);
 }
 
-const step = (page: Page, text: string | RegExp) => rail(page).locator("button").filter({ hasText: text });
+/** A slice of the strip by the words its readout carries. */
+const step = (page: Page, text: string | RegExp) => strip(page).getByRole("button", { name: typeof text === "string"
+  ? new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?: ·|$)`) : text });
 
 for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdue, waitingHost, failed, mode, answered, unavailable, delivered, conclusion, notCounted, integration, reported, handoff, unsure, helperDone, ask } of languages)
   for (const width of [1440, 1280, 390]) {
@@ -87,17 +93,18 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await span.dblclick();
         await expect(detail(page)).toBeVisible();
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}/preview-run-a1/7$`));
-        await expect(rail(page).locator("[aria-current=step]")).toContainText(turn(2));
-        // The macro task's own header and row labels stay while the time tracks give way to the detail.
+        await expect(chosen(page)).toHaveAccessibleName(new RegExp(turn(2)));
+        // The macro task's own header stays; the lanes give way to the detail, and the list beside it holds the rows.
         await expect(page.locator("[data-slot=macro-overview-header] h2")).toBeVisible();
-        await expect(page.locator('[data-slot=task-names] [data-key="row:preview-run-a1"]')).toBeVisible();
-        await expect(page.locator('[data-slot=timeline-tracks]')).toHaveAttribute("aria-hidden", "true");
+        if (width > 760) await expect(page.locator('[data-slot=task-names] [data-key="row:preview-run-a1"]')).toBeVisible();
+        else await expect(page.locator('[data-slot=task-names]')).toBeHidden();
+        await expect(page.locator('[data-slot=timeline-tracks]')).toHaveCount(0);
         await page.goBack();
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}$`));
         await expect(detail(page)).toHaveCount(0);
         await page.goForward();
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}/preview-run-a1/7$`));
-        await expect(rail(page).locator("[aria-current=step]")).toContainText(turn(2));
+        await expect(chosen(page)).toHaveAccessibleName(new RegExp(turn(2)));
         // Choosing a step replaces the address it is on: back leaves the detail, not the step.
         await step(page, delegate).click();
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}/preview-run-a1/1$`));
@@ -114,11 +121,10 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
 
       test("opens a step by its address, the first choice when the address names none, and a failed read when it names no micro task", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a1/4`);
-        await expect(rail(page).locator("[aria-current=step]")).toHaveAttribute("data-step", "4");
         await expect(pane(page)).toContainText(locale === "zh-CN" ? "批准" : "Approved");
         // No step in the address: the detail settles on the last turn and writes it into the address.
         await go(page, `#tasks/${A}/preview-run-a1`);
-        await expect(rail(page).locator("[aria-current=step]")).toContainText(turn(2));
+        await expect(chosen(page)).toHaveAccessibleName(new RegExp(turn(2)));
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}/preview-run-a1/7$`));
         // A step that does not exist is replaced by the first choice.
         await go(page, `#tasks/${A}/preview-run-a1/99`);
@@ -132,30 +138,29 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}$`));
       });
 
-      test("hangs the rail below the selected row while the step fills the detail area", async ({ page }) => {
+      test("hangs the steps along the top while the pane below scrolls on its own", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a1/7`);
         await expect(detail(page)).toBeVisible();
-        await expect(rail(page)).toBeVisible();
-        await expect(detail(page).locator("[data-slot=detail-rail]")).toHaveCount(0);
-        const [rowBox, railBox, paneBox, namesBox] = [
-          (await page.locator('[data-slot=task-names] [data-key="row:preview-run-a1"]').boundingBox())!,
-          (await rail(page).boundingBox())!,
+        await expect(strip(page)).toBeVisible();
+        const [headerBox, stripBox, paneBox, namesBox] = [
+          (await detail(page).locator("[data-slot=detail-header]").boundingBox())!,
+          (await strip(page).boundingBox())!,
           (await pane(page).boundingBox())!,
           (await page.locator('[data-slot=task-names]').boundingBox())!,
         ];
-        expect(railBox.y).toBeGreaterThanOrEqual(rowBox.y + rowBox.height - 1);
-        expect(Math.abs(railBox.x - rowBox.x)).toBeLessThanOrEqual(3);
+        expect(stripBox.y).toBeGreaterThanOrEqual(headerBox.y + headerBox.height - 1);
+        expect(paneBox.y).toBeGreaterThanOrEqual(stripBox.y + stripBox.height - 1);
         if (width > 760) {
-          expect(paneBox.x).toBeGreaterThanOrEqual(railBox.x + railBox.width - 1);
+          expect(paneBox.x).toBeGreaterThanOrEqual(namesBox.x + namesBox.width - 1);
         } else {
-          expect(paneBox.y).toBeGreaterThanOrEqual(namesBox.y + namesBox.height - 1);
+          await expect(page.locator('[data-slot=task-names]')).toBeHidden();
         }
         await expectDetailWhole(page, { skipTitle: true });
         await expectOneLineHead(page, refresh, width <= 760);
         // A step reached by the keyboard is the one shown.
         await step(page, delegate).focus();
         await page.keyboard.press("Enter");
-        await expect(rail(page).locator("[aria-current=step]")).toHaveAttribute("data-step", "1");
+        await expect(page).toHaveURL(new RegExp(`#tasks/${A}/preview-run-a1/1$`));
         await expectDetailWhole(page, { skipTitle: true });
       });
 
@@ -180,7 +185,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await open(page, `#tasks/${A}/preview-run-a1/2`);
         const band = pane(page).locator("[data-slot=detail-band]");
         await expect(band).toContainText("Router");
-        await expect(band).toContainText("gpt-6-luna");
+        await expect(band).toContainText("gpt-5-codex");
         await expect(band).toContainText(mode);
         await expect(pane(page).locator("[data-slot=detail-thread]")).toContainText("deepseek-flash");
         await expectDetailWhole(page, { skipTitle: true });
@@ -216,21 +221,21 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(pane(page).locator("[data-slot=detail-thread]")).not.toContainText(ask);
       });
 
-      test("a stop that is not confirmed is written as not confirmed, in the turn and on the rail", async ({ page }) => {
+      test("a stop that is not confirmed is written as not confirmed, in the turn and on the strip", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a1-h1-h1`);
         await expect(detail(page)).toBeVisible();
         const title = pane(page).locator("h3").first().locator("..");
         await expect(title).toContainText(unsure);
         await expect(title).not.toContainText(locale === "zh-CN" ? "已结束" : "Ended");
-        await expect(rail(page).locator("[aria-current=step]")).toContainText(unsure);
-        const mark = await rail(page).locator("[aria-current=step] i").evaluate(node => getComputedStyle(node).borderTopStyle);
-        expect(mark).toBe("dashed");
+        await expect(chosen(page)).toHaveAccessibleName(new RegExp(locale === "zh-CN" ? "停止未确认" : "Stop unconfirmed"));
+        const mark = await chosen(page).locator("[data-slot=execution-bar]").evaluate(node => node.getAttribute("stroke-dasharray"));
+        expect(mark).toBe("3 2");
         await expectDetailWhole(page, { skipTitle: true });
       });
 
       test("a running turn that is silent: its warnings, its inquiry and the row at the bottom", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a3`);
-        await expect(rail(page).locator("[aria-current=step]")).toContainText(turn(1));
+        await expect(chosen(page)).toHaveAccessibleName(new RegExp(turn(1)));
         const title = pane(page).locator("h3").first().locator("..");
         await expect(title).toContainText(running);
         await expect(title).toContainText(overdue);
@@ -257,14 +262,18 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
 
       test("a decision that waits: the request, and the dashed line that leads to it", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a2`);
-        const selected = rail(page).locator("[aria-current=step]");
-        await expect(selected).toContainText(waitingHost);
+        const selected = chosen(page);
+        await expect(selected).toHaveAccessibleName(new RegExp(waitingHost));
         await expect(pane(page).locator("h3").first()).toContainText(locale === "zh-CN" ? "协助请求" : "Assistance request");
         await expect(pane(page).getByText(waitingHost).first()).toBeVisible();
-        const dashed = await rail(page).locator("li").filter({ hasText: waitingHost }).last().evaluate(node => getComputedStyle(node, "::before").borderLeftStyle);
-        expect(dashed).toBe("dashed");
+        const dashed = await strip(page).locator("[data-slot=host-wait]").last().evaluate(node => node.getAttribute("stroke-dasharray"));
+        expect(dashed).toBe("5 4");
         await expectDetailWhole(page, { skipTitle: true });
         // A decision that was made says what, by whom and when.
+        // Enlarge the shared scale until the decision and its nearby continuation are separate marks.
+        for (let count = 0; count < 5 && await step(page, locale === "zh-CN" ? "决定" : "Decision").count() === 0; count++) {
+          await strip(page).getByRole("button", { name: locale === "zh-CN" ? "放大（+）" : "Zoom in (+)", exact: true }).click();
+        }
         await step(page, locale === "zh-CN" ? "决定" : "Decision").first().click();
         await expect(pane(page)).toContainText(locale === "zh-CN" ? "拒绝" : "Declined");
         await expectDetailWhole(page, { skipTitle: true });
@@ -284,7 +293,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(detail(page)).toBeVisible();
         await expect(detail(page).locator("[data-slot=detail-header]")).toContainText(failed);
         await expect(pane(page)).toContainText("synthetic preview: harness quota exhausted before completion");
-        await step(page, acceptance).click();
+        await step(page, locale === "zh-CN" ? "结论" : "Conclusion").click();
         const section = pane(page).getByRole("group", { name: conclusion });
         await expect(section).toContainText(notCounted);
         await expect(section).toContainText("art-b2-partial");
@@ -320,7 +329,7 @@ test.describe("the detail of a micro task in the dark theme", () => {
     await open(page, `#tasks/${A}/preview-run-a3`);
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await expect(detail(page)).toBeVisible();
-    for (const text of await page.locator("[data-slot=task-detail] h2, [data-slot=task-detail] h3, [data-slot=detail-band] span, [data-slot=detail-live] span, [data-slot=detail-rail] span").all()) {
+    for (const text of await page.locator("[data-slot=task-detail] h2, [data-slot=task-detail] h3, [data-slot=detail-band] span, [data-slot=detail-live] span, [data-slot=detail-strip] text").all()) {
       if (!(await text.locator("*").count()) && (await text.innerText()).trim()) expect(await contrastOf(text), await text.innerText()).toBeGreaterThanOrEqual(4.5);
     }
   });

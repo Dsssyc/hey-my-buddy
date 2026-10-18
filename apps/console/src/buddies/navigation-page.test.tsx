@@ -34,7 +34,7 @@ const modelsRegion = () => screen.queryByRole("region", { name: "目录" });
 
 function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "harness" | "provider" | "model" | "effort">): Buddy {
   return {
-    available: true, enabled: false, capabilities: [], contextWindow: null,
+    effortRank: null, available: true, enabled: false, capabilities: [], contextWindow: null,
     description: "", source: "catalog:fixture", ...entry,
   };
 }
@@ -42,16 +42,16 @@ function buddy(entry: Partial<Buddy> & Pick<Buddy, "buddyId" | "label" | "harnes
 /** One enabled model service per harness plus an offline model service hidden by default. */
 function buddies(): Buddy[] {
   return [
-    buddy({ buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
+    buddy({ effortRank: null, buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
       enabled: true, capabilities: ["execution:claude", "routing:fast", "decision"], contextWindow: 200_000 }),
-    buddy({ buddyId: highId, label: "Claude Sonnet 5 · high", ...sonnet, effort: "high",
+    buddy({ effortRank: null, buddyId: highId, label: "Claude Sonnet 5 · high", ...sonnet, effort: "high",
       capabilities: ["execution:claude", "decision"], contextWindow: 200_000 }),
-    buddy({ buddyId: solMediumId, label: "GPT-6 Sol · medium", ...sol, effort: "medium",
+    buddy({ effortRank: null, buddyId: solMediumId, label: "GPT-6 Sol · medium", ...sol, effort: "medium",
       enabled: true, capabilities: ["execution:codex"] }),
-    buddy({ buddyId: flashMaxId, label: "DeepSeek Flash · max", ...flash, effort: "max",
+    buddy({ effortRank: null, buddyId: flashMaxId, label: "DeepSeek Flash · max", ...flash, effort: "max",
       enabled: true, capabilities: ["execution:dsh", "routing:fast"] }),
     buddy({ buddyId: glmId, label: "GLM-5 · default", ...glm, effort: "default", available: false,
-      unavailableReason: "本机未检测到 zcode CLI" }),
+      unavailableReason: { code: "harness.not-found", params: {} } }),
   ];
 }
 
@@ -64,7 +64,7 @@ function harnesses(): HarnessHealth[] {
     { harness: "codex", status: "ready", available: true, revision: 2, manualPath: null,
       executable: "/opt/bin/codex", version: "0.159.0", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [],
-      readOnlyStructured: { implemented: true, eligible: false, systemSandbox: true, sameAttemptContinuation: false, reasonCode: "READ_ONLY_RESOURCE_UNAVAILABLE", reason: "本地只读运行资源不可用" } },
+      readOnlyStructured: { implemented: true, eligible: false, systemSandbox: true, sameAttemptContinuation: false, reason: { code: "harness.readonly-resource-missing", params: {} } } },
     { harness: "dsh", status: "ready", available: true, revision: 3, manualPath: null,
       executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [],
@@ -74,7 +74,7 @@ function harnesses(): HarnessHealth[] {
           { name: "weekly", usedPercent: 41, resetsAt: null },
         ] } },
     { harness: "zcode", status: "missing", available: false, revision: 1, manualPath: null,
-      reasonCode: "HARNESS_NOT_FOUND", remedy: "安装 ZCode CLI，或填写可执行文件的绝对路径。",
+      reason: { code: "harness.not-found", params: { operation: "probe" } },
       checkedAt: CHECKED_AT, candidates: [] },
   ];
 }

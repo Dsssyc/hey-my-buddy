@@ -54,7 +54,7 @@ export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, erro
   const [titleRef, clipped] = useTextClipped<HTMLHeadingElement>(text);
   const titleHint = title.source === "task" ? t("title.fromTask", { title: title.fullText }) : clipped && title.source !== "none" ? title.fullText : undefined;
   return <header data-slot="detail-header" className="shrink-0 border-b bg-card">
-    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 px-4 py-3 sm:px-6">
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 px-4 py-2 sm:px-6">
       <div className="flex min-w-0 flex-1 items-center gap-2.5 @max-[650px]:order-1 @max-[650px]:basis-full">
         <DetailBack onBack={onBack}/>
         <Hint text={titleHint}>

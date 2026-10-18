@@ -38,7 +38,7 @@ export function MacroCounts({ row }: { row: MacroTaskSummary }) {
 }
 function Entry({ row, selected, onSelect }: { row: MacroTaskSummary; selected: string | null; onSelect: (id: string) => void }) {
   const { t } = useTranslation("tasks");
-  const text = row.titleSource === "none" ? t("unnamed") : row.titleSource === "task" ? Array.from(row.title).slice(0, 40).join("") : row.title;
+  const text = row.titleSource === "none" ? t("unnamed") : row.titleSource === "task" ? Array.from(row.title!).slice(0, 40).join("") : row.title!;
   const [titleRef, clipped] = useTextClipped<HTMLSpanElement>(text);
   const waiting = row.counts.host + row.counts.review > 0;
   const edge = waiting ? "before:bg-hand-mark" : row.counts.active > 0 ? "before:bg-live" : null;

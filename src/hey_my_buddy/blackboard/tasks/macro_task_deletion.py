@@ -168,10 +168,13 @@ def _blockers(store, connection, scope):
     tasks = {row['task_id']:row for row in scope.task_rows}
     reasons = {}
     def block(task_id, code, attempt_ids=()):
+        from .macro_tasks import _run_presentation
         task = tasks[task_id]
         run = runs.get(task_id)
+        title, title_source, _ = _run_presentation(connection, task_id)
         key = (task_id, code)
         reasons[key] = {'runId': task_id if run else None, 'taskId': task_id,
+                        'title': title, 'titleSource': title_source,
                         'state': task['state'], 'runState': run['state'] if run else None,
                         'reason': reason(_BLOCKER_CODES[code]),
                         'attemptIds': sorted(attempt_ids)}
@@ -264,6 +267,48 @@ def _summary(row, *, duplicate):
             'deletedAt':row['deleted_at'], 'microTaskCount':row['micro_task_count'], 'duplicate':duplicate}
 
 
+def _scope_summary(store, scope):
+    """Project retained identities, without inspecting native stores or Git sizes."""
+    from . import workspace
+    from .macro_task_deletion_workspace import _artifact_refs, _fixed_refs
+
+    allocations = [workspace.resolve_allocation(store.directory, manifest, scope.manifests)
+                   for manifest in scope.manifests if manifest['kind'] == 'worktree']
+    checkouts = (None if any(allocation is None for allocation in allocations) else
+                 len({(allocation['repositoryId'], allocation['checkoutId']) for allocation in allocations}))
+    manifests = {}
+    refs = {}
+    refs_known = True
+    for manifest in scope.manifests:
+        identifier = manifest['workspaceId']
+        previous = manifests.setdefault(identifier, manifest)
+        prefix = 'refs/hey-my-buddy/workspaces/' + identifier + '/'
+        snapshot = manifest['snapshot']
+        # A missing or conflicting fixed binding cannot establish a complete
+        # reference scope. Do not turn a known subset into a total.
+        if (previous != manifest or snapshot.get('inputRef') != prefix + 'input'
+                or snapshot.get('stagedRef') != prefix + 'staged'
+                or not snapshot.get('stagedCommit')):
+            refs_known = False
+            continue
+        for ref, commit in _fixed_refs(manifest).items():
+            refs[(manifest['repositoryId'], ref)] = commit
+    if refs_known:
+        for artifact in scope.artifacts:
+            for ref, commit in _artifact_refs(artifact, manifests).items():
+                key = (manifests[artifact['workspaceId']]['repositoryId'], ref)
+                if refs.setdefault(key, commit) != commit:
+                    refs_known = False
+
+    sessions = {(session['harness'], session['sessionId']) for session in scope.sessions}
+    # Artifacts bind Git snapshots, whose objects may be shared with the user's
+    # repository. A patch or checkout path alone is not a complete owned-byte
+    # inventory. Native session receipts likewise contain no byte inventory.
+    return {'artifacts': {'count': len(scope.artifacts), 'bytes': None if scope.artifacts else 0},
+            'sessions': {'count': len(sessions), 'bytes': None if sessions else 0},
+            'checkouts': checkouts, 'gitRefs': len(refs) if refs_known else None}
+
+
 def preview(store, target: str) -> dict:
     """Return confirmation counts and at most fifty blockers in one snapshot."""
     with store.db.read() as connection:
@@ -271,6 +316,8 @@ def preview(store, target: str) -> dict:
         if deletion is not None and deletion['state'] == 'deleted':
             return {'macroTaskId':target, 'microTaskCount':deletion['micro_task_count'],
                     'unconcludedFailureCount':0, 'blockerTotal':0, 'blockers':[],
+                    'scope': {'artifacts': {'count': None, 'bytes': None},
+                              'sessions': {'count': None, 'bytes': None}, 'checkouts': None, 'gitRefs': None},
                     'backupRetention':'until-backup-rotation', 'deletionState':'deleted'}
         scope = _collect(connection, target)
         if _busy(connection, scope):
@@ -289,6 +336,7 @@ def preview(store, target: str) -> dict:
         failures = sum(r['state'] in ('failed','cancelled') and not tasks[r['run_id']]['accepted_at']
                        and r['run_id'] not in concluded for r in scope.run_rows)
         return {'macroTaskId':target, 'microTaskCount':len(scope.runs), 'unconcludedFailureCount':failures,
+                'scope': _scope_summary(store, scope),
                 'blockerTotal':len(blockers), 'blockers':blockers[:50],
                 'backupRetention':'until-backup-rotation', 'deletionState':deletion['state'] if deletion else None}
 

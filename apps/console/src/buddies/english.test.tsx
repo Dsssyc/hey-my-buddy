@@ -41,7 +41,7 @@ function chinese(): string[] {
 const AT = "2026-09-29T09:30:00.000Z";
 const LATER = "2026-09-29T13:00:00.000Z";
 const account = (harness: string) => ({
-  harness, status: "ready", accountType: null, checkedAt: AT, reasonCode: null, guidance: null,
+  harness, status: "ready", accountType: null, checkedAt: AT,
 });
 const harnesses = [
   { harness: "dsh", status: "ready", available: true, revision: 1, manualPath: null, executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH", checkedAt: AT, candidates: [],
@@ -54,24 +54,24 @@ const harnesses = [
     quotaRouting: [{ provider: "openai", limitId: "5h", code: "HARNESS_QUOTA_EXHAUSTED", source: "codex-native", observedAt: AT, resetsAt: null, blocked: true,
       retry: { eligibleAt: LATER, open: false, pendingManual: false, manualAt: null, consumedAt: null, consumedBy: null } }] },
   { harness: "claude", status: "login-required", available: false, revision: 3, manualPath: "/home/user/bin/claude", source: "manual", checkedAt: AT,
-    reasonCode: "HARNESS_LOGIN_REQUIRED", remedy: "Log in to Claude Code, then check again.",
-    candidates: [{ path: "/home/user/bin/claude", source: "manual", status: "failed", reasonCode: "handshake_failed" }] },
+    reason: { code: "harness.login-required", params: { operation: "probe" } },
+    candidates: [{ path: "/home/user/bin/claude", source: "manual", status: "failed", reason: { code: "harness.probe-failed", params: { operation: "probe" } } }] },
   { harness: "zcode", status: "missing", available: false, revision: 1, manualPath: null, checkedAt: AT,
-    reasonCode: "HARNESS_NOT_FOUND", remedy: "Install the ZCode CLI, or give the absolute path of its executable.",
-    candidates: [{ path: "/opt/homebrew/bin/zcode", source: "Homebrew", status: "missing", reasonCode: "not_found" }] },
+    reason: { code: "harness.not-found", params: { operation: "probe" } },
+    candidates: [{ path: "/opt/homebrew/bin/zcode", source: "Homebrew", status: "missing", reason: { code: "harness.not-found", params: { operation: "probe" } } }] },
 ] as unknown as HarnessHealth[];
 
 function buddy(harness: string, provider: string, model: string, effort: string, extra: Partial<Buddy> = {}): Buddy {
-  return { buddyId: `${harness}:${provider}:${model}:${effort}`, label: `${model} · ${effort}`, harness, provider, model, effort,
+  return { effortRank: null, buddyId: `${harness}:${provider}:${model}:${effort}`, label: `${model} · ${effort}`, harness, provider, model, effort,
     available: true, enabled: false, capabilities: [`execution:${harness}`, "routing:fast", "decision"], contextWindow: null, description: "", source: "catalog:fixture", ...extra };
 }
 const buddies = [
   buddy("dsh", "deepseek-official", "deepseek-flash", "off", { enabled: true }),
   buddy("dsh", "deepseek-official", "deepseek-flash", "max"),
   buddy("codex", "openai", "gpt-6-sol", "medium", { enabled: true }),
-  buddy("codex", "openai", "gpt-6-sol", "low", { available: false, unavailableReason: "HARNESS_UNHEALTHY" }),
-  buddy("claude", "anthropic", "claude-sonnet-5", "medium", { available: false, unavailableReason: "provider paused" }),
-  buddy("zcode", "zhipu", "glm-5", "default", { available: false, unavailableReason: "not present in the latest complete native discovery" }),
+  buddy("codex", "openai", "gpt-6-sol", "low", { available: false, unavailableReason: { code: "harness.probe-failed", params: {} } }),
+  buddy("claude", "anthropic", "claude-sonnet-5", "medium", { available: false, unavailableReason: { code: "catalog.native-unavailable", params: {} } }),
+  buddy("zcode", "zhipu", "glm-5", "default", { available: false, unavailableReason: { code: "catalog.model-absent", params: {} } }),
 ];
 
 function world(canWrite = true) {

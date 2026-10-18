@@ -1,3 +1,4 @@
+import type { Reason } from "./reason";
 import type { Actor } from "./types";
 import type { RoutingMode } from "./types";
 
@@ -19,7 +20,7 @@ export type MacroTaskSummary = {
   macroTaskId: string;
   kind: "macro-task" | "standalone";
   /** MacroTask title, or the root's display title; `titleSource: "none"` means the 未命名微任务 fallback. */
-  title: string;
+  title: string | null;
   titleSource: "macro-task" | "title" | "task" | "none";
   /** Immutable creation-time description in the user's words; omitted historic descriptions stay null. */
   description: string | null;
@@ -63,7 +64,7 @@ type TimelineInquiry = {
 };
 export type TimelineRow = {
   runId: string; parentRunId: string | null; rootRunId: string;
-  title: string;
+  title: string | null;
   titleSource: "title" | "task" | "none";
   /** First nonempty task line (at most 200 characters); the 做什么/微任务摘要 source. */
   taskSummary: string | null;
@@ -81,7 +82,7 @@ export type TimelineRow = {
   kind: "micro-task" | "helper";
   /** The micro task this row repairs; absent when this is not a repair. */
   fixes?: string;
-  fixesTitle?: string;
+  fixesTitle?: string | null;
   fixesTitleSource?: "title" | "task" | "none";
   /** Micro tasks that directly repair this row; absent when there are none. */
   fixedBy?: string[];
@@ -89,6 +90,8 @@ export type TimelineRow = {
   rootLeadRunId: string | null;
   /** Recorded owner of a Lead's own micro task, if any. */
   leadOwnership?: { leadRunId: string; leadTurnId: string; createdAt: string } | null;
+  /** The row's own recorded delegation authority; a Lead is never inferred from its children. */
+  delegationAuthority: boolean;
   buddy: TimelineBuddy | null;
   acceptedAt: string | null;
   acceptanceVerdict: string | null;
@@ -116,7 +119,7 @@ export type TimelineSpan = {
   generation?: number; disposition?: string; error?: string;
   /** Own durable attempt receipt; a model turn disposition is not the execution result. */
   resultStatus?: "ok" | "failed" | "cancelled";
-  requestKind?: string; summary?: string; decisionTaskId?: string;
+  requestKind?: string; summary?: string | null; reason?: Reason | null; decisionTaskId?: string;
   /** Native usage of the span's own execution; a shape the console does not read is unknown. */
   tokenUsage?: unknown;
   /** Exact recorded decision; never infer it from the run's current route. */
@@ -125,7 +128,8 @@ export type TimelineSpan = {
   routing?: {
     routingMode?: RoutingMode | null;
     selectedBuddy?: TimelineBuddy | null;
-    reason?: string | null;
+    reason?: Reason | null;
+    note?: string | null;
     policyCheck?: {
       taskPreference?: { ruleIndex?: number | null; outcome?: string | null } | null;
       userPreference?: string | null;
@@ -140,7 +144,8 @@ export type TimelineEvent = {
   seq: number; runId: string;
   /** A current service event kind; kept open for newer kinds. */
   kind: string; at: string;
-  label: string; summary: string; actor: Actor | null;
+  decision: string | null; verdict: string | null; state: string | null; strategy: string | null; note: string | null;
+  actor: Actor | null;
   attemptId: string | null; requestId: string | null; artifactId: string | null;
   integrationId?: string | null; continuationId?: string | null; eventKind?: string;
   stopInitiator?: "host" | "lead" | "console" | "service" | "unknown" | null;

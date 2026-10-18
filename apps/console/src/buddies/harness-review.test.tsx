@@ -14,7 +14,7 @@ import { fieldValue, paneBlock } from "./harness.testing";
 
 afterEach(() => { cleanup(); sessionStorage.clear(); window.location.hash = ""; document.documentElement.dataset.theme = ""; });
 
-const eligibility = { eligible: true, systemSandbox: true, sameAttemptContinuation: true, reasonCode: null, reason: null };
+const eligibility = { eligible: true, systemSandbox: true, sameAttemptContinuation: true, reason: null };
 const note = "本地资格检查不调用模型，不代表原生调用已验证。";
 const sandbox = "具有原生系统沙盒；实际策略由每次运行核对。";
 const noSandbox = "无系统沙盒，不能保证阻止副本外读取或外传；黑板的事后判定只覆盖上报的工具事件。";
@@ -72,9 +72,9 @@ describe("local review eligibility", () => {
 
   it("shows the recorded local failure reason with no paid remedy", async () => {
     await openHarness(fixture({ harnesses: [codex({ readOnlyStructured: { ...eligibility, eligible: false,
-      reasonCode: "readonly-resource-missing", reason: "The native read-only controller is missing" } })] }));
+      reason: { code: "harness.readonly-not-implemented", params: {} } } })] }));
     expect(word().textContent).toBe("不可用");
-    expect(word().getAttribute("aria-description")).toContain("The native read-only controller is missing");
+    expect(word().getAttribute("aria-description")).toContain("该 harness 尚未实现只读结构化调用。");
     expect(word().getAttribute("aria-description")).toContain(note);
     expectNoVerificationControls();
   });

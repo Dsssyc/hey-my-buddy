@@ -11,10 +11,12 @@ export type TimelineMarker = { kind: "event"; event: TimelineEvent; x: number } 
 export const markerKey = (marker: TimelineMarker) => marker.kind === "event" ? `event:${marker.event.seq}` : `inquiry:${marker.inquiry.inquiryId}`;
 export const markerAt = (marker: TimelineMarker) => marker.kind === "event" ? marker.event.at : marker.inquiry.createdAt;
 
-export function MarkerCluster({ markers, x, y, runId, taskTitle, tabKey, boundary, onOpen, onFocusMarker, markerName, markerReadout }: {
-  markers: TimelineMarker[]; x: number; y: number; runId: string; taskTitle: string; tabKey?: string; boundary?: HTMLElement | null;
+export function MarkerCluster({ markers, x, y, runId, taskTitle, tabKey, boundary, onOpen, onFocusMarker, markerName, markerReadout, selectedKey }: {
+  markers: TimelineMarker[]; x: number; y: number; runId: string; taskTitle: string; tabKey?: string | null; boundary?: HTMLElement | null;
   onOpen: (runId: string, key: string) => void; onFocusMarker: (marker: TimelineMarker | null) => void;
   markerName: (marker: TimelineMarker) => string; markerReadout: (marker: TimelineMarker) => string;
+  /** The detail strip's selected step: the cluster is pressed when it holds that marker; null is a selection whose slice is elsewhere. */
+  selectedKey?: string | null;
 }) {
   const { t } = useTranslation("tasks");
   const [open, setOpen] = useState(false);
@@ -28,10 +30,11 @@ export function MarkerCluster({ markers, x, y, runId, taskTitle, tabKey, boundar
     onOpen(runId, markerKey(marker));
   };
   return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger asChild><g ref={trigger} role="button" tabIndex={tabKey === key ? 0 : -1} data-slot="event-cluster" data-at={Date.parse(markerAt(first))} data-key={key}
+    <PopoverTrigger asChild><g ref={trigger} role="button" tabIndex={tabKey === key ? 0 : -1} data-slot="event-cluster" data-at={Date.parse(markerAt(first))} data-key={key} aria-pressed={selectedKey !== undefined ? markers.some(marker => markerKey(marker) === selectedKey) : undefined}
       aria-label={`${label} · ${taskTitle}`} onPointerEnter={() => onFocusMarker(first)} onPointerLeave={() => onFocusMarker(null)} onFocus={() => onFocusMarker(first)} onBlur={() => onFocusMarker(null)}
       onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); setOpen(true); } }}
       className="group/fragment cursor-pointer outline-none">
+      {selectedKey !== undefined && markers.some(marker => markerKey(marker) === selectedKey) && <circle data-slot="selected-span" cx={x} cy={y} r={11} fill="none" className="stroke-live"/>}
       <circle cx={x} cy={y} r={9} className="fill-card stroke-past" strokeWidth={1.5}/>
       <text x={x} y={y + 3.5} textAnchor="middle" aria-hidden="true" className="pointer-events-none fill-past text-xs font-semibold">{markers.length}</text>
       <rect aria-hidden="true" data-slot="fragment-focus" x={x - 11} y={y - 11} width={22} height={22} fill="none" strokeWidth={2} className="pointer-events-none stroke-ink opacity-0 group-focus/fragment:opacity-100"/>

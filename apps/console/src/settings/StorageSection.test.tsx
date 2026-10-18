@@ -17,11 +17,11 @@ function plan(overrides: Partial<StoragePlan> = {}): StoragePlan {
     createdAt: "2026-09-27T12:00:00Z",
     expiresAt: new Date(Date.now() + 14 * 60_000).toISOString(),
     categories: [
-      { id: "zcode", label: "", bytes: 3_500_000_000, reclaimableBytes: 2_900_000_000, count: 71, eligibleCount: 60, reasons: ["continuation-supported", "grace-period"] },
-      { id: "workspaces", label: "", bytes: 3_400_000_000, reclaimableBytes: 1_200_000_000, count: 9, eligibleCount: 4, reasons: [] },
-      { id: "runtimes", label: "", bytes: 2_100_000_000, reclaimableBytes: 2_100_000_000, count: 30, eligibleCount: 30, reasons: [] },
-      { id: "backup", label: "", bytes: 200_000_000, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["durable-record"] },
-      { id: "durable", label: "", bytes: 213_000_000, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["durable-record"] },
+      { id: "zcode", bytes: 3_500_000_000, reclaimableBytes: 2_900_000_000, count: 71, eligibleCount: 60, reasons: ["continuation-supported", "grace-period"] },
+      { id: "workspaces", bytes: 3_400_000_000, reclaimableBytes: 1_200_000_000, count: 9, eligibleCount: 4, reasons: [] },
+      { id: "runtimes", bytes: 2_100_000_000, reclaimableBytes: 2_100_000_000, count: 30, eligibleCount: 30, reasons: [] },
+      { id: "backup", bytes: 200_000_000, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["durable-record"] },
+      { id: "durable", bytes: 213_000_000, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["durable-record"] },
     ],
     candidates: [
       { id: "c1", category: "zcode", path: "/private/zcode/one", bytes: 1_000_000_000, eligible: true, reasons: [] },
@@ -112,7 +112,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
 
   it("keeps unknown category and reason codes visible instead of dropping them", async () => {
     const custom = plan({ categories: [...plan().categories,
-      { id: "future-thing", label: "", bytes: 5, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["never-seen-code"] }] });
+      { id: "future-thing", bytes: 5, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["never-seen-code"] }] });
     const f = fixture({ planValue: custom });
     const user = userEvent.setup();
     render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);

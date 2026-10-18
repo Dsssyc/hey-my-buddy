@@ -12,7 +12,7 @@ export default {
   },
   reminders: {
     title: "Reminders", possiblyStuck: "Possibly stuck", minutesWithoutProgress: "minutes without progress", silenceMinutes: "Silence reminder threshold (minutes)",
-    description: "An execution without progress for this long is marked as possibly stuck in the timeline and micro task.", range: "Enter a whole number of minutes from 1 to 1440.", currentDuration: "The saved value is {{duration}}. Enter whole minutes to change it.",
+    description: "An execution without progress for this long is marked as possibly stuck.", range: "Enter a whole number of minutes from 1 to 1440.", currentDuration: "The saved value is {{duration}}. Enter whole minutes to change it.",
     save: "Save", saving: "Saving", saved: "Reminder settings saved.", unavailable: "Reminder settings are unavailable. Refresh the console.", disconnected: "The connection is interrupted or this browser cannot make changes.", unchanged: "No changes to save.", busy: "Saving reminder settings.", unsaved: "Unsaved",
   },
   version: {

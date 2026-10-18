@@ -11,26 +11,35 @@ import type { Replies } from "./task-detail.fixtures";
 
 export type Options = { replies?: Replies; timeline?: MacroTaskTimeline | null; timelineLoading?: boolean; step?: number | null; origin?: string | null; active?: boolean; client?: TaskDetailClient };
 
+/** Lets a test move the address's step the way the page would. */
+export type StepHandle = { set: (step: number | null) => void };
+
 /** The page owns the step and the detail asks it to change: this holds the step as the address would. */
-function Harness({ options, onStep, onBack, onOpenRun }: { options: Options; onStep: (step: number) => void; onBack: () => void; onOpenRun: (runId: string) => void }) {
+function Harness({ options, steps, onStep, onBack, onOpenRun }: { options: Options; steps: StepHandle; onStep: (step: number) => void; onBack: () => void; onOpenRun: (runId: string) => void }) {
   const [step, setStep] = useState<number | null>(options.step ?? null);
-  const [railTarget, setRailTarget] = useState<HTMLElement | null>(null);
+  steps.set = setStep;
   const reads = options.client ?? client(options.replies);
-  return <TooltipProvider><div data-testid="rail-target" ref={setRailTarget} /><TaskDetail client={reads} runId="m1" timeline={options.timeline === undefined ? timeline() : options.timeline}
-    railTarget={railTarget}
+  return <TooltipProvider><TaskDetail client={reads} runId="m1" timeline={options.timeline === undefined ? timeline() : options.timeline}
     timelineLoading={options.timelineLoading ?? false} nowMs={Date.parse(at("11:30"))} step={step} origin={options.origin ?? null} active={options.active ?? true}
     onStep={next => { onStep(next); setStep(next); }} onBack={onBack} onOpenRun={onOpenRun} /></TooltipProvider>;
 }
 
 export function open(options: Options = {}) {
   const calls = { onStep: vi.fn(), onBack: vi.fn(), onOpenRun: vi.fn() };
+  const steps: StepHandle = { set: () => {} };
   const reads = options.client ?? client(options.replies);
-  const view = render(<Harness options={{ ...options, client: reads }} {...calls} />);
-  return { ...calls, reads: reads as ReturnType<typeof client>, view, user: userEvent.setup() };
+  const view = render(<Harness options={{ ...options, client: reads }} steps={steps} {...calls} />);
+  return { ...calls, reads: reads as ReturnType<typeof client>, view, user: userEvent.setup(),
+    atStep: (next: number) => { act(() => steps.set(next)); },
+    /** A later read or address change, as the page would deliver it. */
+    reread: (next: Options) => { view.rerender(<Harness options={{ ...next, client: reads }} steps={steps} {...calls} />); } };
 }
 
-export const rail = () => screen.getByRole("navigation", { name: "步骤" });
-export const selected = () => within(rail()).getByRole("button", { current: "step" });
+/** The steps strip along the top of the detail: the micro task's own row of the macro task. */
+export const strip = () => screen.getByRole("group", { name: "这个微任务的各步" });
+export const stripSlice = (key: string) => strip().querySelector(`[data-key="${key}"]`) as SVGElement | null;
+/** What the chosen step calls itself in the pane below the strip. */
+export const chosenStep = () => (pane().querySelector("h3") ?? pane()).textContent!;
 export const pane = () => document.querySelector("[data-slot=detail-pane]") as HTMLElement;
 /** The pane can arrive before the mock's subsequent workflow and audit reads. Flush their effects before assertions. */
 export async function ready() {
@@ -38,5 +47,4 @@ export async function ready() {
   await act(async () => {});
   return pane();
 }
-export const step = (name: string | RegExp) => within(rail()).getByRole("button", { name });
-
+export const step = (name: string | RegExp) => within(pane()).getByRole("heading", { name });

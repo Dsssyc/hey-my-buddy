@@ -28,7 +28,7 @@ export const PENDING = "claude / anthropic / claude-haiku-4 / low";
 
 function buddy(buddyId: string, capabilities: string[], extra: Partial<Buddy> = {}): Buddy {
   const [harness, provider, model, effort] = buddyId.split(":");
-  return { buddyId, label: `${model} · ${effort}`, harness, provider, model, effort, available: true, enabled: true,
+  return { effortRank: null, buddyId, label: `${model} · ${effort}`, harness, provider, model, effort, available: true, enabled: true,
     capabilities, contextWindow: null, description: "", source: "catalog:fixture", ...extra };
 }
 
@@ -44,7 +44,7 @@ export function buddies(): Buddy[] {
     buddy(HIGH_ID, routes, { enabled: false }),
     buddy(FLASH_ID, ["execution:dsh", "routing:fast"]),
     buddy(SOL_ID, ["execution:codex"]),
-    buddy(GLM_ID, ["execution:zcode", "decision"], { available: false, unavailableReason: "本机未检测到 zcode CLI" }),
+    buddy(GLM_ID, ["execution:zcode", "decision"], { available: false, unavailableReason: { code: "harness.not-found", params: {} } }),
     buddy(PENDING_ID, routes, { catalogStatus: "pending", pendingSince: "2026-09-29T08:00:00.000Z" }),
   ];
 }

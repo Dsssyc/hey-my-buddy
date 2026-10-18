@@ -1,3 +1,4 @@
+import type { Reason } from "../reason";
 import type { MacroTaskTimeline, TimelineRow } from "../macro-task-types";
 import type { Actor, ActivityPhase, RoutingMode, Task, TokenUsage } from "../types";
 
@@ -36,7 +37,8 @@ export type CompactRequest = {
 };
 
 export type OpenRequest = CompactRequest & {
-  summary: string;
+  summary: string | null;
+  reason: Reason | null;
   attempted: string | null;
   neededWork: string[];
   expectedArtifacts: string[];
@@ -78,7 +80,7 @@ export type Integration = {
   afterCommit: string | null;
   verificationSummary: string | null;
   hostPaths: string[];
-  reason: string | null;
+  note: string | null;
   actor: Actor | null;
   createdAt: string;
 };
@@ -86,7 +88,8 @@ export type Integration = {
 export type HostConclusion = {
   conclusionId: string;
   executionStatus: string;
-  note: string;
+  note: string | null;
+  reason: Reason | null;
   evidence: string[];
   artifactId: string | null;
   integrationId: string | null;
@@ -132,12 +135,12 @@ export type Workflow = {
 /** One full request of the audit, with the decision made on it. */
 export type AuditRequest = OpenRequest & {
   turnId: string | null;
-  decision: { decision: string | null; reason: string | null; actor: Actor | null } | null;
+  decision: { decision: string | null; note: string | null; actor: Actor | null } | null;
   /** The routing decision a routing boundary stopped at. */
   decisionId: string | null;
 };
 
-export type Continuation = { continuationId: string; turnId: string | null; input: string; createdAt: string; kind: string; reason: string | null };
+export type Continuation = { continuationId: string; turnId: string | null; input: string; createdAt: string; kind: string; note: string | null };
 
 /** What only the audit read carries (`workflow_get {runId, includeAudit: true}`). */
 export type Audit = {
@@ -156,7 +159,8 @@ export type RoutingEntry = {
   selectedBuddy: Buddy | null;
   routerBuddy: Buddy | null;
   routingMode: RoutingMode | null;
-  reason: string | null;
+  reason: Reason | null;
+  note: string | null;
 };
 
 /** What was frozen when a routing decision was asked for: the bounds the program chose within. */
@@ -180,7 +184,8 @@ export type Inquiry = {
   author: string;
   createdAt: string;
   state: InquiryState;
-  reason: string | null;
+  reason: Reason | null;
+  note: string | null;
   deliveredAt: string | null;
   answer: { text: string; at: string | null; truncated: boolean } | null;
 };
@@ -212,7 +217,7 @@ export type Ending = {
   /** Who stopped it, when it was stopped. */
   stoppedBy: "host" | "lead" | "console" | "service" | "unknown" | null;
   actor: Actor | null;
-  reason: string | null;
+  note: string | null;
   quota: "quota-exceeded" | "rate-limited" | null;
 };
 
@@ -234,6 +239,7 @@ export type Attempt = {
   startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
+  releaseReason: Reason | null;
   overdue: boolean;
   possiblyStuck: boolean;
   activity: Activity | null;

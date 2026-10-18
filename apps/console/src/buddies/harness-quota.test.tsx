@@ -38,10 +38,10 @@ function observed(): HarnessHealth[] {
         { name: "5h", usedPercent: 93, resetsAt: "2026-09-29T13:00:00.000Z" },
         { name: "weekly", usedPercent: 41, resetsAt: null },
       ] } }),
-    harness({ harness: "zcode", status: "missing", revision: 1, checkedAt: CHECKED_AT, reasonCode: "HARNESS_NOT_FOUND", remedy: "安装 ZCode CLI。",
+    harness({ harness: "zcode", status: "missing", revision: 1, checkedAt: CHECKED_AT, reason: { code: "harness.not-found", params: { operation: "probe" } },
       quota: { observedAt: "2026-09-20T09:00:00.000Z", source: "zcode-native", stale: true, windows: [{ name: "5h", usedPercent: null, resetsAt: null }] } }),
     harness({ harness: "codex", status: "ready", revision: 2, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: CHECKED_AT, quota: null }),
-    harness({ harness: "claude", status: "unhealthy", revision: 5, reasonCode: "HARNESS_HANDSHAKE_FAILED", remedy: "检查该 CLI 能否独立运行。", checkedAt: CHECKED_AT }),
+    harness({ harness: "claude", status: "unhealthy", revision: 5, reason: { code: "harness.probe-failed", params: { operation: "probe" } }, checkedAt: CHECKED_AT }),
   ];
 }
 

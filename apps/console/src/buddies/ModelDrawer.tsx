@@ -16,6 +16,7 @@ import { modelServiceNoteText, setConcurrencyLimit, setModelServiceNote, setPref
 import { formatDateTime } from "../i18n/format";
 import type { ConsoleView, PreferenceMode, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
+import { ConcurrencyNotice } from "./ConcurrencyNotice";
 import { modelIdentity, reasonTexts } from "./models";
 import type { BuddyChip, ModelRow } from "./models";
 
@@ -46,7 +47,7 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
   const enableUnsaved = recorded.buddies.find(entry => entry.buddyId === buddy.buddyId)?.enabled !== buddy.enabled;
   const preferenceUnsaved = preference?.mode !== published?.mode;
   const reasonUnsaved = (preference?.reason ?? "") !== (published?.reason ?? "");
-  const unavailableReason = reasonTexts(buddy.unavailableReason?.trim() ? [buddy.unavailableReason.trim()] : [], t).join(" · ");
+  const unavailableReason = reasonTexts(buddy.unavailableReason ? [buddy.unavailableReason] : [], t).join(" · ");
   const name = (text: string, unsaved: boolean, target: { id: string } | { htmlFor: string }) =>
     <span className="flex shrink-0 items-center gap-1.5 text-xs whitespace-nowrap text-ink3">
       <label {...target}>{text}</label>{unsaved && <UnsavedMark label={t("unsaved")} />}
@@ -139,13 +140,13 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
             {row.pending && row.pendingSince && <time dateTime={row.pendingSince}>{formatDateTime(Date.parse(row.pendingSince))}</time>}
           </span></Hint>
         </div>
-        <div className="grid flex-1 grid-cols-[max-content_minmax(0,1fr)] grid-rows-[auto_minmax(64px,1fr)] items-center gap-x-3 gap-y-2.5">
+        <div className="grid flex-1 grid-cols-[max-content_minmax(0,1fr)] grid-rows-[auto_auto_minmax(64px,1fr)] items-center gap-x-3 gap-y-2.5">
           {name(t("pane.concurrency"), !Object.is(row.limit, publishedLimit), { htmlFor: `${id}-limit` })}
           <div className="flex min-w-0 flex-wrap items-center gap-2.5">
             <Hint text={editingLock}><Input id={`${id}-limit`} type="number" inputMode="numeric" className="h-8 w-16 bg-card px-2.5 text-sm tabular-nums shadow-none"
               min={MODEL_SERVICE_CONCURRENCY_MIN} max={MODEL_SERVICE_CONCURRENCY_MAX} step={1} value={Number.isNaN(row.limit) ? "" : row.limit}
               readOnly={!editing} aria-disabled={!editing || undefined} aria-label={t("pane.concurrencyLimit")}
-              aria-invalid={limitInvalid || undefined} aria-describedby={`${id}-occupancy`} onChange={event => {
+              aria-invalid={limitInvalid || undefined} aria-describedby={`${id}-occupancy ${id}-concurrency-notice`} onChange={event => {
                 if (!editing) return;
                 // Keep the typed draft value, including an empty or invalid limit.
                 const value = event.target.value === "" ? NaN : Number(event.target.value);
@@ -156,6 +157,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
               {limitInvalid && <span className="ml-2 text-fail">{t("pane.range", { min: MODEL_SERVICE_CONCURRENCY_MIN, max: MODEL_SERVICE_CONCURRENCY_MAX })}</span>}
             </span>
           </div>
+          <ConcurrencyNotice id={`${id}-concurrency-notice`} />
           <div className="self-start pt-1.5">{name(t("pane.note"), note !== modelServiceNoteText(recorded, member), { htmlFor: `${id}-note` })}</div>
           <Hint text={editingLock}><textarea id={`${id}-note`} rows={3} maxLength={4000} value={note}
             readOnly={!editing} aria-disabled={!editing || undefined} className={cn(field, "h-full min-h-16 w-full resize-y self-stretch py-1.5")}

@@ -69,7 +69,7 @@ export function modelServices(buddies: Buddy[]): ModelServiceGroup[] {
   }
   // Display order only: each harness's current catalog carries its own order.
   for (const group of groups.values()) group.buddies.sort((a, b) => {
-    const rank = (value: number | null | undefined) => value ?? Number.MAX_SAFE_INTEGER;
+    const rank = (value: number | null) => value ?? Number.MAX_SAFE_INTEGER;
     return rank(a.effortRank) - rank(b.effortRank) || a.effort.localeCompare(b.effort);
   });
   return [...groups.values()].sort((a, b) => a.harness.localeCompare(b.harness)

@@ -2,6 +2,7 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import enBuddies from "./en/buddies";
 import enCommon from "./en/common";
+import enReasons from "./en/reasons";
 import enConsole from "./en/console";
 import enMacroHeader from "./en/macroHeader";
 import enShell from "./en/shell";
@@ -11,6 +12,7 @@ import enTaskDetail from "./en/taskDetail";
 import { tasks as enTasks } from "./en/tasks";
 import zhBuddies from "./zh/buddies";
 import zhCommon from "./zh/common";
+import zhReasons from "./zh/reasons";
 import zhConsole from "./zh/console";
 import zhMacroHeader from "./zh/macroHeader";
 import zhShell from "./zh/shell";
@@ -21,9 +23,9 @@ import { tasks as zhTasks } from "./zh/tasks";
 
 /** One namespace per page, so that pages can be written independently. */
 const resources = {
-  zh: { shell: zhShell, buddies: zhBuddies, taskDetail: zhTaskDetail, tasks: zhTasks,
+  zh: { reasons: zhReasons, shell: zhShell, buddies: zhBuddies, taskDetail: zhTaskDetail, tasks: zhTasks,
     macroHeader: zhMacroHeader, common: zhCommon, console: zhConsole, settingsStorage: zhSettingsStorage, settings: zhSettings },
-  en: { shell: enShell, buddies: enBuddies, taskDetail: enTaskDetail, tasks: enTasks,
+  en: { reasons: enReasons, shell: enShell, buddies: enBuddies, taskDetail: enTaskDetail, tasks: enTasks,
     macroHeader: enMacroHeader, common: enCommon, console: enConsole, settingsStorage: enSettingsStorage, settings: enSettings },
 };
 type Language = keyof typeof resources;

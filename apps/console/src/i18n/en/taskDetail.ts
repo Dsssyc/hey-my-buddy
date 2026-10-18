@@ -13,8 +13,8 @@ export default {
   refresh: { label: "Read again", verified: "Verified {{time}}", unverified: "Verification time not recorded" },
   header: { started: "Started", elapsed: "Elapsed", turns: "Turns" },
   state: { stopping: "Stopping", running: "Running", unknown: "Stop not confirmed", queued: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
-  wait: { queue: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", acceptance: "Awaiting acceptance" },
-  rail: { label: "Steps", truncated: "The timeline read is incomplete and has no row for this micro task; only the delegation is listed." },
+  wait: { host: "Waiting for Host", lead: "Waiting for Lead", acceptance: "Awaiting acceptance" },
+  strip: { label: "The steps of this micro task", truncated: "The read is incomplete and has no row for this micro task; only the delegation is listed." },
   step: {
     delegation: "Delegate", routing: "Route", turn: "Turn {{n}}", handoff: "Handoff", decision: "Decision", continue: "Continue",
     takeover: "Takeover", acceptance: "Acceptance",
@@ -92,7 +92,7 @@ export default {
     decided: "Decision", what: "Decision", who: "By", when: "Time", reason: "Reason",
     state: { approved: "Approved", declined: "Declined", superseded: "Superseded", cancelled: "Cancelled" },
   },
-  event: { facts: "Record", from: "Earlier buddy", to: "New buddy", stoppedBy: "Stopped by", reason: "Stop reason", summary: "Summary" },
+  event: { value: {"approve": "Approved", "decline": "Declined", "approved": "Approved", "declined": "Declined", "accepted": "Accepted", "rejected": "Rejected", "concluded": "Concluded", "completed": "Completed", "failed": "Failed", "cancelled": "Cancelled", "queued": "Queued", "running": "Running", "executing": "Executing", "delivered": "Awaiting acceptance", "awaiting-host": "Awaiting Host", "superseded": "Superseded", "merge": "Merge", "cherry-pick": "Cherry-pick", "patch": "Apply patch", "not-required": "Not required", "verified": "Verified"}, facts: "Record", from: "Earlier buddy", to: "New buddy", stoppedBy: "Stopped by", details: "Details" },
   acceptance: {
     artifact: "Artifact", files: "Files", integration: "Integration", state: "State", verified: "Verified", notRequired: "Not required", why: "Reason",
     strategy: "Method", target: "Target", commits: "Commits", recordedBy: "Recorded by", noIntegration: "No integration evidence is recorded; the Host has to integrate and accept.",

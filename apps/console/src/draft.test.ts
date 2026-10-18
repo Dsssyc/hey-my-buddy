@@ -20,7 +20,7 @@ import { blockingIssues } from "./policy";
 import type { HistoryEntries } from "./draft";
 import type { Draft, ModelServiceNote, Buddy, Snapshot } from "./types";
 
-const flash = {
+const flash = { effortRank: null,
   buddyId: "flash-off",
   label: "Flash",
   harness: "dsh",
@@ -41,7 +41,7 @@ const retired = {
   buddyId: "retired",
   model: "retired-model",
   available: false,
-  unavailableReason: "provider paused",
+  unavailableReason: { code: "catalog.native-unavailable", params: {} },
 } satisfies Buddy;
 const retiredModelService = { harness: "dsh", provider: "deepseek-official", model: "retired-model" };
 const note = (modelService: typeof flashModelService, text: string): ModelServiceNote =>

@@ -71,12 +71,10 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await expect.poll(async () => Number(await canvas(page).getAttribute("data-ppm"))).toBeCloseTo(initial, 5);
       const selected = page.locator('[data-slot="timeline-row-name"][data-run-id="preview-run-a2"]:visible');
       await selected.click();
-      await expect(selected).toHaveAttribute("aria-expanded", "false");
-      await selected.dblclick();
-      await expect(selected).toHaveAttribute("aria-expanded", "true");
-      await expect(page.locator('[data-slot=detail-rail]')).toBeVisible();
+      await expect(page.locator('[data-slot=detail-strip]')).toBeVisible();
+      await expect(page.locator('[data-slot=timeline-tracks]')).toHaveCount(0);
       await page.keyboard.press("Escape");
-      await expect(selected).toHaveAttribute("aria-expanded", "false");
+      await expect(page.locator('[data-slot=timeline-tracks]')).toBeVisible();
       const keys = await page.locator('[data-slot="timeline-row"][data-run-id="preview-run-a2"] [data-slot="timeline-track"] [data-key]').evaluateAll(elements => elements.sort((a, b) => Number(a.getAttribute("data-at")) - Number(b.getAttribute("data-at"))).map(element => element.getAttribute("data-key")!));
       const anchored = page.locator(`[data-slot="timeline-track"] [data-key="${keys[0]}"]`);
       const beforeAnchor = await anchored.boundingBox();
@@ -117,7 +115,8 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await expect(choices.nth(1)).toBeFocused();
       await page.keyboard.press("Enter");
       await expect(page).toHaveURL(new RegExp(`#tasks/${macro}/preview-run-a2/5$`));
-      await expect(page.locator('[data-slot="detail-rail"] [aria-current="step"]')).toContainText(locale === "zh-CN" ? "继续" : "Continue");
+      await expect(page.locator('[data-slot="detail-strip"] [data-slot="event-cluster"][aria-pressed="true"]')).toHaveCount(1);
+      await expect(page.locator('[data-slot="detail-pane"]').getByRole("heading", { name: locale === "zh-CN" ? "继续" : "Continue", exact: true })).toBeVisible();
       await expectNoSidewaysScroll(page);
     });
 

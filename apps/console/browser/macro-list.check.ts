@@ -164,7 +164,7 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await expect(page).toHaveURL(new RegExp(`#tasks/${B}$`));
       const list = page.locator("[data-slot=macro-list]");
       await expect(list).toBeVisible();
-      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(2);
+      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(3);
       await expect(list.locator("[data-slot=macro-group-heading]")).toHaveCount(3);
       await expect(list.locator("[data-slot=macro-group-heading]").last()).toHaveAttribute("aria-expanded", "false");
       await assertListGeometry(page, width);
@@ -190,10 +190,10 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await expect(list.getByText(w.noMatch)).toBeVisible();
       await photograph(page, "unmatched", w.locale, width, theme);
       await list.getByRole("textbox", { name: w.search }).fill("");
-      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(2);
+      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(3);
 
       await list.locator("[data-slot=macro-group-heading]").last().click();
-      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(3);
+      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(4);
       await list.locator("[data-slot=macro-group-heading]").last().click();
       await list.locator(`[data-macro-task-id="${A}"] [data-slot=macro-entry]`).click();
       await expect(page).toHaveURL(new RegExp(`#tasks/${A}$`));
@@ -241,11 +241,11 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await photograph(page, "empty", w.locale, width, theme);
       await page.unrouteAll();
       await page.reload();
-      await expect(page.locator("[data-slot=macro-entry]")).toHaveCount(2);
+      await expect(page.locator("[data-slot=macro-entry]")).toHaveCount(3);
       await page.route(/\/api\/macro-tasks(?:\?|$)/, route => route.fulfill({ json: { malformed: true } }));
       await expect(page.getByRole("alert").filter({ hasText: w.offline })).toBeVisible({ timeout: 7000 });
       await expect(page.locator("[data-slot=macro-offline]")).toBeVisible();
-      await expect(page.locator("[data-slot=macro-entry]")).toHaveCount(2);
+      await expect(page.locator("[data-slot=macro-entry]")).toHaveCount(3);
       await expect(page.getByRole("button", { name: w.retry })).toBeVisible();
       await photograph(page, "offline", w.locale, width, theme);
     });

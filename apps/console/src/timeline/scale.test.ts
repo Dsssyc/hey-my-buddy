@@ -15,7 +15,7 @@ const span = (overrides: Partial<TimelineSpan> = {}): TimelineSpan => ({
   shutdownConfirmed: true, uncertain: false, clockSkew: false, ...overrides,
 });
 const event = (minutes: number): TimelineEvent => ({
-  seq: 1, runId: "run", kind: "accept", at: at(minutes), label: "", summary: "",
+  seq: 1, runId: "run", kind: "accept", at: at(minutes), decision: null, verdict: null, state: null, strategy: null, note: null,
   actor: null, attemptId: null, requestId: null, artifactId: null,
 });
 const timeline = (overrides: Partial<MacroTaskTimeline> = {}): MacroTaskTimeline => ({

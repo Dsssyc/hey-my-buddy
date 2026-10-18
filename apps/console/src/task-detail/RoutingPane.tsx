@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { reasonText } from "../i18n/reason";
 import { formatDuration } from "../i18n/format";
 import { BasisFold } from "./facts";
 import { Band, Facts, Fold, Moment, Pane, PaneTitle } from "./parts";
@@ -48,7 +49,7 @@ export function RoutingPane({ step, ctx }: { step: Step; ctx: Context }) {
         <div className="min-w-0 flex-1">
           <p className="text-xs text-ink3">{t("routing.chosen")}</p>
           <p className="font-mono text-xs wrap-anywhere">{quad(span.routing?.selectedBuddy) ?? unrecorded}</p>
-          <div className="mt-1"><Fold text={span.routing?.reason ?? unrecorded} className="text-foreground" limit={240} /></div>
+          <div className="mt-1"><Fold text={[span.routing?.reason ? reasonText(span.routing.reason) : null, span.routing?.note].filter(Boolean).join("\n") || unrecorded} className="text-foreground" limit={240} /></div>
           {entry?.source && entry.source !== "model-selection" && <div className="mt-2"><Facts items={[[t("routing.source"), t(`routing.sources.${entry.source}`, { defaultValue: entry.source })]]} /></div>}
           {basis && <BasisFold basis={basis} />}
         </div>

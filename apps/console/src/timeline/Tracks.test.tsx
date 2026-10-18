@@ -1,6 +1,7 @@
 import { cleanup, render, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buddyColorKey } from "../macro-task-display";
 import { macroTaskTimelineFixture } from "../macro-task-fixtures";
 import type { TimelineEvent, TimelineSpan } from "../macro-task-types";
 import { createTimelineScale } from "./scale";
@@ -12,8 +13,8 @@ const at = (minutes: number) => new Date(Date.UTC(2026, 9, 17, 8, minutes)).toIS
 const scale = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, 800);
 const base = macroTaskTimelineFixture();
 const execution = (extra: Partial<TimelineSpan> = {}): TimelineSpan => ({ ...base.spans.find(span => span.kind === "execution")!, spanId: "e", startAt: at(5), endAt: at(15), resultStatus: "ok", state: "finished", uncertain: false, shutdownConfirmed: true, expectedSeconds: 600, reminders: null, inquiries: [], ...extra });
-function track(spans: TimelineSpan[], extra: { state?: string; events?: TimelineEvent[]; width?: number; tabKey?: string; onOpen?: (runId: string, key: string) => void; onSelect?: (runId: string, key?: string) => void } = {}) {
-  return render(<Track row={{ ...base.rows[0]!, state: extra.state ?? "accepted", acceptedAt: null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} ongoing buddies={[]} onOpen={extra.onOpen ?? vi.fn()} onSelect={extra.onSelect ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onMarker={vi.fn()} modelColors={new Map([[execution().buddy?.model ?? "", "var(--model-1)"]])} selected={false} tabKey={extra.tabKey}/>);
+function track(spans: TimelineSpan[], extra: { state?: string; events?: TimelineEvent[]; width?: number; tabKey?: string; buddyColors?: ReadonlyMap<string, string>; onOpen?: (runId: string, key: string) => void; onSelect?: (runId: string, key?: string) => void } = {}) {
+  return render(<Track row={{ ...base.rows[0]!, state: extra.state ?? "accepted", acceptedAt: null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} ongoing buddies={[]} onOpen={extra.onOpen ?? vi.fn()} onSelect={extra.onSelect ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onMarker={vi.fn()} buddyColors={extra.buddyColors ?? new Map([[buddyColorKey(execution().buddy), "var(--model-1)"]])} selected={false} tabKey={extra.tabKey}/>);
 }
 const slot = (name: string) => document.querySelector(`[data-slot=${name}]`);
 
@@ -32,6 +33,17 @@ describe("measured timeline labels", () => {
 });
 
 describe("timeline drawings follow recorded facts", () => {
+  it("looks up settled bar colours by all four parts of each historical buddy", () => {
+    const buddy = execution().buddy!;
+    const identities = [buddy, { ...buddy, harness: "other-harness" }, { ...buddy, provider: "other-provider" },
+      { ...buddy, model: "other-model" }, { ...buddy, effort: "other-effort" }];
+    const buddyColors = new Map(identities.map((identity, index) => [buddyColorKey(identity), "var(--model-" + (index + 1) + ")"]));
+    expect(buddyColorKey(null)).toBe("[null,null,null,null]");
+    expect(buddyColors.size).toBe(5);
+    track(identities.map((identity, index) => execution({ spanId: "historical-" + index, buddy: identity })), { buddyColors });
+    expect([...document.querySelectorAll<SVGElement>('[data-slot=execution-bar]')].map(bar => bar.style.fill)).toEqual([...buddyColors.values()]);
+  });
+
   it("uses pale settled execution, solid live/failure and a distinct unconfirmed end", () => {
     track([execution()]);
     expect((slot("execution-bar") as SVGElement).style.fill).toBe("var(--model-1)");
@@ -88,7 +100,7 @@ describe("timeline drawings follow recorded facts", () => {
     expect(document.querySelector('[data-slot=track-label]')?.textContent).toContain("排队");
   });
   it("draws hollow inquiries, acceptance checks and dots for separate Host events, excluding dispatch and integration", () => {
-    const events = ["dispatch", "accept", "decide", "continue", "integrate", "reject", "conclude", "cancel", "takeover"].map((kind, seq) => ({ ...base.events[0]!, seq, kind, at: at(16 + seq * 2), summary: "Explanation" }));
+    const events = ["dispatch", "accept", "decide", "continue", "integrate", "reject", "conclude", "cancel", "takeover"].map((kind, seq) => ({ ...base.events[0]!, seq, kind, at: at(16 + seq * 2), note: "Explanation" }));
     track([execution({ inquiries: [{ inquiryId: "q", createdAt: at(10), author: "host-1", state: "answered" }] })], { events });
     expect(slot("inquiry-mark")?.getAttribute("class")).toContain("fill-card");
     expect(document.querySelectorAll('[data-slot=accept-mark]')).toHaveLength(1);
@@ -96,7 +108,7 @@ describe("timeline drawings follow recorded facts", () => {
     expect(spanReadout(execution({ inquiries: [{ inquiryId: "q", createdAt: at(10), author: "host-1", state: "answered" }] }), Date.parse(at(40)))).toContain("已答复");
   });
   it("merges coincident events into one selectable mark and omits integration", async () => {
-    const events = ["reject", "continue", "integrate", "accept"].map((kind, seq) => ({ ...base.events[0]!, seq, kind, at: at(20), summary: "Explanation" }));
+    const events = ["reject", "continue", "integrate", "accept"].map((kind, seq) => ({ ...base.events[0]!, seq, kind, at: at(20), note: "Explanation" }));
     const onOpen = vi.fn();
     track([], { events, onOpen, tabKey: "cluster:event:0" });
     expect(document.querySelector('[data-key="event:2"]')).toBeNull();

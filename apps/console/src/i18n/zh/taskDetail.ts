@@ -12,8 +12,8 @@ export default {
   refresh: { label: "重新读取", verified: "核对时间 {{time}}", unverified: "核对时间未记录" },
   header: { started: "开始", elapsed: "历时", turns: "回合" },
   state: { stopping: "正在停止", running: "进行中", unknown: "结束未确认", queued: "排队", host: "等待 Host", lead: "等待 Lead", review: "等待验收", accepted: "已验收", done: "已完成", ended: "已结束", failed: "失败" },
-  wait: { queue: "排队", host: "等待 Host", lead: "等待 Lead", acceptance: "等待验收" },
-  rail: { label: "步骤", truncated: "时间轴的读取不完整，没有这个微任务的一行；这里只列出委派。" },
+  wait: { host: "等待 Host", lead: "等待 Lead", acceptance: "等待验收" },
+  strip: { label: "这个微任务的各步", truncated: "读取不完整，没有这个微任务的一行；这里只列出委派。" },
   step: {
     delegation: "委派", routing: "路由", turn: "回合 {{n}}", handoff: "换手", decision: "决定", continue: "继续",
     takeover: "接管", acceptance: "验收",
@@ -91,7 +91,7 @@ export default {
     decided: "决定", what: "决定", who: "谁", when: "时刻", reason: "理由",
     state: { approved: "批准", declined: "拒绝", superseded: "已被取代", cancelled: "已取消" },
   },
-  event: { facts: "记录", from: "原 buddy", to: "新 buddy", stoppedBy: "停止发起", reason: "停止理由", summary: "摘要" },
+  event: { value: {"approve": "批准", "decline": "拒绝", "approved": "已批准", "declined": "已拒绝", "accepted": "验收通过", "rejected": "验收问题", "concluded": "已作结论", "completed": "已完成", "failed": "失败", "cancelled": "已取消", "queued": "排队", "running": "执行中", "executing": "执行中", "delivered": "待验收", "awaiting-host": "等待 Host", "superseded": "已被取代", "merge": "合并", "cherry-pick": "摘取提交", "patch": "应用补丁", "not-required": "无需整合", "verified": "已验证"}, facts: "记录", from: "原 buddy", to: "新 buddy", stoppedBy: "停止发起", details: "详情" },
   acceptance: {
     artifact: "产物", files: "文件", integration: "整合", state: "状态", verified: "已验证", notRequired: "无需整合", why: "原因",
     strategy: "方式", target: "目标", commits: "提交", recordedBy: "记录人", noIntegration: "整合证明未记录；请由 Host 完成整合与验收。",

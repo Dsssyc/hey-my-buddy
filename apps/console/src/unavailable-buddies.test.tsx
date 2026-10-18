@@ -1,3 +1,4 @@
+import { reasonText } from "./i18n/reason";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +18,7 @@ const FLASH = "dsh / deepseek-official / deepseek-flash";
 const RETIRED = "dsh / deepseek-official / retired-model";
 
 function catalog(): Buddy[] {
-  const base = {
+  const base = { effortRank: null,
     harness: "dsh", provider: "deepseek-official", capabilities: ["execution:dsh", "decision"],
     contextWindow: null, source: "catalog:fixture", description: "",
   };
@@ -25,9 +26,9 @@ function catalog(): Buddy[] {
     { ...base, buddyId: flashOff, model: "deepseek-flash", effort: "off", label: "deepseek-flash · off", available: true, enabled: true },
     { ...base, buddyId: flashHigh, model: "deepseek-flash", effort: "high", label: "deepseek-flash · high", available: true, enabled: false },
     { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", label: "retired-model · max",
-      available: false, enabled: true, unavailableReason: "provider paused" },
+      available: false, enabled: true, unavailableReason: { code: "catalog.native-unavailable", params: {} } },
     { ...base, buddyId: retiredLow, model: "retired-model", effort: "low", label: "retired-model · low",
-      available: false, enabled: false, unavailableReason: "provider paused" },
+      available: false, enabled: false, unavailableReason: { code: "catalog.native-unavailable", params: {} } },
   ];
 }
 
@@ -156,13 +157,13 @@ describe("unavailable buddies", () => {
     // The retired model joins its harness's rows. Its harness works, so the
     // row says itself that it cannot, with the recorded reason as explanation.
     const state = within(modelRow(RETIRED)).getByText("不可用");
-    expect(state.getAttribute("aria-description")).toBe("provider paused");
+    expect(state.getAttribute("aria-description")).toBe(reasonText({ code: "catalog.native-unavailable", params: {} }));
     expect(chip(RETIRED, "max").textContent).toBe("max");
     expect(within(modelRow(RETIRED)).queryByText("low")).toBeNull();
     expect(within(modelRow(FLASH)).queryByText("不可用")).toBeNull();
     await user.click(modelButton(RETIRED));
     // The side column says it once for the model and keeps the note.
-    expect(within(pane(RETIRED)).getByText("不可用").getAttribute("aria-description")).toBe("provider paused");
+    expect(within(pane(RETIRED)).getByText("不可用").getAttribute("aria-description")).toBe(reasonText({ code: "catalog.native-unavailable", params: {} }));
     expect(within(pane()).getAllByText("不可用")).toHaveLength(1);
     expect(note()).toHaveProperty("value", "用户保留的历史意见");
   });

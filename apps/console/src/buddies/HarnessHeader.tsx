@@ -2,6 +2,7 @@ import { cn } from "cn";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
+import { reasonText } from "../i18n/reason";
 import type { HarnessHealth } from "../types";
 import { HarnessLogo } from "./HarnessLogo";
 import { harnessSummary, harnessTime, recoveryText } from "./harness";
@@ -26,7 +27,7 @@ export function HarnessHeader({ block, health, state, accountOpen, onToggleAccou
   const metered = health && Object.values(health.billingByProvider ?? {}).some(fact => fact.kind === "metered");
   const blocked = health?.quotaRouting?.find(record => record.blocked);
   const retryTime = blocked && harnessTime(blocked.resetsAt ?? blocked.retry?.eligibleAt);
-  const said = blocked ? recoveryText(blocked, t) : state ? [health?.remedy, ...reasonTexts(block.reasons, t, true)].filter(Boolean).join(" · ") : "";
+  const said = blocked ? recoveryText(blocked, t) : state ? [health?.reason ? reasonText(health.reason) : null, ...reasonTexts(block.reasons, t, !!health?.reason)].filter(Boolean).join(" · ") : "";
   const observed = health?.quota ? t("harness.quota.observation", { time: harnessTime(health.quota.observedAt) ?? t("harness.unrecorded"), source: health.quota.source }) : "";
   const note = [said, observed].filter(Boolean).join(" · ");
   const content = <>

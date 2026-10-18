@@ -1,3 +1,4 @@
+import { reasonText } from "../i18n/reason";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
@@ -111,12 +112,12 @@ describe("the location block", () => {
     await selectHarness(user, "ZCode");
     const location = paneBlock("位置");
     expect(within(location).getByText("未找到")).toBeTruthy();
-    expect(fieldValue(location, "原因").textContent).toBe("未找到可执行文件");
-    expect(within(location).getByText("未找到").getAttribute("aria-description")).toBe("安装 ZCode CLI，或填写可执行文件的绝对路径。");
+    expect(fieldValue(location, "原因").textContent).toBe(reasonText({ code: "harness.not-found", params: { operation: "probe" } }));
+    expect(within(location).getByText("未找到").getAttribute("aria-description")).toBe(reasonText({ code: "harness.not-found", params: { operation: "probe" } }));
     expect(fieldValue(location, "路径").textContent).toBe("未记录");
     const tried = within(location).getByText("试过的位置").parentElement!;
     expect(within(tried).getByText("/Applications/ZCode.app/Contents/MacOS/zcode")).toBeTruthy();
-    expect(within(tried).getByText("应用包 · 未找到")).toBeTruthy();
+    expect(within(tried).getByText("应用包 · " + reasonText({ code: "harness.not-found", params: { operation: "probe" } }))).toBeTruthy();
     expect(within(tried).getByText("/opt/homebrew/bin/zcode")).toBeTruthy();
     expect(within(tried).getByText("Homebrew · 未找到")).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
@@ -430,7 +431,7 @@ describe("entering the view", () => {
 
 describe("the account block", () => {
   const account = { harness: "dsh", status: "ready", accountType: "chatgpt",
-    checkedAt: "2026-09-29T09:00:00.000Z", reasonCode: null, guidance: null };
+    checkedAt: "2026-09-29T09:00:00.000Z", reason: null };
   const billing = { openai: { kind: "subscription", source: "native", observedAt: CHECKED_AT } };
   const withAccount = (extra: object = {}) => [
     harness({ harness: "dsh", status: "ready", executable: "/usr/local/bin/dsh", version: "0.4.2", checkedAt: CHECKED_AT,
@@ -440,12 +441,12 @@ describe("the account block", () => {
 
   it("writes its status, the billing of each provider and the guidance", async () => {
     await openHarness(fixture({ harnesses: withAccount({ status: "logged-out", accountType: null, checkedAt: null,
-      reasonCode: "ACCOUNT_LOGIN_REQUIRED", guidance: "log in" }) }));
+      reason: { code: "account.login-required", params: {} } }) }));
     const block = paneBlock("账户");
     expect(block.firstElementChild!.textContent).toBe("账户");
     expect(fieldValue(block, "状态").textContent).toBe("未登录");
     expect(fieldValue(block, "计费").textContent).toBe("openai 订阅");
-    expect(within(block).getByText("未登录").getAttribute("aria-description")).toBe("在 Harness 中登录后检测。");
+    expect(within(block).getByText("未登录").getAttribute("aria-description")).toBe(reasonText({ code: "account.login-required", params: {} }));
     expect(within(block).queryByRole("button")).toBeNull();
   });
 

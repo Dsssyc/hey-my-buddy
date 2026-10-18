@@ -1,6 +1,8 @@
 import i18n from "i18next";
 import { ApiError } from "../api";
 import { parseActor } from "../actor";
+import { isReason } from "../reason";
+import type { Reason } from "../reason";
 import type { ActivityPhase, Actor, RoutingMode, Task, TokenUsage } from "../types";
 import type {
   Activity, Artifact, Attempt, Audit, AuditRequest, Basis, Buddy, CompactRequest, Continuation, CumulativePatch, Ending,
@@ -32,6 +34,10 @@ function str(value: unknown, what: string): string {
 }
 function strOrNull(value: unknown, what: string): string | null {
   return value === null || value === undefined ? null : str(value, what);
+}
+function reasonOrNull(value: unknown, what: string): Reason | null {
+  if (value === null || value === undefined) return null;
+  return isReason(value) ? value : refuse(what);
 }
 function int(value: unknown, what: string): number {
   if (!Number.isSafeInteger(value)) refuse(what);
@@ -142,7 +148,8 @@ function parseOpenRequest(value: unknown): OpenRequest {
   const problem = recOrNull(request.preparationError, "request.preparationError");
   return {
     ...parseCompactRequest(value),
-    summary: str(request.summary, "request.summary"),
+    summary: strOrNull(request.summary, "request.summary"),
+    reason: reasonOrNull(request.reason, "request.reason"),
     attempted: strOrNull(request.attempted, "request.attempted"),
     neededWork: strings(request.neededWork, "request.neededWork"),
     expectedArtifacts: strings(request.expectedArtifacts, "request.expectedArtifacts"),
@@ -199,7 +206,7 @@ function parseIntegration(value: unknown): Integration {
     beforeCommit: strOrNull(integration.beforeCommit, "integration.beforeCommit"),
     afterCommit: strOrNull(integration.afterCommit, "integration.afterCommit"),
     verificationSummary: summary, hostPaths: strings(verification.hostPaths, "integration.verification"),
-    reason: strOrNull(integration.reason, "integration.reason"),
+    note: strOrNull(integration.note, "integration.note"),
     actor: actorOrNull(integration.actor, "integration.actor"), createdAt: str(integration.createdAt, "integration.createdAt"),
   };
 }
@@ -209,7 +216,7 @@ function parseConclusion(value: unknown): HostConclusion {
   return {
     conclusionId: str(conclusion.conclusionId, "hostConclusion.conclusionId"),
     executionStatus: str(conclusion.executionStatus, "hostConclusion.executionStatus"),
-    note: str(conclusion.note, "hostConclusion.note"), evidence: strings(conclusion.evidence, "hostConclusion.evidence"),
+    note: strOrNull(conclusion.note, "hostConclusion.note"), reason: reasonOrNull(conclusion.reason, "hostConclusion.reason"), evidence: strings(conclusion.evidence, "hostConclusion.evidence"),
     artifactId: strOrNull(conclusion.artifactId, "hostConclusion.artifactId"),
     integrationId: strOrNull(conclusion.integrationId, "hostConclusion.integrationId"),
     attemptId: strOrNull(conclusion.attemptId, "hostConclusion.attemptId"),
@@ -284,7 +291,7 @@ function parseAuditRequest(value: unknown): AuditRequest {
     turnId: strOrNull(request.turnId, "audit.request.turnId"),
     decision: decision && {
       decision: strOrNull(decision.decision, "audit.request.decision"),
-      reason: strOrNull(decision.reason, "audit.request.decision")?.trim() || null,
+      note: strOrNull(decision.note, "audit.request.decision"),
       actor: actorOrNull(decision.actor ?? resolution?.actor, "audit.request.decision"),
     },
     decisionId: strOrNull(payload.decisionId, "audit.request.payload"),
@@ -296,7 +303,7 @@ function parseContinuation(value: unknown): Continuation {
   return {
     continuationId: str(continuation.continuationId, "audit.continuation"), turnId: strOrNull(continuation.turnId, "audit.continuation"),
     input: str(continuation.input, "audit.continuation"), createdAt: str(continuation.createdAt, "audit.continuation"),
-    kind: str(continuation.kind, "audit.continuation"), reason: strOrNull(continuation.reason, "audit.continuation"),
+    kind: str(continuation.kind, "audit.continuation"), note: strOrNull(continuation.note, "audit.continuation"),
   };
 }
 
@@ -309,7 +316,8 @@ function parseRoutingEntry(value: unknown): RoutingEntry {
     selectedBuddy: parseBuddy(entry.selectedBuddy, "routingHistory.selectedBuddy"),
     routerBuddy: parseBuddy(entry.routerBuddy, "routingHistory.routerBuddy"),
     routingMode: (mode === null || mode === undefined ? null : oneOf(mode, ["fast", "review"] as const, "routingHistory.routingMode")) as RoutingMode | null,
-    reason: strOrNull(entry.reason, "routingHistory.reason"),
+    reason: reasonOrNull(entry.reason, "routingHistory.reason"),
+    note: strOrNull(entry.note, "routingHistory.note"),
   };
 }
 
@@ -368,7 +376,8 @@ function parseInquiry(value: unknown): Inquiry {
     messageId: str(message.messageId, "message.messageId"), inquiryId: str(message.inquiryId, "message.inquiryId"), attemptId: strOrNull(message.attemptId, "message.attemptId"),
     question: str(message.question, "message.question"), author: str(message.author, "message.author"),
     createdAt: str(message.createdAt, "message.createdAt"), state: oneOf(message.state, INQUIRY_STATES, "message.state"),
-    reason: strOrNull(message.reason, "message.reason"),
+    reason: reasonOrNull(message.reason, "message.reason"),
+    note: strOrNull(message.note, "message.note"),
     deliveredAt: delivery ? strOrNull(delivery.deliveredAt, "message.delivery") : null,
     answer: answer && { text: str(answer.text, "message.answer"), at: strOrNull(answer.at, "message.answer"), truncated: bool(answer.truncated, "message.answer") },
   };
@@ -439,12 +448,13 @@ function parseAttempt(task: Rec): Attempt | null {
   const normal = raw === "completed" || (raw === null && !cancelled && !quota && !["completed", "failed"].includes(task.status as string));
   const ending: Ending | null = normal ? null : {
     cause: raw, stoppedBy: cancelled ? stoppedBy : null, actor: cancelled ? named : null,
-    reason: cancelled && cancellation ? strOrNull(cancellation.reason, "task.cancellation")?.trim() || null : null, quota,
+    note: cancelled && cancellation ? strOrNull(cancellation.note, "task.cancellation.note") : null, quota,
   };
   return {
     attemptId, active,
     startedAt: strOrNull(attempt.startedAt, "task.selectedAttempt"), finishedAt: strOrNull(attempt.finishedAt, "task.selectedAttempt"),
     error: strOrNull(attempt.error, "task.selectedAttempt"),
+    releaseReason: reasonOrNull(attempt.releaseReason, "task.selectedAttempt.releaseReason"),
     overdue: active && bool(reminders.overdue, "task.selectedAttempt.reminders"),
     possiblyStuck: active && bool(reminders.possiblyStuck, "task.selectedAttempt.reminders"),
     activity: active ? parseActivity(task.activity) : null,

@@ -15,7 +15,7 @@ import zhConsole from "./zh/console";
 const pages = {
   settings: import.meta.glob<string>(["../Settings.tsx", "../settings/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
   buddies: import.meta.glob<string>(["../App.tsx", "../BuddyConfig.tsx", "../buddies/*.{ts,tsx}", "../components/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
-  taskDetail: import.meta.glob<string>(["../task-detail/*.{ts,tsx}", "../components/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
+  taskDetail: import.meta.glob<string>(["../task-detail/*.{ts,tsx}", "../macro-task-display.ts", "../components/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
   shared: import.meta.glob<string>(["../**/*.{ts,tsx}", "!../i18n/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
 };
 const support = /(?:\.(?:test|testing|fixtures)|-fixtures)\.tsx?$/;
@@ -37,11 +37,25 @@ function unused(copy: unknown, text: string, namespace = ""): string[] {
   });
 }
 
+/** A shared namespace can be explicit on the key or bound by useTranslation. */
+function unusedNamespace(copy: unknown, sources: Record<string, string>, namespace: string): string[] {
+  const bound = Object.fromEntries(Object.entries(sources).filter(([, source]) =>
+    source.includes(`useTranslation("${namespace}")`) || source.includes(`useTranslation('${namespace}')`)));
+  const unqualified = new Set(unused(copy, sourceOf(bound)));
+  return unused(copy, sourceOf(sources), `${namespace}:`).filter(key => unqualified.has(key));
+}
+
 describe("the copy of the pages", () => {
   it("has no retired shared or console helper copy", () => {
-    const source = sourceOf(pages.shared);
-    expect(unused(zhCommon, source, "common:")).toEqual([]);
-    expect(unused(zhConsole, source, "console:")).toEqual([]);
+    expect(unusedNamespace(zhCommon, pages.shared, "common")).toEqual([]);
+    expect(unusedNamespace(zhConsole, pages.shared, "console")).toEqual([]);
+  });
+  it("recognises a bound shared namespace and keeps unrelated or retired words visible", () => {
+    const copy = { active: "Active", explicit: "Explicit", retired: "Retired" };
+    expect(unusedNamespace(copy, {
+      "notice.tsx": 'const { t } = useTranslation("common"); t("active");',
+      "other.tsx": 'const { t } = useTranslation("settings"); t("retired"); t("common:explicit");',
+    }, "common")).toEqual(["retired"]);
   });
   it("has no retired settings copy", () => {
     const source = sourceOf(pages.settings).replaceAll("settingsStorage:", "");
@@ -54,7 +68,7 @@ describe("the copy of the pages", () => {
   });
 
   it("has no key of the detail of a micro task that no view uses", () => {
-    expect(unused(zhTaskDetail, sourceOf(pages.taskDetail))).toEqual([]);
+    expect(unused(zhTaskDetail, sourceOf(pages.taskDetail).replaceAll("taskDetail:", ""))).toEqual([]);
   });
 
   it("uses language autonyms and has no other Chinese text or full-width punctuation in English namespaces", () => {

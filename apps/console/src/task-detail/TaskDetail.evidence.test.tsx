@@ -1,15 +1,16 @@
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODEX, HOST, NO_BASIS, OPUS, REASON, at, audit, client, event, inquiry, result, routing, row, span, task, timeline, workflow } from "./task-detail.fixtures";
-import { open, pane, rail, ready, selected, step } from "./task-detail.testing";
+import { chosenStep, open, pane, ready, strip, stripSlice } from "./task-detail.testing";
 import type { Artifact, Basis, Integration } from "./types";
 
 afterEach(cleanup);
 
 const band = () => pane().querySelector("[data-slot=detail-band]") as HTMLElement;
 const head = () => document.querySelector("[data-slot=detail-header]") as HTMLElement;
-const rails = () => within(rail()).getAllByRole("button");
+const turnTitle = () => within(pane()).getByRole("heading", { name: /^回合/ }).parentElement!;
+const slices = () => [...strip().querySelectorAll<SVGElement>("[data-key]")];
 
 /** `e2` ran and did not end: the stop is not confirmed. */
 function unsure() {
@@ -19,13 +20,13 @@ function unsure() {
 }
 
 describe("a stop that is not confirmed", () => {
-  it("is written as not confirmed in the turn, in the route and on the rail, never as ended", async () => {
+  it("is written as not confirmed in the turn, in the route and on the strip, never as ended", async () => {
     open({ step: 7, timeline: unsure() });
     await ready();
     expect(within(pane()).getByRole("heading", { name: "回合 2" }).parentElement!.textContent).toContain("结束未确认");
     expect(pane().textContent).not.toContain("已结束");
-    expect(selected().textContent).toContain("结束未确认");
-    expect(selected().querySelector("i")!.className).toContain("border-dashed");
+    expect(stripSlice("span:e2")!.getAttribute("aria-pressed")).toBe("true");
+    expect(stripSlice("span:e2")!.getAttribute("aria-label")).toContain("停止未确认");
     cleanup();
     const route = timeline();
     Object.assign(route.spans.find(item => item.spanId === "r1")!, { uncertain: true });
@@ -41,7 +42,7 @@ describe("a stop that is not confirmed", () => {
     found.events = found.events.filter(item => item.kind === "dispatch" || item.kind === "continue");
     open({ step: 7, timeline: found, replies: { workflow: workflow({ state: "executing" }) } });
     await ready();
-    expect(within(rail()).queryByRole("button", { name: /^验收/ })).toBeNull();
+    expect(strip().querySelector('[data-key="acceptance-wait"]')).toBeNull();
     expect(pane().textContent).toContain("结束未确认");
   });
 });
@@ -50,7 +51,7 @@ describe("the integration and the acceptance", () => {
   const output: Artifact = { artifactId: "art-final", kind: "output", attemptId: "att-2", manifestSha256: "5f0c81d2" + "0".repeat(52) + "e2a1", outputCommit: "f6dfd59c11",
     diffPath: null, changedPaths: ["a.ts"], partial: false, verified: null, final: null, cumulativePatch: null };
   const verified: Integration = { integrationId: "int-1", artifactId: "art-final", state: "verified", strategy: "merge", target: { path: "~/p", ref: "main" },
-    beforeCommit: "b7285470aa", afterCommit: "f6dfd59c11", verificationSummary: "全量通过", hostPaths: [], reason: null, actor: HOST, createdAt: at("11:03") };
+    beforeCommit: "b7285470aa", afterCommit: "f6dfd59c11", verificationSummary: "全量通过", hostPaths: [], note: null, actor: HOST, createdAt: at("11:03") };
   const integrated = () => {
     const found = timeline();
     found.events.push(event(4, "integrate", at("11:03")));
@@ -63,7 +64,7 @@ describe("the integration and the acceptance", () => {
     expect(pane().textContent).toContain("等待验收");
     expect(pane().textContent).not.toContain("已结束");
     expect(pane().textContent).toContain("全量通过");
-    expect(selected().textContent).toContain("等待验收");
+    expect(strip().querySelector('[data-key="acceptance-wait"]')!.getAttribute("aria-label")).toContain("等待验收");
     expect(head().textContent).toContain("等待验收");
   });
 
@@ -90,9 +91,9 @@ describe("the integration and the acceptance", () => {
 describe("a route", () => {
   const two = () => {
     const found = timeline();
-    found.spans.find(item => item.spanId === "r1")!.routing = { routingMode: "review", selectedBuddy: OPUS, reason: "审阅模式不可用之前的结论", usage: { elapsedMs: 9000, toolCalls: 4 } };
+    found.spans.find(item => item.spanId === "r1")!.routing = { routingMode: "review", selectedBuddy: OPUS, reason: null, note: "审阅模式不可用之前的结论", usage: { elapsedMs: 9000, toolCalls: 4 } };
     found.spans.push(span("r2", "routing", at("10:40"), at("10:41"), { attemptId: "att-r2", decisionId: "decision-1",
-      routing: { routingMode: "fast", selectedBuddy: CODEX, reason: "改用快速模式后的结论", usage: { elapsedMs: 3000, toolCalls: 0 } } }));
+      routing: { routingMode: "fast", selectedBuddy: CODEX, reason: null, note: "改用快速模式后的结论", usage: { elapsedMs: 3000, toolCalls: 0 } } }));
     return found;
   };
 
@@ -103,8 +104,8 @@ describe("a route", () => {
     expect(pane().textContent).not.toContain("改用快速模式后的结论");
     expect(band().textContent).toContain("审阅");
     expect(band().textContent).toContain("gpt-6-luna");
-    await userEvent.setup().click(within(rail()).getAllByRole("button", { name: /路由/ })[1]!);
-    expect(pane().textContent).toContain("改用快速模式后的结论");
+    fireEvent.click(stripSlice("span:r2")!);
+    await waitFor(() => expect(pane().textContent).toContain("改用快速模式后的结论"));
     expect(pane().textContent).not.toContain("审阅模式不可用之前的结论");
     expect(band().textContent).toContain("快速");
     expect(band().textContent).toContain("工具调用 0");
@@ -120,10 +121,10 @@ describe("a route", () => {
     expect(pane().textContent).not.toContain("gpt-6.1-sol");
   });
 
-  it("names the Router of a route on the rail, by the decision's record", async () => {
-    open({ replies: { routing: [routing({ routerBuddy: { harness: "codex", provider: "openai", model: "gpt-6-luna", effort: "max" } })] } });
+  it("names the Router of a route on the band, by the decision's record", async () => {
+    open({ step: 2, replies: { routing: [routing({ routerBuddy: { harness: "codex", provider: "openai", model: "gpt-6-luna", effort: "max" } })] } });
     await ready();
-    expect(step(/^路由/).textContent).toContain("gpt-6-luna / max");
+    expect(band().textContent).toContain("gpt-6-luna / max");
   });
 
   it("says the program chose when it did, shows the bounds it chose within, and names no Router and no mode", async () => {
@@ -213,16 +214,16 @@ describe("a Host wait that ends in a continuation", () => {
       found.spans[5]!];
     found.events = [event(1, "dispatch", at("10:00")), event(2, "continue", at("10:40"), { continuationId: "c-A" }), event(3, "continue", at("10:40"), { continuationId: "c-B" })];
     const full = (id: string, summary: string) => ({ requestId: id, kind: "assistance", state: "approved", createdAt: at("10:30"), decidedAt: at("10:40"), childTaskId: null,
-      routing: false, summary, attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null, turnId: "turn-1", decisionId: null, decision: null });
+      routing: false, summary, reason: null, attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null, turnId: "turn-1", decisionId: null, decision: null });
     const audited = audit({ requests: [full("req-A", "第一个请求"), full("req-B", "第二个请求")] });
     const f = open({ timeline: found, replies: { audit: audited } });
     await ready();
-    const continued = within(rail()).getAllByRole("button", { name: /^继续/ });
-    await f.user.click(continued[0]!);
-    expect(pane().textContent).toContain("第一个请求");
+    // The two continuations happened at one instant: the strip shows them as one cluster, and each keeps its own step.
+    f.atStep(4);
+    await waitFor(() => expect(pane().textContent).toContain("第一个请求"));
     expect(pane().textContent).not.toContain("第二个请求");
-    await f.user.click(continued[1]!);
-    expect(pane().textContent).toContain("第二个请求");
+    f.atStep(5);
+    await waitFor(() => expect(pane().textContent).toContain("第二个请求"));
     expect(pane().textContent).not.toContain("第一个请求");
   });
 });
@@ -339,7 +340,7 @@ describe("the head", () => {
   });
 });
 
-describe("the rail of a turn that runs", () => {
+describe("the title of a turn that runs", () => {
   function running(reminders: { overdue: boolean; possiblyStuck: boolean }) {
     const live = timeline();
     Object.assign(live.spans.find(item => item.spanId === "e2")!, { endAt: null, state: "executing", shutdownConfirmed: false });
@@ -350,18 +351,17 @@ describe("the rail of a turn that runs", () => {
   it("says possibly stuck in orange where it would say running, and past the expected time when only that is so", async () => {
     running({ overdue: true, possiblyStuck: true });
     await ready();
-    expect(step(/^回合 2/).textContent).toContain("可能卡住");
-    expect(step(/^回合 2/).textContent).not.toContain("进行中");
-    expect(within(step(/^回合 2/)).getByText("可能卡住").className).toContain("text-hand");
+    expect(turnTitle().textContent).toContain("可能卡住");
+    expect(within(turnTitle()).getByText("可能卡住").className).toContain("text-hand");
     cleanup();
     running({ overdue: true, possiblyStuck: false });
     await ready();
-    expect(step(/^回合 2/).textContent).toContain("已超过预期");
-    expect(step(/^回合 2/).textContent).not.toContain("可能卡住");
+    expect(turnTitle().textContent).toContain("已超过预期");
+    expect(within(turnTitle()).queryByText("可能卡住")).toBeNull();
     cleanup();
     running({ overdue: false, possiblyStuck: false });
     await ready();
-    expect(within(step(/^回合 2/)).getByText("进行中").className).toContain("text-live");
+    expect(within(turnTitle()).getByText("进行中").className).toContain("text-live");
   });
 
   it("says what backs the report of a running turn in a hint on its phase", async () => {
@@ -399,7 +399,7 @@ describe("the turn that ended otherwise than it should", () => {
       expect(pane().textContent, cause).toContain(words);
     }
     cleanup();
-    ended({ status: "cancelled", cancellation: { actor: { role: "lead", id: "review-lead" }, reason: "Please summarize the current work" },
+    ended({ status: "cancelled", cancellation: { actor: { role: "lead", id: "review-lead" }, note: "Please summarize the current work" },
       selectedAttempt: { stopInitiator: "lead", result: { terminationReason: "wrap-up" } } });
     await ready();
     expect(pane().textContent).toContain("Lead 收尾完成");
@@ -410,12 +410,12 @@ describe("the turn that ended otherwise than it should", () => {
   });
 
   it("names the person who stopped it only when the stopper was a person, and the console or the service never by a name", async () => {
-    ended({ status: "cancelled", cancellation: { actor: { role: "host", id: "old-actor" }, reason: null }, selectedAttempt: { stopInitiator: "console", result: { terminationReason: "console-stop" } } });
+    ended({ status: "cancelled", cancellation: { actor: { role: "host", id: "old-actor" }, note: null }, selectedAttempt: { stopInitiator: "console", result: { terminationReason: "console-stop" } } });
     await ready();
     expect(pane().textContent).toContain("在控制台停止");
     expect(pane().textContent).not.toContain("old-actor");
     cleanup();
-    ended({ status: "cancelled", cancellation: { actor: { role: "host", id: "old-owner" }, reason: null }, selectedAttempt: { stopInitiator: "lead", result: { terminationReason: "forced-stop" } } });
+    ended({ status: "cancelled", cancellation: { actor: { role: "host", id: "old-owner" }, note: null }, selectedAttempt: { stopInitiator: "lead", result: { terminationReason: "forced-stop" } } });
     await ready();
     expect(pane().textContent).toContain("Lead 停止");
     expect(pane().textContent).not.toContain("old-owner");
@@ -527,8 +527,8 @@ describe("the detail is only read", () => {
       "取消目标及协助任务", "实际检查依据", "接受最终交付", "记录验收问题", "填入已启用 buddy", "使用此 buddy 接续", "重试同一目标的路由"];
     const f = open();
     await ready();
-    for (const index of [0, 1, 2, 3, 4, 5, 6, 7]) {
-      await f.user.click(rails()[index]!);
+    for (const slice of slices()) {
+      fireEvent.click(slice);
       for (const name of removed) {
         expect(screen.queryByLabelText(name), name).toBeNull();
         expect(screen.queryByRole("button", { name }), name).toBeNull();

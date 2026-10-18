@@ -1,9 +1,12 @@
+import { isReason } from "./reason";
+import type { Reason } from "./reason";
+
 /** The native login facts reported by one harness. */
 export type HarnessAccount = {
   harness: string;
   status: "unknown" | "logged-out" | "ready" | "unsupported";
   accountType: string | null; checkedAt: string | null;
-  reasonCode: string | null; guidance: string | null;
+  reason: Reason | null;
   plan?: string | null;
 };
 
@@ -13,14 +16,15 @@ export function parseHarnessAccount(value: unknown, harness: string): HarnessAcc
   const row = value as Record<string, unknown>;
   if (row.harness !== harness
     || !["unknown", "logged-out", "ready", "unsupported"].includes(String(row.status))) return null;
-  for (const key of ["accountType", "checkedAt", "reasonCode", "guidance"] as const) {
+  for (const key of ["accountType", "checkedAt"] as const) {
     if (!(row[key] === null || typeof row[key] === "string")) return null;
   }
+  if (row.reason !== null && !isReason(row.reason)) return null;
   if (row.plan !== undefined && row.plan !== null && typeof row.plan !== "string") return null;
   return {
     harness, status: row.status as HarnessAccount["status"],
     accountType: row.accountType as string | null, checkedAt: row.checkedAt as string | null,
-    reasonCode: row.reasonCode as string | null, guidance: row.guidance as string | null,
+    reason: row.reason as Reason | null,
     ...(row.plan !== undefined ? { plan: row.plan as string | null } : {}),
   };
 }

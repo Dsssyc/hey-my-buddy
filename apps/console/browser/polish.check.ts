@@ -4,15 +4,23 @@ import { screenshots as shots, expectNoSidewaysScroll, open, test } from "./prev
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.describe(`trial polish ${theme} ${width}`, () => {
   test.use({ locale: "zh-CN", viewport: { width, height: width === 390 ? 844 : 1000 }, reducedMotion: "reduce" });
-  test("selects without opening, opens exact turns, collapses with the back button and switches details", async ({ page }) => {
+  test("opens a micro task with one click, keeps spans on single-click selection, and switches details", async ({ page }) => {
     await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     await open(page, `#tasks/${macro}`);
     const row = page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a1"]:visible');
     await row.click();
-    await expect(row).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator('[data-slot=detail-strip]')).toBeVisible();
+    await page.locator('[data-slot=detail-header]').getByRole("button", { name: "收起详情" }).click();
+    await expect(page.locator('[data-slot=task-work]')).toHaveAttribute("data-mode", "timeline");
+    await expect(page.locator('[data-slot=timeline-tracks]')).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`#tasks/${macro}$`));
     await expect(row).toHaveCSS("background-color", theme === "dark" ? "rgb(29, 59, 43)" : "rgb(220, 237, 226)");
     await expect(page.locator('[data-slot=timeline-row][data-run-id="preview-run-a1"] [data-slot=selected-span]').first()).toBeAttached();
+    if (width === 390) await page.getByRole("button", { name: "放大（+）", exact: true }).click();
+    const slice = page.locator('[data-slot=timeline-row][data-run-id="preview-run-a1"] [data-key="span:execution:att-a1-1"]');
+    await slice.click();
+    await expect(page.locator('[data-slot=task-work]')).toHaveAttribute("data-mode", "timeline");
+    await expect(page).toHaveURL(new RegExp(`#tasks/${macro}$`));
     await row.hover();
     await expect(row).toHaveCSS("background-color", theme === "dark" ? "rgb(29, 59, 43)" : "rgb(220, 237, 226)");
     await page.screenshot({ path: `${shots}/selected-${theme}-${width}.png` });
@@ -22,21 +30,21 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     }));
     expect(edges.length).toBeGreaterThan(0);
     for (const edge of edges) expect(edge.shadow).toMatch(edge.tone === "queued" ? /^none$/ : /3px/);
-    await expect(page.getByRole("radio", { name: "清单", exact: true })).toHaveCount(0);
-    await row.dblclick();
-    await expect(page.locator('[data-slot=detail-rail]')).toBeVisible();
+    await page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a1"]:visible').click();
+    await expect(page.locator('[data-slot=detail-strip]')).toBeVisible();
     await page.screenshot({ path: `${shots}/micro-task-${theme}-${width}.png` });
     if (width > 760) {
-      const other = page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a2"]:visible');
+      // The list beside the detail switches micro tasks with one click; the open row is where the reader is.
+      const other = page.locator('[data-slot=task-names] [data-slot=timeline-row-name][data-run-id="preview-run-a2"]');
       await other.click();
-      await expect(other).toHaveAttribute("aria-expanded", "true");
+      await expect(other).toHaveAttribute("aria-current", "true");
     }
     await page.locator('[data-slot=detail-header]').getByRole("button", { name: "收起详情" }).click();
     await expect(page.locator('[data-slot=task-work]')).toHaveAttribute("data-mode", "timeline");
     const focused = page.locator('[data-slot=timeline-row-name]:focus');
     await expect(focused).toHaveCount(1);
     await page.keyboard.press("Enter");
-    await expect(page.locator('[data-slot=detail-rail]')).toBeVisible();
+    await expect(page.locator('[data-slot=detail-strip]')).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.locator('[data-slot=task-work]')).toHaveAttribute("data-mode", "timeline");
     await expectNoSidewaysScroll(page);
@@ -63,9 +71,9 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     for (let i = 0; i < 12 && Number(await page.locator('[data-slot=timeline-canvas]').getAttribute("data-ppm")) <= 30; i++) await zoom.click();
     box = (await axis.boundingBox())!;
     const viewport = (await page.locator('[data-slot=timeline-tracks]').boundingBox())!;
-    await page.mouse.move(viewport.x + 40, box.y + 15);
+    await page.mouse.move(viewport.x + (width > 760 ? 272 : 0) + 40, box.y + 15);
     await expect(page.locator('[data-slot=pointer-clock]')).toHaveText(/^\d{2}:\d{2}:\d{2}$/);
-    await page.mouse.move(viewport.x + viewport.width - 20, box.y + 15);
+    await page.mouse.move(viewport.x + viewport.width - (width > 760 ? 208 : 0) - 20, box.y + 15);
     const clockBox = (await page.locator('[data-slot=pointer-clock]').boundingBox())!;
     expect(clockBox.x + clockBox.width).toBeLessThanOrEqual(viewport.x + viewport.width);
     await page.screenshot({ path: `${shots}/pointer-seconds-${theme}-${width}.png` });
@@ -94,7 +102,7 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     await inquiry.dblclick();
     const highlighted = page.locator('[data-inquiry-id="inq-a3-1"][data-highlighted=true]');
     await expect(highlighted).toBeInViewport();
-    await expect(page.locator('[data-slot=detail-rail] [aria-current=step]')).toContainText("回合 1");
+    await expect(page.locator('[data-slot=detail-strip] [aria-pressed=true]')).toHaveAccessibleName(/回合 1/);
     await page.screenshot({ path: `${shots}/inquiry-${theme}-${width}.png` });
     await expectNoSidewaysScroll(page);
   });
@@ -115,7 +123,7 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     await back.click();
     await expect(page.locator('[data-slot=task-work]')).toHaveAttribute("data-mode", "timeline");
     release();
-    await page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a3"]:visible').dblclick();
+    await page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a3"]:visible').click();
     await expect(page.getByRole("heading", { name: "读取微任务失败" })).toBeVisible();
     await expect(back).toBeVisible();
     await page.screenshot({ path: `${shots}/read-failed-${theme}-${width}.png` });
@@ -124,6 +132,34 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     await expect(page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a3"]:focus')).toHaveCount(1);
   });
 
+});
+
+for (const theme of ["light", "dark"]) test.describe(`shared scroll bars ${theme}`, () => {
+  // Both axes overflow at this height, so the shared area's bars are deterministic.
+  test.use({ locale: "zh-CN", viewport: { width: 1440, height: 400 }, reducedMotion: "reduce" });
+  test("shows one vertical bar at the tracks' right edge on hover, and the names column never shows its own", async ({ page }) => {
+    await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+    await open(page, `#tasks/${macro}`);
+    await page.getByRole("button", { name: "放大（+）", exact: true }).click();
+    const tracksRoot = page.locator('[data-slot=timeline-tracks]').locator("xpath=..");
+    await page.mouse.move(5, 5);
+    for (const bar of await tracksRoot.locator('[data-slot=scroll-area-scrollbar]').all()) await expect(bar).toHaveCSS("opacity", "0");
+    await tracksRoot.hover();
+    const bars = tracksRoot.locator('[data-slot=scroll-area-scrollbar]');
+    await expect(bars).toHaveCount(2);
+    for (const bar of await bars.all()) await expect(bar).toBeVisible();
+    const boxes = await bars.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()));
+    const vertical = boxes.find(box => box.height > box.width)!;
+    const horizontal = boxes.find(box => box.width > box.height)!;
+    const rootBox = (await tracksRoot.boundingBox())!;
+    expect(vertical.width).toBeLessThan(vertical.height);
+    expect(vertical.x + vertical.width).toBeCloseTo(rootBox.x + rootBox.width, 0);
+    expect(horizontal.width).toBeGreaterThan(horizontal.height);
+    const name = page.locator('[data-slot=timeline-row-name]').first();
+    await name.hover();
+    expect(await name.evaluate(node => Boolean(node.closest('[data-slot=scroll-area]')?.querySelector('[data-slot=timeline-tracks]')))).toBe(true);
+    await expect(tracksRoot.locator('[data-slot=scroll-area-scrollbar][data-orientation=vertical]')).toHaveCount(1);
+  });
 });
 
 for (const theme of ["light", "dark"]) test.describe(`model order ${theme}`, () => {

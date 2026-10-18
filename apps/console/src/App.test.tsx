@@ -15,7 +15,7 @@ const initial = (): Snapshot => ({
   configuration: { routerBuddyIds: ["flash-off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
   },
   buddies: [
-    {
+    { effortRank: null,
       buddyId: "flash-off",
       label: "Flash 决策",
       harness: "dsh",

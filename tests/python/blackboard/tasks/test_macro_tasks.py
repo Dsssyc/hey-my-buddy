@@ -6,7 +6,8 @@ from hey_my_buddy.protocol import schemas
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing import router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
-from blackboard.tasks.test_workflow import WorkflowTestCase
+from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
+from support import enable_fixture_buddy
 
 
 class ProjectLabelTests(WorkflowTestCase):
@@ -528,6 +529,8 @@ class MacroTaskReadTests(WorkflowTestCase):
                          disposition='attention', shutdown=False)
         timeline = board.call('macro_task_timeline', {'macroTaskId': first['macroTaskId']})
         self.assertEqual([row['runId'] for row in timeline['rows']], [first['runId'], second['runId']])
+        for row in timeline['rows']:
+            self.assertIs(row['delegationAuthority'], False)
         self.assertEqual(timeline['rows'][0]['title'], 'Backend')
         self.assertTrue(timeline['scopeComplete'])
         executions = [span for span in timeline['spans'] if span['kind'] == 'execution']
@@ -650,6 +653,35 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertEqual(actors[submitted], {'role': 'host', 'id': 'source-host'})
         self.assertIsNone(actors[unknown])
 
+    def test_timeline_projects_lead_authority_before_and_after_owned_submission(self):
+        board = self.board()
+        enable_fixture_buddy(board.store, BUDDY)
+        lead = self.submit(board, request_id='authority-root', cwd=str(self.workdir('authority-root')),
+                           executionWorkspace={'kind': 'existing', 'access': 'full', 'accessNote': 'Lead checks'},
+                           delegationAuthority=True, macroTask={'title': 'Timeline authority'})
+        timeline = board.call('macro_task_timeline', {'macroTaskId': lead['macroTaskId']})
+        self.assertEqual(len(timeline['rows']), 1)
+        row = timeline['rows'][0]
+        self.assertIs(row['delegationAuthority'], True)
+        self.assertEqual(row['kind'], 'micro-task')
+        self.assertIsNone(row['leadOwnership'])
+        self.assertIsNone(row['rootLeadRunId'])
+
+        claim = self.claim(board, run_id=lead['runId'])['claim']
+        owned = board.call('workflow_submit', {
+            **BUDDY, 'requestId': 'authority-owned', 'submissionToken': 's' * 32,
+            'task': 'Do owned work', 'cwd': str(self.workdir('authority-owned')),
+            'executionWorkspace': {'kind': 'existing', 'access': 'write'},
+            'credential': claim['agentCredential'],
+        })
+        timeline = board.call('macro_task_timeline', {'macroTaskId': lead['macroTaskId']})
+        rows = {row['runId']: row for row in timeline['rows']}
+        self.assertEqual(set(rows), {lead['runId'], owned['runId']})
+        self.assertIs(rows[lead['runId']]['delegationAuthority'], True)
+        self.assertIs(rows[owned['runId']]['delegationAuthority'], False)
+        self.assertEqual(rows[owned['runId']]['leadOwnership']['leadRunId'], lead['runId'])
+        self.assertEqual(rows[owned['runId']]['rootLeadRunId'], lead['runId'])
+
     def test_lead_owned_waits_count_as_active_and_timeline_projects_ownership(self):
         board = self.board()
         self.register(board)
@@ -686,6 +718,8 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertEqual(summary['counts']['active'], 2)
         self.assertEqual(summary['counts']['host'], 0)
         rows = {row['runId']: row for row in timeline['rows']}
+        self.assertIs(rows[root['runId']]['delegationAuthority'], False)
+        self.assertIs(rows[helper]['delegationAuthority'], False)
         self.assertEqual(rows[root['runId']]['leadOwnership']['leadRunId'], lead['runId'])
         self.assertIsNone(rows[helper]['leadOwnership'])
         self.assertEqual(rows[root['runId']]['rootLeadRunId'], lead['runId'])

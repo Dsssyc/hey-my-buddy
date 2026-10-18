@@ -74,7 +74,7 @@ for (const { locale, language, tasks } of [
       for (const [runId, state] of [[LEAD, ownedState], [WAITING, leadState]]) {
         const label = row(page, runId);
         await expect(label).toHaveAccessibleName(new RegExp(state));
-        await expectReadableStart(label.locator(":scope > span:last-child > span"), state);
+        await expectReadableStart(label.getByText(state, { exact: true }), state);
         await expectWholeAndApart(label, label.locator(":scope > span"));
       }
 
@@ -85,7 +85,7 @@ for (const { locale, language, tasks } of [
       // Enter opens the micro task on the decision it waits for: the Lead's, with the request as recorded.
       const detail = page.locator("[data-slot=task-detail]");
       await expect(detail).toBeVisible();
-      await expect(page.locator("[data-slot=detail-rail] [aria-current=step]")).toContainText("Lead");
+      await expect(page.locator("[data-slot=detail-strip] [aria-pressed=true]")).toHaveAccessibleName(new RegExp(zh ? "等待 Lead" : "Waiting for Lead"));
       const request = detail.locator("[data-slot=detail-pane]");
       await expect(request).toContainText("需要 Lead 决定路径样例的核对范围");
       await expect(request).toContainText("由 Lead 确定后续核对范围");
@@ -114,10 +114,10 @@ for (const { locale, language, tasks } of [
       await stop.click();
       const dialog = page.getByRole("dialog", { name: stopName, exact: true });
       const summary = timeline.macroTask;
-      await expect(dialog.locator("#stop-macro-task-name")).toHaveAttribute("aria-description", summary.title);
-      await expect(dialog.locator("#stop-macro-task-name")).toHaveText(summary.title);
+      await expect(dialog.locator("#stop-macro-task-name")).toHaveAttribute("aria-description", summary.title!);
+      await expect(dialog.locator("#stop-macro-task-name")).toHaveText(summary.title!);
       await expect(dialog.locator("#stop-macro-task-counts li")).toHaveCount(5);
-      await expect(dialog.locator("#stop-macro-task-body")).not.toContainText(summary.title);
+      await expect(dialog.locator("#stop-macro-task-body")).not.toContainText(summary.title!);
       await expect(dialog.locator("#stop-macro-task-counts")).toContainText(zh
         ? `停止 ${summary.counts.stoppableRoots} 个微任务`
         : `Micro tasks to stop ${summary.counts.stoppableRoots}`);
@@ -152,7 +152,7 @@ for (const { locale, language, tasks } of [
       await expect(dialog).toBeHidden();
       const status = page.locator("[data-slot=macro-stop-state]");
       await expect(status).toHaveText(zh ? "停止请求未提交" : "Stop request was refused");
-      await expect(status).toHaveAttribute("aria-description", /This synthetic preview never performs mutations/);
+      await expect(status).toHaveAttribute("aria-description", /This synthetic preview simulates deletion only; other writes are refused/);
       await expectTextUncut(status);
       await expect(page.getByText(zh ? "已停止" : "Stopped", { exact: true })).toHaveCount(0);
       await expect(page.getByRole("button", { name: zh ? "重试停止" : "Retry stop", exact: true })).toHaveCount(0);
@@ -161,8 +161,8 @@ for (const { locale, language, tasks } of [
       expect(unchanged.status()).toBe(200);
       expect(unchanged.headers()["x-hey-my-buddy-preview"]).toBe("synthetic-fixture-data");
       expect(await unchanged.text()).toBe(body);
-      await expectReadableStart(row(page, LEAD).locator(":scope > span:last-child > span"), zh ? "等待名下的微任务" : "Waiting for owned micro tasks");
-      await expectReadableStart(row(page, WAITING).locator(":scope > span:last-child > span"), zh ? "等待 Lead" : "Waiting for Lead");
+      await expectReadableStart(row(page, LEAD).getByText(zh ? "等待名下的微任务" : "Waiting for owned micro tasks", { exact: true }), zh ? "等待名下的微任务" : "Waiting for owned micro tasks");
+      await expectReadableStart(row(page, WAITING).getByText(zh ? "等待 Lead" : "Waiting for Lead", { exact: true }), zh ? "等待 Lead" : "Waiting for Lead");
       await page.getByRole("button", { name: zh ? "知道了" : "Dismiss", exact: true }).click();
       // Dismissing this browser's refusal leaves the earlier recorded Lead stop visible.
       await expect(status).toHaveText(zh ? "正在停止" : "Stopping");
@@ -187,7 +187,7 @@ for (const locale of ["zh-CN", "en-US"]) test.describe(`a long stop title in ${l
       const response = await route.fetch();
       const data = await response.json();
       const target = data.macroTasks.find((item: { macroTaskId: string }) => item.macroTaskId === MACRO);
-      target.title = title;
+      target.title! = title;
       await route.fulfill({ response, json: data });
     });
     await open(page, "#tasks");

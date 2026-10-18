@@ -29,6 +29,7 @@ import type { StopScope } from "./macro-task-stop";
 import type { AuthorityLatch } from "./console-session";
 
 import { displayTitle } from "./macro-task-display";
+import { MacroTaskDeleteDialog } from "./MacroTaskDeleteDialog";
 
 import { useViewPreference } from "./view-preferences";
 
@@ -125,12 +126,22 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   go: (next: TasksLocation, how: "push" | "replace", from?: string | null) => void;
   listNavigation: () => ReactNode; listCollapsed: boolean; onCollapseList: () => void; onExpandList: () => void;
 }) {
-  const { t } = useTranslation(["tasks", "shell"]);
+  const { t } = useTranslation(["tasks", "shell", "macroHeader"]);
   const [filter, setFilter] = useState<MacroTaskFilter>("all");
   const [query, setQuery] = useState("");
   const selected = location.macroTaskId;
   const [showNarrowList, setShowNarrowList] = useState(!selected);
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const deletionOpening = useRef(false);
+  const [deleteTarget, setDeleteTarget] = useState<MacroTaskSummary | null>(null);
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(() => new Set());
+  const [deletionNotice, setDeletionNotice] = useState<{ macroTaskId: string; title: string | null; skipped: number; refreshFailed: boolean } | null>(null);
+  const noticeRef = useRef<HTMLDivElement>(null);
+  const live = useRef(false), selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
+  useEffect(() => { if (deletionNotice) noticeRef.current?.focus(); }, [deletionNotice?.macroTaskId]);
   useEffect(() => setMenuOpen(false), [active, selected]);
   const detailRunId = selected ? location.runId : null;
   useEffect(() => { if (detailRunId) setShowNarrowList(false); }, [detailRunId]);
@@ -143,15 +154,23 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     return () => media.removeEventListener("change", changed);
   }, []);
   const list = useMacroTaskList(api, { query, filter }, active);
-  const timeline = useMacroTaskTimeline(api, selected, active);
+  const rows = list.rows.filter(row => !deletedIds.has(row.macroTaskId));
+  const totals = { ...list.totals };
+  for (const row of list.rows) if (deletedIds.has(row.macroTaskId)) {
+    --totals.all;
+    if (row.state !== "ended") --totals[row.state];
+  }
+  const timeline = useMacroTaskTimeline(api, selected && !deletedIds.has(selected) ? selected : null, active);
   useEffect(() => {
-    if (active && !selected && list.rows.length) go({ macroTaskId: list.rows[0].macroTaskId, runId: null, step: null }, "replace");
-  }, [active, selected, list.rows]);
+    if (!active) return;
+    if (selected && deletedIds.has(selected)) go(TASKS_ROOT, "replace");
+    else if (!selected && rows.length) go({ macroTaskId: rows[0].macroTaskId, runId: null, step: null }, "replace");
+  }, [active, selected, list.rows, deletedIds]);
   const detailClient = useMemo(() => createTaskDetailClient(api, snapshot.csrfToken), [api, snapshot.csrfToken]);
   // The list row is freshest, but a list refresh must never unmount an open
   // detail: the timeline read's summary covers the gap, and a snapshot of the
   // last seen summary covers the moments before the timeline read lands.
-  const listedSummary = list.rows.find(row => row.macroTaskId === selected)
+  const listedSummary = rows.find(row => row.macroTaskId === selected)
     ?? (timeline.timeline?.macroTask.macroTaskId === selected ? timeline.timeline.macroTask : null)
     ?? null;
   const [summarySnapshot, setSummarySnapshot] = useState<MacroTaskSummary | null>(null);
@@ -161,7 +180,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   }, [listedSummary, selected]);
   const selectedSummary = listedSummary
     ?? (summarySnapshot?.macroTaskId === selected ? summarySnapshot : null);
-  // MacroTask-level stop: the one retained write, with its explicit
+  // MacroTask-level stop, with its explicit
   // confirmation and a retained command identity. Nothing here locks browsing.
   const reload = async () => {
     const result = await refresh();
@@ -172,6 +191,24 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   const stop = useMacroTaskStop(api, snapshot, writesAvailable, authority, reload);
   const stopEntry = selected ? stop.entries.get(selected) : undefined;
   const stopState = stopStatus(stopEntry, timeline.timeline);
+
+  const deleted = (macroTaskId: string, skipped: number, summary: MacroTaskSummary) => {
+    if (!live.current) return;
+    const title = summary.titleSource === "none" ? null : displayTitle(summary.titleSource, summary.title).text;
+    setDeletedIds(previous => new Set(previous).add(macroTaskId));
+    setDeleteTarget(previous => previous?.macroTaskId === macroTaskId ? null : previous);
+    setDeletionNotice({ macroTaskId, title, skipped, refreshFailed: false });
+    list.reset();
+    if (selectedRef.current === macroTaskId) {
+      go(TASKS_ROOT, "replace");
+      setShowNarrowList(true);
+      if (listCollapsed) onExpandList();
+    }
+    const markRefreshFailure = () => {
+      if (live.current) setDeletionNotice(previous => previous?.macroTaskId === macroTaskId ? { ...previous, refreshFailed: true } : previous);
+    };
+    void refresh().then(result => { if (!result) markRefreshFailure(); }, markRefreshFailure);
+  };
 
   const selectMacroTask = (macroTaskId: string) => { setShowNarrowList(false); go({ macroTaskId, runId: null, step: null }, "push"); };
   const openRun = (runId: string, from: string | null = null) => go({ macroTaskId: selected, runId, step: null }, "push", from);
@@ -186,15 +223,17 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
       {stopState && <Hint text={stopState.detail}><span data-slot="macro-stop-state" className={cn("text-xs", stopState.phase === "refused" ? "text-fail" : stopState.phase === "stopping" || stopState.phase === "in-progress" ? "text-live" : stopState.phase === "stopped" || stopState.phase === "acknowledged" ? "text-past" : "text-hand")} role="status">{stopState.label}</span></Hint>}
       {stopState?.phase === "unknown" && stop.writable && !stopping && <Hint text={t("shell:macroStop.retryHint")}><Button variant="outline" size="sm" onClick={() => stop.retryStop(selectedSummary)}>{t("shell:macroStop.retry")}</Button></Hint>}
       {stopState?.phase === "refused" && <Button variant="outline" size="sm" onClick={() => stop.dismissStop(selectedSummary.macroTaskId)}>{t("shell:macroStop.dismiss")}</Button>}
-      <Popover open={menuOpen && active} onOpenChange={setMenuOpen}><PopoverTrigger asChild><Button data-slot="macro-menu-button" variant="outline" size="icon" aria-label={t("more")}>⋯</Button></PopoverTrigger>
-        <PopoverContent align="end" className="w-40 rounded-none p-1">
+      <Popover open={menuOpen && active} onOpenChange={setMenuOpen}><PopoverTrigger asChild><Button ref={menuButtonRef} data-slot="macro-menu-button" variant="outline" size="icon" aria-label={t("more")}>⋯</Button></PopoverTrigger>
+        <PopoverContent align="end" className="w-48 rounded-none p-1" onCloseAutoFocus={event => { if (deletionOpening.current) { event.preventDefault(); deletionOpening.current = false; } }}>
           <Hint text={reason}><Button data-slot="macro-stop-action" variant="ghost" className="w-full justify-start" aria-label={t("shell:macroStop.title")} aria-disabled={!!reason} onClick={() => { if (!reason) { setMenuOpen(false); stop.requestStop(selectedSummary, scope); } }}>{t("stop")}</Button></Hint>
+          <div className="my-1 border-t"/>
+          <Button data-slot="macro-delete-action" variant="ghost" className="w-full justify-start text-fail" onClick={() => { deletionOpening.current = true; setMenuOpen(false); setDeleteTarget(selectedSummary); }}>{t("macroHeader:deletion.action")}</Button>
         </PopoverContent>
       </Popover>
     </div>;
   }
   const listPane = <MacroTaskList
-    rows={list.rows} totals={list.totals} loading={list.loading} error={list.error}
+    rows={rows} totals={totals} loading={list.loading} error={list.error}
     nextCursor={list.nextCursor} reorder={list.reorder} filter={filter} query={query} selected={selected}
     active={active} visible={active && !listCollapsed && (!narrow || showNarrowList)} listNavigation={listNavigation()} onCollapse={onCollapseList}
     onFilterChange={setFilter} onQueryChange={setQuery} onSelect={selectMacroTask}
@@ -204,11 +243,11 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     active={active} summary={selectedSummary} timeline={timeline.timeline}
     displayObservedAt={timeline.displayObservedAt} loading={timeline.loading} error={timeline.error}
     stale={timeline.stale} newRunIds={timeline.newRunIds} openedRunId={detailRunId}
-    detail={(runId, railTarget, exiting) => <TaskDetail key={runId} client={detailClient} runId={runId}
-      railTarget={railTarget} timeline={timeline.timeline} timelineLoading={timeline.loading && !timeline.timeline}
+    detail={runId => <TaskDetail key={runId} client={detailClient} runId={runId}
+      timeline={timeline.timeline} timelineLoading={timeline.loading && !timeline.timeline}
       nowMs={timeline.displayObservedAt ? Date.parse(timeline.displayObservedAt) : null}
-      step={location.step} origin={origin} active={active && !exiting}
-      onStep={step => { if (!exiting) go({ macroTaskId: selected, runId, step }, "replace", origin); }}
+      step={location.step} origin={origin} active={active}
+      onStep={step => { go({ macroTaskId: selected, runId, step }, "replace", origin); }}
       onBack={backToTimeline} onOpenRun={next => openRun(next)} />}
     headerActions={stopControl} listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
     buddies={snapshot.buddies} onOpen={(runId, key) => openRun(runId, key)} onClose={backToTimeline}
@@ -217,7 +256,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
 
   const disconnected = !!connectionError || !!list.error;
   const lastRead = list.verifiedAtMs ?? verifiedAtMs;
-  const empty = !list.loading && !list.error && list.totals.all === 0 && !query && filter === "all";
+  const empty = !list.loading && !list.error && totals.all === 0 && !query && filter === "all";
   const detailPane = <aside data-slot="macro-detail" className={cn("col-start-2 flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-card", !listCollapsed && showNarrowList && !empty && "max-[760px]:hidden")} aria-label={t("detail")}>
     {selected
       ? <div className="flex min-h-0 flex-1 flex-col"><div className="flex min-h-0 min-w-0 flex-1 flex-col [container-type:inline-size]">{timelinePane}</div></div>
@@ -230,6 +269,12 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   </aside>;
   return <>
     <div className="flex h-full min-h-0 flex-col">
+      {deletionNotice && <div ref={noticeRef} tabIndex={-1} data-slot="macro-delete-result" className="flex shrink-0 flex-wrap items-center gap-3 border-b bg-card px-4 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-6">
+        <p role="status" className="min-w-0 flex-1 wrap-anywhere">{t(deletionNotice.skipped ? "macroHeader:deletion.skipped" : "macroHeader:deletion.deleted", { title: deletionNotice.title ?? t("macroHeader:unnamed"), n: formatNumber(deletionNotice.skipped) })}</p>
+        {deletionNotice.skipped > 0 && <a href="#settings" className="text-live underline">{t("macroHeader:deletion.storage")}</a>}
+        {(deletionNotice.refreshFailed || list.error) && <p role="alert" className="text-fail">{t("macroHeader:deletion.refreshFailed")}</p>}
+        <Button variant="ghost" size="sm" onClick={() => setDeletionNotice(null)}>{t("macroHeader:deletion.dismiss")}</Button>
+      </div>}
       {disconnected && <ConnectionStrip error={connectionError || list.error} verifiedAtMs={lastRead} retry={() => { if (connectionError) void refresh(); else list.retry(); }}/>}
       <Collapsible open={!listCollapsed} onOpenChange={open => open ? onExpandList() : onCollapseList()} asChild>
         <div data-slot="macro-workspace" className={cn("grid min-h-0 flex-1 transition-[grid-template-columns] duration-200 motion-reduce:transition-none max-[760px]:flex max-[760px]:flex-col", listCollapsed ? "grid-cols-[0px_minmax(0,1fr)]" : "grid-cols-[316px_minmax(0,1fr)]")}>
@@ -241,5 +286,9 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     {stop.confirming && <StopDialog summary={stop.confirming.summary} scope={stop.confirming.scope}
       onConfirm={() => stop.confirmStop(stop.confirming!.summary)}
       onCancel={stop.cancelConfirm} />}
+    {deleteTarget && <MacroTaskDeleteDialog key={deleteTarget.macroTaskId} summary={deleteTarget}
+      open={active && selected === deleteTarget.macroTaskId} returnFocus={menuButtonRef}
+      api={api} snapshot={snapshot} authority={authority} writesAvailable={writesAvailable && !connectionError}
+      onClose={() => setDeleteTarget(null)} onDeleted={(id, skipped) => deleted(id, skipped, deleteTarget)}/>}
   </>;
 }

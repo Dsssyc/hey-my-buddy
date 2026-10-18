@@ -18,37 +18,6 @@ export default {
     unhealthy: "未通过",
     unknown: "未检测",
   },
-  /** What a harness can do when no remedy was recorded for its state. */
-  remedy: {
-    unknown: "点“检测”查看状态。",
-    missing: "安装 CLI，或指定路径。",
-    "login-required": "在 Harness 中登录后检测。",
-    unhealthy: "检查 CLI，或更换路径。",
-  },
-  /** Stable discovery reason codes in short words; a code not listed stays as recorded. */
-  reason: {
-    HARNESS_NOT_CHECKED: "未检测",
-    HARNESS_NOT_FOUND: "未找到可执行文件",
-    HARNESS_HANDSHAKE_FAILED: "握手失败",
-    HARNESS_LOGIN_REQUIRED: "需要登录",
-    HARNESS_UNHEALTHY: "运行不健康",
-    HARNESS_INVALID_RESULT: "检测结果无效",
-    not_found: "未找到",
-    not_executable: "不是可执行文件",
-    permission_denied: "没有执行权限",
-    handshake_failed: "握手失败",
-    login_required: "需要登录",
-  },
-  /** How a tried location ended; a word not listed stays as recorded. */
-  candidate: {
-    ready: "可用",
-    ok: "可用",
-    failed: "握手失败",
-    missing: "未找到",
-    "not-found": "未找到",
-    "login-required": "需要登录",
-    unhealthy: "未通过",
-  },
   done: {
     checked: "已检测 {{name}}：{{status}}",
     checkedAll: "已检测全部 Harness：已找到 {{ready}} / {{n}}",
@@ -106,11 +75,6 @@ export default {
       subscription: "订阅",
       metered: "按量",
       unknown: "未知",
-    },
-    /** What to do about a recorded account problem, by reason code; other guidance stays as recorded. */
-    guidance: {
-      ACCOUNT_NOT_CHECKED: "检测当前 Harness 后查看账户状态。",
-      ACCOUNT_LOGIN_REQUIRED: "在 Harness 中登录后检测。",
     },
   },
   quota: {

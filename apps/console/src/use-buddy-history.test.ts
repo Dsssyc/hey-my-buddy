@@ -6,7 +6,7 @@ import { FILTER_DEBOUNCE_MS, MAX_QUERY_CHARS, MAX_QUERY_TERMS, boundBuddyQuery, 
 import type { Buddy, BuddyPage, Snapshot } from "./types";
 
 function buddy(buddyId: string): Buddy {
-  return { buddyId, label: buddyId, harness: "dsh", provider: "deepseek-official", model: buddyId,
+  return { effortRank: null, buddyId, label: buddyId, harness: "dsh", provider: "deepseek-official", model: buddyId,
     effort: "off", available: true, enabled: true, capabilities: [], contextWindow: null,
     description: "", source: "fixture" };
 }

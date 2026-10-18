@@ -4,6 +4,18 @@ import type { MacroTaskPage, MacroTaskTimeline } from "./macro-task-types";
 import { macroTaskTimelineFixture } from "./macro-task-fixtures";
 
 describe("work macro task reads", () => {
+  it("reads null titles and event facts from the current service without labels or summaries", async () => {
+    const timeline = macroTaskTimelineFixture();
+    timeline.macroTask.title = null;
+    timeline.macroTask.titleSource = "none";
+    timeline.rows[0] = { ...timeline.rows[0]!, title: null, titleSource: "none", fixes: "original", fixesTitle: null, fixesTitleSource: "none" };
+    timeline.events[0] = { ...timeline.events[0]!, decision: "approve", verdict: null, state: null, strategy: null, note: "Host 原文" };
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(timeline)));
+    const result = await createApi("/private", fetcher).macroTaskTimeline(timeline.macroTask.macroTaskId, {});
+    expect(result.timeline).toEqual(timeline);
+    expect(result.timeline.events[0]).not.toHaveProperty("label");
+    expect(result.timeline.events[0]).not.toHaveProperty("summary");
+  });
   it("reports macroTask list verification from each HTTP response without changing its envelope", async () => {
     const page: MacroTaskPage = { macroTasks: [], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: null, cursor: 41, changed: false };
     const firstDate = "Fri, 09 Oct 2026 18:00:00 GMT";

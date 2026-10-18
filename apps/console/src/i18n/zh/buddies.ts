@@ -63,10 +63,6 @@ export default {
     discovered: "新增 {{n}} 个 buddy，默认不启用",
     discoveredNone: "没有新的 buddy",
     refused: "连接中断或没有写入资格，暂时不能发现模型；草稿仍保留。",
-    reason: {
-      harness: "Harness 不可用",
-      gone: "已不在 Harness 的模型目录里",
-    },
     empty: {
       none: "还没有模型",
       noneHint: "点“发现模型”，查找本机的 Harness 能用的模型。",

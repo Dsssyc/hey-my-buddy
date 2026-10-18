@@ -1,5 +1,6 @@
 import i18n from "i18next";
 import { locale } from "./i18n";
+import { isReason } from "./reason";
 import type { RuntimeVersionInfo, VersionFacts, Configuration, ConsoleAccess, ConsoleSession, ReminderSettings, RoutingHealth, Snapshot } from "./types";
 import type {
   MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskSummary, MacroTaskTimeline, TimelineRow, TimelineSpan,
@@ -188,7 +189,6 @@ export function readVerificationText(verifiedAtMs: number | null | undefined): s
 
 export type StorageCategory = {
   id: string;
-  label: string;
   bytes: number;
   reclaimableBytes: number;
   count: number;
@@ -242,7 +242,7 @@ function validStoragePlan(value: unknown): value is StoragePlan {
     || typeof value.expiresAt !== "string" || !Number.isFinite(Date.parse(value.expiresAt))) return false;
   if (!Array.isArray(value.categories) || !Array.isArray(value.candidates) || !Array.isArray(value.orphanProcesses)) return false;
   return value.categories.every(category => storageObject(category) && storageString(category.id)
-    && typeof category.label === "string" && storageCount(category.bytes) && storageCount(category.reclaimableBytes)
+    && storageCount(category.bytes) && storageCount(category.reclaimableBytes)
     && storageCount(category.count) && storageCount(category.eligibleCount) && storageReasons(category.reasons))
     && new Set(value.categories.map(category => category.id)).size === value.categories.length
     && value.candidates.every(row => storageObject(row) && storageString(row.id) && storageString(row.category)
@@ -278,7 +278,7 @@ function validMacroTaskSummary(value: unknown): boolean {
   const project = summary.project;
   return typeof summary.macroTaskId === "string" && summary.macroTaskId.length > 0
     && (summary.kind === "macro-task" || summary.kind === "standalone")
-    && typeof summary.title === "string"
+    && (summary.title === null || typeof summary.title === "string")
     && ["macro-task", "title", "task", "none"].includes(summary.titleSource)
     && (summary.description === null || typeof summary.description === "string")
     && (summary.summary === null || typeof summary.summary === "string")
@@ -305,9 +305,11 @@ function validTimelineRows(rows: unknown): boolean {
   return Array.isArray(rows) && rows.every(row => {
     const entry = row as TimelineRow | null;
     return !!entry && typeof entry === "object"
+      && typeof entry.delegationAuthority === "boolean"
+      && (entry.title === null || typeof entry.title === "string")
       && (entry.taskSummary === null || typeof entry.taskSummary === "string")
       && (Object.hasOwn(entry, "fixes")
-        ? typeof entry.fixes === "string" && entry.fixes.length > 0 && typeof entry.fixesTitle === "string"
+        ? typeof entry.fixes === "string" && entry.fixes.length > 0 && (entry.fixesTitle === null || typeof entry.fixesTitle === "string")
           && ["title", "task", "none"].includes(entry.fixesTitleSource!)
         : !Object.hasOwn(entry, "fixesTitle") && !Object.hasOwn(entry, "fixesTitleSource"))
       && (!Object.hasOwn(entry, "fixedBy") || (Array.isArray(entry.fixedBy) && entry.fixedBy.length > 0
@@ -390,13 +392,11 @@ export function parseReadOnlyStructured(value: unknown): NonNullable<HarnessHeal
   const record = value as Record<string, unknown>;
   if (typeof record.eligible !== "boolean" || typeof record.systemSandbox !== "boolean"
     || typeof record.sameAttemptContinuation !== "boolean") return null;
-  for (const key of ["reasonCode", "reason"] as const) {
-    if (!(record[key] === null || typeof record[key] === "string")) return null;
-  }
-  if (record.eligible && (record.reasonCode !== null || record.reason !== null)) return null;
+  if (record.reason !== null && !isReason(record.reason)) return null;
+  if (record.eligible && record.reason !== null) return null;
   if (record.implemented !== undefined && typeof record.implemented !== "boolean") return null;
   return { eligible: record.eligible, systemSandbox: record.systemSandbox,
-    reasonCode: record.reasonCode as string | null, reason: record.reason as string | null,
+    reason: record.reason as NonNullable<HarnessHealth["readOnlyStructured"]>["reason"],
     sameAttemptContinuation: record.sameAttemptContinuation,
     ...(typeof record.implemented === "boolean" ? { implemented: record.implemented } : {}) };
 }
@@ -413,13 +413,15 @@ function harnessRow(value: unknown): HarnessHealth | null {
   if ((row.status === "ready") !== row.available) return null;
   if (typeof row.available !== "boolean" || !Number.isInteger(row.revision) || row.revision < 0) return null;
   if (!(row.manualPath === null || row.manualPath === undefined || typeof row.manualPath === "string")) return null;
-  for (const key of ["executable", "version", "source", "reasonCode", "remedy", "checkedAt", "expiresAt"] as const) {
+  for (const key of ["executable", "version", "source", "checkedAt", "expiresAt"] as const) {
     if (row[key] != null && typeof row[key] !== "string") return null;
   }
+  if (row.reason != null && !isReason(row.reason)) return null;
   if (row.command != null && (!Array.isArray(row.command) || row.command.some(value => typeof value !== "string"))) return null;
   if (row.candidates != null && (!Array.isArray(row.candidates) || row.candidates.some(candidate =>
-    !candidate || typeof candidate !== "object" || ["path", "source", "reasonCode", "status"].some(key =>
-      (candidate as Record<string, unknown>)[key] != null && typeof (candidate as Record<string, unknown>)[key] !== "string")))) return null;
+    !candidate || typeof candidate !== "object" || ["path", "source", "status"].some(key =>
+      (candidate as Record<string, unknown>)[key] != null && typeof (candidate as Record<string, unknown>)[key] !== "string")
+      || candidate.reason != null && !isReason(candidate.reason)))) return null;
   // ADR-018 §23: a malformed quota observation is dropped as unknown instead of
   // blanking the page or being presented as a recorded 0%. An observation that
   // was not recorded adds no key at all.

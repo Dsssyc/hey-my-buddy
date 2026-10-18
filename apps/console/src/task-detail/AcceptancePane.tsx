@@ -1,3 +1,4 @@
+import { reasonText } from "../i18n/reason";
 import { useTranslation } from "react-i18next";
 import { Section } from "@/components/section";
 import { actorText } from "../actor";
@@ -46,7 +47,7 @@ export function AcceptancePane({ step, ctx }: { step: Step; ctx: Context }) {
       {integration ? <div className="space-y-3">
         <Facts items={[
           [t("acceptance.state"), integration.state === "not-required" ? t("acceptance.notRequired") : t("acceptance.verified")],
-          ...(integration.state === "not-required" && integration.reason ? [[t("acceptance.why"), integration.reason] as [string, string]] : []),
+          ...(integration.state === "not-required" && integration.note ? [[t("acceptance.why"), integration.note] as [string, string]] : []),
           ...(integration.state !== "not-required" ? [
             [t("acceptance.strategy"), integration.strategy] as [string, string],
             ...(integration.target ? [[t("acceptance.target"), `${integration.target.path} @ ${integration.target.ref}`, true] as [string, string, boolean]] : []),
@@ -77,7 +78,7 @@ export function AcceptancePane({ step, ctx }: { step: Step; ctx: Context }) {
           ...(conclusion.artifactId ? [[t("acceptance.artifactRef"), conclusion.artifactId, true] as [string, string, boolean]] : []),
           ...(conclusion.integrationId ? [[t("acceptance.integrationRef"), conclusion.integrationId, true] as [string, string, boolean]] : []),
         ]} />
-        <Fold text={conclusion.note} />
+        <Fold text={conclusion.reason ? reasonText(conclusion.reason) : conclusion.note ?? unrecorded} />
         {conclusion.evidence.length > 0 && <div>
           <p className="mb-1.5 text-xs text-ink3">{t("acceptance.evidence")}</p>
           <Lines items={conclusion.evidence} className="font-mono text-xs" />

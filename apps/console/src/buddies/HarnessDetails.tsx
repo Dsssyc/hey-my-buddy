@@ -31,7 +31,7 @@ function Exception({ exception }: { exception: NonNullable<HarnessDetailsView["l
   const { t } = useTranslation("buddies");
   return <div className={cn(fields, "mt-3")}>
     {exception.reason && <><span className={label}>{t("harness.pane.reason")}</span>
-      <Hint text={exception.remedy ?? undefined}><span tabIndex={0} className={hintTarget}>{exception.reason}</span></Hint></>}
+      <span className="wrap-anywhere">{exception.reason}</span></>}
     {exception.tried.length > 0 && <>
       <span className={cn(label, "col-span-2")}>{t("harness.pane.tried")}</span>
       {exception.tried.map((tried, index) => <div key={`${tried.path ?? ""}:${index}`} className="col-span-2 flex flex-col gap-0.5">
@@ -53,7 +53,7 @@ function LocationBlock({ row, name, view, gate, onCheck, onSavePath }: {
   const refusal = gate.refusal || (gate.busy ? t("harness.running") : undefined);
   return <Block title={t("harness.pane.location")} head={<>
     <StateMark kind={row.status === "ready" ? "live" : "idle"} />
-    <Hint text={location.exception?.remedy ?? undefined}><span tabIndex={0} className={hintTarget}>{statusText(row.status, t)}</span></Hint>
+    <Hint text={location.exception?.reason ?? undefined}><span tabIndex={0} className={hintTarget}>{statusText(row.status, t)}</span></Hint>
   </>}>
     <div className={fields}>
       {row.version && <><span className={label}>{t("harness.pane.version")}</span>
@@ -85,7 +85,7 @@ function AccountBlock({ view }: { view: HarnessDetailsView }) {
   return <Block title={t("harness.account.name")}>
     {account ? <div className={fields}>
       <span className={label}>{t("harness.account.state")}</span>
-      <Hint text={account.guidance ?? undefined}><span tabIndex={0} className={hintTarget}>{account.state}</span></Hint>
+      <Hint text={account.reason ?? undefined}><span tabIndex={0} className={hintTarget}>{account.state}</span></Hint>
       <span className={label}>{t("harness.account.billing")}</span>
       <span className="flex flex-col">{account.billing.length
         ? account.billing.map(entry => <span key={entry.provider}>{entry.provider} <span className="text-ink3">{entry.plan}</span></span>)

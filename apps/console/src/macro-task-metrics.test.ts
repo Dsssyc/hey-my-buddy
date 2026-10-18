@@ -131,7 +131,7 @@ describe("macroTask metrics", () => {
   it("falls back to the macroTask creation time when no span has a usable start", () => {
     const timeline = withSpans([], { macroTask: macroTaskSummary({ createdAt: "2026-09-26T01:12:00Z" }) });
     timeline.events = [{
-      seq: 1, runId: "r1", kind: "dispatch", at: "2026-09-26T02:00:00Z", label: "派发", summary: "", actor: null,
+      seq: 1, runId: "r1", kind: "dispatch", at: "2026-09-26T02:00:00Z", decision: null, verdict: null, state: null, strategy: null, note: null, actor: null,
       attemptId: null, requestId: null, artifactId: null,
     }];
     const metrics = macroTaskMetrics(timeline);

@@ -1,5 +1,73 @@
 /** The frame around every page: top bar, connection state and the startup screen. */
 export default {
+  reasonFact: "{{name}}：{{value}}。",
+  reasonParam: {
+    "access": "权限",
+    "adapter": "执行适配器",
+    "bound": "边界",
+    "buddy": "Buddy",
+    "buddyId": "Buddy 标识",
+    "bytes": "字节",
+    "catalogReadAt": "目录读取",
+    "cause": "原因",
+    "collection": "集合",
+    "conflictIds": "冲突",
+    "continuationId": "续接",
+    "count": "数量",
+    "disposition": "结果",
+    "enabled": "启用",
+    "errorCode": "错误代码",
+    "harness": "Harness",
+    "kind": "类型",
+    "leadRunId": "Lead 微任务",
+    "legalEfforts": "合法推理强度",
+    "limit": "上限",
+    "missingCapabilities": "缺少的能力",
+    "operation": "操作",
+    "paths": "路径",
+    "recordId": "记录",
+    "requiredCapability": "所需能力",
+    "retryAt": "重试时间",
+    "shape": "形状",
+    "total": "总数",
+    "unfinished": "未完成的微任务"
+  },
+  reasonValue: {
+    "yes": "是",
+    "no": "否",
+    "operation": {
+      "probe": "检测",
+      "account-read": "账户读取"
+    },
+    "bound": {
+      "removed": "候选已移除",
+      "disabled": "已停用",
+      "unavailable": "不可用",
+      "excluded": "已排除",
+      "capability-missing": "缺少能力",
+      "constraints-or-quota": "约束或额度不符",
+      "quota-retry-consumed": "额度重试机会已用",
+      "not-a-candidate": "不在候选内"
+    },
+    "disposition": {
+      "completed": "完成",
+      "waiting": "等待",
+      "assistance": "协助",
+      "attention": "关注"
+    },
+    "state": {
+      "queued": "排队",
+      "executing": "执行中",
+      "waiting-helpers": "等待 helper",
+      "waiting-owned": "等待名下微任务",
+      "awaiting-host": "等待 Host",
+      "delivered": "待验收",
+      "accepted": "已验收",
+      "concluded": "已作结论",
+      "cancelled": "已取消",
+      "failed": "失败"
+    }
+  },
   identifier: { copy: "复制标识 {{value}}", copied: "已复制", failed: "复制失败，请重试" },
   actor: {
     delegator: "委派方：{{source}}", originalDelegator: "原始委派方", unrecordedDelegator: "未记录委派方",
@@ -55,7 +123,7 @@ export default {
     refused: "停止请求未提交", refusedDetail: "请求被拒绝。", unknown: "停止未确认",
     unknownDetail: "停止结果未知，可能已生效；可重试同一请求或刷新核对。",
     stopping: "正在停止", stoppingDetail: "停止中 · 等待证据",
-    incomplete: "时间轴读取不完整", incompleteDetail: "时间轴读取不完整 · 停止未确认",
+    incomplete: "这个宏任务的记录没有读全", incompleteDetail: "这个宏任务的记录没有读全 · 停止未确认",
     pendingCount: "仍有 {{count}} 项停止未确认", uncertainCount: "{{count}} 项停止未确认或超出读取范围",
     stopped: "已停止", stoppedCount: "{{roots}}及 {{helpers}}已停止",
     stoppedRoots: "{{count}} 个微任务", stoppedHelpers: "{{count}} 个协助任务",
@@ -81,6 +149,7 @@ export default {
     reload: "重新读取设置",
   },
   startup: {
+    entryUnavailable: "控制台入口已失效或暂不可用", reopenCommand: "hey-my-buddy console",
     connecting: "正在连接本地黑板",
     waiting: "正在连接…",
     failed: "暂时无法连接黑板",

@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Section } from "@/components/section";
+import { reasonText } from "../i18n/reason";
 import { actorText } from "../actor";
 import type { Actor } from "../types";
 import { Facts, Fold, Lines, LinkButton, Moment, Pane, PaneTitle } from "./parts";
@@ -46,7 +47,7 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
     </PaneTitle>
     {full && <>
       <Section name={t("decision.summary")} className="border-t">
-        <Fold text={full.summary} />
+        <Fold text={full.reason ? reasonText(full.reason) : full.summary ?? t("unrecorded")} />
         {full.childTaskId && <p className="mt-2"><LinkButton hint={full.childTaskId} onClick={() => ctx.open(full.childTaskId!)}>{t("decision.child")}</LinkButton></p>}
         {more > 0 && <p className="mt-2 text-xs text-ink3">{t("decision.more", { n: more })}</p>}
         {full.preparationError && <p className="mt-2 text-fail"><code className="font-mono text-xs">{full.preparationError.code}</code> · {full.preparationError.message}</p>}
@@ -61,7 +62,7 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
     {continuation && <Section name={t("decision.continuation")} className="border-t">
       <Facts items={[
         [t("decision.who"), who ? actorText(who) : t("unrecorded")],
-        ...(continuation.reason ? [[t("decision.reason"), continuation.reason] as [string, string]] : []),
+        ...(continuation.note ? [[t("decision.reason"), continuation.note] as [string, string]] : []),
       ]} />
     </Section>}
     <Section name={t("decision.decided")} className={full || continuation ? undefined : "border-t"}>
@@ -69,7 +70,7 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
         [t("decision.what"), step.kind === "continue" ? t("step.continue") : decided ? t(`decision.state.${decided.state}`, { defaultValue: decided.state }) : t("unrecorded")],
         [t("decision.who"), who ? actorText(who) : t("unrecorded")],
         [t("decision.when"), <Moment key="when" at={when} />],
-        ...(full && "decision" in full && full.decision?.reason ? [[t("decision.reason"), full.decision.reason] as [string, string]] : []),
+        ...(full && "decision" in full && full.decision?.note ? [[t("decision.reason"), full.decision.note] as [string, string]] : []),
       ]} />}
     </Section>
   </Pane>;

@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Section } from "@/components/section";
 import { actorText } from "../actor";
-import { eventName } from "../macro-task-display";
+import { eventDetails, eventName } from "../macro-task-display";
 import { Facts, Moment, Pane, PaneTitle } from "./parts";
 import { quad } from "./names";
 import type { Step } from "./steps";
@@ -17,7 +17,7 @@ export function EventPane({ step, ctx }: { step: Step; ctx: Context }) {
   const event = step.events[0] ?? null;
   const unrecorded = t("unrecorded");
   const stopped = event?.kind === "cancel" ? event.stopInitiator ?? event.actor?.role ?? null : null;
-  const reason = event?.kind === "cancel" ? ctx.view.attempt?.ending?.reason ?? null : null;
+  const note = event ? eventDetails(event) : null;
   return <Pane>
     <PaneTitle title={step.kind === "cancel" ? eventName(event!) : t(`step.${step.kind}`)}><Moment at={step.at} /></PaneTitle>
     <Section name={t("event.facts")} className="border-t">
@@ -27,8 +27,7 @@ export function EventPane({ step, ctx }: { step: Step; ctx: Context }) {
           [t("decision.who"), event?.actor ? actorText(event.actor) : unrecorded],
           [t("decision.when"), <Moment key="when" at={step.at} />],
           ...(stopped ? [[t("event.stoppedBy"), t(`stop.${stopped}`, { defaultValue: stopped })] as [string, string]] : []),
-          ...(reason ? [[t("event.reason"), reason] as [string, string]] : []),
-          ...(event?.summary ? [[t("event.summary"), event.summary] as [string, string]] : []),
+          ...(note ? [[t("event.details"), note] as [string, string]] : []),
         ]} />}
     </Section>
   </Pane>;

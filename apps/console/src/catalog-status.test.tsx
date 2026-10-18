@@ -1,3 +1,4 @@
+import { reasonText } from "./i18n/reason";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,7 +33,7 @@ const nameCell = (name: string) => modelRow(model(name));
  * a time, and a retired unavailable model service.
  */
 function catalog(): Buddy[] {
-  const base = {
+  const base = { effortRank: null,
     harness: "dsh", provider: "deepseek-official", capabilities: ["execution:dsh", "decision"],
     contextWindow: null, source: "catalog:fixture", description: "",
   };
@@ -45,15 +46,15 @@ function catalog(): Buddy[] {
     // facts must never merge into one state.
     { ...base, buddyId: plainMax, model: "plain-model", effort: "max", label: "plain-model · max",
       available: false, enabled: true, catalogStatus: "available" as const,
-      unavailableReason: "HARNESS_UNHEALTHY" },
+      unavailableReason: { code: "harness.probe-failed", params: {} } },
     { ...base, buddyId: legacyMax, model: "legacy-model", effort: "max", label: "legacy-model · max",
       available: true, enabled: true },
     { ...base, buddyId: ghostLow, model: "ghost-model", effort: "low", label: "ghost-model · low",
       available: true, enabled: false, catalogStatus: "pending" as const, pendingSince: null },
     { ...base, buddyId: retiredMax, model: "retired-model", effort: "max", label: "retired-model · max",
-      available: false, enabled: false, unavailableReason: "provider paused" },
+      available: false, enabled: false, unavailableReason: { code: "catalog.native-unavailable", params: {} } },
     { ...base, buddyId: retiredLow, model: "retired-model", effort: "low", label: "retired-model · low",
-      available: false, enabled: false, unavailableReason: "provider paused" },
+      available: false, enabled: false, unavailableReason: { code: "catalog.native-unavailable", params: {} } },
   ];
 }
 
@@ -141,7 +142,7 @@ describe("a model the catalogue no longer confirms (ADR-027 §6)", () => {
     // The unavailable model reads as 不可用, never as 待确认.
     await user.click(screen.getByRole("checkbox", { name: "显示不可用 3" }));
     await listed(3, 7);
-    expect(within(nameCell("retired-model")).getByText("不可用").getAttribute("aria-description")).toBe("provider paused");
+    expect(within(nameCell("retired-model")).getByText("不可用").getAttribute("aria-description")).toBe(reasonText({ code: "catalog.native-unavailable", params: {} }));
     expect(within(nameCell("retired-model")).queryByText("待确认")).toBeNull();
   });
 
@@ -207,11 +208,11 @@ describe("a model the catalogue no longer confirms (ADR-027 §6)", () => {
     // The board lists this model as present in the catalogue, yet harness health
     // makes it unusable now: it reads 不可用 with that reason, never 可用 or 待确认.
     const state = within(nameCell("plain-model")).getByText("不可用");
-    expect(state.getAttribute("aria-description")).toBe("Harness 不可用");
+    expect(state.getAttribute("aria-description")).toBe(reasonText({ code: "harness.probe-failed", params: {} }));
     expect(within(nameCell("plain-model")).queryByText("待确认")).toBeNull();
     await user.click(modelButton(model("plain-model")));
     expect(within(pane(model("plain-model"))).getByText("不可用")).toBeTruthy();
-    expect(within(pane()).getByText("不可用").getAttribute("aria-description")).toBe("Harness 不可用");
+    expect(within(pane()).getByText("不可用").getAttribute("aria-description")).toBe(reasonText({ code: "harness.probe-failed", params: {} }));
     expect(within(pane()).queryByText("可用")).toBeNull();
   });
 });

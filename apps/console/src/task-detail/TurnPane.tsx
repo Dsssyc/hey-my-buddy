@@ -6,6 +6,7 @@ import { Hint } from "@/components/hint";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { StateMark } from "@/components/ui/state-mark";
 import { CopyableIdentifier } from "../components/CopyableIdentifier";
+import { reasonText } from "../i18n/reason";
 import { formatDuration, formatRelative } from "../i18n/format";
 import { Ask } from "./ask";
 import { endingText, Origin, sessionHint } from "./facts";
@@ -128,7 +129,7 @@ export function TurnPane({ step, ctx }: { step: Step; ctx: Context }) {
       <span>{t("activity.toolCalls", { n: attempt.activity.toolCalls ?? t("unknown") })}</span>
     </span>
     : <Usage usage={turn?.tokenUsage ?? null} />;
-  const note = [attempt?.ending ? endingText(attempt.ending, t) : null, failed && span.error ? span.error : null].filter(Boolean).join(" · ");
+  const note = [attempt?.releaseReason ? reasonText(attempt.releaseReason) : null, attempt?.ending ? endingText(attempt.ending, t) : null, failed && span.error ? span.error : null].filter(Boolean).join(" · ");
   return <Pane footer={running ? <Live activity={attempt?.activity ?? null} stuck={reminders.possiblyStuck} nowMs={ctx.nowMs} /> : undefined}>
     <PaneTitle title={t("step.turn", { n: index })}
       state={running ? t("state.running") : failed ? t("state.failed") : unknown ? t("state.unknown") : t("state.ended")}

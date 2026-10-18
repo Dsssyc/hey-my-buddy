@@ -1,3 +1,5 @@
+import type { Reason } from "./reason";
+
 export const ACTOR_ROLES = ["host", "lead", "console", "service", "workflow", "bridge"] as const;
 export type ActorRole = (typeof ACTOR_ROLES)[number];
 export type Actor = { role: ActorRole; id: string };
@@ -8,13 +10,13 @@ export type HarnessStatus = "unknown" | "ready" | "missing" | "login-required" |
 export type HarnessCandidate = {
   path?: string;
   source?: string;
-  reasonCode?: string;
+  reason?: Reason | null;
   status?: string;
 };
 /**
  * One harness's recorded health. `ready` carries the chosen executable, its
  * version and where it came from; every other status carries the attempted
- * locations and a remedy. `manualPath` is the user's stored override (`null`
+ * locations and a program reason. `manualPath` is the user's stored override (`null`
  * means automatic detection) and `revision` records its current generation.
  */
 export type HarnessHealth = {
@@ -28,8 +30,7 @@ export type HarnessHealth = {
   version?: string;
   source?: string;
   candidates?: HarnessCandidate[];
-  reasonCode?: string;
-  remedy?: string;
+  reason?: Reason | null;
   checkedAt?: string | null;
   expiresAt?: string | null;
   /** Latest recorded native quota observation; null or absent means unknown. */
@@ -45,8 +46,7 @@ export type HarnessHealth = {
 type ReadOnlyStructured = {
   eligible: boolean;
   systemSandbox: boolean;
-  reasonCode: string | null;
-  reason: string | null;
+  reason: Reason | null;
   sameAttemptContinuation: boolean;
   implemented?: boolean;
 };
@@ -138,17 +138,18 @@ export type Buddy = {
   model: string;
   effort: string;
   /** This effort's 0-based position in the model's current native catalog; absent from that catalog is null. */
-  effortRank?: number | null;
+  effortRank: number | null;
   available: boolean;
   enabled: boolean;
   capabilities: string[];
   contextWindow: number | null;
   description: string;
   source: string;
-  unavailableReason?: string;
+  unavailableReason?: Reason | null;
+  unavailableContent?: string | null;
   /**
    * Model-identity (harness/provider/model) catalog state, shared by every
-   * effort of the model service; absent on boards and fixtures from before ADR-027.
+   * effort of the model service.
    */
   catalogStatus?: CatalogStatus;
   /** First recorded absence of a pending model, UTC ISO; absent otherwise. */
@@ -169,10 +170,10 @@ type Decision = {
   status: string;
   task: string;
   buddyId: string | null;
-  reason: string;
+  reason: Reason | null;
+  note: string | null;
   evidence?: { kind: "annotation" | "preference" | "file"; ref: string }[] | null;
   createdAt: string;
-  error?: string | null;
   updatedAt?: string;
   routingMode?: RoutingMode | null;
 };
@@ -220,7 +221,7 @@ export type Task = {
   stopInitiator?: "host" | "lead" | "console" | "service" | "unknown" | null;
   graceDeadline?: string | null;
   /** First durable cancellation event for this run, when recorded. */
-  cancellation?: { actor: Actor | null; reason: string | null } | null;
+  cancellation?: { actor: Actor | null; note: string | null } | null;
   /** Selected attempt receipt; its `result.terminationReason` is the durable cause. */
   selectedAttempt?: AttemptReceipt | null;
   /** Native usage of the selected execution; null or absent means unknown. */
@@ -257,6 +258,7 @@ type AttemptReceipt = {
   shutdownConfirmed?: boolean;
   result?: Record<string, unknown> | null;
   error?: string | null;
+  releaseReason?: Reason | null;
   terminationReason?: string | null;
   stopInitiator?: "host" | "lead" | "console" | "service" | "unknown" | null;
   graceDeadline?: string | null;
@@ -290,7 +292,7 @@ type TaskActivity = {
   lastNativeActivityAt?: string | null;
   lastToolActivityAt?: string | null;
   toolName?: string | null;
-  waitingReason?: string | null;
+  waitingReason?: Reason | null;
   counts?: ActivityCounts | null;
 };
 type Shutdown = {

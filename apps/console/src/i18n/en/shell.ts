@@ -1,6 +1,74 @@
 import type zh from "../zh/shell";
 
 export default {
+  reasonFact: "{{name}}: {{value}}.",
+  reasonParam: {
+    "access": "Access",
+    "adapter": "Execution adapter",
+    "bound": "Bound",
+    "buddy": "Buddy",
+    "buddyId": "Buddy ID",
+    "bytes": "Bytes",
+    "catalogReadAt": "Catalog read",
+    "cause": "Cause",
+    "collection": "Collection",
+    "conflictIds": "Conflicts",
+    "continuationId": "Continuation",
+    "count": "Count",
+    "disposition": "Disposition",
+    "enabled": "Enabled",
+    "errorCode": "Error code",
+    "harness": "Harness",
+    "kind": "Kind",
+    "leadRunId": "Lead micro task",
+    "legalEfforts": "Legal reasoning efforts",
+    "limit": "Limit",
+    "missingCapabilities": "Missing capabilities",
+    "operation": "Operation",
+    "paths": "Paths",
+    "recordId": "Record",
+    "requiredCapability": "Required capability",
+    "retryAt": "Retry time",
+    "shape": "Shape",
+    "total": "Total",
+    "unfinished": "Unfinished micro tasks"
+  },
+  reasonValue: {
+    "yes": "Yes",
+    "no": "No",
+    "operation": {
+      "probe": "Check",
+      "account-read": "Account read"
+    },
+    "bound": {
+      "removed": "Candidate removed",
+      "disabled": "Disabled",
+      "unavailable": "Unavailable",
+      "excluded": "Excluded",
+      "capability-missing": "Capability missing",
+      "constraints-or-quota": "Constraints or quota",
+      "quota-retry-consumed": "Quota retry consumed",
+      "not-a-candidate": "Not a candidate"
+    },
+    "disposition": {
+      "completed": "Completed",
+      "waiting": "Waiting",
+      "assistance": "Assistance",
+      "attention": "Attention"
+    },
+    "state": {
+      "queued": "Queued",
+      "executing": "Executing",
+      "waiting-helpers": "Waiting for helpers",
+      "waiting-owned": "Waiting for owned micro tasks",
+      "awaiting-host": "Awaiting Host",
+      "delivered": "Awaiting acceptance",
+      "accepted": "Accepted",
+      "concluded": "Concluded",
+      "cancelled": "Cancelled",
+      "failed": "Failed"
+    }
+  },
   identifier: { copy: "Copy identifier {{value}}", copied: "Copied", failed: "Copy failed; try again" },
   actor: {
     delegator: "Delegated by: {{source}}", originalDelegator: "Originally delegated by", unrecordedDelegator: "Delegator not recorded",
@@ -55,7 +123,7 @@ export default {
     refused: "Stop request was refused", refusedDetail: "The request was refused.", unknown: "Stop unconfirmed",
     unknownDetail: "The stop outcome is unknown and may have taken effect. Retry the same request or refresh to check.",
     stopping: "Stopping", stoppingDetail: "Stopping · awaiting evidence",
-    incomplete: "Timeline read is incomplete", incompleteDetail: "Timeline read is incomplete · stop unconfirmed",
+    incomplete: "This macro task's record is incomplete", incompleteDetail: "This macro task's record is incomplete · stop unconfirmed",
     pendingCount: "Stops unconfirmed {{count}}",
     uncertainCount: "Stops unconfirmed or outside the read {{count}}",
     stopped: "Stopped", stoppedCount: "Stopped {{roots}}; {{helpers}}",
@@ -82,6 +150,7 @@ export default {
     reload: "Reread settings",
   },
   startup: {
+    entryUnavailable: "The console entry has expired or is unavailable", reopenCommand: "hey-my-buddy console",
     connecting: "Connecting to the local blackboard",
     waiting: "Connecting…",
     failed: "Cannot reach the blackboard right now",

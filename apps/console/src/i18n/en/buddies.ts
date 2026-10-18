@@ -62,10 +62,6 @@ export default {
     discovered: "New buddies: {{n}}, not enabled by default",
     discoveredNone: "No new buddies",
     refused: "The connection is lost or this session cannot write, so models cannot be discovered now; the draft is kept.",
-    reason: {
-      harness: "Harness unavailable",
-      gone: "No longer in the harness's model catalog",
-    },
     empty: {
       none: "No models yet",
       noneHint: "Use “Discover models” to find the models this machine’s harnesses offer.",

@@ -1,3 +1,5 @@
+import type { Reason } from "../reason";
+import { reasonText } from "../i18n/reason";
 import type { TFunction } from "i18next";
 import { modelServiceSearchText, harnessGroups } from "../buddy-display";
 import { MODEL_SERVICE_CONCURRENCY_DEFAULT, concurrencyEntryFor, modelServicePending, modelServices } from "../console-data";
@@ -22,7 +24,7 @@ export type ModelRow = {
   chips: BuddyChip[];
   available: boolean;
   /** Why its buddies are unavailable, as recorded; empty when nothing was recorded. */
-  reasons: string[];
+  reasons: Reason[];
   pending: boolean;
   pendingSince: string | null;
   fresh: boolean;
@@ -38,7 +40,7 @@ export type HarnessBlock = {
   name: string;
   /** Set only when the harness makes its buddies unavailable: its recorded state, or `unavailable`. */
   state: string | null;
-  reasons: string[];
+  reasons: Reason[];
   folded: boolean;
   models: ModelRow[];
   providers: string[];
@@ -63,8 +65,9 @@ export function listedModels(buddies: Buddy[], { query, enabledOnly, showUnavail
   });
 }
 
-function reasonsOf(buddies: Buddy[]): string[] {
-  return [...new Set(buddies.filter(buddy => !buddy.available).map(buddy => buddy.unavailableReason?.trim() ?? "").filter(Boolean))];
+function reasonsOf(buddies: Buddy[]): Reason[] {
+  return [...new Map(buddies.filter(buddy => !buddy.available && buddy.unavailableReason)
+    .map(buddy => [JSON.stringify(buddy.unavailableReason), buddy.unavailableReason!])).values()];
 }
 
 /**
@@ -134,23 +137,9 @@ export function harnessStateText(state: string, t: TFunction<"buddies">): string
   return key ? t(`models.harnessState.${key}`) : state;
 }
 
-/** The reasons the board records for a buddy that cannot work, by their name in the text. */
-const REASONS: Record<string, "harness" | "gone"> = {
-  HARNESS_UNHEALTHY: "harness",
-  "not present in the latest confirmed native discovery": "gone",
-  "not present in the latest complete native discovery": "gone",
-};
-
-/**
- * Recorded reasons in the reader's words, each once. A reason this console does
- * not know is shown as recorded. Where the harness's own state is already
- * written beside it, the reason that only repeats that state is left out.
- */
-export function reasonTexts(reasons: string[], t: TFunction<"buddies">, harnessSaid = false): string[] {
-  return [...new Set(reasons.flatMap(reason => {
-    const known = REASONS[reason];
-    return known === "harness" && harnessSaid ? [] : [known ? t(`models.reason.${known}`) : reason];
-  }))];
+/** Each program reason is read in the current language; a stated harness cause is not repeated. */
+export function reasonTexts(reasons: Reason[], _t: TFunction<"buddies">, harnessSaid = false): string[] {
+  return [...new Set(reasons.filter(reason => !harnessSaid || !reason.code.startsWith("harness.")).map(reasonText))];
 }
 
 /** The four parts of a buddy's identity without the last: `harness / provider / model`. */

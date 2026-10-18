@@ -35,21 +35,23 @@ it("keeps a correction hint closed when detail moves focus, but opens it for key
   const next = { ...props, timeline: { ...timeline, rows: [target, correction] } };
   const show = (openedRunId: string | null) => rerender(<TooltipProvider><TaskWork {...next} openedRunId={openedRunId}/></TooltipProvider>);
   show(null);
-  const name = document.querySelector<HTMLButtonElement>(`[data-key="row:${correction.runId}"]`)!;
   show(correction.runId);
-  expect(document.activeElement).toBe(name);
+  // The list beside the detail holds the row; moving focus to it opens no tooltip.
+  const openName = document.querySelector<HTMLButtonElement>(`[data-key="row:${correction.runId}"]`)!;
+  expect(document.activeElement).toBe(openName);
   expect(screen.queryByRole("tooltip")).toBeNull();
   show(null);
-  expect(document.activeElement).toBe(name);
+  const closedName = document.querySelector<HTMLButtonElement>(`[data-key="row:${correction.runId}"]`)!;
+  expect(document.activeElement).toBe(closedName);
   expect(screen.queryByRole("tooltip")).toBeNull();
 
   const first = document.querySelector<HTMLButtonElement>(`[data-key="row:${target.runId}"]`)!;
   const user = userEvent.setup();
   first.focus();
   await user.keyboard("{ArrowDown}");
-  expect(document.activeElement).toBe(name);
-  expect((await screen.findByRole("tooltip")).textContent).toBe(target.title);
+  expect(document.activeElement).toBe(closedName);
+  expect((await screen.findByRole("tooltip")).textContent).toContain(target.title);
   await user.keyboard("{Escape}");
-  await user.hover(name);
-  expect((await screen.findByRole("tooltip")).textContent).toBe(target.title);
+  await user.hover(closedName);
+  expect((await screen.findByRole("tooltip")).textContent).toContain(target.title);
 });

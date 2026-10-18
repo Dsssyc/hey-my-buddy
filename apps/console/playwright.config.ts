@@ -11,6 +11,7 @@ const previewPython = process.env.HMB_PREVIEW_PYTHON;
 // https://playwright.dev/docs/test-configuration
 export default defineConfig({
   testDir: "./browser",
+  outputDir: "./test-results/browser",
   testMatch: "*.check.ts",
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),

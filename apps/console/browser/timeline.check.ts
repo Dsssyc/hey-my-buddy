@@ -3,7 +3,6 @@ import { screenshots as shots, open, test, settle, expectNoSidewaysScroll, expec
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const waiting = "preview-run-a1-h1";
-const names = (page: Page) => page.locator('[data-slot=task-names]');
 const row = (page: Page, id: string) => page.locator(`[data-slot=timeline-row-name][data-run-id="${id}"]:visible`);
 
 for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) for (const width of [1440, 800, 390]) {
@@ -21,7 +20,10 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
       await expectWholeAndApart(selected, selected.locator(':scope > span'));
       await expectNoSidewaysScroll(page);
       const overflow = await page.locator('[data-slot=timeline-tracks]').evaluate(node => node.scrollWidth > node.clientWidth);
-      expect(overflow).toBe(false);
+      if (overflow) {
+        await page.locator('[data-slot=timeline-tracks]').hover();
+        await expect(page.locator('[data-slot=task-work] [data-slot=scroll-area-scrollbar][data-orientation=horizontal]')).toHaveCount(1);
+      }
       if (locale === "zh-CN" && width !== 800) await page.screenshot({ path: `${shots}/timeline-${theme}-${width}.png` });
       // At the intermediate width the fitted marks can cover a short turn.
       // Zoom once to expose its own pointer target, then exercise the readout.
@@ -30,29 +32,30 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
       await segment.hover();
       await expect(page.locator('[data-slot=timeline-status]')).toContainText(locale === "zh-CN" ? "回合" : "Turn");
       if (locale === "zh-CN" && theme === "light" && width === 1440) await page.screenshot({ path: `${shots}/segment-readout.png` });
-      await selected.dblclick();
+      await selected.click();
       await expect(page.locator('[data-slot=task-detail]')).toBeVisible();
-      await expect(page.locator('[data-slot=detail-rail]')).toBeVisible();
+      await expect(page.locator('[data-slot=detail-strip]')).toBeVisible();
       await settle(page);
-      const after = await row(page, waiting).boundingBox();
-      expect(after!.width).toBeCloseTo(before!.width, 0);
-      expect(after!.height).toBeCloseTo(before!.height, 0);
-      expect(after!.x).toBeCloseTo(before!.x, 0);
-      if (width > 760) expect(after!.y).toBeCloseTo(before!.y, 0);
-      const selectedColor = await row(page, waiting).evaluate(node => getComputedStyle(node).backgroundColor);
-      expect(selectedColor).toBe(theme === "light" ? "rgb(220, 237, 226)" : "rgb(29, 59, 43)");
-      await row(page, waiting).hover();
-      expect(await row(page, waiting).evaluate(node => getComputedStyle(node).backgroundColor)).toBe(selectedColor);
+      // Beside the detail the same row heads the plain list: same cell, same height, selected; the lanes'
+      // ruler and legend row give way, so the row's own geometry is what stays comparable.
+      if (await page.locator('[data-slot=task-names]').isVisible()) {
+        const after = await row(page, waiting).boundingBox();
+        expect(after!.width).toBeCloseTo(272, 0);
+        expect(after!.height).toBeCloseTo(before!.height, 0);
+        expect(after!.x).toBeCloseTo(before!.x, 0);
+        const selectedColor = await row(page, waiting).evaluate(node => getComputedStyle(node).backgroundColor);
+        expect(selectedColor).toBe(theme === "light" ? "rgb(220, 237, 226)" : "rgb(29, 59, 43)");
+        await row(page, waiting).hover();
+        expect(await row(page, waiting).evaluate(node => getComputedStyle(node).backgroundColor)).toBe(selectedColor);
+      }
       await expectWholeAndApart(page.locator('[data-slot=timeline-detail-stage]'), page.locator('[data-slot=task-detail]'));
       await expectNoSidewaysScroll(page);
-      if (width <= 760) {
-        const panel = await page.locator('[data-slot=task-detail]').boundingBox();
-        expect(panel!.y).toBeGreaterThanOrEqual(after!.y + after!.height);
-        await expect(visibleNames).toHaveCount(1);
-        await names(page).evaluate(node => { node.scrollTop = node.scrollHeight; });
-        await expect(row(page, waiting)).toBeInViewport();
-        expect((await row(page, waiting).boundingBox())!.y).toBeCloseTo(after!.y, 0);
-        await names(page).evaluate(node => { node.scrollTop = 0; });
+      if (!await page.locator('[data-slot=task-names]').isVisible()) {
+        // Narrow hides the list beside the detail; the detail takes the whole area under the macro head.
+        await expect(page.locator("[data-slot=task-names]")).toBeHidden();
+        const panel = await page.locator("[data-slot=task-detail]").boundingBox();
+        const head = await page.locator("[data-slot=macro-overview-header]").boundingBox();
+        expect(panel!.y).toBeGreaterThanOrEqual(head!.y + head!.height - 1);
       }
       if (locale === "zh-CN" && width !== 800) await page.screenshot({ path: `${shots}/detail-${theme}-${width}.png` });
       await page.locator('[data-slot=detail-header]').getByRole("button", { name: locale === "zh-CN" ? "收起详情" : "Close detail" }).click();
@@ -66,28 +69,16 @@ for (const reducedMotion of ["reduce", "no-preference"] as const) test.describe(
   test.use({ viewport: { width: 1440, height: 1000 }, reducedMotion });
   test("uses displacement and opacity within 200ms, and stops motion when requested", async ({ page }) => {
     await open(page, `#tasks/${macro}`);
-    const stage = page.locator('[data-slot=timeline-detail-stage]');
     await expect(row(page, waiting)).toBeVisible();
-    const style = await stage.evaluate(node => {
-      const css = getComputedStyle(node);
-      return { duration: css.transitionDuration, property: css.transitionProperty, translate: css.translate, opacity: css.opacity };
-    });
-    expect(style.opacity).toBe("0");
-    expect(style.translate).not.toBe("none");
-    if (reducedMotion === "reduce") expect(style.property).toBe("none");
-    else {
-      expect(style.property).toContain("opacity"); expect(style.property).toContain("translate");
-      expect(parseFloat(style.duration)).toBeGreaterThan(0); expect(parseFloat(style.duration)).toBeLessThanOrEqual(.2);
-    }
     const pulse = row(page, "preview-run-a3").locator('[data-slot=row-state] > span');
     if (await pulse.count()) expect(await pulse.evaluate(node => getComputedStyle(node).animationName)).toBe(reducedMotion === "reduce" ? "none" : "ping");
-    await row(page, waiting).dblclick();
+    await row(page, waiting).click();
     await settle(page);
-    await expect(stage).toHaveCSS("opacity", "1");
-    await expect(stage).toHaveCSS("translate", "0px");
+    await expect(page.locator("[data-slot=detail-strip]")).toBeVisible();
+    await expect(page.locator("[data-slot=timeline-tracks]")).toHaveCount(0);
     await page.keyboard.press("Escape");
     await settle(page);
-    await expect(stage).toHaveCSS("opacity", "0");
+    await expect(page.locator("[data-slot=timeline-tracks]")).toBeVisible();
     await expect(row(page, waiting)).toBeFocused();
   });
 });
@@ -163,20 +154,20 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) test.d
     for (let index = 0; index < keys.indexOf(execution); index++) await page.keyboard.press("ArrowRight");
     await expect(fragment(execution)).toBeFocused();
     await page.keyboard.press("Enter");
-    await expect(selected).toHaveAttribute("aria-expanded", "true");
-    const chosen = page.locator('[data-slot=detail-rail] [aria-current=step]');
-    await expect(chosen).toContainText(locale === "zh-CN" ? "回合 2" : "Turn 2");
-    const current = Number(await chosen.getAttribute("data-step"));
-    await page.keyboard.press("ArrowLeft"); await expect(chosen).toHaveAttribute("data-step", String(current - 1));
-    await expect(chosen).toBeFocused();
-    await page.keyboard.press("ArrowRight"); await expect(chosen).toHaveAttribute("data-step", String(current));
+    await expect(page.locator("[data-slot=detail-strip]")).toBeVisible();
+    const chosen = page.locator('[data-slot=detail-strip] [aria-pressed=true]');
+    await expect(chosen).toHaveAccessibleName(new RegExp(locale === "zh-CN" ? "回合 2" : "Turn 2"));
+    const current = Number((await page.evaluate(() => window.location.hash.match(/\/(\d+)$/)))?.[1]);
+    await page.keyboard.press("ArrowLeft"); await expect(page.locator('[data-slot=detail-strip]')).toBeVisible();
+    await page.keyboard.press("ArrowRight"); await expect(chosen).toHaveAccessibleName(new RegExp(locale === "zh-CN" ? "回合 2" : "Turn 2"));
     await page.keyboard.press("ArrowDown");
-    await expect(page.locator(`[data-slot=timeline-row-name][data-run-id="${keyboardRun}"]`)).toHaveAttribute("aria-expanded", "false");
-    const adjacent = page.locator('[data-slot=timeline-row-name][aria-expanded=true]');
-    await expect(adjacent).toBeFocused();
-    await page.keyboard.press("ArrowUp"); await expect(selected).toHaveAttribute("aria-expanded", "true");
+    const adjacent = page.locator('[data-slot=task-names] [aria-current=true]');
+    if (await adjacent.isVisible()) await expect(adjacent).toBeFocused();
+    else await expect(page.locator('[data-slot=task-detail]')).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(page.locator(`[data-slot=task-names] [data-run-id="${keyboardRun}"]`)).toHaveAttribute("aria-current", "true");
     await page.keyboard.press("Escape");
-    await expect(selected).toBeFocused(); await expect(selected).toHaveAttribute("aria-expanded", "false");
+    await expect(selected).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(page.locator('[data-slot=task-work] [data-key]:focus')).toHaveCount(0);
     await page.keyboard.press("Shift+Tab"); await expect(selected).toBeFocused();

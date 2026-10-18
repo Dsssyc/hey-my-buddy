@@ -58,7 +58,8 @@ export type Steps = {
 
 /** What the acceptance step lists, and of those what settles it: an integration alone leaves the micro task waiting. */
 const ACCEPTANCE_EVENTS = ["integrate", "accept", "reject", "conclude"];
-const SETTLING_EVENTS = ["accept", "reject", "conclude"];
+/** The marks a settled acceptance selects in the strip: the first of these the record holds. */
+export const SETTLING_EVENTS = ["accept", "reject", "conclude"];
 const AFTER_DELIVERY = ["delivered", "accepted", "concluded"];
 /** Order of steps that start at the same instant. */
 const RANK: Record<StepKind, number> = {

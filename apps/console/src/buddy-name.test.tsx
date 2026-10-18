@@ -16,7 +16,7 @@ const flashOffId = "dsh:deepseek-official:deepseek-flash:off";
 const proMaxId = "dsh:deepseek-official:deepseek-v4-pro:max";
 
 /** Same shape buddy/catalog.py proposes: the label already ends in " · <effort>". */
-const flashOff: Buddy = {
+const flashOff: Buddy = { effortRank: null,
   buddyId: flashOffId,
   label: "DeepSeek-V41-Flash · off",
   harness: "dsh",

@@ -7,7 +7,7 @@ const worker = "codex:openai:gpt-6-sol:medium";
 
 function buddy(buddyId: string, capabilities: string[], enabled = true): Buddy {
   const [harness, provider, model, effort] = buddyId.split(":");
-  return { buddyId, label: buddyId, harness, provider, model, effort, available: true, enabled, capabilities,
+  return { effortRank: null, buddyId, label: buddyId, harness, provider, model, effort, available: true, enabled, capabilities,
     contextWindow: null, description: "", source: "catalog:fixture" };
 }
 

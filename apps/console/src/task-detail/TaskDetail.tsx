@@ -1,9 +1,8 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
-import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 import type { MacroTaskTimeline } from "../macro-task-types";
 import { AcceptancePane } from "./AcceptancePane";
 import type { TaskDetailClient } from "./client";
@@ -12,9 +11,8 @@ import { DelegationPane } from "./DelegationPane";
 import { EventPane } from "./EventPane";
 import { DetailBack, Header } from "./Header";
 import { placeInquiries } from "./inquiries";
-import { modelEffort } from "./names";
-import { Rail } from "./Rail";
 import { RoutingPane } from "./RoutingPane";
+import { StepStrip } from "./StepStrip";
 import { buildSteps, defaultStep, stepForItem } from "./steps";
 import type { Step, Steps } from "./steps";
 import { TurnPane } from "./TurnPane";
@@ -27,8 +25,6 @@ type Props = {
   /** The macro task's timeline the page has read; null while it is read or when it could not be. */
   timeline: MacroTaskTimeline | null;
   timelineLoading: boolean;
-  /** The expanded timeline row owns the step rail's place in the persistent name column. */
-  railTarget: HTMLElement | null;
   /** The display clock, in epoch milliseconds: open waits run to it. Without one the detail reads the clock as it draws. */
   nowMs: number | null;
   /** The step the address names, counted from 1. */
@@ -62,14 +58,16 @@ function elapsedEnd(view: TaskView, workflow: Workflow | null, nowMs: number): n
 }
 
 /**
- * The detail of one micro task, organised by turn: its timeline row holds the
- * step rail, and the detail area says what the chosen step has to say.
- * It reads through the client it is given, hands the address back to its owner,
- * and writes nothing.
+ * The detail of one micro task, organised by turn: its steps sit as its own
+ * timeline row in a strip along the top, and the area below says what the
+ * chosen step has to say. It reads through the client it is given, hands the
+ * address back to its owner, and writes nothing.
  */
-export function TaskDetail({ client, runId, timeline, timelineLoading, railTarget, nowMs, step, origin, active, onStep, onBack, onOpenRun }: Props) {
+export function TaskDetail({ client, runId, timeline, timelineLoading, nowMs, step, origin, active, onStep, onBack, onOpenRun }: Props) {
   const { t } = useTranslation("taskDetail");
   const now = nowMs ?? Date.now();
+  const stripRef = useRef<HTMLDivElement>(null);
+  const keyboardFocusPending = useRef(false);
   const decisionIds = useMemo(() => (timeline?.spans ?? []).flatMap(span => (span.runId === runId && span.kind === "routing" && span.decisionId ? [span.decisionId] : [])), [timeline, runId]);
   const read = useTaskDetail(client, runId, active, decisionIds);
   const { view, workflow } = read;
@@ -86,6 +84,11 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, railTarge
   useEffect(() => {
     if (steps !== null && chosen !== null && step !== chosen + 1) onStep(chosen + 1);
   }, [steps === null, chosen, step]);
+  useLayoutEffect(() => {
+    if (!keyboardFocusPending.current) return;
+    keyboardFocusPending.current = false;
+    stripRef.current?.querySelector<SVGElement>('[aria-pressed=true]')?.focus({ preventScroll: true });
+  }, [chosen]);
 
   // Detail keys leave fields and dialogs to their own controls.
   useEffect(() => {
@@ -98,19 +101,21 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, railTarge
       if (steps === null || chosen === null) return;
       event.preventDefault();
       const next = Math.max(0, Math.min(steps.steps.length - 1, chosen + (event.key === "ArrowRight" ? 1 : -1)));
-      if (next !== chosen) onStep(next + 1);
-      railTarget?.querySelector<HTMLButtonElement>(`[data-step="${next + 1}"]`)?.focus();
+      if (next !== chosen) {
+        keyboardFocusPending.current = true;
+        onStep(next + 1);
+      } else stripRef.current?.querySelector<SVGElement>('[aria-pressed=true]')?.focus({ preventScroll: true });
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [active, onBack, steps, chosen, onStep, railTarget]);
+  }, [active, onBack, steps, chosen, onStep]);
 
   // The view brings its own hints, so that it stands in any page.
   const bare = (body: ReactNode) => <TooltipProvider delayDuration={300}>
-    <section data-slot="task-detail" aria-label={t("label")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-card [container-type:inline-size]">{body}</section>
+    <section data-slot="task-detail" tabIndex={-1} aria-label={t("label")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-card outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-live [container-type:inline-size]">{body}</section>
   </TooltipProvider>;
   if (!view) {
-    return bare(<><header data-slot="detail-header" className="shrink-0 border-b bg-card px-4 py-3 sm:px-6"><DetailBack onBack={onBack}/></header><div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+    return bare(<><header data-slot="detail-header" className="shrink-0 border-b bg-card px-4 py-2 sm:px-6"><DetailBack onBack={onBack}/></header><div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
       {read.error
         ? <>
           <h2 className="text-base font-semibold">{t("failed")}</h2>
@@ -124,19 +129,13 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, railTarge
     view, workflow, audit: read.audit, routing: read.routing, bases: read.bases, inquiries: read.inquiries, asked, timeline, row, highlightedInquiry: origin?.startsWith("inquiry:") ? origin.slice(8) : null, nowMs: now, open: onOpenRun,
   } : null;
   const current = steps !== null && chosen !== null ? steps.steps[chosen] ?? null : null;
-  const attempt = view.attempt;
-  const buddyName = (item: Step) => modelEffort(item.kind === "routing"
-    ? read.routing.find(entry => entry.decisionId === item.span?.decisionId)?.routerBuddy
-    : item.span?.buddy);
-  const reminder = (item: Step) => (attempt !== null && item.kind === "turn" && item.outcome === "running" && attempt.attemptId === item.span?.attemptId
-    ? attempt.possiblyStuck ? "possiblyStuck" as const : attempt.overdue ? "overdue" as const : null : null);
   return bare(<>
-    {railTarget && steps && current && ctx && createPortal(
-      <Rail result={steps} selected={chosen!} lead={view.lead} reminder={reminder} onSelect={index => onStep(index + 1)} buddyName={buddyName} />,
-      railTarget,
-    )}
     <Header view={view} workflow={workflow} turns={workflow ? workflow.counts.turns : null} endMs={elapsedEnd(view, workflow, now)} nowMs={now}
       verifiedAtMs={read.verifiedAtMs} error={read.error} busy={read.busy} onRefresh={read.refresh} onBack={onBack} />
+    {steps && !steps.complete && <p className="border-b bg-card px-4 py-2 text-xs text-ink3 sm:px-6">{t("strip.truncated")}</p>}
+    {steps && current && ctx && row && <div ref={stripRef}>
+      <StepStrip row={row} timeline={timeline!} steps={steps} selected={chosen!} onStep={onStep} nowMs={now}/>
+    </div>}
     {steps && current && ctx
       ? <div key={current.key} className="flex min-h-0 min-w-0 flex-1 flex-col">{pane(current, ctx)}</div>
       : <p role="status" className="p-6 text-ink2">{t("loading")}</p>}

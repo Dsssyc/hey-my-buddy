@@ -13,7 +13,7 @@ describe("the macro task header", () => {
     const onBack = vi.fn();
     render(<section className="timeline-view"><MacroTaskOverview summary={null} timeline={timeline} loading={false}
       stale={false} onBackToList={onBack} listToggle={<button>列表开关</button>} headerActions={<button>停止</button>} /></section>);
-    const head = screen.getByRole("heading", { name: timeline.macroTask.title }).closest("header")!;
+    const head = screen.getByRole("heading", { name: timeline.macroTask.title! }).closest("header")!;
     expect(head.querySelector("h2")?.hasAttribute("title")).toBe(false);
     expect(within(head).getByText("hey-my-buddy")).toBeTruthy();
     expect(within(head).getByText("codex-desktop")).toBeTruthy();
@@ -36,7 +36,7 @@ describe("the macro task header", () => {
     const summary = { ...macroTaskTimelineFixture().macroTask, titleSource: "task" as const };
     render(<TooltipProvider><MacroTaskOverview summary={summary} timeline={null} loading={false}
       stale={false} onBackToList={() => {}} /></TooltipProvider>);
-    const title = screen.getByRole("heading", { name: summary.title });
+    const title = screen.getByRole("heading", { name: summary.title! });
     expect(title.hasAttribute("title")).toBe(false);
     await userEvent.setup().hover(title);
     expect((await screen.findAllByText(/取自任务首行/))[0]).toBeTruthy();

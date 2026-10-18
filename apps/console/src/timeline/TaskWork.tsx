@@ -2,19 +2,24 @@ import { cn } from "cn";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { ChevronRight } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
+import { ScrollArea } from "../components/ui/scroll-area";
 import { MacroTaskOverview } from "../MacroTaskOverview";
-import { buddyLabel, clockTime, rowStateInfo } from "../macro-task-display";
-import { formatDuration } from "../i18n/format";
+import { buddyLabel, clockTime, displayTitle, rowStateInfo } from "../macro-task-display";
+import { formatDuration, formatNumber } from "../i18n/format";
 import type { FriendlyBuddy } from "../macro-task-display";
 import type { MacroTaskSummary, MacroTaskTimeline, TimelineRow, TimelineSpan } from "../macro-task-types";
 import { parseTimelineInstant as instant } from "./instant";
 import { timelineScaleInput } from "./scale";
 import { useTimelineZoom } from "./useTimelineZoom";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
-import { Minus, Plus, ScanLine } from "lucide-react";
+import { useViewport } from "./useViewport";
 import { RowName } from "./RowName";
+import { ZoomControls } from "./ZoomControls";
+import { buddyColorRegistry } from "./buddyColors";
+import { groupLanes, laneSummary, ownedWaits } from "./lanes";
+import type { LaneGroup } from "./lanes";
 import { markerAt } from "./MarkerCluster";
 import type { TimelineMarker } from "./MarkerCluster";
 import { Axis, Track, spanReadout, markerReadout } from "./Tracks";
@@ -22,47 +27,44 @@ import { Axis, Track, spanReadout, markerReadout } from "./Tracks";
 export type TaskWorkProps = {
   summary: MacroTaskSummary | null; timeline: MacroTaskTimeline | null; displayObservedAt: string | null;
   loading: boolean; error: string; stale: boolean; newRunIds: ReadonlySet<string>; active: boolean;
-  openedRunId: string | null; detail: (runId: string, railTarget: HTMLElement | null, exiting: boolean) => ReactNode;
+  openedRunId: string | null; detail: (runId: string) => ReactNode;
   headerActions?: ReactNode; listToggle?: ReactNode; buddies?: readonly FriendlyBuddy[] | null;
   onOpen: (runId: string, key?: string) => void; onClose: () => void;
   onRetry: () => void; onBackToList: () => void;
 };
 
-/** Persistent tree names beside either the scaled tracks or one micro task. */
+const NAME_PX = 272;
+const TOTAL_PX = 208;
+const SLACK_PX = 8;
+const LEAD_PX = 60;
+
+/**
+ * One macro task's working area: without a detail it is the lanes — every Lead
+ * with the micro tasks it owns under one shared time scale, in one scroll area
+ * whose sticky name column and lane summaries stay in view; with a detail the
+ * left column becomes the plain micro task list and the detail, with its steps
+ * in a strip along its top, fills the rest.
+ */
 export function TaskWork(props: TaskWorkProps) {
   const { t } = useTranslation("tasks");
   const { timeline, openedRunId, displayObservedAt } = props;
   const lastPointerAt = useRef<number | null>(null);
   const [focusKey, setFocusKey] = useState<string | null>(null);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState(openedRunId);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   useEffect(() => { if (openedRunId !== null) setSelectedRunId(openedRunId); }, [openedRunId]);
-  const [shownRunId, setShownRunId] = useState(openedRunId);
-  useEffect(() => {
-    if (openedRunId !== null) { setShownRunId(openedRunId); return; }
-    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    const timer = window.setTimeout(() => setShownRunId(null), reduced ? 0 : 200);
-    return () => window.clearTimeout(timer);
-  }, [openedRunId]);
-  const [railTarget, setRailTarget] = useState<HTMLDivElement | null>(null);
   const [hoveredRow, setHoveredRow] = useState<TimelineRow | null>(null);
   const [focusedRow, setFocusedRow] = useState<TimelineRow | null>(null);
   const [focusedSpan, setFocusedSpan] = useState<TimelineSpan | null>(null);
   const [pointerX, setPointerX] = useState<number | null>(null);
   const [activeMarker, setActiveMarker] = useState<TimelineMarker | null>(null);
   const [hoveredSpan, setHoveredSpan] = useState<TimelineSpan | null>(null);
-  const [narrow, setNarrow] = useState(false);
-  useEffect(() => {
-    const media = window.matchMedia?.("(max-width: 760px)");
-    if (!media) return;
-    const update = () => setNarrow(media.matches);
-    update(); media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-  const [width, setWidth] = useState(640);
-  const rootRef = useRef<HTMLElement>(null);
-  const trackRef = useRef<HTMLDivElement>(null);
-  const namesRef = useRef<HTMLDivElement>(null);
+  const [collapsedLanes, setCollapsedLanes] = useState<ReadonlySet<string>>(() => new Set());
+  const { viewport: workspace, setViewport: setWorkspace, width } = useViewport<HTMLElement>(1088);
+  const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
+  const narrow = width <= 760;
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  viewportRef.current = viewport;
   const rowsRef = useRef(new Map<string, HTMLButtonElement>());
   const movingDetailFocus = useRef(false);
   const wasOpen = useRef<string | null>(null);
@@ -77,37 +79,27 @@ export function TaskWork(props: TaskWorkProps) {
     : selectedInquiry && inquirySpan ? { kind: "inquiry", inquiry: selectedInquiry, span: inquirySpan, x: 0 } : null;
   const selectedSpan = inquirySpan ?? timeline?.spans.find(span => `span:${span.spanId}` === selectedKey);
   const selectedAt = selectedMarker ? instant(markerAt(selectedMarker)) : selectedSpan ? instant(selectedSpan.startAt) : selectedRunId ? Math.min(...(timeline?.spans.filter(span => span.runId === selectedRunId).map(span => instant(span.startAt)).filter((at): at is number => at !== null) ?? []), ...(timeline?.events.filter(event => event.runId === selectedRunId).map(event => instant(event.at)).filter((at): at is number => at !== null) ?? [])) : null;
-  const modelColors = useMemo(() => {
-    const colors = new Map<string, string>();
-    const executions = (timeline?.spans ?? []).filter(span => span.kind === "execution" && instant(span.startAt) !== null)
-      .sort((a, b) => instant(a.startAt)! - instant(b.startAt)!);
-    for (const span of executions) {
-      const model = span.buddy?.model;
-      if (model && !colors.has(model)) colors.set(model, `var(--model-${colors.size % 6 + 1})`);
-    }
-    return colors;
-  }, [timeline]);
-  const { scale, change: zoom, atMinimum, atMaximum } = useTimelineZoom(input, width, timeline?.macroTask.macroTaskId, trackRef, selectedAt !== null && Number.isFinite(selectedAt) ? selectedAt : null, lastPointerAt, nowMs);
-  useEffect(() => { setSelectedRunId(openedRunId); setSelectedKey(null); lastPointerAt.current = null; setPointerX(null); }, [timeline?.macroTask.macroTaskId]);
-  useEffect(() => {
-    const element = trackRef.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    const measure = () => { if (element.clientWidth > 0) setWidth(element.clientWidth); };
-    const observer = new ResizeObserver(measure);
-    observer.observe(element); measure();
-    return () => observer.disconnect();
-  }, [!!timeline]);
+  const macroId = timeline?.macroTask.macroTaskId;
+  const buddyColors = useMemo(() => buddyColorRegistry(macroId, timeline?.spans ?? []), [macroId, timeline]);
+  // The scale may fill what the viewport leaves beside the sticky name and summary columns.
+  const originX = narrow ? SLACK_PX : NAME_PX + SLACK_PX;
+  const available = Math.max(1, width - (narrow ? SLACK_PX * 2 : NAME_PX + TOTAL_PX + SLACK_PX * 2));
+  const { scale, change: zoom, atMinimum, atMaximum } = useTimelineZoom(input, available, macroId, viewportRef, selectedAt !== null && Number.isFinite(selectedAt) ? selectedAt : null, lastPointerAt, nowMs, originX);
+  useEffect(() => { setSelectedRunId(openedRunId); setSelectedKey(null); lastPointerAt.current = null; setPointerX(null); }, [macroId]);
   useEffect(() => {
     const previous = wasOpen.current;
-    if (openedRunId !== previous) {
+    if (openedRunId !== previous || open && narrow) {
       const target = openedRunId ?? previous;
       movingDetailFocus.current = true;
-      if (target) rowsRef.current.get(target)?.focus();
+      if (open && narrow) workspace?.querySelector<HTMLElement>('[data-slot=task-detail]')?.focus({ preventScroll: true });
+      else if (target) rowsRef.current.get(target)?.focus({ preventScroll: true });
       movingDetailFocus.current = false;
     }
     wasOpen.current = openedRunId;
-  }, [openedRunId, open]);
+  }, [openedRunId, open, narrow, workspace]);
   const rows = timeline?.rows ?? [];
+  const layout = useMemo(() => groupLanes(rows), [rows]);
+  const summaries = useMemo(() => layout.lanes.map(lane => laneSummary(lane, timeline!)), [layout, timeline]);
   const spansByRow = useMemo(() => {
     const grouped = new Map<string, TimelineSpan[]>();
     for (const span of timeline?.spans ?? []) {
@@ -117,8 +109,8 @@ export function TaskWork(props: TaskWorkProps) {
   }, [timeline]);
   const tabKey = focusKey ?? `row:${selectedRunId ?? rows[0]?.runId}`;
   const focusRow = (runId: string) => rowsRef.current.get(runId)?.focus();
-  const fragments = (runId: string) => Array.from(rootRef.current?.querySelectorAll<SVGElement>("[data-slot=timeline-track] [data-key]") ?? [])
-    .filter(element => element.closest("[data-slot=timeline-row]")?.getAttribute("data-run-id") === runId)
+  const fragments = (runId: string) => Array.from(document.querySelectorAll<SVGElement>("[data-slot=timeline-track] [data-key]"))
+    .filter(element => element.closest("[data-run-id]")?.getAttribute("data-run-id") === runId)
     .sort((left, right) => Number(left.dataset.at) - Number(right.dataset.at));
   const rowLine = (row: TimelineRow) => {
     const spans = spansByRow.get(row.runId) ?? [];
@@ -141,18 +133,126 @@ export function TaskWork(props: TaskWorkProps) {
   const select = (runId: string, key?: string) => {
     setSelectedRunId(runId); setSelectedKey(key ?? null);
     setPointerX(null); setHoveredSpan(null); setFocusedSpan(null); setHoveredRow(null); setFocusedRow(null); setActiveMarker(null);
-    if (open && runId !== openedRunId) props.onOpen(runId, key);
   };
-  const renderName = (row: TimelineRow) => <Collapsible key={row.runId} open={openedRunId === row.runId} className={cn("min-w-0", open && openedRunId !== row.runId && "max-[760px]:hidden")}>
-    <RowName ref={element => { if (element) rowsRef.current.set(row.runId, element); else rowsRef.current.delete(row.runId); }}
-      row={row} rows={rows} tabIndex={tabKey === `row:${row.runId}` ? 0 : -1} selected={selectedRunId === row.runId} open={openedRunId === row.runId} fresh={props.newRunIds.has(row.runId)} buddies={props.buddies}
-      onClick={() => select(row.runId)} onOpen={() => props.onOpen(row.runId)}
-      onEnter={() => { setPointerX(null); setActiveMarker(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={event => { if (movingDetailFocus.current) event.preventDefault(); setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>
-    <CollapsibleContent className="bg-sunk">
-      {(openedRunId ?? shownRunId) === row.runId && <div ref={setRailTarget} data-slot="task-steps-drawer"/>}
-    </CollapsibleContent>
-  </Collapsible>;
-  return <section ref={rootRef} data-slot="task-work" onKeyDownCapture={event => {
+  const renderName = (row: TimelineRow, options: { list?: boolean; tall?: boolean; ariaPrefix?: string } = {}) => <RowName
+    key={row.runId}
+    ref={element => { if (element) rowsRef.current.set(row.runId, element); else rowsRef.current.delete(row.runId); }}
+    row={row} rows={rows} list={options.list} tall={options.tall} ariaPrefix={options.ariaPrefix}
+    tabIndex={tabKey === `row:${row.runId}` ? 0 : -1} current={(options.list ? openedRunId : selectedRunId) === row.runId} fresh={props.newRunIds.has(row.runId)} buddies={props.buddies}
+    onClick={() => { select(row.runId); props.onOpen(row.runId); }}
+    onEnter={() => { setPointerX(null); setActiveMarker(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={event => { if (movingDetailFocus.current) event.preventDefault(); setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>;
+  const trackProps = (row: TimelineRow) => ({
+    boundary: viewport, tabKey, selected: selectedRunId === row.runId, row, spans: spansByRow.get(row.runId) ?? [],
+    events: timeline!.events.filter(event => event.runId === row.runId),
+    onMarker: (marker: TimelineMarker | null) => { setActiveMarker(marker); if (marker) setHoveredSpan(null); },
+    buddyColors, scale: scale!, nowMs, ongoing: input!.nowAtEnd, buddies: props.buddies, onOpen: props.onOpen, onSelect: select,
+    onFocusSpan: (span: TimelineSpan | null) => { setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); setFocusedSpan(span); },
+    onHover: (span: TimelineSpan | null) => { setActiveMarker(null); setHoveredSpan(span); if (span) setHoveredRow(null); },
+  });
+  const trackRow = (row: TimelineRow, inLane: boolean) => <div key={row.runId} data-slot="timeline-row" data-run-id={row.runId}
+    onClick={event => { if (!(event.target as Element).closest("[data-key]")) select(row.runId); }}
+    onDoubleClick={event => { if (!(event.target as Element).closest("[data-key]")) props.onOpen(row.runId); }}
+    className={cn("relative transition-colors duration-150 motion-reduce:transition-none", inLane ? "bg-card" : "bg-background", selectedRunId === row.runId && "bg-live-wash")}>
+    {narrow
+      ? <><div className={cn("sticky left-0 z-10", inLane ? "bg-card" : "bg-background")} style={{ width: Math.max(1, width - 2) }}>{renderName(row)}</div>
+        <Track {...trackProps(row)}/></>
+      : <div className="grid items-stretch" style={{ gridTemplateColumns: `${NAME_PX}px ${scale!.widthPx + SLACK_PX * 2}px minmax(${TOTAL_PX}px,1fr)` }}>
+        <div className={cn("sticky left-0 z-10", inLane ? "bg-card" : "bg-background")}>{renderName(row)}</div>
+        <Track {...trackProps(row)}/>
+        <div className="border-t"/>
+      </div>}
+  </div>;
+  const toggleLane = (leadRunId: string) => setCollapsedLanes(previous => {
+    const next = new Set(previous);
+    if (next.has(leadRunId)) next.delete(leadRunId); else next.add(leadRunId);
+    return next;
+  });
+  const laneToggle = (lead: TimelineRow, collapsed: boolean) => <button type="button" data-slot="lane-toggle" aria-expanded={!collapsed} aria-controls={`lane-${lead.runId}`}
+    aria-label={t("laneToggle", { title: displayTitle(lead.titleSource, lead.title).fullText })} onClick={() => toggleLane(lead.runId)}
+    className="flex size-7 shrink-0 self-center items-center justify-center outline-none focus-visible:ring-2 focus-visible:ring-live">
+    <ChevronRight size={16} strokeWidth={1.5} className={cn("text-ink2 transition-[rotate] duration-150 motion-reduce:transition-none", !collapsed && "rotate-90")}/>
+  </button>;
+  const laneHeader = (lane: LaneGroup, index: number) => {
+    const lead = lane.lead;
+    const collapsed = collapsedLanes.has(lead.runId);
+    const summary = summaries[index]!;
+    const tokenLine = summary.usage.tokens !== null
+      ? summary.usage.partial ? t("laneTokensPartial", { n: formatNumber(summary.usage.tokens) }) : t("laneTokens", { n: formatNumber(summary.usage.tokens) })
+      : t("laneTokensUnknown");
+    const times = <span className="flex gap-2 whitespace-nowrap">
+      <span>{t("elapsed")}{summary.elapsedMs !== null ? formatDuration(summary.elapsedMs) : t("unknown")}</span>
+      <span>{t("execution")}{summary.executionMs !== null ? formatDuration(summary.executionMs) : t("unknown")}</span>
+    </span>;
+    const counts = <span>{t("laneMicroTasks", { n: lane.members.length + 1 })}</span>;
+    const leadName = () => <div className="flex min-w-0 flex-1 items-stretch">
+      {renderName(lead, { tall: true, ariaPrefix: t("leadBadge") })}
+    </div>;
+    return <header data-slot="timeline-lane-lead" data-run-id={lead.runId} className={cn(narrow ? "block" : "grid items-stretch")} style={{ gridTemplateColumns: narrow ? undefined : `${NAME_PX}px ${scale!.widthPx + SLACK_PX * 2}px minmax(${TOTAL_PX}px,1fr)` }}>
+      {narrow
+        ? <div className="sticky left-0 z-10 bg-card" style={{ width: Math.max(1, width - 2) }}>
+          <div className="flex items-stretch">{laneToggle(lead, collapsed)}<span className="flex shrink-0 items-center text-xs text-ink2">{t("leadBadge")}</span>{leadName()}</div>
+          <div className="flex flex-wrap gap-x-2 px-3 pb-1.5 text-xs text-ink2 tabular-nums">{counts}{times}<span>{tokenLine}</span></div>
+        </div>
+        : <div className="sticky left-0 z-20 flex items-stretch bg-card">
+          {laneToggle(lead, collapsed)}
+          <span className="flex shrink-0 items-center text-xs text-ink2">{t("leadBadge")}</span>
+          {leadName()}
+        </div>}
+      {scale && input && <div className={narrow ? "block" : "flex items-center"}>
+        <Track {...trackProps(lead)} ownedWaits={ownedWaits(lead, timeline!.spans, nowMs)} height={LEAD_PX}/>
+      </div>}
+      {!narrow && <div className="sticky right-0 z-20 flex h-[60px] flex-col items-end justify-center gap-0.5 border-t bg-card px-3.5 text-xs text-ink2 tabular-nums">
+        {counts}{times}<span>{tokenLine}</span>
+      </div>}
+    </header>;
+  };
+  const trackWidth = scale ? scale.widthPx + SLACK_PX * 2 : 0;
+  const lanesScroll = useRef<{ left: number; top: number } | null>(null);
+  useEffect(() => {
+    if (open || !viewport || !lanesScroll.current) return;
+    viewport.scrollLeft = lanesScroll.current.left;
+    viewport.scrollTop = lanesScroll.current.top;
+  }, [open, viewport]);
+  const laneOrder = useMemo(() => [
+    ...layout.lanes.flatMap(lane => collapsedLanes.has(lane.lead.runId) ? [lane.lead] : [lane.lead, ...lane.members]),
+    ...layout.ordinary,
+  ], [layout, collapsedLanes]);
+  const lanesView = <ScrollArea className="min-h-0 min-w-0 flex-1 bg-background" orientation="both"
+    viewportProps={{ ref: setViewport, "data-slot": "timeline-tracks",
+      onScroll: event => { lanesScroll.current = { left: event.currentTarget.scrollLeft, top: event.currentTarget.scrollTop }; },
+      onPointerMove: event => {
+        if (!scale) return;
+        const target = (event.target as Element).closest("svg");
+        if (!target || !["timeline-track", "timeline-axis"].includes(target.getAttribute("data-slot") ?? "")) return;
+        const x = Math.max(0, Math.min(scale.widthPx, event.clientX - target.getBoundingClientRect().left - SLACK_PX));
+        setPointerX(x); lastPointerAt.current = scale.toTime(x);
+        const runId = target.closest("[data-run-id]")?.getAttribute("data-run-id");
+        setHoveredRow(rows.find(row => row.runId === runId) ?? null);
+      },
+      onPointerLeave: () => { setPointerX(null); setHoveredSpan(null); setHoveredRow(null); setActiveMarker(null); } }}>
+    {scale && input && <div data-slot="timeline-canvas" data-ppm={scale.pixelsPerMinute} className="relative" style={{ width: narrow ? trackWidth : `max(100%, ${NAME_PX + trackWidth + TOTAL_PX}px)`, minWidth: "100%" }}>
+      <div data-slot="timeline-ruler" className="sticky top-0 z-30 border-b border-line bg-card" style={narrow ? undefined : { display: "grid", gridTemplateColumns: `${NAME_PX}px ${trackWidth}px minmax(${TOTAL_PX}px,1fr)` }}>
+        {narrow
+          ? <Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs} pointerX={pointerX} pointerBounds={{ left: Math.max(0, (viewport?.scrollLeft ?? 0) - originX), right: Math.min(scale.widthPx, (viewport?.scrollLeft ?? 0) - originX + width) }}/>
+          : <><div className="sticky left-0 z-40 flex h-9 items-center justify-between bg-card pl-4 pr-3 text-xs text-ink3"><span>{t("microTasks")}</span><span>{rows.length}</span></div>
+            <Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs} pointerX={pointerX} pointerBounds={{ left: Math.max(0, (viewport?.scrollLeft ?? 0) - originX), right: Math.min(scale.widthPx, (viewport?.scrollLeft ?? 0) - originX + width) }}/>
+            <div className="bg-card"/></>}
+      </div>
+      {layout.lanes.map((lane, index) => <section key={lane.lead.runId} data-slot="timeline-lane" className={cn("border-t-2 border-ink2 bg-card", index > 0 && "mt-6")}>
+        {laneHeader(lane, index)}
+        <Collapsible open={!collapsedLanes.has(lane.lead.runId)}>
+          <CollapsibleContent className="border-t border-line">
+            <div id={`lane-${lane.lead.runId}`}>{lane.members.map(row => trackRow(row, true))}</div>
+          </CollapsibleContent>
+        </Collapsible>
+      </section>)}
+      {layout.lanes.length > 0 && layout.ordinary.length > 0 && <div className="sticky left-0 mt-6 flex h-9 w-max items-center bg-background px-4 text-xs text-ink3">{t("otherMicroTasks")}</div>}
+      {layout.ordinary.map(row => trackRow(row, false))}
+      {pointerX !== null && <div data-slot="timeline-pointer" aria-hidden="true" className="pointer-events-none absolute top-9 bottom-0 z-20" style={{ left: pointerX + (narrow ? 0 : NAME_PX), borderLeft: "1px solid var(--ink3)" }}/>}
+    </div>}
+  </ScrollArea>;
+
+  return <section ref={setWorkspace} data-slot="task-work" onKeyDownCapture={event => {
     // A title tooltip must not consume the detail's close gesture first.
     if (open && event.key === "Escape" && !(event.target as Element).closest("input, textarea, select, [role=dialog]")) {
       event.preventDefault(); props.onClose();
@@ -173,8 +273,9 @@ export function TaskWork(props: TaskWorkProps) {
     if (!runId) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      const index = rows.findIndex(row => row.runId === runId);
-      const next = rows[Math.max(0, Math.min(rows.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))];
+      const order = open ? rows : laneOrder;
+      const index = order.findIndex(row => row.runId === runId);
+      const next = order[Math.max(0, Math.min(order.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))];
       if (next) { if (open && next.runId !== openedRunId) props.onOpen(next.runId); else focusRow(next.runId); }
     } else if (!open && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
       event.preventDefault();
@@ -190,41 +291,25 @@ export function TaskWork(props: TaskWorkProps) {
     {props.stale && !props.error && <p role="status" className="border-b bg-hand-wash px-4 py-2 text-xs text-hand">{t("staleTimeline")}</p>}
     {!timeline && props.loading ? <div role="status" className="flex flex-1 animate-pulse items-center justify-center motion-reduce:animate-none">{t("loading")}</div>
       : timeline && rows.length === 0 && !open ? <p className="p-6 text-sm text-ink2">{t("noMicroTasks")}</p> : <>
-        <div className="grid min-h-9 shrink-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-5 gap-y-2 px-4 py-2 text-xs text-ink2 sm:px-6 @min-[720px]:grid-cols-[auto_minmax(0,1fr)_auto]"><span className="flex h-7 items-center text-sm font-medium text-ink">{t("timeline")}</span>
-          <div data-slot="timeline-legend" aria-hidden={open} className={cn("col-span-2 row-start-2 flex flex-wrap gap-4 @min-[720px]:col-span-1 @min-[720px]:col-start-2 @min-[720px]:row-start-1", open && "invisible")}><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-line2 bg-past-wash"/>{t("execution")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t border-ink3"/>{t("wait")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t-2 border-dashed border-hand-mark"/>{t("waiting")}</span><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-hand-mark bg-hand-wash"/>{t("drawing.silentLegend")}</span><span className="flex items-center gap-1.5"><i className="size-2 rotate-45 border border-ink2"/>{t("drawing.inquiry")}</span><span className="flex items-center gap-1.5"><i className="size-1.5 rounded-full bg-past"/>{t("drawing.eventLegend")}</span><span className="flex items-center gap-1.5"><i className="flex size-4 items-center justify-center rounded-full border border-past">2</i>{t("drawing.clusterLegend")}</span><span className="flex items-center gap-1.5"><i className="h-3 w-4 bg-[repeating-linear-gradient(135deg,var(--sunk)_0_3px,var(--idle-stripe)_3px_4px)]"/>{t("drawing.idleLegend")}</span></div>
-          {!open && <div className="col-start-2 row-start-1 flex shrink-0 justify-self-end gap-1 @min-[720px]:col-start-3" data-slot="timeline-zoom">{([[-1, Minus, "zoomOut", atMinimum], [1, Plus, "zoomIn", atMaximum], [0, ScanLine, "zoomFit", atMinimum]] as const).map(([direction, Icon, label, unavailable]) => <Tooltip key={label}><TooltipTrigger asChild><Button variant="ghost" size="icon-sm" aria-label={t(label)} aria-disabled={unavailable} onClick={() => zoom(direction)}><Icon aria-hidden="true"/></Button></TooltipTrigger><TooltipContent>{t(label)}</TooltipContent></Tooltip>)}</div>}
-        </div>
-        <div role="region" aria-label={t("timeline")} className="relative grid min-h-0 min-w-0 flex-1 grid-cols-[272px_minmax(0,1fr)] max-[760px]:flex max-[760px]:flex-col">
-          <div ref={namesRef} data-slot="task-names" className={cn("min-h-0 min-w-0 overflow-x-hidden overflow-y-auto bg-background pl-6 max-[760px]:px-4", open ? "max-[760px]:max-h-[38dvh] max-[760px]:shrink-0" : "max-[760px]:hidden")}
-            onScroll={event => { if (!open && trackRef.current) trackRef.current.scrollTop = event.currentTarget.scrollTop; }}>
-            <div className="flex h-9 shrink-0 items-center justify-between pr-4 text-xs text-ink3 max-[760px]:hidden"><span>{t("microTasks")}</span><span>{rows.length}</span></div>
-            {(!narrow || open) && rows.map(renderName)}
-            {open && !rows.some(row => row.runId === openedRunId) && <><Button variant="ghost" size="sm" onClick={props.onClose}>{t("closeDetail")}</Button><div ref={setRailTarget} data-slot="task-steps-drawer"/></>}
-          </div>
-          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-            <div ref={trackRef} data-slot="timeline-tracks" aria-hidden={open} inert={open} className={cn("absolute inset-0 overflow-x-auto overflow-y-auto px-4 transition-[opacity,translate] duration-200 motion-reduce:transition-none", open ? "pointer-events-none translate-x-6 opacity-0" : "translate-x-0 opacity-100")}
-              onScroll={event => { if (!open && namesRef.current) namesRef.current.scrollTop = event.currentTarget.scrollTop; }}>
-              {scale && input && <div data-slot="timeline-canvas" data-ppm={scale.pixelsPerMinute} className="relative min-h-full" style={{ width: scale.widthPx + 16 }} onPointerMove={event => {
-                const target = (event.target as Element).closest("svg");
-                if (!target || !["timeline-track", "timeline-axis"].includes(target.getAttribute("data-slot") ?? "")) return;
-                const x = Math.max(0, Math.min(scale.widthPx, event.clientX - target.getBoundingClientRect().left - 8));
-                setPointerX(x); lastPointerAt.current = scale.toTime(x);
-                const runId = target.closest("[data-slot=timeline-row]")?.getAttribute("data-run-id");
-                setHoveredRow(rows.find(row => row.runId === runId) ?? null);
-              }} onPointerLeave={() => { setPointerX(null); setHoveredSpan(null); setHoveredRow(null); setActiveMarker(null); }}>{narrow && <svg aria-hidden="true" data-slot="timeline-break-columns" viewBox={`-8 0 ${scale.widthPx + 16} 1`} preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full">{scale.breaks.map(gap => <rect key={gap.startMs} x={gap.startX} width={gap.endX - gap.startX} height={1} className="fill-sunk"/>)}</svg>}<div className="sticky top-0 z-10 bg-card"><Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs} pointerX={pointerX} pointerBounds={{ left: Math.max(0, (trackRef.current?.scrollLeft ?? 0) - 24), right: Math.min(scale.widthPx, (trackRef.current?.scrollLeft ?? 0) + width - 24) }}/></div>
-                {rows.map(row => <div key={row.runId} data-slot="timeline-row" data-run-id={row.runId} onClick={event => { if (!(event.target as Element).closest("[data-key]")) select(row.runId); }} onDoubleClick={event => { if (!(event.target as Element).closest("[data-key]")) props.onOpen(row.runId); }} className={cn("relative transition-colors duration-150 motion-reduce:transition-none", selectedRunId === row.runId && "bg-live-wash")}>
-                  {narrow && !open && <div className="sticky left-0 z-10" style={{ width: Math.max(1, width - 32) }}>{renderName(row)}</div>}
-                  <Track boundary={trackRef.current} tabKey={tabKey} selected={selectedRunId === row.runId} row={row} spans={spansByRow.get(row.runId) ?? []} events={timeline!.events.filter(event => event.runId === row.runId)} onMarker={marker => { setActiveMarker(marker); if (marker) setHoveredSpan(null); }} modelColors={modelColors} scale={scale} nowMs={nowMs} ongoing={input.nowAtEnd} buddies={props.buddies}
-                    onOpen={props.onOpen} onSelect={select} onFocusSpan={span => { setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); setFocusedSpan(span); }} onHover={span => { setActiveMarker(null); setHoveredSpan(span); if (span) setHoveredRow(null); }}/>
-                </div>)}
-                {pointerX !== null && <svg data-slot="timeline-pointer" aria-hidden="true" viewBox={`-8 0 ${scale.widthPx + 16} 1`} preserveAspectRatio="none" className="pointer-events-none absolute inset-x-0 top-[22px] bottom-0 z-20 h-[calc(100%-22px)] w-full"><line x1={pointerX} x2={pointerX} y2={1} className="stroke-ink3" vectorEffect="non-scaling-stroke"/></svg>}
-              </div>}
-            </div>
-            <div data-slot="timeline-detail-stage" aria-hidden={!open} inert={!open} className={cn("absolute inset-0 flex min-h-0 min-w-0 flex-col border-t border-l bg-card transition-[opacity,translate] duration-200 motion-reduce:transition-none max-[760px]:border-l-0", open ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-6 opacity-0")}>
-              {(openedRunId ?? shownRunId) !== null && props.detail((openedRunId ?? shownRunId)!, railTarget, !open)}
+        {!open && <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 text-xs text-ink2 sm:px-6">
+          <div data-slot="timeline-legend" className="flex flex-wrap gap-4"><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-line2 bg-past-wash"/>{t("execution")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t border-ink3"/>{t("wait")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t-2 border-dashed border-hand-mark"/>{t("waiting")}</span><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-hand-mark bg-hand-wash"/>{t("drawing.silentLegend")}</span><span className="flex items-center gap-1.5"><i className="size-2 rotate-45 border border-ink2"/>{t("drawing.inquiry")}</span><span className="flex items-center gap-1.5"><i className="size-1.5 rounded-full bg-past"/>{t("drawing.eventLegend")}</span><span className="flex items-center gap-1.5"><i className="flex size-4 items-center justify-center rounded-full border border-past">2</i>{t("drawing.clusterLegend")}</span><span className="flex items-center gap-1.5"><i className="h-3 w-4 bg-[repeating-linear-gradient(135deg,var(--sunk)_0_3px,var(--idle-stripe)_3px_4px)]"/>{t("drawing.idleLegend")}</span></div>
+          <ZoomControls className="ml-auto" onChange={zoom} atMinimum={atMinimum} atMaximum={atMaximum}/>
+        </div>}
+        {open
+          ? <div data-slot="timeline-detail-stage" className={cn("grid min-h-0 min-w-0 flex-1", narrow ? "grid-cols-1" : "grid-cols-[272px_minmax(0,1fr)]")}>
+            <ScrollArea className={cn("min-h-0 min-w-0 bg-card", narrow && "hidden")}
+              viewportProps={{ "data-slot": "task-names" }}>
+              <div className="w-0 min-w-full">
+              <div className="flex h-9 shrink-0 items-center justify-between px-3 text-xs text-ink3"><span>{t("microTasks")}</span><span>{rows.length}</span></div>
+              {rows.map(row => renderName(row, { list: true }))}
+              {!rows.some(row => row.runId === openedRunId) && <Button variant="ghost" size="sm" className="mt-2" onClick={props.onClose}>{t("closeDetail")}</Button>}
+              </div>
+            </ScrollArea>
+            <div className={cn("flex min-h-0 min-w-0 flex-col bg-card", !narrow && "border-l")}>
+              {openedRunId !== null && props.detail(openedRunId)}
             </div>
           </div>
-        </div>
+          : <div role="region" aria-label={t("laneRegion")} className="flex min-h-0 min-w-0 flex-1 flex-col">{lanesView}</div>}
         {!open && <div data-slot="timeline-status" role="status" className="flex h-9 shrink-0 items-center gap-2 overflow-hidden border-t bg-card px-4 text-xs text-ink2 sm:px-6"><span className="truncate">{readout}{incomplete ? ` · ${t("uncompressed")}` : ""}</span></div>}
       </>}
   </section>;

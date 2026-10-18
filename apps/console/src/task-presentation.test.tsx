@@ -20,7 +20,7 @@ describe("task identifiers and recorded attribution", () => {
     const summary = { ...macroTaskTimelineFixture().macroTask, macroTaskId: prefix + runId,
       kind: prefix === "run:" ? "standalone" as const : "macro-task" as const };
     render(<MacroTaskOverview summary={summary} timeline={null} loading={false} stale={false} onBackToList={vi.fn()} />);
-    const header = screen.getByRole("heading", { name: summary.title }).closest("header")!;
+    const header = screen.getByRole("heading", { name: summary.title! }).closest("header")!;
     await user.click(within(header).getByRole("button", { name: "时间统计" }));
     await user.click(within(screen.getByRole("dialog", { name: "时间统计" })).getByRole("button", { name: `复制标识 ${prefix}${runId}` }));
     expect(write).toHaveBeenCalledWith(prefix + runId);
@@ -33,7 +33,7 @@ describe("task identifiers and recorded attribution", () => {
     const api = { task: vi.fn(async () => task), command: vi.fn(async (operation: string, params: { includeAudit?: boolean }) => operation === "message_list" ? { messages: [] } : {
       ...workflow({ runId }), ...(params.includeAudit ? { audit: audit(), routingHistory: { entries: [], nextCursor: null } } : {}),
     }) } as unknown as ConsoleApi;
-    render(<TaskDetail railTarget={null} client={createTaskDetailClient(api, "fixture")} runId={runId} timeline={null} timelineLoading={false}
+    render(<TaskDetail client={createTaskDetailClient(api, "fixture")} runId={runId} timeline={null} timelineLoading={false}
       nowMs={Date.parse("2026-10-15T01:00:00Z")} step={1} origin={null} active onStep={vi.fn()} onBack={vi.fn()} onOpenRun={vi.fn()} />);
     await user.click(await screen.findByRole("button", { name: `复制标识 ${runId}` }));
     expect(write).toHaveBeenCalledWith(runId);

@@ -81,7 +81,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       const live = await page.locator('[data-key="span:execution:att-b8-1"] [data-slot=execution-bar]').evaluate(node => getComputedStyle(node).fill);
       await expect(page.locator("[data-slot=macro-stop-state]")).toHaveCSS("color", live);
       for (const id of ["preview-run-b7", "preview-run-b8"]) {
-        await expect(row(page, id).locator(":scope > span:last-child > span")).toHaveCSS("color", live);
+        await expect(row(page, id).getByText(stopping, { exact: true })).toHaveCSS("color", live);
         await expect(row(page, id).locator("[data-slot=state-mark]")).toHaveAttribute("data-kind", "live");
         await expect(row(page, id).locator("[data-slot=state-mark] circle")).toHaveCSS("fill", live);
       }
@@ -100,9 +100,8 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         await marker.press("Enter");
         const detail = page.locator("[data-slot=task-detail]");
         await expect(detail).toBeVisible();
-        const step = page.locator("[data-slot=detail-rail] [aria-current=step]");
-        await expect(step).toHaveAccessibleName(new RegExp(`^${stop}`));
-        await expect(step).toContainText(`Lead · ${lead}`);
+        const step = page.locator("[data-slot=detail-strip] [aria-pressed=true]");
+        await expect(step).toHaveAccessibleName(new RegExp(stop));
         const pane = detail.locator("[data-slot=detail-pane]");
         await expect(pane.getByRole("heading", { level: 3, name: stop, exact: true })).toBeVisible();
         await expect(pane).toContainText(stop);
@@ -124,7 +123,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         zh ? "停止未确认，1 项执行尚未核实" : "Stop not confirmed; executions not yet verified: 1");
       await expect(page.locator("[data-slot=macro-stop-state]")).toHaveText(stopping);
       const hostStop = zh ? "Host 停止" : "Stopped by Host";
-      await page.locator("[data-slot=detail-rail]").getByRole("button", { name: new RegExp(`^${hostStop}`) }).click();
+      await page.locator("[data-slot=detail-strip]").getByRole("button", { name: new RegExp(hostStop) }).click();
       await expect(page.locator("[data-slot=detail-pane]").getByRole("heading", { level: 3, name: hostStop, exact: true })).toBeVisible();
       await settle(page);
       if (locale === "zh-CN") await page.screenshot({ path: `${shots}/lead-stopping-${theme}.png` });

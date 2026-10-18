@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api";
 import { CODEX, HOST, OPUS, at, client, event, inquiry, row, routing, span, task, timeline, workflow } from "./task-detail.fixtures";
-import { open, pane, rail, ready, selected, step } from "./task-detail.testing";
+import { chosenStep, open, pane, ready, step, strip, stripSlice } from "./task-detail.testing";
 import type { Artifact, Integration } from "./types";
 
 afterEach(cleanup);
@@ -16,36 +16,38 @@ describe("opening the detail of a micro task", () => {
     expect(f.reads.workflow).toHaveBeenCalledWith("m1");
     expect(f.reads.audit).toHaveBeenCalledWith("m1", ["decision-1"]);
     expect(f.reads.inquiries).toHaveBeenCalledWith("m1");
-    expect(selected().textContent).toContain("回合 2");
-    expect(within(screen.getByTestId("rail-target")).getByRole("navigation", { name: "步骤" })).toBe(rail());
-    expect(document.querySelector("[data-slot=task-detail] [data-slot=detail-rail]")).toBeNull();
+    expect(chosenStep()).toContain("回合 2");
+    // The steps sit in the strip along the top: this micro task's own timeline row.
+    expect(strip()).toBeTruthy();
+    expect(stripSlice("span:e2")!.getAttribute("aria-pressed")).toBe("true");
+    expect(stripSlice("span:e1")!.getAttribute("aria-pressed")).toBe("false");
     expect(f.onStep).toHaveBeenCalledExactlyOnceWith(7);
   });
 
   it("opens on the step the address names, and replaces an address whose step does not exist", async () => {
     const named = open({ step: 3 });
     await ready();
-    expect(selected().textContent).toContain("回合 1");
+    expect(chosenStep()).toContain("回合 1");
     expect(named.onStep).not.toHaveBeenCalled();
     cleanup();
     const gone = open({ step: 99 });
     await ready();
-    expect(selected().textContent).toContain("回合 2");
+    expect(chosenStep()).toContain("回合 2");
     expect(gone.onStep).toHaveBeenCalledExactlyOnceWith(7);
   });
 
   it("opens on the step that the timeline's span or marker it came from belongs to", async () => {
     const fromRoute = open({ origin: "span:r1" });
     await ready();
-    expect(selected().textContent).toContain("路由");
+    expect(chosenStep()).toContain("路由");
     cleanup();
     const fromWait = open({ origin: "span:h1" });
     await ready();
-    expect(selected().textContent).toContain("决定");
+    expect(pane().textContent).toContain("需要读取样例目录");
     cleanup();
     open({ origin: "settle:m1" });
     await ready();
-    expect(selected().textContent).toContain("验收");
+    expect(chosenStep()).toContain("验收");
     expect(fromRoute.onStep).toHaveBeenCalledExactlyOnceWith(2);
     expect(fromWait.onStep).toHaveBeenCalledExactlyOnceWith(4);
   });
@@ -53,23 +55,21 @@ describe("opening the detail of a micro task", () => {
   it("waits for the timeline before it lists the steps, and lists the delegation alone, with a note, when the timeline has no row for it", async () => {
     const waiting = open({ timeline: null, timelineLoading: true });
     expect(await screen.findByRole("status")).toBeTruthy();
-    expect(screen.queryByRole("navigation", { name: "步骤" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "这个微任务的各步" })).toBeNull();
     expect(waiting.onStep).not.toHaveBeenCalled();
     cleanup();
     const cut = timeline();
     cut.rows = [];
     open({ timeline: cut });
     await ready();
-    expect(within(rail()).getAllByRole("button")).toHaveLength(1);
-    expect(within(rail()).getByRole("button").textContent).toContain("委派");
-    expect(rail().textContent).toContain("没有这个微任务的一行");
+    expect(document.querySelector("[data-slot=detail-strip]")).toBeNull();
+    expect(document.querySelector("[data-slot=task-detail]")!.textContent).toContain("没有这个微任务的一行");
     expect(pane().textContent).toContain("实现微任务详情");
   });
 
   it("goes back by Escape, unless the key is for a field or a dialog, and not while the page is elsewhere", async () => {
     const f = open();
     await ready();
-    expect(screen.queryByRole("button", { name: "时间轴" })).toBeNull();
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(f.onBack).toHaveBeenCalledTimes(1);
     const field = document.body.appendChild(document.createElement("input"));
@@ -86,18 +86,20 @@ describe("opening the detail of a micro task", () => {
     expect(away.onBack).not.toHaveBeenCalled();
   });
 
-  it("switches detail steps with horizontal arrows, clamps both ends and focuses the chosen step", async () => {
+  it("switches detail steps with horizontal arrows, clamps both ends and focuses the step's own slice", async () => {
     const f = open({ step: 1 });
     await ready();
-    await f.user.keyboard("{ArrowLeft}"); expect(selected().getAttribute("data-step")).toBe("1");
-    await f.user.keyboard("{ArrowRight}"); expect(selected().getAttribute("data-step")).toBe("2");
-    expect(document.activeElement).toBe(selected());
-    await f.user.keyboard("{ArrowLeft}"); expect(selected().getAttribute("data-step")).toBe("1");
-    const count = within(rail()).getAllByRole("button").length;
-    await f.user.keyboard("{ArrowRight>20/}"); expect(selected().getAttribute("data-step")).toBe(String(count));
-    expect(within(rail()).getAllByRole("button").every(button => button.tabIndex === -1)).toBe(true);
+    await f.user.keyboard("{ArrowLeft}"); expect(chosenStep()).toContain("委派");
+    await f.user.keyboard("{ArrowRight}"); expect(chosenStep()).toContain("路由");
+    expect(document.activeElement?.getAttribute("data-key")).toBe("span:r1");
+    await f.user.keyboard("{ArrowLeft}"); expect(chosenStep()).toContain("委派");
+    for (let press = 0; press < 10; press += 1) await f.user.keyboard("{ArrowRight}");
+    expect(chosenStep()).toContain("验收");
+    expect(document.activeElement?.getAttribute("aria-pressed")).toBe("true");
+    await f.user.keyboard("{ArrowLeft}"); expect(document.activeElement?.getAttribute("data-key")).toBe("span:e2");
     const field = document.body.appendChild(document.createElement("input")); field.focus();
-    await f.user.keyboard("{ArrowLeft}"); expect(selected().getAttribute("data-step")).toBe(String(count)); field.remove();
+    // A key for a field is not a key for the detail: the step stays where the reader left it.
+    await f.user.keyboard("{ArrowLeft}"); expect(chosenStep()).toContain("回合 2"); field.remove();
   });
 
   it("shows a read that failed as a failure with a retry that reads again", async () => {
@@ -106,7 +108,7 @@ describe("opening the detail of a micro task", () => {
     const f = open({ client: reads });
     expect((await screen.findByRole("alert")).textContent).toContain("Unknown runId");
     expect(screen.getByRole("heading", { name: "读取微任务失败" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "时间轴" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "这个微任务的各步" })).toBeNull();
     await f.user.click(screen.getByRole("button", { name: "重试读取" }));
     await ready();
     expect(reads.task).toHaveBeenCalledTimes(2);
@@ -141,7 +143,7 @@ describe("the head of the detail", () => {
 
   it("writes a wait for a Lead's decision as a wait for the Lead, in the head and on the rail", async () => {
     const awaiting = workflow({ state: "awaiting-host", activeRequest: { requestId: "req-2", kind: "assistance", state: "open", createdAt: at("11:00"), decidedAt: null,
-      childTaskId: null, routing: false, summary: "要不要改范围", attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null },
+      childTaskId: null, routing: false, summary: "要不要改范围", reason: null, attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null },
     counts: { turns: 2, openRequests: 1 } });
     const leadTimeline = timeline();
     leadTimeline.rows = [row({ state: "awaiting-host", rootLeadRunId: "lead-1" })];
@@ -151,8 +153,8 @@ describe("the head of the detail", () => {
     open({ timeline: leadTimeline, replies: { workflow: awaiting, task: task({ workflow: { ...task().workflow, state: "awaiting-host" }, lineage: { ...task().lineage, rootLeadRunId: "lead-1" } }) } });
     await ready();
     expect(document.querySelector("[data-slot=detail-header]")!.textContent).toContain("等待 Lead");
-    expect(selected().textContent).toContain("等待 Lead");
     expect(pane().textContent).toContain("等待 Lead");
+    expect(stripSlice("span:h2")!.getAttribute("aria-pressed")).toBe("true");
     expect(pane().textContent).not.toContain("等待 Host");
   });
 
@@ -201,7 +203,7 @@ describe("the head of the detail", () => {
     (reads.workflow as ReturnType<typeof vi.fn>).mockRejectedValue(new ApiError("NETWORK", "连接中断"));
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 3100)); });
     expect((await screen.findByRole("alert")).textContent).toContain("连接中断");
-    expect(selected().textContent).toContain("回合 2");
+    expect(chosenStep()).toContain("回合 2");
     (reads.workflow as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ value: workflow(), verifiedAtMs: 1 }));
     await f.user.click(within(screen.getByRole("alert")).getByRole("button", { name: "重试读取" }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
@@ -283,8 +285,8 @@ describe("the route", () => {
   it("folds a long reason, unfolds it in the same paragraph, and starts folded again on another route", async () => {
     const reason = "具体的选择依据。".repeat(60);
     const two = timeline();
-    two.spans.find(item => item.spanId === "r1")!.routing!.reason = reason;
-    two.spans.push(span("r2", "routing", at("10:40"), at("10:41"), { attemptId: "att-r2", decisionId: "decision-2", routing: { routingMode: "fast", selectedBuddy: CODEX, reason: reason + "二" } }));
+    two.spans.find(item => item.spanId === "r1")!.routing!.note = reason;
+    two.spans.push(span("r2", "routing", at("10:40"), at("10:41"), { attemptId: "att-r2", decisionId: "decision-2", routing: { routingMode: "fast", selectedBuddy: CODEX, reason: null, note: reason + "二" } }));
     const f = open({ step: 2, timeline: two, replies: { routing: [routing(), routing({ decisionId: "decision-2" })] } });
     await ready();
     const paragraphs = () => [...pane().querySelectorAll("p")].filter(node => node.textContent!.includes("具体的选择依据"));
@@ -297,8 +299,8 @@ describe("the route", () => {
     await f.user.click(within(pane()).getByRole("button", { name: "收起" }));
     await waitFor(() => expect(within(pane()).getByRole("button", { name: "展开" })).toBeTruthy());
     await f.user.click(within(pane()).getByRole("button", { name: "展开" }));
-    await f.user.click(within(rail()).getAllByRole("button", { name: /路由/ })[1]!);
-    expect(within(pane()).getByRole("button", { name: "展开" }).getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(stripSlice("span:r2")!);
+    await waitFor(() => expect(within(pane()).getByRole("button", { name: "展开" }).getAttribute("aria-expanded")).toBe("false"));
   });
 });
 
@@ -307,10 +309,10 @@ describe("a turn", () => {
     const artifact: Artifact = { artifactId: "art-1", kind: "output", attemptId: "att-1", manifestSha256: "f".repeat(64), outputCommit: "3f9a2c1d00", diffPath: "/diffs/1.diff",
       changedPaths: ["a.ts", "b.ts"], partial: false, verified: null, final: null, cumulativePatch: { baseCommit: "d286db0aa", outputCommit: "3f9a2c1d00", path: "/p.patch", sha256: "a".repeat(64), changedPaths: ["a.ts"] } };
     const integration: Integration = { integrationId: "int-1", artifactId: "art-1", state: "not-required", strategy: "none", target: null, beforeCommit: null, afterCommit: null,
-      verificationSummary: null, hostPaths: ["docs/console.md"], reason: "未整合", actor: HOST, createdAt: at("11:05") };
+      verificationSummary: null, hostPaths: ["docs/console.md"], note: "未整合", actor: HOST, createdAt: at("11:05") };
     const f = open({ step: 3, replies: { workflow: workflow({ artifacts: [artifact], integrations: [integration] }), inquiries: { items: [
       inquiry({ messageId: "q1", question: "读到哪里了？", state: "answered", answer: { text: "读到第二个文件。", at: at("10:21"), truncated: false } }),
-      inquiry({ messageId: "q2", question: "收到请回复", state: "unavailable", reason: "no live agent to receive this question", answer: null, createdAt: at("10:31") }),
+      inquiry({ messageId: "q2", question: "收到请回复", state: "unavailable", reason: { code: "inquiry-no-live-agent", params: {} }, answer: null, createdAt: at("10:31") }),
       inquiry({ messageId: "q3", attemptId: "att-2", question: "第二轮的问询", state: "queued" }),
     ], more: false } } });
     await ready();
@@ -337,7 +339,7 @@ describe("a turn", () => {
     expect(text()).toContain("无需整合");
     // The reason an inquiry could not be delivered is in its hint.
     await f.user.hover(within(pane()).getByText("无法送达"));
-    expect((await screen.findAllByText("no live agent to receive this question"))[0]).toBeTruthy();
+    expect((await screen.findAllByText("没有可接收问询的活动代理。"))[0]).toBeTruthy();
   });
 
   it("begins a later turn with what the Host gave it to continue, and keeps each turn's own result", async () => {
@@ -431,7 +433,7 @@ describe("a turn", () => {
   it("writes why an execution did not end as it should: the cause, who cancelled it and why, a native limit", async () => {
     const stopped = task({ status: "cancelled", workflow: { ...task().workflow, state: "cancelled" }, stopInitiator: "host",
       selectedAttempt: { attemptId: "att-2", result: { terminationReason: "wrap-up" }, stopInitiator: "host" },
-      cancellation: { actor: HOST, reason: "改由 Host 接手" } });
+      cancellation: { actor: HOST, note: "改由 Host 接手" } });
     open({ step: 7, replies: { task: stopped, workflow: workflow({ state: "cancelled" }) } });
     await ready();
     expect(pane().textContent).toContain("终止原因：Host 收尾完成");
@@ -507,7 +509,7 @@ describe("a Host's decision", () => {
 
   it("names a request still open, with another count when several wait, and offers no way to decide", async () => {
     const open2 = { requestId: "req-2", kind: "assistance", state: "open", createdAt: at("11:00"), decidedAt: null, childTaskId: "child-1", routing: false,
-      summary: "要不要扩大范围", attempted: "已试过窄范围", neededWork: ["选一个范围"], expectedArtifacts: ["docs/x.md"], acceptance: "范围确定", preparationError: { code: "WORKSPACE_INVALID", message: "检出准备失败" } };
+      summary: "要不要扩大范围", reason: null, attempted: "已试过窄范围", neededWork: ["选一个范围"], expectedArtifacts: ["docs/x.md"], acceptance: "范围确定", preparationError: { code: "WORKSPACE_INVALID", message: "检出准备失败" } };
     const live = timeline();
     live.spans = live.spans.filter(item => !["e2", "q2"].includes(item.spanId));
     live.spans.push(span("h2", "host", at("11:00"), null, { state: "open", requestId: "req-2", requestKind: "assistance" }));
@@ -515,7 +517,6 @@ describe("a Host's decision", () => {
     live.rows = [row({ state: "awaiting-host", category: "host" })];
     const f = open({ timeline: live, replies: { workflow: workflow({ state: "awaiting-host", activeRequest: open2 as never, counts: { turns: 2, openRequests: 3 } }) } });
     await ready();
-    expect(selected().textContent).toContain("等待 Host");
     const text = pane().textContent!;
     expect(text).toContain("要不要扩大范围");
     expect(text).toContain("另有 2 项待决定");
@@ -530,7 +531,7 @@ describe("a Host's decision", () => {
 
   it("is a routing boundary for a request about routing: read, and nothing to fill in or to try again", async () => {
     const boundary = { requestId: "req-3", kind: "assistance", state: "open", createdAt: at("11:00"), decidedAt: null, childTaskId: null, routing: true,
-      summary: "路由需要 Host 指定 buddy", attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null };
+      summary: "路由需要 Host 指定 buddy", reason: null, attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null };
     const live = timeline();
     live.spans = live.spans.filter(item => !["e2", "q2"].includes(item.spanId));
     live.spans.push(span("h3", "host", at("11:00"), null, { state: "open", requestId: "req-3", requestKind: "assistance" }));
@@ -539,8 +540,8 @@ describe("a Host's decision", () => {
     await ready();
     expect(within(pane()).getByRole("heading", { name: "路由边界" })).toBeTruthy();
     expect(pane().textContent).toContain("路由需要 Host 指定 buddy");
-    expect(screen.queryByRole("button", { name: /重试|填入|使用此 buddy|接续/ })).toBeNull();
-    expect(screen.queryByLabelText(/buddy/)).toBeNull();
+    expect(within(pane()).queryByRole("button", { name: /重试|填入|使用此 buddy|接续/ })).toBeNull();
+    expect(within(pane()).queryByLabelText(/buddy/)).toBeNull();
   });
 
   it("names a continuation for what it is, with who gave it and why", async () => {
@@ -553,19 +554,17 @@ describe("a Host's decision", () => {
 
   it("is told apart from a handoff, a takeover and a cancellation, which each have their own step", async () => {
     const changed = timeline();
-    changed.events.push(event(4, "takeover", at("10:50")), event(5, "cancel", at("10:55"), { stopInitiator: "host" }));
-    open({ timeline: changed, replies: { task: task({ status: "cancelled", cancellation: { actor: HOST, reason: "不再需要" }, selectedAttempt: { result: { terminationReason: "forced-stop" } } }) } });
+    changed.events.push(event(4, "takeover", at("10:50")), event(5, "cancel", at("10:55"), { stopInitiator: "host", note: "不再需要" }));
+    const f = open({ timeline: changed, replies: { task: task({ status: "cancelled", cancellation: { actor: HOST, note: "不再需要" }, selectedAttempt: { result: { terminationReason: "forced-stop" } } }) } });
     await ready();
-    const names = within(rail()).getAllByRole("button").map(button => button.textContent);
-    expect(names.some(name => name!.startsWith("接管"))).toBe(true);
-    expect(names.some(name => name!.startsWith("Host 停止"))).toBe(true);
-    expect(names.some(name => name!.startsWith("换手"))).toBe(true);
-    await userEvent.setup().click(step(/^换手/));
+    // A change of buddy is the boundary between two turns; the takeover and the cancellation are their own marks.
+    f.atStep(6);
     expect(pane().textContent).toContain("gpt-6.1-sol");
     expect(pane().textContent).toContain("claude-opus-5-5");
-    await userEvent.setup().click(step(/^Host 停止/));
-    expect(within(pane()).getByRole("heading", { level: 3, name: "Host 停止" })).toBeTruthy();
-    expect(pane().textContent).toContain("Host 停止");
+    fireEvent.click(stripSlice("event:4")!);
+    await waitFor(() => expect(within(pane()).getByRole("heading", { level: 3, name: "接管" })).toBeTruthy());
+    fireEvent.click(stripSlice("event:5")!);
+    await waitFor(() => expect(within(pane()).getByRole("heading", { level: 3, name: "Host 停止" })).toBeTruthy());
     expect(pane().textContent).toContain("不再需要");
   });
 });
@@ -580,7 +579,7 @@ describe("the acceptance", () => {
   const artifact: Artifact = { artifactId: "art-final", kind: "output", attemptId: "att-2", manifestSha256: "5f0c81d2" + "0".repeat(52) + "e2a1", outputCommit: "f6dfd59c11",
     diffPath: null, changedPaths: Array.from({ length: 14 }, (_, index) => `f${index}.ts`), partial: false, verified: null, final: null, cumulativePatch: null };
   const verified: Integration = { integrationId: "int-1", artifactId: "art-final", state: "verified", strategy: "merge", target: { path: "~/projects/hey-my-buddy", ref: "socu/console" },
-    beforeCommit: "b7285470aa", afterCommit: "f6dfd59c11", verificationSummary: "前端全量通过；构建可复现。", hostPaths: ["apps/console/src/tokens.css", "apps/console/src/button.tsx"], reason: null, actor: HOST, createdAt: at("11:03") };
+    beforeCommit: "b7285470aa", afterCommit: "f6dfd59c11", verificationSummary: "前端全量通过；构建可复现。", hostPaths: ["apps/console/src/tokens.css", "apps/console/src/button.tsx"], note: null, actor: HOST, createdAt: at("11:03") };
 
   it("is the final artifact and the evidence that it was integrated, as the Host recorded it", async () => {
     open({ timeline: settled(), step: 8, replies: { workflow: workflow({ state: "accepted", artifacts: [artifact], finalArtifactId: "art-final", integrations: [verified] }), task: task({ acceptedAt: at("11:05"), acceptanceVerdict: "accepted" }) } });
@@ -604,7 +603,7 @@ describe("the acceptance", () => {
   });
 
   it("writes that an integration was not required with its reason, and that none was recorded as it is", async () => {
-    const notRequired: Integration = { ...verified, state: "not-required", strategy: "none", target: null, beforeCommit: null, afterCommit: null, reason: "只改了文档", hostPaths: [] };
+    const notRequired: Integration = { ...verified, state: "not-required", strategy: "none", target: null, beforeCommit: null, afterCommit: null, note: "只改了文档", hostPaths: [] };
     open({ timeline: settled(), step: 8, replies: { workflow: workflow({ state: "accepted", artifacts: [artifact], finalArtifactId: "art-final", integrations: [notRequired] }) } });
     await ready();
     expect(pane().textContent).toContain("无需整合");
@@ -624,7 +623,7 @@ describe("the acceptance", () => {
     open({ step: 8 });
     await ready();
     expect(pane().textContent).toContain("等待验收");
-    expect(selected().textContent).toContain("验收");
+    expect(chosenStep()).toContain("验收");
   });
 
   it("writes the review that sent the delivery back, and does not call it accepted", async () => {
@@ -642,7 +641,7 @@ describe("the acceptance", () => {
     const failed = timeline();
     failed.events.push(event(4, "conclude", at("11:07")));
     failed.rows = [row({ state: "failed", status: "failed" })];
-    const conclusion = { conclusionId: "c1", executionStatus: "failed", note: "额度耗尽前把改动提取为部分成果", evidence: ["部分成果已封存", "检出内容已保留"],
+    const conclusion = { conclusionId: "c1", reason: null, executionStatus: "failed", note: "额度耗尽前把改动提取为部分成果", evidence: ["部分成果已封存", "检出内容已保留"],
       artifactId: "art-partial", integrationId: null, attemptId: "att-2", actor: { role: "host" as const, id: "host-a" }, createdAt: at("11:07"), runRevision: 7 };
     open({ timeline: failed, step: 8, replies: { workflow: workflow({ state: "failed", hostConclusion: conclusion }), task: task({ status: "failed", workflow: { ...task().workflow, state: "failed" } }) } });
     await ready();
@@ -679,8 +678,8 @@ describe("the detail is only read", () => {
   it("has no field to write in and asks the board only to read", async () => {
     const f = open();
     await ready();
-    for (const index of [1, 2, 3, 4, 5, 6, 7, 8]) {
-      await f.user.click(within(rail()).getAllByRole("button")[index - 1]!);
+    for (let index = 1; index <= 8; index += 1) {
+      f.atStep(index);
       expect(document.querySelectorAll("[data-slot=task-detail] input, [data-slot=task-detail] textarea, [data-slot=task-detail] select, [data-slot=task-detail] form")).toHaveLength(0);
     }
     expect(Object.keys(f.reads).sort()).toEqual(["audit", "basis", "held", "inquiries", "task", "workflow"]);
@@ -706,7 +705,8 @@ it("opens and highlights the exact inquiry in its turn, then scrolls it into vie
     open({ origin: "inquiry:inq-1", timeline: found, replies: { inquiries: { items: [inquiry({ messageId: "different-message-id", inquiryId: "inq-1" })], more: false } } });
     await ready();
     await waitFor(() => expect(document.querySelector('[data-inquiry-id="inq-1"]')?.getAttribute("data-highlighted")).toBe("true"));
-    expect(selected().textContent).toContain("回合 1");
+    expect(pane().textContent).toContain("回合 1");
+    expect(stripSlice("span:e1")!.getAttribute("aria-pressed")).toBe("true");
     expect(scroll).toHaveBeenCalledWith(expect.objectContaining({ block: "center" }));
   } finally { HTMLElement.prototype.scrollIntoView = original; }
 });

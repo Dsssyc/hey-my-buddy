@@ -5,7 +5,7 @@ import { formatShortDateTime } from "../i18n/format";
 import type { HarnessAccount } from "../harness-account";
 import { quotaView } from "../quota";
 import type { QuotaWindowView } from "../quota";
-import zh from "../i18n/zh/buddies-harness";
+import { reasonText } from "../i18n/reason";
 import type { HarnessCandidate, HarnessHealth, QuotaRoutingRecord } from "../types";
 
 type T = TFunction<"buddies">;
@@ -29,30 +29,14 @@ export function statusText(status: string, t: T): string {
   return key ? t(`harness.status.${key}`) : status;
 }
 
-/** A discovery reason code in a short word; a code not known stays as recorded. */
-function reasonText(code: string | undefined, t: T): string {
-  const value = code?.trim() ?? "";
-  return Object.hasOwn(zh.reason, value) ? t(`harness.reason.${value as keyof typeof zh.reason}`) : value;
-}
-
-/** How a tried location ended: its status and its reason, each word once. */
+/** A tried location's own reason, or its recorded status when no reason is needed. */
 function candidateText(candidate: HarnessCandidate, t: T): string {
-  const status = candidate.status?.trim() ?? "";
-  const known = Object.hasOwn(zh.candidate, status);
-  const words = [known ? t(`harness.candidate.${status as keyof typeof zh.candidate}`) : status, reasonText(candidate.reasonCode, t)];
-  // "missing" and "not_found" describe the same fact; say it once.
-  return [...new Set(words.filter(Boolean))].join(" · ");
+  return candidate.reason ? reasonText(candidate.reason) : candidate.status ? statusText(candidate.status, t) : "";
 }
 
 /** The chosen executable: the recorded one, else the launched command's first word, else the manual path. */
 export function harnessPath(row: HarnessHealth): string | null {
   return row.executable?.trim() || row.command?.[0]?.trim() || row.manualPath || null;
-}
-
-/** What a harness that is not found offers to do: the recorded remedy, else one for its state. */
-function remedyText(row: HarnessHealth, t: T): string | null {
-  const known = (["unknown", "missing", "login-required", "unhealthy"] as const).find(name => name === row.status);
-  return row.remedy?.trim() || (known ? t(`harness.remedy.${known}`) : null);
 }
 
 /** The quota summary of a harness section: the window nearest its limit. */
@@ -113,12 +97,12 @@ export type HarnessDetailsView = {
     checked: string | null;
     review: { text: string; reason: string | null; note: string };
     /** Only for a harness that is not found. */
-    exception: null | { reason: string | null; remedy: string | null; tried: { path: string | null; source: string | null; result: string }[] };
+    exception: null | { reason: string | null; tried: { path: string | null; source: string | null; result: string }[] };
   };
   account: null | {
     state: string;
     billing: { provider: string; plan: string }[];
-    guidance: string | null;
+    reason: string | null;
   };
   quota: null | {
     observed: string | null;
@@ -171,12 +155,11 @@ export function harnessDetailsView(row: HarnessHealth, t: T): HarnessDetailsView
       checked: harnessTime(row.checkedAt),
       review: {
         text: t(!eligibility ? "harness.review.unknown" : eligibility.eligible ? "harness.review.eligible" : "harness.review.ineligible"),
-        reason: eligibility?.reason ?? null,
+        reason: eligibility?.reason ? reasonText(eligibility.reason) : null,
         note: reviewNote,
       },
       exception: found ? null : {
-        reason: reasonText(row.reasonCode, t) || null,
-        remedy: remedyText(row, t),
+        reason: row.reason ? reasonText(row.reason) : null,
         tried: (row.candidates ?? []).map(candidate => ({
           path: candidate.path?.trim() || null, source: candidate.source?.trim() || null, result: candidateText(candidate, t),
         })),
@@ -188,8 +171,7 @@ export function harnessDetailsView(row: HarnessHealth, t: T): HarnessDetailsView
         harnessTime(parsed.checkedAt) ?? ""].filter(Boolean).join(" · "),
       billing: Object.entries(row.billingByProvider ?? {}).map(([provider, fact]) =>
         ({ provider, plan: t(`harness.account.plan.${PLANS.find(name => name === fact?.kind) ?? "unknown"}`) })),
-      guidance: parsed.guidance && Object.hasOwn(zh.account.guidance, parsed.reasonCode ?? "")
-        ? t(`harness.account.guidance.${parsed.reasonCode as keyof typeof zh.account.guidance}`) : parsed.guidance,
+      reason: parsed.reason ? reasonText(parsed.reason) : null,
     },
     quota: quota && {
       observed: harnessTime(quota.observedAt),

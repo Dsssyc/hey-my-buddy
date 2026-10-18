@@ -5,10 +5,21 @@ import { excerpt } from "./task-state";
 import { actorRoleText } from "./actor";
 import type { TimelineBuddy, TimelineEvent, TimelineRow, TimelineSpan } from "./macro-task-types";
 
+/** Stable identity for the six historical execution colours, assigned by the timeline. */
+export function buddyColorKey(buddy: TimelineBuddy | null): string {
+  return JSON.stringify([buddy?.harness ?? null, buddy?.provider ?? null, buddy?.model ?? null, buddy?.effort ?? null]);
+}
+
 /** The same recorded event has one name on the timeline and in its detail. */
 export function eventName(event: TimelineEvent): string {
   return event.kind === "cancel" ? i18n.t("tasks:drawing.stoppedBy", { actor: actorRoleText(event.actor?.role) })
     : i18n.t(`tasks:drawing.events.${event.kind}`);
+}
+
+/** An event carries its own decision facts and authored note, without service prose. */
+export function eventDetails(event: TimelineEvent): string {
+  return [...(["decision", "verdict", "state", "strategy"] as const).flatMap(key =>
+    event[key] ? [i18n.t(`taskDetail:event.value.${event[key]}`, { defaultValue: event[key] })] : []), event.note].filter(Boolean).join(" · ");
 }
 
 /** Recorded execution states that keep a null-ended span visually open. */
@@ -113,7 +124,8 @@ type TitleLine = {
  * never masquerades as a title; explicit macroTask/Host titles keep their
  * recorded bounded text. The complete first line stays available as `fullText`.
  */
-export function displayTitle(titleSource: string, title: string): TitleLine {
+export function displayTitle(titleSource: string, recorded: string | null): TitleLine {
+  const title = titleSource === "none" ? i18n.t("console:unnamedMicroTask") : recorded!;
   const fromTask = titleSource === "task";
   const text = fromTask ? excerpt(title, TASK_TITLE_CHARS) : title;
   return { text, fullText: title, clipped: text !== title, fromTask };

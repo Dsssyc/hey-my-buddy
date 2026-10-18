@@ -29,25 +29,25 @@ export function harnesses(): HarnessHealth[] {
       command: ["/usr/local/bin/dsh", "--version"], version: "0.4.2", source: "版本管理器（nvm 默认版本）",
       checkedAt: CHECKED_AT }),
     harness({ harness: "zcode", status: "missing", revision: 1, checkedAt: CHECKED_AT,
-      reasonCode: "HARNESS_NOT_FOUND", remedy: "安装 ZCode CLI，或填写可执行文件的绝对路径。",
+      reason: { code: "harness.not-found", params: { operation: "probe" } },
       candidates: [
-        { path: "/Applications/ZCode.app/Contents/MacOS/zcode", source: "应用包", status: "missing", reasonCode: "not_found" },
+        { path: "/Applications/ZCode.app/Contents/MacOS/zcode", source: "应用包", status: "missing", reason: { code: "harness.not-found", params: { operation: "probe" } } },
         { path: "/opt/homebrew/bin/zcode", source: "Homebrew", status: "missing" },
       ] }),
     harness({ harness: "codex", status: "login-required", revision: 2, executable: CODEX_EXECUTABLE,
       command: [CODEX_EXECUTABLE], version: "0.157.0", source: "PATH",
-      reasonCode: "HARNESS_LOGIN_REQUIRED", remedy: "先运行 codex login 完成登录，再检测。", checkedAt: CHECKED_AT }),
+      reason: { code: "harness.login-required", params: { operation: "probe" } }, checkedAt: CHECKED_AT }),
     harness({ harness: "claude", status: "unhealthy", revision: 5, executable: "/Users/fixture/.claude/local/claude",
       version: "2.0.1", source: "手动路径", manualPath: "/Users/fixture/.claude/local/claude",
-      reasonCode: "HARNESS_HANDSHAKE_FAILED", remedy: "检查该 CLI 能否独立运行。", checkedAt: CHECKED_AT,
-      candidates: [{ path: "/Users/fixture/.claude/local/claude", source: "手动路径", status: "failed", reasonCode: "handshake_failed" }] }),
+      reason: { code: "harness.probe-failed", params: { operation: "probe" } }, checkedAt: CHECKED_AT,
+      candidates: [{ path: "/Users/fixture/.claude/local/claude", source: "手动路径", status: "failed", reason: { code: "harness.probe-failed", params: { operation: "probe" } } }] }),
   ];
 }
 
 type HarnessSnapshot = Snapshot & { harnesses: HarnessHealth[] };
 
 export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
-  const buddy: Buddy = { buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium", available: true,
+  const buddy: Buddy = { effortRank: null, buddyId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium", available: true,
     enabled: true, capabilities: ["execution:claude", "decision"], contextWindow: 200_000, description: "", source: "catalog:fixture" };
   return {
     csrfToken: "csrf", eventCursor: 0,
@@ -86,7 +86,7 @@ export function fixture(options: FixtureOptions = {}) {
     return state.harnesses.map(row => harness === undefined || row.harness === harness
       ? { ...row, status: "ready" as const, available: true, revision: row.revision + 1,
           executable: `/opt/bin/${row.harness}`, version: "9.9.9", source: "PATH",
-          manualPath: null, reasonCode: undefined, remedy: undefined, candidates: [],
+          manualPath: null, reason: null, candidates: [],
           checkedAt: new Date().toISOString() }
       : row);
   }
@@ -110,11 +110,11 @@ export function fixture(options: FixtureOptions = {}) {
       const path = params.path as string | null;
       state = { ...state, harnesses: state.harnesses.map(row => row.harness !== harness ? row : path
         ? { ...row, revision: row.revision + 1, status: "ready" as const, available: true, manualPath: path,
-            executable: path, version: "1.0.0", source: "手动路径", reasonCode: undefined, remedy: undefined,
+            executable: path, version: "1.0.0", source: "手动路径", reason: null,
             candidates: [], checkedAt: new Date().toISOString() }
         : { ...row, revision: row.revision + 1, status: "missing" as const, available: false, manualPath: null,
-            executable: undefined, version: undefined, source: undefined, reasonCode: "HARNESS_NOT_FOUND",
-            remedy: "安装 ZCode CLI，或填写可执行文件的绝对路径。", candidates: [],
+            executable: undefined, version: undefined, source: undefined, reason: { code: "harness.not-found", params: { operation: "probe" } },
+            candidates: [],
             checkedAt: new Date().toISOString() }) };
       return { harness: state.harnesses.find(row => row.harness === harness)! };
     }

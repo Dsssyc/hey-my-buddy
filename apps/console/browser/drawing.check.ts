@@ -29,7 +29,7 @@ function comparison(timeline: MacroTaskTimeline): MacroTaskTimeline {
     piece(3, "live", "execution", "09:06", null, { reminders: { overdue: true, possiblyStuck: true, lastNativeEventAt: at("09:12"), toolInProgress: false } }),
     piece(4, "repair", "execution", "09:15", "09:22", { inquiries: [{ inquiryId: "comparison-question", createdAt: at("09:19"), author: "preview-host", state: "answered" }] })];
   const event = timeline.events[0]!;
-  timeline.events = [{ ...event, seq: 1, runId: ids[0]!, kind: "accept", at: at("09:08"), summary: "Review passed" }];
+  timeline.events = [{ ...event, seq: 1, runId: ids[0]!, kind: "accept", at: at("09:08"), verdict: "accepted", note: "Review passed" }];
   timeline.totals = { rows: 5, allRows: 5, spans: timeline.spans.length, events: timeline.events.length };
   timeline.macroTask = { ...timeline.macroTask, title: "控制台前端重建", rootRunIds: ids, counts: { ...timeline.macroTask.counts, roots: 5, helpers: 0, active: 1, host: 0, review: 3, accepted: 1, ended: 1 } };
   return timeline;
@@ -101,7 +101,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         "inquiry-mark", "waiting-diamond", "accept-mark"]) {
         expect(await drawing.locator(`[data-slot="${slot}"]`).count(), `${slot} is drawn`).toBeGreaterThan(0);
       }
-      if (width === 1440) await expect(drawing.locator('[data-slot="track-label"]').filter({ hasText: locale === "zh-CN" ? "可能卡住" : "Possibly stuck" })).toHaveCount(1);
+      if (width === 1440) await expect(drawing.locator('[data-slot="track-label"]').filter({ hasText: locale === "zh-CN" ? /可能卡住|无动静/ : /Possibly stuck|Silent/ })).toHaveCount(1);
       await expect(drawing.locator('[data-slot="gap-label"]')).toHaveText(locale === "zh-CN" ? ["35 分", "2 时 14 分"] : ["35 min", "2 h 14 min"]);
       await expect(page.locator('[data-slot="timeline-row-name"][data-run-id="preview-run-a1"]:visible [data-slot="fixed-by"]')).toHaveText("↩ 2");
       for (const run of ["preview-run-a2", "preview-run-a3"])
@@ -112,14 +112,16 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       const colors = new Set(await ended.evaluateAll(bars => bars.map(bar => getComputedStyle(bar).fill)));
       expect(colors.size).toBeGreaterThan(1);
       // Every shown duration belongs inside its bar, even beside an inquiry.
-      const outsideDurations = await drawing.locator('[data-slot="timeline-track"]').evaluateAll(tracks => tracks.flatMap(track => {
+      const durationPositions = await drawing.locator('[data-slot="timeline-track"]').evaluateAll(tracks => tracks.flatMap(track => {
         const bars = [...track.querySelectorAll('[data-slot="execution-bar"], [data-slot="routing-bar"], [data-slot="silent-tail"]')].map(bar => bar.getBoundingClientRect());
-        return [...track.querySelectorAll('[data-slot="track-label"][y="35"]')].filter(label => /^(\d+\s*(分|时|秒|min|h|s)\s*)+$/.test(label.textContent ?? "")).filter(label => {
+        return [...track.querySelectorAll('[data-slot="track-label"]')].filter(label => /^(\d+\s*(分|时|秒|min|h|s)\s*)+$/.test(label.textContent ?? "")).flatMap(label => {
           const box = label.getBoundingClientRect();
-          return !bars.some(bar => box.left >= bar.left && box.right <= bar.right);
-        }).map(label => label.textContent);
+          if (!bars.some(bar => box.top >= bar.top && box.bottom <= bar.bottom)) return [];
+          return [{ text: label.textContent, inside: bars.some(bar => box.left >= bar.left && box.right <= bar.right) }];
+        });
       }));
-      expect(outsideDurations).toEqual([]);
+      expect(durationPositions.length).toBeGreaterThan(0);
+      expect(durationPositions.filter(label => !label.inside)).toEqual([]);
       await expectDrawingGeometry(page);
       const acceptedTrack = page.locator('[data-slot="timeline-track"]').first();
       const acceptedMark = (await acceptedTrack.locator('[data-slot="accept-mark"] circle').boundingBox())!;

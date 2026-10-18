@@ -40,7 +40,7 @@ describe("recorded row state", () => {
 
 describe("0.16 acceptance wait (P1.8)", () => {
   const row: TimelineRow = {
-    runId: "r1", parentRunId: null, rootRunId: "r1", rootLeadRunId: null, title: "修复标题错位", titleSource: "title", taskSummary: null,
+    runId: "r1", parentRunId: null, rootRunId: "r1", rootLeadRunId: null, delegationAuthority: false, title: "修复标题错位", titleSource: "title", taskSummary: null,
     summary: null, createdAt: "2026-09-26T01:00:00Z", state: "accepted", status: "completed", category: "ended",
     shutdownConfirmed: true, depth: 0, kind: "micro-task", buddy: null,
     acceptedAt: "2026-09-26T07:25:00Z", acceptanceVerdict: "accepted", reviewRejectedAt: null, reviewRejectionNote: null,

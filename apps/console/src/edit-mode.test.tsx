@@ -13,7 +13,7 @@ function catalog(): Buddy[] {
     { model: "deepseek-flash", effort: "high", enabled: false },
     { model: "deepseek-v4-pro", effort: "max", enabled: true },
   ];
-  return entries.map(({ model, effort, enabled }) => ({
+  return entries.map(({ model, effort, enabled }) => ({ effortRank: null,
     buddyId: `dsh:deepseek-official:${model}:${effort}`,
     label: `${model} · ${effort}`,
     harness: "dsh", provider: "deepseek-official", model, effort,
@@ -74,7 +74,7 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
       // A discovery can coincide with another settings publication.
       state = { ...state,
         ...(options.discoveryNote ? { modelServiceNotes: [flashNote(options.discoveryNote)] } : {}),
-        buddies: [...state.buddies, { buddyId: discovered, label: "deepseek-v5 · medium", harness: "dsh",
+        buddies: [...state.buddies, { effortRank: null, buddyId: discovered, label: "deepseek-v5 · medium", harness: "dsh",
           provider: "deepseek-official", model: "deepseek-v5", effort: "medium", available: true, enabled: false,
           capabilities: [], contextWindow: null, source: "catalog:refresh", description: "" }] };
       return { discovered: true };

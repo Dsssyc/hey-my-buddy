@@ -601,6 +601,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "shutdownConfirmed": attempts == confirmed and not unproven,
         "depth": depth,
         "kind": metadata["kind"],
+        "delegationAuthority": metadata["delegationAuthority"],
         "leadOwnership": metadata["leadOwnership"],
         "rootLeadRunId": metadata["rootLeadRunId"],
         "buddy": _full_buddy(metadata["buddy"]),

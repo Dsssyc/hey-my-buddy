@@ -23,7 +23,7 @@ function catalog(): Buddy[] {
     { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max", enabled: true },
     { harness: "zcode", provider: "bigmodel-api", model: "GLM-5.3", effort: "high", enabled: false },
   ];
-  return entries.map(p => ({ ...p, buddyId: [p.harness, p.provider, p.model, p.effort].join(":"),
+  return entries.map(p => ({ ...p, effortRank: null, buddyId: [p.harness, p.provider, p.model, p.effort].join(":"),
     label: `${p.model} · ${p.effort}`, available: true, capabilities: [], contextWindow: null,
     source: "catalog:fixture", description: "" }));
 }
@@ -470,7 +470,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
       window.location.hash = "#tasks/run%3Abrowse-task/browse-task";
       render(<App suppliedApi={f.api} />);
       const detail = await screen.findByRole("region", { name: "微任务详情" });
-      await screen.findByRole("navigation", { name: "步骤" });
+      await screen.findByRole("group", { name: "这个微任务的各步" });
       expect(await within(detail).findByText("协助 browse-task")).toBeTruthy();
       expect(within(detail).queryByRole("group", { name: "用户决定" })).toBeNull();
       expect(within(detail).queryByRole("group", { name: "手工接续" })).toBeNull();
@@ -497,7 +497,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     window.location.hash = "#tasks/run%3Agated-micro-task/gated-micro-task";
     render(<App suppliedApi={f.api} />);
     const detail = await screen.findByRole("region", { name: "微任务详情" });
-    await screen.findByRole("navigation", { name: "步骤" });
+    await screen.findByRole("group", { name: "这个微任务的各步" });
 
     await readSnapshotOnForeground(f.api.snapshot);
     expect(await screen.findByText("连接中断")).toBeTruthy();

@@ -21,7 +21,7 @@ import {
 } from "./policy";
 import type { Buddy, Snapshot } from "./types";
 
-const worker: Buddy = {
+const worker: Buddy = { effortRank: null,
   buddyId: "dsh:deepseek-official:deepseek-flash:off",
   label: "flash · off",
   harness: "dsh",
@@ -42,7 +42,7 @@ const retired: Buddy = {
   effort: "max",
   available: false,
   enabled: false,
-  unavailableReason: "provider paused",
+  unavailableReason: { code: "catalog.native-unavailable", params: {} },
 };
 const disabled: Buddy = { ...worker, buddyId: "dsh:deepseek-official:disabled:low", enabled: false };
 const coder: Buddy = {

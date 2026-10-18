@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "../api";
 import { parseAudit, parseBasis, parseInquiries, parseRoutingPage, parseTask, parseTokenUsage, parseWorkflow } from "./parse";
-import { task } from "./task-detail.fixtures";
+import { HOST, task } from "./task-detail.fixtures";
 
 const usage = { inputTokens: 20000, cachedInputTokens: 15000, outputTokens: 800, source: "codex-native", scope: "attempt" };
 
@@ -50,6 +50,16 @@ const reply = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("the compact collaboration record", () => {
+  it("reads a system request and an automatic conclusion with null authored text", () => {
+    const reason = { code: "lead.result-refused", params: { disposition: "completed", unfinished: [{ runId: "child", state: "executing" }], total: 1 } };
+    const conclusion = { conclusionId: "c", executionStatus: "failed", note: null, reason: { code: "lead.owned-concluded", params: { leadRunId: "lead" } },
+      evidence: [], artifactId: null, integrationId: null, attemptId: null, actor: HOST, createdAt: "t", runRevision: 1 };
+    const parsed = parseWorkflow(reply({ activeRequest: { requestId: "r", kind: "attention", state: "open", createdAt: "t", decidedAt: null,
+      childTaskId: null, routing: false, summary: null, reason, attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null },
+      hostConclusion: conclusion }), "m1");
+    expect(parsed.activeRequest).toMatchObject({ summary: null, reason });
+    expect(parsed.hostConclusion).toEqual(conclusion);
+  });
   it("belongs to the run asked for, with a revision", () => {
     expect(parseWorkflow(reply(), "m1")).toMatchObject({ runId: "m1", revision: 3, buddyLocked: false, delegationAuthority: false, counts: { turns: 0, openRequests: 0 } });
   });
@@ -98,11 +108,11 @@ describe("the compact collaboration record", () => {
 
   it("reads an integration that needed none, with no target, and one that was verified", () => {
     const base = { integrationId: "i", artifactId: "o1", attemptId: "a1", state: "not-required", strategy: "not-required", target: null, beforeCommit: null, afterCommit: null,
-      verification: {}, reason: "只读", actor: { role: "host", id: "h" }, createdAt: "t" };
+      verification: {}, note: "只读", actor: { role: "host", id: "h" }, createdAt: "t" };
     const verified = { ...base, state: "verified", strategy: "merge", target: { kind: "checkout", path: "~/p", ref: "main" }, afterCommit: "c3",
       verification: { summary: "通过", hostPaths: ["docs/a.md"] } };
     const [first, second] = parseWorkflow(reply({ integrations: [base, verified] }), "m1").integrations;
-    expect(first).toMatchObject({ state: "not-required", target: null, verificationSummary: null, hostPaths: [], reason: "只读" });
+    expect(first).toMatchObject({ state: "not-required", target: null, verificationSummary: null, hostPaths: [], note: "只读" });
     expect(second).toMatchObject({ target: { path: "~/p", ref: "main" }, afterCommit: "c3", verificationSummary: "通过", hostPaths: ["docs/a.md"] });
   });
 });
@@ -110,13 +120,13 @@ describe("the compact collaboration record", () => {
 describe("the audit", () => {
   const result = { ...turn, summary: "结果", remaining: ["还差一项"] };
   const entry = { decisionId: "d1", status: "completed", source: "single-candidate", selectedBuddy: { harness: "dsh", provider: "p", model: "m", effort: "off", buddyId: "x", label: "L" },
-    routerBuddy: null, routingMode: "review", reason: null };
+    routerBuddy: null, routingMode: "review", reason: null, note: null };
   const audit = { runId: "m1", revision: 4, audit: { turns: [result], continuations: [], requests: [], hostConclusions: [] }, routingHistory: { entries: [entry], nextCursor: 12, total: 40 } };
 
   it("carries every turn with its result, the Host's inputs, the requests and the first page of the routes", () => {
     const parsed = parseAudit(audit, "m1");
     expect(parsed.audit.turns[0]).toMatchObject({ turnId: "t1", attemptId: "a1", summary: "结果", remaining: ["还差一项"] });
-    expect(parsed.routing.entries).toEqual([{ decisionId: "d1", status: "completed", source: "single-candidate", routerBuddy: null, routingMode: "review", reason: null,
+    expect(parsed.routing.entries).toEqual([{ decisionId: "d1", status: "completed", source: "single-candidate", routerBuddy: null, routingMode: "review", reason: null, note: null,
       selectedBuddy: { harness: "dsh", provider: "p", model: "m", effort: "off" } }]);
     expect(parsed.routing.nextCursor).toBe(12);
   });
@@ -131,11 +141,11 @@ describe("the audit", () => {
       turnId: "t1", attemptId: "a1", childTaskId: null, createdAt: "t", decidedAt: "t", routing: false, payload: {}, decision: null };
     const [adopted, approved, open] = parseAudit({ ...audit, audit: { ...audit.audit, requests: [
       { ...request, decision: { resolution: { action: "adopt", actor: { role: "host", id: "h" } } } },
-      { ...request, decision: { decision: "approve", reason: "可以", actor: { role: "lead", id: "l" } } },
+      { ...request, decision: { decision: "approve", note: "可以", actor: { role: "lead", id: "l" } } },
       { ...request, state: "open", decidedAt: null },
     ] } }, "m1").audit.requests;
-    expect(adopted!.decision).toEqual({ decision: null, reason: null, actor: { role: "host", id: "h" } });
-    expect(approved!.decision).toEqual({ decision: "approve", reason: "可以", actor: { role: "lead", id: "l" } });
+    expect(adopted!.decision).toEqual({ decision: null, note: null, actor: { role: "host", id: "h" } });
+    expect(approved!.decision).toEqual({ decision: "approve", note: "可以", actor: { role: "lead", id: "l" } });
     expect(open!.decision).toBeNull();
   });
 
@@ -189,6 +199,14 @@ describe("the inquiries", () => {
     expect(parseInquiries({ messages: [message("x", "queued", { attemptId: null })] }, 200).items[0]!.attemptId).toBeNull();
   });
 
+  it("reads program reasons separately from a Host's original note and rejects a string reason", () => {
+    const reason = { code: "inquiry-queued-at-attempt-end", params: {} };
+    const note = " Host original note. 原文 ";
+    const parsed = parseInquiries({ messages: [message("x", "unavailable", { reason, note })] }, 200).items[0]!;
+    expect(parsed).toMatchObject({ reason, note });
+    expect(() => parseInquiries({ messages: [message("x", "unavailable", { reason: "attempt ended" })] }, 200)).toThrow(ApiError);
+  });
+
   it("refuses a state it does not know", () => {
     expect(() => parseInquiries({ messages: [message("x", "sent")] }, 200)).toThrow(ApiError);
     expect(() => parseInquiries({ messages: "none" }, 200)).toThrow(ApiError);
@@ -197,6 +215,12 @@ describe("the inquiries", () => {
 
 describe("the task view", () => {
   const attempt = (overrides: Record<string, unknown> = {}) => ({ attemptId: "att-2", ...overrides });
+
+  it("reads the selected execution's release reason and rejects its old string form", () => {
+    const releaseReason = { code: "service-stopped-before-launch", params: {} };
+    expect(parseTask(task({ selectedAttempt: attempt({ releaseReason }) }), "m1").attempt!.releaseReason).toEqual(releaseReason);
+    expect(() => parseTask(task({ selectedAttempt: attempt({ releaseReason: "service stopped" }) }), "m1")).toThrow(ApiError);
+  });
 
   it("belongs to the run asked for and carries what the detail reads, made definite", () => {
     const view = parseTask(task(), "m1");
@@ -213,7 +237,7 @@ describe("the task view", () => {
     expect(() => parseTask(task({ lineage: { ...task().lineage, kind: "other" } }), "m1")).toThrow(ApiError);
     expect(parseTask(task({ lineage: { ...task().lineage, project: null } }), "m1").task.lineage?.project).toBeNull();
     expect(() => parseTask(task({ lineage: { ...task().lineage, sourceHostId: 7 } }), "m1")).toThrow(ApiError);
-    expect(() => parseTask(task({ status: "cancelled", cancellation: { actor: { role: "robot", id: "x" }, reason: null } }), "m1")).toThrow(ApiError);
+    expect(() => parseTask(task({ status: "cancelled", cancellation: { actor: { role: "robot", id: "x" }, note: null } }), "m1")).toThrow(ApiError);
     expect(() => parseTask(task({ selectedAttempt: { reminders: null } }), "m1")).toThrow(ApiError);
   });
 
@@ -255,9 +279,9 @@ describe("the task view", () => {
 
   it("writes how an attempt ended: a normal end is none, any other has its cause, who stopped it, why, and a native limit", () => {
     expect(parseTask(task(), "m1").attempt!.ending).toBeNull();
-    const stopped = parseTask(task({ status: "cancelled", cancellation: { actor: { role: "host", id: "codex-desktop" }, reason: "不再需要" },
+    const stopped = parseTask(task({ status: "cancelled", cancellation: { actor: { role: "host", id: "codex-desktop" }, note: "不再需要" },
       selectedAttempt: attempt({ stopInitiator: "host", result: { terminationReason: "forced-stop" } }) }), "m1").attempt!.ending;
-    expect(stopped).toEqual({ cause: "forced-stop", stoppedBy: "host", actor: { role: "host", id: "codex-desktop" }, reason: "不再需要", quota: null });
+    expect(stopped).toEqual({ cause: "forced-stop", stoppedBy: "host", actor: { role: "host", id: "codex-desktop" }, note: "不再需要", quota: null });
     const limited = parseTask(task({ status: "failed", quotaFailure: { code: "rate-limited" }, selectedAttempt: attempt({ result: { terminationReason: "harness-error" } }) }), "m1").attempt!.ending;
     expect(limited).toMatchObject({ cause: "harness-error", stoppedBy: null, quota: "rate-limited" });
     // A stop with no recorded initiator is unknown, never a person.

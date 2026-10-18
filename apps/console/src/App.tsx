@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { buddyAttention } from "./buddies/attention";
 import { attentionHints } from "./buddies/BuddyHeader";
 import { createApi } from "./api";
+import { EntryUnavailable } from "./EntryUnavailable";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import { useConsole } from "./use-console";
@@ -49,6 +50,11 @@ function BrandMark() {
 }
 
 export function App({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
+  return document.querySelector('meta[name="hey-my-buddy-reason"]')?.getAttribute("content") === "console.entry-unavailable"
+    ? <EntryUnavailable /> : <ConsoleApp suppliedApi={suppliedApi} />;
+}
+
+function ConsoleApp({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
   const { t } = useTranslation(["shell", "common"]);
   const [api] = useState(() => suppliedApi || createApi(window.location.pathname));
   const state = useConsole(api);

@@ -49,7 +49,7 @@ function row(runId: string, overrides: Partial<TimelineRow> = {}): TimelineRow {
   return {
     runId,
     parentRunId: null,
-    rootRunId: runId, rootLeadRunId: null,
+    rootRunId: runId, rootLeadRunId: null, delegationAuthority: false,
     title: `微任务 ${runId}`,
     titleSource: "title",
     taskSummary: null,
@@ -81,7 +81,7 @@ function span(spanId: string, runId: string, kind: TimelineSpan["kind"], startAt
 }
 
 function event(seq: number, runId: string, kind: TimelineEvent["kind"], at: string, overrides: Partial<TimelineEvent> = {}): TimelineEvent {
-  return { seq, runId, kind, at, label: "", summary: "", actor: { role: "host", id: "codex-desktop" },
+  return { seq, runId, kind, at, decision: null, verdict: null, state: null, strategy: null, note: null, actor: { role: "host", id: "codex-desktop" },
     attemptId: null, requestId: null, artifactId: null, ...overrides };
 }
 
@@ -113,7 +113,7 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
       { turnIndex: 1, attemptId: "att-r1", buddy: OPUS, shutdownConfirmed: true, resultStatus: "ok" }),
     span("s-r2-q", "r2", "queue", "2026-09-26T01:20:00Z", "2026-09-26T01:21:00Z"),
     span("s-r2-r", "r2", "routing", "2026-09-26T01:21:00Z", "2026-09-26T01:24:00Z", { decisionTaskId: "run-d02b", decisionId: "decision-r2-first", routing: {
-      selectedBuddy: OPUS, reason: "适合接口审阅", policyCheck: { taskPreference: { ruleIndex: 0, outcome: "matched" }, userPreference: "none" },
+      selectedBuddy: OPUS, reason: null, note: "适合接口审阅", policyCheck: { taskPreference: { ruleIndex: 0, outcome: "matched" }, userPreference: "none" },
       usage: { elapsedMs: 180000, toolCalls: 3, bytesRead: 1024 },
     } }),
     span("s-r2-e1", "r2", "execution", "2026-09-26T01:24:00Z", "2026-09-26T02:10:00Z",
@@ -139,15 +139,15 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
       { state: "uncertain", uncertain: true, turnIndex: 1, attemptId: "att-r6", buddy: GLM, shutdownConfirmed: false }),
   ];
   const events: TimelineEvent[] = [
-    event(1, "r1", "dispatch", "2026-09-26T01:12:00Z", { label: "派发" }),
-    event(2, "r2", "dispatch", "2026-09-26T01:20:00Z", { label: "派发" }),
-    event(3, "r3", "dispatch", "2026-09-26T01:38:00Z", { label: "授权协助任务" }),
-    event(4, "r1", "accept", "2026-09-26T02:20:00Z", { label: "验收" }),
-    event(5, "r2", "decide", "2026-09-26T03:00:00Z", { label: "决定" }),
-    event(6, "r2", "continue", "2026-09-26T03:02:00Z", { label: "续接" }),
-    event(7, "r2", "accept", "2026-09-26T03:30:00Z", { label: "验收" }),
-    event(8, "r5", "cancel", "2026-09-26T05:50:00Z", { label: "取消" }),
-    event(9, "r4", "dispatch", "2026-09-26T06:38:00Z", { label: "派发" }),
+    event(1, "r1", "dispatch", "2026-09-26T01:12:00Z", {  }),
+    event(2, "r2", "dispatch", "2026-09-26T01:20:00Z", {  }),
+    event(3, "r3", "dispatch", "2026-09-26T01:38:00Z", {  }),
+    event(4, "r1", "accept", "2026-09-26T02:20:00Z", {  }),
+    event(5, "r2", "decide", "2026-09-26T03:00:00Z", {  }),
+    event(6, "r2", "continue", "2026-09-26T03:02:00Z", {  }),
+    event(7, "r2", "accept", "2026-09-26T03:30:00Z", {  }),
+    event(8, "r5", "cancel", "2026-09-26T05:50:00Z", {  }),
+    event(9, "r4", "dispatch", "2026-09-26T06:38:00Z", {  }),
   ];
   return {
     macroTask: macroTaskSummary(),

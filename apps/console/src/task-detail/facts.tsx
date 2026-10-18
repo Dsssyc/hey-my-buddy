@@ -17,7 +17,7 @@ export function endingText(ending: Ending, t: TFunction<"taskDetail">): string {
     cause ? t("ending.cause", { cause }) : ending.stoppedBy || ending.quota ? null : t("ending.unrecorded"),
     ending.stoppedBy ? t(`stop.${ending.stoppedBy}`) : null,
     ending.actor ? `${actorRoleText(ending.actor.role)} · ${ending.actor.id}` : null,
-    ending.reason,
+    ending.note,
     ending.quota ? t(`quota.${ending.quota}`) : null,
   ].filter(Boolean).join(" · ");
 }

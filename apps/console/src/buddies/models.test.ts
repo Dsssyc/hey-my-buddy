@@ -1,3 +1,4 @@
+import { reasonText } from "../i18n/reason";
 import i18n from "i18next";
 import { describe, expect, it } from "vitest";
 import { historyView } from "../draft";
@@ -13,7 +14,7 @@ import { harnessBlocks, harnessStateText, listedModels, modelIdentity, reasonTex
 const t = i18n.getFixedT(null, "buddies");
 
 function buddy(harness: string, provider: string, model: string, effort: string, extra: Partial<Buddy> = {}): Buddy {
-  return {
+  return { effortRank: null,
     buddyId: `${harness}:${provider}:${model}:${effort}`, label: `${model.toUpperCase()} · ${effort}`, harness, provider, model, effort,
     available: true, enabled: false, capabilities: [], contextWindow: null, description: "", source: "catalog:fixture", ...extra,
   };
@@ -26,8 +27,8 @@ function buddies(): Buddy[] {
     buddy("dsh", "deepseek-official", "flash", "max"),
     buddy("dsh", "second-provider", "pro", "high"),
     buddy("codex", "openai", "sol", "high"),
-    buddy("claude", "anthropic", "opus", "high", { enabled: true, available: false, unavailableReason: "HARNESS_UNHEALTHY" }),
-    buddy("claude", "anthropic", "opus", "max", { available: false, unavailableReason: "HARNESS_UNHEALTHY" }),
+    buddy("claude", "anthropic", "opus", "high", { enabled: true, available: false, unavailableReason: { code: "harness.probe-failed", params: {} } }),
+    buddy("claude", "anthropic", "opus", "max", { available: false, unavailableReason: { code: "harness.probe-failed", params: {} } }),
   ];
 }
 
@@ -148,15 +149,12 @@ describe("the table's blocks", () => {
 });
 
 describe("recorded reasons in words", () => {
-  it("words the reasons the board is known to record and shows any other as recorded", () => {
-    expect(reasonTexts(["HARNESS_UNHEALTHY", "provider paused"], t))
-      .toEqual(["Harness 不可用", "provider paused"]);
-    expect(reasonTexts(["not present in the latest confirmed native discovery", "not present in the latest complete native discovery"], t))
-      .toEqual(["已不在 Harness 的模型目录里"]);
+  const harness = { code: "harness.probe-failed", params: {} };
+  const absent = { code: "catalog.model-absent", params: {} };
+  it("formats structured reasons and deduplicates their text", () => {
+    expect(reasonTexts([harness, absent, absent], t)).toEqual([reasonText(harness), reasonText(absent)]);
   });
-
-  it("leaves out the reason that only repeats the harness's state where that state is already written", () => {
-    expect(reasonTexts(["HARNESS_UNHEALTHY"], t, true)).toEqual([]);
-    expect(reasonTexts(["HARNESS_UNHEALTHY", "provider paused"], t, true)).toEqual(["provider paused"]);
+  it("omits a harness cause when that harness has already said it", () => {
+    expect(reasonTexts([harness, absent], t, true)).toEqual([reasonText(absent)]);
   });
 });
