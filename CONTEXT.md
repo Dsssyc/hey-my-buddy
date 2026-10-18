@@ -184,3 +184,20 @@ _Avoid_: 接管, takeover (those name a Host taking over the ownership of a micr
 
 **验收 / acceptance**:
 The Host's evidence-backed judgment on a fixed artifact, separate from Worker completion.
+
+### What records say
+
+**原因 / reason**:
+Why something the blackboard did or observed happened, recorded as one fixed code for one fact together with the facts it needs, never as a sentence. Whoever reads it supplies the words, in the reader's language, and any advice on what to do next.
+_Avoid_: 说明, remedy (fixed advice is the reader's, not stored with the reason)
+
+**内容 / content**:
+Text that a buddy or a native harness wrote, such as a Host's continuation, a Worker's result, a Router's explanation or a harness's own message about a model. It is kept and shown as written; the blackboard never turns content into a reason or a reason into content.
+_Avoid_: reason (for words someone wrote)
+
+**备注 / note**:
+The content someone attaches to an action of their own: a Host's decision, continuation, cancellation, scope change, acceptance or request for full access, the user's stop of a macro task, a Router's choice of buddy. Some actions require one; where it is left out, the blackboard writes nothing in its place, because the record already says who acted.
+_Avoid_: reason (for these words)
+
+**诊断 / diagnostic**:
+Error detail meant for the developer, such as a native error code or the text of a failure. It travels with the error it explains and is not a reason.
