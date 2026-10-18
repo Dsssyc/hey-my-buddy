@@ -47,7 +47,8 @@ class SoleCandidateSelectionTests(DecisionTestCase):
             self.assertIsNone(decision[absent], absent)
         self.assertIs(decision["routerCalled"], False)
         self.assertEqual(decision["routingBasis"],
-                         {"candidateCount": 1, "excludedCount": 0, "excludedBuddies": []})
+                         {"candidateCount": 1, "excludedCount": 0, "excludedBuddies": [],
+                          "coolingCount": 0, "coolingBuddies": []})
         self.assertEqual(decision["output"]["programSelection"]["code"], "single-candidate")
         self.assertEqual(decision["policyCheck"],
                          {"hardConstraints": {}, "userPreference": "none"})
@@ -216,7 +217,8 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         self.assertIsNone(routing["taskId"])
         self.assertIsNone(routing["attemptId"])
         self.assertEqual(routing["routingBasis"],
-                         {"candidateCount": 1, "excludedCount": 0, "excludedBuddies": []})
+                         {"candidateCount": 1, "excludedCount": 0, "excludedBuddies": [],
+                          "coolingCount": 0, "coolingBuddies": []})
         self.assertEqual(submitted["buddy"],
                          {key: SECOND_BUDDY[key] for key in BUDDY})
         self.assertEqual(submitted["counts"]["turns"], 0)
