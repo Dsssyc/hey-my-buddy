@@ -54,3 +54,11 @@
 - **接受的小处：** 发布时因输入过大而失败的旧决策，过大的那份文档当时没有存下，升级转 `history.reason-unavailable`；决策已完成却选出了不能用的组合时，若旧路由的原因是 Router 的文字，升级会失败，这条路只在不变量被破坏时才走得到。
 - **顺带项：** 3b——`router_boundary_data.router_trials` 仍按 `output["decision"]["reason"]` 读已存回答，并把执行进程的诊断抄进条目；从记录拼原因对象的函数挂在 `DecisionCoordinator` 上，应放进 `protocol/reasons.py`。第 5 项——释放的原因只在 `attempt.released` 事件里，执行视图看不到。
 - **消耗：** 四个回合输入 4430 万，其中命中缓存 4342 万，输出 10 万；审查另计，见上。
+
+## 微任务 3b：路由边界自己的文字
+
+- **微任务：** “原因3b：路由边界自己的文字”（run `a592c335`，经路由，Router 选了 Codex CLI `gpt-6.1-sol / max`，一个回合）。基点 `08329cb7`，输出 `42e364ae`，合并在 `socu/batch2` 上（`8e628caa`）。没有存储改动。
+- **做了什么：** 路由边界的条目、候选问题、续接问题与命令阻塞不再写句子，只带代码与事实：候选问题复用 `router-out-of-bounds` 加 bound，续接问题用代码（新登记 `micro-task-not-found`、`micro-task-not-owned`、`workspace-cleanup-started`、`workspace-ownership-lost`，已关闭的祖先沿用 `ANCESTOR_TERMINAL`），能由 blocked、停止证据、revision 与候选推出的不另给代码。条目不再按回答的键读已存回答，也不再抄执行进程的诊断，旧尝试不借用当前决策的原因。续接模板删掉写死的 input，新模板的 commandId 随之变化，已存命令与重放不动。从记录拼原因对象只剩 `protocol/reasons.py:reason_from_json` 一处，路由请求的原因由 `tasks/request_reasons.py` 一处解析。
+- **核对：** 差异读过。交付时它没能跑 `cli/test_host_preview.py` 的前端解析项（检出里没有控制台依赖），Host 在合并后的树上跑通。受影响的 routing、tasks、evaluation、catalog、store、cli、protocol、console 共 158 个文件 2437 项通过。看板上已验收（`int-e513decd`），检出已回收。
+- **小处（接受）：** 两种检出归属问题（不再拥有冻结的分配、被别的所有者占用）合成了一个代码；`router-out-of-bounds` 的 bound 在发布与候选两处粒度不同（发布处合为 constraints-or-quota，候选处分开）。
+- **消耗：** 输入 880 万，其中命中缓存 859 万，输出 4.1 万。
