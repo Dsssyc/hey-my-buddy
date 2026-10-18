@@ -351,47 +351,19 @@ function validTimelineSpans(spans: unknown): boolean {
 /* ---- harness health wire shapes (ADR-017 §15) ---- */
 
 export type { HarnessStatus, HarnessCandidate, HarnessHealth } from "./types";
-import type { HarnessHealth, QuotaRetryWindow, QuotaRoutingRecord } from "./types";
-import { parseQuota } from "./quota";
+import type { HarnessHealth, ProviderCooling } from "./types";
 
 /** The supported harnesses, in the Buddy page's fixed display order. */
 const HARNESS_ORDER = ["dsh", "zcode", "codex", "claude"] as const;
 
-/** Strict parse of one retry window (ADR-019): every fact is named or the value is null. */
-function parseQuotaRetry(value: unknown): QuotaRetryWindow | null {
-  const facts = value as QuotaRetryWindow | null;
-  if (!facts || typeof facts !== "object") return null;
-  if (typeof facts.eligibleAt !== "string" || typeof facts.open !== "boolean") return null;
-  if (typeof facts.pendingManual !== "boolean") return null;
-  for (const key of ["manualAt", "consumedAt", "consumedBy"] as const) {
-    if (!(facts[key] === null || typeof facts[key] === "string")) return null;
-  }
-  return facts;
-}
-
-/**
- * Strict parse of the harness's persisted exhaustion records (ADR-019). A
- * malformed list or entry is dropped as unknown instead of being presented as
- * recovery state; the records never claim a live balance.
- */
-function parseQuotaRouting(value: unknown): QuotaRoutingRecord[] | undefined {
+/** Parse provider cooling facts once at the service boundary. */
+function parseProviders(value: unknown): ProviderCooling[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const records = value.map(entry => {
-    const record = entry as QuotaRoutingRecord | null;
-    if (!record || typeof record !== "object") return null;
-    if (typeof record.provider !== "string" || !record.provider.trim()) return null;
-    for (const key of ["source", "observedAt"] as const) {
-      if (typeof record[key] !== "string") return null;
-    }
-    if (!(record.limitId === null || typeof record.limitId === "string")) return null;
-    if (!(record.resetsAt === null || typeof record.resetsAt === "string")) return null;
-    if (typeof record.blocked !== "boolean") return null;
-    if (record.blocked ? typeof record.code !== "string" : record.code !== null) return null;
-    if (!("retry" in record) || record.retry === null) return { ...record, retry: null };
-    const retry = parseQuotaRetry(record.retry);
-    return retry ? { ...record, retry } : null;
-  });
-  return records.every(record => record !== null) ? records as QuotaRoutingRecord[] : undefined;
+  const records = value as ProviderCooling[];
+  if (records.some(record => !record || typeof record.provider !== "string" || !record.provider.trim()
+    || !(record.coolingUntil === null || typeof record.coolingUntil === "string" && Number.isFinite(Date.parse(record.coolingUntil)))
+    || !Number.isInteger(record.consecutiveRejections) || record.consecutiveRejections <= 0)) return undefined;
+  return records;
 }
 
 /** A boolean declaration or retired certificate cannot stand in for local eligibility. */
@@ -430,16 +402,12 @@ function harnessRow(value: unknown): HarnessHealth | null {
     !candidate || typeof candidate !== "object" || ["path", "source", "status"].some(key =>
       (candidate as Record<string, unknown>)[key] != null && typeof (candidate as Record<string, unknown>)[key] !== "string")
       || candidate.reason != null && !isReason(candidate.reason)))) return null;
-  // ADR-018 §23: a malformed quota observation is dropped as unknown instead of
-  // blanking the page or being presented as a recorded 0%. An observation that
-  // was not recorded adds no key at all.
-  const { quota: rawQuota, quotaRouting: rawRouting, readOnlyStructured: rawReadOnly, systemSandbox: rawSandbox,
+  const { providers: rawProviders, readOnlyStructured: rawReadOnly, systemSandbox: rawSandbox,
     reviewVerification: _retiredCertificate, verified: _retiredVerified, ...rest } = row as HarnessHealth & { reviewVerification?: unknown; verified?: unknown };
-  const quota = parseQuota(rawQuota);
-  const quotaRouting = parseQuotaRouting(rawRouting);
+  const providers = parseProviders(rawProviders);
   const readOnlyStructured = parseReadOnlyStructured(rawReadOnly);
   return { ...rest, harness: row.harness.trim(), manualPath: row.manualPath ?? null,
-    ...(quota ? { quota } : {}), ...(quotaRouting ? { quotaRouting } : {}),
+    ...(providers ? { providers } : {}),
     ...(readOnlyStructured ? { readOnlyStructured } : {}),
     ...(typeof rawSandbox === "boolean" ? { systemSandbox: rawSandbox } : {}) };
 }

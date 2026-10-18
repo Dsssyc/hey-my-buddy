@@ -63,14 +63,24 @@ function elapsedEnd(view: TaskView, workflow: Workflow | null, nowMs: number): n
  * chosen step has to say. It reads through the client it is given, hands the
  * address back to its owner, and writes nothing.
  */
-export function TaskDetail({ client, runId, timeline, timelineLoading, nowMs, step, origin, active, onStep, onBack, onOpenRun }: Props) {
+export function TaskDetail({ client, runId, timeline: recordedTimeline, timelineLoading, nowMs, step, origin, active, onStep, onBack, onOpenRun }: Props) {
   const { t } = useTranslation("taskDetail");
   const now = nowMs ?? Date.now();
   const stripRef = useRef<HTMLDivElement>(null);
   const keyboardFocusPending = useRef(false);
-  const decisionIds = useMemo(() => (timeline?.spans ?? []).flatMap(span => (span.runId === runId && span.kind === "routing" && span.decisionId ? [span.decisionId] : [])), [timeline, runId]);
+  const decisionIds = useMemo(() => (recordedTimeline?.spans ?? []).flatMap(span => (span.runId === runId && span.kind === "routing" && span.decisionId ? [span.decisionId] : [])), [recordedTimeline, runId]);
   const read = useTaskDetail(client, runId, active, decisionIds);
   const { view, workflow } = read;
+  // Execution shutdown and workflow rejection are distinct facts. The macro
+  // timeline records the finished process; this detail also reads its turn.
+  const timeline = useMemo(() => {
+    if (!recordedTimeline || !workflow) return recordedTimeline;
+    const rejected = new Set([...workflow.turns, ...(read.audit?.turns ?? [])]
+      .filter(turn => turn.state === "rejected").map(turn => turn.attemptId));
+    return { ...recordedTimeline, spans: recordedTimeline.spans.map(span =>
+      span.runId === runId && span.kind === "execution" && span.attemptId != null && rejected.has(span.attemptId)
+        ? { ...span, state: "rejected" } : span) };
+  }, [recordedTimeline, workflow, read.audit, runId]);
   const row = timeline?.rows.find(candidate => candidate.runId === runId) ?? null;
   const steps: Steps | null = useMemo(() => {
     if (view === null) return null;

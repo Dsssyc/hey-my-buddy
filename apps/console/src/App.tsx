@@ -141,7 +141,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   const waiting = attentionHints(buddyAttention(editor.view, snapshot), buddies.t);
   const tabHints: Partial<Record<Tab, string>> = {
     tasks: pending > 0 ? t("nav.pendingHost") : undefined,
-    buddies: editor.dirty ? t("nav.unsaved") : waiting.roles ?? waiting.harness,
+    buddies: editor.dirty ? t("nav.unsaved") : waiting.roles,
   };
   return <TooltipProvider delayDuration={300}><div className="flex h-dvh min-h-0 flex-col overflow-hidden">
     <a className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground"

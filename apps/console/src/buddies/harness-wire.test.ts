@@ -8,8 +8,8 @@ import { CHECKED_AT, harness } from "./harness.fixtures";
 
 /**
  * What the harness view reads from the wire, before any of it is drawn: the
- * calls that check and that save a path, the rows of a snapshot, a quota
- * observation, and the account a row carries. What does not parse is dropped as
+ * calls that check and that save a path, the rows of a snapshot, provider
+ * cooling records, and the account a row carries. What does not parse is dropped as
  * unknown; it is never shown as health.
  */
 
@@ -112,29 +112,16 @@ describe("the harness wire contract", () => {
   });
 });
 
-describe("a quota observation on the wire", () => {
-  it("drops a malformed observation as unknown instead of failing the row", () => {
-    const rows = snapshotHarnesses({
-      harnesses: [harness({ harness: "dsh", status: "ready",
-        quota: { observedAt: CHECKED_AT, source: "dsh-native", windows: "near-limit" } as unknown as HarnessHealth["quota"] })],
-    } as unknown as Snapshot);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].quota ?? null).toBeNull();
-    expect(snapshotHarnesses({ harnesses: [harness({ harness: "dsh", status: "ready", quota: null })] } as unknown as Snapshot)[0].quota ?? null).toBeNull();
+describe("provider cooling on the wire", () => {
+  const record = { provider: "openai", coolingUntil: "2026-10-19T12:00:00Z", consecutiveRejections: 2 };
+  const parse = (providers: unknown) => snapshotHarnesses({ harnesses: [harness({ harness: "codex", status: "ready", providers: providers as never })] } as unknown as Snapshot)[0].providers;
+  it("reads active, expired and manually cleared records", () => {
+    const providers = [record, { ...record, provider: "other", coolingUntil: null }];
+    expect(parse(providers)).toEqual(providers);
   });
-
-  it("drops malformed exhaustion records as a whole instead of presenting part of them", () => {
-    const record = { provider: "deepseek-official", limitId: null, code: "HARNESS_BALANCE_ZERO", source: "dsh-native",
-      observedAt: CHECKED_AT, resetsAt: null, blocked: true, retry: null };
-    const parse = (quotaRouting: unknown) => snapshotHarnesses({ harnesses: [harness({ harness: "dsh", status: "ready", quotaRouting: quotaRouting as never })] } as unknown as Snapshot)[0].quotaRouting;
-    expect(parse([record])).toEqual([record]);
-    const available = { ...record, blocked: false, code: null };
-    expect(parse([record, available])).toEqual([record, available]);
-    expect(parse([{ ...record, code: null }])).toBeUndefined();
-    expect(parse([{ ...available, code: "HARNESS_QUOTA_EXHAUSTED" }])).toBeUndefined();
-    expect(parse([record, { ...record, retry: { eligibleAt: 42, open: "yes" } }])).toBeUndefined();
-    expect(parse([{ ...record, provider: " " }])).toBeUndefined();
-    expect(parse("blocked")).toBeUndefined();
+  it("rejects malformed provider records at the boundary", () => {
+    for (const providers of [[{ ...record, coolingUntil: "invalid" }], [{ ...record, consecutiveRejections: 0 }], [{ ...record, provider: " " }], "cooling"])
+      expect(parse(providers)).toBeUndefined();
   });
 });
 

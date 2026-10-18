@@ -20,7 +20,7 @@ export default {
   },
   fold: { more: "展开", less: "收起" },
   result: { name: "结果" },
-  turn: { expected: "预期 {{time}}" },
+  turn: { expected: "预期 {{time}}", rejected: "模型开始前额度被拒绝", reassigned: "已交回重新路由" },
   origin: { host: "Host 指定", locked: "用户锁定", single: "唯一候选", unrecorded: "未记录路由" },
   usage: {
     inputShort: "输入", outputShort: "输出", cacheShort: "缓存",
@@ -64,7 +64,7 @@ export default {
   },
   basis: {
     name: "提交时的约束", constraints: "硬约束：{{buddy}}", capabilities: "所需能力：{{list}}", candidates: "提交时冻结候选 {{n}} 个",
-    excluded: "用户排除 {{n}} 个：{{list}}", prefer: "优先考虑 {{buddy}}：{{note}}", pin: "固定选择 {{buddy}}：{{note}}", exclude: "排除 {{buddy}}：{{note}}",
+    excluded: "用户排除 {{n}} 个：{{list}}", cooling: "冷却中的候选 {{n}} 个：{{list}}", coolingBuddy: "{{buddy}}（至 {{time}}）", prefer: "优先考虑 {{buddy}}：{{note}}", pin: "固定选择 {{buddy}}：{{note}}", exclude: "排除 {{buddy}}：{{note}}",
   },
   routing: {
     chosen: "选择", abstained: "放弃选择", notCalled: "未调用 Router", elapsed: "耗时 {{time}}", toolCalls: "工具调用 {{n}}", source: "来源",

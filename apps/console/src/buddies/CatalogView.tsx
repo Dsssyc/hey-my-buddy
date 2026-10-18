@@ -71,7 +71,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
       reasons: [], folded: folded[health.harness] ?? true, models: [], modelCount: 0, providers: Object.keys(health.billingByProvider ?? {}), enabled: 0, total: 0 }));
   const sections = [...blocks, ...healthBlocks].map(block => {
     const health = actions.rows.find(row => row.harness === block.harness);
-    const state = health && health.status !== "ready" ? health.status : health?.quotaRouting?.some(record => record.blocked) ? "unavailable" : block.state;
+    const state = health && health.status !== "ready" ? health.status : block.state;
     return { ...block, state };
   }).sort((a, b) => Number(!!a.state) - Number(!!b.state));
   const buddies = blocks.flatMap(block => block.models).flatMap(model => model.chips);

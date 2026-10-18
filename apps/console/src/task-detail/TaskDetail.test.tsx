@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api";
-import { CODEX, HOST, OPUS, at, client, event, inquiry, row, routing, span, task, timeline, workflow } from "./task-detail.fixtures";
+import { CODEX, HOST, OPUS, at, audit, client, event, inquiry, row, routing, span, task, timeline, workflow } from "./task-detail.fixtures";
 import { chosenStep, open, pane, ready, step, strip, stripSlice } from "./task-detail.testing";
 import type { Artifact, Integration } from "./types";
 
@@ -282,6 +282,25 @@ describe("the route", () => {
     expect(pane().textContent).toContain("路由边界被拒绝");
   });
 
+  it("lists cooled candidates and their retry times on a route with no available candidate", async () => {
+    const blocked = timeline();
+    blocked.spans.find(item => item.spanId === "r1")!.routing = {
+      routingMode: null, selectedBuddy: null,
+      reason: { code: "all-candidates-cooling", params: { retryAt: at("12:00") } }, note: null,
+    };
+    open({ step: 2, timeline: blocked, replies: {
+      routing: [routing({ source: "no-candidate" })],
+      bases: { "decision-1": { constraints: {}, requiredCapabilities: [], candidateCount: 0, excluded: [], coolingCount: 2,
+        cooling: [{ buddy: CODEX, coolingUntil: at("12:00") }, { buddy: OPUS, coolingUntil: at("12:30") }], preferences: [] } },
+    } });
+    await ready();
+    expect(pane().textContent).toContain("所有候选都在冷却");
+    await userEvent.setup().click(within(pane()).getByRole("button", { name: "提交时的约束" }));
+    expect(pane().textContent).toContain("冷却中的候选 2 个");
+    expect(pane().textContent).toContain(CODEX.model);
+    expect(pane().textContent).toContain(OPUS.model);
+  });
+
   it("folds a long reason, unfolds it in the same paragraph, and starts folded again on another route", async () => {
     const reason = "具体的选择依据。".repeat(60);
     const two = timeline();
@@ -449,6 +468,35 @@ describe("a turn", () => {
     open({ step: 7 });
     await ready();
     expect(pane().textContent).not.toContain("终止原因");
+  });
+
+  it("shows a pre-model quota rejection on its own turn, then the new route without making the successful task failed", async () => {
+    const first = timeline();
+    first.spans = first.spans.filter(item => ["r1", "e1"].includes(item.spanId));
+    Object.assign(first.spans.find(item => item.spanId === "e1")!, { endAt: at("10:03"), resultStatus: "failed", error: "quota exceeded" });
+    first.spans.push(span("r2", "routing", at("10:04"), at("10:05"), { attemptId: "att-r2", decisionId: "decision-2",
+      routing: { routingMode: "fast", selectedBuddy: OPUS, reason: null, note: null } }),
+    span("e2", "execution", at("10:06"), at("10:30"), { turnIndex: 2, attemptId: "att-2", turnId: "turn-2", buddy: OPUS, shutdownConfirmed: true, resultStatus: "ok" }));
+    first.events = first.events.filter(item => item.kind === "dispatch");
+    first.rows = [row({ state: "accepted", status: "completed", acceptedAt: at("10:31"), acceptanceVerdict: "accepted" })];
+    const base = workflow({ state: "accepted" });
+    // Older rejected turns are outside the compact record and still present in the audit.
+    base.turns = base.turns.filter(item => item.turnIndex !== 1);
+    const history = audit();
+    history.turns = history.turns.map(item => item.turnIndex === 1 ? { ...item, state: "rejected", summary: null } : item);
+    open({ step: 3, timeline: first, replies: { task: task({ status: "completed", workflow: { ...task().workflow, state: "accepted" } }), workflow: base, audit: history } });
+    await ready();
+    expect(pane().textContent).toContain("模型开始前额度被拒绝");
+    expect(pane().textContent).toContain("额度耗尽");
+    expect(pane().textContent).toContain("已交回重新路由");
+    expect(pane().textContent).toContain(CODEX.model);
+    expect(pane().textContent).not.toContain("失败");
+    expect(chosenStep()).toContain("回合 1");
+    expect(stripSlice("span:e1")?.getAttribute("aria-label")).toContain("已改派");
+    expect(stripSlice("span:r2")).toBeTruthy();
+    await userEvent.setup().click(stripSlice("span:r2")!);
+    expect(chosenStep()).toContain("路由");
+    expect(document.querySelector("[data-slot=detail-header]")?.textContent).toContain("已验收");
   });
 
   it("shows no node for the session's reasoning or tool calls, and no placeholder for them", async () => {

@@ -21,7 +21,7 @@ export default {
   },
   fold: { more: "Show more", less: "Show less" },
   result: { name: "Result" },
-  turn: { expected: "Expected {{time}}" },
+  turn: { expected: "Expected {{time}}", rejected: "Rejected before the model started", reassigned: "Returned for a new route" },
   origin: { host: "Chosen by Host", locked: "Locked by user", single: "Only candidate", unrecorded: "Route not recorded" },
   usage: {
     inputShort: "Input", outputShort: "Output", cacheShort: "Cache",
@@ -65,7 +65,7 @@ export default {
   },
   basis: {
     name: "Bounds at submission", constraints: "Hard constraints: {{buddy}}", capabilities: "Required capabilities: {{list}}", candidates: "Legal candidates when submitted: {{n}}",
-    excluded: "Excluded by the user: {{n}}; {{list}}", prefer: "Preferred {{buddy}}: {{note}}", pin: "Pinned {{buddy}}: {{note}}", exclude: "Excluded {{buddy}}: {{note}}",
+    excluded: "Excluded by the user: {{n}}; {{list}}", cooling: "Cooling down: {{n}}; {{list}}", coolingBuddy: "{{buddy}} (until {{time}})", prefer: "Preferred {{buddy}}: {{note}}", pin: "Pinned {{buddy}}: {{note}}", exclude: "Excluded {{buddy}}: {{note}}",
   },
   routing: {
     chosen: "Choice", abstained: "Abstained", notCalled: "No Router was called", elapsed: "Time: {{time}}", toolCalls: "Tool calls: {{n}}", source: "Source",

@@ -13,9 +13,9 @@ import {
 
 /**
  * ADR-017 §15 on the Buddy page's harness sections: each harness shows its state
- * and quota summary in its head, and in what the head opens its path, version,
+ * and cooldown summary in its head, and in what the head opens its path, version,
  * source, last check, or its attempted locations and remedy, its account and its
- * quota. Checking is an explicit click that goes through the existing
+ * cooldown. Checking is an explicit click that goes through the existing
  * `capabilities` operation with `refresh: true` and never calls a model; saving
  * a path goes through `harness_set`.
  */
@@ -156,14 +156,11 @@ describe("opening a harness by its address", () => {
     expect(screen.queryByRole("navigation", { name: "目录的内容" })).toBeNull();
   });
 
-  it("opens the addressed harness with its recorded quota", async () => {
-    const rows = [harness({ harness: "dsh", status: "ready", quota: {
-      source: "dsh-native", observedAt: CHECKED_AT, windows: [{ name: "5h", usedPercent: 93, resetsAt: null }],
-    } })];
+  it("opens the addressed harness with the cooling provider", async () => {
+    const rows = [harness({ harness: "dsh", status: "ready", providers: [{ provider: "zai", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 1 }] })];
     await openHarness(fixture({ harnesses: rows }), "#buddies/catalog/harness/dsh");
-    expect(harnessPane("DSH")).toBeTruthy();
-    expect(within(paneBlock("额度", "DSH")).getByText("93%")).toBeTruthy();
-    expect(within(paneBlock("额度", "DSH")).getByText("接近上限")).toBeTruthy();
+    expect(within(paneBlock("冷却", "DSH")).getByText("zai")).toBeTruthy();
+    expect(within(paneBlock("冷却", "DSH")).getByRole("button", { name: "解除冷却" })).toBeTruthy();
   });
 
   it("keeps every account closed when the address names no harness", async () => {
@@ -381,7 +378,7 @@ describe("a disconnected session", () => {
     function View() {
       const editor = useEditor(f.api, state, async () => null, false, "连接中断或缺少写入资格");
       return <TooltipProvider><CatalogView snapshot={state} editor={editor} api={f.api} refresh={async () => null} active
-        mutationsAvailable={false} location={{ view: "models" }} attention={{ roles: null, quota: [] }} onNavigate={() => {}} hidden={false} /></TooltipProvider>;
+        mutationsAvailable={false} location={{ view: "models" }} attention={{ roles: null }} onNavigate={() => {}} hidden={false} /></TooltipProvider>;
     }
     render(<View />);
     const button = screen.getByRole("button", { name: "全部检测" });
@@ -408,7 +405,7 @@ describe("entering the view", () => {
     function View({ active }: { active: boolean }) {
       const editor = useEditor(f.api, state, async () => null, true, "");
       return <TooltipProvider><CatalogView snapshot={state} editor={editor} api={f.api} refresh={async () => null} active={active}
-        mutationsAvailable location={{ view: "models" }} attention={{ roles: null, quota: [] }} onNavigate={() => {}} hidden={!active} /></TooltipProvider>;
+        mutationsAvailable location={{ view: "models" }} attention={{ roles: null }} onNavigate={() => {}} hidden={!active} /></TooltipProvider>;
     }
     const { rerender } = render(<View active />);
     await user.click(screen.getByRole("button", { name: "Claude Code 账户" }));
@@ -462,7 +459,7 @@ describe("the account block", () => {
     await selectHarness(user, "ZCode");
     expect(paneBlock("账户").textContent).toBe("账户未记录");
     expect(within(paneBlock("账户")).queryByRole("button")).toBeNull();
-    expect(harnessButton("ZCode").textContent).toContain("—");
+    expect(harnessButton("ZCode").querySelector("[data-slot=cooling-status]")?.textContent).toBe("");
   });
 
   it("keeps native login facts readable in a session that cannot write", async () => {

@@ -282,10 +282,10 @@ def buddies(evaluation, params):
         effort_ranks = current_catalog.effort_ranks() if current_catalog is not None else {}
         values = [evaluation._buddy_view(row, pending=pending, effort_ranks=effort_ranks) for row in rows[:limit]]
         from ...protocol.billing import for_provider
-        from ..routing.quota_routing import provider_state
+        from ..routing.quota_routing import cooling
         for value in values:
             value['billing'] = for_provider(db, value['harness'], value['provider'])
-            value['providerCooling'] = provider_state(db, value['harness'], value['provider'])
+            value['providerCooling'] = cooling(db, value)
         ids = [value['buddyId'] for value in values]
         model_services = {(value['harness'], value['provider'], value['model']) for value in values}
         return {'buddies': values, **user_policy.policy_view(db, ids),

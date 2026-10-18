@@ -27,7 +27,7 @@ const OPEN_EXECUTION_STATES = new Set(["starting", "executing", "finalizing", "r
 
 export type SpanOutcome =
   | "open" | "admitted" | "resolved" | "running" | "failed"
-  | "cancelled" | "unknown" | "finished" | "unplaced" | "abstention";
+  | "cancelled" | "unknown" | "finished" | "unplaced" | "abstention" | "rejected";
 
 export function spanOutcome(span: TimelineSpan): SpanOutcome {
   const state = typeof span.state === "string" ? span.state.trim().toLowerCase() : "";
@@ -36,6 +36,7 @@ export function spanOutcome(span: TimelineSpan): SpanOutcome {
   // Unknown shutdown outranks a recorded failure disposition: an unconfirmed
   // stop is never labelled plain failed/cancelled, though the failure text stays.
   if (span.uncertain === true || state === "uncertain") return "unknown";
+  if (span.kind === "execution" && state === "rejected") return "rejected";
   if (span.resultStatus === "cancelled") return "cancelled";
   if (span.kind === "routing" && span.disposition === "routing-failed") return "failed";
   if (span.kind === "routing" && (state === "abstention" || span.disposition === "abstention")) return "abstention";
@@ -51,6 +52,7 @@ const OUTCOME_LABEL: Record<SpanOutcome, string> = {
   get open() { return i18n.t("console:stillWaiting"); }, get admitted() { return i18n.t("console:started"); }, get resolved() { return i18n.t("console:decided"); }, get running() { return i18n.t("console:executing"); },
   get failed() { return i18n.t("console:executionFailed"); }, get cancelled() { return i18n.t("console:cancelled"); }, get unknown() { return i18n.t("console:stopUnconfirmed"); }, get finished() { return i18n.t("console:executionCompleted"); },
   get unplaced() { return i18n.t("console:timeMissing"); }, get abstention() { return i18n.t("console:abstained"); },
+  get rejected() { return i18n.t("console:reassignedAfterRejection"); },
 };
 
 /** Host-request decision labels use the recorded request state, not a guess. */

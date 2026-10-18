@@ -2,17 +2,16 @@ import { reasonText } from "../i18n/reason";
 import i18n from "i18next";
 import { describe, expect, it } from "vitest";
 import type { HarnessAccount } from "../harness-account";
-import { quotaView } from "../quota";
-import type { HarnessHealth, HarnessQuota, QuotaRoutingRecord } from "../types";
+import type { HarnessHealth } from "../types";
 import {
-  absolutePath, harnessDetailsView, harnessPath, harnessSummary, harnessTime, recoveryText, retryProviders, statusText,
+  absolutePath, harnessDetailsView, harnessPath, harnessTime, statusText,
 } from "./harness";
 
 /**
  * What the harness view is made of, apart from how it is drawn: how a time and a
- * state are worded, which quota window the table shows, what the side column
+ * state are worded, which provider the table shows, what the side column
  * says of a harness that is found and of one that is not, and where each of the
- * six recovery states of an exhausted quota stands.
+ * cooling records stand.
  */
 
 const t = i18n.getFixedT(null, "buddies");
@@ -24,9 +23,6 @@ const clock = (iso: string) => {
 
 function row(entry: Partial<HarnessHealth> = {}): HarnessHealth {
   return { harness: "dsh", status: "ready", available: true, revision: 1, manualPath: null, ...entry };
-}
-function quota(entry: Partial<HarnessQuota> = {}): HarnessQuota {
-  return { observedAt: "2026-09-29T09:00:00.000Z", source: "dsh-native", windows: [], ...entry };
 }
 const account: HarnessAccount = { harness: "dsh", status: "ready",
   accountType: null, checkedAt: null, reason: null };
@@ -70,42 +66,6 @@ describe("a harness summary", () => {
     expect(harnessDetailsView(row({ account: { ...account, status: "unknown" } }), t).account?.state).toBe("未知");
   });
 
-  it("shows no quota for a harness without an observation", () => {
-    expect(harnessSummary(row({ quota: null }), t)).toBeNull();
-    expect(harnessSummary(row(), t)).toBeNull();
-  });
-
-  it("shows the window nearest its limit, hot from the near-limit threshold", () => {
-    const cell = (windows: HarnessQuota["windows"], extra: Partial<HarnessQuota> = {}) =>
-      harnessSummary(row({ quota: quota({ windows, ...extra }) }), t);
-    expect(cell([{ name: "5h", usedPercent: 41, resetsAt: null }, { name: "weekly", usedPercent: 93, resetsAt: "2026-09-29T13:00:00.000Z" }]))
-      .toEqual({ used: 93, text: "93%", hot: true, stale: false, resets: clock("2026-09-29T13:00:00.000Z") });
-    expect(cell([{ name: "5h", usedPercent: 89, resetsAt: null }])).toMatchObject({ used: 89, hot: false, resets: null });
-    expect(cell([{ name: "5h", usedPercent: 90, resetsAt: null }])).toMatchObject({ hot: true });
-    expect(cell([{ name: "5h", usedPercent: 100, resetsAt: null }])).toMatchObject({ used: 100, hot: true });
-  });
-
-  it("writes an unknown use as unknown, with no share that could read as 0", () => {
-    const cell = harnessSummary(row({ quota: quota({ windows: [{ name: "5h", usedPercent: null, resetsAt: null }] }) }), t);
-    expect(cell).toEqual({ used: null, text: "未知", hot: false, stale: false, resets: null });
-    // An observation with no window says the same.
-    expect(harnessSummary(row({ quota: quota() }), t)).toMatchObject({ used: null, text: "未知" });
-    // A window with a known use outranks one without, whichever comes first.
-    expect(harnessSummary(row({ quota: quota({ windows: [{ name: "a", usedPercent: null, resetsAt: null }, { name: "b", usedPercent: 12, resetsAt: null }] }) }), t))
-      .toMatchObject({ used: 12, text: "12%" });
-  });
-
-  it("marks a stale observation and never lets it raise the near-limit colour", () => {
-    expect(harnessSummary(row({ quota: quota({ stale: true, windows: [{ name: "5h", usedPercent: 97, resetsAt: null }] }) }), t))
-      .toMatchObject({ used: 97, hot: false, stale: true });
-    expect(harnessSummary(row({ quota: quota({ windows: [{ name: "5h", usedPercent: 97, resetsAt: null, stale: true }] }) }), t))
-      .toMatchObject({ hot: false, stale: true });
-  });
-
-  it("makes the row hot when the native record reports a limit, even below the threshold", () => {
-    expect(harnessSummary(row({ quota: quota({ reachedType: "usage_limit_reached", windows: [{ name: "5h", usedPercent: 10, resetsAt: null }] }) }), t))
-      .toMatchObject({ hot: true });
-  });
 });
 
 describe("harness details", () => {
@@ -169,70 +129,4 @@ describe("harness details", () => {
     expect(loggedOut.reason).toBe(reasonText({ code: "account.login-required", params: {} }));
   });
 
-  it("lists each window with its use, its reset and whether it is at or near its limit", () => {
-    const view = harnessDetailsView(row({ quota: quota({ provider: "deepseek-official", windows: [
-      { name: "5h", usedPercent: 100, resetsAt: "2026-09-29T13:00:00.000Z" },
-      { name: "weekly", usedPercent: 93.5, resetsAt: null },
-      { name: "monthly", usedPercent: 41, resetsAt: null },
-      { name: "daily", usedPercent: null, resetsAt: null },
-    ] }) }), t).quota!;
-    expect(view.source).toBe("dsh-native · deepseek-official");
-    expect(view.windows).toEqual([
-      { name: "5h", text: "100%", hot: true, resets: `重置 ${clock("2026-09-29T13:00:00.000Z")}`, flag: "atLimit" },
-      { name: "weekly", text: "93.5%", hot: true, resets: "重置 未记录", flag: "nearLimit" },
-      { name: "monthly", text: "41%", hot: false, resets: "重置 未记录", flag: null },
-      { name: "daily", text: "未知", hot: false, resets: "重置 未记录", flag: null },
-    ]);
-    expect(view.limitReported).toBe(false);
-    expect(view.note).toBe("最近额度观测 · 非实时");
-  });
-
-  it("says a stale observation is stale and has no window flagged near its limit", () => {
-    const view = harnessDetailsView(row({ quota: quota({ stale: true, windows: [{ name: "5h", usedPercent: 99, resetsAt: null }] }) }), t).quota!;
-    expect(view).toMatchObject({ stale: true, note: "额度观测已过期" });
-    expect(view.windows[0]).toMatchObject({ hot: false, flag: null });
-  });
-
-  it("words the note of an observation from the page's own text, as the layer below words it", () => {
-    for (const recorded of [quota(), quota({ stale: true }), quota({ reachedType: "usage_limit_reached" })])
-      expect(harnessDetailsView(row({ quota: recorded }), t).quota!.note).toBe(quotaView(recorded)!.note);
-  });
-});
-
-describe("an exhausted quota", () => {
-  const retry = (extra: Partial<NonNullable<QuotaRoutingRecord["retry"]>> = {}) =>
-    ({ eligibleAt: "2026-09-29T10:30:00.000Z", open: false, pendingManual: false, manualAt: null, consumedAt: null, consumedBy: null, ...extra });
-  function record(extra: Partial<QuotaRoutingRecord> = {}): QuotaRoutingRecord {
-    return { provider: "deepseek-official", limitId: null, code: "HARNESS_BALANCE_ZERO", source: "dsh-native",
-      observedAt: "2026-09-29T09:00:00.000Z", resetsAt: null, blocked: true, retry: retry(), ...extra };
-  }
-
-  it("says where each of the six recovery states stands, from the recorded facts alone", () => {
-    const at = (iso: string) => clock(iso);
-    expect(recoveryText(record({ resetsAt: "2026-09-29T13:00:00.000Z", retry: null }), t)).toBe(`重置 ${at("2026-09-29T13:00:00.000Z")}`);
-    expect(recoveryText(record({ retry: null }), t)).toBe("未知");
-    expect(recoveryText(record({ retry: retry({ open: true }) }), t)).toBe("可重试");
-    expect(recoveryText(record({ retry: retry({ open: true, consumedAt: "2026-09-29T09:40:00.000Z" }) }), t))
-      .toBe(`已重试 ${at("2026-09-29T09:40:00.000Z")}，可再试`);
-    expect(recoveryText(record(), t)).toBe(`${at("2026-09-29T10:30:00.000Z")} 后可重试`);
-    expect(recoveryText(record({ retry: retry({ consumedAt: "2026-09-29T09:40:00.000Z" }) }), t))
-      .toBe(`已重试 ${at("2026-09-29T09:40:00.000Z")}，${at("2026-09-29T10:30:00.000Z")} 后可再试`);
-  });
-
-  it("lists the blocked records with their word, their observation and their recovery, and leaves the others out", () => {
-    const view = harnessDetailsView(row({ quotaRouting: [
-      record(),
-      record({ provider: "other", limitId: "tokens", code: "HARNESS_QUOTA_EXHAUSTED" }),
-      record({ provider: "settled", blocked: false, code: null }),
-    ] }), t);
-    expect(view.exhausted.map(entry => [entry.provider, entry.limitId, entry.word])).toEqual([
-      ["deepseek-official", null, "余额为零"], ["other", "tokens", "额度耗尽"]]);
-    expect(view.exhausted[0].observation).toBe(`观测 ${clock("2026-09-29T09:00:00.000Z")} · dsh-native`);
-  });
-
-  it("offers a retry only for a blocked provider with no reset, once each", () => {
-    expect(retryProviders([record(), record({ limitId: "b" }), record({ provider: "known", resetsAt: "2026-09-29T13:00:00.000Z", retry: null }),
-      record({ provider: "free", blocked: false, code: null })])).toEqual(["deepseek-official"]);
-    expect(retryProviders([])).toEqual([]);
-  });
 });

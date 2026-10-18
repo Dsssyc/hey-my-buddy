@@ -36,7 +36,7 @@ describe("recorded actor roles", () => {
 
 it("uses one stop attribution in both languages and keeps the event actor as its source", async () => {
   const source = macroTaskTimelineFixture().events[0]!;
-  for (const [language, consoleWords, hostWords] of [["zh", "控制台 停止", "Host 停止"], ["en", "Stopped by Console", "Stopped by Host"]]) {
+  for (const [language, consoleWords, hostWords] of [["zh", "控制台停止", "Host 停止"], ["en", "Stopped by Console", "Stopped by Host"]]) {
     await i18n.changeLanguage(language);
     expect(stopActorText("console")).toBe(consoleWords);
     expect(eventName({ ...source, kind: "cancel", actor: { role: "console", id: "console-session" } })).toBe(consoleWords);

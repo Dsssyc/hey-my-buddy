@@ -63,7 +63,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
       await expect(tooltip).toContainText("5 个微任务");
       await expect(tooltip).toContainText(/历时/);
       await expect(tooltip).toContainText(/执行/);
-      await expect(tooltip).toContainText("输入 24.5k（含缓存 12.0k） · 输出 2.5k");
+      await expect(tooltip).toContainText("输入 26.6k（含缓存 12.4k） · 输出 2.7k");
       await page.mouse.move(0, 0);
       const ordinary = page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-b10"]');
       await expect(ordinary).toHaveCount(1);

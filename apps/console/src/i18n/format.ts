@@ -58,6 +58,13 @@ export function formatMomentMinutes(ms: number, nowMs: number): string {
   return date.getFullYear() === now.getFullYear() ? short : `${date.getFullYear()}-${short}`;
 }
 
+/** Local cooldown deadline: only the time today, otherwise the date too. */
+export function formatCoolingTime(ms: number, nowMs = Date.now()): string {
+  const today = new Date(ms).toDateString() === new Date(nowMs).toDateString();
+  return new Intl.DateTimeFormat(locale, { ...(today ? {} : { month: "short", day: "numeric" } as const),
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(ms);
+}
+
 /** 12,000 */
 export function formatNumber(value: number): string {
   return formatters().whole.format(value);

@@ -47,7 +47,6 @@ export default {
       "excluded": "Excluded",
       "capability-missing": "Capability missing",
       "constraints-or-quota": "Constraints or quota",
-      "quota-retry-consumed": "Quota retry consumed",
       "not-a-candidate": "Not a candidate"
     },
     "disposition": {

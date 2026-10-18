@@ -129,7 +129,7 @@ describe("a route", () => {
 
   it("says the program chose when it did, shows the bounds it chose within, and names no Router and no mode", async () => {
     const bounds: Basis = { constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], candidateCount: 0,
-      excluded: [{ buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" }, note: "提交时排除低推理强度" }], preferences: [] };
+      excluded: [{ buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" }, note: "提交时排除低推理强度" }], coolingCount: null, cooling: [], preferences: [] };
     const f = open({ step: 2, replies: { routing: [routing({ source: "no-candidate", routerBuddy: null, routingMode: null })], bases: { "decision-1": bounds } } });
     await ready();
     await waitFor(() => expect(pane().textContent).toContain("没有合法候选"));
@@ -391,7 +391,7 @@ describe("the turn that ended otherwise than it should", () => {
   const ended = (record: Record<string, unknown>) => open({ step: 7, replies: { task: task(record), workflow: workflow({ state: "cancelled" }) } });
 
   it("names each cause in words, and a wrap-up that a Lead asked for as the Lead's", async () => {
-    for (const [cause, words] of [["deadline", "Router 预算用完"], ["forced-stop", "强制停止"], ["console-stop", "控制台 停止"], ["service-stop", "服务停止"],
+    for (const [cause, words] of [["deadline", "Router 预算用完"], ["forced-stop", "强制停止"], ["console-stop", "控制台停止"], ["service-stop", "服务停止"],
       ["unknown-stop", "停止（发起者未知）"], ["harness-error", "Harness 错误"], ["transport-error", "传输故障"], ["grace-expired", "收尾宽限到期后停止"]] as const) {
       cleanup();
       ended({ status: "failed", selectedAttempt: { result: { terminationReason: cause } } });
@@ -412,7 +412,7 @@ describe("the turn that ended otherwise than it should", () => {
   it("names the person who stopped it only when the stopper was a person, and the console or the service never by a name", async () => {
     ended({ status: "cancelled", cancellation: { actor: { role: "host", id: "old-actor" }, note: null }, selectedAttempt: { stopInitiator: "console", result: { terminationReason: "console-stop" } } });
     await ready();
-    expect(pane().textContent).toContain("控制台 停止");
+    expect(pane().textContent).toContain("控制台停止");
     expect(pane().textContent).not.toContain("old-actor");
     cleanup();
     ended({ status: "cancelled", cancellation: { actor: { role: "host", id: "old-owner" }, note: null }, selectedAttempt: { stopInitiator: "lead", result: { terminationReason: "forced-stop" } } });

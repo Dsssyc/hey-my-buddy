@@ -7,7 +7,7 @@ const macro = "macro-11111111-1111-4111-8111-111111111111";
 /** The approved drawing's time distribution, using the service's exact DTO. */
 function comparison(timeline: MacroTaskTimeline): MacroTaskTimeline {
   const at = (clock: string) => new Date(Date.parse(`2026-09-27T${clock}:00.000Z`) + 29 * 60_000).toISOString();
-  const ids = timeline.rows.map(row => row.runId);
+  const ids = timeline.rows.slice(0, 5).map(row => row.runId);
   const titles = ["打底：样式与组件", "设置页", "Buddy 页：模型分区", "时间轴比例尺", "标签的对比度"];
   const source = timeline.spans.find(span => span.kind === "execution")!;
   const router = timeline.spans.find(span => span.kind === "routing")!;
@@ -18,7 +18,7 @@ function comparison(timeline: MacroTaskTimeline): MacroTaskTimeline {
     reminders: null, inquiries: kind === "execution" ? [] : null, ...extra,
   });
   timeline.observedAt = at("09:31");
-  timeline.rows = timeline.rows.map((row, index) => ({ ...row, title: titles[index]!, titleSource: "title", parentRunId: null, rootRunId: row.runId, depth: 0, kind: "micro-task",
+  timeline.rows = timeline.rows.slice(0, 5).map((row, index) => ({ ...row, title: titles[index]!, titleSource: "title", parentRunId: null, rootRunId: row.runId, depth: 0, kind: "micro-task",
     state: index === 0 ? "accepted" : index === 3 ? "executing" : "delivered", status: index === 3 ? "running" : "completed", category: index === 0 ? "ended" : index === 3 ? "active" : "review",
     shutdownConfirmed: index !== 3, acceptedAt: index === 0 ? at("09:08") : null, reviewRejectedAt: null, reviewRejectionNote: null }));
   timeline.spans = [piece(0, "foundation", "execution", "06:00", "06:04"),
@@ -195,7 +195,7 @@ test.describe("unreached expected duration", () => {
       await route.fulfill({ response, json: timeline });
     });
     await open(page, `#tasks/${macro}`);
-    const track = page.locator('[data-slot="timeline-track"]').last();
+    const track = page.locator('[data-slot="timeline-track"]').filter({ has: page.locator('[data-key="span:execution:att-a3-1"]') });
     await expect(track.locator('[data-slot="expected-mark"]')).toHaveCount(0);
     const nowX = Number(await track.locator('[data-slot="timeline-now"]').getAttribute("x1"));
     const frame = await track.getAttribute("viewBox");

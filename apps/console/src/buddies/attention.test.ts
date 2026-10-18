@@ -16,7 +16,7 @@ const failing: RoutingHealth = {
   abstentionCount: 0, cancelledCount: 0, lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],
 };
 
-function attention(options: { routers?: string[]; mode?: "fast" | "review"; health?: RoutingHealth; configuration?: null; quota?: number } = {}) {
+function attention(options: { routers?: string[]; mode?: "fast" | "review"; health?: RoutingHealth; configuration?: null } = {}) {
   const configuration = options.configuration === null ? null
     : { routerBuddyIds: options.routers ?? [reviewer], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: options.mode ?? "review", routingBudget: "standard" };
@@ -24,16 +24,15 @@ function attention(options: { routers?: string[]; mode?: "fast" | "review"; heal
   const harnesses = [
     { harness: "claude", status: "ready", available: true, revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [] },
     { harness: "dsh", status: "ready", available: true, revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [],
-      quota: { observedAt: "2026-09-29T09:00:00.000Z", source: "dsh-native", provider: "deepseek-official", stale: false,
-        windows: [{ name: "5h", usedPercent: options.quota ?? 40, resetsAt: null }] } },
+      providers: [{ provider: "deepseek-official", coolingUntil: "2099-01-01T00:00:00Z", consecutiveRejections: 1 }] },
   ];
   const snapshot = { configuration, routingHealth: options.health, harnesses } as unknown as Snapshot;
   return buddyAttention({ buddies, configuration } as unknown as ConsoleView, snapshot);
 }
 
 describe("what waits on the Buddy page", () => {
-  it("is nothing while a Router that can work holds the role and no quota nears its limit", () => {
-    expect(attention()).toEqual({ roles: null, quota: [] });
+  it("is nothing while a Router that can work holds the role while a provider cools down", () => {
+    expect(attention()).toEqual({ roles: null });
   });
 
   it("names a missing Router, one that cannot work in the default mode, and settings the service cannot read", () => {
@@ -54,8 +53,4 @@ describe("what waits on the Buddy page", () => {
     expect(attention({ health: failing }).roles).toBe("failing");
   });
 
-  it("lists the harnesses whose recorded quota nears its limit", () => {
-    expect(attention({ quota: 93 }).quota).toEqual(["dsh"]);
-    expect(attention({ configuration: null, quota: 93 })).toEqual({ roles: "upgrade", quota: ["dsh"] });
-  });
 });

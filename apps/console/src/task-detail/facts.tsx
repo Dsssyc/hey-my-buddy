@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { actorRoleText, stopActorText } from "../actor";
-import { formatList } from "../i18n/format";
+import { formatCoolingTime, formatList } from "../i18n/format";
 import { quad } from "./names";
 import { Lines } from "./parts";
 import type { Basis, Ending, Session } from "./types";
@@ -46,6 +46,11 @@ function basisLines(basis: Basis, t: TFunction<"taskDetail">): string[] {
     ...(basis.candidateCount !== null ? [t("basis.candidates", { n: basis.candidateCount })] : []),
     ...(basis.excluded.length > 0
       ? [t("basis.excluded", { n: basis.excluded.length, list: basis.excluded.map(item => item.note ? `${named(item.buddy)} (${item.note})` : named(item.buddy)).join("; ") })]
+      : []),
+    ...((basis.coolingCount ?? basis.cooling.length) > 0
+      ? [t("basis.cooling", { n: basis.coolingCount ?? basis.cooling.length,
+        list: basis.cooling.map(item => t("basis.coolingBuddy", { buddy: named(item.buddy),
+          time: item.coolingUntil ? formatCoolingTime(Date.parse(item.coolingUntil)) : t("unrecorded") })).join("; ") })]
       : []),
     ...basis.preferences.map(item => t(`basis.${item.mode}`, { buddy: item.buddyId, note: item.note ?? t("unrecorded") })),
   ];

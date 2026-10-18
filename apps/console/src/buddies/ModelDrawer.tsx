@@ -16,6 +16,7 @@ import { modelServiceNoteText, setConcurrencyLimit, setModelServiceNote, setPref
 import { formatDateTime } from "../i18n/format";
 import type { ConsoleView, PreferenceMode, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
+import { CoolingStatus } from "./cooling";
 import { ConcurrencyNotice } from "./ConcurrencyNotice";
 import { modelIdentity, reasonTexts } from "./models";
 import type { BuddyChip, ModelRow } from "./models";
@@ -67,6 +68,7 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
       </span>
       {modelAvailable && !buddy.available && <Hint text={unavailableReason}><span className="text-ink3">{t("pane.unavailable")}</span></Hint>}
     </div>
+    <CoolingStatus providers={buddy.providerCooling ? [buddy.providerCooling] : []} />
     <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3 max-[600px]:flex-col max-[600px]:items-stretch">
       <div className="flex items-center gap-2.5 max-[600px]:justify-between">
         {name(t("models.enabled"), enableUnsaved, { htmlFor: `${id}-enabled` })}

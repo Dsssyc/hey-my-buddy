@@ -1,20 +1,15 @@
 import { expect } from "@playwright/test";
-import enBuddies from "../src/i18n/en/buddies";
-import zhBuddies from "../src/i18n/zh/buddies";
 import { TOOLBAR_ITEMS, contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle, test } from "./preview";
 
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 const CODEX = "codex / openai / gpt-5-codex";
 
-/** The section mark's alert for the harness it names, worded by the catalogue's own text. */
-const withHarness = (template: string) => template.replace("{{names}}", "Claude Code");
-
 const languages = [
-  { locale: "zh-CN", catalog: "目录", quotaAlert: withHarness(zhBuddies.attention.quota), unsaved: "未保存的修改", settings: "设置", account: "账户", check: "检测", checked: "已检测 Codex：已找到", stale: "过期", unavailable: /^显示不可用/ },
-  { locale: "en-US", catalog: "Catalog", quotaAlert: withHarness(enBuddies.attention.quota), unsaved: "Unsaved changes", settings: "settings", account: "account", check: "Check", checked: "Checked Codex: Found", stale: "Stale", unavailable: /^Show unavailable/ },
+  { locale: "zh-CN", catalog: "目录", unsaved: "未保存的修改", settings: "设置", account: "账户", check: "检测", checked: "已检测 Codex：已找到", cooling: "冷却中", clear: "解除冷却", unavailable: /^显示不可用/ },
+  { locale: "en-US", catalog: "Catalog", unsaved: "Unsaved changes", settings: "settings", account: "account", check: "Check", checked: "Checked Codex: Found", cooling: "Cooling down", clear: "Clear cooldown", unavailable: /^Show unavailable/ },
 ];
 
-for (const { locale, catalog, quotaAlert, unsaved, settings, account, check, checked, stale, unavailable } of languages)
+for (const { locale, catalog, unsaved, settings, account, check, checked, cooling, clear, unavailable } of languages)
   for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const) {
     test.describe(`the catalogue in ${locale} at ${width}px in ${theme}`, () => {
       // The contrast is measured at rest: under reduced motion the page makes no transitions.
@@ -49,10 +44,10 @@ for (const { locale, catalog, quotaAlert, unsaved, settings, account, check, che
             expect(box.height).toBe(28);
           }
         } else expect(searchBox.x).toBeGreaterThan(navBox.x + navBox.width + 24);
-        await expect(toolbar.getByRole("link").first()).toHaveAccessibleName(new RegExp(`^${catalog}.*${quotaAlert}$`));
+        await expect(toolbar.getByRole("link").first()).toHaveAccessibleName(catalog);
         await expect(page.locator("[data-slot=unsaved-mark]")).toHaveCount(0);
         const metered = page.getByRole("button", { name: `DSH ${account}`, exact: true });
-        await expect(metered).toContainText(locale === "zh-CN" ? "余额为零" : "Balance zero");
+        await expect(metered.locator("[data-slot=cooling-status]")).toContainText(cooling);
         await expect(metered).not.toContainText("%");
         const logo = page.locator("[data-slot=harness-section][aria-label=ZCode] [data-slot=harness-logo]");
         const mask = await logo.evaluate(node => {
@@ -69,12 +64,12 @@ for (const { locale, catalog, quotaAlert, unsaved, settings, account, check, che
         }
         for (const summary of await page.locator("[data-slot=harness-section]").getByRole("button", { name: new RegExp(` ${account}$`) }).all()) {
           await expectTextUncut(summary);
-          // The row is the button; its quota summary is a part of it and stays on one line.
-          expect(await summary.locator("[data-slot=quota-summary]").evaluate(node => getComputedStyle(node).whiteSpace)).toBe("nowrap");
+          // The row remains the button, and the cooldown summary belongs to it.
+          await expect(summary.locator("[data-slot=cooling-status]")).toHaveCount(1);
           expect(await contrastOf(summary)).toBeGreaterThanOrEqual(4.5);
         }
         const zcode = page.getByRole("button", { name: `ZCode ${account}`, exact: true });
-        await expect(zcode).toContainText(stale);
+        await expect(zcode.locator("[data-slot=cooling-status]")).toBeEmpty();
         await expectTextUncut(zcode);
         // The available sections precede the recorded login failure.
         await expect(page.locator("[data-slot=harness-section]").last()).toHaveAttribute("aria-label", "Claude Code");
@@ -92,6 +87,23 @@ for (const { locale, catalog, quotaAlert, unsaved, settings, account, check, che
           }
         }
         await expectNoSidewaysScroll(page);
+      });
+
+      test("shows one cooling provider and a quiet non-cooling provider in the account details", async ({ page }, testInfo) => {
+        await open(page, "#buddies/catalog");
+        await page.getByRole("button", { name: `DSH ${account}`, exact: true }).click();
+        await page.getByRole("button", { name: `Codex ${account}`, exact: true }).click();
+        const dsh = page.getByRole("group", { name: `DSH ${settings}`, exact: true });
+        const codex = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
+        await expect(dsh.locator("[data-slot=cooling-details]")).toContainText("deepseek-official");
+        await expect(dsh.locator("[data-slot=cooling-details]")).not.toContainText("deepseek-partner");
+        await expect(dsh.getByRole("button", { name: clear })).toHaveCount(1);
+        await expect(codex.locator("[data-slot=cooling-details]")).toBeEmpty();
+        await expect(codex.getByRole("button", { name: clear })).toHaveCount(0);
+        await expectNoSidewaysScroll(page);
+        await page.screenshot({ path: testInfo.outputPath(`catalogue-cooling-and-clear-${locale}-${width}-${theme}.png`), fullPage: true });
+        await dsh.screenshot({ path: testInfo.outputPath(`buddy-cooling-${locale}-${width}-${theme}.png`) });
+        await codex.screenshot({ path: testInfo.outputPath(`buddy-clear-${locale}-${width}-${theme}.png`) });
       });
 
       test("aligns the effort strip and selected panel, stacking the same drawer on narrow screens", async ({ page }) => {

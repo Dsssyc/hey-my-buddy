@@ -236,6 +236,11 @@ function parseBounds(source: Rec, what: string): Omit<Basis, "preferences"> {
       const excluded = rec(item, what);
       return { buddy: partialBuddy(excluded, what), note: strOrNull(excluded.note, what)?.trim() || null };
     }) : [],
+    coolingCount: basis ? intOrNull(basis.coolingCount, what) : null,
+    cooling: basis ? list(basis.coolingBuddies ?? [], what).map(item => {
+      const cooled = rec(item, what);
+      return { buddy: partialBuddy(cooled, what), coolingUntil: strOrNull(cooled.coolingUntil, what) };
+    }) : [],
   };
 }
 

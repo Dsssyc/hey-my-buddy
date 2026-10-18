@@ -13,7 +13,6 @@ export default {
     unset: "未指定 Router",
     unusable: "Router 不可用",
     failing: "路由连续失败",
-    quota: "额度接近上限：{{names}}",
   },
   /** One clear choice and three buddy preference modes. */
   preference: {

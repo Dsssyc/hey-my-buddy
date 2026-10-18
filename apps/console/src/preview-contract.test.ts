@@ -7,7 +7,6 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { ApiError, createApi, snapshotHarnesses } from "./api";
-import { quotaView } from "./quota";
 import { createTaskDetailClient } from "./task-detail/client";
 import { parseTask } from "./task-detail/parse";
 import { usageLabel } from "./task-detail/usage";
@@ -132,11 +131,7 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
         harnesses: harnesses.map(row => ({
           harness: row.harness,
           status: row.status,
-          // The display view drops the raw metered balance fact the Python
-          // regression checks; keep it on the report row.
-          quota: row.quota?.balanceZero === true
-            ? { ...quotaView(row.quota)!, balanceZero: true }
-            : quotaView(row.quota),
+          providers: row.providers,
         })),
       };
     } else if (entry.kind === "lineage-records") {
@@ -255,16 +250,6 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     expect(incompatible.filter(outcome => !outcome.accepted).map(outcome => outcome.code))
       .toEqual(incompatible.filter(outcome => entryFor(outcome).expected === "rejected").map(() => "INVALID_RESPONSE"));
     expect(incompatible.filter(outcome => !outcome.accepted)).toHaveLength(4);
-    // A malformed optional quota observation keeps the page readable and is
-    // dropped as unknown: it never surfaces as a recorded 0% or near-limit flag.
-    const downgraded = incompatible.find(outcome => entryFor(outcome).expected === "accepted")!;
-    expect(downgraded.accepted).toBe(true);
-    const downgradedRows = downgraded.facts.harnesses as { harness: string; quota: { windows: { usedText: string }[] } | null }[];
-    expect(downgradedRows[0].harness).toBe("dsh");
-    expect(downgradedRows[0].quota).toBeNull();
-    expect(downgradedRows.slice(1).some(row => row.quota !== null)).toBe(true);
-    expect(downgradedRows.every(row => row.quota === null
-      || row.quota.windows.every(window => window.usedText !== "0%"))).toBe(true);
 
     report({ fixtureVersion: manifest.fixtureVersion, fixtureDir, outcomes });
   });
@@ -288,18 +273,18 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     expect("decisionBuddyId" in snapshotFacts.configuration).toBe(false);
     expect("routerBuddyId" in snapshotFacts.configuration).toBe(false);
 
-    // DSH is metered: a zero balance is recorded without invented percentage windows.
+    // Two providers on one harness retain independent cooling states.
     const normalSnapshot = await apiFor(manifest.files.find(entry => entry.scenario === "normal" && entry.kind === "console-snapshot")!).snapshot();
     expect(snapshotHarnesses(normalSnapshot).find(row => row.harness === "dsh")).toMatchObject({
       billingByProvider: { "deepseek-official": { kind: "metered" } },
-      quota: { balanceZero: true, windows: [] },
+      providers: [
+        { provider: "deepseek-official", coolingUntil: expect.any(String), consecutiveRejections: 2 },
+        { provider: "deepseek-partner", coolingUntil: null, consecutiveRejections: 1 },
+      ],
     });
-    // Recorded quota: the near-limit, normal, stale-and-unknown and absent
-    // observations stay four distinct states; only claude alerts.
-    const quotaFacts = snapshotFacts.harnesses as { harness: string; quota: ReturnType<typeof quotaView> }[];
-    expect(quotaFacts.filter(row => row.quota?.alert).map(row => row.harness)).toEqual(["claude"]);
-    expect(quotaFacts.some(row => row.quota === null)).toBe(true);
-    expect(quotaFacts.some(row => row.quota?.stale && row.quota.windows.some(window => window.usedPercent === null))).toBe(true);
+    const providerFacts = snapshotFacts.harnesses as { harness: string; providers: { coolingUntil: string | null }[] }[];
+    expect(providerFacts.find(row => row.harness === "zcode")?.providers[0].coolingUntil).toBe("2020-01-01T00:00:00.000Z");
+    expect(providerFacts.find(row => row.harness === "codex")?.providers).toEqual([]);
 
     // Per-execution usage: known, partial-unknown and unknown all appear, and
     // no value is a session cumulative.

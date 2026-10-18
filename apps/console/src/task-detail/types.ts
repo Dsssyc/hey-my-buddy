@@ -170,6 +170,9 @@ export type Basis = {
   /** How many candidates were legal; null when it was not recorded. */
   candidateCount: number | null;
   excluded: { buddy: Partial<Buddy>; note: string | null }[];
+  /** The full count may exceed the frozen list's display limit. */
+  coolingCount: number | null;
+  cooling: { buddy: Partial<Buddy>; coolingUntil: string | null }[];
   /** The preferences the program applied when it chose the only candidate. */
   preferences: { buddyId: string; mode: "prefer" | "pin" | "exclude"; note: string | null }[];
 };

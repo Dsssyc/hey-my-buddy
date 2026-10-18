@@ -59,10 +59,10 @@ class EvaluationStore:
                 )
             ]
             from ...protocol.billing import for_provider
-            from ..routing.quota_routing import provider_state
+            from ..routing.quota_routing import cooling
             for buddy in buddies:
                 buddy["billing"] = for_provider(connection, buddy["harness"], buddy["provider"])
-                buddy['providerCooling'] = provider_state(connection, buddy['harness'], buddy['provider'])
+                buddy['providerCooling'] = cooling(connection, buddy)
             buddy_ids = [buddy["buddyId"] for buddy in buddies]
             policy = user_policy.policy_view(connection, buddy_ids)
             decisions = [

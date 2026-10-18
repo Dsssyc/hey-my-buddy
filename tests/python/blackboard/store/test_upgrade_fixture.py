@@ -1315,34 +1315,6 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
         self.assertEqual(backup.database_snapshot(connection, exact=True), before)
 
-    def test_quota_catalog_warnings_are_removed_from_both_current_copies(self):
-        fixture, connection = self.restored('old-quota-warnings')
-        warnings = [{'code': code, 'message': code} for code in (
-            'HARNESS_RATE_LIMIT_REPORTED', 'HARNESS_QUOTA_LIMIT_REPORTED',
-            'HARNESS_QUOTA_NEAR_LIMIT')]
-        warnings.append({'message': 'native detail'})
-        for observation_id, raw in connection.execute(
-                'SELECT observation_id,response_json FROM catalog_observations WHERE response_json IS NOT NULL').fetchall():
-            response = json.loads(raw)
-            response['catalog']['warnings'] = warnings
-            connection.execute('UPDATE catalog_observations SET response_json=? WHERE observation_id=?',
-                               (canonical_json(response), observation_id))
-        for discovery_id, raw in connection.execute('SELECT discovery_id,payload_json FROM evaluation_catalog').fetchall():
-            payload = json.loads(raw)
-            payload['warnings'] = warnings
-            connection.execute('UPDATE evaluation_catalog SET payload_json=? WHERE discovery_id=?',
-                               (canonical_json(payload), discovery_id))
-        connection.commit()
-        upgrade_schema_24_to_25(fixture['state'])
-        for raw, in connection.execute('SELECT response_json FROM catalog_observations WHERE response_json IS NOT NULL'):
-            converted = json.loads(raw)['catalog']['warnings']
-            self.assertEqual(converted, [{'reason': {'code': 'catalog.native-warning', 'params': {}},
-                                          'content': 'native detail'}])
-        for raw, in connection.execute('SELECT payload_json FROM evaluation_catalog'):
-            converted = json.loads(raw)['warnings']
-            self.assertEqual(converted, [{'reason': {'code': 'catalog.native-warning', 'params': {}},
-                                          'content': 'native detail'}])
-
     def test_unknown_catalog_warning_still_refuses_upgrade(self):
         fixture, connection = self.restored('unknown-quota-warning')
         discovery_id, raw = connection.execute('SELECT discovery_id,payload_json FROM evaluation_catalog LIMIT 1').fetchone()
@@ -1764,8 +1736,11 @@ class UpgradeFixtureTests(unittest.TestCase):
         connection.execute('UPDATE router_requests SET snapshot_json=? WHERE decision_id=?',
                            (canonical_json(snapshot), decision_id))
         connection.execute("UPDATE evaluation_decisions SET status='needs-host',buddy_id=NULL,"
-                           "reason='the selected quota retry was consumed',error='router-out-of-bounds'"
+                           "reason='The selected quota retry was consumed by another decision',"
+                           "error='router-out-of-bounds'"
                            ' WHERE decision_id=?', (decision_id,))
+        connection.execute('UPDATE decision_requests SET output_json=? WHERE decision_id=?',
+                           (canonical_json({'status': 'error', 'code': 'router-out-of-bounds'}), decision_id))
         connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at)'
                            ' VALUES(?,?,?,?,?)', ('old-redetect', 'quota.redetect', 'old-redetect-hash',
                                                   '{"oldRetry":true}', '2026-01-01T00:00:00.000Z'))

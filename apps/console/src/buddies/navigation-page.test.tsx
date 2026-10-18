@@ -55,7 +55,7 @@ function buddies(): Buddy[] {
   ];
 }
 
-/** Codex lacks local review eligibility; DSH carries a near-limit quota window. */
+/** Codex lacks local review eligibility; DSH carries a provider cooldown. */
 function harnesses(): HarnessHealth[] {
   return [
     { harness: "claude", status: "ready", available: true, revision: 2, manualPath: null,
@@ -68,11 +68,7 @@ function harnesses(): HarnessHealth[] {
     { harness: "dsh", status: "ready", available: true, revision: 3, manualPath: null,
       executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [],
-      quota: { observedAt: "2026-09-29T09:00:00.000Z", source: "dsh-native", provider: "deepseek-official",
-        stale: false, windows: [
-          { name: "5h", usedPercent: 93, resetsAt: "2026-09-29T13:00:00.000Z" },
-          { name: "weekly", usedPercent: 41, resetsAt: null },
-        ] } },
+      providers: [{ provider: "deepseek-official", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 1 }] },
     { harness: "zcode", status: "missing", available: false, revision: 1, manualPath: null,
       reason: { code: "harness.not-found", params: { operation: "probe" } },
       checkedAt: CHECKED_AT, candidates: [] },
@@ -186,13 +182,13 @@ describe("the Buddy page's sections and tables", () => {
 
 describe("marks for what waits", () => {
   it("marks the roles and directory sections, and the Buddy tab of the top bar", async () => {
-    // The fixture's Router cannot review, and DSH's quota is at 93%.
+    // The Router cannot review; provider cooling is an ordinary wait.
     const f = fixture();
     const user = userEvent.setup();
     renderBuddy("#buddies", f);
     await listed(3, 4);
     expect(sectionLink(/^角色\s*Router 不可用$/)).toBeTruthy();
-    expect(sectionLink(/^目录\s*额度接近上限：DSH$/)).toBeTruthy();
+    expect(sectionLink(/^目录$/)).toBeTruthy();
     // Inside the catalogue the mark sits on the table, so the section itself carries none.
     expect(sectionLink(/^目录/)).toBeTruthy();
     const topBar = screen.getByRole("navigation", { name: "主要导航" });
@@ -200,7 +196,7 @@ describe("marks for what waits", () => {
 
     // Outside the catalogue the table is not on screen, and the section carries its mark.
     await user.click(sectionLink(/^角色/));
-    expect(sectionLink(/^目录\s*额度接近上限：DSH$/)).toBeTruthy();
+    expect(sectionLink(/^目录$/)).toBeTruthy();
     expect(sectionLink(/^角色\s*Router 不可用$/)).toBeTruthy();
   });
 

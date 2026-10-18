@@ -66,10 +66,6 @@ _READONLY_CODES = {
     'readonly-tools-unrestricted': 'harness.readonly-tools-unrestricted',
     'readonly-resource-missing': 'harness.readonly-resource-missing',
 }
-_DISCARDED_CATALOG_WARNINGS = frozenset((
-    'HARNESS_RATE_LIMIT_REPORTED', 'HARNESS_QUOTA_LIMIT_REPORTED',
-    'HARNESS_QUOTA_NEAR_LIMIT',
-))
 _ACCOUNT_CODES = {'ACCOUNT_LOGIN_REQUIRED': 'account.login-required',
                   'ACCOUNT_NOT_CHECKED': 'account.not-checked'}
 _FIXED_CATALOG_WARNINGS = {
@@ -298,9 +294,7 @@ def _catalog_payload(value: dict) -> dict:
             warning['reason'] = make_reason('catalog.native-warning')
             warning['content'] = old
         else:
-            if code not in _DISCARDED_CATALOG_WARNINGS:
-                raise BoardError('UPGRADE_INVALID_BOARD', 'Stored catalog warning has unknown code')
-            continue
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Stored catalog warning has unknown code')
         warnings.append(warning)
     value['warnings'] = warnings
     return value

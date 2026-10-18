@@ -191,28 +191,17 @@ class PreviewFixtureTest(unittest.TestCase):
         version = outcomes["normal/runtime-version.json"]["facts"]
         self.assertEqual({"mode": "runtime", "softwareVersion": "0.0.0", "installed": True}, version)
 
-        # Recorded quota: near-limit, normal, stale-and-unknown and absent
-        # observations are four distinct, explicit states.
-        quotas = [row["quota"] for row in normal["harnesses"]]
-        near = [quota for quota in quotas if quota and quota["alert"]]
-        self.assertTrue(near, "the preview must record one near-limit quota window")
-        self.assertTrue(any(window["nearLimit"] for quota in near for window in quota["windows"]))
-        self.assertTrue(any(window["usedPercent"] >= 90 for quota in near for window in quota["windows"]))
-        stale = [quota for quota in quotas if quota and quota["stale"]]
-        self.assertTrue(stale, "the preview must record one stale quota observation")
-        self.assertTrue(any(window["usedPercent"] is None for quota in stale for window in quota["windows"]))
-        self.assertFalse(any(window["nearLimit"] for quota in stale for window in quota["windows"]
-                             if window["usedPercent"] is None))
-        self.assertIn(None, quotas, "the preview must record a harness without any quota observation")
-        for quota in quotas:
-            if quota is None:
-                continue
-            self.assertTrue(isinstance(quota["source"], str) and quota["source"],
-                            "a recorded observation names its source")
-            self.assertTrue(quota["windows"] or (quota.get("balanceZero") is True and not quota["windows"]),
-                            "a recorded observation carries its windows or is a metered balance fact")
-            self.assertIn('已过期' if quota['stale'] else '非实时', quota['note'],
-                          'the short status must retain freshness without implying live quota')
+        # A harness can have independent providers in different cooling states.
+        harnesses = {row["harness"]: row for row in normal["harnesses"]}
+        dsh = {row["provider"]: row for row in harnesses["dsh"]["providers"]}
+        self.assertEqual({"deepseek-official", "deepseek-partner"}, set(dsh))
+        self.assertIsNotNone(dsh["deepseek-official"]["coolingUntil"])
+        self.assertIsNone(dsh["deepseek-partner"]["coolingUntil"])
+        self.assertEqual(2, dsh["deepseek-official"]["consecutiveRejections"])
+        self.assertLess(harnesses["zcode"]["providers"][0]["coolingUntil"], "2026-01-01")
+        self.assertEqual([], harnesses["codex"]["providers"])
+        self.assertTrue(all("quota" not in row and "quotaRouting" not in row
+                            for row in raw_snapshot["harnesses"]))
 
         # Workflow facts straight from the frontend parser's report.
         workflows = {path: outcome["facts"] for path, outcome in outcomes.items()
@@ -418,6 +407,25 @@ class PreviewDeletionTest(unittest.TestCase):
             return response.status, json.loads(response.read())
         finally:
             connection.close()
+
+    def test_provider_clear_replies_are_flat_and_idempotent(self) -> None:
+        with self.server() as server:
+            params = {"requestId": "synthetic-clear-1", "harness": "dsh", "provider": "deepseek-official"}
+            status, first = self.call(server, "/api/command", "quota_redetect", params)
+            self.assertEqual(200, status)
+            self.assertEqual({"harness": "dsh", "provider": "deepseek-official", "cleared": True,
+                              "duplicate": False}, first["result"])
+            _, replay = self.call(server, "/api/command", "quota_redetect", params)
+            self.assertEqual({**first["result"], "duplicate": True}, replay["result"])
+            _, none = self.call(server, "/api/command", "quota_redetect", {**params, "requestId": "synthetic-clear-2"})
+            self.assertEqual({"harness": "dsh", "provider": "deepseek-official", "cleared": False,
+                              "duplicate": False}, none["result"])
+            _, snapshot = self.call(server, "/api/console")
+            self.assertIsNone(snapshot["harnesses"][0]["providers"][0]["coolingUntil"])
+            _, expired = self.call(server, "/api/command", "quota_redetect", {
+                "requestId": "synthetic-clear-expired", "harness": "zcode", "provider": "zai"})
+            self.assertEqual({"harness": "zcode", "provider": "zai", "cleared": True,
+                              "duplicate": False}, expired["result"])
 
     def test_preview_scope_and_blocker_titles(self) -> None:
         with self.server() as server:

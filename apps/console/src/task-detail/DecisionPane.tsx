@@ -3,6 +3,7 @@ import { Section } from "@/components/section";
 import { reasonText } from "../i18n/reason";
 import { actorText } from "../actor";
 import type { Actor } from "../types";
+import { BasisFold } from "./facts";
 import { Facts, Fold, Lines, LinkButton, Moment, Pane, PaneTitle } from "./parts";
 import type { Step } from "./steps";
 import type { AuditRequest, CompactRequest, Context, OpenRequest } from "./types";
@@ -40,6 +41,8 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
   const when = decided?.decidedAt ?? event?.at ?? null;
   const more = step.pending ? workflow.counts.openRequests - 1 : 0;
   const entry = full && "decisionId" in full && full.decisionId ? ctx.routing.find(item => item.decisionId === full.decisionId) ?? null : null;
+  const currentBoundary = full?.routing && full.requestId === workflow.activeRequest?.requestId ? workflow.routing : null;
+  const basis = currentBoundary?.basis ?? (entry ? ctx.bases[entry.decisionId] : null);
   const title = step.kind === "continue" ? t("step.continue") : request ? t(`decision.kind.${kindKey(request)}`) : t("step.decision");
   return <Pane>
     <PaneTitle title={title} state={open ? wait : undefined} tone="hand">
@@ -52,6 +55,7 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
         {more > 0 && <p className="mt-2 text-xs text-ink3">{t("decision.more", { n: more })}</p>}
         {full.preparationError && <p className="mt-2 text-fail"><code className="font-mono text-xs">{full.preparationError.code}</code> · {full.preparationError.message}</p>}
       </Section>
+      {basis && <div className="border-t px-4 py-4 sm:px-6"><BasisFold basis={basis} /></div>}
       {full.attempted && <Section name={t("decision.attempted")}><Fold text={full.attempted} /></Section>}
       {full.neededWork.length > 0 && <Section name={t("decision.needed")}><Lines items={full.neededWork} /></Section>}
       {full.acceptance && <Section name={t("decision.acceptance")}><Fold text={full.acceptance} /></Section>}

@@ -7,6 +7,7 @@ import { concurrencyEntryFor, MODEL_SERVICE_CONCURRENCY_DEFAULT } from "../conso
 import { modelServiceNoteText } from "../draft";
 import { formatDateTime } from "../i18n/format";
 import type { ConsoleView, Snapshot } from "../types";
+import { CoolingStatus } from "./cooling";
 import { modelIdentity, reasonTexts } from "./models";
 import type { ModelRow } from "./models";
 
@@ -45,6 +46,7 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
             {chip.preference && <span className="text-ink2">{t(`preference.${chip.preference}`)}</span>}
           </span>)}
         </span>
+        <span className="col-start-3 col-end-[-1] row-start-3 min-w-0 sm:row-start-2"><CoolingStatus providers={member.providerCooling ? [member.providerCooling] : []} /></span>
         <span className="col-start-4 row-start-1 whitespace-nowrap text-right text-xs text-ink2 tabular-nums sm:col-start-auto sm:row-start-auto" aria-label={occupancy}>
           {row.occupancy ?? "—"} / {Number.isNaN(row.limit) ? "—" : row.limit}
         </span>

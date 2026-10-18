@@ -7,7 +7,7 @@ import type { ConsoleApi } from "../api";
 import { harnessName } from "../buddy-display";
 import type { HarnessHealth, Snapshot } from "../types";
 import { harnessPath, statusText } from "./harness";
-import { openQuotaRetry } from "./harness-retry";
+import { clearCooldown } from "./harness-retry";
 
 const liveT = i18n.getFixedT(null, "buddies");
 
@@ -60,8 +60,8 @@ export function useHarnessActions({ snapshot, api, refresh, mutationsAvailable, 
           return action.path ? liveT("harness.done.saved", { path: harnessPath(updated) ?? action.path, ...status }) : liveT("harness.done.restored", status);
         });
       } else {
-        const outcome = await openQuotaRetry(api, snapshot.csrfToken, action.harness, action.provider);
-        setNote(() => liveT(`harness.quota.done.${outcome}`, { provider: action.provider }));
+        const outcome = await clearCooldown(api, snapshot.csrfToken, action.harness, action.provider);
+        setNote(() => liveT(`harness.cooling.done.${outcome}`, { provider: action.provider }));
       }
       await reloadSnapshot();
     } catch (failure) {

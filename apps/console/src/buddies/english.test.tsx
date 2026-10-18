@@ -1,6 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import i18n from "i18next";
+import { setLanguageChoice } from "../i18n";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { App } from "../App";
@@ -46,13 +47,11 @@ const account = (harness: string) => ({
 const harnesses = [
   { harness: "dsh", status: "ready", available: true, revision: 1, manualPath: null, executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH", checkedAt: AT, candidates: [],
     account: account("dsh"), billingByProvider: { "deepseek-official": { kind: "metered", source: "native", observedAt: AT } },
-    quota: { source: "dsh-native", observedAt: AT, balanceZero: true, windows: [] } },
+    providers: [{ provider: "deepseek-official", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 1 }] },
   { harness: "codex", status: "ready", available: true, revision: 2, manualPath: null, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: AT, candidates: [],
     account: account("codex"),
     readOnlyStructured: { implemented: true, eligible: false, systemSandbox: false, sameAttemptContinuation: false, reasonCode: "READ_ONLY_RESOURCE_UNAVAILABLE", reason: "The local read-only resources are unavailable" },
-    quota: { source: "codex-native", observedAt: AT, provider: "openai", windows: [{ name: "5h", usedPercent: 93, resetsAt: LATER }, { name: "weekly", usedPercent: 41, resetsAt: null }] },
-    quotaRouting: [{ provider: "openai", limitId: "5h", code: "HARNESS_QUOTA_EXHAUSTED", source: "codex-native", observedAt: AT, resetsAt: null, blocked: true,
-      retry: { eligibleAt: LATER, open: false, pendingManual: false, manualAt: null, consumedAt: null, consumedBy: null } }] },
+    providers: [{ provider: "openai", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 2 }] },
   { harness: "claude", status: "login-required", available: false, revision: 3, manualPath: "/home/user/bin/claude", source: "manual", checkedAt: AT,
     reason: { code: "harness.login-required", params: { operation: "probe" } },
     candidates: [{ path: "/home/user/bin/claude", source: "manual", status: "failed", reason: { code: "harness.probe-failed", params: { operation: "probe" } } }] },
@@ -89,12 +88,12 @@ async function openCatalog(f: ReturnType<typeof world>, hash = "#buddies") {
   return await screen.findByRole("region", { name: "Catalog" });
 }
 
-beforeEach(async () => { await i18n.changeLanguage("en"); });
+beforeEach(async () => { setLanguageChoice("en"); });
 afterEach(async () => {
   cleanup();
   window.localStorage.clear();
   window.location.hash = "";
-  await i18n.changeLanguage("zh");
+  setLanguageChoice("zh");
 });
 
 describe("the catalogue in English", () => {
@@ -102,7 +101,7 @@ describe("the catalogue in English", () => {
     const user = userEvent.setup();
     const catalog = await openCatalog(world());
     expect(chinese()).toEqual([]);
-    // Every section open on its account, location and quota; every section's models unfolded.
+    // Every section open on its account, location and cooldown; every section's models unfolded.
     for (const fold of [...catalog.querySelectorAll<HTMLElement>("[data-slot=fold-handle]")]) if (fold.getAttribute("aria-expanded") === "false") await user.click(fold);
     for (const summary of [...catalog.querySelectorAll<HTMLElement>("[data-slot=account-summary]")]) await user.click(summary);
     expect(catalog.querySelectorAll("[data-slot=harness-details]").length).toBeGreaterThan(0);

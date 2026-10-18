@@ -80,7 +80,7 @@ for (const { locale, account, settings, fold } of languages) {
       const details = page.getByRole("group", { name: `Codex ${settings}`, exact: true });
       await expect(chevron).toHaveAttribute("aria-expanded", "true");
       await expect(row).toHaveAttribute("aria-expanded", "false");
-      // The far end of the row, over the quota summary, opens the account and nothing else.
+      // The far end of the row opens the account and nothing else.
       const wide = await box(row);
       await row.click({ position: { x: wide.width - 8, y: wide.height / 2 } });
       await expect(row).toHaveAttribute("aria-expanded", "true");

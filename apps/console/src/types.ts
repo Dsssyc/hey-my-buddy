@@ -33,10 +33,7 @@ export type HarnessHealth = {
   reason?: Reason | null;
   checkedAt?: string | null;
   expiresAt?: string | null;
-  /** Latest recorded native quota observation; null or absent means unknown. */
-  quota?: HarnessQuota | null;
-  /** Persisted exhaustion records with their recovery state; absent means none recorded. */
-  quotaRouting?: QuotaRoutingRecord[];
+  providers?: ProviderCooling[];
   readOnlyStructured?: ReadOnlyStructured;
   systemSandbox?: boolean;
   billingByProvider?: Record<string, BillingFact>;
@@ -76,47 +73,11 @@ export type TokenUsage = {
   coverage?: "native-root-session" | "native-root-thread" | "native-attempt";
 };
 
-/**
- * One recorded native quota observation (ADR-018 §23). This is the latest
- * observation the harness reported, never a live account reading: `stale`
- * means it may already be out of date, an unknown `usedPercent` stays unknown
- * and is never shown as 0 or "available".
- */
-export type QuotaWindow = {
-  name: string;
-  usedPercent: number | null;
-  resetsAt: string | null;
-  stale?: boolean;
-};
-export type HarnessQuota = {
-  observedAt: string;
-  source: string;
-  provider?: string;
-  stale?: boolean;
-  reachedType?: string;
-  ordinaryUsageAllowed?: boolean;
-  balanceZero?: boolean;
-  windows: QuotaWindow[];
-};
-/** The single-use routing retry window of one no-reset exhaustion record (ADR-019). */
-export type QuotaRetryWindow = {
-  eligibleAt: string;
-  open: boolean;
-  pendingManual: boolean;
-  manualAt: string | null;
-  consumedAt: string | null;
-  consumedBy: string | null;
-};
-/** One persisted native exhaustion record with its recovery state (ADR-019). */
-export type QuotaRoutingRecord = {
+/** A provider's retained cooling record; only a future deadline is active. */
+export type ProviderCooling = {
   provider: string;
-  limitId: string | null;
-  code: string | null;
-  source: string;
-  observedAt: string;
-  resetsAt: string | null;
-  blocked: boolean;
-  retry: QuotaRetryWindow | null;
+  coolingUntil: string | null;
+  consecutiveRejections: number;
 };
 
 /**
@@ -129,8 +90,7 @@ type CatalogStatus = "available" | "pending" | "unavailable";
 
 export type Buddy = {
   billing?: BillingFact;
-  quotaExhausted?: boolean;
-  quotaRetry?: QuotaRetryWindow;
+  providerCooling?: ProviderCooling | null;
   buddyId: string;
   label: string;
   harness: string;
@@ -191,9 +151,10 @@ export type Lineage = {
   rootLeadRunId: string | null;
   leadOwnership?: { leadRunId: string; leadTurnId: string; createdAt: string } | null;
 };
-type QuotaFailure = { code: "quota-exceeded" | "rate-limited"; nativeCode?: string; source?: string };
+type QuotaFailure = { code: "quota-exceeded" | "rate-limited"; nativeCode?: string; source?: string; observedAt?: string; resetsAt?: string | null; rejectionPhase?: "before-model" | "during-model" | "unknown" };
 
 export type Task = {
+  providerCooling?: ProviderCooling | null;
   quotaFailure?: QuotaFailure | null;
   runId: string;
   /** Whether the assigned buddy may delegate work from this micro task. */

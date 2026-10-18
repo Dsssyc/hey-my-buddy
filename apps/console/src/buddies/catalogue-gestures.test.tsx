@@ -8,7 +8,7 @@ import { catalogue, effortCell, foldHandle, modelButton, selectModel } from "./p
 /**
  * The gestures of the catalogue, apart from what they open: a harness's head is
  * two buttons that do not contain each other, one for the section's models and
- * one for its location, account and quota; and what opens and closes does so
+ * one for its location, account and cooldown; and what opens and closes does so
  * through the shared Collapsible. How they move and how they change colour is
  * a matter of computed style, which the browser checks assert.
  */
@@ -34,7 +34,7 @@ describe("a harness section's head", () => {
       expect(account.hasAttribute("aria-expanded")).toBe(true);
       expect(fold.contains(account) || account.contains(fold)).toBe(false);
       expect(header(name).querySelectorAll("button button, [tabindex]:not(button)")).toHaveLength(0);
-      // One chevron; the quota summary has none of its own.
+      // One chevron; the cooldown summary has none of its own.
       expect(header(name).querySelectorAll("[data-slot=disclosure]")).toHaveLength(1);
       expect(fold.querySelectorAll("[data-slot=disclosure]")).toHaveLength(1);
       expect(header(name).textContent).not.toMatch(/[▲▼▶▷△▽▸▾]/);
@@ -54,11 +54,11 @@ describe("a harness section's head", () => {
     await openHarness(fixture({ harnesses: [harness({ harness: "claude", status: "ready" })] }), "#buddies", false);
     const fold = foldHandle("Claude Code"), account = harnessButton("Claude Code");
     expect([fold.getAttribute("aria-expanded"), account.getAttribute("aria-expanded")]).toEqual(["true", "false"]);
-    // The name, the provider and the quota summary are all part of the row's button.
+    // The name, the provider and the cooldown summary are all part of the row's button.
     await user.click(within(account).getByText("Claude Code"));
     expect([fold.getAttribute("aria-expanded"), account.getAttribute("aria-expanded")]).toEqual(["true", "true"]);
     expect(screen.getByRole("group", { name: "Claude Code 设置" })).toBeTruthy();
-    await user.click(within(account).getByText(/^—$|%$|余额/));
+    await user.click(account.querySelector<HTMLElement>("[data-slot=cooling-status]")!);
     expect(account.getAttribute("aria-expanded")).toBe("false");
     await user.click(fold);
     expect([fold.getAttribute("aria-expanded"), account.getAttribute("aria-expanded")]).toEqual(["false", "false"]);

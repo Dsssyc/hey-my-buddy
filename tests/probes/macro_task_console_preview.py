@@ -22,8 +22,9 @@ Safety boundary:
   per-run cancel/retry and friends) answer ``METHOD_NOT_FOUND`` exactly like
   the real console; the still-allowed writes (settings operations and
   ``macro_task_stop``) are refused here with ``CONSOLE_READ_ONLY``. The deletion
-  preview and confirmed deletion operate only on an instance's in-memory
-  synthetic records; no files, processes, sessions or Git objects are removed.
+  preview and confirmed deletion, plus provider cooldown clearing, operate only
+  on an instance's in-memory synthetic records; no files, processes, sessions
+  or Git objects are removed.
 * Fixture records reuse the same field names as the console DTOs
   (``apps/console/src/macro-task-types.ts`` and the console snapshot/task views).
   Reads use one fixed page with a synthetic event head and
@@ -56,7 +57,7 @@ artifacts add ``partial``/``verified``/``final`` flags, ``kind`` may be
 ``partial-output`` and an artifact may carry ``cumulativePatch``; integration
 verification adds ``hostPaths``; task views, attempts and turns carry a
 per-attempt ``tokenUsage`` (``null`` when unknown, never a zero); and the
-console snapshot adds four harness rows with retained ``quota`` observations.
+console snapshot adds four harness rows with provider cooling facts.
 Absent or unknown values stay explicitly null.
 
 The asset directory is Host-supplied; the repository's current bundle lives at
@@ -97,6 +98,12 @@ def host_actor(identifier: str) -> dict[str, str]:
 
 FIXTURE_DAY = datetime(2026, 9, 27, tzinfo=timezone.utc)
 OBSERVED_AT = "2026-09-27T10:00:00.000Z"
+# Emitted parser fixtures use the fixed fixture clock, so two independent
+# emissions are byte-identical. The live browser server uses its own clock,
+# keeping the visible cooldown inside the product's 24-hour maximum.
+_cooling_clock = FIXTURE_DAY + timedelta(hours=10) if {"--emit-fixtures", "--check"} & set(sys.argv) \
+    else datetime.now(timezone.utc)
+COOLING_UNTIL = (_cooling_clock + timedelta(minutes=30)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 HEAD = 21
 MAX_BODY_BYTES = 1024 * 1024
 MAX_ASSET_BYTES = 8 * 1024 * 1024
@@ -136,6 +143,7 @@ ROUTING_FACT_KEYS = ("routerBuddyIds", "routerIdentities", "routerBuddyId", "rou
 CATALOG = (
     ("dsh", "deepseek-official", "deepseek-flash", ("off", "max"), ("off", "max")),
     ("dsh", "deepseek-official", "deepseek-v4-pro", ("high", "max"), ()),
+    ("dsh", "deepseek-partner", "deepseek-flash", ("max",), ("max",)),
     ("codex", "openai", "gpt-5-codex", ("medium", "high", "max"), ("high", "max")),
     ("codex", "openai", "gpt-5-mini", ("low", "medium", "high", "max"), ("high",)),
     ("zcode", "zai", "glm-5", ("high", "max"), ("high",)),
@@ -168,7 +176,7 @@ EMIT_LAYOUT = {
                "runtime-version.json", "tasks.json",
                "timeline-macro-a.json", "timeline-macro-b.json", "timeline-macro-c.json", "timeline-standalone.json",
                "workflow-audit-preview-run-a1.json", "workflow-audit-preview-run-a2.json",
-               "workflow-preview-run-a1.json", "workflow-preview-run-a2.json",
+               "workflow-preview-run-a1.json", "workflow-preview-run-a2.json", "workflow-preview-run-a4.json",
                "workflow-preview-run-b1-h1.json", "workflow-preview-run-b1.json", "workflow-preview-run-b10.json",
                "workflow-preview-run-b2.json", "workflow-preview-run-b3.json",
                "workflow-preview-run-b4.json", "workflow-preview-run-b5.json",
@@ -177,8 +185,7 @@ EMIT_LAYOUT = {
     "readonly": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "truncated": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "error": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
-    "incompatible": ("harness-quota-malformed.json",
-                     "snapshot-legacy-single-router.json", "snapshot-missing-session.json",
+    "incompatible": ("snapshot-legacy-single-router.json", "snapshot-missing-session.json",
                      "snapshot-missing-tasks.json", "workflow-missing-revision.json"),
 }
 
@@ -192,7 +199,7 @@ MARKER_EVENTS = {"dispatch": "task.submitted", "decide": "workflow.request_appro
 ALLOWED_OPERATIONS = (
     "selection_get", "selection_list", "buddy_list", "workflow_get", "message_list", "user_policy_publish",
     "model_catalog_refresh", "macro_task_stop", "capabilities", "reminder_settings_set",
-    "macro_task_deletion_preview", "macro_task_delete",
+    "macro_task_deletion_preview", "macro_task_delete", "quota_redetect",
 )
 #: Operations the 0.15.1 read-only repair removed from the browser surface.
 REMOVED_OPERATIONS = (
@@ -278,7 +285,8 @@ def attempt(attempt_id: str, turn_index: int, state: str, confirmed: bool, start
             usage: dict | None = None, expected_seconds: int = 1800,
             stop_initiator: str | None = None, cancel_requested_at: str | None = None,
             grace_deadline: str | None = None, result_status: str | None = None,
-            termination_reason: str | None = None, release_reason: dict | None = None) -> dict:
+            termination_reason: str | None = None, release_reason: dict | None = None,
+            turn_state: str | None = None) -> dict:
     # `result` is the stored worker receipt: {"status", "result", "shutdownConfirmed"},
     # exactly what store.task_result unpacks; the adapter payload nests under `result`.
     # `usage` is the ADR-018 per-attempt token usage: null when the record is
@@ -294,6 +302,7 @@ def attempt(attempt_id: str, turn_index: int, state: str, confirmed: bool, start
             "stopInitiator": stop_initiator, "cancelRequestedAt": cancel_requested_at,
             "graceDeadline": grace_deadline,
             "releaseReason": release_reason,
+            "turnState": turn_state,
             "uncertain": state == "uncertain" or (state == "finished" and not confirmed)}
 
 
@@ -345,7 +354,7 @@ def span(span_id: str, kind: str, start: str, end: str | None, state: str, *, at
         view["decisionId"] = routing_record["decisionId"]
         view["routing"] = {key: routing_record[key] for key in
                            (*ROUTING_FACT_KEYS, "selectedBuddy", "reason", "note", "policyCheck", "usage")}
-    if kind in ("execution", "routing") and state == "finished":
+    if kind in ("execution", "routing") and state in ("finished", "rejected"):
         view["resultStatus"] = result_status or ("failed" if error else "ok")
     return view
 
@@ -417,6 +426,24 @@ ROUTING_A2_ABSTENTION = routing("preview-decision-a2-abstention", "preview-run-a
                                "needs-host", None, "合成预览：证据不足，主动放弃选择并等待 Host。",
                                {"harness": "claude"}, elapsed_ms=60000, tool_calls=2, bytes_read=16384,
                                attempt_id="att-router-a2-abstention", program_reason=reason("router-abstained"))
+ROUTING_A4 = routing("preview-decision-a4", "preview-run-a4-router", "needs-host", None,
+                     "合成预览：所有候选均在冷却，等待 Host 决定。", {"harness": "dsh", "provider": "deepseek-official"},
+                     attempt_id="att-router-a4", program_reason=reason("all-candidates-cooling",
+                                                               retryAt=COOLING_UNTIL))
+ROUTING_A4.update(taskId=None, attemptId=None, generation=None, routerBuddyId=None, routerBuddy=None,
+                  routerIndex=None, routerIdentities=[], routingMode=None, usage=None, budget=None,
+                  source="no-candidate")
+ROUTING_A4["routingBasis"] = {
+    "candidateCount": 0, "excludedCount": 0, "excludedBuddies": [], "coolingCount": 2,
+    "coolingBuddies": [
+        {"buddyId": f"dsh:deepseek-official:{model}:max", "harness": "dsh",
+         "provider": "deepseek-official", "model": model, "effort": "max", "note": None,
+         "coolingUntil": COOLING_UNTIL}
+        for model in ("deepseek-flash", "deepseek-v4-pro")],
+}
+ROUTING_B9 = routing("preview-decision-b9-reassign", "preview-run-b9-router-reassign", "completed", CFG_FLASH,
+                     "合成预览：前一 buddy 在模型开始前被额度拒绝，重新路由到 DSH。", {},
+                     attempt_id="att-router-b9-reassign", mode="fast", elapsed_ms=15000, tool_calls=0, bytes_read=0)
 
 
 def decision_result(record: dict) -> dict:
@@ -741,6 +768,18 @@ def build_runs() -> dict[str, dict]:
                       "counts": {"modelTurns": 7, "toolCalls": 23}},
             messages=[message("inq-a3-1", "att-a3-1", "测试跑了很久还没有结束，卡在哪一步？", author=HOST_A,
                               created=instant(9, 55), state="delivered", delivered=instant(9, 55, 3))]),
+        run("preview-run-a4", project="alpha", group=MACRO_A,
+            title="等待全部候选冷却结束", title_source="title",
+            task_text="核对冷却中的候选，等待 Host 决定下一步。",
+            created=instant(9, 43), updated=instant(9, 44), state="awaiting-host", status="queued",
+            category="host", buddy=None, routing=ROUTING_A4,
+            active_request={"requestId": "req-a4-cooling", "kind": "attention", "routing": True,
+                            "state": "open", "summary": None, "reason": ROUTING_A4["reason"],
+                            "attempted": None, "neededWork": [], "expectedArtifacts": [], "acceptance": None,
+                            "childTaskId": None, "createdAt": instant(9, 44), "decidedAt": None},
+            spans=[span("host:req-a4-cooling", "host", instant(9, 44), None, "open",
+                        request_id="req-a4-cooling", request_kind="attention")],
+            markers=[marker(instant(9, 43), "dispatch", actor=host_actor(HOST_A))]),
         run("preview-run-b1", project="beta", group=MACRO_B, hosts=(HOST_B, HOST_B2),
             title=long_title("DSH 插件在 Windows 路径下的沙箱回归排查与修复记录，包含长标题截断检查："),
             title_source="title",
@@ -833,7 +872,8 @@ def build_runs() -> dict[str, dict]:
                      disposition="completed", turn_index=1, error=QUOTA_ERROR, result_status="failed"),
             ],
             attempts=[attempt("att-b2-1", 1, "finished", True, instant(6, 7), instant(6, 26), CFG_GLM,
-                              error=QUOTA_ERROR, result=QUOTA_ERROR,
+                              error=QUOTA_ERROR, result={"finalText": QUOTA_ERROR,
+                                                        "quotaFailure": {"code": "quota-exceeded", "rejectionPhase": "during-model"}},
                               usage=usage("zcode-native", None, None, 4200))],
             markers=[marker(instant(6, 5), "dispatch", actor={"role": "lead", "id": "preview-run-b1"}),
                      marker(instant(6, 26), "conclude", actor={"role": "lead", "id": "preview-run-b1"}, state="failed")],
@@ -925,11 +965,22 @@ def build_runs() -> dict[str, dict]:
             task_text="核对合成平台路径中的字符编码并交回结果。",
             created=instant(7, 14), updated=instant(7, 18), state="accepted", status="completed",
             category="ended", buddy=CFG_FLASH, result=True, accepted=instant(7, 18), verdict="accepted",
-            spans=[span("execution:att-b9-1", "execution", instant(7, 16), instant(7, 18), "finished",
-                        attempt_id="att-b9-1", buddy=CFG_FLASH, confirmed=True, generation=1, turn_index=1)],
-            attempts=[attempt("att-b9-1", 1, "finished", True, instant(7, 16), instant(7, 18), CFG_FLASH,
+            routing=ROUTING_B9,
+            spans=[span("execution:att-b9-1", "execution", instant(7, 15), instant(7, 15, 10), "finished",
+                        attempt_id="att-b9-1", buddy=CFG_GLM, confirmed=True, generation=1, turn_index=1,
+                        error=QUOTA_ERROR, result_status="failed"),
+                   span("routing:att-router-b9-reassign", "routing", instant(7, 15, 10), instant(7, 15, 20), "finished",
+                        attempt_id="att-router-b9-reassign", confirmed=True,
+                        decision_task="preview-run-b9-router-reassign", routing_record=ROUTING_B9),
+                   span("execution:att-b9-2", "execution", instant(7, 16), instant(7, 18), "finished",
+                        attempt_id="att-b9-2", buddy=CFG_FLASH, confirmed=True, generation=2, turn_index=2)],
+            attempts=[attempt("att-b9-1", 1, "finished", True, instant(7, 15), instant(7, 15, 10), CFG_GLM,
+                              error=QUOTA_ERROR, result={"finalText": QUOTA_ERROR,
+                                                        "quotaFailure": {"code": "quota-exceeded", "rejectionPhase": "before-model"}},
+                              usage=None, turn_state="rejected"),
+                      attempt("att-b9-2", 2, "finished", True, instant(7, 16), instant(7, 18), CFG_FLASH,
                               result="合成预览：编码样例一致。", usage=usage("dsh-native", 1700, 500, 200))],
-            artifacts=[artifact("art-b9", "att-b9-1", digest("b9-output")[:40],
+            artifacts=[artifact("art-b9", "att-b9-2", digest("b9-output")[:40],
                                 "/synthetic-preview/diffs/b9.diff", ["synthetic/path-encoding.txt"])],
             markers=[marker(instant(7, 14), "dispatch", actor={"role": "lead", "id": "preview-run-b3"}),
                      marker(instant(7, 18), "accept", actor={"role": "lead", "id": "preview-run-b3"}, verdict="accepted")]),
@@ -1042,11 +1093,12 @@ def build_runs() -> dict[str, dict]:
     ]
     # Internal routing rows: real task history, never macro task rows.
     for owner, record in (("preview-run-a1", ROUTING_A1), ("preview-run-a2", ROUTING_A2),
-                          ("preview-run-a3", ROUTING_A3), ("preview-run-a2", ROUTING_A2_ABSTENTION)):
+                          ("preview-run-a3", ROUTING_A3), ("preview-run-a2", ROUTING_A2_ABSTENTION),
+                          ("preview-run-b9", ROUTING_B9)):
         router = record["taskId"]
         owner_entry = next(entry for entry in runs if entry["runId"] == owner)
         recorded_span = next(item for item in owner_entry["spans"] if item.get("decisionId") == record["decisionId"])
-        runs.append(run(router, project="alpha", parent=owner, title=None, title_source="none",
+        runs.append(run(router, project=owner_entry["project"], parent=owner, title=None, title_source="none",
                         task_text="Choose the execution buddy for this synthetic task.",
                         created=recorded_span["startAt"], updated=recorded_span["endAt"],
                         state="cancelled" if record["status"] == "cancelled" else "accepted",
@@ -1146,11 +1198,13 @@ FIXTURES = build_runs()
 
 
 class PreviewState:
-    """One server's volatile deletion receipts, never a connection to a board."""
+    """One server's volatile synthetic receipts, never a connection to a board."""
 
     def __init__(self):
         self.deleted: dict[str, dict] = {}
         self.removed_runs: set[str] = set()
+        self.cleared_providers: set[tuple[str, str]] = set()
+        self.clear_receipts: dict[str, dict] = {}
         self.lock = threading.RLock()
 
     @property
@@ -1343,6 +1397,8 @@ def task_view(entry: dict) -> dict:
         view.update({"result": receipt["result"],
                      "resultMeta": {key: value for key, value in receipt.items() if key != "result"},
                      "attemptId": selected["attemptId"], "resultDelivered": True})
+        if "quotaFailure" in receipt["result"]:
+            view["quotaFailure"] = receipt["result"]["quotaFailure"]
     return view
 
 
@@ -1366,12 +1422,13 @@ def turn_view(entry: dict, item: dict) -> dict:
         "turnId": item["turnId"], "turnIndex": item["turnIndex"], "attemptId": item["attemptId"],
         "expectedSeconds": item["expectedSeconds"],
         "generation": item["generation"], "resumeMode": "reconstructed-new-session",
-        "sessionId": None, "state": "returned" if item["state"] == "finished" else "open",
+        "sessionId": None, "state": item["turnState"] or ("returned" if item["state"] == "finished" else "open"),
         "disposition": item["disposition"], "createdAt": item["startedAt"],
         "updatedAt": item["finishedAt"] or item["startedAt"],
         "buddy": item["buddy"],
         "routing": ({"decisionId": entry["routing"]["decisionId"], "buddyRevision": 2}
-                    if entry["routing"] and entry["routing"]["decisionId"] and item["turnIndex"] == 1
+                    if entry["routing"] and entry["routing"]["decisionId"]
+                    and item["turnIndex"] == len(entry["attempts"])
                     else None),
         # Each turn keeps its own per-attempt usage record; never a
         # session-cumulative number.
@@ -1440,6 +1497,10 @@ def workflow_view(entry: dict) -> dict:
                  "harness": entry["adapter"] or (entry["buddy"] or {}).get("harness", "dsh"),
                  "cwd": entry["cwd"], "fingerprint": digest(f"{entry['runId']}-micro-task")},
         "buddy": entry["buddy"],
+        "providerCooling": ({"provider": "deepseek-official", "coolingUntil": COOLING_UNTIL,
+                             "consecutiveRejections": 2}
+                            if entry["buddy"] and entry["buddy"]["harness"] == "dsh"
+                            and entry["buddy"]["provider"] == "deepseek-official" else None),
         "buddyRevision": 2 if entry["buddy"] else None,
         "routing": routing, "turns": turns,
         "currentTurn": ({**turns[0], "summary": turn_summary(entry["attempts"][-1]), "summaryTruncated": False,
@@ -1748,8 +1809,11 @@ def buddy_views() -> list[dict]:
                     "contextWindow": 200000, "description": "synthetic preview model catalog entry",
                     "source": "synthetic-preview", "catalogState": "ready", "catalogReason": None,
                     "catalogStatus": "pending" if pending else "available",
+                    "providerCooling": ({"provider": "deepseek-official", "coolingUntil": COOLING_UNTIL,
+                                         "consecutiveRejections": 2}
+                                        if harness == "dsh" and provider == "deepseek-official" else None),
                     "billing": {'kind': 'subscription' if harness in ('codex', 'claude') else 'metered',
-                                'source': 'synthetic-preview', 'observedAt': OBSERVED_AT}, 'quotaExhausted': False}
+                                'source': 'synthetic-preview', 'observedAt': OBSERVED_AT}}
             if not available:
                 view["unavailableReason"] = reason("harness.login-required", operation="execution")
             if pending:
@@ -1792,56 +1856,46 @@ def harness_account(harness: str, status: str, *, account_type: str | None = Non
             "reason": reason}
 
 
-def harness_rows() -> list[dict]:
-    """The four ADR-018 console harness rows, in harness order, with account and quota.
-
-    The accounts cover native login observations, a known account type,
-    and a login that is missing. One provider carries the exhaustion
-    record of the run that failed on quota, with its retry window open.
-
-    Retained quota observations are display-only: an absent observation is
-    ``null``, a stale one keeps its old ``observedAt``, and an unknown window is
-    ``usedPercent: null`` — never 0.
-    """
-    return [
+def harness_rows(state: PreviewState | None = None) -> list[dict]:
+    """Four synthetic harnesses with active, expired, and cleared provider rows."""
+    rows = [
         {"harness": "dsh", "status": "ready", "available": True, "revision": 3, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/dsh/dsh", "version": "synthetic-preview-1.0",
          "account": harness_account("dsh", "ready", account_type="apiKey"),
          "billingByProvider": {"deepseek-official": {"kind": "metered", "source": "synthetic-preview",
-                                                     "observedAt": OBSERVED_AT}},
+                                                     "observedAt": OBSERVED_AT},
+                               "deepseek-partner": {"kind": "metered", "source": "synthetic-preview",
+                                                    "observedAt": OBSERVED_AT}},
          "source": "synthetic-preview", "checkedAt": instant(9, 55),
-         "quota": {"observedAt": instant(9, 50), "source": "dsh-native",
-                   "provider": "deepseek-official", "stale": False, "balanceZero": True,
-                   "windows": []}},
+         "providers": [{"provider": "deepseek-official", "coolingUntil": COOLING_UNTIL,
+                        "consecutiveRejections": 2},
+                       {"provider": "deepseek-partner", "coolingUntil": None,
+                        "consecutiveRejections": 1}]},
         {"harness": "zcode", "status": "ready", "available": True, "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/zcode/zcode", "version": "synthetic-preview-0.4",
          "account": harness_account("zcode", "ready"),
-         "quotaRouting": [{"provider": "zai", "limitId": None, "code": "HARNESS_QUOTA_EXHAUSTED",
-                           "source": "zcode-native", "observedAt": instant(6, 26), "resetsAt": None, "blocked": True,
-                           "retry": {"eligibleAt": instant(7, 26), "open": True, "pendingManual": False,
-                                     "manualAt": None, "consumedAt": None, "consumedBy": None}}],
          "source": "synthetic-preview", "checkedAt": instant(9, 55),
-         "quota": {"observedAt": instant(2, 30), "source": "zcode-native", "provider": "zai",
-                   "stale": True,
-                   "windows": [{"name": "5h", "usedPercent": None, "resetsAt": None},
-                               {"name": "weekly", "usedPercent": 12, "resetsAt": instant(77, 0)}]}},
+         "providers": [{"provider": "zai", "coolingUntil": "2020-01-01T00:00:00.000Z",
+                        "consecutiveRejections": 1}]},
         {"harness": "codex", "status": "ready", "available": True, "revision": 1, "manualPath": None,
          'executable': '/synthetic-preview/codex', 'version': '0.159.0',
          "account": harness_account("codex", "ready", account_type="chatgpt"),
          'billingByProvider': {'openai': {'kind': 'subscription', 'source': 'synthetic-preview', 'observedAt': OBSERVED_AT}},
          'systemSandbox': True,
          'readOnlyStructured': {'eligible': True, 'reason': None, 'systemSandbox': True, 'sameAttemptContinuation': True},
-         "source": "synthetic-preview", "checkedAt": instant(9, 55), "quota": None},
+         "source": "synthetic-preview", "checkedAt": instant(9, 55), "providers": []},
         {"harness": "claude", "status": "login-required", "available": False, "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/claude/claude", "version": "synthetic-preview-2.1",
          "account": harness_account("claude", "logged-out", reason=reason("account.login-required")),
          "source": "synthetic-preview", "checkedAt": instant(9, 55),
-         "reason": reason("harness.login-required", operation="execution"),
-         "quota": {"observedAt": instant(9, 40), "source": "claude-native", "provider": "anthropic",
-                   "stale": False,
-                   "windows": [{"name": "5h", "usedPercent": 18, "resetsAt": instant(14, 30)},
-                               {"name": "weekly", "usedPercent": 93, "resetsAt": instant(77, 0)}]}},
+         "reason": reason("harness.login-required", operation="execution"), "providers": []},
     ]
+    if state is not None:
+        for row in rows:
+            for provider in row["providers"]:
+                if (row["harness"], provider["provider"]) in state.cleared_providers:
+                    provider["coolingUntil"] = None
+    return rows
 
 
 def pending_root_count(state: PreviewState | None = None) -> int:
@@ -1902,10 +1956,10 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
         "configurationError": None,
         "buddies": buddies,
         "modelServiceConcurrency": concurrency_rows(),
-        "harnesses": harness_rows(),
+        "harnesses": harness_rows(state),
         "unavailableBuddyCount": sum(1 for buddy in buddies if not buddy["available"]),
         **policy_views(), "decisions": [],
-        "routingHealth": {"windowSize": 20, "sampleCount": 4, "failureCount": 1,
+        "routingHealth": {"windowSize": 20, "sampleCount": 6, "failureCount": 1,
                           "consecutiveFailures": 0, "abstentionCount": 1, "cancelledCount": 1,
                           "budgetExhaustedCount": 0, "boundsRejectedCount": 1, "inputChangedCount": 0,
                           "lastSuccessAt": instant(6, 5), "lastSuccessDecisionId": ROUTING_A1["decisionId"],
@@ -1945,6 +1999,10 @@ def selection_get(params: dict, state: PreviewState | None = None) -> dict:
     decision_id = params.get("decisionId")
     if not isinstance(decision_id, str) or not decision_id:
         raise PreviewError("INVALID_ARGUMENT", "decisionId is required")
+    if decision_id == ROUTING_A4["decisionId"]:
+        return {"decision": {**ROUTING_A4, "kind": "select", "runId": "preview-run-a4", "task": None,
+                             "routerCalled": False, "output": None, "input": None,
+                             "createdAt": instant(9, 43), "updatedAt": instant(9, 44)}}
     router = next((item for item in FIXTURES["runs"].values()
                    if item["kind"] == "decision" and item.get("decisionId") == decision_id
                    and (state is None or item["runId"] not in state.removed_runs)), None)
@@ -2031,6 +2089,8 @@ def workflow_get(params: dict, state: PreviewState | None = None) -> dict:
                      **{key: routing[key] for key in ROUTING_FACT_KEYS},
                      "source": "model-selection",
                      "ownerGeneration": 1, "current": routing["decisionId"] == entry["routing"]["decisionId"]})
+        if entry["routing"] and entry["routing"]["source"] == "no-candidate":
+            entries.append({**entry["routing"], "createdAt": entry["createdAt"], "current": True, "ownerGeneration": 1})
         view["routingHistory"] = {"entries": entries, "nextCursor": None, "total": len(entries)}
     return view
 
@@ -2045,6 +2105,30 @@ def command_result(scenario: str, operation: str, params: Any, state: PreviewSta
     if operation not in ALLOWED_OPERATIONS:
         raise PreviewError("METHOD_NOT_FOUND",
                            f"Operation {operation!r} is not available through the console")
+    if operation == "quota_redetect":
+        if set(params) != {"requestId", "harness", "provider"} or not all(
+                isinstance(params[key], str) and params[key] for key in ("requestId", "harness", "provider")):
+            raise PreviewError("INVALID_ARGUMENT", "requestId, harness and provider are required")
+        if scenario == "readonly":
+            raise PreviewError("CONSOLE_READ_ONLY", "This synthetic preview session has no write authority")
+        if state is None:
+            raise PreviewError("INVALID_ARGUMENT", "a server instance is required")
+        previous = state.clear_receipts.get(params["requestId"])
+        if previous is not None:
+            if (previous["harness"], previous["provider"]) != (params["harness"], params["provider"]):
+                raise PreviewError("INVALID_ARGUMENT", "requestId belongs to another provider")
+            return {**previous, "duplicate": True}
+        matches = [entry for row in harness_rows(state) if row["harness"] == params["harness"]
+                   for entry in row["providers"] if entry["provider"] == params["provider"]]
+        if not matches:
+            raise PreviewError("INVALID_ARGUMENT", "Unknown harness provider")
+        cleared = matches[0]["coolingUntil"] is not None
+        if cleared:
+            state.cleared_providers.add((params["harness"], params["provider"]))
+        reply = {"harness": params["harness"], "provider": params["provider"], "cleared": cleared,
+                 "duplicate": False}
+        state.clear_receipts[params["requestId"]] = reply
+        return reply
     if operation in ("macro_task_deletion_preview", "macro_task_delete"):
         fields = {"macroTaskId"} | ({"microTaskCount", "confirm"} if operation == "macro_task_delete" else set())
         unknown = sorted(set(params) - fields)
@@ -2078,14 +2162,14 @@ def command_result(scenario: str, operation: str, params: Any, state: PreviewSta
             raise PreviewError("INVALID_ARGUMENT", "commandId is required")
         if len(str(params.get("note") or "")) > 500:
             raise PreviewError("INVALID_ARGUMENT", "note is too long")
-    # A check of the harnesses changes nothing here: it answers the same synthetic rows, and nothing is probed.
+    # A check of the harnesses changes nothing here: it answers synthetic rows, and nothing is probed.
     checking = operation == "capabilities" and scenario != "readonly"
     if checking:
         unknown = sorted(set(params) - {"refresh", "harness"})
         if unknown:
             raise PreviewError("INVALID_ARGUMENT", f"Unknown parameter: {unknown[0]}")
     if operation not in READ_OPERATIONS and not checking:
-        # Only synthetic deletion changes this preview's in-memory records.
+        # Only synthetic deletion and cooldown clearing change this preview's in-memory records.
         # Other allowed product writes retain the preview's refusal.
         raise PreviewError("CONSOLE_READ_ONLY",
                            "This synthetic preview simulates deletion only; other writes are refused")
@@ -2100,7 +2184,7 @@ def command_result(scenario: str, operation: str, params: Any, state: PreviewSta
                      if item["kind"] == "decision" and (state is None or item["runId"] not in state.removed_runs)]
         result = {"decisions": decisions, "nextCursor": None, "total": len(decisions)}
     elif operation == "capabilities":
-        rows = [row for row in harness_rows() if params.get("harness") in (None, row["harness"])]
+        rows = [row for row in harness_rows(state) if params.get("harness") in (None, row["harness"])]
         if not rows:
             raise PreviewError("INVALID_ARGUMENT", "harness names no harness of the preview")
         result = {"harnesses": rows}
@@ -2826,6 +2910,17 @@ def validate_fixtures() -> list[str]:
         problems.append("preview-run-b2 must stay failed and record the synthetic quota exhaustion")
     if not any(item["kind"] == "partial-output" for item in quota_failed["artifacts"]):
         problems.append("preview-run-b2 must carry its sealed partial output")
+    if quota_failed["task"].get("quotaFailure", {}).get("rejectionPhase") != "during-model":
+        problems.append("preview-run-b2 must retain the midturn quota failure phase")
+    rerouted = workflow_get({"runId": "preview-run-b9"})
+    if ([turn["state"] for turn in rerouted["turns"]] != ["returned", "rejected"]
+            or rerouted["state"] != "accepted" or rerouted["task"].get("quotaFailure") is not None):
+        problems.append("preview-run-b9 must preserve a rejected turn before its accepted success")
+    cooled = workflow_get({"runId": "preview-run-a4"})["routing"]
+    if (cooled["reason"] != reason("all-candidates-cooling", retryAt=COOLING_UNTIL)
+            or cooled["routingBasis"]["coolingCount"] != 2
+            or len(cooled["routingBasis"]["coolingBuddies"]) != 2):
+        problems.append("preview-run-a4 must freeze every cooling candidate and the earliest retry")
     multi_turn = workflow_get({"runId": "preview-run-a1"})
     if len({json.dumps(turn["tokenUsage"], sort_keys=True) for turn in multi_turn["turns"]}) != len(
             multi_turn["turns"]):
@@ -2837,7 +2932,6 @@ def validate_fixtures() -> list[str]:
                                                                                         "codex", "claude"]:
         problems.append("harnesses must list dsh, zcode, codex and claude in that order")
         harnesses = []
-    stale_unknown = False
     for row in harnesses:
         if (row.get("available") is True) != (row.get("status") == "ready"):
             problems.append(f"harness {row.get('harness')}: available must mirror status")
@@ -2845,29 +2939,23 @@ def validate_fixtures() -> list[str]:
             problems.append(f"harness {row.get('harness')}: manualPath must be null")
         if type(row.get("revision")) is not int or row["revision"] < 0:
             problems.append(f"harness {row.get('harness')}: revision must be a nonnegative integer")
-        quota = row.get("quota")
-        if quota is None:
+        if set(row) & {"quota", "quotaRouting"}:
+            problems.append(f"harness {row.get('harness')}: retired quota fields remain")
+        if not isinstance(row.get("providers"), list):
+            problems.append(f"harness {row.get('harness')}: providers must be a list")
             continue
-        if not isinstance(quota, dict) or not isinstance(quota.get("observedAt"), str) \
-                or not isinstance(quota.get("source"), str) or not isinstance(quota.get("windows"), list):
-            problems.append(f"harness {row.get('harness')}: malformed quota observation")
-            continue
-        if row["harness"] == "dsh" and (row["billingByProvider"]["deepseek-official"]["kind"] != "metered"
-                                         or quota.get("balanceZero") is not True or quota["windows"]):
-            problems.append("DSH must be metered with a zero balance and no quota windows")
-        if quota.get("stale") is True and any(window.get("usedPercent") is None
-                                              for window in quota["windows"]):
-            stale_unknown = True
-        for window in quota["windows"]:
-            used = window.get("usedPercent")
-            if used is None:
-                continue
-            if type(used) is not int or not 0 <= used <= 100:
-                problems.append(f"harness {row.get('harness')}: window usage must be 0..100 or null")
-    if not stale_unknown:
-        problems.append("one harness quota observation must be stale with an unknown window")
-    if not any(row.get("quota") is None for row in harnesses):
-        problems.append("one harness row must carry quota: null")
+        for provider in row["providers"]:
+            if (not isinstance(provider.get("provider"), str)
+                    or type(provider.get("consecutiveRejections")) is not int
+                    or provider["consecutiveRejections"] < 1
+                    or provider.get("coolingUntil") is not None
+                    and not isinstance(provider["coolingUntil"], str)):
+                problems.append(f"harness {row.get('harness')}: malformed provider cooling")
+    if len(harnesses[0]["providers"]) != 2 or harnesses[0]["providers"][0]["coolingUntil"] is None \
+            or harnesses[0]["providers"][1]["coolingUntil"] is not None:
+        problems.append("DSH must show one cooling and one cleared provider")
+    if not harnesses[1]["providers"][0]["coolingUntil"] < OBSERVED_AT:
+        problems.append("ZCode must show an expired provider cooling row")
 
     # -- the emitted fixture tree -------------------------------------------- #
     plan = emit_fixture_files()
@@ -2966,7 +3054,7 @@ def emit_fixture_files() -> list[dict]:
     failure = error_envelope("SERVICE_UNAVAILABLE", ERROR_SCENARIO_MESSAGE)
     timeline_endpoint = "GET /api/macro-tasks/<macroTaskId>/timeline"
     workflow_endpoint = "POST /api/command workflow_get"
-    workflows = {"normal": ("preview-run-a1", "preview-run-a2", "preview-run-b1", "preview-run-b1-h1",
+    workflows = {"normal": ("preview-run-a1", "preview-run-a2", "preview-run-a4", "preview-run-b1", "preview-run-b1-h1",
                             "preview-run-b2", "preview-run-b3", "preview-run-b4", "preview-run-b5",
                             "preview-run-b6", "preview-run-b7", "preview-run-b8", "preview-run-b9", "preview-run-b10",
                             "preview-run-d1", "preview-run-d2"),
@@ -3031,9 +3119,7 @@ def emit_fixture_files() -> list[dict]:
                     workflow_get({"runId": run_id}), request={"runId": run_id})
 
     # Deliberately wrong shapes for the strict frontend parser. The readonly
-    # snapshot is the real fixture for the retired superseded-session shape; the
-    # malformed quota stays readable because a bad optional observation must be
-    # dropped as unknown rather than blanking the page or reading as 0%.
+    # snapshot covers the retired superseded-session shape.
     normal = console_snapshot("normal", assets_ready=False)
     legacy = clone(normal)
     for key in ("routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode"):
@@ -3058,13 +3144,6 @@ def emit_fixture_files() -> list[dict]:
     add("incompatible", "workflow-missing-revision.json", "workflow-get", workflow_endpoint, 200,
         "rejected", missing_revision, request={"runId": "preview-run-a1"}, expected_code="INVALID_RESPONSE",
         mutation="revision removed from the micro task workflow view, so owner-generation fencing is unprovable")
-    malformed_quota = clone(normal)
-    malformed_quota["harnesses"][0]["quota"]["windows"] = "near-limit"
-    add("incompatible", "harness-quota-malformed.json", "console-snapshot", "GET /api/console", 200,
-        "accepted", malformed_quota, request={},
-        mutation="harnesses[0].quota.windows replaced by the string \"near-limit\" while every other "
-                 "harness field stays valid",
-        note="malformed quota must be dropped as unknown, never displayed as 0")
 
     order = {scenario: index for index, scenario in enumerate(EMIT_SCENARIOS + ("incompatible",))}
     files.sort(key=lambda item: (order[item["scenario"]], item["path"]))
@@ -3117,7 +3196,7 @@ def print_banner(server: PreviewHTTPServer, assets: Path) -> None:
         summary = macro_task_summary(group, set(FIXTURES["groups"][group]))
         members = summary["counts"]["roots"] + summary["counts"]["helpers"]
         print(f"  {group}  state={summary['state']} members={members} project={summary['project']['label']}")
-    print("deletion changes synthetic memory only; other writes are refused; Ctrl-C stops the preview.")
+    print("deletion and cooldown clearing change synthetic memory only; other writes are refused; Ctrl-C stops the preview.")
 
 
 def run_server(assets: Path, scenario: str, port: int, verbose: bool) -> int:

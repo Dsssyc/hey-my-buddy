@@ -3,10 +3,8 @@ import { parseReadOnlyStructured } from "../api";
 import { parseHarnessAccount } from "../harness-account";
 import { formatShortDateTime } from "../i18n/format";
 import type { HarnessAccount } from "../harness-account";
-import { quotaView } from "../quota";
-import type { QuotaWindowView } from "../quota";
 import { reasonText } from "../i18n/reason";
-import type { HarnessCandidate, HarnessHealth, QuotaRoutingRecord } from "../types";
+import type { HarnessCandidate, HarnessHealth } from "../types";
 
 type T = TFunction<"buddies">;
 
@@ -39,56 +37,9 @@ export function harnessPath(row: HarnessHealth): string | null {
   return row.executable?.trim() || row.command?.[0]?.trim() || row.manualPath || null;
 }
 
-/** The quota summary of a harness section: the window nearest its limit. */
-type QuotaCell = {
-  /** The share used, 0–100; null while it is unknown, which never reads as 0. */
-  used: number | null;
-  text: string;
-  /** Near or at its limit, or the native record reports a limit. */
-  hot: boolean;
-  stale: boolean;
-  resets: string | null;
-};
-
 function accountStatusText(status: HarnessAccount["status"], t: T): string {
   return t(`harness.account.status.${status}`);
 }
-
-export function harnessSummary(row: HarnessHealth, t: T): QuotaCell | null {
-  const view = quotaView(row.quota);
-  if (!view) return null;
-  // The window nearest its limit; while none has a known use the first stands, as unknown.
-  const known = view.windows.filter(window => window.usedPercent !== null);
-  const nearest: QuotaWindowView | undefined = known.reduce<QuotaWindowView | undefined>(
-    (best, window) => !best || window.usedPercent! > best.usedPercent! ? window : best, undefined) ?? view.windows[0];
-  const used = nearest?.usedPercent ?? null;
-  return {
-    used,
-    text: used === null ? t("harness.quota.unknown") : nearest!.usedText,
-    hot: !!nearest?.nearLimit || view.limitReported,
-    stale: view.stale || nearest?.stale === true,
-    resets: harnessTime(nearest?.resetsAt),
-  };
-}
-
-/** One window of the quota block. */
-export type WindowRow = {
-  name: string;
-  text: string;
-  hot: boolean;
-  resets: string;
-  flag: "atLimit" | "nearLimit" | null;
-};
-
-/** One persisted exhaustion record, with where its recovery stands. */
-type ExhaustedRow = {
-  key: string;
-  provider: string;
-  limitId: string | null;
-  word: string;
-  observation: string;
-  recovery: string;
-};
 
 export type HarnessDetailsView = {
   location: {
@@ -104,38 +55,7 @@ export type HarnessDetailsView = {
     billing: { provider: string; plan: string }[];
     reason: string | null;
   };
-  quota: null | {
-    observed: string | null;
-    stale: boolean;
-    /** The board's own note that this is an observation and not a live reading. */
-    note: string;
-    source: string;
-    limitReported: boolean;
-    windows: WindowRow[];
-  };
-  exhausted: ExhaustedRow[];
-  /** The providers of this harness for which a retry can be opened now. */
-  retryProviders: string[];
 };
-
-/** One blocked record's recovery, phrased from the recorded facts only. */
-export function recoveryText(record: QuotaRoutingRecord, t: T): string {
-  const time = (value: string | null | undefined) => harnessTime(value) ?? t("harness.unrecorded");
-  if (record.resetsAt) return t("harness.quota.recovery.reset", { time: time(record.resetsAt) });
-  const retry = record.retry;
-  if (!retry) return t("harness.quota.recovery.unknown");
-  if (retry.open) return retry.consumedAt
-    ? t("harness.quota.recovery.openUsed", { used: time(retry.consumedAt) })
-    : t("harness.quota.recovery.open");
-  return retry.consumedAt
-    ? t("harness.quota.recovery.waitUsed", { used: time(retry.consumedAt), time: time(retry.eligibleAt) })
-    : t("harness.quota.recovery.wait", { time: time(retry.eligibleAt) });
-}
-
-/** The providers of this harness that a retry could help right now: blocked, with no reset recorded. */
-export function retryProviders(records: QuotaRoutingRecord[]): string[] {
-  return [...new Set(records.filter(record => record.blocked && !record.resetsAt).map(record => record.provider))];
-}
 
 const PLANS = ["subscription", "metered"] as const;
 const ACCOUNT_TYPES = ["chatgpt", "apiKey", "subscription", "metered"] as const;
@@ -145,8 +65,6 @@ export function harnessDetailsView(row: HarnessHealth, t: T): HarnessDetailsView
   const reviewNote = [t("harness.review.note"),
     eligibility ? t(eligibility.systemSandbox ? "harness.review.sandbox" : "harness.review.noSandbox") : ""].filter(Boolean).join(" ");
   const parsed = parseHarnessAccount(row.account, row.harness);
-  const quota = quotaView(row.quota);
-  const records = row.quotaRouting ?? [];
   const found = row.status === "ready";
   return {
     location: {
@@ -173,28 +91,5 @@ export function harnessDetailsView(row: HarnessHealth, t: T): HarnessDetailsView
         ({ provider, plan: t(`harness.account.plan.${PLANS.find(name => name === fact?.kind) ?? "unknown"}`) })),
       reason: parsed.reason ? reasonText(parsed.reason) : null,
     },
-    quota: quota && {
-      observed: harnessTime(quota.observedAt),
-      stale: quota.stale,
-      note: [t(quota.stale ? "harness.quota.note.stale" : "harness.quota.note.recent"), quota.limitReported ? t("harness.quota.note.reported") : ""].filter(Boolean).join(" "),
-      source: quota.provider ? `${quota.source} · ${quota.provider}` : quota.source,
-      limitReported: quota.limitReported,
-      windows: quota.windows.map(window => ({
-        name: window.name,
-        text: window.usedPercent === null ? t("harness.quota.unknown") : window.usedText,
-        hot: window.nearLimit,
-        resets: window.resetsAt ? t("harness.quota.reset", { time: harnessTime(window.resetsAt) ?? t("harness.unrecorded") }) : t("harness.quota.resetUnrecorded"),
-        flag: window.atLimit ? "atLimit" : window.nearLimit ? "nearLimit" : null,
-      })),
-    },
-    exhausted: records.filter(record => record.blocked).map(record => ({
-      key: `${record.provider}:${record.limitId ?? ""}`,
-      provider: record.provider,
-      limitId: record.limitId,
-      word: t(record.code === "HARNESS_BALANCE_ZERO" ? "harness.quota.balanceZero" : "harness.quota.exhausted"),
-      observation: t("harness.quota.observation", { time: harnessTime(record.observedAt) ?? t("harness.unrecorded"), source: record.source }),
-      recovery: recoveryText(record, t),
-    })),
-    retryProviders: retryProviders(records),
   };
 }

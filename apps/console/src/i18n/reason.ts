@@ -2,7 +2,7 @@ import i18n from "i18next";
 import type zh from "./zh/reasons";
 import { isReason } from "../reason";
 import type { Reason } from "../reason";
-import { formatDateTime, formatList, formatNumber } from "./format";
+import { formatCoolingTime, formatDateTime, formatList, formatNumber } from "./format";
 
 function parameter(value: unknown, key: string): string {
   if (isReason(value)) return reasonText(value);
@@ -16,7 +16,8 @@ function parameter(value: unknown, key: string): string {
     if ("runId" in row) return `${row.runId} (${i18n.t(`shell:reasonValue.state.${row.state}`)})`;
     return JSON.stringify(value);
   }
-  if (key === "retryAt" || key === "catalogReadAt") return formatDateTime(Date.parse(String(value)));
+  if (key === "retryAt") return formatCoolingTime(Date.parse(String(value)));
+  if (key === "catalogReadAt") return formatDateTime(Date.parse(String(value)));
   if (key === "operation" || key === "bound" || key === "disposition") return i18n.t(`shell:reasonValue.${key}.${value}`);
   return String(value);
 }

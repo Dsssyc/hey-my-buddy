@@ -46,7 +46,6 @@ export default {
       "excluded": "已排除",
       "capability-missing": "缺少能力",
       "constraints-or-quota": "约束或额度不符",
-      "quota-retry-consumed": "额度重试机会已用",
       "not-a-candidate": "不在候选内"
     },
     "disposition": {
@@ -85,7 +84,7 @@ export default {
     unrecorded: "未记录", identity: "{{role}} · {{id}}", recordedBy: "记录来源",
     markerIdentity: "{{sentence}}，记录来源 {{actor}}", origin: "发起 {{role}}", reason: "停止理由",
     roles: { host: "Host", lead: "Lead", console: "控制台", service: "服务", workflow: "黑板", bridge: "桥接" },
-    stop: { host: "Host 停止", lead: "Lead 停止", console: "控制台 停止", service: "服务停止", workflow: "黑板 停止", bridge: "桥接 停止", unknown: "停止（发起者未知）" },
+    stop: { host: "Host 停止", lead: "Lead 停止", console: "控制台停止", service: "服务停止", workflow: "黑板停止", bridge: "桥接停止", unknown: "停止（发起者未知）" },
   },
   /** A length of time: the number comes first, then the unit. */
   duration: { hour: "{{n}} 时", minute: "{{n}} 分", second: "{{n}} 秒" },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatClockMinutes, formatCompact, formatDuration, formatMoment, formatMomentMinutes, formatNumber, formatRelative } from "./format";
+import { formatCoolingTime, formatClockMinutes, formatCompact, formatDuration, formatMoment, formatMomentMinutes, formatNumber, formatRelative } from "./format";
 
 describe("the numbers and the times the detail writes", () => {
   it("writes a length of time in the units that matter, with the seconds only when asked for", () => {
@@ -43,4 +43,10 @@ describe("the numbers and the times the detail writes", () => {
     expect(formatMomentMinutes(new Date(2026, 8, 25, 23, 59, 59).getTime(), now)).toBe("09-25 23:59");
     expect(formatMomentMinutes(new Date(2025, 11, 31, 8, 0, 0).getTime(), now)).toBe("2025-12-31 08:00");
   });
+  it("shows a cooling deadline as a local clock today and includes the date across midnight", () => {
+    const now = new Date(2026, 9, 19, 23, 0).getTime();
+    expect(formatCoolingTime(new Date(2026, 9, 19, 23, 30).getTime(), now)).toBe("23:30");
+    expect(formatCoolingTime(new Date(2026, 9, 20, 0, 30).getTime(), now)).toBe("10月20日 00:30");
+  });
+
 });

@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { StateMark } from "@/components/ui/state-mark";
 import type { HarnessHealth } from "../types";
 import { harnessDetailsView, statusText } from "./harness";
-import type { HarnessDetailsView, WindowRow } from "./harness";
+import type { HarnessDetailsView } from "./harness";
+import { CoolingDetails } from "./cooling";
 import { HarnessPathDialog } from "./HarnessPathDialog";
 
 const hintTarget = "rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
@@ -79,7 +80,7 @@ function LocationBlock({ row, name, view, gate, onCheck, onSavePath }: {
   </Block>;
 }
 
-function AccountBlock({ view }: { view: HarnessDetailsView }) {
+function AccountBlock({ view, row, gate, onClear }: { view: HarnessDetailsView; row: HarnessHealth; gate: Gate; onClear: (provider: string) => void }) {
   const { t } = useTranslation("buddies");
   const { account } = view;
   return <Block title={t("harness.account.name")}>
@@ -91,53 +92,7 @@ function AccountBlock({ view }: { view: HarnessDetailsView }) {
         ? account.billing.map(entry => <span key={entry.provider}>{entry.provider} <span className="text-ink3">{entry.plan}</span></span>)
         : t("harness.account.plan.unknown")}</span>
     </div> : <span className="text-xs text-ink3">{t("harness.unrecorded")}</span>}
-  </Block>;
-}
-
-function QuotaWindow({ window }: { window: WindowRow }) {
-  const { t } = useTranslation("buddies");
-  return <><span className={label}>{window.name}</span>
-    <span className="flex flex-wrap items-baseline gap-x-2.5 tabular-nums">
-      <span className={cn(window.hot && "text-hand")}>{window.text}</span>
-      <span className="text-ink3">{window.resets}</span>
-      {window.flag && <span className="text-hand">{t(`harness.quota.${window.flag}`)}</span>}
-    </span></>;
-}
-
-function QuotaBlock({ view, gate, onRetry }: { view: HarnessDetailsView; gate: Gate; onRetry: (provider: string) => void }) {
-  const { t } = useTranslation("buddies");
-  const { quota, exhausted, retryProviders } = view;
-  const inert = gate.busy || !gate.canWrite;
-  const refusal = gate.refusal || (gate.busy ? t("harness.running") : "");
-  return <Block title={t("harness.quota.name")} head={quota && <>
-    <Hint text={quota.note}><span tabIndex={0} className={hintTarget}>{t("harness.quota.observed")}</span></Hint>
-    <span className="tabular-nums">{quota.observed ?? t("harness.unrecorded")}</span>
-    {quota.stale && <span className="whitespace-nowrap">{t("harness.quota.stale")}</span>}
-  </>}>
-    {quota ? <div className={fields}>
-      {quota.windows.map(window => <QuotaWindow key={window.name} window={window} />)}
-      <span className={label}>{t("harness.quota.source")}</span><span className="break-all">{quota.source}</span>
-      {quota.limitReported && <span className="col-span-2 text-hand">{t("harness.quota.reported")}</span>}
-    </div> : <span className="text-xs text-ink3">{t("harness.unrecorded")}</span>}
-    {exhausted.length > 0 && <>
-      <ul aria-label={t("harness.quota.exhaustedList")} className="mt-3 divide-y border-y">
-        {exhausted.map(record => <li key={record.key} className="flex flex-col gap-1 py-2.5">
-          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-            <span className="font-mono text-xs break-all">{record.provider}{record.limitId ? ` · ${record.limitId}` : ""}</span>
-            <span className="shrink-0 text-xs text-hand">{record.word}</span>
-          </div>
-          <span className="text-xs text-ink3">{record.observation}</span>
-          <span className="text-xs">{record.recovery}</span>
-        </li>)}
-      </ul>
-      {retryProviders.length > 0 && <div className={buttons}>
-        {retryProviders.map(provider => <Hint key={provider} text={[refusal, t("harness.quota.openHint")].filter(Boolean).join(" ")}>
-          <Button variant="outline" aria-disabled={inert || undefined} onClick={() => onRetry(provider)}>
-            {retryProviders.length > 1 ? t("harness.quota.openFor", { provider }) : t("harness.quota.open")}
-          </Button>
-        </Hint>)}
-      </div>}
-    </>}
+    <CoolingDetails providers={row.providers ?? []} gate={gate} onClear={onClear} />
   </Block>;
 }
 
@@ -150,9 +105,8 @@ export function HarnessDetails({ row, name, canWrite, refusal, busy, onCheck, on
   const view = harnessDetailsView(row, t);
   const gate = { canWrite, refusal, busy };
   return <div role="group" aria-label={t("harness.detailsLabel", { name })} data-slot="harness-details"
-    className="grid border-b-2 border-ink3 bg-card text-sm min-[900px]:pl-[38px] min-[900px]:grid-cols-3 min-[900px]:divide-x max-[899px]:divide-y">
+    className="grid border-b-2 border-ink3 bg-card text-sm min-[900px]:pl-[38px] min-[900px]:grid-cols-2 min-[900px]:divide-x max-[899px]:divide-y">
     <LocationBlock row={row} name={name} view={view} gate={gate} onCheck={onCheck} onSavePath={onSavePath} />
-    <AccountBlock view={view} />
-    <QuotaBlock view={view} gate={gate} onRetry={onRetry} />
+    <AccountBlock view={view} row={row} gate={gate} onClear={onRetry} />
   </div>;
 }

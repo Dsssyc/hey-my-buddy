@@ -13,7 +13,6 @@ export default {
     unset: "No Router set",
     unusable: "Router unavailable",
     failing: "Routing keeps failing",
-    quota: "Quota near its limit: {{names}}",
   },
   preference: {
     unset: "None",

@@ -300,6 +300,30 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expectDetailWhole(page, { skipTitle: true });
       });
 
+      test("a quota rejection names the earlier buddy and the reroute, while the completed task succeeds", async ({ page }, testInfo) => {
+        await open(page, `#tasks/${B}/preview-run-b9`);
+        await expect(detail(page).locator("[data-slot=detail-status]")).toHaveText(locale === "zh-CN" ? "已验收" : "Accepted");
+        await step(page, turn(1)).click();
+        await expect(pane(page)).toContainText(locale === "zh-CN" ? "模型开始前额度被拒绝" : "Rejected before the model started");
+        await expect(pane(page)).toContainText(locale === "zh-CN" ? "已交回重新路由" : "Returned for a new route");
+        await expect(pane(page)).toContainText("zcode");
+        await page.screenshot({ path: testInfo.outputPath(`task-reassigned-${locale}-${width}-light.png`) });
+        await expect(step(page, locale === "zh-CN" ? "路由" : "Routing")).toHaveCount(1);
+        await step(page, locale === "zh-CN" ? "路由" : "Routing").last().click();
+        await expect(chosen(page)).toHaveAccessibleName(new RegExp(locale === "zh-CN" ? "路由" : "Routing"));
+        await expectDetailWhole(page, { skipTitle: true });
+      });
+
+      test("a route with every candidate cooling shows the next retry and the frozen buddies", async ({ page }, testInfo) => {
+        await open(page, `#tasks/${A}/preview-run-a4`);
+        await expect(pane(page)).toContainText(locale === "zh-CN" ? "所有候选都在冷却" : "All candidates are cooling down");
+        await pane(page).getByRole("button", { name: locale === "zh-CN" ? "提交时的约束" : "Bounds at submission" }).click();
+        await expect(pane(page)).toContainText(locale === "zh-CN" ? "冷却中的候选 2 个" : "Cooling down: 2");
+        await expect(pane(page)).toContainText("dsh");
+        await page.screenshot({ path: testInfo.outputPath(`task-cooling-${locale}-${width}-light.png`) });
+        await expectDetailWhole(page, { skipTitle: true });
+      });
+
       test("only reads: no field to write in, and nothing but reads asked of the board", async ({ page }) => {
         const operations: string[] = [];
         page.on("request", request => {
