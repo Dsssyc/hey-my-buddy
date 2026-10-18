@@ -397,7 +397,7 @@ def _host_boundary(
                     "controlFile": "<saved-controlFile>",
                     "expectedRevision": revision,
                     "decision": "decline",
-                    "reason": "...",
+                    "note": "...",
                 },
             )
         )
@@ -406,7 +406,8 @@ def _host_boundary(
         target_params = {"targetRunId": target} if target and target != run_id else {}
         for mode, choice in (
             ("reroute", {"reroute": True}),
-            ("buddy", {"buddy": {key: f"<{key}>" for key in ("harness", "provider", "model", "effort")}}),
+            ("buddy", {"buddy": {key: f"<{key}>" for key in ("harness", "provider", "model", "effort")},
+                       "note": "..."}),
         ):
             commands.append(_boundary_command("continue", {
                 "runId": run_id, "commandId": f"{run_id}:{mode}:{revision}",
