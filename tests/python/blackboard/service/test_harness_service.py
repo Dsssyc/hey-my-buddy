@@ -58,7 +58,7 @@ class HarnessServiceTests(BoardTestCase):
         self.board.initialize()
         self.live_registry = LiveRegistry()
         self.service = BoardService(self.board, live_registry=self.live_registry, token='host', control={}, on_stop=lambda p: {}, on_restart=lambda p: {}, automatic_discovery=True)
-        self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)))
+        self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=None))
         self.service.harnesses.kick = Mock()
         self.service.harnesses.catalog_refresh = Mock()
         self.addCleanup(self.service.harnesses.close)

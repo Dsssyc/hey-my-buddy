@@ -469,7 +469,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
         self.assertEqual(token_usage["nativeRecords"], expected["records"])
         self.assertEqual(token_usage["completeness"], "complete")
         self.assertNotIn("quota", outcome.result)
-        self.assertIsNone(outcome.result["quotaFailure"])
+        self.assertNotIn("quotaFailure", outcome.result)
         message = outcome.result["lastAssistantMessage"]
         self.assertEqual(message["text"], expected["lastAssistantText"])
         self.assertEqual(message["source"], "zcode/session-root-assistant-message")
@@ -533,7 +533,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertIsNone(outcome.result["tokenUsage"])
         self.assertNotIn("quota", outcome.result)
-        self.assertIsNone(outcome.result["quotaFailure"])
+        self.assertNotIn("quotaFailure", outcome.result)
         self.assertIsNone(outcome.result["lastAssistantMessage"])
 
 
