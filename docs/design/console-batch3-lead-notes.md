@@ -73,9 +73,9 @@ Python 命令为 `uv run --frozen python -m hey_my_buddy.cli.checks tests/python
 
 最终日志在忽略的 `apps/console/test-results/lead-turn9-verified-*.log` 与 `lead-turn9-final-python.log`。私有预览端口已确认关闭。应用源码与设计文件的差异检查通过；生成 JS 里仍有依赖 CSS 模板字符串的 5 处行尾空白，未手改构建输出，不把整个生成资源的 whitespace 检查说成通过。
 
-实际改前/改后图片按同一宏任务、步骤、1280 × 900 与 390 × 900、明暗主题保存：`batch3-before-{macro,detail}-{1280,390}-{light,dark}.png` 与 `batch3-after-{macro,detail}-{1280,390}-{light,dark}.png`。另有四种宽窄/明暗的 after-lanes 图和八张删除图，均在 `console-frontend/`。已查看宽窄明暗的宏任务、详情、泳道和删除确认/拦截的像素；静态稿的 20 张 PNG 不冒充实际应用截图。
+实际改前/改后图片按同一宏任务、步骤、1280 × 900 与 390 × 900、明暗主题保存：`batch3-before-{macro,detail}-{1280,390}-{light,dark}.png` 与 `batch3-after-{macro,detail}-{1280,390}-{light,dark}.png`。另有四种宽窄/明暗的 after-lanes 图和八张删除图，当时在 `console-frontend/`，Host 验收之后连同稿一起删除，可在 git 历史里找到。已查看宽窄明暗的宏任务、详情、泳道和删除确认/拦截的像素；静态稿的 20 张 PNG 不冒充实际应用截图。
 
-可直接对照[改前宽屏](console-frontend/batch3-before-macro-1280-light.png)与[改后宽屏](console-frontend/batch3-after-macro-1280-light.png)，以及[改前窄屏详情](console-frontend/batch3-before-detail-390-dark.png)与[改后窄屏详情](console-frontend/batch3-after-detail-390-dark.png)。[Lead 泳道](console-frontend/batch3-after-lanes-1280-light.png)、[窄屏删除](console-frontend/batch3-delete-confirm-320-dark.png)和[可滚动的拦截列表](console-frontend/batch3-delete-blocked-320-light.png)也是当前构建的实际画面。
+可直接对照改前宽屏与改后宽屏，以及改前窄屏详情与改后窄屏详情。Lead 泳道、窄屏删除和可滚动的拦截列表也是当前构建的实际画面。
 
 ## 审查发现与处置
 
