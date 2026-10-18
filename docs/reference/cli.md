@@ -115,7 +115,7 @@ At most eight helpers are authorized by one decision, and their specs accept the
 
 At an `awaiting-host` boundary, `accept` with the exact current sealed `artifactId` can finish the micro task after verified integration and confirmed lineage shutdown. `conclude` ends a failed, cancelled or delivered-unaccepted micro task with a required note: unsealed managed changes are sealed as an independent Host partial output, the original execution status is retained in `hostConclusion.executionStatus`, and the micro task enters terminal `concluded`. The automatic reclaim keeps the recorded acceptance or conclusion and reports its reasons when blocked; a later `reclaim` retries subject to the same stop, identity, dependency and unsealed-change checks. The [workflow contract](workflow.md) owns these transitions.
 
-Output artifacts may include `cumulativePatch` with its original micro task input commit, output commit, path and hash; `partial-output` is explicitly partial, unverified and non-final. Brief projections retain these distinctions, `hostConclusion`, `buddyLocked` and quota reminders. Execution and turn views carry `tokenUsage`; null or null counters mean unknown. Input tokens include cached input, so cache must not be added again.
+Output artifacts may include `cumulativePatch` with its original micro task input commit, output commit, path and hash; `partial-output` is explicitly partial, unverified and non-final. Brief projections retain these distinctions, `hostConclusion`, `buddyLocked` and `providerCooling`. Execution and turn views carry `tokenUsage`; null or null counters mean unknown. Input tokens include cached input, so cache must not be added again.
 
 ## Macro tasks
 

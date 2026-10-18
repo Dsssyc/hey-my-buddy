@@ -16,7 +16,7 @@ A complete governed lifecycle was then captured from the real in-process service
 
 The same lifecycle printed 5,852 tokens (−86%): `submit` 2,615→308, `await` 1,988→840, `get` 4,267→1,020, `integration-record` 6,122→916, `acknowledge` 6,110→911, cleanup plan 8,362→890 and apply 10,498→967. `list` with one task fell from 9,427 to 143 tokens, `status` from 4,693 to 683 and `result` from 6,617 to 1,480. `health`, `capabilities` and other unprojected responses only lose their indentation (about 30%).
 
-The skill now states the brief output, asks packets to reference files rather than paste them, and starts verification from changed paths and patch statistics. Its new waiting section keeps the Codex foreground `await` unchanged and gives Claude Code one background `await` per running goal, whose exit notification arrives during the turn or wakes the idle session; [usage.md](../reference/usage.md#waiting-from-claude-code) owns that flow. The skill text shrank from 9,946 to 9,106 bytes despite the two new sections.
+The skill now states the brief output, asks packets to reference files rather than paste them, and starts verification from changed paths and patch statistics. Its new waiting section keeps the Codex foreground `await` unchanged and gives Claude Code one background `await` per running goal, whose exit notification arrives during the turn or wakes the idle session; [usage.md](../reference/usage.md#waiting-from-your-host) owns that flow. The skill text shrank from 9,946 to 9,106 bytes despite the two new sections.
 
 ## Verification
 

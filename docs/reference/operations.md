@@ -266,11 +266,11 @@ Windows process ownership uses a suspended child assigned to a private Job Objec
 
 In PowerShell, invoke `hey-my-buddy.ps1` directly for JSON commands. It preserves argument boundaries using `ProcessStartInfo.ArgumentList` where available and explicit native quoting on legacy Windows PowerShell; `hey-my-buddy.cmd` is the Command Prompt bridge. The quoting paths have a PowerShell-on-macOS round-trip smoke, with Windows shell behavior still awaiting native acceptance.
 
-## Routing diagnostics and quota recovery (0.25.0)
+## Routing diagnostics and provider cooling
 
 Paid review-check evidence is retired with its executor. Ordinary Router results retain their native policy/tool stream, usage, frozen-input verification and actual stop evidence under the existing private attempt lifecycle; no review certificate is read or issued. Historical evidence went into the declared payload of the schema-18 archive.
 
-A provider rate limit explicitly marked non-retryable also counts as quota exhaustion without a recovery time. For native exhaustion with no reset time, use `hey-my-buddy quota-redetect '{"requestId":"quota-check-1","harness":"dsh","provider":"deepseek-official"}'` to allow one later selected call to retry now. Reuse the requestId after a lost reply; a fresh request intentionally opens a new chance after consumption. The command performs no native query or model call and does not assert that the balance recovered. Otherwise one chance opens after an hour; only its selected buddy consumes it. Known reset times, explicit Host choices and newer available/unknown observation rules retain their existing behavior.
+A quota refusal cools its provider ([harnesses](harnesses.md#quota-refusals-and-cooling)). To end a cooldown early, for example after topping up a balance or changing a plan, use `hey-my-buddy quota-redetect '{"requestId":"quota-check-1","harness":"dsh","provider":"deepseek-official"}'` or the console's 解除冷却. Reuse the requestId after a lost reply. The command performs no native query or model call and does not assert that the quota recovered: the next dispatch finds out, and a further refusal cools the provider again for a longer time.
 
 
 

@@ -107,6 +107,14 @@ _Avoid_: family, 模型家族 (a model family is commonly a series of several mo
 Whoever serves models to a harness: a model's own vendor or another party. In a buddy's identity it is the name the harness gives that source.
 _Avoid_: 供应方, 服务商
 
+**冷却 / cooling**:
+The time a provider of one harness sits out automatic routing after it refused work for quota. It grows with consecutive refusals, ends by itself or when the user clears it, and a later success ends the sequence. It belongs to the provider in that harness, not to a model or a buddy, and never changes the user's enablement or preferences.
+_Avoid_: 额度耗尽 / exhausted (for the provider's state; a refusal that interrupts a turn is still reported as quota used up), quota window
+
+**改派 / reroute**:
+A new routing decision for the same micro task, without starting another micro task: at a Host's request, or by the blackboard when the chosen buddy's provider refused the turn for quota before its model started.
+_Avoid_: 重派, 换 buddy (for the routing step itself)
+
 **模型目录 / model catalog**:
 The blackboard's record of the models and reasoning efforts a harness reported it can provide, and so of which buddies exist in that harness. It is a reading taken at one moment, not a fact about the harness: a buddy whose model is missing from a later reading is pending, still usable, until a further reading confirms the absence.
 _Avoid_: model list (for the blackboard's record; the model list is what the harness itself returns)

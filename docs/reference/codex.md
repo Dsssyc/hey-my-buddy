@@ -40,7 +40,7 @@ The native CLI 0.157.0 offline check observed an empty tool inventory in the act
 
 The existing native read-only configuration permits only the frozen copy, denies other locations and disables network; the run still reads back the effective settings and the thread acknowledgement before model input, and refuses only as stated under the review Router permission boundary above. Historical native evidence remains historical, separate from current source and installation.
 
-On-demand account refresh sends only initialization, `account/read` with `refreshToken:false`, `config/read` for the reported provider, and `account/rateLimits/read`, never `thread/start` or `turn/start`. It preserves the existing local login, records only bounded billing and quota facts and confirms owned-process shutdown. Extra subscription credits at zero do not establish exhaustion while ordinary usage is available.
+On-demand account refresh sends only initialization, `account/read` with `refreshToken:false`, and `config/read` for the reported provider, never `thread/start` or `turn/start`. It preserves the existing local login, records only the bounded billing fact and confirms owned-process shutdown.
 
 ## Worker permission levels
 

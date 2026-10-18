@@ -37,4 +37,4 @@ A Lead (`delegationAuthority`) only at the user's explicit request, confirmed fi
 
 Preferences, enablement, capacity and Router settings are user-owned: change them only in the console. Routing and execution share capacity and model service limits; native permissions need Host attention.
 
-`quota-redetect` opens one retry ([harnesses](../../docs/reference/harnesses.md)).
+`quota-redetect` ends a provider's cooldown ([harnesses](../../docs/reference/harnesses.md)).

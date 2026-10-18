@@ -1,6 +1,6 @@
 # Shared buddies, settings and local console
 
-The Python blackboard owns published buddies, each buddy’s preference, model service notes, model facts and routing records. Settings patches publish atomically in commit order and retain command receipts. Native token and quota observations remain separate from user policy; installation facts live in the [acceptance records](../README.md#history-and-evidence).
+The Python blackboard owns published buddies, each buddy’s preference, model service notes, model facts and routing records. Settings patches publish atomically in commit order and retain command receipts. Native token usage and provider cooling remain separate from user policy; installation facts live in the [acceptance records](../README.md#history-and-evidence).
 
 ## Open the console
 
@@ -29,7 +29,7 @@ A command success is `{ok:true,result:...}`; a failure is `{ok:false,error:{code
 
 HTTP snapshots additionally carry `consoleSession: {id, canWrite, reason}`; an admitted session reports `canWrite: true`, and the descriptor never grants authority to a C-Two snapshot reader. Settings drafts remain per browser window, and read-only browsing and theme controls stay available.
 
-The browser command allowlist is defined in `CONSOLE_OPERATIONS` in `src/hey_my_buddy/console/server.py`. It permits authenticated `user_policy_publish`, bounded buddy and selection-history reads, catalog refresh, one manual harness path, bounded harness re-check, quota retry, macro task stop, and console-only macro task deletion preview and deletion. Session authority is attached by the console server, not trusted from browser JSON: a caller-supplied `consoleAuthority`, `userOverride`, `consoleUser` or `adminOverride` is refused, and a fabricated console authority over C-Two is `UNAUTHORIZED`. Ordinary service-token Hosts and Workers cannot publish user settings or replay console publication receipts.
+The browser command allowlist is defined in `CONSOLE_OPERATIONS` in `src/hey_my_buddy/console/server.py`. It permits authenticated `user_policy_publish`, bounded buddy and selection-history reads, catalog refresh, one manual harness path, bounded harness re-check, clearing a provider's cooldown, macro task stop, and console-only macro task deletion preview and deletion. Session authority is attached by the console server, not trusted from browser JSON: a caller-supplied `consoleAuthority`, `userOverride`, `consoleUser` or `adminOverride` is refused, and a fabricated console authority over C-Two is `UNAUTHORIZED`. Ordinary service-token Hosts and Workers cannot publish user settings or replay console publication receipts.
 
 The bootstrap snapshot carries `csrfToken` (nonempty only on the HTTP surface), `eventCursor`, `configurationError`, `configuration` (`{routerBuddyIds,routerRetryIntervalSeconds,defaultRoutingMode,routingBudget,routingBudgetLimits}`), `buddies`, `modelServiceConcurrency` entries `{harness,provider,model,limit,active}` with read-only `active`, `preferences` (`{buddyId,mode,note}`), `modelServiceNotes` (`{harness,provider,model,text,updatedAt}`), `decisions`, `tasks`, `capabilities` and `harnesses`. Each preference keeps its own nullable authored `note`; model service notes are stored once per model service. Reads are bounded: the latest 50 decision summaries and at most 202 buddies in the default snapshot. On the browser route `tasks` is only `{pendingCount}`; the task page reads macro task lists and timelines separately, and details use the fixed run route. There is no `GET /api/tasks` history route. The `console-snapshot` CLI read carries the latest 100 tasks, infrastructure tasks included, with a total and `nextCursor`; the [CLI list operation](cli.md#execution-observation) supplies bounded execution history.
 
@@ -51,7 +51,7 @@ This boundary does not claim isolation from another process running as the same 
 
 A fresh board starts with a fresh capability secret, an empty ordered Router list and the default routing mode `fast`. Buddies, preferences, model service notes and harness health start empty. The running installed version is a separate fact; inspect `health`, `runtime` and `harnesses` before using a new-contract client.
 
-The authenticated user publishes ordered `routerBuddyIds`, `routerRetryIntervalSeconds`, common default mode and review budget. List publication validates complete catalog identities; admission checks current health, quota and mode eligibility. Fresh boards start with `[]`/600/fast/standard.
+The authenticated user publishes ordered `routerBuddyIds`, `routerRetryIntervalSeconds`, common default mode and review budget. List publication validates complete catalog identities; admission checks current health, cooling and mode eligibility. Fresh boards start with `[]`/600/fast/standard.
 
 ```sh
 ~/.agents/skills/hey-my-buddy/scripts/hey-my-buddy model-catalog-refresh '{"requestId":"first-discovery"}'
@@ -76,7 +76,7 @@ Availability alone never makes a Router eligible: health, enablement and the cap
 
 The execution details display native `tokenUsage` per attempt: input tokens (including cached input), cached input and output tokens. Missing counters stay unknown; native cumulative session records are not charged to every continuation. These are native observations, not billing estimates or served-model attestations.
 
-Harness health retains its last native quota observation independently of location and handshake refresh. A provider rate limit explicitly marked non-retryable also counts as quota exhaustion without a recovery time. Quota includes its source, observation time, provider scope, windows, usage percentages and reset times. An observation older than one hour, from the future, or a window past its reset is stale; unknown percentages are never zero. A fresh matching-provider window at 90% or more produces a submission receipt reminder and a console warning. An explicit native quota-limit report also warns when its utilization or reset is unknown; a limit-only report never fabricates a percentage. Utilization reminders never change user enablement or preferences. Native-confirmed exhaustion filters automatic candidates until reset or a newer available observation; explicit Host selections remain unchanged with a reminder. A no-reset exhaustion carries one single-use retry window (exposed as the buddy’s `quotaRetry` and the harness row’s `quotaRouting`); it admits exactly one later automatic routing retry and never changes what the observation claims ([harnesses](harnesses.md#no-reset-exhaustion-recovery-adr-019-second-stage)).
+A quota refusal leaves provider cooling, not a reading ([harnesses](harnesses.md#quota-refusals-and-cooling)): the cooling provider's buddies drop out of automatic candidates until the cooldown ends or the user clears it, and user enablement and preferences never change. A buddy the Host names explicitly stays as chosen and shows `providerCooling`.
 
 ## Edit and publish
 
@@ -118,7 +118,7 @@ Source lives in `apps/console/` (React 19, Vite 8, TypeScript); a relative-base 
 
 ## Native eligibility facts (0.23.0)
 
-Buddy reads include bounded native `billing` and derived `quotaExhausted`; neither is user-editable. Billing never changes enablement, preference or routing eligibility. Native exhaustion temporarily filters candidates without changing user policy. Review capability is projected from the local eligibility check without certificates. Current snapshots include `configurationError:null`; an unreadable configuration returns `configuration:null` and `configurationError:{code,message}` while preserving other readable data. See [harnesses](harnesses.md) for the separate native verification boundary.
+Buddy reads include bounded native `billing` and `providerCooling`; neither is user-editable. Billing never changes enablement, preference or routing eligibility. Cooling temporarily filters candidates without changing user policy. Review capability is projected from the local eligibility check without certificates. Current snapshots include `configurationError:null`; an unreadable configuration returns `configuration:null` and `configurationError:{code,message}` while preserving other readable data. See [harnesses](harnesses.md) for the separate native verification boundary.
 
 ## Public model facts snapshots (ADR-021 L8)
 

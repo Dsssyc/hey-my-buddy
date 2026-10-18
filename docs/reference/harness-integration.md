@@ -20,11 +20,11 @@ Set `model_discovery` on the adapter and route `discover_models` through the sha
 
 Discovery receipts and candidate ordering are guarded by `tests/python/buddy/harnesses/test_harness_discovery.py`; catalog admission over all four names by `tests/python/blackboard/catalog/test_catalog.py`; trust by `test_catalog_trust.py`; the version diagnostics across the four run seams by `tests/python/buddy/harnesses/test_runtime_version.py`. Per-harness configuration facts have their own files (`zcode/test_native_config.py`, `claude/test_claude_config.py`, `codex/test_batch4_facts.py`); DSH's facts are asserted inside `dsh/test_native_run.py`.
 
-## Accounts, quota and native quota failure
+## Accounts and native quota failure
 
-Give the harness a billing label from its own native account metadata: a parser in `src/hey_my_buddy/protocol/billing.py` (`codex_account`, `claude_status`, `zcode_access`), or, like DSH, a label assembled from catalog provider rows in `blackboard/service/harness_health.py`. Codex additionally has the bounded account and rate-limit readback `codex/account_probe.py`. Classify native quota failures in the harness's own `protocol.py` or `native_run.py` and let `protocol/usage.py`'s `normalize_quota_failure` keep the native code's identity; retained observations go through `blackboard/evaluation/native_observations.py`, and exhaustion and retry consequences through `blackboard/routing/quota_routing.py` and `router.py`.
+Give the harness a billing label from its own native account metadata: a parser in `src/hey_my_buddy/protocol/billing.py` (`codex_account`, `claude_status`, `zcode_access`), or, like DSH, a label assembled from catalog provider rows in `blackboard/service/harness_health.py`. Codex additionally has the bounded account readback `codex/account_probe.py`. Classify native quota failures in the harness's own `protocol.py` or `native_run.py` and let `protocol/usage.py`'s `normalize_quota_failure` keep the native code's identity, and report the rejection phase from the collector's own evidence of root model activity (`unknown` when collection failed or the stream was truncated). Cooling lives in `blackboard/routing/quota_routing.py`, and the reroute of a refused turn in `blackboard/tasks/workflow.py`.
 
-The per-harness quota tables are guarded by `tests/python/buddy/harnesses/test_quota_failures.py` with subtests for all four; the billing labels and the mocked Codex account probe by `tests/python/protocol/test_billing_quota.py`; the routing consequences by `tests/python/blackboard/routing/test_nonretryable_quota.py` and `test_quota_retry.py`; the shared normalization by `tests/python/protocol/test_usage.py`.
+The per-harness quota tables are guarded by `tests/python/buddy/harnesses/test_quota_failures.py` with subtests for all four; the billing labels and the mocked Codex account probe by `tests/python/protocol/test_billing_quota.py`; the cooling and reroute by `tests/python/blackboard/routing/test_nonretryable_quota.py` and `test_provider_cooling.py`; the shared normalization by `tests/python/protocol/test_usage.py`.
 
 ## Health, discovery and routing eligibility
 
@@ -90,7 +90,7 @@ The private-adapter invariants are guarded by `tests/python/buddy/harnesses/test
 
 ## Usage
 
-Report token usage through `protocol/usage.py`'s normalizers (`normalize_token_usage`, `normalize_quota`, `normalize_last_assistant_message`); the facts cross the run boundary as `RunResult.usage`, and a resumed turn counts only what was appended after its pre-prompt freeze. The normalizers are guarded by `tests/python/protocol/test_usage.py`; the canonical adapter results by `test_adapter_usage.py` (Codex, DSH); the replayed native shapes by `tests/python/blackboard/evaluation/test_other_native_observations.py` (Claude, ZCode) and `test_native_observations.py` (Codex); the wrap-up sums by `tests/python/buddy/roles/test_wrap_up.py`.
+Report token usage through `protocol/usage.py`'s normalizers (`normalize_token_usage`, `normalize_quota_failure`, `normalize_last_assistant_message`); the facts cross the run boundary as `RunResult.usage`, and a resumed turn counts only what was appended after its pre-prompt freeze. The normalizers are guarded by `tests/python/protocol/test_usage.py`; the canonical adapter results by `test_adapter_usage.py` (Codex, DSH); the replayed native shapes by `tests/python/blackboard/evaluation/test_other_native_observations.py` (Claude, ZCode) and `test_native_observations.py` (Codex); the wrap-up sums by `tests/python/buddy/roles/test_wrap_up.py`.
 
 ## Tool evidence
 
@@ -144,7 +144,6 @@ The same four names are listed separately in the following places; the backlog h
 - `src/hey_my_buddy/buddy/harnesses/live.py` — the `EXISTING_CAPABILITIES` keys.
 - `src/hey_my_buddy/blackboard/tasks/worker_sessions.py` — the Codex-only native session inventory.
 - `src/hey_my_buddy/blackboard/tasks/storage.py` — the ZCode legacy-home storage category.
-- `src/hey_my_buddy/blackboard/routing/quota_routing.py` — the Codex limit-id special case.
 - `src/hey_my_buddy/blackboard/catalog/catalog_store.py` and `catalog.py` — the ZCode access-type handling.
 - `src/hey_my_buddy/cli/checks.py` — the per-harness private homes and the smoke allowlist.
 - `apps/console/src` — `buddies/HarnessLogo.tsx`, `buddy-display.ts` and `api.ts`'s `HARNESS_ORDER`, plus the `zcode` storage-category id in the settings i18n.

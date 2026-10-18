@@ -4,7 +4,7 @@
 
 ## 实现
 
-`skills/buddy/SKILL.md` 与 [usage](../reference/usage.md#waiting-from-codex) 将 Codex Host 的默认等待改为每个运行中委派一个监控子代理，派生时显式设置 `gpt-6-luna / low` 和空历史，覆盖本机 `[agents]` 的 GPT-6 Sol max 默认。监控只执行同一 `runId` 的 `await`，将 brief 结果原样交回，不读仓库、配置或记忆，不执行任何 Host 决策或验收命令。父代理继续独立工作，在需要结果时等待该监控；监控失败、权限不可用或自身超时时回退前台 `await`。文档区分 Buddy 等待窗口、命令工具 yield 和父代理 wait-tool 超时，说明沙盒外权限必须覆盖子代理，Claude Code 后台 Bash 流程不变。
+`skills/buddy/SKILL.md` 与 [usage](../reference/usage.md#waiting-from-your-host) 将 Codex Host 的默认等待改为每个运行中委派一个监控子代理，派生时显式设置 `gpt-6-luna / low` 和空历史，覆盖本机 `[agents]` 的 GPT-6 Sol max 默认。监控只执行同一 `runId` 的 `await`，将 brief 结果原样交回，不读仓库、配置或记忆，不执行任何 Host 决策或验收命令。父代理继续独立工作，在需要结果时等待该监控；监控失败、权限不可用或自身超时时回退前台 `await`。文档区分 Buddy 等待窗口、命令工具 yield 和父代理 wait-tool 超时，说明沙盒外权限必须覆盖子代理，Claude Code 后台 Bash 流程不变。
 
 `342b2a1` 修复结构化报告被误拒的问题：结果摘要使用既有的 64 KiB serialized outcome 总预算，其他请求字段仍限 8,000 UTF-8 字节，数组仍限 32 项，引用仍限 4,096 字节。Python 与 DSH 校验器、ZCode 工具 schema 和 Codex schema 说明保持一致；不截断有效报告，不放宽 completed/request 关系、重复 JSON 键或非 JSON 尾部规则。Codex runner 同时保留具体、受限的校验错误原因。
 

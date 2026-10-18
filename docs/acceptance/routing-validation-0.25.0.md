@@ -9,7 +9,7 @@
 | Codex 0.159.0 的审阅验证失败，且证据没有保留 | 原生策略在失败分支也先保存到私有结果；外层 attempt 的白名单文件 `review-evidence.json` 保存脱敏策略读回、关联事件摘要、九项检查依据和字节哈希。凭据、路径原文、命令、输出、账户字段与模型原文均不进入该文件。证据发布失败拒绝认证并保留私有诊断；未知停止不清理。Worker 回执引用实际保留的诊断，不再引用已删除的内部日志。 |
 | 没有重置时间的额度耗尽可能一直排除 | 无重置时间的 provider/limit 耗尽在观测或上次消费一小时后开放一次机会；选定配置时在同一事务中消费，未选候选、读取和未决 Router 不消费。CLI `quota-redetect` 与 Harness 详情中的最小入口提前开放机会，requestId 回执防止回复丢失后重发再开机会；回执、事件与状态原子提交。已知重置、明确 Host 配置、旧／未知／部分观测及适用作用域均保留原有规则；旧的 pre-meta 原生观测只在写操作中按顺序导入。 |
 
-设计与拥有详细契约的引用见[路由与验证设计](../design/routing-validation.md)、[Harness](../reference/harnesses.md)、[CLI](../reference/cli.md)与[操作文档](../reference/operations.md#routing-diagnostics-and-quota-recovery-0250)。两条 backlog 已删除，其余条目保留。
+设计与拥有详细契约的引用见[路由与验证设计](../design/routing-validation.md)、[Harness](../reference/harnesses.md)、[CLI](../reference/cli.md)与[操作文档](../reference/operations.md#routing-diagnostics-and-provider-cooling)。两条 backlog 已删除，其余条目保留。
 
 ## 一次经授权的 Codex 原生重跑
 
