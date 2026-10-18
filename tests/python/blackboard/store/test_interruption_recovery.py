@@ -470,6 +470,7 @@ class InterruptionRecoveryTests(BoardTestCase):
 
     def test_release_reason_belongs_to_the_selected_attempt(self):
         board, client, task, _, first = self.claimed(identity=False)
+        self.assertNotIn('releaseReason', first)
         self.assertIsNone(client.get(runId=task['taskId'])['selectedAttempt']['releaseReason'])
 
         board.store.release_execution(first['attemptId'], reason='execution-process-not-created')
@@ -480,6 +481,7 @@ class InterruptionRecoveryTests(BoardTestCase):
 
         client.retry(runId=task['taskId'])
         second = admit_execution(client, 'n' * 32)['claim']['attempt']
+        self.assertNotIn('releaseReason', second)
         current = client.get(runId=task['taskId'])['selectedAttempt']
         self.assertEqual(current['attemptId'], second['attemptId'])
         self.assertIsNone(current['releaseReason'])
@@ -487,6 +489,13 @@ class InterruptionRecoveryTests(BoardTestCase):
         board.store.release_execution(second['attemptId'], reason='service-stopped-before-launch')
         self.assertEqual(client.get(runId=task['taskId'])['selectedAttempt']['releaseReason'],
                          {'code': 'service-stopped-before-launch', 'params': {}})
+        with board.store.db.read() as connection:
+            plan = connection.execute(
+                "EXPLAIN QUERY PLAN SELECT payload_json FROM events "
+                "WHERE task_id=? AND attempt_id=? AND kind='attempt.released'",
+                (task['taskId'], second['attemptId']),
+            ).fetchall()
+        self.assertTrue(any('events_task_idx' in row['detail'] for row in plan), plan)
 
     def test_service_stop_between_admission_and_creation_releases_as_cancelled(self):
         board, client, task, _, actor = self.claimed(identity=False)

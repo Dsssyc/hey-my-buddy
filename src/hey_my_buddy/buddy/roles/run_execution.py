@@ -862,6 +862,8 @@ def _native_operation(name: str, operation: str, **arguments) -> dict:
                 raise BoardError(specification["stopUnconfirmedCode"],
                                  f'The native {operation} process stop is unconfirmed', harness=name)
             payload = collection.payload
+            if not isinstance(payload, dict) and not (wait_expired and specification["allowUnknown"]):
+                raise BoardError("HARNESS_UNAVAILABLE", "The native operation receipt must be an object", harness=name)
             if specification["allowUnknown"] and (wait_expired or payload.get("status") == "unknown"):
                 return {"source": "native-discovery", "providers": [], "discoveries": [{
                     "harness": name, "status": "unknown", "accountStatus": "unknown",

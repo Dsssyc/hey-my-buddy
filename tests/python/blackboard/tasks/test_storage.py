@@ -192,7 +192,7 @@ class StorageTests(BoardTestCase):
             backup_row = next(row for row in planned['categories'] if row['id'] == 'backup')
             self.assertEqual(backup_row, {
                 'id': 'backup', 'bytes': previous_board.stat().st_size, 'reclaimableBytes': 0,
-                'count': 1, 'eligibleCount': 0,
+                'count': 1, 'eligibleCount': 0, 'reasons': ['current-backup'],
             })
             self.assertEqual(backup_row['bytes'], previous_board.stat().st_size)
             self.assertEqual(backup_row['reclaimableBytes'], 0)

@@ -642,7 +642,8 @@ def inspect(store, *, git_proof: bool = True) -> dict:
         total_bytes = tree_info(state / 'workspaces')[0] if key == 'workspaces' else sum(r['bytes'] for r in members)
         categories.append({'id': key, 'bytes': total_bytes,
                            'reclaimableBytes': sum(r['bytes'] for r in members if r['eligible']),
-                           'count': len(members), 'eligibleCount': sum(r['eligible'] for r in members)})
+                           'count': len(members), 'eligibleCount': sum(r['eligible'] for r in members),
+                           'reasons': sorted({reason for r in members for reason in r['reasons']})})
     return {'createdAt': utc_now(), 'categories': categories, 'candidates': rows, 'orphanProcesses': orphaned}
 
 

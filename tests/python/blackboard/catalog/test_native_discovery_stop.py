@@ -48,7 +48,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
         instance = SimpleNamespace(model_discovery=True, discovery_available=lambda: (True, None), discover_models=read)
         with patch('hey_my_buddy.buddy.harnesses.registry.adapters', return_value={'codex': instance}), \
              patch.object(catalog, '_override', return_value=None), bound([self.record]):
-            return catalog.discover(directory=self.board.directory)
+            return catalog.discover(directory=self.board.directory, harnesses=[self.record])
 
     def test_foreign_harness_return_after_stop_is_rejected(self):
         payload = {**self.payload, 'providers': [{'harness': 'zcode', 'provider': 'fixture',
