@@ -529,8 +529,7 @@ class DecisionCoordinator:
                 elif needs_host_reason is not None:
                     status, reason = "needs-host", needs_host_reason
                 elif facts["routingMode"] is None or resolution.buddy is None:
-                    status, reason = "needs-host", (
-                        {"code": resolution.problem["code"], "params": {key: value for key, value in resolution.problem.items() if key != "code"}})
+                    status, reason = "needs-host", resolution.problem
             task_id = None
             connection.execute(
                 "INSERT INTO evaluation_decisions(decision_id, status, task, buddy_id, reason_code,"
@@ -855,7 +854,7 @@ class DecisionCoordinator:
         self._record_preflight_walk(connection, row["request_id"], advance.inspections, now=now, selection_retry=bool(json.loads(row["requested_json"]).get("selectionRetry")))
         if advance.buddy is None:
             self._finish(connection, row, status="needs-host", now=now,
-                         reason={"code": advance.problem["code"], "params": {key:value for key,value in advance.problem.items() if key != "code"}},
+                         reason=advance.problem,
                          output={"status": "error", "code": advance.problem["code"]})
             return "decision-closed"
         try:
@@ -1225,7 +1224,7 @@ class DecisionCoordinator:
         connection.execute("UPDATE decision_requests SET requested_json=?, input_json=? WHERE decision_id=?",
                            (canonical_json(request), canonical_json(document), row["decision_id"]))
         if oversized or resolution.buddy is None:
-            problem = oversized or {"code": resolution.problem["code"], "params": {key:value for key,value in resolution.problem.items() if key != "code"}}
+            problem = oversized or resolution.problem
             self._finish(connection, self._row(connection, row["decision_id"]), status="needs-host", now=now,
                          reason=problem,
                          output={"code": problem["code"]})
@@ -1603,7 +1602,7 @@ class DecisionCoordinator:
                         "code": last_error.get("code"), "at": last_error["at"], "phase": last_error.get("phase")},
                 })
         return {"available":resolution.buddy_id is not None,
-                "reason":make_reason(resolution.problem["code"]) if resolution.problem else None,
+                "reason":resolution.problem,
                 "currentRouterBuddyId":resolution.buddy_id,
                 "routers":routers,
                 "windowSize":limit, "sampleCount":len(rows), "failureCount":len(failed),

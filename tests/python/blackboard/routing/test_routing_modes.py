@@ -82,7 +82,7 @@ class RoutingModesTests(BoardTestCase):
         self.assertEqual(resolution.facts['routingMode'], 'review')
         self.assertNotIn('fallback', resolution.facts)
         self.assertEqual(resolution.problem['code'], 'router-not-configured')
-        self.assertEqual(resolution.problem, {'code': 'router-not-configured'})
+        self.assertEqual(resolution.problem, {'code': 'router-not-configured', 'params': {}})
 
     def test_claim_rechecks_review_without_charging_another_model_service(self):
         board = self.board()

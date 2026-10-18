@@ -6,7 +6,7 @@ import json
 from pathlib import PurePosixPath
 
 from ..store.db import canonical_json
-from ...protocol.reasons import reason_from_json
+from ...protocol.reasons import reason, reason_from_json
 from ...errors import BoardError
 
 PROMPT_VERSION = 13
@@ -229,9 +229,9 @@ class RouterResolution:
     identity snapshot plus the global mode, budget and retry interval.
     ``inspections`` walks the candidates examined in order and ends with the
     selected one when a Router was found; each entry carries eligibility, the skip
-    reason with ``retryAt``, and the live ``retryInProgress`` fact. ``problem`` names
-    why no Router was resolved; a frozen continuation never re-selects mode or
-    candidates and never follows later changes to the shared settings.
+    reason with ``retryAt``, and the live ``retryInProgress`` fact. ``problem`` is
+    the reason no Router was resolved; a frozen continuation never re-selects mode
+    or candidates and never follows later changes to the shared settings.
     """
 
     buddy: dict | None
@@ -342,11 +342,7 @@ def current_router(connection, *, frozen: dict | None = None, after_index: int =
     else:
         facts = {"routerBuddyIds": [], "routerIdentities": [], "routingMode": None, "routingBudget": None,
                  "routerRetryIntervalSeconds": None, "budget": None}
-        try:
-            settings = configuration(connection)
-        except BoardError as error:
-            return RouterResolution(None, None, None, facts, (),
-                                    {"code": error.code})
+        settings = configuration(connection)
         facts = _snapshot_facts(connection, settings)
     interval = facts["routerRetryIntervalSeconds"]
     mode = facts["routingMode"]
@@ -384,11 +380,11 @@ def current_router(connection, *, frozen: dict | None = None, after_index: int =
                             "retryInProgress": state["retryInProgress"], "selected": True})
         return RouterResolution(buddy, buddy_id, index, facts, tuple(inspections), None)
     if not ids:
-        problem = {"code": "router-not-configured"}
+        problem = reason("router-not-configured")
     elif after_index + 1 >= len(ids):
-        problem = {"code": "router-list-exhausted"}
+        problem = reason("router-list-exhausted")
     else:
-        problem = {"code": "router-all-unavailable"}
+        problem = reason("router-all-unavailable")
     return RouterResolution(None, None, None, facts, tuple(inspections), problem)
 
 
