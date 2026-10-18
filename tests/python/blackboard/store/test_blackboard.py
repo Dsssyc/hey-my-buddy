@@ -850,12 +850,12 @@ class TestDelivery(BoardTestCase):
         )["task"]
         pass  # Admission is owned by the service.
         admit_execution(client, "a" * 32)
-        first = client.post_question("q1", "what is blocking you?", runId=task["runId"])
-        again = client.post_question("q1", "what is blocking you?", runId=task["runId"])
+        first = board.store._message_post(task["runId"], "q1", "what is blocking you?")
+        again = board.store._message_post(task["runId"], "q1", "what is blocking you?")
         self.assertFalse(first["duplicate"])
         self.assertTrue(again["duplicate"])
         with self.assertRaises(BoardError) as caught:
-            client.post_question("q1", "a different question", runId=task["runId"])
+            board.store._message_post(task["runId"], "q1", "a different question")
         self.assertEqual(caught.exception.code, "CONFLICT")
 
     def test_inquiry_bounds_and_honest_unsupported_adapter(self):
@@ -864,52 +864,53 @@ class TestDelivery(BoardTestCase):
         cwd = self.workdir()
         task = board.submit_execution(requestId="inq-1", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
         with self.assertRaises(BoardError) as caught:
-            client.post_question("q1", "x" * 4001, runId=task["runId"])
+            board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q1", "question": "x" * 4001})
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         observed = board.call("inquiry_observe", {"runId": task["runId"]})
         self.assertEqual(observed["status"], "queued")
         self.assertFalse(observed["bridge"]["enabled"])
         self.assertFalse(observed["bridge"]["canObserve"])
         self.assertFalse(observed["bridge"]["canAsk"])
-        self.assertTrue(observed["bridge"]["reason"])
+        self.assertIsNone(observed["bridge"]["reason"])
         self.assertEqual(observed["limits"]["maxQuestionBytes"], 4000)
         self.assertEqual(observed["limits"]["maxInquiriesPerRun"], 32)
 
     def test_correlated_answer_survives_a_daemon_restart(self):
+        board = self.board()
+        task = board.submit_execution(
+            requestId="inq-restart", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"],
+        )["task"]
+        run_id = task["runId"]
+        board.store._message_post(run_id, "q-restart", "how is it going?")
+        update = board.store._message_update(run_id, "q-restart", actor="bridge", answer={
+            "text": "still running", "bytes": 13, "via": "reply-tool", "toolCallId": None,
+            "at": None, "truncated": False, "source": "bridge-journal",
+        })
+        self.assertEqual(update["message"]["state"], "answered")
+        board.store.db.close()
         with self.daemon():
-            cwd = self.workdir()
-            task = self.submit_execution(
-                requestId="inq-restart", task="do", cwd=str(cwd), adapter="command", argv=["/bin/sleep", "8"],
-            )["task"]
-            run_id = task["runId"]
-            self.assertTrue(wait_for(lambda: self.cli("status", json.dumps({"runId": run_id}))[1]["status"] == "running", 20))
-            code, posted = self.cli("message", json.dumps({"runId": run_id, "inquiryId": "q-restart", "question": "how is it going?"}))
-            self.assertEqual(code, 0, posted)
-            self.assertEqual(posted["message"]["state"], "queued")
-            code, update = self.cli(
-                "message-update",
-                json.dumps({"runId": run_id, "inquiryId": "q-restart", "answer": {"text": "still running", "via": "reply-tool"}}),
-            )
-            self.assertEqual(code, 0, update)
-            self.assertEqual(update["message"]["state"], "answered")
+            code, read = self.cli("message-get", json.dumps({"runId": run_id, "inquiryId": "q-restart"}))
+            self.assertEqual(code, 0, read)
+            self.assertEqual(read["message"]["answer"]["text"], "still running")
         with self.daemon():
             code, read = self.cli("message-get", json.dumps({"runId": run_id, "inquiryId": "q-restart"}))
             self.assertEqual(code, 0, read)
             self.assertEqual(read["message"]["answer"]["text"], "still running")
 
     def test_answers_require_the_correlated_id(self):
+        from hey_my_buddy.blackboard.tasks.inquiry import _apply_journal
+
         board = self.board()
         client = board.client()
         cwd = self.workdir()
         task = board.submit_execution(requestId="inq-2", task="do", cwd=str(cwd), adapter="command", argv=["/bin/sleep", "5"])["task"]
         pass  # Admission is owned by the service.
         admit_execution(client, "a" * 32)
-        client.post_question("q-known", "hello?", runId=task["runId"])
-        with self.assertRaises(BoardError):
-            board.call("message_update", {"runId": task["runId"], "inquiryId": "q-unknown", "answer": {"text": "hi"}})
-        with self.assertRaises(BoardError) as caught:
-            board.call("message_update", {"runId": task["runId"], "inquiryId": "q-known", "state": "answered"})
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+        board.store._message_post(task["runId"], "q-known", "hello?")
+        self.assertEqual(_apply_journal(board.store, task["runId"], "q-unknown",
+                                         {"answer": {"text": "hi", "bytes": 2}}),
+                         "journal-question-unknown")
+        self.assertIsNone(client.get_message("q-known", runId=task["runId"])["answer"])
 
 
 class TestExtensibility(BoardTestCase):

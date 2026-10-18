@@ -11,7 +11,7 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.codex import native_run
 from hey_my_buddy.buddy.harnesses.codex.native_run import (
-    _NativeInquiry, IN_TURN_NOTE, RunServices, prepare_inquiry_services, run,
+    _NativeInquiry, RunServices, prepare_inquiry_services, run,
 )
 from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError, TurnEvidence
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
@@ -49,7 +49,7 @@ class NativeInquiryTests(unittest.TestCase):
         self.bridge = InquiryBridge(identity=identity, journal_path=str(self.root / "inquiries.jsonl"),
                                     error_factory=CodexProtocolError,
                                     event_metadata=lambda message: {"kind": message.get("method", "unknown")},
-                                    limitation=IN_TURN_NOTE, delivery_mode="realtime", checkpoint_tool=None)
+                                    delivery_mode="realtime", checkpoint_tool=None)
         self.bridge.start()
         self.bridge.activate("thread-1")
         self.addCleanup(self.bridge.close)

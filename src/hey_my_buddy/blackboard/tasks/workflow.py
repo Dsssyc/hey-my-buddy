@@ -74,10 +74,8 @@ AGENT_OPERATIONS = frozenset(
         "task_result",
         "artifact_list",
         "events_read",
-        "message_post",
         "message_get",
         "message_list",
-        "message_update",
         "inquiry_observe",
     }
 )
@@ -91,10 +89,8 @@ AGENT_RUN_BOUND_OPERATIONS = frozenset(
         "task_result",
         "artifact_list",
         "events_read",
-        "message_post",
         "message_get",
         "message_list",
-        "message_update",
         "inquiry_observe",
     }
 )
@@ -103,10 +99,10 @@ AGENT_RUN_BOUND_OPERATIONS = frozenset(
 LEAD_OPERATIONS = frozenset({
     "workflow_submit", "workflow_decide", "workflow_continue", "workflow_cancel",
     "workflow_accept", "workflow_conclude", "workflow_reclaim", "workflow_scope_amend",
-    "workflow_workspace_resolve", "task_list", "message_wait",
+    "workflow_workspace_resolve", "task_list",
 })
 LEAD_OWNED_OPERATIONS = LEAD_OPERATIONS - {"workflow_submit"} | (
-    AGENT_RUN_BOUND_OPERATIONS - {"workflow_suggest", "message_update"}
+    AGENT_RUN_BOUND_OPERATIONS - {"workflow_suggest"}
 )
 
 TURN_INPUT_VERSION = 2

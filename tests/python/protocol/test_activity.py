@@ -81,7 +81,7 @@ class ActivityValidation(BoardTestCase):
             "lastNativeActivityAt": "2026-01-01T00:00:01.000Z",
             "lastToolActivityAt": "2026-01-01T00:00:00.900Z",
             "toolName": "read_file",
-            "waitingReason": "waiting for the tool to return",
+            "waitingReason": {"code": "native-authority-required", "params": {"kind": "permission.requested"}},
             "counts": {"modelTurns": 2, "toolCalls": 3},
         }
         self.assertEqual(normalize_activity(payload), payload)
@@ -109,7 +109,6 @@ class ActivityValidation(BoardTestCase):
             "negative count": {**base, "counts": {"toolCalls": -1}},
             "bool count": {**base, "counts": {"modelTurns": True}},
             "oversized tool": {**base, "toolName": "x" * 65},
-            "oversized reason": {**base, "waitingReason": "x" * 257},
             "oversized session": {**base, "nativeSessionId": "x" * 257},
             "non-iso timestamp": {**base, "observedAt": "yesterday"},
             "invalid calendar date": {**base, "observedAt": "2026-02-30T00:00:00Z"},
@@ -205,6 +204,29 @@ class ActivityProjection(BoardTestCase):
         ]
         self.assertEqual(len(events), 1, "advancing receipts replace this attempt's previous activity")
         self.assertEqual(events[0]["payload"]["activity"], newer)
+
+    def test_activity_waiting_reason_is_checked_at_service_receipt(self):
+        board = self.board()
+        client, task, claim, nonce = self.claimed_attempt(board)
+        attempt = claim['attempt']
+        identity = {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': nonce}
+        waiting = {'phase': 'waiting-host', 'eventSeq': 1,
+                   'waitingReason': {'code': 'native-authority-required',
+                                     'params': {'kind': 'permission'}}}
+        self.assertEqual(self.post_activity(client, identity, {'activity': waiting})['activity'], 'recorded')
+        self.assertEqual(client.get(runId=task['runId'])['activity']['waitingReason'], waiting['waitingReason'])
+        for reason in ('native permission requested', {'code': 'unregistered-wait', 'params': {}},
+                       {'code': 'native-authority-required', 'params': {'unexpected': 'permission'}},
+                       {'code': 'native-authority-required', 'params': {}},
+                       {'code': 'router-input-unknown', 'params': {}},
+                       {'code': 'native-authority-required', 'params': {'kind': 'permission.requested'}},
+                       {'code': 'native-authority-required', 'params': {'kind': 'tool'}},
+                       {'code': 'native-authority-required', 'params': {'kind': []}}):
+            invalid = {'phase': 'waiting-host', 'eventSeq': 2, 'waitingReason': reason}
+            with self.subTest(reason=reason), self.assertRaises(BoardError) as error:
+                self.post_activity(client, identity, {'activity': invalid})
+            self.assertEqual(error.exception.code, 'INVALID_ARGUMENT')
+        self.assertEqual(client.get(runId=task['runId'])['activity'], waiting)
 
     def test_replacement_preserves_forward_cursors_and_rolls_back_with_the_projection(self):
         board = self.board()

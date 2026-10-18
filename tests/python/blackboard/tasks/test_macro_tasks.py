@@ -539,12 +539,10 @@ class MacroTaskReadTests(WorkflowTestCase):
         board = self.board()
         run = self.submit(board, kind='worktree', expectedSeconds=37)
         run_id = run['runId']
-        board.call('message_post', {'runId': run_id, 'inquiryId': 'before-turn',
-                                    'question': 'Question before a turn', 'author': 'host-1'})
+        board.store._message_post(run_id, 'before-turn', 'Question before a turn')
         claim = self.claim(board, run_id=run_id)
         attempt_id = claim['claim']['attempt']['attemptId']
-        asked = board.call('message_post', {'runId': run_id, 'inquiryId': 'during-turn',
-                                            'question': 'Sensitive question body', 'author': 'host-1'})['message']
+        asked = board.store._message_post(run_id, 'during-turn', 'Sensitive question body')['message']
         now = board.store.now()
         with board.store.db.write() as connection:
             attempt = connection.execute('SELECT * FROM attempts WHERE attempt_id=?', (attempt_id,)).fetchone()
@@ -573,7 +571,7 @@ class MacroTaskReadTests(WorkflowTestCase):
                          board.call('task_get', {'runId': run_id})['task']['selectedAttempt']['reminders'])
         self.assertEqual(execution['inquiries'], [{
             'inquiryId': 'during-turn', 'createdAt': asked['createdAt'],
-            'author': 'host-1', 'state': asked['state'],
+            'author': 'cli', 'state': asked['state'],
         }])
         self.assertNotIn('Sensitive question body', json.dumps(timeline))
         for span in timeline['spans']:

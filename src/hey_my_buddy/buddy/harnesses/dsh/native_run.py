@@ -321,19 +321,6 @@ def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str
                                  native_stderr=native_stderr))
 
 
-#: The cooperative-checkpoint delivery fact, stated as this harness's own
-#: limitation: a Host question only reaches the root through the checkpoint tool
-#: the root itself calls inside the one admitted turn. Nothing is injected into
-#: the native turn, no input arrives mid-turn, and only a verified root-turn
-#: receipt advances the journal.
-CHECKPOINT_INQUIRY_NOTE = (
-    "Host questions reach this root only when the root itself calls hey_my_buddy_checkpoint inside the one "
-    "admitted native turn (cooperative-checkpoint delivery); they are never injected mid-turn, never "
-    "start a new turn, and an answer counts only through hey_my_buddy_answer_inquiry verified against this "
-    "root turn's own tool evidence"
-)
-
-
 def _inquiry_event_metadata(message: dict) -> dict:
     """The two native metadata items the bridge's live view keeps: kind and tool name.
 
@@ -358,7 +345,7 @@ def make_inquiry_bridge(*, identity: dict, journal_path: str,
     """The shared cooperative bridge over this harness's own native error shape."""
     return InquiryBridge(identity=identity, journal_path=journal_path,
                          attention_path=attention_path, live=live, error_factory=NativeError,
-                         event_metadata=_inquiry_event_metadata, limitation=CHECKPOINT_INQUIRY_NOTE)
+                         event_metadata=_inquiry_event_metadata)
 
 
 def check_preparation(spec: dict, environment: dict) -> None:
@@ -1938,7 +1925,7 @@ def _catalog_receipt(version: str, providers: list, discoveries: list) -> dict:
 
 
 __all__ = [
-    "CHECKPOINT_INQUIRY_NOTE", "NONE_SCOPE_DISABLED_ROWS", "SessionServiceMount", "SessionServices",
+    "NONE_SCOPE_DISABLED_ROWS", "SessionServiceMount", "SessionServices",
     "check_preparation", "execution_deadline", "make_inquiry_bridge",
     "native_evidence", "prepare_services", "prepare_session_service", "run", "run_discovery",
     "session_facts", "session_record_facts", "tool_scope_launch", "validate_turn_provenance",

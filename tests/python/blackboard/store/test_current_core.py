@@ -16,10 +16,10 @@ from support import BoardTestCase
 from hey_my_buddy.cli import main as cli
 from hey_my_buddy.blackboard.service import daemon
 from hey_my_buddy.protocol import schemas, transport
-from hey_my_buddy.protocol.contracts import CONTRACT_VERSION, BuddyControl
+from hey_my_buddy.protocol.contracts import CONTRACT_VERSION, BuddyControl, BuddyWait
 from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS
+from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS, WAIT_OPERATIONS
 from hey_my_buddy.blackboard.store.store import BoardStore
 
 
@@ -160,6 +160,15 @@ class CurrentCoreTests(BoardTestCase):
         self.assertFalse(hasattr(board.service, "task_submit"))
         self.assertNotIn("execution-submit", cli.METHODS)
         self.assertNotIn(("control", "task_submit"), transport.METHOD_MAP.values())
+        for method, operation in (("message", "message_post"), ("message-update", "message_update")):
+            self.assertNotIn(method, cli.METHODS)
+            self.assertNotIn(method, transport.METHOD_MAP)
+            self.assertNotIn(operation, CONTROL_OPERATIONS)
+            self.assertFalse(hasattr(BuddyControl, operation))
+            self.assertFalse(hasattr(board.service, operation))
+        self.assertNotIn("message_wait", WAIT_OPERATIONS)
+        self.assertFalse(hasattr(BuddyWait, "message_wait"))
+        self.assertFalse(hasattr(board.wait_service, "message_wait"))
         with self.assertRaises(BoardError) as caught:
             board.call("workflow_get", {"runId": "current-run", "taskId": "silently-ignored-target"})
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
@@ -176,16 +185,19 @@ class CurrentCoreTests(BoardTestCase):
                 other = board.submit_execution(requestId=f"other-{status}-{confirmed}", task="still running",
                     cwd=str(self.workdir(f"other-{status}-{confirmed}")), adapter="command", argv=["true"])["task"]
                 other_attempt = admit_execution(client, "o" * 32, task_id=other["taskId"])["claim"]["attempt"]
-                client.post_question("q-other", "Still there?", runId=other["taskId"])
+                board.store._message_post(other["taskId"], "q-other", "Still there?")
                 for inquiry_id in ("q-pending", "q-delivered", "q-answered"):
-                    client.post_question(inquiry_id, "Status?", runId=task["taskId"])
-                client.update_message("q-delivered", state="delivered", runId=task["taskId"])
-                client.update_message("q-answered", answer={"text": "Still working"}, runId=task["taskId"])
+                    board.store._message_post(task["taskId"], inquiry_id, "Status?")
+                board.store._message_update(task["taskId"], "q-delivered", actor="bridge", state="delivered")
+                board.store._message_update(task["taskId"], "q-answered", actor="bridge", answer={
+                    "text": "Still working", "bytes": 13, "via": None, "toolCallId": None,
+                    "at": None, "truncated": False, "source": "bridge-journal",
+                })
                 report = {"status": status, "shutdownConfirmed": confirmed}
                 client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, report)
                 pending = client.get_message("q-pending", runId=task["taskId"])
                 self.assertEqual(pending["state"], "unavailable")
-                self.assertIn("attempt ended", pending["reason"])
+                self.assertEqual(pending["reason"], {"code": "inquiry-queued-at-attempt-end", "params": {}})
                 self.assertEqual(client.get_message("q-delivered", runId=task["taskId"])["state"], "delivered")
                 self.assertEqual(client.get_message("q-answered", runId=task["taskId"])["answer"]["text"], "Still working")
                 events = client.read_events(taskId=task["taskId"])

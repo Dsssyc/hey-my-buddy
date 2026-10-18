@@ -1323,7 +1323,7 @@ class InquirySeamTests(NativeRunCase):
         self.assertEqual(report["answered"], 1)
         self.assertEqual(report["requested"], 1)
         self.assertEqual(report["deliveryMode"], "cooperative-checkpoint")
-        self.assertIn("checkpoint", report["limitation"])
+        self.assertNotIn("limitation", report)
         self.assertIn("attention-report",
                       [ref.kind for ref in result.evidence_refs])
         reference = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")

@@ -16,13 +16,13 @@ class InquirySettlementTests(BoardTestCase):
         task = board.submit_execution(requestId="inquiry-settlement", task="work",
             cwd=str(self.workdir()), adapter="command", argv=["true"])["task"]
         attempt = admit_execution(client, "n" * 32, task_id=task["taskId"])["claim"]["attempt"]
-        client.post_question("q-pending", "Status?", runId=task["taskId"])
+        board.store._message_post(task["taskId"], "q-pending", "Status?")
         return board, client, task, attempt
 
     def assert_settled_once(self, board, client, task, attempt):
         message = client.get_message("q-pending", runId=task["taskId"])
         self.assertEqual(message["state"], "unavailable")
-        self.assertIn("attempt ended", message["reason"])
+        self.assertEqual(message["reason"], {"code": "inquiry-queued-at-attempt-end", "params": {}})
         events = client.read_events(taskId=task["taskId"])["events"]
         updates = [event for event in events if event["kind"] == "message.updated"
                    and event["payload"].get("state") == "unavailable"]

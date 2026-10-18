@@ -16,7 +16,8 @@ from .. import session_receipts
 from ..native_observations import bound_native_text, native_counter
 from ..session_receipts import refusal_shaped
 from ....json_codec import canonical_json, decode_strict_json
-from ....protocol.activity import MAX_SESSION_ID, MAX_TOOL_NAME, MAX_WAITING_REASON, PHASES
+from ....protocol.activity import MAX_SESSION_ID, MAX_TOOL_NAME, PHASES
+from ....protocol.reasons import reason as make_reason
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
@@ -86,17 +87,7 @@ decode_json = decode_strict_json
 #: The native protocol still has no turn-bound in-turn input: ``session/send``
 #: has no delivery/expectedTurn fields and rejects a send during an active
 #: prompt, and the v4 sendText guide can only defer unbound input or start a
-#: new turn. The cooperative channel never injects anything: a question is
-#: queued by the bridge and reaches the root only through the session-private
-#: ``hey_my_buddy_checkpoint``/``hey_my_buddy_finish_turn`` tools inside the one admitted
-#: native turn, and only ``hey_my_buddy_answer_inquiry`` evidence verified against
-#: that turn's own tool events counts as an answer.
-COOPERATIVE_INQUIRY_NOTE = (
-    "Host questions are queued by the bridge and delivered only at the root's next hey_my_buddy_checkpoint "
-    "or finish refusal inside the same admitted native turn; they are never injected through "
-    "session/send, a v4 command, a stop, a restart or a new turn, and an answer counts only through "
-    "hey_my_buddy_answer_inquiry verified against the root turn's own tool evidence"
-)
+#: new turn. The cooperative channel never injects questions mid-turn.
 
 
 class ActivityProjection:
@@ -119,7 +110,7 @@ class ActivityProjection:
         self.last_native_activity_at: str | None = None
         self.last_tool_activity_at: str | None = None
         self.tool_name: str | None = None
-        self.waiting_reason: str | None = None
+        self.waiting_reason: dict | None = None
         self.counts = {"modelTurns": 0, "toolCalls": 0}
 
     def note(self, message: dict, ordinal: int) -> bool:
@@ -156,7 +147,8 @@ class ActivityProjection:
                     self.last_tool_activity_at = _now()
             elif kind in ("permission.requested", "userInput.requested"):
                 self.phase = "waiting-host"
-                self.waiting_reason = f"native {kind} requires Host authority"[:MAX_WAITING_REASON]
+                self.waiting_reason = make_reason('native-authority-required',
+                                                 kind='permission' if kind == 'permission.requested' else 'user-input')
         self.observed_at = _now()
         return self.phase != previous
 

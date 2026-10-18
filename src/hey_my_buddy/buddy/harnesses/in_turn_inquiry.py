@@ -16,11 +16,6 @@ from .session_receipts import (
 )
 
 INQUIRY_TOOLS = ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry")
-IN_TURN_NOTE = ("Questions enter the running native turn and are read at its next decision. "
-                "They never start a turn or extend its deadline. Only a signed root tool receipt "
-                "from hey_my_buddy_answer_inquiry records an answer.")
-
-
 @dataclass(frozen=True)
 class InquiryServices:
     configuration: dict

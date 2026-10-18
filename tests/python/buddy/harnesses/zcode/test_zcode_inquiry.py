@@ -39,7 +39,6 @@ from hey_my_buddy.buddy.harnesses.session_receipts import (
 )
 from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
-    COOPERATIVE_INQUIRY_NOTE,
     NativeError,
     verify_inquiry_receipt,
     verify_receipt,
@@ -77,7 +76,7 @@ def make_inquiry_bridge(*, identity: dict, journal_path: str,
 
     return InquiryBridge(identity=identity, journal_path=journal_path,
                          attention_path=attention_path, error_factory=NativeError,
-                         event_metadata=event_metadata, limitation=COOPERATIVE_INQUIRY_NOTE,
+                         event_metadata=event_metadata,
                          live=live)
 
 
@@ -244,7 +243,7 @@ class BridgeQueueTests(unittest.TestCase):
         self.ask()
         queued = self.harness.records()[0]
         discarded = {"version": 1, **IDENTITY, "inquiryId": "q-1", "state": "discarded",
-                     "discardedAt": "2026-01-01T00:00:00Z", "reason": "historical Host withdrawal"}
+                     "discardedAt": "2026-01-01T00:00:00Z"}
         directory = Path(self.temporary.name) / "historical-discard"
         directory.mkdir()
         path = directory / "inquiry.results.jsonl"
@@ -261,9 +260,7 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(len(snapshot.inquiries), 1)
         entry = snapshot.inquiries[0]
         self.assertEqual((entry.question_id, entry.status, entry.answer), ("q-1", "discarded", None))
-        self.assertEqual(entry.reason, discarded["reason"])
         self.assertEqual(entry.delivery.value, queued["delivery"])
-        self.assertEqual(entry.limitation, queued["limitation"])
         self.assertEqual(snapshot.observation.inbox.value["pending"], 0)
         self.assertEqual(pending_inquiries({"identity": IDENTITY, "inquiryJournalPath": str(path)}), [])
         self.assertEqual(path.read_bytes(), original)
@@ -406,7 +403,8 @@ class BridgeQueueTests(unittest.TestCase):
         self.harness.close()
         states = {record["inquiryId"]: record for record in self.harness.records()}
         self.assertEqual(self.harness.bridge.entries["q-queued"]["state"], "unavailable")
-        self.assertIn("ended before this inquiry was answered", states["q-queued"]["reason"])
+        self.assertNotIn("reason", states["q-queued"])
+        self.assertNotIn("limitation", states["q-queued"])
         self.assertEqual(self.harness.bridge.entries["q-answered"]["state"], "answered")
         # A closed local owner refuses admission before any journal append.
         self.assertEqual(self.harness.owner_call("ask", inquiryId="q-after", question="late?")["code"],
@@ -424,7 +422,7 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(value["limits"]["inquiry"], "cooperative-checkpoint")
         self.assertFalse(value["limits"]["startsNewTurn"])
         self.assertFalse(value["limits"]["extendsDeadline"])
-        self.assertIn("never injected", value["limitation"])
+        self.assertNotIn("limitation", value)
         self.assertIn("immediateDelivery", value["unavailable"])
 
     def test_live_answer_view_reports_state_and_receipt_shape(self):
@@ -1155,7 +1153,7 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         self.assertEqual(control["inquiry"]["resultsPath"], str(context.directory / "inquiry.results.jsonl"))
         self.assertEqual(tree["identity"], {"taskId": "micro-task-1", "attemptId": context.attempt_id,
                                             "generation": 1, "turnId": "turn-1"})
-        self.assertIn(COOPERATIVE_INQUIRY_NOTE, outcome.result["inquiry"]["limitation"])
+        self.assertNotIn("limitation", outcome.result["inquiry"])
         from hey_my_buddy.buddy.roles.worker_services import micro_task_prompt
 
         prompt = micro_task_prompt("task", {"turn": 1}, "mcp__buddy_x__hey_my_buddy_finish_turn",

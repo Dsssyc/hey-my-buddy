@@ -163,9 +163,10 @@ class InterruptionRecoveryTests(BoardTestCase):
         self.assertEqual(view['attemptState'], 'uncertain')
         self.assertEqual(view['selectedAttempt']['ownership'], 'uncertain')
         self.assertEqual(board.store.resource_claims()[0]['state'], 'retained')
-        board.call('execution_progress', {**actor, 'data': {'waitingReason': 'native tool in progress'}})
+        board.call('execution_progress', {**actor, 'data': {'waitingReason':
+                   {'code': 'router-input-unknown', 'params': {}}}})
         board.store.execution_connection(actor['attemptId'], connected=True)
-        self.assertEqual(client.get(runId=task['taskId'])['queueReason'], 'native tool in progress')
+        self.assertEqual(client.get(runId=task['taskId'])['queueReason'], 'router-input-unknown')
 
     def test_receipt_is_used_before_native_journal_and_commits_through_result(self):
         board, client, task, claim, actor = self.claimed()

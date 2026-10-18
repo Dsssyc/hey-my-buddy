@@ -42,7 +42,6 @@ COUNT_FIELDS = frozenset({"modelTurns", "toolCalls"})
 MAX_TIMESTAMP = 64
 MAX_SESSION_ID = 256
 MAX_TOOL_NAME = 64
-MAX_WAITING_REASON = 256
 MAX_EVENT_SEQ = 2**53 - 1
 MAX_COUNT = 2**31 - 1
 
@@ -132,7 +131,8 @@ def normalize_activity(value: Any) -> dict:
     if value.get("toolName") is not None:
         normalized["toolName"] = _bounded_string(value["toolName"], "toolName", maximum=MAX_TOOL_NAME)
     if value.get("waitingReason") is not None:
-        normalized["waitingReason"] = _bounded_string(value["waitingReason"], "waitingReason", maximum=MAX_WAITING_REASON)
+        # The service validates this cross-process reason once against the registry.
+        normalized["waitingReason"] = value["waitingReason"]
     counts = value.get("counts")
     if counts is not None:
         if not isinstance(counts, dict):

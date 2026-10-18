@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hey_my_buddy.buddy.harnesses.in_turn_inquiry import IN_TURN_NOTE, prepare_inquiry_services
+from hey_my_buddy.buddy.harnesses.in_turn_inquiry import prepare_inquiry_services
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
 from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError
 from hey_my_buddy.buddy.roles.session_mcp import respond
@@ -24,7 +24,7 @@ class InTurnInquiryTests(unittest.TestCase):
         self.bridge = InquiryBridge(
             identity=self.identity, journal_path=self.services.configuration["inquiryJournalPath"],
             error_factory=ReceiptError, event_metadata=lambda _event: {"kind": "test"},
-            limitation=IN_TURN_NOTE, delivery_mode="realtime")
+            delivery_mode="realtime")
         self.bridge.start()
         self.addCleanup(self.bridge.close)
 
@@ -79,14 +79,15 @@ class InTurnInquiryTests(unittest.TestCase):
                 self.services.accept_tool_result(self.bridge, name, raw, "call")
         self.assertEqual(self.bridge.entries["q"]["state"], "queued")
 
-    def test_unread_native_input_keeps_its_specific_end_reason(self):
+    def test_unread_native_input_closes_as_unavailable(self):
         self.bridge.activate("native-session")
         self.ask()
         self.bridge.deliver_native("q", {"sessionId": "native-session"})
-        reason = "the micro task root turn ended before reading this inquiry"
-        self.bridge.close(reason=reason)
+        self.bridge.close()
         self.assertEqual(self.bridge.entries["q"]["state"], "unavailable")
-        self.assertEqual(self.bridge.entries["q"]["reason"], reason)
+        self.assertEqual(set(json.loads(Path(self.bridge.journal_path).read_text().splitlines()[-1])),
+                         {"version", "taskId", "attemptId", "generation", "turnId", "sessionId",
+                          "inquiryId", "state", "unavailableAt"})
         self.assertEqual(self.bridge.report()["unansweredDelivered"], 1)
 
     def test_client_answer_requires_delivered_question_and_never_overwrites(self):

@@ -257,7 +257,6 @@ class DshActivity:
         self.last_native_activity_at: str | None = None
         self.last_tool_activity_at: str | None = None
         self.tool_name: str | None = None
-        self.waiting_reason: str | None = None
         self.counts = {"modelTurns": 0, "toolCalls": 0}
         self._seen_calls: set[tuple[str, str]] = set()
 
@@ -307,7 +306,6 @@ class DshActivity:
             "lastNativeActivityAt": self.last_native_activity_at,
             "lastToolActivityAt": self.last_tool_activity_at,
             "toolName": self.tool_name,
-            "waitingReason": self.waiting_reason,
             "counts": dict(self.counts),
         }
 

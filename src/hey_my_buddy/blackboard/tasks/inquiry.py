@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ...protocol import schemas
+from ...protocol.reasons import reason as make_reason
 from ...errors import BoardError
 from ..store.store import BoardStore
 from ...private_dirs import attempt_root
@@ -40,13 +41,6 @@ LIMITS = {
     "correlation": "inquiryId",
     "exposesModelReasoning": False,
 }
-
-NOTE = (
-    "Inquiry is bounded, read-only observation plus correlated questions. It never cancels, restarts, "
-    "re-scopes or extends the attempt, and observation is not a percentage or a guaranteed ETA: fields the "
-    "bridge cannot see are named in live.unavailable instead of being reported as zero. Repeating an inquiryId "
-    "never injects the question twice; the same id with different text is a CONFLICT."
-)
 
 
 def adapter_capabilities(adapter: str) -> frozenset[str]:
@@ -124,15 +118,7 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
     recorded = None
     duplicate = False
     if inquiry_id is not None:
-        posted = store.message_post(
-            {
-                "runId": view["taskId"],
-                "inquiryId": inquiry_id,
-                "question": question,
-                "author": "cli",
-                "waitMs": 0,
-            }
-        )
+        posted = store._message_post(view["taskId"], inquiry_id, question)
         recorded = posted["message"]
         duplicate = bool(posted.get("duplicate"))
 
@@ -151,20 +137,17 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
               "canObserve": can_observe, "canAsk": can_ask}
     live: dict[str, Any] = {
         "available": False,
-        "reason": "no live bridge for this attempt",
+        "reason": None,
         "unavailable": ["sessionId", "agentStatus", "inbox", "lastEvent", "activity", "replyTool"],
         "limits": LIMITS,
     }
-    if not can_observe:
-        bridge["reason"] = "this adapter has no observation or inquiry capability"
-    elif attempt_ended:
-        bridge["reason"] = "the attempt has ended; an idle or finished agent cannot be woken"
+    if not can_observe or attempt_ended:
+        pass
     elif inquiry_id is not None and not can_ask:
         # The adapter can be observed but cannot ask: record the honest capability
         # refusal instead of sending a question the native protocol cannot carry.
-        bridge["reason"] = "this adapter observes native activity but has no correlated inquiry capability"
         bridge["capability"] = "observe"
-        _mark_unavailable(store, view["taskId"], inquiry_id, "unsupported", bridge["reason"])
+        _mark_unavailable(store, view["taskId"], inquiry_id, "unsupported")
     elif channel is not None:
         # The registered live binding of this very run: the question, the
         # observation and the journal projection all go through one channel
@@ -177,7 +160,7 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
             if reply.observed:
                 # An observed interaction projects its committed state whatever
                 # it is — a withdrawn question's replay carries ``discarded``
-                # and its native reason, never a transport refusal.
+                # and its delivery evidence, never a transport refusal.
                 bridge["observed"] = True
                 _apply_bridge_answer(store, view["taskId"], inquiry_id, _live_ask_value(reply), None)
             else:
@@ -198,7 +181,7 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
                 bridge["reason"] = snapshot.reason or "observation-unavailable"
                 bridge["error"] = snapshot.error
     elif unbound_live:
-        bridge["reason"] = "the owning Worker has not attached this live run"
+        bridge["reason"] = "channel-unbound"
     evidence_journal = (store.directory / "attempts" / view["taskId"] / attempt["attemptId"] /
                         "inquiry.results.jsonl") if attempt.get("attemptId") else None
     rejections: dict[str, str] = {}
@@ -233,8 +216,8 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
         journal = (read_journal(str(evidence_journal) if evidence_journal else None) if attempt_ended
                    else {"available": False, "reason": "no-live-channel", "entries": {}})
     # Import every existing question's latest source fact even for run-only
-    # observation. message_update refuses unknown ids, so orphan source records
-    # cannot create questions or consume the run's inquiry allowance.
+    # observation. Unknown ids are rejected before the internal writer runs, so
+    # orphan records cannot create questions or consume the inquiry allowance.
     records = ({key: _journal_record(entry) for key, entry in projected.items()}
                if channel is not None else journal["entries"]
                if isinstance(journal["entries"], dict) else {})
@@ -243,13 +226,19 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
     for question_id, record in records.items():
         if question_id in rejections:
             continue
-        mismatch = _journal_identity_mismatch(record, view["taskId"], attempt.get("attemptId"))
+        mismatch = (_journal_identity_mismatch(record, view["taskId"], attempt.get("attemptId"))
+                    if channel is None else None)
         if mismatch is not None:
+            rejections[question_id] = mismatch
             if question_id == inquiry_id:
                 bridge["journalRejected"] = mismatch
             continue
-        _apply_journal(store, view["taskId"], question_id, record)
-        if question_id == inquiry_id:
+        rejected = _apply_journal(store, view["taskId"], question_id, record)
+        if rejected is not None:
+            rejections[question_id] = rejected
+            if question_id == inquiry_id:
+                bridge["journalRejected"] = rejected
+        elif question_id == inquiry_id:
             bridge["journalImported"] = True
 
     if inquiry_id is not None and wait_ms:
@@ -304,9 +293,9 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
         ],
         "journal": {"available": journal["available"], "reason": journal["reason"],
                     "entries": (journal["entries"] if isinstance(journal["entries"], int)
-                                else len(journal["entries"]))},
+                                else len(journal["entries"])),
+                    **({"rejections": rejections} if rejections else {})},
         "limits": LIMITS,
-        "note": NOTE,
     }
 
 
@@ -333,13 +322,10 @@ def _live_ask_value(reply) -> dict:
     """The ask reply's committed value, in the bridge's own ask-value shape.
 
     An observed reply projects its actual committed state — a withdrawn
-    question's ``discarded`` included — with the bridge's own reason and
-    delivery record from the correlation.
+    question's ``discarded`` included — with its delivery record from the correlation.
     """
     correlation = reply.native_correlation.value if reply.native_correlation is not None else {}
     value: dict[str, Any] = {"state": reply.state or reply.status}
-    if isinstance(correlation.get("reason"), str) and correlation["reason"]:
-        value["reason"] = correlation["reason"]
     if isinstance(correlation.get("delivery"), dict):
         value["delivery"] = correlation["delivery"]
     return value
@@ -353,7 +339,7 @@ def _live_answer_value(entry) -> dict:
                            "via": entry.via, "toolCallId": entry.tool_call_id, "at": entry.at,
                            "truncated": entry.truncated is True}
     else:
-        value["answer"] = {"available": False, "reason": entry.reason or "no correlated answer yet"}
+        value["answer"] = {"available": False}
     return value
 
 
@@ -383,10 +369,6 @@ def _journal_record(entry: Any) -> dict:
         record["answer"] = {"text": entry.answer, "bytes": entry.bytes, "via": entry.via,
                             "toolCallId": entry.tool_call_id, "at": entry.at,
                             "truncated": entry.truncated is True}
-    if entry.reason is not None:
-        record["reason"] = entry.reason
-    if entry.limitation is not None:
-        record["limitation"] = entry.limitation
     if entry.delivery is not None:
         record["delivery"] = entry.delivery.value
     return record
@@ -399,24 +381,27 @@ def _journal_identity_mismatch(record: dict, task_id: str, attempt_id: str | Non
         if value in (None, ""):
             continue
         if not isinstance(value, str) or value != expected:
-            return f"the journal record belongs to another {label}"
+            return "journal-task-mismatch" if label == "task" else "journal-attempt-mismatch"
+    if not record.get("taskId") or not record.get("attemptId"):
+        return "journal-attempt-unbound"
     return None
 
 
-def _mark_unavailable(store: BoardStore, task_id: str, inquiry_id: str, code: str, reason: str | None = None) -> None:
-    """Record a question refused because the owned agent cannot receive it."""
-    try:
-        store.message_update(
-            {
-                "runId": task_id,
-                "inquiryId": inquiry_id,
-                "actor": "live-bridge",
-                "state": "unavailable",
-                "reason": reason or f"the bridge cannot deliver this question ({code})",
-            }
-        )
-    except BoardError:
-        pass
+def _known_question(store: BoardStore, task_id: str, inquiry_id: str) -> bool:
+    with store.db.read() as connection:
+        return connection.execute(
+            "SELECT 1 FROM messages WHERE task_id=? AND inquiry_id=?", (task_id, inquiry_id)
+        ).fetchone() is not None
+
+
+def _mark_unavailable(store: BoardStore, task_id: str, inquiry_id: str, code: str) -> str | None:
+    """Record a refusal only for a question the blackboard already owns."""
+    if not _known_question(store, task_id, inquiry_id):
+        return "journal-question-unknown"
+    reason = (make_reason("inquiry-observe-only") if code == "unsupported"
+              else make_reason("bridge-refused", errorCode=code))
+    store._message_update(task_id, inquiry_id, actor="live-bridge", state="unavailable", reason=reason)
+    return None
 
 
 def _inquiry_view(message: dict, duplicate: bool) -> dict:
@@ -434,112 +419,71 @@ def _inquiry_view(message: dict, duplicate: bool) -> dict:
         "delivery": message.get("delivery"),
         "updatedAt": message["updatedAt"],
         "answer": (
-            {"available": True, **answer} if answer else {"available": False, "reason": message.get("reason") or "no correlated answer yet"}
+            {"available": True, **answer} if answer else {"available": False}
         ),
         "correlation": "inquiryId",
     }
 
 
-def _apply_bridge_answer(store: BoardStore, task_id: str, inquiry_id: str, value: dict, result: dict) -> None:
-    if not isinstance(value, dict):
-        return
-    record = value if "answer" in value else {**value, "answer": value.get("answer")}
-    answer = normalize_journal_answer(record)
-    patch: dict[str, Any] = {"runId": task_id, "inquiryId": inquiry_id, "actor": "live-bridge"}
-    if answer is not None:
-        patch["answer"] = {**answer, "source": "live-bridge"}
-    state = value.get("state")
-    if isinstance(state, str):
-        if state == "answered" and answer is None:
-            patch["state"] = "delivered"
-            patch["reason"] = "the live bridge reported answered without usable answer text"
-        else:
-            patch["state"] = state
-            reason = value.get("reason")
-            if state != "answered" and isinstance(reason, str) and reason.strip():
-                # A bridge may report a refusal inside a successful value (the dsh
-                # bridge reports agent-gone/agent-not-running this way). Keep the
-                # honest reason instead of a bare terminal state.
-                patch["reason"] = reason
-    if isinstance(value.get("delivery"), dict):
-        patch["delivery"] = value["delivery"]
-    if patch.keys() - {"runId", "inquiryId", "actor"}:
-        try:
-            store.message_update(patch)
-        except BoardError:
-            pass
+def _apply_bridge_answer(store: BoardStore, task_id: str, inquiry_id: str, value: dict, result: dict | None) -> str | None:
+    return _apply_inquiry_record(store, task_id, inquiry_id, value, actor="live-bridge")
 
 
 def normalize_journal_answer(record: dict) -> dict | None:
-    """Normalize one journal record's answer into the board's answer shape.
-
-    The Node bridge writes the answer text as a string with ``via``, ``toolCallId``,
-    ``answeredAt``, ``answerBytes``, ``truncated`` and ``messageId`` as sibling
-    fields, while the live socket returns a nested object. Both are accepted here so
-    an answered record can never be recorded without its correlated answer text and
-    its reply-tool evidence.
-    """
+    """Read the bridge's nested answer object."""
     answer = record.get("answer")
-    if isinstance(answer, dict):
-        text = answer.get("text")
-        if not isinstance(text, str) or not text.strip():
-            return None
-        return {
-            "text": text,
-            "bytes": answer.get("bytes") if isinstance(answer.get("bytes"), int) else len(text.encode("utf-8")),
-            "via": answer.get("via") if isinstance(answer.get("via"), str) else _as_text(record.get("via")),
-            "toolCallId": answer.get("toolCallId")
-            if isinstance(answer.get("toolCallId"), str)
-            else _as_text(record.get("toolCallId")),
-            "at": answer.get("at") if isinstance(answer.get("at"), str) else _as_text(record.get("answeredAt")),
-            "truncated": answer.get("truncated") is True or record.get("truncated") is True,
-            "source": "bridge-journal",
-        }
-    if isinstance(answer, str) and answer.strip():
-        return {
-            "text": answer,
-            "bytes": record.get("answerBytes") if isinstance(record.get("answerBytes"), int) else len(answer.encode("utf-8")),
-            "via": _as_text(record.get("via")),
-            "toolCallId": _as_text(record.get("toolCallId")),
-            "at": _as_text(record.get("answeredAt")),
-            "truncated": record.get("truncated") is True,
-            "source": "bridge-journal",
-        }
-    return None
+    if not isinstance(answer, dict):
+        return None
+    text = answer.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    size = len(text.encode("utf-8"))
+    if size > schemas.MAX_ANSWER_BYTES:
+        raise BoardError("INVALID_ARGUMENT", "answer exceeds the size limit")
+    return {
+        "text": text,
+        "bytes": size,
+        "via": answer.get("via") if isinstance(answer.get("via"), str) else None,
+        "toolCallId": answer.get("toolCallId") if isinstance(answer.get("toolCallId"), str) else None,
+        "at": answer.get("at") if isinstance(answer.get("at"), str) else None,
+        "truncated": answer.get("truncated") is True,
+        "source": "bridge-journal",
+    }
 
 
-def _as_text(value: Any) -> str | None:
-    return value if isinstance(value, str) and value else None
+def _apply_journal(store: BoardStore, task_id: str, inquiry_id: str, record: dict) -> str | None:
+    return _apply_inquiry_record(store, task_id, inquiry_id, record, actor="bridge-journal")
 
 
-def _apply_journal(store: BoardStore, task_id: str, inquiry_id: str, record: dict) -> None:
-    patch: dict[str, Any] = {"runId": task_id, "inquiryId": inquiry_id, "actor": "bridge-journal"}
+def _apply_inquiry_record(store: BoardStore, task_id: str, inquiry_id: str, record: dict, *, actor: str) -> str | None:
+    if not _known_question(store, task_id, inquiry_id):
+        return "journal-question-unknown"
+    patch: dict[str, Any] = {}
     if isinstance(record.get("delivery"), dict):
-        patch["delivery"] = record["delivery"]
-    if record.get("messageId") is not None and isinstance(record.get("messageId"), str):
-        patch["delivery"] = {**(patch.get("delivery") or {}), "messageId": record["messageId"]}
+        patch["delivery"] = {
+            key: str(value)[:200] for key in (
+                "messageId", "agentStatusAtInject", "injectedAt", "insertedAt", "claimedAt",
+                "deliveredAt", "observedAt", "observedAgentStatus")
+            if (value := record["delivery"].get(key)) not in (None, "")
+        }
     answer = normalize_journal_answer(record)
     if answer is not None:
-        patch["answer"] = answer
-    # ``answered`` is only recorded together with a normalized answer: an answered
-    # record without usable text stays at its previous state with an explicit reason
-    # instead of becoming a half-answered question.
-    if isinstance(record.get("state"), str):
-        if record["state"] == "answered" and answer is None:
-            patch["reason"] = "the bridge recorded an answered journal entry without usable answer text"
+        patch["answer"] = {**answer, "source": actor}
+    state = record.get("state")
+    reason = None
+    if state is not None and state not in ("queued", "claimed", "delivered", "answered", "discarded", "unavailable"):
+        raise BoardError("INVALID_ARGUMENT", "Unknown message state")
+    if state is not None:
+        if state == "answered" and answer is None:
             patch["state"] = "delivered"
+            reason = make_reason("inquiry-answer-empty")
         else:
-            patch["state"] = record["state"]
-            # A terminal refusal carries the bridge's own bounded reason; keep it
-            # instead of a generic "unavailable" with no explanation.
-            reason = record.get("reason") or record.get("limitation")
-            if record["state"] == "unavailable" and isinstance(reason, str) and reason.strip():
-                patch["reason"] = reason
-    if patch.keys() - {"runId", "inquiryId", "actor"}:
-        try:
-            store.message_update(patch)
-        except BoardError:
-            pass
+            patch["state"] = state
+            if state == "unavailable":
+                reason = make_reason("inquiry-root-turn-ended")
+    if patch:
+        store._message_update(task_id, inquiry_id, actor=actor, reason=reason, **patch)
+    return None
 
 
 def _activity_metadata(value: Any) -> list[dict]:
@@ -552,11 +496,11 @@ def _activity_metadata(value: Any) -> list[dict]:
             for item in value[-20:] if isinstance(item, dict)]
 
 
-def _live(value: Any) -> dict:
-    if not isinstance(value, dict) or value.get("ready") is not True:
+def _live(value: dict) -> dict:
+    if value.get("ready") is not True:
         return {
             "available": False,
-            "reason": (value or {}).get("error") if isinstance(value, dict) else "the bridge did not report readiness",
+            "reason": value.get("error"),
             "unavailable": ["sessionId", "agentStatus", "inbox", "lastEvent", "activity", "replyTool"],
             "limits": LIMITS,
         }
@@ -574,7 +518,6 @@ def _live(value: Any) -> dict:
         "capability": value.get("capability") or ("inquiry" if value.get("replyTool") else "observe"),
         "supported": value.get("supported") is not False,
         "deliveryMode": "cooperative-checkpoint" if value.get("deliveryMode") == "cooperative-checkpoint" else None,
-        "limitation": value.get("limitation") if isinstance(value.get("limitation"), str) else None,
         "journal": value.get("journal"),
         # Bounded, metadata-only evidence that the native harness asked for an
         # interactive capability this adapter cannot grant. It is surfaced verbatim

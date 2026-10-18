@@ -14,7 +14,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from hey_my_buddy.protocol.reasons import reason, reason_from_json
+from hey_my_buddy.protocol.reasons import reason, reason_from_json, validate_reason, validate_waiting_reason
+from hey_my_buddy.errors import BoardError
 
 ROOT = Path(__file__).resolve().parents[3]
 SOURCE = ROOT / "src" / "hey_my_buddy"
@@ -139,6 +140,31 @@ def reason_violations(root: Path, codes: dict[str, list[str]]) -> list[str]:
 
 
 class ReasonTests(unittest.TestCase):
+    def test_waiting_reason_accepts_only_its_originating_writer(self):
+        self.assertEqual(validate_waiting_reason(reason('router-input-unknown')),
+                         reason('router-input-unknown'))
+        for kind in ('permission', 'user-input'):
+            expected = reason('native-authority-required', kind=kind)
+            self.assertEqual(validate_waiting_reason(expected, activity=True), expected)
+        for value, activity in (
+            (reason('native-authority-required', kind='permission'), False),
+            (reason('router-input-unknown'), True),
+            (reason('native-authority-required', kind='permission.requested'), True),
+            (reason('native-authority-required', kind='unrecognized'), True),
+        ):
+            with self.subTest(value=value, activity=activity), self.assertRaises(BoardError):
+                validate_waiting_reason(value, activity=activity)
+
+    def test_boundary_reason_requires_registered_code_and_exact_parameter_names(self):
+        expected = reason('native-authority-required', kind='permission.requested')
+        self.assertEqual(validate_reason(expected, 'activity.waitingReason'), expected)
+        for invalid in ('native-authority-required', {'code': 'missing', 'params': {}},
+                        {'code': 'native-authority-required', 'params': {}},
+                        {'code': 'native-authority-required', 'params': {'kind': 'permission.requested', 'extra': 1}},
+                        {'code': 'native-authority-required', 'params': [], 'extra': 1}):
+            with self.subTest(invalid=invalid), self.assertRaises(BoardError):
+                validate_reason(invalid, 'activity.waitingReason')
+
     def test_stored_reason_preserves_facts_and_null_means_no_reason(self):
         params = {"bound": "disabled", "buddyId": "buddy-1", "retryAt": None, "count": 3}
         self.assertEqual(reason_from_json("router-out-of-bounds", json.dumps(params)),

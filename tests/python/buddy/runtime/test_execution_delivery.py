@@ -272,15 +272,15 @@ class ExecutionDeliveryTests(unittest.TestCase):
     def test_offline_hints_back_off_and_keep_only_the_latest_value(self):
         client = self.execution.client
         client.progress.side_effect = [BoardError('SERVICE_UNAVAILABLE', 'offline'), None]
-        self.execution.hint(waitingReason='first')
+        self.execution.hint(waitingReason={'code': 'router-input-unknown', 'params': {}})
         with mock.patch.object(entry.time, 'monotonic', return_value=10.0):
             self.assertFalse(self.execution.flush_hints())
-        self.execution.hint(waitingReason='latest')
+        self.execution.hint(waitingReason=None)
         with mock.patch.object(entry.time, 'monotonic', return_value=10.1):
             self.assertFalse(self.execution.flush_hints())
             self.assertEqual(client.progress.call_count, 1)
         with mock.patch.object(entry.time, 'monotonic', return_value=10.25):
             self.assertTrue(self.execution.flush_hints())
         self.assertEqual(client.progress.call_count, 2)
-        self.assertEqual(client.progress.call_args.kwargs['data'], {'waitingReason': 'latest'})
+        self.assertEqual(client.progress.call_args.kwargs['data'], {'waitingReason': None})
         self.assertEqual(self.execution._hints, {})

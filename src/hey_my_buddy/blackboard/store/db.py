@@ -235,13 +235,19 @@ CREATE TABLE IF NOT EXISTS messages (
     payload_hash    TEXT NOT NULL,
     state           TEXT NOT NULL
         CHECK (state IN ('queued','claimed','delivered','answered','discarded','unavailable')),
-    reason          TEXT,
+    reason_code     TEXT,
+    reason_params_json TEXT,
     delivery_json   TEXT,
     answer_json     TEXT,
     attempts_count  INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
     revision        INTEGER NOT NULL DEFAULT 1,
+    CHECK ((reason_code IS NULL AND reason_params_json IS NULL)
+        OR (reason_code IS NOT NULL AND reason_params_json IS NOT NULL
+            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object'
+            AND state IN ('delivered','unavailable'))),
+    CHECK (state != 'unavailable' OR reason_code IS NOT NULL),
     UNIQUE(task_id, inquiry_id)
 );
 CREATE INDEX IF NOT EXISTS messages_task_idx ON messages(task_id, created_at);

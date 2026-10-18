@@ -57,7 +57,7 @@ from ....json_codec import canonical_json
 from ....private_dirs import ensure_private_dir
 from ....protocol.activity import ActivityPublisher
 from ..c_two_live import CTwoLiveEndpoint
-from ..in_turn_inquiry import INQUIRY_TOOLS, IN_TURN_NOTE, InquiryServices, prepare_inquiry_services
+from ..in_turn_inquiry import INQUIRY_TOOLS, InquiryServices, prepare_inquiry_services
 from ..inquiry_bridge import InquiryBridge
 from ..session_receipts import ReceiptError, refusal_shaped
 from ....protocol.usage import identifier as _usage_identifier
@@ -538,8 +538,7 @@ class _TurnCollector:
                 # first result. The process was already stopped before drain;
                 # this init is evidence of that window, never a new turn.
                 self.followup_init_observed = True
-                self.bridge.close(reason="the micro task root turn ended before reading or answering this inquiry; "
-                                         "its queued follow-up was stopped")
+                self.bridge.close()
                 return
             if self.followup_init_observed:
                 self.followup_messages = min(128, self.followup_messages + 1)
@@ -1143,7 +1142,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                 attention_path=configuration.get("attentionPath"), live=live,
                 error_factory=ClaudeProtocolError,
                 event_metadata=lambda message: {"kind": str(message.get("kind") or "event")},
-                limitation=IN_TURN_NOTE, delivery_mode="realtime")
+                delivery_mode="realtime")
             inquiry_bridge.start()
         collector = _TurnCollector(
             request,

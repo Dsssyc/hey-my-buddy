@@ -127,11 +127,10 @@ class InquiryState(InternalModel):
     whenever its state changes, so an observer that has read up to ``after_seq``
     can fetch exactly the entries it has not seen yet.
 
-    The answer's and the delivery record's own source facts ride beside the
-    text exactly as the producing bridge wrote them — the byte count, the reply
-    or checkpoint tool evidence, the timestamp, the truncation flag, the
-    bridge's own bounded reason and its delivery record. A field the record
-    never carried stays ``None``; nothing here derives or backfills one.
+    The answer's and delivery record's source facts ride beside the text as
+    the producing bridge wrote them: byte count, tool evidence, timestamp,
+    truncation flag and delivery record. A field the record never carried
+    stays ``None``; nothing here derives or backfills one.
     """
 
     question_id: Identifier
@@ -143,8 +142,6 @@ class InquiryState(InternalModel):
     tool_call_id: OptionalText(512) = None
     at: OptionalText(64) = None
     truncated: Optional[bool] = None
-    reason: OptionalText(400) = None
-    limitation: OptionalText(2048) = None
     delivery: OptionalFrozenJsonAt(1024) = None
 
 
@@ -188,7 +185,6 @@ class LiveObservation(InternalModel):
     attention: OptionalFrozenJsonAt(4096) = None
     journal: OptionalFrozenJsonAt(1024) = None
     delivery_mode: Optional[InquiryDeliveryMode] = None
-    limitation: OptionalText(2048) = None
     unavailable: JsonTuple(Text(64), max_items=16) = ()
     error: OptionalText(512) = None
 
@@ -209,12 +205,11 @@ JournalReason = Literal["no-journal-path", "journal-not-written", "journal-excee
 class InquiryJournalRejection(InternalModel):
     """One question's journal record the identity binding refused, and why.
 
-    The reason is the public string the direct reader's own mismatch check
-    produced; nothing here invents a different vocabulary.
+    The reason is the stable identity rejection code produced by the reader.
     """
 
     question_id: Identifier
-    reason: Text(128)
+    reason: Literal["journal-task-mismatch", "journal-attempt-mismatch", "journal-attempt-unbound"]
 
 
 class LiveJournal(InternalModel):
@@ -300,25 +295,22 @@ def _bounded_word(value: Any) -> str | None:
 def _record_facts(entry: dict) -> dict:
     """One journal record's carried facts, exactly as the record states them.
 
-    The answer's own source fields come from the answer object when the record
-    carries one and from the record's own sibling fields when it carries a bare
-    answer text — the two shapes the existing bridges write. Anything the
-    record never stated stays ``None``.
+    The answer's source fields come from its nested object. Anything the record
+    never stated stays ``None``.
     """
     answer = entry.get("answer")
-    nested = isinstance(answer, dict)
-    source = answer if nested else entry
-    text = answer.get("text") if nested else answer
+    source = answer if isinstance(answer, dict) else {}
+    # A delivery record carries checkpoint-tool evidence of its own, before
+    # there is an answer. A bare answer string has no supported source form.
+    tool_source = entry if answer is None else source
+    text = source.get("text")
     facts: dict[str, Any] = {
         "answer": text if isinstance(text, str) and text else None,
-        "bytes": _bounded_bytes(source.get("bytes") if nested else entry.get("answerBytes")),
-        "via": _bounded_word(source.get("via")),
-        "tool_call_id": _bounded_word(source.get("toolCallId")),
-        "at": _bounded_word(source.get("at") if nested else entry.get("answeredAt")),
-        "truncated": (source.get("truncated") if isinstance(source.get("truncated"), bool)
-                      else (entry.get("truncated") is True if not nested else None)),
-        "reason": _bounded_word(entry.get("reason")),
-        "limitation": _bounded_word(entry.get("limitation")),
+        "bytes": _bounded_bytes(source.get("bytes")),
+        "via": _bounded_word(tool_source.get("via")),
+        "tool_call_id": _bounded_word(tool_source.get("toolCallId")),
+        "at": _bounded_word(source.get("at")),
+        "truncated": source.get("truncated") if isinstance(source.get("truncated"), bool) else None,
         "delivery": entry.get("delivery") if isinstance(entry.get("delivery"), dict) else None,
     }
     return facts

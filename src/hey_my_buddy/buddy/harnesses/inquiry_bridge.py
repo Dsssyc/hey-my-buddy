@@ -58,13 +58,12 @@ class InquiryBridge:
     """
 
     def __init__(self, *, identity: dict, journal_path: str,
-                 error_factory, event_metadata, limitation: str, attention_path: str | None = None,
+                 error_factory, event_metadata, attention_path: str | None = None,
                  live: CTwoLiveEndpoint | None = None,
                  delivery_mode: str = "cooperative-checkpoint",
                  checkpoint_tool: str | None = "hey_my_buddy_checkpoint"):
         self.error_factory = error_factory
         self.event_metadata = event_metadata
-        self.limitation = limitation
         self.delivery_mode = delivery_mode
         self.checkpoint_tool = checkpoint_tool
         self.identity = identity
@@ -125,7 +124,7 @@ class InquiryBridge:
                 if state in ("queued", "delivered", "answered", "discarded"):
                     reply = LiveReply(status=state, state=state, observed=True,
                                       native_correlation={key: value[key] for key in
-                                          ("inquiryId", "questionSha256", "state", "duplicate", "delivery", "reason")
+                                          ("inquiryId", "questionSha256", "state", "duplicate", "delivery")
                                           if value.get(key) is not None})
                 else:
                     reply = LiveReply(status="unavailable", reason_code="unknown-bridge-state")
@@ -134,7 +133,7 @@ class InquiryBridge:
                                   error_code=result["error"])
             self.live.settle_request(request.request_id, reply)
 
-    def close(self, *, reason: str = "the micro task root turn ended before this inquiry was answered") -> None:
+    def close(self) -> None:
         """Terminalize the answer window before stopping the owner consumer.
 
         This is no evidence of native process shutdown. The controller owns the
@@ -149,9 +148,7 @@ class InquiryBridge:
             for inquiry_id, entry in list(self.entries.items()):
                 if entry.get("state") in ANSWERABLE_STATES:
                     self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "unavailable",
-                                   "unavailableAt": _now(),
-                                   "reason": reason,
-                                   "limitation": self.limitation})
+                                   "unavailableAt": _now()})
             self._publish()
             self._stop.set()
         if self.thread is not None:
@@ -343,7 +340,6 @@ class InquiryBridge:
                 # expected: keep the terminal state and drop the late answer.
                 return
             self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "answered",
-                           "answeredAt": _now(),
                            "answer": {"text": answer, "bytes": len(answer.encode()), "truncated": False,
                                       "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": tool_call_id,
                                       "at": _now()}})
@@ -359,7 +355,6 @@ class InquiryBridge:
             if entry.get("state") != "delivered":
                 return "the inquiry must be delivered and still unanswered"
             if not self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "answered",
-                                  "answeredAt": _now(),
                                   "answer": {"text": answer, "bytes": len(answer.encode()), "truncated": False,
                                              "via": "tool:hey_my_buddy_answer_inquiry",
                                              "toolCallId": tool_call_id, "at": _now()}}):
@@ -412,7 +407,6 @@ class InquiryBridge:
             "capability": "inquiry",
             "supported": True,
             "deliveryMode": self.delivery_mode,
-            "limitation": self.limitation,
             "limits": {"maxQuestionBytes": MAX_QUESTION_BYTES, "maxAnswerBytes": MAX_ANSWER_BYTES,
                        "maxInquiriesPerRun": MAX_INQUIRIES,
                        "inquiry": self.delivery_mode, "deliveryMode": self.delivery_mode,
@@ -433,7 +427,6 @@ class InquiryBridge:
             "supported": True,
             "inquiry": self.delivery_mode,
             "deliveryMode": self.delivery_mode,
-            "limitation": self.limitation,
             "requested": len(entries),
             "queued": counts["queued"],
             "delivered": counts["delivered"],
@@ -531,7 +524,7 @@ class InquiryBridge:
                         "startsNewTurn": False, "extendsDeadline": False, "supported": True, "at": _now()}
             if not self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "queued",
                                   "question": question, "questionSha256": digest, "askedAt": _now(),
-                                  "delivery": delivery, "limitation": self.limitation}):
+                                  "delivery": delivery}):
                 # Never report a queued question the journal did not durably
                 # record: the MCP tools could not read it back.
                 return response(False, error="journal-unavailable")
@@ -546,7 +539,6 @@ class InquiryBridge:
             "duplicate": duplicate,
             "inquiryId": inquiry_id,
             "questionSha256": entry.get("questionSha256"),
-            "reason": entry.get("reason"),
             "delivery": entry.get("delivery") or {},
         }
 
@@ -558,7 +550,7 @@ class InquiryBridge:
 #: snapshot's ``activity`` field keeps meaning the normalized activity publication.
 _OBSERVATION_FIELDS = ("ready", "observedAt", "sessionId", "agentStatus", "inbox", "lastEvent",
                        "activityDropped", "replyTool", "capability", "supported", "attention",
-                       "journal", "deliveryMode", "limitation", "unavailable", "error")
+                       "journal", "deliveryMode", "unavailable", "error")
 
 
 def _observation_view(value: dict) -> dict:
@@ -568,20 +560,15 @@ def _observation_view(value: dict) -> dict:
     return view
 
 
-#: The rejection strings of the direct reader's own mismatch check, kept
-#: verbatim; a record that carries neither field was never foreign to it, so a
-#: binding refusal on such a record says exactly what it is.
-_UNBOUND_REASON = "the journal record is not bound to this execution"
-
-
 def _journal_rejection_reason(record: dict, bound: dict) -> str:
-    for key, label in (("taskId", "task"), ("attemptId", "attempt")):
+    for key, reason in (("taskId", "journal-task-mismatch"),
+                        ("attemptId", "journal-attempt-mismatch")):
         value = record.get(key)
         if value in (None, ""):
             continue
         if not isinstance(value, str) or value != bound[key]:
-            return f"the journal record belongs to another {label}"
-    return _UNBOUND_REASON
+            return reason
+    return "journal-attempt-unbound"
 
 
 def read_inquiry_journal(identity: RunIdentity | dict, journal_path: str | Path | None) -> dict:

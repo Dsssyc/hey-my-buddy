@@ -284,14 +284,11 @@ def _question_reply(entry: InquiryState, *, duplicate: bool) -> LiveReply:
     """One duplicate's reply from the question's own current published state.
 
     The reply never re-enqueues and never upgrades the state: whatever the
-    entry last published is the fact, the entry's own committed withdrawal
-    reason and delivery record ride along in the correlation exactly as the
-    existing ask value reads them, and an unrecognized state stays a refusal
-    instead of being projected onto the reply set.
+    entry last published is the fact, and its delivery record rides along in
+    the correlation exactly as the existing ask value reads it. An unrecognized
+    state stays a refusal instead of being projected onto the reply set.
     """
     correlation: dict[str, Any] = {"questionId": entry.question_id, "duplicate": duplicate}
-    if entry.reason is not None:
-        correlation["reason"] = entry.reason
     if entry.delivery is not None:
         correlation["delivery"] = entry.delivery.value
     status = _REPLY_STATE_STATUSES.get(entry.status)

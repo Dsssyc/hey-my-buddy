@@ -282,12 +282,13 @@ class RequestBindingTests(LiveSeamCase):
 
 class ObserveTests(LiveSeamCase):
     def test_a_front_row_update_during_pagination_never_hides_the_back_rows(self):
-        self.publish_records([{"inquiryId": f"question-{index}", "state": "answered", "answer": "x" * 4000}
+        self.publish_records([{"inquiryId": f"question-{index}", "state": "answered",
+                               "answer": {"text": "x" * 4000}}
                               for index in range(32)])
         page1 = self.channel.observe(after_seq=None, limit=10, timeout_ms=1500)
         self.assertEqual([entry.question_id for entry in page1.inquiries],
                          [f"question-{index}" for index in range(10)])
-        self.publish_records([{"inquiryId": "question-0", "state": "answered", "answer": "changed"}])
+        self.publish_records([{"inquiryId": "question-0", "state": "answered", "answer": {"text": "changed"}}])
         cursor = max(entry.seq for entry in page1.inquiries)
         page2 = self.channel.observe(after_seq=cursor, limit=10, timeout_ms=1500)
         page3 = self.channel.observe(after_seq=max(entry.seq for entry in page2.inquiries),
@@ -317,7 +318,8 @@ class ObserveTests(LiveSeamCase):
         self.assertFalse(last.truncated)
 
     def test_the_full_answer_set_is_reachable_through_paged_observation(self):
-        self.publish_records([{"inquiryId": f"question-{index}", "state": "answered", "answer": "x" * 4000}
+        self.publish_records([{"inquiryId": f"question-{index}", "state": "answered",
+                               "answer": {"text": "x" * 4000}}
                               for index in range(32)])
         first = self.channel.observe(after_seq=None, limit=4, timeout_ms=1500)
         self.assertEqual(self.channel.observe(after_seq=None, limit=4, timeout_ms=1500), first)
@@ -343,7 +345,7 @@ class ObserveTests(LiveSeamCase):
 
     def test_activity_is_monotone_and_journal_changes_take_fresh_sequences(self):
         self.publish_records([{"inquiryId": "question-1", "state": "claimed"},
-                              {"inquiryId": "question-2", "state": "answered", "answer": "check the tests"}])
+                              {"inquiryId": "question-2", "state": "answered", "answer": {"text": "check the tests"}}])
         self.endpoint.publish_activity({"phase": "waiting-model", "eventSeq": 4})
         first = self.channel.observe(after_seq=None, limit=10, timeout_ms=1500)
         self.assertEqual([entry.status for entry in first.inquiries], ["queued", "answered"])
@@ -404,14 +406,13 @@ class TransportFactTests(LiveSeamCase):
         self.assertFalse(self.journal.exists())
         self.assertEqual(self.handoff().status, "queued")
 
-    def test_a_committed_withdrawal_is_an_observed_discarded_fact_with_its_reason(self):
+    def test_a_committed_withdrawal_is_an_observed_discarded_fact(self):
         self.handoff()
-        reason = "withdrawn by the asking side; it no longer blocks turn completion"
-        self.commit({"inquiryId": "question-1", "state": "discarded", "reason": reason})
+        self.commit({"inquiryId": "question-1", "state": "discarded"})
         reply = self.channel.request(inquiry_request(), timeout_ms=1500)
         self.assertEqual((reply.status, reply.observed, reply.state), ("discarded", True, "discarded"))
         self.assertIsNone(reply.error_code)
-        self.assertEqual(reply.native_correlation.value["reason"], reason)
+        self.assertNotIn("reason", reply.native_correlation.value)
         self.assertIsNone(self.endpoint.consume_request(0))
 
     def test_an_unreachable_transport_reads_as_a_fact_on_request_and_snapshot(self):
@@ -510,14 +511,17 @@ class ObserveSelectionTests(LiveSeamCase):
                          ("answered", "the answer", 10, False))
         self.assertEqual(entry.tool_call_id, "call-1")
         self.assertEqual(entry.delivery.value["admittedDelivery"], "cooperative-checkpoint")
-        bare = [{"inquiryId": "question-2", "state": "answered", "answer": "from the node journal",
-                 "answerBytes": 21, "via": "tool:hey_my_buddy_inquiry_reply", "toolCallId": "call-2",
-                 "answeredAt": "2026-09-19T05:00:04.000Z", "truncated": True}]
+        bare = [{"inquiryId": "question-2", "state": "answered", "answer": "legacy text",
+                 "answerBytes": 11, "answeredAt": "2026-09-19T05:00:04.000Z"}]
         entry, = lv._journal_states(bare)
-        self.assertEqual((entry.status, entry.answer, entry.bytes, entry.truncated, entry.via,
-                          entry.tool_call_id, entry.at),
-                         ("answered", "from the node journal", 21, True, "tool:hey_my_buddy_inquiry_reply",
-                          "call-2", "2026-09-19T05:00:04.000Z"))
+        self.assertEqual((entry.status, entry.answer, entry.bytes, entry.at),
+                         ("answered", None, None, None))
+        entry, = lv._journal_states([{
+            "inquiryId": "question-3", "state": "answered", "text": "not nested",
+            "via": "sibling", "toolCallId": "sibling", "at": "sibling",
+        }])
+        self.assertIsNone(entry.answer)
+        self.assertIsNone(entry.at)
 
     def test_the_journal_fact_reports_availability_count_and_rejections(self):
         self.endpoint.publish_journal(lv.LiveJournal(available=False, reason="journal-not-written", entries=0))
@@ -528,26 +532,26 @@ class ObserveSelectionTests(LiveSeamCase):
         self.publish_records([{"inquiryId": "question-1", "state": "queued"}])
         self.endpoint.publish_journal({"available": True, "reason": None, "entries": 2,
                                        "rejections": [{"questionId": "question-foreign",
-                                                       "reason": "the journal record belongs to another task"}]})
+                                                       "reason": "journal-task-mismatch"}]})
         snapshot = self.channel.observe(after_seq=None, limit=8, timeout_ms=1500, fields=("inquiries",))
         self.assertEqual((snapshot.journal.available, snapshot.journal.entries), (True, 2))
         self.assertEqual([item.question_id for item in snapshot.journal.rejections], ["question-foreign"])
-        self.assertEqual(snapshot.journal.rejections[0].reason, "the journal record belongs to another task")
+        self.assertEqual(snapshot.journal.rejections[0].reason, "journal-task-mismatch")
         self.assertEqual([entry.question_id for entry in snapshot.inquiries], ["question-1"])
-        for invalid in ({"available": False, "reason": "mysterious", "entries": 0, "rejections": []},
+        for invalid in ({"available": True, "entries": 1, "rejections": [{"questionId": "q", "reason": "the journal belongs to another task"}]},
+                        {"available": False, "reason": "mysterious", "entries": 0, "rejections": []},
                         [{"inquiryId": "question-1", "state": "queued"}]):
             with self.assertRaises(BoardError):
                 self.endpoint.publish_journal(invalid)
 
-    def test_a_bound_record_keeps_its_limitation_for_the_public_reason(self):
-        note = "Host questions are queued by the bridge and delivered only at the root's next checkpoint"
-        journal = [{"inquiryId": "question-1", "state": "unavailable",
-                    "reason": "the micro task root turn ended before this inquiry was answered", "limitation": note}]
+    def test_a_closed_record_projects_only_unavailable_status(self):
+        journal = [{"inquiryId": "question-1", "state": "unavailable"}]
         self.publish_records(journal)
         entry = self.channel.observe(after_seq=None, limit=8, timeout_ms=1500,
                                       fields=("inquiries",)).inquiries[0]
-        self.assertEqual((entry.status, entry.reason, entry.limitation),
-                         ("unavailable", "the micro task root turn ended before this inquiry was answered", note))
+        self.assertEqual(entry.status, "unavailable")
+        self.assertNotIn("reason", entry.to_payload())
+        self.assertNotIn("limitation", entry.to_payload())
 
     def test_failed_owner_observation_keeps_its_facts_without_clearing_activity(self):
         self.endpoint.publish_activity({"phase": "streaming-model", "eventSeq": 6})

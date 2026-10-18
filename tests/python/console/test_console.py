@@ -738,7 +738,7 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
                 "adapter": "command",
                 "argv": ["true"],
             })["task"]["runId"]
-        posted = board.call("message_post", {"runId": run, "inquiryId": "ask-1", "question": "Status?"})["message"]
+        posted = board.store._message_post(run, "ask-1", "Status?")["message"]
         _stated, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
 

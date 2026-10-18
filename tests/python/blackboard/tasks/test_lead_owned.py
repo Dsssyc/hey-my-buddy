@@ -151,7 +151,7 @@ class LeadOwnedTests(WorkflowTestCase):
         helper_view, helper_claim = self.finish_owned(board, helper, "w2", disposition="assistance")
         scope = board.store.workflow.resolve_credential(claim["agentCredential"])
         for view, attempt in ((host_view, host_claim), (other_view, other_attempt), (helper_view, helper_claim)):
-            message = board.call("message_post", {"runId": view["runId"], "inquiryId": "question", "question": "Status?"})["message"]
+            message = board.store._message_post(view["runId"], "question", "Status?")["message"]
             for operation in sorted(workflow.LEAD_OWNED_OPERATIONS):
                 selectors = [{"runId": view["runId"]}, {"taskId": view["runId"]},
                              {"requestId": view["activeRequest"]["requestId"] if operation == "workflow_decide" else view["requestId"]},
@@ -214,7 +214,6 @@ class LeadOwnedTests(WorkflowTestCase):
         message = board.call("message_get", {"runId": child["runId"], "inquiryId": "question", **cred})["message"]
         board.call("message_get", {"messageId": message["messageId"], **cred})
         board.call("message_list", {"runId": child["runId"], **cred})
-        board.call("message_wait", {"runId": child["runId"], "inquiryId": "question", "timeoutMs": 0, **cred})
         view, _ = self.finish_owned(board, child, disposition="assistance")
         declined = self.decide(board, view, view["activeRequest"]["requestId"], decision="decline", **cred)
         continued = self.continue_run(board, declined, **cred)
