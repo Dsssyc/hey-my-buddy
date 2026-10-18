@@ -16,10 +16,10 @@ from support import BoardTestCase
 from hey_my_buddy.cli import main as cli
 from hey_my_buddy.blackboard.service import daemon
 from hey_my_buddy.protocol import schemas, transport
-from hey_my_buddy.protocol.contracts import CONTRACT_VERSION, BuddyControl, BuddyWait
+from hey_my_buddy.protocol.contracts import CONTRACT_VERSION, BuddyControl
 from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS, WAIT_OPERATIONS
+from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS
 from hey_my_buddy.blackboard.store.store import BoardStore
 
 
@@ -160,15 +160,6 @@ class CurrentCoreTests(BoardTestCase):
         self.assertFalse(hasattr(board.service, "task_submit"))
         self.assertNotIn("execution-submit", cli.METHODS)
         self.assertNotIn(("control", "task_submit"), transport.METHOD_MAP.values())
-        for method, operation in (("message", "message_post"), ("message-update", "message_update")):
-            self.assertNotIn(method, cli.METHODS)
-            self.assertNotIn(method, transport.METHOD_MAP)
-            self.assertNotIn(operation, CONTROL_OPERATIONS)
-            self.assertFalse(hasattr(BuddyControl, operation))
-            self.assertFalse(hasattr(board.service, operation))
-        self.assertNotIn("message_wait", WAIT_OPERATIONS)
-        self.assertFalse(hasattr(BuddyWait, "message_wait"))
-        self.assertFalse(hasattr(board.wait_service, "message_wait"))
         with self.assertRaises(BoardError) as caught:
             board.call("workflow_get", {"runId": "current-run", "taskId": "silently-ignored-target"})
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")

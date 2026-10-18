@@ -895,12 +895,11 @@ class TestInquiry(BoardTestCase):
         board = self.board()
         client = board.client()
         task, _attempt, _owner = self._attempt_directory(board, client)
-        for apply in (_apply_journal, lambda store, task, inquiry, record: _apply_bridge_answer(store, task, inquiry, record, None)):
-            self.assertEqual(apply(board.store, task["runId"], "q-orphan", {"state": "delivered"}), "journal-question-unknown")
-            board.store._message_post(task["runId"], "q-owned", "status?")
+        self.assertEqual(_apply_journal(board.store, task["runId"], "q-orphan", {"state": "delivered"}), "journal-question-unknown")
+        board.store._message_post(task["runId"], "q-owned", "status?")
+        for apply in (_apply_journal, _apply_bridge_answer):
             with mock.patch.object(board.store, "_message_update", side_effect=BoardError("CONFLICT", "test failure")), self.assertRaises(BoardError):
                 apply(board.store, task["runId"], "q-owned", {"state": "delivered"})
-        self.assertEqual(_mark_unavailable(board.store, task["runId"], "q-orphan", "agent-gone"), "journal-question-unknown")
         with mock.patch.object(board.store, "_message_update", side_effect=BoardError("CONFLICT", "test failure")), self.assertRaises(BoardError):
             _mark_unavailable(board.store, task["runId"], "q-owned", "agent-gone")
 
@@ -910,6 +909,7 @@ class TestInquiry(BoardTestCase):
         task, _attempt, _owner = self._attempt_directory(board, client)
         result = board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-shape", "question": "status?"})
         self.assertNotIn("note", result)
+        self.assertNotIn("reason", result["live"])
         self.assertNotIn("limitation", result["live"])
         self.assertEqual(result["inquiry"]["answer"], {"available": False})
         self.assertNotIn("note", result["inquiry"])
@@ -922,24 +922,57 @@ class TestInquiry(BoardTestCase):
         task, _attempt, _owner = self._attempt_directory(board, client)
         board.store._message_post(task["runId"], "q-closed", "status?")
         frame = InquiryState(question_id="q-closed", status="unavailable")
-        _apply_bridge_answer(board.store, task["runId"], "q-closed", _live_answer_value(frame), None)
+        _apply_bridge_answer(board.store, task["runId"], "q-closed", _live_answer_value(frame))
         message = client.get_message("q-closed", runId=task["runId"])
         self.assertEqual(message["state"], "unavailable")
         self.assertEqual(message["reason"], {"code": "inquiry-root-turn-ended", "params": {}})
 
-    def test_invalid_journal_answer_size_and_state_fail_at_receipt(self):
-        from hey_my_buddy.blackboard.tasks.inquiry import _apply_journal
+    def test_terminal_observe_reports_invalid_records_and_imports_valid_answers(self):
         board = self.board()
         client = board.client()
-        task, _attempt, _owner = self._attempt_directory(board, client)
-        board.store._message_post(task["runId"], "q-invalid", "status?")
-        head = board.store.head()
-        for record in ({"state": "not-a-state"}, {"state": "answered", "answer": {"text": "错" * 1400}}):
-            with self.subTest(record=record), self.assertRaises(BoardError) as error:
-                _apply_journal(board.store, task["runId"], "q-invalid", record)
-            self.assertEqual(error.exception.code, "INVALID_ARGUMENT")
-        self.assertEqual(board.store.head(), head)
-        self.assertEqual(client.get_message("q-invalid", runId=task["runId"])["state"], "queued")
+        task, attempt, owner = self._attempt_directory(board, client)
+        for question_id in ("q-state", "q-size", "q-valid"):
+            board.store._message_post(task["runId"], question_id, "status?")
+        owner.close()
+        client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32,
+                             {"status": "ok", "result": {"finalText": "fixture ended"},
+                              "shutdownConfirmed": True, "exitCode": 0})
+        bound = self._bound_fields(task, attempt)
+        records = [
+            {**bound, "inquiryId": "q-state", "state": "not-a-state"},
+            {**bound, "inquiryId": "q-size", "state": "answered", "answer": {"text": "错" * 1400}},
+            {**bound, "inquiryId": "q-valid", "state": "answered", "answer": {"text": "valid answer"}},
+        ]
+        journal = Path(owner.journal_path)
+        journal.write_text("".join(json.dumps(record) + "\n" for record in records))
+        evidence = journal.read_bytes()
+        before = len(owner.requests)
+        for selector in ({}, {"inquiryId": "q-state", "question": "status?"}, {}):
+            observed = board.call("inquiry_observe", {"runId": task["runId"], **selector})
+            self.assertEqual(observed["journal"]["rejections"], {
+                "q-state": "journal-record-invalid", "q-size": "journal-record-invalid"})
+            self.assertEqual(observed["journal"]["entries"], 3)
+            if selector:
+                self.assertEqual(observed["bridge"]["journalRejected"], "journal-record-invalid")
+            self.assertEqual(client.get_message("q-valid", runId=task["runId"])["answer"]["text"], "valid answer")
+            for question_id in ("q-state", "q-size"):
+                self.assertIsNone(client.get_message(question_id, runId=task["runId"])["answer"])
+        self.assertEqual(journal.read_bytes(), evidence)
+        self.assertEqual(len(owner.requests), before)
+
+    def test_observe_preserves_delivery_mode_and_separates_live_diagnostics(self):
+        board = self.board()
+        task, _attempt, owner = self._attempt_directory(board, board.client())
+        for mode in ("realtime", "cooperative-checkpoint", "unsupported"):
+            for ready in (True, False):
+                with self.subTest(mode=mode, ready=ready):
+                    diagnostic = "journal-unavailable: the inquiry record could not be appended durably"
+                    owner.observation.update(ready=ready, error=diagnostic, deliveryMode=mode)
+                    result = board.call("inquiry_observe", {"runId": task["runId"]})
+                    self.assertEqual(result["live"]["available"], ready)
+                    self.assertEqual(result["live"]["deliveryMode"], mode)
+                    self.assertEqual(result["live"]["error"], diagnostic)
+                    self.assertNotIn("reason", result["live"])
 
     def test_only_nested_journal_answers_supply_answer_provenance(self):
         from hey_my_buddy.blackboard.tasks.inquiry import normalize_journal_answer

@@ -81,7 +81,7 @@ class ActivityValidation(BoardTestCase):
             "lastNativeActivityAt": "2026-01-01T00:00:01.000Z",
             "lastToolActivityAt": "2026-01-01T00:00:00.900Z",
             "toolName": "read_file",
-            "waitingReason": {"code": "native-authority-required", "params": {"kind": "permission.requested"}},
+            "waitingReason": {"code": "native-authority-required", "params": {"kind": "permission"}},
             "counts": {"modelTurns": 2, "toolCalls": 3},
         }
         self.assertEqual(normalize_activity(payload), payload)

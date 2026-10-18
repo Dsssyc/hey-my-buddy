@@ -999,25 +999,20 @@ def _upgrade_routing_copies(connection: sqlite3.Connection) -> None:
                                (canonical_json(payload), seq))
 
 
-# The sentence, emitter and storage bound identify the schema-24 writer.
+# Each schema-24 sentence is owned by one event writer.
 _INQUIRY_PROGRAM_REASONS = {
-    'no live agent to receive this question': 'inquiry-no-live-agent',
-    'the attempt ended before this question could be delivered': 'inquiry-queued-at-attempt-end',
-    'this adapter observes native activity but has no correlated inquiry capability': 'inquiry-observe-only',
-    'the live bridge reported answered without usable answer text': 'inquiry-answer-empty',
-    'the bridge recorded an answered journal entry without usable answer text': 'inquiry-answer-empty',
-    'the micro task root turn ended before this inquiry was answered': 'inquiry-root-turn-ended',
-    'the micro task root turn ended before reading or answering this inquiry; its queued follow-up was stopped': 'inquiry-root-turn-ended',
-    "Host questions reach this root only when the root itself calls hey_my_buddy_checkpoint inside the one admitted native turn (cooperative-checkpoint delivery); they are never injected mid-turn, never start a new turn, and an answer counts only through hey_my_buddy_answer_inquiry verified against this root turn's own tool evidence": 'inquiry-root-turn-ended',
-    "Host questions are queued by the bridge and delivered only at the root's next hey_my_buddy_checkpoint or finish refusal inside the same admitted native turn; they are never injected through session/send, a v4 command, a stop, a restart or a new turn, and an answer counts only through hey_my_buddy_answer_inquiry verified against the root turn's own tool evidence": 'inquiry-root-turn-ended',
+    'the attempt ended before this question could be delivered': ('inquiry-queued-at-attempt-end', ('service', 'attempt-finished')),
+    'this adapter observes native activity but has no correlated inquiry capability': ('inquiry-observe-only', ('bridge', 'live-bridge')),
+    'the live bridge reported answered without usable answer text': ('inquiry-answer-empty', ('bridge', 'live-bridge')),
+    'the bridge recorded an answered journal entry without usable answer text': ('inquiry-answer-empty', ('bridge', 'bridge-journal')),
+    'the micro task root turn ended before this inquiry was answered': ('inquiry-root-turn-ended', ('bridge', 'bridge-journal')),
+    'the micro task root turn ended before reading or answering this inquiry; its queued follow-up was stopped': ('inquiry-root-turn-ended', ('bridge', 'bridge-journal')),
+    "Host questions reach this root only when the root itself calls hey_my_buddy_checkpoint inside the one admitted native turn (cooperative-checkpoint delivery); they are never injected mid-turn, never start a new turn, and an answer counts only through hey_my_buddy_answer_inquiry verified against this root turn's own tool evidence": ('inquiry-root-turn-ended', ('bridge', 'bridge-journal')),
+    "Host questions are queued by the bridge and delivered only at the root's next hey_my_buddy_checkpoint or finish refusal inside the same admitted native turn; they are never injected through session/send, a v4 command, a stop, a restart or a new turn, and an answer counts only through hey_my_buddy_answer_inquiry verified against the root turn's own tool evidence": ('inquiry-root-turn-ended', ('bridge', 'bridge-journal')),
 }
-_INQUIRY_PROGRAM_ACTORS = {('bridge', 'live-bridge'), ('bridge', 'bridge-journal'),
-                           ('service', 'attempt-finished')}
 
 
 def _message_reason(connection: sqlite3.Connection, row: sqlite3.Row) -> dict | None:
-    if row['state'] == 'answered':
-        return None
     old = row['reason']
     if old is None and row['state'] != 'unavailable':
         return None
@@ -1042,19 +1037,20 @@ def _message_reason(connection: sqlite3.Connection, row: sqlite3.Row) -> dict | 
         if live_closed_without_reason:
             return make_reason('inquiry-root-turn-ended')
         raise BoardError('UPGRADE_INVALID_BOARD', 'Unavailable message has no recognized writer')
-    program = bool(sources & _INQUIRY_PROGRAM_ACTORS)
+    reason = None
     if posted_unavailable and old == 'no live agent to receive this question':
-        return make_reason('inquiry-no-live-agent')
-    if program:
-        for text, code in _INQUIRY_PROGRAM_REASONS.items():
-            # Old journal/mark writes had a 400-character bound; live answers
-            # had a 200-character bound. These are finite known writer forms.
-            if old in (text, text[:400], text[:200]):
-                return {'code': code, 'params': {}}
+        reason = make_reason('inquiry-no-live-agent')
+    elif old in _INQUIRY_PROGRAM_REASONS:
+        code, writer = _INQUIRY_PROGRAM_REASONS[old]
+        if writer in sources:
+            reason = {'code': code, 'params': {}}
+    elif ('bridge', 'live-bridge') in sources:
         match = re.fullmatch(r'the bridge cannot deliver this question \((agent-gone|agent-not-running|journal-unavailable)\)', old)
         if match:
-            return make_reason('bridge-refused', errorCode=match[1])
-    raise BoardError('UPGRADE_INVALID_BOARD', 'Message reason has no recognized writer')
+            reason = make_reason('bridge-refused', errorCode=match[1])
+    if reason is None:
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Message reason has no recognized writer')
+    return None if row['state'] == 'answered' else reason
 
 
 def _upgrade_messages(connection: sqlite3.Connection) -> None:

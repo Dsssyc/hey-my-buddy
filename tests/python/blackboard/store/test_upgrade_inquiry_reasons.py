@@ -15,6 +15,32 @@ from hey_my_buddy.blackboard.store.upgrade import upgrade_schema_24_to_25
 from hey_my_buddy.errors import BoardError
 
 
+DSH_LIMITATION = ("Host questions reach this root only when the root itself calls hey_my_buddy_checkpoint inside the one "
+                  "admitted native turn (cooperative-checkpoint delivery); they are never injected mid-turn, never "
+                  "start a new turn, and an answer counts only through hey_my_buddy_answer_inquiry verified against this "
+                  "root turn's own tool evidence")
+ZCODE_LIMITATION = ("Host questions are queued by the bridge and delivered only at the root's next hey_my_buddy_checkpoint "
+                    "or finish refusal inside the same admitted native turn; they are never injected through "
+                    "session/send, a v4 command, a stop, a restart or a new turn, and an answer counts only through "
+                    "hey_my_buddy_answer_inquiry verified against the root turn's own tool evidence")
+PROGRAM_WRITERS = (
+    ('the attempt ended before this question could be delivered', ('service', 'attempt-finished')),
+    ('this adapter observes native activity but has no correlated inquiry capability', ('bridge', 'live-bridge')),
+    ('the live bridge reported answered without usable answer text', ('bridge', 'live-bridge')),
+    ('the bridge recorded an answered journal entry without usable answer text', ('bridge', 'bridge-journal')),
+    ('the micro task root turn ended before this inquiry was answered', ('bridge', 'bridge-journal')),
+    ('the micro task root turn ended before reading or answering this inquiry; its queued follow-up was stopped',
+     ('bridge', 'bridge-journal')),
+    (DSH_LIMITATION, ('bridge', 'bridge-journal')),
+    (ZCODE_LIMITATION, ('bridge', 'bridge-journal')),
+    ('the bridge cannot deliver this question (agent-gone)', ('bridge', 'live-bridge')),
+    ('the bridge cannot deliver this question (agent-not-running)', ('bridge', 'live-bridge')),
+    ('the bridge cannot deliver this question (journal-unavailable)', ('bridge', 'live-bridge')),
+)
+WRITERS = (('service', 'attempt-finished'), ('bridge', 'live-bridge'),
+           ('bridge', 'bridge-journal'), ('bridge', 'bridge'), ('bridge', 'cli'))
+
+
 class InquiryReasonUpgradeTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix='upgrade-inquiry-'))
@@ -35,6 +61,11 @@ class InquiryReasonUpgradeTests(unittest.TestCase):
     def message(self, inquiry_id, state, reason, *, actor=None, answer=None, posted_state="queued",
                 updated_state=None, updated_inquiry_id=None):
         message_id = 'message-' + inquiry_id
+        if answer is not None:
+            answer = {"text": answer["text"], "bytes": len(answer["text"].encode("utf-8")),
+                      "via": answer.get("via"), "toolCallId": answer.get("toolCallId"),
+                      "at": answer.get("at"), "truncated": answer.get("truncated") is True,
+                      "source": answer.get("source")}
         self.db.execute(
             'INSERT INTO messages(message_id,task_id,attempt_id,inquiry_id,direction,author,body,'
             'body_bytes,payload_hash,state,reason,answer_json,created_at,updated_at) '
@@ -54,6 +85,17 @@ class InquiryReasonUpgradeTests(unittest.TestCase):
         self.db.commit()
         upgrade_schema_24_to_25(self.fixture['state'])
 
+    def assert_rejected_message(self, inquiry_id, state, reason, **options):
+        previous_seq = self.db.execute('SELECT COALESCE(MAX(seq), 0) FROM events').fetchone()[0]
+        self.message(inquiry_id, state, reason, **options)
+        with self.assertRaises(BoardError) as caught:
+            self.upgrade()
+        self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+        self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '24')
+        self.db.execute('DELETE FROM events WHERE seq>?', (previous_seq,))
+        self.db.execute('DELETE FROM messages WHERE inquiry_id=?', (inquiry_id,))
+        self.db.commit()
+
     def test_program_reasons_follow_event_actor(self):
         cases = (
             ('finished', 'unavailable', 'the attempt ended before this question could be delivered',
@@ -69,8 +111,16 @@ class InquiryReasonUpgradeTests(unittest.TestCase):
         )
         for inquiry_id, state, old, actor, _, _ in cases:
             self.message(inquiry_id, state, old, actor=actor)
-        self.message('answered', 'answered', cases[2][2], actor=('bridge', 'bridge-journal'),
-                     answer={'text': 'answer'})
+        # The old journal writer first recorded empty-answer delivery, then
+        # recorded the answer while retaining its previous reason.
+        self.message('answered', 'delivered', cases[2][2], actor=('bridge', 'bridge-journal'))
+        self.db.execute("UPDATE messages SET state='answered',answer_json=? WHERE inquiry_id='answered'",
+                        (canonical_json({"text": "answer", "bytes": 6, "via": None,
+                                         "toolCallId": None, "at": None, "truncated": False,
+                                         "source": "bridge-journal"}),))
+        self.event('message.updated', {'inquiryId': 'answered', 'state': 'answered',
+                                      'actor': {'role': 'bridge', 'id': 'bridge-journal'}},
+                   attempt_id=self.attempt_id)
         self.upgrade()
         for inquiry_id, _, _, _, code, params in cases:
             with self.subTest(inquiry=inquiry_id):
@@ -101,20 +151,11 @@ class InquiryReasonUpgradeTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
 
     def test_old_journal_limitation_and_claude_close_writers(self):
-        # 0.42.0's journal importer selected these fixed limitations before its
-        # reason, and stored the first 400 characters (both fit in that bound).
-        dsh = ("Host questions reach this root only when the root itself calls hey_my_buddy_checkpoint inside the one "
-               "admitted native turn (cooperative-checkpoint delivery); they are never injected mid-turn, never "
-               "start a new turn, and an answer counts only through hey_my_buddy_answer_inquiry verified against this "
-               "root turn's own tool evidence")
-        zcode = ("Host questions are queued by the bridge and delivered only at the root's next hey_my_buddy_checkpoint "
-                 "or finish refusal inside the same admitted native turn; they are never injected through "
-                 "session/send, a v4 command, a stop, a restart or a new turn, and an answer counts only through "
-                 "hey_my_buddy_answer_inquiry verified against the root turn's own tool evidence")
+        # Both fixed limitations fit in the journal writer's 400-character bound.
         claude = ("the micro task root turn ended before reading or answering this inquiry; "
                   "its queued follow-up was stopped")
-        for inquiry_id, text in (('dsh', dsh), ('zcode', zcode), ('claude', claude)):
-            self.message(inquiry_id, 'unavailable', text[:400], actor=('bridge', 'bridge-journal'))
+        for inquiry_id, text in (('dsh', DSH_LIMITATION), ('zcode', ZCODE_LIMITATION), ('claude', claude)):
+            self.message(inquiry_id, 'unavailable', text, actor=('bridge', 'bridge-journal'))
         self.message('live-empty', 'delivered', 'the live bridge reported answered without usable answer text',
                      actor=('bridge', 'live-bridge'))
         self.upgrade()
@@ -124,11 +165,43 @@ class InquiryReasonUpgradeTests(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT reason_code FROM messages WHERE inquiry_id='live-empty'").fetchone()[0],
                          'inquiry-answer-empty')
 
-    def test_answered_reason_is_cleared_without_needing_a_writer(self):
-        self.message('answered-unattributed', 'answered', 'obsolete reason', answer={'text': 'late answer'})
+    def test_answered_reason_requires_recognized_writer(self):
+        self.assert_rejected_message('answered-unattributed', 'answered', 'obsolete reason',
+                                     answer={'text': 'late answer'})
+        self.assert_rejected_message('answered-caller', 'answered', '已在会上口头答复',
+                                     actor=('bridge', 'bridge'), answer={'text': 'late answer'})
+        self.assert_rejected_message('answered-wrong-writer', 'answered', PROGRAM_WRITERS[0][0],
+                                     actor=('bridge', 'live-bridge'), answer={'text': 'late answer'})
+
+    def test_answered_without_a_stored_reason_needs_no_writer(self):
+        self.message('answered-clean', 'answered', None, answer={'text': 'answer'})
         self.upgrade()
-        row = self.db.execute("SELECT reason_code,reason_params_json FROM messages WHERE inquiry_id='answered-unattributed'").fetchone()
+        row = self.db.execute("SELECT reason_code,reason_params_json FROM messages WHERE inquiry_id='answered-clean'").fetchone()
         self.assertEqual(tuple(row), (None, None))
+
+    def test_each_program_sentence_requires_its_exact_writer(self):
+        for index, (reason, owner) in enumerate(PROGRAM_WRITERS):
+            for writer in WRITERS:
+                if writer == owner:
+                    continue
+                with self.subTest(reason=reason, writer=writer):
+                    self.assert_rejected_message(f'wrong-{index}-{writer[1]}', 'unavailable', reason,
+                                                 actor=writer)
+
+    def test_posted_reason_requires_unavailable_post_state(self):
+        for writer in WRITERS:
+            with self.subTest(writer=writer):
+                self.assert_rejected_message('posted-' + writer[1], 'unavailable',
+                                             'no live agent to receive this question', actor=writer)
+
+    def test_reason_prefixes_are_not_recognized(self):
+        for index, (reason, writer) in enumerate(PROGRAM_WRITERS):
+            for prefix in (reason[:-1], reason[:200], reason[:400]):
+                if prefix == reason:
+                    continue
+                with self.subTest(reason=reason, prefix_length=len(prefix)):
+                    self.assert_rejected_message(f'prefix-{index}-{len(prefix)}', 'unavailable', prefix,
+                                                 actor=writer)
 
     def test_live_closed_frame_without_reason_has_a_structured_reason(self):
         self.message('live-closed', 'unavailable', None, actor=('bridge', 'live-bridge'))

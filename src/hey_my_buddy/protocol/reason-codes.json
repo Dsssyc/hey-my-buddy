@@ -133,6 +133,7 @@
   "journal-attempt-mismatch": [],
   "journal-attempt-unbound": [],
   "journal-question-unknown": [],
+  "journal-record-invalid": [],
   "journal-task-mismatch": [],
   "lead.owned-concluded": [
     "leadRunId"
