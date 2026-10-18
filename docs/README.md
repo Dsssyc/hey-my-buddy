@@ -45,6 +45,7 @@ Daily [installation is 0.45.2/schema 24](acceptance/install-0.45.2.md): the shar
 | [reference/macro-tasks.md](reference/macro-tasks.md) | Macro task grouping, `macro-task-list`/`macro-task-timeline` read shapes and timeline presentation |
 | [reference/decision.md](reference/decision.md) | The harness-neutral Router protocol in both modes: the tool-free fast request and the read-only review request, frozen candidates, answer bounds, provisional budgets, input verification and the native capability boundary |
 | [reference/workers.md](reference/workers.md) | `dsh`/`zcode`/`codex`/`claude`/`command` adapters, the DSH launch and micro task turn, the public `BoardClient` contract, worker identity, reconciliation, bounded activity and receipts, and supervisors |
+| [reference/harness-integration.md](reference/harness-integration.md) | Adding a harness: each part to implement, its file and the test that guards it, the conformance check over every harness name and what it cannot verify |
 | [reference/architecture.md](reference/architecture.md) | Implemented topology, C-Two contract, schema 19, the shared attempt ceiling and model service concurrency, identity, recovery, catalog observation and packaging |
 
 Detailed commands belong in their owning reference, routed from this page and from [skills/hey-my-buddy/SKILL.md](../skills/hey-my-buddy/SKILL.md). The previous implementation contracts under `docs/implementation/` were consolidated into these owning references and removed; there is no compatibility copy.
