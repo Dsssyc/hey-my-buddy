@@ -635,6 +635,15 @@ def _converted_event_note(connection: sqlite3.Connection, row: sqlite3.Row,
 
 def _upgrade_notes(connection: sqlite3.Connection) -> None:
     """Change mutable Host and user annotations without rewriting frozen evidence."""
+    definition = next(part for part in EVALUATION_TABLES
+                      if 'CREATE TABLE IF NOT EXISTS evaluation_preferences (' in part)
+    connection.execute(definition.split('CREATE INDEX')[0].replace(
+        'evaluation_preferences (', 'evaluation_preferences_upgrade ('))
+    connection.execute("INSERT INTO evaluation_preferences_upgrade(buddy_id,mode,note)"
+                       " SELECT buddy_id,mode,NULLIF(reason,'') FROM evaluation_preferences")
+    connection.execute('DROP TABLE evaluation_preferences')
+    connection.execute('ALTER TABLE evaluation_preferences_upgrade RENAME TO evaluation_preferences')
+    connection.execute('CREATE INDEX evaluation_preferences_mode_idx ON evaluation_preferences(mode, buddy_id)')
     for table, old, new in (
         ('workflow_turns', 'access_reason', 'access_note'),
         ('workflow_continuations', 'reason', 'note'),
@@ -794,6 +803,16 @@ def _old_router_unavailable(value: str, record_id: str) -> dict:
     return {'code': code, 'params': {}} if code else make_reason('history.reason-unavailable', recordId=record_id)
 
 
+def _upgrade_preference_notes(entries: list[dict]) -> list[dict]:
+    """The schema-24 preference writer stores the user's text verbatim."""
+    converted = []
+    for entry in entries:
+        item = dict(entry)
+        item['note'] = item.pop('reason') or None
+        converted.append(item)
+    return converted
+
+
 def _upgrade_router_snapshot(value, *, record_id: str):
     """Convert board-authored, unsent routing snapshots only."""
     if not isinstance(value, dict):
@@ -812,6 +831,15 @@ def _upgrade_router_snapshot(value, *, record_id: str):
         return result
 
     result = dict(value)
+    if 'preferences' in result:
+        result['preferences'] = _upgrade_preference_notes(result['preferences'])
+    if 'routingBasis' in result:
+        basis = dict(result['routingBasis'])
+        if 'excludedBuddies' in basis:
+            basis['excludedBuddies'] = _upgrade_preference_notes(basis['excludedBuddies'])
+        result['routingBasis'] = basis
+    if 'baseInput' in result:
+        result['baseInput'] = _upgrade_router_snapshot(result['baseInput'], record_id=record_id)
     result.pop('routingBoundary', None)
     for key in ('inspections', 'selectionRetryInspections'):
         if key in result:
@@ -999,6 +1027,15 @@ def _upgrade_routing_copies(connection: sqlite3.Connection) -> None:
             if converted != json.loads(raw):
                 connection.execute(f'UPDATE {table} SET {column}=? WHERE {identity}=?',
                                    (canonical_json(converted), record_id))
+    for record_id, raw in connection.execute(
+        'SELECT decision_id,output_json FROM decision_requests WHERE output_json IS NOT NULL'
+    ):
+        output = json.loads(raw)
+        if 'programSelection' in output and 'preferences' in output['programSelection']:
+            output['programSelection']['preferences'] = _upgrade_preference_notes(
+                output['programSelection']['preferences'])
+            connection.execute('UPDATE decision_requests SET output_json=? WHERE decision_id=?',
+                               (canonical_json(output), record_id))
     for seq, kind, task_id, attempt_id, raw, actor_role, actor_id in connection.execute(
         'SELECT seq,kind,task_id,attempt_id,payload_json,actor_role,actor_id FROM events'
     ):

@@ -43,9 +43,9 @@ function basisLines(basis: Basis, t: TFunction<"taskDetail">): string[] {
     ...(basis.requiredCapabilities.length > 0 ? [t("basis.capabilities", { list: formatList(basis.requiredCapabilities) })] : []),
     ...(basis.candidateCount !== null ? [t("basis.candidates", { n: basis.candidateCount })] : []),
     ...(basis.excluded.length > 0
-      ? [t("basis.excluded", { n: basis.excluded.length, list: basis.excluded.map(item => item.reason ? `${named(item.buddy)} (${item.reason})` : named(item.buddy)).join("; ") })]
+      ? [t("basis.excluded", { n: basis.excluded.length, list: basis.excluded.map(item => item.note ? `${named(item.buddy)} (${item.note})` : named(item.buddy)).join("; ") })]
       : []),
-    ...basis.preferences.map(item => t(`basis.${item.mode}`, { buddy: item.buddyId, reason: item.reason ?? t("unrecorded") })),
+    ...basis.preferences.map(item => t(`basis.${item.mode}`, { buddy: item.buddyId, note: item.note ?? t("unrecorded") })),
   ];
 }
 

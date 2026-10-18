@@ -95,7 +95,7 @@ class RoutingHealthTests(BoardTestCase):
                 self.assertEqual(health["failureCount"], count)
                 self.assertEqual(health["consecutiveFailures"], count)
                 self.assertFalse(health["available"])
-                self.assertEqual(health["reasonCode"], "router-not-configured")
+                self.assertEqual(health["reason"], {"code": "router-not-configured", "params": {}})
                 self.assertEqual(health["recentFailures"][0], {
                     "decisionId": decision_id, "runId": f"task-health-{count}",
                     "at": now, "code": "router-budget-exhausted"})
@@ -108,7 +108,7 @@ class RoutingHealthTests(BoardTestCase):
             "programSelection": {"code": "single-candidate", "buddyId": "worker-fixture", "candidateCount": 1}})
         health = self.coordinator.health_summary()
         self.assertFalse(health["available"])
-        self.assertEqual(health["reasonCode"], "router-not-configured")
+        self.assertEqual(health["reason"], {"code": "router-not-configured", "params": {}})
         self.assertEqual(health["failureCount"], 3)
         self.assertEqual(health["budgetExhaustedCount"], 3)
         self.assertEqual(health["consecutiveFailures"], 3)
@@ -119,7 +119,7 @@ class RoutingHealthTests(BoardTestCase):
         self.settle("completed", invoked=False, output={"programSelection": {"code": "single-candidate"}})
         recovered = self.coordinator.health_summary()
         self.assertFalse(recovered["available"])
-        self.assertEqual(recovered["reasonCode"], "router-not-configured")
+        self.assertEqual(recovered["reason"], {"code": "router-not-configured", "params": {}})
         self.assertEqual(recovered["consecutiveFailures"], 0)
         self.assertEqual(recovered["failureCount"], 3)
         self.assertEqual(recovered["lastSuccessAt"], success_at)
@@ -133,7 +133,7 @@ class RoutingHealthTests(BoardTestCase):
         self.settle("failed", code="transport-error")
         health = self.coordinator.health_summary()
         self.assertFalse(health["available"])
-        self.assertEqual(health["reasonCode"], "router-not-configured")
+        self.assertEqual(health["reason"], {"code": "router-not-configured", "params": {}})
         self.assertEqual(health["failureCount"], 3)
         self.assertEqual(health["consecutiveFailures"], 3)
         self.assertEqual(health["budgetExhaustedCount"], 1)
@@ -160,7 +160,7 @@ class RoutingHealthTests(BoardTestCase):
         health = self.coordinator.health_summary()
         self.assertEqual(health["budgetExhaustedCount"], 3)
         self.assertEqual(health["failureCount"], 3)
-        self.assertEqual(health["reasonCode"], "router-not-configured")
+        self.assertEqual(health["reason"], {"code": "router-not-configured", "params": {}})
 
     def test_rejected_null_buddy_cannot_hide_a_failed_answer_in_the_overview(self):
         self.settle(output={"status": "ok", "operation": "select", "code": "router-tools-forbidden",
@@ -173,7 +173,7 @@ class RoutingHealthTests(BoardTestCase):
         for code in ("timeout", "call-timeout", "deadline"):
             self.settle("failed", code=code)
         health = self.coordinator.health_summary()
-        self.assertEqual(health["reasonCode"], "router-not-configured")
+        self.assertEqual(health["reason"], {"code": "router-not-configured", "params": {}})
         self.assertEqual(health["budgetExhaustedCount"], 0)
 
     def test_decision_event_has_no_reason_or_error_copies(self):
@@ -229,7 +229,7 @@ class RoutingHealthTests(BoardTestCase):
             before = list(connection.iterdump())
         empty = self.coordinator.health_summary()
         self.assertFalse(empty["available"])
-        self.assertEqual(empty["reasonCode"], "router-not-configured")
+        self.assertEqual(empty["reason"], {"code": "router-not-configured", "params": {}})
         self.assertEqual(empty["sampleCount"], 1)
         self.assertIsNone(empty["lastSuccessAt"])
         self.assertEqual(self.coordinator.health_summary(), empty)

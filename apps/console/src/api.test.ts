@@ -36,7 +36,7 @@ describe("snapshot upgrade boundary and routing health", () => {
     preferences: [], modelServiceNotes: [], modelServiceConcurrency: [],
     tasks: { pendingCount: 0 } };
   const error = { code: "router-settings-upgrade-required", message: "Router 设置需升级" };
-  const health = { available: false, reasonCode: "router-consecutive-failures", windowSize: 20, sampleCount: 3,
+  const health = { available: false, reason: { code: "router-consecutive-failures", params: {} }, windowSize: 20, sampleCount: 3,
     failureCount: 3, consecutiveFailures: 3, abstentionCount: 0, cancelledCount: 0,
     lastSuccessAt: null, lastSuccessDecisionId: null,
     recentFailures: [{ decisionId: "timeout", runId: "run", at: "2026-10-02T00:00:00Z", code: "router-timeout" }] };
@@ -51,6 +51,21 @@ describe("snapshot upgrade boundary and routing health", () => {
         .rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
     await expect(apiFor({ ...snapshot, configurationError: error }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+  });
+  it("reads nullable preference notes and refuses a malformed preference publication view", async () => {
+    for (const note of [null, "", " 用户备注 "]) {
+      const preferences = [{ buddyId: "dsh:p:m:off", mode: "prefer", note }];
+      await expect(apiFor({ ...snapshot, preferences }).snapshot()).resolves.toMatchObject({ preferences });
+    }
+    for (const preference of [
+      { buddyId: "a", mode: "prefer", note: 1 },
+      { buddyId: "a", mode: "prefer", reason: "old field" },
+      { buddyId: "a", mode: "prefer", note: null, reason: "old field" },
+      { buddyId: "a", mode: "other", note: null },
+    ]) {
+      await expect(apiFor({ ...snapshot, preferences: [preference] }).snapshot())
+        .rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    }
   });
   it("preserves snapshot parsing while reporting its own revalidation time", async () => {
     const date = "Fri, 09 Oct 2026 18:05:00 GMT";
@@ -73,9 +88,9 @@ describe("snapshot upgrade boundary and routing health", () => {
   });
   it("preserves service availability and timeout failures without calculating a threshold", async () => {
     await expect(apiFor({ ...snapshot, routingHealth: health }).snapshot()).resolves.toMatchObject({ routingHealth: health });
-    expect(parseRoutingHealth({ ...health, available: true, reasonCode: null })).toMatchObject({ available: true });
+    expect(parseRoutingHealth({ ...health, available: true, reason: null })).toMatchObject({ available: true });
     expect(parseRoutingHealth({ ...health, consecutiveFailures: 0 })).toMatchObject({ available: false });
-    for (const broken of [{ ...health, available: "false" }, { ...health, reasonCode: 3 }, { ...health, recentFailures: {} }]) {
+    for (const broken of [{ ...health, available: "false" }, { ...health, reason: 3 }, { ...health, recentFailures: {} }]) {
       await expect(apiFor({ ...snapshot, routingHealth: broken }).snapshot()).resolves.toMatchObject({ routingHealth: undefined });
     }
   });
@@ -88,7 +103,7 @@ describe("snapshot upgrade boundary and routing health", () => {
       windowBudgetExhaustedCount: 4, windowBoundsRejectedCount: 0, windowAttemptCount: 4,
       lastError: { code: "timeout", at: "2026-10-02T01:00:00Z", phase: "runtime" },
     }, { buddyId: "tail", index: 1, identity: null, eligible: false, code: "router-skip-window" }];
-    const listHealth = { ...health, available: false, reasonCode: "router-skip-window",
+    const listHealth = { ...health, available: false, reason: { code: "router-skip-window", params: {} },
       currentRouterBuddyId: "tail", routers, unattributedCount: 1,
       unattributed: [{ decisionId: "dec-u", at: "2026-10-02T02:00:00Z", outcome: "unknown", code: null }] };
     await expect(apiFor({ ...snapshot, routingHealth: listHealth }).snapshot()).resolves.toMatchObject({ routingHealth: listHealth });

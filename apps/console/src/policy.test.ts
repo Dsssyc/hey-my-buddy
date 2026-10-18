@@ -173,7 +173,7 @@ describe("blocking new changes", () => {
   it("allows disabling an unavailable buddy and editing its model service note", () => {
     const enabledRetired = { ...retired, enabled: true };
     const baseline = makeDraft(snapshot([worker, enabledRetired], {
-      preferences: [{ buddyId: retired.buddyId, mode: "pin", reason: "以前固定" }],
+      preferences: [{ buddyId: retired.buddyId, mode: "pin", note: "以前固定" }],
     }));
     let draft = {
       ...baseline,
@@ -201,21 +201,21 @@ describe("blocking new changes", () => {
     const pinned = setPreference(baseline, disabled.buddyId, "pin");
     expect(blockingIssues(baseline, pinned)[0].message).toContain("停用状态");
     // An existing pin on a disabled buddy is attention, never a blocker.
-    const stale = { ...baseline, preferences: [{ buddyId: disabled.buddyId, mode: "pin" as const, reason: "以前固定" }] };
+    const stale = { ...baseline, preferences: [{ buddyId: disabled.buddyId, mode: "pin" as const, note: "以前固定" }] };
     expect(blockingIssues(stale, stale)).toEqual([]);
     expect(attentionIssues(stale)[0].message).toContain("停用状态");
   });
 
   it("allows a reason-only edit of an existing unavailable pin", () => {
     const baseline = makeDraft(snapshot([worker, retired], {
-      preferences: [{ buddyId: retired.buddyId, mode: "pin", reason: "旧依据" }],
+      preferences: [{ buddyId: retired.buddyId, mode: "pin", note: "旧依据" }],
     }));
     // The mode does not transition into pin, so current legality is not required.
     const reasonOnly = setPreference(baseline, retired.buddyId, "pin", "新依据");
     expect(blockingIssues(baseline, reasonOnly)).toEqual([]);
     const patch = publication(baseline, reasonOnly, "c");
     expect(patch.preferenceChanges).toEqual([
-      { buddyId: retired.buddyId, mode: "pin", reason: "新依据" },
+      { buddyId: retired.buddyId, mode: "pin", note: "新依据" },
     ]);
     // The same edit from prefer into pin is a transition and stays blocked.
     const soft = setPreference(baseline, retired.buddyId, "prefer", "旧依据");
@@ -271,7 +271,7 @@ describe("stale settings needing attention", () => {
 
   it("reports a stale buddy pin while leaving other patches untouched", () => {
     const baseline = makeDraft(snapshot([worker, retired], {
-      preferences: [{ buddyId: retired.buddyId, mode: "pin", reason: "以前固定" }],
+      preferences: [{ buddyId: retired.buddyId, mode: "pin", note: "以前固定" }],
     }));
     const issues = attentionIssues(baseline);
     expect(issues).toHaveLength(1);

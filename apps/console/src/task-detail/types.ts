@@ -169,9 +169,9 @@ export type Basis = {
   requiredCapabilities: string[];
   /** How many candidates were legal; null when it was not recorded. */
   candidateCount: number | null;
-  excluded: { buddy: Partial<Buddy>; reason: string | null }[];
+  excluded: { buddy: Partial<Buddy>; note: string | null }[];
   /** The preferences the program applied when it chose the only candidate. */
-  preferences: { buddyId: string; mode: "prefer" | "pin" | "exclude"; reason: string | null }[];
+  preferences: { buddyId: string; mode: "prefer" | "pin" | "exclude"; note: string | null }[];
 };
 
 export type InquiryState = "queued" | "claimed" | "delivered" | "answered" | "discarded" | "unavailable";

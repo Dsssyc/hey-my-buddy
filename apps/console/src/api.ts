@@ -1,7 +1,7 @@
 import i18n from "i18next";
 import { locale } from "./i18n";
 import { isReason } from "./reason";
-import type { RuntimeVersionInfo, VersionFacts, Configuration, ConsoleAccess, ConsoleSession, ReminderSettings, RoutingHealth, Snapshot } from "./types";
+import type { RuntimeVersionInfo, VersionFacts, Configuration, ConsoleAccess, ConsoleSession, ReminderSettings, RoutingHealth, Snapshot, Preference } from "./types";
 import type {
   MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskSummary, MacroTaskTimeline, TimelineRow, TimelineSpan,
 } from "./macro-task-types";
@@ -134,6 +134,14 @@ function validRouterHealthEntry(entry: unknown): entry is NonNullable<RoutingHea
   return true;
 }
 
+/** Preferences carry only user-authored notes and their effective mode. */
+export function validPreferences(value: unknown): value is Preference[] {
+  return Array.isArray(value) && value.every(entry => entry && typeof entry === "object"
+    && !Array.isArray(entry) && Object.keys(entry).length === 3
+    && typeof entry.buddyId === "string" && ["prefer", "pin", "exclude"].includes(entry.mode)
+    && (entry.note === null || typeof entry.note === "string"));
+}
+
 /** Optional health observations are never inferred from a failure count. */
 export function parseRoutingHealth(value: unknown): RoutingHealth | undefined {
   const health = value as RoutingHealth | null;
@@ -145,7 +153,7 @@ export function parseRoutingHealth(value: unknown): RoutingHealth | undefined {
       health.unattributedCount]
       .some(count => count !== undefined && (!Number.isSafeInteger(count) || count < 0))
     || (health.available !== undefined && typeof health.available !== "boolean")
-    || (health.reasonCode !== undefined && health.reasonCode !== null && typeof health.reasonCode !== "string")
+    || (health.reason !== undefined && health.reason !== null && !isReason(health.reason))
     || (health.currentRouterBuddyId !== undefined && health.currentRouterBuddyId !== null
       && typeof health.currentRouterBuddyId !== "string")
     || (health.routers !== undefined
@@ -664,7 +672,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         !Number.isSafeInteger(data.eventCursor) || data.eventCursor < 0 ||
         !validConfigurationState(data) ||
         !Array.isArray(data.buddies) ||
-        !Array.isArray(data.preferences) ||
+        !validPreferences(data.preferences) ||
         !Array.isArray(data.modelServiceNotes) ||
         !Array.isArray(data.modelServiceConcurrency) ||
         !data.tasks ||

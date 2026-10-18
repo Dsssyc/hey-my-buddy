@@ -485,7 +485,7 @@ class ModelFactsTestCase(EvaluationTestCase):
         calls = self.count_refresh_calls()
         # A buddy preference patch without an enablement never touches the source.
         self.publish(board, preferenceChanges=[{"buddyId": FLASH_BUDDY_ID,
-                                                "mode": "prefer", "reason": ""}])
+                                                "mode": "prefer", "note": ""}])
         self.assertEqual(calls, [])
 
     def test_resaving_an_enabled_effort_does_not_trigger(self):

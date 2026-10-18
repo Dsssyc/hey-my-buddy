@@ -194,10 +194,10 @@ describe("a buddy's own preference", () => {
     await user.click(levelSwitch("medium"));
     expect(pin.hasAttribute("aria-disabled")).toBe(false);
     await user.click(within(levelPreference("medium")).getByRole("radio", { name: "优先" }));
-    await user.type(within(level("medium")).getByRole("textbox", { name: "medium 的偏好理由" }), "机械改动");
+    await user.type(within(level("medium")).getByRole("textbox", { name: "medium 的偏好备注" }), "机械改动");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
-    expect(f.published[0].preferenceChanges).toEqual([{ buddyId: "codex:openai:gpt-6-sol:medium", mode: "prefer", reason: "机械改动" }]);
+    expect(f.published[0].preferenceChanges).toEqual([{ buddyId: "codex:openai:gpt-6-sol:medium", mode: "prefer", note: "机械改动" }]);
     expect(f.published[0]).not.toHaveProperty("familyPreferenceChanges");
   });
 });

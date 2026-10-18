@@ -129,7 +129,7 @@ describe("a route", () => {
 
   it("says the program chose when it did, shows the bounds it chose within, and names no Router and no mode", async () => {
     const bounds: Basis = { constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], candidateCount: 0,
-      excluded: [{ buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" }, reason: "提交时排除低推理强度" }], preferences: [] };
+      excluded: [{ buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" }, note: "提交时排除低推理强度" }], preferences: [] };
     const f = open({ step: 2, replies: { routing: [routing({ source: "no-candidate", routerBuddy: null, routingMode: null })], bases: { "decision-1": bounds } } });
     await ready();
     await waitFor(() => expect(pane().textContent).toContain("没有合法候选"));
@@ -145,7 +145,7 @@ describe("a route", () => {
 
   it("shows the bounds beside the only candidate, in a hint on the word that says so, with the preference the program applied", async () => {
     const bounds: Basis = { ...NO_BASIS, constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], candidateCount: 1,
-      excluded: [{ buddy: { model: "m" }, reason: "提交时排除低推理强度" }], preferences: [{ buddyId: "dsh:p:m:max", mode: "pin", reason: "当时固定此 buddy" }] };
+      excluded: [{ buddy: { model: "m" }, note: "提交时排除低推理强度" }], preferences: [{ buddyId: "dsh:p:m:max", mode: "pin", note: "当时固定此 buddy" }] };
     const f = open({ step: 3, replies: { routing: [routing({ source: "single-candidate" })], bases: { "decision-1": bounds } } });
     await ready();
     await waitFor(() => expect(f.reads.basis).toHaveBeenCalledWith("decision-1"));

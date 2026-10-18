@@ -29,7 +29,7 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         if kind == "excluded":
             self.board_.console_call("user_policy_publish", {
                 "commandId": "exclude-" + buddy,
-                "preferenceChanges": [{"buddyId": buddy, "mode": "exclude", "reason": "User exclusion"}],
+                "preferenceChanges": [{"buddyId": buddy, "mode": "exclude", "note": "User exclusion"}],
             })
         elif kind == "quota":
             from hey_my_buddy.blackboard.routing import quota_routing
@@ -199,5 +199,5 @@ class CatalogAndPreferencePublicationTests(DecisionTestCase):
         board = self.board()
         request, claim = self.begin(board)
         self.publish_user_patch(board, request_id="prefer", command_id="prefer",
-            preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer", "reason": "Soft preference"}])
+            preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer", "note": "Soft preference"}])
         self.finish(board, request, claim)

@@ -1,3 +1,4 @@
+import { reasonText } from "../i18n/reason";
 import { useTranslation } from "react-i18next";
 import type { ReactNode } from "react";
 import { Hint } from "@/components/hint";
@@ -40,7 +41,7 @@ export function RolesRecords({ health }: { health: RoutingHealth | undefined }) 
   const count = (value: number | undefined) => value ?? none;
   return <div className="flex flex-col gap-4 pt-[5px]">
     <div className="flex flex-wrap gap-x-[22px] gap-y-1 text-xs">
-      {health.available === false && <Fact name={t("roles.records.unavailable")}><code className="font-mono text-xs">{health.reasonCode ?? t("roles.records.unknown")}</code></Fact>}
+      {health.available === false && <Fact name={t("roles.records.unavailable")}><code className="font-mono text-xs">{health.reason ? reasonText(health.reason) : t("roles.records.unknown")}</code></Fact>}
       {health.sampleCount === 0
         ? <p className="text-ink3">{t("roles.records.empty")}</p>
         : <>

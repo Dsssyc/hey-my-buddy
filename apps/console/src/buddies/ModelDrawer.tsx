@@ -46,7 +46,7 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
   const enableLock = editingLock ?? (!canToggle ? t("pane.locked.retired") : undefined);
   const enableUnsaved = recorded.buddies.find(entry => entry.buddyId === buddy.buddyId)?.enabled !== buddy.enabled;
   const preferenceUnsaved = preference?.mode !== published?.mode;
-  const reasonUnsaved = (preference?.reason ?? "") !== (published?.reason ?? "");
+  const noteUnsaved = (preference?.note ?? "") !== (published?.note ?? "");
   const unavailableReason = reasonTexts(buddy.unavailableReason ? [buddy.unavailableReason] : [], t).join(" · ");
   const name = (text: string, unsaved: boolean, target: { id: string } | { htmlFor: string }) =>
     <span className="flex shrink-0 items-center gap-1.5 text-xs whitespace-nowrap text-ink3">
@@ -56,7 +56,7 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
   function setBuddyPreference(value: string) {
     if (!editing || value === "pin" && pinLocked) return;
     const mode = value as PreferenceMode | "";
-    editor.update(draft => setPreference(draft, buddy.buddyId, mode, mode ? preference?.reason ?? "" : ""));
+    editor.update(draft => setPreference(draft, buddy.buddyId, mode, mode ? preference?.note ?? "" : ""));
   }
 
   return <div id={buddyRowId(buddy.buddyId)} role="group" aria-label={effort} tabIndex={-1} data-slot="buddy-panel"
@@ -87,10 +87,10 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
         </Segmented>
       </div>
       <div className="flex min-w-40 flex-1 items-center gap-2.5 max-[600px]:min-w-0">
-        {name(t("pane.reason"), reasonUnsaved, { htmlFor: `${id}-reason` })}
-        <Hint text={editingLock ?? (!preference ? t("pane.reasonNone") : undefined)}>
-          <Input id={`${id}-reason`} className="h-8 min-w-0 flex-1 bg-card text-sm shadow-none" maxLength={500}
-            aria-label={t("pane.buddyReason", { effort })} value={preference?.reason ?? ""} readOnly={!editing || !preference}
+        {name(t("pane.note"), noteUnsaved, { htmlFor: `${id}-note` })}
+        <Hint text={editingLock ?? (!preference ? t("pane.noteNone") : undefined)}>
+          <Input id={`${id}-note`} className="h-8 min-w-0 flex-1 bg-card text-sm shadow-none"
+            aria-label={t("pane.buddyNote", { effort })} value={preference?.note ?? ""} readOnly={!editing || !preference}
             aria-disabled={!editing || !preference || undefined}
             onChange={event => {
               if (editing && preference) editor.update(draft => setPreference(draft, buddy.buddyId, preference.mode, event.target.value));

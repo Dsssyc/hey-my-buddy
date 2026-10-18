@@ -131,7 +131,7 @@ describe("the table's blocks", () => {
     const data: ConsoleView = {
       ...view,
       buddies: view.buddies.map(entry => entry.buddyId === "dsh:deepseek-official:flash:max" ? { ...entry, enabled: true } : entry),
-      preferences: [{ buddyId: "codex:openai:sol:high", mode: "exclude", reason: "" }],
+      preferences: [{ buddyId: "codex:openai:sol:high", mode: "exclude", note: null }],
     };
     const chips = blocks({ recorded, data }).flatMap(block => block.models).flatMap(model => model.chips);
     expect(chips.filter(chip => chip.unsaved).map(chip => chip.buddy.buddyId))

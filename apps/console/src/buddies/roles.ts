@@ -1,3 +1,4 @@
+import type { Reason } from "../reason";
 import { hasDecisionCapability, hasFastRoutingCapability, routerAttention } from "../policy";
 import type { Configuration, Draft, Buddy, RouterHealthEntry, RouterHealthIdentity, RoutingHealth, RoutingMode } from "../types";
 
@@ -7,7 +8,7 @@ export function buddyQuad(identity: RouterHealthIdentity): string {
 }
 
 /** What the recorded window says is wrong with routing; the user has something to do about either. */
-type HealthWarning = { kind: "unavailable"; code: string | null } | { kind: "failing"; count: number };
+type HealthWarning = { kind: "unavailable"; reason: Reason | null } | { kind: "failing"; count: number };
 
 /**
  * The warning the recorded routing window gives, or none. Absent data is
@@ -16,7 +17,7 @@ type HealthWarning = { kind: "unavailable"; code: string | null } | { kind: "fai
  */
 export function healthSummary(health: RoutingHealth | undefined): { warning: HealthWarning | null } {
   if (!health) return { warning: null };
-  if (health.available === false) return { warning: { kind: "unavailable", code: health.reasonCode ?? null } };
+  if (health.available === false) return { warning: { kind: "unavailable", reason: health.reason ?? null } };
   if (health.sampleCount > 0 && health.consecutiveFailures > 0) return { warning: { kind: "failing", count: health.consecutiveFailures } };
   return { warning: null };
 }

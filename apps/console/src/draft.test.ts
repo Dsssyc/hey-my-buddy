@@ -78,7 +78,7 @@ describe("editing a published snapshot", () => {
     expect(patch).toEqual({
       commandId: "c",
       buddySettings: [{ buddyId: "flash-off", enabled: false }],
-      preferenceChanges: [{ buddyId: "flash-off", mode: "exclude", reason: "太贵" }],
+      preferenceChanges: [{ buddyId: "flash-off", mode: "exclude", note: "太贵" }],
       modelServiceNoteChanges: [{ ...flashModelService, text: "我的使用备注" }],
     });
     const wire = JSON.stringify(patch);
@@ -105,29 +105,29 @@ describe("editing a published snapshot", () => {
     const baseline = {
       ...makeDraft(snapshot),
       modelServiceNotes: [note(flashModelService, "旧备注")],
-      preferences: [{ buddyId: "flash-off", mode: "exclude" as const, reason: "贵" }],
+      preferences: [{ buddyId: "flash-off", mode: "exclude" as const, note: "贵" }],
     };
     let draft = setModelServiceNote(baseline, flash, "");
     draft = setPreference(draft, "flash-off", "");
     const patch = publication(baseline, draft, "c");
     expect(patch.modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "" }]);
-    expect(patch.preferenceChanges).toEqual([{ buddyId: "flash-off", mode: null, reason: "" }]);
+    expect(patch.preferenceChanges).toEqual([{ buddyId: "flash-off", mode: null, note: null }]);
     expect(modelServiceNoteChanges(baseline, draft)).toEqual([{ ...flashModelService, text: "" }]);
-    expect(preferenceChanges(baseline, draft)).toEqual([{ buddyId: "flash-off", mode: null, reason: "" }]);
+    expect(preferenceChanges(baseline, draft)).toEqual([{ buddyId: "flash-off", mode: null, note: null }]);
   });
 
   it("keeps 不设 as an absent preference after clearing a buddy", () => {
-    const baseline = makeDraft({ ...snapshot, preferences: [{ buddyId: flash.buddyId, mode: "prefer", reason: "常用" }] } as Snapshot);
+    const baseline = makeDraft({ ...snapshot, preferences: [{ buddyId: flash.buddyId, mode: "prefer", note: "常用" }] } as Snapshot);
     const cleared = setPreference(baseline, flash.buddyId, "");
     expect(cleared.preferences).toEqual([]);
-    expect(preferenceChanges(baseline, cleared)).toEqual([{ buddyId: flash.buddyId, mode: null, reason: "" }]);
+    expect(preferenceChanges(baseline, cleared)).toEqual([{ buddyId: flash.buddyId, mode: null, note: null }]);
   });
 
   it("keeps a stale pin and a stale Router out of every patch", () => {
     const baseline = makeDraft({
       ...snapshot,
       buddies: [flash, retired],
-      preferences: [{ buddyId: "retired", mode: "pin", reason: "以前固定" }],
+      preferences: [{ buddyId: "retired", mode: "pin", note: "以前固定" }],
       configuration: { routerBuddyIds: ["retired"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     } as Snapshot);
     const draft = { ...baseline };
@@ -142,10 +142,10 @@ describe("editing a published snapshot", () => {
   });
 
   it("allows several buddy pins independently", () => {
-    const draft = { ...makeDraft(snapshot), preferences: [{ buddyId: "a", mode: "pin" as const, reason: "" }] };
+    const draft = { ...makeDraft(snapshot), preferences: [{ buddyId: "a", mode: "pin" as const, note: null }] };
     const updated = setPreference(draft, flash.buddyId, "pin");
     expect(updated.preferences).toHaveLength(2);
-    expect(preferenceChanges(draft, updated)).toEqual([{ buddyId: flash.buddyId, mode: "pin", reason: "" }]);
+    expect(preferenceChanges(draft, updated)).toEqual([{ buddyId: flash.buddyId, mode: "pin", note: null }]);
   });
 
   it("detects human edits independently of array order and program facts", () => {
@@ -184,8 +184,8 @@ describe("editing a published snapshot", () => {
     const overridden = {
       ...baseline,
       preferences: [
-        { buddyId: "a", mode: "prefer" as const, reason: "1" },
-        { buddyId: "b", mode: "exclude" as const, reason: "2" },
+        { buddyId: "a", mode: "prefer" as const, note: "1" },
+        { buddyId: "b", mode: "exclude" as const, note: "2" },
       ],
     };
     expect(draftDiffers(overridden, { ...overridden, preferences: [...overridden.preferences].reverse() })).toBe(false);
@@ -220,7 +220,7 @@ describe("editing a published snapshot", () => {
     expect(modelServiceNoteText(adopted.draft, flash)).toBe("保留的备注");
     const patch = publication(adopted.baseline, adopted.draft, "c");
     expect(patch.modelServiceNoteChanges).toEqual([{ ...flashModelService, text: "保留的备注" }]);
-    expect(patch.preferenceChanges).toEqual([{ buddyId: "flash-off", mode: "prefer", reason: "更快" }]);
+    expect(patch.preferenceChanges).toEqual([{ buddyId: "flash-off", mode: "prefer", note: "更快" }]);
     expect(patch.buddySettings).toEqual([{ buddyId: "flash-off", enabled: false }]);
     expect(buddySettings(baseline, draft)).toEqual([
       { buddyId: "flash-off", enabled: false },
@@ -255,27 +255,27 @@ describe("replaying a draft on refreshed content", () => {
   });
 
   it("replays a buddy preference over a concurrent change", () => {
-    const baseline = { ...makeDraft(snapshot), preferences: [{ buddyId: flash.buddyId, mode: "prefer" as const, reason: "A" }] };
+    const baseline = { ...makeDraft(snapshot), preferences: [{ buddyId: flash.buddyId, mode: "prefer" as const, note: "A" }] };
     const draft = setPreference(baseline, flash.buddyId, "exclude", "B");
-    const refreshed = { ...snapshot, preferences: [{ buddyId: flash.buddyId, mode: "pin" as const, reason: "C" }] };
+    const refreshed = { ...snapshot, preferences: [{ buddyId: flash.buddyId, mode: "pin" as const, note: "C" }] };
     const adopted = rebaseDraft(draft, baseline, refreshed);
     expect(adopted.conflicts).toEqual([]);
     expect(publication(adopted.baseline, adopted.draft, "save").preferenceChanges).toEqual([
-      { buddyId: flash.buddyId, mode: "exclude", reason: "B" },
+      { buddyId: flash.buddyId, mode: "exclude", note: "B" },
     ]);
   });
 });
 
 describe("retained history with local removals", () => {
   it("keeps a local preference removal when the published row returns", () => {
-    const baseline = { ...makeDraft(snapshot), preferences: [{ buddyId: flash.buddyId, mode: "pin" as const, reason: "old" }] };
+    const baseline = { ...makeDraft(snapshot), preferences: [{ buddyId: flash.buddyId, mode: "pin" as const, note: "old" }] };
     const draft = { ...baseline, preferences: [] };
     const refreshed = { ...snapshot, preferences: baseline.preferences };
     const adopted = rebaseDraft(draft, baseline, refreshed);
     expect(adopted.conflicts).toEqual([]);
     expect(adopted.draft.preferences).toEqual([]);
     expect(publication(adopted.baseline, adopted.draft, "save").preferenceChanges).toEqual([
-      { buddyId: flash.buddyId, mode: null, reason: "" },
+      { buddyId: flash.buddyId, mode: null, note: null },
     ]);
   });
 

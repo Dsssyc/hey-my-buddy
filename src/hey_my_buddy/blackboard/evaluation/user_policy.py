@@ -65,13 +65,6 @@ def _model_service(entry: dict) -> tuple[str, str, str]:
     return tuple(entry[name] for name in MODEL_SERVICE_FIELDS)
 
 
-def _reason(entry: dict) -> str:
-    reason = entry.get('reason', '')
-    if not isinstance(reason, str) or len(reason) > 500:
-        raise BoardError('INVALID_ARGUMENT', 'reason must be a string of at most 500 characters')
-    return reason
-
-
 def policy_view(connection, buddy_ids: list[str]) -> dict:
     """User-owned buddy preferences and model annotations for the console."""
     return {
@@ -82,7 +75,7 @@ def policy_view(connection, buddy_ids: list[str]) -> dict:
 
 def preferences(connection, buddy_ids: list[str]) -> list[dict]:
     marks = ','.join('?' for _ in buddy_ids) or 'NULL'
-    return [{'buddyId': row['buddy_id'], 'mode': row['mode'], 'reason': row['reason']}
+    return [{'buddyId': row['buddy_id'], 'mode': row['mode'], 'note': row['note']}
             for row in connection.execute(f'SELECT * FROM evaluation_preferences WHERE buddy_id IN ({marks})'
                                           ' ORDER BY buddy_id', buddy_ids)]
 
@@ -120,7 +113,7 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
     if not provided:
         raise BoardError('INVALID_ARGUMENT', 'A user publication must contain a field patch')
     settings = _changes(params, 'buddySettings', {'buddyId', 'enabled'})
-    preferences = _changes(params, 'preferenceChanges', {'buddyId', 'mode', 'reason'})
+    preferences = _changes(params, 'preferenceChanges', {'buddyId', 'mode', 'note'})
     annotations = _model_service_changes(params, 'modelServiceNoteChanges', {*MODEL_SERVICE_FIELDS, 'text'})
     model_limits = _model_service_concurrency_changes(params)
     enabled_model_services: list[tuple[str, str, str]] = []
@@ -165,14 +158,16 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
     for entry in preferences:
         if 'mode' not in entry or entry['mode'] not in (None, 'pin', 'prefer', 'exclude'):
             raise BoardError('INVALID_ARGUMENT', 'mode must be pin, prefer, exclude or null')
-        buddy_id, mode, reason = entry['buddyId'], entry['mode'], _reason(entry)
+        buddy_id, mode = entry['buddyId'], entry['mode']
+        note = (schemas.bounded_text(entry, 'note', max_bytes=schemas.MAX_NOTE_BYTES, allow_empty=True)[0]
+                or None) if entry.get('note') is not None else None
         previous = connection.execute('SELECT mode FROM evaluation_preferences WHERE buddy_id=?', (buddy_id,)).fetchone()
         if mode == 'pin' and (previous is None or previous['mode'] != 'pin') and not (buddies[buddy_id]['available'] and buddies[buddy_id]['enabled']):
             raise BoardError('BUDDY_UNAVAILABLE', 'A new pin requires an available enabled buddy', buddyId=buddy_id)
         if mode is None:
             connection.execute('DELETE FROM evaluation_preferences WHERE buddy_id=?', (buddy_id,))
         else:
-            connection.execute('INSERT INTO evaluation_preferences(buddy_id,mode,reason) VALUES(?,?,?) ON CONFLICT(buddy_id) DO UPDATE SET mode=excluded.mode,reason=excluded.reason', (buddy_id, mode, reason))
+            connection.execute('INSERT INTO evaluation_preferences(buddy_id,mode,note) VALUES(?,?,?) ON CONFLICT(buddy_id) DO UPDATE SET mode=excluded.mode,note=excluded.note', (buddy_id, mode, note))
     for entry in annotations:
         text = entry.get('text')
         if not isinstance(text, str) or len(text) > 4000:

@@ -66,7 +66,7 @@ export default {
   },
   basis: {
     name: "Bounds at submission", constraints: "Hard constraints: {{buddy}}", capabilities: "Required capabilities: {{list}}", candidates: "Legal candidates when submitted: {{n}}",
-    excluded: "Excluded by the user: {{n}}; {{list}}", prefer: "Preferred {{buddy}}: {{reason}}", pin: "Pinned {{buddy}}: {{reason}}", exclude: "Excluded {{buddy}}: {{reason}}",
+    excluded: "Excluded by the user: {{n}}; {{list}}", prefer: "Preferred {{buddy}}: {{note}}", pin: "Pinned {{buddy}}: {{note}}", exclude: "Excluded {{buddy}}: {{note}}",
   },
   routing: {
     chosen: "Choice", abstained: "Abstained", notCalled: "No Router was called", elapsed: "Time: {{time}}", toolCalls: "Tool calls: {{n}}", source: "Source",

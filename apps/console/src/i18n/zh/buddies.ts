@@ -72,11 +72,10 @@ export default {
   },
   pane: {
     preference: "偏好",
-    reasonNone: "选择偏好后可填写理由",
+    noteNone: "选择偏好后可填写备注",
     enable: "启用 {{effort}}",
     buddyPreference: "{{effort}} 的偏好",
-    buddyReason: "{{effort}} 的偏好理由",
-    reason: "理由",
+    buddyNote: "{{effort}} 的偏好备注",
     model: "模型",
     available: "可用",
     unavailable: "不可用",

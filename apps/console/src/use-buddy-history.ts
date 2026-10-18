@@ -2,7 +2,7 @@ import { useCopyState } from "./i18n/use-copy-state";
 import i18n from "i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
-import { ApiError, errorText } from "./api";
+import { ApiError, errorText, validPreferences } from "./api";
 import { modelServiceKey } from "./console-data";
 import type { ModelService, BuddyPage, Snapshot } from "./types";
 
@@ -26,7 +26,7 @@ function parseBuddyPage(value: unknown): BuddyPage {
   const optionalList = (value: unknown) => value === undefined || Array.isArray(value);
   const valid = !!page
     && Array.isArray(page.buddies)
-    && Array.isArray(page.preferences)
+    && validPreferences(page.preferences)
     && optionalList(page.modelServiceNotes)
     && Array.isArray(page.modelServiceConcurrency)
     && (page.nextCursor === null || typeof page.nextCursor === "string");

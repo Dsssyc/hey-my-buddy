@@ -330,7 +330,8 @@ test.describe("the detail of a micro task in the dark theme", () => {
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await expect(detail(page)).toBeVisible();
     for (const text of await page.locator("[data-slot=task-detail] h2, [data-slot=task-detail] h3, [data-slot=detail-band] span, [data-slot=detail-live] span, [data-slot=detail-strip] text").all()) {
-      if (!(await text.locator("*").count()) && (await text.innerText()).trim()) expect(await contrastOf(text), await text.innerText()).toBeGreaterThanOrEqual(4.5);
+      const label = (await text.textContent())?.trim();
+      if (!(await text.locator("*").count()) && label) expect(await contrastOf(text), label).toBeGreaterThanOrEqual(4.5);
     }
   });
 });

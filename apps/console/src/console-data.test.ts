@@ -63,11 +63,11 @@ describe("console grouping and recorded attribution", () => {
     const modelService = modelServices([retiredEnabled, availableDisabled])[0];
     // Inspecting the model service never lands on a retired variant while one is listed.
     expect(preferredVariant(modelService, []).buddyId).toBe("available");
-    expect(preferredVariant(modelService, [{ buddyId: "retired", mode: "prefer", reason: "历史" } as Preference]).buddyId)
+    expect(preferredVariant(modelService, [{ buddyId: "retired", mode: "prefer", note: "历史" } as Preference]).buddyId)
       .toBe("available");
     // When every variant is retired, an enabled variant still wins over a disabled one.
     const allRetired = modelServices([retiredEnabled, { ...availableDisabled, available: false }])[0];
-    expect(preferredVariant(allRetired, [{ buddyId: "available", mode: "prefer", reason: "历史" } as Preference]).buddyId)
+    expect(preferredVariant(allRetired, [{ buddyId: "available", mode: "prefer", note: "历史" } as Preference]).buddyId)
       .toBe("retired");
   });
 
@@ -77,7 +77,7 @@ describe("console grouping and recorded attribution", () => {
       buddy("low", "codex", "openai", "low", 0),
     ])[0];
     expect(modelService.buddies.map(row => row.buddyId)).toEqual(["low", "high"]);
-    expect(preferredVariant(modelService, [{ buddyId: "high", mode: "prefer", reason: "coding" }]).buddyId).toBe("high");
+    expect(preferredVariant(modelService, [{ buddyId: "high", mode: "prefer", note: "coding" }]).buddyId).toBe("high");
     expect(preferredVariant(modelService, []).buddyId).toBe("low");
   });
 

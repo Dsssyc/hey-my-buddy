@@ -1768,9 +1768,9 @@ def policy_views() -> dict:
     def buddy_id(cfg: dict) -> str:
         return f"{cfg['harness']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}"
 
-    preferences = [{"buddyId": buddy_id(CFG_FLASH), "mode": "prefer", "reason": "synthetic preview choice"},
-                   {"buddyId": buddy_id(CFG_CLAUDE), "mode": "exclude", "reason": "synthetic preview exclusion"},
-                   {"buddyId": buddy_id(CFG_CODEX), "mode": "pin", "reason": ""}]
+    preferences = [{"buddyId": buddy_id(CFG_FLASH), "mode": "prefer", "note": "synthetic preview choice"},
+                   {"buddyId": buddy_id(CFG_CLAUDE), "mode": "exclude", "note": "synthetic preview exclusion"},
+                   {"buddyId": buddy_id(CFG_CODEX), "mode": "pin", "note": None}]
     return {
         "preferences": sorted(preferences, key=lambda entry: entry["buddyId"]),
         "modelServiceNotes": [{**model_service(CFG_CODEX), "text": "synthetic preview family note",
@@ -1909,7 +1909,7 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
                           "consecutiveFailures": 0, "abstentionCount": 1, "cancelledCount": 1,
                           "budgetExhaustedCount": 0, "boundsRejectedCount": 1, "inputChangedCount": 0,
                           "lastSuccessAt": instant(6, 5), "lastSuccessDecisionId": ROUTING_A1["decisionId"],
-                          "available": True, "reasonCode": None, "currentRouterBuddyId": routers[0]["buddyId"],
+                          "available": True, "reason": None, "currentRouterBuddyId": routers[0]["buddyId"],
                           "routers": routers,
                           "recentFailures": [{"decisionId": ROUTING_A2["decisionId"], "runId": "preview-run-a2",
                                               "at": instant(8, 36), "code": "routing-bounds-rejected"}]},
@@ -2468,8 +2468,6 @@ def reason_problems(value: Any, registry: dict, path: str = "reply") -> list[str
         for key, item in value.items():
             field = f"{path}.{key}"
             if key in ("reason", "releaseReason", "unavailableReason", "catalogReason", "decisionAdapterReason") and item is not None:
-                if key == "reason" and ".preferences[" in path:
-                    continue  # The user's preference text remains its current public field.
                 if (not isinstance(item, dict) or set(item) != {"code", "params"}
                         or item.get("code") not in registry or not isinstance(item.get("params"), dict)
                         or set(item["params"]) - set(registry[item["code"]])):

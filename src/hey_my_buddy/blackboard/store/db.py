@@ -407,7 +407,7 @@ CREATE INDEX IF NOT EXISTS buddies_harness_idx ON buddies(harness, buddy_id);
 CREATE TABLE IF NOT EXISTS evaluation_preferences (
     buddy_id        TEXT PRIMARY KEY REFERENCES buddies(buddy_id) ON DELETE RESTRICT,
     mode              TEXT NOT NULL CHECK (mode IN ('prefer','pin','exclude')),
-    reason            TEXT NOT NULL DEFAULT ''
+    note              TEXT
 );
 CREATE INDEX IF NOT EXISTS evaluation_preferences_mode_idx ON evaluation_preferences(mode, buddy_id);
 """,

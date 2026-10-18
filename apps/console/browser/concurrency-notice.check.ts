@@ -24,7 +24,7 @@ for (const { locale, copy, limit, note } of languages) for (const width of [1280
       const heading = notice.getByRole("heading", { name: copy.title });
       const body = notice.getByText(copy.body, { exact: true });
       const input = drawer.getByRole("spinbutton", { name: limit });
-      const noteInput = drawer.getByRole("textbox", { name: note });
+      const noteInput = drawer.getByRole("textbox", { name: note, exact: true });
       await notice.scrollIntoViewIfNeeded();
       await expect(heading).toBeVisible();
       await expect(body).toBeVisible();

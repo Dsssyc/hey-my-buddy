@@ -80,7 +80,7 @@ describe("console interactions", () => {
     expect(note()).toHaveProperty("value", "本地草稿");
     expect(screen.getByRole("region", { name: "未保存的修改" })).toBeTruthy();
     expect(within(pane()).getAllByRole("textbox")).toHaveLength(2);
-    expect(within(pane()).getByRole("textbox", { name: "off 的偏好理由" })).toHaveProperty("readOnly", true);
+    expect(within(pane()).getByRole("textbox", { name: "off 的偏好备注" })).toHaveProperty("readOnly", true);
     await user.click(screen.getByRole("button", { name: "放弃" }));
     expect(api.command).not.toHaveBeenCalled();
   });

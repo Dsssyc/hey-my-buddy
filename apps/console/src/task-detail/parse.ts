@@ -234,7 +234,7 @@ function parseBounds(source: Rec, what: string): Omit<Basis, "preferences"> {
     candidateCount: basis ? intOrNull(basis.candidateCount, what) : null,
     excluded: basis ? list(basis.excludedBuddies ?? [], what).map(item => {
       const excluded = rec(item, what);
-      return { buddy: partialBuddy(excluded, what), reason: strOrNull(excluded.reason, what)?.trim() || null };
+      return { buddy: partialBuddy(excluded, what), note: strOrNull(excluded.note, what)?.trim() || null };
     }) : [],
   };
 }
@@ -360,7 +360,7 @@ export function parseBasis(value: unknown, decisionId: string): Basis {
       const preference = rec(item, "decision.output");
       return {
         buddyId: str(preference.buddyId, "decision.output"), mode: oneOf(preference.mode, ["prefer", "pin", "exclude"] as const, "decision.output"),
-        reason: strOrNull(preference.reason, "decision.output")?.trim() || null,
+        note: strOrNull(preference.note, "decision.output")?.trim() || null,
       };
     }) : [],
   };

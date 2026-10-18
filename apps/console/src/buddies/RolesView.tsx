@@ -1,3 +1,4 @@
+import { reasonText } from "../i18n/reason";
 import type { TFunction } from "i18next";
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
@@ -36,7 +37,7 @@ function noteText(note: RouterNote | null, buddies: Buddy[], t: TFunction<"buddi
         name: buddy ? buddyQuad(buddy) : note.buddyId, reason: note.refusal ? t(`roles.refusal.${note.refusal}`) : t("roles.list.attention.gone"),
       });
     }
-    case "unavailable": return note.code ? t("roles.list.attention.unavailableCode", { code: note.code }) : t("roles.list.attention.unavailable");
+    case "unavailable": return note.reason ? reasonText(note.reason) : t("roles.list.attention.unavailable");
     case "failing": return t("roles.list.attention.failing", { n: note.count });
   }
 }

@@ -206,7 +206,7 @@ describe("marks for what waits", () => {
 
   it("keeps the mark while the service reports no current Router, even when the head of the list could work", async () => {
     const f = fixture(mediumId, { routingHealth: {
-      available: false, currentRouterBuddyId: null, reasonCode: "router-unavailable",
+      available: false, currentRouterBuddyId: null, reason: { code: "router-unavailable", params: {} },
       windowSize: 20, sampleCount: 2, failureCount: 2, consecutiveFailures: 2,
       abstentionCount: 0, cancelledCount: 0,
       lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],

@@ -460,7 +460,10 @@ class UpgradeFixtureTests(unittest.TestCase):
         expected_settings = router.configuration(old)
         expected_runs = dict(old.execute('SELECT run_id,state FROM workflow_runs'))
         request_fingerprints = dict(old.execute('SELECT run_id,request_fingerprint FROM workflow_runs'))
-        expected_preferences = [tuple(row) for row in old.execute(
+        # 0.42.0 (90bd0148) through 0.45.3 (e006910b) share the same
+        # writer: an omitted reason is '', explicit strings (<= 500 characters)
+        # are stored verbatim. Derive the expected nullable notes from that stock.
+        expected_preferences = [(row[0], row[1], row[2] or None) for row in old.execute(
             'SELECT buddy_id,mode,reason FROM evaluation_preferences ORDER BY buddy_id')]
         retained_meta = dict(old.execute("SELECT key,value FROM meta WHERE key!='schema_version'"))
         stock = {row[0]: [dict(item) for item in old.execute(f'SELECT * FROM {row[0]} ORDER BY rowid')]
@@ -471,6 +474,8 @@ class UpgradeFixtureTests(unittest.TestCase):
             if row['key'] == 'schema_version':
                 row['value'] = str(SCHEMA_VERSION)
         stock['macro_task_deletions'] = []
+        for row in stock['evaluation_preferences']:
+            row['note'] = row.pop('reason') or None
         for row in stock['workflow_requests']:
             row['reason_code'] = row['reason_params_json'] = None
         old.close()
@@ -581,10 +586,66 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual(dict(upgraded.execute('SELECT run_id,request_fingerprint FROM workflow_runs')),
                              request_fingerprints)
             self.assertEqual([tuple(row) for row in upgraded.execute(
-                'SELECT buddy_id,mode,reason FROM evaluation_preferences ORDER BY buddy_id')],
+                'SELECT buddy_id,mode,note FROM evaluation_preferences ORDER BY buddy_id')],
                 expected_preferences)
             self.assertEqual(upgraded.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
             self.assertEqual(upgraded.execute('PRAGMA foreign_key_check').fetchall(), [])
+
+    def test_preference_notes_preserve_the_accepted_schema24_writer_values(self):
+        # The unchanged 0.42.0--0.45.3 _reason writer defaults to '' and accepts
+        # every string of up to 500 characters, including whitespace and Unicode.
+        for index, (written, expected) in enumerate((('', None), ('  ', '  '),
+                                                    ('用户的说明' * 100, '用户的说明' * 100))):
+            with self.subTest(written=written):
+                fixture, old = self.restored(f'preference-{index}')
+                old.execute('UPDATE evaluation_preferences SET reason=?', (written,))
+                ids = [row[0] for row in old.execute('SELECT buddy_id FROM evaluation_preferences ORDER BY buddy_id')]
+                old.commit()
+                old.close()
+                upgrade_schema_24_to_25(fixture['state'])
+                with sqlite3.connect(fixture['state'] / 'board.sqlite3') as upgraded:
+                    self.assertEqual(upgraded.execute(
+                        'SELECT buddy_id,note FROM evaluation_preferences ORDER BY buddy_id').fetchall(),
+                        [(buddy_id, expected) for buddy_id in ids])
+
+    def test_preference_notes_upgrade_board_routing_copies_and_keep_native_audit(self):
+        # 0.45.3 freezes user_policy.preferences in baseInput/programSelection
+        # and f.reason in routingBasis; these are board-owned copies of the same
+        # schema-24 writer values. The dispatched native input stays exact.
+        fixture, old = self.restored('preference-copies')
+        decision_id, buddy_id = old.execute(
+            'SELECT decision_id,buddy_id FROM evaluation_decisions LIMIT 1').fetchone()
+        preferences = [{'buddyId': buddy_id, 'mode': 'pin', 'reason': ''}]
+        excluded = [{'buddyId': buddy_id, 'harness': 'dsh', 'provider': 'fixture',
+                     'model': 'model', 'effort': 'max', 'reason': ' User explanation  '}]
+        expected_preferences = [{'buddyId': buddy_id, 'mode': 'pin', 'note': None}]
+        expected_excluded = [{'buddyId': buddy_id, 'harness': 'dsh', 'provider': 'fixture',
+                              'model': 'model', 'effort': 'max', 'note': ' User explanation  '}]
+        requested = json.loads(old.execute('SELECT requested_json FROM decision_requests WHERE decision_id=?',
+                                           (decision_id,)).fetchone()[0])
+        requested['routingBasis'] = {'candidateCount': 1, 'excludedCount': 1, 'excludedBuddies': excluded}
+        native = canonical_json({'preferences': preferences, 'routingBasis': requested['routingBasis']})
+        native_sha = _sha(native.encode())
+        output = {'programSelection': {'code': 'single-candidate', 'buddyId': buddy_id,
+                                       'preferences': preferences}}
+        old.execute("UPDATE evaluation_decisions SET status='completed',error=NULL WHERE decision_id=?", (decision_id,))
+        old.execute('UPDATE decision_requests SET requested_json=?,input_json=?,input_sha256=?,output_json=?'
+                    ' WHERE decision_id=?', (canonical_json(requested), native, native_sha,
+                                             canonical_json(output), decision_id))
+        snapshot = {'baseInput': {'preferences': preferences, 'routingBasis': requested['routingBasis']}}
+        old.execute('INSERT OR REPLACE INTO router_requests(decision_id,snapshot_json,frozen_at) VALUES(?,?,?)',
+                    (decision_id, canonical_json(snapshot), 'created'))
+        old.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        row = old.execute('SELECT requested_json,input_json,input_sha256,output_json FROM decision_requests'
+                          ' WHERE decision_id=?', (decision_id,)).fetchone()
+        self.assertEqual(json.loads(row['requested_json'])['routingBasis']['excludedBuddies'], expected_excluded)
+        self.assertEqual(json.loads(row['output_json'])['programSelection']['preferences'], expected_preferences)
+        copied = json.loads(old.execute('SELECT snapshot_json FROM router_requests WHERE decision_id=?',
+                                       (decision_id,)).fetchone()[0])['baseInput']
+        self.assertEqual(copied['preferences'], expected_preferences)
+        self.assertEqual(copied['routingBasis']['excludedBuddies'], expected_excluded)
+        self.assertEqual((row['input_json'], row['input_sha256']), (native, native_sha))
 
     def insert_stop_receipt(self, fixture, connection):
         response = {'macroTaskId': 'run:' + fixture['stableIds']['cancelled'],

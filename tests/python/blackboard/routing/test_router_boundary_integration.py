@@ -348,7 +348,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         frozen = self.boundary(request["decisionId"])
         with self.board_.store.db.write() as db:
             db.execute("UPDATE buddies SET model='later-model'")
-            db.execute("UPDATE evaluation_preferences SET reason='later preference'")
+            db.execute("UPDATE evaluation_preferences SET note='later preference'")
             db.execute("DELETE FROM model_service_notes")
         current = self.boundary(request["decisionId"])
         self.assertEqual(current["facts"], frozen["facts"])

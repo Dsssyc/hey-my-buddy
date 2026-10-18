@@ -249,7 +249,7 @@ class DecisionCoordinator:
         total = int(connection.execute("SELECT COUNT(*) AS count" + from_sql, values).fetchone()["count"])
         rows = connection.execute(
             "SELECT p.buddy_id, p.harness, p.provider, p.model, p.effort,"
-            " f.reason AS preference_reason" + from_sql +
+            " f.note AS preference_note" + from_sql +
             " ORDER BY p.rowid LIMIT ?",
             [*values, MAX_FROZEN_EXCLUSIONS],
         ).fetchall()
@@ -260,7 +260,7 @@ class DecisionCoordinator:
                 "provider": row["provider"],
                 "model": row["model"],
                 "effort": row["effort"],
-                "reason": row["preference_reason"],
+                "note": row["preference_note"],
             }
             for row in rows
         ]
@@ -1603,7 +1603,7 @@ class DecisionCoordinator:
                         "code": last_error.get("code"), "at": last_error["at"], "phase": last_error.get("phase")},
                 })
         return {"available":resolution.buddy_id is not None,
-                "reasonCode":resolution.problem["code"] if resolution.problem else None,
+                "reason":make_reason(resolution.problem["code"]) if resolution.problem else None,
                 "currentRouterBuddyId":resolution.buddy_id,
                 "routers":routers,
                 "windowSize":limit, "sampleCount":len(rows), "failureCount":len(failed),

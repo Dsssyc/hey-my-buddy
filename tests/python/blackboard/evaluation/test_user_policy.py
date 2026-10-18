@@ -2,6 +2,7 @@
 
 from support import BoardTestCase
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol import schemas
 
 #: ``live`` and ``retired`` are each their own model service in this fixture.
 LIVE_MODEL_SERVICE = {'harness': 'dsh', 'provider': 'fixture', 'model': 'live'}
@@ -51,13 +52,43 @@ class UserPolicyTests(BoardTestCase):
         self.assertEqual(snapshot['preferences'][0]['mode'], 'pin')
         self.assertFalse(next(p for p in snapshot['buddies'] if p['buddyId'] == 'retired')['enabled'])
 
-    def test_reason_only_change_does_not_reenable_an_unavailable_pin(self):
+    def test_note_only_change_does_not_reenable_an_unavailable_pin(self):
         grant = self.publication_params()
-        self.user('user_policy_publish', self.payload(grant, preferenceChanges=[{'buddyId': 'retired', 'mode': 'pin', 'reason': 'Keep this intent while its provider is offline'}]))
+        self.user('user_policy_publish', self.payload(grant, preferenceChanges=[{'buddyId': 'retired', 'mode': 'pin', 'note': 'Keep this intent while its provider is offline'}]))
         snapshot = self.board_.call('console_snapshot', {})
-        self.assertEqual(snapshot['preferences'][0]['reason'], 'Keep this intent while its provider is offline')
+        self.assertEqual(snapshot['preferences'][0]['note'], 'Keep this intent while its provider is offline')
         self.assertFalse(next(p for p in snapshot['buddies'] if p['buddyId'] == 'retired')['available'])
 
+
+    def test_preference_notes_round_trip_null_empty_and_utf8_limit(self):
+        for index, (note, expected) in enumerate(((None, None), ('', None),
+                                                ('备注' * (schemas.MAX_NOTE_BYTES // 6),
+                                                 '备注' * (schemas.MAX_NOTE_BYTES // 6)))):
+            with self.subTest(note=note):
+                self.user('user_policy_publish', self.payload({}, f'note-{index}',
+                          preferenceChanges=[{'buddyId': 'retired', 'mode': 'pin', 'note': note}]))
+                self.assertEqual(self.board_.call('console_snapshot', {})['preferences'],
+                                 [{'buddyId': 'retired', 'mode': 'pin', 'note': expected}])
+                with self.board_.store.db.read() as db:
+                    self.assertEqual(db.execute('SELECT note FROM evaluation_preferences').fetchone()[0], expected)
+        self.user('user_policy_publish', self.payload({}, 'omitted-note',
+                  preferenceChanges=[{'buddyId': 'retired', 'mode': 'pin'}]))
+        self.assertEqual(self.board_.call('console_snapshot', {})['preferences'],
+                         [{'buddyId': 'retired', 'mode': 'pin', 'note': None}])
+
+    def test_invalid_preference_notes_roll_back_the_publication(self):
+        for index, field in enumerate(({'note': '汉' * (schemas.MAX_NOTE_BYTES // 3 + 1)},
+                                       {'note': 1}, {'note': False}, {'note': []},
+                                       {'reason': 'retired field'})):
+            with self.subTest(field=field), self.assertRaises(BoardError) as caught:
+                self.user('user_policy_publish', self.payload({}, f'invalid-note-{index}',
+                          buddySettings=[{'buddyId': 'live', 'enabled': False}],
+                          preferenceChanges=[{'buddyId': 'retired', 'mode': 'pin', **field}]))
+            self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+            snapshot = self.board_.call('console_snapshot', {})
+            self.assertEqual(snapshot['preferences'],
+                             [{'buddyId': 'retired', 'mode': 'pin', 'note': 'user intent'}])
+            self.assertTrue(next(b for b in snapshot['buddies'] if b['buddyId'] == 'live')['enabled'])
 
     def test_invalid_patch_is_atomic_and_cannot_change_program_fields(self):
         grant = self.publication_params()

@@ -121,7 +121,7 @@ function applyPublication(state: HarnessSnapshot, params: Record<string, any>): 
   for (const change of params.preferenceChanges ?? []) {
     next.preferences = next.preferences.filter(entry => entry.buddyId !== change.buddyId);
     if (change.mode !== null) {
-      next.preferences.push({ buddyId: change.buddyId, mode: change.mode, reason: change.reason });
+      next.preferences.push({ buddyId: change.buddyId, mode: change.mode, note: change.note });
     }
   }
   for (const change of params.modelServiceNoteChanges ?? []) {
@@ -322,7 +322,7 @@ describe("the harness directory", () => {
 
 describe("a level's own preference", () => {
   it("clears one buddy's preference with 不设 and sends mode null", async () => {
-    const f = fixture({ preferences: [{ buddyId: mediumId, mode: "prefer", reason: "常用" }] });
+    const f = fixture({ preferences: [{ buddyId: mediumId, mode: "prefer", note: "常用" }] });
     const user = userEvent.setup();
     await openBuddy(f.api);
     await selectModel(user, SONNET, "Claude Code");
@@ -333,15 +333,15 @@ describe("a level's own preference", () => {
     expect(chip(SONNET, "medium").textContent).toBe("medium");
     await user.click(saveButton());
     await screen.findByText("设置已保存");
-    expect(f.published.at(-1)!.preferenceChanges).toEqual([{ buddyId: mediumId, mode: null, reason: "" }]);
+    expect(f.published.at(-1)!.preferenceChanges).toEqual([{ buddyId: mediumId, mode: null, note: null }]);
     expect(f.published.at(-1)).not.toHaveProperty("familyPreferenceChanges");
   });
 
   it("writes enabled preferences as words and gives them the same styling", async () => {
     const f = fixture({ preferences: [
-      { buddyId: highId, mode: "prefer", reason: "" },
-      { buddyId: solMediumId, mode: "pin", reason: "" },
-      { buddyId: solLowId, mode: "exclude", reason: "" },
+      { buddyId: highId, mode: "prefer", note: null },
+      { buddyId: solMediumId, mode: "pin", note: null },
+      { buddyId: solLowId, mode: "exclude", note: null },
     ] });
     const user = userEvent.setup();
     await openBuddy(f.api);

@@ -25,8 +25,8 @@ describe("the warning of the recorded window", () => {
   });
 
   it("names the unavailable Router with the recorded code, and a window that keeps failing", () => {
-    expect(healthSummary(health({ available: false, reasonCode: "router-skip-window" })).warning).toEqual({ kind: "unavailable", code: "router-skip-window" });
-    expect(healthSummary(health({ available: false })).warning).toEqual({ kind: "unavailable", code: null });
+    expect(healthSummary(health({ available: false, reason: { code: "router-skip-window", params: {} } })).warning).toEqual({ kind: "unavailable", reason: { code: "router-skip-window", params: {} } });
+    expect(healthSummary(health({ available: false })).warning).toEqual({ kind: "unavailable", reason: null });
     expect(healthSummary(health({ failureCount: 4, consecutiveFailures: 4 })).warning).toEqual({ kind: "failing", count: 4 });
   });
 
@@ -189,8 +189,8 @@ describe("the note under the list", () => {
   });
 
   it("says that nobody can serve when the service names nobody and the list is not empty", () => {
-    expect(routerNote(source([MEDIUM_ID]), health({ currentRouterBuddyId: null, available: false, reasonCode: "x" }))).toEqual({ kind: "nobody" });
-    expect(routerNote(source([]), health({ currentRouterBuddyId: null, available: false }))).toEqual({ kind: "unavailable", code: null });
+    expect(routerNote(source([MEDIUM_ID]), health({ currentRouterBuddyId: null, available: false, reason: { code: "x", params: {} } }))).toEqual({ kind: "nobody" });
+    expect(routerNote(source([]), health({ currentRouterBuddyId: null, available: false }))).toEqual({ kind: "unavailable", reason: null });
   });
 
   it("names the first buddy and why the default mode refuses it, by the reason code", () => {

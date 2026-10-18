@@ -158,7 +158,7 @@ describe("what the list says needs the user", () => {
   });
 
   it("says that no buddy of the list can serve when the service names none", async () => {
-    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ available: false, reasonCode: "router-skip-window", currentRouterBuddyId: null }) }));
+    const f = fixture(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ available: false, reason: { code: "router-skip-window", params: {} }, currentRouterBuddyId: null }) }));
     await openRoles(f);
     expect(note()!.textContent).toBe("列表里没有一个 buddy 现在能担任 Router。");
   });
@@ -181,10 +181,10 @@ describe("what the list says needs the user", () => {
     expect(note()!.textContent).toBe("路由连续失败 4 次。");
   });
 
-  it("says that the Router is unavailable, with the recorded code", async () => {
-    const f = fixture(snapshot({ routers: [], routingHealth: health({ available: false, reasonCode: "ROUTER_UNAVAILABLE", currentRouterBuddyId: null }) }));
+  it("renders the recorded Router reason", async () => {
+    const f = fixture(snapshot({ routers: [], routingHealth: health({ available: false, reason: { code: "router-all-unavailable", params: {} }, currentRouterBuddyId: null }) }));
     await openRoles(f);
-    expect(note()!.textContent).toBe("Router 当前不可用（ROUTER_UNAVAILABLE）。");
+    expect(note()!.textContent).toBe("列表中的 Router 当前均不可用。");
   });
 
   it("is worked out from the draft: the first buddy is named as soon as the default mode refuses it, and not once it does not", async () => {
@@ -522,7 +522,7 @@ describe("what leaves the roles view out of use", () => {
     expect(f.published).toHaveLength(1);
     expect(f.published[0]).not.toHaveProperty("configuration");
     expect(f.published[0].preferenceChanges).toEqual([
-      { buddyId: MEDIUM_ID, mode: "prefer", reason: "" },
+      { buddyId: MEDIUM_ID, mode: "prefer", note: null },
     ]);
   });
 
@@ -738,10 +738,10 @@ describe("the records of routing", () => {
     expect(records().queryByText("连续失败")).toBeNull();
   });
 
-  it("writes the reason code of a Router that is unavailable, as recorded", async () => {
-    const f = fixture(snapshot({ routingHealth: health({ available: false, reasonCode: "router-skip-window", sampleCount: 3, failureCount: 3, consecutiveFailures: 3 }) }));
+  it("renders the structured reason of an unavailable Router in the current language", async () => {
+    const f = fixture(snapshot({ routingHealth: health({ available: false, reason: { code: "router-not-configured", params: {} }, sampleCount: 3, failureCount: 3, consecutiveFailures: 3 }) }));
     await openRoles(f);
-    expect(fact("不可用")).toBe("不可用router-skip-window");
+    expect(fact("不可用")).toBe("不可用尚未设置 Router。");
   });
 
   it("gives each buddy of the list a line of its own records, with a dash where nothing is recorded", async () => {

@@ -1,11 +1,9 @@
 import { expect, type Page } from "@playwright/test";
-import { fileURLToPath } from "node:url";
 import { expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle, test } from "./preview";
 import { macroTaskTimelineFixture } from "../src/macro-task-fixtures";
 import type { DeletionBlocker, MacroTaskDeletionPreview } from "../src/macro-task-deletion";
 
 const title = "控制台前端重建：宏任务删除、确认范围与很长的微任务名称 / deletion scope and confirmation";
-const drawings = fileURLToPath(new URL("../../../docs/design/console-frontend/", import.meta.url));
 const authoredTitle = "未加载的作者标题 / original author title";
 const taskTitle = "任务首行内容 / original task line";
 const words = {
@@ -66,7 +64,7 @@ async function deletionFixture(page: Page, blocked = false, scope: MacroTaskDele
 for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 760, 320]) for (const theme of ["light", "dark"] as const) {
   test.describe(`macro deletion ${locale} ${width}px ${theme}`, () => {
     test.use({ locale, viewport: { width, height: 800 }, colorScheme: theme });
-    test("keeps confirmation readable, traps focus, cancels and retries the fixed deletion", async ({ page }) => {
+    test("keeps confirmation readable, traps focus, cancels and retries the fixed deletion", async ({ page }, testInfo) => {
       const w = words[locale];
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       const commands = await deletionFixture(page);
@@ -83,7 +81,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 760
       await expectTextUncut(dialog.locator("h2, p, dt, dd, button"));
       await expectWholeAndApart(dialog.locator("[data-slot=macro-delete-actions]"), dialog.locator("[data-slot=macro-delete-actions] button"));
       await expectNoSidewaysScroll(page);
-      if (locale === "zh-CN" && width !== 760) await page.screenshot({ path: `${drawings}batch3-delete-confirm-${width}-${theme}.png` });
+      if (locale === "zh-CN" && width !== 760) await page.screenshot({ path: testInfo.outputPath(`batch3-delete-confirm-${width}-${theme}.png`) });
       for (let index = 0; index < 6; index++) {
         await page.keyboard.press("Tab");
         expect(await dialog.evaluate(node => node.contains(document.activeElement))).toBe(true);
@@ -108,7 +106,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 760
       expect(writes[1]).toEqual(writes[0]);
     });
 
-    test("distinguishes known zero from unknown scope facts", async ({ page }) => {
+    test("distinguishes known zero from unknown scope facts", async ({ page }, testInfo) => {
       const w = words[locale];
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       const commands = await deletionFixture(page, false, { artifacts: { count: 0, bytes: 0 }, sessions: { count: null, bytes: null }, checkouts: 0, gitRefs: null });
@@ -127,7 +125,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 760
       expect(commands.every(command => command.operation === "macro_task_deletion_preview")).toBe(true);
     });
 
-    test("shows bounded unsettled evidence with a scrollable body and reachable acknowledgement", async ({ page }) => {
+    test("shows bounded unsettled evidence with a scrollable body and reachable acknowledgement", async ({ page }, testInfo) => {
       const w = words[locale];
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       const commands = await deletionFixture(page, true);
@@ -152,7 +150,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 760
       await expect.poll(() => viewport.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
       await expectTextUncut(dialog.locator("h2, [data-slot=macro-delete-actions] button"));
       await expectNoSidewaysScroll(page);
-      if (locale === "zh-CN" && width !== 760) await page.screenshot({ path: `${drawings}batch3-delete-blocked-${width}-${theme}.png` });
+      if (locale === "zh-CN" && width !== 760) await page.screenshot({ path: testInfo.outputPath(`batch3-delete-blocked-${width}-${theme}.png`) });
       await dialog.getByRole("button", { name: w.acknowledge, exact: true }).click();
       expect(commands.every(command => command.operation === "macro_task_deletion_preview")).toBe(true);
     });

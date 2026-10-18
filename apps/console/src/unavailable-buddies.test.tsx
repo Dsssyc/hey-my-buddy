@@ -42,7 +42,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
   const decisionId = options.staleDecision ? retiredMax : flashOff;
   const modelServiceNotes: ModelServiceNote[] = [{ ...retiredModelService, text: "用户保留的历史意见", updatedAt: null }];
   const preferences: Preference[] = options.stalePin
-    ? [{ buddyId: retiredMax, mode: "pin" as const, reason: "以前固定" }]
+    ? [{ buddyId: retiredMax, mode: "pin" as const, note: "以前固定" }]
     : [];
 
   const pages = (params: Record<string, any>): BuddyPage => {
@@ -283,7 +283,7 @@ describe("unavailable buddies", () => {
     await screen.findByText(/固定选择指向.*请启用或改为/);
     // The existing pin stays a reachable value on its own level; only its reason changes.
     expect(within(levelPreference("max")).getByRole("radio", { name: "固定" }).getAttribute("aria-checked")).toBe("true");
-    const reason = within(level("max")).getByRole("textbox", { name: "max 的偏好理由" });
+    const reason = within(level("max")).getByRole("textbox", { name: "max 的偏好备注" });
     expect(reason).toHaveProperty("value", "以前固定");
     await user.clear(reason);
     await user.type(reason, "仍然适用");
@@ -297,7 +297,7 @@ describe("unavailable buddies", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
     expect(f.published[0].preferenceChanges).toEqual([
-      { buddyId: retiredMax, mode: "pin", reason: "仍然适用" },
+      { buddyId: retiredMax, mode: "pin", note: "仍然适用" },
     ]);
     expect(f.published[0]).not.toHaveProperty("buddySettings");
   });
@@ -333,7 +333,7 @@ describe("unavailable buddies", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
     expect(f.published[0].preferenceChanges).toEqual([
-      { buddyId: retiredMax, mode: null, reason: "" },
+      { buddyId: retiredMax, mode: null, note: null },
     ]);
   });
 

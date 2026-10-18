@@ -375,7 +375,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         # Two effort-high buddies keep the Router path under the capability
         # filter; a single constrained candidate would be selected by the program.
         self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY),
-                  preferences=[{"buddyId": THIRD_BUDDY_ID, "mode": "prefer", "reason": "prefer flash-high"}])
+                  preferences=[{"buddyId": THIRD_BUDDY_ID, "mode": "prefer", "note": "prefer flash-high"}])
         view = self.routed(board, request_id="route-caps", requiredCapabilities=["effort:high"])
         self.assertEqual(view["routing"]["requiredCapabilities"], ["effort:high", "permission:write"])
         self.assertEqual(view["routing"]["constraints"], {})

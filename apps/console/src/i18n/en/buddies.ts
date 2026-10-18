@@ -71,11 +71,10 @@ export default {
   },
   pane: {
     preference: "Preference",
-    reasonNone: "Choose a preference to give a reason",
+    noteNone: "Choose a preference to add a note",
     enable: "Enable {{effort}}",
     buddyPreference: "Preference of {{effort}}",
-    buddyReason: "Reason for the preference of {{effort}}",
-    reason: "Reason",
+    buddyNote: "Note for the preference of {{effort}}",
     model: "Model",
     available: "Available",
     unavailable: "Unavailable",

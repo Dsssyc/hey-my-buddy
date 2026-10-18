@@ -245,7 +245,7 @@ class SelectionRequestTests(DecisionTestCase):
         # the Router path still runs; a single remaining candidate would be
         # selected by the program directly (covered in test_sole_candidate_selection).
         self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY),
-                  preferences=[{"buddyId": BUDDY_ID, "mode": "exclude", "reason": "user excluded"}])
+                  preferences=[{"buddyId": BUDDY_ID, "mode": "exclude", "note": "user excluded"}])
         self.use_helper(buddy_id=SECOND_BUDDY_ID)
         request = self.request(board)
         self.run_worker(board)
@@ -261,8 +261,8 @@ class SelectionRequestTests(DecisionTestCase):
             board,
             request_id="pin-1",
             command_id="pin-1",
-            preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "pin", "reason": "only these two"},
-                               {"buddyId": THIRD_BUDDY_ID, "mode": "pin", "reason": "only these two"}],
+            preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "pin", "note": "only these two"},
+                               {"buddyId": THIRD_BUDDY_ID, "mode": "pin", "note": "only these two"}],
         )
         pinned = self.request(board, request_id="pick-2")
         self.run_worker(board, worker_id="w-pinned")
@@ -275,9 +275,9 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(pinned_decision["input"]["preferences"],
                          sorted([
                              {"buddyId": SECOND_BUDDY_ID, "mode": "pin",
-                              "reason": "only these two"},
+                              "note": "only these two"},
                              {"buddyId": THIRD_BUDDY_ID, "mode": "pin",
-                              "reason": "only these two"},
+                              "note": "only these two"},
                          ], key=lambda entry: entry["buddyId"]))
 
     def test_requested_capabilities_filter_the_candidate_set(self):
@@ -323,7 +323,7 @@ class SelectionRequestTests(DecisionTestCase):
                 frozen = self.decision(board, request["decisionId"])["input"]
                 self.assertEqual([p["buddyId"] for p in frozen["buddies"]], [BUDDY_ID, SECOND_BUDDY_ID])
                 self.publish_user_patch(board, request_id=f"policy-{mode}", command_id=f"policy-{mode}",
-                                        preferenceChanges=[{"buddyId": bounded, "mode": mode, "reason": "new hard bound"}])
+                                        preferenceChanges=[{"buddyId": bounded, "mode": mode, "note": "new hard bound"}])
                 self.run_worker(board, worker_id=f"w-freeze-{mode}")
                 decision = self.decision(board, request["decisionId"])
                 with board.store.db.read() as connection:
@@ -436,7 +436,7 @@ class DecisionGateTests(DecisionTestCase):
         self.seed(board)
         request = self.request(board)
         self.publish_user_patch(board, request_id="before-claim", command_id="before-claim",
-                                preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer", "reason": "new preference"}])
+                                preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer", "note": "new preference"}])
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed")
@@ -554,7 +554,7 @@ class DecisionFailureTests(DecisionTestCase):
     def test_alternative_without_model_notes_completes_and_is_audited(self):
         board = self.board()
         self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY),
-                  preferences=[{"buddyId": THIRD_BUDDY_ID, "mode": "prefer", "reason": "prefer high"}])
+                  preferences=[{"buddyId": THIRD_BUDDY_ID, "mode": "prefer", "note": "prefer high"}])
         self.use_helper(buddy_id=SECOND_BUDDY_ID, evidence="none")
         request = board.call("selection_request", {
             "requestId": "pick-alternative", "task": "choose for this task"})

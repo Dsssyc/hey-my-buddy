@@ -78,7 +78,7 @@ class SingleRouterRequestTests(BoardTestCase):
     def test_router_choice_is_independent_of_worker_bounds_and_preferences(self):
         board = self.board()
         self.seed(board, buddies=(CATALOG_BUDDY, SECOND_BUDDY, THIRD_BUDDY), preferences=[
-            {"buddyId": BUDDY_ID, "mode": "exclude", "reason": "Worker exclusion"}])
+            {"buddyId": BUDDY_ID, "mode": "exclude", "note": "Worker exclusion"}])
         view = self.audit(board, self.request(board, requiredCapabilities=["effort:high"]))
         self.assertEqual(view["status"], "queued")
         self.assertEqual(view["routerBuddyId"], BUDDY_ID)
@@ -104,7 +104,7 @@ class SingleRouterRequestTests(BoardTestCase):
         original = self.audit(board, first)
         self.configure(board, routerBuddyIds=[SECOND_BUDDY_ID], defaultRoutingMode="fast", routingBudget="brief")
         self.publish_user_patch(board, request_id="exclude", command_id="exclude",
-                                preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "exclude", "reason": "later bound"}])
+                                preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "exclude", "note": "later bound"}])
         with patch("hey_my_buddy.blackboard.routing.router.current_router", side_effect=AssertionError("replay must not resolve")):
             replay = self.request(board)
         self.assertTrue(replay["duplicate"])

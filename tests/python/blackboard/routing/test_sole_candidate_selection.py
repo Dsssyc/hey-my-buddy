@@ -90,7 +90,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
 
     def test_sole_candidate_records_bounds_capabilities_and_preference_check(self):
         board = self.board()
-        self.seed(board, preferences=[{"buddyId": BUDDY_ID, "mode": "prefer", "reason": "prefer flash"}])
+        self.seed(board, preferences=[{"buddyId": BUDDY_ID, "mode": "prefer", "note": "prefer flash"}])
         request = board.store.decisions._create(
             "sole-bounds",
             {"kind": "select", "task": "bounded selection",
@@ -132,7 +132,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
     def test_routing_basis_freezes_the_user_exclusions_of_the_request(self):
         board = self.board()
         self.seed(board, preferences=[
-            {"buddyId": SECOND_BUDDY_ID, "mode": "exclude", "reason": "excluded for this test"}])
+            {"buddyId": SECOND_BUDDY_ID, "mode": "exclude", "note": "excluded for this test"}])
         request = board.store.decisions._create(
             "basis-freeze",
             {"kind": "select", "task": "bounded selection", "constraints": {"harness": "dsh"},
@@ -144,14 +144,14 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         self.assertEqual(decision["routingBasis"]["excludedCount"], 1)
         [excluded] = decision["routingBasis"]["excludedBuddies"]
         self.assertEqual(excluded["buddyId"], SECOND_BUDDY_ID)
-        self.assertEqual(excluded["reason"], "excluded for this test")
+        self.assertEqual(excluded["note"], "excluded for this test")
         self.assertNotIn("source", excluded)
         self.assertEqual({key: excluded[key] for key in BUDDY},
                          {key: SECOND_BUDDY[key] for key in BUDDY})
         # A later preference change never rewrites the frozen basis.
         self.publish_user_patch(
             board, request_id="basis-change", command_id="basis-change",
-            preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "prefer", "reason": "changed later"}])
+            preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "prefer", "note": "changed later"}])
         refreshed = self.decision(board, request["decisionId"])
         self.assertEqual(refreshed["routingBasis"], decision["routingBasis"])
 
@@ -174,12 +174,12 @@ class SoleCandidateSelectionTests(DecisionTestCase):
 
     def test_direct_selection_retains_the_pin_that_narrowed_the_candidates(self):
         board = self.board()
-        self.seed(board, preferences=[{"buddyId": BUDDY_ID, "mode": "pin", "reason": "fixed by user"}])
+        self.seed(board, preferences=[{"buddyId": BUDDY_ID, "mode": "pin", "note": "fixed by user"}])
         request = self.request(board, request_id="pinned-direct")
         original = self.decision(board, request["decisionId"])
         self.assertEqual(original["reason"], SOLE_CANDIDATE_REASON)
         frozen = original["output"]["programSelection"]["preferences"]
-        self.assertEqual(frozen, [{"buddyId": BUDDY_ID, "mode": "pin", "reason": "fixed by user"}])
+        self.assertEqual(frozen, [{"buddyId": BUDDY_ID, "mode": "pin", "note": "fixed by user"}])
         self.publish_user_patch(board, request_id="unpin", command_id="unpin",
             preferenceChanges=[{"buddyId": BUDDY_ID, "mode": None}])
         self.assertEqual(self.decision(board, request["decisionId"])["output"]["programSelection"]["preferences"], frozen)
@@ -275,7 +275,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         board.store.workflow.prepare_continuation_workspace({"runId": continued["runId"]})
         self.publish_user_patch(
             board, request_id="exclude-one", command_id="exclude-one",
-            preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "exclude", "reason": "narrowed later"}])
+            preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "exclude", "note": "narrowed later"}])
         routed = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(routed["routing"]["status"], "queued")
         self.assertEqual(routed["routing"]["constraints"], {})
@@ -297,7 +297,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         # stops at the Host boundary with the frozen basis naming the exclusion.
         self.publish_user_patch(
             board, request_id="exclude-high", command_id="exclude-high",
-            preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "exclude", "reason": "no longer wanted"}])
+            preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "exclude", "note": "no longer wanted"}])
         current = board.call("workflow_get", {"runId": submitted["runId"]})
         pending = self.continue_run(board, current, command_id="reroute-after-change", reroute=True)
         board.store.workflow.prepare_continuation_workspace({"runId": pending["runId"]})

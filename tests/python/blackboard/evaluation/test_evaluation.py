@@ -133,13 +133,13 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.seed_catalog(board)
         first = self.publish(board, command_id="c1",
                              buddySettings=[{"buddyId": BUDDY_ID, "enabled": True}],
-                             preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer", "reason": "cheap and fast"}],
+                             preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer", "note": "cheap and fast"}],
                              modelServiceNoteChanges=[{**model_service_key(BUDDY), "text": "human context"}])
         self.assertTrue(first["published"])
         self.publish(board, command_id="c2", buddySettings=[])
         snapshot = self.snapshot(board)
         self.assertTrue(next(item for item in snapshot["buddies"] if item["buddyId"] == BUDDY_ID)["enabled"])
-        self.assertEqual(snapshot["preferences"][0]["reason"], "cheap and fast")
+        self.assertEqual(snapshot["preferences"][0]["note"], "cheap and fast")
         self.assertEqual(snapshot["modelServiceNotes"][0]["text"], "human context")
 
     def test_program_fields_are_rejected(self):
@@ -178,9 +178,9 @@ class EvaluationPublishTests(EvaluationTestCase):
         board = self.board()
         self.seed_buddies(board, BUDDY, SECOND_BUDDY)
         self.refused_publish(board, "NOT_FOUND", request_id="w2", command_id="c2",
-                             preferenceChanges=[{"buddyId": "dsh:nope:nope:off", "mode": "prefer", "reason": "unknown"}])
+                             preferenceChanges=[{"buddyId": "dsh:nope:nope:off", "mode": "prefer", "note": "unknown"}])
         self.publish(board, request_id="w3", command_id="c3",
-                     preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "pin", "reason": "user pin"}],
+                     preferenceChanges=[{"buddyId": SECOND_BUDDY_ID, "mode": "pin", "note": "user pin"}],
                      configuration={"routerBuddyIds": [SECOND_BUDDY_ID]})
         self.publish(board, request_id="w4", command_id="c4",
                      buddySettings=[{"buddyId": SECOND_BUDDY_ID, "enabled": False}],
@@ -218,11 +218,11 @@ class EvaluationPublishTests(EvaluationTestCase):
         board = self.board()
         self.seed_catalog(board)
         self.refused_publish(board, "BUDDY_UNAVAILABLE", request_id="w1", command_id="c1",
-                             preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "pin", "reason": "wanted"}])
+                             preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "pin", "note": "wanted"}])
         self.publish(board, request_id="w2", command_id="c2",
                      buddySettings=[{"buddyId": BUDDY_ID, "enabled": True}])
         self.publish(board, request_id="w3", command_id="c3",
-                     preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "pin", "reason": "wanted"}])
+                     preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "pin", "note": "wanted"}])
         self.assertEqual(self.snapshot(board)["preferences"][0]["mode"], "pin")
 
     def test_omitted_collections_and_explicit_null_are_distinct_commands(self):
@@ -260,22 +260,22 @@ class EvaluationPublishTests(EvaluationTestCase):
                             if item["model"] == BUDDY["model"] and item["buddyId"] != BUDDY_ID)
         published = self.publish(board, request_id="w1", command_id="c1",
                                  preferenceChanges=[{"buddyId": BUDDY_ID, "mode": "prefer",
-                                                     "reason": "cheap and fast"}])
+                                                     "note": "cheap and fast"}])
         self.assertEqual(published["counts"]["preferenceChanges"], 1)
         snapshot = self.snapshot(board)
         self.assertEqual(snapshot["preferences"],
-                         [{"buddyId": BUDDY_ID, "mode": "prefer", "reason": "cheap and fast"}])
+                         [{"buddyId": BUDDY_ID, "mode": "prefer", "note": "cheap and fast"}])
         self.assertNotIn(other_effort["buddyId"],
                          {entry["buddyId"] for entry in snapshot["preferences"]})
         self.publish(board, request_id="w2", command_id="c2",
                      preferenceChanges=[{"buddyId": other_effort["buddyId"], "mode": "prefer",
-                                         "reason": "higher effort"},
-                                        {"buddyId": BUDDY_ID, "mode": "exclude", "reason": "too costly"}])
+                                         "note": "higher effort"},
+                                        {"buddyId": BUDDY_ID, "mode": "exclude", "note": "too costly"}])
         other_preference = {"buddyId": other_effort["buddyId"], "mode": "prefer",
-                            "reason": "higher effort"}
+                            "note": "higher effort"}
         self.assertEqual(self.snapshot(board)["preferences"],
                          sorted([other_preference,
-                                 {"buddyId": BUDDY_ID, "mode": "exclude", "reason": "too costly"}],
+                                 {"buddyId": BUDDY_ID, "mode": "exclude", "note": "too costly"}],
                                 key=lambda entry: entry["buddyId"]))
         self.publish(board, request_id="w3", command_id="c3",
                      preferenceChanges=[{"buddyId": BUDDY_ID, "mode": None}])

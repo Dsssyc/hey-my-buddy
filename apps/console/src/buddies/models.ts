@@ -98,7 +98,7 @@ export function harnessBlocks({ listed, data, recorded, harnesses, folded, fresh
             effort: effortText(buddy.effort),
             preference: data.preferences.find(entry => entry.buddyId === buddy.buddyId)?.mode ?? null,
             unsaved: (!!published && published.enabled !== buddy.enabled)
-              || own(data)?.mode !== own(recorded)?.mode || (own(data)?.reason ?? "") !== (own(recorded)?.reason ?? ""),
+              || own(data)?.mode !== own(recorded)?.mode || (own(data)?.note ?? "") !== (own(recorded)?.note ?? ""),
           };
         }),
         available: modelService.buddies.some(buddy => buddy.available),

@@ -29,7 +29,6 @@ export default {
       head: "列表第一项 {{name}}：{{reason}}。",
       gone: "已不在目录中",
       unavailable: "Router 当前不可用。",
-      unavailableCode: "Router 当前不可用（{{code}}）。",
       failing: "路由连续失败 {{n}} 次。",
     },
   },

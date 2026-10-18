@@ -122,7 +122,7 @@ class OverviewTests(RouterListHealthTestCase):
     def test_empty_list_reports_not_configured_without_the_old_threshold(self):
         summary = self.state()
         self.assertFalse(summary["available"])
-        self.assertEqual(summary["reasonCode"], "router-not-configured")
+        self.assertEqual(summary["reason"], {"code": "router-not-configured", "params": {}})
         self.assertIsNone(summary["currentRouterBuddyId"])
         self.assertEqual(summary["routers"], [])
 
@@ -135,7 +135,7 @@ class OverviewTests(RouterListHealthTestCase):
         summary = self.state()
         # A is inside its skip window, so B holds the role even with A's streak.
         self.assertTrue(summary["available"])
-        self.assertIsNone(summary["reasonCode"])
+        self.assertIsNone(summary["reason"])
         self.assertEqual(summary["currentRouterBuddyId"], B)
 
     def test_per_item_last_error_names_the_most_recent_no_answer(self):

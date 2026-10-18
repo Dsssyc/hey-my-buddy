@@ -69,9 +69,9 @@ export function modelServiceNoteText(
 }
 
 /** An empty mode clears this buddy's preference. */
-export function setPreference(draft: Draft, buddyId: string, mode: PreferenceMode | "", reason = ""): Draft {
+export function setPreference(draft: Draft, buddyId: string, mode: PreferenceMode | "", note: string | null = null): Draft {
   const preferences = draft.preferences.filter(p => p.buddyId !== buddyId);
-  if (mode) preferences.push({ buddyId, mode, reason });
+  if (mode) preferences.push({ buddyId, mode, note: note || null });
   return { ...draft, preferences };
 }
 
@@ -169,7 +169,7 @@ export function modelServiceConcurrencyChanges(
 /** The only fields a human may publish; program-owned buddy/catalog fields stay out. */
 type BuddySettingPatch = { buddyId: string; enabled: boolean };
 /** One buddy's preference; `mode: null` clears it. */
-type PreferenceChangePatch = { buddyId: string; mode: PreferenceMode | null; reason: string };
+type PreferenceChangePatch = { buddyId: string; mode: PreferenceMode | null; note: string | null };
 /** Model service note patch; `text: ""` clears the note. */
 type ModelServiceNoteChangePatch = ModelService & { text: string };
 
@@ -214,8 +214,8 @@ export function preferenceChanges(baseline: Draft, draft: Draft): PreferenceChan
   for (const buddyId of new Set([...before.keys(), ...after.keys()])) {
     const previous = before.get(buddyId);
     const next = after.get(buddyId);
-    if (previous?.mode === next?.mode && (previous?.reason ?? "") === (next?.reason ?? "")) continue;
-    changed.push(next ? { buddyId, mode: next.mode, reason: next.reason } : { buddyId, mode: null, reason: "" });
+    if (previous?.mode === next?.mode && (previous?.note ?? "") === (next?.note ?? "")) continue;
+    changed.push(next ? { buddyId, mode: next.mode, note: next.note } : { buddyId, mode: null, note: null });
   }
   return changed.sort(byBuddyId);
 }
@@ -304,7 +304,7 @@ function fingerprint(draft: UserEditable): string {
     buddies: [...draft.buddies]
       .map(({ buddyId, enabled }) => ({ buddyId, enabled }))
       .sort(byBuddyId),
-    preferences: [...draft.preferences].map(({ buddyId, mode, reason }) => ({ buddyId, mode, reason })).sort(byBuddyId),
+    preferences: [...draft.preferences].map(({ buddyId, mode, note }) => ({ buddyId, mode, note })).sort(byBuddyId),
     modelServiceNotes: draft.modelServiceNotes
       .filter((a) => a.text)
       .map((a) => ({ key: modelServiceKey(a), text: a.text }))
@@ -443,7 +443,7 @@ export function rebaseDraft(
     enabledOverrides.set(setting.buddyId, setting.enabled);
   }
 
-  // Buddy preferences: mode and reason are merged per buddy.
+  // Buddy preferences: mode and note are merged per buddy.
   const preferenceMerges = new Map<string, Preference>();
   const preferenceRemovals = new Set<string>();
   for (const change of preferenceChanges(baseline, draft)) {
@@ -456,9 +456,9 @@ export function rebaseDraft(
     const draftRow = draft.preferences.find(p => p.buddyId === buddyId);
     const freshRow = nextBaseline.preferences.find(p => p.buddyId === buddyId);
     const mode = merge(oldRow?.mode, draftRow?.mode, freshRow?.mode);
-    const reason = merge(oldRow?.reason ?? "", draftRow?.reason ?? "", freshRow?.reason ?? "");
+    const note = merge(oldRow?.note ?? "", draftRow?.note ?? "", freshRow?.note ?? "");
     if (mode.value === undefined) preferenceRemovals.add(buddyId);
-    else preferenceMerges.set(buddyId, { buddyId, mode: mode.value, reason: reason.value });
+    else preferenceMerges.set(buddyId, { buddyId, mode: mode.value, note: note.value || null });
   }
 
   // Model service notes: replay the local text over the refreshed value.

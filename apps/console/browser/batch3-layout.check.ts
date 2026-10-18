@@ -1,8 +1,6 @@
 import { expect } from "@playwright/test";
-import { fileURLToPath } from "node:url";
 import { expectNoSidewaysScroll, expectWholeAndApart, open, settle, test } from "./preview";
 
-const drawings = fileURLToPath(new URL("../../../docs/design/console-frontend/", import.meta.url));
 const A = "macro-11111111-1111-4111-8111-111111111111";
 const B = "macro-22222222-2222-4222-8222-222222222222";
 
@@ -10,7 +8,7 @@ const B = "macro-22222222-2222-4222-8222-222222222222";
 for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
   test.describe(`batch-three integrated layout ${width}px ${theme}`, () => {
     test.use({ locale: "zh-CN", viewport: { width, height: 900 }, reducedMotion: "reduce", colorScheme: theme as "light" | "dark" });
-    test("keeps compact rows, the fixed detail strip and independently collapsible Lead lanes", async ({ page }) => {
+    test("keeps compact rows, the fixed detail strip and independently collapsible Lead lanes", async ({ page }, testInfo) => {
       await page.clock.setFixedTime(new Date("2026-09-27T10:00:00Z"));
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await open(page, `#tasks/${A}`);
@@ -22,7 +20,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
       await settle(page);
       await expectNoSidewaysScroll(page);
       await page.mouse.move(0, 0);
-      await page.screenshot({ path: `${drawings}batch3-after-macro-${width}-${theme}.png` });
+      await page.screenshot({ path: testInfo.outputPath(`batch3-after-macro-${width}-${theme}.png`) });
 
       await name.click();
       const strip = page.locator('[data-slot=detail-strip]');
@@ -39,7 +37,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
       else await expect(page.locator('[data-slot=task-names]')).toBeVisible();
       await expectNoSidewaysScroll(page);
       await page.mouse.move(0, 0);
-      await page.screenshot({ path: `${drawings}batch3-after-detail-${width}-${theme}.png` });
+      await page.screenshot({ path: testInfo.outputPath(`batch3-after-detail-${width}-${theme}.png`) });
 
       await page.evaluate(hash => { window.location.hash = hash; }, `#tasks/${B}`);
       const header = page.locator('[data-slot=timeline-lane-lead][data-run-id="preview-run-b3"]');
@@ -60,7 +58,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
       await settle(page);
       await expectNoSidewaysScroll(page);
       await page.mouse.move(0, 0);
-      await page.screenshot({ path: `${drawings}batch3-after-lanes-${width}-${theme}.png` });
+      await page.screenshot({ path: testInfo.outputPath(`batch3-after-lanes-${width}-${theme}.png`) });
     });
   });
 }

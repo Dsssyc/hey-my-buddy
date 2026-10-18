@@ -47,7 +47,7 @@ class CatalogTrustRoutingTests(BoardTestCase):
             "user_policy_publish",
             {
                 "commandId": "pin-1",
-                "preferenceChanges": [{"buddyId": "dsh:fixture:alpha:max", "mode": "pin", "reason": "still my model"}],
+                "preferenceChanges": [{"buddyId": "dsh:fixture:alpha:max", "mode": "pin", "note": "still my model"}],
             },
         )
         self.assertEqual(pinned["counts"]["preferenceChanges"], 1)

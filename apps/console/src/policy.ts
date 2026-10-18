@@ -116,7 +116,7 @@ function pinRefusal(buddy: Buddy | undefined): string | null {
 /**
  * Changes that cannot be published at all. Only a *new* enable, a mode that
  * *transitions into* pin or a changed
- * Router needs a currently legal model; changing the reason of an existing pin,
+ * Router needs a currently legal model; changing the note of an existing pin,
  * a disable and every other edit stay independent of current availability. A
  * model service's concurrency limit is equally independent of availability — it only
  * has to be an integer in 1–32.
@@ -152,7 +152,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
   for (const change of preferenceChanges(baseline, draft)) {
     if (change.mode !== "pin") continue;
     // The board requires current legality only when the mode transitions into
-    // pin; a reason-only edit of an existing pin stays a legal patch.
+    // pin; a note-only edit of an existing pin stays a legal patch.
     if (baselinePreferenceModes.get(change.buddyId) === "pin") continue;
     const buddy = buddies.get(change.buddyId);
     const refusal = pinRefusal(buddy);

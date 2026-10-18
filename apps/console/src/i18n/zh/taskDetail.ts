@@ -65,7 +65,7 @@ export default {
   },
   basis: {
     name: "提交时的约束", constraints: "硬约束：{{buddy}}", capabilities: "所需能力：{{list}}", candidates: "提交时冻结候选 {{n}} 个",
-    excluded: "用户排除 {{n}} 个：{{list}}", prefer: "优先考虑 {{buddy}}：{{reason}}", pin: "固定选择 {{buddy}}：{{reason}}", exclude: "排除 {{buddy}}：{{reason}}",
+    excluded: "用户排除 {{n}} 个：{{list}}", prefer: "优先考虑 {{buddy}}：{{note}}", pin: "固定选择 {{buddy}}：{{note}}", exclude: "排除 {{buddy}}：{{note}}",
   },
   routing: {
     chosen: "选择", abstained: "放弃选择", notCalled: "未调用 Router", elapsed: "耗时 {{time}}", toolCalls: "工具调用 {{n}}", source: "来源",

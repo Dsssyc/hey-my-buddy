@@ -157,7 +157,7 @@ export type Buddy = {
 };
 /** A user's preference for one buddy; an absent row means no preference. */
 export type PreferenceMode = "prefer" | "pin" | "exclude";
-export type Preference = { buddyId: string; mode: PreferenceMode; reason: string };
+export type Preference = { buddyId: string; mode: PreferenceMode; note: string | null };
 /** The model service's human note. */
 export type ModelServiceNote = ModelService & {
   text: string;
@@ -366,7 +366,7 @@ export type RouterHealthEntry = {
 };
 export type RoutingHealth = {
   available?: boolean;
-  reasonCode?: string | null;
+  reason?: Reason | null;
   /** The buddy currently holding the Router role, or null while none can serve. */
   currentRouterBuddyId?: string | null;
   /** Per-buddy facts in the user's list order; absent data is unknown, not success. */
