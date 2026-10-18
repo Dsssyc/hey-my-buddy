@@ -36,6 +36,7 @@
   --color-line2: var(--line2);
   --color-live: var(--live);
   --color-live-wash: var(--live-wash);
+  --color-selected-row: var(--selected-row);
   --color-hand: var(--hand);
   --color-hand-mark: var(--hand-mark);
   --color-hand-wash: var(--hand-wash);

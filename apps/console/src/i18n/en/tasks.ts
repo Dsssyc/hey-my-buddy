@@ -2,10 +2,10 @@ import type { tasks as zh } from "../zh/tasks";
 export const tasks = {
   zoomOut: "Zoom out (-)", zoomIn: "Zoom in (+)", zoomFit: "Fit to window (0)",
   drawing: {
+    acceptedLegend: "Accepted", failedConclusionLegend: "Failed conclusion",
     eventLegend: "Event", clusterLegend: "Clustered markers", idleLegend: "Idle",
     eventCluster: "{{count}} markers",
     stopUnconfirmed: "Stop unconfirmed",
-    stoppedBy: "Stopped by {{actor}}",
     running: "Running {{duration}}", failed: "{{duration}} failed", queue: "Queued {{duration}}",
     expected: "Expected {{duration}}", silent: "Possibly stuck · silent {{duration}}", silence: "Silent {{duration}}", silentLegend: "Possibly stuck",
     waiting: "{{kind}} {{duration}}", inquiry: "Inquiry", inquiryReadout: "Inquiry · {{author}} · {{at}} · {{state}}",

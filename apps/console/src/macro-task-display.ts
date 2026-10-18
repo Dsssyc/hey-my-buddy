@@ -2,7 +2,7 @@ import i18n from "i18next";
 import { locale } from "./i18n";
 import { parseTimelineInstant } from "./timeline/instant";
 import { excerpt } from "./task-state";
-import { actorRoleText } from "./actor";
+import { stopActorText } from "./actor";
 import type { TimelineBuddy, TimelineEvent, TimelineRow, TimelineSpan } from "./macro-task-types";
 
 /** Stable identity for the six historical execution colours, assigned by the timeline. */
@@ -12,7 +12,7 @@ export function buddyColorKey(buddy: TimelineBuddy | null): string {
 
 /** The same recorded event has one name on the timeline and in its detail. */
 export function eventName(event: TimelineEvent): string {
-  return event.kind === "cancel" ? i18n.t("tasks:drawing.stoppedBy", { actor: actorRoleText(event.actor?.role) })
+  return event.kind === "cancel" ? stopActorText(event.actor?.role)
     : i18n.t(`tasks:drawing.events.${event.kind}`);
 }
 

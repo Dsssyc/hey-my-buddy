@@ -52,11 +52,10 @@ export default {
   },
   ending: { cause: "Ended by: {{cause}}", unrecorded: "Cause not recorded" },
   termination: {
-    "wrap-up": "Host wrap-up finished", "grace-expired": "Stopped when the wrap-up grace ran out", "forced-stop": "Forced stop", "console-stop": "Stopped in the console",
+    "wrap-up": "Host wrap-up finished", "grace-expired": "Stopped when the wrap-up grace ran out", "forced-stop": "Forced stop",
     "service-stop": "Service stopped", "unknown-stop": "Stopped (initiator unknown)", deadline: "Router budget used up", "harness-error": "Harness error",
     "transport-error": "Transport failure", completed: "Completed normally", wrapUpLead: "Lead wrap-up finished",
   },
-  stop: { host: "Stopped by Host", lead: "Stopped by Lead", console: "Stopped in the console", service: "Stopped by the service", unknown: "Stopped (initiator unknown)" },
   quota: { "quota-exceeded": "Quota used up", "rate-limited": "Rate limited by the native service" },
   seal: {
     name: "Seal", commit: "Commit", files: "Files: {{n}}", id: "Artifact ID", sha: "SHA-256", diff: "Diff", note: "Note",

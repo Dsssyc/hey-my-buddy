@@ -4,7 +4,7 @@ import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { actorRoleText } from "../actor";
+import { actorRoleText, stopActorText } from "../actor";
 import { formatList } from "../i18n/format";
 import { quad } from "./names";
 import { Lines } from "./parts";
@@ -12,10 +12,12 @@ import type { Basis, Ending, Session } from "./types";
 
 /** Why an execution did not end as it should: the cause, who stopped it and why, a native limit. */
 export function endingText(ending: Ending, t: TFunction<"taskDetail">): string {
-  const cause = ending.cause === "wrap-up" && ending.stoppedBy === "lead" ? t("termination.wrapUpLead") : ending.cause ? t(`termination.${ending.cause}`, { defaultValue: ending.cause }) : null;
+  const cause = ending.cause === "wrap-up" && ending.stoppedBy === "lead" ? t("termination.wrapUpLead")
+    : ending.cause === "console-stop" ? stopActorText("console")
+    : ending.cause ? t(`termination.${ending.cause}`, { defaultValue: ending.cause }) : null;
   return [
     cause ? t("ending.cause", { cause }) : ending.stoppedBy || ending.quota ? null : t("ending.unrecorded"),
-    ending.stoppedBy ? t(`stop.${ending.stoppedBy}`) : null,
+    ending.stoppedBy ? stopActorText(ending.stoppedBy) : null,
     ending.actor ? `${actorRoleText(ending.actor.role)} · ${ending.actor.id}` : null,
     ending.note,
     ending.quota ? t(`quota.${ending.quota}`) : null,

@@ -391,7 +391,7 @@ describe("the turn that ended otherwise than it should", () => {
   const ended = (record: Record<string, unknown>) => open({ step: 7, replies: { task: task(record), workflow: workflow({ state: "cancelled" }) } });
 
   it("names each cause in words, and a wrap-up that a Lead asked for as the Lead's", async () => {
-    for (const [cause, words] of [["deadline", "Router 预算用完"], ["forced-stop", "强制停止"], ["console-stop", "在控制台停止"], ["service-stop", "服务停止"],
+    for (const [cause, words] of [["deadline", "Router 预算用完"], ["forced-stop", "强制停止"], ["console-stop", "控制台 停止"], ["service-stop", "服务停止"],
       ["unknown-stop", "停止（发起者未知）"], ["harness-error", "Harness 错误"], ["transport-error", "传输故障"], ["grace-expired", "收尾宽限到期后停止"]] as const) {
       cleanup();
       ended({ status: "failed", selectedAttempt: { result: { terminationReason: cause } } });
@@ -412,7 +412,7 @@ describe("the turn that ended otherwise than it should", () => {
   it("names the person who stopped it only when the stopper was a person, and the console or the service never by a name", async () => {
     ended({ status: "cancelled", cancellation: { actor: { role: "host", id: "old-actor" }, note: null }, selectedAttempt: { stopInitiator: "console", result: { terminationReason: "console-stop" } } });
     await ready();
-    expect(pane().textContent).toContain("在控制台停止");
+    expect(pane().textContent).toContain("控制台 停止");
     expect(pane().textContent).not.toContain("old-actor");
     cleanup();
     ended({ status: "cancelled", cancellation: { actor: { role: "host", id: "old-owner" }, note: null }, selectedAttempt: { stopInitiator: "lead", result: { terminationReason: "forced-stop" } } });

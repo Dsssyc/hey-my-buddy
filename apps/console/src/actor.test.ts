@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import i18n from "i18next";
-import { actorText, parseActor, workflowOwnerText } from "./actor";
+import { eventName } from "./macro-task-display";
+import { macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { actorText, parseActor, stopActorText, workflowOwnerText } from "./actor";
 
 afterEach(async () => { await i18n.changeLanguage("zh"); });
 
@@ -29,4 +31,15 @@ describe("recorded actor roles", () => {
     expect(actorText({ role: "console", id: "session" })).toBe("Console · session");
     expect(actorText(null)).toBe("Not recorded");
   });
+});
+
+
+it("uses one stop attribution in both languages and keeps the event actor as its source", async () => {
+  const source = macroTaskTimelineFixture().events[0]!;
+  for (const [language, consoleWords, hostWords] of [["zh", "控制台 停止", "Host 停止"], ["en", "Stopped by Console", "Stopped by Host"]]) {
+    await i18n.changeLanguage(language);
+    expect(stopActorText("console")).toBe(consoleWords);
+    expect(eventName({ ...source, kind: "cancel", actor: { role: "console", id: "console-session" } })).toBe(consoleWords);
+    expect(eventName({ ...source, kind: "cancel", actor: { role: "host", id: "host-session" }, stopInitiator: "console" })).toBe(hostWords);
+  }
 });
