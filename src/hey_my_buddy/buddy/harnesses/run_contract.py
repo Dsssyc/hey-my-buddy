@@ -410,6 +410,8 @@ def _normalized_package(kind: str, value: Any) -> Optional[FrozenJson]:
     elif kind == "usage":
         normalized = usage_protocol.normalize_token_usage(unpacked)
     elif kind == "nativeFailure":
+        # Every harness reports its rejection phase in this quota package;
+        # the common codec refuses a missing phase rather than inferring one.
         normalized = usage_protocol.normalize_quota_failure(unpacked)
     elif kind == "lastAssistantMessage":
         normalized = usage_protocol.normalize_last_assistant_message(unpacked)

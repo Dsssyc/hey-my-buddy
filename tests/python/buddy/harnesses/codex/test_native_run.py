@@ -77,6 +77,21 @@ def observed_activity(endpoint, identity):
     return json.loads(endpoint.observe(json.dumps(query.to_payload())))["activity"]
 
 
+class RejectionPhaseTests(unittest.TestCase):
+    def test_input_start_and_foreign_activity_do_not_start_the_root_model(self):
+        from hey_my_buddy.buddy.harnesses.codex.protocol import TurnEvidence
+        evidence = TurnEvidence("root", "current")
+        for method, params in (
+            ("turn/started", {"threadId": "root", "turn": {"id": "current"}}),
+            ("item/completed", {"threadId": "root", "turnId": "current", "item": {"type": "userMessage", "text": "input"}}),
+            ("item/completed", {"threadId": "child", "turnId": "current", "item": {"type": "agentMessage", "text": "child output"}}),
+            ("item/completed", {"threadId": "root", "turnId": "previous", "item": {"type": "agentMessage", "text": "old output"}}),
+            ("thread/tokenUsage/updated", {"threadId": "root", "turnId": "current", "tokenUsage": {"last": {"inputTokens": 100, "outputTokens": 0}}}),
+        ):
+            evidence.observe({"method": method, "params": params})
+        self.assertEqual(evidence.rejection_phase, "before-model")
+
+
 class SeamCase(unittest.TestCase):
     """The shared private environment for direct seam calls."""
 
@@ -160,8 +175,7 @@ class SeamCase(unittest.TestCase):
                 self.assertEqual(set(catalog['billingByProvider']), {expected})
                 self.assertEqual(catalog['billingByProvider'][expected]['kind'],
                                  'subscription' if expected == 'openai' else 'unknown')
-                billing, _quota, error = account_probe.read([str(FIXTURE)], dict(os.environ))
-                self.assertIsNone(error)
+                billing = account_probe.read([str(FIXTURE)], dict(os.environ))
                 self.assertEqual(billing['provider'], expected)
                 self.assertEqual(billing['kind'], 'subscription' if expected == 'openai' else 'unknown')
                 self.assertEqual(trace.read_bytes() if trace.exists() else None, before,
@@ -273,6 +287,15 @@ class FastSeamTests(SeamCase):
         self.assertEqual(result.end.reason_code, "native-turn-failed")
         self.assertEqual(result.native_error.value["error"]["message"], "Native request failed: invalid_json_schema")
         self.assertEqual(native_run.native_evidence(result)["nativeFailure"], result.native_error.value)
+
+    def test_fast_quota_failure_uses_common_root_activity(self):
+        for case, phase in (("quota-before", "before-model"), ("quota-text", "during-model"),
+                            ("quota-error", "before-model")):
+            with self.subTest(case=case):
+                result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a buddy"))
+                self.assertEqual(result.end.status, "error")
+                self.assertEqual(result.native_failure.value["code"], "quota-exceeded")
+                self.assertEqual(result.native_failure.value["rejectionPhase"], phase)
 
     def test_foreign_turn_refusal_bounds_multibyte_method_name(self):
         from hey_my_buddy.buddy.harnesses.codex.protocol import TurnEvidence
@@ -638,6 +661,15 @@ class ReviewCorrection:
 
 
 class ReviewSeamTests(CodexSeamCase):
+    def test_review_quota_failure_uses_common_root_activity(self):
+        for case, phase in (("quota-before", "before-model"), ("quota-activity-text", "during-model"),
+                            ("quota-before-truncated", "unknown")):
+            with self.subTest(case=case):
+                result = self.review_run(case)
+                self.assertEqual(result.end.status, "error")
+                self.assertEqual(result.native_failure.value["rejectionPhase"], phase)
+
+
     def test_default_and_configured_provider_reach_review_thread_start(self):
         self.assert_discovered_provider_runs('read', REVIEW_SCHEMA)
 
@@ -1082,12 +1114,12 @@ class WorkerSeamTests(CodexSeamCase):
                            "acceptance": "Verified", "expectedArtifacts": [], "suggestedBuddyId": suggestion}}
             self.assertIsNone(validate_outcome(outcome))
 
-    def test_worker_native_usage_and_quota_snapshot_are_retained(self):
+    def test_worker_native_usage_is_retained_without_quota_snapshot(self):
         result = self.worker_run("usage")
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertIsNotNone(result.usage.value)
         self.assertEqual(result.usage.value["scope"], "attempt")
-        self.assertIn("quota-snapshot", {ref.kind for ref in result.evidence_refs})
+        self.assertNotIn("quota-snapshot", {ref.kind for ref in result.evidence_refs})
         self.assertIsNone(result.native_failure)
 
     def test_worker_quota_failure_attribution_is_reported(self):
@@ -1097,6 +1129,17 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertIsNotNone(result.native_failure.value)
         self.assertEqual(result.native_failure.value["nativeCode"], "usageLimitExceeded")
         self.assertEqual(result.native_failure.value["code"], "quota-exceeded")
+
+    def test_worker_quota_rejection_phase_uses_only_root_model_activity(self):
+        cases = (("quota-before", "before-model"), ("quota-before-truncated", "unknown"),
+                 ("quota-before-overflow", "unknown"),
+                 ("quota-activity-text", "during-model"), ("quota-activity-reasoning", "during-model"),
+                 ("quota-activity-tool", "during-model"), ("quota-activity-tokens", "during-model"))
+        for case, phase in cases:
+            with self.subTest(case=case):
+                result = self.worker_run(case)
+                self.assertEqual(result.end.status, "error")
+                self.assertEqual(result.native_failure.value["rejectionPhase"], phase)
 
     def test_denied_native_requests_are_facts_on_a_completed_worker_turn(self):
         result = self.worker_run("approval")

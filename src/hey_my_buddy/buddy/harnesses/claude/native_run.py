@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-import math
 import os
 import subprocess
 import threading
@@ -60,7 +59,6 @@ from ..c_two_live import CTwoLiveEndpoint
 from ..in_turn_inquiry import INQUIRY_TOOLS, InquiryServices, prepare_inquiry_services
 from ..inquiry_bridge import InquiryBridge
 from ..session_receipts import ReceiptError, refusal_shaped
-from ....protocol.usage import identifier as _usage_identifier
 from ...roles.turn_io import private_json
 from ..version import VersionShutdownError, probe_version
 from ..base import ProcessHandle
@@ -204,13 +202,6 @@ def _interrupt(connection: Connection | None) -> bool:
         # A late quota frame while awaiting interrupt acknowledgement must not
         # escape the cleanup path and suppress the controller's stop receipt.
         return False
-
-
-def _latest_rejected(rate_limits: dict) -> tuple[str, object]:
-    for rate_limit_type in reversed(list(rate_limits)):
-        if rate_limits[rate_limit_type].get("status") == "rejected":
-            return rate_limit_type, rate_limits[rate_limit_type].get("resetsAt")
-    return "unknown", None
 
 
 @dataclasses.dataclass
@@ -767,7 +758,7 @@ def _check_terminal(evidence: TurnEvidence, session_id: str) -> bool:
     if subtype == "success" and native_result.get("is_error") is False:
         return True
     if result_quota_denial(native_result):
-        raise QuotaRejected(*_latest_rejected(evidence.rate_limits))
+        raise QuotaRejected("unknown", None, source="claude/stream-json-result")
     if (native_result.get("is_error") is True or subtype == "error"
             or isinstance(subtype, str) and subtype.startswith("error_")):
         raise ClaudeProtocolError("native-turn-failed",
@@ -823,13 +814,10 @@ def _retain(evidence_refs: list, invocation_root: Path, kind: str, name: str, va
 
 def _native_observations(collector: _TurnCollector, native_result: dict | None,
                          state: _RunState) -> dict:
-    """The observed session model, model set, costs and quota windows, as facts.
+    """The observed session model, model set and costs, as facts.
 
     Each value keeps its native source; none is ever filled from a requested
-    buddy, and an unobserved one stays null. ``quota_failure`` carries
-    the frozen facts of one native quota rejection only: the legacy bounded
-    receipt shape travels in this package for the role's projection, and an
-    unrejected run writes nothing. The interrupt pair appears only when an
+    buddy, and an unobserved one stays null. The interrupt pair appears only when an
     interrupt was actually requested, as the strict booleans the shared
     projection keeps — the acknowledged value is the peer's own reply, never
     an inference from the process stop.
@@ -844,9 +832,6 @@ def _native_observations(collector: _TurnCollector, native_result: dict | None,
         observations["catalogStatus"] = state.catalog["discoveries"][0]["status"]
         observations["catalogWarnings"] = state.catalog["warnings"][:16]
         observations["buddyStatus"] = "confirmed" if state.catalog_checked else "unknown"
-    if state.quota_failure is not None:
-        observations["quotaFailure"] = _quota_failure(
-            {"rateLimitType": state.quota_failure.get("nativeCode"), "resetsAt": state.quota_failure.get("resetsAt")})
     if state.interrupt_requested:
         observations["nativeInterruptRequested"] = True
         observations["nativeInterruptAcknowledged"] = state.interrupt_acknowledged is True
@@ -858,24 +843,20 @@ def _native_observations(collector: _TurnCollector, native_result: dict | None,
     if collector.evidence is not None:
         observations["permissionMode"] = collector.evidence.permission_mode
         observations["permissionModeStatus"] = "confirmed" if collector.evidence.permission_mode is not None else "unread"
-        observations["quota"] = collector.evidence.quota_candidate()
-        observations["rateLimitObservations"] = dict(sorted(collector.evidence.rate_limits.items()))
     return observations
 
 
-def _quota_failure(value: object) -> dict:
-    """Only rateLimitType and resetsAt, typed and bounded; never native error text.
-
-    The legacy collect's own bounded projection, kept verbatim: an identifier
-    that cannot be named becomes ``unknown``, and the reset time keeps its
-    original bounded string or finite number instead of being normalized.
-    """
-    source = value if isinstance(value, dict) else {}
-    resets = source.get("resetsAt")
-    return {"rateLimitType": _usage_identifier(source.get("rateLimitType")) or "unknown",
-            "resetsAt": resets if isinstance(resets, str) and len(resets) <= 64
-            else resets if isinstance(resets, (int, float)) and not isinstance(resets, bool) and math.isfinite(resets)
-            else None}
+def _incomplete_result_quota_failure(collector: _TurnCollector | None,
+                                     preparation: _Preparation | None) -> dict | None:
+    """Retain a confirmed root result rejection when collection fails after it."""
+    evidence = collector.evidence if collector is not None else None
+    result = evidence.result if evidence is not None else None
+    if (result is None or not result_quota_denial(result) or not evidence.init_observed
+            or preparation is None or result.get("session_id") != preparation.session_id):
+        return None
+    return {"code": "quota-exceeded", "nativeCode": "unknown",
+            "source": "claude/stream-json-result", "observedAt": utc_now(),
+            "resetsAt": None, "rejectionPhase": "unknown"}
 
 
 def _native_turn_facts(collector: _TurnCollector, session_id: str, subtype: str) -> dict:
@@ -1192,16 +1173,23 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     except QuotaRejected as error:
         # Quota exhaustion is infrastructure unavailability: no retry, no outcome.
         state.status = "error"
-        state.reason = "quota-rejected"
+        state.reason = "harness-error"
         state.error_text = QUOTA_REJECTED_ERROR
         state.quota_failure = {"code": "quota-exceeded", "nativeCode": error.rate_limit_type,
-                               "source": "claude/stream-json-rate-limit-event",
-                               "observedAt": utc_now(), "resetsAt": error.resets_at}
+                               "source": error.source, "observedAt": utc_now(),
+                               "resetsAt": error.resets_at,
+                               "rejectionPhase": collector.evidence.rejection_phase() if collector is not None
+                               and collector.evidence is not None else "unknown"}
         request_interrupt()
     except (ClaudeProtocolError, VersionShutdownError) as error:
         state.status = "cancelled" if error.code == "user-cancel" else "error"
         state.reason = error.code
         state.error_text = str(error)
+        # A result can report a structured rejection before the stream fails
+        # during the drain. Its activity history is then incomplete, but the
+        # rejection itself remains a native fact.
+        if state.status == "error":
+            state.quota_failure = _incomplete_result_quota_failure(collector, preparation)
         if error.code in ("user-cancel", "deadline"):
             request_interrupt()
     except ClaudeUnavailable as error:
@@ -1212,6 +1200,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         state.status = "error"
         state.reason = "invalid-native-result"
         state.error_text = "the native execution returned invalid or incomplete data"
+        state.quota_failure = _incomplete_result_quota_failure(collector, preparation)
     finally:
         if inquiry_bridge is not None:
             inquiry_bridge.close()

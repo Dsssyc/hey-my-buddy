@@ -91,11 +91,11 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
             self.assertIsNone(view["finalArtifactId"])
             meta, result = receipt["resultMeta"], receipt["result"]
             self.assertEqual(meta["terminationReason"], "harness-error", receipt)
-            self.assertEqual(result["code"], "quota-rejected")
+            self.assertEqual(result["code"], "harness-error")
             self.assertNotIn("turn", result)
             self.assertNotIn("workspaceSeal", result)
-            self.assertEqual(view["counts"]["turns"], 1, "No automatic retry is allowed")
-            self.assertEqual(set(result["quotaFailure"]), {"rateLimitType", "resetsAt"})
+            self.assertEqual(set(result["quotaFailure"]),
+                             {"code", "nativeCode", "source", "observedAt", "resetsAt", "rejectionPhase"})
 
 
 class ClaudeCatalogRuleTests(unittest.TestCase):

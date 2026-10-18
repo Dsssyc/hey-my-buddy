@@ -85,11 +85,18 @@ for line in sys.stdin:
           'settings':{'model':{'current':{'providerId':provider,'modelId':'fixture-model',
           'options':{'reasoningLevel':'low'}}},'thoughtLevel':{'current':'low'}}}
     elif method == 'session/messages':
-        if case in ('usage-ok', 'usage-quota', 'usage-projection-quota', 'usage-correct', 'usage-correct-quota') and subscribed and prompt_sent:
+        if case == 'quota-read-error' and subscribed and prompt_sent:
+            result = {'messages':'invalid'}
+        elif case in ('usage-ok', 'usage-quota', 'usage-projection-quota', 'usage-correct',
+                    'usage-correct-quota', 'quota-truncated') and subscribed and prompt_sent:
             result = {'messages':[{'info':{'sessionId':f's-{session}', 'messageId':f'a-{session}',
                 'parentMessageId':f'u-{session}', 'role':'assistant',
                 'tokens':{'input':12, 'output':3, 'reasoning':1, 'cache':{'read':2,'write':1}}},
                 'parts':[]}]}
+            if case == 'quota-truncated':
+                result['messages'] = [dict(result['messages'][0],
+                    info={**result['messages'][0]['info'], 'messageId':f'a-{session}-{index}'})
+                    for index in range(64)]
         else:
             result = {'messages':[]}
     elif method == 'session/subscribe':
@@ -155,7 +162,8 @@ for line in sys.stdin:
             send({'id':'srv-2','method':'interaction/requestProviderRuntimeHeaders',
                   'params':{'sessionId':f's-{session}','providerId':'fixture-account'}})
             time.sleep(30)
-        if case in ('usage-quota', 'usage-projection-quota') or case == 'usage-correct-quota' and session == 2:
+        if case in ('usage-quota', 'usage-projection-quota', 'quota-before',
+                    'quota-truncated', 'quota-read-error') or case == 'usage-correct-quota' and session == 2:
             if case == 'usage-projection-quota':
                 send({'method':'computer-use/operation-event','params':{'sessionId':f's-{session}',
                       'turnId':f't-{session}','kind':'turn-failed','sequenceNumber':2}})

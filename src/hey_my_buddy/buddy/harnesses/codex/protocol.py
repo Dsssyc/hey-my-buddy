@@ -8,10 +8,8 @@ import re
 import select
 import threading
 import time
-from decimal import Decimal, InvalidOperation
 
 from ....json_codec import canonical_json, decode_strict_json
-from ..native_support import utc_now
 
 MAX_FRAME_BYTES = 8 * 1024 * 1024
 #: The whole native-refusal text — the ``Codex rejected <method>:`` prefix
@@ -215,119 +213,6 @@ def attempt_token_usage(evidence) -> dict | None:
     }
 
 
-#: The native quota slots a rate-limit snapshot may carry.
-_RATE_WINDOW_SLOTS = ("primary", "secondary")
-
-
-def _zero_balance(value) -> bool:
-    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
-        return False
-    if isinstance(value, str) and (not value or len(value) > 32):
-        return False
-    try:
-        amount = Decimal(str(value))
-        return amount.is_finite() and amount == 0
-    except InvalidOperation:
-        return False
-
-
-def _quota_candidate(buckets, *, observed_at: str, account_id=None, ordinary_usage_allowed=None) -> dict | None:
-    """Build one quota candidate from native rate-limit buckets.
-
-    Only natively reported values are carried. A slot without ``usedPercent``
-    contributes no window, and a missing ``resetsAt`` stays unknown rather than
-    becoming zero. Multi-bucket snapshots keep their native ``limitId`` on each
-    window so two metered buckets can never be merged into one percentage.
-    """
-    if not buckets:
-        return None
-    candidate = {"source": "codex/app-server-rate-limits", "observedAt": observed_at,
-                 "provider": "openai", "windows": []}
-    if len(buckets) > 1:
-        candidate["ambiguousLimits"] = True
-        from ....protocol.usage import classify_quota_code
-        def usable(bucket):
-            if not isinstance(bucket, dict) or ordinary_usage_allowed is False:
-                return False
-            if classify_quota_code(bucket.get('rateLimitReachedType') or '') == 'quota-exceeded':
-                return False
-            windows = [bucket[slot] for slot in _RATE_WINDOW_SLOTS if isinstance(bucket.get(slot), dict)]
-            return bool(windows and all(type(w.get('usedPercent')) in (int, float) and 0 <= w['usedPercent'] < 100
-                for w in windows))
-        if all(usable(bucket) for _limit, bucket in buckets):
-            candidate['allLimitsAvailable'] = True
-            candidate['coveredLimits'] = [limit_id for limit_id, _bucket in buckets if isinstance(limit_id, str)]
-    if isinstance(account_id, str) and account_id:
-        candidate["nativeAccountId"] = account_id
-    if isinstance(ordinary_usage_allowed, bool):
-        candidate["ordinaryUsageAllowed"] = ordinary_usage_allowed
-    for limit_id, bucket in buckets:
-        if not isinstance(bucket, dict):
-            continue
-        plan = bucket.get("planType")
-        if candidate.get("planType") is None and isinstance(plan, str) and plan:
-            candidate["planType"] = plan
-        reached = bucket.get("rateLimitReachedType")
-        if candidate.get("reachedType") is None and isinstance(reached, str) and reached:
-            candidate["reachedType"] = reached
-        if candidate.get("limitId") is None and limit_id:
-            candidate["limitId"] = limit_id
-        credits = bucket.get("credits")
-        if (isinstance(credits, dict) and credits.get("hasCredits") is True
-                and credits.get("unlimited") is False
-                and ordinary_usage_allowed is False
-                and _zero_balance(credits.get("balance"))):
-            candidate["balanceZero"] = True
-        for slot in _RATE_WINDOW_SLOTS:
-            window = bucket.get(slot)
-            used = window.get("usedPercent") if isinstance(window, dict) else None
-            if isinstance(used, bool) or not isinstance(used, (int, float)):
-                # A slot without a native percentage is not a window and is never a zero.
-                continue
-            entry = {"name": slot, "usedPercent": used}
-            resets = window.get("resetsAt")
-            if isinstance(resets, int) and not isinstance(resets, bool) and resets > 0:
-                entry["resetsAt"] = resets
-            duration = window.get("windowDurationMins")
-            if isinstance(duration, int) and not isinstance(duration, bool) and duration > 0:
-                entry["windowDurationMins"] = duration
-            if limit_id:
-                entry["limitId"] = limit_id
-            candidate["windows"].append(entry)
-    return candidate
-
-
-def quota_candidate(snapshot, *, observed_at: str, account_id=None, ordinary_usage_allowed=None) -> dict | None:
-    """One native ``RateLimitSnapshot`` (one bucket, as a rolling update carries)."""
-    if not isinstance(snapshot, dict):
-        return None
-    limit_id = snapshot.get("limitId")
-    return _quota_candidate([(limit_id if isinstance(limit_id, str) else None, snapshot)],
-                            observed_at=observed_at, account_id=account_id,
-                            ordinary_usage_allowed=ordinary_usage_allowed)
-
-
-def quota_candidate_from_response(response, *, observed_at: str) -> dict | None:
-    """One ``account/rateLimits/read`` response as an unnormalized candidate.
-
-    The multi-bucket view is preferred when the backend supplies it; otherwise
-    the backward-compatible single view is used. An empty response proves
-    nothing and returns ``None`` instead of an empty observation.
-    """
-    if not isinstance(response, dict):
-        return None
-    buckets: list[tuple[str | None, dict]] = []
-    by_id = response.get("rateLimitsByLimitId")
-    single = response.get("rateLimits") if isinstance(response.get("rateLimits"), dict) else None
-    if isinstance(by_id, dict) and by_id:
-        buckets = [(str(limit_id), by_id[limit_id]) for limit_id in sorted(by_id)]
-    elif single is not None:
-        limit_id = single.get("limitId")
-        buckets = [(limit_id if isinstance(limit_id, str) else None, single)]
-    return _quota_candidate(buckets, observed_at=observed_at, account_id=response.get("accountId"),
-                            ordinary_usage_allowed=response.get("ordinaryUsageAllowed"))
-
-
 def turn_failure_code(turn) -> str | None:
     """The native structured error code of a failed native turn, when it has one."""
     error = turn.get("error") if isinstance(turn, dict) else None
@@ -352,8 +237,8 @@ class TurnEvidence:
         self.usage_events = 0
         self.usage_anomaly = False
         self.usage_unprovable = False
-        # The most recent non-empty native quota observation for this execution.
-        self.quota_candidate = None
+        self.model_activity = False
+        self.collector_failed = False
 
     def _observe_token_usage(self, token_usage) -> None:
         """Fold one native usage notification into this attempt's delta."""
@@ -381,17 +266,31 @@ class TurnEvidence:
         self.usage_total = total
         self.usage_events += 1
 
-    def _observe_rate_limits(self, snapshot) -> None:
-        """Keep the newest quota observation a sparse rolling update can prove.
+    @property
+    def rejection_phase(self) -> str:
+        if self.collector_failed:
+            return "unknown"
+        return "during-model" if self.model_activity else "before-model"
 
-        A rolling update may omit fields; an update that proves nothing replaces
-        nothing, so an earlier complete observation is never cleared by a
-        partial one.
-        """
-        from ....protocol.usage import normalize_quota
-        candidate = quota_candidate(snapshot, observed_at=utc_now())
-        if candidate is not None and normalize_quota(candidate) is not None:
-            self.quota_candidate = candidate
+    def _observe_activity(self, method: str, params: dict) -> None:
+        item = params.get("item")
+        if isinstance(item, dict):
+            kind = item.get("type")
+            if kind in ("reasoning", "commandExecution", "fileChange", "mcpToolCall",
+                        "dynamicToolCall", "collabAgentToolCall", "webSearch", "imageGeneration",
+                        "function_call", "custom_tool_call"):
+                self.model_activity = True
+            elif kind == "agentMessage" and item.get("text"):
+                self.model_activity = True
+        if method in ("item/agentMessage/delta", "item/reasoning/textDelta",
+                      "item/reasoning/summaryTextDelta") and params.get("delta"):
+            self.model_activity = True
+        if method == "thread/tokenUsage/updated":
+            usage = params.get("tokenUsage")
+            last = usage.get("last") if isinstance(usage, dict) else None
+            if isinstance(last, dict) and any(type(last.get(key)) is int and last[key] > 0
+                                            for key in ("outputTokens", "reasoningOutputTokens")):
+                self.model_activity = True
 
     def _complete_final(self, item: dict) -> None:
         if self.final_item is not None:
@@ -416,9 +315,6 @@ class TurnEvidence:
         method, params = message.get("method"), message.get("params")
         if not isinstance(params, dict):
             return None
-        if method == "account/rateLimits/updated":
-            self._observe_rate_limits(params.get("rateLimits"))
-            return None
         if params.get("threadId") != self.thread_id:
             return None
         turn = params.get("turn")
@@ -426,6 +322,7 @@ class TurnEvidence:
         if native_turn_id != self.turn_id:
             return None
         self.event_seq += 1
+        self._observe_activity(method, params)
         if method == "thread/tokenUsage/updated":
             self._observe_token_usage(params.get("tokenUsage"))
             return "streaming-model", None
@@ -453,9 +350,10 @@ class TurnEvidence:
         if method == "turn/completed":
             if self.completed is not None:
                 raise CodexProtocolError("invalid-protocol", "duplicate native turn completion")
-            if self.final_item is None and isinstance(turn, dict) and isinstance(turn.get("items"), list):
+            if isinstance(turn, dict) and isinstance(turn.get("items"), list):
                 for item in turn["items"]:
-                    if isinstance(item, dict) and item.get("type") == "agentMessage" and item.get("phase") == "final_answer":
+                    self._observe_activity("item/completed", {"item": item})
+                    if self.final_item is None and isinstance(item, dict) and item.get("type") == "agentMessage" and item.get("phase") == "final_answer":
                         self._complete_final(item)
             self.completed = turn
             return "finishing", None

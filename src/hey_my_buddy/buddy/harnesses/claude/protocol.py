@@ -28,14 +28,7 @@ _WINDOWS_PIPE = os.name == "nt"
 
 MAX_FRAME_BYTES = 8 * 1024 * 1024
 MAX_PENDING_RESPONSES = 16
-MAX_RATE_LIMIT_TYPES = 16
 MAX_BACKGROUND_TASKS = 32
-
-#: The per-window view of the native unified rate-limit response headers. Each
-#: member is optional and only natively reported values are carried.
-UNIFIED_WINDOW_NAMES = ("five_hour", "seven_day", "seven_day_overage_included")
-#: Bound on the canonical quota windows one observation may publish.
-MAX_QUOTA_WINDOWS = 8
 #: Bound on the deduplicated native assistant usage records kept for the fallback
 #: sum of one attempt.
 MAX_ASSISTANT_USAGE_RECORDS = 256
@@ -65,10 +58,11 @@ class ClaudeProtocolError(Exception):
 class QuotaRejected(Exception):
     """A structured native quota rejection; carries only bounded typed facts."""
 
-    def __init__(self, rate_limit_type: str, resets_at: object):
+    def __init__(self, rate_limit_type: str, resets_at: object, *, source: str = "claude/stream-json-rate-limit-event"):
         super().__init__("the Claude provider quota rejected this execution")
         self.rate_limit_type = rate_limit_type
         self.resets_at = resets_at
+        self.source = source
 
 
 #: The one shared strict decode (duplicate members, non-finite numbers and the
@@ -257,72 +251,6 @@ def _bounded_resets_at(value: object):
     return None
 
 
-def _finite_utilization(value: object):
-    """A finite numeric observation: one number or a flat map of numbers."""
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)) and math.isfinite(value):
-        return value
-    if isinstance(value, dict) and len(value) <= MAX_RATE_LIMIT_TYPES:
-        result = {}
-        for key, item in value.items():
-            if not isinstance(key, str) or len(key) > 64 or isinstance(item, bool) \
-                    or not isinstance(item, (int, float)) or not math.isfinite(item):
-                return None
-            result[key] = item
-        return result
-    return None
-
-
-def rate_limit_observation(frame: dict) -> tuple[str, dict] | None:
-    """One bounded, typed observation of a native ``rate_limit_event`` frame."""
-    info = frame.get("rate_limit_info")
-    if not isinstance(info, dict):
-        return None
-    rate_limit_type = _identifier(info.get("rateLimitType"))
-    status = info.get("status")
-    if rate_limit_type is None or status not in ("allowed", "allowed_warning", "rejected"):
-        return None
-    observation = {"status": status, "resetsAt": _bounded_resets_at(info.get("resetsAt"))}
-    utilization = _finite_utilization(info.get("utilization"))
-    if utilization is not None:
-        observation["utilization"] = utilization
-    return rate_limit_type, observation
-
-
-def rate_limit_windows(frame: dict) -> dict[str, dict]:
-    """The native ``unifiedWindows`` fractions of one rate-limit event.
-
-    The native schema tracks the 5-hour, weekly and overage-included weekly
-    windows on every observation; ``utilization`` is the fraction of the window
-    used and ``resetsAt`` is Unix epoch seconds. Only the three named windows are
-    read, each value is re-validated, and an absent or non-numeric entry stays
-    absent instead of becoming zero.
-    """
-    info = frame.get("rate_limit_info")
-    raw = info.get("unifiedWindows") if isinstance(info, dict) else None
-    if not isinstance(raw, dict):
-        return {}
-    windows: dict[str, dict] = {}
-    for name in UNIFIED_WINDOW_NAMES:
-        item = raw.get(name)
-        if not isinstance(item, dict):
-            continue
-        utilization = item.get("utilization")
-        if isinstance(utilization, bool) or not isinstance(utilization, (int, float)) or not math.isfinite(utilization):
-            continue
-        window = {"utilization": utilization}
-        resets = _bounded_resets_at(item.get("resetsAt"))
-        if resets is not None:
-            window["resetsAt"] = resets
-        windows[name] = window
-    return windows
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
 def result_quota_denial(result: dict) -> bool:
     """A structured native quota denial in the final result; never prose-based."""
     status = result.get("api_error_status")
@@ -383,16 +311,13 @@ class TurnEvidence:
         self.event_seq = 0
         self.model_messages = 0
         self.tool_calls = 0
-        self.rate_limits: dict[str, dict] = {}
+        self.root_model_activity = False
         self.permission_denials = 0
         self.background_tasks: dict[str, str] = {}
         self.anonymous_task_starts = 0
         # Native observation material for ADR-018 items 22/23 and the retained
         # assistant text. These never change the turn's status; they are facts
         # the adapter publishes, or nothing at all.
-        self.rate_limit_windows: dict[str, dict] = {}
-        self.quota_observed_at: str | None = None
-        self.quota_rejection_type: str | None = None
         self.usage_result: dict | None = None
         self.assistant_usage: dict[str, dict] = {}
         self.assistant_text: dict | None = None
@@ -403,32 +328,19 @@ class TurnEvidence:
         frame_type = frame.get("type")
         if frame_type == "rate_limit_event":
             info = frame.get("rate_limit_info")
-            windows = rate_limit_windows(frame)
-            if windows and self.quota_observed_at is None:
-                self.quota_observed_at = _utc_now()
-            for name, window in windows.items():
-                if name in self.rate_limit_windows or len(self.rate_limit_windows) < len(UNIFIED_WINDOW_NAMES):
-                    self.rate_limit_windows[name] = window
             if isinstance(info, dict) and info.get("status") == "rejected":
                 # A rejection fails the attempt even when the rate-limit identity
                 # is absent or malformed; the published facts stay sanitized.
                 rate_limit_type = _identifier(info.get("rateLimitType")) or "unknown"
-                self.quota_observed_at = self.quota_observed_at or _utc_now()
-                self.quota_rejection_type = rate_limit_type
                 raise QuotaRejected(rate_limit_type, _bounded_resets_at(info.get("resetsAt")))
-            observation = rate_limit_observation(frame)
-            if observation is not None:
-                rate_limit_type, item = observation
-                if self.quota_observed_at is None:
-                    self.quota_observed_at = _utc_now()
-                if rate_limit_type in self.rate_limits or len(self.rate_limits) < MAX_RATE_LIMIT_TYPES:
-                    self.rate_limits[rate_limit_type] = item
             return None
         # Frames under a subagent's tool call are not root-turn evidence; a
         # subagent result never ends the root turn.
         parent = frame.get("parent_tool_use_id")
         if isinstance(parent, str) and parent:
             return None
+        frame_session = frame.get("session_id")
+        root_session = not isinstance(frame_session, str) or not frame_session or frame_session == self.session_id
         if frame_type == "system":
             subtype = frame.get("subtype")
             if subtype == "init":
@@ -492,13 +404,29 @@ class TurnEvidence:
             message = frame.get("message")
             content = message.get("content") if isinstance(message, dict) else None
             if isinstance(content, list):
+                if root_session and any(isinstance(block, dict) and block.get("type") in ("text", "thinking", "reasoning", "tool_use")
+                       for block in content):
+                    self.root_model_activity = True
                 names = [block.get("name") for block in content
                          if isinstance(block, dict) and block.get("type") == "tool_use" and isinstance(block.get("name"), str)]
                 if names:
                     self.tool_calls += len(names)
                     return "tool-running", names[0][:80]
+            if root_session:
+                self._observe_output_tokens(message.get("usage") if isinstance(message, dict) else None)
             return "streaming-model", None
         if frame_type == "stream_event":
+            event = frame.get("event")
+            if root_session and isinstance(event, dict):
+                block = event.get("content_block")
+                delta = event.get("delta")
+                if (event.get("type") == "content_block_start" and isinstance(block, dict)
+                        and block.get("type") in ("text", "thinking", "reasoning", "tool_use")) or (
+                        event.get("type") == "content_block_delta" and isinstance(delta, dict)
+                        and delta.get("type") in ("text_delta", "thinking_delta", "input_json_delta")):
+                    self.root_model_activity = True
+                if event.get("type") == "message_delta":
+                    self._observe_output_tokens(event.get("usage"))
             return "streaming-model", None
         if frame_type == "result":
             if self.result is not None:
@@ -507,8 +435,20 @@ class TurnEvidence:
             usage = frame.get("usage")
             if isinstance(usage, dict):
                 self.usage_result = usage
+                self._observe_output_tokens(usage)
             return "finishing", None
         return None
+
+    def _observe_output_tokens(self, usage: object) -> None:
+        if not isinstance(usage, dict):
+            return
+        details = usage.get("output_tokens_details")
+        reasoning = native_counter(details.get("thinking_tokens")) if isinstance(details, dict) else None
+        if (native_counter(usage.get("output_tokens")) or 0) > 0 or (reasoning or 0) > 0:
+            self.root_model_activity = True
+
+    def rejection_phase(self) -> str:
+        return "during-model" if self.root_model_activity else "before-model"
 
     def _observe_assistant(self, frame: dict) -> None:
         """Keep one root assistant frame's text and deduplicated usage.
@@ -635,54 +575,6 @@ class TurnEvidence:
                 counters[key] = None
         return self._usage_document(counters, source="claude/stream-json-assistant-usage",
                                     records=contributing, completeness="partial")
-
-    def quota_candidate(self) -> dict | None:
-        """The native rate-limit observations as an unnormalized quota candidate.
-
-        ``unifiedWindows`` fractions are the authoritative per-window view; a
-        top-level numeric ``utilization`` is the fraction of the currently
-        limiting window and fills a window the per-window view did not name. All
-        values are fractions and are converted to percentages here; a missing or
-        out-of-range value contributes no window instead of a guessed one.
-        """
-        if self.quota_observed_at is None:
-            return None
-        windows: list[dict] = []
-        named: set[str] = set()
-        for name, window in self.rate_limit_windows.items():
-            entry = self._quota_window(name, window.get("utilization"), window.get("resetsAt"))
-            if entry is not None:
-                windows.append(entry)
-                named.add(name)
-        for name, observation in self.rate_limits.items():
-            if name in named:
-                continue
-            entry = self._quota_window(name, observation.get("utilization"), observation.get("resetsAt"))
-            if entry is not None:
-                windows.append(entry)
-        reached = self.quota_rejection_type if self.quota_rejection_type and self.quota_rejection_type != "unknown" else None
-        if not windows and reached is None:
-            return None
-        candidate = {"source": "claude/stream-json-rate-limit-event", "observedAt": self.quota_observed_at,
-                     "provider": self.provider, "windows": windows[:MAX_QUOTA_WINDOWS]}
-        if reached is not None:
-            candidate["reachedType"] = reached
-        return candidate
-
-    @staticmethod
-    def _quota_window(name: str, utilization: object, resets: object) -> dict | None:
-        if isinstance(utilization, bool) or not isinstance(utilization, (int, float)) or not math.isfinite(utilization):
-            return None
-        # The native field is the fraction of the window used; a value past the
-        # window cap converts past 100% and cannot be represented, so it stays
-        # unknown instead of being clamped.
-        percent = utilization * 100
-        if not 0 <= percent <= 100:
-            return None
-        window = {"name": name, "usedPercent": percent}
-        if resets is not None:
-            window["resetsAt"] = resets
-        return window
 
     def last_assistant_message(self) -> dict | None:
         """The bounded last root assistant text observed before the result."""

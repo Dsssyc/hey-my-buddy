@@ -14,7 +14,6 @@ from hey_my_buddy.buddy.harnesses.claude.protocol import (
     TurnEvidence,
     decode_json,
     model_usage_keys,
-    rate_limit_observation,
     result_quota_denial,
 )
 
@@ -45,28 +44,6 @@ class DecodeTests(unittest.TestCase):
 
 
 class QuotaParsingTests(unittest.TestCase):
-    def test_rate_limit_observation_is_bounded_and_typed(self):
-        frame = {"type": "rate_limit_event", "rate_limit_info": {
-            "status": "allowed_warning", "rateLimitType": "seven_day", "resetsAt": "2026-09-27T00:00:00Z",
-            "utilization": {"sevenDayPctUsed": 43}}}
-        rate_limit_type, observation = rate_limit_observation(frame)
-        self.assertEqual(rate_limit_type, "seven_day")
-        self.assertEqual(observation, {"status": "allowed_warning", "resetsAt": "2026-09-27T00:00:00Z",
-                                       "utilization": {"sevenDayPctUsed": 43}})
-        number = {"type": "rate_limit_event", "rate_limit_info": {
-            "status": "allowed", "rateLimitType": "five_hour", "utilization": 12.5}}
-        self.assertEqual(rate_limit_observation(number)[1]["utilization"], 12.5)
-        # Utilization stays a finite numeric observation, never arbitrary JSON.
-        prose = {"type": "rate_limit_event", "rate_limit_info": {
-            "status": "allowed", "rateLimitType": "five_hour", "utilization": "about half full"}}
-        self.assertNotIn("utilization", rate_limit_observation(prose)[1])
-        mixed = {"type": "rate_limit_event", "rate_limit_info": {
-            "status": "allowed", "rateLimitType": "five_hour", "utilization": {"note": "text", "pct": 10}}}
-        self.assertNotIn("utilization", rate_limit_observation(mixed)[1])
-        self.assertIsNone(rate_limit_observation({"type": "rate_limit_event"}))
-        self.assertIsNone(rate_limit_observation(
-            {"rate_limit_info": {"status": "mystery", "rateLimitType": "five_hour"}}))
-
     def test_result_quota_denial_uses_structured_fields_only(self):
         self.assertTrue(result_quota_denial({"api_error_status": 429}))
         self.assertTrue(result_quota_denial({"api_error_status": "429"}))
@@ -85,16 +62,6 @@ class QuotaParsingTests(unittest.TestCase):
 
 
 class TurnEvidenceTests(unittest.TestCase):
-    def test_quota_facts_keep_the_native_provider_without_assuming_anthropic(self):
-        for provider in ("bedrock", "anthropic", "unknown"):
-            with self.subTest(provider=provider):
-                evidence = TurnEvidence("session", "/fixture", provider=provider)
-                evidence.observe({"type": "rate_limit_event", "rate_limit_info": {
-                    "status": "allowed", "rateLimitType": "five_hour", "utilization": 0.2}})
-                quota = evidence.quota_candidate()
-                self.assertEqual(quota["provider"], provider)
-                self.assertEqual(quota["windows"][0]["usedPercent"], 20)
-
     def test_init_binds_session_and_cwd_and_records_model_readback(self):
         evidence = TurnEvidence("session-1", "/tmp/checkout-a")
         evidence.observe({"type": "system", "subtype": "init", "session_id": "session-1",
@@ -158,17 +125,32 @@ class TurnEvidenceTests(unittest.TestCase):
         # replaced with "unknown" instead of being published.
         for bad in ("five hour", "Bearer sk-ant-api03-fragment\n", "primary?x=1", "x" * 65):
             with self.subTest(bad=bad):
-                self.assertIsNone(rate_limit_observation(
-                    {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "rateLimitType": bad}}))
                 with self.assertRaises(QuotaRejected) as caught:
                     TurnEvidence("session-1", "/tmp/checkout-a").observe(
                         {"type": "rate_limit_event",
                          "rate_limit_info": {"status": "rejected", "rateLimitType": bad}})
                 self.assertEqual(caught.exception.rate_limit_type, "unknown")
-        evidence = TurnEvidence("session-1", "/tmp/checkout-a")
-        evidence.observe({"type": "rate_limit_event", "rate_limit_info": {
-            "status": "allowed", "rateLimitType": "five_hour", "utilization": 12.5}})
-        self.assertEqual(list(evidence.rate_limits), ["five_hour"])
+
+    def test_quota_rejection_phase_uses_root_model_activity_only(self):
+        init = {"type": "system", "subtype": "init", "session_id": "session-1", "cwd": "/tmp/checkout-a"}
+        cases = (
+            ({"type": "assistant", "message": {"content": [{"type": "text", "text": "done"}]}}, "during-model"),
+            ({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "idea"}]}}, "during-model"),
+            ({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash"}]}}, "during-model"),
+            ({"type": "assistant", "message": {"content": [], "usage": {"output_tokens": 2}}}, "during-model"),
+            ({"type": "result", "usage": {"output_tokens": 1}}, "during-model"),
+            ({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "thinking_delta"}}}, "during-model"),
+            ({"type": "user", "message": {"content": "input"}}, "before-model"),
+            ({"type": "stream_event", "event": {"type": "message_start"}}, "before-model"),
+            ({"type": "assistant", "parent_tool_use_id": "child", "message": {"content": [{"type": "text"}]}}, "before-model"),
+        )
+        for frame, expected in cases:
+            with self.subTest(frame=frame):
+                evidence = TurnEvidence("session-1", "/tmp/checkout-a")
+                evidence.observe(init)
+                self.assertEqual(evidence.rejection_phase(), "before-model")
+                evidence.observe(frame)
+                self.assertEqual(evidence.rejection_phase(), expected)
 
     def test_assistant_tool_use_reports_tool_activity(self):
         evidence = TurnEvidence("session-1", "/tmp/checkout-a")

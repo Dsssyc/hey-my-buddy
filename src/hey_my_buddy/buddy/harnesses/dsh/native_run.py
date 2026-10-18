@@ -557,6 +557,7 @@ class _RunState:
     reason: str | None = None
     error_text: str | None = None
     model_started: bool = False
+    root_model_activity: bool = False
     harness_version: str | None = None
     session_opened: bool = False
     configured: bool = False
@@ -870,6 +871,24 @@ class _AttentionPolicy:
 # -- the one run -------------------------------------------------------------------
 
 
+def _root_model_activity(update: dict) -> bool:
+    """Native ACP evidence of assistant content, reasoning, a tool call or output."""
+    kind = update.get("sessionUpdate")
+    if kind in ("tool_call", "tool_call_update"):
+        return isinstance(update.get("toolCallId"), str) and bool(update["toolCallId"])
+    if kind in ("agent_message_chunk", "agent_thought_chunk"):
+        content = update.get("content")
+        return isinstance(content, dict) and any(
+            isinstance(content.get(key), str) and bool(content[key].strip())
+            for key in ("text", "content"))
+    if kind == "plan":
+        return bool(update.get("entries"))
+    if kind == "usage_update":
+        return any(type(update.get(key)) is int and update[key] > 0
+                   for key in ("outputTokens", "reasoningTokens"))
+    return False
+
+
 def _fold_update(message: object, state: _RunState, *, facts: _RunFacts, tools: DshToolFacts,
                  activity: DshActivity, evidence: RootTurnEvidence | None,
                  inquiry_bridge: InquiryBridge | None = None) -> bool:
@@ -898,6 +917,8 @@ def _fold_update(message: object, state: _RunState, *, facts: _RunFacts, tools: 
         evidence.observe(message, state.event_count)
     if kind in MODEL_ACTIVITY_KINDS and not state.model_started:
         state.model_started = True
+    if params.get("sessionId") == activity.session_id and isinstance(update, dict):
+        state.root_model_activity |= _root_model_activity(update)
     activity.note(message, state.event_count)
     if inquiry_bridge is not None:
         inquiry_bridge.note_event(message, activity.phase)
@@ -1192,6 +1213,7 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
     the turn's end; the run loop owns every update, the cancel flag, the overall
     deadline and the role's feedback while it streams.
     """
+    state.root_model_activity = False
     activity.note_prompt()
     result: dict = {}
 
@@ -1627,6 +1649,12 @@ def _build_result(request: RunRequest, *, state: _RunState,
     from ....protocol.usage import classify_quota_code
     failure_code = record_failure.get("code") if record_failure else None
     classification = classify_quota_code(failure_code) if failure_code else "unknown"
+    incomplete = (drained is not True or bool(record and record.get("truncated"))
+                  or state.reason in ("invalid-native-result", "invalid-protocol", "native-disconnected")
+                  or state.update_overflow)
+    rejection_phase = ("unknown" if incomplete else
+                       "during-model" if state.root_model_activity or bool(record and record.get("modelActivity"))
+                       else "before-model")
     return RunResult(
         identity=request.identity, harness="dsh",
         end=RunEnd(status=state.status, reason_code=state.reason,
@@ -1647,7 +1675,8 @@ def _build_result(request: RunRequest, *, state: _RunState,
         effective_policy=_effective_policy(request, state),
         usage=_usage_package(record.get("usage")) if record else None,
         native_failure=(_quota_package({"code": classification, "nativeCode": failure_code,
-                                        "source": "dsh/session-turn-end"})
+                                        "source": "dsh/session-turn-end", "observedAt": utc_now(),
+                                        "resetsAt": None, "rejectionPhase": rejection_phase})
                         if classification != "unknown" else None),
         last_assistant_message=(_message_package({"text": record["lastAssistant"],
                                                   "sourceId": record.get("lastAssistantSourceId")})

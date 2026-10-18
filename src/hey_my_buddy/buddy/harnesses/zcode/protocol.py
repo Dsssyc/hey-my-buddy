@@ -490,6 +490,7 @@ class ZcodeAttemptUsage:
         self.message_records = 0
         self.message_truncated = False
         self.message_complete = False
+        self.read_incomplete = False
         self.last_assistant_message: dict | None = None
         self.child_activity = False
 
@@ -569,6 +570,7 @@ class ZcodeAttemptUsage:
                                         {"sessionId": self.session_id, "limit": MAX_BASELINE_MESSAGES})
         page = _bounded_message_page(response, session_id=self.session_id, limit=MAX_BASELINE_MESSAGES)
         if page is None:
+            self.read_incomplete = True
             return
         self.baseline_ids = frozenset(item["info"]["messageId"] for item in page)
         self.baseline_last = page[-1]["info"]["messageId"] if page else None
@@ -580,6 +582,7 @@ class ZcodeAttemptUsage:
             # Without a provable cursor nothing may be attributed to this attempt:
             # a resumed session whose read lost its cursor would otherwise be
             # counted from its beginning.
+            self.read_incomplete = True
             return
         params = {"sessionId": self.session_id, "limit": MAX_MESSAGE_PAGE}
         if self.baseline_last is not None:
@@ -587,10 +590,12 @@ class ZcodeAttemptUsage:
         response = optional_native_call(connection, "session/messages", params)
         page = _bounded_message_page(response, session_id=self.session_id, limit=MAX_MESSAGE_PAGE)
         if page is None:
+            self.read_incomplete = True
             return
         if any(item["info"]["messageId"] in self.baseline_ids for item in page):
             # The native server could not resolve the cursor and returned the
             # whole conversation; no entry in this page is provably new.
+            self.read_incomplete = True
             return
         self.message_truncated = len(page) >= MAX_MESSAGE_PAGE
         new_messages = [item for item in page

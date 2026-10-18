@@ -121,6 +121,7 @@ class RecordAccumulator:
         self.turn_end_completed = False
         self.truncated = False
         self.failure: dict | None = None
+        self.model_activity = False
         self.last_assistant: str | None = None
         self.last_assistant_id: str | None = None
         self.model: dict | None = None
@@ -222,6 +223,8 @@ def _fold_event(event: dict, session: str, acc: RecordAccumulator) -> None:
         # A previous turn/end does not close a later, unfinished prompt.
         acc.turn_end_seen = False
         acc.turn_end_completed = False
+        acc.failure = None
+        acc.model_activity = False
     elif kind == "assistant/message":
         message = data.get("message") if isinstance(data.get("message"), dict) else {}
         source = message.get("source") if isinstance(message.get("source"), dict) else {}
@@ -231,6 +234,10 @@ def _fold_event(event: dict, session: str, acc: RecordAccumulator) -> None:
             "step": data.get("step") if type(data.get("step")) is int else None})
         if source.get("kind") == "model":
             text = _record_text(message.get("content"))
+            usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+            if text.strip() or any(type(usage.get(key)) is int and usage[key] > 0
+                                   for key in ("outputTokens", "reasoningTokens")):
+                acc.model_activity = True
             if text.strip():
                 acc.last_assistant = text
                 acc.last_assistant_id = message.get("id") if isinstance(message.get("id"), str) else None
@@ -241,6 +248,7 @@ def _fold_event(event: dict, session: str, acc: RecordAccumulator) -> None:
         # The last turn end is this projection's terminal reason.
         acc.turn_end_seen = True
         acc.turn_end_completed = reason.get("kind") == "completed"
+        acc.failure = None
         if reason.get("kind") == "error":
             error = reason.get("error") if isinstance(reason.get("error"), dict) else {}
             code = error.get("code")
@@ -311,7 +319,8 @@ def session_record_facts(sessions_root: Path, session_ids) -> dict | None:
         return None
     return {"usage": usage, "model": acc.model, "lastAssistant": acc.last_assistant,
             "lastAssistantSourceId": acc.last_assistant_id,
-            "failure": acc.failure, "steps": acc.steps, "sessions": acc.sessions,
+            "failure": acc.failure, "modelActivity": acc.model_activity,
+            "steps": acc.steps, "sessions": acc.sessions,
             "recordsRead": len(candidates), "truncated": acc.truncated,
             "turnEndSeen": acc.turn_end_seen, "turnEndCompleted": acc.turn_end_completed}
 
@@ -421,7 +430,7 @@ def freeze_session_records(sessions_root: Path, session_id: str) -> RecordBaseli
 def _unknown_resumed_facts(baseline: RecordBaseline, reason: str, records_read: int) -> dict:
     """The honest unknown projection: no usage, no old facts, and the reason."""
     return {"usage": None, "model": None, "lastAssistant": None, "lastAssistantSourceId": None,
-            "failure": None, "steps": [], "sessions": [baseline.session_id],
+            "failure": None, "modelActivity": False, "steps": [], "sessions": [baseline.session_id],
             "recordsRead": records_read, "truncated": False,
             "turnEndSeen": False, "turnEndCompleted": False,
             "resumeBoundary": {"proven": False, "reason": reason,
@@ -503,7 +512,7 @@ def resumed_session_record_facts(sessions_root: Path, baseline: RecordBaseline) 
     else:
         facts = {"usage": usage, "model": acc.model, "lastAssistant": acc.last_assistant,
                  "lastAssistantSourceId": acc.last_assistant_id,
-                 "failure": acc.failure, "steps": acc.steps,
+                 "failure": acc.failure, "modelActivity": acc.model_activity, "steps": acc.steps,
                  "sessions": acc.sessions, "recordsRead": records_read,
                  "truncated": acc.truncated,
                  "turnEndSeen": acc.turn_end_seen, "turnEndCompleted": acc.turn_end_completed,

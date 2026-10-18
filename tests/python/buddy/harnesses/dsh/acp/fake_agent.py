@@ -572,9 +572,10 @@ class FakeAgent:
         index = min(self.prompt_count, len(self.final_answers) - 1) if self.final_answers else 0
         self.prompt_count += 1
         answer = self.final_answers[index] if self.final_answers else '{"choice":"a"}'
-        self.notify_client("session/update", {"sessionId": session_id,
-                                              "update": {"sessionUpdate": "agent_message_chunk",
-                                                         "content": {"type": "text", "text": answer}}})
+        if self.session_record != "quota-before":
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": "agent_message_chunk",
+                                                             "content": {"type": "text", "text": answer}}})
         self.send({"jsonrpc": "2.0", "id": request_id,
                    "result": {} if self.stop_reason_unread
                    else {"stopReason": self.stop_reason or "end_turn"}})
@@ -785,14 +786,17 @@ class FakeAgent:
             {"type": "step/end", "seq": 8, "data": {"turn": 1, "step": 1}},
             {"type": "step/start", "seq": 9, "data": {"turn": 1, "step": 2}},
         ]
-        if mode == "missing":
+        if mode == "quota-before":
+            events = events[:3]
+        elif mode == "missing":
             events.append(assistant(10, 2, "the final answer", None))
         else:
             events.append(assistant(10, 2, "the final answer", {
                 "inputTokens": 2000, "outputTokens": 200, "totalTokens": 2300,
                 "cacheReadTokens": 100, "reasoningTokens": 20}))
-        events.append({"type": "step/end", "seq": 11, "data": {"turn": 1, "step": 2}})
-        if mode == "quota":
+        if mode != "quota-before":
+            events.append({"type": "step/end", "seq": 11, "data": {"turn": 1, "step": 2}})
+        if mode in ("quota", "quota-before", "quota-truncated"):
             events.append({"type": "turn/end", "seq": 12, "data": {
                 "turn": 1, "reason": {"kind": "error",
                                       "error": {"code": "QUOTA",
@@ -804,6 +808,8 @@ class FakeAgent:
             events.insert(len(events) - 1, {"type": "fixture/oversized",
                                             "seq": 11.5, "data": {"blob": "x" * (4 * 1024 * 1024)}})
         lines = "".join(json.dumps(event) + "\n" for event in events)
+        if mode == "quota-truncated":
+            lines += "malformed record frame\n"
         if mode == "corrupt":
             path = directory / f"{session_id}.v3.jsonl.zstd"
             path.write_bytes(b"this is not a zstd stream\n")
@@ -1071,7 +1077,8 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--forge-receipt", action="store_true",
                         help="tamper with the finish receipt so its signature fails")
     parser.add_argument("--session-record", default=None,
-                        choices=["usage", "quota", "missing", "foreign", "corrupt",
+                        choices=["usage", "quota", "quota-before", "quota-truncated",
+                                 "missing", "foreign", "corrupt",
                                  "flood", "plain", "resume", "resume-missing",
                                  "resume-rewrite", "resume-shorten", "resume-duplicate",
                                  "resume-flood"],

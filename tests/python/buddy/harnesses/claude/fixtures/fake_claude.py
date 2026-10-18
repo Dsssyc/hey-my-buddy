@@ -133,7 +133,7 @@ def result_frame(case, session_id):
         result.pop("is_error")
     if case == "error-flag-with-unknown-subtype":
         result.update(is_error=True, subtype="future")
-    if case == "result-quota":
+    if case in ("result-quota", "result-quota-bad-tail"):
         result.update(is_error=True, subtype="error_quota_during_execution")
     if case == "api-429":
         result.update(is_error=True, api_error_status=429)
@@ -229,11 +229,10 @@ def run_turn(case):
                 "interrupt-quota"):
         if case == "warning-then-rejected":
             send({"type": "rate_limit_event", "rate_limit_info": {
-                "status": "allowed_warning", "rateLimitType": "seven_day", "utilization": .9}})
+                "status": "allowed_warning", "rateLimitType": "seven_day"}})
         if case in ("quota-rejected", "warning-then-rejected"):
             send({"type": "rate_limit_event", "rate_limit_info": {
-                "status": "rejected", "rateLimitType": "five_hour", "resetsAt": "2026-09-26T12:00:00Z",
-                "utilization": {"fiveHourPctUsed": 100}}})
+                "status": "rejected", "rateLimitType": "five_hour", "resetsAt": "2026-09-26T12:00:00Z"}})
         if case == "quota-bad-type":
             send({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
         if case == "quota-free-text-type":
@@ -274,11 +273,7 @@ def run_turn(case):
               "summary": "Sleep briefly and print short"})
     if case == "quota-warning":
         send({"type": "rate_limit_event", "rate_limit_info": {
-            "status": "allowed_warning", "rateLimitType": "seven_day", "resetsAt": "2026-09-27T00:00:00Z",
-            "utilization": {"sevenDayPctUsed": 43}}})
-        send({"type": "rate_limit_event", "rate_limit_info": {
-            "status": "allowed", "rateLimitType": "five_hour", "resetsAt": None,
-            "utilization": {"fiveHourPctUsed": 12}}})
+            "status": "allowed_warning", "rateLimitType": "seven_day", "resetsAt": "2026-09-27T00:00:00Z"}})
     send({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}]}})
     if case in ("inquiry-answer", "inquiry-wrong-call", "inquiry-child", "inquiry-text-only",
                 "inquiry-unanswered", "inquiry-tool-error", "inquiry-tool-error-retry",
@@ -371,6 +366,9 @@ def run_turn(case):
             send(frame)
     if case == "duplicate-result":
         send(dict(frames[-1]))
+    if case == "result-quota-bad-tail":
+        sys.stdout.write('{"type":"assistant",invalid}\n')
+        sys.stdout.flush()
     # A -p CLI exits after its final result; the controller drains to this EOF.
     sys.exit(0)
 

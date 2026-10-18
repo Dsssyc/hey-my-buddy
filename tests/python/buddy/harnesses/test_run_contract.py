@@ -80,8 +80,9 @@ def full_result() -> rc.RunResult:
         usage=rc.FrozenJson({"version": 1, "inputTokens": 10, "cachedInputTokens": 4, "outputTokens": 2,
                              "inputBasis": "includes-cached", "source": "fixture", "scope": "attempt",
                              "completeness": "complete", "nativeRecords": 1}),
-        native_failure=rc.FrozenJson({"version": 1, "code": "quota-exceeded", "nativeCode": "QUOTA",
-                                      "source": "fixture", "observedAt": "2026-01-01T00:00:00Z"}),
+        native_failure=rc.FrozenJson({"code": "quota-exceeded", "nativeCode": "QUOTA",
+                                      "source": "fixture", "observedAt": "2026-01-01T00:00:00Z",
+                                      "rejectionPhase": "before-model"}),
         last_assistant_message=rc.FrozenJson({
             "version": 1, "text": "done", "source": "fixture", "sourceId": "m1", "sourceBytes": 4,
             "sha256": hashlib.sha256(b"done").hexdigest(), "truncated": False}),
@@ -609,6 +610,14 @@ class InterfaceSurfaceTests(unittest.TestCase):
     def test_a_foreign_usage_package_is_refused_not_dropped(self):
         payload = full_result().to_payload()
         payload["usage"] = {"scope": "session", "inputTokens": 1}
+        with self.assertRaises(BoardError):
+            rc.RunResult.from_payload(payload)
+
+    def test_native_failure_requires_explicit_rejection_phase(self):
+        payload = full_result().to_payload()
+        failure = dict(payload["nativeFailure"])
+        failure.pop("rejectionPhase")
+        payload["nativeFailure"] = failure
         with self.assertRaises(BoardError):
             rc.RunResult.from_payload(payload)
 

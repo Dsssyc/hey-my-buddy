@@ -20,14 +20,6 @@
                      "reasoningOutputTokens": 38, "inputBasis": "includes-cached",
                      "source": "codex/app-server-thread-token-usage", "scope": "attempt",
                      "coverage": "native-root-thread", "completeness": "complete", "nativeRecords": 2},
-      "quota": {"version": 1, "source": "codex/app-server-rate-limits",
-                "observedAt": "2026-01-01T00:00:00Z",
-                "scope": {"provider": "openai", "nativeAccountId": "account-fixture-0001",
-                          "limitId": null, "planType": "pro"},
-                "windows": [{"name": "primary", "usedPercent": 42.5, "resetsAt": "2026-01-06T00:00:00Z",
-                             "windowDurationMins": 10080},
-                            {"name": "secondary", "usedPercent": 7.25, "windowDurationMins": 10080}],
-                "ordinaryUsageAllowed": true},
       "processState": {"shutdownConfirmed": true, "nativeExitCode": 0}
     },
     "microTaskQuotaFailure": {
@@ -42,7 +34,8 @@
       "sessionId": "thread-fixture-0001",
       "nativeIdentity": {"sessionId": "thread-fixture-0001", "turnId": "turn-fixture-0002"},
       "quotaFailure": {"code": "quota-exceeded", "nativeCode": "usageLimitExceeded", "source": "codex/app-server-turn-error",
-                       "observedAt": "2026-01-01T00:05:00Z"},
+                       "observedAt": "2026-01-01T00:05:00Z", "resetsAt": null,
+                       "rejectionPhase": "during-model"},
       "processState": {"shutdownConfirmed": true, "nativeExitCode": 0}
     },
     "spawnFailure": {

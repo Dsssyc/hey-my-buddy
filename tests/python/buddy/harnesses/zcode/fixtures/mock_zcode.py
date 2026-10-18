@@ -499,19 +499,21 @@ def handle_message(message):
         if case == "hang":
             time.sleep(120)
         event("turn.started", {"inputId": "wrong-input" if case == "wrong-input" else params["inputId"]})
-        if case in ("turn-failed-quota", "turn-failed-quiet"):
+        if case in ("turn-failed-quota", "turn-failed-quota-after-output", "turn-failed-quiet"):
             # The exported native turn.failed shape: error.type plus, for the
             # quota case, error.code and the strict attribution object. The raw
             # message is deliberately secret-shaped so a test can prove the
             # controller never surfaces provider text, keys or URLs.
             error = {"type": "AiSdkModelAdapterError",
                      "message": "stream failed for https://models.example.com/v1 key sk-fixture-never-public"}
-            if case == "turn-failed-quota":
+            if case != "turn-failed-quiet":
                 error.update({"code": "model_rate_limited", "retryable": False, "attribution": {
                     "source": "provider", "reason": "rate_limited", "errorPhase": "stream",
                     "exceptionKind": "provider_business", "providerId": "fixture-api",
                     "modelId": "fixture-model", "providerKind": "anthropic", "transport": "sse",
                     "statusCode": 429, "providerErrorCode": "1308", "retryable": False}})
+            if case == "turn-failed-quota-after-output":
+                event("part.delta", {"delta": {"type": "text", "text": "partial answer"}})
             event("turn.failed", {"error": error, "turnPhase": "stream", "inputId": params["inputId"]})
             return
         if case.startswith("refusal-"):
@@ -568,6 +570,8 @@ def handle_message(message):
         record_commands()
         send({"id": request_id, "error": {"code": -32601, "message": "no client command is used by this adapter"}})
         return
+    elif method == "session/messages" and case in ("turn-failed-quota", "turn-failed-quota-after-output"):
+        result = {"messages": []}
     elif method == "session/close":
         result = {"closed": case != "close-failed"}
     else:

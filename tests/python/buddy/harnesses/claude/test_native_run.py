@@ -578,12 +578,8 @@ class WorkerCarrierTests(NativeRunCase):
         observations = json.loads(Path(next(ref.location for ref in result.evidence_refs
                                             if ref.kind == "native-observations")).read_bytes())
         self.assertEqual(observations["observedModels"], ["claude-fixture-5"])
-        # The unified-windows fractions convert to percentage windows; an
-        # out-of-range or missing value would contribute no window.
-        quota = observations["quota"]
-        self.assertEqual(quota["source"], "claude/stream-json-rate-limit-event")
-        windows = {window["name"]: window["usedPercent"] for window in quota["windows"]}
-        self.assertEqual(windows, {"five_hour": 42.0, "seven_day": 90.0})
+        self.assertNotIn("quota", observations)
+        self.assertNotIn("rateLimitObservations", observations)
 
     def test_a_denied_native_permission_is_a_reported_fact_not_an_outcome(self):
         self.fixture_case("permission")
@@ -846,22 +842,21 @@ class SettlementGuardTests(NativeRunCase):
         self.fixture_case("quota-rejected")
         result = self.execute(self.request(timeout=20))
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "quota-rejected")
+        self.assertEqual(result.end.reason_code, "harness-error")
         self.assertIn("HARNESS_UNAVAILABLE", result.end.message)
         failure = result.native_failure.value
         self.assertEqual(failure["nativeCode"], "five_hour")
         self.assertEqual(failure["code"], "quota-exceeded")
         self.assertEqual(failure["source"], "claude/stream-json-rate-limit-event")
+        self.assertEqual(failure["rejectionPhase"], "before-model")
         self.assertIsNone(result.value)
         self.assertTrue(result.stop_evidence.interrupt.requested)
         self.assertTrue(self.fixture_state()["interrupted"])
-        # The observations package carries the legacy bounded receipt shape —
-        # the two fields, the original reset value, nothing on a clean run —
-        # and the interrupt pair with the peer's own acknowledgement reply.
+        # The observations package retains only the interrupt pair; the failure
+        # travels in the common native-failure package.
         observations = json.loads(Path(next(ref.location for ref in result.evidence_refs
                                             if ref.kind == "native-observations")).read_bytes())
-        self.assertEqual(observations["quotaFailure"],
-                         {"rateLimitType": "five_hour", "resetsAt": "2026-09-26T12:00:00Z"})
+        self.assertNotIn("quotaFailure", observations)
         self.assertIs(observations["nativeInterruptRequested"], True)
         self.assertIs(observations["nativeInterruptAcknowledged"], True)
         self.fixture_case("ok")
@@ -871,6 +866,23 @@ class SettlementGuardTests(NativeRunCase):
         self.assertNotIn("quotaFailure", observations)
         self.assertNotIn("nativeInterruptRequested", observations)
         self.assertNotIn("nativeInterruptAcknowledged", observations)
+
+    def test_quota_failure_uses_the_common_package_on_worker_and_router_carriers(self):
+        self.fixture_case("quota-rejected")
+        for scope, schema in (("write", WORKER_SCHEMA), ("read", READ_SCHEMA)):
+            with self.subTest(scope=scope):
+                result = self.execute(self.request(scope=scope, schema=schema, timeout=20))
+                self.assertEqual(result.end.reason_code, "harness-error")
+                self.assertEqual(result.native_failure.value["rejectionPhase"], "before-model")
+                self.assertEqual(result.native_failure.value["nativeCode"], "five_hour")
+
+    def test_result_quota_rejection_survives_a_corrupt_trailing_frame_as_unknown_phase(self):
+        self.fixture_case("result-quota-bad-tail")
+        result = self.execute(self.request(timeout=20))
+        self.assertEqual(result.end.reason_code, "invalid-protocol")
+        self.assertEqual(result.native_failure.value["code"], "quota-exceeded")
+        self.assertEqual(result.native_failure.value["source"], "claude/stream-json-result")
+        self.assertEqual(result.native_failure.value["rejectionPhase"], "unknown")
 
     def test_cancellation_interrupts_the_native_run(self):
         self.fixture_case("hang")

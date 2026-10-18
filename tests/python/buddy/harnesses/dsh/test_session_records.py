@@ -106,6 +106,19 @@ class SessionRecordCase(unittest.TestCase):
 
 
 class FreshFoldTests(SessionRecordCase):
+    def test_a_later_turn_clears_the_previous_quota_failure_and_activity(self):
+        first = turn_one()
+        first[-1] = {"type": "turn/end", "seq": 3, "data": {
+            "turn": 1, "reason": {"kind": "error", "error": {"code": "QUOTA"}}}}
+        next_turn = [{"type": "user/message", "seq": 4, "data": {}},
+                     {"type": "turn/start", "seq": 5, "data": {"turn": 2}},
+                     {"type": "turn/end", "seq": 6, "data": {
+                         "turn": 2, "reason": {"kind": "completed"}}}]
+        self.write_rollout([*first, *next_turn])
+        facts = session_record_facts(self.sessions, [SESSION])
+        self.assertIsNone(facts["failure"])
+        self.assertFalse(facts["modelActivity"])
+
     def test_a_plain_rollout_folds_like_a_compressed_one(self):
         self.write_rollout(turn_one(), compressed=False)
         self.write_rollout(turn_one(), name=f"{SESSION}-b.v3.jsonl.zstd")

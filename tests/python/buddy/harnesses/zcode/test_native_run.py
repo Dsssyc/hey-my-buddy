@@ -206,6 +206,23 @@ class MockNativeCase(ZcodeFixtureCase):
 
 
 class FastSeamTests(NativeRunCase):
+    def test_router_quota_phase_uses_current_root_output_tokens(self):
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        for case, expected in (("quota-before", "before-model"),
+                               ("usage-quota", "during-model"),
+                               ("quota-truncated", "unknown"),
+                               ("quota-read-error", "unknown")):
+            with self.subTest(case=case):
+                os.environ["HMB_ZCODE_TEST_CASE"] = case
+                result = run(self.fast_request(prompt), observer=FastCorrection(SCHEMA, prompt).observer,
+                             services=None, cancelled=lambda: False)
+                self.assertEqual(result.end.reason_code, "native-turn-failed")
+                failure = result.native_failure.value
+                self.assertEqual(failure["rejectionPhase"], expected)
+                self.assertEqual(failure["code"], "quota-exceeded")
+                self.assertEqual(failure["nativeCode"], "1310")
+                self.assertIsNone(failure["resetsAt"])
+
     def test_full_scope_without_worker_permission_is_refused_before_native_launch(self):
         request = self.fast_request("fixture prompt").model_copy(update={"tool_scope": "full"})
         with mock.patch.object(native_run, "_run") as native:
@@ -560,6 +577,26 @@ def evidence_call(result):
 
 
 class WorkerSeamTests(MockNativeCase):
+    def test_quota_phase_tracks_root_output_not_turn_start_or_native_turn_phase(self):
+        os.environ.update(self.environment)
+        for case, expected in (("turn-failed-quota", "before-model"),
+                               ("turn-failed-quota-after-output", "during-model")):
+            with self.subTest(case=case):
+                os.environ["HMB_ZCODE_TEST_CASE"] = case
+                request, services = self.worker_request(self.turn_input())
+                result = run(request, observer=worker_observer, services=services,
+                             cancelled=lambda: False)
+                self.assertEqual(result.end.reason_code, "native-turn-failed")
+                failure = result.native_failure.value
+                self.assertEqual(failure["rejectionPhase"], expected)
+                self.assertEqual(failure["code"], "quota-exceeded")
+                self.assertEqual(failure["nativeCode"], "1308")
+                self.assertEqual(failure["source"], "zcode/session-turn-failed")
+                self.assertIsNone(failure["resetsAt"])
+                self.assertTrue(failure["observedAt"])
+                self.assertEqual(set(failure), {"code", "nativeCode", "source", "observedAt",
+                                                "resetsAt", "rejectionPhase"})
+
     def test_worker_levels_keep_the_micro_task_carrier_and_record_the_sent_mode(self):
         from hey_my_buddy.buddy.harnesses.registry import worker_permission
         os.environ.update(self.environment)

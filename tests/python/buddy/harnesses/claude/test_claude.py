@@ -254,16 +254,17 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
     def test_rejected_rate_limit_with_malformed_identity_still_fails_as_quota(self):
         outcome = self.execute(self.context("quota-bad-type"))
         self.assertEqual(outcome.status, "failed", outcome.to_report())
-        self.assertEqual(outcome.result["code"], "quota-rejected")
-        self.assertEqual(outcome.result["quotaFailure"], {"rateLimitType": "unknown", "resetsAt": None})
+        self.assertEqual(outcome.result["code"], "harness-error")
+        self.assertEqual(outcome.result["quotaFailure"]["nativeCode"], "unknown")
+        self.assertEqual(outcome.result["quotaFailure"]["rejectionPhase"], "before-model")
 
     def test_a_free_text_rate_limit_identity_is_sanitized_not_copied(self):
         outcome = self.execute(self.context("quota-free-text-type"))
         self.assertEqual(outcome.status, "failed", outcome.to_report())
-        self.assertEqual(outcome.result["code"], "quota-rejected")
+        self.assertEqual(outcome.result["code"], "harness-error")
         # Only the bounded reset time survives; the free-text identity never does.
-        self.assertEqual(outcome.result["quotaFailure"],
-                         {"rateLimitType": "unknown", "resetsAt": "2026-09-26T12:00:00Z"})
+        self.assertEqual(outcome.result["quotaFailure"]["nativeCode"], "unknown")
+        self.assertEqual(outcome.result["quotaFailure"]["resetsAt"], "2026-09-26T12:00:00Z")
         self.assertNotIn("SECRET-FRAGMENT", json.dumps(outcome.result))
 
     def test_permission_request_denial_becomes_controller_attention(self):
@@ -400,12 +401,15 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         context = self.context("quota-rejected")
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "failed", outcome.to_report())
-        self.assertEqual(outcome.result["code"], "quota-rejected")
+        self.assertEqual(outcome.result["code"], "harness-error")
         self.assertEqual(outcome.error, QUOTA_REJECTED_ERROR)
         self.assertIn("HARNESS_UNAVAILABLE", outcome.error)
-        self.assertEqual(outcome.result["quotaFailure"],
-                         {"rateLimitType": "five_hour", "resetsAt": "2026-09-26T12:00:00Z"})
-        self.assertEqual(set(outcome.result["quotaFailure"]), {"rateLimitType", "resetsAt"})
+        failure = outcome.result["quotaFailure"]
+        self.assertEqual(set(failure), {"code", "nativeCode", "source", "observedAt", "resetsAt", "rejectionPhase"})
+        self.assertEqual(failure["code"], "quota-exceeded")
+        self.assertEqual(failure["nativeCode"], "five_hour")
+        self.assertEqual(failure["resetsAt"], "2026-09-26T12:00:00Z")
+        self.assertEqual(failure["rejectionPhase"], "before-model")
         self.assertNotIn("turn", outcome.result)
         self.assertNotIn("workspaceSeal", outcome.result)
         self.assertFalse(context.turn_output_file().exists())
@@ -417,28 +421,26 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
             with self.subTest(case=case):
                 outcome = self.execute(self.context(case, index=index))
                 self.assertEqual(outcome.status, "failed", outcome.to_report())
-                self.assertEqual(outcome.result["code"], "quota-rejected")
+                self.assertEqual(outcome.result["code"], "harness-error")
                 self.assertEqual(outcome.error, QUOTA_REJECTED_ERROR)
-                self.assertEqual(outcome.result["quotaFailure"]["rateLimitType"], "unknown")
+                self.assertEqual(outcome.result["quotaFailure"]["nativeCode"], "unknown")
+                self.assertEqual(outcome.result["quotaFailure"]["rejectionPhase"], "during-model")
                 self.assertIsNone(outcome.result["quotaFailure"]["resetsAt"])
                 self.assertNotIn("turn", outcome.result)
 
-    def test_quota_warning_records_latest_bounded_observations(self):
+    def test_quota_warning_does_not_publish_readings(self):
         outcome = self.execute(self.context("quota-warning"))
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        observations = outcome.result["rateLimitObservations"]
-        self.assertEqual(set(observations), {"five_hour", "seven_day"})
-        self.assertEqual(observations["seven_day"]["status"], "allowed_warning")
-        self.assertEqual(observations["seven_day"]["resetsAt"], "2026-09-27T00:00:00Z")
-        self.assertEqual(observations["five_hour"]["utilization"], {"fiveHourPctUsed": 12})
-        self.assertNotIn("quotaFailure", outcome.result)
+        self.assertNotIn("rateLimitObservations", outcome.result)
+        self.assertIsNone(outcome.result.get("quotaFailure"))
         self.assertIn("turn", outcome.result)
 
     def test_quota_warning_survives_a_later_rejection(self):
         outcome = self.execute(self.context("warning-then-rejected"))
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertEqual(outcome.error, QUOTA_REJECTED_ERROR)
-        self.assertEqual(outcome.result["rateLimitObservations"]["seven_day"]["utilization"], .9)
+        self.assertNotIn("rateLimitObservations", outcome.result)
+        self.assertEqual(outcome.result["quotaFailure"]["rejectionPhase"], "before-model")
         self.assertNotIn("turn", outcome.result)
 
     def test_discovery_catalog_uses_resolved_ids_without_a_user_turn(self):

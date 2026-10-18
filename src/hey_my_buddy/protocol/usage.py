@@ -1,4 +1,4 @@
-"""Native token usage, harness quota and last-assistant-message normalization.
+"""Native token usage, quota failures and last-assistant-message normalization.
 
 Adapters observe native harness records; they never invent numbers. This module
 turns one observed record into the bounded, canonical shape the board persists,
@@ -16,13 +16,9 @@ explicit ``completeness``. Unknown fields stay unknown; a missing cache counter 
 never turned into zero, and a session-cumulative record is refused instead of being
 counted as this attempt.
 
-Quota is a native fact too: an observation time, a native source, the applicable
-provider/account scope and the reported windows. A window without a native
-percentage is dropped rather than reported as ``0``; a quota failure keeps its
-native structured code. Identifier-shaped quota fields (window names, reached
-types, scope identities, native codes and sources) accept only identifier
-characters: a value with free text is dropped or replaced with ``unknown``
-instead of being persisted.
+A quota failure keeps its native structured code, observation time, reset time
+and rejection phase. Native codes and sources accept only identifier characters:
+free text is refused or replaced with ``unknown`` instead of being persisted.
 
 Every ``normalize_*`` function is idempotent: replaying the same record through it
 again returns the same canonical value and never accumulates a second time.
@@ -37,8 +33,6 @@ from typing import Any
 
 #: Canonical document versions. A reader accepts exactly these versions.
 TOKEN_USAGE_VERSION = 1
-QUOTA_VERSION = 1
-QUOTA_FAILURE_VERSION = 1
 LAST_ASSISTANT_MESSAGE_VERSION = 1
 
 #: The only attempt scope this module accepts. A session- or task-cumulative
@@ -58,7 +52,6 @@ MAX_COUNT = 2**53 - 1
 MAX_SOURCE = 120
 MAX_TIMESTAMP = 64
 MAX_WINDOW_NAME = 64
-MAX_WINDOWS = 8
 #: The retained native root assistant text, matching the Codex checkpoint bound.
 MAX_ASSISTANT_MESSAGE_BYTES = 65536
 
@@ -67,8 +60,7 @@ TIMESTAMP = re.compile(
 )
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
-#: Identifier-shaped strings in native quota facts — window names, reached
-#: types, scope identities, native codes, source labels and rate-limit types —
+#: Identifier-shaped native codes and source labels
 #: accept only identifier characters, never free text. ``/`` stays an identifier
 #: character because native source labels use it as the harness/origin separator.
 IDENTIFIER = re.compile(r"^[A-Za-z0-9._:/-]{1,64}$")
@@ -269,104 +261,6 @@ def normalize_token_usage(value: Any) -> dict | None:
     return normalized
 
 
-def normalize_quota_window(value: Any) -> dict | None:
-    """One native quota window, or ``None`` when no percentage was reported."""
-    if not isinstance(value, dict):
-        return None
-    name = identifier(value.get("name"))
-    used = value.get("usedPercent")
-    if name is None or not _is_number(used) or not (0 <= used <= 100):
-        # A window without its native percentage is dropped, never shown as 0.
-        return None
-    used_percent: int | float = int(used) if float(used).is_integer() else float(used)
-    window = {"name": name, "usedPercent": used_percent}
-    if value.get('invalidReset') is True:
-        window['invalidReset'] = True
-    resets = value.get("resetsAt")
-    if resets is not None:
-        timestamp = _timestamp(resets)
-        if timestamp is not None:
-            window["resetsAt"] = timestamp
-        else:
-            window["invalidReset"] = True
-    duration = value.get("windowDurationMins")
-    if _is_count(duration) and duration > 0:
-        window["windowDurationMins"] = duration
-    limit_id = identifier(value.get("limitId"))
-    if limit_id is not None:
-        window["limitId"] = limit_id
-    return window
-
-
-def normalize_quota(value: Any) -> dict | None:
-    """Validate one native quota observation into its canonical bounded record.
-
-    Accepted input fields: ``source``, ``observedAt`` (ISO-8601 or Unix seconds),
-    ``provider``, ``nativeAccountId``, ``limitId``, ``planType``,
-    ``ordinaryUsageAllowed``, ``reachedType`` and ``windows``. Each window is
-    ``{name, usedPercent, resetsAt?, windowDurationMins?, limitId?}``.
-
-    Returns ``None`` when the value carries no fact at all: no window, no
-    ordinary-usage permission and no reached state. Missing fields are never
-    filled in with zero, and a window without a native percentage is dropped.
-    Identifier-shaped fields accept only identifier characters; a non-conforming
-    value is omitted (or ``unknown`` for ``source``), never persisted as-is.
-    """
-    if not isinstance(value, dict):
-        return None
-    if "version" in value and (type(value["version"]) is not int or value["version"] != 1):
-        return None
-    observed_at = _timestamp(value.get("observedAt"))
-    if observed_at is None:
-        return None
-    windows: list[dict] = []
-    raw_windows = value.get("windows")
-    if raw_windows is not None:
-        if not isinstance(raw_windows, list) or len(raw_windows) > MAX_WINDOWS:
-            # An unbounded window list is refused instead of silently trimmed.
-            return None
-        for item in raw_windows:
-            window = normalize_quota_window(item)
-            if window is not None:
-                windows.append(window)
-    allowed = value.get("ordinaryUsageAllowed")
-    ordinary: bool | None = allowed if isinstance(allowed, bool) else None
-    reached = identifier(value.get("reachedType"))
-    if not windows and ordinary is None and reached is None and type(value.get('balanceZero')) is not bool:
-        return None
-    scope_source = value.get("scope") if isinstance(value.get("scope"), dict) else value
-    scope = {
-        "provider": identifier(scope_source.get("provider")),
-        "nativeAccountId": identifier(scope_source.get("nativeAccountId")),
-        "limitId": identifier(scope_source.get("limitId")),
-        "planType": identifier(scope_source.get("planType")),
-    }
-    normalized = {
-        "version": QUOTA_VERSION,
-        "source": identifier(value.get("source")) or "unknown",
-        "observedAt": observed_at,
-        "scope": scope,
-        "windows": windows,
-    }
-    if ordinary is not None:
-        normalized["ordinaryUsageAllowed"] = ordinary
-    if reached is not None:
-        normalized["reachedType"] = reached
-    if type(value.get("balanceZero")) is bool:
-        normalized["balanceZero"] = value['balanceZero']
-    resets = _timestamp(value.get('resetsAt'))
-    if resets:
-        normalized['resetsAt'] = resets
-    if value.get("ambiguousLimits") is True:
-        normalized["ambiguousLimits"] = True
-    if value.get('allLimitsAvailable') is True:
-        limits = value.get('coveredLimits')
-        if isinstance(limits, list) and len(limits) <= MAX_WINDOWS and all(identifier(limit) for limit in limits):
-            normalized['allLimitsAvailable'] = True
-            normalized['coveredLimits'] = list(dict.fromkeys(limits))
-    return normalized
-
-
 def classify_quota_code(native_code: str) -> str:
     """Map one native structured code onto the bounded quota classification."""
     if native_code in _QUOTA_NATIVE_CODES:
@@ -388,29 +282,27 @@ def normalize_quota_failure(value: Any) -> dict | None:
 
     The harness supplies the bounded ``code`` classification; ``nativeCode``
     is its own machine code and is never translated or classified here.
+    ``rejectionPhase`` is an explicit collector judgment, including ``unknown``
+    when collection failed or the stream was truncated.
     """
     if not isinstance(value, dict):
-        return None
-    if "version" in value and (type(value["version"]) is not int or value["version"] != 1):
         return None
     code = value.get("code")
     if code not in ("quota-exceeded", "rate-limited"):
         return None
     native_code = identifier(value.get("nativeCode"))
-    if native_code is None:
+    phase = value.get("rejectionPhase")
+    if native_code is None or phase not in ("before-model", "during-model", "unknown"):
         return None
     observed_at = _timestamp(value.get("observedAt"))
     failure = {
-        "version": QUOTA_FAILURE_VERSION,
         "code": code,
         "nativeCode": native_code,
         "source": identifier(value.get("source")) or "unknown",
+        "observedAt": observed_at,
+        "resetsAt": _timestamp(value.get("resetsAt")),
+        "rejectionPhase": phase,
     }
-    if observed_at is not None:
-        failure["observedAt"] = observed_at
-    reset = _timestamp(value.get('resetsAt'))
-    if reset is not None:
-        failure['resetsAt'] = reset
     return failure
 
 
@@ -493,14 +385,10 @@ __all__ = [
     "INPUT_BASIS_INCLUDES_CACHED",
     "LAST_ASSISTANT_MESSAGE_VERSION",
     "MAX_ASSISTANT_MESSAGE_BYTES",
-    "QUOTA_FAILURE_VERSION",
-    "QUOTA_VERSION",
     "TOKEN_USAGE_VERSION",
     "classify_quota_code",
     "identifier",
     "normalize_last_assistant_message",
-    "normalize_quota",
     "normalize_quota_failure",
-    "normalize_quota_window",
     "normalize_token_usage",
 ]

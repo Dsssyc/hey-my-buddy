@@ -13,7 +13,7 @@ and never by re-entering the legacy ``runner`` branches.
 
 The driver owns protocol integrity and fact projection only: thread/turn
 identity, the native configuration readbacks, tool-fact projection, unknown
-and denied-interaction facts, the Worker usage/quota/checkpoint observations
+and denied-interaction facts, the Worker usage/checkpoint observations
 and the owned-group stop evidence. Whether an unknown event, a tool fact or a
 raw answer fails the run stays with the role observer, which receives
 cumulative facts and answers one
@@ -111,7 +111,6 @@ from .protocol import (
     TurnEvidence,
     attempt_token_usage,
     decode_json,
-    quota_candidate_from_response,
     turn_failure_code,
 )
 from .tool_evidence import (
@@ -361,7 +360,6 @@ class _RunState:
     binding_path: Path | None = None
     token_usage: dict | None = None
     usage_rounds: list[TurnEvidence] = dataclasses.field(default_factory=list)
-    quota: dict | None = None
     quota_failure: dict | None = None
     native_error: dict | None = None
     capture: dict | None = None
@@ -879,6 +877,7 @@ class _EventChain:
         self.overflow_raises = overflow_raises
         self.carrier: Callable[[dict], Any] | None = None
         self.pending: list[dict] = []
+        self.truncated = False
 
     def observe_facts(self, message: dict) -> None:
         """Project and classify one frame without the carrier stage."""
@@ -891,6 +890,7 @@ class _EventChain:
         self.observe_facts(message)
         if self.carrier is None:
             if len(self.pending) >= _BOUND_NOTIFICATIONS:
+                self.truncated = True
                 if self.overflow_raises:
                     raise CodexProtocolError("invalid-native-result",
                                              "Codex no-tool startup event stream exceeded its bound")
@@ -909,6 +909,7 @@ class _EventChain:
         """Buffer again: the next round's frames precede its turn identity."""
         self.carrier = None
         self.pending = []
+        self.truncated = False
 
 
 class _NativeInquiry:
@@ -1027,14 +1028,10 @@ class _FastProtocol:
             raise CodexProtocolError("native-turn-failed", f"Native no-tool turn reported an error ({label})")
         if event_turn is None:
             return
-        if method == "thread/tokenUsage/updated":
-            self.evidence.observe(message)
-            return
         if method in ("thread/status/changed", "thread/settings/updated", "warning"):
             return
         turn = params.get("turn")
-        if method in ("turn/started", "turn/completed"):
-            self.evidence.observe(message)
+        self.evidence.observe(message)
         if method == "turn/started":
             if self.state["started"]:
                 raise CodexProtocolError("invalid-native-result", f"Duplicate native turn start ({label})")
@@ -1091,22 +1088,6 @@ def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
         state.worker_policy = {"sandboxPolicy": params["sandboxPolicy"],
                                "approvalPolicy": params["approvalPolicy"]}
     return connection.call("turn/start", params)
-
-
-def _observe_quota(connection: Connection, evidence: TurnEvidence) -> dict | None:
-    """Best-effort native quota snapshot; a failed read never fails a turn."""
-    from ....protocol.usage import normalize_quota
-    candidate = evidence.quota_candidate
-    previous_deadline = connection.deadline
-    connection.deadline = min(previous_deadline, time.monotonic() + 2)
-    try:
-        response = connection.call("account/rateLimits/read", {})
-    except CodexProtocolError:
-        return candidate
-    finally:
-        connection.deadline = previous_deadline
-    fresh = quota_candidate_from_response(response, observed_at=utc_now())
-    return fresh if fresh is not None and normalize_quota(fresh) is not None else candidate
 
 
 def _checkpoint(request: RunRequest, evidence: TurnEvidence) -> dict:
@@ -1226,6 +1207,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         # ever spawned, and that known fact — not an unknown — is what the
         # result must carry.
         _stop_collection(request, prep, state, spawn, owned_spawn, mode, cancel)
+    _collect_quota_failure(state, stream_truncated=chain.truncated)
     return _build_result(request, prep, state, mode, projector, facts, activity)
 
 
@@ -1295,7 +1277,7 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
                  inquiry_bridge: InquiryBridge | None = None,
                  inquiry_services: ClientInquiryServices | None = None,
                  inquiry_poller: list[_NativeInquiry] | None = None) -> None:
-    """The micro task turn: one admission, settlement, usage, quota, checkpoint."""
+    """The micro task turn: one admission, settlement, usage, checkpoint."""
     state.model_started = True
     response = _admit_turn(connection, request, thread_id, request.input_text, "worker", state)
     turn = response.get("turn")
@@ -1308,6 +1290,10 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
         chain.projector.observe_root(thread_id, turn_id)
     evidence = TurnEvidence(thread_id, turn_id)
     state.turn_evidence = evidence
+    items = turn.get("items")
+    if isinstance(items, list):
+        for item in items:
+            evidence._observe_activity("item/started", {"item": item})
     native_inquiry = None
     if inquiry_bridge is not None and inquiry_services is not None:
         native_inquiry = _NativeInquiry(connection, evidence, thread_id, turn_id,
@@ -1341,14 +1327,6 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
         state.checkpoint = _checkpoint(request, evidence)
         state.event_count = evidence.event_seq
         state.token_usage = attempt_token_usage(evidence)
-    state.quota = _observe_quota(connection, evidence)
-    failure_code = turn_failure_code(native_turn)
-    if failure_code is not None:
-        from ....protocol.usage import classify_quota_code
-        classification = classify_quota_code(failure_code)
-        if classification != "unknown":
-            state.quota_failure = {"code": classification, "nativeCode": failure_code, "source": "codex/app-server-turn-error",
-                                   "observedAt": utc_now()}
     if native_turn.get("status") != "completed" or not evidence.started:
         raise CodexProtocolError("native-turn-failed", "Codex turn did not complete successfully")
     item = evidence.final_item
@@ -1411,6 +1389,11 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
                     chain.observe_facts({"method": "item/started", "params": {
                         "threadId": thread_id, "turnId": turn_id, "item": item}})
         evidence = TurnEvidence(thread_id, turn_id)
+        state.turn_evidence = evidence
+        items = turn.get("items")
+        if isinstance(items, list):
+            for item in items:
+                evidence._observe_activity("item/started", {"item": item})
         state.usage_rounds.append(evidence)
         if mode == "fast":
             chain.bind(_FastProtocol(thread_id, turn_id, fast_state, evidence, state))
@@ -1683,6 +1666,26 @@ def _capture_native_error(state: _RunState, message: dict, thread_id: str, turn_
             state.native_error["nativeTurnId"] = turn_id
 
 
+def _collect_quota_failure(state: _RunState, *, stream_truncated: bool) -> None:
+    """Classify the current root turn for every carrier from structured errors."""
+    from ....protocol.usage import classify_quota_code
+    evidence = state.turn_evidence
+    if evidence is None:
+        return
+    if stream_truncated or state.reason in ("invalid-protocol", "transport-error", "invalid-native-result", "deadline"):
+        evidence.collector_failed = True
+    failure_code = turn_failure_code(evidence.completed)
+    if failure_code is None and state.native_error is not None:
+        failure_code = turn_failure_code({"error": state.native_error["error"]})
+    if failure_code is None:
+        return
+    classification = classify_quota_code(failure_code)
+    if classification != "unknown":
+        state.quota_failure = {"code": classification, "nativeCode": failure_code,
+                               "source": "codex/app-server-turn-error", "observedAt": utc_now(),
+                               "resetsAt": None, "rejectionPhase": evidence.rejection_phase}
+
+
 def _checked_buddy(request: RunRequest, state: _RunState, mode: str) -> ResultBuddy:
     checked = CheckedBuddy()
     if state.configured:
@@ -1765,10 +1768,6 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
     if facts.denied:
         retain("denied-interactions", invocation_root / "denied-interactions.json",
                {"records": facts.denied})
-    if state.quota is not None:
-        # The native quota snapshot has no field in the common result yet; the
-        # retained file keeps the real observation for the role wiring.
-        retain("quota-snapshot", invocation_root / "quota-snapshot.json", state.quota)
     if state.capture is not None:
         retain("review-captured-events", invocation_root / "review-captured-events.json", state.capture)
     if state.selected_model_listed is False:

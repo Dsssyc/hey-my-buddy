@@ -1,7 +1,7 @@
 """Adapter result contract for ADR-018 items 22/23 and the retained assistant text.
 
 Codex runs against the private App Server fixture (no model call); DSH runs against the private ACP fixture and reads its own session record. Both paths end in the same canonical result fields: ``tokenUsage``,
-``quota``, ``quotaFailure`` and ``lastAssistantMessage``.
+``quotaFailure`` and ``lastAssistantMessage``.
 """
 from __future__ import annotations
 
@@ -69,8 +69,8 @@ class CodexUsageContractTests(unittest.TestCase):
         self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
         return self.adapter.collect(handle, context)
 
-    def test_a_native_turn_reports_attempt_scoped_usage_and_a_quota_observation(self):
-        outcome = self.execute(self.context("usage-read"))
+    def test_a_native_turn_reports_attempt_scoped_usage(self):
+        outcome = self.execute(self.context("usage"))
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         expected = CODEX_NATIVE["expected"]
         token_usage = outcome.result["tokenUsage"]
@@ -85,13 +85,6 @@ class CodexUsageContractTests(unittest.TestCase):
         self.assertEqual(token_usage["nativeRecords"], expected["records"])
         self.assertEqual(token_usage["completeness"], "complete")
 
-        quota = outcome.result["quota"]
-        self.assertEqual(quota["scope"]["provider"], "openai")
-        self.assertEqual(quota["scope"]["nativeAccountId"], "account-fixture-0001")
-        self.assertTrue(quota["ordinaryUsageAllowed"])
-        self.assertEqual([window["name"] for window in quota["windows"]], ["primary", "secondary"])
-        self.assertEqual(quota["windows"][0]["usedPercent"], 42.5)
-        self.assertEqual(quota["windows"][1]["windowDurationMins"], 10080)
         self.assertIsNone(outcome.result["quotaFailure"])
 
         message = outcome.result["lastAssistantMessage"]
@@ -102,9 +95,9 @@ class CodexUsageContractTests(unittest.TestCase):
         self.assertFalse(message["truncated"])
 
     def test_a_resumed_thread_counts_only_this_attempt(self):
-        first = self.execute(self.context("usage-read"))
+        first = self.execute(self.context("usage"))
         self.assertEqual(first.status, "ok", first.to_report())
-        second = self.execute(self.context("usage-read", index=2, previous=first.result["sessionId"]))
+        second = self.execute(self.context("usage", index=2, previous=first.result["sessionId"]))
         self.assertEqual(second.status, "ok", second.to_report())
         expected = CODEX_NATIVE["expected"]
         # The fixture's thread totals already carry 250,000 earlier tokens on the
@@ -119,27 +112,17 @@ class CodexUsageContractTests(unittest.TestCase):
         self.assertEqual(failure["nativeCode"], "usageLimitExceeded")
         self.assertEqual(failure["code"], "quota-exceeded")
         self.assertEqual(failure["source"], "codex/app-server-turn-error")
+        self.assertEqual(failure["rejectionPhase"], "during-model")
         # Usage observed before the failure and the root message both survive.
         self.assertEqual(outcome.result["tokenUsage"]["inputTokens"], CODEX_NATIVE["expected"]["inputTokens"])
         self.assertIsNotNone(outcome.result["lastAssistantMessage"])
         self.assertNotIn("provider wording", json.dumps(outcome.result))
-
-    def test_a_failed_quota_read_keeps_the_rolling_notification(self):
-        outcome = self.execute(self.context("usage"))
-        self.assertEqual(outcome.status, "ok", outcome.to_report())
-        quota = outcome.result["quota"]
-        self.assertEqual([window["name"] for window in quota["windows"]], ["primary"])
-        self.assertEqual(quota["windows"][0]["usedPercent"], 77)
-        self.assertEqual(quota["source"], "codex/app-server-rate-limits")
-        self.assertNotIn("ordinaryUsageAllowed", quota)
-        self.assertEqual(outcome.result["tokenUsage"]["inputTokens"], CODEX_NATIVE["expected"]["inputTokens"])
 
     def test_an_attempt_without_native_usage_reports_unknown_not_zero(self):
         outcome = self.execute(self.context("ok"))
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertIsNone(outcome.result["tokenUsage"])
         self.assertIsNone(outcome.result["quotaFailure"])
-        self.assertIsNotNone(outcome.result["quota"])
         self.assertIsNotNone(outcome.result["lastAssistantMessage"])
 
 
@@ -217,7 +200,6 @@ class DshUsageContractTests(DshRoleCase):
         self.assertEqual(usage["inputBasis"], "includes-cached")
         self.assertEqual(usage["scope"], "attempt")
         self.assertEqual(usage["nativeRecords"], 2)
-        self.assertIsNone(outcome.result["quota"])
         self.assertIsNone(outcome.result["quotaFailure"])
         message = outcome.result["lastAssistantMessage"]
         self.assertEqual(message["text"], "the final answer")
@@ -244,6 +226,7 @@ class DshUsageContractTests(DshRoleCase):
         self.assertEqual(failure["nativeCode"], "QUOTA")
         self.assertEqual(failure["code"], "quota-exceeded")
         self.assertEqual(failure["source"], "dsh/session-turn-end")
+        self.assertEqual(failure["rejectionPhase"], "during-model")
         self.assertNotIn("provider wording", json.dumps(outcome.result))
 
     def test_an_unrelated_turn_failure_is_not_reported_as_a_quota_failure(self):

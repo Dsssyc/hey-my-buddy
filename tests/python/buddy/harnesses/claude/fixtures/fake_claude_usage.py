@@ -4,8 +4,8 @@
 It speaks the same stdio control protocol as ``fake_claude.py`` (initialize,
 correlated responses, interrupt) but replays the desensitized records of
 ``native-usage-claude.json``: assistant frames with Anthropic usage objects, a
-replayed duplicate, a foreign session, a subagent frame, rate-limit events with
-``unifiedWindows`` and a final ``result`` frame. No model, no network, no shared
+replayed duplicate, a foreign session, a subagent frame, and a final
+``result`` frame. No model, no network, no shared
 Claude state.
 """
 import hashlib
@@ -118,10 +118,6 @@ def run_turn(case, session_id):
                     "subtype": "success", "request_id": frame["request_id"], "response": {}}})
                 return
         return
-    if case == "usage-none":
-        pass
-    else:
-        send({"type": "rate_limit_event", "rate_limit_info": FIXTURE["rateLimitWarning"]["rate_limit_info"]})
     send(result_frame(case, session_id))
 
 

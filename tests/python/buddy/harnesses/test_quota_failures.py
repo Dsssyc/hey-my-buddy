@@ -21,6 +21,8 @@ PROVIDER_RATE_LIMIT_FAILURE = {
     "attribution": {"providerErrorCode": "1310", "reason": "rate_limited", "retryable": False, "statusCode": 429},
 }
 
+FAILURE_FIELDS = {"code", "nativeCode", "source", "observedAt", "resetsAt", "rejectionPhase"}
+
 
 class ZcodeQuotaProtocolTests(unittest.TestCase):
     def test_nonretryable_provider_rate_limit_is_exhaustion_with_its_own_code(self):
@@ -115,7 +117,8 @@ class NativeQuotaFailureTests(unittest.TestCase):
                 failure = _worker_facts(result)["quotaFailure"]
                 self.assertEqual(failure["code"], "quota-exceeded")
                 self.assertEqual(failure["nativeCode"], "1310")
-                self.assertNotIn("resetsAt", failure)
+                self.assertIsNone(failure["resetsAt"])
+                self.assertEqual(set(failure), FAILURE_FIELDS)
                 self.assertEqual(failure["source"], "zcode/session-turn-failed")
 
     def test_zcode_publishes_retryable_and_unspecified_rate_limits_without_exhaustion(self):
@@ -129,6 +132,7 @@ class NativeQuotaFailureTests(unittest.TestCase):
                 # Keep misleading summary text in the actual native run path.
                 result = self.zcode_result(failure)
                 self.assertEqual(_worker_facts(result)["quotaFailure"]["code"], "rate-limited")
+                self.assertEqual(set(_worker_facts(result)["quotaFailure"]), FAILURE_FIELDS)
 
     def test_zcode_does_not_publish_unrelated_native_failures(self):
         for reason in ("context_window", "transport"):
@@ -143,23 +147,27 @@ class NativeQuotaFailureTests(unittest.TestCase):
                                  ("contextWindowExceeded", None)):
             with self.subTest(native=native):
                 state = native_run._RunState()
-                evidence = SimpleNamespace(completed={"status": "failed", "error": {"codexErrorInfo": native}},
-                                           final_item=None, event_seq=1, started=True)
+                evidence = native_run.TurnEvidence("thread", "turn")
+                evidence.completed = {"status": "failed", "error": {"codexErrorInfo": native}}
+                evidence.event_seq = 1
+                evidence.started = True
                 chain = SimpleNamespace(projector=None, bind=Mock())
                 with patch.object(native_run, "_admit_turn", return_value={"turn": {"id": "turn"}}), \
                      patch.object(native_run, "TurnEvidence", return_value=evidence), \
                      patch.object(native_run, "_checkpoint", return_value=None), \
-                     patch.object(native_run, "attempt_token_usage", return_value=None), \
-                     patch.object(native_run, "_observe_quota", return_value=None):
+                     patch.object(native_run, "attempt_token_usage", return_value=None):
                     with self.assertRaises(CodexProtocolError):
                         native_run._worker_turn(Mock(), chain, self.request("codex"), state, "thread",
                                                 lambda _: FEEDBACK_CONTINUE, Mock())
+                native_run._collect_quota_failure(state, stream_truncated=False)
                 if expected is None:
                     self.assertIsNone(state.quota_failure)
                 else:
                     failure = native_run._quota_package(state.quota_failure).value
                     self.assertEqual(failure["code"], expected)
                     self.assertEqual(failure["nativeCode"], native)
+                    self.assertEqual(set(failure), FAILURE_FIELDS)
+                    self.assertEqual(failure["rejectionPhase"], "before-model")
 
     def test_claude_publishes_explicit_native_rejection_as_exhaustion(self):
         from hey_my_buddy.buddy.harnesses.claude import native_run
@@ -171,6 +179,8 @@ class NativeQuotaFailureTests(unittest.TestCase):
                                     services=None, cancelled=lambda: False)
         self.assertEqual(result.native_failure.value["code"], "quota-exceeded")
         self.assertEqual(result.native_failure.value["nativeCode"], "five_hour")
+        self.assertEqual(set(_worker_facts(result)["quotaFailure"]), FAILURE_FIELDS)
+        self.assertEqual(result.native_failure.value["rejectionPhase"], "unknown")
 
     def test_dsh_publishes_the_code_table_classification(self):
         from hey_my_buddy.buddy.harnesses.dsh import native_run
@@ -188,3 +198,4 @@ class NativeQuotaFailureTests(unittest.TestCase):
                     failure = _worker_facts(result)["quotaFailure"]
                     self.assertEqual(failure["code"], expected)
                     self.assertEqual(failure["nativeCode"], native)
+                    self.assertEqual(set(failure), FAILURE_FIELDS)

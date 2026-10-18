@@ -61,7 +61,6 @@ class NativeSchemaWorker:
     validation_key: str
     display_name: str
     interaction_kind: str
-    native_quota_failure: bool = False
     native_identity_keys: tuple[str, ...] = ()
     validation_error_key: str | None = None
     reject_previous_on_initial: bool = False

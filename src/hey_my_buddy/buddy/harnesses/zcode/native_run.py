@@ -670,6 +670,7 @@ class _RunState:
     failure_kind: str | None = None
     native_failure: dict | None = None
     quota_failure: dict | None = None
+    root_model_activity: bool = False
     model_started: bool = False
     shutdown: bool = False
     exit_code: int | None = None
@@ -933,6 +934,47 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
     return session_id, resolved
 
 
+def _root_model_activity(message: dict, session_id: str, turn_id: str | None) -> bool:
+    """Content, reasoning, a tool call or output tokens from the bound root turn."""
+    params = message.get("params")
+    if not isinstance(params, dict) or not turn_id or (params.get("sessionId"), params.get("turnId")) != (session_id, turn_id):
+        return False
+    if message.get("method") == "v4/telemetry/event" and params.get("kind") == "usage.delta":
+        return any(type(params.get(key)) is int and params[key] > 0
+                   for key in ("outputTokens", "reasoningTokens"))
+    if message.get("method") != "session/event":
+        return False
+    data = params.get("payload")
+    if not isinstance(data, dict) or any(data.get(key) for key in (
+            "source", "parentToolCallId", "childSessionId", "childToolCallId", "agentId", "background")):
+        return False
+    kind = params.get("type")
+    if kind == "tool.updated":
+        return data.get("kind") in ("scheduled", "started", "progress", "result", "error")
+    if kind == "message.upserted":
+        item = data.get("message")
+        if not isinstance(item, dict):
+            return False
+        info = item.get("info") if isinstance(item.get("info"), dict) else item
+        if info.get("role") not in (None, "assistant"):
+            return False
+        tokens = info.get("tokens") if isinstance(info.get("tokens"), dict) else {}
+        if any(type(tokens.get(key)) is int and tokens[key] > 0 for key in ("output", "reasoning")):
+            return True
+        parts = item.get("parts") if isinstance(item.get("parts"), list) else []
+        return any(isinstance(part, dict) and part.get("type") in ("text", "reasoning", "thinking")
+                   and isinstance(part.get("text"), str) and bool(part["text"].strip()) for part in parts)
+    if kind in ("part.started", "part.delta", "part.upserted"):
+        part = data.get("part") if isinstance(data.get("part"), dict) else data.get("delta")
+        if not isinstance(part, dict):
+            return False
+        if part.get("type") in ("tool", "tool-call", "tool_call"):
+            return True
+        return part.get("type") in ("text", "reasoning", "thinking") and any(
+            isinstance(part.get(key), str) and bool(part[key].strip()) for key in ("text", "content"))
+    return False
+
+
 def _close_root_session(connection: NativeConnection, session_id: str,
                         tools: ZcodeToolFacts | None) -> None:
     """The one close site; an unacknowledged close always fails the run."""
@@ -1164,6 +1206,20 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
         drained = _stop_collection(spawn=spawn, deadline=deadline, cancel=cancel, state=state,
                                    tools=tools, classifier=classifier, facts=facts, notify=notify,
                                    completion_carrier=completion_carrier, outcome=outcome)
+    if state.quota_failure is not None:
+        usage = outcome.attempt_usage.raw_usage() if outcome.attempt_usage is not None else None
+        has_output = bool(usage and any(type(usage.get(key)) is int and usage[key] > 0
+                                        for key in ("outputTokens", "reasoningOutputTokens")))
+        has_text = bool(outcome.attempt_usage and outcome.attempt_usage.last_assistant_message)
+        incomplete = (drained is not True or state.drain_error is not None
+                      or state.reason in ("invalid-native-result", "invalid-protocol", "native-disconnected")
+                      or bool(outcome.attempt_usage and (outcome.attempt_usage.read_incomplete
+                                                        or outcome.attempt_usage.message_truncated
+                                                        or outcome.attempt_usage.delta_conflict)))
+        state.quota_failure.update(
+            resetsAt=None,
+            rejectionPhase="unknown" if incomplete else
+            "during-model" if state.root_model_activity or has_output or has_text else "before-model")
     if (completion_carrier and state.status == "ok" and state.shutdown
             and state.exit_code == 0 and outcome.record is not None
             and outcome.binding_path is not None and outcome.session_id is not None):
@@ -1218,6 +1274,8 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
             if holder:
                 holder[0].observe(message, ordinal)
                 outcome.attempt_usage.observe(message, holder[0].turn_id)
+                state.root_model_activity |= _root_model_activity(
+                    message, holder[0].session_id, holder[0].turn_id)
         return observe
 
     protocol_holder: list = []
@@ -1248,6 +1306,7 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
     state.create_params = create_params
     while True:
         protocol_holder[:] = []
+        state.root_model_activity = False
         connection.observe = final_chain(protocol_holder)
         snapshot = _open_root(connection, workspace, create_params=create_params)
         state.session_opened = True
@@ -1356,6 +1415,8 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         # Attempt usage is observed next to the root-turn evidence; a
         # foreign session or an unstarted turn contributes nothing.
         outcome.attempt_usage.observe(message, outcome.evidence.turn_id)
+        state.root_model_activity |= _root_model_activity(
+            message, outcome.evidence.session_id, outcome.evidence.turn_id)
         outcome.projection.note(message, ordinal)
         if outcome.inquiry_bridge is not None:
             outcome.inquiry_bridge.note_event(message, outcome.projection.phase)

@@ -120,6 +120,15 @@ def main():
                     event(method, turn_id, item=item)
             if case == "connection-notification":
                 send({"method": "account/updated", "params": {"authMode": "chatgpt", "planType": "plus"}})
+            if case in ("quota-before", "quota-text", "quota-error"):
+                if case == "quota-text":
+                    event("item/completed", turn_id, item={"id": "partial", "type": "agentMessage", "text": "partial"})
+                error = {"message": "native quota exceeded", "codexErrorInfo": "usageLimitExceeded"}
+                if case == "quota-error":
+                    event("error", turn_id, error=error, willRetry=False)
+                else:
+                    event("turn/completed", turn_id, turn={"id": turn_id, "status": "failed", "items": [], "error": error})
+                continue
             if case == "native-failure":
                 event("turn/completed", turn_id, turn={"id": turn_id, "status": "failed", "items": [],
                       "error": {"message": "Native request failed: invalid_json_schema", "codexErrorInfo": "badRequest"}})

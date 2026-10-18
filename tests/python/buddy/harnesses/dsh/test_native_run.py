@@ -296,9 +296,26 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(failure["code"], "quota-exceeded")
         self.assertEqual(failure["nativeCode"], "QUOTA")
         self.assertEqual(failure["source"], "dsh/session-turn-end")
+        self.assertEqual(failure["rejectionPhase"], "during-model")
+        self.assertIsNone(failure["resetsAt"])
+        self.assertTrue(failure["observedAt"])
+        self.assertEqual(set(failure), {"code", "nativeCode", "source", "observedAt",
+                                        "resetsAt", "rejectionPhase"})
         retained = json.loads(Path(next(ref for ref in result.evidence_refs
                                         if ref.kind == "dsh-session-record").location).read_text())
         self.assertNotIn("provider wording", json.dumps(retained))
+
+    def test_quota_phase_distinguishes_prompt_only_from_a_truncated_record(self):
+        for mode, expected in (("quota-before", "before-model"),
+                               ("quota-truncated", "unknown")):
+            with self.subTest(mode=mode):
+                self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}',
+                                         "--session-record", mode]
+                result = run(self.fast_request("prompt"),
+                             observer=FastCorrection(SCHEMA, "prompt").observer,
+                             services=None, cancelled=lambda: False)
+                self.assertEqual(result.native_failure.value["rejectionPhase"], expected)
+                self.assertEqual(result.native_failure.value["nativeCode"], "QUOTA")
 
     def test_a_foreign_session_record_is_never_attributed(self):
         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}',
@@ -781,6 +798,15 @@ class MountTests(NativeRunCase):
 
 
 class WorkerSeamTests(NativeRunCase):
+    def test_worker_keeps_structured_quota_failure_from_its_root_record(self):
+        request, bound, mount = self.worker_request()
+        self.micro_task_agent_args(mount)
+        self.extra_agent_args.extend(["--session-record", "quota"])
+        result = run(request, observer=worker_observer, services=bound.services,
+                     cancelled=lambda: False)
+        self.assertEqual(result.native_failure.value["nativeCode"], "QUOTA")
+        self.assertEqual(result.native_failure.value["rejectionPhase"], "during-model")
+
     """The micro task completion-tool carrier over real signed receipts."""
 
     def test_slow_setup_waits_for_the_single_request_without_a_worker_deadline(self):

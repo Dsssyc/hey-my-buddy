@@ -1,5 +1,5 @@
 {
-  "comment": "Desensitized minimal Claude Code stream-json records. Field names, nullability and units are copied from the installed 2.1.284 CLI's embedded schemas: the Anthropic usage object (input_tokens excludes cache; cache_creation_input_tokens and cache_read_input_tokens are nullable), the assistant message frame's message.id/usage, and rate_limit_info (status, rateLimitType, resetsAt unix seconds, utilization as the fraction of the window used, and unifiedWindows with per-window fractions). Every session id, message id, model id and text is replaced; no credential, prompt, tool output or reasoning text is retained.",
+  "comment": "Desensitized minimal Claude Code stream-json records. Field names, nullability and units are copied from the installed 2.1.284 CLI's embedded schemas: the Anthropic usage object (input_tokens excludes cache; cache_creation_input_tokens and cache_read_input_tokens are nullable), the assistant message frame's message.id/usage, and rate_limit_info rejection status, rateLimitType and resetsAt. Every session id, message id, model id and text is replaced; no credential, prompt, tool output or reasoning text is retained.",
   "source": "claude/stream-json",
   "harnessVersion": "2.1.284",
   "sessionId": "session-fixture-0001",
@@ -87,27 +87,11 @@
     "server_tool_use": null,
     "service_tier": "standard"
   },
-  "rateLimitWarning": {
-    "rate_limit_info": {
-      "status": "allowed_warning",
-      "rateLimitType": "five_hour",
-      "resetsAt": 1790467200,
-      "utilization": 0.42,
-      "unifiedWindows": {
-        "five_hour": {"utilization": 0.42, "resetsAt": 1790467200},
-        "seven_day": {"utilization": 0.9, "resetsAt": 1790985600}
-      }
-    }
-  },
   "rateLimitRejected": {
     "rate_limit_info": {
       "status": "rejected",
       "rateLimitType": "five_hour",
-      "resetsAt": 1790467200,
-      "utilization": 0.5,
-      "unifiedWindows": {
-        "five_hour": {"utilization": 0.5, "resetsAt": 1790467200}
-      }
+      "resetsAt": 1790467200
     }
   },
   "resultQuotaDenial": {

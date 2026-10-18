@@ -42,29 +42,6 @@ USAGE_REQUESTS = (
 #: A resumed thread already carries its earlier turns in the native total.
 PRIOR_THREAD_TOKENS = 250000
 
-RATE_LIMITS_READ = {
-    "ordinaryUsageAllowed": True,
-    "rateLimits": {
-        "limitId": "codex", "limitName": None, "normalModelSlug": None,
-        "primary": {"usedPercent": 42.5, "windowDurationMins": 300, "resetsAt": 1791050000},
-        "secondary": {"usedPercent": 77, "windowDurationMins": 10080, "resetsAt": 1791046876},
-        "credits": {"hasCredits": False, "unlimited": False, "balance": "0"},
-        "individualLimit": None, "spendControlReached": False, "planType": "pro",
-        "rateLimitReachedType": None,
-    },
-    "accountId": "account-fixture-0001",
-    "rateLimitUpsell": None,
-}
-RATE_LIMITS_NOTIFICATION = {
-    "limitId": "codex", "limitName": None, "normalModelSlug": None,
-    "primary": {"usedPercent": 77, "windowDurationMins": 10080, "resetsAt": 1791046876},
-    "secondary": None,
-    "credits": {"hasCredits": False, "unlimited": False, "balance": "0"},
-    "individualLimit": None, "spendControlReached": False, "planType": "pro",
-    "rateLimitReachedType": None,
-}
-
-
 def cumulative(turn_index: int, requests: list) -> dict:
     """One native ``total`` breakdown: prior thread usage plus these requests.
 
@@ -83,8 +60,8 @@ def cumulative(turn_index: int, requests: list) -> dict:
 
 
 def send_usage(case: str, thread_id: str, turn_id: str, turn_index: int) -> None:
-    """Emit this fixture's native usage and quota notifications, in native order."""
-    if case not in ("usage", "usage-read", "quota-failure"):
+    """Emit this fixture's native token usage notifications, in native order."""
+    if case not in ("usage", "quota-failure"):
         return
     observed = []
     for request in USAGE_REQUESTS:
@@ -93,7 +70,6 @@ def send_usage(case: str, thread_id: str, turn_id: str, turn_index: int) -> None
             "threadId": thread_id, "turnId": turn_id,
             "tokenUsage": {"last": request, "total": cumulative(turn_index, observed),
                            "modelContextWindow": 828400}}})
-    send({"method": "account/rateLimits/updated", "params": {"rateLimits": RATE_LIMITS_NOTIFICATION}})
     # The native stream may repeat the final snapshot; a replay is not new usage.
     send({"method": "thread/tokenUsage/updated", "params": {
         "threadId": thread_id, "turnId": turn_id,
@@ -181,13 +157,6 @@ def main():
                            "email": None, "planType": "plus"}
             send({"id": ident, "result": {"account": account, "requiresOpenaiAuth": True}})
             send({"method": "account/updated", "params": {"authMode": account["type"], "planType": account.get("planType")}})
-        elif method == "account/rateLimits/read":
-            if case in ("usage", "quota-failure"):
-                # The rolling notifications already carried the quota; a failed
-                # read must not fail the turn and must not erase what was seen.
-                send({"id": ident, "error": {"code": -32603, "message": "usage read unavailable"}})
-            else:
-                send({"id": ident, "result": RATE_LIMITS_READ})
         elif method == "model/list":
             if case == "unreadable-catalog-result":
                 send({"id": ident, "result": []})
@@ -305,8 +274,33 @@ def main():
                     else f"model not found: {params['model']}"
                 send({"id": ident, "error": {"code": -32000, "message": native_reason}})
                 continue
+            if case == "quota-before-overflow":
+                for _ in range(140):
+                    send({"method": "thread/status/changed", "params": {"threadId": thread_id,
+                          "turnId": turn_id, "status": {"type": "active"}}})
             send({"id": ident, "result": {"turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "inProgress", "items": []}}})
+            if case.startswith("quota-before") or case.startswith("quota-activity-"):
+                activity = case.removeprefix("quota-activity-")
+                if activity in ("text", "reasoning", "tool"):
+                    item = {"type": {"text": "agentMessage", "reasoning": "reasoning",
+                                      "tool": "mcpToolCall"}[activity], "id": "activity-1"}
+                    if activity == "text":
+                        item["text"] = "partial output"
+                    send({"method": "item/started", "params": {
+                        "threadId": thread_id, "turnId": turn_id, "item": item}})
+                elif activity == "tokens":
+                    send_usage("quota-failure", thread_id, turn_id, turn_index)
+                error = {"message": "native quota exceeded", "codexErrorInfo": "usageLimitExceeded"}
+                if case == "quota-before-truncated":
+                    send({"method": "error", "params": {"threadId": thread_id, "turnId": turn_id,
+                                                           "error": error, "willRetry": False}})
+                    sys.stdout.write('{"method":')
+                    sys.stdout.flush()
+                    return
+                turn = {"id": turn_id, "status": "failed", "items": [], "error": error}
+                send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn}})
+                continue
             if case in ("inquiry-active", "inquiry-unanswered", "inquiry-invalid-retry"):
                 state['threads'][thread_id]['turnStart'] = {"threadId": thread_id, "turnId": turn_id}
                 write_state(state)

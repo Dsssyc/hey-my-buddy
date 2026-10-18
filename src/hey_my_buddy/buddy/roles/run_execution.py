@@ -150,6 +150,8 @@ def _base_result(result) -> dict:
         payload["error"] = result.end.message or result.end.reason_code or "the native run failed"
         if result.end.reason_code == "native-disconnected":
             payload["failureKind"] = "transport"
+    if result.native_failure is not None:
+        payload["quotaFailure"] = result.native_failure.value
     _merge_native_evidence(result, payload)
     return payload
 
@@ -240,8 +242,6 @@ def _worker_facts(result, *, delegation_authority: bool = False) -> dict:
                                        if result.last_assistant_message is not None else None)
     if result.native_error is not None:
         payload["nativeFailure"] = result.native_error.value
-    if result.native_failure is not None and not (format and format.native_quota_failure):
-        payload["quotaFailure"] = result.native_failure.value
     if result.activity is not None:
         activity = result.activity.value
         payload["activity"] = {"phase": activity.get("phase"),
@@ -254,7 +254,7 @@ def _review_result(result, request: RunRequest, verdict: dict) -> dict:
     facts = _worker_facts(result)
     if _worker_reports(result, facts):
         payload.update(status="error", code="invalid-native-result")
-    for key in ("tokenUsage", "quota", "quotaFailure", "lastAssistantMessage", "rateLimitObservations",
+    for key in ("tokenUsage", "quotaFailure", "lastAssistantMessage",
                 "nativeInterruptRequested", "nativeInterruptAcknowledged"):
         if key in facts:
             payload[key] = facts[key]
@@ -284,7 +284,7 @@ def _worker_reports(result, payload: dict) -> bool:
     invalid = False
     for kind, key in (("inquiry-report", "inquiry"), ("inquiry-tool-failures", "inquiryToolFailures"),
                       ("attention-report", "nativeAttention"),
-                      ("quota-snapshot", "quota"), ("native-checkpoint", "nativeCheckpoint"),
+                      ("native-checkpoint", "nativeCheckpoint"),
                       ("native-observations", None), ("native-turn-facts", None)):
         try:
             report = _evidence(result, kind)
@@ -298,8 +298,7 @@ def _worker_reports(result, payload: dict) -> bool:
                 if key == "nativeCheckpoint" and result.native_identity is not None:
                     payload["nativeTurnId"] = result.native_identity.turn_id
             elif kind == "native-observations":
-                for field in ("sessionModel", "observedModels", "totalCostUsd", "rateLimitObservations", "quota",
-                              "quotaFailure"):
+                for field in ("sessionModel", "observedModels", "totalCostUsd"):
                     if field in report:
                         payload[field] = report[field]
                 if report.get("unsupportedNativeRequests"):
@@ -716,15 +715,13 @@ class WorkerRunExecutor:
             payload.pop("nativeCheckpoint", None)
             if result is not None and any(ref.kind == "native-checkpoint" for ref in result.evidence_refs):
                 payload["lastAssistantMessage"] = None
-        from ..harnesses.registry import worker_format
-        format = worker_format(self.name)
-        for key, normalizer in (("tokenUsage", usage.normalize_token_usage), ("quota", usage.normalize_quota)):
-            payload[key] = normalizer(payload.get(key))
-        if not (format and format.native_quota_failure):
-            payload["quotaFailure"] = usage.normalize_quota_failure(payload.get("quotaFailure"))
+        payload["tokenUsage"] = usage.normalize_token_usage(payload.get("tokenUsage"))
+        payload["quotaFailure"] = usage.normalize_quota_failure(payload.get("quotaFailure"))
         from ..harnesses.registry import worker_message_source
         payload["lastAssistantMessage"] = usage.normalize_last_assistant_message(
             payload.get("lastAssistantMessage"), source=worker_message_source(self.name))
+        from ..harnesses.registry import worker_format
+        format = worker_format(self.name)
         status = "cancelled" if (handle.cancel_requested or payload.get("status") == "cancelled") and shutdown else "failed"
         if not handle.cancel_requested and exit_code == 0 and payload.get("status") == "ok" and shutdown:
             status = "ok"
