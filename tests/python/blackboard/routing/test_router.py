@@ -10,26 +10,27 @@ from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 
 class RouterContractTests(unittest.TestCase):
     def test_independent_references_and_alternative_are_advisory(self):
-        answer = {"buddyId": "legal-alternative", "reason": "Better fit after reading the code",
+        answer = {"buddyId": "legal-alternative", "note": "Better fit after reading the code",
                   "evidence": [{"kind": "annotation", "ref": "model-note"},
                                {"kind": "file", "ref": "src/worker.py"}]}
         self.assertEqual(router.validate_answer(answer, ["preferred", "legal-alternative"]), answer)
 
     def test_candidate_escape_has_noncorrectable_code(self):
         with self.assertRaises(BoardError) as caught:
-            router.validate_answer({"buddyId": "foreign", "reason": "x", "evidence": []}, ["legal"])
+            router.validate_answer({"buddyId": "foreign", "note": "x", "evidence": []}, ["legal"])
         self.assertEqual(caught.exception.code, "router-out-of-bounds")
+        self.assertEqual(caught.exception.details, {"bound": "not-a-candidate"})
 
     def test_file_references_cannot_escape_or_embed_lines(self):
         for ref in ("../secret", "/tmp/other-run", "src/../../secret", "C:\\secret", "file\ncontents"):
             with self.subTest(ref=ref), self.assertRaises(BoardError):
-                router.validate_answer({"buddyId": "legal", "reason": "x",
+                router.validate_answer({"buddyId": "legal", "note": "x",
                                         "evidence": [{"kind": "file", "ref": ref}]}, ["legal"])
 
     def test_abstention_and_malformed_results(self):
-        self.assertIsNone(router.validate_answer('{"buddyId":null,"reason":"Insufficient evidence","evidence":[]}', [])['buddyId'])
-        for value in ("invalid", {}, {"buddyId": None, "reason": " ", "evidence": []},
-                      {"buddyId": None, "reason": "x", "evidence": [], "request": {}}):
+        self.assertIsNone(router.validate_answer('{"buddyId":null,"note":"Insufficient evidence","evidence":[]}', [])['buddyId'])
+        for value in ("invalid", {}, {"buddyId": None, "note": " ", "evidence": []},
+                      {"buddyId": None, "note": "x", "evidence": [], "request": {}}):
             with self.subTest(value=value), self.assertRaises(BoardError):
                 router.validate_answer(value, [])
 
@@ -105,7 +106,7 @@ class RouterPublicationTests(WorkflowTestCase):
                   'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
                   'usage': {'elapsedMs': 100, 'toolCalls': 0},
                   'inputVerification': {'unchanged': True, 'manifestSha256': None, 'snapshotSha256': 'fixture-digest'},
-                  'decision': {'buddyId': buddy, 'reason': 'Read the frozen input',
+                  'decision': {'buddyId': buddy, 'note': 'Read the frozen input',
                                'evidence': [{'kind': 'annotation', 'ref': 'not-supplied'}]}}
         if code:
             result['code'] = code

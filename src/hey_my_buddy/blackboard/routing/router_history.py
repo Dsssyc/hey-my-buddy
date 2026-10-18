@@ -1,13 +1,7 @@
 """Router outcome facts: idempotent recording and read-only per-buddy projections.
 
 One entry point records ``router.answered``/``router.no_answer`` facts for every
-Router plane (work, maintenance, portrait); reads never append events. Facts and
-pre-list routing records project into one per-buddy timeline: old records keep the
-Router their own frozen input named and the effective answer or no-answer their
-immutable terminal event and attempt receipt prove, never today's first list item,
-and never re-audited by today's evidence rules. Records whose nature or attribution
-cannot be proven stay ``unknown`` instead of being guessed, and old and new records
-deduplicate by their request/attempt identity.
+Router plane (work, maintenance, portrait); reads project only those receipts.
 
 Skip windows come from the last recorded no-answer plus the current retry interval;
 a later valid answered (including a valid abstention) removes it. Reads project
@@ -19,7 +13,6 @@ circuit breaker; queuing belongs to the execution layers.
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import datetime, timedelta, timezone
 
 from ..store.db import canonical_json, utc_now
@@ -31,18 +24,7 @@ OUTCOMES = ("answered", "no_answer")
 #: Attempt states that still own capacity: active execution or unconfirmed stop.
 #: Missing PIDs and expired leases never prove a stop, so ``uncertain`` stays here.
 ACTIVE_ATTEMPT_STATES = ("starting", "executing", "finalizing", "uncertain")
-#: Terminal decision kinds whose immutable records can prove an effective outcome.
-_RECORD_KINDS = ("decision.completed", "decision.failed", "decision.needs_host",
-                 "decision.cancelled")
-_RECORD_KIND_LITERALS = "(" + ",".join(f"'{kind}'" for kind in _RECORD_KINDS) + ")"
-#: json_valid guards every json_extract over an untrusted stored column: a malformed
-#: payload must fail neither the write path's expression index nor a projection read
-#: and simply never matches an attribution. Keep the buddy expression aligned with
-#: the events_router_outcome_idx definition so the index stays usable.
-_BUDDY_EXPRESSION = ("json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END,"
-                       " '$.buddyId')")
 _VALID_REQUESTED = "CASE WHEN json_valid(r.requested_json) THEN r.requested_json END"
-_VALID_EVENT_PAYLOAD = "CASE WHEN json_valid(e.payload_json) THEN e.payload_json END"
 MAX_CODE = 128
 MAX_PHASE = 64
 
@@ -150,169 +132,25 @@ def record_outcome(connection, *, buddy_id: str, plane: str, request_id: str, ta
 
 
 def _fact_entries(connection, buddy_id: str) -> list[dict]:
-    """Recorded fact events of one buddy, ordered by the event sequence."""
+    """Recorded outcome receipts of one buddy, ordered by the event sequence."""
     entries = []
     rows = connection.execute(
-        "SELECT seq, kind, created_at, payload_json FROM events"
-        " WHERE kind IN ('router.answered','router.no_answer')"
-        f" AND {_BUDDY_EXPRESSION}=? ORDER BY seq", (buddy_id,))
+        "SELECT event_seq, recorded_at, plane, request_id, router_index, phase, task_id,"
+        " attempt_id, outcome, code FROM router_outcomes WHERE buddy_id=? ORDER BY event_seq", (buddy_id,))
     for row in rows:
-        try:
-            payload = json.loads(row["payload_json"])
-        except ValueError:
-            payload = None
-        if not isinstance(payload, dict):
-            # A malformed recorded fact stays isolated: it cannot affect this or
-            # any other buddy's projection.
-            continue
-        entries.append({"source": "fact", "seq": int(row["seq"]), "at": row["created_at"],
-                        "outcome": "answered" if row["kind"] == "router.answered" else "no_answer",
-                        "plane": payload.get("plane"), "requestId": payload.get("requestId"),
-                        "routerIndex": payload.get("routerIndex"), "phase": payload.get("phase"),
-                        "taskId": payload.get("taskId"), "attemptId": payload.get("attemptId"),
-                        "code": payload.get("code")})
-    return entries
-
-
-def _valid_answer(receipt: dict | None, output: dict | None) -> bool:
-    """Whether immutable stop evidence proves an adopted Router answer.
-
-    Old accepted answers stay answers: today's tool-evidence rules never re-audit
-    them. Unknown elapsed or model-start facts are taken as recorded, never read as
-    a model rejection.
-    """
-    if receipt:
-        result = receipt.get("result")
-        return (receipt.get("status") == "ok" and isinstance(result, dict) and result.get("status") == "ok"
-                and result.get("modelStarted") is not False and receipt.get("shutdownConfirmed") == 1)
-    return isinstance(output, dict) and output.get("status") == "ok"
-
-
-def _abstained(kind: str, output: dict) -> bool:
-    decision = output.get("decision") if isinstance(output, dict) else None
-    return (kind == "decision.needs_host" and isinstance(output, dict) and output.get("status") == "ok"
-            and isinstance(decision, dict) and decision.get("buddyId", False) is None
-            and set(decision) == {"buddyId", "reason", "evidence"})
-
-
-def _classify_record(kind: str, output: dict, receipt: dict | None, event_payload: dict | None = None) -> tuple[str, str | None]:
-    """One old record's effective outcome: answered, no_answer, changed, neutral or unknown."""
-    if isinstance(receipt, dict) and isinstance(receipt.get('result'), dict):
-        output = receipt['result']
-    payload_code = (event_payload or {}).get("errorCode")
-    code = payload_code or (output.get("code") if isinstance(output, dict) else None)
-    code = code if isinstance(code, str) and code else None
-    if kind == "decision.completed":
-        return ("answered", None) if _valid_answer(receipt, output) else ("unknown", code)
-    if kind == "decision.needs_host":
-        if code == "router-input-changed":
-            return "changed", code
-        if code:
-            return "no_answer", code
-        if _abstained(kind, output):
-            return "answered", None
-        return "no_answer", code
-    if kind == "decision.failed":
-        if code == "router-input-changed":
-            return "changed", code
-        return "no_answer", code
-    if kind == "decision.cancelled":
-        return "neutral", code
-    return "unknown", code
-
-
-def _record_rows(connection, buddy_id: str | None) -> list[dict]:
-    """Terminal select records attributed (or not attributable) through their own frozen input."""
-    if buddy_id is None:
-        attribution = (f"json_extract({_VALID_REQUESTED}, '$.routerBuddyId') IS NULL"
-                       " AND (json_extract(" + _VALID_REQUESTED + ",'$.routerCalled') IS NULL"
-                       " OR json_extract(" + _VALID_REQUESTED + ",'$.routerCalled')!=0)"
-                       " AND (json_extract(" + _VALID_REQUESTED + ",'$.routingBasis.candidateCount') IS NULL"
-                       " OR json_extract(" + _VALID_REQUESTED + ",'$.routingBasis.candidateCount')!=0)")
-        values: tuple = ()
-    else:
-        attribution = f"json_extract({_VALID_REQUESTED}, '$.routerBuddyId')=?"
-        values = (buddy_id,)
-    rows = connection.execute(
-        "SELECT e.seq AS event_seq, e.kind AS kind, e.created_at AS at, e.payload_json AS event_payload,"
-        " r.decision_id AS decision_id, r.request_id AS request_id, r.task_id AS task_id,"
-        " r.attempt_id AS attempt_id, r.generation AS generation, r.requested_json AS requested_json,"
-        " r.output_json AS output_json, a.result_json AS receipt_json"
-        " FROM events e JOIN decision_requests r"
-        f" ON r.decision_id=json_extract({_VALID_EVENT_PAYLOAD}, '$.decisionId')"
-        " LEFT JOIN attempts a ON a.attempt_id=r.attempt_id AND a.task_id=r.task_id AND a.generation=r.generation"
-        f" WHERE e.kind IN {_RECORD_KIND_LITERALS} AND r.kind='select' AND {attribution}"
-        " ORDER BY e.seq", values)
-    entries = []
-    for row in rows:
-        try:
-            requested = json.loads(row["requested_json"]) if row["requested_json"] else {}
-            output = json.loads(row["output_json"]) if row["output_json"] else {}
-        except ValueError:
-            requested, output = {}, {}
-        # The request output may have been replaced by a late, fenced result; the
-        # immutable receipt wins where one exists.
-        try:
-            receipt = json.loads(row["receipt_json"]) if row["receipt_json"] else None
-        except ValueError:
-            receipt = None
-        try:
-            event_payload = json.loads(row["event_payload"]) if row["event_payload"] else {}
-        except ValueError:
-            event_payload = {}
-        entries.append({"row": row, "requested": requested if isinstance(requested, dict) else {},
-                        "output": output if isinstance(output, dict) else {},
-                        "receipt": receipt if isinstance(receipt, dict) else None,
-                        "eventPayload": event_payload if isinstance(event_payload, dict) else {}})
+        entries.append({"seq": int(row["event_seq"]), "at": row["recorded_at"],
+                        "outcome": row["outcome"], "plane": row["plane"],
+                        "requestId": row["request_id"], "routerIndex": row["router_index"],
+                        "phase": row["phase"], "taskId": row["task_id"],
+                        "attemptId": row["attempt_id"], "code": row["code"]})
     return entries
 
 
 def buddy_timeline(connection, *, buddy_id: str) -> list[dict]:
-    """One buddy's merged outcome timeline: recorded facts plus pre-list records.
-
-    Old records are deduplicated against facts by request identity, so a request the
-    new facts already recorded is never counted twice. Each entry names its source;
-    entries with an unprovable nature are carried as ``unknown`` instead of being
-    counted as an answer, a no-answer or a model rejection.
-    """
+    """One buddy's outcome timeline from durable Router outcome receipts."""
     if not isinstance(buddy_id, str) or not IDENTIFIER_PATTERN.fullmatch(buddy_id):
         raise BoardError("INVALID_ARGUMENT", "buddy_id must be a buddyId")
-    facts = _fact_entries(connection, buddy_id)
-    seen_requests = {entry["requestId"] for entry in facts if entry["requestId"] is not None}
-    seen_attempts = {entry["attemptId"] for entry in facts if entry["attemptId"] is not None}
-    timeline = list(facts)
-    for entry in _record_rows(connection, buddy_id):
-        row = entry["row"]
-        if row["request_id"] in seen_requests or (row["attempt_id"] and row["attempt_id"] in seen_attempts):
-            continue
-        outcome, code = _classify_record(row["kind"], entry["output"], entry["receipt"], entry['eventPayload'])
-        if outcome == "changed" or outcome == "neutral":
-            continue
-        phase = "preflight" if not row["attempt_id"] else "runtime"
-        timeline.append({"source": "record", "seq": int(row["event_seq"]), "at": row["at"],
-                         "outcome": outcome, "decisionId": row["decision_id"],
-                         "requestId": row["request_id"], "taskId": row["task_id"],
-                         "attemptId": row["attempt_id"], "phase": phase, "code": code,
-                         "kind": row["kind"]})
-    timeline.sort(key=lambda entry: entry["seq"])
-    return timeline
-
-
-def unattributed_records(connection) -> list[dict]:
-    """Terminal select records whose Router attribution or nature is not provable.
-
-    These are reported separately and never guessed onto the current list's first
-    item or any other buddy.
-    """
-    entries = []
-    for entry in _record_rows(connection, None):
-        row = entry["row"]
-        outcome, code = _classify_record(row["kind"], entry["output"], entry["receipt"], entry['eventPayload'])
-        entries.append({"source": "record", "seq": int(row["event_seq"]), "at": row["at"],
-                        "outcome": outcome, "decisionId": row["decision_id"],
-                        "requestId": row["request_id"], "taskId": row["task_id"],
-                        "attemptId": row["attempt_id"], "code": code, "kind": row["kind"]})
-    return entries
+    return _fact_entries(connection, buddy_id)
 
 
 def active_executions(connection, *, buddy_id: str) -> list[dict]:
@@ -409,4 +247,4 @@ def router_state(connection, *, buddy_id: str, interval_seconds: int, now: str |
 
 
 __all__ = ["ACTIVE_ATTEMPT_STATES", "OUTCOMES", "PLANES", "active_executions",
-           "buddy_timeline", "record_outcome", "router_state", "summarize", "unattributed_records"]
+           "buddy_timeline", "record_outcome", "router_state", "summarize"]

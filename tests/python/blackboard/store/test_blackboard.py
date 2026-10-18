@@ -325,7 +325,7 @@ class TestCrashWindows(BoardTestCase):
         board.submit_execution(requestId="crash-pre", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "a" * 32)
-        board.store.release_execution(claim["claim"]["attempt"]["attemptId"])
+        board.store.release_execution(claim["claim"]["attempt"]["attemptId"], reason="execution-process-not-created")
         task = client.get(runId=claim["claim"]["task"]["runId"])
         self.assertEqual(task["status"], "failed")
         self.assertEqual(task["attemptState"], "finished")

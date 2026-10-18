@@ -28,7 +28,7 @@ class ReceiptStopTests(WorkflowTestCase):
         run = self.submit(board)
         claim = self.claim(board)["claim"]["attempt"]
         board.call("workflow_cancel", {"runId": run["runId"], "commandId": "cancel", **self.control(run)})
-        board.store.release_execution(({'attemptId': claim['attemptId'], 'generation': claim['generation'], 'nonce': NONCE, 'evidence': {'spawnIntentWritten': False}, 'reason': 'owner never spawned'})["attemptId"])
+        board.store.release_execution(({'attemptId': claim['attemptId'], 'generation': claim['generation'], 'nonce': NONCE, 'evidence': {'spawnIntentWritten': False}, 'reason': 'owner never spawned'})["attemptId"], reason="execution-process-not-created")
         view = board.call("workflow_get", {"runId": run["runId"], "includeAudit": True})
         self.assertEqual(view["state"], "cancelled")
         self.assertEqual(view["task"]["status"], "cancelled")

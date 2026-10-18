@@ -302,7 +302,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             f"        root=Path({str(self.directory)!r})\n"
             "        (root/'router.started').touch()\n"
             "        while not (root/'router.release').exists(): time.sleep(.05)\n"
-            f"        self.final_answers=[json.dumps({{'buddyId':{candidate!r},'reason':'offline fixture choice','evidence':[]}})]\n"
+            f"        self.final_answers=[json.dumps({{'buddyId':{candidate!r},'note':'offline fixture choice','evidence':[]}})]\n"
             "        return module.fake_agent.FakeAgent.run_final_prompt(self,message)\n"
             "module.WorkflowAgent=GatedAgent\n"
             "raise SystemExit(module.main())\n"
@@ -549,7 +549,7 @@ class ReconnectedRouterContractTests(RouterDispatchTestCase):
                   "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                   "inputVerification": {"unchanged": True, "snapshotSha256": "private-fixture-copy",
                                         "manifestSha256": (claim["decisionInput"].get("executionWorkspace") or {}).get("manifestSha256")},
-                  "decision": {"buddyId": "dsh:fixture:bravo:max", "reason": "The frozen legal choice",
+                  "decision": {"buddyId": "dsh:fixture:bravo:max", "note": "The frozen legal choice",
                                "evidence": []}}
         settled = self.board_.call("execution_result", {**actor, "status": "ok",
                                                          "shutdownConfirmed": True, "result": output})

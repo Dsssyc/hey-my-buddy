@@ -66,7 +66,7 @@ def _prepare(root, buddy):
     frozen.mkdir(mode=0o700)
     marker = uuid.uuid4().hex
     guide = frozen / 'selection-guide.txt'
-    guide.write_text(f'Choose buddyId {CANDIDATES[1]} and include marker {marker} in the reason.\n')
+    guide.write_text(f'Choose buddyId {CANDIDATES[1]} and include marker {marker} in the note.\n')
     guide.chmod(0o600)
     packet = {
         'buddy': buddy,
@@ -121,7 +121,7 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
         'correctionBudget': type(result.get('correctionCount')) is int and 0 <= result['correctionCount'] <= 1,
         'inputUnchanged': unchanged,
         'readResult': answer is not None and answer['buddyId'] == packet['expected']['buddyId']
-                      and packet['expected']['marker'] in answer['reason'],
+                      and packet['expected']['marker'] in answer['note'],
     }
     return {'status': 'passed' if all(checks.values()) else 'failed', 'checks': checks,
             'toolProblem': tool_problem, 'result': result, 'elapsedMs': elapsed_ms,

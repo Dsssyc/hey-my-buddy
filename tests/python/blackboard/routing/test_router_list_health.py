@@ -14,7 +14,7 @@ import unittest
 from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 
-from hey_my_buddy.blackboard.routing import router, router_history
+from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
 
 A = "dsh:fixture:alpha:max"
@@ -78,7 +78,7 @@ class RouterListHealthTestCase(BoardTestCase):
             return events, receipts
 
     def add_legacy_record(self, decision, *, buddy_id=None, kind="decision.failed", code="timeout",
-                          at=T0, receipt=None, output=None, candidates=3):
+                          at=T0, receipt=None, output=None, candidates=3, dispatched=False):
         """One pre-list routing record: its own frozen input, terminal event and receipt."""
         task_id = attempt_id = None
         if receipt is not None:
@@ -95,15 +95,24 @@ class RouterListHealthTestCase(BoardTestCase):
                      "routingBasis": {"candidateCount": candidates}}
         with self.db.write() as db:
             db.execute(
-                "INSERT INTO evaluation_decisions(decision_id,status,task,buddy_id,reason,"
-                "created_at) VALUES(?,?,?,?,?,?)",
-                (decision, "failed", "task", buddy_id, "", at))
+                "INSERT INTO evaluation_decisions(decision_id,status,task,buddy_id,"
+                "created_at) VALUES(?,?,?,?,?)",
+                (decision, "failed", "task", buddy_id, at))
             db.execute(
                 "INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,attempt_id,"
                 "generation,requested_json,output_json,created_at,updated_at)"
                 " VALUES(?,?,'select','digest',?,?,0,?,?,?,?)",
                 (decision, f"legacy-request-{decision}", task_id, attempt_id,
                  canonical_json(requested), canonical_json(output or {}), at, at))
+            if dispatched:
+                router_sequence.freeze_request(db, decision, snapshot={
+                    "facts": {"routerBuddyIds": [buddy_id]}, "baseInput": {}, "inspections": []}, now=at)
+                buddy = db.execute("SELECT buddy_id,harness,provider,model,effort FROM buddies WHERE buddy_id=?",
+                                   (buddy_id,)).fetchone()
+                router_sequence.reserve_dispatch(db, decision_id=decision, task_id=task_id,
+                                                 router_index=0, buddy={"buddyId": buddy["buddy_id"],
+                                                 **{key: buddy[key] for key in ("harness", "provider", "model", "effort")}},
+                                                 document={}, now=at)
             self.board_.store._append_event(db, kind, task_id=task_id, attempt_id=attempt_id,
                                             payload={"decisionId": decision,
                                                      **({"errorCode": code} if code else {})})
@@ -145,10 +154,10 @@ class OverviewTests(RouterListHealthTestCase):
         # Two settled business requests, each with a bound attempt.
         self.add_legacy_record("dec-r1", buddy_id=A, kind="decision.failed", code="timeout",
                                receipt={"status": "failed", "result": {"status": "error", "code": "timeout"},
-                                        "shutdownConfirmed": True})
+                                        "shutdownConfirmed": True}, dispatched=True)
         self.add_legacy_record("dec-r2", buddy_id=A, kind="decision.failed", code="timeout",
                                receipt={"status": "failed", "result": {"status": "error", "code": "timeout"},
-                                        "shutdownConfirmed": True})
+                                        "shutdownConfirmed": True}, dispatched=True)
         summary = self.state()
         self.assertEqual(summary["sampleCount"], 2)
         self.assertEqual(summary["attemptCount"], 2)
@@ -230,16 +239,16 @@ class PerRouterTests(RouterListHealthTestCase):
         self.assertEqual(entry["windowFailureCount"], 20)
         self.assertEqual(entry["windowBudgetExhaustedCount"], 20)
 
-    def test_window_entries_keep_unknown_nature_out_of_success_and_failure(self):
+    def test_window_entries_count_only_recorded_outcomes(self):
         self.add_buddy(A)
         self.set_settings(ids=[A])
-        # A legacy record whose receipt proves nothing stays unknown on the timeline.
+        # A decision record without a Router outcome receipt does not enter the timeline.
         self.add_legacy_record("dec-unknown", buddy_id=A, kind="decision.completed",
                                receipt={"status": "failed", "result": {"status": "error"},
                                         "shutdownConfirmed": True})
         self.record(A, code="timeout", index=0)
         entry = self.entry(self.state(), A)
-        self.assertEqual(entry["windowEntries"], 2)
+        self.assertEqual(entry["windowEntries"], 1)
         self.assertEqual(entry["windowFailureCount"], 1)
         self.assertEqual(entry["windowAnsweredCount"], 0)
         self.assertEqual(entry["consecutiveNoAnswers"], 1)
@@ -304,7 +313,7 @@ class CurrentRoleTests(RouterListHealthTestCase):
         self.set_settings(ids=[A, B, C], mode="fast")
         summary = self.state()
         self.assertEqual(summary["currentRouterBuddyId"], C)
-        self.assertEqual(self.entry(summary, A)["code"], "router-unavailable")
+        self.assertEqual(self.entry(summary, A)["code"], "router-disabled")
         self.assertEqual(self.entry(summary, B)["code"], "router-no-tool-unsupported")
         self.assertTrue(self.entry(summary, C)["eligible"])
 
@@ -319,21 +328,21 @@ class CurrentRoleTests(RouterListHealthTestCase):
 
 
 class AttributionTests(RouterListHealthTestCase):
-    def test_old_records_keep_their_own_frozen_attribution(self):
+    def test_decision_records_do_not_create_outcome_facts(self):
         self.add_buddy(A)
         self.add_buddy(B)
         self.set_settings(ids=[A, B])
-        # A pre-list record named B; it must never be counted as today's first item.
+        # An old decision record is not a Router outcome receipt.
         self.add_legacy_record("dec-old", buddy_id=B, kind="decision.failed", code="timeout",
                                receipt={"status": "failed", "result": {"status": "error", "code": "timeout"},
                                         "shutdownConfirmed": True})
         summary = self.state()
-        self.assertEqual(self.entry(summary, B)["noAnswerCount"], 1)
-        self.assertEqual(self.entry(summary, B)["consecutiveNoAnswers"], 1)
+        self.assertEqual(self.entry(summary, B)["noAnswerCount"], 0)
+        self.assertEqual(self.entry(summary, B)["consecutiveNoAnswers"], 0)
         self.assertEqual(self.entry(summary, A)["noAnswerCount"], 0)
-        self.assertEqual(summary["unattributedCount"], 0)
+        self.assertNotIn("unattributed", summary)
 
-    def test_unattributable_records_are_listed_separately_and_counted_nowhere(self):
+    def test_unattributable_decisions_do_not_affect_buddy_history(self):
         self.add_buddy(A)
         self.set_settings(ids=[A])
         # No frozen routerBuddyId although a model ran: attribution is unprovable.
@@ -342,14 +351,12 @@ class AttributionTests(RouterListHealthTestCase):
                                         "shutdownConfirmed": True})
         self.record(A, code="timeout", index=0)
         summary = self.state()
-        self.assertEqual(summary["unattributedCount"], 1)
-        self.assertEqual(summary["unattributed"][0]["decisionId"], "dec-mystery")
-        self.assertEqual(summary["unattributed"][0]["outcome"], "no_answer")
+        self.assertNotIn("unattributedCount", summary)
         # Neither the buddy's counts nor the total claim it.
         self.assertEqual(self.entry(summary, A)["noAnswerCount"], 1)
         self.assertEqual(self.entry(summary, A)["windowEntries"], 1)
 
-    def test_effective_abstention_stays_an_answer_for_its_own_buddy(self):
+    def test_accepted_abstention_requires_an_outcome_receipt(self):
         self.add_buddy(A)
         self.add_buddy(B)
         self.set_settings(ids=[A, B])
@@ -359,7 +366,7 @@ class AttributionTests(RouterListHealthTestCase):
                                                                     "reason": "insufficient evidence",
                                                                     "evidence": []}})
         summary = self.state()
-        self.assertEqual(self.entry(summary, A)["answeredCount"], 1)
+        self.assertEqual(self.entry(summary, A)["answeredCount"], 0)
         self.assertEqual(self.entry(summary, A)["consecutiveNoAnswers"], 0)
         self.assertEqual(self.entry(summary, B)["consecutiveNoAnswers"], 1)
 

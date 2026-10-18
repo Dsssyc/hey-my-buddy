@@ -65,7 +65,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
                 board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': output})
                 view = self.decision(board, requested['decisionId'])
                 self.assertEqual(view['status'], 'needs-host' if expected else 'completed')
-                self.assertEqual(view.get('error'), expected)
+                self.assertEqual((view['reason'] or {}).get('code'), expected)
                 self.assertEqual(view['selectedBuddy'] is None, expected is not None)
                 with board.store.db.read() as connection:
                     self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 1)
@@ -89,7 +89,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
                 board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': output})
                 view = self.decision(board, requested['decisionId'])
                 self.assertEqual(view['status'], 'needs-host')
-                self.assertEqual(view['error'], 'router-tool-evidence-unverified')
+                self.assertEqual(view['reason']['code'], 'router-tool-evidence-unverified')
                 self.assertIsNone(view['selectedBuddy'])
                 board.close()
                 self._stack.remove(board)

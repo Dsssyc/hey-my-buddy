@@ -35,7 +35,7 @@ class DirectAdmissionTests(BoardTestCase):
         refused = board.store.admit_execution("o" * 32, task_id=third["runId"])
         self.assertIsNone(refused["claim"])
         self.assertEqual(refused["reason"], "capacity")
-        board.store.release_execution(one["attempt"]["attemptId"])
+        board.store.release_execution(one["attempt"]["attemptId"], reason="execution-process-not-created")
         self.assertEqual(board.store.admit_execution("p" * 32, task_id=third["runId"])["claim"]["task"]["runId"],
                          third["runId"])
 

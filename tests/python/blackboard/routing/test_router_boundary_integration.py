@@ -28,7 +28,7 @@ BOUNDARY_FIELDS = {"kind", "code", "reason", "routerTrials", "candidates", "fact
 class BoundaryTemplateIdentityTests(unittest.TestCase):
     def test_removing_generated_notes_keeps_existing_command_ids(self):
         boundary = build_boundary(
-            kind="router-unavailable", code=None, reason="Router unavailable",
+            kind="router-unavailable", code=None, reason={"code": "provider-error", "params": {}},
             candidates=[{"buddyId": "buddy-stable", "harness": "dsh", "provider": "fixture",
                          "model": "alpha", "effort": "max"}],
             facts={}, router_trials=[], retry_at="2026-01-01T00:10:00.000Z",
@@ -92,7 +92,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         request, first, second = self.finish_all()
         result = self.boundary(request["decisionId"])
         self.assertEqual(result["kind"], "router-unavailable")
-        self.assertIn("取消后重新提交没有用", result["reason"])
+        self.assertEqual(result["reason"], {"code": "provider-error", "params": {}})
         self.assert_packet(result)
         self.assertEqual(result["retryAt"], "2026-01-01T00:10:00.000Z")
         for index, claim in enumerate((first, second)):
@@ -115,11 +115,11 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.report(first, self.failure(first), status="failed")
         second = self.next_claim(request)
         answer = self.answer(second, buddy_id=None)
-        answer["decision"]["reason"] = "No justified choice within the frozen candidates"
+        answer["decision"]["note"] = "No justified choice within the frozen candidates"
         self.report(second, answer)
         boundary = self.boundary(request["decisionId"])
         self.assertEqual(boundary["kind"], "router-abstained")
-        self.assertEqual(boundary["reason"], answer["decision"]["reason"])
+        self.assertEqual(boundary["reason"], {"code": "router-abstained", "params": {}})
         self.assertEqual(boundary["retryAt"], self.clock.value)
         self.assertEqual(boundary["routerTrials"][1]["outcome"], "answered")
         self.assertEqual(boundary["routerTrials"][1]["consecutiveNoAnswers"], 0)
@@ -129,7 +129,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
     def test_invalid_null_is_no_answer_and_never_model_reason_abstention(self):
         request, first = self.start()
         answer = self.answer(first, buddy_id=None)
-        answer["decision"]["reason"] = "Router unavailable: model wording is not program classification"
+        answer["decision"]["note"] = "Router unavailable: model wording is not program classification"
         answer["usage"]["toolCalls"] = None
         self.report(first, answer)
         second = self.next_claim(request)
@@ -153,12 +153,11 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         request, first = self.start(micro_task=True)
         self.report(first, self.answer(first))
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE workflow_routes SET state='needs-host',reason='Cached execution validation changed' WHERE decision_id=?",
+            db.execute("UPDATE workflow_routes SET state='needs-host' WHERE decision_id=?",
                        (request["decisionId"],))
         boundary = self.boundary(request["decisionId"])
         self.assertEqual(boundary["kind"], "routing-changed")
-        self.assertIn("Cached execution validation changed", boundary["reason"])
-        self.assertNotIn("The frozen legal choice", boundary["reason"])
+        self.assertIsNone(boundary["reason"])
         self.assertEqual(boundary["routerTrials"][0]["outcome"], "answered")
 
     def test_recorded_quota_reset_is_a_known_retry_time_without_a_new_fuse(self):
@@ -361,7 +360,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         first = self.boundary(request["decisionId"])["routerTrials"][0]
         self.assertEqual(first["phase"], "preflight")
         self.assertEqual(first["outcome"], "no_answer")
-        self.assertEqual(first["code"], "router-unavailable")
+        self.assertEqual(first["code"], "router-disabled")
         self.assertEqual(first["consecutiveNoAnswers"], 1)
         self.assertIsNone(first["attemptId"])
         self.assertIsNone(first["usage"])
@@ -597,6 +596,19 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
             self.assertEqual(choice["params"]["helperPolicy"], "keep")
         proxy = next(item for item in root["pendingRequests"] if (item.get("proxy") or {}).get("runId") == leaf["runId"])
         self.assertEqual(proxy["routingBoundary"], leaf["routing"]["routingBoundary"])
+        self.assertEqual(proxy["decisionId"], leaf["routing"]["decisionId"])
+        self.assertEqual(proxy["reason"], leaf["activeRequest"]["reason"])
+        with self.board_.store.db.read() as db:
+            source, copied = (db.execute(
+                "SELECT summary,reason_code,reason_params_json,decision_id,payload_json"
+                " FROM workflow_requests WHERE request_id=?", (request_id,),
+            ).fetchone() for request_id in (leaf["activeRequest"]["requestId"], proxy["requestId"]))
+            self.assertEqual(source["decision_id"], leaf["routing"]["decisionId"])
+            self.assertEqual(copied["decision_id"], source["decision_id"])
+            self.assertIsNone(copied["summary"])
+            self.assertIsNone(copied["reason_code"])
+            self.assertIsNone(copied["reason_params_json"])
+            self.assertEqual(json.loads(copied["payload_json"])["origin"]["runId"], leaf["runId"])
         boundary = leaf["routing"]["routingBoundary"]
         chosen = boundary["commands"]["continue"]["choices"][0]["params"]
         self.assertEqual(chosen["runId"], root["runId"])
@@ -656,20 +668,24 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         claim = admit_board(self.board_, {'workerId': 'w-route', 'claimRequestId': 'router-abstain', 'nonce': nonce, 'runId': view['routing']['taskId']})["claim"]
         answer = self.answer(claim, buddy_id=None)
         reason = "The frozen packet does not justify choosing a buddy"
-        answer["decision"]["reason"] = reason
+        answer["decision"]["note"] = reason
         self.board_.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'shutdownConfirmed': True, 'result': answer})
         current = self.board_.call("workflow_get", {"runId": view["runId"]})
         boundary = current["routing"]["routingBoundary"]
         self.assertEqual(boundary["kind"], "router-abstained")
-        self.assertEqual(boundary["reason"], reason)
-        self.assertEqual(current["activeRequest"]["summary"], reason)
+        self.assertEqual(boundary["reason"], {"code": "router-abstained", "params": {}})
+        self.assertIsNone(current["activeRequest"]["summary"])
+        self.assertEqual(current["activeRequest"]["reason"], boundary["reason"])
         self.assertEqual(current["activeRequest"]["routingBoundary"], boundary)
         self.assertEqual(boundary["retryAt"], self.clock.value)
         with self.board_.store.db.read() as db:
             payload = json.loads(db.execute("SELECT payload_json FROM workflow_requests WHERE request_id=?",
                                            (current["activeRequest"]["requestId"],)).fetchone()[0])
-        self.assertEqual(payload["routingBoundary"]["kind"], "router-abstained")
-        self.assertEqual(payload["routingBoundary"]["reason"], reason)
+        self.assertEqual(payload, {"source": "routing"})
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT decision_id FROM workflow_requests WHERE request_id=?",
+                                        (current["activeRequest"]["requestId"],)).fetchone()[0],
+                             view["routing"]["decisionId"])
 
     def test_explicit_reroute_after_known_retry_time_continues_same_micro_task_without_model(self):
         with self.board_.store.db.write() as db:

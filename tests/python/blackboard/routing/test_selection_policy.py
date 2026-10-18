@@ -50,7 +50,7 @@ class PolicyFactsTests(unittest.TestCase):
         self.assertEqual(check["userPreference"], "alternative")
         self.assertEqual(check["hardConstraints"], {})
         from hey_my_buddy.blackboard.routing import router
-        answer = {"buddyId": ZCODE_ID, "reason": "file evidence supports another route", "evidence": []}
+        answer = {"buddyId": ZCODE_ID, "note": "file evidence supports another route", "evidence": []}
         self.assertEqual(router.validate_answer(answer, [DSH_ID, ZCODE_ID]), answer)
 
     def test_no_user_preference_is_none_and_a_preferred_choice_is_matched(self):
@@ -84,7 +84,7 @@ class PolicyFactsTests(unittest.TestCase):
 
 class RouterAnswerTests(unittest.TestCase):
     def answer(self, **changes):
-        return {"buddyId": DSH_ID, "reason": "Read the frozen checkout", "evidence": [], **changes}
+        return {"buddyId": DSH_ID, "note": "Read the frozen checkout", "evidence": [], **changes}
 
     def validate(self, value):
         from hey_my_buddy.blackboard.routing import router
@@ -118,21 +118,22 @@ class RouterAnswerTests(unittest.TestCase):
                 self.assert_code("router-out-of-bounds", self.answer(buddyId=value))
 
     def test_extra_legacy_fields_and_missing_required_fields_are_rejected(self):
+        self.assert_code("answer-shape", {"buddyId": DSH_ID, "reason": "legacy", "evidence": []})
         for key in ("policyCheck", "support", "evidenceIds", "diagnostics"):
             with self.subTest(key=key):
                 self.assert_code("answer-shape", self.answer(**{key: None}))
-        for key in ("buddyId", "reason", "evidence"):
+        for key in ("buddyId", "note", "evidence"):
             answer = self.answer()
             del answer[key]
             self.assert_code("answer-shape", answer)
         for value in (None, [], "{not json", "[]"):
             self.assert_code("answer-invalid-json" if value == "{not json" else "answer-shape", value)
 
-    def test_reason_and_reference_shape_are_bounded(self):
+    def test_note_and_reference_shape_are_bounded(self):
         from hey_my_buddy.blackboard.routing import router
-        for value in (None, "", "  ", 1, "x" * (router.MAX_REASON + 1)):
-            with self.subTest(reason=value):
-                self.assert_code("answer-shape", self.answer(reason=value))
+        for value in (None, "", "  ", 1, "x" * (router.MAX_NOTE + 1)):
+            with self.subTest(note=value):
+                self.assert_code("answer-shape", self.answer(note=value))
         invalid = [None, {}, "id", [{"kind": "annotation"}], [{"kind": "annotation", "ref": "a", "extra": 1}],
                    [{"kind": "unknown", "ref": "a"}], [{"kind": "card", "ref": "a"}],
                    [{"kind": "annotation", "ref": ""}], [{"kind": "annotation", "ref": "a\nsecret"}],
@@ -141,7 +142,7 @@ class RouterAnswerTests(unittest.TestCase):
         for value in invalid:
             with self.subTest(evidence=value):
                 self.assert_code("answer-shape", self.answer(evidence=value))
-        self.validate(self.answer(reason="x" * router.MAX_REASON,
+        self.validate(self.answer(note="x" * router.MAX_NOTE,
                                   evidence=[{"kind": "annotation", "ref": "x" * 1024}] * router.MAX_REFERENCES))
 
     def test_file_paths_cannot_escape_checkout(self):
@@ -155,19 +156,19 @@ class RouterAnswerTests(unittest.TestCase):
         from hey_my_buddy.buddy.roles.structured_call import correction_code, schema_errors, valid_answer
         schema = router.answer_schema([DSH_ID, ZCODE_ID])
         self.assertEqual(schema["properties"]["buddyId"]["enum"], [DSH_ID, ZCODE_ID, None])
-        self.assertEqual(set(schema["properties"]), {"buddyId", "reason", "evidence"})
+        self.assertEqual(set(schema["properties"]), {"buddyId", "note", "evidence"})
         self.assertTrue(valid_answer(self.answer(), schema))
         self.assertTrue(valid_answer(self.answer(buddyId=None), schema))
         self.assertFalse(valid_answer(self.answer(buddyId="ghost"), schema))
         self.assertFalse(valid_answer(self.answer(policyCheck={}), schema))
-        self.assertFalse(valid_answer(self.answer(reason=""), schema))
+        self.assertFalse(valid_answer(self.answer(note=""), schema))
         self.assertFalse(valid_answer(self.answer(evidence=[{"kind": "card", "ref": "retired"}]), schema))
         self.assertFalse(valid_answer(self.answer(evidence=[{"kind": "web", "ref": "x"}]), schema))
         self.assertFalse(valid_answer(self.answer(buddyId=True), schema))
         self.assertFalse(valid_answer("not json", schema))
         # Out-of-bounds choices are never format-corrected; shape errors are.
         self.assertIsNone(correction_code(self.answer(buddyId="ghost"), schema))
-        self.assertEqual(correction_code(self.answer(reason=""), schema), "answer-shape")
+        self.assertEqual(correction_code(self.answer(note=""), schema), "answer-shape")
         self.assertEqual(correction_code("{", schema), "answer-invalid-json")
         self.assertIsNone(correction_code(self.answer(), schema))
         with self.assertRaises(ValueError):

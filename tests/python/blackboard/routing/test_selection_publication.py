@@ -1,6 +1,9 @@
 """Current selected-buddy bounds through real claim and publication transactions."""
 from admission import admit_execution
 import json
+from unittest.mock import patch
+
+from hey_my_buddy.errors import BoardError
 
 from blackboard.routing.test_router_dispatch import RouterDispatchTestCase, A, B, C
 import blackboard.routing.test_router_failover_integration as _failover
@@ -61,7 +64,7 @@ class SelectionPublicationTests(RouterDispatchTestCase):
             self.assertEqual(db.execute("SELECT state FROM workflow_routes").fetchone()[0], "pending")
             events = [json.loads(r[0]) for r in db.execute("SELECT payload_json FROM events WHERE kind='decision.selection_rerouted'")]
             self.assertEqual(len(events), 1)
-            self.assertIn(reason, events[0]["reason"])
+            self.assertNotIn("reason", events[0])
         self.report(second, self.answer(second, buddy_id=C))
         self.assertEqual(self.decision_row(request["decisionId"])["status"], "completed")
         self.assertEqual(self.decision_row(request["decisionId"])["buddyId"], C)
@@ -94,6 +97,18 @@ class SelectionPublicationTests(RouterDispatchTestCase):
             self.assertEqual(db.execute("SELECT shutdown_confirmed FROM attempts WHERE attempt_id=?",
                                         (first["attempt"]["attemptId"],)).fetchone()[0], 0)
 
+    def test_selection_retry_dispatch_limit_retains_its_size_facts(self):
+        request, first = self.start(three=True, micro_task=True)
+        self.invalidate(B, "disabled")
+        coordinator = self.board_.store.decisions
+        with patch.object(coordinator, "_queue_router_dispatch", side_effect=BoardError(
+                "router-input-too-large", "dispatch preparation diagnostic", bytes=200, limit=100)):
+            response = self.report(first, self.answer(first, buddy_id=B))
+        self.assertTrue(response["committed"])
+        view = self.decision_row(request["decisionId"])
+        self.assertEqual(view["reason"], {"code": "router-input-too-large", "params": {"bytes": 200, "limit": 100}})
+        self.assertIsNone(view["note"])
+
     def test_second_invalid_selection_reaches_host_with_reason(self):
         request, first = self.start(three=True, micro_task=True)
         self.invalidate(B, "disabled")
@@ -104,10 +119,9 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         response = self.report(second, self.answer(second, buddy_id=C))
         self.assertEqual(response["decision"]["status"], "needs-host", response)
         view = self.decision_row(request["decisionId"])
-        self.assertIn("after rerouting", view["reason"])
-        self.assertIn("excluded by the user", view["reason"])
+        self.assertEqual(view["reason"], {"code": "router-out-of-bounds", "params": {"bound": "excluded"}})
         self.assertEqual(view["routingBoundary"]["kind"], "routing-changed")
-        self.assertIn("excluded by the user", view["routingBoundary"]["reason"])
+        self.assertEqual(view["routingBoundary"]["reason"], view["reason"])
         self.assertEqual([p["buddyId"] for p in view["routingBoundary"]["candidates"]], [A, C])
         self.assertEqual([t["taskId"] for t in view["routerTrials"] if t["attemptId"]], [second["task"]["taskId"]])
         with self.board_.store.db.read() as db:
@@ -120,6 +134,19 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         view = self.decision_row(request["decisionId"])
         self.assertEqual((view["status"], view["buddyId"]), ("completed", B))
         self.assertEqual(len(self.tasks()), 1)
+
+    def test_empty_retry_keeps_the_triggering_bound_and_health_classification(self):
+        request, first = self.start(three=True, micro_task=True)
+        for buddy in (A, B, C):
+            self.invalidate(buddy, "disabled")
+        response = self.report(first, self.answer(first, buddy_id=B))
+        self.assertTrue(response["committed"])
+        view = self.board_.call("selection_get", {"decisionId": request["decisionId"], "includeAudit": True})["decision"]
+        self.assertEqual(view["reason"], {"code":"router-out-of-bounds", "params":{"bound":"disabled"}})
+        self.assertEqual(view["output"]["code"], "router-out-of-bounds")
+        health = self.board_.store.decisions.health_summary()
+        self.assertEqual(health["boundsRejectedCount"], 1)
+        self.assertEqual(health["failureCount"], 0)
 
     def test_sole_candidate_after_retry_does_not_attribute_old_router_answer(self):
         request, first = self.start(three=True)

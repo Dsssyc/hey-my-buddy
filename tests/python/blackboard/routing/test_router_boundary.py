@@ -11,17 +11,18 @@ RETRY = "2026-01-01T00:10:00.000Z"
 
 class RouterBoundaryTests(unittest.TestCase):
     def build(self, **changes):
-        return build_boundary(**(dict(kind="router-unavailable", code="router-unavailable",
-            reason="Router 不可用：全部没有答案", candidates=[CANDIDATE], facts={"policyFacts": {"candidateCount": 1}},
+        return build_boundary(**(dict(kind="router-unavailable", code="router-no-answer",
+            reason={"code": "router-no-answer", "params": {}}, candidates=[CANDIDATE], facts={"policyFacts": {"candidateCount": 1}},
             router_trials=[{"buddyId": "router-a", "outcome": "no_answer", "code": "timeout"}],
             retry_at=RETRY, decision_id="dec-1", run_id="run-1", revision=7, shutdown_confirmed=True) | changes))
 
     def test_three_boundary_natures_and_model_reason_remain_distinct(self):
         for kind in ("router-unavailable", "routing-changed", "router-abstained"):
             with self.subTest(kind=kind):
-                result = self.build(kind=kind, reason="原因原文")
+                reason = {"code": "router-no-answer", "params": {}}
+                result = self.build(kind=kind, reason=reason)
                 self.assertEqual(result["kind"], kind)
-                self.assertEqual(result["reason"], "原因原文" if kind == "router-abstained" else "原因原文；取消后重新提交没有用。")
+                self.assertEqual(result["reason"], reason)
                 self.assertEqual(result["userAction"], "settingsChangeOnly")
 
     def test_templates_keep_the_same_micro_task_and_complete_identity_with_supported_parameters(self):

@@ -108,7 +108,7 @@ def result_frame(session_id):
     structured = {"outcome": {"disposition": "completed", "summary": "stream fixture", "remaining": [],
                               "decisions": [], "artifacts": [], "request": None}}
     if "--json-schema" in sys.argv:
-        structured = {"buddyId": "legal", "reason": "Read-only stream fixture", "evidence": []}
+        structured = {"buddyId": "legal", "note": "Read-only stream fixture", "evidence": []}
     return {"type": "result", "subtype": "success", "is_error": False, "session_id": session_id,
             "structured_output": structured}
 

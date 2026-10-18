@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from hey_my_buddy.blackboard.routing.decision import SOLE_CANDIDATE_REASON
+SOLE_CANDIDATE_REASON = {"code": "single-candidate", "params": {}}
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.routing.test_decision import (
     DecisionTestCase,
@@ -73,7 +73,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         # program has more than one candidate to compare.
         multi = self.request(board, request_id="pick-multi-no-router")
         self.assertEqual(multi["status"], "needs-host")
-        self.assertIn("尚未设置 Router", self.decision(board, multi["decisionId"])["reason"])
+        self.assertEqual(self.decision(board, multi["decisionId"])["reason"]["code"], "router-not-configured")
         self.assertEqual(self.decision(board, multi["decisionId"])["routerProblem"]["code"], "router-not-configured")
 
     def test_selection_source_reads_only_recorded_frozen_facts(self):
@@ -167,7 +167,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         self.run_worker(board)
         completed = self.decision(board, request["decisionId"])
         self.assertEqual(completed["status"], "completed")
-        self.assertIn("mock select chose", completed["reason"])
+        self.assertIn("mock select chose", completed["note"])
         self.readonly_start.assert_called_once()
         task = board.call("task_get", {"runId": request["runId"]})["task"]
         self.assertEqual(task["status"], "completed")
@@ -224,9 +224,8 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 0)
-            route = connection.execute("SELECT state, reason FROM workflow_routes").fetchone()
+            route = connection.execute("SELECT state FROM workflow_routes").fetchone()
             self.assertEqual(route["state"], "resolved")
-            self.assertEqual(route["reason"], SOLE_CANDIDATE_REASON)
             resolved = json.loads(connection.execute(
                 "SELECT payload_json FROM events WHERE kind='workflow.routing_resolved'").fetchone()[0])
         self.assertEqual(resolved["source"], "single-candidate")
@@ -270,7 +269,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         # Settle the first Router answer so the reroute can replace the route.
         pass  # Admission is owned by the service.
         claim = self.claim(board, "router", run_id=submitted["routing"]["taskId"], claim_request_id="router-claim")["claim"]
-        board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 16, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(claim), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': claim['decisionInput']['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': BUDDY_ID, 'reason': 'fixture selection', 'evidence': []}}})
+        board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 16, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(claim), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': claim['decisionInput']['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': BUDDY_ID, "note": 'fixture selection', 'evidence': []}}})
         settled = board.call("workflow_get", {"runId": submitted["runId"]})
         continued = self.continue_run(board, settled, command_id="reroute-unlocked", reroute=True)
         board.store.workflow.prepare_continuation_workspace({"runId": continued["runId"]})
@@ -307,7 +306,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         # The reroute stopped at the Host boundary without a Router call, so its
         # recorded source names the empty candidate set instead of a model choice.
         self.assertEqual(continued["routing"]["source"], "no-candidate")
-        self.assertIn("legal candidate", continued["routing"]["reason"])
+        self.assertEqual(continued["routing"]["reason"]["code"], "no-legal-candidate")
         basis = continued["routing"]["routingBasis"]
         self.assertEqual(basis["candidateCount"], 0)
         self.assertEqual(basis["excludedCount"], 1)
@@ -333,7 +332,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         claim = self.claim(board, "router", run_id=submitted["routing"]["taskId"], claim_request_id="router-claim")["claim"]
         self.assertEqual([buddy["buddyId"] for buddy in claim["decisionInput"]["buddies"]],
                          [BUDDY_ID, SECOND_BUDDY_ID])
-        board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 16, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(claim), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': claim['decisionInput']['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': BUDDY_ID, 'reason': 'fixture selection', 'evidence': []}}})
+        board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 16, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(claim), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': claim['decisionInput']['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': BUDDY_ID, "note": 'fixture selection', 'evidence': []}}})
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["routing"]["status"], "completed")
         self.assertEqual(view["routing"]["source"], "model-selection")

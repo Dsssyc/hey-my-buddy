@@ -1,6 +1,7 @@
 """Cancellation follows owned descendants and preserves honest stop evidence."""
 from __future__ import annotations
 
+import json
 import uuid
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace
@@ -316,15 +317,27 @@ class WorkflowCancellationTests(WorkflowTestCase):
         helper = self.claim(board, claim_request_id="helper-claim", run_id=child)
         attempt = helper["claim"]["attempt"]
         self.cancel(board, parent)
-        board.store.release_execution(({'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'evidence': {'spawnIntentWritten': False}, 'reason': 'no process spawned'})["attemptId"])
+        board.store.release_execution(({'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'evidence': {'spawnIntentWritten': False}, 'reason': 'no process spawned'})["attemptId"], reason="execution-process-not-created")
         with board.store.db.write() as connection:
             task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child,)).fetchone()
             attempt_row = connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (attempt["attemptId"],)).fetchone()
-            board.store.workflow.attempt_released(connection, task=task_row, attempt=attempt_row, now=board.store.now(), reason="no process spawned")
+            board.store.workflow.attempt_released(connection, task=task_row, attempt=attempt_row, now=board.store.now())
         self.assert_cancelled_run(board, child)
         self.assertIn((child, "released"), self.reservations(board))
         self.assertNotIn((parent["runId"], "held"), self.reservations(board))
         self.assertTrue(self.summary(board, parent["runId"])["descendantsConfirmed"])
+        with board.store.db.read() as connection:
+            released = connection.execute(
+                "SELECT kind,payload_json FROM events WHERE attempt_id=?"
+                " AND kind IN ('attempt.released','workflow.attempt_released')",
+                (attempt["attemptId"],),
+            ).fetchall()
+            self.assertEqual([event["kind"] for event in released], ["attempt.released"])
+            self.assertEqual(json.loads(released[0]["payload_json"])["reason"],
+                             {"code": "execution-process-not-created", "params": {}})
+            self.assertIsNone(connection.execute(
+                "SELECT error FROM attempts WHERE attempt_id=?", (attempt["attemptId"],),
+            ).fetchone()["error"])
 
     def test_shutdown_summary_counts_all_descendants_but_bounds_ids(self):
         board, _, parent, _ = self.parent_and_child(kind="worktree")

@@ -82,7 +82,7 @@ class RoutingModesTests(BoardTestCase):
         self.assertEqual(resolution.facts['routingMode'], 'review')
         self.assertNotIn('fallback', resolution.facts)
         self.assertEqual(resolution.problem['code'], 'router-not-configured')
-        self.assertTrue(resolution.problem['reason'].startswith('Router 不可用：'))
+        self.assertEqual(resolution.problem, {'code': 'router-not-configured'})
 
     def test_claim_rechecks_review_without_charging_another_model_service(self):
         board = self.board()
@@ -96,7 +96,7 @@ class RoutingModesTests(BoardTestCase):
         self.assertIsNone(claim)
         decision = board.call('selection_get', {'decisionId': result['decisionId'], 'includeAudit': True})['decision']
         self.assertEqual(decision['status'], 'needs-host')
-        self.assertEqual(decision['output']['code'], 'router-unavailable')
+        self.assertEqual(decision['output']['code'], 'router-list-exhausted')
         self.assertEqual(decision['routingMode'], 'review')
         with board.store.db.read() as connection:
             import json
@@ -152,16 +152,16 @@ class RoutingModesTests(BoardTestCase):
             facts = claim_tool_receipt(claim, count if type(count) is int else 0)
             if proof is None:
                 facts.pop('toolEvidence')
-            board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**facts, 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'zeroToolVerified': proof, 'usage': {'elapsedMs': 100, 'toolCalls': count}, 'decision': {'buddyId': BUDDY_ID, 'reason': 'candidate match', 'evidence': []}}})
+            board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**facts, 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'zeroToolVerified': proof, 'usage': {'elapsedMs': 100, 'toolCalls': count}, 'decision': {'buddyId': BUDDY_ID, 'note': 'candidate match', 'evidence': []}}})
             decision = board.call('selection_get', {'decisionId': result['decisionId']})['decision']
             self.assertEqual(decision['status'], expected)
             if expected == 'needs-host':
-                self.assertEqual(decision['error'], code)
+                self.assertEqual(decision['reason']['code'], code)
 
 
     def test_file_evidence_is_rejected_even_if_schema_was_bypassed(self):
         with self.assertRaises(BoardError) as caught:
-            router.validate_answer({'buddyId': 'legal', 'reason': 'x', 'evidence': [{'kind': 'file', 'ref': 'src/a.py'}]}, ['legal'], 'fast')
+            router.validate_answer({'buddyId': 'legal', 'note': 'x', 'evidence': [{'kind': 'file', 'ref': 'src/a.py'}]}, ['legal'], 'fast')
         self.assertEqual(caught.exception.code, 'router-evidence-out-of-bounds')
 
     def test_fast_prompt_drops_repository_and_history_payloads(self):

@@ -74,7 +74,7 @@ def check_code(where: str, code: str, parameters: set[str], codes: dict[str, lis
     if declared is None:
         violations.append(f"{where}: reason code {code!r} is not registered in reason-codes.json")
         return
-    if set(declared) != parameters:
+    if not parameters <= set(declared):
         violations.append(
             f"{where}: reason code {code!r} declares parameters {sorted(declared)}, "
             f"but the call names {sorted(parameters)}"
@@ -151,6 +151,15 @@ class ReasonTests(unittest.TestCase):
 
 
 class ReasonCodesTableTests(unittest.TestCase):
+    def test_dispatch_errors_are_parameters_not_reason_codes(self):
+        codes = declared_codes()
+        for code in ("BUDDY_UNAVAILABLE", "CATALOG_UNAVAILABLE", "HARNESS_UNAVAILABLE", "INVALID_ARGUMENT",
+                     "INVALID_BUDDY", "PERMISSION_DENIED", "UNSUPPORTED_ADAPTER", "UNSUPPORTED_CAPABILITY",
+                     "UNSUPPORTED_HARNESS"):
+            self.assertNotIn(code, codes)
+        self.assertIn("errorCode", codes["dispatch.buddy-rejected"])
+        self.assertIn("cause", codes["dispatch.buddy-rejected"])
+
     def test_the_table_maps_codes_to_unique_parameter_names(self):
         codes = declared_codes()
         self.assertIsInstance(codes, dict)
@@ -167,6 +176,39 @@ class ReasonCodesTableTests(unittest.TestCase):
 class SourceReasonTests(unittest.TestCase):
     def test_every_source_call_matches_the_declared_table(self):
         self.assertEqual(reason_violations(SOURCE, declared_codes()), [])
+
+
+    def test_finite_router_and_release_producers_use_registered_codes(self):
+        codes = declared_codes()
+        routing = SOURCE / "blackboard" / "routing"
+        for path in (routing / "router.py", routing / "decision.py",
+                     SOURCE / "blackboard" / "service" / "execution_scheduler.py",
+                     SOURCE / "blackboard" / "tasks" / "interruption.py"):
+            module = ast.parse(path.read_text(encoding="utf-8"))
+            produced = []
+            for node in ast.walk(module):
+                if isinstance(node, ast.Dict):
+                    produced.extend(value.value for key, value in zip(node.keys, node.values)
+                                    if isinstance(key, ast.Constant) and key.value == "code"
+                                    and isinstance(value, ast.Constant) and isinstance(value.value, str))
+                if isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Name) and node.func.id == "refuse" and node.args:
+                        first = node.args[0]
+                        if isinstance(first, ast.Constant):
+                            produced.append(first.value)
+                    if isinstance(node.func, ast.Attribute) and node.func.attr == "release_execution":
+                        produced.extend(item.value.value for item in node.keywords if item.arg == "reason"
+                                        and isinstance(item.value, ast.Constant))
+            if path.name == "router.py":
+                producer = next(node for node in module.body if isinstance(node, ast.FunctionDef)
+                                and node.name == "buddy_problem")
+                produced.extend(node.value.elts[1].value for node in ast.walk(producer)
+                                if isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple)
+                                and len(node.value.elts) == 2 and isinstance(node.value.elts[1], ast.Constant)
+                                and isinstance(node.value.elts[1].value, str))
+            for code in produced:
+                with self.subTest(path=path.name, code=code):
+                    self.assertIn(code, codes)
 
 
 REGISTERED = {
@@ -220,9 +262,8 @@ UNRELATED = {"skip": "not-a-reason-code"}
             violations,
         )
 
-    def test_a_missing_registered_parameter_fails(self):
-        violations = scan('reason("router-skip-window", buddyId="buddy-1")\n')
-        self.assertTrue(any("retryAt" in item for item in violations), violations)
+    def test_registered_parameter_names_allow_branch_specific_facts(self):
+        self.assertEqual(scan('reason("router-skip-window", buddyId="buddy-1")\n'), [])
 
     def test_a_dynamic_code_outside_a_literal_mapping_fails(self):
         for source in (
@@ -247,10 +288,10 @@ reason(CODES["skip"], buddyId="b", retryAt="r")
     def test_a_mapped_code_with_mismatched_parameters_fails(self):
         source = '''
 CODES = {"skip": "router-skip-window"}
-reason(CODES[kind], buddyId="b")
+reason(CODES[kind], buddyId="b", unknown="value")
 '''
         violations = scan(source)
-        self.assertTrue(any("retryAt" in item for item in violations), violations)
+        self.assertTrue(any("unknown" in item for item in violations), violations)
 
 
 if __name__ == "__main__":

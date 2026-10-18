@@ -474,7 +474,7 @@ def main():
                 if case == "final-last-invalid":
                     item["text"] = "not json"
             if "buddyId" in params.get("outputSchema", {}).get("properties", {}):
-                item["text"] = json.dumps({"buddyId": "foreign" if case == "readonly-outside" else "legal", "reason": "Read-only fixture", "evidence": []})
+                item["text"] = json.dumps({"buddyId": "foreign" if case == "readonly-outside" else "legal", "note": "Read-only fixture", "evidence": []})
                 if case in ("readonly-repair", "readonly-repair-evidence") and not state['threads'][thread_id]['turns']:
                     item["text"] = "not-json"
             if case != "no-final":
