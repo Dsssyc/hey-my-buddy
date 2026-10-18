@@ -52,13 +52,6 @@ TERMINAL_STATUSES = frozenset({"completed", "concluded", "failed", "cancelled", 
 # the outcome/ok claim never says success without the result.
 COMPLETED_WITHOUT_RESULT_OUTCOME = "completed-no-result"
 
-_NOTE = (
-    "This call waited inside one CLI invocation; no model polling and no heartbeat were used. "
-    "A finished run is not acceptance: inspect the real artifacts and checks before the owner "
-    "acknowledges with `hey-my-buddy acknowledge` and the saved controlFile."
-)
-
-
 class WaitAbandoned(RuntimeError):
     """This wait was abandoned (Ctrl-C, closed client, stopped wait).
 
@@ -191,7 +184,6 @@ def _envelope(
         "result": result,
         "recovery": recovery,
         "error": error,
-        "note": _NOTE,
     }
 
 
@@ -258,10 +250,6 @@ def _result_command(run_id: str) -> str:
     return f"hey-my-buddy result {shlex.quote(json.dumps({'runId': run_id}, ensure_ascii=False))}"
 
 
-def _micro_task_get_command(run_id: str) -> str:
-    return f"hey-my-buddy get {shlex.quote(json.dumps({'runId': run_id, 'includeAudit': True}, ensure_ascii=False))}"
-
-
 def _head_text(value, limit: int) -> str | None:
     if not isinstance(value, str):
         return None
@@ -326,7 +314,6 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
         "logPaths": result.get("logPaths"),
         "processState": {"shutdownConfirmed": bool(full.get("shutdownConfirmed", (result.get("processState") or {}).get("shutdownConfirmed")))},
         "resultCommand": _result_command(run_id),
-        "note": "Compact micro-task result; the full payload, manifests and sealed output stay durable.",
     }
 
 
@@ -456,11 +443,6 @@ def _host_boundary(
             "artifacts": (micro_task_view or {}).get("artifacts", []) if micro_task_view is not None else [],
             "request": request_view,
             "nextCommands": commands,
-            "note": (
-                "The original micro task needs Host input. Inspect its sealed artifacts with get: an integrated current turn may be acknowledged directly, while partial work stays unverified. A routing boundary may have no "
-                "coding turn or result yet. Use the current owner's saved controlFile with an applicable "
-                "decision or continuation, then await the same runId."
-            ),
         }
     )
     return envelope
@@ -681,10 +663,6 @@ def _wait_until_terminal(
                 "resultCommand": _result_command(run_id),
                 "turn": micro_task_view["turn"],
                 "artifacts": micro_task_view["artifacts"],
-                "note": (
-                    "The durable result keeps the full runner payload, manifests and sealed output; read it with "
-                    f"{_result_command(run_id)} or {_micro_task_get_command(run_id)}."
-                ),
             }
         )
         return envelope

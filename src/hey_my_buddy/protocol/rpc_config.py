@@ -81,10 +81,6 @@ def _build_report(role: str) -> dict:
         "overrides": overrides,
         "capacity": _capacity(overrides),
         "sharedMemoryDisabled": False,
-        "note": (
-            "Configured capacities are upper bounds, not resident memory; mapped shared memory and process RSS "
-            "are separate measurements."
-        ),
     }
 
 

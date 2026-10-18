@@ -737,7 +737,6 @@ class WorkflowCoordinator:
             "status": task_row["state"],
             "queueReason": task_row["queue_reason"],
             "awaitingHost": state == "awaiting-host",
-            "waitReason": self._wait_reason(state, task_row, active_request),
             "microTask": self._micro_task_view(micro_task, run_row["micro_task_fingerprint"]),
             "revision": run_row["revision"],
             "continuationCount": run_row["continuation_count"],
@@ -863,34 +862,6 @@ class WorkflowCoordinator:
             summary["awaitingHost"] = decorated["awaitingHost"]
             summary["workflowShutdown"] = decorated["workflowShutdown"]
         return summary
-
-    @staticmethod
-    def _wait_reason(state: str, task_row, active_request) -> str:
-        if state == "awaiting-host":
-            if active_request is not None and active_request.get("routing") is True:
-                return "model routing needs Host buddy; no new coding turn was started"
-            if active_request is not None and active_request["kind"] in ("assistance", "helper-attention"):
-                return "the current turn requested Host assistance"
-            if active_request is not None and active_request["kind"] == "helper-report":
-                return "all helpers reached a terminal state; the Host decides the next turn"
-            return "the current turn returned and the Host decides the next turn"
-        if state == "waiting-helpers":
-            return "authorized helpers are still running"
-        if state == "waiting-owned":
-            return "the Lead turn ended and is waiting for its owned micro tasks"
-        if state == "concluded":
-            return "the micro task work was concluded by its Host without acceptance"
-        if state == "delivered":
-            return "the micro task work is delivered and awaits final acknowledgement"
-        if state == "accepted":
-            return "the final artifact was acknowledged"
-        if state == "cancelled":
-            return "the run was cancelled"
-        if state == "failed":
-            return "the run failed without a Host decision boundary"
-        if task_row["state"] == "running":
-            return "a turn is executing"
-        return "the run is queued for its next turn"
 
     # -- authority -----------------------------------------------------------
     def _authorize(self, connection, run_row, params: dict, *, console_authority: dict | None, action: str) -> tuple[dict, str]:

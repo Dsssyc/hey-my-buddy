@@ -62,7 +62,7 @@ class ConsoleAccessTests(ConsoleTestCase):
         board = self.board()
         now = [1000.0]
         board.console._clock = lambda: now[0]
-        _, browser = self.open_console(board)
+        _, browser = self.open_console(board, assets=True)
         old_csrf = browser.bootstrap()["csrfToken"]
         old_authority = board.console._local_session.cookie
         self.assertEqual(self.change(browser, True)[0], 200)
@@ -85,7 +85,7 @@ class ConsoleAccessTests(ConsoleTestCase):
 
     def test_disable_revokes_old_sessions_and_entries_across_restart(self):
         board = self.board()
-        _, browser = self.open_console(board)
+        _, browser = self.open_console(board, assets=True)
         self.change(browser, True)
         second = Browser(board.console.start()["url"])
         old_cookie = second.cookie

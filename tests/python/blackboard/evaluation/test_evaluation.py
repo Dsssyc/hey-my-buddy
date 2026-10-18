@@ -90,8 +90,9 @@ class EvaluationPublishTests(EvaluationTestCase):
         from hey_my_buddy.blackboard.catalog.accounts import view
         board = self.board()
         with board.store.db.write() as db:
-            db.execute("INSERT INTO harness_health(harness,status,record_json) VALUES('codex','login-required','{}') "
-                       "ON CONFLICT(harness) DO UPDATE SET status=excluded.status,record_json=excluded.record_json")
+            db.execute("INSERT INTO harness_health(harness,status,record_json) VALUES('codex','login-required',?) "
+                       "ON CONFLICT(harness) DO UPDATE SET status=excluded.status,record_json=excluded.record_json",
+                       (json.dumps({'reason': {'code': 'harness.login-required', 'params': {'operation': 'probe'}}}),))
         with board.store.db.read() as db:
             account = view(db, 'codex')
         self.assertEqual(account['reason'], {'code': 'account.login-required', 'params': {}})

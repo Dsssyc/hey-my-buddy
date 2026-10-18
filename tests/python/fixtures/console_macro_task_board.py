@@ -213,7 +213,7 @@ class SyntheticBoard:
         from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
         response = self.board.service.admit_execution(NONCE, task_id=view['routing']['taskId'])
         if response.get("claim") is None:
-            raise AssertionError({"syntheticRouterClaim": response, "routing": view.get("routing"), "waitReason": view.get("waitReason")})
+            raise AssertionError({"syntheticRouterClaim": response, "routing": view.get("routing")})
         claim = response["claim"]
         attempt, document = claim["attempt"], claim["decisionInput"]
         self.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(claim), 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'usage': {'elapsedMs': 0, 'toolCalls': 0}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': BUDDY_ID, 'note': 'Fictional fixture selection', 'evidence': []}}})

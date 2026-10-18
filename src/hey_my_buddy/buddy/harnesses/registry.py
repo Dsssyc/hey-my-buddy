@@ -171,8 +171,8 @@ def capability_report() -> dict:
     for name, instance in adapters().items():
         usable, _diagnostic = instance.available()
         record = selected(name)
-        cause = (record.get('reason') if record is not None else
-                 make_reason('harness.probe-failed', operation='probe') if not usable else None)
+        cause = (record['reason'] if record is not None else
+                 make_reason('harness.not-checked', operation='probe') if name in HARNESS_NAMES else None)
         report[name] = {
             "adapter": name,
             "available": usable,

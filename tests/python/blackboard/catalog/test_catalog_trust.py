@@ -48,7 +48,8 @@ class CatalogTrustTests(BoardTestCase):
         confirmed = self.record(reading(models=('alpha', 'beta')))
         before = self.state()
         payload = reading(models=('alpha', 'untrusted'), status='unknown', account_status='confirmed')
-        payload['discoveries'][0]['reason'] = 'native model shape unreadable'
+        payload['discoveries'][0]['reason'] = {'code': 'catalog.model-shape-unreadable', 'params': {}}
+        payload['discoveries'][0]['content'] = 'native model shape unreadable'
         instance = SimpleNamespace(model_discovery=True, discovery_available=lambda: (True, None),
                                    discover_models=lambda: payload)
         for elapsed in (1, catalog.CONFIRMATION_SECONDS + 1):
@@ -59,8 +60,8 @@ class CatalogTrustTests(BoardTestCase):
             result = catalog_store.record(self.evaluation, discovered)
             row, pending, read_at, buddies = self.state()
             self.assertEqual(row['status'], 'unknown')
-            self.assertEqual(json.loads(row['reason']), {'code': 'catalog.native-unknown', 'params': {'harness': 'dsh'}})
-            self.assertEqual(result['catalog']['discoveries'][0]['content'], payload['discoveries'][0]['reason'])
+            self.assertEqual(json.loads(row['reason']), payload['discoveries'][0]['reason'])
+            self.assertEqual(result['catalog']['discoveries'][0]['content'], payload['discoveries'][0]['content'])
             self.assertEqual(row['discovery_id'], confirmed['discoveryId'])
             self.assertEqual(read_at, before[2])
             self.assertEqual([tuple(buddy) for buddy in buddies], [tuple(buddy) for buddy in before[3]])

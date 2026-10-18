@@ -8,7 +8,9 @@ from hey_my_buddy.blackboard.catalog import catalog as catalog_rules, catalog_st
 
 def catalog(harness='dsh', models=('alpha',), status='complete', account_status=None):
     trusted = account_status if account_status is not None else ('unknown' if status == 'unknown' else 'confirmed')
-    return {'source': 'fixture-native', 'discoveries': [{'harness': harness, 'status': status, 'accountStatus': trusted, 'reason': 'fixture failure' if status == 'unknown' else None}], 'providers': ([{'harness': harness, 'provider': 'fixture', 'models': [{'id': model, 'efforts': ['max'], 'available': True} for model in models]}] if models else [])}
+    return {'source': 'fixture-native', 'discoveries': [{'harness': harness, 'status': status, 'accountStatus': trusted,
+            'reason': {'code': 'catalog.model-shape-unreadable', 'params': {}} if status == 'unknown' else None}],
+            'providers': ([{'harness': harness, 'provider': 'fixture', 'models': [{'id': model, 'efforts': ['max'], 'available': True} for model in models]}] if models else [])}
 
 
 class CatalogObservationTests(BoardTestCase):
@@ -59,7 +61,9 @@ class CatalogObservationTests(BoardTestCase):
         first = self.record(catalog())
         facts = self.table_facts()
         different = {**catalog(), 'source': 'another-native-reading', 'harnessVersion': 'next',
-                     'warnings': ['observation detail'], 'quota': {'remaining': 42}, 'observedAt': 'now'}
+                     'warnings': [{'reason': {'code': 'catalog.native-warning', 'params': {}},
+                                   'content': 'observation detail'}],
+                     'quota': {'remaining': 42}, 'observedAt': 'now'}
         second = self.record(different)
         self.assertNotEqual(first['discoveryId'], second['discoveryId'])
         self.assertEqual(self.table_facts()[0], facts[0])

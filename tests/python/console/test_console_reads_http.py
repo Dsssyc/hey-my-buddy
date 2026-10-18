@@ -102,7 +102,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         etag = changed("Router setting")
         # A harness health observation revision.
         with board.store.db.write() as connection:
-            connection.execute("UPDATE harness_health SET revision=revision+1, record_json='{}' WHERE harness='dsh'")
+            connection.execute("UPDATE harness_health SET revision=revision+1, record_json=? WHERE harness='dsh'", (json.dumps({"reason": None}),))
         etag = changed("harness health")
         # Console asset availability is part of the marker.
         (board.console.assets_dir).mkdir(parents=True, exist_ok=True)

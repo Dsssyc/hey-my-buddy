@@ -40,7 +40,7 @@ SUMMARIES: dict[str, str] = {
     "help": "Show every method, or one method's validated parameters, defaults and bounds.",
     "ping": "Authenticated process liveness; no storage or runtime scan.",
     "health": "Service, runtime, capacity and integrity report; read it before relying on routing.",
-    "harnesses": "Harness report with availability, capabilities, named operations and limitations.",
+    "harnesses": "Harness report with availability, capabilities and named operations.",
     "harness-set": "Choose the harness executable or restore automatic detection.",
     "quota-redetect": "Open the one-shot routing retry window of a provider's no-reset quota exhaustion; no model or balance query.",
     "accounts": "Read cached native login status and billing type without a native refresh.",

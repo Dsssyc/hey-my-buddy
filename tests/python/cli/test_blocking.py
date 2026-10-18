@@ -605,8 +605,6 @@ class CompactMicroTaskEnvelopeTests(unittest.TestCase):
         self.assertEqual(envelope["turn"]["turnId"], "turn-1")
         self.assertEqual(envelope["artifacts"][0]["commit"], "c" * 40)
         self.assertIn("hey-my-buddy result", envelope["resultCommand"])
-        self.assertIn("hey-my-buddy get", envelope["note"])
-        self.assertNotIn("workflow-get", envelope["note"])
         self.assertTrue(envelope["result"]["finalTextTruncated"])
 
     def test_execution_envelope_delivers_the_full_result(self):

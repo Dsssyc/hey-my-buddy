@@ -88,7 +88,7 @@ class HealthEligibilityTests(BoardTestCase):
         with board.store.db.write() as db:
             db.execute("INSERT INTO harness_health(harness,revision,status,record_json) VALUES('codex',1,'ready',?) "
                        "ON CONFLICT(harness) DO UPDATE SET revision=excluded.revision,status=excluded.status,record_json=excluded.record_json",
-                       (json.dumps({'version': 'new-version', 'reviewVerification': {'verified': False}}),))
+                       (json.dumps({'version': 'new-version', 'reviewVerification': {'verified': False}, 'reason': None}),))
         with patch('hey_my_buddy.buddy.harnesses.base.sys.platform', 'darwin'), board.store.db.read() as db:
             before = db.execute('SELECT record_json FROM harness_health WHERE harness=?', ('codex',)).fetchone()[0]
             result = read_health(db, 'codex')

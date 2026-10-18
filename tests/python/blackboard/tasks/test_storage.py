@@ -190,7 +190,10 @@ class StorageTests(BoardTestCase):
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
             planned = board.call('storage_plan', {})
             backup_row = next(row for row in planned['categories'] if row['id'] == 'backup')
-            self.assertEqual(backup_row['label'], '上次升级之前的看板')
+            self.assertEqual(backup_row, {
+                'id': 'backup', 'bytes': previous_board.stat().st_size, 'reclaimableBytes': 0,
+                'count': 1, 'eligibleCount': 0,
+            })
             self.assertEqual(backup_row['bytes'], previous_board.stat().st_size)
             self.assertEqual(backup_row['reclaimableBytes'], 0)
             native_row = next(r for r in planned['candidates'] if r['category'] == 'zcode')

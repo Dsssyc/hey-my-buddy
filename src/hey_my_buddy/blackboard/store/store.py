@@ -448,7 +448,8 @@ class BoardStore:
         return view
 
     @staticmethod
-    def _attempt_view(row: sqlite3.Row, *, include_result: bool = True) -> dict:
+    def _attempt_view(row: sqlite3.Row, *, include_result: bool = True,
+                      release_reason: dict | None = None) -> dict:
         """Public attempt record. The claim capability and nonce verifier never appear."""
         view = {
             "attemptId": row["attempt_id"],
@@ -471,6 +472,7 @@ class BoardStore:
             "exitCode": row["exit_code"],
             "signal": row["signal"],
             "error": row["error"],
+            "releaseReason": release_reason,
             "startedAt": row["started_at"],
             "finishedAt": row["finished_at"],
             "createdAt": row["created_at"],
@@ -561,7 +563,12 @@ class BoardStore:
             from ..evaluation.native_observations import failure_view
             recorded = json.loads(attempt["result_json"]) if attempt["result_json"] else {}
             view["quotaFailure"] = failure_view(recorded.get("result"), harness=attempt["adapter"])
-            view["selectedAttempt"] = self._attempt_view(attempt)
+            release = connection.execute(
+                "SELECT payload_json FROM events WHERE kind='attempt.released' AND attempt_id=?",
+                (attempt["attempt_id"],),
+            ).fetchone() if attempt["execution_state"] == "finished" and attempt["result_json"] is None else None
+            view["selectedAttempt"] = self._attempt_view(
+                attempt, release_reason=json.loads(release["payload_json"])["reason"] if release else None)
             view["resultAvailable"] = attempt["result_json"] is not None
             view["shutdownConfirmed"] = bool(attempt["shutdown_confirmed"])
             view["terminationReason"] = recorded.get("terminationReason")

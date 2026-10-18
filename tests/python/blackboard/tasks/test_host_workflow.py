@@ -125,7 +125,6 @@ class HostCompletionTests(WorkflowTestCase):
         self.assertEqual(delivered["state"], "delivered")
         self.assertFalse(delivered["awaitingHost"])
         self.assertIsNone(delivered["hostConclusion"])
-        self.assertEqual(delivered["waitReason"], "the micro task work is delivered and awaits final acknowledgement")
 
     def test_concluded_delivered_micro_task_reports_the_conclusion_instead_of_acknowledgement(self):
         board = self.board()
@@ -139,12 +138,10 @@ class HostCompletionTests(WorkflowTestCase):
         self.assertEqual(concluded["state"], "concluded")
         self.assertFalse(concluded["awaitingHost"])
         self.assertIsNotNone(concluded["hostConclusion"])
-        self.assertEqual(concluded["waitReason"], "the micro task work was concluded by its Host without acceptance")
         # A later read keeps the terminal state and the same conclusion.
         current = board.call("workflow_get", {"runId": delivered["runId"]})
         self.assertEqual(current["hostConclusion"], concluded["hostConclusion"])
         self.assertFalse(current["awaitingHost"])
-        self.assertEqual(current["waitReason"], "the micro task work was concluded by its Host without acceptance")
 
     def test_takeover_preserves_a_terminal_conclusion(self):
         board = self.board()
@@ -165,7 +162,6 @@ class HostCompletionTests(WorkflowTestCase):
         self.assertEqual(current["state"], "concluded")
         self.assertFalse(current["awaitingHost"])
         self.assertEqual(current["hostConclusion"], concluded["hostConclusion"])
-        self.assertEqual(current["waitReason"], "the micro task work was concluded by its Host without acceptance")
         with self.assertRaises(BoardError) as raised:
             board.call("workflow_accept", {
                 "runId": current["runId"], "artifactId": current["finalArtifactId"],
