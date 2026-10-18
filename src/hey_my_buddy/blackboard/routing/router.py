@@ -6,6 +6,7 @@ import json
 from pathlib import PurePosixPath
 
 from ..store.db import canonical_json
+from ...protocol.reasons import reason_from_json
 from ...errors import BoardError
 
 PROMPT_VERSION = 13
@@ -161,8 +162,7 @@ def buddy_problem(connection, buddy_id: str | None, routing_mode: str) -> tuple[
     if not row["enabled"]:
         return unavailable("router-disabled")
     if not row["available"]:
-        cause = ({"code": row["unavailable_code"], "params": json.loads(row["unavailable_params_json"])}
-                 if row["unavailable_code"] else None)
+        cause = reason_from_json(row["unavailable_code"], row["unavailable_params_json"])
         return unavailable("router-catalog-unavailable", **({"cause": cause} if cause else {}))
     health = read_health(connection, row["harness"])
     if not health["available"]:

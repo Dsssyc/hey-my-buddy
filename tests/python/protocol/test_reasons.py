@@ -14,7 +14,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from hey_my_buddy.protocol.reasons import reason
+from hey_my_buddy.protocol.reasons import reason, reason_from_json
 
 ROOT = Path(__file__).resolve().parents[3]
 SOURCE = ROOT / "src" / "hey_my_buddy"
@@ -139,6 +139,12 @@ def reason_violations(root: Path, codes: dict[str, list[str]]) -> list[str]:
 
 
 class ReasonTests(unittest.TestCase):
+    def test_stored_reason_preserves_facts_and_null_means_no_reason(self):
+        params = {"bound": "disabled", "buddyId": "buddy-1", "retryAt": None, "count": 3}
+        self.assertEqual(reason_from_json("router-out-of-bounds", json.dumps(params)),
+                         {"code": "router-out-of-bounds", "params": params})
+        self.assertIsNone(reason_from_json(None, None))
+
     def test_reason_carries_the_code_and_exactly_the_named_parameters(self):
         self.assertEqual(
             reason("router-skip-window", buddyId="buddy-1", retryAt="2026-10-17T00:00:00Z"),
@@ -182,6 +188,7 @@ class SourceReasonTests(unittest.TestCase):
         codes = declared_codes()
         routing = SOURCE / "blackboard" / "routing"
         for path in (routing / "router.py", routing / "decision.py",
+                     routing / "router_boundary.py", routing / "router_boundary_data.py",
                      SOURCE / "blackboard" / "service" / "execution_scheduler.py",
                      SOURCE / "blackboard" / "tasks" / "interruption.py"):
             module = ast.parse(path.read_text(encoding="utf-8"))
@@ -192,6 +199,8 @@ class SourceReasonTests(unittest.TestCase):
                                     if isinstance(key, ast.Constant) and key.value == "code"
                                     and isinstance(value, ast.Constant) and isinstance(value.value, str))
                 if isinstance(node, ast.Call):
+                    produced.extend(item.value.value for item in node.keywords if item.arg == "code"
+                                    and isinstance(item.value, ast.Constant) and isinstance(item.value.value, str))
                     if isinstance(node.func, ast.Name) and node.func.id == "refuse" and node.args:
                         first = node.args[0]
                         if isinstance(first, ast.Constant):
@@ -206,9 +215,37 @@ class SourceReasonTests(unittest.TestCase):
                                 if isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple)
                                 and len(node.value.elts) == 2 and isinstance(node.value.elts[1], ast.Constant)
                                 and isinstance(node.value.elts[1].value, str))
+            if path.name == "router_boundary_data.py":
+                context = next(node for node in module.body if isinstance(node, ast.FunctionDef)
+                               and node.name == "_continuation_context")
+                produced.extend(node.value.elts[1].value for node in ast.walk(context)
+                                if isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple)
+                                and isinstance(node.value.elts[1], ast.Constant)
+                                and isinstance(node.value.elts[1].value, str))
             for code in produced:
                 with self.subTest(path=path.name, code=code):
                     self.assertIn(code, codes)
+
+    def test_json_reason_projection_is_owned_by_the_protocol(self):
+        projections = []
+        for path in sorted(SOURCE.rglob("*.py")):
+            module = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(module):
+                if not isinstance(node, ast.Dict):
+                    continue
+                if any(isinstance(key, ast.Constant) and key.value == "params"
+                       and isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+                       and isinstance(value.func.value, ast.Name) and value.func.value.id == "json"
+                       and value.func.attr == "loads" for key, value in zip(node.keys, node.values)):
+                    projections.append(path.relative_to(SOURCE).as_posix())
+        self.assertEqual(projections, ["protocol/reasons.py"])
+
+    def test_trials_do_not_read_router_text_or_diagnostics(self):
+        module = ast.parse((SOURCE / "blackboard/routing/router_boundary_data.py").read_text(encoding="utf-8"))
+        trials = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "router_trials")
+        fields = {node.value for node in ast.walk(trials) if isinstance(node, ast.Constant)
+                  and isinstance(node.value, str)}
+        self.assertFalse(fields & {"reason", "note", "error"})
 
 
 REGISTERED = {

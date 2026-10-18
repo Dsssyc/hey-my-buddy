@@ -19,7 +19,7 @@ from ...protocol import schemas
 from ..evaluation import user_policy
 from . import selection_policy, router, router_sequence, router_failover
 from ...protocol import tool_evidence
-from ...protocol.reasons import reason as make_reason
+from ...protocol.reasons import reason as make_reason, reason_from_json
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
 
@@ -298,8 +298,7 @@ class DecisionCoordinator:
             "source": row["source"],
         }
         if row["unavailable_code"]:
-            entry["unavailableReason"] = {"code": row["unavailable_code"],
-                                          "params": json.loads(row["unavailable_params_json"])}
+            entry["unavailableReason"] = reason_from_json(row["unavailable_code"], row["unavailable_params_json"])
             if row["unavailable_content"] is not None:
                 entry["unavailableContent"] = row["unavailable_content"]
         return entry
@@ -1166,7 +1165,7 @@ class DecisionCoordinator:
                          reason={"code": code, "params": checked["params"] if code == checked["code"] else {}})
         current = self._row(connection, row["decision_id"])
         return {**summary, "status": current["status"], "outcome": outcome, "buddyId": current["buddy_id"],
-                "reason": self._reason(current), "note": current["note"]}
+                "reason": reason_from_json(current["reason_code"], current["reason_params_json"]), "note": current["note"]}
 
 
     def _retry_selection(self, connection: sqlite3.Connection, row: sqlite3.Row, *, reason: dict, now: str) -> None:
@@ -1701,11 +1700,6 @@ class DecisionCoordinator:
                     next_cursor = last_rowid
         return {"decisions": decisions, "nextCursor": next_cursor, "total": total}
 
-    @staticmethod
-    def _reason(row: sqlite3.Row) -> dict | None:
-        return ({"code": row["reason_code"], "params": json.loads(row["reason_params_json"])}
-                if row["reason_code"] is not None else None)
-
     def _view(self, connection: sqlite3.Connection | None, row: sqlite3.Row, *, include_audit: bool) -> dict:
         if connection is None:
             # Admission responses are assembled after their write transaction.
@@ -1739,7 +1733,7 @@ class DecisionCoordinator:
                 "resolved": (output or {}).get("resolved"),
                 "observed": (output or {}).get("observed"),
             },
-            "reason": self._reason(row),
+            "reason": reason_from_json(row["reason_code"], row["reason_params_json"]),
             "note": row["note"],
             "evidence": evidence,
             "policyCheck": (output or {}).get("policyCheck"),

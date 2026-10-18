@@ -18,9 +18,11 @@ import uuid
 from typing import Any
 
 from . import fixes, micro_task, reminders
+from .request_reasons import request_reason
 from .macro_task_deletion_guard import reject_macro_task
 from ..routing import router
 from ...protocol import schemas
+from ...protocol.reasons import reason_from_json
 from ...errors import BoardError
 
 LIST_DEFAULT_LIMIT = 50
@@ -685,7 +687,6 @@ def _turn_buddy(input_json: Any) -> dict | None:
 
 
 def _run_spans(store, connection, row) -> list[dict]:
-    from ..routing.decision import DecisionCoordinator
     """Queue, execution and waiting-Host spans of one micro-task run, from recorded rows."""
     run_id = row["task_id"]
     spans: list[dict] = []
@@ -762,9 +763,7 @@ def _run_spans(store, connection, row) -> list[dict]:
         spans.append(_span("queue", f"queue:open:{run_id}", run_id, queued_from, None, "queued"))
     for request in connection.execute(
         "SELECT w.request_id,w.kind,w.state,w.summary,w.decision_id,w.created_at,w.decided_at,w.updated_at,"
-        " COALESCE(w.reason_code,d.reason_code) AS reason_code,"
-        " COALESCE(w.reason_params_json,d.reason_params_json) AS reason_params_json FROM workflow_requests w"
-        " LEFT JOIN evaluation_decisions d ON d.decision_id=w.decision_id"
+        " w.reason_code,w.reason_params_json FROM workflow_requests w"
         " WHERE w.run_id=? ORDER BY w.created_at,w.request_id", (run_id,)
     ).fetchall():
         open_request = request["state"] == "open"
@@ -778,13 +777,12 @@ def _run_spans(store, connection, row) -> list[dict]:
             None if open_request else (closed_at or None), request["state"],
             request_id=request["request_id"], requestKind=request["kind"], decisionId=request["decision_id"],
             summary=(request["summary"][:SUMMARY_LIMIT] if request["summary"] is not None else None),
-            reason=DecisionCoordinator._reason(request),
+            reason=request_reason(connection, request),
         ))
     return spans
 
 
 def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list[dict]:
-    from ..routing.decision import DecisionCoordinator
     # Resolve every Router task through its immutable dispatch, including tasks
     # replaced by a later Router in the same decision.
     record = connection.execute(
@@ -801,7 +799,7 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
     routing = {
         **router.routing_facts(json.loads(record["requested_json"]) if record else {}),
         "selectedBuddy": json.loads(record["selected_json"]) if record and record["selected_json"] else None,
-        "reason": DecisionCoordinator._reason(record) if record else None,
+        "reason": reason_from_json(record["reason_code"], record["reason_params_json"]) if record else None,
         "note": record["note"] if record else None,
         "policyCheck": output.get("policyCheck"),
         "budget": output.get("budget"),

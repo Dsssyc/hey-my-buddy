@@ -33,7 +33,7 @@ class RouterBoundaryTests(unittest.TestCase):
         self.assertEqual(params["expectedRevision"], 7)
         self.assertEqual(params["controlFile"], "<saved-control-file>")
         self.assertEqual(params["buddy"], {key: CANDIDATE[key] for key in ("harness", "provider", "model", "effort")})
-        self.assertTrue(params["input"])
+        self.assertNotIn("input", params)
         self.assertNotIn("note", params)
         self.assertNotIn("reason", params)
         reroute = result["commands"]["reroute"]
@@ -41,6 +41,7 @@ class RouterBoundaryTests(unittest.TestCase):
         self.assertEqual(reroute["method"], "continue")
         self.assertTrue(reroute["params"]["reroute"])
         self.assertNotIn("notBefore", reroute["params"])
+        self.assertNotIn("input", reroute["params"])
         self.assertNotIn("note", reroute["params"])
         self.assertNotIn("reason", reroute["params"])
         # Validate the public parameter vocabulary, without a control-file read
@@ -50,7 +51,8 @@ class RouterBoundaryTests(unittest.TestCase):
         self.assertTrue(help_)
         fields = {item.name for item in help_.parameters}
         # controlFile is a CLI-local authority source, consumed before the
-        # operation validator whose vocabulary this help extracts.
+        # operation validator whose vocabulary this help extracts. The Host
+        # supplies input and, when selecting a buddy, a note.
         self.assertTrue(set(params) - {"controlFile"} <= fields, set(params) - fields - {"controlFile"})
         self.assertTrue(set(reroute["params"]) - {"controlFile"} <= fields,
                         set(reroute["params"]) - fields - {"controlFile"})
@@ -58,12 +60,13 @@ class RouterBoundaryTests(unittest.TestCase):
         self.assertNotEqual(params["commandId"], reroute["params"]["commandId"])
 
     def test_stop_unknown_and_hard_gate_block_both_operations(self):
-        for changes in ({"shutdown_confirmed": False}, {"continuation_problem": "固定 buddy 约束不满足"}):
+        for changes in ({"shutdown_confirmed": False}, {"continuation_problem": "workflow-routing-fenced"}):
             with self.subTest(changes=changes):
                 result = self.build(**changes)
                 for command in result["commands"].values():
                     self.assertTrue(command["blocked"])
-                    self.assertTrue(command["reason"])
+                    self.assertNotIn("reason", command)
+                    self.assertEqual(command["code"], changes.get("continuation_problem"))
                 self.assertEqual(result["commands"]["continue"]["choices"], [])
                 self.assertIsNone(result["commands"]["reroute"]["params"])
 
@@ -100,7 +103,7 @@ class RouterBoundaryTests(unittest.TestCase):
         for policy in ("cancel", "unknown", False):
             with self.subTest(policy=policy), self.assertRaises(BoardError):
                 self.build(helper_policy=policy)
-        blocked = self.build(continuation_problem="live helpers 没有明确 keep 政策")
+        blocked = self.build(continuation_problem="workspace-ownership-lost")
         self.assertTrue(blocked["commands"]["continue"]["blocked"])
         self.assertTrue(blocked["commands"]["reroute"]["blocked"])
 
@@ -109,13 +112,23 @@ class RouterBoundaryTests(unittest.TestCase):
         self.assertFalse(result["commands"]["continue"]["blocked"])
         self.assertTrue(result["commands"]["reroute"]["blocked"])
         self.assertIsNone(result["retryAt"])
+        self.assertIsNone(result["commands"]["reroute"]["code"])
 
     def test_standalone_selection_has_no_invented_business_commands(self):
         result = self.build(run_id=None, revision=None)
         self.assertEqual(result["commands"]["continue"]["choices"], [])
         self.assertTrue(result["commands"]["continue"]["blocked"])
         self.assertIsNone(result["commands"]["reroute"]["params"])
-        self.assertIn("独立 selection-request", result["commands"]["reroute"]["reason"])
+        self.assertIsNone(result["commands"]["reroute"]["code"])
+
+    def test_derivable_gates_have_no_reason_code(self):
+        for changes in ({"run_id": None}, {"revision": None}, {"shutdown_confirmed": False}, {"candidates": []}):
+            with self.subTest(changes=changes):
+                result = self.build(**changes)
+                self.assertTrue(result["commands"]["continue"]["blocked"])
+                for command in result["commands"].values():
+                    self.assertNotIn("reason", command)
+                    self.assertIsNone(command["code"])
 
     def test_frozen_candidates_facts_and_trials_are_not_mutated_or_aliased(self):
         facts = {"policyFacts": {"candidateCount": 1}}

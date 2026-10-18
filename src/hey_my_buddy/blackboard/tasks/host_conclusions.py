@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 
+from ...protocol.reasons import reason_from_json
+
 
 def current(connection, run):
     if run["state"] != "concluded":
@@ -17,8 +19,7 @@ def view(row):
         return None
     return {"conclusionId": row["conclusion_id"], "attemptId": row["attempt_id"],
             "executionStatus": row["execution_status"], "note": row["note"],
-            "reason": ({"code": row["reason_code"], "params": json.loads(row["reason_params_json"])}
-                       if row["reason_code"] is not None else None),
+            "reason": reason_from_json(row["reason_code"], row["reason_params_json"]),
             "evidence": json.loads(row["evidence_json"])["references"], "artifactId": row["artifact_id"],
             "integrationId": row["integration_id"], "actor": {"role": row["actor_role"], "id": row["actor_id"]}, "createdAt": row["created_at"],
             "ownerGeneration": row["owner_generation"], "runRevision": row["run_revision"]}

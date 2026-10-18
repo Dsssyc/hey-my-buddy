@@ -47,11 +47,8 @@ def build_boundary(*, kind: str, code: str | None, reason: dict | None, candidat
             raise BoardError("INVALID_ARGUMENT", "A frozen Router candidate needs a complete buddy identity")
         identities.append({key: candidate[key] for key in BUDDY_FIELDS})
 
-    blocked = ("独立 selection-request 没有关联业务微任务，不能生成 continue 命令" if run_id is None else
-               "Router 或拥有的执行尚未确认停止" if not shutdown_confirmed else
-               continuation_problem or ("当前微任务 revision 未提供" if revision is None else None))
-    base = {"runId": run_id, "expectedRevision": revision, "controlFile": "<saved-control-file>",
-            "input": "继续既定微任务。"}
+    blocked = run_id is None or not shutdown_confirmed or continuation_problem is not None or revision is None
+    base = {"runId": run_id, "expectedRevision": revision, "controlFile": "<saved-control-file>"}
     if target_run_id is not None:
         base["targetRunId"] = target_run_id
     if helper_policy is not None:
@@ -68,19 +65,18 @@ def build_boundary(*, kind: str, code: str | None, reason: dict | None, candidat
         return f"router-{operation}-{digest}"
 
     choices = []
-    if blocked is None:
+    if not blocked:
         for index, (candidate, identity) in enumerate(zip(candidates, identities)):
             choices.append({"buddyId": candidate["buddyId"], "method": "continue", "params": {
                 **base, "commandId": command_id("continue", index=index, identity=identity),
                 "buddy": identity}})
-    continue_reason = blocked or ("没有冻结的合法候选" if not choices else None)
-    reroute_reason = blocked or ("尚无可知的 Router 恢复时间；可先读取 health 再决定" if retry_at is None else None)
-    reroute_params = None if reroute_reason else {
+    reroute_blocked = blocked or retry_at is None
+    reroute_params = None if reroute_blocked else {
         **base, "commandId": command_id("reroute"), "reroute": True}
     return deepcopy({"kind": kind, "code": code, "reason": reason, "routerTrials": router_trials,
                      "candidates": candidates, "facts": facts, "retryAt": retry_at,
                      "commands": {
-                         "continue": {"blocked": continue_reason is not None, "reason": continue_reason, "choices": choices},
-                         "reroute": {"blocked": reroute_reason is not None, "reason": reroute_reason,
+                         "continue": {"blocked": blocked or not choices, "code": continuation_problem, "choices": choices},
+                         "reroute": {"blocked": reroute_blocked, "code": continuation_problem,
                                      "method": "continue", "params": reroute_params, "notBefore": retry_at}},
                      "userAction": "settingsChangeOnly"})

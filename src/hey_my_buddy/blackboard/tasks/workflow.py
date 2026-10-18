@@ -34,11 +34,12 @@ from pathlib import Path
 from typing import Any
 
 from ...protocol import schemas
-from ...protocol.reasons import reason as make_reason
+from ...protocol.reasons import reason as make_reason, reason_from_json
 from ...protocol.stop import WRAP_UP_INITIATORS
 from . import fixes as task_fixes
 from . import host_conclusions
 from . import micro_task
+from .request_reasons import request_reason
 from .macro_task_deletion_guard import reject_deleting_run, reject_macro_task
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
@@ -372,7 +373,7 @@ class WorkflowCoordinator:
         payload = json.loads(row["payload_json"])
         boundary = None
         decision_id = row["decision_id"]
-        request_reason = self.board.decisions._reason(row)
+        projected_reason = request_reason(connection, row)
         if connection is not None and payload.get("source") == "routing" and decision_id:
             # Proxy rows retain the leaf's frozen decision. Only command fencing
             # is refreshed from the current owned lineage, never its frozen packet.
@@ -381,8 +382,6 @@ class WorkflowCoordinator:
             decision = self.board.decisions._row(connection, decision_id)
             if target is not None and decision is not None:
                 boundary = self._routing_boundary(connection, decision, target, now=now)
-            if request_reason is None and decision is not None:
-                request_reason = self.board.decisions._reason(decision)
         if compact:
             view = {
                 "requestId": row["request_id"],
@@ -395,7 +394,7 @@ class WorkflowCoordinator:
                 "origin": payload.get("origin"),
                 "routing": payload.get("source") == "routing",
                 "decisionId": decision_id,
-                "reason": request_reason,
+                "reason": projected_reason,
             }
             if boundary is not None:
                 view["routingBoundary"] = boundary
@@ -405,7 +404,7 @@ class WorkflowCoordinator:
             "kind": row["kind"],
             "state": row["state"],
             "summary": row["summary"],
-            "reason": request_reason,
+            "reason": projected_reason,
             "decisionId": decision_id,
             "turnId": row["turn_id"],
             "attemptId": row["attempt_id"],
@@ -2066,7 +2065,7 @@ class WorkflowCoordinator:
                     "taskId": row["decision_task_id"],
                     "selectedBuddy": json.loads(row["selected_json"]) if row["selected_json"] else None,
                     "source": selection_source(requested),
-                    "reason": self.board.decisions._reason(row),
+                    "reason": reason_from_json(row["reason_code"], row["reason_params_json"]),
                     "note": row["note"],
                     "createdAt": row["created_at"],
                     "ownerGeneration": int(row["owner_generation"]),

@@ -155,6 +155,8 @@
   "macro-task-deletion.unsealed-changes": [],
   "macro-task-deletion.unsealed-handoff": [],
   "micro-task-cancelled": [],
+  "micro-task-not-found": [],
+  "micro-task-not-owned": [],
   "model-cursor-shape-unreadable": [],
   "model-list-shape-unreadable": [],
   "no-legal-candidate": [],
@@ -211,6 +213,8 @@
   "single-candidate": [],
   "timeout": [],
   "workflow-routing-fenced": [],
+  "workspace-cleanup-started": [],
+  "workspace-ownership-lost": [],
   "workspace-scope-violation": [
     "conflictIds",
     "paths"
