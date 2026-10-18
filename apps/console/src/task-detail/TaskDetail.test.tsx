@@ -554,7 +554,7 @@ describe("a Host's decision", () => {
 
   it("is told apart from a handoff, a takeover and a cancellation, which each have their own step", async () => {
     const changed = timeline();
-    changed.events.push(event(4, "takeover", at("10:50")), event(5, "cancel", at("10:55"), { stopInitiator: "host", note: "不再需要" }));
+    changed.events.push(event(4, "takeover", at("10:50")), event(5, "cancel", at("10:55"), { actor: HOST, note: "不再需要" }));
     const f = open({ timeline: changed, replies: { task: task({ status: "cancelled", cancellation: { actor: HOST, note: "不再需要" }, selectedAttempt: { result: { terminationReason: "forced-stop" } } }) } });
     await ready();
     // A change of buddy is the boundary between two turns; the takeover and the cancellation are their own marks.
@@ -565,6 +565,7 @@ describe("a Host's decision", () => {
     await waitFor(() => expect(within(pane()).getByRole("heading", { level: 3, name: "接管" })).toBeTruthy());
     fireEvent.click(stripSlice("event:5")!);
     await waitFor(() => expect(within(pane()).getByRole("heading", { level: 3, name: "Host 停止" })).toBeTruthy());
+    expect(within(pane()).getByText("停止发起", { selector: "dt" }).nextElementSibling?.textContent).toBe("Host 停止");
     expect(pane().textContent).toContain("不再需要");
   });
 });

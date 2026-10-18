@@ -140,7 +140,7 @@ describe("timeline drawings follow recorded facts", () => {
   it("moves through mixed event and inquiry entries, then restores cluster focus on Escape", async () => {
     const user = userEvent.setup();
     const inquiry = { inquiryId: "q", createdAt: at(20), author: "host-1", state: "answered" as const };
-    const event = { ...base.events[0]!, seq: 7, kind: "reject", at: at(20), summary: "Decision" };
+    const event = { ...base.events[0]!, seq: 7, kind: "reject", at: at(20), note: "Decision" };
     const onOpen = vi.fn();
     track([execution({ inquiries: [inquiry] })], { events: [event], onOpen, tabKey: "cluster:event:7" });
     const cluster = document.querySelector<SVGGElement>('[data-slot=event-cluster]')!;
@@ -174,7 +174,7 @@ describe("timeline drawings follow recorded facts", () => {
   });
   it("keeps isolated events direct and groups marks within 16 pixels", async () => {
     const onOpen = vi.fn();
-    const events = [0, 1, 3].map((minute, seq) => ({ ...base.events[0]!, seq, kind: "reject", at: at(20 + minute), summary: `Event ${seq}` }));
+    const events = [0, 1, 3].map((minute, seq) => ({ ...base.events[0]!, seq, kind: "reject", at: at(20 + minute), note: `Event ${seq}` }));
     track([], { events, onOpen, width: 400 });
     expect(document.querySelectorAll('[data-slot=event-cluster]')).toHaveLength(1);
     expect(document.querySelectorAll('[data-slot=event-mark]')).toHaveLength(1);

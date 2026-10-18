@@ -40,7 +40,8 @@ describe("the lanes and the detail workspace", () => {
     expect(document.querySelector("[data-slot=timeline-tracks]")).toBeTruthy();
     expect(row("r1").className).not.toContain("bg-live-wash");
     expect(row("r2").className).toContain("bg-live-wash");
-    expect(document.querySelectorAll('[data-key="span:s-r2-e1"] [data-slot=selected-span]')).toHaveLength(1);
+    expect(document.querySelector('[data-slot=timeline-row][data-run-id="r2"] [data-slot=selected-row]')).toBeTruthy();
+    expect(document.querySelectorAll('[data-slot=selected-item]')).toHaveLength(0);
     expect(props.onClose).not.toHaveBeenCalled();
   });
   it("opens a row by one click without an origin, and a segment with its exact identity; arrows move between rows", () => {
@@ -49,6 +50,8 @@ describe("the lanes and the detail workspace", () => {
     expect(props.onOpen).toHaveBeenCalledWith("r1");
     expect(row("r1").className).toContain("bg-live-wash");
     fireEvent.click(document.querySelector('[data-key="span:s-r2-e1"]')!);
+    expect(document.querySelector('[data-key="span:s-r2-e1"] [data-slot=selected-item]')).toBeTruthy();
+    expect(document.querySelectorAll('[data-slot=selected-item]')).toHaveLength(1);
     expect(props.onOpen).toHaveBeenCalledTimes(1);
     fireEvent.doubleClick(document.querySelector('[data-key="span:s-r2-e1"]')!);
     expect(props.onOpen).toHaveBeenLastCalledWith("r2", "span:s-r2-e1");

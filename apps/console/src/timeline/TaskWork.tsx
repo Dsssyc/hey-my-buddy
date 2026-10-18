@@ -143,6 +143,7 @@ export function TaskWork(props: TaskWorkProps) {
     onEnter={() => { setPointerX(null); setActiveMarker(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={event => { if (movingDetailFocus.current) event.preventDefault(); setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>;
   const trackProps = (row: TimelineRow) => ({
     boundary: viewport, tabKey, selected: selectedRunId === row.runId, row, spans: spansByRow.get(row.runId) ?? [],
+    selectedKey: selectedRunId === row.runId ? selectedKey : null,
     events: timeline!.events.filter(event => event.runId === row.runId),
     onMarker: (marker: TimelineMarker | null) => { setActiveMarker(marker); if (marker) setHoveredSpan(null); },
     buddyColors, scale: scale!, nowMs, ongoing: input!.nowAtEnd, buddies: props.buddies, onOpen: props.onOpen, onSelect: select,
@@ -152,14 +153,14 @@ export function TaskWork(props: TaskWorkProps) {
   const trackRow = (row: TimelineRow, inLane: boolean) => <div key={row.runId} data-slot="timeline-row" data-run-id={row.runId}
     onClick={event => { if (!(event.target as Element).closest("[data-key]")) select(row.runId); }}
     onDoubleClick={event => { if (!(event.target as Element).closest("[data-key]")) props.onOpen(row.runId); }}
-    className={cn("relative transition-colors duration-150 motion-reduce:transition-none", inLane ? "bg-card" : "bg-background", selectedRunId === row.runId && "bg-live-wash")}>
+    className={cn("relative", inLane ? "bg-card" : "bg-background")}>
     {narrow
       ? <><div className={cn("sticky left-0 z-10", inLane ? "bg-card" : "bg-background")} style={{ width: Math.max(1, width - 2) }}>{renderName(row, { indent: inLane })}</div>
         <Track {...trackProps(row)}/></>
       : <div className="grid items-stretch" style={{ gridTemplateColumns: `${NAME_PX}px ${scale!.widthPx + SLACK_PX * 2}px minmax(0,1fr)` }}>
         <div className={cn("sticky left-0 z-10", inLane ? "bg-card" : "bg-background")}>{renderName(row, { indent: inLane })}</div>
         <Track {...trackProps(row)}/>
-        <div className="border-t"/>
+        <div className={cn("border-t", selectedRunId === row.runId && "bg-selected-row")}/>
       </div>}
   </div>;
   const toggleLane = (leadRunId: string) => setCollapsedLanes(previous => {
@@ -202,6 +203,7 @@ export function TaskWork(props: TaskWorkProps) {
       {scale && input && <div className={narrow ? "block" : "flex items-center"}>
         <Track {...trackProps(lead)} ownedWaits={ownedWaits(lead, timeline!.spans, nowMs)} height={LEAD_PX}/>
       </div>}
+      {!narrow && <div className={cn(selectedRunId === lead.runId && "bg-selected-row")}/>}
     </header>;
   };
   const trackWidth = scale ? scale.widthPx + SLACK_PX * 2 : 0;
@@ -290,7 +292,7 @@ export function TaskWork(props: TaskWorkProps) {
     {!timeline && props.loading ? <div role="status" className="flex flex-1 animate-pulse items-center justify-center motion-reduce:animate-none">{t("loading")}</div>
       : timeline && rows.length === 0 && !open ? <p className="p-6 text-sm text-ink2">{t("noMicroTasks")}</p> : <>
         {!open && <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 text-xs text-ink2 sm:px-6">
-          <div data-slot="timeline-legend" className="flex flex-wrap gap-4"><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-line2 bg-past-wash"/>{t("execution")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t border-ink3"/>{t("wait")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t-2 border-dashed border-hand-mark"/>{t("waiting")}</span><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-hand-mark bg-hand-wash"/>{t("drawing.silentLegend")}</span><span className="flex items-center gap-1.5"><i className="size-2 rotate-45 border border-ink2"/>{t("drawing.inquiry")}</span><span className="flex items-center gap-1.5"><i className="size-1.5 rounded-full bg-past"/>{t("drawing.eventLegend")}</span><span className="flex items-center gap-1.5"><i className="flex size-4 items-center justify-center rounded-full border border-past">2</i>{t("drawing.clusterLegend")}</span><span className="flex items-center gap-1.5"><i className="h-3 w-4 bg-[repeating-linear-gradient(135deg,var(--sunk)_0_3px,var(--idle-stripe)_3px_4px)]"/>{t("drawing.idleLegend")}</span></div>
+          <div data-slot="timeline-legend" className="flex flex-wrap gap-4"><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-line2 bg-past-wash"/>{t("execution")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t border-ink3"/>{t("wait")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t-2 border-dashed border-hand-mark"/>{t("waiting")}</span><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-hand-mark bg-hand-wash"/>{t("drawing.silentLegend")}</span><span className="flex items-center gap-1.5"><i className="size-2 rotate-45 border border-ink2"/>{t("drawing.inquiry")}</span><span className="flex items-center gap-1.5"><i className="size-1.5 rounded-full bg-past"/>{t("drawing.eventLegend")}</span><span className="flex items-center gap-1.5"><i aria-hidden="true" className="flex size-4 items-center justify-center rounded-full border border-past text-past">✓</i>{t("drawing.acceptedLegend")}</span><span className="flex items-center gap-1.5"><i aria-hidden="true" className="flex size-4 items-center justify-center rounded-full border border-past text-fail">✕</i>{t("drawing.failedConclusionLegend")}</span><span className="flex items-center gap-1.5"><i className="flex size-4 items-center justify-center rounded-full border border-past">2</i>{t("drawing.clusterLegend")}</span><span className="flex items-center gap-1.5"><i className="h-3 w-4 bg-[repeating-linear-gradient(135deg,var(--sunk)_0_3px,var(--idle-stripe)_3px_4px)]"/>{t("drawing.idleLegend")}</span></div>
           <ZoomControls className="ml-auto" onChange={zoom} atMinimum={atMinimum} atMaximum={atMaximum}/>
         </div>}
         {open

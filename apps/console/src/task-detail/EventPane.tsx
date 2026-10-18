@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Section } from "@/components/section";
-import { actorText } from "../actor";
+import { actorText, stopActorText } from "../actor";
 import { eventDetails, eventName } from "../macro-task-display";
 import { Facts, Moment, Pane, PaneTitle } from "./parts";
 import { quad } from "./names";
@@ -16,7 +16,7 @@ export function EventPane({ step, ctx }: { step: Step; ctx: Context }) {
   const { t } = useTranslation("taskDetail");
   const event = step.events[0] ?? null;
   const unrecorded = t("unrecorded");
-  const stopped = event?.kind === "cancel" ? event.stopInitiator ?? event.actor?.role ?? null : null;
+  const stopped = event?.kind === "cancel" ? event.actor?.role ?? null : null;
   const note = event ? eventDetails(event) : null;
   return <Pane>
     <PaneTitle title={step.kind === "cancel" ? eventName(event!) : t(`step.${step.kind}`)}><Moment at={step.at} /></PaneTitle>
@@ -26,7 +26,7 @@ export function EventPane({ step, ctx }: { step: Step; ctx: Context }) {
         : <Facts items={[
           [t("decision.who"), event?.actor ? actorText(event.actor) : unrecorded],
           [t("decision.when"), <Moment key="when" at={step.at} />],
-          ...(stopped ? [[t("event.stoppedBy"), t(`stop.${stopped}`, { defaultValue: stopped })] as [string, string]] : []),
+          ...(stopped ? [[t("event.stoppedBy"), stopActorText(stopped)] as [string, string]] : []),
           ...(note ? [[t("event.details"), note] as [string, string]] : []),
         ]} />}
     </Section>

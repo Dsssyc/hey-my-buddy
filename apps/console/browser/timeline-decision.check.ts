@@ -1,14 +1,14 @@
 import { expect, type Page } from "@playwright/test";
-import type { MacroTaskTimeline } from "../src/macro-task-types";
+import type { MacroTaskTimeline, TimelineEvent } from "../src/macro-task-types";
 import { open, screenshots as shots, test } from "./preview";
 
 const MACRO_A = "macro-11111111-1111-4111-8111-111111111111";
 const MACRO_B = "macro-22222222-2222-4222-8222-222222222222";
-const selectedRow = (page: Page, runId: string) => page.locator(`[data-slot=timeline-row][data-run-id="${runId}"]`);
+const selectedRow = (page: Page, runId: string) => page.locator(`[data-slot=timeline-row][data-run-id="${runId}"], [data-slot=timeline-lane-lead][data-run-id="${runId}"]`);
 
-for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", "dark"] as const) {
-  test.describe(`timeline drawing decision ${locale} ${theme}`, () => {
-    test.use({ locale, viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" });
+for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+  test.describe(`timeline drawing decision ${locale} ${theme} ${width}px`, () => {
+    test.use({ locale, viewport: { width, height: width === 390 ? 844 : 1000 }, reducedMotion: "reduce" });
     test.beforeEach(async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     });
@@ -18,6 +18,8 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       const name = page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-b1"]:visible');
       const track = selectedRow(page, "preview-run-b1");
       await name.click();
+      await expect(page.locator('[data-slot=detail-strip]')).toBeVisible();
+      await page.locator('[data-slot=detail-header]').getByRole("button", { name: locale === "zh-CN" ? "收起详情" : "Close detail" }).click();
       await expect(track.locator("[data-slot=selected-row]")).toHaveCount(1);
       await expect(track.locator("[data-slot=selected-item]")).toHaveCount(0);
       const drawing = await track.evaluate(node => {
@@ -28,26 +30,32 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         const gaps = Array.from(svg.querySelectorAll<SVGRectElement>("[data-slot=timeline-break]"));
         const fill = getComputedStyle(wash).fill.match(/[\d.]+/g)?.slice(0, 3).map(Number) ?? [];
         return { left: box.left, right: box.right, viewportLeft: viewport.left, viewportRight: viewport.right,
-          gapCount: gaps.length, coversGaps: gaps.every(gap => {
+          trackLeft: svg.getBoundingClientRect().left, gapCount: gaps.length, coversGaps: gaps.every(gap => {
             const rect = gap.getBoundingClientRect();
             return box.left <= rect.left && box.right >= rect.right && !!(gap.compareDocumentPosition(wash) & Node.DOCUMENT_POSITION_FOLLOWING);
           }), fill };
       });
-      expect(drawing.left).toBeLessThanOrEqual(drawing.viewportLeft + 2);
+      expect(drawing.left).toBeCloseTo(drawing.trackLeft, 0);
+      expect(drawing.left).toBeLessThanOrEqual(drawing.viewportLeft + (width > 760 ? 272 : 0) + 2);
       expect(drawing.right).toBeGreaterThanOrEqual(drawing.viewportRight - 2);
       expect(drawing.gapCount).toBeGreaterThan(0);
       expect(drawing.coversGaps).toBe(true);
       expect(drawing.fill).toHaveLength(3);
       expect(Math.max(...drawing.fill) - Math.min(...drawing.fill)).toBeLessThanOrEqual(10);
-      if (locale === "zh-CN") await page.screenshot({ path: `${shots}/name-selected-${theme}.png` });
+      if (locale === "zh-CN") await page.screenshot({ path: `${shots}/name-selected-${theme}-${width}.png` });
 
+      // At the narrow fit scale, adjacent short queue and execution hit areas overlap.
+      if (width === 390) for (let n = 0; n < 2; n++) await page.locator('[data-slot=timeline-zoom] button').nth(1).click();
       const item = track.locator('[data-key="span:execution:att-b1-2"]');
       await item.click();
       await expect(track.locator("[data-slot=selected-row]")).toHaveCount(1);
       await expect(track.locator("[data-slot=selected-item]")).toHaveCount(1);
       await expect(item.locator("[data-slot=selected-item]")).toHaveCount(1);
       await expect(page.locator("[data-slot=timeline-track] [data-slot=selected-item]")).toHaveCount(1);
-      if (locale === "zh-CN") await page.screenshot({ path: `${shots}/span-selected-${theme}.png` });
+      await item.focus();
+      await expect(item.locator('[data-slot=fragment-focus]')).toHaveCSS("opacity", "0");
+      await expect(item.locator('[data-slot=selected-item]')).toHaveCSS("stroke-width", "1px");
+      if (locale === "zh-CN") await page.screenshot({ path: `${shots}/span-selected-${theme}-${width}.png` });
 
       const wait = track.locator('[data-key="span:queue:att-b1-1"]');
       await wait.click();
@@ -70,21 +78,42 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         const response = await route.fetch();
         const timeline = await response.json() as MacroTaskTimeline;
         const seed = timeline.events.find(event => event.kind === "accept")!;
-        timeline.events.push({ ...seed, seq: 9001, runId: "preview-run-a1", kind: "takeover",
-          at: new Date(Date.parse(seed.at) + 25 * 60_000).toISOString(), label: "接管", summary: "" });
+        const marker = (seq: number, runId: string, kind: string, at: string): TimelineEvent => ({
+          seq, runId, kind, at, actor: seed.actor, decision: null, verdict: null, state: null, strategy: null,
+          note: null, attemptId: null, requestId: null, artifactId: null,
+        });
+        timeline.events.push(marker(9001, "preview-run-a1", "takeover", new Date(Date.parse(seed.at) + 25 * 60_000).toISOString()));
         // A name at the end of an execution must not jump past its acceptance connector.
         const end = timeline.spans.find(span => span.spanId === "execution:att-h1-2")!.endAt!;
-        timeline.events.push({ ...seed, seq: 9002, runId: "preview-run-a1-h1", kind: "continue", at: end, label: "续接", summary: "" });
-        timeline.totals.events += 2;
+        timeline.events.push(marker(9002, "preview-run-a1-h1", "continue", end));
+        timeline.events.push(marker(9003, "preview-run-a1", "takeover", new Date(Date.parse(timeline.observedAt) - 60_000).toISOString()));
+        timeline.totals.events += 3;
         await route.fulfill({ response, json: timeline });
       });
       await open(page, `#tasks/${MACRO_A}`);
       await expect(page.locator("[data-slot=timeline-axis]")).toBeVisible();
       await expect(page.locator('text[data-event-key="event:9001"]')).toBeVisible();
       await expect(page.locator('text[data-event-key="event:9002"]')).toHaveCount(0);
+      const leftLabel = page.locator('text[data-event-key="event:9003"]');
+      await expect(leftLabel).toBeVisible();
+      const leftBox = (await leftLabel.boundingBox())!;
+      const dotBox = (await page.locator('[data-key="event:9003"] [data-slot=event-mark]').boundingBox())!;
+      expect(leftBox.x + leftBox.width).toBeLessThan(dotBox.x);
       const legend = page.locator("[data-slot=timeline-legend]");
       await expect(legend).toContainText(locale === "zh-CN" ? "已验收" : "Accepted");
       await expect(legend).toContainText(locale === "zh-CN" ? "结论为失败" : "Failed conclusion");
+      const hiddenName = page.locator('[data-key="event:9002"]');
+      const status = page.locator('[data-slot=timeline-status]');
+      const continuationName = locale === "zh-CN" ? "续接" : "Continuation";
+      await hiddenName.hover();
+      await expect(status).toContainText(continuationName);
+      await legend.hover();
+      await hiddenName.focus();
+      await expect(status).toContainText(continuationName);
+      await hiddenName.click();
+      await legend.hover();
+      await expect(status).toContainText(continuationName);
+      await expect(hiddenName.locator('[data-slot=selected-item]')).toHaveCount(1);
       const accepted = page.locator("[data-slot=accept-mark]");
       expect(await accepted.count()).toBeGreaterThan(0);
       const acceptedLabels = await accepted.evaluateAll(marks => marks.map(mark => {
@@ -121,9 +150,11 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         nodes.map(node => ({ slot: node.getAttribute("data-slot"), userSelect: getComputedStyle(node).userSelect })));
       expect(selectionStyles.length).toBeGreaterThan(0);
       for (const style of selectionStyles) expect(style.userSelect, style.slot ?? "timeline text").toBe("none");
-      await page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a1"]:visible').dblclick();
+      await page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a1"]:visible').click();
+      await expect(page.locator('[data-slot=detail-strip]')).toBeVisible();
       expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
       await page.locator('[data-slot=detail-header]').getByRole("button", { name: locale === "zh-CN" ? "收起详情" : "Close detail" }).click();
+      if (width === 390) for (let n = 0; n < 2; n++) await page.locator('[data-slot=timeline-zoom] button').nth(1).click();
       await page.locator('[data-key="span:routing:att-router-a1"]').dblclick();
       expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
 
@@ -136,11 +167,10 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         return !!svg.querySelector(`text[data-event-key="${parent.getAttribute("data-key")}"]`);
       }));
       expect(failedLabels).not.toContain(true);
-      await page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-b1"]:visible').click();
-      const continuation = page.locator(`[data-slot=timeline-row][data-run-id="preview-run-b1"] [data-key^="event:"][aria-label*="${locale === "zh-CN" ? "续接" : "Continuation"}"]`);
+      const continuation = selectedRow(page, "preview-run-b1").locator(`[data-key^="event:"][aria-label*="${locale === "zh-CN" ? "续接" : "Continuation"}"]`);
       await expect(continuation).toBeVisible();
       await continuation.scrollIntoViewIfNeeded();
-      if (locale === "zh-CN") await page.screenshot({ path: `${shots}/continuation-row-${theme}.png` });
+      if (locale === "zh-CN") await page.screenshot({ path: `${shots}/continuation-row-${theme}-${width}.png` });
     });
   });
 }

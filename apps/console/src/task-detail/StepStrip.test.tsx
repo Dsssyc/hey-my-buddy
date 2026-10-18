@@ -68,7 +68,7 @@ describe("the step strip along the top of a micro task's detail", () => {
     fireEvent.click(acceptance);
     expect(acceptance.getAttribute("aria-pressed")).toBe("true");
     expect(pane().textContent).toContain("等待验收");
-    expect(strip().querySelectorAll('[data-slot="selected-span"]')).toHaveLength(1);
+    expect(strip().querySelectorAll('[data-slot="selected-item"]')).toHaveLength(1);
   });
 
   it("decides the opening position once even when the first step is the open acceptance with no instant of its own", async () => {

@@ -48,7 +48,7 @@ export const RowName = forwardRef<HTMLButtonElement, {
   const button = <button ref={ref} type="button" data-key={`row:${row.runId}`} data-slot="timeline-row-name" data-run-id={row.runId} data-fixes={row.fixes}
     tabIndex={tabIndex} aria-current={list && current ? "true" : undefined} aria-label={[ariaPrefix, title.fullText, repair, state.label].filter(Boolean).join(" · ")} onClick={onClick}
     onPointerEnter={onEnter} onPointerLeave={onLeave} onFocus={onFocus} onBlur={onBlur}
-    className={cn("group flex w-full shrink-0 flex-col justify-center gap-1 border-t px-3 text-left outline-none transition-colors duration-150 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-live",
+    className={cn("group flex w-full shrink-0 select-none flex-col justify-center gap-1 border-t px-3 text-left outline-none transition-colors duration-150 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-live",
       tall ? "h-[60px] border-t-0" : "h-[52px]",
       current ? "bg-live-wash hover:bg-live-wash" : "hover:bg-sunk")}
     style={{ paddingLeft: 13 + (row.depth + (indent ? 1 : 0)) * 18, boxShadow: tone ? `inset 3px 0 var(--${tone === "hand" ? "hand-mark" : tone})` : undefined }} data-state-tone={tone ?? "queued"}>

@@ -15,10 +15,12 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     await expect(page.locator('[data-slot=timeline-tracks]')).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`#tasks/${macro}$`));
     await expect(row).toHaveCSS("background-color", theme === "dark" ? "rgb(29, 59, 43)" : "rgb(220, 237, 226)");
-    await expect(page.locator('[data-slot=timeline-row][data-run-id="preview-run-a1"] [data-slot=selected-span]').first()).toBeAttached();
+    await expect(page.locator('[data-slot=timeline-row][data-run-id="preview-run-a1"] [data-slot=selected-row]')).toBeAttached();
+    await expect(page.locator('[data-slot=timeline-row][data-run-id="preview-run-a1"] [data-slot=selected-item]')).toHaveCount(0);
     if (width === 390) await page.getByRole("button", { name: "放大（+）", exact: true }).click();
     const slice = page.locator('[data-slot=timeline-row][data-run-id="preview-run-a1"] [data-key="span:execution:att-a1-1"]');
     await slice.click();
+    await expect(slice.locator('[data-slot=selected-item]')).toBeAttached();
     await expect(page.locator('[data-slot=task-work]')).toHaveAttribute("data-mode", "timeline");
     await expect(page).toHaveURL(new RegExp(`#tasks/${macro}$`));
     await row.hover();

@@ -92,9 +92,9 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs }: {
     key={key} role="button" tabIndex={selected === index ? 0 : -1} data-key={key} aria-pressed={selected === index} aria-label={label}
     onClick={() => onStep(index + 1)}
     onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onStep(index + 1); } }}
-    className="pointer-events-auto cursor-pointer outline-none focus-visible:[&_.hit]:stroke-live focus-visible:[&_.hit]:stroke-2">
+    className={selected === index ? "pointer-events-auto cursor-pointer outline-none" : "pointer-events-auto cursor-pointer outline-none focus-visible:[&_.hit]:stroke-live focus-visible:[&_.hit]:stroke-2"}>
     <rect className="hit" fill="transparent" x={hit.x} y={hit.y} width={hit.w} height={hit.h}/>
-    {selected === index && <rect data-slot="selected-span" x={at - 8} y={STRIP_PX / 2 - 8} width={16} height={16} fill="none" className="stroke-live"/>}
+    {selected === index && <rect data-slot="selected-item" x={at - 8} y={STRIP_PX / 2 - 8} width={16} height={16} fill="none" className="pointer-events-none stroke-ink3"/>}
     {mark}
   </g>;
   const middle = STRIP_PX / 2;
@@ -103,7 +103,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs }: {
     if (event.key === "+" || event.key === "=") { event.preventDefault(); zoom(1); }
     else if (event.key === "-") { event.preventDefault(); zoom(-1); }
     else if (event.key === "0") { event.preventDefault(); zoom(0); }
-  }} className="relative flex-none border-b border-line bg-card">
+  }} className="relative flex-none select-none border-b border-line bg-card">
     <ScrollArea className="mr-28 block" orientation="both" viewportProps={{ ref: setViewport, "data-slot": "detail-strip-scroll" }}>
       {scale && input && <div className="relative" style={{ width: scale.widthPx + SLACK * 2 }}>
         <Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs}/>
