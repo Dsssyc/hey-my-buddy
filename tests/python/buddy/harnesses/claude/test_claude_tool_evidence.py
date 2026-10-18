@@ -98,7 +98,7 @@ def armed(frames):
     return collector
 
 
-DELIVERED = {"buddyId": "legal", "reason": "the delivered value", "evidence": ["one"]}
+DELIVERED = {"buddyId": "legal", "note": "the delivered value", "evidence": [{"kind": "file", "ref": "one"}]}
 
 
 def settled_stream():
@@ -348,7 +348,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_a_second_different_full_input_refuses_the_exemption_in_either_order(self):
-        other = {"buddyId": "conflict", "reason": "a different complete input", "evidence": []}
+        other = {"buddyId": "conflict", "note": "a different complete input", "evidence": []}
         for name, first, second in (("delivered-first", DELIVERED, other), ("conflict-first", other, DELIVERED)):
             with self.subTest(order=name):
                 collector = armed([init_frame(), structured_use("toolu_so_1", first),
