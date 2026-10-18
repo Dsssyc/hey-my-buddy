@@ -28,6 +28,7 @@
 | 2026-10-09 | [各 harness 的原生权限](2026-10-09-native-harness-permissions.md) | ADR-023 的权限档位 |
 | 2026-10-11 | [订阅额度用完之后：付费用量、供应方的拒绝与恢复](2026-10-11-plan-quota-and-paid-usage.md) | ADR-021 第 22 条 |
 | 2026-10-11 | [供应方的拒绝怎样分类、歇多久；智谱的套餐、资源包与余额各管哪一段](2026-10-11-refusal-kinds-and-zhipu-funding.md) | ADR-021 第 22 条与 L9；续查上一份，读了源码并做了实测 |
+| 2026-10-18 | [额度用尽之后怎样不打扰 Host，又怎样知道额度回来了](2026-10-18-quota-cooling-and-failover.md) | ADR-021 第 22 条 2026-10-18 的修改；续查 10-11 的两份 |
 | 2026-10-11 | [别的项目怎样在三个系统上找到 harness](2026-10-11-harness-discovery-across-systems.md) | ADR-017 第 9 至 15 条；harness 这一层管哪些事的讨论 |
 | 2026-10-11 | [黑板加的角色说明压不压得过用户自己的指令；Worker 的会话能不能不留在 harness 的历史里](2026-10-11-role-text-against-user-instructions.md) | harness 这一层管哪些事的决定，尚未起草 |
 | 2026-10-11 | [harness 的标志从哪里来，受什么约束](2026-10-11-harness-marks.md) | 控制台 Buddy 页的设计，尚未实现 |
