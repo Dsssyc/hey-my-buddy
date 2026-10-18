@@ -428,11 +428,22 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                 self.assertIsNone(outcome.result["quotaFailure"]["resetsAt"])
                 self.assertNotIn("turn", outcome.result)
 
+    def test_a_completed_turn_does_not_publish_quota_failure(self):
+        usage_fixture = FIXTURE.with_name("fake_claude_usage.py")
+        usage_fixture.chmod(0o755)
+        native = json.loads(FIXTURE.with_name("native-usage-claude.json").read_text())
+        context = self.context("usage-ok", model=native["modelId"])
+        context.environment["HMB_CLAUDE_CLI"] = str(usage_fixture)
+        outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertIsNotNone(outcome.result["tokenUsage"])
+        self.assertNotIn("quotaFailure", outcome.result)
+
     def test_quota_warning_does_not_publish_readings(self):
         outcome = self.execute(self.context("quota-warning"))
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertNotIn("rateLimitObservations", outcome.result)
-        self.assertIsNone(outcome.result.get("quotaFailure"))
+        self.assertNotIn("quotaFailure", outcome.result)
         self.assertIn("turn", outcome.result)
 
     def test_quota_warning_survives_a_later_rejection(self):

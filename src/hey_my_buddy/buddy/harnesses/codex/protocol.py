@@ -351,9 +351,10 @@ class TurnEvidence:
             if self.completed is not None:
                 raise CodexProtocolError("invalid-protocol", "duplicate native turn completion")
             if isinstance(turn, dict) and isinstance(turn.get("items"), list):
+                recover_final = self.final_item is None
                 for item in turn["items"]:
                     self._observe_activity("item/completed", {"item": item})
-                    if self.final_item is None and isinstance(item, dict) and item.get("type") == "agentMessage" and item.get("phase") == "final_answer":
+                    if recover_final and isinstance(item, dict) and item.get("type") == "agentMessage" and item.get("phase") == "final_answer":
                         self._complete_final(item)
             self.completed = turn
             return "finishing", None

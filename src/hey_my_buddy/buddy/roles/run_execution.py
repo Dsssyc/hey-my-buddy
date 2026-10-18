@@ -716,7 +716,6 @@ class WorkerRunExecutor:
             if result is not None and any(ref.kind == "native-checkpoint" for ref in result.evidence_refs):
                 payload["lastAssistantMessage"] = None
         payload["tokenUsage"] = usage.normalize_token_usage(payload.get("tokenUsage"))
-        payload["quotaFailure"] = usage.normalize_quota_failure(payload.get("quotaFailure"))
         from ..harnesses.registry import worker_message_source
         payload["lastAssistantMessage"] = usage.normalize_last_assistant_message(
             payload.get("lastAssistantMessage"), source=worker_message_source(self.name))

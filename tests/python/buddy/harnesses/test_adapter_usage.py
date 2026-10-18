@@ -85,7 +85,7 @@ class CodexUsageContractTests(unittest.TestCase):
         self.assertEqual(token_usage["nativeRecords"], expected["records"])
         self.assertEqual(token_usage["completeness"], "complete")
 
-        self.assertIsNone(outcome.result["quotaFailure"])
+        self.assertNotIn("quotaFailure", outcome.result)
 
         message = outcome.result["lastAssistantMessage"]
         self.assertEqual(message["source"], "codex/app-server-root-assistant-message")
@@ -122,7 +122,7 @@ class CodexUsageContractTests(unittest.TestCase):
         outcome = self.execute(self.context("ok"))
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertIsNone(outcome.result["tokenUsage"])
-        self.assertIsNone(outcome.result["quotaFailure"])
+        self.assertNotIn("quotaFailure", outcome.result)
         self.assertIsNotNone(outcome.result["lastAssistantMessage"])
 
 
@@ -200,7 +200,7 @@ class DshUsageContractTests(DshRoleCase):
         self.assertEqual(usage["inputBasis"], "includes-cached")
         self.assertEqual(usage["scope"], "attempt")
         self.assertEqual(usage["nativeRecords"], 2)
-        self.assertIsNone(outcome.result["quotaFailure"])
+        self.assertNotIn("quotaFailure", outcome.result)
         message = outcome.result["lastAssistantMessage"]
         self.assertEqual(message["text"], "the final answer")
         self.assertEqual(message["source"], "dsh/session-root-assistant-message")
@@ -231,7 +231,7 @@ class DshUsageContractTests(DshRoleCase):
 
     def test_an_unrelated_turn_failure_is_not_reported_as_a_quota_failure(self):
         _context, _handle, outcome = self.execute_record("quota", variant="non-quota")
-        self.assertIsNone(outcome.result["quotaFailure"])
+        self.assertNotIn("quotaFailure", outcome.result)
         self.assertIsNotNone(outcome.result["tokenUsage"])
 
     def test_a_partial_observation_keeps_its_own_completeness(self):
